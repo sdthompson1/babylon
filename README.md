@@ -118,11 +118,12 @@ Some highlights:
  - [Demo_14_GCD.b](examples/Demo_14_GCD.b) implements Euclid's
    algorithm for finding the greatest common divisor of two numbers.
 
- - The [chess](chess) demo implements a simple interactive chessboard.
-   This uses [SDL](https://www.libsdl.org/) to do the graphics and
-   mouse input. The program consists of several Babylon modules which
-   implement the game logic and UI, together with a small C file
-   ("game_engine.c") which provides the interface to the SDL library.
+ - The [chess](examples/chess) demo implements a simple interactive
+   chessboard. This uses [SDL](https://www.libsdl.org/) to do the
+   graphics and mouse input. The program consists of several Babylon
+   modules which implement the game logic and UI, together with a
+   small C file ("game_engine.c") which provides the interface to the
+   SDL library.
 
 ![](examples/chess/screenshot.png)
 
