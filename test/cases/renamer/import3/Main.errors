@@ -1,0 +1,2 @@
+Main.b:9:12: Name 'same_name' is ambiguous: could refer to 'A.same_name' or 'B.same_name'
+Main.b:12:12: Not in scope: 'q'

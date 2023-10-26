@@ -1,0 +1,13 @@
+Arrays.b:21:18: Type mismatch
+Arrays.b:24:19: Can't use sizeof on this expression (not an lvalue)
+Arrays.b:26:19: Type mismatch (expected array)
+Arrays.b:27:22: Type mismatch (expected integer)
+Arrays.b:30:13: Type mismatch
+Arrays.b:32:19: Type mismatch
+Arrays.b:33:7: Type mismatch
+Arrays.b:34:5: Wrong number of array indices (expected 1)
+Arrays.b:37:19: Type mismatch
+Arrays.b:38:5: Wrong number of array indices (expected 2)
+Arrays.b:43:16: Type mismatch (expected integer)
+Arrays.b:44:20: Type mismatch (expected integer)
+Arrays.b:45:13: Cannot index this term

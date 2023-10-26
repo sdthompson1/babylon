@@ -1,0 +1,2 @@
+IntLiteralsOutOfRange.b:4:30: Integer literal too big
+IntLiteralsOutOfRange.b:9:22: Integer literal too big

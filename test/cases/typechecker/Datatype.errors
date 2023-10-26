@@ -1,0 +1,27 @@
+Datatype.b:11:3: Illegal recursive definition of 'Datatype.Recursive'
+Datatype.b:13:42: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:19:20: Type mismatch
+Datatype.b:20:20: Type mismatch
+Datatype.b:22:5: Can't assign (left-hand-side is not an lvalue)
+Datatype.b:28:26: Type mismatch
+Datatype.b:29:13: Wrong number of type arguments (expected: 1, actual: 2)
+Datatype.b:30:13: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:31:14: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:38:14: Type mismatch
+Datatype.b:40:22: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:42:14: Type mismatch
+Datatype.b:44:9: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:45:5: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:46:5: Wrong number of type arguments (expected: 0, actual: 2)
+Datatype.b:49:13: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:50:19: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:51:25: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:52:14: Wrong number of type arguments (expected: 1, actual: 0)
+Datatype.b:53:26: Type mismatch
+Datatype.b:57:21: Type mismatch (expected bool or integer)
+Datatype.b:58:21: Type mismatch (expected integer)
+Datatype.b:59:21: Type mismatch (expected bool or integer)
+Datatype.b:60:21: Type mismatch (expected bool or integer)
+Datatype.b:65:13: Type mismatch (expected integer)
+Datatype.b:66:20: Type mismatch
+Datatype.b:67:13: Type mismatch (expected non-function type)

@@ -1,0 +1,14 @@
+IntLiteralsOutOfRange.b:3:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:5:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:8:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:10:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:13:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:15:29: Operator precondition might not be met
+IntLiteralsOutOfRange.b:18:29: Operator precondition might not be met
+IntLiteralsOutOfRange.b:20:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:23:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:25:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:27:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:29:30: Operator precondition might not be met
+IntLiteralsOutOfRange.b:31:29: Operator precondition might not be met
+IntLiteralsOutOfRange.b:33:29: Operator precondition might not be met

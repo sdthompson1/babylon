@@ -1,0 +1,6 @@
+Swap.b:11:13: Type mismatch
+Swap.b:16:10: Can't swap (not an lvalue)
+Swap.b:16:13: Can't swap (not an lvalue)
+Swap.b:24:13: Can't swap (readonly value)
+Swap.b:31:10: Can't access a ghost variable or function from executable code
+Swap.b:32:19: Can't write to a non-ghost variable from ghost code

@@ -1,0 +1,7 @@
+RefArgAlias.b:21:12: Aliasing rules violated: argument 2 aliases argument 3
+RefArgAlias.b:22:9: Aliasing rules violated: argument 1 aliases argument 3
+RefArgAlias.b:24:9: Aliasing rules violated: argument 1 aliases argument 2
+RefArgAlias.b:28:9: Aliasing rules violated: argument 1 aliases argument 2
+RefArgAlias.b:35:9: Aliasing rules violated: argument 1 aliases argument 2
+RefArgAlias.b:49:13: Aliasing rules violated: argument 1 aliases argument 2
+RefArgAlias.b:60:16: Aliasing rules violated: argument 1 aliases argument 2

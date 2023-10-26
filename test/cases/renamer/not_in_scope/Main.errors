@@ -1,0 +1,6 @@
+Main.b:7:18: Not in scope: 'bar'
+Main.b:11:16: Not in scope: 'Main.notexist'
+Main.b:15:16: Not in scope: 'Imp1.wrongname'
+Main.b:19:16: Not in scope: 'Imp1'
+Main.b:23:16: Not in scope: 'wrong2'
+Main.b:24:16: Not in scope: 'wrong3'

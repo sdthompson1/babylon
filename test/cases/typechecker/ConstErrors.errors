@@ -1,0 +1,9 @@
+ConstErrors.b:20:12: Value is not a compile-time constant
+ConstErrors.b:21:12: Value is not a compile-time constant
+ConstErrors.b:22:12: Value is not a compile-time constant
+ConstErrors.b:25:12: Value is not a compile-time constant
+ConstErrors.b:26:12: Value is not a compile-time constant
+ConstErrors.b:27:12: Value is not a compile-time constant
+ConstErrors.b:28:12: Value is not a compile-time constant
+ConstErrors.b:29:13: Value is not a compile-time constant
+ConstErrors.b:31:13: Value is not a compile-time constant

@@ -1,0 +1,6 @@
+Tuple.b:5:19: Wrong number of type arguments (expected: 1, actual: 0)
+Tuple.b:5:21: Wrong number of type arguments (expected: 1, actual: 0)
+Tuple.b:16:8: Type mismatch
+Tuple.b:22:19: Type mismatch
+Tuple.b:23:13: Field '2' not found
+Tuple.b:26:18: Wrong number of type arguments (expected: 1, actual: 0)

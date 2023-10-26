@@ -1,0 +1,2 @@
+RefArgArrayAlias.b:12:9: Aliasing rules violated: argument 1 might alias argument 2
+RefArgArrayAlias.b:24:9: Aliasing rules violated: argument 1 might alias argument 2

@@ -1,0 +1,47 @@
+2      // scalar_swap
+1
+1
+2
+2
+1
+1
+2
+4       // aggregate_swap
+5
+6
+1
+2
+3
+1
+2
+3
+4
+5
+6
+2        // swap_scalar_with_field
+1
+3
+4
+3
+1
+2
+4
+1        // swap_fields
+6
+3
+4
+5
+2
+1
+6
+4
+3
+5
+2
+1        // self_swap
+1
+2
+3
+1
+2
+3

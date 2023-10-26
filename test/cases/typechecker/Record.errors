@@ -1,0 +1,13 @@
+Record.b:4:24: Type mismatch
+Record.b:7:48: Type mismatch
+Record.b:8:43: Field 'xx' not found
+Record.b:9:51: Duplicate field name 'f1'
+Record.b:10:36: Record update applied to non-record value
+Record.b:11:43: A field name is required
+Record.b:11:46: A field name is required
+Record.b:13:13: Value is not a callable function
+Record.b:14:13: Value is not a callable function
+Record.b:15:13: Value is not a callable function
+Record.b:16:13: Value is not a callable function
+Record.b:18:17: Type mismatch (expected integer)
+Record.b:21:15: Type mismatch (expected non-function value)

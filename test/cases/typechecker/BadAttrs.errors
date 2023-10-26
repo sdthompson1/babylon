@@ -1,0 +1,6 @@
+BadAttrs.b:5:5: 'invariant' not allowed here
+BadAttrs.b:6:5: 'decreases' not allowed here
+BadAttrs.b:14:9: 'requires' not allowed here
+BadAttrs.b:15:9: 'ensures' not allowed here
+BadAttrs.b:13:5: A 'decreases' clause is required
+BadAttrs.b:25:9: Duplicate 'decreases' clause

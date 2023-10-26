@@ -1,0 +1,3 @@
+Obtain.b:8:5: A value with the given property might not exist
+Obtain.b:13:5: Assert might not hold
+Obtain.b:18:20: Operator precondition might not be met

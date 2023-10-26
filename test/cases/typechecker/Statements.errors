@@ -1,0 +1,32 @@
+Statements.b:5:12: Return value not expected
+Statements.b:10:12: Type mismatch
+Statements.b:15:5: Return value expected
+Statements.b:20:19: Type mismatch
+Statements.b:26:9: Type mismatch
+Statements.b:31:18: Type mismatch
+Statements.b:36:5: Incomplete definition
+Statements.b:43:5: Can't assign (left-hand-side is not an lvalue)
+Statements.b:48:19: Type mismatch
+Statements.b:59:22: Type mismatch (expected integer)
+Statements.b:60:13: Type mismatch (expected integer)
+Statements.b:61:16: Type mismatch (expected integer)
+Statements.b:64:22: Type mismatch (expected non-function value)
+Statements.b:68:13: Type mismatch (expected non-function value)
+Statements.b:73:21: Type mismatch (expected non-function value)
+Statements.b:90:12: Can't access a ghost variable or function from executable code
+Statements.b:104:5: Can't assign (left-hand-side is read-only)
+Statements.b:105:5: Can't assign (left-hand-side is read-only)
+Statements.b:113:12: Type mismatch
+Statements.b:114:17: Type mismatch (expected integer)
+Statements.b:120:11: Type mismatch
+Statements.b:121:17: Type mismatch
+Statements.b:127:21: Type mismatch (expected integer)
+Statements.b:129:20: Type mismatch
+Statements.b:133:17: Invalid type for 'decreases' (must be int, bool, or tuple of the above)
+Statements.b:138:17: Invalid type for 'decreases' (must be int, bool, or tuple of the above)
+Statements.b:148:17: Invalid type for 'decreases' (must be int, bool, or tuple of the above)
+Statements.b:170:5: Function return value is being ignored
+Statements.b:172:8: Type mismatch
+Statements.b:180:5: Match with no cases
+Statements.b:198:29: Type mismatch
+Statements.b:200:12: Type mismatch in pattern

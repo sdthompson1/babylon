@@ -1,0 +1,4 @@
+NegateOverflow.b:4:26: Operator precondition might not be met
+NegateOverflow.b:7:26: Operator precondition might not be met
+NegateOverflow.b:10:26: Operator precondition might not be met
+NegateOverflow.b:13:26: Operator precondition might not be met

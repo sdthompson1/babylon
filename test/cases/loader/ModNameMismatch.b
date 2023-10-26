@@ -1,0 +1,2 @@
+module ThisNameDoesntMatchFilename
+interface {}

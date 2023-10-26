@@ -1,0 +1,2 @@
+Match.b:5:15: Duplicate definition of 'x'
+Match.b:6:12: Not in scope: 'Name'

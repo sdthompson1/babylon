@@ -1,0 +1,7 @@
+InterfaceMismatchImpl.b:3:3: Interface for 'InterfaceMismatchImpl.a' doesn't match implementation
+InterfaceMismatchImpl.b:4:3: Interface for 'InterfaceMismatchImpl.b' doesn't match implementation
+InterfaceMismatchImpl.b:6:3: Interface for 'InterfaceMismatchImpl.diff_num_args' doesn't match implementation
+InterfaceMismatchImpl.b:7:3: Interface for 'InterfaceMismatchImpl.diff_arg_type' doesn't match implementation
+InterfaceMismatchImpl.b:8:3: Interface for 'InterfaceMismatchImpl.diff_ret_type' doesn't match implementation
+InterfaceMismatchImpl.b:9:3: Multiple implementations of 'InterfaceMismatchImpl.double_impl'
+InterfaceMismatchImpl.b:11:3: Interface for 'InterfaceMismatchImpl.fun_confused_with_const' doesn't match implementation

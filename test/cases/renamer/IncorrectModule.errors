@@ -1,0 +1,2 @@
+IncorrectModule.b:4:12: Incorrect use of 'x' as module name
+IncorrectModule.b:5:12: Not in scope: 'M'

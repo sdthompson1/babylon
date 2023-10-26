@@ -1,0 +1,9 @@
+Datatype3.b:3:19: Mixture of named and unnamed fields
+Datatype3.b:4:19: Duplicate field name 'f1'
+Datatype3.b:11:12: Mixture of named and unnamed fields
+Datatype3.b:12:12: Duplicate field name 'x'
+Datatype3.b:13:15: Field 'z' not found
+Datatype3.b:17:12: Pattern has wrong number of fields
+Datatype3.b:18:12: Pattern has wrong number of fields
+Datatype3.b:29:14: Value is not a callable function
+Datatype3.b:30:14: Type mismatch (expected non-function value)

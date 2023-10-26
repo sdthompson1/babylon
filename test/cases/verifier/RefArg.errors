@@ -1,0 +1,2 @@
+RefArg.b:21:5: Assert might not hold
+RefArg.b:45:3: Postcondition at RefArg.b:42:5 might not hold

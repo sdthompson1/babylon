@@ -1,0 +1,2 @@
+module MissingMain
+interface {}

@@ -1,0 +1,7 @@
+RefArg.b:15:11: Can't take reference (expression is not an lvalue)
+RefArg.b:26:20: Cannot pass ref arg here
+RefArg.b:26:17: Can't take reference (expression is not an lvalue)
+RefArg.b:27:17: Cannot pass ref arg here
+RefArg.b:41:30: 'match ref' not allowed in postconditions
+RefArg.b:50:17: Can't take reference (expression is read-only)
+RefArg.b:51:17: Can't take reference (expression is read-only)

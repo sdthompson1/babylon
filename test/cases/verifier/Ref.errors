@@ -1,0 +1,4 @@
+Ref.b:9:5: Assert might not hold
+Ref.b:18:10: Operator precondition might not be met
+Ref.b:28:12: Operator precondition might not be met
+Ref.b:35:13: Array index might be out of bounds

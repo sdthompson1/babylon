@@ -1,0 +1,6 @@
+Generic.b:7:18: Wrong number of type arguments (expected: 1, actual: 0)
+Generic.b:8:18: Wrong number of type arguments (expected: 1, actual: 2)
+Generic.b:9:19: Type mismatch
+Generic.b:20:23: Type mismatch
+Generic.b:21:17: Type mismatch
+Generic.b:22:13: Wrong number of type arguments (expected: 0, actual: 1)

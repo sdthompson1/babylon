@@ -1,0 +1,19 @@
+Datatype2.b:17:26: Type mismatch
+Datatype2.b:18:26: Type mismatch
+Datatype2.b:19:26: Duplicate field name 'x'
+Datatype2.b:20:20: Type mismatch
+Datatype2.b:21:14: Type mismatch (expected non-function value)
+Datatype2.b:22:13: Wrong number of arguments passed to function
+Datatype2.b:22:13: Function does not return a value
+Datatype2.b:28:46: Type mismatch
+Datatype2.b:29:13: Wrong number of type arguments (expected: 2, actual: 0)
+Datatype2.b:30:30: Wrong number of type arguments (expected: 2, actual: 0)
+Datatype2.b:32:55: Type mismatch
+Datatype2.b:33:46: Type mismatch
+Datatype2.b:34:16: Type mismatch (expected integer)
+Datatype2.b:39:27: Type mismatch
+Datatype2.b:43:28: Field 'z' not found
+Datatype2.b:44:28: Cannot access fields in this expression
+Datatype2.b:45:29: Cannot access fields in this expression
+Datatype2.b:49:16: Mixture of named and unnamed fields
+Datatype2.b:54:20: Duplicate field name 'field1'
