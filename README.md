@@ -128,9 +128,11 @@ Some highlights:
 ![](examples/chess/screenshot.png)
 
 *A screenshot of the chess demo. The Babylon compiler verifies that
-this program cannot crash at runtime. We do not go so far as to verify
-that the rules of chess are correctly implemented (according to some
-formal specification), but perhaps that could be a future project!*
+this program cannot crash at runtime (or at least, the parts written
+in Babylon cannot crash -- the program does also include some C code
+which is unverified). We do not go so far as to verify that the
+program is functionally correct, i.e. that the rules of chess are
+correctly implemented -- but perhaps that could be a future project!*
 
 
 # Building/Installing
