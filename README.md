@@ -18,7 +18,7 @@ Here is a simple example program written in the language.
                 forall (i: i32) 2 <= i < n ==> n % i != 0;
         }
 
-        // Export a function to check whether a number is prime.
+        // Declare a function which will check whether a number is prime.
         function check_if_prime(n: i32): bool
             ensures return <==> is_prime(n);
     }
@@ -47,11 +47,11 @@ Here is a simple example program written in the language.
     }
 
 The interesting part of this example is the postcondition `ensures
-return <==> is_prime(n)` which is attached to the `check_is_prime`
-function. This basically states that `check_if_prime(n)` should return
-true if and only if `is_prime(n)` is true. The Babylon verifier will
-confirm that this condition, along with a number of other conditions
-(such as loop termination and absence of run-time errors), is true.
+return <==> is_prime(n)`. This basically states that
+`check_if_prime(n)` should return true if and only if `is_prime(n)` is
+true. The Babylon compiler will verify that this condition, along
+with a number of other conditions (such as loop termination and
+absence of run-time errors), is true.
 
 This verification is done by formulating each of the conditions to be
 checked as an SMT problem, and passing it to one or more external SMT
@@ -60,49 +60,67 @@ solvers to be proved. (Currently, we use
 and [vampire](https://vprover.github.io/).) If, for each condition, at
 least one of the solvers responds with `unsat` (indicating that it has
 found a proof), then we consider the program to be successfully
-verified; otherwise an error message is reported.
+verified; otherwise an error is reported.
 
 
 # Current Status
 
-The first thing to say is that this project is still at a very early
-and experimental stage. I would not recommend anyone to use this
-language for "production" purposes yet -- the language itself is
-likely to change, and there are probably bugs in the compiler.
-However, if anyone would like to experiment with the language, and
-perhaps suggest improvements, they would be welcome to do so.
+Be advised that this project is currently in a very early, pre-alpha
+state. The language will change in incompatible ways in the future,
+and you can expect bugs. Therefore I would not recommend anyone to use
+this language for production purposes at this time. However, if anyone
+wants to try out the language, and perhaps suggest improvements, they
+would be welcome to do so.
 
-The current status of the project could be summarised as follows.
+The current status of the project is basically as follows:
 
- - There is a working compiler, written in C, with "verify" and
-   "compile" modes. "Verify" works by formulating SMT problems, as
-   described above. "Compile" works by producing assembly code files,
-   which can then be assembled and linked to make an executable.
-   (Currently the assembly code produced is rather inefficient, and
-   also only x86-64 running on Linux is supported. This should be
-   improved in future.)
+ - There is a compiler (written in C) with "verify" and "compile"
+   modes.
+    - "Verify" mode takes one or more input files, formulates
+      verification conditions, and uses SMT solver(s) to verify those
+      conditions (as described above).
+    - "Compile" mode works by creating assembly code files, which can
+      be separately assembled and linked to make an executable.
+       - The compiler is currently fairly basic (i.e. it produces
+         very inefficient code) and also can only produce code for
+         x86-64 and Linux at the moment.
 
- - The language itself is reasonably complete, and it's possible to
-   write programs in it, but I think it's fair to say that there are
-   still a lot of new features and improvements that could be added,
-   in order to make programming more convenient. (To give one example,
-   there is no "for" loop in the language currently; one has to use
-   "while" loops instead.)
+ - By default, the language verifies that various operator
+   preconditions are satisfied (additions don't overflow, divisions
+   don't divide by zero, array indexing is within bounds, memory
+   allocations are eventually freed, etc.). This means that verified
+   Babylon code shouldn't crash at runtime, or leak memory (at
+   least in theory!).
+    - The user can also add their own preconditions, postconditions
+      and asserts, allowing further properties to be verified (e.g.
+      state invariants, or perhaps even full functional correctness
+      against some specification).
+    - However, verification of more complex properties can be quite
+      challenging, so I suspect most users would want to stick to
+      "basic" verification (e.g. absence of run-time crashes, or
+      simple state invariants), or perhaps doing more in-depth
+      verification only on the most critical parts of their programs.
 
- - There is also, at the moment, no "standard library" provided. So
-   for example, there is not even a "print" function available. It
-   *is* possible to link C functions with the Babylon program, and in
-   practice, this is what one has to do, if one wants to do any kind
-   of I/O. (Clearly this is something that should be improved in the
-   future, but I think this arrangement works reasonably well for
-   now.)
-      
- - There is no documentation yet. We do have a series of example
-   programs, with comments, that explain some of the language
-   features. Hopefully people can at least get an idea of how things
-   work by studying these examples. (Proper documentation will be
-   provided later, once the language has stabilised a bit more.)
+ - The language is reasonably complete, and it's certainly possible to
+   write programs in it (see examples below). However, there are
+   definitely missing features, and also things that could be done in
+   a better way, so programming is not as "ergonomic" as it could be.
+   (One example is that there is no "for" loop yet -- one must use
+   "while" loops instead.) Hopefully this will improve over time.
 
+ - There is no standard library currently. To do I/O, one must write
+   separate C functions, and then call those from the Babylon side.
+   (Moreover, the C/Babylon interface isn't well documented, so you
+   basically need to know something about how the compiler works, in
+   order to write the C functions correctly.) Clearly
+   this is not an ideal arrangement,
+   but again, I hope to improve this in the future.
+
+ - I have created a few example programs (see below), which
+   demonstrate the system, and act as a tutorial of sorts.
+
+ - There is no documentation yet (apart from this file and
+   the example programs).
 
 
 # Examples
@@ -113,10 +131,15 @@ Some highlights:
 
  - [Demo_07_Primes.b](examples/Demo_07_Primes.b) uses the Sieve of
    Eratosthenes to print out all prime numbers up to and including
-   2^31 - 1.
+   2^31 - 1. The program is verified (i.e. we include "assert"
+   statements to check that the program prints all prime numbers in
+   the given range, and nothing but prime numbers, and these asserts
+   are verified by the SMT solvers).
 
  - [Demo_14_GCD.b](examples/Demo_14_GCD.b) implements Euclid's
    algorithm for finding the greatest common divisor of two numbers.
+   Again, the program is verified by the SMT solvers to be a correct
+   implementation.
 
  - The [chess](examples/chess) demo implements a simple interactive
    chessboard. This uses [SDL](https://www.libsdl.org/) to do the
@@ -134,6 +157,12 @@ which is unverified). We do not go so far as to verify that the
 program is functionally correct, i.e. that the rules of chess are
 correctly implemented -- but perhaps that could be a future project!*
 
+The chess program at least confirms that we can write small-ish
+applications in the language (provided one is willing to persevere a
+bit), but to be honest I wouldn't want to try anything much more
+ambitious than this, at least not until the language matures a bit
+more. But what we have now is a good start :) 
+
 
 # Building/Installing
 
@@ -147,12 +176,12 @@ dependencies, so it is easy to build. You can just run `gcc -O3 -o
 babylon src/*.c` to make an optimised `babylon` executable in the
 current directory.
 
-Alternatively, you can install the "Shake" build system from
+(Alternatively, you can install the "Shake" build system from
 https://shakebuild.com. Then you will be able to use the Shakefile.hs
 that I created. This gives the ability to do incremental builds, as
 opposed to a full rebuild. This is only really necessary if you intend
-to work on the compiler itself, however (the "gcc" command given above
-probably works well enough for most users).
+to work on the compiler itself, however -- the "gcc" command given
+above probably works well enough for most users.)
 
 As well as building the compiler, you will need to make sure that at
 least one (and preferably all three) of the commands `z3`,
@@ -182,94 +211,54 @@ explain how to use the compiler and verifier.
 
 
 
-# Future directions
+# Future work
 
-My main motivation for working on this project is that I would like to
-explore whether it is feasible to use formally verified languages,
-combined with modern SMT solver technology, to create "real" programs.
-To this end I would like to start writing some larger projects in the
-Babylon language -- perhaps a simple 2-D game (I am particularly
-interested in the roguelike genre).
+There are several possible directions for future work.
 
-Rewriting the compiler in its own language could also be interesting,
-although I don't think I have time for such a large project right now!
-(Perhaps sometime in the future.)
+I would like to continue improving the language itself:
 
-As far as the language itself goes I have several ideas for things I
-would like to add:
+ - add "for" loops
+ - add recursion (currently recursive functions or recursive datatypes
+   are not supported, mostly because I haven't got around to adding
+   them yet)
+ - maybe reconsider how "refs" work (as they have some limitations
+   currently)
+ - maybe add support for higher order functions (if I can figure out
+   how to do this in the SMT solvers)
+ - loop features: infinite while loops, "break" and "continue"
+ - consider adding Haskell-like type classes (or something similar)
+ - etc.
 
- - "Refs" could be improved. Currently it is possible to pass function
-   parameters by reference, but not, for example, to return a
-   reference, or store a reference in a data structure. Rust, with its
-   "borrow checker", does allow such things, so perhaps we could
-   consider implementing some similar ideas in Babylon.
+The interface for calling C from Babylon should be improved (something
+like a "foreign function interface", as found in Haskell or other
+languages, is needed).
 
- - It would be nice to support higher order functions (i.e. passing
-   functions to other functions). The main barrier to this is that
-   most SMT solvers do not support higher order functions, so it would
-   be hard to translate higher order programs into something that an
-   SMT solver could understand. However I think there are some things
-   that could be done, so this would be worth investigating.
+A standard library should be added at some point.
 
- - Haskell-like type classes could be interesting to add. With the
-   verifier, we could not only state the list of operations that a
-   type class should support, but also a set of axioms that must be
-   satisfied by all instances.
+The compiler could be made easier to use, e.g.:
+ - better error messages
+ - the provers to be used should be specified in some config file,
+   rather than hard coded
 
- - Recursion is not currently supported, but should be added. (To ensure
-   termination, we would require a "decreases" clause on any recursive
-   function.)
+The compiler could produce more efficient code. Perhaps rather than
+trying to generate asm directly, I should just generate a C program
+and let a C compiler do the heavy lifting of optimisation.
 
- - Miscellaneous other language features should be added, e.g. "for"
-   loops, "break" and "continue" in while loops. Infinite loops should
-   be supported (not by default, but sometimes they are needed).
-   Various other things.
+The compiler should also be portable to other architectures and
+operating systems (currently it only supports x86-64 and Linux).
 
- - I'm considering changing arrays so that they are represented just
-   by a pointer, instead of a tuple of pointer and size (as they are
-   currently). This would mean that "sizeof" would become a ghost
-   construct. Programmers would still be able to pass the size around
-   together with the array if they wanted to, but this change would
-   optimise the case where you already know the size (or don't need
-   it) and just want to pass the pointer around.
+Rewriting the compiler in its own language might be interesting, at
+some point -- but for now it probably makes sense to continue
+improving the language itself, before starting on such a project.
 
- - The interface for calling C from Babylon could be improved.
-   Currently it is completely undocumented -- basically the programmer
-   has to know the exact structure layout that the Babylon compiler
-   uses, and then mimic that structure in the C code. (This is further
-   complicated by the Babylon compiler's insistence on using packed
-   structs everywhere -- that's something else that should be fixed, to
-   be honest.) It would be better if we had some kind of formally
-   defined "foreign function interface".
+Finally, my main motivation for working on this project was that I
+wanted to explore whether it is feasible to use formally verified
+languages, combined with modern SMT solver technology, to create
+"real" programs. To this end, I would like to start writing some
+larger projects/applications in the Babylon language -- perhaps a
+simple 2-D game, using SDL for the graphics (like in the chess
+example).
 
-There are also improvements that could be made to the compiler:
-
- - The error messages need to be improved.
-
- - The provers to be used should be specified in some config file (or
-   similar) rather than hard coded into the compiler.
-
- - The compiler needs to produce better code. We should either rewrite
-   the code generator to be more like a conventional compiler backend
-   (with separate instruction selection, register allocation,
-   optimisation passes and so on); or else we could explore generating
-   C code, and using a C compiler to do the hard work of optimisation.
-   Alternatively we could use something like LLVM. There are lots of
-   options here.
-
- - The compiler should be portable to other architectures and
-   operating systems (currently it only supports x86-64 / Linux).
-
- - It might be useful to give more control over the verifier. E.g.
-   systems like Isabelle have a "using" construct, which allows control
-   over which facts/theorems are actually passed to the solver
-   (sometimes passing a smaller, more relevant set of facts can make
-   the problem easier to solve). It might be good to have something
-   similar in Babylon.
-
-In short, there is a long way to go before this becomes a truly
-"useful" programming language, but what we have so far is a good start
-and a good basis for future experimentation and development.
 
 
 # Related projects
@@ -278,11 +267,14 @@ This whole project was very much inspired by
 [Dafny](https://dafny.org/). However, Dafny is targetting managed
 languages (for example, they use a garbage collector) whereas I am
 more interested in the kind of lower-level programming that one might
-do in Rust or C. (For example, I have explicitly-sized integers, like
-"i32" or "u64", whereas Dafny uses an infinite-sized "int" type.) This
-is why I mentioned Rust above -- perhaps combining some of Rust's
-ideas with the verification features of Dafny could be an interesting
-direction to go in.
+do in Rust or C. For example, I have explicitly-sized integers, like
+"i32" or "u64", whereas Dafny uses an infinite-sized "int" type.
+
+(Indeed, I am considering adding something like Rust's references and
+borrow checking system to the Babylon language -- then we would end up
+with a language that combines the memory safety of Rust with the
+verification features of Dafny. This could be an interesting direction
+to go in.)
 
 There are also many other verifcation and proof systems out there,
 including [Coq](https://coq.inria.fr/),
@@ -294,9 +286,9 @@ to list here.
 
 One important distinction is that systems like Coq or Isabelle place a
 great emphasis on really making sure that the proofs are correct and
-trustworthy. On the other hand, systems like Babylon are willing to
-trust the results of an SMT solver, without further checks being made.
-This means that theoretically, a Babylon program could be successfully
+trustworthy. On the other hand, systems like mine are willing to trust
+the results of an SMT solver, without further checks being made. This
+means that theoretically, a Babylon program could be successfully
 verified, yet not be correct, due to a bug in the SMT solver. (Or
 indeed a bug in the compiler itself!) Personally I am happy with this
 trade-off, but for users who really require a cast-iron guarantee that
@@ -307,4 +299,4 @@ systems would be better.
 
 # Contact
 
-I can be contacted by email at: stephen (at) solarflare.org.uk
+I can be contacted by email at: stephen (at) solarflare.org.uk.
