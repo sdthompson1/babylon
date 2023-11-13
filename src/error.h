@@ -109,6 +109,7 @@ void report_main_not_found(const char *module_name);
 void report_main_wrong_type(const char *module_name);
 void report_both_body_and_extern(struct Location location);
 void report_non_compile_time_constant(struct Location location);
+void report_int_real_not_allowed(struct Location location);
 
 // Verifier errors
 void report_operator_precondition_fail(struct Term *term);
@@ -121,6 +122,7 @@ void report_inconsistent_postconds(struct Decl *decl);
 void report_invariant_violated_on_entry(struct Attribute *attr);
 void report_invariant_violated_on_exit(struct Attribute *attr);
 void report_decreases_might_not_decrease(struct Attribute *attr);
+void report_decreases_not_bounded_below(struct Attribute *attr);
 void report_obtain_doesnt_exist(const struct Statement *stmt);
 void report_nonexhaustive_match(struct Location loc);
 void report_out_of_bounds(struct Location loc);

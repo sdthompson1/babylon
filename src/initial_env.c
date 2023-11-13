@@ -739,6 +739,9 @@ static void add_integer_types(struct HashTable *verifier_env)
         ulim += 1;
         slim += 2;
     }
+
+    div_i(verifier_env, "int");
+    mod_i(verifier_env, "int");
 }
 
 static void setup_arbitrary_array(struct VerifierEnv *verifier_env)

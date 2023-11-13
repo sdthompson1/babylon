@@ -460,6 +460,8 @@ static void lex_keyword_or_name(struct LexerState *state)
         case 'n':
             if (buf[2] == 0) {
                 add_simple_token(state, TOK_KW_IN);
+            } else if (strcmp(&buf[2], "t") == 0) {
+                add_simple_token(state, TOK_KW_INT);
             } else if (strcmp(&buf[2], "terface") == 0) {
                 add_simple_token(state, TOK_KW_INTERFACE);
             } else if (strcmp(&buf[2], "variant") == 0) {
@@ -492,7 +494,9 @@ static void lex_keyword_or_name(struct LexerState *state)
         break;
 
     case 'r':
-        if (strcmp(&buf[1], "ef") == 0) {
+        if (strcmp(&buf[1], "eal") == 0) {
+            add_simple_token(state, TOK_KW_REAL);
+        } else if (strcmp(&buf[1], "ef") == 0) {
             add_simple_token(state, TOK_KW_REF);
         } else if (strcmp(&buf[1], "equires") == 0) {
             add_simple_token(state, TOK_KW_REQUIRES);

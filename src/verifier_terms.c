@@ -587,7 +587,11 @@ static struct Sexpr *make_default(struct Type *type)
         return make_string_sexpr("false");
 
     case TY_INT:
+    case TY_MATH_INT:
         return make_string_sexpr("0");
+
+    case TY_MATH_REAL:
+        return make_string_sexpr("0.0");
 
     case TY_RECORD:
         if (type->record_data.fields) {
@@ -847,8 +851,35 @@ static void* verify_cast(void *context, struct Term *term, void *type_result, vo
         return NULL;
     }
 
-    const struct TypeData_Int *from_type = &term->cast.operand->type->int_data;
-    const struct TypeData_Int *to_type = &term->type->int_data;
+    enum TypeTag from_tag = term->cast.operand->type->tag;
+    enum TypeTag to_tag = term->type->tag;
+
+    bool from_signed = false;
+    int from_num_bits = 0;
+    bool to_signed = false;
+    int to_num_bits = 0;
+
+    if (from_tag == TY_INT) {
+        from_signed = term->cast.operand->type->int_data.is_signed;
+        from_num_bits = term->cast.operand->type->int_data.num_bits;
+    }
+    if (to_tag == TY_INT) {
+        to_signed = term->type->int_data.is_signed;
+        to_num_bits = term->type->int_data.num_bits;
+    }
+
+    // Insert "to_real" or "to_int" if required
+    // (Note: casting from real to int doesn't check if the number is an integer;
+    // instead it does a "floor" operation.)
+    if (from_tag == TY_MATH_REAL) {
+        if (to_tag != TY_MATH_REAL) {
+            operand = make_list2_sexpr(make_string_sexpr("to_int"),
+                                       operand);
+        }
+    } else if (to_tag == TY_MATH_REAL) {
+        operand = make_list2_sexpr(make_string_sexpr("to_real"),
+                                   operand);
+    }
 
     // A check is needed if:
     //  - going from signed to unsigned, at any width
@@ -859,12 +890,16 @@ static void* verify_cast(void *context, struct Term *term, void *type_result, vo
     //      (e.g. 20000 as i16 is representable in i16,i32,i64 but not i8)
 
     bool need_check = false;
-    if (from_type->is_signed && !to_type->is_signed) {
-        need_check = true;
-    } else if (!from_type->is_signed && to_type->is_signed) {
-        need_check = (to_type->num_bits <= from_type->num_bits);
-    } else {
-        need_check = (to_type->num_bits < from_type->num_bits);
+    if (to_num_bits != 0) {
+        if (from_num_bits == 0) {
+            need_check = true;
+        } else if (from_signed && !to_signed) {
+            need_check = true;
+        } else if (!from_signed && to_signed) {
+            need_check = (to_num_bits <= from_num_bits);
+        } else {
+            need_check = (to_num_bits < from_num_bits);
+        }
     }
 
     if (need_check) {
@@ -883,9 +918,6 @@ static void* verify_cast(void *context, struct Term *term, void *type_result, vo
         }
     }
 
-    // All integer types become "Int" in verifier-land, so there is no
-    // need for a cast on the verifier side, we can just return the
-    // same Sexpr.
     return operand;
 }
 
@@ -937,7 +969,9 @@ static void* verify_unop(void *context, struct Term *term, void *type_result, vo
 
     switch (term->unop.operator) {
     case UNOP_NEGATE:
-        check_fun = copy_string_2("$can_neg_", int_type_string(term->unop.operand->type));
+        if (term->unop.operand->type->tag == TY_INT) {
+            check_fun = copy_string_2("$can_neg_", int_type_string(term->unop.operand->type));
+        }
         break;
 
     case UNOP_COMPLEMENT:
@@ -1028,64 +1062,76 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
     const char *ty = term->binop.lhs->type->tag == TY_INT ? int_type_string(term->binop.lhs->type) : "";
 
     // Verify Operator Preconditions
+    // (only relevant if return type is TY_INT i.e. finite integer.)
+    // (note: division preconditions for MATH_INT and MATH_REAL handled below)
     char *check_fun = NULL;
 
-    switch (binop) {
-    case BINOP_PLUS:
-        check_fun = copy_string_2("$can_add_", ty);
-        break;
+    if (term->type->tag == TY_INT) {
+        switch (binop) {
+        case BINOP_PLUS:
+            check_fun = copy_string_2("$can_add_", ty);
+            break;
 
-    case BINOP_MINUS:
-        check_fun = copy_string_2("$can_sub_", ty);
-        break;
+        case BINOP_MINUS:
+            check_fun = copy_string_2("$can_sub_", ty);
+            break;
 
-    case BINOP_TIMES:
-        check_fun = copy_string_2("$can_mul_", ty);
-        break;
+        case BINOP_TIMES:
+            check_fun = copy_string_2("$can_mul_", ty);
+            break;
 
-    case BINOP_DIVIDE:
-    case BINOP_MODULO:
-        check_fun = copy_string_2("$can_div_", ty);
-        break;
+        case BINOP_DIVIDE:
+        case BINOP_MODULO:
+            check_fun = copy_string_2("$can_div_", ty);
+            break;
 
-    case BINOP_BITAND:
-    case BINOP_BITOR:
-    case BINOP_BITXOR:
-        // no precondition
-        break;
+        case BINOP_BITAND:
+        case BINOP_BITOR:
+        case BINOP_BITXOR:
+            // no precondition
+            break;
 
-    case BINOP_SHIFTLEFT:
-        check_fun = copy_string_2("$can_shl_", ty);
-        break;
+        case BINOP_SHIFTLEFT:
+            check_fun = copy_string_2("$can_shl_", ty);
+            break;
 
-    case BINOP_SHIFTRIGHT:
-        check_fun = copy_string_2("$can_shr_", ty);
-        break;
+        case BINOP_SHIFTRIGHT:
+            check_fun = copy_string_2("$can_shr_", ty);
+            break;
 
-    case BINOP_EQUAL:
-    case BINOP_NOT_EQUAL:
-    case BINOP_LESS:
-    case BINOP_LESS_EQUAL:
-    case BINOP_GREATER:
-    case BINOP_GREATER_EQUAL:
-    case BINOP_AND:
-    case BINOP_OR:
-    case BINOP_IMPLIES:
-    case BINOP_IFF:
-        // no precondition
-        break;
+        case BINOP_EQUAL:
+        case BINOP_NOT_EQUAL:
+        case BINOP_LESS:
+        case BINOP_LESS_EQUAL:
+        case BINOP_GREATER:
+        case BINOP_GREATER_EQUAL:
+        case BINOP_AND:
+        case BINOP_OR:
+        case BINOP_IMPLIES:
+        case BINOP_IFF:
+            // no precondition
+            break;
 
-    case BINOP_IMPLIED_BY:
-        fatal_error("<== should have been removed by typechecker");
+        case BINOP_IMPLIED_BY:
+            fatal_error("<== should have been removed by typechecker");
+        }
     }
 
-    if (check_fun != NULL) {
+    struct Sexpr *condition_expr = NULL;
+    if (check_fun) {
         // (check_fun lhs rhs)
-        struct Sexpr * condition_expr =
+        condition_expr =
             make_list3_sexpr(make_string_sexpr_handover(check_fun),
                              copy_sexpr(lhs),
                              copy_sexpr(rhs));
+    } else if (binop == BINOP_DIVIDE || binop == BINOP_MODULO) {
+        condition_expr =
+            make_list3_sexpr(make_string_sexpr("distinct"),
+                             copy_sexpr(rhs),
+                             make_string_sexpr(term->type->tag == TY_MATH_REAL ? "0.0" : "0"));
+    }
 
+    if (condition_expr) {
         bool verify_result = verify_condition(cxt, term->location, condition_expr, "binary operator");
         free_sexpr(condition_expr);
 
@@ -1113,7 +1159,11 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
         break;
 
     case BINOP_DIVIDE:
-        if (ty[0] == 'i') {
+        if (term->type->tag == TY_MATH_REAL) {
+            op = make_string_sexpr("/");
+        } else if (term->type->tag == TY_MATH_INT) {
+            op = make_string_sexpr("$div_int");
+        } else if (ty[0] == 'i') {
             op = make_string_sexpr_handover(copy_string_2("$div_", ty));
         } else {
             op = make_string_sexpr("div");
@@ -1121,7 +1171,9 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
         break;
 
     case BINOP_MODULO:
-        if (ty[0] == 'i') {
+        if (term->type->tag == TY_MATH_INT) {
+            op = make_string_sexpr("$mod_int");
+        } else if (ty[0] == 'i') {
             op = make_string_sexpr_handover(copy_string_2("$mod_", ty));
         } else {
             op = make_string_sexpr("mod");

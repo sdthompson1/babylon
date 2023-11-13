@@ -237,6 +237,8 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
 
     case TY_BOOL:
     case TY_INT:
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
         // nothing to do
         return true;
 
@@ -394,6 +396,8 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
         case TY_RECORD:
         case TY_VARIANT:
         case TY_ARRAY:
+        case TY_MATH_INT:
+        case TY_MATH_REAL:
             if (!types_equal(expected_type, (*term)->type)) {
                 report_type_mismatch(expected_type, *term);
                 tc_context->error = true;
@@ -450,8 +454,8 @@ static bool check_term_is_bool(struct TypecheckContext *tc_context,
     }
 }
 
-// If term is not TY_INT, TY_BOOL, or a tuple of the same, report
-// error and return false. Else return true.
+// If term is not TY_INT, TY_MATH_INT, TY_BOOL, or a tuple of the
+// same, report error and return false. Else return true.
 static bool check_type_is_valid_for_decreases(struct TypecheckContext *tc_context,
                                               struct Type *type,
                                               const struct Location *location)
@@ -469,7 +473,7 @@ static bool check_type_is_valid_for_decreases(struct TypecheckContext *tc_contex
                     return false;
                 }
             }
-        } else if (type->tag != TY_INT && type->tag != TY_BOOL) {
+        } else if (type->tag != TY_INT && type->tag != TY_MATH_INT && type->tag != TY_BOOL) {
             report_invalid_decreases_type(*location);
             tc_context->error = true;
             return false;
@@ -548,13 +552,19 @@ static bool match_int_binop_types(struct TypecheckContext *tc_context, struct Te
     return true;
 }
 
-// Checks that binop args are uniformly all TY_BOOL, or all TY_INT.
-// If TY_INT, cast all args to the same type.
-// In ghost code, if allow_bools==true, also allows any non-function
-// type as long as it matches lhs type.
+enum BinopCategory {
+    BINOP_CAT_ANY_NON_FUNCTION,
+    BINOP_CAT_BOOL_OR_NUMERIC,
+    BINOP_CAT_NUMERIC,
+    BINOP_CAT_ANY_INTEGER,
+    BINOP_CAT_FINITE_INTEGER
+};
+
+// Checks that binop args are valid.
+// If TY_INT, cast all args to the same bitsize and signedness.
 static bool check_binop_args(struct TypecheckContext *tc_context,
                              struct Term *binop,
-                             bool allow_bools)
+                             enum BinopCategory cat)
 {
     struct TermData_BinOp *data = &binop->binop;
 
@@ -563,35 +573,54 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
     }
 
     const char *msg;
-    if (allow_bools) {
-        if (tc_context->executable) {
-            msg = "bool or integer";
-        } else {
-            msg = "non-function type";
-        }
-    } else {
+    switch (cat) {
+    case BINOP_CAT_ANY_NON_FUNCTION:
+        msg = "non-function type";
+        break;
+
+    case BINOP_CAT_BOOL_OR_NUMERIC:
+        msg = "bool or numeric";
+        break;
+
+    case BINOP_CAT_NUMERIC:
+        msg = "numeric type";
+        break;
+
+    case BINOP_CAT_ANY_INTEGER:
         msg = "integer";
+        break;
+
+    case BINOP_CAT_FINITE_INTEGER:
+        msg = "finite-sized integer";
+        break;
     }
 
-    // Check that the lhs is either int or bool (or any non-function type
-    // if in ghost code)
+    // Check the lhs
     bool lhs_ok = false;
     enum TypeTag lhs_tag = data->lhs->type->tag;
 
-    if (!allow_bools) {
-        // comparison operator, only INT allowed
-        lhs_ok = (lhs_tag == TY_INT);
+    switch (cat) {
+    case BINOP_CAT_FINITE_INTEGER:
+        lhs_ok = lhs_tag == TY_INT;
+        break;
 
-    } else {
-        // == or != operator
-        if (tc_context->executable) {
-            // executable code, only INT or BOOL allowed
-            lhs_ok = (lhs_tag == TY_INT || lhs_tag == TY_BOOL);
-        } else {
-            // ghost code, any nonfunction type allowed
-            lhs_ok = (lhs_tag != TY_FUNCTION && lhs_tag != TY_FORALL);
-        }
+    case BINOP_CAT_ANY_INTEGER:
+        lhs_ok = lhs_tag == TY_INT || lhs_tag == TY_MATH_INT;
+        break;
+
+    case BINOP_CAT_NUMERIC:
+        lhs_ok = lhs_tag == TY_INT || lhs_tag == TY_MATH_INT || lhs_tag == TY_MATH_REAL;
+        break;
+
+    case BINOP_CAT_BOOL_OR_NUMERIC:
+        lhs_ok = lhs_tag == TY_INT || lhs_tag == TY_MATH_INT || lhs_tag == TY_MATH_REAL || lhs_tag == TY_BOOL;
+        break;
+
+    case BINOP_CAT_ANY_NON_FUNCTION:
+        lhs_ok = lhs_tag != TY_FUNCTION && lhs_tag != TY_FORALL;
+        break;
     }
+
     if (!lhs_ok) {
         report_type_mismatch_string(msg, data->lhs);
         tc_context->error = true;
@@ -599,14 +628,14 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
     }
 
     // Check that all rhs terms have the same type as the lhs
-    // (but allowing an inexact match in the case of int types).
+    // (but allowing an inexact match in the case of TY_INT).
     for (struct OpTermList *list = data->list; list; list = list->next) {
         if (list->rhs->type == NULL) {
             return false;
         }
         if (lhs_tag == TY_INT) {
             if (list->rhs->type->tag != TY_INT) {
-                report_type_mismatch_string("integer", list->rhs);
+                report_type_mismatch_string("finite-sized integer", list->rhs);
                 tc_context->error = true;
                 return false;
             }
@@ -619,7 +648,7 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
         }
     }
 
-    // If the tag is int, then cast them all to a uniform type.
+    // If the tag is TY_INT, then cast them all to a uniform type.
     if (lhs_tag == TY_INT) {
         match_int_binop_types(tc_context, binop);
     }
@@ -627,8 +656,9 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
     return true;
 }
 
-// check a type is valid for a variable i.e. it is not TY_FUNCTION or TY_FORALL
-// (the type should be valid, kind *)
+// Check a type is valid for a variable i.e. it is not TY_FUNCTION or TY_FORALL.
+// Also, in non-ghost code, make sure it is not TY_MATH_INT or TY_MATH_REAL.
+// (precondition: the type should be valid, kind *)
 static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Location loc,
                                  struct Type *type)
 {
@@ -641,8 +671,34 @@ static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Loc
     case TY_VAR:
     case TY_BOOL:
     case TY_INT:
+        return true;
+
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        if (tc_context->executable) {
+            report_int_real_not_allowed(loc);
+            tc_context->error = true;
+            return false;
+        } else {
+            return true;
+        }
+
     case TY_RECORD:
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            if (!check_valid_var_type(tc_context, loc, field->type)) {
+                return false;
+            }
+        }
+        return true;
+
     case TY_VARIANT:
+        for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+            if (!check_valid_var_type(tc_context, loc, variant->type)) {
+                return false;
+            }
+        }
+        return true;
+
     case TY_ARRAY:
         return true;
 
@@ -848,6 +904,13 @@ static void* typecheck_string_literal(void *context, struct Term *term, void *ty
     return NULL;
 }
 
+static bool valid_cast_type(enum TypeTag tag, bool allow_math)
+{
+    return tag == TY_INT
+        || (allow_math && tag == TY_MATH_INT)
+        || (allow_math && tag == TY_MATH_REAL);
+}
+
 static void* typecheck_cast(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)
 {
     struct TypecheckContext *tc_context = context;
@@ -861,11 +924,19 @@ static void* typecheck_cast(void *context, struct Term *term, void *type_result,
         return NULL;
     }
 
-    // At the moment, cast can only be applied to integers, and can
-    // only convert them to other types of integer.
+    // Casting is allowed from/to TY_INT, TY_MATH_INT and TY_MATH_REAL.
+    // In executable code, this is further restricted to just TY_INT.
 
-    if (term->cast.operand->type->tag != TY_INT || term->cast.target_type->tag != TY_INT) {
-        report_invalid_cast(term);
+    enum TypeTag from_type = term->cast.operand->type->tag;
+    enum TypeTag to_type = term->cast.target_type->tag;
+    bool allow_math = !tc_context->executable;
+
+    if (!valid_cast_type(from_type, allow_math) || !valid_cast_type(to_type, allow_math)) {
+        if (valid_cast_type(from_type, true) && valid_cast_type(to_type, true)) {
+            report_int_real_not_allowed(term->location);
+        } else {
+            report_invalid_cast(term);
+        }
         tc_context->error = true;
     } else {
         term->type = copy_type(term->cast.target_type);
@@ -908,10 +979,16 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
 
     bool ok = true;
 
+    bool numeric = operand->type->tag == TY_INT
+        || operand->type->tag == TY_MATH_INT
+        || operand->type->tag == TY_MATH_REAL;
+
+    bool is_signed = operand->type->tag != TY_INT || operand->type->int_data.is_signed;
+
     switch (operator) {
     case UNOP_NEGATE:
-        if (operand->type->tag != TY_INT || !operand->type->int_data.is_signed) {
-            report_type_mismatch_string("signed integer", operand);
+        if (!numeric || !is_signed) {
+            report_type_mismatch_string("signed numeric type", operand);
             tc_context->error = true;
             ok = false;
         }
@@ -919,7 +996,7 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
 
     case UNOP_COMPLEMENT:
         if (operand->type->tag != TY_INT) {
-            report_type_mismatch_string("integer", operand);
+            report_type_mismatch_string("finite-sized integer", operand);
             tc_context->error = true;
             ok = false;
         }
@@ -1065,10 +1142,28 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
     case BINOP_EQUAL:
     case BINOP_NOT_EQUAL:
         {
-            // == and != can work on bools or ints. All others require ints.
+            // == and != can work on bools or numeric types.
+            // Modulo requires integers.
+            // BIT operators require finite integers.
+            // All others require any numeric type.
             // (exception: in ghost code, == and != can be used at any non-function type)
-            bool allow_bools = (op == BINOP_EQUAL || op == BINOP_NOT_EQUAL);
-            if (check_binop_args(tc_context, term, allow_bools)) {
+
+            enum BinopCategory cat;
+            if (op == BINOP_EQUAL || op == BINOP_NOT_EQUAL) {
+                if (tc_context->executable) {
+                    cat = BINOP_CAT_BOOL_OR_NUMERIC;
+                } else {
+                    cat = BINOP_CAT_ANY_NON_FUNCTION;
+                }
+            } else if (op == BINOP_MODULO) {
+                cat = BINOP_CAT_ANY_INTEGER;
+            } else if (op == BINOP_BITAND || op == BINOP_BITOR || op == BINOP_BITXOR) {
+                cat = BINOP_CAT_FINITE_INTEGER;
+            } else {
+                cat = BINOP_CAT_NUMERIC;
+            }
+
+            if (check_binop_args(tc_context, term, cat)) {
 
                 // The comparisons return bool, others return the same type as their argument.
                 if (op == BINOP_LESS || op == BINOP_LESS_EQUAL
@@ -1076,7 +1171,7 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
                 || op == BINOP_EQUAL || op == BINOP_NOT_EQUAL) {
                     term->type = make_type(g_no_location, TY_BOOL);
 
-                } else if (term->binop.lhs->type->tag == TY_INT) {
+                } else {
                     term->type = copy_type(term->binop.lhs->type);
                 }
 
@@ -1092,16 +1187,18 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
             // Result has same type as lhs.
             // (Note: the parser will not chain shift operators, so only two operands to worry about.)
 
+            // Note: TY_MATH_INT not supported for shifts currently.
+
             bool ok = true;
 
             if (term->binop.lhs->type->tag != TY_INT) {
-                report_type_mismatch_string("integer", term->binop.lhs);
+                report_type_mismatch_string("finite-sized integer", term->binop.lhs);
                 tc_context->error = true;
                 ok = false;
             }
 
             if (term->binop.list->rhs->type->tag != TY_INT) {
-                report_type_mismatch_string("integer", term->binop.list->rhs);
+                report_type_mismatch_string("finite-sized integer", term->binop.list->rhs);
                 tc_context->error = true;
                 ok = false;
             }
@@ -2157,6 +2254,11 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         if (!kindcheck_type(tc_context, &stmt->var_decl.type)) {
             return;
         }
+
+        // Also ensure it is a valid var type.
+        if (!check_valid_var_type(tc_context, stmt->var_decl.type->location, stmt->var_decl.type)) {
+            return;
+        }
     }
 
     // If there is a right-hand-side, then typecheck it.
@@ -2175,8 +2277,6 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
             if (stmt->var_decl.type) {
                 // There is a type annotation. Ensure it is consistent with the rhs term.
-                // (Note: the type must be a valid var type in this case, because there is
-                // no concrete syntax for function or forall types -- yet.)
                 match_term_to_type(tc_context, stmt->var_decl.type, &stmt->var_decl.rhs);
 
             } else if (check_valid_var_type(tc_context, stmt->var_decl.rhs->location, stmt->var_decl.rhs->type)) {
@@ -2737,6 +2837,13 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         if (kindcheck_type(tc_context, &arg->type)) {
+
+            // arg types must be "valid for var" types
+            bool old_exec = tc_context->executable;
+            tc_context->executable = !decl->ghost;
+            check_valid_var_type(tc_context, arg->type->location, arg->type);
+            tc_context->executable = old_exec;
+
             add_to_type_env(tc_context->local_env,
                             arg->name,
                             copy_type(arg->type),   // handover
@@ -2755,6 +2862,13 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     if (ret_type) {
         if (kindcheck_type(tc_context, &decl->function_data.return_type)) {
             ret_type = decl->function_data.return_type;
+
+            // return type must be "valid for var" type
+            bool old_exec = tc_context->executable;
+            tc_context->executable = !decl->ghost;
+            check_valid_var_type(tc_context, ret_type->location, ret_type);
+            tc_context->executable = old_exec;
+
         } else {
             ret_type = NULL;
             kinds_ok = false;

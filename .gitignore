@@ -1,1 +1,6 @@
 build
+gcov
+Shakefile
+Shakefile.hi
+Shakefile.o
+test/output_tmp

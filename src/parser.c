@@ -342,6 +342,16 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
         result = make_int_type(loc, true, 64);
         break;
 
+    case TOK_KW_INT:
+        advance(state);
+        result = make_type(loc, TY_MATH_INT);
+        break;
+
+    case TOK_KW_REAL:
+        advance(state);
+        result = make_type(loc, TY_MATH_REAL);
+        break;
+
     case TOK_LBRACE:
         {
             bool error = false;
@@ -915,6 +925,8 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
     case TOK_KW_U16:
     case TOK_KW_U32:
     case TOK_KW_U64:
+    case TOK_KW_INT:
+    case TOK_KW_REAL:
         {
             struct Type *type = parse_type(state, true);  // will succeed
             struct Term *operand = parse_paren_term(state);

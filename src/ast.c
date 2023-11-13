@@ -115,6 +115,22 @@ void * transform_type(struct TypeTransform *tr, void *context, struct Type *type
         }
         break;
 
+    case TY_MATH_INT:
+        if (tr->transform_math_int) {
+            return tr->transform_math_int(context, type);
+        } else {
+            return NULL;
+        }
+        break;
+
+    case TY_MATH_REAL:
+        if (tr->transform_math_real) {
+            return tr->transform_math_real(context, type);
+        } else {
+            return NULL;
+        }
+        break;
+
     case TY_RECORD:
         {
             void * fields_result = transform_name_type_list(tr, context, type->record_data.fields);
@@ -565,6 +581,16 @@ static void * copy_ty_int(void *context, struct Type *type)
     return result;
 }
 
+static void * copy_ty_math_int(void *context, struct Type *type)
+{
+    return make_type(type->location, TY_MATH_INT);
+}
+
+static void * copy_ty_math_real(void *context, struct Type *type)
+{
+    return make_type(type->location, TY_MATH_REAL);
+}
+
 static void * copy_ty_record(void *context, struct Type *type, void *field_list)
 {
     struct Type *result = make_type(type->location, TY_RECORD);
@@ -663,6 +689,8 @@ void copying_type_transform(struct TypeTransform *tr)
     tr->transform_var = copy_ty_var;
     tr->transform_bool = copy_ty_bool;
     tr->transform_int = copy_ty_int;
+    tr->transform_math_int = copy_ty_math_int;
+    tr->transform_math_real = copy_ty_math_real;
     tr->transform_record = copy_ty_record;
     tr->transform_variant = copy_ty_variant;
     tr->transform_array = copy_ty_array;
@@ -755,6 +783,8 @@ static void freeing_type_transform(struct TypeTransform *tr)
     tr->transform_var = free_var_type;
     tr->transform_bool = free_type_0;
     tr->transform_int = free_type_0;
+    tr->transform_math_int = free_type_0;
+    tr->transform_math_real = free_type_0;
     tr->transform_record = free_type_1;
     tr->transform_variant = free_type_1;
     tr->transform_array = free_type_1;
@@ -1756,6 +1786,10 @@ bool types_equal(const struct Type *lhs, const struct Type *rhs)
     case TY_INT:
         return lhs->int_data.is_signed == rhs->int_data.is_signed &&
             lhs->int_data.num_bits == rhs->int_data.num_bits;
+
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        return true;
 
     case TY_RECORD:
         return name_type_lists_equal(lhs->record_data.fields, rhs->record_data.fields);

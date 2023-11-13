@@ -1,5 +1,5 @@
 Quantifiers.b:7:28: Type mismatch
-Quantifiers.b:8:32: Type mismatch (expected integer)
+Quantifiers.b:8:32: Type mismatch (expected finite-sized integer)
 Quantifiers.b:14:19: Quantifiers cannot be used in executable code
 Quantifiers.b:16:12: Quantifiers cannot be used in executable code
 Quantifiers.b:26:20: Quantifiers cannot be used in executable code

@@ -227,6 +227,12 @@ void report_non_compile_time_constant(struct Location location)
     print_error("Value is not a compile-time constant\n");
 }
 
+void report_int_real_not_allowed(struct Location location)
+{
+    print_location(location);
+    print_error("'int' or 'real' types not allowed in executable code\n");
+}
+
 
 void report_type_mismatch(struct Type *expected_type, struct Term *term)
 {
@@ -258,7 +264,7 @@ void report_type_mismatch_pattern(struct Type *scrut_type, struct Location locat
 void report_invalid_decreases_type(struct Location location)
 {
     print_location(location);
-    print_error("Invalid type for 'decreases' (must be int, bool, or tuple of the above)\n");
+    print_error("Invalid type for 'decreases' (must be integer, bool, or tuple of the above)\n");
 }
 
 void report_pattern_wrong_number_of_fields(struct Location location)
@@ -645,6 +651,12 @@ void report_decreases_might_not_decrease(struct Attribute *attr)
 {
     print_location(attr->location);
     print_error("'decreases' value might not decrease\n");
+}
+
+void report_decreases_not_bounded_below(struct Attribute *attr)
+{
+    print_location(attr->location);
+    print_error("'decreases' value (of type 'int') might not be bounded below by zero\n");
 }
 
 void report_obtain_doesnt_exist(const struct Statement *stmt)

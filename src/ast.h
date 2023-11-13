@@ -25,6 +25,8 @@ enum TypeTag {
     TY_VAR,        // variable (or type-name)
     TY_BOOL,
     TY_INT,
+    TY_MATH_INT,
+    TY_MATH_REAL,
     TY_RECORD,
     TY_VARIANT,
     TY_ARRAY,
@@ -656,6 +658,8 @@ struct TypeTransform {
     void * (*transform_var) (void *context, struct Type *type_var);
     void * (*transform_bool) (void *context, struct Type *type_bool);
     void * (*transform_int) (void *context, struct Type *type_int);
+    void * (*transform_math_int) (void *context, struct Type *type_math_int);
+    void * (*transform_math_real) (void *context, struct Type *type_math_real);
     void * (*transform_record) (void *context, struct Type *type_record, void *fields_result);
     void * (*transform_variant) (void *context, struct Type *type_variant, void *variants_result);
     void * (*transform_array) (void *context, struct Type *type_array, void *elt_type_result);

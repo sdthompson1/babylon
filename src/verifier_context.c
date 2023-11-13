@@ -1077,6 +1077,10 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
             make_string_sexpr_handover(copy_string_2("$in_range_", int_type_string(type))),
             make_string_sexpr(var_name));
 
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        return NULL;
+
     case TY_RECORD:
         return make_record_predicate(type, var_name, validity_test_expr, conjunction);
 
@@ -1198,6 +1202,8 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
 
     case TY_BOOL:
     case TY_INT:
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
         return NULL;
 
     case TY_RECORD:

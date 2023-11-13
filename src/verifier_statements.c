@@ -895,6 +895,7 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
             make_list2_sexpr(make_string_sexpr("not"), new_variant));
 
     case TY_INT:
+    case TY_MATH_INT:
         // new_variant must be strictly less than old
         return make_list3_sexpr(
             make_string_sexpr("<"),
@@ -981,6 +982,7 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
     case TY_FORALL:
     case TY_LAMBDA:
     case TY_APP:
+    case TY_MATH_REAL:
         // the typechecker shouldn't allow these as 'decreases' expressions
         fatal_error("decreases clause - unexpected type");
     }
@@ -988,6 +990,87 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
     fatal_error("decreases clause - unhandled case");
 }
 
+static struct Sexpr *variant_bounded_expr(struct Type *type,
+                                          struct Sexpr *variant)
+{
+    switch (type->tag) {
+    case TY_BOOL:
+    case TY_INT:
+        return NULL;
+
+    case TY_MATH_INT:
+        return make_list3_sexpr(make_string_sexpr(">="),
+                                copy_sexpr(variant),
+                                make_string_sexpr("0"));
+
+    case TY_RECORD:
+        ;
+
+        // first get the list of field types, so we can do $FLD projections
+        struct Sexpr *field_types = NULL;
+        struct Sexpr **field_types_tail = &field_types;
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            *field_types_tail = make_list1_sexpr(verify_type(field->type));
+            field_types_tail = &(*field_types_tail)->right;
+        }
+
+        // make a list of boundedness conditions
+        struct Sexpr *cond_list = NULL;
+        struct Sexpr **cond_tail = &cond_list;
+
+        // iterate through the fields
+        uint32_t num = 0;
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+
+            // project out this field
+            char fld[30];
+            sprintf(fld, "$FLD%" PRIu32, num);
+
+            struct Sexpr *field_proj_sexpr = make_string_sexpr(fld);
+            make_instance(&field_proj_sexpr, copy_sexpr(field_types));
+
+            field_proj_sexpr = make_list2_sexpr(field_proj_sexpr, copy_sexpr(variant));
+
+            // figure out the condition for this field to be bounded (if any)
+            struct Sexpr *field_bound_cond = variant_bounded_expr(field->type, field_proj_sexpr);
+
+            free_sexpr(field_proj_sexpr);
+            field_proj_sexpr = NULL;
+
+            if (field_bound_cond) {
+                // add it to the list
+                *cond_tail = make_list1_sexpr(field_bound_cond);
+                cond_tail = &(*cond_tail)->right;
+            }
+
+            ++num;
+        }
+
+        // field_types no longer needed
+        free_sexpr(field_types);
+        field_types = NULL;
+
+        // return the conjunction of all conditions (if any)
+        if (cond_list) {
+            return conjunction(cond_list);
+        } else {
+            return NULL;
+        }
+
+    case TY_VAR:
+    case TY_VARIANT:
+    case TY_ARRAY:
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+    case TY_MATH_REAL:
+        // the typechecker shouldn't allow these as 'decreases' expressions
+        fatal_error("decreases clause - unexpected type");
+    }
+
+    fatal_error("decreases clause - unhandled case");
+}
 
 // Verify that the new variant is lower than the old.
 // May modify the path condition.
@@ -1025,6 +1108,40 @@ static bool check_variant_has_decreased(struct VContext *context,
 
     if (!valid) {
         report_decreases_might_not_decrease(attr);
+    }
+
+    return valid;
+}
+
+// Verify that the variant is bounded below - this is automatic for TY_INT and TY_BOOL
+// but needs to be checked for TY_MATH_INT.
+static bool check_variant_is_bounded(struct VContext *context,
+                                     struct Statement *while_stmt,
+                                     struct Sexpr *variant)
+{
+    if (variant == NULL) {
+        return false;
+    }
+
+    struct Attribute *attr = while_stmt->while_data.attributes;
+    while (attr) {
+        if (attr->tag == ATTR_DECREASES) {
+            break;
+        }
+        attr = attr->next;
+    }
+
+    struct Sexpr *bounded_expr = variant_bounded_expr(attr->term->type,
+                                                      variant);
+    bool valid = true;
+
+    if (bounded_expr) {
+        valid = verify_condition(context, attr->location, bounded_expr, "decreases bounded below");
+        free_sexpr(bounded_expr);
+
+        if (!valid) {
+            report_decreases_not_bounded_below(attr);
+        }
     }
 
     return valid;
@@ -1096,6 +1213,10 @@ bool verify_while_stmt(struct VContext *context,
         valid = false;
     }
 
+    // Verify that the initial variant is bounded
+    if (!check_variant_is_bounded(context, stmt, initial_variant)) {
+        valid = false;
+    }
 
     // Verify the loop body
     if (!verify_statements(context, stmt->while_data.body, next_axiom_ptr)) {

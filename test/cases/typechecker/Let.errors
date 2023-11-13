@@ -1,2 +1,2 @@
-Let.b:4:30: Type mismatch (expected integer)
-Let.b:7:35: Type mismatch (expected integer)
+Let.b:4:30: Type mismatch (expected finite-sized integer)
+Let.b:7:35: Type mismatch (expected finite-sized integer)

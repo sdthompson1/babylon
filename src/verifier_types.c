@@ -27,7 +27,11 @@ struct Sexpr * verify_type(struct Type *type)
         return make_string_sexpr("Bool");
 
     case TY_INT:
+    case TY_MATH_INT:
         return make_string_sexpr("Int");
+
+    case TY_MATH_REAL:
+        return make_string_sexpr("Real");
 
     case TY_RECORD:
         {

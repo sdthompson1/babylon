@@ -1,2 +1,2 @@
 AbstractType.b:5:1: Abstract type declarations cannot (currently) have type variables
-AbstractType.b:21:9: Type mismatch (expected integer)
+AbstractType.b:21:9: Type mismatch (expected numeric type)

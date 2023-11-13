@@ -61,6 +61,14 @@ static void print_type(FILE *file, struct Type *type)
                 type->int_data.num_bits);
         break;
 
+    case TY_MATH_INT:
+        fprintf(file, "int");
+        break;
+
+    case TY_MATH_REAL:
+        fprintf(file, "real");
+        break;
+
     case TY_RECORD:
         fprintf(file, "{");
         print_name_type_list(file, type->record_data.fields);
