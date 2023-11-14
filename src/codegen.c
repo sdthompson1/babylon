@@ -170,17 +170,17 @@ static bool is_memory_type(const struct Type *type)
 
 static bool is_signed_integral_type(const struct Type *type)
 {
-    if (type->tag == TY_INT) {
+    if (type->tag == TY_FINITE_INT) {
         return type->int_data.is_signed;
     } else {
         return false;
     }
 }
 
-// calculate size of a TY_INT or TY_BOOL type. Returns 1, 2, 4 or 8.
+// calculate size of a TY_FINITE_INT or TY_BOOL type. Returns 1, 2, 4 or 8.
 static int size_of_integral_type(const struct Type *type)
 {
-    if (type->tag == TY_INT) {
+    if (type->tag == TY_FINITE_INT) {
         return type->int_data.num_bits / 8;
     } else if (type->tag == TY_BOOL) {
         return 1;
@@ -1279,7 +1279,7 @@ static void codegen_binop(struct CGContext *cxt, enum CodegenMode mode, struct T
         }
 
         bool is_signed = false;
-        if (term->binop.lhs->type->tag == TY_INT) {
+        if (term->binop.lhs->type->tag == TY_FINITE_INT) {
             is_signed = term->binop.lhs->type->int_data.is_signed;
         }
 

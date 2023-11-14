@@ -240,7 +240,7 @@ static struct Term * eval_binop(struct HashTable *env, struct Term *term)
         return NULL;
     }
 
-    bool is_signed = lhs->type->tag == TY_INT ? lhs->type->int_data.is_signed : false;
+    bool is_signed = lhs->type->tag == TY_FINITE_INT ? lhs->type->int_data.is_signed : false;
     uint64_t lhs_value = normal_form_to_int(lhs);
     uint64_t rhs_value = normal_form_to_int(rhs);
     free_term(lhs);

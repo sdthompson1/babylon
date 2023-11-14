@@ -107,9 +107,9 @@ void * transform_type(struct TypeTransform *tr, void *context, struct Type *type
         }
         break;
 
-    case TY_INT:
-        if (tr->transform_int) {
-            return tr->transform_int(context, type);
+    case TY_FINITE_INT:
+        if (tr->transform_finite_int) {
+            return tr->transform_finite_int(context, type);
         } else {
             return NULL;
         }
@@ -555,7 +555,7 @@ struct Type * make_type(struct Location loc, enum TypeTag tag)
 
 struct Type * make_int_type(struct Location loc, bool is_signed, int num_bits)
 {
-    struct Type * type = make_type(loc, TY_INT);
+    struct Type * type = make_type(loc, TY_FINITE_INT);
     type->int_data.is_signed = is_signed;
     type->int_data.num_bits = num_bits;
     return type;
@@ -574,9 +574,9 @@ static void * copy_ty_bool(void *context, struct Type *type)
     return make_type(type->location, TY_BOOL);
 }
 
-static void * copy_ty_int(void *context, struct Type *type)
+static void * copy_ty_finite_int(void *context, struct Type *type)
 {
-    struct Type *result = make_type(type->location, TY_INT);
+    struct Type *result = make_type(type->location, TY_FINITE_INT);
     result->int_data = type->int_data;
     return result;
 }
@@ -688,7 +688,7 @@ void copying_type_transform(struct TypeTransform *tr)
 {
     tr->transform_var = copy_ty_var;
     tr->transform_bool = copy_ty_bool;
-    tr->transform_int = copy_ty_int;
+    tr->transform_finite_int = copy_ty_finite_int;
     tr->transform_math_int = copy_ty_math_int;
     tr->transform_math_real = copy_ty_math_real;
     tr->transform_record = copy_ty_record;
@@ -782,7 +782,7 @@ static void freeing_type_transform(struct TypeTransform *tr)
 {
     tr->transform_var = free_var_type;
     tr->transform_bool = free_type_0;
-    tr->transform_int = free_type_0;
+    tr->transform_finite_int = free_type_0;
     tr->transform_math_int = free_type_0;
     tr->transform_math_real = free_type_0;
     tr->transform_record = free_type_1;
@@ -1783,7 +1783,7 @@ bool types_equal(const struct Type *lhs, const struct Type *rhs)
     case TY_BOOL:
         return true;
 
-    case TY_INT:
+    case TY_FINITE_INT:
         return lhs->int_data.is_signed == rhs->int_data.is_signed &&
             lhs->int_data.num_bits == rhs->int_data.num_bits;
 

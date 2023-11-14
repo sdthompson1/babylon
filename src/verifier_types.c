@@ -26,7 +26,7 @@ struct Sexpr * verify_type(struct Type *type)
     case TY_BOOL:
         return make_string_sexpr("Bool");
 
-    case TY_INT:
+    case TY_FINITE_INT:
     case TY_MATH_INT:
         return make_string_sexpr("Int");
 

@@ -55,7 +55,7 @@ static void print_type(FILE *file, struct Type *type)
         fprintf(file, "bool");
         break;
 
-    case TY_INT:
+    case TY_FINITE_INT:
         fprintf(file, "%s%d",
                 type->int_data.is_signed ? "i" : "u",
                 type->int_data.num_bits);

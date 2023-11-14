@@ -682,7 +682,7 @@ static struct MC_Output * split_up_match(
         free((void*)chosen_ctor);
         return result_a;
 
-    case TY_INT:
+    case TY_FINITE_INT:
         {
             struct Term *cond_term = make_term(chosen_location, TM_BINOP);
             cond_term->type = make_type(g_no_location, TY_BOOL);

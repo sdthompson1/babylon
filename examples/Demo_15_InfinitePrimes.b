@@ -9,7 +9,7 @@
 // (as there is not currently any support for arbitrary-precision arithmetic
 // at runtime).
 
-module Demo_15_Infinite_Primes
+module Demo_15_InfinitePrimes
 
 interface {}
 
@@ -28,8 +28,9 @@ ghost function is_prime(n: int): bool
 // We first need some arithmetic lemmas.
 
 // If i divides n, then i also divides n*m, for any integer m.
+// (We prove this for non-negative i,n,m only, because that is all we will need below.)
 ghost function mod_lemma_1(n: int, m: int, i: int)
-    requires i != int(0);
+    requires i > int(0) && n >= int(0) && m >= int(0);
     requires n % i == int(0);
     ensures (n * m) % i == int(0);
 {
@@ -39,29 +40,23 @@ ghost function mod_lemma_1(n: int, m: int, i: int)
 
 // If a%b == 0, and b%c == 0, then a%c == 0.
 ghost function mod_lemma_2(a: int, b: int, c: int)
-    requires b != int(0) && c != int(0);
+    requires a >= int(0) && b > int(0) && c > int(0);
     requires a % b == int(0);
     requires b % c == int(0);
     ensures a % c == int(0);
 {
-    var k1 = a/b;
-    assert a == k1 * b;
-
-    var k2 = b/c;
-    assert b == k2 * c;
-
-    var k3 = k1*k2;
-    assert a == k3 * c;
-
-    assert a/c == k3;
+    assert (a/b) * (b/c) == (a/c);
 }
 
-// If a%b == 0, and b > 1, then a%b + 1 == 1.
+// If a%b == 0, a >= 0, and b > 1, then a%b + 1 == 1.
 ghost function mod_lemma_3(a: int, b: int)
+    requires a >= int(0);
     requires b > int(1);
     requires a % b == int(0);
     ensures (a + int(1)) % b == int(1);
-{}
+{
+    assert a == (a/b) * b;
+}
 
 // This multiplies A by B and also asserts that the result is divisible by B.
 ghost function multiply(a: int, b: int): int

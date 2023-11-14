@@ -29,7 +29,7 @@ uint64_t parse_int_literal(const char *data);
 uint64_t normal_form_to_int(const struct Term *term);
 
 // Make a normal form term from a type and value.
-// The type must be TY_INT or TY_BOOL.
+// The type must be TY_FINITE_INT or TY_BOOL.
 struct Term * make_literal_of_type(struct Type *type, uint64_t value);
 
 #endif

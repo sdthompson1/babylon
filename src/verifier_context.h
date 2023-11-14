@@ -177,7 +177,7 @@ void free_ref_chain(struct RefChain *);
 void clear_refs_hash_table(struct HashTable *table);
 
 // returns a statically-allocated string: "u32", "i64" etc.
-// only works for TY_INT types
+// only works for TY_FINITE_INT types
 const char *int_type_string(const struct Type *type);
 
 // Make a new Item for a declare-const, and add it to the context

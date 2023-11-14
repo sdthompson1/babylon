@@ -586,7 +586,7 @@ static struct Sexpr *make_default(struct Type *type)
     case TY_BOOL:
         return make_string_sexpr("false");
 
-    case TY_INT:
+    case TY_FINITE_INT:
     case TY_MATH_INT:
         return make_string_sexpr("0");
 
@@ -859,11 +859,11 @@ static void* verify_cast(void *context, struct Term *term, void *type_result, vo
     bool to_signed = false;
     int to_num_bits = 0;
 
-    if (from_tag == TY_INT) {
+    if (from_tag == TY_FINITE_INT) {
         from_signed = term->cast.operand->type->int_data.is_signed;
         from_num_bits = term->cast.operand->type->int_data.num_bits;
     }
-    if (to_tag == TY_INT) {
+    if (to_tag == TY_FINITE_INT) {
         to_signed = term->type->int_data.is_signed;
         to_num_bits = term->type->int_data.num_bits;
     }
@@ -969,7 +969,7 @@ static void* verify_unop(void *context, struct Term *term, void *type_result, vo
 
     switch (term->unop.operator) {
     case UNOP_NEGATE:
-        if (term->unop.operand->type->tag == TY_INT) {
+        if (term->unop.operand->type->tag == TY_FINITE_INT) {
             check_fun = copy_string_2("$can_neg_", int_type_string(term->unop.operand->type));
         }
         break;
@@ -1059,14 +1059,14 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
     }
 
     // "ty" string needed for some integer operations
-    const char *ty = term->binop.lhs->type->tag == TY_INT ? int_type_string(term->binop.lhs->type) : "";
+    const char *ty = term->binop.lhs->type->tag == TY_FINITE_INT ? int_type_string(term->binop.lhs->type) : "";
 
     // Verify Operator Preconditions
-    // (only relevant if return type is TY_INT i.e. finite integer.)
-    // (note: division preconditions for MATH_INT and MATH_REAL handled below)
+    // (most of these apply to TY_FINITE_INT only, although BINOP_DIVIDE and BINOP_MODULO
+    // also have preconditions for TY_MATH_INT.)
     char *check_fun = NULL;
 
-    if (term->type->tag == TY_INT) {
+    if (term->type->tag == TY_FINITE_INT) {
         switch (binop) {
         case BINOP_PLUS:
             check_fun = copy_string_2("$can_add_", ty);

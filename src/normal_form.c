@@ -73,7 +73,7 @@ struct Term * make_literal_of_type(struct Type *type, uint64_t value)
     struct Term *result = NULL;
 
     switch (type->tag) {
-    case TY_INT:
+    case TY_FINITE_INT:
         if (type->int_data.is_signed) {
             int64_t signed_value;
             memcpy(&signed_value, &value, sizeof(int64_t));

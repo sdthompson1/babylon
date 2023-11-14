@@ -236,7 +236,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
         return true;
 
     case TY_BOOL:
-    case TY_INT:
+    case TY_FINITE_INT:
     case TY_MATH_INT:
     case TY_MATH_REAL:
         // nothing to do
@@ -407,7 +407,7 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
             }
             break;
 
-        case TY_INT:
+        case TY_FINITE_INT:
             if (expected_type->int_data.is_signed != (*term)->type->int_data.is_signed
             || expected_type->int_data.num_bits != (*term)->type->int_data.num_bits) {
 
@@ -454,7 +454,7 @@ static bool check_term_is_bool(struct TypecheckContext *tc_context,
     }
 }
 
-// If term is not TY_INT, TY_MATH_INT, TY_BOOL, or a tuple of the
+// If term is not TY_FINITE_INT, TY_MATH_INT, TY_BOOL, or a tuple of the
 // same, report error and return false. Else return true.
 static bool check_type_is_valid_for_decreases(struct TypecheckContext *tc_context,
                                               struct Type *type,
@@ -473,7 +473,7 @@ static bool check_type_is_valid_for_decreases(struct TypecheckContext *tc_contex
                     return false;
                 }
             }
-        } else if (type->tag != TY_INT && type->tag != TY_MATH_INT && type->tag != TY_BOOL) {
+        } else if (type->tag != TY_FINITE_INT && type->tag != TY_MATH_INT && type->tag != TY_BOOL) {
             report_invalid_decreases_type(*location);
             tc_context->error = true;
             return false;
@@ -496,7 +496,7 @@ static int bigger_width(int num_bits)
 }
 
 // Helper for check_binop_args.
-// Tries to cast all TY_INT terms in a (possibly chained) binop term to a common type.
+// Tries to cast all TY_FINITE_INT terms in a (possibly chained) binop term to a common type.
 // On success, wraps cast(s) arounds terms if required.
 // On failure, logs error & sets tc_context->error.
 static bool match_int_binop_types(struct TypecheckContext *tc_context, struct Term *term)
@@ -561,7 +561,7 @@ enum BinopCategory {
 };
 
 // Checks that binop args are valid.
-// If TY_INT, cast all args to the same bitsize and signedness.
+// If TY_FINITE_INT, cast all args to the same bitsize and signedness.
 static bool check_binop_args(struct TypecheckContext *tc_context,
                              struct Term *binop,
                              enum BinopCategory cat)
@@ -601,19 +601,19 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
 
     switch (cat) {
     case BINOP_CAT_FINITE_INTEGER:
-        lhs_ok = lhs_tag == TY_INT;
+        lhs_ok = lhs_tag == TY_FINITE_INT;
         break;
 
     case BINOP_CAT_ANY_INTEGER:
-        lhs_ok = lhs_tag == TY_INT || lhs_tag == TY_MATH_INT;
+        lhs_ok = lhs_tag == TY_FINITE_INT || lhs_tag == TY_MATH_INT;
         break;
 
     case BINOP_CAT_NUMERIC:
-        lhs_ok = lhs_tag == TY_INT || lhs_tag == TY_MATH_INT || lhs_tag == TY_MATH_REAL;
+        lhs_ok = lhs_tag == TY_FINITE_INT || lhs_tag == TY_MATH_INT || lhs_tag == TY_MATH_REAL;
         break;
 
     case BINOP_CAT_BOOL_OR_NUMERIC:
-        lhs_ok = lhs_tag == TY_INT || lhs_tag == TY_MATH_INT || lhs_tag == TY_MATH_REAL || lhs_tag == TY_BOOL;
+        lhs_ok = lhs_tag == TY_FINITE_INT || lhs_tag == TY_MATH_INT || lhs_tag == TY_MATH_REAL || lhs_tag == TY_BOOL;
         break;
 
     case BINOP_CAT_ANY_NON_FUNCTION:
@@ -628,13 +628,13 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
     }
 
     // Check that all rhs terms have the same type as the lhs
-    // (but allowing an inexact match in the case of TY_INT).
+    // (but allowing an inexact match in the case of TY_FINITE_INT).
     for (struct OpTermList *list = data->list; list; list = list->next) {
         if (list->rhs->type == NULL) {
             return false;
         }
-        if (lhs_tag == TY_INT) {
-            if (list->rhs->type->tag != TY_INT) {
+        if (lhs_tag == TY_FINITE_INT) {
+            if (list->rhs->type->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", list->rhs);
                 tc_context->error = true;
                 return false;
@@ -648,8 +648,8 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
         }
     }
 
-    // If the tag is TY_INT, then cast them all to a uniform type.
-    if (lhs_tag == TY_INT) {
+    // If the tag is TY_FINITE_INT, then cast them all to a uniform type.
+    if (lhs_tag == TY_FINITE_INT) {
         match_int_binop_types(tc_context, binop);
     }
 
@@ -670,7 +670,7 @@ static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Loc
     switch (type->tag) {
     case TY_VAR:
     case TY_BOOL:
-    case TY_INT:
+    case TY_FINITE_INT:
         return true;
 
     case TY_MATH_INT:
@@ -906,7 +906,7 @@ static void* typecheck_string_literal(void *context, struct Term *term, void *ty
 
 static bool valid_cast_type(enum TypeTag tag, bool allow_math)
 {
-    return tag == TY_INT
+    return tag == TY_FINITE_INT
         || (allow_math && tag == TY_MATH_INT)
         || (allow_math && tag == TY_MATH_REAL);
 }
@@ -924,8 +924,8 @@ static void* typecheck_cast(void *context, struct Term *term, void *type_result,
         return NULL;
     }
 
-    // Casting is allowed from/to TY_INT, TY_MATH_INT and TY_MATH_REAL.
-    // In executable code, this is further restricted to just TY_INT.
+    // Casting is allowed from/to TY_FINITE_INT, TY_MATH_INT and TY_MATH_REAL.
+    // In executable code, this is further restricted to just TY_FINITE_INT.
 
     enum TypeTag from_type = term->cast.operand->type->tag;
     enum TypeTag to_type = term->cast.target_type->tag;
@@ -979,11 +979,11 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
 
     bool ok = true;
 
-    bool numeric = operand->type->tag == TY_INT
+    bool numeric = operand->type->tag == TY_FINITE_INT
         || operand->type->tag == TY_MATH_INT
         || operand->type->tag == TY_MATH_REAL;
 
-    bool is_signed = operand->type->tag != TY_INT || operand->type->int_data.is_signed;
+    bool is_signed = operand->type->tag != TY_FINITE_INT || operand->type->int_data.is_signed;
 
     switch (operator) {
     case UNOP_NEGATE:
@@ -995,7 +995,7 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
         break;
 
     case UNOP_COMPLEMENT:
-        if (operand->type->tag != TY_INT) {
+        if (operand->type->tag != TY_FINITE_INT) {
             report_type_mismatch_string("finite-sized integer", operand);
             tc_context->error = true;
             ok = false;
@@ -1191,13 +1191,13 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
 
             bool ok = true;
 
-            if (term->binop.lhs->type->tag != TY_INT) {
+            if (term->binop.lhs->type->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", term->binop.lhs);
                 tc_context->error = true;
                 ok = false;
             }
 
-            if (term->binop.list->rhs->type->tag != TY_INT) {
+            if (term->binop.list->rhs->type->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", term->binop.list->rhs);
                 tc_context->error = true;
                 ok = false;
@@ -1888,7 +1888,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         }
 
     case PAT_INT:
-        if (scrutinee_type->tag != TY_INT) {
+        if (scrutinee_type->tag != TY_FINITE_INT) {
             report_type_mismatch_pattern(scrutinee_type, pattern->location);
             tc_context->error = true;
             return false;

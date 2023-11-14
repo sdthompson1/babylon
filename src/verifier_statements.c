@@ -894,7 +894,7 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
             old_variant,
             make_list2_sexpr(make_string_sexpr("not"), new_variant));
 
-    case TY_INT:
+    case TY_FINITE_INT:
     case TY_MATH_INT:
         // new_variant must be strictly less than old
         return make_list3_sexpr(
@@ -995,7 +995,7 @@ static struct Sexpr *variant_bounded_expr(struct Type *type,
 {
     switch (type->tag) {
     case TY_BOOL:
-    case TY_INT:
+    case TY_FINITE_INT:
         return NULL;
 
     case TY_MATH_INT:
@@ -1113,7 +1113,7 @@ static bool check_variant_has_decreased(struct VContext *context,
     return valid;
 }
 
-// Verify that the variant is bounded below - this is automatic for TY_INT and TY_BOOL
+// Verify that the variant is bounded below - this is automatic for TY_FINITE_INT and TY_BOOL
 // but needs to be checked for TY_MATH_INT.
 static bool check_variant_is_bounded(struct VContext *context,
                                      struct Statement *while_stmt,

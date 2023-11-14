@@ -274,7 +274,7 @@ void revert_facts(struct VContext *context, int num)
 
 const char * int_type_string(const struct Type *type)
 {
-    if (type->tag != TY_INT) {
+    if (type->tag != TY_FINITE_INT) {
         fatal_error("int_type_string called on wrong type");
     }
 
@@ -1072,7 +1072,7 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
     case TY_BOOL:
         return NULL;
 
-    case TY_INT:
+    case TY_FINITE_INT:
         return make_list2_sexpr(
             make_string_sexpr_handover(copy_string_2("$in_range_", int_type_string(type))),
             make_string_sexpr(var_name));
@@ -1201,7 +1201,7 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
                                 make_string_sexpr(var_name));
 
     case TY_BOOL:
-    case TY_INT:
+    case TY_FINITE_INT:
     case TY_MATH_INT:
     case TY_MATH_REAL:
         return NULL;

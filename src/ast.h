@@ -24,7 +24,7 @@ repository.
 enum TypeTag {
     TY_VAR,        // variable (or type-name)
     TY_BOOL,
-    TY_INT,
+    TY_FINITE_INT,
     TY_MATH_INT,
     TY_MATH_REAL,
     TY_RECORD,
@@ -657,7 +657,7 @@ struct Module {
 struct TypeTransform {
     void * (*transform_var) (void *context, struct Type *type_var);
     void * (*transform_bool) (void *context, struct Type *type_bool);
-    void * (*transform_int) (void *context, struct Type *type_int);
+    void * (*transform_finite_int) (void *context, struct Type *type_finite_int);
     void * (*transform_math_int) (void *context, struct Type *type_math_int);
     void * (*transform_math_real) (void *context, struct Type *type_math_real);
     void * (*transform_record) (void *context, struct Type *type_record, void *fields_result);
