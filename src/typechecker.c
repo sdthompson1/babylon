@@ -1043,8 +1043,7 @@ static void break_chain(struct TypecheckContext *tc_context, struct Term *term)
         tm1->binop.lhs = term_a;
         tm1->binop.list = alloc(sizeof(struct OpTermList));
         tm1->binop.list->operator = operator;
-        tm1->binop.list->rhs = make_var_term(term_b->location, term_b->var.name);
-        tm1->binop.list->rhs->type = copy_type(term_b->type);
+        tm1->binop.list->rhs = copy_term(term_b);
         tm1->binop.list->next = NULL;
 
         struct Term * tm2 = make_term(term_b->location, TM_BINOP);

@@ -36,3 +36,9 @@ function test3()
     var y = identity(x.0);
     assert y == 0;
 }
+
+function chain_test(ref x: i32)
+    ensures 1 <= x <= 2;
+{
+    x = 1;
+}
