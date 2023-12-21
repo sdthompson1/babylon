@@ -209,13 +209,23 @@ static bool verify_obtain_stmt(struct VContext *context, struct Statement *stmt)
     // Transform the condition
     struct Sexpr *cond = verify_term(context, stmt->obtain.condition);
     if (cond) {
-        // We must verify that a var exists that satisfies the condition.
+
+        // Update the cond to say that the value must also be a valid
+        // value of its type.
+        struct Sexpr *var = make_string_sexpr(item->fol_name);
+        cond = insert_validity_condition(context,
+                                         QUANT_EXISTS,
+                                         stmt->obtain.type,
+                                         var,
+                                         cond);
+
+        // Verify that such a value exists.
         struct Sexpr *exists =
             make_list3_sexpr(
                 make_string_sexpr("exists"),
                 make_list1_sexpr(
                      make_list2_sexpr(
-                         make_string_sexpr(item->fol_name),
+                         var,
                          copy_sexpr(item->fol_type))),
                 copy_sexpr(cond));
         bool result = verify_condition(context, stmt->location, exists, "obtain");
