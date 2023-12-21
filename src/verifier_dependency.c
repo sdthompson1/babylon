@@ -7,7 +7,6 @@ For licensing information please see LICENCE.txt at the root of the
 repository.
 */
 
-
 #include "alloc.h"
 #include "error.h"
 #include "hash_table.h"
@@ -134,18 +133,21 @@ static void get_names_from_sexpr(const struct Sexpr *expr,
         && str[1] != 0
         && !is_shadowed(shadowed_names, str)) {
 
-            hash_table_insert(found_names, expr->string, NULL);
+            if (!hash_table_contains_key(found_names, expr->string)) {
 
-            if (fake_edges) {
-                struct Edge *edge = alloc(sizeof(struct Edge));
+                hash_table_insert(found_names, expr->string, NULL);
 
-                // Here we are converting the char* expr->string pointer
-                // to struct Vertex *; it will be converted back to char*
-                // again later.
-                edge->target = (struct Vertex*) expr->string;
+                if (fake_edges) {
+                    struct Edge *edge = alloc(sizeof(struct Edge));
 
-                edge->next = *(fake_edges);
-                *fake_edges = edge;
+                    // Here we are converting the char* expr->string pointer
+                    // to struct Vertex *; it will be converted back to char*
+                    // again later.
+                    edge->target = (struct Vertex*) expr->string;
+
+                    edge->next = *(fake_edges);
+                    *fake_edges = edge;
+                }
             }
         }
         break;
@@ -190,23 +192,20 @@ static void get_names_from_sexpr(const struct Sexpr *expr,
     }
 }
 
-
-// Returns a graph in which the Vertex "data" is a name (char*) used
-// in the problem, and the edges point to dependencies (i.e. decls
-// that have to appear before this one in the FOL problem).
-static struct Vertex * build_decl_graph(const struct HashTable *env1,
-                                        const struct HashTable *env2,
-                                        const struct Sexpr *expr1,
-                                        const struct Sexpr *expr2)
+struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
+                                      const struct HashTable *env2,
+                                      const struct Sexpr *expr,
+                                      struct Sexpr *tail_sexpr) // handover
 {
     struct HashTable *open_set = new_hash_table();
     struct HashTable *closed_set = new_hash_table();
     struct HashTable *shadowed_names = new_hash_table();  // this is just scratch space from our point of view
-    struct Vertex *vertices = NULL;
 
-    // Initialise from expr1 and expr2
-    get_names_from_sexpr(expr1, open_set, shadowed_names, NULL);
-    get_names_from_sexpr(expr2, open_set, shadowed_names, NULL);
+    struct Sexpr *result = NULL;
+    struct Sexpr **tail_ptr = &result;
+
+    // Initialise from expr
+    get_names_from_sexpr(expr, open_set, shadowed_names, NULL);
 
     // Iterate until the open set is empty
     while (!hash_table_empty(open_set)) {
@@ -222,6 +221,8 @@ static struct Vertex * build_decl_graph(const struct HashTable *env1,
             // not there already
             if (!hash_table_contains_key(closed_set, name)) {
 
+                hash_table_insert(closed_set, name, NULL);
+
                 struct Item *item = NULL;
                 if (env1) {
                     item = hash_table_lookup(env1, name);
@@ -231,55 +232,31 @@ static struct Vertex * build_decl_graph(const struct HashTable *env1,
                 }
 
                 if (item) {
-                    // Build vertex.
-                    struct Vertex *vertex = alloc(sizeof(struct Vertex));
-                    vertex->data = (void*) name;
-                    vertex->edges = NULL;
-                    vertex->next = vertices;
-                    vertices = vertex;
+                    // Add the decl to result list, and add any names it
+                    // references to open set.
+                    get_names_from_sexpr(item->fol_decl, open_set, shadowed_names, NULL);
+                    *tail_ptr = make_pair_sexpr(copy_sexpr(item->fol_decl), NULL);
+                    tail_ptr = &(*tail_ptr)->right;
 
-                    // Add all names referenced by this name to the open set.
-
-                    // Also add Edges -- but we cannot add Vertex
-                    // pointers yet, because we haven't created all
-                    // the vertices yet. Instead add the names (cast
-                    // to Vertex *) and we will fix it up later.
-
-                    // (1) For the fol_decl - we do need to bring in any names
-                    // referenced as dependencies (edges).
-                    get_names_from_sexpr(item->fol_decl, open_set, shadowed_names, &vertex->edges);
-
-                    // (2) For the axioms - bring any names referenced
-                    // into the open set, but they do not form a
-                    // dependency because the order of asserts in the
-                    // FOL problem doesn't matter.
+                    // Same for axioms.
                     for (struct Sexpr *axiom = item->fol_axioms; axiom; axiom = axiom->right) {
                         get_names_from_sexpr(axiom->left, open_set, shadowed_names, NULL);
+                        *tail_ptr = make_pair_sexpr(copy_sexpr(axiom->left), NULL);
+                        tail_ptr = &(*tail_ptr)->right;
                     }
-
-                    // Add the vertex itself to the closed set.
-                    hash_table_insert(closed_set, name, vertex);
                 }
             }
         }
     }
 
     free_hash_table(open_set);
+    free_hash_table(closed_set);
     free_hash_table(shadowed_names);
 
-    // Now "fix" all the edge target pointers
-    for (struct Vertex *v = vertices; v; v = v->next) {
-        for (struct Edge *e = v->edges; e; e = e->next) {
-            void *value = hash_table_lookup(closed_set, (const char*)e->target);
-            e->target = (struct Vertex*) value;
-        }
-    }
-
-    free_hash_table(closed_set);
-
-    // Done!
-    return vertices;
+    *tail_ptr = tail_sexpr;
+    return result;
 }
+
 
 static void free_edge_list(struct Edge *edge)
 {
@@ -300,14 +277,113 @@ static void free_graph(struct Vertex *vertex)
     }
 }
 
-struct Component * get_sexpr_dependencies(const struct HashTable *env1,
-                                          const struct HashTable *env2,
-                                          const struct Sexpr *expr1,
-                                          const struct Sexpr *expr2)
+static struct Component * reverse_component_list(struct Component *component)
 {
-    struct Vertex *graph = build_decl_graph(env1, env2, expr1, expr2);
-    struct Component *components = strongly_connected_components(graph);
-    free_graph(graph);
+    if (component == NULL) {
+        return NULL;
+    }
 
-    return components;
+    struct Component *prev = NULL;
+    while (component) {
+        struct Component *next = component->next_component;
+        component->next_component = prev;
+        prev = component;
+        component = next;
+    }
+
+    return prev;
+}
+
+static const char * get_defn_name(const struct Sexpr *defn)
+{
+    if (sexpr_equal_string(defn->left, "declare-const")
+        || sexpr_equal_string(defn->left, "declare-fun")
+        || sexpr_equal_string(defn->left, "define-fun")
+        || sexpr_equal_string(defn->left, "declare-sort")
+        || sexpr_equal_string(defn->left, "generic")) {
+        return defn->right->left->string;
+    } else if (sexpr_equal_string(defn->left, "declare-datatypes")) {
+        return defn->right->left->left->left->string;
+    } else {
+        fatal_error("get_defn_name failed");
+    }
+}
+
+struct Sexpr * reorder_sexpr_defns(struct Sexpr *defns,  // handover
+                                   bool reverse_order)
+{
+    struct Vertex *vertices = NULL;
+
+    struct HashTable *name_to_vertex = new_hash_table();
+    struct HashTable *found_names = new_hash_table();
+    struct HashTable *shadowed_names = new_hash_table();
+
+    while (defns) {
+        struct Sexpr *defn = defns->left;
+        struct Sexpr *next = defns->right;
+        free(defns);
+
+        // make a vertex - taking ownership of defn
+        struct Vertex *vertex = alloc(sizeof(struct Vertex));
+        vertex->data = (void*) defn;
+        vertex->edges = NULL;
+        vertex->next = vertices;
+        vertices = vertex;
+
+        // insert it into the hash table
+        const char *name = get_defn_name(defn);
+        hash_table_insert(name_to_vertex, name, vertex);
+
+        // for each name mentioned, add a "fake" Edge
+        // (it is "fake" because the target points to a string rather than
+        // a Vertex but we will fix that up later)
+        hash_table_clear(found_names);
+        get_names_from_sexpr(defn, found_names, shadowed_names, &vertex->edges);
+
+        defns = next;
+    }
+
+    free_hash_table(found_names);
+    free_hash_table(shadowed_names);
+
+    // Fix the fake edges to point to actual vertices
+    for (struct Vertex *v = vertices; v; v = v->next) {
+        for (struct Edge *e = v->edges; e; e = e->next) {
+            void *value = hash_table_lookup(name_to_vertex, (const char *)e->target);
+            e->target = (struct Vertex *) value;
+        }
+    }
+
+    free_hash_table(name_to_vertex);
+
+    // Do connected components.
+    struct Component *component = strongly_connected_components(vertices);
+    free_graph(vertices);
+
+    if (reverse_order) {
+        component = reverse_component_list(component);
+    }
+
+    // Build the output list - transferring ownership of the sexprs to
+    // the output.
+    struct Sexpr *output = NULL;
+    struct Sexpr **output_tail = &output;
+
+    while (component) {
+        struct ComponentVertex *vertex = component->first_vertex;
+        while (vertex) {
+            *output_tail = make_list1_sexpr(vertex->vertex_data);
+            output_tail = &(*output_tail)->right;
+
+            struct ComponentVertex *to_free = vertex;
+            vertex = vertex->next;
+            free(to_free);
+        }
+
+        struct Component *to_free = component;
+        component = component->next_component;
+        free(to_free);
+    }
+
+    return output;
 }

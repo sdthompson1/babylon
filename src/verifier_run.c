@@ -29,81 +29,21 @@ static struct Sexpr * make_fol_problem(const struct HashTable *global_env,
                                        struct Sexpr *initial_asserts,
                                        struct Sexpr *conjecture)
 {
-    struct Sexpr *first = NULL;
-    struct Sexpr *last = NULL;
-
-    struct Component * component =
-        get_sexpr_dependencies(global_env,
-                               local_env,
-                               initial_asserts,
-                               conjecture);
-
-    while (component) {
-
-        struct ComponentVertex *vertex = component->first_vertex;
-        while (vertex) {
-            const char *name = vertex->vertex_data;
-
-            struct Item *item = hash_table_lookup(local_env, name);
-            if (item == NULL) {
-                item = hash_table_lookup(global_env, name);
-            }
-
-            if (item->fol_decl) {
-                struct Sexpr *new_decl = make_pair_sexpr(copy_sexpr(item->fol_decl), NULL);
-                if (last) {
-                    last->right = new_decl;
-                } else {
-                    first = new_decl;
-                }
-                last = new_decl;
-            }
-
-            for (struct Sexpr* assrt = item->fol_axioms; assrt; assrt = assrt->right) {
-                struct Sexpr *new_assert = make_pair_sexpr(copy_sexpr(assrt->left), NULL);
-                if (last) {
-                    last->right = new_assert;
-                } else {
-                    first = new_assert;
-                }
-                last = new_assert;
-            }
-
-            struct ComponentVertex *to_free = vertex;
-            vertex = vertex->next;
-            free(to_free);
-        }
-
-        struct Component *to_free = component;
-        component = component->next_component;
-        free(to_free);
+    // Add initial asserts and the 'prove' command.
+    struct Sexpr *result = copy_sexpr(initial_asserts);
+    struct Sexpr **tail_ptr = &result;
+    while (*tail_ptr) {
+        tail_ptr = &(*tail_ptr)->right;
     }
-
-    // append initial_asserts
-    if (last) {
-        last->right = copy_sexpr(initial_asserts);
-    } else {
-        first = copy_sexpr(initial_asserts);
-        last = first;
-    }
-    while (last && last->right) {
-        last = last->right;
-    }
-
-    // append 'prove' command
-    struct Sexpr *prove =
+    *tail_ptr =
         make_list1_sexpr(
             make_list2_sexpr(
                 make_string_sexpr("prove"),
                 copy_sexpr(conjecture)));
-    if (last) {
-        last->right = prove;
-    } else {
-        last = prove;
-    }
-    last = prove;
 
-    return first;
+    // Add the required dependency definitions/axioms.
+    return get_sexpr_dependencies(global_env, local_env,
+                                  result, result);
 }
 
 const char * make_debug_filename(struct VContext *context,

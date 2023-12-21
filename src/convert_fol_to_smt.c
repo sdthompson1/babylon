@@ -14,6 +14,7 @@ repository.
 #include "sexpr.h"
 #include "stringbuf.h"
 #include "util.h"
+#include "verifier_dependency.h"
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -208,7 +209,7 @@ static bool in_assert_group(struct Sexpr *cmd_node)
 }
 
 // Replace "instance" keywords with encoded names, appending any required
-// new definitions to the "tail_ptr".
+// new sexprs to either decls_tail or asserts_tail.
 // Replace "(prove ...)" with "(assert (not ...))".
 // Return the new sexpr.
 static struct Sexpr * scan_sexpr(struct HashTable *encodings,
@@ -363,18 +364,18 @@ struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
     struct Sexpr *asserts;
     split_fol_problem(fol_problem, &generics, &decls, &asserts);
 
-    // Copy 'decls' and 'asserts' to the output,
-    // instantiating generics (into the correct lists) as we go along.
     struct StringBuf buf;
     stringbuf_init(&buf);
+    struct HashTable *encodings = new_hash_table();
+    struct HashTable *closed_set = new_hash_table();
 
     struct Sexpr *decls_result = NULL;
     struct Sexpr **decls_tail = &decls_result;
     struct Sexpr *asserts_result = NULL;
     struct Sexpr **asserts_tail = &asserts_result;
 
-    struct HashTable *encodings = new_hash_table();
-    struct HashTable *closed_set = new_hash_table();
+    // Instantiate generics, copying the results into
+    // decls_result and asserts_result.
 
     for (struct Sexpr *node = decls; node; node = node->right) {
         struct Sexpr *command = node->left;
@@ -401,11 +402,7 @@ struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
     // Terminate asserts list with (check-sat)
     *asserts_tail = make_list1_sexpr(make_list1_sexpr(make_string_sexpr("check-sat")));
 
-    // Join the two lists
-    *decls_tail = asserts_result;
-
-
-    // Clean up, return the decls_list (which now has the asserts after it)
+    // Clean up
     free_sexpr(generics);
     free_sexpr(decls);
     free_sexpr(asserts);
@@ -418,5 +415,14 @@ struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
     hash_table_for_each(encodings, ht_free_key_and_value, NULL);
     free_hash_table(encodings);
 
+    // Reorder the decls list to respect dependencies.
+    decls_result = reorder_sexpr_defns(decls_result, false);
+    decls_tail = &decls_result;
+    while (*decls_tail) {
+        decls_tail = &(*decls_tail)->right;
+    }
+
+    // Join the two lists, and return the combined list.
+    *decls_tail = asserts_result;
     return decls_result;
 }

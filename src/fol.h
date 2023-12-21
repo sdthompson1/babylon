@@ -18,6 +18,7 @@ repository.
 Top-level items:
 
   (declare-sort sortname 0)
+  (declare-datatypes ((name 0)) ...)
   (declare-const constname ty)
      ; note: define-const doesn't work in vampire - use define-fun (with no args) instead.
   (declare-fun funname (ty1 ty2..) retty)

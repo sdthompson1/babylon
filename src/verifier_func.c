@@ -249,23 +249,6 @@ static bool verify_postconditions(struct VContext *context,
     return ok;
 }
 
-static struct Component * reverse_component_list(struct Component *component)
-{
-    if (component == NULL) {
-        return NULL;
-    }
-
-    struct Component *prev = NULL;
-    while (component) {
-        struct Component *next = component->next_component;
-        component->next_component = prev;
-        prev = component;
-        component = next;
-    }
-
-    return prev;
-}
-
 static bool require_let_for(struct VContext *context, const char *name)
 {
     if (strcmp(name, "%return") == 0) {
@@ -294,83 +277,92 @@ static bool require_let_for(struct VContext *context, const char *name)
     return true;
 }
 
-// item must be non-NULL
-static bool is_sort(const struct Item *item)
-{
-    if (item->fol_decl->type != S_PAIR) {
-        fatal_error("is_sort: fol_decl doesn't have expected type");
-    }
-
-    struct Sexpr *keyword = item->fol_decl->left;
-    return sexpr_equal_string(keyword, "declare-sort");
-}
-
-static struct Sexpr * get_value_of_variable(const char *fol_name, const struct Item *item)
-{
-    if (item == NULL) {
-        return NULL;
-    }
-
-    // Check decl is of form (define-fun name () type expr)
-    if (get_sexpr_list_length(item->fol_decl) != 5
-        || get_sexpr_list_length(item->fol_decl->right->right->left) != 0
-        || !sexpr_equal_string(item->fol_decl->left, "define-fun")) {
-        return NULL;
-    }
-
-    // Return a copy of the expr
-    return copy_sexpr(item->fol_decl->right->right->right->right->left);
-}
-
 struct Sexpr * insert_lets(struct VContext *context,
                            struct Sexpr *expr)
 {
-    struct Component * component = get_sexpr_dependencies(context->local_env, NULL, expr, NULL);
+    struct Sexpr *deps = get_sexpr_dependencies(context->local_env, NULL, expr, NULL);
 
-    component = reverse_component_list(component);
+    // First of all, figure out which deps we want to keep.
+    struct Sexpr *new_deps = NULL;
+    struct Sexpr **tail_ptr = &new_deps;
 
-    while (component) {
+    while (deps) {
+        struct Sexpr *defn = deps->left;
+        struct Sexpr *next = deps->right;
+        free(deps);
+
+        // Figure out the name.
+        // The only things in the local_env should be
+        // define-fun, declare-fun, declare-const,
+        // declare-sort, assert.
+        // (The latter two can be ignored.)
+        const char *name = NULL;
+        if (sexpr_equal_string(defn->left, "define-fun")
+        || sexpr_equal_string(defn->left, "declare-fun")
+        || sexpr_equal_string(defn->left, "declare-const")) {
+            name = defn->right->left->string;
+        } else if (sexpr_equal_string(defn->left, "declare-sort")
+        || sexpr_equal_string(defn->left, "assert")) {
+            // Ignore
+        } else {
+            fatal_error("insert_lets: unrecognised local_env dependency");
+        }
+
+        // We don't need to insert lets for certain variable names.
+        if (name && require_let_for(context, name)) {
+
+            // Keep this dependency.
+            *tail_ptr = make_list1_sexpr(defn);
+            tail_ptr = &(*tail_ptr)->right;
+
+            defn = NULL;
+        }
+
+        free_sexpr(defn);
+        deps = next;
+    }
+
+    // Now sort the deps into the proper order (we want "reverse" order
+    // because we will be creating lets "inside out").
+    new_deps = reorder_sexpr_defns(new_deps, true);
+
+    // Now create the lets.
+    while (new_deps) {
+        struct Sexpr *defn = new_deps->left;
+        struct Sexpr *next = new_deps->right;
+        free(new_deps);
+
         if (expr != NULL) {
-            if (component->first_vertex->next) {
-                // Not supported yet
-                fatal_error("not implemented: multi-decl component");
-            }
 
-            const char *local_fol_name = component->first_vertex->vertex_data;
+            // Only defns of the form
+            // (define-fun name () type value)
+            // can be used.
 
-            // We don't need to insert lets for certain terms
-            if (require_let_for(context, local_fol_name)) {
-                struct Item * item = hash_table_lookup(context->local_env, local_fol_name);
-                if (item && !is_sort(item)) {
-                    struct Sexpr * value = get_value_of_variable(local_fol_name, item);
+            if (!sexpr_equal_string(defn->left, "define-fun")
+            || defn->right->right->left != NULL) {
+                free_sexpr(expr);
+                expr = NULL;
 
-                    if (value != NULL) {
-                        // We can simply add a let for this variable
+            } else {
+                struct Sexpr **name = &defn->right->left;
+                struct Sexpr **value = &defn->right->right->right->right->left;
 
-                        // (let ((var value)) expr)
-                        expr = make_list3_sexpr(
-                            make_string_sexpr("let"),
-                            make_list1_sexpr(
-                                make_list2_sexpr(
-                                    make_string_sexpr(local_fol_name),
-                                    value)),
-                            expr);
-
-                    } else {
-                        // We don't have a simple "x = something" definition for this variable.
-                        // This case arises for while-loops, for example.
-                        // We can't (currently) do anything useful here, so just "fail".
-                        free_sexpr(expr);
-                        expr = NULL;
-                    }
-                }
+                // Add a let for this variable
+                // (let ((var value)) expr)
+                expr = make_list3_sexpr(
+                    make_string_sexpr("let"),
+                    make_list1_sexpr(
+                        make_list2_sexpr(
+                            *name,
+                            *value)),
+                    expr);
+                *name = NULL;
+                *value = NULL;
             }
         }
 
-        free(component->first_vertex);
-        struct Component *next = component->next_component;
-        free(component);
-        component = next;
+        free_sexpr(defn);
+        new_deps = next;
     }
 
     return expr;
