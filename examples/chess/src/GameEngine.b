@@ -197,6 +197,7 @@ interface {
     // ** Set blending and colour state
 
     // The blend state affects all draw operations (including textures)
+    // apart from clear_screen.
     extern function set_blend_mode(ref engine: GameEngine,
                                    blend_mode: BlendMode)
         requires valid_engine(engine);

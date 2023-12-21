@@ -492,19 +492,19 @@ static bool translate_sdl_event(struct Event *result,
             }
             result->size_info.new_width = w;
             result->size_info.new_height = h;
-            break;
+            return true;
 
         case SDL_WINDOWEVENT_EXPOSED:
             result->tag = WINDOW_REQUIRES_REDRAW;
-            break;
+            return true;
 
         case SDL_WINDOWEVENT_ENTER:
             result->tag = MOUSE_ENTERED_WINDOW;
-            break;
+            return true;
 
         case SDL_WINDOWEVENT_LEAVE:
             result->tag = MOUSE_LEFT_WINDOW;
-            break;
+            return true;
 
         default:
             return false;
