@@ -345,12 +345,6 @@ struct Item *add_const_item(struct VContext *context,
     struct Item *item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
 
-    // (NULL fol_name fol_type)
-    item->fol_decl = make_list3_sexpr(
-        NULL,  // filled in later
-        make_string_sexpr(fol_name),
-        copy_sexpr(fol_type));
-
     item->fol_axioms = NULL;
 
     if (fol_term) {

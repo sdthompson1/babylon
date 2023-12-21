@@ -204,7 +204,7 @@ static struct Sexpr * instantiate(struct HashTable *encodings,
 static bool in_assert_group(struct Sexpr *cmd_node)
 {
     return sexpr_equal_string(cmd_node->left->left, "assert")
-        || sexpr_equal_string(cmd_node->left->left, "check-sat");
+        || sexpr_equal_string(cmd_node->left->left, "prove");
 }
 
 // Replace "instance" keywords with encoded names, appending any required

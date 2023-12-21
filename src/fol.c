@@ -31,7 +31,6 @@ static const char * PROVERS[NUM_PROVERS][MAX_ARGS] = {
       NULL },
 
     { "vampire",
-      "--mode", "casc",
       "--memory_limit", "3000",
       "--forced_options", "output_mode=smtcomp",
       "--input_syntax", "smtlib2",
