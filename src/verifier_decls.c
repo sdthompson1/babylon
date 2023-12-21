@@ -420,7 +420,7 @@ static bool verify_function_decl(struct VContext *context,
     item->fol_name = copy_string(fol_name);
     item->fol_type = NULL;
 
-    // Verify the preconds/postconds, and add the preconds to the path condition
+    // Verify the preconds/postconds, and add the preconds to the list of known facts
     struct Condition *preconds = NULL;
     struct Condition **precond_tail = &preconds;
     struct Condition *postconds = NULL;
