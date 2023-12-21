@@ -1186,6 +1186,11 @@ void stk_return_from_function(struct StackMachine *mc)
 
 void stk_begin_function(struct StackMachine *mc, const char *function_name)
 {
+#ifdef DEBUG_RECONCILE
+    printf("-----------------------\n");
+    printf("stk_begin_function: %s\n\n", function_name);
+#endif
+
     if (mc->current_env != NULL || mc->control_stack != NULL
         || mc->fun_call_stack != NULL || mc->var_size_mem_block_names != NULL
         || mc->args != NULL || mc->args_tail != NULL || mc->function_name != NULL) {

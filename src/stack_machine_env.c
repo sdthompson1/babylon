@@ -724,6 +724,11 @@ static void reconcile_mem_to_mem(struct MachineEnv *current_env,
                     // Find another (temporary) home, that is currently unoccupied in both envs.
                     new_low = find_free_frame_slot(current_env, desired_env, from->size);
                     new_high = new_low + from->size - 1;
+                    if (!try_insert_interval(current_env, new_low, new_high)) {
+                        // This should be impossible, because we found the slot using
+                        // find_free_frame_slot.
+                        fatal_error("failed to insert temporary interval");
+                    }
                 }
 
 #ifdef DEBUG_RECONCILE
