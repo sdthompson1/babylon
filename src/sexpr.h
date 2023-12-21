@@ -66,8 +66,8 @@ struct Sexpr * make_list4_sexpr(struct Sexpr *s1, struct Sexpr *s2, struct Sexpr
 struct Sexpr * make_list5_sexpr(struct Sexpr *s1, struct Sexpr *s2, struct Sexpr *s3, struct Sexpr *s4, struct Sexpr *s5);
 
 
-// Get length of sexpr list. Returns 0 if it is NULL, or -1 if a
-// string is found on the "right" at any stage.
+// Get length of sexpr list. Returns 0 if it is NULL, or -1 if
+// not a proper list.
 int get_sexpr_list_length(const struct Sexpr *s);
 
 

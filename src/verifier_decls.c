@@ -417,8 +417,6 @@ static bool verify_function_decl(struct VContext *context,
     type_list = NULL;
 
     item->fol_axioms = NULL;
-    struct Sexpr ** tail_ptr = &(item->fol_axioms);
-
     item->fol_name = copy_string(fol_name);
     item->fol_type = NULL;
 
@@ -446,7 +444,9 @@ static bool verify_function_decl(struct VContext *context,
     if (data->body_specified) {
         context->postconds = postconds;
 
-        ok = verify_statements(context, data->body, &tail_ptr) && ok;
+        struct Sexpr *fun_defn_expr = NULL;
+        struct Sexpr **fun_defn_tail = &fun_defn_expr;
+        ok = verify_statements(context, data->body, &fun_defn_tail) && ok;
 
         if (context->var_decl_stack != NULL) {
             fatal_error("var decl stack not empty");
@@ -469,15 +469,35 @@ static bool verify_function_decl(struct VContext *context,
             // End of void function
             // Verify that the postconditions hold
             ok = verify_function_return(context, decl->function_data.end_loc,
-                                        NULL, decl->ghost, &tail_ptr) && ok;
+                                        NULL, decl->ghost, &fun_defn_tail) && ok;
         }
 
         context->postconds = NULL;
+
+        // If we got a fun_defn_expr then let's change our declare-fun into
+        // a define-fun.
+        if (fun_defn_expr != NULL) {
+            if (*fun_defn_tail == NULL) {
+                struct Sexpr *arbitrary = make_string_sexpr("$ARBITRARY");
+                make_instance(&arbitrary, make_list1_sexpr(copy_sexpr(fol_fake_ret_type)));
+                *fun_defn_tail = arbitrary;
+            }
+            fun_defn_expr = insert_lets(context, fun_defn_expr);
+            if (fun_defn_expr != NULL) {
+                // (define-fun name name_type_list type expr)
+                free_sexpr(item->fol_decl->left);
+                item->fol_decl->left = make_string_sexpr("define-fun");
+                free_sexpr(item->fol_decl->right->right->left);
+                item->fol_decl->right->right->left = copy_sexpr(name_type_list);
+                item->fol_decl->right->right->right->right = make_list1_sexpr(fun_defn_expr);
+            }
+        }
     }
 
     // Add an axiom to say that the return-value(s) are valid,
     // given that the input-value(s) are valid for their types,
     // and the preconditions hold.
+    struct Sexpr **tail_ptr = &item->fol_axioms;
     struct Sexpr *ret_validity = ret_validity_test(data->args, data->return_type, fol_fake_ret_type);
     if (ret_validity) {
         ret_validity = make_postcond_assert(context,
@@ -488,7 +508,7 @@ static bool verify_function_decl(struct VContext *context,
         tail_ptr = &((*tail_ptr)->right);
     }
 
-    // Add the postconditions to the "definitional axioms" for this function
+    // Add the postconditions as additional axioms
     // (again, under appropriate assumptions on the input).
     for (struct Condition *cond = postconds; cond; cond = cond->next) {
         struct Sexpr *expr = copy_sexpr(cond->expr);

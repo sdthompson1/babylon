@@ -17,51 +17,177 @@ repository.
 #include "verifier_dependency.h"
 
 #include <stdlib.h>
+#include <string.h>
 
-struct GetNamesContext {
-    struct HashTable *found_names;
-    struct Edge **fake_edges;
-};
+static void get_names_from_sexpr(const struct Sexpr *expr,
+                                 struct HashTable *found_names,
+                                 struct HashTable *shadowed_names,
+                                 struct Edge **fake_edges);
 
-static void* get_names_from_string_sexpr(void *cxt, struct Sexpr *expr)
+static bool is_shadowed(struct HashTable *shadowed_names, const char *name)
 {
-    struct GetNamesContext *context = (struct GetNamesContext*) cxt;
+    return hash_table_lookup(shadowed_names, name) != NULL;
+}
 
-    if ((expr->string[0] == '%' || expr->string[0] == '$')
-    && expr->string[1] != 0) {
-        hash_table_insert(context->found_names, expr->string, NULL);
-
-        if (context->fake_edges) {
-            struct Edge *edge = alloc(sizeof(struct Edge));
-
-            // Here I'm assuming that it's safe to convert a char*
-            // (allocated) pointer to a struct Vertex* pointer, and
-            // back again (later on). This should be fine (C11,
-            // section 6.3.2.3 paragraph 7 -- we may assume that a
-            // malloc-returned pointer is aligned for any struct
-            // type).
-            edge->target = (struct Vertex*) expr->string;
-
-            edge->next = *(context->fake_edges);
-            *(context->fake_edges) = edge;
-        }
+static void add_shadowed_name(const struct Sexpr *name, struct HashTable *shadowed_names)
+{
+    if (name == NULL || name->type != S_STRING) {
+        fatal_error("add_shadowed_name: wrong sexpr type");
     }
 
-    return NULL;
+    uintptr_t n = (uintptr_t) hash_table_lookup(shadowed_names, name->string);
+    hash_table_insert(shadowed_names, name->string, (void*)(n + 1));
+}
+
+static void remove_shadowed_name(const struct Sexpr *name, struct HashTable *shadowed_names)
+{
+    if (name == NULL || name->type != S_STRING) {
+        fatal_error("remove_shadowed_name: wrong sexpr type");
+    }
+
+    uintptr_t n = (uintptr_t) hash_table_lookup(shadowed_names, name->string);
+    if (n == 0) {
+        fatal_error("not shadowed");
+    }
+    hash_table_insert(shadowed_names, name->string, (void*)(n - 1));
+}
+
+static void enter_scope_name_type_list(const struct Sexpr *list,
+                                       struct HashTable *found_names,
+                                       struct HashTable *shadowed_names,
+                                       struct Edge **fake_edges)
+{
+    // List of (name type) pairs (or (name expr) pairs if this is a let).
+    // The types/exprs should be scanned as normal, and the names should be added as shadowed.
+    // The types/exprs must be done first, as these are not in the scope of the new bindings.
+    for (const struct Sexpr *node = list; node; node = node->right) {
+        // node->left is (name type)
+        // node->left->right->left is type
+        get_names_from_sexpr(node->left->right->left, found_names, shadowed_names, fake_edges);
+    }
+    for (const struct Sexpr *node = list; node; node = node->right) {
+        // node->left is (name type)
+        // node->left->left is name
+        add_shadowed_name(node->left->left, shadowed_names);
+    }
+}
+
+static void exit_scope_name_type_list(const struct Sexpr *list,
+                                      struct HashTable *shadowed_names)
+{
+    while (list) {
+        remove_shadowed_name(list->left->left, shadowed_names);
+        list = list->right;
+    }
+}
+
+static void enter_scope_pattern(const struct Sexpr *pat,
+                                struct HashTable *found_names,
+                                struct HashTable *shadowed_names,
+                                struct Edge **fake_edges)
+{
+    // pat is either (ctorname list_of_bound_vars)
+    // or the string "$wild" - which is shadowed
+    if (pat->type == S_STRING) {
+        if (strcmp(pat->string, "$wild") != 0) {
+            fatal_error("unexpected pattern");
+        }
+        add_shadowed_name(pat, shadowed_names);
+    } else if (pat->type == S_PAIR) {
+        get_names_from_sexpr(pat->left, found_names, shadowed_names, fake_edges);  // ctorname
+        for (struct Sexpr *node = pat->right; node; node = node->right) {
+            add_shadowed_name(node->left, shadowed_names);
+        }
+    } else {
+        fatal_error("unexpected sexpr type");
+    }
+}
+
+static void exit_scope_pattern(const struct Sexpr *pat,
+                               struct HashTable *shadowed_names)
+{
+    if (pat->type == S_STRING) {
+        remove_shadowed_name(pat, shadowed_names);
+    } else if (pat->type == S_PAIR) {
+        for (struct Sexpr *node = pat->right; node; node = node->right) {
+            remove_shadowed_name(node->left, shadowed_names);
+        }
+    } else {
+        fatal_error("unexpected sexpr type");
+    }
 }
 
 static void get_names_from_sexpr(const struct Sexpr *expr,
                                  struct HashTable *found_names,
+                                 struct HashTable *shadowed_names,
                                  struct Edge **fake_edges)
 {
-    struct GetNamesContext context;
-    context.found_names = found_names;
-    context.fake_edges = fake_edges;
+    if (expr == NULL) {
+        return;
+    }
 
-    struct SexprTransform tr = {0};
-    tr.transform_string = get_names_from_string_sexpr;
+    switch (expr->type) {
+    case S_STRING:
+        ;
+        const char *str = expr->string;
+        if ((str[0] == '%' || str[0] == '$')
+        && str[1] != 0
+        && !is_shadowed(shadowed_names, str)) {
 
-    transform_sexpr(&tr, &context, (struct Sexpr*)expr);
+            hash_table_insert(found_names, expr->string, NULL);
+
+            if (fake_edges) {
+                struct Edge *edge = alloc(sizeof(struct Edge));
+
+                // Here we are converting the char* expr->string pointer
+                // to struct Vertex *; it will be converted back to char*
+                // again later.
+                edge->target = (struct Vertex*) expr->string;
+
+                edge->next = *(fake_edges);
+                *fake_edges = edge;
+            }
+        }
+        break;
+
+    case S_PAIR:
+        if (expr->left && expr->left->type == S_STRING) {
+            const char *str = expr->left->string;
+
+            if (strcmp(str, "forall") == 0 || strcmp(str, "exists") == 0 || strcmp(str, "let") == 0) {
+                // (forall/exists/let name_type_list expr)
+                enter_scope_name_type_list(expr->right->left, found_names, shadowed_names, fake_edges);
+                get_names_from_sexpr(expr->right->right->left, found_names, shadowed_names, fake_edges);
+                exit_scope_name_type_list(expr->right->left, shadowed_names);
+                break;
+
+            } else if (strcmp(str, "define-fun") == 0) {
+                // (define-fun name args rettype expr)
+                enter_scope_name_type_list(expr->right->right->left, found_names, shadowed_names, fake_edges);
+                get_names_from_sexpr(expr->right->right->right, found_names, shadowed_names, fake_edges); // covers rettype and expr
+                exit_scope_name_type_list(expr->right->right->left, shadowed_names);
+                break;
+
+            } else if (strcmp(str, "match") == 0) {
+                // (match expr arms)
+                // each arm is: (pat rhs)
+                get_names_from_sexpr(expr->right->left, found_names, shadowed_names, fake_edges);
+                for (struct Sexpr *arm = expr->right->right->left; arm; arm = arm->right) {
+                    enter_scope_pattern(arm->left->left, found_names, shadowed_names, fake_edges);
+                    get_names_from_sexpr(arm->left->right->left, found_names, shadowed_names, fake_edges);
+                    exit_scope_pattern(arm->left->left, shadowed_names);
+                }
+                break;
+            }
+        }
+
+        get_names_from_sexpr(expr->left, found_names, shadowed_names, fake_edges);
+        get_names_from_sexpr(expr->right, found_names, shadowed_names, fake_edges);
+        break;
+
+    default:
+        fatal_error("unknown sexpr type");
+    }
 }
 
 
@@ -75,11 +201,12 @@ static struct Vertex * build_decl_graph(const struct HashTable *env1,
 {
     struct HashTable *open_set = new_hash_table();
     struct HashTable *closed_set = new_hash_table();
+    struct HashTable *shadowed_names = new_hash_table();  // this is just scratch space from our point of view
     struct Vertex *vertices = NULL;
 
     // Initialise from expr1 and expr2
-    get_names_from_sexpr(expr1, open_set, NULL);
-    get_names_from_sexpr(expr2, open_set, NULL);
+    get_names_from_sexpr(expr1, open_set, shadowed_names, NULL);
+    get_names_from_sexpr(expr2, open_set, shadowed_names, NULL);
 
     // Iterate until the open set is empty
     while (!hash_table_empty(open_set)) {
@@ -118,9 +245,16 @@ static struct Vertex * build_decl_graph(const struct HashTable *env1,
                     // the vertices yet. Instead add the names (cast
                     // to Vertex *) and we will fix it up later.
 
-                    get_names_from_sexpr(item->fol_decl, open_set, &vertex->edges);
+                    // (1) For the fol_decl - we do need to bring in any names
+                    // referenced as dependencies (edges).
+                    get_names_from_sexpr(item->fol_decl, open_set, shadowed_names, &vertex->edges);
+
+                    // (2) For the axioms - bring any names referenced
+                    // into the open set, but they do not form a
+                    // dependency because the order of asserts in the
+                    // FOL problem doesn't matter.
                     for (struct Sexpr *axiom = item->fol_axioms; axiom; axiom = axiom->right) {
-                        get_names_from_sexpr(axiom->left, open_set, &vertex->edges);
+                        get_names_from_sexpr(axiom->left, open_set, shadowed_names, NULL);
                     }
 
                     // Add the vertex itself to the closed set.
@@ -131,6 +265,7 @@ static struct Vertex * build_decl_graph(const struct HashTable *env1,
     }
 
     free_hash_table(open_set);
+    free_hash_table(shadowed_names);
 
     // Now "fix" all the edge target pointers
     for (struct Vertex *v = vertices; v; v = v->next) {
@@ -146,15 +281,19 @@ static struct Vertex * build_decl_graph(const struct HashTable *env1,
     return vertices;
 }
 
+static void free_edge_list(struct Edge *edge)
+{
+    while (edge) {
+        struct Edge *next = edge->next;
+        free(edge);
+        edge = next;
+    }
+}
+
 static void free_graph(struct Vertex *vertex)
 {
     while (vertex) {
-        struct Edge *edge = vertex->edges;
-        while (edge) {
-            struct Edge *next = edge->next;
-            free(edge);
-            edge = next;
-        }
+        free_edge_list(vertex->edges);
         struct Vertex *next = vertex->next;
         free(vertex);
         vertex = next;
@@ -169,5 +308,6 @@ struct Component * get_sexpr_dependencies(const struct HashTable *env1,
     struct Vertex *graph = build_decl_graph(env1, env2, expr1, expr2);
     struct Component *components = strongly_connected_components(graph);
     free_graph(graph);
+
     return components;
 }

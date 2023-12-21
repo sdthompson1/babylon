@@ -201,6 +201,12 @@ static struct Sexpr * instantiate(struct HashTable *encodings,
     return list;
 }
 
+static bool in_assert_group(struct Sexpr *cmd_node)
+{
+    return sexpr_equal_string(cmd_node->left->left, "assert")
+        || sexpr_equal_string(cmd_node->left->left, "check-sat");
+}
+
 // Replace "instance" keywords with encoded names, appending any required
 // new definitions to the "tail_ptr".
 // Replace "(prove ...)" with "(assert (not ...))".
@@ -209,7 +215,8 @@ static struct Sexpr * scan_sexpr(struct HashTable *encodings,
                                  struct HashTable *closed_set,
                                  struct StringBuf *buf,
                                  struct Sexpr *generics,
-                                 struct Sexpr ***tail_ptr,
+                                 struct Sexpr ***decls_tail,
+                                 struct Sexpr ***asserts_tail,
                                  struct Sexpr *sexpr)
 {
     // (instance name (args))
@@ -245,13 +252,26 @@ static struct Sexpr * scan_sexpr(struct HashTable *encodings,
             // recursively scan the definitions to see if they themselves
             // have instances that need to be resolved
             struct Sexpr *new_instances = scan_sexpr(encodings, closed_set, buf,
-                                                     generics, tail_ptr, instances);
+                                                     generics, decls_tail, asserts_tail, instances);
             free_sexpr(instances);
 
-            // now add the new definitions into the list
-            **tail_ptr = new_instances;
-            while (**tail_ptr) {
-                *tail_ptr = &((**tail_ptr)->right);
+            // now add the new definitions into the correct output lists
+            while (new_instances) {
+                // detach
+                struct Sexpr *next = new_instances->right;
+                new_instances->right = NULL;
+
+                // add to proper result list
+                if (in_assert_group(new_instances)) {
+                    **asserts_tail = new_instances;
+                    *asserts_tail = &(new_instances->right);
+                } else {
+                    **decls_tail = new_instances;
+                    *decls_tail = &(new_instances->right);
+                }
+
+                // move on
+                new_instances = next;
             }
 
         } else {
@@ -270,7 +290,7 @@ static struct Sexpr * scan_sexpr(struct HashTable *encodings,
     } else if (sexpr && sexpr->type == S_PAIR && sexpr_equal_string(sexpr->left, "prove")) {
         // (prove EXPR) --> (assert (not NEW_EXPR))
         struct Sexpr *new_expr = scan_sexpr(encodings, closed_set, buf,
-                                            generics, tail_ptr, sexpr->right->left);
+                                            generics, decls_tail, asserts_tail, sexpr->right->left);
         return make_list2_sexpr(make_string_sexpr("assert"),
                                 make_list2_sexpr(make_string_sexpr("not"),
                                                  new_expr));
@@ -278,8 +298,8 @@ static struct Sexpr * scan_sexpr(struct HashTable *encodings,
     } else if (sexpr && sexpr->type == S_PAIR) {
         // not an "instance". just recursively process the left and right,
         // then combine them together into a new node
-        struct Sexpr *new_left = scan_sexpr(encodings, closed_set, buf, generics, tail_ptr, sexpr->left);
-        struct Sexpr *new_right = scan_sexpr(encodings, closed_set, buf, generics, tail_ptr, sexpr->right);
+        struct Sexpr *new_left = scan_sexpr(encodings, closed_set, buf, generics, decls_tail, asserts_tail, sexpr->left);
+        struct Sexpr *new_right = scan_sexpr(encodings, closed_set, buf, generics, decls_tail, asserts_tail, sexpr->right);
         return make_pair_sexpr(new_left, new_right);
 
     } else {
@@ -288,64 +308,107 @@ static struct Sexpr * scan_sexpr(struct HashTable *encodings,
     }
 }
 
-struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
+
+// Split the fol problem into 3 lists:
+//  - generics
+//  - declarations/definitions
+//  - asserts and 'prove'
+// 'cmd' is handed over.
+static void split_fol_problem(struct Sexpr *cmd,
+                              struct Sexpr **generics_out,
+                              struct Sexpr **decls_out,
+                              struct Sexpr **asserts_out)
 {
-    // Let's first take all the generics out of the fol_problem
-    struct Sexpr *generics = NULL;
-    struct Sexpr **generic_tail_ptr = &generics;
+    struct Sexpr *first_generic = NULL;
+    struct Sexpr **generic_link = &first_generic;
+    struct Sexpr *first_decl = NULL;
+    struct Sexpr **decl_link = &first_decl;
+    struct Sexpr *first_assert = NULL;
+    struct Sexpr **assert_link = &first_assert;
 
-    struct Sexpr **link = &fol_problem;
-    for (struct Sexpr *node = fol_problem; node; ) {
+    while (cmd) {
+        // Detach from input list
+        struct Sexpr *next = cmd->right;
+        cmd->right = NULL;
 
-        struct Sexpr *command = node->left;
-
-        if (command->type == S_PAIR
-        && sexpr_equal_string(command->left, "generic")) {
-
-            *generic_tail_ptr = make_list1_sexpr(command);
-            generic_tail_ptr = &((*generic_tail_ptr)->right);
-
-            *link = node->right;
-
-            free(node);
-            node = *link;
-
+        // Add to the correct output list
+        if (sexpr_equal_string(cmd->left->left, "generic")) {
+            *generic_link = cmd;
+            generic_link = &cmd->right;
+        } else if (in_assert_group(cmd)) {
+            *assert_link = cmd;
+            assert_link = &cmd->right;
         } else {
-            link = &node->right;
-            node = node->right;
+            *decl_link = cmd;
+            decl_link = &cmd->right;
         }
+
+        cmd = next;
     }
 
+    *generics_out = first_generic;
+    *generic_link = NULL;
 
-    // Now copy the remaining fol_problem to the output, instantiating
-    // generics as we go along.
+    *decls_out = first_decl;
+    *decl_link = NULL;
+
+    *asserts_out = first_assert;
+    *assert_link = NULL;
+}
+
+struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
+{
+    struct Sexpr *generics;
+    struct Sexpr *decls;
+    struct Sexpr *asserts;
+    split_fol_problem(fol_problem, &generics, &decls, &asserts);
+
+    // Copy 'decls' and 'asserts' to the output,
+    // instantiating generics (into the correct lists) as we go along.
     struct StringBuf buf;
     stringbuf_init(&buf);
 
-    struct Sexpr *result = NULL;
-    struct Sexpr **result_tail_ptr = &result;
+    struct Sexpr *decls_result = NULL;
+    struct Sexpr **decls_tail = &decls_result;
+    struct Sexpr *asserts_result = NULL;
+    struct Sexpr **asserts_tail = &asserts_result;
 
     struct HashTable *encodings = new_hash_table();
     struct HashTable *closed_set = new_hash_table();
 
-    for (struct Sexpr *node = fol_problem; node; node = node->right) {
+    for (struct Sexpr *node = decls; node; node = node->right) {
         struct Sexpr *command = node->left;
 
         struct Sexpr *new_command = scan_sexpr(encodings, closed_set, &buf, generics,
-                                               &result_tail_ptr, command);
+                                               &decls_tail, &asserts_tail,
+                                               command);
 
-        *result_tail_ptr = make_list1_sexpr(new_command);
-        result_tail_ptr = &((*result_tail_ptr)->right);
+        *decls_tail = make_list1_sexpr(new_command);
+        decls_tail = &((*decls_tail)->right);
     }
 
+    for (struct Sexpr *node = asserts; node; node = node->right) {
+        struct Sexpr *command = node->left;
 
-    // Append (check-sat)
-    *result_tail_ptr = make_list1_sexpr(make_list1_sexpr(make_string_sexpr("check-sat")));
+        struct Sexpr *new_command = scan_sexpr(encodings, closed_set, &buf, generics,
+                                               &decls_tail, &asserts_tail,
+                                               command);
+
+        *asserts_tail = make_list1_sexpr(new_command);
+        asserts_tail = &((*asserts_tail)->right);
+    }
+
+    // Terminate asserts list with (check-sat)
+    *asserts_tail = make_list1_sexpr(make_list1_sexpr(make_string_sexpr("check-sat")));
+
+    // Join the two lists
+    *decls_tail = asserts_result;
 
 
-    // Clean up
+    // Clean up, return the decls_list (which now has the asserts after it)
     free_sexpr(generics);
-    free_sexpr(fol_problem);
+    free_sexpr(decls);
+    free_sexpr(asserts);
 
     stringbuf_free(&buf);
 
@@ -355,5 +418,5 @@ struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
     hash_table_for_each(encodings, ht_free_key_and_value, NULL);
     free_hash_table(encodings);
 
-    return result;
+    return decls_result;
 }

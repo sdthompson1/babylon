@@ -273,6 +273,11 @@ struct Sexpr *or_sexpr(struct Sexpr *lhs, struct Sexpr *rhs);
 // construct "(=> current-pc expr)"; expr handed over (context left unchanged)
 struct Sexpr *pc_implies(struct VContext *context, struct Sexpr *expr);
 
+// Construct (ite current-pc-expr expr NULL). (expr handed over.)
+// The result is pasted in to **ret_val_ptr which should point to a NULL.
+// Then *ret_val_ptr is moved to point to the new NULL (unless the ite was optimised away!).
+void make_ite_pc_expr(struct Sexpr *** ret_val_ptr, struct VContext *context, struct Sexpr *expr);
+
 // add (=> current-path-condition fact) to the list of currently known facts.
 // 'fact' is handed over.
 void add_fact(struct VContext *context, struct Sexpr *fact);

@@ -50,6 +50,6 @@ bool verify_function_return(struct VContext *context,
                             struct Location location,
                             struct Term *return_value,
                             bool ghost,
-                            struct Sexpr ***next_axiom_ptr);
+                            struct Sexpr *** ret_val_ptr);
 
 #endif

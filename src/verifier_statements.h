@@ -25,6 +25,6 @@ bool verify_postconditions(struct VContext *context,
 
 bool verify_statements(struct VContext *context,
                        struct Statement *stmt,
-                       struct Sexpr *** next_axiom_ptr);
+                       struct Sexpr *** ret_val_ptr);
 
 #endif

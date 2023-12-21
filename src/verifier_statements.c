@@ -29,7 +29,7 @@ repository.
 
 static bool verify_var_decl_stmt(struct VContext *context,
                                  struct Statement *stmt,
-                                 struct Sexpr *** next_axiom_ptr)
+                                 struct Sexpr *** ret_val_ptr)
 {
     bool valid = true;
     bool added_to_stack = false;
@@ -88,7 +88,7 @@ static bool verify_var_decl_stmt(struct VContext *context,
         }
     }
 
-    valid = verify_statements(context, stmt->next, next_axiom_ptr) && valid;
+    valid = verify_statements(context, stmt->next, ret_val_ptr) && valid;
 
     if (added_to_stack) {
         // the variable must be non-allocated when it goes out of scope
@@ -418,7 +418,7 @@ static bool verify_swap_stmt(struct VContext *context,
 
 static bool verify_return_stmt(struct VContext *context,
                                struct Statement *stmt,
-                               struct Sexpr *** next_axiom_ptr)
+                               struct Sexpr *** ret_val_ptr)
 {
     bool valid = true;
 
@@ -459,7 +459,7 @@ static bool verify_return_stmt(struct VContext *context,
                                    stmt->location,
                                    stmt->ret.value,
                                    stmt->ghost,
-                                   next_axiom_ptr) && valid;
+                                   ret_val_ptr) && valid;
 
     return valid;
 }
@@ -525,7 +525,7 @@ static bool verify_assume_stmt(struct VContext *context,
 
 static bool verify_if_stmt(struct VContext *context,
                            struct Statement *stmt,
-                           struct Sexpr *** next_axiom_ptr)
+                           struct Sexpr *** ret_val_ptr)
 {
     // Verify the condition itself
     struct Sexpr *cond = verify_term(context, stmt->if_data.condition);
@@ -567,7 +567,7 @@ static bool verify_if_stmt(struct VContext *context,
         make_string_sexpr(cond_item->fol_name));
 
     // Verify the "then" branch
-    bool then_ok = verify_statements(context, stmt->if_data.then_block, next_axiom_ptr);
+    bool then_ok = verify_statements(context, stmt->if_data.then_block, ret_val_ptr);
 
     // Capture new path condition from the "then" branch
     struct Sexpr *then_pc = context->path_condition;
@@ -585,7 +585,7 @@ static bool verify_if_stmt(struct VContext *context,
         make_string_sexpr(cond_item->fol_name));
 
     // Verify the "else" branch
-    bool else_ok = verify_statements(context, stmt->if_data.else_block, next_axiom_ptr);
+    bool else_ok = verify_statements(context, stmt->if_data.else_block, ret_val_ptr);
 
     // Capture path condition from the "else" branch
     struct Sexpr *else_pc = context->path_condition;
@@ -622,7 +622,7 @@ static bool verify_if_stmt(struct VContext *context,
 
 static bool verify_match_stmt(struct VContext *context,
                               struct Statement *stmt,
-                              struct Sexpr *** next_axiom_ptr)
+                              struct Sexpr *** ret_val_ptr)
 {
     // Verify the scrutinee
     struct Sexpr *scrut = verify_term(context, stmt->match.scrutinee);
@@ -723,7 +723,7 @@ static bool verify_match_stmt(struct VContext *context,
                       copy_sexpr(check_expr));
 
         // Verify the right-hand-side
-        bool rhs_ok = verify_statements(context, arm->rhs, next_axiom_ptr);
+        bool rhs_ok = verify_statements(context, arm->rhs, ret_val_ptr);
         if (!rhs_ok) {
             all_ok = false;
         }
@@ -1149,7 +1149,7 @@ static bool check_variant_is_bounded(struct VContext *context,
 
 bool verify_while_stmt(struct VContext *context,
                        struct Statement *stmt,
-                       struct Sexpr *** next_axiom_ptr)
+                       struct Sexpr *** ret_val_ptr)
 {
     for (struct Attribute *attr = stmt->while_data.attributes; attr; attr = attr->next) {
         attr->valid = true;
@@ -1219,7 +1219,7 @@ bool verify_while_stmt(struct VContext *context,
     }
 
     // Verify the loop body
-    if (!verify_statements(context, stmt->while_data.body, next_axiom_ptr)) {
+    if (!verify_statements(context, stmt->while_data.body, ret_val_ptr)) {
         valid = false;
     }
 
@@ -1277,7 +1277,7 @@ static bool verify_call_stmt(struct VContext *context, struct Statement *stmt)
 
 bool verify_statements(struct VContext *context,
                        struct Statement *stmt,
-                       struct Sexpr *** next_axiom_ptr)
+                       struct Sexpr *** ret_val_ptr)
 {
     bool all_ok = true;
 
@@ -1285,7 +1285,7 @@ bool verify_statements(struct VContext *context,
         switch (stmt->tag) {
         case ST_VAR_DECL:
             // verify_var_decl_stmt will itself do the rest of the list
-            return verify_var_decl_stmt(context, stmt, next_axiom_ptr) && all_ok;
+            return verify_var_decl_stmt(context, stmt, ret_val_ptr) && all_ok;
 
         case ST_FIX:
             all_ok = verify_fix_stmt(context, stmt) && all_ok;
@@ -1308,7 +1308,7 @@ bool verify_statements(struct VContext *context,
             break;
 
         case ST_RETURN:
-            all_ok = verify_return_stmt(context, stmt, next_axiom_ptr) && all_ok;
+            all_ok = verify_return_stmt(context, stmt, ret_val_ptr) && all_ok;
             break;
 
         case ST_ASSERT:
@@ -1320,11 +1320,11 @@ bool verify_statements(struct VContext *context,
             break;
 
         case ST_IF:
-            all_ok = verify_if_stmt(context, stmt, next_axiom_ptr) && all_ok;
+            all_ok = verify_if_stmt(context, stmt, ret_val_ptr) && all_ok;
             break;
 
         case ST_WHILE:
-            all_ok = verify_while_stmt(context, stmt, next_axiom_ptr) && all_ok;
+            all_ok = verify_while_stmt(context, stmt, ret_val_ptr) && all_ok;
             break;
 
         case ST_CALL:
@@ -1332,7 +1332,7 @@ bool verify_statements(struct VContext *context,
             break;
 
         case ST_MATCH:
-            all_ok = verify_match_stmt(context, stmt, next_axiom_ptr) && all_ok;
+            all_ok = verify_match_stmt(context, stmt, ret_val_ptr) && all_ok;
             break;
 
         case ST_MATCH_FAILURE:

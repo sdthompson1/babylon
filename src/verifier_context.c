@@ -162,6 +162,11 @@ static bool is_true(struct Sexpr *expr)
     return expr->type == S_STRING && strcmp(expr->string, "true") == 0;
 }
 
+static bool is_false(struct Sexpr *expr)
+{
+    return expr->type == S_STRING && strcmp(expr->string, "false") == 0;
+}
+
 struct Sexpr *and_sexpr(struct Sexpr *lhs, struct Sexpr *rhs)
 {
     if (is_true(lhs)) {
@@ -249,6 +254,27 @@ struct Sexpr * pc_implies(struct VContext *context, struct Sexpr *rhs)
     }
 }
 
+void make_ite_pc_expr(struct Sexpr *** ret_val_ptr, struct VContext *context, struct Sexpr *expr)
+{
+    if (**ret_val_ptr != NULL) {
+        fatal_error("make_ite_pc_expr: error, *ret_val_ptr should be NULL on entry");
+    }
+
+    if (is_true(context->path_condition)) {
+        // optimisation: (ite true x NULL) = x
+        **ret_val_ptr = expr;
+    } else if (is_false(context->path_condition)) {
+        // optimisation: (ite false x NULL) = NULL
+        free_sexpr(expr);
+    } else {
+        **ret_val_ptr = make_list4_sexpr(make_string_sexpr("ite"),
+                                        copy_sexpr(context->path_condition),
+                                        expr,
+                                        NULL);
+        *ret_val_ptr = &((**ret_val_ptr)->right->right->right->left);
+    }
+}
+
 void add_fact(struct VContext *context, struct Sexpr *fact)
 {
     context->facts = make_pair_sexpr(pc_implies(context, fact), context->facts);
@@ -319,30 +345,34 @@ struct Item *add_const_item(struct VContext *context,
     struct Item *item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
 
-    // (declare-const fol_name fol_type)
+    // (NULL fol_name fol_type)
     item->fol_decl = make_list3_sexpr(
-        make_string_sexpr("declare-const"),
+        NULL,  // filled in later
         make_string_sexpr(fol_name),
         copy_sexpr(fol_type));
 
+    item->fol_axioms = NULL;
+
     if (fol_term) {
-        // ((assert (= fol_name fol_term)))
-        item->fol_axioms = make_list1_sexpr(
-            make_list2_sexpr(
-                make_string_sexpr("assert"),
-                make_list3_sexpr(
-                    make_string_sexpr("="),
-                    make_string_sexpr(fol_name),
-                    fol_term)));
+        // (define-fun fol_name () fol_type fol_term)
+        item->fol_decl = make_list5_sexpr(
+            make_string_sexpr("define-fun"),
+            make_string_sexpr(fol_name),
+            NULL,
+            copy_sexpr(fol_type),
+            fol_term);
     } else {
+        // (declare-const fol_name fol_type)
+        item->fol_decl = make_list3_sexpr(
+            make_string_sexpr("declare-const"),
+            make_string_sexpr(fol_name),
+            copy_sexpr(fol_type));
         struct Sexpr * vexpr = validity_test_expr(type, fol_name);
         if (vexpr) {
             item->fol_axioms = make_list1_sexpr(
                 make_list2_sexpr(
                     make_string_sexpr("assert"),
                     vexpr));
-        } else {
-            item->fol_axioms = NULL;
         }
     }
 

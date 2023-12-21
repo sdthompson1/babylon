@@ -26,12 +26,13 @@ repository.
 #define MAX_ARGS 10
 static const char * PROVERS[NUM_PROVERS][MAX_ARGS] = {
     { "z3",
-      "-memory:4000",
+      "-memory:3000",
       "-in",
       NULL },
 
     { "vampire",
       "--mode", "casc",
+      "--memory_limit", "3000",
       "--forced_options", "output_mode=smtcomp",
       "--input_syntax", "smtlib2",
       NULL },

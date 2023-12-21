@@ -307,42 +307,19 @@ static bool is_sort(const struct Item *item)
 
 static struct Sexpr * get_value_of_variable(const char *fol_name, const struct Item *item)
 {
-    // TODO: Maybe the variable value could be cached in Item to avoid
-    // the need for this...
-
     if (item == NULL) {
         return NULL;
     }
 
-    // check decl is of form (declare-const name type)
-    if (get_sexpr_list_length(item->fol_decl) != 3
-        || !sexpr_equal_string(item->fol_decl->left, "declare-const")) {
+    // Check decl is of form (define-fun name () type expr)
+    if (get_sexpr_list_length(item->fol_decl) != 5
+        || get_sexpr_list_length(item->fol_decl->right->right->left) != 0
+        || !sexpr_equal_string(item->fol_decl->left, "define-fun")) {
         return NULL;
     }
 
-    // check axioms is of form (A) for some A
-    if (get_sexpr_list_length(item->fol_axioms) != 1) {
-        return NULL;
-    }
-
-    // check A is of the form (assert E) for some E
-    struct Sexpr * the_assert = item->fol_axioms->left;
-    if (get_sexpr_list_length(the_assert) != 2
-        || !sexpr_equal_string(the_assert->left, "assert")) {
-        return NULL;
-    }
-
-    // check E is of the form (= fol_name X) for some X
-    struct Sexpr * equation = the_assert->right->left;
-    if (get_sexpr_list_length(equation) != 3
-        || !sexpr_equal_string(equation->left, "=")
-        || !sexpr_equal_string(equation->right->left, fol_name)) {
-        return NULL;
-    }
-
-    // OK so the assert is of the expected form where it is just saying what the
-    // value of the local is. So we can return a copy of that expr.
-    return copy_sexpr(equation->right->right->left);
+    // Return a copy of the expr
+    return copy_sexpr(item->fol_decl->right->right->right->right->left);
 }
 
 struct Sexpr * insert_lets(struct VContext *context,
@@ -403,8 +380,13 @@ bool verify_function_return(struct VContext *context,
                             struct Location location,
                             struct Term *return_term,
                             bool ghost,
-                            struct Sexpr ***next_axiom_ptr)
+                            struct Sexpr *** ret_val_ptr)
 {
+    // If this point in the code is unreachable we shouldn't try to continue
+    if (sexpr_equal_string(context->path_condition, "false")) {
+        return true;
+    }
+
     bool ok = true;
     struct Sexpr *ret_val = NULL;
 
@@ -432,59 +414,22 @@ bool verify_function_return(struct VContext *context,
         }
     }
 
-
     // Expand the ret val to include "new" values of ref vars
     struct Sexpr *expanded_ret_val;
     bool ret_val_valid = get_expanded_ret_val(context, ret_val, &expanded_ret_val);
     free_sexpr(ret_val);
 
     if (ret_val_valid) {
-
         // Verify that under the current path condition, each
         // postcondition is true at this point
         ok = verify_postconditions(context, location, expanded_ret_val) && ok;
 
         if (expanded_ret_val != NULL) {
-            // As part of the definition of this function, we now want to
-            // assert that that under the current path condition, the function
-            // will return the provided value.
-
-            // (= funapp-expr retval)
-            struct Sexpr *expr = make_list3_sexpr(
-                make_string_sexpr("="),
-                copy_sexpr(context->funapp_sexpr),
-                expanded_ret_val);
+            // Add (ite current-path-condition expr NULL) onto the definition
+            // of this function.
+            // ("ret_val_ptr" always points to the NULL at the tail of this chain.)
+            make_ite_pc_expr(ret_val_ptr, context, expanded_ret_val);
             expanded_ret_val = NULL;
-
-            // (=> path-condition ...)
-            expr = pc_implies(context, expr);
-
-            // (let ((%somevar somexpr)) ...)
-            expr = insert_lets(context, expr);
-
-            if (expr) {
-                // (=> (VALID args) ...)
-                expr = insert_validity_conditions(context,
-                                                  QUANT_FORALL,
-                                                  context->function_args,
-                                                  context->funapp_sexpr,
-                                                  expr);
-
-                // (forall args ...)
-                if (context->arglist_sexpr != NULL) {
-                    expr = make_list3_sexpr(
-                        make_string_sexpr("forall"),
-                        copy_sexpr(context->arglist_sexpr),
-                        expr);
-                }
-
-                // (assert ...)
-                expr = make_list2_sexpr(make_string_sexpr("assert"), expr);
-
-                // add that assert to the end of the list of "axioms" for this function
-                **next_axiom_ptr = make_list1_sexpr(expr);
-                *next_axiom_ptr = &((**next_axiom_ptr)->right);
-            }
         }
     }
 
