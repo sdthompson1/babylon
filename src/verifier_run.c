@@ -26,6 +26,7 @@ repository.
 
 static struct Sexpr * make_fol_problem(const struct HashTable *global_env,
                                        const struct HashTable *local_env,
+                                       const struct HashTable *local_hidden,
                                        struct Sexpr *initial_asserts,
                                        struct Sexpr *conjecture)
 {
@@ -42,7 +43,7 @@ static struct Sexpr * make_fol_problem(const struct HashTable *global_env,
                 copy_sexpr(conjecture)));
 
     // Add the required dependency definitions/axioms.
-    return get_sexpr_dependencies(global_env, local_env,
+    return get_sexpr_dependencies(global_env, local_env, local_hidden,
                                   result, result);
 }
 
@@ -113,6 +114,7 @@ bool verify_condition(struct VContext *context,
     // Make the FOL problem
     struct Sexpr * problem = make_fol_problem(context->global_env,
                                               context->local_env,
+                                              context->local_hidden,
                                               initial_asserts,
                                               condition);
 

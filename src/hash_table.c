@@ -127,6 +127,17 @@ void hash_table_swap(struct HashTable *table1, struct HashTable *table2)
     *table1 = tmp;
 }
 
+static void copy_helper(void *context, const char *key, void *value)
+{
+    hash_table_insert(context, key, value);
+}
+
+void hash_table_copy(struct HashTable *dest, struct HashTable *src)
+{
+    hash_table_clear(dest);
+    hash_table_for_each(src, copy_helper, dest);
+}
+
 void hash_table_insert(struct HashTable *table, const char *key, void *value)
 {
     // Rehash when load factor is around 0.6, i.e.

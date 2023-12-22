@@ -215,6 +215,10 @@ void names_used_in_statements(struct HashTable *names, struct Statement *stmt)
 
         case ST_MATCH_FAILURE:
             break;
+
+        case ST_SHOW_HIDE:
+            hash_table_insert(names, stmt->show_hide.name, NULL);
+            break;
         }
 
         stmt = stmt->next;
@@ -408,6 +412,9 @@ static void get_modified_vars_impl(struct HashTable *names,
             break;
 
         case ST_MATCH_FAILURE:
+            break;
+
+        case ST_SHOW_HIDE:
             break;
         }
 

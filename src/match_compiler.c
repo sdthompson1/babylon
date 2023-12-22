@@ -1328,6 +1328,9 @@ void match_compiler_statements(uint64_t *name_counter, struct Statement *stateme
 
         case ST_MATCH_FAILURE:
             break;
+
+        case ST_SHOW_HIDE:
+            break;
         }
     }
 }

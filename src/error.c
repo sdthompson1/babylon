@@ -233,6 +233,11 @@ void report_int_real_not_allowed(struct Location location)
     print_error("'int' or 'real' types not allowed in executable code\n");
 }
 
+void report_can_only_show_hide_functions(struct Location location)
+{
+    print_location(location);
+    print_error("Attempting to show or hide non-function value\n");
+}
 
 void report_type_mismatch(struct Type *expected_type, struct Term *term)
 {

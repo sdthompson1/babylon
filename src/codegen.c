@@ -2581,6 +2581,7 @@ static void codegen_statements(struct CGContext *context, struct Statement *stmt
             case ST_OBTAIN:
             case ST_ASSUME:
             case ST_ASSERT:
+            case ST_SHOW_HIDE:
                 // these should always be ghost
                 fatal_error("codegen_statements: non-ghost fix/use/etc.");
 

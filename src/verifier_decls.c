@@ -655,6 +655,8 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     context->facts = NULL;
     context->num_facts = 0;
 
+    hash_table_clear(context->local_hidden);
+
     return result;
 }
 

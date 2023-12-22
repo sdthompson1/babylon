@@ -1487,6 +1487,11 @@ struct Statement * copy_statement(struct Statement *stmt)
 
     case ST_MATCH_FAILURE:
         break;
+
+    case ST_SHOW_HIDE:
+        result->show_hide.name = copy_string(stmt->show_hide.name);
+        result->show_hide.show = stmt->show_hide.show;
+        break;
     }
 
     result->ghost = stmt->ghost;
@@ -1593,6 +1598,10 @@ void free_statement(struct Statement *stmt)
             break;
 
         case ST_MATCH_FAILURE:
+            break;
+
+        case ST_SHOW_HIDE:
+            free((void*)stmt->show_hide.name);
             break;
         }
 

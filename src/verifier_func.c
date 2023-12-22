@@ -280,7 +280,7 @@ static bool require_let_for(struct VContext *context, const char *name)
 struct Sexpr * insert_lets(struct VContext *context,
                            struct Sexpr *expr)
 {
-    struct Sexpr *deps = get_sexpr_dependencies(context->local_env, NULL, expr, NULL);
+    struct Sexpr *deps = get_sexpr_dependencies(context->local_env, NULL, NULL, expr, NULL);
 
     // First of all, figure out which deps we want to keep.
     struct Sexpr *new_deps = NULL;

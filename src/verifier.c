@@ -98,6 +98,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.timeout_seconds = options->timeout_seconds;
     cxt.continue_after_error = options->continue_after_error;
     cxt.error_found = false;
+    cxt.local_hidden = new_hash_table();
 
     cxt.debug_filename_prefix = options->debug_filename_prefix;
     if (cxt.debug_filename_prefix) {
@@ -140,6 +141,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
     free_hash_table(cxt.refs);
     free_hash_table(cxt.local_to_version);
     free_hash_table(cxt.local_env);
+    free_hash_table(cxt.local_hidden);
 
     if (cxt.debug_filename_prefix) {
         hash_table_for_each(cxt.debug_files_created, ht_free_key, NULL);

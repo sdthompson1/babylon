@@ -25,6 +25,7 @@ struct Sexpr;
 
 struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
                                       const struct HashTable *env2,
+                                      const struct HashTable *hidden_names,
                                       const struct Sexpr *expr,
                                       struct Sexpr *tail_sexpr);
 

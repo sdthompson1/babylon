@@ -1637,6 +1637,36 @@ static struct Statement * parse_match_stmt(struct ParserState *state)
     return new_stmt;
 }
 
+static struct Statement * parse_show_hide_stmt(struct ParserState *state)
+{
+    bool show = (state->token->type == TOK_KW_SHOW);
+
+    struct Location loc = state->token->location;
+    advance(state);
+
+    const struct Token *tok_name = expect(state, TOK_NAME, "name");
+    if (!tok_name) return NULL;
+
+    // allow dotted names
+    const struct Token *tok_name_2 = NULL;
+    if (state->token->type == TOK_DOT) {
+        advance(state);
+        tok_name_2 = expect(state, TOK_NAME, "name");
+    }
+
+    expect(state, TOK_SEMICOLON, "';'");
+
+    struct Statement *new_stmt = make_statement(loc, ST_SHOW_HIDE);
+    if (tok_name_2) {
+        new_stmt->show_hide.name = copy_string_3(tok_name->data, ".", tok_name_2->data);
+    } else {
+        new_stmt->show_hide.name = copy_string(tok_name->data);
+    }
+    new_stmt->show_hide.show = show;
+
+    return new_stmt;
+}
+
 static struct Statement * parse_statement(struct ParserState *state)
 {
     bool ghost = false;
@@ -1691,6 +1721,11 @@ static struct Statement * parse_statement(struct ParserState *state)
 
     case TOK_KW_MATCH:
         stmt = parse_match_stmt(state);
+        break;
+
+    case TOK_KW_SHOW:
+    case TOK_KW_HIDE:
+        stmt = parse_show_hide_stmt(state);
         break;
 
     default:

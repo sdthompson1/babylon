@@ -905,6 +905,20 @@ static void rename_statement(struct RenamerState *state, struct Statement *stmt)
 
         case ST_MATCH_FAILURE:
             break;
+
+        case ST_SHOW_HIDE:
+            {
+                struct NameList *list = resolve_name(state, false, stmt->show_hide.name);
+                if (list && !list->next) {
+                    free((void*)stmt->show_hide.name);
+                    stmt->show_hide.name = list->name;
+                    list->name = NULL;
+                } else {
+                    handle_resolution_failure(state, stmt->show_hide.name, stmt->location, list);
+                }
+                free_name_list(list);
+            }
+            break;
         }
 
         stmt = stmt->next;

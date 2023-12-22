@@ -124,6 +124,10 @@ struct VContext {
     int timeout_seconds;
     bool continue_after_error;
     bool error_found;
+
+
+    // Hidden Names
+    struct HashTable *local_hidden;
 };
 
 enum RefType {

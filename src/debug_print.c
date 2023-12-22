@@ -682,6 +682,12 @@ static void print_statements(int indent_level, FILE *file, struct Statement *stm
         case ST_MATCH_FAILURE:
             fprintf(file, "#match_fail_stmt;\n");
             break;
+
+        case ST_SHOW_HIDE:
+            fprintf(file, "%s %s;",
+                    stmt->show_hide.show ? "show" : "hide",
+                    stmt->show_hide.name);
+            break;
         }
 
         stmt = stmt->next;

@@ -448,7 +448,8 @@ enum StmtTag {
     ST_WHILE,
     ST_CALL,
     ST_MATCH,
-    ST_MATCH_FAILURE
+    ST_MATCH_FAILURE,
+    ST_SHOW_HIDE
 };
 
 struct StmtData_VarDecl {
@@ -517,6 +518,11 @@ struct StmtData_Match {
     struct Arm *arms;
 };
 
+struct StmtData_ShowHide {
+    const char *name;
+    bool show;
+};
+
 struct Statement {
     struct Location location;
     struct Statement *next;
@@ -535,6 +541,7 @@ struct Statement {
         struct StmtData_While while_data;
         struct StmtData_Call call;
         struct StmtData_Match match;
+        struct StmtData_ShowHide show_hide;
     };
     bool ghost;
 };

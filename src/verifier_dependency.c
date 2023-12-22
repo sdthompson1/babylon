@@ -192,8 +192,40 @@ static void get_names_from_sexpr(const struct Sexpr *expr,
     }
 }
 
+static struct Sexpr *strip_define_fun(struct Sexpr *expr)
+{
+    struct Sexpr *types = NULL;
+    struct Sexpr **tail = &types;
+    for (struct Sexpr *node = expr->right->right->left; node; node = node->right) {
+        *tail = make_list1_sexpr(copy_sexpr(node->left->right->left));
+        tail = &(*tail)->right;
+    }
+    return make_list4_sexpr(make_string_sexpr("declare-fun"),
+                            copy_sexpr(expr->right->left),
+                            types,
+                            copy_sexpr(expr->right->right->right->left));
+}
+
+static struct Sexpr *maybe_hide_defn(struct Sexpr *expr,
+                                     const struct HashTable *hidden_names)
+{
+    // (define-fun name ((arg type) (arg type)) type value)
+    // becomes
+    // (declare-fun name (type type) type)
+    if (hidden_names != NULL) {
+        if (sexpr_equal_string(expr->left, "define-fun")) {
+            const char *name = expr->right->left->string;
+            if (name[0] == '%' && hash_table_contains_key(hidden_names, &name[1])) {
+                return strip_define_fun(expr);
+            }
+        }
+    }
+    return copy_sexpr(expr);
+}
+
 struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
                                       const struct HashTable *env2,
+                                      const struct HashTable *hidden_names,
                                       const struct Sexpr *expr,
                                       struct Sexpr *tail_sexpr) // handover
 {
@@ -232,13 +264,17 @@ struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
                 }
 
                 if (item) {
+                    // Hide the definition if necessary.
+                    struct Sexpr *new_decl = maybe_hide_defn(item->fol_decl, hidden_names);
+
                     // Add the decl to result list, and add any names it
                     // references to open set.
-                    get_names_from_sexpr(item->fol_decl, open_set, shadowed_names, NULL);
-                    *tail_ptr = make_pair_sexpr(copy_sexpr(item->fol_decl), NULL);
+                    get_names_from_sexpr(new_decl, open_set, shadowed_names, NULL);
+                    *tail_ptr = make_pair_sexpr(new_decl, NULL);
                     tail_ptr = &(*tail_ptr)->right;
 
-                    // Same for axioms.
+                    // Same for axioms (but we don't hide the axioms, only
+                    // the definition itself).
                     for (struct Sexpr *axiom = item->fol_axioms; axiom; axiom = axiom->right) {
                         get_names_from_sexpr(axiom->left, open_set, shadowed_names, NULL);
                         *tail_ptr = make_pair_sexpr(copy_sexpr(axiom->left), NULL);

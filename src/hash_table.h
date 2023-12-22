@@ -26,6 +26,9 @@ void free_hash_table(struct HashTable *table);
 // Swap two hash tables quickly
 void hash_table_swap(struct HashTable *table1, struct HashTable *table2);
 
+// Copy one hash table to another. Existing contents of 'dest' are lost.
+void hash_table_copy(struct HashTable *dest, struct HashTable *src);
+
 
 // Insertion, removal
 // Note: keys and values are not copied; they are stored in the table as pointers.

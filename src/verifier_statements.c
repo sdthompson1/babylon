@@ -544,6 +544,8 @@ static bool verify_if_stmt(struct VContext *context,
         return false;
     }
 
+    struct HashTable * hidden_backup = new_hash_table();
+
 
     // Let's pretend that the condition is being assigned to a local
     // variable called "if".
@@ -565,6 +567,8 @@ static bool verify_if_stmt(struct VContext *context,
     // Take a snapshot of variable versions before we start.
     struct HashTable * original_snapshot = snapshot_variable_versions(context, modified_vars);
 
+    hash_table_copy(hidden_backup, context->local_hidden);
+
     // Save the original path condition
     struct Sexpr *orig_pc = context->path_condition;
     context->path_condition = NULL;
@@ -578,6 +582,8 @@ static bool verify_if_stmt(struct VContext *context,
 
     // Verify the "then" branch
     bool then_ok = verify_statements(context, stmt->if_data.then_block, ret_val_ptr);
+
+    hash_table_copy(context->local_hidden, hidden_backup);
 
     // Capture new path condition from the "then" branch
     struct Sexpr *then_pc = context->path_condition;
@@ -596,6 +602,11 @@ static bool verify_if_stmt(struct VContext *context,
 
     // Verify the "else" branch
     bool else_ok = verify_statements(context, stmt->if_data.else_block, ret_val_ptr);
+
+    free_hash_table(context->local_hidden);
+    context->local_hidden = hidden_backup;
+    hidden_backup = NULL;
+
 
     // Capture path condition from the "else" branch
     struct Sexpr *else_pc = context->path_condition;
@@ -679,6 +690,10 @@ static bool verify_match_stmt(struct VContext *context,
 
     bool all_ok = true;
 
+    struct HashTable * hidden_backup = new_hash_table();
+    hash_table_copy(hidden_backup, context->local_hidden);
+
+
     // Verify each arm
     for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
 
@@ -738,6 +753,8 @@ static bool verify_match_stmt(struct VContext *context,
             all_ok = false;
         }
 
+        hash_table_copy(context->local_hidden, hidden_backup);
+
         // Capture the new path condition
         *captured_pc_tail = make_list1_sexpr(context->path_condition);
         captured_pc_tail = &(*captured_pc_tail)->right;
@@ -752,6 +769,9 @@ static bool verify_match_stmt(struct VContext *context,
         // Go back to the original variable values (for the next arm)
         revert_to_snapshot(context, original_snapshot);
     }
+
+    free_hash_table(hidden_backup);
+    hidden_backup = NULL;
 
     free_sexpr(scrut);
     free_sexpr(all_check_exprs);
@@ -1228,6 +1248,9 @@ bool verify_while_stmt(struct VContext *context,
         valid = false;
     }
 
+    struct HashTable *hidden_backup = new_hash_table();
+    hash_table_copy(hidden_backup, context->local_hidden);
+
     // Verify the loop body
     if (!verify_statements(context, stmt->while_data.body, ret_val_ptr)) {
         valid = false;
@@ -1263,6 +1286,10 @@ bool verify_while_stmt(struct VContext *context,
     free_hash_table(snapshot);
     snapshot = NULL;
 
+    free_hash_table(context->local_hidden);
+    context->local_hidden = hidden_backup;
+    hidden_backup = NULL;
+
     // Remove any facts that were derived during the loop (since we
     // are now considering the case where the loop condition is false
     // and the loop doesn't run).
@@ -1282,6 +1309,15 @@ static bool verify_call_stmt(struct VContext *context, struct Statement *stmt)
 
     free_sexpr(fol_call_term);
     return true;
+}
+
+static void verify_show_hide_stmt(struct VContext *context, struct Statement *stmt)
+{
+    if (stmt->show_hide.show) {
+        hash_table_remove(context->local_hidden, stmt->show_hide.name);
+    } else {
+        hash_table_insert(context->local_hidden, stmt->show_hide.name, NULL);
+    }
 }
 
 
@@ -1347,6 +1383,10 @@ bool verify_statements(struct VContext *context,
 
         case ST_MATCH_FAILURE:
             all_ok = verify_match_failure_stmt(context, stmt) && all_ok;
+            break;
+
+        case ST_SHOW_HIDE:
+            verify_show_hide_stmt(context, stmt);
             break;
         }
 

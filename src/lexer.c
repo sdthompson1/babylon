@@ -419,6 +419,12 @@ static void lex_keyword_or_name(struct LexerState *state)
         }
         break;
 
+    case 'h':
+        if (strcmp(&buf[1], "ide") == 0) {
+            add_simple_token(state, TOK_KW_HIDE);
+        }
+        break;
+
     case 'i':
         switch (buf[1]) {
         case '8':
@@ -506,7 +512,9 @@ static void lex_keyword_or_name(struct LexerState *state)
         break;
 
     case 's':
-        if (strcmp(&buf[1], "izeof") == 0) {
+        if (strcmp(&buf[1], "how") == 0) {
+            add_simple_token(state, TOK_KW_SHOW);
+        } else if (strcmp(&buf[1], "izeof") == 0) {
             add_simple_token(state, TOK_KW_SIZEOF);
         } else if (strcmp(&buf[1], "wap") == 0) {
             add_simple_token(state, TOK_KW_SWAP);
