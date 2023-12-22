@@ -17,10 +17,11 @@ import CString;
 import GameEngine;
 import Int;
 import Limits;
-import LoadTexture;
+import qualified LoadPNG;
 import Maybe;
 import MessageBox;
 import Result;
+import StringBuffer;
 
 // Texture numbers
 function piece_texture_num(p: Piece): TextureNum
@@ -45,6 +46,7 @@ const TX_POSSIBLE_MOVE = 13;
 const TX_CHECK = 14;
 const TX_CHECKMATE_MSG = 15;
 const TX_STALEMATE_MSG = 16;
+const HIGHEST_TEXTURE_NUM = 16;
 
 // Square colours and sizes
 const DARK_SQUARE_COL: GameEngine.RGBA = {r=u8(134), g=u8(172), b=u8(191), a=u8(255)};
@@ -62,6 +64,81 @@ ghost function textures_loaded(engine: GameEngine): bool
     return valid_engine(engine)
       && forall (i: u32) i <= HIGHEST_TEXTURE_NUM ==>
            engine_state(engine).textures[i];
+}
+
+function load_texture(ref mem: Mem,
+                      ref io: IO,
+                      ref engine: GameEngine,
+                      ref result: Result<{}>,
+                      texture_num: TextureNum,
+                      filename: u8[])
+
+    requires texture_num <= HIGHEST_TEXTURE_NUM;
+
+    requires valid_c_string(filename);
+    
+    requires valid_engine(engine);
+    requires !engine_state(engine).textures[texture_num];
+
+    requires valid_c_result<{}>(result);
+
+    ensures is_error<{}>(old(result)) ==> result == old(result);
+
+    ensures is_ok<{}>(result) ==> engine_state(engine)
+        == set_texture(old(engine_state(engine)), texture_num);
+
+    ensures is_error<{}>(result) ==> engine_state(engine)
+        == old(engine_state(engine));
+
+    ensures valid_engine(engine);
+    ensures valid_c_result<{}>(result);    
+{
+    if is_error<{}>(result) {
+        // Do not attempt the load
+        return;
+    }
+
+    var img: LoadPNG.RGBA[,];
+    var load_png_result: Result<{}>;
+    LoadPNG.load_png(io, filename, img, load_png_result);
+    
+    match load_png_result {
+    case Error(ref msg) =>
+        // Try to make a new err msg, if we can allocate space for it
+
+        var MAX_ERR_MSG_LEN = u64(1024);
+        var sb: StringBuffer;
+        var resize_result = resize_string_buffer(mem, sb, MAX_ERR_MSG_LEN);
+        
+        if !resize_result {
+            // no memory, just use the original error message.
+            swap sb.buf, msg;
+
+        } else {
+            // we allocated a buffer, write the new message into it.
+            append_string(sb, "Failed to load ");
+            append_c_string(sb, filename);
+            append_string(sb, ":\n");
+            append_c_string(sb, msg);
+            null_terminate(sb);
+            var free_result = resize_array<u8>(mem, msg, 0);
+        }
+
+        // Now we have to get sb.buf into an error Result.
+        // This is slightly awkward unfortunately - we have to swap it into place.
+        var empty_string: u8[];
+        result = Error<{}>(empty_string);
+        match result {
+        case Error(ref err_msg) => swap err_msg, sb.buf;
+        }
+
+    case Ok({}) =>
+        // The load was successful, now let's send the pixel data to the GameEngine.
+        create_texture(engine, texture_num, img, result);
+        
+        // Free the pixel array as it's no longer needed.
+        var free_result = resize_2d_array<LoadPNG.RGBA>(mem, img, 0, 0);
+    }
 }
 
 function load_textures(ref mem: Mem,
@@ -475,6 +552,8 @@ function run_prog(ref engine: GameEngine,
         }
 
         fuel = fuel - u64(1);
+
+        hide handle_mouse_click;  // for proving the invariant
     }
 }
 

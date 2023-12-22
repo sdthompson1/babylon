@@ -707,16 +707,13 @@ function castling_through_check(pos: Position,
     return false;
 }
 
-// Compute whether a move is a legal move
-function real_compute_is_legal_move(pos: Position,
-                                    ref scratch_pos: Position,
-                                    from: Square,
-                                    to: Square): bool
+// Definition of whether a move is legal
+ghost function is_legal_move(pos: Position,
+                             from: Square,
+                             to: Square): bool
     requires valid_position(pos);
-    requires sizeof(scratch_pos.board) == board_size;
     requires valid_square(from);
     requires valid_square(to);
-    ensures sizeof(scratch_pos.board) == board_size;
 {
     // First of all, it must be a pseudo-legal move.
     if !is_pseudo_legal_move(pos, from, to, pos.turn) {
@@ -730,8 +727,9 @@ function real_compute_is_legal_move(pos: Position,
         return false;
     }
 
-    // Now copy our position to the scratch board
-    copy_position(scratch_pos, pos);
+    // Now copy our position to a scratch board
+    // (we can do this, because this is a ghost function)
+    var scratch_pos = pos;
 
     // If we are castling, confirm we are not trying to castle through check.
     if castling {
@@ -750,17 +748,8 @@ function real_compute_is_legal_move(pos: Position,
     return !is_check(scratch_pos);
 }
 
-ghost function is_legal_move(pos: Position, from: Square, to: Square): bool
-    requires valid_position(pos);
-    requires valid_square(from);
-    requires valid_square(to);
-{
-    var pos2 = pos;
-    var result = real_compute_is_legal_move(pos, pos2, from, to);
-    return result;
-}
-
-// This just calls real_compute_is_legal_move
+// An executable version of is_legal_move. This requires a scratch position
+// to be passed in (so that we don't have to allocate memory at runtime).
 function compute_is_legal_move(pos: Position,
                                ref scratch_pos: Position,
                                from: Square,
@@ -772,8 +761,37 @@ function compute_is_legal_move(pos: Position,
     ensures sizeof(scratch_pos.board) == board_size;
     ensures return == is_legal_move(pos, from, to);
 {
-    var result = real_compute_is_legal_move(pos, scratch_pos, from, to);
-    return result;
+    // We just mirror the structure of is_legal_move, but using the
+    // scratch position that we have been given.
+    
+    if !is_pseudo_legal_move(pos, from, to, pos.turn) {
+        return false;
+    }
+
+    var castling = is_castling_move(pos, from, to);
+    if castling && is_check(pos) {
+        // Trying to castle out of check
+        return false;
+    }
+
+    copy_position(scratch_pos, pos);
+
+    if castling {
+        var bad = castling_through_check(pos, scratch_pos, from, to);
+        if bad {
+            return false;
+        }
+    }
+
+    assert scratch_pos == pos;
+    make_move_internal(scratch_pos, from, to);
+
+    // These hide statements make it easier to prove the postcondition
+    // "return == is_legal_move(pos, from, to)".
+    hide is_pseudo_legal_move;
+    hide is_castling_move;
+
+    return !is_check(scratch_pos);
 }
 
 
@@ -797,6 +815,9 @@ function get_legal_moves_from(pos: Position,
     ensures forall (sq:Square) valid_square(sq) ==>
         to[sq.x, sq.y] == is_legal_move(pos, from, sq);
 {
+    hide is_legal_move;
+    hide compute_is_legal_move;
+    
     var sq = first_square();
     while !iteration_done(sq)
         invariant sizeof(scratch_pos.board) == board_size;
@@ -939,6 +960,9 @@ function exists_legal_move_from(pos: Position,
         valid_square(to) && is_legal_move(pos, from, to);
     ensures sizeof(scratch_pos.board) == board_size;
 {
+    hide compute_is_legal_move;
+    hide is_legal_move;
+
     var to = first_square();
     while !iteration_done(to)
         invariant valid_square(to) || iteration_done(to);
@@ -965,6 +989,9 @@ function get_game_status(pos: Position,
     ensures sizeof(scratch_pos.board) == board_size;
     ensures return == game_status(pos);    
 {
+    hide is_legal_move;
+    hide compute_is_legal_move;
+
     var from = first_square();
     while !iteration_done(from)
         invariant valid_square(from) || iteration_done(from);
