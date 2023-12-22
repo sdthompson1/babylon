@@ -103,3 +103,15 @@ function test9()
         // that the invariants still hold on exit from the loop.)
     }
 }
+
+function test10()
+{
+    // Scope test: hide/show included in a "proof" of an assert
+    // should be limited to the scope of the proof
+
+    assert 1 == 1 {
+        hide g;
+    }
+
+    assert g(3) == 3;   // should succeed, g is now shown again
+}

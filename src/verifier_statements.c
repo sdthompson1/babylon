@@ -491,6 +491,12 @@ static bool verify_assert_stmt(struct VContext *context,
     // save the assert expression in the context
     context->assert_exprs = make_pair_sexpr(copy_sexpr(expr), context->assert_exprs);
 
+    struct HashTable * hidden_backup = NULL;
+    if (stmt->assert_data.proof) {
+        hidden_backup = new_hash_table();
+        hash_table_copy(hidden_backup, context->local_hidden);
+    }
+
     // Execute the proof
     ok = verify_statements(context, stmt->assert_data.proof, NULL);
 
@@ -515,6 +521,12 @@ static bool verify_assert_stmt(struct VContext *context,
 
     // Add the (now proved) assert to the known facts
     add_fact(context, expr);
+
+    if (hidden_backup) {
+        free_hash_table(context->local_hidden);
+        context->local_hidden = hidden_backup;
+        hidden_backup = NULL;
+    }
 
     // Done!
     return ok;
