@@ -33,19 +33,19 @@ struct Options {
 
 static void print_usage_and_exit(char **argv)
 {
-    fprintf(stderr, "Usage: %s <options> <filename>\n", argv[0]);
-    fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  -c, --compile:          Compile the given file (and all its dependencies) to .s files\n");
-    fprintf(stderr, "  -v, --verify:           Verify the code in the specified file, but not the imports\n");
-    fprintf(stderr, "  -V, --verify-all:       Verify the code in the specified file and all imports\n");
-    fprintf(stderr, "  -o, --output-path:      Set output path (default is same folder as the input)\n");
-    fprintf(stderr, "  -q, --quiet:            Don't print progress messages while verifying\n");
-    fprintf(stderr, "      --verify-continue:  Don't stop after the first verification error\n");
-    fprintf(stderr, "  -t, --verify-timeout:   Set verification timeout in seconds (default = 60)\n");
-    fprintf(stderr, "      --main:             Always generate the C 'main' function\n");
-    fprintf(stderr, "      --no-main:          Never generate the C 'main' function\n");
-    fprintf(stderr, "  -d, --debug:            Create debug output files\n");
-    fprintf(stderr, "  -h, --help:             Show help\n");
+    printf("Usage: %s <options> <filename>\n", argv[0]);
+    printf("Options:\n");
+    printf("  -c, --compile:          Compile the given file (and all its dependencies) to .s files\n");
+    printf("  -v, --verify:           Verify the code in the specified file, but not the imports\n");
+    printf("  -V, --verify-all:       Verify the code in the specified file and all imports\n");
+    printf("  -o, --output-path:      Set output path (default is same folder as the input)\n");
+    printf("  -q, --quiet:            Don't print progress messages while verifying\n");
+    printf("      --verify-continue:  Don't stop after the first verification error\n");
+    printf("  -t, --verify-timeout:   Set verification timeout in seconds (default = 60)\n");
+    printf("      --main:             Always generate the C 'main' function\n");
+    printf("      --no-main:          Never generate the C 'main' function\n");
+    printf("  -d, --debug:            Create debug output files\n");
+    printf("  -h, --help:             Show help\n");
     exit(1);
 }
 
