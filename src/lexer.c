@@ -11,6 +11,7 @@ repository.
 #include "alloc.h"
 #include "error.h"
 #include "lexer.h"
+#include "sha256.h"
 
 #include <ctype.h>
 #include <stdbool.h>
@@ -827,5 +828,132 @@ void free_token(struct Token *token)
         free_token(token->next);
         free(token->data);
         free(token);
+    }
+}
+
+
+static void complex_token(struct SHA256_CTX *ctx, const struct Token *token, const char *str)
+{
+    // add the string including terminating null
+    sha256_add_bytes(ctx, (uint8_t*)str, strlen(str)+1);
+
+    // add the argument, with its length
+    sha256_add_bytes(ctx, (uint8_t*)&token->length, sizeof(token->length));
+    sha256_add_bytes(ctx, (uint8_t*)token->data, token->length);
+}
+
+static void simple_token(struct SHA256_CTX *ctx, const char *str)
+{
+    // add the string including terminating null
+    sha256_add_bytes(ctx, (uint8_t*)str, strlen(str)+1);
+}
+
+void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
+{
+    // each token must have a unique identifying string
+
+    switch (token->type) {
+    case TOK_INT_LITERAL: complex_token(ctx, token, "INTLIT"); break;
+    case TOK_STRING_LITERAL: complex_token(ctx, token, "STRLIT"); break;
+    case TOK_NAME: complex_token(ctx, token, "VARNAM"); break;
+
+    case TOK_KW_ALLOCATED: simple_token(ctx, "allocated"); break;
+    case TOK_KW_AS: simple_token(ctx, "as"); break;
+    case TOK_KW_ASSERT: simple_token(ctx, "assert"); break;
+    case TOK_KW_ASSUME: simple_token(ctx, "assume"); break;
+    case TOK_KW_BOOL: simple_token(ctx, "bool"); break;
+    case TOK_KW_CASE: simple_token(ctx, "case"); break;
+    case TOK_KW_CONST: simple_token(ctx, "const"); break;
+    case TOK_KW_DATATYPE: simple_token(ctx, "datatype"); break;
+    case TOK_KW_DECREASES: simple_token(ctx, "decreases"); break;
+    case TOK_KW_ELSE: simple_token(ctx, "else"); break;
+    case TOK_KW_ENSURES: simple_token(ctx, "ensures"); break;
+    case TOK_KW_EXISTS: simple_token(ctx, "exists"); break;
+    case TOK_KW_EXTERN: simple_token(ctx, "extern"); break;
+    case TOK_KW_FALSE: simple_token(ctx, "false"); break;
+    case TOK_KW_FIX: simple_token(ctx, "fix"); break;
+    case TOK_KW_FORALL: simple_token(ctx, "forall"); break;
+    case TOK_KW_FUNCTION: simple_token(ctx, "function"); break;
+    case TOK_KW_GHOST: simple_token(ctx, "ghost"); break;
+    case TOK_KW_HIDE: simple_token(ctx, "hide"); break;
+    case TOK_KW_I8: simple_token(ctx, "i8"); break;
+    case TOK_KW_I16: simple_token(ctx, "i16"); break;
+    case TOK_KW_I32: simple_token(ctx, "i32"); break;
+    case TOK_KW_I64: simple_token(ctx, "i64"); break;
+    case TOK_KW_IF: simple_token(ctx, "if"); break;
+    case TOK_KW_IMPORT: simple_token(ctx, "import"); break;
+    case TOK_KW_IN: simple_token(ctx, "in"); break;
+    case TOK_KW_INT: simple_token(ctx, "int"); break;
+    case TOK_KW_INTERFACE: simple_token(ctx, "interface"); break;
+    case TOK_KW_INVARIANT: simple_token(ctx, "invariant"); break;
+    case TOK_KW_LET: simple_token(ctx, "let"); break;
+    case TOK_KW_MATCH: simple_token(ctx, "match"); break;
+    case TOK_KW_MODULE: simple_token(ctx, "module"); break;
+    case TOK_KW_OBTAIN: simple_token(ctx, "obtain"); break;
+    case TOK_KW_OLD: simple_token(ctx, "old"); break;
+    case TOK_KW_REAL: simple_token(ctx, "real"); break;
+    case TOK_KW_REF: simple_token(ctx, "ref"); break;
+    case TOK_KW_REQUIRES: simple_token(ctx, "requires"); break;
+    case TOK_KW_RETURN: simple_token(ctx, "return"); break;
+    case TOK_KW_SHOW: simple_token(ctx, "show"); break;
+    case TOK_KW_SIZEOF: simple_token(ctx, "sizeof"); break;
+    case TOK_KW_SWAP: simple_token(ctx, "swap"); break;
+    case TOK_KW_THEN: simple_token(ctx, "then"); break;
+    case TOK_KW_TRUE: simple_token(ctx, "true"); break;
+    case TOK_KW_TYPE: simple_token(ctx, "type"); break;
+    case TOK_KW_U8: simple_token(ctx, "u8"); break;
+    case TOK_KW_U16: simple_token(ctx, "u16"); break;
+    case TOK_KW_U32: simple_token(ctx, "u32"); break;
+    case TOK_KW_U64: simple_token(ctx, "u64"); break;
+    case TOK_KW_USE: simple_token(ctx, "use"); break;
+    case TOK_KW_VAR: simple_token(ctx, "var"); break;
+    case TOK_KW_WHILE: simple_token(ctx, "while"); break;
+    case TOK_KW_WITH: simple_token(ctx, "with"); break;
+
+    case TOK_PLUS: simple_token(ctx, "+"); break;
+    case TOK_MINUS: simple_token(ctx, "-"); break;
+    case TOK_TIMES: simple_token(ctx, "*"); break;
+    case TOK_DIVIDE: simple_token(ctx, "/"); break;
+    case TOK_MODULO: simple_token(ctx, "%"); break;
+
+    case TOK_AND: simple_token(ctx, "&"); break;
+    case TOK_AND_AND: simple_token(ctx, "&&"); break;
+    case TOK_BAR: simple_token(ctx, "|"); break;
+    case TOK_BAR_BAR: simple_token(ctx, "||"); break;
+    case TOK_HAT: simple_token(ctx, "^"); break;
+    case TOK_EXCLAM: simple_token(ctx, "!"); break;
+    case TOK_TILDE: simple_token(ctx, "~"); break;
+
+    case TOK_LESS: simple_token(ctx, "<"); break;
+    case TOK_LESS_LESS: simple_token(ctx, "<<"); break;
+    case TOK_LESS_EQUAL: simple_token(ctx, "<="); break;
+    case TOK_LESS_EQUAL_EQUAL: simple_token(ctx, "<=="); break;
+    case TOK_LESS_EQUAL_EQUAL_GREATER: simple_token(ctx, "<==>"); break;
+
+    case TOK_GREATER: simple_token(ctx, ">"); break;
+    case TOK_GREATER_GREATER: simple_token(ctx, ">>"); break;
+    case TOK_GREATER_EQUAL: simple_token(ctx, ">="); break;
+
+    case TOK_EQUAL: simple_token(ctx, "="); break;
+    case TOK_EQUAL_GREATER: simple_token(ctx, "=>"); break;
+    case TOK_EQUAL_EQUAL: simple_token(ctx, "=="); break;
+    case TOK_EQUAL_EQUAL_GREATER: simple_token(ctx, "==>"); break;
+    case TOK_EXCLAM_EQUAL: simple_token(ctx, "!="); break;
+
+    case TOK_COLON: simple_token(ctx, ":"); break;
+    case TOK_SEMICOLON: simple_token(ctx, ";"); break;
+    case TOK_COMMA: simple_token(ctx, ","); break;
+    case TOK_DOT: simple_token(ctx, "."); break;
+
+    case TOK_LPAREN: simple_token(ctx, "("); break;
+    case TOK_RPAREN: simple_token(ctx, ")"); break;
+    case TOK_LBRACE: simple_token(ctx, "{"); break;
+    case TOK_RBRACE: simple_token(ctx, "}"); break;
+    case TOK_LBRACKET: simple_token(ctx, "["); break;
+    case TOK_RBRACKET: simple_token(ctx, "]"); break;
+
+    case TOK_UNDERSCORE: simple_token(ctx, "_"); break;
+
+    case TOK_EOF: simple_token(ctx, "EOF"); break;
     }
 }

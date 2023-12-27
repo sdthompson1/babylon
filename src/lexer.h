@@ -142,4 +142,7 @@ struct Token * lex_from_char_data(const char *filename, const char *file_content
 
 void free_token(struct Token *token);
 
+struct SHA256_CTX;
+void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token);
+
 #endif

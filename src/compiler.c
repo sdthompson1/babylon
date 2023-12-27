@@ -7,11 +7,13 @@ For licensing information please see LICENCE.txt at the root of the
 repository.
 */
 
+#define _POSIX_C_SOURCE 200809L   // for O_RDWR (etc) for diskhash
 
 #include "alloc.h"
 #include "ast.h"
 #include "compiler.h"
 #include "debug_print.h"
+#include "diskhash.h"
 #include "error.h"
 #include "hash_table.h"
 #include "initial_env.h"
@@ -30,6 +32,11 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
+// for O_RDWR (etc) for diskhash
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 struct StringNode {
     const char *ptr;
     struct StringNode *next;
@@ -44,12 +51,13 @@ static void add_string(struct StringNode **node, const char *ptr)
 }
 
 
-static const char LOADING;
-static const char LOADED;
-
-
 struct LoadDetails {
-    struct HashTable *loaded_modules;   // keys are allocated. values are &LOADING or &LOADED.
+    // key = module name (allocated)
+    // value = NULL if module loading still in progress, or the module's
+    // interface-fingerprint (32 bytes, allocated on heap) if the module
+    // is fully loaded.
+    struct HashTable *loaded_modules;
+
     struct HashTable *renamer_env;
     struct HashTable *type_env;
     struct VerifierEnv *verifier_env;
@@ -70,8 +78,37 @@ struct LoadDetails {
     int verify_timeout_seconds;
     bool generate_main;
     bool auto_main;
+
+    DiskHashTable *cache_db;
 };
 
+static DiskHashTable * open_cache_db(const char *prefix)
+{
+    HashTableOpts opts = dht_zero_opts();
+    opts.key_len = SHA256_HASH_LENGTH;
+
+    char *filename = copy_string_2(prefix, "babylon.cache");
+
+    DiskHashTable *db = dht_open(filename,
+                                 opts,
+                                 O_CLOEXEC | O_RDWR,
+                                 NULL);
+
+    if (db == NULL) {
+        db = dht_open(filename,
+                      opts,
+                      O_CLOEXEC | O_RDWR | O_CREAT | O_EXCL,
+                      NULL);
+
+        if (db == NULL) {
+            fprintf(stderr, "Warning: failed to open '%s', disabling caching.\n", filename);
+        }
+    }
+
+    free(filename);
+
+    return db;
+}
 
 static void interpret_filename(struct LoadDetails *details, const char *filename)
 {
@@ -150,6 +187,18 @@ bool load_imports(struct LoadDetails *details, struct Module *module, struct Imp
     return true;
 }
 
+static void add_import_hashes(struct SHA256_CTX *ctx, struct Import *imports, struct HashTable *loaded_modules)
+{
+    for (struct Import *import = imports; import; import = import->next) {
+        const uint8_t *other_hash = hash_table_lookup(loaded_modules, import->module_name);
+        if (other_hash == NULL) {
+            fatal_error("module lookup failed");
+        }
+        sha256_add_bytes(ctx, (uint8_t*)"D#", 3);
+        sha256_add_bytes(ctx, other_hash, SHA256_HASH_LENGTH);
+    }
+}
+
 // Returns true if success, false if error (e.g. module not found, circular dependency)
 static bool load_module_from_disk(struct LoadDetails *details)
 {
@@ -211,6 +260,35 @@ static bool load_module_from_disk(struct LoadDetails *details)
         return false;
     }
 
+    // Create a "fingerprint" of this module's interface.
+    // The fingerprint of a module's interface is the SHA256 hash of the
+    // following:
+    //  (a) the SHA256 hash of the interface tokens (as created by parser.c)
+    //  (b) the fingerprints of any modules imported by the interface.
+    // (mixed with some arbitrary made-up strings like "IN#" or "D#" just
+    // to make it a bit more unique).
+    struct SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_add_bytes(&ctx, (const uint8_t*)"IN#", 4);
+    sha256_add_bytes(&ctx, module->interface_checksum, SHA256_HASH_LENGTH);
+    add_import_hashes(&ctx, module->interface_imports, details->loaded_modules);
+
+    // The interface fingerprint is stored in the loaded_modules hash table.
+    uint8_t *interface_fingerprint = alloc(SHA256_HASH_LENGTH);
+    struct SHA256_CTX ctx2 = ctx;
+    sha256_final(&ctx2, interface_fingerprint);
+    hash_table_insert(details->loaded_modules, module->name, interface_fingerprint);
+
+    // We now create a fingerprint of the full module.
+    // This is the SHA256 of (a) and (b) above, together with:
+    //  (c) the SHA256 of the implementation tokens
+    //  (d) the fingerprints of any modules imported by the implementation.
+    uint8_t full_module_fingerprint[SHA256_HASH_LENGTH] = {0};
+    sha256_add_bytes(&ctx, (const uint8_t*)"IM#", 4);
+    sha256_add_bytes(&ctx, module->implementation_checksum, SHA256_HASH_LENGTH);
+    add_import_hashes(&ctx, module->implementation_imports, details->loaded_modules);
+    sha256_final(&ctx, full_module_fingerprint);
+
     // Rename (in place)
     if (!rename_module(details->renamer_env, module, interface_only)) {
         free_module(module);
@@ -240,25 +318,53 @@ static bool load_module_from_disk(struct LoadDetails *details)
 
     // Verify (if requested)
     if (details->compile_mode == CM_VERIFY || details->compile_mode == CM_VERIFY_ALL) {
+        if (!interface_only) {
+            // See if we can find this module's fingerprint in the cache.
+            // If so, that means we have in the past verified a module with
+            // identical text, and identical imported interfaces. Therefore
+            // there is no need to verify it again.
+            bool found_in_cache =
+                (details->cache_db
+                 && dht_lookup(details->cache_db,
+                               (char*)full_module_fingerprint));
+
+            if (found_in_cache) {
+                if (details->show_progress) {
+                    fprintf(stderr, "Skipping module %s (cached)\n", module->name);
+                }
+
+                // No need to run a full verification.
+                // We do still need to run in interface_only mode, so that
+                // any required decls are added to the verification context
+                // (i.e. in case they are imported by future modules).
+                interface_only = true;
+            }
+        }
+
         struct VerifierOptions options;
-        options.cache_prefix = copy_string_2(details->output_prefix, "cache/");
+        options.cache_db = details->cache_db;
         options.debug_filename_prefix = NULL;
         if (details->create_debug_files) {
             options.debug_filename_prefix = get_output_filename(details, "");
         }
         options.timeout_seconds = details->verify_timeout_seconds;
-        options.interface_only =
-            details->compile_mode == CM_VERIFY && !details->root_module;
-        options.show_progress = details->show_progress;
+        options.interface_only = interface_only;
+        options.show_progress = !interface_only && details->show_progress;
         options.continue_after_error = details->continue_after_verify_error;
         bool result = verify_module(details->verifier_env,
                                     module,
                                     &options);
         free((char*)options.debug_filename_prefix);
-        free((char*)options.cache_prefix);
         if (!result) {
             free_module(module);
             return false;
+        }
+
+        // Successful verification. Store the module's fingerprint in
+        // the cache (if this was a full verification), so that we know
+        // not to verify it again in future.
+        if (!interface_only && details->cache_db) {
+            dht_insert(details->cache_db, (char*)full_module_fingerprint, NULL);
         }
     }
 
@@ -297,35 +403,42 @@ static bool load_module_from_disk(struct LoadDetails *details)
 // Returns true if success, false if error (e.g. module not found, circular dependency)
 static bool load_module_recursive(struct LoadDetails *details)
 {
-    void *module_lookup = hash_table_lookup(details->loaded_modules, details->module_name);
+    const char *key_out = NULL;
+    void *value_out = NULL;
+    hash_table_lookup_2(details->loaded_modules, details->module_name, &key_out, &value_out);
 
-    if (module_lookup == &LOADED) {
-        // Nothing to do
+    if (value_out != NULL) {
+        // Module was previously loaded. Nothing to do.
         return true;
     }
 
-    if (module_lookup == &LOADING) {
-        // Circular dependency
+    if (key_out != NULL) {
+        // Circular dependency.
         report_circular_dependency(details->import_location, details->module_name);
         return false;
     }
 
     // The module is now loading
-    hash_table_insert(details->loaded_modules, copy_string(details->module_name), (void*)&LOADING);
+    hash_table_insert(details->loaded_modules, copy_string(details->module_name), NULL);
 
     // Load the module, either as a built-in module, or from disk.
-    if (!import_builtin_module(details->module_name,
-                               details->renamer_env,
-                               details->type_env,
-                               details->verifier_env,
-                               details->codegen_env)) {
+    if (import_builtin_module(details->module_name,
+                              details->renamer_env,
+                              details->type_env,
+                              details->verifier_env,
+                              details->codegen_env)) {
+        // HACK: just use a "fake" SHA256 hash for now.
+        // TODO: We probably should remove builtin modules sometime.
+        char *hash = alloc(SHA256_HASH_LENGTH);
+        for (int i = 0; i < SHA256_HASH_LENGTH; ++i) {
+            hash[i] = i;
+        }
+        hash_table_insert(details->loaded_modules, details->module_name, hash);
+    } else {
         if (!load_module_from_disk(details)) {
             return false;
         }
     }
-
-    // The module is now fully loaded
-    hash_table_insert(details->loaded_modules, details->module_name, (void*)&LOADED);
 
     return true;
 }
@@ -348,6 +461,12 @@ bool compile(struct CompileOptions *options)
         details.output_prefix = details.input_prefix;
     }
 
+    if (options->cache_mode == CACHE_DISABLED) {
+        details.cache_db = NULL;
+    } else {
+        details.cache_db = open_cache_db(details.output_prefix);
+    }
+
     details.import_location = g_no_location;
     details.compile_mode = options->mode;
     details.root_module = true;
@@ -361,9 +480,11 @@ bool compile(struct CompileOptions *options)
 
     bool success = load_module_recursive(&details);
 
+    dht_free(details.cache_db);
+
     free_verifier_env(details.verifier_env);
 
-    hash_table_for_each(details.loaded_modules, ht_free_key, NULL);
+    hash_table_for_each(details.loaded_modules, ht_free_key_and_value, NULL);
     free_hash_table(details.loaded_modules);
 
     free_renamer_env(details.renamer_env);

@@ -26,7 +26,7 @@ void free_verifier_env(struct VerifierEnv *);
 
 
 struct VerifierOptions {
-    const char *cache_prefix;
+    struct DiskHashTable *cache_db;
     const char *debug_filename_prefix;
     int timeout_seconds;
     bool interface_only;

@@ -25,10 +25,16 @@ enum CompileMode {
     CM_VERIFY_ALL
 };
 
+enum CacheMode {
+    CACHE_DISABLED,
+    CACHE_ENABLED
+};
+
 struct CompileOptions {
     const char *filename;
     const char *output_prefix;
     enum CompileMode mode;
+    enum CacheMode cache_mode;
     bool show_progress;
     bool create_debug_files;
     bool continue_after_verify_error;

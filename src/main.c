@@ -21,6 +21,7 @@ repository.
 struct Options {
     bool mode_set;
     enum CompileMode mode;
+    enum CacheMode cache_mode;
     const char *filename;
     const char *output_path;
     bool quiet;
@@ -42,6 +43,7 @@ static void print_usage_and_exit(char **argv)
     printf("  -q, --quiet:            Don't print progress messages while verifying\n");
     printf("      --verify-continue:  Don't stop after the first verification error\n");
     printf("  -t, --verify-timeout:   Set verification timeout in seconds (default = 60)\n");
+    printf("      --no-cache:         Disable the verification cache ('babylon.cache' file)\n");
     printf("      --main:             Always generate the C 'main' function\n");
     printf("      --no-main:          Never generate the C 'main' function\n");
     printf("  -d, --debug:            Create debug output files\n");
@@ -61,10 +63,12 @@ static void ensure_mode_not_set(struct Options *options, char **argv)
 static void parse_options(int argc, char **argv, struct Options *options)
 {
     memset(options, 0, sizeof(struct Options));
+    options->cache_mode = CACHE_ENABLED;
     options->verify_timeout = 60;
     options->auto_main = true;
 
-    enum { OPT_VERIFY_CONTINUE = 2, OPT_MAIN = 3, OPT_NO_MAIN = 4 };
+    enum { OPT_VERIFY_CONTINUE = 2, OPT_MAIN = 3, OPT_NO_MAIN = 4,
+           OPT_NO_CACHE = 5 };
 
     static struct option long_options[] = {
         {"help",            no_argument,       NULL, 'h'},
@@ -75,6 +79,7 @@ static void parse_options(int argc, char **argv, struct Options *options)
         {"quiet",           no_argument,       NULL, 'q'},
         {"verify-continue", no_argument,       NULL, OPT_VERIFY_CONTINUE},
         {"verify-timeout",  required_argument, NULL, 't'},
+        {"no-cache",        no_argument,       NULL, OPT_NO_CACHE},
         {"main",            no_argument,       NULL, OPT_MAIN},
         {"no-main",         no_argument,       NULL, OPT_NO_MAIN},
         {"debug",           no_argument,       NULL, 'd'},
@@ -135,6 +140,10 @@ static void parse_options(int argc, char **argv, struct Options *options)
                 fprintf(stderr, "Invalid timeout value: %s\n", optarg);
                 exit(1);
             }
+            break;
+
+        case OPT_NO_CACHE:
+            options->cache_mode = CACHE_DISABLED;
             break;
 
         case OPT_MAIN:
@@ -208,6 +217,7 @@ int main(int argc, char **argv)
     copt.filename = options.filename;
     copt.output_prefix = make_output_prefix(options.output_path);
     copt.mode = options.mode;
+    copt.cache_mode = options.cache_mode;
     copt.show_progress = !options.quiet;
     copt.create_debug_files = options.debug;
     copt.continue_after_verify_error = options.verify_continue;

@@ -118,7 +118,7 @@ struct VContext {
     // Debug and Cache files
     const char *debug_filename_prefix;
     struct HashTable *debug_files_created;
-    const char *cache_prefix;
+    struct DiskHashTable *cache_db;
 
     // Error and timeout handling
     int timeout_seconds;

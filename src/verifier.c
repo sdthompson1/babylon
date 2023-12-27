@@ -7,12 +7,13 @@ For licensing information please see LICENCE.txt at the root of the
 repository.
 */
 
-
 #include "alloc.h"
 #include "ast.h"
+#include "diskhash.h"
 #include "error.h"
 #include "hash_table.h"
 #include "initial_env.h"
+#include "sha256.h"
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
@@ -106,8 +107,8 @@ bool verify_module(struct VerifierEnv *verifier_env,
     } else {
         cxt.debug_files_created = NULL;
     }
-    cxt.cache_prefix = options->cache_prefix;
 
+    cxt.cache_db = options->cache_db;
 
     bool ok = true;
 

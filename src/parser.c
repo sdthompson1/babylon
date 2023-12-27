@@ -73,11 +73,15 @@ struct ParserState {
     // context for "old" parsing
     bool postcondition;
     bool old;
+
+    // checksumming
+    struct SHA256_CTX sha256;
 };
 
 static void advance(struct ParserState *state)
 {
     if (state->token->type != TOK_EOF) {
+        sha256_add_token(&state->sha256, state->token);
         state->token = state->token->next;
     }
 }
@@ -2247,6 +2251,8 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     state.error = false;
     state.postcondition = false;
     state.old = false;
+    sha256_init(&state.sha256);
+    sha256_add_bytes(&state.sha256, (const uint8_t*)"INT", 4);
 
     struct Module * result = alloc(sizeof(struct Module));
 
@@ -2276,6 +2282,9 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     // '}'
     expect(&state, TOK_RBRACE, "'}'");
 
+    // pull out interface checksum
+    sha256_final(&state.sha256, result->interface_checksum);
+
     // now for the implementation
     result->implementation_imports = NULL;
     result->implementation = NULL;
@@ -2284,16 +2293,22 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
 
     if (interface_only) {
         // We've been asked to parse only the interface, so we can stop here
+        memset(result->implementation_checksum, 0, SHA256_HASH_LENGTH);
         done = true;
 
     } else {
         // Keep going...
+
+        sha256_init(&state.sha256);
+        sha256_add_bytes(&state.sha256, (const uint8_t*)"IMP", 4);
 
         // imports - zero or more
         result->implementation_imports = parse_imports(&state);
 
         // main definitions - zero or more
         result->implementation = parse_decls(&state);
+
+        sha256_final(&state.sha256, result->implementation_checksum);
     }
 
     // We should now be at eof (unless 'done' was set above)

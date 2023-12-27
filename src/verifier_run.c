@@ -120,7 +120,7 @@ bool verify_condition(struct VContext *context,
 
     // Solve the FOL problem
     enum FolResult result = solve_fol_problem(problem,
-                                              context->cache_prefix,
+                                              context->cache_db,
                                               debug_filename,
                                               context->show_progress,
                                               context->timeout_seconds);

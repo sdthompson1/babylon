@@ -10,10 +10,12 @@ repository.
 
 #include "alloc.h"
 #include "convert_fol_to_smt.h"
+#include "diskhash.h"
 #include "error.h"
 #include "fol.h"
 #include "run_processes.h"
 #include "sexpr.h"
+#include "sha256.h"
 #include "stringbuf.h"
 #include "util.h"
 
@@ -64,101 +66,27 @@ static void print_to_stdin(void *context, FILE *pipe)
     print_problem(pipe, context);
 }
 
-static uint64_t hash_sexpr(struct Sexpr *expr, uint64_t h)
+static void hash_sexpr(struct Sexpr *expr, struct SHA256_CTX *ctx)
 {
     if (expr == NULL) {
-        // treat this as a zero-byte
-        return ((h << 5u) + h);
+        sha256_add_byte(ctx, 1);
+        return;
     }
 
     switch (expr->type) {
     case S_PAIR:
-        // "print" the following:
-        // ( left-expr space right-expr )
-        h = ((h << 5u) + h) ^ (uint64_t)'(';
-        h = hash_sexpr(expr->left, h);
-        h = ((h << 5u) + h) ^ (uint64_t)' ';
-        h = hash_sexpr(expr->right, h);
-        return ((h << 5u) + h) ^ (uint64_t)')';
+        sha256_add_byte(ctx, 2);
+        hash_sexpr(expr->left, ctx);
+        hash_sexpr(expr->right, ctx);
+        return;
 
     case S_STRING:
-        for (const char *p = expr->string; *p; ++p) {
-            h = ((h << 5u) + h) ^ (uint64_t)(*p);
-        }
-        return h;
+        sha256_add_byte(ctx, 3);
+        sha256_add_bytes(ctx, (const uint8_t*)expr->string, strlen(expr->string) + 1);
+        return;
     }
 
     fatal_error("invalid sexpr");
-}
-
-static bool check_cache(const char *cache_prefix, struct Sexpr *smt_problem,
-                        uint64_t *hash_out)
-{
-    if (cache_prefix == NULL) {
-        return false;
-    }
-
-    uint64_t hash = hash_sexpr(smt_problem, 5381);
-    *hash_out = hash;
-
-    char hash_buf[17];
-    sprintf(hash_buf, "%016" PRIx64, hash);
-
-    char *filename = copy_string_2(cache_prefix, hash_buf);
-    FILE *file = fopen(filename, "r");
-    free(filename);
-
-    if (file) {
-
-        // potential cache hit. read the file to make sure.
-        struct StringBuf buf;
-        stringbuf_init(&buf);
-        format_sexpr(&buf, smt_problem);
-
-        bool found_difference = false;
-        for (size_t i = 0; i < buf.length; ++i) {
-            int c = fgetc(file);
-            if (c == EOF || c != buf.data[i]) {
-                found_difference = true;
-                break;
-            }
-        }
-
-        stringbuf_free(&buf);
-
-        if (!found_difference) {
-            // the file should end here
-            if (fgetc(file) != EOF) {
-                found_difference = true;
-            }
-        }
-
-        fclose(file);
-        return !found_difference;
-
-    } else {
-        return false;
-    }
-}
-
-static void write_cache(const char *cache_prefix, struct Sexpr *smt_problem,
-                        uint64_t hash)
-{
-    char hash_buf[17];
-    sprintf(hash_buf, "%016" PRIx64, hash);
-
-    char *filename = copy_string_2(cache_prefix, hash_buf);
-    FILE *file = fopen(filename, "w");
-    free(filename);
-
-    if (file) {
-        struct StringBuf buf;
-        stringbuf_init(&buf);
-        format_sexpr(&buf, smt_problem);
-        fwrite(buf.data, buf.length, 1, file);
-        stringbuf_free(&buf);
-        fclose(file);
-    }
 }
 
 static bool is_sat(const char *output, int output_length)
@@ -258,7 +186,7 @@ static enum FolResult solve_smt_problem(struct Sexpr *smt_problem,
 }
 
 enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
-                                 const char *cache_prefix,
+                                 DiskHashTable *cache_db,
                                  const char *debug_filename,
                                  bool print_progress_messages,
                                  int timeout_seconds)
@@ -287,9 +215,22 @@ enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
     }
 
     // check the cache
-    uint64_t hash;
-    bool cache_hit = check_cache(cache_prefix, smt_problem, &hash);
+    uint8_t hash[SHA256_HASH_LENGTH];
+    if (cache_db) {
+        struct SHA256_CTX ctx;
+        sha256_init(&ctx);
+        sha256_add_bytes(&ctx, (const uint8_t*)"SMT", 4);
+        hash_sexpr(smt_problem, &ctx);
+        sha256_final(&ctx, hash);
+    }
+
+    bool cache_hit = false;
+    if (cache_db) {
+        cache_hit = dht_lookup(cache_db, (char*)hash);
+    }
+
     if (cache_hit) {
+        free_sexpr(smt_problem);
         if (print_progress_messages) {
             fprintf(stderr, "(cached)\n");
         }
@@ -300,8 +241,8 @@ enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
     enum FolResult result = solve_smt_problem(smt_problem, print_progress_messages, timeout_seconds);
 
     // successful results can be written back to the cache
-    if (result == FOL_RESULT_PROVED) {
-        write_cache(cache_prefix, smt_problem, hash);
+    if (result == FOL_RESULT_PROVED && cache_db) {
+        dht_insert(cache_db, (char*)hash, NULL);
     }
 
     free_sexpr(smt_problem);

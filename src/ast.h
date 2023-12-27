@@ -12,6 +12,7 @@ repository.
 #define AST_H
 
 #include "location.h"
+#include "sha256.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -653,6 +654,9 @@ struct Module {
     struct DeclGroup *implementation;
     struct Import *interface_imports;   // cleared by renamer (as no longer needed after that)
     struct Import *implementation_imports;  // ditto
+
+    uint8_t interface_checksum[SHA256_HASH_LENGTH];
+    uint8_t implementation_checksum[SHA256_HASH_LENGTH];
 };
 
 
