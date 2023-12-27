@@ -242,34 +242,39 @@ function main()
 // *** Note: Verification cache
 
 // In larger projects the verification process can take some time to run.
-// Therefore, a caching feature is provided. This will cache the calls to the 
-// SMT solvers (and their results) on disk, so that if the same proof needs to
-// be done again in future, the result can be quickly looked up from disk.
-// (If a certain theorem was true last time we invoked the solver, it should 
-// still be true again the next time, so invoking the solver again would be a 
-// waste of time!)
+// Therefore, a caching feature is provided. This works by caching
+// verification results in a file called "babylon.cache" on disk. (This
+// file is stored in the same folder as the source module(s) being
+// compiled, unless you are using the "-o" option to set an output 
+// directory, in which case the cache file is stored there.) This file
+// persists between different runs of the compiler.
 
-// The caching feature can be enabled by creating a folder called "cache".
-// If a folder with this name is found, then cache files will be stored there.
-// For example:
+// The cache works at two levels. Firstly, every time a module is successfully
+// verified, a hash of the entire source text of the module (together with its
+// dependencies) is stored in the database. This means that when re-verifying 
+// a large program (consisting of many modules), only the modules that changed
+// (and their dependent modules) need to be re-verified, saving time.
 
-// mkdir cache
-// babylon -V Demo_02_RequiresEnsures.b
-// babylon -V Demo_02_RequiresEnsures.b
+// Secondly, each time the SMT solver is invoked, and a successful result is
+// obtained, a hash of the SMT problem description is stored in the database.
+// This means that if the same SMT problem is encountered in future, the SMT
+// solver will not need to be re-invoked. This means that even if a module
+// file has been changed, typically only a subset of the verification work
+// will have to be re-done.
 
-// The first of those "babylon" commands will take slightly longer to run
-// and it will dump a few files into your "cache" directory. The second
-// will run faster and you will see "(cached)" several times in the output.
+// The combination of these two features saves a great deal of time in the 
+// common case where one is making incremental changes to one or two modules
+// in a large project, then re-running the verifier.
 
-// NB. If you are using the "-o" option to specify an output directory, then
-// the "cache" folder should be placed inside the output directory. Otherwise
-// it should be placed in the directory that you are running the compiler from.
+// The cache is enabled automatically, and the babylon.cache file is created
+// automatically if it does not currently exist.
 
-// The cache can make a big difference to verification times in larger
-// projects. Note that only successful results are cached, as it might be 
-// desired to re-run the prover in unsuccessful cases (sometimes the prover 
-// might succeed on a second attempt, where it failed the first time round).
+// Of course, some users might not trust the caching implementation, or might
+// not want to use the cache for other reasons. Therefore, a "--no-cache" option
+// is provided. If this is used, the compiler will ignore any existing babylon.cache 
+// file and will not create a new one. This will make the verification result more
+// "reproducible" (as it will not depend on state left behind by previous runs)
+// but the trade-off is that runtimes will likely be much higher.
 
-// Note: If you ever want to wipe the cache, it is safe to just delete all 
-// files in the cache directory. (Do not delete the cache directory itself, 
-// unless it is your intention to disable caching completely.)
+// It is also always safe to manually delete the babylon.cache file. The compiler
+// will just re-create it the next time it is run (unless "--no-cache" was used).

@@ -26,10 +26,9 @@ doing the graphics and mouse input.
 # How to build this
 
 I recommend creating a "build" directory to hold the temporary files
-from the build. Also create "build/cache" to hold cache files from the
-verifier.
+from the build.
 
-    mkdir -p build/cache
+    mkdir build
 
 Then run
 
