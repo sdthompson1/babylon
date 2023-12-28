@@ -26,8 +26,9 @@ repository.
 #include <time.h>
 #include <unistd.h>
 
-// Uncomment the following if you want to confirm whether the child processes
-// are starting correctly or not
+// Uncommenting the following will allow stderr messages from the child
+// processes to be printed. This can be useful e.g. to check whether the
+// child processes are starting correctly or not.
 //#define DEBUG_OUTPUT
 
 
@@ -237,6 +238,23 @@ static void fork_children(struct JobState *state)
 
 // ------------------------------------------------------------------------
 
+// If just one process still running, return its name.
+static const char * still_running_process_name(struct JobState *state)
+{
+    const char *result = NULL;
+    for (int i = 0; i < state->job->num_procs; ++i) {
+        if (state->infos[i].pid != 0) {
+            if (result) {
+                // Multiple processes still running
+                return NULL;
+            } else {
+                result = state->job->procs[i].cmd[0];
+            }
+        }
+    }
+    return result;
+}
+
 // Returns true if any processes are still running, false if all have exited.
 static bool wait_for_data(struct JobState *state)
 {
@@ -338,18 +356,6 @@ static bool wait_for_data(struct JobState *state)
                         info->child_stdout = -1;
                     }
                 }
-
-                // If should_stop returns true, that means we don't
-                // need to get the output from the other processes. In
-                // this case we set the timeout to zero, which will
-                // cause the next run of this function to start
-                // killing the child processes.
-                if (state->job->should_stop(state->job->context,
-                                            proc->output,
-                                            proc->output_length)
-                && !state->sent_sigint) {
-                    state->job->timeout_in_seconds = 0;
-                }
             }
         }
 
@@ -364,6 +370,19 @@ static bool wait_for_data(struct JobState *state)
                     } else if (wait_result > 0) {
                         // process no longer exists
                         state->infos[i].pid = 0;
+
+                        // Check the output from the exited process.
+                        // If should_stop returns true, that means we
+                        // don't need to wait for the other processes.
+                        // In this case we set timeout to zero, which
+                        // will cause the next run of this function to
+                        // start killing the child processes.
+                        if (state->job->should_stop(state->job->context,
+                                                    state->job->procs[i].output,
+                                                    state->job->procs[i].output_length)
+                        && !state->sent_sigint) {
+                            state->job->timeout_in_seconds = 0;
+                        }
                     }
                 }
             }
@@ -397,7 +416,14 @@ static bool wait_for_data(struct JobState *state)
             sig = SIGKILL;
             state->sent_sigkill = true;
             if (state->job->print_timeout_message) {
-                fprintf(stderr, "Child process didn't respond to SIGINT, sending SIGKILL...\n");
+                fprintf(stderr, "\nChild process");
+                const char *name = still_running_process_name(state);
+                if (name) {
+                    fprintf(stderr, " '%s'", name);
+                } else {
+                    fprintf(stderr, "(es)");
+                }
+                fprintf(stderr, " didn't respond to SIGINT, sending SIGKILL...\n");
             }
         }
 
