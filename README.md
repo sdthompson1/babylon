@@ -157,12 +157,6 @@ which is unverified). We do not go so far as to verify that the
 program is functionally correct, i.e. that the rules of chess are
 correctly implemented -- but perhaps that could be a future project!*
 
-The chess program at least confirms that we can write small-ish
-applications in the language (provided one is willing to persevere a
-bit), but to be honest I wouldn't want to try anything much more
-ambitious than this, at least not until the language matures a bit
-more. But what we have now is a good start :) 
-
 
 # Building/Installing
 
@@ -269,12 +263,6 @@ languages (for example, they use a garbage collector) whereas I am
 more interested in the kind of lower-level programming that one might
 do in Rust or C. For example, I have explicitly-sized integers, like
 "i32" or "u64", whereas Dafny uses an infinite-sized "int" type.
-
-(Indeed, I am considering adding something like Rust's references and
-borrow checking system to the Babylon language -- then we would end up
-with a language that combines the memory safety of Rust with the
-verification features of Dafny. This could be an interesting direction
-to go in.)
 
 There are also many other verifcation and proof systems out there,
 including [Coq](https://coq.inria.fr/),
