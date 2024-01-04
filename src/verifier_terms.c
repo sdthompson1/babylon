@@ -77,8 +77,8 @@ static struct Sexpr *convert_indexes(struct VContext *context,
     if (ndim > 1) {
         result = make_list1_sexpr(array_index_type(ndim));
         struct Sexpr **tail = &result->right;
-        for (; indexes; indexes = indexes->next) {
-            struct Sexpr *idx = verify_term(context, indexes->rhs);
+        for (struct OpTermList *index = indexes; index; index = index->next) {
+            struct Sexpr *idx = verify_term(context, index->rhs);
             if (idx == NULL) {
                 ok = false;
             } else {
@@ -96,7 +96,7 @@ static struct Sexpr *convert_indexes(struct VContext *context,
         make_instance(&size, copy_sexpr(fol_type->right->right->left));
         size = make_list2_sexpr(size, fol_lhs);  // handover fol_lhs
 
-        struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size");
+        struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size", indexes, false);
         in_bounds = make_list3_sexpr(
             make_string_sexpr("let"),
             make_list2_sexpr(
@@ -421,7 +421,9 @@ bool validate_ref_chain(struct VContext *context,
             size = make_list2_sexpr(size, base);
             base = NULL;
 
-            struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size");
+            // no need for the >= 0 check since that was already done when the ref was
+            // created.
+            struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size", NULL, true);
             in_bounds = make_list3_sexpr(
                 make_string_sexpr("let"),
                 make_list2_sexpr(

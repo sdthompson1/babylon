@@ -719,19 +719,33 @@ struct Sexpr * array_index_type(int ndim)
     }
 }
 
-struct Sexpr * array_index_in_range(int ndim, const char *idx_name, const char *size_name)
+static bool is_unsigned(const struct OpTermList *term)
+{
+    return term
+        && term->rhs->type->tag == TY_FINITE_INT
+        && !term->rhs->type->int_data.is_signed;
+}
+
+struct Sexpr * array_index_in_range(int ndim, const char *idx_name, const char *size_name,
+                                    const struct OpTermList *idx_terms, bool assume_nonneg)
 {
     if (ndim == 1) {
-        return make_list3_sexpr(
-           make_string_sexpr("and"),
-           make_list3_sexpr(
-               make_string_sexpr(">="),
-               make_string_sexpr(idx_name),
-               make_string_sexpr("0")),
-           make_list3_sexpr(
+        struct Sexpr * lt_size =
+            make_list3_sexpr(
                make_string_sexpr("<"),
                make_string_sexpr(idx_name),
-               make_string_sexpr(size_name)));
+               make_string_sexpr(size_name));
+        if (assume_nonneg || is_unsigned(idx_terms)) {
+            return lt_size;
+        } else {
+            return make_list3_sexpr(
+               make_string_sexpr("and"),
+               make_list3_sexpr(
+                   make_string_sexpr(">="),
+                   make_string_sexpr(idx_name),
+                   make_string_sexpr("0")),
+               lt_size);
+        }
     } else {
 
         struct Sexpr *idx_pattern = make_list1_sexpr(array_index_type(ndim));
@@ -756,16 +770,24 @@ struct Sexpr * array_index_in_range(int ndim, const char *idx_name, const char *
             *size_pattern_tail = make_list1_sexpr(make_string_sexpr(size));
             size_pattern_tail = &(*size_pattern_tail)->right;
 
-            *cond_tail = make_list2_sexpr(
-                 make_list3_sexpr(
-                     make_string_sexpr(">="),
-                     make_string_sexpr(idx),
-                     make_string_sexpr("0")),
-                 make_list3_sexpr(
+            struct Sexpr *lt_size =
+                make_list3_sexpr(
                      make_string_sexpr("<"),
                      make_string_sexpr(idx),
-                     make_string_sexpr(size)));
-            cond_tail = &(*cond_tail)->right->right;
+                     make_string_sexpr(size));
+            if (assume_nonneg || is_unsigned(idx_terms)) {
+                *cond_tail = make_list1_sexpr(lt_size);
+                cond_tail = &(*cond_tail)->right;
+            } else {
+                *cond_tail = make_list2_sexpr(
+                     make_list3_sexpr(
+                         make_string_sexpr(">="),
+                         make_string_sexpr(idx),
+                         make_string_sexpr("0")),
+                     lt_size);
+                cond_tail = &(*cond_tail)->right->right;
+            }
+            idx_terms = idx_terms ? idx_terms->next : NULL;
         }
 
         return make_list3_sexpr(
@@ -928,7 +950,7 @@ struct Sexpr *for_all_array_elt(int ndim,
                                 struct Sexpr *expr,
                                 struct Sexpr *elt_type)
 {
-    struct Sexpr *inrange = array_index_in_range(ndim, "$idx", "$size");
+    struct Sexpr *inrange = array_index_in_range(ndim, "$idx", "$size", NULL, false);
 
     struct Sexpr *arbitrary_elt = make_string_sexpr("$ARBITRARY");
     make_instance(&arbitrary_elt, make_list1_sexpr(elt_type));

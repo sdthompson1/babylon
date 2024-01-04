@@ -242,7 +242,12 @@ struct Sexpr * array_index_type(int ndim);
 
 // Returns an expression saying that an array index is in range
 // (checking both >= 0, and < size).
-struct Sexpr * array_index_in_range(int ndim, const char *idx_name, const char *size_name);
+// If OpTermList given, entries will be checked to see if unsigned, in which case,
+// the corresponding ">= 0" check can be skipped.
+// If assume_nonneg is true, then ">= 0" check is always skipped.
+struct Sexpr * array_index_in_range(int ndim, const char *idx_name, const char *size_name,
+                                    const struct OpTermList *idx_terms,
+                                    bool assume_nonneg);
 
 // Produce an expression something like
 //  forall $elt in $arr.
