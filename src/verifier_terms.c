@@ -1706,7 +1706,7 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
         // add the generic_args, if any
         if (generic_args) {
             make_instance(&call_expr, copy_sexpr(generic_args));
-            make_instance(&call_expr_dummies, copy_sexpr(generic_args));
+            make_instance(&call_expr_dummies, copy_sexpr(item->fol_generic_vars));
         }
 
         // add the args, if any
