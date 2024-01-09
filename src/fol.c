@@ -165,8 +165,7 @@ static enum FolResult solve_smt_problem(struct Sexpr *smt_problem,
 
     for (int i = 0; i < NUM_PROVERS; ++i) {
         enum FolResult new_result = interpret_result(&job, print_progress_messages, &job.procs[i]);
-        if (new_result != FOL_RESULT_UNKNOWN){
-
+        if (new_result != FOL_RESULT_UNKNOWN) {
             if (result == FOL_RESULT_UNKNOWN) {
                 result = new_result;
             } else if (result != new_result) {
