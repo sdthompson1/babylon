@@ -174,7 +174,6 @@ static bool try_insert_interval(struct MachineEnv *env, int64_t low, int64_t hig
     return true;
 }
 
-
 // Find a free frame slot of the given size, not in either env's occupied_intervals
 // (either env can be NULL).
 static int64_t find_free_frame_slot(struct MachineEnv *env1,
@@ -661,6 +660,22 @@ void print_env(struct MachineEnv *env)
 }
 #endif
 
+static struct VarLoc * find_occupier(struct MachineEnv *env, int64_t low, int64_t high)
+{
+    struct HashIterator *iter = new_hash_iterator(env->var_locs);
+    const char *key;
+    void *value;
+    while (hash_iterator_next(iter, &key, &value)) {
+        struct VarLoc *loc = value;
+        if (loc->fp_offset != 0 && loc->fp_offset <= high && loc->fp_offset + (int64_t)loc->size - 1 >= low) {
+            free_hash_iterator(iter);
+            return loc;
+        }
+    }
+    free_hash_iterator(iter);
+    return NULL;
+}
+
 static void reconcile_mem_to_mem(struct MachineEnv *current_env,
                                  struct MachineEnv *desired_env,
                                  struct AsmGen *gen)
@@ -694,63 +709,92 @@ static void reconcile_mem_to_mem(struct MachineEnv *current_env,
     int tmp_reg = find_free_register(current_env, gen);
 
     // Now loop through again.
-    bool did_something = false;
     iter = new_hash_iterator(current_env->var_locs);
-    do {
-        did_something = false;
+    while (hash_iterator_next(iter, &key, &value)) {
+        struct VarLoc *from = value;
+        struct VarLoc *to = hash_table_lookup(desired_env->var_locs, key);
+        if (from->reg_num < 0 && to->reg_num < 0 && from->fp_offset != to->fp_offset) {
 
-        while (hash_iterator_next(iter, &key, &value)) {
-            struct VarLoc *from = value;
-            struct VarLoc *to = hash_table_lookup(desired_env->var_locs, key);
-            if (from->reg_num < 0 && to->reg_num < 0 && from->fp_offset != to->fp_offset) {
+            if (from->size > 8 || from->size != to->size) {
+                // We assume that the vars requiring moving will
+                // be able to fit into a register, and have the
+                // same size in both envs.
+                fatal_error("reconcile_mem_to_mem assumption violated");
+            }
 
-                if (from->size > 8 || from->size != to->size) {
-                    // We assume that the vars requiring moving will
-                    // be able to fit into a register, and have the
-                    // same size in both envs.
-                    fatal_error("reconcile_mem_to_mem assumption violated");
-                }
+            // OK so "from" is in memory in the wrong place, we need to move it
+            // from from->fp_offset to to->fp_offset.
 
-                // OK so "from" is in memory in the wrong place, we need to move it
-                // from from->fp_offset to to->fp_offset.
+            // But to->fp_offset might already be occupied, let's find out...
 
-                // But to->fp_offset might already be occupied, let's find out...
+            int64_t new_low = to->fp_offset;
+            int64_t new_high = to->fp_offset + to->size - 1;
 
-                int64_t new_low = to->fp_offset;
-                int64_t new_high = to->fp_offset + to->size - 1;
+            if (!try_insert_interval(current_env, new_low, new_high)) {
+                // The to-slot was indeed already occupied.
 
-                if (!try_insert_interval(current_env, new_low, new_high)) {
-                    // That didn't work.
-                    // Find another (temporary) home, that is currently unoccupied in both envs.
-                    new_low = find_free_frame_slot(current_env, desired_env, from->size);
-                    new_high = new_low + from->size - 1;
-                    if (!try_insert_interval(current_env, new_low, new_high)) {
-                        // This should be impossible, because we found the slot using
-                        // find_free_frame_slot.
-                        fatal_error("failed to insert temporary interval");
+                // Find out who is occupying the slot.
+                struct VarLoc *occupier;
+                while ((occupier = find_occupier(current_env, new_low, new_high)) != NULL) {
+                    if (occupier->reg_num >= 0) {
+                        // The occupier is currently in a register although it has a
+                        // "home slot" on the stack. We can just remove the home slot.
+                        remove_frame_slot(current_env, occupier->fp_offset, occupier->fp_offset + occupier->size - 1);
+                        occupier->fp_offset = 0;
+
+                    } else {
+                        // The occupier is on the stack.
+                        // Find another (temporary) home, that is currently unoccupied in both envs.
+                        int64_t occupier_new_low = find_free_frame_slot(current_env, desired_env, occupier->size);
+                        int64_t occupier_new_high = occupier_new_low + occupier->size - 1;
+
+#ifdef DEBUG_RECONCILE
+                        printf(". Move occupier %" PRIi64 "(fp) to %" PRIi64 "(fp)\n", occupier->fp_offset, occupier_new_low);
+#endif
+
+                        // Mark the new position as occupied
+                        if (!try_insert_interval(current_env, occupier_new_low, occupier_new_high)) {
+                            // This should be impossible, because we found the slot using
+                            // find_free_frame_slot.
+                            fatal_error("failed to insert temporary interval");
+                        }
+
+                        // Mark the occupier's old position as no longer occupied
+                        remove_frame_slot(current_env, occupier->fp_offset, occupier->fp_offset + occupier->size - 1);
+
+                        // Physically move the occupier, using our tmp_reg
+                        asm_load_from_frame(gen, tmp_reg, occupier->fp_offset, occupier->is_signed, occupier->size);
+                        asm_store_to_frame(gen, occupier_new_low, tmp_reg, occupier->size);
+
+                        // Update the recorded location for the occupier.
+                        occupier->fp_offset = occupier_new_low;
                     }
                 }
 
+                // The to-slot should now be available!
+                if (!try_insert_interval(current_env, new_low, new_high)) {
 #ifdef DEBUG_RECONCILE
-                printf(". Move %" PRIi64 "(fp) to %" PRIi64 "(fp)\n", from->fp_offset, new_low);
+                    printf("Failed: Moving %" PRIi64 "(fp) to %" PRIi64 "(fp)\n", from->fp_offset, new_low);
+#endif
+                    fatal_error("failed to insert interval, even after removing occupiers");
+                }
+            }
+
+#ifdef DEBUG_RECONCILE
+            printf(". Move %" PRIi64 "(fp) to %" PRIi64 "(fp)\n", from->fp_offset, new_low);
 #endif
 
-                // Either way, the new interval is now marked as "occupied".
+            // Mark the old interval as "unoccupied".
+            remove_frame_slot(current_env, from->fp_offset, from->fp_offset + from->size - 1);
 
-                // Mark the old interval as "unoccupied".
-                remove_frame_slot(current_env, from->fp_offset, from->fp_offset + from->size - 1);
+            // Physically move the value, using our tmp_reg.
+            asm_load_from_frame(gen, tmp_reg, from->fp_offset, from->is_signed, from->size);
+            asm_store_to_frame(gen, new_low, tmp_reg, from->size);
 
-                // Physically move the value, using our tmp_reg.
-                asm_load_from_frame(gen, tmp_reg, from->fp_offset, from->is_signed, from->size);
-                asm_store_to_frame(gen, new_low, tmp_reg, from->size);
-
-                // Update the recorded location for this variable.
-                from->fp_offset = new_low;
-
-                did_something = true;
-            }
+            // Update the recorded location for this variable.
+            from->fp_offset = new_low;
         }
-    } while (did_something);
+    }
 
     free_hash_iterator(iter);
 }
