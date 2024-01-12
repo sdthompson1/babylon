@@ -1,4 +1,4 @@
-The Babylon Compiler, copyright (C) Stephen Thompson 2023.
+The Babylon Compiler, copyright (C) Stephen Thompson 2023--2024.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
