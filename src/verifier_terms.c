@@ -66,11 +66,13 @@ bool bind_payload(struct VContext *context,
 
 static struct Sexpr *convert_indexes(struct VContext *context,
                                      struct Location location,
-                                     int ndim,
+                                     struct Type *array_type,
                                      struct OpTermList *indexes,
                                      struct Sexpr *fol_lhs,   // handover
                                      struct Sexpr *fol_type)
 {
+    const int ndim = array_ndim(array_type);
+
     bool ok = true;
     struct Sexpr *result = NULL;
 
@@ -92,9 +94,17 @@ static struct Sexpr *convert_indexes(struct VContext *context,
     }
 
     if (ok) {
-        struct Sexpr *size = make_string_sexpr("$FLD1");
-        make_instance(&size, copy_sexpr(fol_type->right->right->left));
-        size = make_list2_sexpr(size, fol_lhs);  // handover fol_lhs
+        struct Sexpr *size;
+
+        if (array_type->tag == TY_FIXED_ARRAY) {
+            size = fixed_arr_size_sexpr(array_type);
+            free_sexpr(fol_lhs);
+        } else {
+            size = make_string_sexpr("$FLD1");
+            make_instance(&size, copy_sexpr(fol_type->right->right->left));
+            size = make_list2_sexpr(size, fol_lhs);  // handover fol_lhs
+        }
+        fol_lhs = NULL;
 
         struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size", indexes, false);
         in_bounds = make_list3_sexpr(
@@ -117,6 +127,7 @@ static struct Sexpr *convert_indexes(struct VContext *context,
         }
     } else {
         free_sexpr(fol_lhs);
+        fol_lhs = NULL;
     }
 
     if (ok) {
@@ -193,6 +204,8 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
             ref->fol_type = verify_type(term->array_proj.lhs->type);
             ref->base = base;
             ref->array_index = NULL;
+            ref->ndim = array_ndim(term->array_proj.lhs->type);
+            ref->fixed_size = (term->array_proj.lhs->type->tag == TY_FIXED_ARRAY);
 
             // we need a sexpr for the lhs so that we can get the size
             struct Sexpr *fol_lhs = ref_chain_to_sexpr(context, base);
@@ -201,12 +214,10 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
                 return NULL;
             }
 
-            ref->ndim = term->array_proj.lhs->type->array_data.ndim;
-
             struct Sexpr *index =
                 convert_indexes(context,
                                 term->location,
-                                ref->ndim,
+                                term->array_proj.lhs->type,
                                 term->array_proj.indexes,
                                 fol_lhs,  // handover
                                 ref->fol_type);
@@ -305,10 +316,15 @@ struct Sexpr *ref_chain_to_sexpr(struct VContext *cxt, struct RefChain *ref)
                 return NULL;
             }
 
-            // $FLD0 gives the array itself
-            struct Sexpr *expr = make_string_sexpr("$FLD0");
-            make_instance(&expr, copy_sexpr(ref->fol_type->right->right->left));
-            expr = make_list2_sexpr(expr, base);
+            struct Sexpr *expr;
+            if (ref->fixed_size) {
+                expr = base;
+            } else {
+                // $FLD0 gives the array itself
+                expr = make_string_sexpr("$FLD0");
+                make_instance(&expr, copy_sexpr(ref->fol_type->right->right->left));
+                expr = make_list2_sexpr(expr, base);
+            }
 
             // now use select to do the indexing
             return make_list3_sexpr(make_string_sexpr("select"),
@@ -408,13 +424,17 @@ bool validate_ref_chain(struct VContext *context,
                 return false;
             }
 
+            // No further validation required for fixed-size arrays...
+            if (ref->fixed_size) {
+                return true;
+            }
+
+            // If variable-size, validate that the indexes are still in
+            // range of the (possibly new) size.
             struct Sexpr *base = ref_chain_to_sexpr(context, ref->base);
             if (!base) {
                 return false;
             }
-
-            // Validate that the index is still in range
-            int ndim = ref->ndim;
 
             struct Sexpr *size = make_string_sexpr("$FLD1");
             make_instance(&size, copy_sexpr(ref->fol_type->right->right->left));
@@ -423,7 +443,7 @@ bool validate_ref_chain(struct VContext *context,
 
             // no need for the >= 0 check since that was already done when the ref was
             // created.
-            struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size", NULL, true);
+            struct Sexpr *in_bounds = array_index_in_range(ref->ndim, "$idx", "$size", NULL, true);
             in_bounds = make_list3_sexpr(
                 make_string_sexpr("let"),
                 make_list2_sexpr(
@@ -528,27 +548,38 @@ void update_reference(struct VContext *context,
 
     case RT_ARRAY_ELEMENT:
         {
-            struct Sexpr *field_types = ref->fol_type->right->right->left;
             struct Sexpr *lhs = ref_chain_to_atomic_sexpr(context, ref->base, ref->fol_type);
             if (lhs == NULL) {
                 free_sexpr(rhs);
                 return;
             }
 
-            struct Sexpr *prod = make_string_sexpr("$PROD");
-            struct Sexpr *fld0 = make_string_sexpr("$FLD0");
-            struct Sexpr *fld1 = make_string_sexpr("$FLD1");
-            make_instance(&prod, copy_sexpr(field_types));
-            make_instance(&fld0, copy_sexpr(field_types));
-            make_instance(&fld1, copy_sexpr(field_types));
+            struct Sexpr *update = NULL;
 
-            struct Sexpr *updated_array = make_list4_sexpr(
-                make_string_sexpr("store"),
-                make_list2_sexpr(fld0, copy_sexpr(lhs)),
-                copy_sexpr(ref->array_index),
-                rhs);
+            if (ref->fixed_size) {
+                update = make_list4_sexpr(
+                    make_string_sexpr("store"),
+                    lhs,
+                    copy_sexpr(ref->array_index),
+                    rhs);
 
-            struct Sexpr *update = make_list3_sexpr(prod, updated_array, make_list2_sexpr(fld1, lhs));
+            } else {
+                struct Sexpr *field_types = ref->fol_type->right->right->left;
+                struct Sexpr *prod = make_string_sexpr("$PROD");
+                struct Sexpr *fld0 = make_string_sexpr("$FLD0");
+                struct Sexpr *fld1 = make_string_sexpr("$FLD1");
+                make_instance(&prod, copy_sexpr(field_types));
+                make_instance(&fld0, copy_sexpr(field_types));
+                make_instance(&fld1, copy_sexpr(field_types));
+
+                struct Sexpr *updated_array = make_list4_sexpr(
+                    make_string_sexpr("store"),
+                    make_list2_sexpr(fld0, copy_sexpr(lhs)),
+                    copy_sexpr(ref->array_index),
+                    rhs);
+
+                update = make_list3_sexpr(prod, updated_array, make_list2_sexpr(fld1, lhs));
+            }
 
             update_reference(context, ref->base, update);
         }
@@ -579,7 +610,78 @@ static void* verify_var(void *context, struct Term *term, void *type_result)
     }
 }
 
-static struct Sexpr *make_default(struct Type *type)
+static struct Sexpr *make_default(struct VContext *cxt, struct Type *type);
+
+static struct Sexpr *make_default_fixed_array(struct VContext *cxt,
+                                              struct Type *array_type)
+{
+    const char *key;
+    void *value;
+    uintptr_t unique_num;
+    hash_table_lookup_2(cxt->string_names, "$DefaultArrayNum", &key, &value);
+    if (key == NULL) {
+        key = copy_string("$DefaultArrayNum");
+        unique_num = 0;
+    } else {
+        unique_num = ((uintptr_t) value) + 1;
+    }
+    hash_table_insert(cxt->string_names, key, (void*)unique_num);
+
+    char name[60];
+    sprintf(name, "$DefaultArray.%" PRIuPTR, unique_num);
+
+    struct Sexpr *fol_type = verify_type(array_type);
+
+    // this says that each in-range element of "$arr" is equal to the
+    // default, and out-of-range elements are equal to $ARBITRARY
+    struct Sexpr *equality =
+        for_all_array_elt(
+            array_type->fixed_array_data.ndim,
+            make_list3_sexpr(
+                make_string_sexpr("="),
+                make_string_sexpr("$elt"),
+                make_default(cxt, array_type->fixed_array_data.element_type)),
+            verify_type(array_type->fixed_array_data.element_type));
+
+    // to make the axiom we need to use "let" to assign values for
+    // $arr and $size
+    struct Sexpr *axioms =
+        make_list1_sexpr(
+            make_list2_sexpr(
+                make_string_sexpr("assert"),
+                make_list3_sexpr(
+                    make_string_sexpr("let"),
+                    make_list2_sexpr(
+                        make_list2_sexpr(
+                            make_string_sexpr("$arr"),
+                            make_string_sexpr(name)),
+                        make_list2_sexpr(
+                            make_string_sexpr("$size"),
+                            fixed_arr_size_sexpr(array_type))),
+                    equality)));
+
+    // make an Item for the array
+    struct Item *item = alloc(sizeof(struct Item));
+    memset(item, 0, sizeof(struct Item));
+
+    item->fol_decl = make_list3_sexpr(
+        make_string_sexpr("declare-const"),
+        make_string_sexpr(name),
+        copy_sexpr(fol_type));
+
+    item->fol_axioms = axioms;
+
+    item->fol_name = copy_string(name);
+
+    item->fol_type = fol_type;
+    fol_type = NULL;
+
+    hash_table_insert(cxt->global_env, copy_string(name), item);
+
+    return make_string_sexpr(name);
+}
+
+static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
 {
     switch (type->tag) {
     case TY_VAR:
@@ -605,7 +707,7 @@ static struct Sexpr *make_default(struct Type *type)
             struct Sexpr **tail = &result->right;
 
             for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-                *tail = make_list1_sexpr(make_default(field->type));
+                *tail = make_list1_sexpr(make_default(cxt, field->type));
                 tail = &(*tail)->right;
             }
 
@@ -621,13 +723,16 @@ static struct Sexpr *make_default(struct Type *type)
             struct Sexpr *ctor = make_string_sexpr("$IN0");
             make_instance(&ctor, verify_name_type_list(type->variant_data.variants));
 
-            return make_list2_sexpr(ctor, make_default(type->variant_data.variants->type));
+            return make_list2_sexpr(ctor, make_default(cxt, type->variant_data.variants->type));
         }
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
+        return make_default_fixed_array(cxt, type);
+
+    case TY_DYNAMIC_ARRAY:
         {
-            struct Sexpr *element_type = verify_type(type->array_data.element_type);
-            struct Sexpr *index_type = array_index_type(type->array_data.ndim);
+            struct Sexpr *element_type = verify_type(type->dynamic_array_data.element_type);
+            struct Sexpr *index_type = array_index_type(type->dynamic_array_data.ndim);
 
             // $ARBITRARY-ARRAY is an array where all elements are equal to
             // $ARBITRARY at the element type.
@@ -638,14 +743,14 @@ static struct Sexpr *make_default(struct Type *type)
             element_type = NULL;
 
             struct Sexpr *default_size;
-            if (type->array_data.ndim == 1) {
+            if (type->dynamic_array_data.ndim == 1) {
                 default_size = make_string_sexpr("0");
                 free_sexpr(index_type);
 
             } else {
                 struct Sexpr *zeroes = NULL;
                 struct Sexpr **tail = &zeroes;
-                for (int i = 0; i < type->array_data.ndim; ++i) {
+                for (int i = 0; i < type->dynamic_array_data.ndim; ++i) {
                     *tail = make_list1_sexpr(make_string_sexpr("0"));
                     tail = &(*tail)->right;
                 }
@@ -669,7 +774,7 @@ static struct Sexpr *make_default(struct Type *type)
 
 static void* verify_default(void *context, struct Term *term, void *type_result)
 {
-    return make_default(term->type);
+    return make_default(context, term->type);
 }
 
 static void* verify_bool_literal(void *context, struct Term *term, void *type_result)
@@ -1601,7 +1706,7 @@ static bool verify_aliasing(struct VContext *cxt, struct Term *term)
 //  - a "$lambda" expression representing the "allocated" function for that type
 //    (note lambdas are expanded out by substitute_in_sexpr so they do not reach the
 //    SMT solver itself).
-static struct Sexpr * make_generic_args(struct TypeList *types)
+static struct Sexpr * make_generic_args(struct VContext *cxt, struct TypeList *types)
 {
     struct Sexpr *list = NULL;
     struct Sexpr **tail = &list;
@@ -1610,7 +1715,7 @@ static struct Sexpr * make_generic_args(struct TypeList *types)
         *tail = make_list1_sexpr(ty);
         tail = &((*tail)->right);
 
-        struct Sexpr *dflt = make_default(types->type);
+        struct Sexpr *dflt = make_default(cxt, types->type);
         *tail = make_list1_sexpr(dflt);
         tail = &((*tail)->right);
 
@@ -1643,7 +1748,7 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
             fatal_error("function not in expected form");
         }
         func_fol_name = copy_string_2("%", term->call.func->tyapp.lhs->var.name);
-        generic_args = make_generic_args(term->call.func->tyapp.tyargs);
+        generic_args = make_generic_args(cxt, term->call.func->tyapp.tyargs);
 
     } else {
         fatal_error("Function not in expected form");
@@ -2064,15 +2169,22 @@ static void * verify_sizeof(void *context, struct Term *term, void *type_result,
         return NULL;
     }
 
-    struct Sexpr * array_type = verify_type(term->sizeof_data.rhs->type);
+    if (term->sizeof_data.rhs->type->tag == TY_FIXED_ARRAY) {
+        free_sexpr(rhs_result);
+        return fixed_arr_size_sexpr(term->sizeof_data.rhs->type);
 
-    // array_type is (instance $PROD something)
-    // we change that to (instance $FLD1 something), and then apply that to the rhs.
+    } else {
 
-    free_sexpr(array_type->right->left);
-    array_type->right->left = make_string_sexpr("$FLD1");
+        struct Sexpr * array_type = verify_type(term->sizeof_data.rhs->type);
 
-    return make_list2_sexpr(array_type, rhs_result);
+        // array_type is (instance $PROD something)
+        // we change that to (instance $FLD1 something), and then apply that to the rhs.
+
+        free_sexpr(array_type->right->left);
+        array_type->right->left = make_string_sexpr("$FLD1");
+
+        return make_list2_sexpr(array_type, rhs_result);
+    }
 }
 
 static void * verify_allocated(void *context, struct Term *term, void *type_result,
@@ -2114,12 +2226,13 @@ static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
         return NULL;
     }
 
-    struct Sexpr *fol_type = verify_type(term->array_proj.lhs->type);
+    struct Type *lhs_type = term->array_proj.lhs->type;
+    struct Sexpr *fol_type = verify_type(lhs_type);
 
     struct Sexpr *index =
         convert_indexes(context,
                         term->location,
-                        term->array_proj.lhs->type->array_data.ndim,
+                        lhs_type,
                         term->array_proj.indexes,
                         copy_sexpr(fol_lhs),
                         fol_type);
@@ -2129,9 +2242,14 @@ static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
         return NULL;
     }
 
-    struct Sexpr *expr = make_string_sexpr("$FLD0");
-    make_instance(&expr, copy_sexpr(fol_type->right->right->left));
-    expr = make_list2_sexpr(expr, fol_lhs);
+    struct Sexpr *expr;
+    if (lhs_type->tag == TY_DYNAMIC_ARRAY) {
+        expr = make_string_sexpr("$FLD0");
+        make_instance(&expr, copy_sexpr(fol_type->right->right->left));
+        expr = make_list2_sexpr(expr, fol_lhs);
+    } else {
+        expr = fol_lhs;
+    }
 
     free_sexpr(fol_type);
 

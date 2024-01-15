@@ -202,7 +202,7 @@ void report_wrong_number_of_indexes(struct Term *term)
 {
     print_location(term->location);
     print_error("Wrong number of array indices (expected %d)\n",
-                term->array_proj.lhs->type->array_data.ndim);
+                array_ndim(term->array_proj.lhs->type));
 }
 
 void report_main_not_found(const char *module_name)

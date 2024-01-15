@@ -68,7 +68,7 @@ struct VContext {
     // Cleared for each new Decl.
     struct HashTable *local_counter;
 
-    // Used for string literals
+    // Used for string literals and fixed-sized-arrays
     struct HashTable *string_names;
 
     // Tracks references. Maps source-code local name (shared with
@@ -153,15 +153,25 @@ struct RefChain {
 
     struct RefChain *base;     // allocated. NULL for RT_LOCAL_VAR or RT_SEXPR.
     union {
-        const char *variable_name;    // RT_LOCAL_VAR. Shared with AST
-        uint32_t index;               // RT_FIELD, RT_VARIANT -- which field or variant
-        struct Sexpr *array_index;    // RT_ARRAY_ELEMENT. Allocated.
-        struct Sexpr *sexpr;          // RT_SEXPR. Allocated.
-    };
-
-    union {
-        bool postcond_new; // applies to RT_LOCAL_VAR
-        int ndim;          // applies to RT_ARRAY_INDEX
+        struct {
+            // Vars relevant to RT_LOCAL_VAR
+            const char *variable_name;    // Shared with AST
+            bool postcond_new;
+        };
+        struct {
+            // Vars relevant to RT_FIELD and RT_VARIANT
+            uint32_t index;  // Which field or variant
+        };
+        struct {
+            // Vars relevant to RT_ARRAY_INDEX
+            struct Sexpr *array_index;  // The index-expr
+            int ndim;    // Number of dimensions of the array
+            bool fixed_size;   // True if it is a fixed-size array
+        };
+        struct {
+            // Vars relevant to RT_SEXPR
+            struct Sexpr *sexpr;          // Allocated
+        };
     };
 };
 
@@ -256,14 +266,19 @@ struct Sexpr * array_index_in_range(int ndim, const char *idx_name, const char *
 //    else
 //      $elt == $ARBITRARY at elt_type.
 // "expr" and "elt_type" are handed over.
+// The variable $size, holding the array size, is assumed to exist.
 struct Sexpr *for_all_array_elt(int ndim,
                                 struct Sexpr *expr,
                                 struct Sexpr *elt_type);
 
 // create "match arr_expr with (arr_name,size_name) => rhs_expr"
 // arr_expr, rhs_expr are handed over. arr_name, size_name are copied.
+// array_type must be TY_DYNAMIC_ARRAY.
 struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
                              struct Sexpr *arr_expr, struct Type *array_type, struct Sexpr *expr);
+
+// create a sexpr giving the size of a fixed-size array
+struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type);
 
 
 //-------------------------------------------------------------------------------

@@ -34,7 +34,8 @@ enum RefPathTag {
     REF_VAR,
     REF_STRING_LITERAL,
     REF_FIELD_PROJ,
-    REF_ARRAY_PROJ,
+    REF_DYNAMIC_ARRAY_PROJ,
+    REF_FIXED_ARRAY_PROJ,
     REF_VARIANT_PAYLOAD
 };
 
@@ -165,7 +166,8 @@ static bool is_memory_type(const struct Type *type)
     return (type->tag == TY_VAR && is_memory_var_type(type))
         || type->tag == TY_RECORD
         || type->tag == TY_VARIANT
-        || type->tag == TY_ARRAY;
+        || type->tag == TY_FIXED_ARRAY
+        || type->tag == TY_DYNAMIC_ARRAY;
 }
 
 static bool is_signed_integral_type(const struct Type *type)
@@ -282,9 +284,20 @@ static struct SizeExpr * compute_size_of_type(struct StackMachine *mc,
             free_size_expr(tag_size);
             return output;
 
-        } else if (type->tag == TY_ARRAY) {
-            // An array is a pointer to the data followed by one 8-byte size per dimension.
-            return const_size_expr(8 * (1 + type->array_data.ndim));
+        } else if (type->tag == TY_FIXED_ARRAY) {
+            // A fixed array is just a block of memory of the correct size.
+            struct SizeExpr *size = compute_size_of_type(mc, type->fixed_array_data.element_type);
+            for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
+                uint64_t dim = normal_form_to_int(type->fixed_array_data.sizes[i]);
+                struct SizeExpr *new_size = multiply_size_expr(dim, size);
+                free_size_expr(size);
+                size = new_size;
+            }
+            return size;
+
+        } else if (type->tag == TY_DYNAMIC_ARRAY) {
+            // A dynamic array is a pointer to the data followed by one 8-byte size per dimension.
+            return const_size_expr(8 * (1 + type->dynamic_array_data.ndim));
 
         } else if (type->tag == TY_VAR) {
             // A type variable of the current function
@@ -557,7 +570,7 @@ static void pop_local_scope(struct CGContext *context)
                 // any array index variables are "owned" by the CT_REF and must
                 // be removed now.
                 for (struct RefPath *path = item->path; path; path = path->parent) {
-                    if (path->tag == REF_ARRAY_PROJ) {
+                    if (path->tag == REF_DYNAMIC_ARRAY_PROJ || path->tag == REF_FIXED_ARRAY_PROJ) {
                         for (struct NameList *node = path->names; node; node = node->next) {
                             stk_destroy_local(mc, node->name);
                         }
@@ -874,7 +887,7 @@ static void pre_codegen_term(struct CGContext *cxt, bool store, struct Term *ter
     case TM_SIZEOF:
         {
             struct Term *rhs = term->sizeof_data.rhs;
-            int ndim = rhs->type->array_data.ndim;
+            int ndim = array_ndim(rhs->type);
             if (!store && ndim > 1) {
                 add_temp_mem_block(cxt, term->type);
             }
@@ -1917,7 +1930,7 @@ static void codegen_sizeof(struct CGContext *cxt,
     struct StackMachine *mc = cxt->machine;
 
     struct Term *rhs = term->sizeof_data.rhs;
-    int ndim = rhs->type->array_data.ndim;
+    int ndim = array_ndim(rhs->type);
 
     if (mode == PUSH_VALUE && ndim != 1) {
         fatal_error("codegen_sizeof: PUSH_VALUE can only be used when ndim = 1");
@@ -1932,28 +1945,58 @@ static void codegen_sizeof(struct CGContext *cxt,
         stk_get_local(mc, name);
     }
 
-    // Push a pointer to the array.
-    codegen_term(cxt, PUSH_ADDR, rhs);
+    if (rhs->type->tag == TY_DYNAMIC_ARRAY) {
+        // Push a pointer to the array.
+        codegen_term(cxt, PUSH_ADDR, rhs);
 
-    // The dimensions start at the 8th byte of the array descriptor.
-    stk_const(mc, 8);
-    stk_alu(mc, OP_ADD);
+        // The dimensions start at the 8th byte of the array descriptor.
+        stk_const(mc, 8);
+        stk_alu(mc, OP_ADD);
 
-    if (ndim == 1) {
-        // Load the first (and only) dimension.
-        stk_load(mc, false, 8);
-        if (mode == STORE_TO_MEM) {
-            stk_store(mc, 8);
+        if (ndim == 1) {
+            // Load the first (and only) dimension.
+            stk_load(mc, false, 8);
+            if (mode == STORE_TO_MEM) {
+                stk_store(mc, 8);
+            }
+
+        } else {
+            // Memcpy to the correct place.
+            memcpy_type(mc, term->type);
+
+            if (mode == PUSH_ADDR) {
+                // Get the temp block address back on the stack.
+                stk_get_local(mc, name);
+            }
+        }
+
+    } else if (rhs->type->tag == TY_FIXED_ARRAY) {
+        if (ndim == 1) {
+            // Push the dimension as a constant
+            stk_const(mc, normal_form_to_int(rhs->type->fixed_array_data.sizes[0]));
+            if (mode == STORE_TO_MEM) {
+                stk_store(mc, 8);
+            }
+
+        } else {
+            // We must store the dimensions one by one
+            // Stack currently contains the place to write to.
+            for (int i = 0; i < ndim; ++i) {
+                stk_dup(mc, 0);
+                if (i != 0) {
+                    stk_const(mc, i*8);
+                    stk_alu(mc, OP_ADD);
+                }
+                stk_const(mc, normal_form_to_int(rhs->type->fixed_array_data.sizes[i]));
+                stk_store(mc, 8);
+            }
+            if (mode == STORE_TO_MEM) {
+                stk_pop(mc);
+            }
         }
 
     } else {
-        // Memcpy to the correct place.
-        memcpy_type(mc, term->type);
-
-        if (mode == PUSH_ADDR) {
-            // Get the temp block address back on the stack.
-            stk_get_local(mc, name);
-        }
+        fatal_error("Invalid array type tag");
     }
 }
 
@@ -1961,6 +2004,15 @@ static void codegen_array_proj(struct CGContext *cxt,
                                enum CodegenMode mode,
                                struct Term *term)
 {
+    bool fixed;
+    if (term->array_proj.lhs->type->tag == TY_FIXED_ARRAY) {
+        fixed = true;
+    } else if (term->array_proj.lhs->type->tag == TY_DYNAMIC_ARRAY) {
+        fixed = false;
+    } else {
+        fatal_error("invalid array type for array proj");
+    }
+
     struct StackMachine *mc = cxt->machine;
 
     // Get the address of the array on top of stack
@@ -1973,32 +2025,65 @@ static void codegen_array_proj(struct CGContext *cxt,
     // (if the array has size {dim1,dim2}).
     // In other words this is equivalent to array[i][j] in C.
 
-    int n = 1;
-    for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
-        if (n > 1) {
-            // [array tot]
-            stk_dup(mc, 1);      // [array tot array-ptr]
-            stk_const(mc, n*8);  // [array tot array-ptr n*8]
-            stk_alu(mc, OP_ADD); // [array tot size-ptr]
-            stk_load(mc, false, 8);     // [array tot size]
-            stk_alu(mc, OP_MUL); // [array new-tot]
+    if (fixed) {
+        struct TypeData_FixedArray *data = &term->array_proj.lhs->type->fixed_array_data;
+
+        int n = 1;
+        for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
+            codegen_term(cxt, PUSH_VALUE, node->rhs);
+
+            uint64_t multiplier = 1;
+            for (int i = n; i < data->ndim; ++i) {
+                multiplier *= normal_form_to_int(data->sizes[i]);
+            }
+            if (multiplier != 1) {
+                stk_const(mc, multiplier);
+                stk_alu(mc, OP_MUL);
+            }
+
+            if (n > 1) {
+                stk_alu(mc, OP_ADD);
+            }
+
+            ++n;
         }
 
-        codegen_term(cxt, PUSH_VALUE, node->rhs);   // [array idx] or [array tot idx]
+    } else {
+        int n = 1;
+        for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
+            if (n > 1) {
+                // [array tot]
+                stk_dup(mc, 1);      // [array tot array-ptr]
+                stk_const(mc, n*8);  // [array tot array-ptr n*8]
+                stk_alu(mc, OP_ADD); // [array tot size-ptr]
+                stk_load(mc, false, 8);     // [array tot size]
+                stk_alu(mc, OP_MUL); // [array new-tot]
+            }
 
-        if (n > 1) {
-            stk_alu(mc, OP_ADD);   // [array tot-idx]
+            codegen_term(cxt, PUSH_VALUE, node->rhs);   // [array idx] or [array tot idx]
+
+            if (n > 1) {
+                stk_alu(mc, OP_ADD);   // [array tot-idx]
+            }
+
+            ++n;
         }
-
-        ++n;
     }
+
+    // Stack now contains: [array tot-idx]
+    // Total-index must be multiplied by element-size, then added to the
+    // array base pointer.
 
     struct SizeExpr *size = compute_size_of_type(mc, term->type);
     push_size_expr(mc, size);         // [array tot-idx size]
     free_size_expr(size);
     stk_alu(mc, OP_MUL);              // [array offset]
-    stk_swap(mc, 0, 1);               // [offset array]
-    stk_load(mc, false, 8);           // [offset data-ptr]
+
+    if (!fixed) {
+        stk_swap(mc, 0, 1);               // [offset array]
+        stk_load(mc, false, 8);           // [offset data-ptr]
+    }
+
     stk_alu(mc, OP_ADD);              // [addr]
 
     switch (mode) {
@@ -2085,7 +2170,16 @@ static void push_ref_addr(struct CGContext *context, struct RefPath *path)
         offset_for_field_proj(mc, path->parent->type, path->names->name);
         break;
 
-    case REF_ARRAY_PROJ:
+    case REF_FIXED_ARRAY_PROJ:
+        {
+            // There is just one name which contains an offset in bytes
+            // from the array base.
+            stk_get_local(mc, path->names->name);
+            stk_alu(mc, OP_ADD);
+        }
+        break;
+
+    case REF_DYNAMIC_ARRAY_PROJ:
         {
             // This is similar to codegen_array_proj, but slightly different
             // because the indexes are represented by stack-machine vars,
@@ -2187,8 +2281,53 @@ static struct RefPath * codegen_ref(struct CGContext *cxt, struct Term *term)
         break;
 
     case TM_ARRAY_PROJ:
-        ref->tag = REF_ARRAY_PROJ;
-        ref->names = codegen_array_indexes(cxt, term->array_proj.indexes);
+        if (term->array_proj.lhs->type->tag == TY_FIXED_ARRAY) {
+            struct StackMachine *mc = cxt->machine;
+
+            // Compute the (fixed) array offset in bytes
+            struct TypeData_FixedArray *data = &term->array_proj.lhs->type->fixed_array_data;
+            int n = 1;
+            for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
+                codegen_term(cxt, PUSH_VALUE, node->rhs);
+                uint64_t multiplier = 1;
+                for (int i = n; i < data->ndim; ++i) {
+                    multiplier *= normal_form_to_int(data->sizes[i]);
+                }
+                if (multiplier != 1) {
+                    stk_const(mc, multiplier);
+                    stk_alu(mc, OP_MUL);
+                }
+                if (n > 1) {
+                    stk_alu(mc, OP_ADD);
+                }
+                ++n;
+            }
+
+            struct SizeExpr *size = compute_size_of_type(mc, term->type);
+            push_size_expr(mc, size);
+            free_size_expr(size);
+            stk_alu(mc, OP_MUL);
+
+            // Store the offset into a variable
+            char *name = next_ref_name(cxt);
+            stk_create_local(mc, name, false, 8);
+            stk_set_local(mc, name);
+
+            // Create the ref, storing that name.
+            struct NameList *names = alloc(sizeof(struct NameList));
+            names->name = name;
+            names->next = NULL;
+
+            ref->tag = REF_FIXED_ARRAY_PROJ;
+            ref->names = names;
+
+        } else {
+            // For dynamic arrays, we just store the individual array index
+            // values, because the array might be re-sized by the time we
+            // get to use the reference.
+            ref->tag = REF_DYNAMIC_ARRAY_PROJ;
+            ref->names = codegen_array_indexes(cxt, term->array_proj.indexes);
+        }
         ref->parent = codegen_ref(cxt, term->array_proj.lhs);
         break;
 

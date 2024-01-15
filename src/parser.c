@@ -128,6 +128,8 @@ static void set_location_end(struct Location *loc, const struct Location *from)
 
 static struct Type * parse_type(struct ParserState *state, bool report_errors);
 
+static struct Term * parse_term(struct ParserState *state, bool allow_lbrace);
+
 // Assumption: current token is '<'.
 // The list is closed by '>'.
 // End of "loc_out" is set to end of list.
@@ -375,32 +377,100 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
     }
 
     while (result && state->token->type == TOK_LBRACKET) {
-        const struct Token * backtrack_token = state->token;
         advance(state);
 
-        int ndim = 1;
-        while (state->token->type == TOK_COMMA) {
-            if (ndim == INT_MAX) {
-                fatal_error("ndim overflow");
+        struct OpTermList *dim_terms = NULL;
+        struct OpTermList **dim_terms_tail = &dim_terms;
+        bool first = true;
+
+        do {
+            struct Term *term = NULL;
+
+            // need a comma before each dimension other than the first
+            if (!first) {
+                if (state->token->type == TOK_COMMA) {
+                    advance(state);
+                } else {
+                    free_op_term_list(dim_terms);
+                    free_type(result);
+                    if (report_errors) {
+                        report_error(state, state->token->location, "expected ',' or ']'");
+                    }
+                    return NULL;
+                }
             }
-            ++ndim;
-            advance(state);
+
+            first = false;
+
+            // There might be a size-term next. If so it will start
+            // with a token which is neither ',' nor ']'.
+            if (state->token->type != TOK_COMMA && state->token->type != TOK_RBRACKET) {
+                // Note: technically we should not report errors while
+                // parsing the array-size term (if report_errors is false).
+                // But we don't have a report_errors option in parse_term
+                // (yet). This is relatively harmless, it just means errors
+                // might get reported twice e.g. in a term like f<a[**]>
+                // (where ** is a parse error).
+                term = parse_term(state, true);
+                if (term == NULL) {
+                    free_op_term_list(dim_terms);
+                    free_type(result);
+                    return NULL;
+                }
+            }
+
+            struct OpTermList *node = alloc(sizeof(struct OpTermList));
+            node->operator = BINOP_PLUS;  // dummy value
+            node->rhs = term;
+            node->next = NULL;
+            *dim_terms_tail = node;
+            dim_terms_tail = &node->next;
+
+        } while (state->token->type != TOK_RBRACKET);
+
+        int ndim = 0;
+        bool found_size = false;
+        bool found_nosize = false;
+        for (struct OpTermList *node = dim_terms; node; node = node->next) {
+            ndim++;
+            if (node->rhs) {
+                found_size = true;
+            } else {
+                found_nosize = true;
+            }
         }
 
-        if (state->token->type != TOK_RBRACKET) {
-            // cancel, backtrack
-            state->token = backtrack_token;
-            break;
+        if (found_size && found_nosize) {
+            if (report_errors) {
+                report_error(state, loc, "mixture of fixed and variable-sized dimensions");
+            }
+            free_op_term_list(dim_terms);
+            free_type(result);
+            return NULL;
+        }
 
+        set_location_end(&loc, &state->token->location);
+        advance(state);
+
+        struct Type *array_type;
+        if (found_size) {
+            array_type = make_type(loc, TY_FIXED_ARRAY);
+            array_type->fixed_array_data.element_type = result;
+            array_type->fixed_array_data.ndim = ndim;
+            array_type->fixed_array_data.sizes = alloc(sizeof(struct Term*) * ndim);
+            int i = 0;
+            for (struct OpTermList *node = dim_terms; node; node = node->next) {
+                array_type->fixed_array_data.sizes[i++] = node->rhs;
+                node->rhs = NULL;
+            }
         } else {
-            set_location_end(&loc, &state->token->location);
-            advance(state);
-
-            struct Type *array_type = make_type(loc, TY_ARRAY);
-            array_type->array_data.element_type = result;
-            array_type->array_data.ndim = ndim;
-            result = array_type;
+            array_type = make_type(loc, TY_DYNAMIC_ARRAY);
+            array_type->dynamic_array_data.element_type = result;
+            array_type->dynamic_array_data.ndim = ndim;
         }
+        result = array_type;
+
+        free_op_term_list(dim_terms);
     }
 
     return result;
@@ -619,8 +689,6 @@ static struct Arm * make_arm(struct Pattern *p, void *r,
 //
 // Term Parsing
 //
-
-static struct Term * parse_term(struct ParserState *state, bool allow_lbrace);
 
 static struct Term * parse_tyarg_suffix(struct ParserState *state, struct Term *base_term)
 {

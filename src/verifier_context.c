@@ -118,6 +118,7 @@ struct RefChain * copy_ref_chain(struct RefChain *ref)
     case RT_ARRAY_ELEMENT:
         result->array_index = copy_sexpr(ref->array_index);
         result->ndim = ref->ndim;
+        result->fixed_size = ref->fixed_size;
         break;
 
     case RT_SEXPR:
@@ -996,6 +997,9 @@ struct Sexpr *for_all_array_elt(int ndim,
 struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
                              struct Sexpr *arr_expr, struct Type *array_type, struct Sexpr *rhs_expr)
 {
+    if (array_type->tag != TY_DYNAMIC_ARRAY) {
+        fatal_error("match_arr_size: wrong type");
+    }
     return make_list3_sexpr(
         make_string_sexpr("match"),
         arr_expr,
@@ -1006,6 +1010,32 @@ struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
                     make_string_sexpr(arr_name),
                     make_string_sexpr(size_name)),
                 rhs_expr)));
+}
+
+struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type)
+{
+    if (array_type->tag != TY_FIXED_ARRAY) {
+        fatal_error("fixed_arr_size_sexpr: wrong type");
+    }
+    struct TypeData_FixedArray *data = &array_type->fixed_array_data;
+    if (data->ndim == 1) {
+        return make_string_sexpr(data->sizes[0]->int_literal.data);
+    } else {
+        struct Sexpr *list = NULL;
+        struct Sexpr *ints = NULL;
+        struct Sexpr **tail = &list;
+        struct Sexpr **ints_tail = &ints;
+        for (int i = 0; i < data->ndim; ++i) {
+            *tail = make_list1_sexpr(make_string_sexpr(data->sizes[i]->int_literal.data));
+            *ints_tail = make_list1_sexpr(make_string_sexpr("Int"));
+            tail = &(*tail)->right;
+            ints_tail = &(*ints_tail)->right;
+        }
+        struct Sexpr *prod = make_string_sexpr("$PROD");
+        make_instance(&prod, ints);
+        ints = NULL;
+        return make_pair_sexpr(prod, list);
+    }
 }
 
 struct Sexpr *make_record_predicate(
@@ -1133,11 +1163,36 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
     case TY_VARIANT:
         return make_variant_predicate(type, var_name, validity_test_expr, conjunction);
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
+        {
+            // make an expression saying that all array elements in range are
+            // valid, and all out-of-range are equal to $ARBITRARY at that type
+            struct Type *elt_type = type->fixed_array_data.element_type;
+            struct Sexpr *elt_valid = validity_test_expr(elt_type, "$elt");
+            if (elt_valid == NULL) {
+                elt_valid = make_string_sexpr("true");
+            }
+
+            return make_list3_sexpr(
+                make_string_sexpr("let"),
+                make_list2_sexpr(
+                    make_list2_sexpr(
+                        make_string_sexpr("$arr"),
+                        make_string_sexpr(var_name)),
+                    make_list2_sexpr(
+                        make_string_sexpr("$size"),
+                        fixed_arr_size_sexpr(type))),
+                for_all_array_elt(
+                    type->fixed_array_data.ndim,
+                    elt_valid,
+                    verify_type(elt_type)));
+        }
+
+    case TY_DYNAMIC_ARRAY:
         {
             // first make an expression saying that the size is valid
-            struct Type *elt_type = type->array_data.element_type;
-            int ndim = type->array_data.ndim;
+            struct Type *elt_type = type->dynamic_array_data.element_type;
+            int ndim = type->dynamic_array_data.ndim;
             struct Sexpr *size_valid = NULL;
 
             if (ndim == 1) {
@@ -1258,9 +1313,59 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
     case TY_VARIANT:
         return make_variant_predicate(type, var_name, allocated_test_expr, disjunction);
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
+        {
+            // A fixed-array is allocated if any of its elements is...
+            struct Type *elt_type = type->fixed_array_data.element_type;
+            int ndim = type->fixed_array_data.ndim;
+
+            // "$elt" is allocated
+            struct Sexpr *elt_alloc = allocated_test_expr(elt_type, "$elt");
+
+            if (elt_alloc == NULL) {
+                // This array is never allocated, because it is fixed-size
+                // and its elements are of a non-allocated type.
+                return NULL;
+            }
+
+            // "$idx" is in range
+            struct Sexpr *inrange = array_index_in_range(ndim, "$idx", "$size", NULL, false);
+
+            // "$idx" is in range, and the element at $idx is allocated
+            struct Sexpr *inrange_and_alloc =
+                make_list3_sexpr(
+                    make_string_sexpr("and"),
+                    make_list3_sexpr(
+                        make_string_sexpr("let"),
+                        make_list1_sexpr(
+                            make_list2_sexpr(
+                                make_string_sexpr("$size"),
+                                fixed_arr_size_sexpr(type))),
+                        inrange),
+                    make_list3_sexpr(
+                        make_string_sexpr("let"),
+                        make_list1_sexpr(
+                            make_list2_sexpr(
+                                make_string_sexpr("$elt"),
+                                make_list3_sexpr(
+                                    make_string_sexpr("select"),
+                                    make_string_sexpr(var_name),
+                                    make_string_sexpr("$idx")))),
+                        elt_alloc));
+
+            // there exists $idx such that inrange_and_alloc is true
+            return make_list3_sexpr(
+                make_string_sexpr("exists"),
+                make_list1_sexpr(
+                    make_list2_sexpr(
+                        make_string_sexpr("$idx"),
+                        array_index_type(ndim))),
+                inrange_and_alloc);
+        }
+
+    case TY_DYNAMIC_ARRAY:
         ;
-        int ndim = type->array_data.ndim;
+        int ndim = type->dynamic_array_data.ndim;
         struct Sexpr *size_zero = NULL;
 
         if (ndim == 1) {

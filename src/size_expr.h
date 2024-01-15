@@ -43,6 +43,9 @@ struct SizeExpr * var_size_expr(const char *varname, uint64_t multiplier);
 // Return a new SizeExpr representing the sum of two other sizes.
 struct SizeExpr * add_size_expr(struct SizeExpr *lhs, struct SizeExpr *rhs);
 
+// Return a new SizeExpr representing a constant multiplied by another size.
+struct SizeExpr * multiply_size_expr(uint64_t lhs, struct SizeExpr *rhs);
+
 // Return a new SizeExpr representing the max of two other sizes.
 struct SizeExpr * max_size_expr(struct SizeExpr *lhs, struct SizeExpr *rhs);
 

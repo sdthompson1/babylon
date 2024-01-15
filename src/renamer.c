@@ -407,6 +407,9 @@ void handle_resolution_failure(struct RenamerState *state,
 }
 
 
+static void rename_term(struct RenamerState *state, struct Term *term);
+
+
 // Type renaming.
 
 static void * rename_var_type(void *context, struct Type *type)
@@ -426,9 +429,21 @@ static void * rename_var_type(void *context, struct Type *type)
     return NULL;
 }
 
+static void * rename_fixed_array(void *context, struct Type *type, void *elt_type_result)
+{
+    // A quirk of TypeTransform is that it does not descend into
+    // the terms found in TY_FIXED_ARRAY, therefore we have to do that
+    // ourselves here.
+    for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
+        rename_term(context, type->fixed_array_data.sizes[i]);
+    }
+    return NULL;
+}
+
 static void renaming_type_transform(struct TypeTransform *tr)
 {
     tr->transform_var = rename_var_type;
+    tr->transform_fixed_array = rename_fixed_array;
 }
 
 static void rename_type(struct RenamerState *state, struct Type *type)

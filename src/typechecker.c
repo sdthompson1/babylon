@@ -174,6 +174,16 @@ static struct Type * substitute_in_type(struct TyVarList *tyvars,
 
 // ----------------------------------------------------------------------------------------------------
 
+// Functions needed by TY_FIXED_ARRAY kind checking.
+
+static void typecheck_term(struct TypecheckContext *tc_context, struct Term *term);
+
+static bool match_term_to_type(struct TypecheckContext *tc_context,
+                               struct Type *expected_type,
+                               struct Term **term);
+
+// ----------------------------------------------------------------------------------------------------
+
 // Kind-checking of types.
 
 // Kind-checking is intended to run on Types created by the parser. It
@@ -193,6 +203,9 @@ static struct Type * substitute_in_type(struct TyVarList *tyvars,
 
 //  4) Any errors (such as failing to provide required type arguments)
 //     are reported.
+
+//  5) The sizes of fixed-size arrays will be normalised to
+//     TM_INT_LITERAL.
 
 
 // This can be applied to types of kind *. Returns true on success.
@@ -287,8 +300,47 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
             return ok;
         }
 
-    case TY_ARRAY:
-        return kindcheck_type(tc_context, &(*type)->array_data.element_type);
+    case TY_FIXED_ARRAY:
+        if (!kindcheck_type(tc_context, &(*type)->fixed_array_data.element_type)) {
+            return false;
+        }
+
+        {
+            // Array sizes are u64
+            struct Type *u64 = make_int_type(g_no_location, false, 64);
+
+            for (int i = 0; i < (*type)->fixed_array_data.ndim; ++i) {
+                typecheck_term(tc_context, (*type)->fixed_array_data.sizes[i]);
+                if ((*type)->fixed_array_data.sizes[i]->type == NULL) {
+                    // Size doesn't typecheck
+                    free_type(u64);
+                    return false;
+                }
+
+                if (!match_term_to_type(tc_context, u64, &(*type)->fixed_array_data.sizes[i])) {
+                    // Size doesn't have type u64
+                    free_type(u64);
+                    return false;
+                }
+
+                struct Term *normal = eval_to_normal_form(tc_context->global_env, (*type)->fixed_array_data.sizes[i]);
+                if (normal == NULL) {
+                    // Size is not a compile time constant
+                    free_type(u64);
+                    report_non_compile_time_constant((*type)->fixed_array_data.sizes[i]->location);
+                    return false;
+                }
+                free_term((*type)->fixed_array_data.sizes[i]);
+                (*type)->fixed_array_data.sizes[i] = normal;
+            }
+
+            free_type(u64);
+        }
+
+        return true;
+
+    case TY_DYNAMIC_ARRAY:
+        return kindcheck_type(tc_context, &(*type)->dynamic_array_data.element_type);
 
     case TY_VARIANT:
     case TY_FUNCTION:
@@ -395,7 +447,8 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
         case TY_BOOL:
         case TY_RECORD:
         case TY_VARIANT:
-        case TY_ARRAY:
+        case TY_FIXED_ARRAY:
+        case TY_DYNAMIC_ARRAY:
         case TY_MATH_INT:
         case TY_MATH_REAL:
             if (!types_equal(expected_type, (*term)->type)) {
@@ -699,7 +752,8 @@ static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Loc
         }
         return true;
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
+    case TY_DYNAMIC_ARRAY:
         return true;
 
     case TY_FUNCTION:
@@ -897,10 +951,12 @@ static void* typecheck_int_literal(void *context, struct Term *term, void *type_
 
 static void* typecheck_string_literal(void *context, struct Term *term, void *type_result)
 {
-    // string literals have type u8[]
-    term->type = make_type(g_no_location, TY_ARRAY);
-    term->type->array_data.element_type = make_int_type(g_no_location, false, 8);
-    term->type->array_data.ndim = 1;
+    // String literals currently have type u8[].
+    // TODO: Maybe u8[N] (where N is the compile time known size of the
+    // string) might make more sense?
+    term->type = make_type(g_no_location, TY_DYNAMIC_ARRAY);
+    term->type->dynamic_array_data.element_type = make_int_type(g_no_location, false, 8);
+    term->type->dynamic_array_data.ndim = 1;
     return NULL;
 }
 
@@ -2036,22 +2092,25 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         return NULL;
     }
 
-    if (rhs->type->tag != TY_ARRAY) {
+    if (rhs->type->tag != TY_DYNAMIC_ARRAY && rhs->type->tag != TY_FIXED_ARRAY) {
         report_type_mismatch_string("array", rhs);
         tc_context->error = true;
         return NULL;
     }
 
-    if (!is_lvalue(tc_context, rhs, NULL, NULL) && tc_context->executable) {
-        // in executable code, passing an rvalue to sizeof would "lose" the rvalue, so we
-        // would never be able to free it
-        // in ghost code it is fine
+    if (rhs->type->tag == TY_DYNAMIC_ARRAY
+    && !is_lvalue(tc_context, rhs, NULL, NULL)
+    && tc_context->executable) {
+        // In executable code, passing an rvalue (of allocatable type)
+        // to sizeof would "lose" the rvalue, so we would never be able
+        // to free it.
+        // In ghost code it is fine.
         report_cannot_take_sizeof(rhs);
         tc_context->error = true;
         return NULL;
     }
 
-    int ndim = rhs->type->array_data.ndim;
+    int ndim = array_ndim(rhs->type);
     if (ndim == 1) {
         term->type = make_int_type(g_no_location, false, 64);
     } else {
@@ -2105,7 +2164,7 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
         return NULL;
     }
 
-    if (lhs->type->tag != TY_ARRAY) {
+    if (lhs->type->tag != TY_FIXED_ARRAY && lhs->type->tag != TY_DYNAMIC_ARRAY) {
         report_cannot_index(lhs);
         tc_context->error = true;
         return NULL;
@@ -2135,14 +2194,14 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
 
     free_type(u64);
 
-    if (num_indexes != lhs->type->array_data.ndim) {
+    if (num_indexes != array_ndim(lhs->type)) {
         report_wrong_number_of_indexes(term);
         tc_context->error = true;
         ok = false;
     }
 
     if (ok) {
-        term->type = copy_type(lhs->type->array_data.element_type);
+        term->type = copy_type(array_element_type(lhs->type));
     }
 
     return NULL;

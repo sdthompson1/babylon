@@ -16,6 +16,7 @@ repository.
 #include <ctype.h>
 
 static void print_type(FILE *file, struct Type *type);
+static void print_term(bool postcond, FILE *file, struct Term *term);
 
 static void print_name_type_list(FILE *file, struct NameTypeList *list)
 {
@@ -81,11 +82,25 @@ static void print_type(FILE *file, struct Type *type)
         fprintf(file, ">");
         break;
 
-    case TY_ARRAY:
-        print_type(file, type->array_data.element_type);
+    case TY_FIXED_ARRAY:
+        print_type(file, type->fixed_array_data.element_type);
         fprintf(file, "[");
         {
-            for (int i = 2; i <= type->array_data.ndim; ++i) {
+            for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
+                print_term(false, file, type->fixed_array_data.sizes[i]);
+                if (i < type->fixed_array_data.ndim - 1) {
+                    fprintf(file, ", ");
+                }
+            }
+        }
+        fprintf(file, "]");
+        break;
+
+    case TY_DYNAMIC_ARRAY:
+        print_type(file, type->dynamic_array_data.element_type);
+        fprintf(file, "[");
+        {
+            for (int i = 2; i <= type->dynamic_array_data.ndim; ++i) {
                 fprintf(file, ",");
             }
         }
@@ -250,8 +265,6 @@ static int precedence(struct Term *term)
 
     fatal_error("could not calculate precedence");
 }
-
-static void print_term(bool postcond, FILE *file, struct Term *term);
 
 static void print_paren_term(bool postcond, FILE *file, struct Term *term, bool use_paren)
 {

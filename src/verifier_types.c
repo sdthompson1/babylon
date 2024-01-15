@@ -49,10 +49,19 @@ struct Sexpr * verify_type(struct Type *type)
             return result;
         }
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
         {
-            struct Sexpr *element_type = verify_type(type->array_data.element_type);
-            struct Sexpr *index_type = array_index_type(type->array_data.ndim);
+            struct Sexpr *element_type = verify_type(type->fixed_array_data.element_type);
+            struct Sexpr *index_type = array_index_type(type->fixed_array_data.ndim);
+            return make_list3_sexpr(make_string_sexpr("Array"),
+                                    index_type,
+                                    element_type);
+        }
+
+    case TY_DYNAMIC_ARRAY:
+        {
+            struct Sexpr *element_type = verify_type(type->dynamic_array_data.element_type);
+            struct Sexpr *index_type = array_index_type(type->dynamic_array_data.ndim);
             struct Sexpr * array_type =
                 make_list3_sexpr(make_string_sexpr("Array"),
                                  copy_sexpr(index_type),

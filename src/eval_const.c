@@ -17,6 +17,7 @@ repository.
 #include "typechecker.h"   // for TypeEnvEntry
 #include "util.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,6 +35,7 @@ static struct Term * eval_cast(struct HashTable *env, struct Term *term)
 {
     // a cast doesn't change the value, but it does change the type.
     struct Term *result = eval_to_normal_form(env, term->cast.operand);
+    if (!result) return NULL;
     free_type(result->type);
     result->type = copy_type(term->type);
     return result;
@@ -355,6 +357,9 @@ static struct Term * eval_record_update(struct HashTable *env, struct Term *term
 static struct Term * eval_field_proj(struct HashTable *env, struct Term *term)
 {
     struct Term *lhs = eval_to_normal_form(env, term->field_proj.lhs);
+    if (!lhs) {
+        return NULL;
+    }
 
     if (lhs->tag == TM_DEFAULT) {
         free_term(lhs);
@@ -463,6 +468,38 @@ static struct Term * eval_match(struct HashTable *env, struct Term *term)
     return result;
 }
 
+static struct Term * make_sizeof_tuple(const struct TypeData_FixedArray *data)
+{
+    struct NameTermList *output = NULL;
+    struct NameTermList **tail = &output;
+    char buf[50];
+
+    struct NameTypeList *types = NULL;
+    struct NameTypeList **type_tail = &types;
+
+    for (int i = 0; i < data->ndim; ++i) {
+        sprintf(buf, "%d", i);
+
+        *tail = alloc(sizeof(struct NameTermList));
+        (*tail)->name = copy_string(buf);
+        (*tail)->term = copy_term(data->sizes[i]);
+        (*tail)->next = NULL;
+        tail = &((*tail)->next);
+
+        *type_tail = alloc(sizeof(struct NameTypeList));
+        (*type_tail)->name = copy_string(buf);
+        (*type_tail)->type = copy_type(data->sizes[i]->type);
+        (*type_tail)->next = NULL;
+        type_tail = &((*type_tail)->next);
+    }
+
+    struct Term *result = make_term(g_no_location, TM_RECORD);
+    result->record.fields = output;
+    result->type = make_type(g_no_location, TY_RECORD);
+    result->type->record_data.fields = types;
+    return result;
+}
+
 struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
 {
     switch (term->tag) {
@@ -519,6 +556,20 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
         }
 
     case TM_SIZEOF:
+        ;
+        struct Type *arr_type = term->sizeof_data.rhs->type;
+        if (arr_type->tag == TY_FIXED_ARRAY) {
+            // fixed array sizes are already in normal-form, just need to
+            // copy (and make into a tuple if necessary)
+            if (arr_type->fixed_array_data.ndim == 1) {
+                return copy_term(arr_type->fixed_array_data.sizes[0]);
+            } else {
+                return make_sizeof_tuple(&arr_type->fixed_array_data);
+            }
+        } else {
+            return NULL;
+        }
+
     case TM_ALLOCATED:
     case TM_ARRAY_PROJ:
         return NULL;

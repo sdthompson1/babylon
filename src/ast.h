@@ -30,7 +30,8 @@ enum TypeTag {
     TY_MATH_REAL,
     TY_RECORD,
     TY_VARIANT,
-    TY_ARRAY,
+    TY_FIXED_ARRAY,    // fixed sized array
+    TY_DYNAMIC_ARRAY,  // variable sized array
     TY_FUNCTION,
     TY_FORALL,
     TY_LAMBDA,
@@ -72,7 +73,13 @@ struct TypeData_Variant {
     struct NameTypeList *variants;    // the types can be NULL, until after typechecking
 };
 
-struct TypeData_Array {
+struct TypeData_FixedArray {
+    struct Type *element_type;
+    int ndim;
+    struct Term **sizes;  // after typechecking, should always be TM_INT_LITERAL (in u64 range).
+};
+
+struct TypeData_DynamicArray {
     struct Type *element_type;
     int ndim;
 };
@@ -109,7 +116,8 @@ struct Type {
         struct TypeData_Int int_data;
         struct TypeData_Record record_data;
         struct TypeData_Variant variant_data;
-        struct TypeData_Array array_data;
+        struct TypeData_FixedArray fixed_array_data;
+        struct TypeData_DynamicArray dynamic_array_data;
         struct TypeData_Function function_data;
         struct TypeData_Forall forall_data;
         struct TypeData_Lambda lambda_data;
@@ -226,7 +234,7 @@ struct TermData_BoolLiteral {
 };
 
 struct TermData_IntLiteral {
-    const char *data;  // contains only digits 0-9 and possibly a single initial '-'
+    const char *data;  // contains only digits 0-9 (no redundant leading zeroes) and possibly a single initial '-'.
 };
 
 struct TermData_StringLiteral {
@@ -673,7 +681,8 @@ struct TypeTransform {
     void * (*transform_math_real) (void *context, struct Type *type_math_real);
     void * (*transform_record) (void *context, struct Type *type_record, void *fields_result);
     void * (*transform_variant) (void *context, struct Type *type_variant, void *variants_result);
-    void * (*transform_array) (void *context, struct Type *type_array, void *elt_type_result);
+    void * (*transform_fixed_array) (void *context, struct Type *type_array, void *elt_type_result);
+    void * (*transform_dynamic_array) (void *context, struct Type *type_array, void *elt_type_result);
     void * (*transform_function) (void *context, struct Type *type_function, void *args_result, void *return_type_result);
     void * (*transform_forall) (void *context, struct Type *type_forall, void *tyvars_result, void *child_type_result);
     void * (*transform_lambda) (void *context, struct Type *type_lambda, void *tyvars_result, void *type_result);
@@ -793,6 +802,7 @@ struct Term * make_var_term(struct Location loc, const char *name);
 struct Term * copy_term(const struct Term *term);
 
 void free_term(struct Term *term);
+void free_op_term_list(struct OpTermList *list);
 void free_name_term_list(struct NameTermList *list);
 
 
@@ -820,6 +830,9 @@ void free_module(struct Module *);
 
 int tyvar_list_length(const struct TyVarList *list);
 int type_list_length(const struct TypeList *list);
+
+int array_ndim(const struct Type *ty);
+struct Type *array_element_type(const struct Type *ty);
 
 // Checks for syntactic equality of types
 bool type_lists_equal(const struct TypeList *lhs, const struct TypeList *rhs);

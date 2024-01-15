@@ -155,12 +155,24 @@ void * transform_type(struct TypeTransform *tr, void *context, struct Type *type
         }
         break;
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
         {
-            void * elt_type_result = transform_type(tr, context, type->array_data.element_type);
+            void * elt_type_result = transform_type(tr, context, type->fixed_array_data.element_type);
 
-            if (tr->transform_array) {
-                return tr->transform_array(context, type, elt_type_result);
+            if (tr->transform_fixed_array) {
+                return tr->transform_fixed_array(context, type, elt_type_result);
+            } else {
+                return NULL;
+            }
+        }
+        break;
+
+    case TY_DYNAMIC_ARRAY:
+        {
+            void * elt_type_result = transform_type(tr, context, type->dynamic_array_data.element_type);
+
+            if (tr->transform_dynamic_array) {
+                return tr->transform_dynamic_array(context, type, elt_type_result);
             } else {
                 return NULL;
             }
@@ -605,11 +617,23 @@ static void * copy_ty_variant(void *context, struct Type *type, void *variants_r
     return result;
 }
 
-static void * copy_ty_array(void *context, struct Type *type, void *elt_type_result)
+static void * copy_ty_fixed_array(void *context, struct Type *type, void *elt_type_result)
 {
-    struct Type *result = make_type(type->location, TY_ARRAY);
-    result->array_data.element_type = elt_type_result;
-    result->array_data.ndim = type->array_data.ndim;
+    struct Type *result = make_type(type->location, TY_FIXED_ARRAY);
+    result->fixed_array_data.element_type = elt_type_result;
+    result->fixed_array_data.ndim = type->fixed_array_data.ndim;
+    result->fixed_array_data.sizes = alloc(type->fixed_array_data.ndim * sizeof(struct Term *));
+    for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
+        result->fixed_array_data.sizes[i] = copy_term(type->fixed_array_data.sizes[i]);
+    }
+    return result;
+}
+
+static void * copy_ty_dynamic_array(void *context, struct Type *type, void *elt_type_result)
+{
+    struct Type *result = make_type(type->location, TY_DYNAMIC_ARRAY);
+    result->dynamic_array_data.element_type = elt_type_result;
+    result->dynamic_array_data.ndim = type->dynamic_array_data.ndim;
     return result;
 }
 
@@ -693,7 +717,8 @@ void copying_type_transform(struct TypeTransform *tr)
     tr->transform_math_real = copy_ty_math_real;
     tr->transform_record = copy_ty_record;
     tr->transform_variant = copy_ty_variant;
-    tr->transform_array = copy_ty_array;
+    tr->transform_fixed_array = copy_ty_fixed_array;
+    tr->transform_dynamic_array = copy_ty_dynamic_array;
     tr->transform_function = copy_ty_function;
     tr->transform_forall = copy_ty_forall;
     tr->transform_lambda = copy_ty_lambda;
@@ -751,6 +776,16 @@ static void* free_var_type(void *context, struct Type *type)
     return NULL;
 }
 
+static void* free_fixed_array_type(void *context, struct Type *type, void *elt_type_result)
+{
+    for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
+        free_term(type->fixed_array_data.sizes[i]);
+    }
+    free(type->fixed_array_data.sizes);
+    free(type);
+    return NULL;
+}
+
 static void * free_tyvar_list_node(void *context, struct TyVarList *node, void *next_result)
 {
     free((char*)node->name);
@@ -787,7 +822,8 @@ static void freeing_type_transform(struct TypeTransform *tr)
     tr->transform_math_real = free_type_0;
     tr->transform_record = free_type_1;
     tr->transform_variant = free_type_1;
-    tr->transform_array = free_type_1;
+    tr->transform_dynamic_array = free_type_1;
+    tr->transform_fixed_array = free_fixed_array_type;
     tr->transform_function = free_type_2;
     tr->transform_forall = free_type_2;
     tr->transform_lambda = free_type_2;
@@ -1383,6 +1419,13 @@ void free_name_term_list(struct NameTermList *list)
     transform_name_term_list(&tr, NULL, list);
 }
 
+void free_op_term_list(struct OpTermList *list)
+{
+    struct TermTransform tr = {0};
+    freeing_term_transform(&tr);
+    transform_op_term_list(&tr, NULL, list);
+}
+
 
 //
 // Constructors/Destructors -- Other
@@ -1782,6 +1825,19 @@ bool funarg_lists_equal(const struct FunArg *lhs, const struct FunArg *rhs)
     return (lhs == NULL && rhs == NULL);
 }
 
+static bool array_size_terms_equal(struct Term **lhs, struct Term **rhs, int ndim)
+{
+    for (int i = 0; i < ndim; ++i) {
+        if (lhs[i]->tag != TM_INT_LITERAL || rhs[i]->tag != TM_INT_LITERAL) {
+            fatal_error("can't compare array types, sizes have not been normalised to TM_INT_LITERAL");
+        }
+        if (strcmp(lhs[i]->int_literal.data, rhs[i]->int_literal.data) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool types_equal(const struct Type *lhs, const struct Type *rhs)
 {
     if (lhs->tag != rhs->tag) {
@@ -1806,10 +1862,15 @@ bool types_equal(const struct Type *lhs, const struct Type *rhs)
     case TY_VARIANT:
         return name_type_lists_equal(lhs->variant_data.variants, rhs->variant_data.variants);
 
-    case TY_ARRAY:
+    case TY_FIXED_ARRAY:
+        return lhs->fixed_array_data.ndim == rhs->fixed_array_data.ndim
+            && array_size_terms_equal(lhs->fixed_array_data.sizes, rhs->fixed_array_data.sizes, lhs->fixed_array_data.ndim)
+            && types_equal(lhs->fixed_array_data.element_type, rhs->fixed_array_data.element_type);
+
+    case TY_DYNAMIC_ARRAY:
         return
-            lhs->array_data.ndim == rhs->array_data.ndim
-            && types_equal(lhs->array_data.element_type, rhs->array_data.element_type);
+            lhs->dynamic_array_data.ndim == rhs->dynamic_array_data.ndim
+            && types_equal(lhs->dynamic_array_data.element_type, rhs->dynamic_array_data.element_type);
 
     case TY_FUNCTION:
         {
@@ -1856,4 +1917,26 @@ int type_list_length(const struct TypeList *list)
         list = list->next;
     }
     return len;
+}
+
+int array_ndim(const struct Type *ty)
+{
+    if (ty->tag == TY_FIXED_ARRAY) {
+        return ty->fixed_array_data.ndim;
+    } else if (ty->tag == TY_DYNAMIC_ARRAY) {
+        return ty->dynamic_array_data.ndim;
+    } else {
+        fatal_error("array_ndim: not an array type");
+    }
+}
+
+struct Type * array_element_type(const struct Type *ty)
+{
+    if (ty->tag == TY_FIXED_ARRAY) {
+        return ty->fixed_array_data.element_type;
+    } else if (ty->tag == TY_DYNAMIC_ARRAY) {
+        return ty->dynamic_array_data.element_type;
+    } else {
+        fatal_error("array_ndim: not an array type");
+    }
 }

@@ -9,6 +9,7 @@ repository.
 
 
 #include "alloc.h"
+#include "error.h"
 #include "size_expr.h"
 #include "stack_machine.h"
 #include "util.h"
@@ -309,6 +310,46 @@ struct SizeExpr * add_size_expr(struct SizeExpr *lhs, struct SizeExpr *rhs)
     }
 }
 
+struct SizeExpr * multiply_size_expr(uint64_t lhs, struct SizeExpr *rhs)
+{
+    // If either factor is zero, the result is zero.
+    if (lhs == 0 || rhs == NULL) {
+        return NULL;
+    }
+
+    // Just multiply each TermList by the lhs.
+    struct SizeExpr *output = NULL;
+    struct SizeExpr **output_tail = &output;
+
+    for (struct SizeExpr *e = rhs; e; e = e->next) {
+        struct SizeTermList *list = NULL;
+        struct SizeTermList **list_tail = &list;
+
+        for (struct SizeTermList *x = e->term_list; x; x = x->next) {
+            // multiply, checking for overflow
+            uint64_t mult = lhs * x->multiplier;
+            if (mult / lhs != x->multiplier) {
+                fatal_error("array size too big");
+            }
+
+            struct SizeTermList *node = alloc(sizeof(struct SizeTermList));
+            node->multiplier = mult;
+            node->varname = x->varname ? copy_string(x->varname) : NULL;
+            node->next = NULL;
+            *list_tail = node;
+            list_tail = &node->next;
+        }
+
+        struct SizeExpr *node = alloc(sizeof(struct SizeExpr));
+        node->term_list = list;
+        node->next = NULL;
+        *output_tail = node;
+        output_tail = &node->next;
+    }
+
+    return output;
+}
+
 struct SizeExpr * max_size_expr(struct SizeExpr *lhs, struct SizeExpr *rhs)
 {
     // We can just concantenate the two lists, then remove any
@@ -363,7 +404,7 @@ bool is_size_expr_zero(struct SizeExpr *expr)
 
 uint64_t get_size_expr_const(struct SizeExpr *expr)
 {
-    if (expr->term_list == NULL) {
+    if (expr == NULL) {
         return 0;
     } else {
         return expr->term_list->multiplier;
