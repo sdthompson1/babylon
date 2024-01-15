@@ -350,9 +350,6 @@ void add_variable(struct MachineEnv *env, struct AsmGen *gen,
     if (hash_table_contains_key(env->var_locs, name)) {
         fatal_error("add_variable: a var with this name already exists");
     }
-    if (size == 0) {
-        fatal_error("add_variable: invalid size");
-    }
 
     struct VarLoc *loc = alloc(sizeof(struct VarLoc));
     loc->reg_num = -1;
@@ -362,10 +359,11 @@ void add_variable(struct MachineEnv *env, struct AsmGen *gen,
     loc->locked = false;
     loc->is_signed = is_signed;
 
-    // lockable variables start in a register; unlockable on the stack.
+    // lockable variables start in a register; unlockable (non-zero size) on the stack;
+    // and unlockable (zero size) are neither in reg nor on stack.
     if (lockable) {
         loc->reg_num = find_free_register(env, gen);
-    } else {
+    } else if (size != 0) {
         loc->fp_offset = create_frame_slot(env, size);
     }
 
@@ -696,7 +694,10 @@ static void reconcile_mem_to_mem(struct MachineEnv *current_env,
         // scope wasn't closed properly, and a variable is therefore
         // being kept alive longer than it should be).
 
-        if (from->reg_num < 0 && to->reg_num < 0 && from->fp_offset != to->fp_offset) {
+        if (from->reg_num < 0
+        && to->reg_num < 0
+        && from->fp_offset != to->fp_offset
+        && from->fp_offset != 0) {
             found = true;
             break;
         }
@@ -713,7 +714,10 @@ static void reconcile_mem_to_mem(struct MachineEnv *current_env,
     while (hash_iterator_next(iter, &key, &value)) {
         struct VarLoc *from = value;
         struct VarLoc *to = hash_table_lookup(desired_env->var_locs, key);
-        if (from->reg_num < 0 && to->reg_num < 0 && from->fp_offset != to->fp_offset) {
+        if (from->reg_num < 0
+        && to->reg_num < 0
+        && from->fp_offset != to->fp_offset
+        && from->fp_offset != 0) {
 
             if (from->size > 8 || from->size != to->size) {
                 // We assume that the vars requiring moving will

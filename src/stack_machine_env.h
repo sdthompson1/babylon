@@ -75,6 +75,8 @@ void check_no_reserved_regs(struct MachineEnv *env, struct AsmGen *gen);
 
 // Get the frame-pointer-offset of a variable.
 // The var must be "unlockable".
+// Note: if the var has size zero, this returns zero as the variable doesn't
+// actually "exist" anywhere.
 int64_t get_variable_fp_offset(struct MachineEnv *env, const char *var_name);
 
 

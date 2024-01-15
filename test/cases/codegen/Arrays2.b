@@ -67,13 +67,10 @@ function pass_array_param()
     f(a);  // prints 99
 }
 
-/*
-// This is crashing currently
 function zero_size_array()
 {
     var a: i32[0];
 }
-*/
 
 function main()
 {
@@ -82,4 +79,5 @@ function main()
     fixed_array_1d_ref();
     fixed_array_3d_ref();
     pass_array_param();
+    zero_size_array();
 }

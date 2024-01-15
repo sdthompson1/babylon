@@ -433,7 +433,12 @@ void stk_get_local(struct StackMachine *mc, const char *name)
 
     if (hash_table_contains_key(mc->fixed_size_mem_block_names, name)) {
         // compute fp + fp_offset into tos_reg
-        asm_lea_frame_slot(mc->asm_gen, tos_reg, get_variable_fp_offset(mc->current_env, name));
+        // (unless fp_offset is zero, in which case we can be sure the addr will never
+        // be used, so we can omit the lea instruction)
+        int64_t offset = get_variable_fp_offset(mc->current_env, name);
+        if (offset != 0) {
+            asm_lea_frame_slot(mc->asm_gen, tos_reg, offset);
+        }
         unlock_var(mc, tos_name);
 
     } else {
