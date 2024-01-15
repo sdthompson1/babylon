@@ -20,19 +20,33 @@ repository.
 #include "verifier_decls.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 struct VerifierEnv * new_verifier_env()
 {
     struct VerifierEnv *env = alloc(sizeof(struct VerifierEnv));
     env->table = new_hash_table();
+    env->string_names = new_hash_table();
     setup_initial_verifier_env(env);
     return env;
+}
+
+static void free_string_names_entry(void *context, const char *key, void *value)
+{
+    if (strcmp(key, "$DefaultArrayNum") != 0) {
+        free_term(value);
+    }
+    free((char*)key);
 }
 
 void free_verifier_env(struct VerifierEnv *env)
 {
     clear_verifier_env_hash_table(env->table);
     free_hash_table(env->table);
+
+    hash_table_for_each(env->string_names, free_string_names_entry, NULL);
+    free_hash_table(env->string_names);
+
     free(env);
 }
 
@@ -83,7 +97,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.local_env = new_hash_table();
     cxt.local_to_version = new_hash_table();
     cxt.local_counter = new_hash_table();
-    cxt.string_names = new_hash_table();
+    cxt.string_names = verifier_env->string_names;
     cxt.refs = new_hash_table();
     cxt.var_decl_stack = NULL;
     cxt.new_values = NULL;
@@ -134,9 +148,6 @@ bool verify_module(struct VerifierEnv *verifier_env,
         // things in the environment after the module is processed.
         restore_impl_decls(verifier_env->table, backup);
     }
-
-    hash_table_for_each(cxt.string_names, ht_free_key, NULL);
-    free_hash_table(cxt.string_names);
 
     free_hash_table(cxt.local_counter);
     free_hash_table(cxt.refs);

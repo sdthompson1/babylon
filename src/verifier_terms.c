@@ -849,7 +849,7 @@ static bool get_name_for_string(struct VContext *cxt,
         }
 
         // We have a new string
-        hash_table_insert(cxt->string_names, copy_string(out), term);
+        hash_table_insert(cxt->string_names, copy_string(out), copy_term(term));
         return false;
     }
 

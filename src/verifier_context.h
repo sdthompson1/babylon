@@ -28,6 +28,9 @@ struct Sexpr;
 // (defined below). Both are allocated.
 struct VerifierEnv {
     struct HashTable *table;
+
+    // this is used for tracking string literals and fixed-sized array defaults
+    struct HashTable *string_names;
 };
 
 struct Condition {
