@@ -1700,28 +1700,43 @@ static bool verify_aliasing(struct VContext *cxt, struct Term *term)
 
 // Given a list of type args to a function, make the "generic args" that
 // must be passed to the function in the FOL representation.
-// Each type arg expands into 3 sexpr args:
+// Each type arg expands into 4 sexpr args:
 //  - the type itself
 //  - a default value of the type
 //  - a "$lambda" expression representing the "allocated" function for that type
 //    (note lambdas are expanded out by substitute_in_sexpr so they do not reach the
 //    SMT solver itself).
+//  - a "$lambda" representing the "valid" function for that type.
 static struct Sexpr * make_generic_args(struct VContext *cxt, struct TypeList *types)
 {
     struct Sexpr *list = NULL;
     struct Sexpr **tail = &list;
     while (types) {
+        // the type
         struct Sexpr *ty = verify_type(types->type);
         *tail = make_list1_sexpr(ty);
         tail = &((*tail)->right);
 
+        // default value
         struct Sexpr *dflt = make_default(cxt, types->type);
         *tail = make_list1_sexpr(dflt);
         tail = &((*tail)->right);
 
+        // allocated function
         struct Sexpr *lam = allocated_test_expr(types->type, "$x");
         if (lam == NULL) {
             lam = make_string_sexpr("false");
+        }
+        lam = make_list3_sexpr(make_string_sexpr("$lambda"),
+                               make_list1_sexpr(make_string_sexpr("$x")),
+                               lam);
+        *tail = make_list1_sexpr(lam);
+        tail = &((*tail)->right);
+
+        // validity function
+        lam = validity_test_expr(types->type, "$x");
+        if (lam == NULL) {
+            lam = make_string_sexpr("true");
         }
         lam = make_list3_sexpr(make_string_sexpr("$lambda"),
                                make_list1_sexpr(make_string_sexpr("$x")),

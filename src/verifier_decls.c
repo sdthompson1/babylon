@@ -236,10 +236,11 @@ static struct Sexpr * make_generic_fun_params(const struct TyVarList *tyvars)
     struct Sexpr *list = NULL;
     struct Sexpr **tail = &list;
     while (tyvars) {
-        // Each type variable expands into three generic params:
+        // Each type variable expands into four generic params:
         //  - the type itself
         //  - a default value of that type
-        //  - a function telling whether a value of the type is "allocated" or not.
+        //  - a function telling whether a value of the type is "allocated" or not
+        //  - a function telling whether a value of the type is valid or not.
         *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("%", tyvars->name)));
         tail = &((*tail)->right);
 
@@ -247,6 +248,9 @@ static struct Sexpr * make_generic_fun_params(const struct TyVarList *tyvars)
         tail = &((*tail)->right);
 
         *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("$allocated-%", tyvars->name)));
+        tail = &((*tail)->right);
+
+        *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("$valid-%", tyvars->name)));
         tail = &((*tail)->right);
 
         tyvars = tyvars->next;

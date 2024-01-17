@@ -258,9 +258,11 @@ static bool require_let_for(struct VContext *context, const char *name)
 
     const char *prefix1 = "$allocated-";
     const char *prefix2 = "$default-";
+    const char *prefix3 = "$valid-";
     if (strncmp(prefix1, name, strlen(prefix1)) == 0
-    || strncmp(prefix2, name, strlen(prefix2)) == 0) {
-        // Lets not required for "$default" or "$allocated" variables because
+    || strncmp(prefix2, name, strlen(prefix2)) == 0
+    || strncmp(prefix3, name, strlen(prefix3)) == 0) {
+        // Lets not required for "$default", "$allocated" or "$valid" variables because
         // these will become part of the generic args for this function.
         return false;
     }

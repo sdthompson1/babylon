@@ -214,7 +214,7 @@ enum AllocFunc {
 };
 
 // add type variable(s) to the env (declare-sort)
-// also add $default and $allocated items for each tyvar
+// also add $default, $allocated and $valid items for each tyvar
 void add_tyvar_to_env(struct VContext *context, const char *name, bool local,
                       enum AllocFunc alloc_func);
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars);

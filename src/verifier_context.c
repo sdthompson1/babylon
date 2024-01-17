@@ -471,8 +471,25 @@ void add_tyvar_to_env(struct VContext *context, const char *name, bool local,
     allocated_fol_name = NULL;
     item = NULL;
 
+    // Add $valid
+    item = alloc(sizeof(struct Item));
+    memset(item, 0, sizeof(struct Item));
+
+    const char *valid_fol_name = copy_string_2("$valid-", fol_name);
+
+    // (declare-fun $valid-%^name (%^name) Bool)
+    item->fol_decl = make_list4_sexpr(
+        make_string_sexpr("declare-fun"),
+        make_string_sexpr(valid_fol_name),
+        make_list1_sexpr(make_string_sexpr(fol_name)),
+        make_string_sexpr("Bool"));
+    item->fol_name = copy_string(valid_fol_name);
+    hash_table_insert(env, valid_fol_name, item);
+    valid_fol_name = NULL;
+    item = NULL;
 
     free((char*)fol_name);
+    fol_name = NULL;
 }
 
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars)
@@ -1143,7 +1160,10 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
 {
     switch (type->tag) {
     case TY_VAR:
-        return NULL;
+        ;
+        char *valid_name = copy_string_2("$valid-%", type->var_data.name);
+        return make_list2_sexpr(make_string_sexpr_handover(valid_name),
+                                make_string_sexpr(var_name));
 
     case TY_BOOL:
         return NULL;
