@@ -697,7 +697,7 @@ static void print_statements(int indent_level, FILE *file, struct Statement *stm
             break;
 
         case ST_SHOW_HIDE:
-            fprintf(file, "%s %s;",
+            fprintf(file, "%s %s;\n",
                     stmt->show_hide.show ? "show" : "hide",
                     stmt->show_hide.name);
             break;
