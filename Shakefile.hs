@@ -9,6 +9,7 @@ normalFlags = ["-g"]
 optFlags = ["-O3"]
 covFlags = normalFlags ++ ["--coverage"]
 asanFlags = normalFlags ++ ["-fsanitize=address"]
+profFlags = normalFlags ++ ["-O3", "-g", "-pg"]
 
 getFlags = do
   mode <- getEnv "MODE"
@@ -19,6 +20,7 @@ getFlags = do
         "OPT" -> return optFlags
         "COV" -> return covFlags
         "ASAN" -> return asanFlags
+        "PROF" -> return profFlags
         _ -> return normalFlags
 
 
