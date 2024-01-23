@@ -2519,40 +2519,49 @@ static void codegen_assign_stmt(struct CGContext *context, struct Statement *stm
 {
     struct StackMachine *mc = context->machine;
     enum TermTag tag = stmt->assign.lhs->tag;
+    const struct Type *type = stmt->assign.lhs->type;
 
-    if (tag == TM_VAR) {
-        const char *name;
-        struct CodegenItem *item;
-        look_up_local_variable(context, stmt->assign.lhs->var.name, &name, &item);
-
-        if (item->ctype == CT_REF || item->ctype == CT_POINTER_ARG || is_memory_type(stmt->assign.lhs->type)) {
-            // compute rhs directly into the variable
-            do_codegen_for_term(context, STORE_TO_MEM, name, stmt->assign.rhs);
-
-        } else {
-            // compute rhs onto stack, then do a set_local
-            do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->assign.rhs);
-            stk_set_local(mc, name);
-        }
+    if (is_memory_type(type)) {
+        // Compute the rhs into a memory block, and then copy to the lhs.
+        // (We can't compute directly into the lhs using STORE_TO_MEM, because the
+        // lhs value might be needed during the computation of the rhs.)
+        push_local_scope(context);
+        add_named_mem_block(context, "$assign", type);
+        do_codegen_for_term(context, STORE_TO_MEM, "$assign", stmt->assign.rhs);
+        clean_up_temp_blocks(context);
+        do_codegen_for_term(context, PUSH_ADDR, NULL, stmt->assign.lhs);
+        clean_up_temp_blocks(context);
+        stk_get_local(mc, "$assign");
+        memcpy_type(mc, type);
+        pop_local_scope(context);
 
     } else {
-        // compute the *address* of the LHS onto the stack
-        do_codegen_for_term(context, PUSH_ADDR, NULL, stmt->assign.lhs);
-
-        // The addr of the lhs shouldn't point into a temp block,
-        // because we're assigning to an lvalue. So it is safe to
-        // clean up temp blocks here, and indeed necessary because we
-        // are about to call pre_codegen_term, which assumes that
-        // context->num_temps has been reset to zero.
+        // Compute the rhs onto the stack.
+        do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->assign.rhs);
         clean_up_temp_blocks(context);
 
-        // compute RHS into the given address
-        pre_codegen_term(context, true, stmt->assign.rhs);
-        context->num_temps = 0;
-        codegen_term(context, STORE_TO_MEM, stmt->assign.rhs);
-    }
+        // Can we do a stk_set_local directly?
+        bool done = false;
+        if (tag == TM_VAR) {
+            const char *name;
+            struct CodegenItem *item;
+            look_up_local_variable(context, stmt->assign.lhs->var.name, &name, &item);
 
-    clean_up_temp_blocks(context);
+            if (item->ctype != CT_REF && item->ctype != CT_POINTER_ARG) {
+                // Yes, we can
+                stk_set_local(mc, name);
+                done = true;
+            }
+        }
+
+        if (!done) {
+            // No, the lhs is in memory. Get its address then do stk_store.
+            do_codegen_for_term(context, PUSH_ADDR, NULL, stmt->assign.lhs);
+            clean_up_temp_blocks(context);
+            stk_swap(mc, 0, 1);
+            stk_store(mc, size_of_integral_type(type));
+        }
+    }
 }
 
 // Helper for codegen_swap_stmt.
