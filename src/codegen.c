@@ -2829,6 +2829,15 @@ static void codegen_decl_function(struct HashTable *env,
         return;
     }
 
+    // Normal function.
+    // Create an item in the env (if not already created from an interface decl).
+    if (!hash_table_contains_key(env, decl->name)) {
+        struct CodegenItem *item = alloc(sizeof(struct CodegenItem));
+        item->ctype = CT_FUNCTION;
+        item->foreign_name = NULL;
+        hash_table_insert(env, copy_string(decl->name), item);
+    }
+
     if (!decl->function_data.body_specified) {
         // This must be an interface decl
         return;
@@ -2881,12 +2890,6 @@ static void codegen_decl_function(struct HashTable *env,
 
     // Finalise the generated code
     free_cg_context(context);
-
-    // Create an item in the env
-    struct CodegenItem *item = alloc(sizeof(struct CodegenItem));
-    item->ctype = CT_FUNCTION;
-    item->foreign_name = NULL;
-    hash_table_insert(env, copy_string(decl->name), item);
 }
 
 // codegens a single Decl
