@@ -1001,7 +1001,7 @@ struct Term * make_string_literal_term(struct Location loc, const uint8_t *data,
 {
     struct Term * result = make_term(loc, TM_STRING_LITERAL);
     uint8_t *new_data = alloc(length);
-    memcpy(new_data, data, length);
+    if (length != 0) memcpy(new_data, data, length);
     result->string_literal.data = new_data;
     result->string_literal.length = length;
     return result;
