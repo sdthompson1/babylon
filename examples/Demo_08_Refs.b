@@ -185,9 +185,6 @@ function clear_array(ref a: i32[])
 
 function fun4()
 {
-    var a: i32[];
-    resize_array<i32>(a, 10);
-
     var i: i32 = 10;
 
     // Here we create a reference variable "r1", and set it to
@@ -204,35 +201,6 @@ function fun4()
     // i is now equal to 20.
     print_i32(i);   // prints 20
     print_string("\n");
-
-    // We can use this to refer to array elements as well:
-    ref r2 = a[2];
-    ref r3 = a[3];
-
-    r2 = 10;
-    r3 = 20;
-
-    print_i32(a[2]);  // prints 10
-    print_string("\n");
-
-    // These references still work even if the array is resized.
-    resize_array<i32>(a, 100);
-    print_i32(r2);   // still prints 10
-    print_string("\n");
-
-    // After calling the "clear_array" function, all array elements will
-    // be set to zero, and therefore r2 and r3 will be zero as well.
-    clear_array(a);
-    
-    print_i32(r3);  // prints 0
-    print_string("\n");
-
-    // Now let's free the array (resize it to zero).
-    resize_array<i32>(a, 0);
-
-    // r2 and r3 will now become invalid. Uncommenting the following line
-    // would produce an error message during verification.
-    // print_i32(r3);
 }
 
 
@@ -250,5 +218,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_08_Refs.b
-//   gcc Demo_08_Refs.s ExampleLib.s example_lib.c
+//   gcc Demo_08_Refs.c ExampleLib.c example_lib.c
 //   ./a.out

@@ -262,5 +262,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_06_GhostAndForall.b
-//   gcc Demo_06_GhostAndForall.s ExampleLib.s example_lib.c
+//   gcc Demo_06_GhostAndForall.c ExampleLib.c example_lib.c
 //   ./a.out

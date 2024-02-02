@@ -383,17 +383,31 @@ static bool load_module_from_disk(struct LoadDetails *details)
 
     // Compile (if requested)
     if (details->compile_mode == CM_COMPILE) {
-        char *asm_filename = get_output_filename(details, ".s");
-        FILE *asm_file = fopen(asm_filename, "w");
-        if (!asm_file) {
-            report_failed_to_open_asm_file(asm_filename);
-            free(asm_filename);
+        char *c_filename = get_output_filename(details, ".c");
+        char *h_filename = get_output_filename(details, ".h");
+        FILE *c_file = fopen(c_filename, "w");
+        FILE *h_file = fopen(h_filename, "w");
+        if (!c_file || !h_file) {
+            if (c_file) {
+                fclose(c_file);
+            } else {
+                report_failed_to_open_c_file(c_filename);
+            }
+            if (h_file) {
+                fclose(h_file);
+            } else {
+                report_failed_to_open_c_file(h_filename);
+            }
+            free(c_filename);
+            free(h_filename);
             free_module(module);
             return false;
         }
-        free(asm_filename);
-        codegen_module(asm_file, details->codegen_env, module, details->root_module, details->generate_main);
-        fclose(asm_file);
+        free(c_filename);
+        free(h_filename);
+        codegen_module(c_file, h_file, details->codegen_env, module, details->root_module, details->generate_main);
+        fclose(c_file);
+        fclose(h_file);
     }
 
     free_module(module);

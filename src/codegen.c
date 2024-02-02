@@ -8,621 +8,1473 @@ repository.
 */
 
 
+/*
+
+This converts a Babylon module into a C translation unit (.c and .h file pair).
+
+We make the following assumptions about the target C compiler:
+
+ - The compiler conforms to the C standard (C99 or later).
+
+ - The compiler supports variable length arrays (VLAs).
+
+ - The target machine represents integers using a conventional twos-complement
+   representation, with no padding bits, no trap representations, etc.
+
+ - The exact-width integer types (uint8_t, int16_t etc.) are available,
+   in sizes of (at least) 8, 16, 32 and 64 bits.
+
+ - Right shifts of negative numbers perform an arithmetic right shift.
+   (The C standard leaves this implementation-defined, but in practice
+   most compilers will do an arithmetic shift in this case.)
+
+Note that we do NOT assume anything about sizeof(int), sizeof(void*), pointer
+representations, endianness, 32-bit vs 64-bit, or anything of that sort.
+
+*/
+
+
 #include "alloc.h"
 #include "ast.h"
 #include "codegen.h"
+#include "cprint.h"
 #include "error.h"
 #include "hash_table.h"
 #include "normal_form.h"
-#include "opcode.h"
 #include "size_expr.h"
-#include "stack_machine.h"
 #include "util.h"
 
+#include <ctype.h>
 #include <inttypes.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 
 //
-// RefPath -- represents a reference
+// Codegen data structures
 //
 
-enum RefPathTag {
-    REF_VAR,
-    REF_STRING_LITERAL,
-    REF_FIELD_PROJ,
-    REF_DYNAMIC_ARRAY_PROJ,
-    REF_FIXED_ARRAY_PROJ,
-    REF_VARIANT_PAYLOAD
+struct CodegenEntry {
+    bool is_ref;                // true if 'ref' variable.
+    bool is_func_const;         // true if 'const' decl represented by a function.
+    const char *foreign_name;   // non-NULL if 'extern' func. points to allocated mem.
+    bool is_abstract_type;      // true if abstract type decl ("type Foo;").
 };
-
-struct RefPath {
-    enum RefPathTag tag;
-    struct NameList *names;   // allocated
-    struct Type *type;        // shared with AST. Type of the "result" of the lookup
-    struct RefPath *parent;
-};
-
-
-//
-// CodegenItem -- info about a source-level variable
-//
-
-enum CodegenType {
-    CT_FUNCTION,
-    CT_GLOBAL_VAR,
-    CT_LOCAL_VAR,
-    CT_POINTER_ARG,
-    CT_REF
-};
-
-
-struct CodegenItem {
-    enum CodegenType ctype;
-
-    union {
-        // For CT_REF, this gives the RefPath (allocated)
-        struct RefPath *path;
-
-        // For CT_FUNCTION, 'foreign_name' is the C name of this
-        // function, if any (allocated).
-        const char *foreign_name;
-    };
-};
-
-
-// We need to keep track of scopes so that we know when to delete
-// local vars from the stack-machine.
-struct Scope {
-    struct NameList *local_var_names;    // names are allocated
-    struct Scope *next;
-};
-
-
-// String literals
-struct StringLiteral {
-    struct StringLiteral *next;
-    const uint8_t *data;
-    uint32_t length;
-    const char *name;  // allocated
-};
-
 
 struct CGContext {
-    struct StackMachine *machine;
-
-    // codegen env
-    // key = global or local name (allocated), value = CodegenItem (allocated)
-    // exception: key "$StringNum" maps to a counter of string literals
     struct HashTable *env;
-
-    // local scopes (linked list)
-    struct Scope *scope;
-
-    // temporary memory block counter
-    int num_temps;
-
-    // type variables of the current function, in order
-    struct TyVarList *tyvars;
-
-    // string literals to be created
-    struct StringLiteral *strings;
-
-    // counter for 'ref' variables
-    int ref_counter;
+    struct CPrinter *pr;
+    struct CPrinter *h_pr;
+    uint64_t tmp_num;
 };
 
-
-static void free_ref_path(struct RefPath *path)
+static void reset_context(struct CGContext *cxt)
 {
-    while (path) {
-        free_name_list(path->names);
-        struct RefPath *to_free = path;
-        path = path->parent;
-        free(to_free);
+    cxt->tmp_num = 0;
+}
+
+static bool is_ref_var(struct CGContext *cxt, const char *name)
+{
+    struct CodegenEntry *entry = hash_table_lookup(cxt->env, name);
+    return entry && entry->is_ref;
+}
+
+static bool is_func_const(struct CGContext *cxt, const char *name)
+{
+    struct CodegenEntry *entry = hash_table_lookup(cxt->env, name);
+    return entry && entry->is_func_const;
+}
+
+static bool is_abstract_type(struct CGContext *cxt, const char *name)
+{
+    struct CodegenEntry *entry = hash_table_lookup(cxt->env, name);
+    return entry && entry->is_abstract_type;
+}
+
+
+//
+// Z-encoding of names
+//
+
+// Identifiers are encoded into C as follows:
+
+// "."         => "z_"
+// "@"         => "za"
+// "^"         => "zh"
+// Leading "_" => "zu"
+// "z"         => "zz"
+
+// Any other underscore, any digit 0-9, or any letter a-z or A-Z maps
+// to itself.
+
+// If the entire result comes out equal to a C keyword, or an
+// otherwise reserved name, then a lone "z" is appended.
+
+static bool valid_char(char ch)
+{
+    return isalnum(ch) || ch == '_';
+}
+
+static uint64_t encode_chars(const char *input, char *output)
+{
+    uint64_t num = 0;
+    while (*input) {
+        switch (*input) {
+        case '.':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = '_'; }
+            break;
+
+        case '@':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = 'a'; }
+            break;
+
+        case '^':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = 'h'; }
+            break;
+
+        case 'z':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = 'z'; }
+            break;
+
+        case '_':
+            if (num == 0) {
+                num += 2;
+                if (output) { *output++ = 'z'; *output++ = 'u'; }
+                break;
+            }
+            // Fall through
+
+        default:
+            if (!valid_char(*input)) {
+                fatal_error("encoding identifier to C failed");
+            }
+
+            num += 1;
+            if (output) *output++ = *input;
+        }
+
+        input++;
     }
+
+    num++;
+    if (output) *output = 0;
+
+    return num;
+}
+
+static const char * RESERVED_NAMES[] = {
+    // Keywords - based on the C11 standard.
+    // (We omit the keywords that begin with "_", because initial
+    // underscores are z-encoded away.)
+    "alignof",
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+
+    // "ret" is reserved as an argument name (for functions that return aggregates).
+    "ret",
+
+    // "memcpy", "memmove" and "memset" are called by the compiled code, so naming
+    // local variables after them would cause problems.
+    "memcpy",
+    "memmove",
+    "memset",
+
+    // TODO: It might be necessary to add other reserved names to this list.
+    // A close reading of the section(s) on reserved identifiers in the C standard
+    // might be a good idea!
+
+    NULL
+};
+
+static bool is_reserved(const char *name)
+{
+    // check the list of known reserved names
+    const char **kw = RESERVED_NAMES;
+    while (*kw) {
+        if (strcmp(*kw, name) == 0) {
+            return true;
+        }
+        kw++;
+    }
+
+    // also any name of the form "tmp" + numeric digits is reserved
+    if (name[0] == 't' && name[1] == 'm' && name[2] == 'p') {
+        const char *p = &name[3];
+        bool all_digits = true;
+        while (*p) {
+            if (!isdigit(*p)) {
+                all_digits = false;
+                break;
+            }
+            p++;
+        }
+        if (all_digits) return true;
+    }
+
+    // anything else is OK
+    return false;
 }
 
 static char * mangle_name(const char *input)
 {
-    // Our decls have names like "M.x" where M is the module name and
-    // x the function or const name.
+    uint64_t len = encode_chars(input, NULL);
 
-    // For C compatibility we will change this into "M_x". This allows
-    // the decls to be accessed from C if that is wanted.
+    char *buf = alloc(len + 1);
+    encode_chars(input, buf);
 
-    // Note that this system might produce duplicate definitions, e.g.
-    // imagine two modules "Foo" and "Foo_bar", containing functions
-    // "Foo.bar_baz" and "Foo_bar.baz" respectively. Both of these map
-    // to "Foo_bar_baz". For now we will ignore this problem :)
-
-    char *output = copy_string(input);
-    for (char *p = output; *p; ++p) {
-        if (*p == '.') *p = '_';
+    if (is_reserved(buf)) {
+        buf[len - 1] = 'z';
+        buf[len] = 0;
     }
 
-    return output;
+    return buf;
 }
 
-static bool is_memory_var_type(const struct Type *type)
+
+//
+// TermMode and Priority enums
+//
+
+// TermMode only affects scalar types. The term is generated as an integer expression
+// in MODE_VALUE, or a char* pointer in MODE_ADDR.
+
+// Aggregates always map to char* regardless of TermMode.
+
+enum TermMode {
+    MODE_VALUE,
+    MODE_ADDR
+};
+
+enum Priority {
+    // lowest priority
+    EXPR,
+    ASSIGN_EXPR,
+    COND_EXPR,
+    LOG_OR_EXPR,
+    LOG_AND_EXPR,
+    BIT_OR_EXPR,
+    BIT_XOR_EXPR,
+    BIT_AND_EXPR,
+    EQ_EXPR,
+    REL_EXPR,
+    SHIFT_EXPR,
+    ADD_EXPR,
+    MULT_EXPR,
+    CAST_EXPR,
+    UNARY_EXPR,
+    POSTFIX_EXPR,
+    PRIMARY_EXPR
+    // highest priority
+};
+
+
+//
+// Code generation for types
+//
+
+static bool is_scalar_type(struct CGContext *cxt, const struct Type *type)
 {
-    // We assume TY_VAR names containing a dot are global "abstract types"
-    // i.e. "type Such_and_such;" at top level of the module.
-    // Current we map these to a 64-bit integer value.
-
-    // All other TY_VAR names are assumed to be local type variables
-    // i.e. "function f<T>(...)".
-    // These are considered to be a memory type, with the size being
-    // passed to the function as a hidden parameter.
-
-    return strchr(type->var_data.name, '.') == NULL;
-}
-
-static bool is_memory_type(const struct Type *type)
-{
-    return (type->tag == TY_VAR && is_memory_var_type(type))
-        || type->tag == TY_RECORD
-        || type->tag == TY_VARIANT
-        || type->tag == TY_FIXED_ARRAY
-        || type->tag == TY_DYNAMIC_ARRAY;
-}
-
-static bool is_signed_integral_type(const struct Type *type)
-{
-    if (type->tag == TY_FINITE_INT) {
-        return type->int_data.is_signed;
+    if (type->tag == TY_BOOL || type->tag == TY_FINITE_INT) {
+        return true;
+    } else if (type->tag == TY_VAR) {
+        // Abstract typedefs are actually scalars (of type void*).
+        // Anything else is a generic type parameter, which is considered
+        // an aggregate type.
+        return is_abstract_type(cxt, type->var_data.name);
     } else {
         return false;
     }
 }
 
-// calculate size of a TY_FINITE_INT or TY_BOOL type. Returns 1, 2, 4 or 8.
-static int size_of_integral_type(const struct Type *type)
+static const char * scalar_type_to_name(struct Type *type)
 {
-    if (type->tag == TY_FINITE_INT) {
-        return type->int_data.num_bits / 8;
-    } else if (type->tag == TY_BOOL) {
-        return 1;
-    } else if (type->tag == TY_VAR && strchr(type->var_data.name, '.') != NULL) {
-        // see note in is_memory_var_type
-        return 8;
-    } else {
-        fatal_error("not an integral type");
-    }
-}
+    switch (type->tag) {
+    case TY_BOOL:
+        // We could also use _Bool here, but sizeof(_Bool) isn't defined by the
+        // standard (i.e. it might be more than 1 on some compilers) whereas
+        // uint8_t has a well-defined size (1 byte) and representation.
+        return "uint8_t";
 
-static int type_or_pointer_size(const struct Type *type)
-{
-    if (is_memory_type(type)) {
-        return 8;
-    } else {
-        return size_of_integral_type(type);
-    }
-}
-
-// assumption: type is TY_VARIANT
-static int get_tag_size(const struct Type *type)
-{
-    uint32_t num_tags = 0;
-    for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
-        ++num_tags;
-        if (num_tags == 0) {
-            fatal_error("too many variants");
+    case TY_FINITE_INT:
+        if (type->int_data.is_signed) {
+            switch (type->int_data.num_bits) {
+            case 8: return "int8_t";
+            case 16: return "int16_t";
+            case 32: return "int32_t";
+            case 64: return "int64_t";
+            default: fatal_error("wrong number of bits");
+            }
+        } else {
+            switch (type->int_data.num_bits) {
+            case 8: return "uint8_t";
+            case 16: return "uint16_t";
+            case 32: return "uint32_t";
+            case 64: return "uint64_t";
+            default: fatal_error("wrong number of bits");
+            }
         }
+
+    case TY_VAR:
+        return "void*";
+
+    default:
+        fatal_error("not a scalar type");
+    }
+}
+
+// this outputs int8_t (etc.) (or void*) for scalar types,
+// or char* for aggregate types.
+static void codegen_type(struct CGContext *cxt,
+                         struct Type *type)
+{
+    switch (type->tag) {
+    case TY_VAR:
+        if (is_abstract_type(cxt, type->var_data.name)) {
+            print_token(cxt->pr, "void");
+        } else {
+            print_token(cxt->pr, "char");
+        }
+        print_token(cxt->pr, "*");
+        break;
+
+    case TY_BOOL:
+    case TY_FINITE_INT:
+        print_token(cxt->pr, scalar_type_to_name(type));
+        break;
+
+    case TY_RECORD:
+    case TY_VARIANT:
+    case TY_FIXED_ARRAY:
+    case TY_DYNAMIC_ARRAY:
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        break;
+
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+        fatal_error("cannot codegen this type");
+    }
+}
+
+
+//
+// Temporary names
+//
+
+#define TEMP_NAME_LEN 50
+
+// Get the name of the next available temporary variable.
+static void get_temp_name(struct CGContext *cxt,
+                          char name[TEMP_NAME_LEN])
+{
+    sprintf(name, "tmp%" PRIu64, cxt->tmp_num++);
+}
+
+
+//
+// Size computations
+//
+
+static char* temp_name_func(void *cxt)
+{
+    char name[TEMP_NAME_LEN];
+    get_temp_name(cxt, name);
+    return copy_string(name);
+}
+
+static void print_size_expr(struct CGContext *cxt,
+                            enum Priority pri,
+                            struct SizeExpr *expr)
+{
+    if (pri > ADD_EXPR) print_token(cxt->pr, "(");
+    write_size_expr(cxt->pr, expr, temp_name_func, cxt);
+    if (pri > ADD_EXPR) print_token(cxt->pr, ")");
+}
+
+static int get_tag_size(struct Type *variant_type, const char **c_type_name)
+{
+    if (variant_type->tag != TY_VARIANT) fatal_error("get_tag_size called with wrong type");
+
+    uint32_t num_tags = 0;
+    for (struct NameTypeList *variant = variant_type->variant_data.variants; variant; variant = variant->next) {
+        ++num_tags;
+        if (num_tags == 0) fatal_error("too many variants");
     }
     if (num_tags <= 256) {
+        if (c_type_name) *c_type_name = "uint8_t";
         return 1;
     } else if (num_tags <= 65536) {
+        if (c_type_name) *c_type_name = "uint16_t";
         return 2;
     } else {
+        if (c_type_name) *c_type_name = "uint32_t";
         return 4;
     }
 }
 
-// assumption: type is TY_VARIANT, and given name is in the list
-static uint32_t get_tag_number_and_payload_type(struct Type *type, const char *name, struct Type ** payload_type_out)
+static uint32_t get_tag_number_and_payload_type(struct Type *variant_type,
+                                                const char *name,
+                                                struct Type **payload_type_out)
 {
+    if (variant_type->tag != TY_VARIANT) fatal_error("get_tag_number_and_payload_type: wrong type");
     uint32_t num = 0;
-    for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+    for (struct NameTypeList *variant = variant_type->variant_data.variants; variant; variant = variant->next) {
         if (strcmp(name, variant->name) == 0) {
-            if (payload_type_out) {
-                *payload_type_out = variant->type;
-            }
+            if (payload_type_out) *payload_type_out = variant->type;
             return num;
         }
         ++num;
-        if (num == 0) {
-            fatal_error("too many variants");
-        }
+        if (num == 0) fatal_error("too many variants");
     }
     fatal_error("variant tag not found");
 }
 
-
-// Calculate the size of a type, as a function of the sizes of
-// the type variables currently in scope.
-static struct SizeExpr * compute_size_of_type(struct StackMachine *mc,
-                                              const struct Type *type)
+static struct SizeExpr * get_size_of_type(struct CGContext *cxt,
+                                          struct Type *type)
 {
-    if (is_memory_type(type)) {
+    switch (type->tag) {
+    case TY_VAR:
+        if (is_abstract_type(cxt, type->var_data.name)) {
+            // Abstract types are always represented as void*
+            return var_size_expr("sizeof(void*)", 1);
+        } else {
+            // It must be a generic type parameter, so the size is represented
+            // by a variable.
+            char *mangled_name = mangle_name(type->var_data.name);
+            struct SizeExpr *result = var_size_expr(mangled_name, 1);
+            free(mangled_name);
+            return result;
+        }
 
-        if (type->tag == TY_RECORD) {
-            // start with zero
-            struct SizeExpr *output = zero_size_expr();
+    case TY_BOOL:
+        // TY_BOOL converts to uint8_t which has size 1.
+        return const_size_expr(1);
 
+    case TY_FINITE_INT:
+        // We assume that the intN_t and uintN_t types have the
+        // standard sizes (1, 2, 4 or 8).
+        // I think this is legitimate (according to the C standard)
+        // because, if uint8_t and int8_t exist at all, they must have
+        // exactly 8 bits (with no padding) which means that CHAR_BIT
+        // must be 8. Therefore the other intN_t types must have the
+        // expected sizes as well.
+        return const_size_expr(type->int_data.num_bits / 8);
+
+    case TY_RECORD:
+        {
+            struct SizeExpr *size = zero_size_expr();
             for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-                // add size of each field
-                struct SizeExpr *field_size = compute_size_of_type(mc, field->type);
-                struct SizeExpr *new_size = add_size_expr(output, field_size);
-                free_size_expr(output);
+                struct SizeExpr *field_size = get_size_of_type(cxt, field->type);
+                struct SizeExpr *sum = add_size_expr(field_size, size);
+                free_size_expr(size);
                 free_size_expr(field_size);
-                output = new_size;
+                size = sum;
             }
+            return size;
+        }
 
-            return output;
-
-        } else if (type->tag == TY_VARIANT) {
-            struct SizeExpr *tag_size = const_size_expr(get_tag_size(type));
-            struct SizeExpr *output = zero_size_expr();
-
-            // The size is the max of the variant sizes,
-            // where the size of each variant is the tag size plus the payload size.
+    case TY_VARIANT:
+        {
+            struct SizeExpr *size = zero_size_expr();
             for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
-                struct SizeExpr *payload_size = compute_size_of_type(mc, variant->type);
-                struct SizeExpr *variant_size = add_size_expr(tag_size, payload_size);
-                free_size_expr(payload_size);
-
-                struct SizeExpr *new_size = max_size_expr(output, variant_size);
-                free_size_expr(output);
+                struct SizeExpr *variant_size = get_size_of_type(cxt, variant->type);
+                struct SizeExpr *new_size = max_size_expr(size, variant_size);
+                free_size_expr(size);
                 free_size_expr(variant_size);
-                output = new_size;
+                size = new_size;
             }
-
+            struct SizeExpr *tag_size = const_size_expr(get_tag_size(type, NULL));
+            struct SizeExpr *result = add_size_expr(size, tag_size);
+            free_size_expr(size);
             free_size_expr(tag_size);
-            return output;
+            return result;
+        }
 
-        } else if (type->tag == TY_FIXED_ARRAY) {
-            // A fixed array is just a block of memory of the correct size.
-            struct SizeExpr *size = compute_size_of_type(mc, type->fixed_array_data.element_type);
+    case TY_FIXED_ARRAY:
+        {
+            struct SizeExpr *size = get_size_of_type(cxt, type->fixed_array_data.element_type);
             for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
                 uint64_t dim = normal_form_to_int(type->fixed_array_data.sizes[i]);
                 struct SizeExpr *new_size = multiply_size_expr(dim, size);
                 free_size_expr(size);
                 size = new_size;
             }
+
             return size;
+        }
 
-        } else if (type->tag == TY_DYNAMIC_ARRAY) {
-            // A dynamic array is a pointer to the data followed by one 8-byte size per dimension.
-            return const_size_expr(8 * (1 + type->dynamic_array_data.ndim));
+    case TY_DYNAMIC_ARRAY:
+        {
+            // dynamic array descriptor = pointer to data + dimensions as u64's
+            // note this is independent of the element size
+            struct SizeExpr *size1 = var_size_expr("sizeof(void*)", 1);
+            struct SizeExpr *size2 = const_size_expr(8 * type->dynamic_array_data.ndim);
+            struct SizeExpr *result = add_size_expr(size1, size2);
+            free_size_expr(size1);
+            free_size_expr(size2);
+            return result;
+        }
 
-        } else if (type->tag == TY_VAR) {
-            // A type variable of the current function
-            return var_size_expr(type->var_data.name, 1);
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+        fatal_error("get_size_of_type: improper argument");
+    }
+
+    fatal_error("get_size_of_type: unrecognised type->tag");
+}
+
+static struct SizeExpr * get_field_offset(struct CGContext *cxt,
+                                          struct Type *record_type,
+                                          const char *field_name)
+{
+    if (record_type->tag != TY_RECORD) fatal_error("get_field_offset: requires a record type");
+
+    struct SizeExpr *size = zero_size_expr();
+    for (struct NameTypeList *field = record_type->record_data.fields; field; field = field->next) {
+        if (strcmp(field->name, field_name) == 0) {
+            return size;
+        }
+        struct SizeExpr *field_size = get_size_of_type(cxt, field->type);
+        struct SizeExpr *sum = add_size_expr(field_size, size);
+        free_size_expr(size);
+        free_size_expr(field_size);
+        size = sum;
+    }
+    fatal_error("get_field_offset: field not found");
+}
+
+static void print_size_of_type(struct CGContext *cxt,
+                               enum Priority pri,
+                               struct Type *type)
+{
+    struct SizeExpr *size = get_size_of_type(cxt, type);
+    print_size_expr(cxt, pri, size);
+    free_size_expr(size);
+}
+
+
+//
+// Variable declarations (including temporaries)
+//
+
+// Declare a variable, as either an appropriate integer type (for scalars)
+// or a char array (for aggregates).
+static void declare_variable(struct CGContext *cxt,
+                             char *mangled_name,
+                             struct Type *type,
+                             bool is_static);
+
+// Combination of get_temp_name and declare_variable.
+static void make_temporary(struct CGContext *cxt,
+                           char name[TEMP_NAME_LEN],
+                           struct Type *type)
+{
+    get_temp_name(cxt, name);
+    declare_variable(cxt, name, type, false);
+}
+
+static void make_static_temporary(struct CGContext *cxt,
+                                  char name[TEMP_NAME_LEN],
+                                  struct Type *type)
+{
+    get_temp_name(cxt, name);
+    declare_variable(cxt, name, type, true);
+}
+
+static void declare_scalar(struct CGContext *cxt,
+                           char *mangled_name,
+                           const char *type_name)
+{
+    print_token(cxt->pr, type_name);
+    print_token(cxt->pr, mangled_name);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+}
+
+static void declare_aggregate(struct CGContext *cxt,
+                              char *mangled_name,
+                              struct Type *type)
+{
+    print_token(cxt->pr, "char");
+    print_token(cxt->pr, mangled_name);
+    print_token(cxt->pr, "[");
+
+    // technically speaking array sizes are not allowed to be zero, hence,
+    // we use the max of 1 and the actual size of the type
+    struct SizeExpr *size = get_size_of_type(cxt, type);
+    struct SizeExpr *one = const_size_expr(1);
+    struct SizeExpr *modified_size = max_size_expr(size, one);
+    free_size_expr(size);
+    free_size_expr(one);
+    print_size_expr(cxt, ASSIGN_EXPR, modified_size);
+    free_size_expr(modified_size);
+
+    print_token(cxt->pr, "]");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+}
+
+static void declare_variable(struct CGContext *cxt,
+                             char *mangled_name,
+                             struct Type *type,
+                             bool is_static)
+{
+    begin_item(cxt->pr);
+
+    if (is_static) {
+        print_token(cxt->pr, "static");
+    }
+
+    if (is_scalar_type(cxt, type)) {
+        declare_scalar(cxt, mangled_name, scalar_type_to_name(type));
+    } else {
+        declare_aggregate(cxt, mangled_name, type);
+    }
+
+    end_item(cxt->pr);
+}
+
+
+//
+// Code generation for terms
+//
+
+static void codegen_term(struct CGContext *cxt,
+                         enum Priority pri,
+                         enum TermMode mode,
+                         struct Term *term);
+
+static void codegen_statements(struct CGContext *cxt,
+                               struct Statement *stmts);
+
+static bool is_lvalue(struct Term *term)
+{
+    return term->tag == TM_VAR
+        || term->tag == TM_STRING_LITERAL
+        || term->tag == TM_FIELD_PROJ
+        || term->tag == TM_ARRAY_PROJ;
+}
+
+static void memmove_begin(struct CGContext *cxt)
+{
+    print_token(cxt->pr, "memmove");
+    print_token(cxt->pr, "(");
+}
+
+static void memmove_end(struct CGContext *cxt, struct Type *type)
+{
+    print_token(cxt->pr, ",");
+    print_size_of_type(cxt, ASSIGN_EXPR, type);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+}
+
+// Copy contents of rhs into the variable "mangled_name", or, if
+// is_ref is true, to the memory pointed to by "mangled_name" (a char*
+// pointer). (is_ref only makes any difference for scalar types.)
+static void copy_term_to_variable(struct CGContext *cxt,
+                                  const char *mangled_name,
+                                  bool is_ref,
+                                  struct Term *rhs)
+{
+    begin_item(cxt->pr);
+    if (!is_scalar_type(cxt, rhs->type) || is_ref) {
+        memmove_begin(cxt);
+        print_token(cxt->pr, mangled_name);
+        print_token(cxt->pr, ",");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, rhs);
+        memmove_end(cxt, rhs->type);
+    } else {
+        print_token(cxt->pr, mangled_name);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_VALUE, rhs);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+    }
+    end_item(cxt->pr);
+}
+
+// Copy a variable to a term. The variable is assumed NOT to be a reference.
+// (This is used in codegen for swap statements.)
+static void copy_variable_to_term(struct CGContext *cxt,
+                                  struct Term *lhs,
+                                  const char *rhs_mangled_name)
+{
+    bool scalar = is_scalar_type(cxt, lhs->type);
+
+    begin_item(cxt->pr);
+    if (scalar && lhs->tag == TM_VAR && !is_ref_var(cxt, lhs->var.name)) {
+        char *lhs_mangled_name = mangle_name(lhs->var.name);
+        print_token(cxt->pr, lhs_mangled_name);
+        free(lhs_mangled_name);
+        print_token(cxt->pr, "=");
+        print_token(cxt->pr, rhs_mangled_name);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+    } else {
+        memmove_begin(cxt);
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, lhs);
+        print_token(cxt->pr, ",");
+        if (scalar) print_token(cxt->pr, "&");
+        print_token(cxt->pr, rhs_mangled_name);
+        memmove_end(cxt, lhs->type);
+    }
+    end_item(cxt->pr);
+}
+
+// Copy rhs to lhs. The two terms must have the same type.
+static void copy_term_to_term(struct CGContext *cxt,
+                              struct Term *lhs,
+                              struct Term *rhs)
+{
+    begin_item(cxt->pr);
+    if (lhs->tag == TM_VAR && is_scalar_type(cxt, lhs->type) && !is_ref_var(cxt, lhs->var.name)) {
+        char *mangled_name = mangle_name(lhs->var.name);
+        print_token(cxt->pr, mangled_name);
+        free(mangled_name);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_VALUE, rhs);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+    } else {
+        memmove_begin(cxt);
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, lhs);
+        print_token(cxt->pr, ",");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, rhs);
+        memmove_end(cxt, rhs->type);
+    }
+    end_item(cxt->pr);
+}
+
+static void codegen_var(struct CGContext *cxt,
+                        enum Priority pri,
+                        enum TermMode mode,
+                        struct Term *term)
+{
+    bool ref = is_ref_var(cxt, term->var.name);
+    bool scalar = is_scalar_type(cxt, term->type);
+    char *mangled_name = mangle_name(term->var.name);
+
+    if (scalar && mode == MODE_VALUE) {
+        if (ref) {
+            // need to read value of reference using memmove
+            char temp_name[TEMP_NAME_LEN];
+            make_temporary(cxt, temp_name, term->type);
+
+            begin_item(cxt->pr);
+            memmove_begin(cxt);
+            print_token(cxt->pr, "&");
+            print_token(cxt->pr, temp_name);
+            print_token(cxt->pr, ",");
+            print_token(cxt->pr, mangled_name);
+            memmove_end(cxt, term->type);
+            end_item(cxt->pr);
+
+            print_token(cxt->pr, temp_name);
 
         } else {
-            fatal_error("compute_size_of_type: unexpected case");
+            // return value of scalar directly
+            print_token(cxt->pr, mangled_name);
         }
-
-    } else {
-        return const_size_expr(size_of_integral_type(type));
-    }
-}
-
-static void offset_pointer_by_size(struct StackMachine *mc, struct SizeExpr *size)
-{
-    if (!is_size_expr_zero(size)) {
-        push_size_expr(mc, size);
-        stk_alu(mc, OP_ADD);
-    }
-}
-
-
-// Assuming two pointers are on the stack, do a memcpy of either a fixed or
-// variable size as appropriate. (Source on top of stack, dest below.)
-static void memcpy_type(struct StackMachine *mc, const struct Type *type)
-{
-    struct SizeExpr *size = compute_size_of_type(mc, type);
-
-    if (is_size_expr_const(size)) {
-        stk_memcpy_fixed_size(mc, get_size_expr_const(size));
-    } else {
-        push_size_expr(mc, size);
-        stk_memcpy_variable_size(mc);
-    }
-
-    free_size_expr(size);
-}
-
-// Assuming a pointer is on the stack, do a memclear of either fixed or variable size as appropriate.
-static void memclear_type(struct StackMachine *mc, const struct Type *type)
-{
-    struct SizeExpr *size = compute_size_of_type(mc, type);
-
-    if (is_size_expr_const(size)) {
-        stk_memclear_fixed_size(mc, get_size_expr_const(size));
-    } else {
-        push_size_expr(mc, size);
-        stk_memclear_variable_size(mc);
-    }
-
-    free_size_expr(size);
-}
-
-static struct CGContext * new_cg_context(struct HashTable *env,
-                                         struct StackMachine *mc,
-                                         const char *fun_name)
-{
-    struct CGContext *cxt = alloc(sizeof(struct CGContext));
-    cxt->machine = mc;
-    cxt->env = env;
-    cxt->scope = NULL;
-    cxt->num_temps = 0;
-    cxt->tyvars = NULL;
-    cxt->strings = NULL;
-    cxt->ref_counter = 0;
-
-    stk_begin_function(mc, fun_name);
-
-    return cxt;
-}
-
-
-static const char * add_string_literal(struct HashTable *env,
-                                       struct StringLiteral **head_ptr,
-                                       struct Term *term)
-{
-    uintptr_t num = (uintptr_t)hash_table_lookup(env, "$StringNum");
-    ++num;
-    hash_table_insert(env, "$StringNum", (void*)num);
-
-    char name[50];
-    sprintf(name, "string.%" PRIuPTR, num);
-
-    struct StringLiteral *node = alloc(sizeof(struct StringLiteral));
-    node->next = *head_ptr;
-    node->data = term->string_literal.data;
-    node->length = term->string_literal.length;
-    node->name = copy_string(name);
-    *head_ptr = node;
-
-    return node->name;
-}
-
-static void write_string_descriptor(struct StackMachine *mc,
-                                    struct StringLiteral *str)
-{
-    if (str->length == 0) {
-        stk_insert_octa(mc, 0);
-    } else {
-        const char *data_name = copy_string_2(str->name, ".data");
-        stk_insert_global_addr(mc, data_name);
-        free((char*)data_name);
-    }
-    stk_insert_octa(mc, str->length);
-}
-
-// this creates each string literal and also frees the list
-static void create_string_literals(struct StackMachine *mc,
-                                   struct StringLiteral *str,
-                                   bool write_descriptors)
-{
-    while (str) {
-
-        if (write_descriptors) {
-            stk_begin_global_constant(mc, str->name, str->length != 0, false);
-            write_string_descriptor(mc, str);
-            stk_end_global_constant(mc);
+    } else if (scalar && mode == MODE_ADDR) {
+        if (ref) {
+            // return reference (of type char*) directly
+            print_token(cxt->pr, mangled_name);
+        } else {
+            // return address of the variable using "&" operator,
+            // but cast to char*
+            if (pri > CAST_EXPR) print_token(cxt->pr, "(");
+            print_token(cxt->pr, "(");
+            print_token(cxt->pr, "char");
+            print_token(cxt->pr, "*");
+            print_token(cxt->pr, ")");
+            print_token(cxt->pr, "&");
+            print_token(cxt->pr, mangled_name);
+            if (pri > CAST_EXPR) print_token(cxt->pr, ")");
         }
-
-        if (str->length != 0) {
-            const char *data_name = copy_string_2(str->name, ".data");
-            stk_begin_global_constant(mc, data_name, false, false);
-            for (uint32_t i = 0; i < str->length; ++i) {
-                stk_insert_byte(mc, str->data[i]);
-            }
-            stk_end_global_constant(mc);
-            free((char*)data_name);
-        }
-
-        struct StringLiteral *next = str->next;
-        free((char*)str->name);
-        free(str);
-        str = next;
-    }
-}
-
-static void free_cg_context(struct CGContext *cxt)
-{
-    if (cxt->scope || cxt->num_temps != 0) {
-        fatal_error("local scope or temporaries still exist");
-    }
-    stk_end_function(cxt->machine);
-    free_tyvar_list(cxt->tyvars);
-    create_string_literals(cxt->machine, cxt->strings, true);
-    free(cxt);
-}
-
-// Open a new scope for local variables
-static void push_local_scope(struct CGContext *context)
-{
-    struct Scope *scope = alloc(sizeof(struct Scope));
-    scope->local_var_names = NULL;
-    scope->next = context->scope;
-    context->scope = scope;
-}
-
-// helper function
-static void add_to_scope(struct CGContext *context,
-                         const char *name,    // copied
-                         enum CodegenType ctype,
-                         struct RefPath *path)   // handed over
-{
-    struct NameList *node = alloc(sizeof(struct NameList));
-    node->name = copy_string(name);
-    node->next = context->scope->local_var_names;
-    context->scope->local_var_names = node;
-
-    struct CodegenItem *item = alloc(sizeof(struct CodegenItem));
-    item->ctype = ctype;
-    if (ctype == CT_REF) {
-        item->path = path;
-    } else if (ctype == CT_FUNCTION || path != NULL) {
-        // 1) This function doesn't support adding CT_FUNCTION variables.
-        // 2) If path != NULL then ctype should have been CT_REF.
-        fatal_error("add_to_scope: incorrect arguments");
-    }
-    hash_table_insert(context->env, copy_string(name), item);
-}
-
-
-// Add a new local variable of the given size (must be 1/2/4/8 bytes)
-static void add_new_local(struct CGContext *context,
-                          const char *name,             // copied
-                          bool is_signed,
-                          int size)
-{
-    add_to_scope(context, name, CT_LOCAL_VAR, NULL);
-    struct StackMachine *mc = context->machine;
-    stk_create_local(mc, name, is_signed, size);
-}
-
-// Add a new local variable representing an area of stack memory.
-static void add_named_mem_block(struct CGContext *context,
-                                const char *name,
-                                const struct Type *type)
-{
-    add_to_scope(context, name, CT_LOCAL_VAR, NULL);
-
-    struct StackMachine *mc = context->machine;
-    struct SizeExpr *size = compute_size_of_type(mc, type);
-
-    if (is_size_expr_const(size)) {
-        stk_create_mem_block_fixed_size(mc, name, get_size_expr_const(size));
+    } else if (is_func_const(cxt, term->var.name)) {
+        // function call required to get the value
+        if (pri > POSTFIX_EXPR) print_token(cxt->pr, "(");
+        print_token(cxt->pr, mangled_name);
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, ")");
+        if (pri > POSTFIX_EXPR) print_token(cxt->pr, ")");
     } else {
-        push_size_expr(mc, size);
-        stk_create_mem_block_variable_size(mc, name);
+        // aggregate, always represented as char* (whether ref or not) so
+        // we can just return the variable. (mode is irrelevant in this case.)
+        print_token(cxt->pr, mangled_name);
     }
 
-    free_size_expr(size);
+    free(mangled_name);
 }
 
-// Add a new reference variable
-static void add_new_ref(struct CGContext *context,
-                        const char *name,        // copied
-                        struct RefPath *path)    // handed over
+static void codegen_default(struct CGContext *cxt,
+                            enum Priority pri,
+                            enum TermMode mode,
+                            struct Term *term)
 {
-    add_to_scope(context, name, CT_REF, path);
+    if (is_scalar_type(cxt, term->type)) {
+        // note: MODE_ADDR is handled elsewhere (in codegen_term itself)
+        if (mode == MODE_ADDR) fatal_error("unexpected: MODE_ADDR in codegen_default");
+        print_token(cxt->pr, "0");
+
+    } else {
+        char name[TEMP_NAME_LEN];
+        make_temporary(cxt, name, term->type);
+
+        // Zero-initialise using memset.
+        // (The alternative would be to initialise with "={0};", but this doesn't
+        // work with variable-length arrays.)
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memset");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, name);
+        print_token(cxt->pr, ",");
+        print_token(cxt->pr, "0");
+        print_token(cxt->pr, ",");
+        print_size_of_type(cxt, ASSIGN_EXPR, term->type);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        print_token(cxt->pr, name);
+    }
 }
 
-
-
-// Temporary memory blocks
-#define TEMP_NAME_SIZE 30
-
-static void get_temp_block_name(struct CGContext *context, char buf[TEMP_NAME_SIZE])
+static void codegen_bool_literal(struct CGContext *cxt,
+                                 enum Priority pri,
+                                 enum TermMode mode,
+                                 struct Term *term)
 {
-    sprintf(buf, "!%d", context->num_temps++);
+    if (mode == MODE_ADDR) fatal_error("unexpected: MODE_ADDR in codegen_bool_literal");
+    print_token(cxt->pr, term->bool_literal.value ? "1" : "0");
 }
 
-static void add_temp_mem_block(struct CGContext *context, const struct Type *type)
+static uint64_t largest_negative(int num_bits)
 {
-    char name[TEMP_NAME_SIZE];
-    get_temp_block_name(context, name);
-    add_named_mem_block(context, name, type);
+    switch (num_bits) {
+    case 8:  return UINT64_C(0xffffffffffffff80);
+    case 16: return UINT64_C(0xffffffffffff8000);
+    case 32: return UINT64_C(0xffffffff80000000);
+    case 64: return UINT64_C(0x8000000000000000);
+    default: fatal_error("wrong number of bits");
+    }
 }
 
-
-static void free_codegen_item(void *context, const char *key, void *value);
-
-// Remove one scope from context->scope, and remove all the locals of
-// this scope from the machine.
-static void pop_local_scope(struct CGContext *context)
+static void codegen_int_literal(struct CGContext *cxt,
+                                enum Priority pri,
+                                enum TermMode mode,
+                                struct Term *term)
 {
-    struct StackMachine *mc = context->machine;
+    if (mode != MODE_VALUE) fatal_error("unexpected: MODE_ADDR in codegen_int_literal");
 
-    while (context->scope->local_var_names) {
-        // look up in env
-        const char *name = context->scope->local_var_names->name;
+    char buf[50];
 
-        const char *key;
-        void *value;
-        hash_table_lookup_2(context->env, name, &key, &value);
+    uint64_t num = parse_int_literal(term->int_literal.data);
 
-        if (key) {
-            struct CodegenItem *item = value;
+    // Use the INTn_C or UINTn_C macros to ensure we get the correct types for
+    // our integer literals.
 
-            // remove from machine if required
-            switch (item->ctype) {
-            case CT_FUNCTION:
-            case CT_GLOBAL_VAR:
-                break;
+    // For negative numbers, apparently we can't write INT32_C(-1), we have to
+    // write -INT32_C(1) instead. Also we must be careful about the largest negative
+    // number because its positive form will be an overflow for the type.
 
-            case CT_LOCAL_VAR:
-            case CT_POINTER_ARG:
-                stk_destroy_local(mc, name);
-                break;
+    if (term->type->int_data.is_signed
+    && num == largest_negative(term->type->int_data.num_bits)) {
+        num = ~num;
+        sprintf(buf,
+                "~INT%d_C(0x%" PRIx64 ")",
+                term->type->int_data.num_bits,
+                num);
+        if (pri > UNARY_EXPR) print_token(cxt->pr, "(");
+        print_token(cxt->pr, buf);
+        if (pri > UNARY_EXPR) print_token(cxt->pr, ")");
 
-            case CT_REF:
-                // any array index variables are "owned" by the CT_REF and must
-                // be removed now.
-                for (struct RefPath *path = item->path; path; path = path->parent) {
-                    if (path->tag == REF_DYNAMIC_ARRAY_PROJ || path->tag == REF_FIXED_ARRAY_PROJ) {
-                        for (struct NameList *node = path->names; node; node = node->next) {
-                            stk_destroy_local(mc, node->name);
-                        }
-                    }
-                }
-                break;
-            }
+    } else if (term->type->int_data.is_signed
+               && term->int_literal.data[0] == '-') {
+        num = -num;
+        sprintf(buf,
+                "-INT%d_C(%" PRIu64 ")",
+                term->type->int_data.num_bits,
+                num);
+        if (pri > UNARY_EXPR) print_token(cxt->pr, "(");
+        print_token(cxt->pr, buf);
+        if (pri > UNARY_EXPR) print_token(cxt->pr, ")");
 
-            // remove from env
-            hash_table_remove(context->env, name);
-            free_codegen_item(NULL, key, item);
-        }
+    } else {
+        sprintf(buf,
+                "%sINT%d_C(%s)",
+                term->type->int_data.is_signed ? "" : "U",
+                term->type->int_data.num_bits,
+                term->int_literal.data);
+        if (pri > POSTFIX_EXPR) print_token(cxt->pr, "(");
+        print_token(cxt->pr, buf);
+        if (pri > POSTFIX_EXPR) print_token(cxt->pr, ")");
+    }
+}
 
-        // remove from scope
-        struct NameList *next = context->scope->local_var_names->next;
-        free((void*)name);
-        free(context->scope->local_var_names);
-        context->scope->local_var_names = next;
+static void codegen_string_literal(struct CGContext *cxt,
+                                   enum Priority pri,
+                                   enum TermMode mode,
+                                   struct Term *term)
+{
+    // Currently string literals are TY_DYNAMIC_ARRAY, hence we need to create
+    // a descriptor here.
+
+    // Make the raw array of bytes
+    char raw_array[TEMP_NAME_LEN];
+    get_temp_name(cxt, raw_array);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "static");
+    print_token(cxt->pr, "const");
+    print_token(cxt->pr, "uint8_t");
+    print_token(cxt->pr, raw_array);
+    print_token(cxt->pr, "[]");
+    print_token(cxt->pr, "=");
+    print_token(cxt->pr, "{");
+
+    for (uint32_t i = 0; i < term->string_literal.length; ++i) {
+        if (i != 0) print_token(cxt->pr, ",");
+        char buf[10];
+        sprintf(buf, "%" PRIu8, term->string_literal.data[i]);
+        print_token(cxt->pr, buf);
     }
 
-    // remove the scope itself
-    struct Scope *next = context->scope->next;
-    free(context->scope);
-    context->scope = next;
+    print_token(cxt->pr, "}");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // Make a pointer to the first byte of the raw array
+    char pointer[TEMP_NAME_LEN];
+    get_temp_name(cxt, pointer);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "void");
+    print_token(cxt->pr, "*");
+    print_token(cxt->pr, pointer);
+    print_token(cxt->pr, "=");
+    print_token(cxt->pr, "(void*)");
+    print_token(cxt->pr, raw_array);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // Make a constant giving the array size
+    char string_length[TEMP_NAME_LEN];
+    get_temp_name(cxt, string_length);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "uint64_t");
+    print_token(cxt->pr, string_length);
+    print_token(cxt->pr, "=");
+    char buf[30];
+    sprintf(buf, "%" PRIu32, term->string_literal.length);
+    print_token(cxt->pr, buf);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // Make the descriptor
+    char descr[TEMP_NAME_LEN];
+    make_temporary(cxt, descr, term->type);
+
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "memcpy");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, descr);
+    print_token(cxt->pr, ",");
+    print_token(cxt->pr, "&");
+    print_token(cxt->pr, pointer);
+    print_token(cxt->pr, ",");
+    print_token(cxt->pr, "sizeof(void*)");
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    print_token(cxt->pr, "memcpy");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, descr);
+    print_token(cxt->pr, "+");
+    print_token(cxt->pr, "sizeof(void*)");
+    print_token(cxt->pr, ",");
+    print_token(cxt->pr, "&");
+    print_token(cxt->pr, string_length);
+    print_token(cxt->pr, ",");
+    print_token(cxt->pr, "8");
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // Return the descriptor
+    print_token(cxt->pr, descr);
 }
 
-
-// Remove all temp names/memory blocks
-static void clean_up_temp_blocks(struct CGContext *context)
+static void codegen_cast(struct CGContext *cxt,
+                         enum Priority pri,
+                         enum TermMode mode,
+                         struct Term *term)
 {
-    int num_temps = context->num_temps;
-    context->num_temps = 0;
-    for (int i = 0; i < num_temps; ++i) {
-        char name[TEMP_NAME_SIZE];
-        get_temp_block_name(context, name);
+    // Casting currently only works with scalar types so MODE_ADDR is unexpected here
+    if (mode != MODE_VALUE) fatal_error("unexpected: MODE_ADDR in codegen_cast");
 
-        // remove from machine
-        stk_destroy_local(context->machine, name);
+    if (pri > CAST_EXPR) print_token(cxt->pr, "(");
 
-        // remove from env
-        const char *key;
-        void *value;
-        hash_table_lookup_2(context->env, name, &key, &value);
-        hash_table_remove(context->env, name);
-        free((void*)key);
-        free(value);
+    print_token(cxt->pr, "(");
+    codegen_type(cxt, term->cast.target_type);
+    print_token(cxt->pr, ")");
+
+    codegen_term(cxt, CAST_EXPR, MODE_VALUE, term->cast.operand);
+
+    if (pri > CAST_EXPR) print_token(cxt->pr, ")");
+}
+
+static void codegen_if(struct CGContext *cxt,
+                       enum Priority pri,
+                       enum TermMode mode,
+                       struct Term *term)
+{
+    char name[TEMP_NAME_LEN];
+    make_temporary(cxt, name, term->type);
+
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "if");
+    print_token(cxt->pr, "(");
+    codegen_term(cxt, EXPR, MODE_VALUE, term->if_data.cond);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    increase_indent(cxt->pr);
+    copy_term_to_variable(cxt, name, false, term->if_data.then_branch);
+
+    decrease_indent(cxt->pr);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "}");
+    print_token(cxt->pr, "else");
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    increase_indent(cxt->pr);
+    copy_term_to_variable(cxt, name, false, term->if_data.else_branch);
+
+    decrease_indent(cxt->pr);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "}");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    print_token(cxt->pr, name);
+}
+
+static void codegen_unop(struct CGContext *cxt,
+                         enum Priority pri,
+                         enum TermMode mode,
+                         struct Term *term)
+{
+    if (mode != MODE_VALUE) fatal_error("unexpected: MODE_ADDR in codegen_unop");
+
+    if (pri > UNARY_EXPR) print_token(cxt->pr, "(");
+
+    switch (term->unop.operator) {
+    case UNOP_NEGATE: print_token(cxt->pr, "-"); break;
+    case UNOP_COMPLEMENT: print_token(cxt->pr, "~"); break;
+    case UNOP_NOT: print_token(cxt->pr, "!"); break;
+    default: fatal_error("Unknown unop");
     }
-    context->num_temps = 0;
+
+    codegen_term(cxt, CAST_EXPR, MODE_VALUE, term->unop.operand);
+
+    if (pri > UNARY_EXPR) print_token(cxt->pr, ")");
+}
+
+static void short_circuit_binop(struct CGContext *cxt,
+                                enum Priority pri,
+                                struct Term *term)
+{
+    // a && b   -->   result = a;  if (result)  result = b;
+    // a || b   -->   result = a;  if (!result) result = b;
+    // a ==> b  -->   result = !a; if (!result) result = b;
+
+    char name[TEMP_NAME_LEN];
+    get_temp_name(cxt, name);
+
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "uint8_t");
+    print_token(cxt->pr, name);
+    print_token(cxt->pr, "=");
+
+    if (term->binop.list->operator == BINOP_IMPLIES) {
+        print_token(cxt->pr, "!");
+        codegen_term(cxt, CAST_EXPR, MODE_VALUE, term->binop.lhs);
+    } else {
+        codegen_term(cxt, ASSIGN_EXPR, MODE_VALUE, term->binop.lhs);
+    }
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "if");
+    print_token(cxt->pr, "(");
+    if (term->binop.list->operator != BINOP_AND) print_token(cxt->pr, "!");
+    print_token(cxt->pr, name);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    increase_indent(cxt->pr);
+    copy_term_to_variable(cxt, name, false, term->binop.list->rhs);
+
+    decrease_indent(cxt->pr);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "}");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    print_token(cxt->pr, name);
+}
+
+static void shift_binop(struct CGContext *cxt,
+                        enum Priority pri,
+                        struct Term *term)
+{
+    if (term->type->tag != TY_FINITE_INT) fatal_error("shift_binop: unexpected type");
+
+    if (!term->type->int_data.is_signed) {
+        // If E1 is an unsigned type then the behaviour of both E1 << E2 and
+        // E1 >> E2 are well defined by the C standard.
+        // The only gotcha is that E1 might be promoted to a signed integer type
+        // by the integer promotion rules. To counteract this, one can add 0u
+        // (not 0) to it. This forces it to promote to "unsigned int" if it
+        // promotes at all.
+
+        // Generate (E1 + 0u) << E2  (or >>).
+        // This is a shift-expression so will require parens in a context
+        // of priority higher than SHIFT_EXPR.
+        if (pri > SHIFT_EXPR) print_token(cxt->pr, "(");
+        print_token(cxt->pr, "(");
+        codegen_term(cxt, ADD_EXPR, MODE_VALUE, term->binop.lhs);
+        print_token(cxt->pr, "+");
+        print_token(cxt->pr, "0u");
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, term->binop.list->operator == BINOP_SHIFTLEFT ? "<<" : ">>");
+
+        // technically this should be ADD_EXPR, but MULT_EXPR will prevent some
+        // compiler warnings
+        codegen_term(cxt, MULT_EXPR, MODE_VALUE, term->binop.list->rhs);
+
+        if (pri > SHIFT_EXPR) print_token(cxt->pr, ")");
+
+    } else if (term->binop.list->operator == BINOP_SHIFTRIGHT) {
+        // Right-shifting a signed value.
+        // This is implementation-defined behaviour, but according to our assumptions
+        // (listed at the top of this file) we assume that the C compiler will do
+        // an arithmetic right shift in this case.
+
+        // NOTE: If we wanted to drop this assumption, we could try one of the
+        // approaches listed here:
+        // https://stackoverflow.com/questions/31879878/how-can-i-perform-arithmetic-right-shift-in-c-in-a-portable-way
+
+        // Generate E1 >> E2 (we do not have to worry about promotions in this case
+        // as the promotion would be to another signed type).
+        if (pri > SHIFT_EXPR) print_token(cxt->pr, "(");
+
+        // technically this should be SHIFT_EXPR, but using MULT_EXPR will prevent
+        // some compiler warnings
+        codegen_term(cxt, MULT_EXPR, MODE_VALUE, term->binop.lhs);
+
+        print_token(cxt->pr, ">>");
+        codegen_term(cxt, ADD_EXPR, MODE_VALUE, term->binop.list->rhs);
+        if (pri > SHIFT_EXPR) print_token(cxt->pr, ")");
+
+    } else {
+        // Left-shifting a signed value.
+        // This is *undefined* behaviour (if the value is negative) so we had better
+        // not do it.
+        // Instead we can cast the value to the corresponding unsigned type
+        // (this is well-defined, wrapping around if the value is out of range),
+        // add 0u to prevent promotion to a signed type,
+        // do the shift,
+        // and memcpy back to a signed value.
+        // (memcpy is required rather than just a cast, because casting to a
+        // signed type is undefined, or at least implementation-defined, if the
+        // value is out of range. But the compiler should be able to optimise away the
+        // memcpy.)
+
+        // uintN_t temp;
+        char temp_name[TEMP_NAME_LEN];
+        struct Type dummy_type = *(term->type);
+        dummy_type.int_data.is_signed = false;
+        make_temporary(cxt, temp_name, &dummy_type);
+
+        // temp = ((uintN_t)E1 + 0u) << E2;
+        begin_item(cxt->pr);
+        print_token(cxt->pr, temp_name);
+        print_token(cxt->pr, "=");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, "(");
+        codegen_type(cxt, &dummy_type);
+        print_token(cxt->pr, ")");
+        codegen_term(cxt, CAST_EXPR, MODE_VALUE, term->binop.lhs);
+        print_token(cxt->pr, "+");
+        print_token(cxt->pr, "0u");
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, "<<");
+
+        // technically this should be ADD_EXPR, but using MULT_EXPR will prevent
+        // some compiler warnings
+        codegen_term(cxt, MULT_EXPR, MODE_VALUE, term->binop.list->rhs);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        // intN_t result;
+        char result_name[TEMP_NAME_LEN];
+        make_temporary(cxt, result_name, term->type);
+
+        // memcpy(&result, &temp, SIZE);
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, result_name);
+        print_token(cxt->pr, ",");
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, temp_name);
+        print_token(cxt->pr, ",");
+        print_size_of_type(cxt, ASSIGN_EXPR, term->type);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        print_token(cxt->pr, result_name);
+    }
+}
+
+static void codegen_binop(struct CGContext *cxt,
+                          enum Priority pri,
+                          enum TermMode mode,
+                          struct Term *term)
+{
+    if (mode != MODE_VALUE) fatal_error("unexpected: MODE_ADDR in codegen_binop");
+
+    enum BinOp binop = term->binop.list->operator;
+
+    enum Priority expr_type;
+    enum Priority lhs_type;
+    enum Priority rhs_type;
+
+    switch (binop) {
+    case BINOP_AND:
+    case BINOP_OR:
+    case BINOP_IMPLIES:
+        // These need special handling
+        short_circuit_binop(cxt, pri, term);
+        return;
+
+    case BINOP_SHIFTLEFT:
+    case BINOP_SHIFTRIGHT:
+        // These also need special handling because the standard doesn't fully
+        // define what these operators do in all cases!
+        // (In particular: left shifting a negative value is undefined behaviour,
+        // and right shifting a negative value is implementation-defined behaviour.)
+        shift_binop(cxt, pri, term);
+        return;
+
+    case BINOP_PLUS:
+    case BINOP_MINUS:
+        expr_type = ADD_EXPR;
+        lhs_type = ADD_EXPR;
+        rhs_type = MULT_EXPR;
+        break;
+
+    case BINOP_TIMES:
+    case BINOP_DIVIDE:
+    case BINOP_MODULO:
+        expr_type = MULT_EXPR;
+        lhs_type = MULT_EXPR;
+        rhs_type = CAST_EXPR;
+        break;
+
+    case BINOP_BITAND:
+        expr_type = BIT_AND_EXPR;
+        // technically lhs_type should be BIT_AND_EXPR and rhs_type should be
+        // EQ_EXPR, but compilers often give warnings so we use CAST_EXPR instead
+        // (this results in more parens than strictly required, but is safe)
+        lhs_type = CAST_EXPR;
+        rhs_type = CAST_EXPR;
+        break;
+
+    case BINOP_BITOR:
+        expr_type = BIT_OR_EXPR;
+        lhs_type = CAST_EXPR;
+        rhs_type = CAST_EXPR;
+        break;
+
+    case BINOP_BITXOR:
+        expr_type = BIT_XOR_EXPR;
+        lhs_type = CAST_EXPR;
+        rhs_type = CAST_EXPR;
+        break;
+
+    case BINOP_EQUAL:
+    case BINOP_NOT_EQUAL:
+        expr_type = EQ_EXPR;
+        lhs_type = EQ_EXPR;
+        rhs_type = REL_EXPR;
+        break;
+
+    case BINOP_LESS:
+    case BINOP_LESS_EQUAL:
+    case BINOP_GREATER:
+    case BINOP_GREATER_EQUAL:
+        expr_type = REL_EXPR;
+        lhs_type = REL_EXPR;
+        rhs_type = SHIFT_EXPR;
+        break;
+
+    case BINOP_IMPLIED_BY:
+        fatal_error("should have been removed by typechecker");
+
+    case BINOP_IFF:
+        // same as == for booleans
+        expr_type = EQ_EXPR;
+        lhs_type = EQ_EXPR;
+        rhs_type = REL_EXPR;
+        break;
+
+    default:
+        fatal_error("unrecognised binop");
+    }
+
+    if (pri > expr_type) print_token(cxt->pr, "(");
+
+    codegen_term(cxt, lhs_type, MODE_VALUE, term->binop.lhs);
+
+    const char *str;
+    switch (binop) {
+    case BINOP_PLUS: str = "+"; break;
+    case BINOP_MINUS: str = "-"; break;
+    case BINOP_TIMES: str = "*"; break;
+    case BINOP_DIVIDE: str = "/"; break;
+    case BINOP_MODULO: str = "%"; break;
+    case BINOP_BITAND: str = "&"; break;
+    case BINOP_BITOR: str = "|"; break;
+    case BINOP_BITXOR: str = "^"; break;
+
+    case BINOP_EQUAL: case BINOP_IFF: str = "=="; break;
+    case BINOP_NOT_EQUAL: str = "!="; break;
+    case BINOP_LESS: str = "<"; break;
+    case BINOP_LESS_EQUAL: str = "<="; break;
+    case BINOP_GREATER: str = ">"; break;
+    case BINOP_GREATER_EQUAL: str = ">="; break;
+
+    case BINOP_AND:
+    case BINOP_OR:
+    case BINOP_IMPLIES:
+    case BINOP_IMPLIED_BY:
+    case BINOP_SHIFTLEFT:
+    case BINOP_SHIFTRIGHT:
+        fatal_error("unreachable");
+    }
+
+    print_token(cxt->pr, str);
+
+    codegen_term(cxt, rhs_type, MODE_VALUE, term->binop.list->rhs);
+
+    if (pri > expr_type) print_token(cxt->pr, ")");
+}
+
+static void codegen_let(struct CGContext *cxt,
+                        enum Priority pri,
+                        enum TermMode mode,
+                        struct Term *term)
+{
+    char temp_name[TEMP_NAME_LEN];
+    get_temp_name(cxt, temp_name);
+
+    begin_item(cxt->pr);
+    codegen_type(cxt, term->let.rhs->type);
+    char *mangled_name = mangle_name(term->let.name);
+    print_token(cxt->pr, mangled_name);
+    free(mangled_name);
+    print_token(cxt->pr, "=");
+    codegen_term(cxt, ASSIGN_EXPR, MODE_VALUE, term->let.rhs);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    codegen_term(cxt, pri, mode, term->let.body);
+}
+
+static const char * get_function_name(struct Term *term)
+{
+    if (term->tag != TM_CALL) fatal_error("get_function_name: TM_CALL is required");
+
+    if (term->call.func->tag == TM_VAR) {
+        return term->call.func->var.name;
+    } else if (term->call.func->tag == TM_TYAPP
+               && term->call.func->tyapp.lhs->tag == TM_VAR) {
+        return term->call.func->tyapp.lhs->var.name;
+    } else {
+        fatal_error("get_function_name: couldn't obtain function name");
+    }
 }
 
 static struct Type * get_function_type(struct Term *term)
 {
+    if (term->tag != TM_CALL) fatal_error("get_function_type: TM_CALL is required");
+
     struct Type *fun_type;
     if (term->call.func->tag == TM_TYAPP) {
         if (term->call.func->tyapp.lhs->type->tag != TY_FORALL) {
@@ -638,1844 +1490,791 @@ static struct Type * get_function_type(struct Term *term)
     return fun_type;
 }
 
-// Given a local variable name, return the "underlying" variable name
-// (i.e. chasing down any *direct* variable references) together
-// with the corresponding CodegenItem.
-static void look_up_local_variable(struct CGContext *context,
-                                   const char *name_in,
-                                   const char **name_out,
-                                   struct CodegenItem **item_out)
+// This can be used for both terms and statements.
+static void codegen_call(struct CGContext *cxt,
+                         enum Priority pri,
+                         struct Term *term,
+                         bool as_statement)
 {
-    while (true) {
-        struct CodegenItem *item = hash_table_lookup(context->env, name_in);
-        if (!item) {
-            fatal_error("look_up_local_variable: name not found");
-        }
+    const char * fun_name = get_function_name(term);
+    struct Type * fun_ty = get_function_type(term);
+    struct Type * ret_ty = fun_ty->function_data.return_type;
 
-        if (item->ctype == CT_REF && item->path->tag == REF_VAR) {
-            name_in = item->path->names->name;
-        } else {
-            if (item_out) *item_out = item;
-            if (name_out) *name_out = name_in;
-            return;
-        }
-    }
-}
-
-
-//
-// Codegen pre-pass for terms. Does Sethi-Ullman numbering and
-// allocates any required temporary memory blocks.
-//
-
-static void pre_codegen_term(struct CGContext *cxt, bool store, struct Term *term);
-
-static bool arg_use_temp_block(struct CGContext *cxt, struct FunArg *formal, struct OpTermList *actual)
-{
-    // We need a temp mem block in the following cases:
-    //  - When passing a scalar value (like "i32") to a pointer type (like "a"),
-    //    NOT by reference.
-    //  - When passing a scalar CT_LOCAL_VAR term by reference.
-
-    if (is_memory_type(actual->rhs->type)) {
-        return false;
+    // Make a temporary buffer to hold the return value, if required.
+    char ret_name[TEMP_NAME_LEN];
+    bool using_ret_buffer = false;
+    if (ret_ty && !is_scalar_type(cxt, ret_ty)) {
+        make_temporary(cxt, ret_name, term->type);
+        using_ret_buffer = true;
     }
 
-    if (is_memory_type(formal->type) && !formal->ref) {
-        return true;
-    }
+    // Is this call going to be directly used in an expression?
+    bool call_expr = !using_ret_buffer && !as_statement;
 
-    if (actual->rhs->tag == TM_VAR && formal->ref) {
-        struct CodegenItem *item;
-        look_up_local_variable(cxt, actual->rhs->var.name, NULL, &item);
-        if (item->ctype == CT_LOCAL_VAR) {
-            return true;
-        }
-    }
+    // Parenthesise the expression if necessary
+    if (call_expr && pri > POSTFIX_EXPR) print_token(cxt->pr, "(");
 
-    return false;
-}
+    // Begin a new item if necessary
+    if (!call_expr) begin_item(cxt->pr);
 
-static int pre_codegen_arguments(struct CGContext *cxt,
-                                 struct FunArg *formal,
-                                 struct OpTermList *actual)
-{
-    if (formal == NULL) {
-        return 1;
-    }
-
-    int n = pre_codegen_arguments(cxt, formal->next, actual->next);
-
-    bool use_temp_block = arg_use_temp_block(cxt, formal, actual);
-
-    if (use_temp_block) {
-        add_temp_mem_block(cxt, actual->rhs->type);
-    }
-
-    pre_codegen_term(cxt, use_temp_block, actual->rhs);
-
-    // Sethi-Ullman number is the max of all the arguments
-    if (actual->rhs->sethi_ullman_number > n) {
-        n = actual->rhs->sethi_ullman_number;
-    }
-
-    return n;
-}
-
-static void pre_codegen_call(struct CGContext *cxt, bool store, struct Term *term)
-{
-    struct Type * fun_type = get_function_type(term);
-
-    // "struct" returns go to a temporary buffer
-    if (term->type && is_memory_type(fun_type->function_data.return_type)) {
-        add_temp_mem_block(cxt, term->type);
-    }
-
-    // check the arguments (in right-to-left order)
-    term->sethi_ullman_number =
-        pre_codegen_arguments(cxt, fun_type->function_data.args, term->call.args);
-}
-
-static void pre_codegen_term(struct CGContext *cxt, bool store, struct Term *term)
-{
-    switch (term->tag) {
-    case TM_VAR:
-    case TM_BOOL_LITERAL:
-    case TM_INT_LITERAL:
-    case TM_STRING_LITERAL:
-        term->sethi_ullman_number = 1;
-        break;
-
-    case TM_DEFAULT:
-    case TM_MATCH_FAILURE:
-        if (!store && is_memory_type(term->type)) {
-            add_temp_mem_block(cxt, term->type);
-        }
-        term->sethi_ullman_number = 1;
-        break;
-
-    case TM_CAST:
-        pre_codegen_term(cxt, false, term->cast.operand);
-        term->sethi_ullman_number = term->cast.operand->sethi_ullman_number;
-        break;
-
-    case TM_IF:
-        pre_codegen_term(cxt, false, term->if_data.cond);
-        pre_codegen_term(cxt, store, term->if_data.then_branch);
-        pre_codegen_term(cxt, store, term->if_data.else_branch);
-        {
-            int n = term->if_data.cond->sethi_ullman_number;
-            int n2 = term->if_data.then_branch->sethi_ullman_number;
-            int n3 = term->if_data.else_branch->sethi_ullman_number;
-            if (n2 > n) n = n2;
-            if (n3 > n) n = n3;
-            term->sethi_ullman_number = n;
-        }
-        break;
-
-    case TM_UNOP:
-        pre_codegen_term(cxt, false, term->unop.operand);
-        term->sethi_ullman_number = term->unop.operand->sethi_ullman_number;
-        break;
-
-    case TM_BINOP:
-        {
-            enum BinOp binop = term->binop.list->operator;
-            bool lhs_store = false;
-            bool rhs_store = false;
-            if (binop == BINOP_AND || binop == BINOP_OR || binop == BINOP_IMPLIES) {
-                rhs_store = store;
-            }
-            pre_codegen_term(cxt, lhs_store, term->binop.lhs);
-            pre_codegen_term(cxt, rhs_store, term->binop.list->rhs);
-
-            int n1 = term->binop.lhs->sethi_ullman_number;
-            int n2 = term->binop.list->rhs->sethi_ullman_number;
-            int n;
-            if (n1 > n2) {
-                n = n1;
-            } else if (n2 > n1) {
-                n = n2;
-            } else {
-                n = n1 + 1;
-            }
-            term->sethi_ullman_number = n;
-        }
-        break;
-
-    case TM_LET:
-        pre_codegen_term(cxt, false, term->let.rhs);
-        pre_codegen_term(cxt, store, term->let.body);
-        {
-            int n1 = term->let.rhs->sethi_ullman_number;
-            int n2 = term->let.body->sethi_ullman_number;
-            term->sethi_ullman_number = (n1 > n2 ? n1 : n2);
-        }
-        break;
-
-    case TM_QUANTIFIER:
-        fatal_error("pre_codegen_term: trying to codegen TM_QUANTIFIER");
-
-    case TM_CALL:
-        pre_codegen_call(cxt, store, term);
-        break;
-
-    case TM_TYAPP:
-        fatal_error("pre_codegen_term: trying to codegen TM_TYAPP");
-
-    case TM_RECORD:
-        if (!store) {
-            add_temp_mem_block(cxt, term->type);
-        }
-        {
-            int n = 1;
-            for (struct NameTermList *field = term->record.fields; field; field = field->next) {
-                pre_codegen_term(cxt, true, field->term);
-                if (field->term->sethi_ullman_number > n) {
-                    n = field->term->sethi_ullman_number;
-                }
-            }
-            term->sethi_ullman_number = n;
-        }
-        break;
-
-    case TM_RECORD_UPDATE:
-        if (!store) {
-            add_temp_mem_block(cxt, term->type);
-        }
-        {
-            pre_codegen_term(cxt, true, term->record_update.lhs);
-            int n = term->record_update.lhs->sethi_ullman_number;
-            for (struct NameTermList *field = term->record_update.fields; field; field = field->next) {
-                pre_codegen_term(cxt, true, field->term);
-                if (field->term->sethi_ullman_number > n) {
-                    n = field->term->sethi_ullman_number;
-                }
-            }
-            term->sethi_ullman_number = n;
-        }
-        break;
-
-    case TM_FIELD_PROJ:
-        pre_codegen_term(cxt, false, term->field_proj.lhs);
-        term->sethi_ullman_number = term->field_proj.lhs->sethi_ullman_number;
-        break;
-
-    case TM_VARIANT:
-        if (!store) {
-            add_temp_mem_block(cxt, term->type);
-        }
-        pre_codegen_term(cxt, true, term->variant.payload);
-        term->sethi_ullman_number = term->variant.payload->sethi_ullman_number;
-        break;
-
-    case TM_MATCH:
-        {
-            pre_codegen_term(cxt, false, term->match.scrutinee);
-            int n = term->match.scrutinee->sethi_ullman_number;
-            for (struct Arm *arm = term->match.arms; arm; arm = arm->next) {
-                pre_codegen_term(cxt, store, arm->rhs);
-                int n2 = ((struct Term*)arm->rhs)->sethi_ullman_number;
-                if (n2 > n) {
-                    n = n2;
-                }
-            }
-            term->sethi_ullman_number = n;
-        }
-        break;
-
-    case TM_SIZEOF:
-        {
-            struct Term *rhs = term->sizeof_data.rhs;
-            int ndim = array_ndim(rhs->type);
-            if (!store && ndim > 1) {
-                add_temp_mem_block(cxt, term->type);
-            }
-            pre_codegen_term(cxt, false, rhs);
-            term->sethi_ullman_number = rhs->sethi_ullman_number;
-        }
-        break;
-
-    case TM_ALLOCATED:
-        fatal_error("pre_codegen_term: trying to codegen TM_ALLOCATED");
-
-    case TM_ARRAY_PROJ:
-        {
-            pre_codegen_term(cxt, false, term->array_proj.lhs);
-            int n = term->array_proj.lhs->sethi_ullman_number;
-            for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
-                pre_codegen_term(cxt, false, node->rhs);
-                if (node->rhs->sethi_ullman_number > n) {
-                    n = node->rhs->sethi_ullman_number;
-                }
-            }
-            term->sethi_ullman_number = n;
-        }
-        break;
-    }
-}
-
-
-
-//
-// Code generation for terms
-//
-
-enum CodegenMode {
-    PUSH_VALUE,
-    PUSH_ADDR,
-    STORE_TO_MEM
-};
-
-// Evaluate the given term, according to 'mode'.
-
-// Mode PUSH_VALUE pushes the value of the term to the stack.
-// The value must be a scalar type (bool or integer).
-
-// Mode PUSH_ADDR pushes the *address* of the value to the stack.
-// If the term is an lvalue, this looks up the existing addr (if
-// possible). For rvalues a temporary block is filled and the addr
-// of the temporary block is returned.
-
-// Mode STORE_TO_MEM computes the term into the address currently on
-// top of stack. This addr is popped afterwards. (This works with all
-// kinds of term whether they fit into a register or not.)
-
-// Special case: if generating a TM_CALL that doesn't return
-// a value, then 'mode' is ignored.
-
-static void codegen_term(struct CGContext *cxt,
-                         enum CodegenMode mode,
-                         struct Term *term);
-
-static void push_ref_addr(struct CGContext *context,
-                          struct RefPath *path);
-
-static struct RefPath * codegen_ref(struct CGContext *cxt,
-                                    struct Term *term);
-
-static void codegen_statements(struct CGContext *context, struct Statement *stmts);
-
-static void codegen_var(struct CGContext *cxt,
-                        enum CodegenMode mode,
-                        const char *name_in,
-                        struct Type *type)
-{
-    struct StackMachine *mc = cxt->machine;
-
-    const char *name;
-    struct CodegenItem *item;
-    look_up_local_variable(cxt, name_in, &name, &item);
-
-    switch (item->ctype) {
-    case CT_GLOBAL_VAR:
-        ;
-        char *mangled_name = mangle_name(name);
-
-        switch (mode) {
-        case PUSH_ADDR:
-            // push addr of global
-            stk_push_global_addr(mc, mangled_name);
-            break;
-
-        case PUSH_VALUE:
-        case STORE_TO_MEM:
-            if (is_memory_type(type)) {
-                if (mode == STORE_TO_MEM) {
-                    // memcpy global
-                    stk_push_global_addr(mc, mangled_name);
-                    memcpy_type(mc, type);
-                } else {
-                    fatal_error("can't use PUSH_VALUE with memory type");
-                }
-            } else {
-                // first put the value on the stack
-                stk_push_global_value(mc,
-                                      mangled_name,
-                                      is_signed_integral_type(type),
-                                      size_of_integral_type(type));
-
-                // now store to memory if required
-                if (mode == STORE_TO_MEM) {
-                    stk_store(mc, size_of_integral_type(type));
-                }
-            }
-            break;
-        }
+    // Write the function name.
+    struct CodegenEntry *entry = hash_table_lookup(cxt->env, fun_name);
+    if (entry && entry->foreign_name) {
+        print_token(cxt->pr, entry->foreign_name);
+    } else {
+        char *mangled_name = mangle_name(fun_name);
+        print_token(cxt->pr, mangled_name);
         free(mangled_name);
-        break;
+    }
 
-    case CT_LOCAL_VAR:
-        // Local variable. Get its value on stack.
-        stk_get_local(mc, name);
+    print_token(cxt->pr, "(");
+    bool first_arg = true;
 
-        if (is_memory_type(type)) {
-            // We have pushed an address
-            switch (mode) {
-            case PUSH_ADDR:
-                // Nothing else required
-                break;
+    // Write the return argument, if necessary
+    if (using_ret_buffer) {
+        if (is_scalar_type(cxt, term->type) && !is_scalar_type(cxt, ret_ty)) {
+            print_token(cxt->pr, "(");
+            print_token(cxt->pr, "char");
+            print_token(cxt->pr, "*");
+            print_token(cxt->pr, ")");
+            print_token(cxt->pr, "&");
+        }
+        print_token(cxt->pr, ret_name);
+        first_arg = false;
+    }
 
-            case STORE_TO_MEM:
-                // Memcpy the value into position
-                memcpy_type(mc, type);
-                break;
-
-            case PUSH_VALUE:
-                fatal_error("can't push value of a memory type");
+    // Write the generic size arguments
+    if (term->call.func->tag == TM_TYAPP) {
+        for (struct TypeList *tyarg = term->call.func->tyapp.tyargs; tyarg; tyarg = tyarg->next) {
+            if (!first_arg) {
+                print_token(cxt->pr, ",");
+            } else {
+                first_arg = false;
             }
+            print_size_of_type(cxt, ASSIGN_EXPR, tyarg->type);
+        }
+    }
 
+    // Write the actual arguments
+    struct FunArg *formal = fun_ty->function_data.args;
+    struct OpTermList *actual = term->call.args;
+    for (; actual; actual = actual->next, formal = formal->next) {
+        if (!first_arg) {
+            print_token(cxt->pr, ",");
         } else {
-            // We have pushed a value
-            switch (mode) {
-            case PUSH_ADDR:
-                fatal_error("can't take addr of this variable");
-
-            case PUSH_VALUE:
-                // Nothing else required
-                break;
-
-            case STORE_TO_MEM:
-                // Store the value
-                stk_store(mc, size_of_integral_type(type));
-                break;
-            }
+            first_arg = false;
         }
-        break;
-
-    case CT_REF:
-    case CT_POINTER_ARG:
-        // Push the referenced address
-        if (item->ctype == CT_REF) {
-            push_ref_addr(cxt, item->path);
+        enum TermMode arg_mode;
+        if (is_scalar_type(cxt, formal->type) && !formal->ref) {
+            arg_mode = MODE_VALUE;
         } else {
-            stk_get_local(mc, name);
+            arg_mode = MODE_ADDR;
         }
+        codegen_term(cxt, ASSIGN_EXPR, arg_mode, actual->rhs);
+    }
 
-        switch (mode) {
-        case PUSH_ADDR:
-            // Nothing else required
-            break;
+    print_token(cxt->pr, ")");
 
-        case PUSH_VALUE:
-            // Load the value
-            stk_load(mc, is_signed_integral_type(type), size_of_integral_type(type));
-            break;
-
-        case STORE_TO_MEM:
-            // Memcpy the value
-            memcpy_type(mc, type);
-            break;
+    // Finish up
+    if (call_expr && pri > POSTFIX_EXPR) print_token(cxt->pr, ")");
+    if (!call_expr) {
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+        if (!as_statement) {
+            print_token(cxt->pr, ret_name);
         }
-        break;
-
-    case CT_FUNCTION:
-        fatal_error("unexpected ctype");
     }
 }
 
-static void codegen_default(struct CGContext *cxt, enum CodegenMode mode, struct Type *type)
+static void codegen_record(struct CGContext *cxt,
+                           enum Priority pri,
+                           enum TermMode mode,
+                           struct Term *term)
 {
-    struct StackMachine *mc = cxt->machine;
+    char result_name[TEMP_NAME_LEN];
+    make_temporary(cxt, result_name, term->type);
 
-    if (is_memory_type(type)) {
-        switch (mode) {
-        case STORE_TO_MEM:
-            memclear_type(mc, type);
-            break;
+    struct SizeExpr *offset = zero_size_expr();
 
-        case PUSH_VALUE:
-            fatal_error("can't use PUSH_VALUE with memory type");
+    for (struct NameTermList *field = term->record.fields; field; field = field->next) {
+        // Using memcpy is fine here as the existing term cannot possibly overlap
+        // with our newly-created "result" variable.
 
-        case PUSH_ADDR:
-            ;
-            // get address of temp block
-            char name[TEMP_NAME_SIZE];
-            get_temp_block_name(cxt, name);
-            stk_get_local(mc, name);
+        struct SizeExpr *size = get_size_of_type(cxt, field->term->type);
 
-            // clear the temp block
-            memclear_type(mc, type);
-
-            // get address of temp block again
-            stk_get_local(mc, name);
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, result_name);
+        if (!is_size_expr_zero(offset)) {
+            print_token(cxt->pr, "+");
+            print_size_expr(cxt, ADD_EXPR, offset);
         }
+        print_token(cxt->pr, ",");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, field->term);
+        print_token(cxt->pr, ",");
+        print_size_expr(cxt, ASSIGN_EXPR, size);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        struct SizeExpr *new_offset = add_size_expr(offset, size);
+        free_size_expr(size);
+        free_size_expr(offset);
+        offset = new_offset;
+    }
+
+    free_size_expr(offset);
+
+    print_token(cxt->pr, result_name);
+}
+
+static void codegen_record_update(struct CGContext *cxt,
+                                  enum Priority pri,
+                                  enum TermMode mode,
+                                  struct Term *term)
+{
+    char result_name[TEMP_NAME_LEN];
+    make_temporary(cxt, result_name, term->type);
+    copy_term_to_variable(cxt, result_name, false, term->record_update.lhs);
+
+    for (struct NameTermList *field = term->record_update.fields; field; field = field->next) {
+        struct SizeExpr *offset = get_field_offset(cxt, term->type, field->name);
+
+        // Using memcpy (as opposed to memmove) is fine here, as the existing terms
+        // cannot overlap with result_name
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, result_name);
+        if (!is_size_expr_zero(offset)) {
+            print_token(cxt->pr, "+");
+            print_size_expr(cxt, ADD_EXPR, offset);
+        }
+        print_token(cxt->pr, ",");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, field->term);
+        print_token(cxt->pr, ",");
+        print_size_of_type(cxt, ASSIGN_EXPR, field->term->type);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        free_size_expr(offset);
+    }
+
+    print_token(cxt->pr, result_name);
+}
+
+static void codegen_term_plus_offset(struct CGContext *cxt,
+                                     enum Priority pri,
+                                     struct Term *base_addr,
+                                     struct SizeExpr *offset)
+{
+    if (pri > ADD_EXPR) print_token(cxt->pr, "(");
+    codegen_term(cxt, ADD_EXPR, MODE_ADDR, base_addr); // generates a char*
+    if (!is_size_expr_zero(offset)) {
+        print_token(cxt->pr, "+");
+        print_size_expr(cxt, ADD_EXPR, offset);
+    }
+    if (pri > ADD_EXPR) print_token(cxt->pr, ")");
+}
+
+static void codegen_field_proj(struct CGContext *cxt,
+                               enum Priority pri,
+                               enum TermMode mode,
+                               struct Term *term)
+{
+    struct SizeExpr *offset = get_field_offset(cxt,
+                                               term->field_proj.lhs->type,
+                                               term->field_proj.field_name);
+
+    if (is_scalar_type(cxt, term->type) && mode == MODE_VALUE) {
+        // we need to memcpy the field into a temporary scalar variable, then
+        // return that variable
+        char name[TEMP_NAME_LEN];
+        make_temporary(cxt, name, term->type);
+
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, name);
+        print_token(cxt->pr, ",");
+        codegen_term_plus_offset(cxt, ASSIGN_EXPR, term->field_proj.lhs, offset);
+        print_token(cxt->pr, ",");
+        print_size_of_type(cxt, ASSIGN_EXPR, term->type);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        print_token(cxt->pr, name);
 
     } else {
-        switch (mode) {
-        case PUSH_VALUE:
-        case STORE_TO_MEM:
-            stk_const(mc, 0);
-            if (mode == STORE_TO_MEM) {
-                stk_store(mc, size_of_integral_type(type));
+        // we can just return a pointer to the field
+        codegen_term_plus_offset(cxt, pri, term->field_proj.lhs, offset);
+    }
+
+    free_size_expr(offset);
+}
+
+static void codegen_variant(struct CGContext *cxt,
+                            enum Priority pri,
+                            enum TermMode mode,
+                            struct Term *term)
+{
+    char result_name[TEMP_NAME_LEN];
+    make_temporary(cxt, result_name, term->type);
+
+    const char *tag_type;
+    int tag_size = get_tag_size(term->type, &tag_type);
+
+    char tag_name[TEMP_NAME_LEN];
+    get_temp_name(cxt, tag_name);
+
+    uint32_t tag_num = get_tag_number_and_payload_type(term->type,
+                                                       term->variant.variant_name,
+                                                       NULL);
+
+    char buf[20];
+
+    begin_item(cxt->pr);
+    print_token(cxt->pr, tag_type);
+    print_token(cxt->pr, tag_name);
+    print_token(cxt->pr, "=");
+    sprintf(buf, "%" PRIu32, tag_num);
+    print_token(cxt->pr, buf);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+
+    print_token(cxt->pr, "memcpy");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, result_name);
+    print_token(cxt->pr, ",");
+    print_token(cxt->pr, "&");
+    print_token(cxt->pr, tag_name);
+    print_token(cxt->pr, ",");
+    sprintf(buf, "%d", tag_size);
+    print_token(cxt->pr, buf);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+
+    print_token(cxt->pr, "memcpy");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, result_name);
+    print_token(cxt->pr, "+");
+    print_token(cxt->pr, buf);  // buf still contains tag_size
+    print_token(cxt->pr, ",");
+    codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, term->variant.payload);
+    print_token(cxt->pr, ",");
+    print_size_of_type(cxt, ASSIGN_EXPR, term->variant.payload->type);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    print_token(cxt->pr, result_name);
+}
+
+// This can be used for both terms and statements.
+// Note: after typechecking, MATCH is only used for variants, not integers or
+// anything else.
+static void codegen_match(struct CGContext *cxt,
+                          struct Term *scrut,
+                          struct Arm *arms,
+                          bool as_statement)
+{
+    struct Type *variant_type = scrut->type;
+
+    // Get a char* pointer to the scrutinee.
+    char scrut_ptr_name[TEMP_NAME_LEN];
+    get_temp_name(cxt, scrut_ptr_name);
+
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "char");
+    print_token(cxt->pr, "*");
+    print_token(cxt->pr, scrut_ptr_name);
+    print_token(cxt->pr, "=");
+    codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, scrut);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // Read out the tag.
+    char tag_name[TEMP_NAME_LEN];
+    get_temp_name(cxt, tag_name);
+
+    const char *tag_type_name;
+    int tag_size = get_tag_size(variant_type, &tag_type_name);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, tag_type_name);
+    print_token(cxt->pr, tag_name);
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    print_token(cxt->pr, "memcpy");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, "&");
+    print_token(cxt->pr, tag_name);
+    print_token(cxt->pr, ",");
+    print_token(cxt->pr, scrut_ptr_name);
+    print_token(cxt->pr, ",");
+    char buf[20];
+    sprintf(buf, "%d", tag_size);
+    print_token(cxt->pr, buf);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // If this is an expression, create a variable to hold the result.
+    // NB there must be at least one Arm for match expressions.
+    char result_name[TEMP_NAME_LEN];
+    if (!as_statement) {
+        struct Term *first_rhs = (struct Term*) arms->rhs;
+        make_temporary(cxt, result_name, first_rhs->type);
+    }
+
+    // Write the switch statement
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "switch");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, tag_name);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    for (struct Arm *arm = arms; arm; arm = arm->next) {
+        char *copied_name = NULL;
+        struct CodegenEntry *entry = NULL;
+
+        switch (arm->pattern->tag) {
+        case PAT_VARIANT:
+            {
+                struct Type *payload_type;
+                uint32_t tag = get_tag_number_and_payload_type(
+                    variant_type,
+                    arm->pattern->variant.variant_name,
+                    &payload_type);
+                sprintf(buf, "%" PRIu32, tag);
+
+                begin_item(cxt->pr);
+                print_token(cxt->pr, "case");
+                print_token(cxt->pr, buf);
+                print_token(cxt->pr, ":");
+                print_token(cxt->pr, "{");
+                new_line(cxt->pr);
+                end_item(cxt->pr);
+
+                increase_indent(cxt->pr);
+
+                switch (arm->pattern->variant.payload->tag) {
+                case PAT_VAR:
+                    {
+                        // Make a variable for the payload...
+                        begin_item(cxt->pr);
+                        print_token(cxt->pr, "char");
+                        print_token(cxt->pr, "*");
+                        char *mangled_name = mangle_name(arm->pattern->variant.payload->var.name);
+                        print_token(cxt->pr, mangled_name);
+                        free(mangled_name);
+                        print_token(cxt->pr, "=");
+                        print_token(cxt->pr, scrut_ptr_name);
+                        print_token(cxt->pr, "+");
+                        sprintf(buf, "%d", tag_size);
+                        print_token(cxt->pr, buf);
+                        print_token(cxt->pr, ";");
+                        new_line(cxt->pr);
+                        end_item(cxt->pr);
+
+                        // We will need a new CodegenEntry for the payload variable
+                        entry = alloc(sizeof(struct CodegenEntry));
+                        memset(entry, 0, sizeof(*entry));
+                        entry->is_ref = true;
+                        copied_name = copy_string(arm->pattern->variant.payload->var.name);
+                        hash_table_insert(cxt->env, copied_name, entry);
+                    }
+                    break;
+
+                case PAT_WILDCARD:
+                    // do nothing
+                    break;
+
+                default:
+                    fatal_error("unexpected pattern");
+                }
             }
             break;
 
-        case PUSH_ADDR:
-            fatal_error("can't take addr of TM_DEFAULT of non-memory type");
-        }
-    }
-}
-
-static void codegen_bool_literal(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_ADDR) {
-        fatal_error("can't take addr of literal");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-    stk_const(mc, term->bool_literal.value ? 1 : 0);
-
-    if (mode == STORE_TO_MEM) {
-        stk_store(cxt->machine, size_of_integral_type(term->type));
-    }
-}
-
-static void codegen_int_literal(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_ADDR) {
-        fatal_error("can't take addr of literal");
-    }
-
-    uint64_t value = parse_int_literal(term->int_literal.data);
-
-    struct StackMachine *mc = cxt->machine;
-    stk_const(mc, value);
-
-    if (mode == STORE_TO_MEM) {
-        stk_store(cxt->machine, size_of_integral_type(term->type));
-    }
-}
-
-static void codegen_string_literal(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    add_string_literal(cxt->env, &cxt->strings, term);
-    stk_push_global_addr(cxt->machine, cxt->strings->name);
-
-    switch (mode) {
-    case PUSH_VALUE:
-        fatal_error("can't push a string constant");
-
-    case PUSH_ADDR:
-        // Nothing else required
-        break;
-
-    case STORE_TO_MEM:
-        memcpy_type(cxt->machine, term->type);
-        break;
-    }
-}
-
-static void codegen_cast(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_ADDR) {
-        fatal_error("can't take addr of cast");
-    }
-
-    // Push the operand to the stack.
-    codegen_term(cxt, PUSH_VALUE, term->cast.operand);
-
-    // Store to destination if we have been asked to do so.
-    if (mode == STORE_TO_MEM) {
-        stk_store(cxt->machine, size_of_integral_type(term->type));
-    }
-}
-
-static void codegen_if(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    struct StackMachine *mc = cxt->machine;
-
-    codegen_term(cxt, PUSH_VALUE, term->if_data.cond);
-    stk_cond_if_nonzero(mc, 1);
-
-    codegen_term(cxt, mode, term->if_data.then_branch);
-    stk_cond_else(mc);
-
-    codegen_term(cxt, mode, term->if_data.else_branch);
-    stk_cond_endif(mc);
-}
-
-static void codegen_unop(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_ADDR) {
-        fatal_error("can't take addr of unop");
-    }
-
-    codegen_term(cxt, PUSH_VALUE, term->unop.operand);
-
-    enum Opcode op = OP_ADD;  // dummy value
-    switch (term->unop.operator) {
-    case UNOP_NEGATE: op = OP_NEG; break;
-    case UNOP_COMPLEMENT: op = OP_NOT; break;
-    case UNOP_NOT: op = OP_XOR_1; break;
-    }
-    if (op == OP_ADD) {
-        fatal_error("unknown unop");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-    stk_alu(mc, op);
-
-    if (mode == STORE_TO_MEM) {
-        stk_store(mc, size_of_integral_type(term->type));
-    }
-}
-
-static void codegen_binop(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_ADDR) {
-        fatal_error("can't take addr of binop");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-
-    enum BinOp binop = term->binop.list->operator;
-
-    if (binop == BINOP_AND || binop == BINOP_OR || binop == BINOP_IMPLIES) {
-        // Short-circuit operator
-
-        // AND:     if (lhs) rhs else false
-        // OR:      if (lhs) true else rhs
-        // IMPLIES: if (lhs) rhs else true
-
-        codegen_term(cxt, PUSH_VALUE, term->binop.lhs);
-        stk_cond_if_nonzero(mc, 1);
-
-        switch (binop) {
-        case BINOP_AND:
-            codegen_term(cxt, mode, term->binop.list->rhs);
-            stk_cond_else(mc);
-            stk_const(mc, 0);
-            if (mode == STORE_TO_MEM) {
-                stk_store(mc, size_of_integral_type(term->type));
-            }
-            break;
-
-        case BINOP_OR:
-            stk_const(mc, 1);
-            if (mode == STORE_TO_MEM) {
-                stk_store(mc, size_of_integral_type(term->type));
-            }
-            stk_cond_else(mc);
-            codegen_term(cxt, mode, term->binop.list->rhs);
+        case PAT_WILDCARD:
+            begin_item(cxt->pr);
+            print_token(cxt->pr, "default");
+            print_token(cxt->pr, ":");
+            print_token(cxt->pr, "{");
+            new_line(cxt->pr);
+            end_item(cxt->pr);
+            increase_indent(cxt->pr);
             break;
 
         default:
-            // BINOP_IMPLIES
-            codegen_term(cxt, mode, term->binop.list->rhs);
-            stk_cond_else(mc);
-            stk_const(mc, 1);
-            if (mode == STORE_TO_MEM) {
-                stk_store(mc, size_of_integral_type(term->type));
-            }
-            break;
+            fatal_error("unexpected pattern");
         }
 
-        stk_cond_endif(mc);
-
-    } else {
-        // Normal binop, where both operands need to be evaluated
-
-        // Recursively codegen the two sub-terms -- highest Sethi-Ullman number first.
-        bool left_first = false;
-        if (term->binop.lhs->sethi_ullman_number >= term->binop.list->rhs->sethi_ullman_number) {
-            left_first = true;
-        }
-
-        if (left_first) {
-            codegen_term(cxt, PUSH_VALUE, term->binop.lhs);
-            codegen_term(cxt, PUSH_VALUE, term->binop.list->rhs);
+        // Now we are inside the "case" or "default", we can generate the payload
+        // (either term or statements).
+        if (as_statement) {
+            codegen_statements(cxt, arm->rhs);
         } else {
-            codegen_term(cxt, PUSH_VALUE, term->binop.list->rhs);
-            codegen_term(cxt, PUSH_VALUE, term->binop.lhs);
-            stk_swap(mc, 0, 1);  // RHS needs to be on top of stack
+            copy_term_to_variable(cxt, result_name, false, arm->rhs);
         }
 
-        bool is_signed = false;
-        if (term->binop.lhs->type->tag == TY_FINITE_INT) {
-            is_signed = term->binop.lhs->type->int_data.is_signed;
-        }
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "break");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
 
-        enum Opcode op = OP_NEG;  // dummy value
-        switch (binop) {
-        case BINOP_PLUS: op = OP_ADD; break;
-        case BINOP_MINUS: op = OP_SUB; break;
-        case BINOP_TIMES: op = OP_MUL; break;
-        case BINOP_DIVIDE: op = is_signed ? OP_SDIV : OP_UDIV; break;
-        case BINOP_MODULO: op = is_signed ? OP_SREM : OP_UREM; break;
-        case BINOP_BITAND: op = OP_AND; break;
-        case BINOP_BITOR: op = OP_OR; break;
-        case BINOP_BITXOR: op = OP_XOR; break;
-        case BINOP_SHIFTLEFT: op = OP_SHL; break;
-        case BINOP_SHIFTRIGHT: op = is_signed ? OP_ASR : OP_LSR; break;
-        case BINOP_EQUAL: op = OP_EQ; break;
-        case BINOP_NOT_EQUAL: op = OP_NE; break;
-        case BINOP_LESS: op = is_signed ? OP_SLT : OP_ULT; break;
-        case BINOP_LESS_EQUAL: op = is_signed ? OP_SLE : OP_ULE; break;
-        case BINOP_GREATER: op = is_signed ? OP_SGT : OP_UGT; break;
-        case BINOP_GREATER_EQUAL: op = is_signed ? OP_SGE : OP_UGE; break;
-        case BINOP_IFF: op = OP_EQ; break;
-        case BINOP_AND: case BINOP_OR: case BINOP_IMPLIES: fatal_error("unreachable");
-        case BINOP_IMPLIED_BY: fatal_error("<== is removed by typechecker");
-        }
-        if (op == OP_NEG) {
-            fatal_error("unknown binop");
-        }
+        decrease_indent(cxt->pr);
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "}");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
 
-        // Do the computation -- pops 2 operands and pushes result.
-        stk_alu(mc, op);
-
-        // Store to destination address if required
-        if (mode == STORE_TO_MEM) {
-            stk_store(mc, size_of_integral_type(term->type));
-        }
-    }
-}
-
-static void codegen_let(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    struct StackMachine *mc = cxt->machine;
-
-    const struct Type *rhs_type = term->let.rhs->type;
-    bool is_signed = is_signed_integral_type(rhs_type);
-    int rhs_size = type_or_pointer_size(rhs_type);
-
-    enum CodegenMode rhs_mode = is_memory_type(term->let.rhs->type) ? PUSH_ADDR : PUSH_VALUE;
-    codegen_term(cxt, rhs_mode, term->let.rhs);
-
-    push_local_scope(cxt);
-
-    add_new_local(cxt, term->let.name, is_signed, rhs_size);
-    stk_set_local(mc, term->let.name);
-
-    codegen_term(cxt, mode, term->let.body);
-
-    pop_local_scope(cxt);
-}
-
-
-// Pass all actual function arguments in right-to-left order.
-// returns a list indicating the temp blocks used for each argument, if any.
-static struct NameList * pass_actual_arguments(struct CGContext *cxt,
-                                               struct FunArg *formal,
-                                               struct OpTermList *actual)
-{
-    if (!formal) return NULL;
-
-    struct StackMachine *mc = cxt->machine;
-
-    // This recursion will traverse the list in reverse order.
-    // Because we don't expect thousands of function arguments, recursion should be OK here.
-    struct NameList *old_name_list = pass_actual_arguments(cxt, formal->next, actual->next);
-
-    struct NameList *new_name_list = alloc(sizeof(struct NameList));
-    new_name_list->name = NULL;
-    new_name_list->next = old_name_list;
-
-    bool use_temp_block = arg_use_temp_block(cxt, formal, actual);
-
-    // If appropriate, just directly compute the addr of the argument
-    // term onto the stack
-    if (!use_temp_block &&
-    (is_memory_type(formal->type) || formal->ref)) {
-        codegen_term(cxt, PUSH_ADDR, actual->rhs);
-
-    } else {
-        // If we are using a temp block then get the addr of the temp
-        // block onto the stack
-        char name[TEMP_NAME_SIZE];
-        if (use_temp_block) {
-            get_temp_block_name(cxt, name);
-            new_name_list->name = copy_string(name);
-            stk_get_local(mc, name);
-        }
-
-        // Push the value of the argument onto the stack, OR copy its
-        // value to the temp block
-        codegen_term(cxt, use_temp_block ? STORE_TO_MEM : PUSH_VALUE, actual->rhs);
-
-        // If we're using a temp block then put its address on the
-        // stack once more
-        if (use_temp_block) {
-            stk_get_local(mc, name);
+        // Remove entry from CodegenEnv if required.
+        if (entry) {
+            hash_table_remove(cxt->env, copied_name);
+            free(copied_name);
+            free(entry);
         }
     }
 
-    // Pass the argument.
-    stk_load_function_argument(mc);
-
-    return new_name_list;
-}
-
-// Pass the hidden size arguments in right-to-left order.
-static void pass_size_arguments(struct CGContext *cxt, struct TypeList *tyarg)
-{
-    if (!tyarg) return;
-
-    pass_size_arguments(cxt, tyarg->next);
-
-    struct StackMachine *mc = cxt->machine;
-    struct SizeExpr *size = compute_size_of_type(mc, tyarg->type);
-    push_size_expr(mc, size);
-    free_size_expr(size);
-    stk_load_function_argument(mc);
-}
-
-static void codegen_call(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    struct StackMachine *mc = cxt->machine;
-
-    struct Type * fun_type = get_function_type(term);
-
-    // Calculate the total number of arguments
-    int num_args = 0;
-    if (term->type && is_memory_type(fun_type->function_data.return_type)) {
-        ++num_args;
-    }
-    if (term->call.func->tag == TM_TYAPP) {
-        for (struct TypeList *tyarg = term->call.func->tyapp.tyargs; tyarg; tyarg = tyarg->next) {
-            ++num_args;
-        }
-    }
-    for (struct OpTermList *arg = term->call.args; arg; arg = arg->next) {
-        ++num_args;
-    }
-
-    stk_prepare_function_call(mc, num_args);
-
-    // Pass the arguments to the function, in right-to-left order
-    struct NameList *temps = pass_actual_arguments(cxt, fun_type->function_data.args, term->call.args);
-
-    // Pass the hidden size arguments, in right-to-left order, if applicable
-    if (term->call.func->tag == TM_TYAPP) {
-        pass_size_arguments(cxt, term->call.func->tyapp.tyargs);
-    }
-
-    // Figure out what we're doing with the return value
-    bool returns_value = false;
-    char return_temporary[TEMP_NAME_SIZE];
-    return_temporary[0] = 0;
-    if (term->type) {
-        if (is_memory_type(fun_type->function_data.return_type)) {
-            // The callee is returning a struct (or generic value).
-            // Write this to a temporary block.
-            get_temp_block_name(cxt, return_temporary);
-            stk_get_local(mc, return_temporary);
-            stk_load_function_argument(mc);
-
-        } else {
-            // The callee is returning a simple scalar value (e.g. i32),
-            // so we can use the StackMachine's return mechanism for that.
-            returns_value = true;
-        }
-    }
-
-    // Make the call
-    const char *fun_name;
-    if (term->call.func->tag == TM_VAR) {
-        fun_name = term->call.func->var.name;
-    } else if (term->call.func->tag == TM_TYAPP
-               && term->call.func->tyapp.lhs->tag == TM_VAR) {
-        fun_name = term->call.func->tyapp.lhs->var.name;
-    } else {
-        fatal_error("codegen_call - couldn't obtain function name");
-    }
-
-    // sanity check
-    struct CodegenItem *item = hash_table_lookup(cxt->env, fun_name);
-    if (item == NULL || item->ctype != CT_FUNCTION) {
-        fatal_error("codegen_call - failed to find function in the env (or it had wrong type)");
-    }
-
-    if (item->foreign_name) {
-        // "foreign_name" is unmangled
-        stk_emit_function_call(mc, item->foreign_name, returns_value);
-    } else {
-        // "fun_name" needs to be mangled
-        char *new_name = mangle_name(fun_name);
-        stk_emit_function_call(mc, new_name, returns_value);
-        free(new_name);
-    }
-
-    // If we told the function to return to a temporary block then we
-    // need to sort that out now.
-    if (return_temporary[0] != 0) {
-        // Put the pointer to the temporary return block on the stack.
-        stk_get_local(mc, return_temporary);
-
-        if (!is_memory_type(term->type)) {
-            // This is the case where the function returns a generic value,
-            // but we are expecting (on our side) something like i32.
-            // Solve this by doing a "load".
-            stk_load(mc, is_signed_integral_type(term->type), size_of_integral_type(term->type));
-        }
-    }
-
-    // Copy ref local variables back if required
-    struct NameList *temp = temps;
-    struct FunArg *formal;
-    struct OpTermList *actual;
-    for (formal = fun_type->function_data.args, actual = term->call.args;
-    actual;
-    formal = formal->next, actual = actual->next, temp = temp->next) {
-        if (formal->ref && temp->name) {
-            // push addr of temp block
-            stk_get_local(mc, temp->name);
-
-            // load scalar value from temp block
-            stk_load(mc,
-                     is_signed_integral_type(actual->rhs->type),
-                     size_of_integral_type(actual->rhs->type));
-
-            if (actual->rhs->tag != TM_VAR) {
-                fatal_error("inconsistency - argument should be a local variable in this case");
-            }
-
-            const char *name;
-            struct CodegenItem *item;
-            look_up_local_variable(cxt, actual->rhs->var.name, &name, &item);
-
-            if (item->ctype != CT_LOCAL_VAR) {
-                fatal_error("inconsistency - was expecting CT_LOCAL_VAR here");
-            }
-
-            // save the new value into the local
-            stk_set_local(mc, name);
-        }
-    }
-
-    free_name_list(temps);
-
-    // Store, if requested by our caller, and if the function returned
-    // something to store.
-    if (term->type) {
-        if (is_memory_type(term->type)) {
-            switch (mode) {
-            case PUSH_ADDR:
-                // Nothing else needed. Return addr is on top of stack.
-                break;
-
-            case PUSH_VALUE:
-                fatal_error("can't use PUSH_VALUE with memory type");
-
-            case STORE_TO_MEM:
-                memcpy_type(mc, term->type);
-                break;
-            }
-        } else {
-            switch (mode) {
-            case PUSH_ADDR:
-                fatal_error("can't take addr of TM_CALL where return value is not a memory type");
-
-            case PUSH_VALUE:
-                // Nothing else needed. Return value is on top of stack.
-                break;
-
-            case STORE_TO_MEM:
-                stk_store(mc, size_of_integral_type(term->type));
-                break;
-            }
-        }
-    }
-}
-
-static void codegen_record(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_VALUE) {
-        fatal_error("can't use PUSH_VALUE with TM_RECORD");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-
-    char name[TEMP_NAME_SIZE];
-    if (mode == PUSH_ADDR) {
-        // PUSH_ADDR mode needs a temp block
-        get_temp_block_name(cxt, name);
-        stk_get_local(mc, name);
-    }
-
-    for (struct NameTermList *field = term->record.fields; field; field = field->next) {
-        // calculate size of this field
-        struct SizeExpr *size = compute_size_of_type(mc, field->term->type);
-
-        // if there is another field after this one, then we will
-        // still need the pointer, so duplicate it
-        if (field->next) {
-            stk_dup(mc, 0);
-        }
-
-        // evaluate the initialiser, storing it to the pointer
-        codegen_term(cxt, STORE_TO_MEM, field->term);
-
-        // if there is another field after this one, then advance the
-        // pointer to the next field (by adding current field's size)
-        if (field->next) {
-            offset_pointer_by_size(mc, size);
-        }
-
-        free_size_expr(size);
-    }
-
-    if (mode == STORE_TO_MEM && term->record.fields == NULL) {
-        // There was nothing to store so pop the caller's store-ptr.
-        stk_pop(mc);
-    }
-
-    if (mode == PUSH_ADDR && term->record.fields != NULL) {
-        // Get the pointer back onto the stack
-        stk_get_local(mc, name);
-    }
-}
-
-static void codegen_record_update(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_VALUE) {
-        fatal_error("can't use PUSH_VALUE with TM_RECORD_UPDATE");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-
-    char name[TEMP_NAME_SIZE];
-    if (mode == PUSH_ADDR) {
-        // PUSH_ADDR mode needs a temp block
-        get_temp_block_name(cxt, name);
-        stk_get_local(mc, name);
-    }
-
-    // Generate the "base" record term
-    // (keeping the pointer on the stack!)
-    stk_dup(mc, 0);
-    codegen_term(cxt, STORE_TO_MEM, term->record_update.lhs);
-
-    struct SizeExpr *offset_from_prev_update = zero_size_expr();
-
-    for (struct NameTypeList *node = term->type->record_data.fields; node; node = node->next) {
-
-        // see if there is an update for this field
-        struct NameTermList *update;
-        for (update = term->record_update.fields; update; update = update->next) {
-            if (strcmp(update->name, node->name) == 0) {
-                break;
-            }
-        }
-
-        if (update) {
-            // Advance the pointer by the required amount
-            offset_pointer_by_size(mc, offset_from_prev_update);
-            free_size_expr(offset_from_prev_update);
-            offset_from_prev_update = zero_size_expr();
-
-            // Generate the updated field, overwriting the previous
-            // contents.
-            stk_dup(mc, 0);
-            codegen_term(cxt, STORE_TO_MEM, update->term);
-        }
-
-        // Work out how much we need to advance the pointer by
-        // to skip over this field.
-        struct SizeExpr *field_size = compute_size_of_type(mc, node->type);
-        struct SizeExpr *total = add_size_expr(offset_from_prev_update, field_size);
-        free_size_expr(field_size);
-        free_size_expr(offset_from_prev_update);
-        offset_from_prev_update = total;
-    }
-
-    free_size_expr(offset_from_prev_update);
-
-    // Get rid of the (now "moved up") pointer from the stack.
-    stk_pop(mc);
-
-    // In PUSH_ADDR mode we need the original pointer back again.
-    if (mode == PUSH_ADDR) {
-        stk_get_local(mc, name);
-    }
-}
-
-static void offset_for_field_proj(struct StackMachine *mc, struct Type *type, const char *field_name)
-{
-    // Work out how much to offset the pointer by
-    struct SizeExpr *total_size = zero_size_expr();
-
-    for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-        struct SizeExpr *field_size = compute_size_of_type(mc, field->type);
-
-        if (strcmp(field->name, field_name) == 0) {
-            free_size_expr(field_size);
-
-            // Displace the pointer by the required amount
-            offset_pointer_by_size(mc, total_size);
-
-            free_size_expr(total_size);
-            return;
-        }
-
-        struct SizeExpr *new_size = add_size_expr(total_size, field_size);
-        free_size_expr(field_size);
-        free_size_expr(total_size);
-        total_size = new_size;
-    }
-
-    fatal_error("field not found");
-}
-
-static void codegen_field_proj(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    struct StackMachine *mc = cxt->machine;
-
-    // Put the address of the record on top of the stack
-    codegen_term(cxt, PUSH_ADDR, term->field_proj.lhs);
-
-    // Offset by the required amount
-    offset_for_field_proj(mc, term->field_proj.lhs->type, term->field_proj.field_name);
-
-    // Do a load if required (otherwise just leave the pointer on stack)
-    switch (mode) {
-    case PUSH_ADDR:
-        // Nothing required
-        break;
-
-    case PUSH_VALUE:
-        // Load value, pop the pointer
-        if (is_memory_type(term->type)) {
-            fatal_error("can't use PUSH_VALUE with memory type");
-        }
-        stk_load(mc, is_signed_integral_type(term->type), size_of_integral_type(term->type));
-        break;
-
-    case STORE_TO_MEM:
-        // Memcpy and pop both pointers
-        memcpy_type(mc, term->type);
-        break;
-    }
-}
-
-static void codegen_variant(struct CGContext *cxt, enum CodegenMode mode, struct Term *term)
-{
-    if (mode == PUSH_VALUE) {
-        fatal_error("can't use PUSH_VALUE with TM_VARIANT");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-
-    char name[TEMP_NAME_SIZE];
-    if (mode == PUSH_ADDR) {
-        // PUSH_ADDR mode needs a temp block
-        get_temp_block_name(cxt, name);
-        stk_get_local(mc, name);
-    }
-
-    // write the tag
-    stk_dup(mc, 0);
-    uint32_t tag_num = get_tag_number_and_payload_type(term->type, term->variant.variant_name, NULL);
-    stk_const(mc, tag_num);
-    stk_store(mc, get_tag_size(term->type));
-
-    // place the payload after the tag
-    stk_const(mc, get_tag_size(term->type));
-    stk_alu(mc, OP_ADD);
-
-    // codegen the payload, placing it in the computed position
-    codegen_term(cxt, STORE_TO_MEM, term->variant.payload);
-
-    if (mode == PUSH_ADDR) {
-        // Get the pointer back onto the stack
-        stk_get_local(mc, name);
-    }
-}
-
-static char* next_ref_name(struct CGContext *cxt)
-{
-    if (cxt->ref_counter == INT_MAX) {
-        fatal_error("ref_counter overflow");
-    }
-    char name[40];
-    sprintf(name, "$Ref:%d", cxt->ref_counter++);
-    return copy_string(name);
-}
-
-struct RefPath *copy_ref_path(struct RefPath *ref)
-{
-    if (ref == NULL) {
-        return NULL;
-    }
-
-    struct RefPath *out = alloc(sizeof(struct RefPath));
-    out->tag = ref->tag;
-    out->names = copy_name_list(ref->names);
-    out->type = ref->type;
-    out->parent = copy_ref_path(ref->parent);
-    return out;
-}
-
-// Note: this handles both match terms and match statements
-// (one or other of 'term' or 'stmt' should be NULL).
-// For statements, 'mode' is ignored and the addr of the scrutinee should be on the stack.
-// For terms, this will itself codegen the scrutinee as needed.
-static void codegen_match(struct CGContext *cxt,
-                          enum CodegenMode mode,
-                          struct Term *term,
-                          struct Statement *stmt)
-{
-    struct StackMachine *mc = cxt->machine;
-
-    struct Term *scrut = term ? term->match.scrutinee : stmt->match.scrutinee;
-    struct Arm *arms = term ? term->match.arms : stmt->match.arms;
-
-    struct Type *variant_type = scrut->type;
-
-    // Construct a path for the scrutinee
-    // (The match compiler guarantees that the scrutinee will be zero or more
-    // TM_FIELD_PROJ's applied to a TM_VAR.)
-    struct RefPath *scrut_ref = codegen_ref(cxt, scrut);
-
-    // push a pointer to the scrutinee
-    // (only for terms, this is already done for us for statements)
-    if (term) {
-        codegen_term(cxt, PUSH_ADDR, scrut);
-    }
-
-    int num_ifs = 0;
-
-    for (struct Arm *arm = arms; arm; arm = arm->next) {
-        // inspect the pattern
-        if (arm->pattern->tag == PAT_VARIANT) {
-            struct Type *payload_type;
-            uint32_t wanted_tag =
-                get_tag_number_and_payload_type(variant_type,
-                                                arm->pattern->variant.variant_name,
-                                                &payload_type);
-
-            // the last arm always matches so no need for "if" in that case
-            if (arm->next) {
-                // push the scrut tag to the stack
-                stk_dup(mc, 0);
-                stk_load(mc, false, get_tag_size(variant_type));
-
-                // compare it to the wanted tag
-                stk_const(mc, wanted_tag);
-                stk_alu(mc, OP_EQ);
-
-                // branch based on the result
-                stk_cond_if_nonzero(mc, 1);
-                ++num_ifs;
-            }
-
-            // Arm matched!
-
-            // We don't need the scrut pointer any more at this point
-            stk_pop(mc);
-
-            // Create a new local scope for the pattern-var, and any new
-            // vars required by the arm itself
-            push_local_scope(cxt);
-
-            if (arm->pattern->variant.payload->tag == PAT_VAR) {
-                // make a new reference to the payload
-                struct RefPath *path = alloc(sizeof(struct RefPath));
-                path->tag = REF_VARIANT_PAYLOAD;
-                path->names = NULL;
-                path->type = payload_type;
-                path->parent = copy_ref_path(scrut_ref);
-                add_new_ref(cxt, arm->pattern->variant.payload->var.name, path);
-                path = NULL;
-            }
-
-            // We can now evaluate the arm!
-            if (term) {
-                codegen_term(cxt, mode, arm->rhs);
-            } else {
-                codegen_statements(cxt, arm->rhs);
-            }
-
-            // Get rid of the payload variable (and any vars created
-            // by the arm itself) afterwards
-            pop_local_scope(cxt);
-
-            if (arm->next) {
-                stk_cond_else(mc);
-            }
-
-        } else if (arm->pattern->tag == PAT_WILDCARD) {
-
-            // We don't need the scrut pointer any more at this point
-            stk_pop(mc);
-
-            // Evaluate the arm
-            // (This should be done in a new scope)
-            push_local_scope(cxt);
-            if (term) {
-                codegen_term(cxt, mode, arm->rhs);
-            } else {
-                codegen_statements(cxt, arm->rhs);
-            }
-            pop_local_scope(cxt);
-
-        } else {
-            fatal_error("codegen only supports variant & wildcard patterns");
-        }
-    }
-
-    free_ref_path(scrut_ref);
-
-    // now close all the ifs :)
-    for (int i = 0; i < num_ifs; ++i) {
-        stk_cond_endif(mc);
+    // Close the switch.
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "}");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    // Finally, if this was an expression, return the result variable.
+    if (!as_statement) {
+        print_token(cxt->pr, result_name);
     }
 }
 
 static void codegen_sizeof(struct CGContext *cxt,
-                           enum CodegenMode mode,
+                           enum Priority pri,
+                           enum TermMode mode,
                            struct Term *term)
 {
-    struct StackMachine *mc = cxt->machine;
+    if (term->sizeof_data.rhs->type->tag == TY_DYNAMIC_ARRAY) {
+        // This produces either a u64, or a tuple of u64s.
+        // Either way, we can just memcpy directly from the descriptor.
+        char name[TEMP_NAME_LEN];
+        make_temporary(cxt, name, term->type);
 
-    struct Term *rhs = term->sizeof_data.rhs;
-    int ndim = array_ndim(rhs->type);
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        if (term->type->tag == TY_FINITE_INT) print_token(cxt->pr, "&");
+        print_token(cxt->pr, name);
+        print_token(cxt->pr, ",");
 
-    if (mode == PUSH_VALUE && ndim != 1) {
-        fatal_error("codegen_sizeof: PUSH_VALUE can only be used when ndim = 1");
-    }
-    if (mode == PUSH_ADDR && ndim == 1) {
-        fatal_error("codegen_sizeof: PUSH_ADDR can only be used when ndim != 1");
-    }
+        // 'rhs' is an array, therefore represented as a char* descriptor.
+        // We add sizeof(void*) to get to the size.
+        codegen_term(cxt, ADD_EXPR, MODE_VALUE, term->sizeof_data.rhs);
+        print_token(cxt->pr, "+");
+        print_token(cxt->pr, "sizeof(void*)");
+        print_token(cxt->pr, ",");
 
-    char name[TEMP_NAME_SIZE];
-    if (mode == PUSH_ADDR) {
-        get_temp_block_name(cxt, name);
-        stk_get_local(mc, name);
-    }
+        uint64_t bytes_to_copy = 8 * term->sizeof_data.rhs->type->dynamic_array_data.ndim;
+        char buf[50];
+        sprintf(buf, "%" PRIu64, bytes_to_copy);
+        print_token(cxt->pr, buf);
 
-    if (rhs->type->tag == TY_DYNAMIC_ARRAY) {
-        // Push a pointer to the array.
-        codegen_term(cxt, PUSH_ADDR, rhs);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
 
-        // The dimensions start at the 8th byte of the array descriptor.
-        stk_const(mc, 8);
-        stk_alu(mc, OP_ADD);
+        // Return the value that we just memcpy'd out.
+        print_token(cxt->pr, name);
 
-        if (ndim == 1) {
-            // Load the first (and only) dimension.
-            stk_load(mc, false, 8);
-            if (mode == STORE_TO_MEM) {
-                stk_store(mc, 8);
-            }
-
-        } else {
-            // Memcpy to the correct place.
-            memcpy_type(mc, term->type);
-
-            if (mode == PUSH_ADDR) {
-                // Get the temp block address back on the stack.
-                stk_get_local(mc, name);
-            }
-        }
-
-    } else if (rhs->type->tag == TY_FIXED_ARRAY) {
-        if (ndim == 1) {
-            // Push the dimension as a constant
-            stk_const(mc, normal_form_to_int(rhs->type->fixed_array_data.sizes[0]));
-            if (mode == STORE_TO_MEM) {
-                stk_store(mc, 8);
-            }
+    } else if (term->sizeof_data.rhs->type->tag == TY_FIXED_ARRAY) {
+        if (term->sizeof_data.rhs->type->fixed_array_data.ndim == 1) {
+            // Just return the size directly as an integer literal
+            uint64_t size = normal_form_to_int(term->sizeof_data.rhs->type->fixed_array_data.sizes[0]);
+            char buf[50];
+            sprintf(buf, "UINT64_C(%" PRIu64 ")", size);
+            print_token(cxt->pr, buf);
 
         } else {
-            // We must store the dimensions one by one
-            // Stack currently contains the place to write to.
-            for (int i = 0; i < ndim; ++i) {
-                stk_dup(mc, 0);
+            // We need to make a little tuple
+            char tuple[TEMP_NAME_LEN];
+            make_temporary(cxt, tuple, term->type);
+
+            char tmp[TEMP_NAME_LEN];
+            get_temp_name(cxt, tmp);
+            begin_item(cxt->pr);
+            print_token(cxt->pr, "uint64_t");
+            print_token(cxt->pr, tmp);
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
+            end_item(cxt->pr);
+
+            for (int i = 0; i < term->sizeof_data.rhs->type->fixed_array_data.ndim; ++i) {
+                begin_item(cxt->pr);
+                print_token(cxt->pr, tmp);
+                print_token(cxt->pr, "=");
+
+                uint64_t size = normal_form_to_int(term->sizeof_data.rhs->type->fixed_array_data.sizes[i]);
+                char buf[50];
+                sprintf(buf, "UINT64_C(%" PRIu64 ");", size);
+                print_token(cxt->pr, buf);
+
+                new_line(cxt->pr);
+                print_token(cxt->pr, "memcpy");
+                print_token(cxt->pr, "(");
+                print_token(cxt->pr, tuple);
                 if (i != 0) {
-                    stk_const(mc, i*8);
-                    stk_alu(mc, OP_ADD);
+                    print_token(cxt->pr, "+");
+                    sprintf(buf, "%d", i*8);
+                    print_token(cxt->pr, buf);
                 }
-                stk_const(mc, normal_form_to_int(rhs->type->fixed_array_data.sizes[i]));
-                stk_store(mc, 8);
+                print_token(cxt->pr, ",");
+                print_token(cxt->pr, "&");
+                print_token(cxt->pr, tmp);
+                print_token(cxt->pr, ",");
+                print_token(cxt->pr, "8");  // sizeof(uint64_t)
+                print_token(cxt->pr, ")");
+                print_token(cxt->pr, ";");
+                new_line(cxt->pr);
+                end_item(cxt->pr);
             }
-            if (mode == STORE_TO_MEM) {
-                stk_pop(mc);
-            }
+
+            print_token(cxt->pr, tuple);
         }
 
     } else {
-        fatal_error("Invalid array type tag");
+        fatal_error("codegen_sizeof: wrong type");
     }
+}
+
+static void print_pointer_to_element(struct CGContext *cxt,
+                                     enum Priority pri,
+                                     struct Term *array_term,
+                                     struct OpTermList *indexes)
+{
+    if (pri > ADD_EXPR) print_token(cxt->pr, "(");
+
+    if (array_term->type->tag == TY_FIXED_ARRAY) {
+        codegen_term(cxt, ADD_EXPR, MODE_VALUE, array_term);
+        print_token(cxt->pr, "+");
+
+        print_size_of_type(cxt, MULT_EXPR, array_term->type->fixed_array_data.element_type);
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, "(");
+
+        // array[x,y,z] becomes:
+        // base_ptr + element_size * (x + ndim0 * (y + ndim1 * (z)))
+        // Note this gives "column major" (i.e. Fortran-style) indexing.
+        struct Term **sizes = array_term->type->fixed_array_data.sizes;
+        struct OpTermList *index = indexes;
+        while (index) {
+            codegen_term(cxt, ADD_EXPR, MODE_VALUE, index->rhs);
+            if (index->next) {
+                print_token(cxt->pr, "+");
+                char buf[40];
+                uint64_t size = normal_form_to_int(*sizes);
+                sprintf(buf, "%" PRIu64, size);
+                print_token(cxt->pr, buf);
+                print_token(cxt->pr, "*");
+                print_token(cxt->pr, "(");
+            }
+            index = index->next;
+            ++sizes;
+        }
+        for (int i = 0; i < array_term->type->fixed_array_data.ndim; ++i) {
+            print_token(cxt->pr, ")");
+        }
+
+    } else {
+        char descriptor[TEMP_NAME_LEN];
+        get_temp_name(cxt, descriptor);
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, descriptor);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_VALUE, array_term);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+
+        char base_ptr[TEMP_NAME_LEN];
+        get_temp_name(cxt, base_ptr);
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, base_ptr);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, base_ptr);
+        print_token(cxt->pr, ",");
+        print_token(cxt->pr, descriptor);
+        print_token(cxt->pr, ",");
+        print_token(cxt->pr, "sizeof(void*)");
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        print_token(cxt->pr, base_ptr);
+        print_token(cxt->pr, "+");
+
+        print_size_of_type(cxt, MULT_EXPR, array_term->type->dynamic_array_data.element_type);
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, "(");
+
+        // Same as above, but more complicated because we have to read out each
+        // dimension with a memcpy, instead of just getting it from the array type.
+        struct OpTermList *index = indexes;
+        uint64_t dim_offset = 0;
+        while (index) {
+            codegen_term(cxt, ADD_EXPR, MODE_VALUE, index->rhs);
+            if (index->next) {
+                print_token(cxt->pr, "+");
+
+                char size_name[TEMP_NAME_LEN];
+                get_temp_name(cxt, size_name);
+                begin_item(cxt->pr);
+                print_token(cxt->pr, "uint64_t");
+                print_token(cxt->pr, size_name);
+                print_token(cxt->pr, ";");
+                new_line(cxt->pr);
+                print_token(cxt->pr, "memcpy");
+                print_token(cxt->pr, "(");
+                print_token(cxt->pr, "&");
+                print_token(cxt->pr, size_name);
+                print_token(cxt->pr, ",");
+                print_token(cxt->pr, descriptor);
+                print_token(cxt->pr, "+");
+                print_token(cxt->pr, "sizeof(void*)");
+
+                if (dim_offset != 0) {
+                    print_token(cxt->pr, "+");
+                    char buf[40];
+                    sprintf(buf, "%" PRIu64, dim_offset);
+                    print_token(cxt->pr, buf);
+                }
+
+                dim_offset += 8;
+
+                print_token(cxt->pr, ",");
+                print_token(cxt->pr, "8");
+                print_token(cxt->pr, ")");
+                print_token(cxt->pr, ";");
+                new_line(cxt->pr);
+                end_item(cxt->pr);
+
+                print_token(cxt->pr, size_name);
+                print_token(cxt->pr, "*");
+                print_token(cxt->pr, "(");
+            }
+
+            index = index->next;
+        }
+        for (int i = 0; i < array_term->type->dynamic_array_data.ndim; ++i) {
+            print_token(cxt->pr, ")");
+        }
+    }
+
+    if (pri > ADD_EXPR) print_token(cxt->pr, ")");
 }
 
 static void codegen_array_proj(struct CGContext *cxt,
-                               enum CodegenMode mode,
+                               enum Priority pri,
+                               enum TermMode mode,
                                struct Term *term)
 {
-    bool fixed;
-    if (term->array_proj.lhs->type->tag == TY_FIXED_ARRAY) {
-        fixed = true;
-    } else if (term->array_proj.lhs->type->tag == TY_DYNAMIC_ARRAY) {
-        fixed = false;
+    if (mode == MODE_ADDR || !is_scalar_type(cxt, term->type)) {
+        print_pointer_to_element(cxt, pri, term->array_proj.lhs, term->array_proj.indexes);
     } else {
-        fatal_error("invalid array type for array proj");
-    }
-
-    struct StackMachine *mc = cxt->machine;
-
-    // Get the address of the array on top of stack
-    codegen_term(cxt, PUSH_ADDR, term->array_proj.lhs);       // [array]
-
-    // Compute the index
-
-    // Note: currently arrays are stored in "row-major order"
-    // i.e. array[i,j] is at position (i * dim2 + j)
-    // (if the array has size {dim1,dim2}).
-    // In other words this is equivalent to array[i][j] in C.
-
-    if (fixed) {
-        struct TypeData_FixedArray *data = &term->array_proj.lhs->type->fixed_array_data;
-
-        int n = 1;
-        for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
-            codegen_term(cxt, PUSH_VALUE, node->rhs);
-
-            uint64_t multiplier = 1;
-            for (int i = n; i < data->ndim; ++i) {
-                multiplier *= normal_form_to_int(data->sizes[i]);
-            }
-            if (multiplier != 1) {
-                stk_const(mc, multiplier);
-                stk_alu(mc, OP_MUL);
-            }
-
-            if (n > 1) {
-                stk_alu(mc, OP_ADD);
-            }
-
-            ++n;
-        }
-
-    } else {
-        int n = 1;
-        for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
-            if (n > 1) {
-                // [array tot]
-                stk_dup(mc, 1);      // [array tot array-ptr]
-                stk_const(mc, n*8);  // [array tot array-ptr n*8]
-                stk_alu(mc, OP_ADD); // [array tot size-ptr]
-                stk_load(mc, false, 8);     // [array tot size]
-                stk_alu(mc, OP_MUL); // [array new-tot]
-            }
-
-            codegen_term(cxt, PUSH_VALUE, node->rhs);   // [array idx] or [array tot idx]
-
-            if (n > 1) {
-                stk_alu(mc, OP_ADD);   // [array tot-idx]
-            }
-
-            ++n;
-        }
-    }
-
-    // Stack now contains: [array tot-idx]
-    // Total-index must be multiplied by element-size, then added to the
-    // array base pointer.
-
-    struct SizeExpr *size = compute_size_of_type(mc, term->type);
-    push_size_expr(mc, size);         // [array tot-idx size]
-    free_size_expr(size);
-    stk_alu(mc, OP_MUL);              // [array offset]
-
-    if (!fixed) {
-        stk_swap(mc, 0, 1);               // [offset array]
-        stk_load(mc, false, 8);           // [offset data-ptr]
-    }
-
-    stk_alu(mc, OP_ADD);              // [addr]
-
-    switch (mode) {
-    case STORE_TO_MEM:
-        // [dest-addr src-addr]
-        memcpy_type(mc, term->type);
-        break;
-
-    case PUSH_VALUE:
-        if (is_memory_type(term->type)) {
-            fatal_error("can't use PUSH_VALUE with memory type");
-        }
-        stk_load(mc, is_signed_integral_type(term->type), size_of_integral_type(term->type));
-        break;
-
-    case PUSH_ADDR:
-        // Nothing else to do
-        break;
+        char result[TEMP_NAME_LEN];
+        make_temporary(cxt, result, term->type);
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, result);
+        print_token(cxt->pr, ",");
+        print_pointer_to_element(cxt, ASSIGN_EXPR, term->array_proj.lhs, term->array_proj.indexes);
+        print_token(cxt->pr, ",");
+        print_size_of_type(cxt, ASSIGN_EXPR, term->type);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+        print_token(cxt->pr, result);
     }
 }
-
 
 static void codegen_term(struct CGContext *cxt,
-                         enum CodegenMode mode,
+                         enum Priority pri,
+                         enum TermMode mode,
                          struct Term *term)
 {
-    switch (term->tag) {
-    case TM_VAR: codegen_var(cxt, mode, term->var.name, term->type); break;
+    if (is_scalar_type(cxt, term->type) && mode == MODE_ADDR && !is_lvalue(term)) {
+        // Someone has asked for the address of a non-lvalue scalar term
+        // (like "1 + 2"). We will compute it to a temporary and give them the
+        // address of the temporary (cast to char*).
+        char name[TEMP_NAME_LEN];
+        make_temporary(cxt, name, term->type);
+        copy_term_to_variable(cxt, name, false, term);
+        if (pri > CAST_EXPR) print_token(cxt->pr, "(");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, name);
+        if (pri > CAST_EXPR) print_token(cxt->pr, ")");
 
-    case TM_DEFAULT:
-    case TM_MATCH_FAILURE:
-        // (For now, a match failure just generates a default value
-        // of that type. Perhaps we could have a mode where it
-        // crashes the program instead)
-        codegen_default(cxt, mode, term->type); break;
+    } else {
+        switch (term->tag) {
+        case TM_VAR: codegen_var(cxt, pri, mode, term); break;
 
-    case TM_BOOL_LITERAL: codegen_bool_literal(cxt, mode, term); break;
-    case TM_INT_LITERAL: codegen_int_literal(cxt, mode, term); break;
-    case TM_STRING_LITERAL: codegen_string_literal(cxt, mode, term); break;
-    case TM_CAST: codegen_cast(cxt, mode, term); break;
-    case TM_IF: codegen_if(cxt, mode, term); break;
-    case TM_UNOP: codegen_unop(cxt, mode, term); break;
-    case TM_BINOP: codegen_binop(cxt, mode, term); break;
-    case TM_LET: codegen_let(cxt, mode, term); break;
-    case TM_QUANTIFIER: fatal_error("unexpected: trying to generate code for quantifier");
-    case TM_CALL: codegen_call(cxt, mode, term); break;
-    case TM_TYAPP: fatal_error("unexpected: trying to generate code for type-application");
-    case TM_RECORD: codegen_record(cxt, mode, term); break;
-    case TM_RECORD_UPDATE: codegen_record_update(cxt, mode, term); break;
-    case TM_FIELD_PROJ: codegen_field_proj(cxt, mode, term); break;
-    case TM_VARIANT: codegen_variant(cxt, mode, term); break;
-    case TM_MATCH: codegen_match(cxt, mode, term, NULL); break;
-    case TM_SIZEOF: codegen_sizeof(cxt, mode, term); break;
-    case TM_ALLOCATED: fatal_error("unexpected: trying to generate code for 'allocated'");
-    case TM_ARRAY_PROJ: codegen_array_proj(cxt, mode, term); break;
-    }
-}
+        case TM_DEFAULT:
+        case TM_MATCH_FAILURE:
+            // (For now, a match failure just generates a default value
+            // of that type. Perhaps we could have a mode where it
+            // crashes the program instead)
+            codegen_default(cxt, pri, mode, term); break;
 
-
-static void push_ref_addr(struct CGContext *context, struct RefPath *path)
-{
-    struct StackMachine *mc = context->machine;
-
-    bool expect_parent = !(path->tag == REF_VAR || path->tag == REF_STRING_LITERAL);
-    bool have_parent = (path->parent != NULL);
-    if (expect_parent != have_parent) {
-        fatal_error("push_ref_addr: parent mismatches tag");
-    }
-
-    if (path->parent) {
-        push_ref_addr(context, path->parent);
-    }
-
-    switch (path->tag) {
-    case REF_VAR:
-        codegen_var(context, PUSH_ADDR, path->names->name, path->type);
-        break;
-
-    case REF_STRING_LITERAL:
-        stk_push_global_addr(mc, path->names->name);
-        break;
-
-    case REF_FIELD_PROJ:
-        offset_for_field_proj(mc, path->parent->type, path->names->name);
-        break;
-
-    case REF_FIXED_ARRAY_PROJ:
-        {
-            // There is just one name which contains an offset in bytes
-            // from the array base.
-            stk_get_local(mc, path->names->name);
-            stk_alu(mc, OP_ADD);
+        case TM_BOOL_LITERAL: codegen_bool_literal(cxt, pri, mode, term); break;
+        case TM_INT_LITERAL: codegen_int_literal(cxt, pri, mode, term); break;
+        case TM_STRING_LITERAL: codegen_string_literal(cxt, pri, mode, term); break;
+        case TM_CAST: codegen_cast(cxt, pri, mode, term); break;
+        case TM_IF: codegen_if(cxt, pri, mode, term); break;
+        case TM_UNOP: codegen_unop(cxt, pri, mode, term); break;
+        case TM_BINOP: codegen_binop(cxt, pri, mode, term); break;
+        case TM_LET: codegen_let(cxt, pri, mode, term); break;
+        case TM_QUANTIFIER: fatal_error("unexpected: trying to generate code for quantifier");
+        case TM_CALL: codegen_call(cxt, pri, term, false); break;
+        case TM_TYAPP: fatal_error("unexpected: trying to generate code for type-application");
+        case TM_RECORD: codegen_record(cxt, pri, mode, term); break;
+        case TM_RECORD_UPDATE: codegen_record_update(cxt, pri, mode, term); break;
+        case TM_FIELD_PROJ: codegen_field_proj(cxt, pri, mode, term); break;
+        case TM_VARIANT: codegen_variant(cxt, pri, mode, term); break;
+        case TM_MATCH: codegen_match(cxt, term->match.scrutinee, term->match.arms, false); break;
+        case TM_SIZEOF: codegen_sizeof(cxt, pri, mode, term); break;
+        case TM_ALLOCATED: fatal_error("unexpected: codegen_term called on TM_ALLOCATED");
+        case TM_ARRAY_PROJ: codegen_array_proj(cxt, pri, mode, term); break;
         }
-        break;
-
-    case REF_DYNAMIC_ARRAY_PROJ:
-        {
-            // This is similar to codegen_array_proj, but slightly different
-            // because the indexes are represented by stack-machine vars,
-            // rather than Terms.
-            int n = 1;
-
-            for (struct NameList *name = path->names; name; name = name->next) {
-                if (n > 1) {
-                    // [array tot]
-                    // We need to multiply tot by size
-                    stk_dup(mc, 1);          // [array tot array]
-                    stk_const(mc, n*8);      // [array tot array n*8]
-                    stk_alu(mc, OP_ADD);     // [array tot size_ptr]
-                    stk_load(mc, false, 8);  // [array tot size]
-                    stk_alu(mc, OP_MUL);     // [array new_tot]
-                }
-
-                stk_get_local(mc, name->name);  // [array idx] or [array tot idx]
-
-                if (n > 1) {
-                    stk_alu(mc, OP_ADD);     // [array tot]
-                }
-
-                ++n;
-            }
-
-            struct SizeExpr *size = compute_size_of_type(mc, path->type);
-            push_size_expr(mc, size);
-            free_size_expr(size);
-            stk_alu(mc, OP_MUL);     // [array offset]
-            stk_swap(mc, 0, 1);      // [offset array]
-            stk_load(mc, false, 8);  // [offset data-ptr]
-            stk_alu(mc, OP_ADD);     // [addr]
-        }
-        break;
-
-    case REF_VARIANT_PAYLOAD:
-        {
-            int size = get_tag_size(path->parent->type);
-            stk_const(mc, size);
-            stk_alu(mc, OP_ADD);
-        }
-        break;
     }
-}
-
-
-// helper for codegen_ref
-static struct NameList * codegen_array_indexes(struct CGContext *cxt, struct OpTermList *terms)
-{
-    if (terms == NULL) {
-        return NULL;
-    }
-
-    char *name = next_ref_name(cxt);
-
-    codegen_term(cxt, PUSH_VALUE, terms->rhs);
-    stk_create_local(cxt->machine, name, false, 8);
-    stk_set_local(cxt->machine, name);
-
-    struct NameList *result = alloc(sizeof(struct NameList));
-    result->name = name;
-    name = NULL;
-
-    result->next = codegen_array_indexes(cxt, terms->next);
-
-    return result;
-}
-
-static struct RefPath * codegen_ref(struct CGContext *cxt, struct Term *term)
-{
-    struct RefPath *ref = alloc(sizeof(struct RefPath));
-    ref->type = term->type;
-
-    switch (term->tag) {
-    case TM_VAR:
-        ref->tag = REF_VAR;
-        ref->names = alloc(sizeof(struct NameList));
-        ref->names->name = copy_string(term->var.name);
-        ref->names->next = NULL;
-        ref->parent = NULL;
-        break;
-
-    case TM_STRING_LITERAL:
-        add_string_literal(cxt->env, &cxt->strings, term);
-        ref->tag = REF_STRING_LITERAL;
-        ref->names = alloc(sizeof(struct NameList));
-        ref->names->name = copy_string(cxt->strings->name);
-        ref->names->next = NULL;
-        ref->parent = NULL;
-        break;
-
-    case TM_FIELD_PROJ:
-        ref->tag = REF_FIELD_PROJ;
-        ref->names = alloc(sizeof(struct NameList));
-        ref->names->name = copy_string(term->field_proj.field_name);
-        ref->names->next = NULL;
-        ref->parent = codegen_ref(cxt, term->field_proj.lhs);
-        break;
-
-    case TM_ARRAY_PROJ:
-        if (term->array_proj.lhs->type->tag == TY_FIXED_ARRAY) {
-            struct StackMachine *mc = cxt->machine;
-
-            // Compute the (fixed) array offset in bytes
-            struct TypeData_FixedArray *data = &term->array_proj.lhs->type->fixed_array_data;
-            int n = 1;
-            for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
-                codegen_term(cxt, PUSH_VALUE, node->rhs);
-                uint64_t multiplier = 1;
-                for (int i = n; i < data->ndim; ++i) {
-                    multiplier *= normal_form_to_int(data->sizes[i]);
-                }
-                if (multiplier != 1) {
-                    stk_const(mc, multiplier);
-                    stk_alu(mc, OP_MUL);
-                }
-                if (n > 1) {
-                    stk_alu(mc, OP_ADD);
-                }
-                ++n;
-            }
-
-            struct SizeExpr *size = compute_size_of_type(mc, term->type);
-            push_size_expr(mc, size);
-            free_size_expr(size);
-            stk_alu(mc, OP_MUL);
-
-            // Store the offset into a variable
-            char *name = next_ref_name(cxt);
-            stk_create_local(mc, name, false, 8);
-            stk_set_local(mc, name);
-
-            // Create the ref, storing that name.
-            struct NameList *names = alloc(sizeof(struct NameList));
-            names->name = name;
-            names->next = NULL;
-
-            ref->tag = REF_FIXED_ARRAY_PROJ;
-            ref->names = names;
-
-        } else {
-            // For dynamic arrays, we just store the individual array index
-            // values, because the array might be re-sized by the time we
-            // get to use the reference.
-            ref->tag = REF_DYNAMIC_ARRAY_PROJ;
-            ref->names = codegen_array_indexes(cxt, term->array_proj.indexes);
-        }
-        ref->parent = codegen_ref(cxt, term->array_proj.lhs);
-        break;
-
-    default:
-        fatal_error("codegen_ref: unexpected term tag");
-    }
-
-    return ref;
-}
-
-
-// This combines pre_codegen_term and codegen_term in a single function.
-// Usable when there is only one term to generate. Call clean_up_temp_blocks
-// when you're done with the results.
-static void do_codegen_for_term(struct CGContext *cxt,
-                                enum CodegenMode mode,
-                                const char *store_to_local,
-                                struct Term *term)
-{
-    if (cxt->num_temps != 0) {
-        fatal_error("Temporaries have not been cleared from the previous term");
-    }
-    pre_codegen_term(cxt, store_to_local != NULL, term);
-
-    int saved_num_temps = cxt->num_temps;
-    cxt->num_temps = 0;
-
-    if (mode == STORE_TO_MEM) {
-        codegen_var(cxt, PUSH_ADDR, store_to_local, term->type);
-    }
-
-    codegen_term(cxt, mode, term);
-
-    if (cxt->num_temps != saved_num_temps) {
-        fatal_error("do_codegen_for_term: inconsistency detected between pass 1 and 2");
-    }
-}
-
-
-static bool normal_form_includes_nonempty_strings(struct Term *term)
-{
-    switch (term->tag) {
-    case TM_DEFAULT:
-    case TM_BOOL_LITERAL:
-    case TM_INT_LITERAL:
-        return false;
-
-    case TM_STRING_LITERAL:
-        return term->string_literal.length != 0;
-
-    case TM_RECORD:
-        for (struct NameTermList *field = term->record.fields; field; field = field->next) {
-            if (normal_form_includes_nonempty_strings(field->term)) {
-                return true;
-            }
-        }
-        return false;
-
-    case TM_VARIANT:
-        return normal_form_includes_nonempty_strings(term->variant.payload);
-
-    default:
-        fatal_error("unrecognised normal form");
-    }
-}
-
-// This writes the bytes for a normal-form term
-// (using stk_insert_byte, etc.)
-// It's assume the caller will do the stk_begin_global_constant
-// and stk_end_global_constant calls.
-// String literals are output to 'strings', the caller should take
-// care of these afterwards.
-// Size of the term is returned.
-static uint64_t codegen_normal_form(struct StackMachine *mc,
-                                    struct HashTable *env,
-                                    struct StringLiteral **strings,
-                                    struct Term *term)
-{
-    // Compute size of the term
-    struct SizeExpr *expr = compute_size_of_type(mc, term->type);
-    if (!is_size_expr_const(expr)) fatal_error("size is not known");
-    const uint64_t size = get_size_expr_const(expr);
-    free_size_expr(expr);
-
-    switch (term->tag) {
-    case TM_DEFAULT:
-        for (uint64_t n = size; n > 0; --n) {
-            stk_insert_byte(mc, 0);
-        }
-        break;
-
-    case TM_BOOL_LITERAL:
-        stk_insert_byte(mc, term->bool_literal.value ? 1 : 0);
-        break;
-
-    case TM_INT_LITERAL:
-        {
-            uint64_t val = normal_form_to_int(term);
-            switch (term->type->int_data.num_bits) {
-            case 8: stk_insert_byte(mc, val); break;
-            case 16: stk_insert_wyde(mc, val); break;
-            case 32: stk_insert_tetra(mc, val); break;
-            case 64: stk_insert_octa(mc, val); break;
-            }
-        }
-        break;
-
-    case TM_STRING_LITERAL:
-        add_string_literal(env, strings, term);
-        write_string_descriptor(mc, *strings);
-        break;
-
-    case TM_RECORD:
-        // just concatenate the fields...
-        for (struct NameTermList *field = term->record.fields; field; field = field->next) {
-            codegen_normal_form(mc, env, strings, field->term);
-        }
-        break;
-
-    case TM_VARIANT:
-        {
-            uint64_t size_written = 0;
-
-            int tag_size = get_tag_size(term->type);
-            uint32_t tag_num = get_tag_number_and_payload_type(term->type, term->variant.variant_name, NULL);
-            // Write tag
-            switch (tag_size) {
-            case 1: stk_insert_byte(mc, tag_num); break;
-            case 2: stk_insert_wyde(mc, tag_num); break;
-            case 4: stk_insert_tetra(mc, tag_num); break;
-            }
-            size_written += tag_size;
-
-            // Write the payload
-            size_written += codegen_normal_form(mc, env, strings, term->variant.payload);
-
-            // Zero pad
-            for (uint64_t n = size - size_written; n != 0; --n) {
-                stk_insert_byte(mc, 0);
-            }
-        }
-        break;
-
-    default:
-        fatal_error("unrecognised normal form");
-    }
-
-    return size;
 }
 
 
@@ -2483,245 +2282,166 @@ static uint64_t codegen_normal_form(struct StackMachine *mc,
 // Code generation for statements
 //
 
-static void codegen_var_decl_stmt(struct CGContext *context, struct Statement *stmt)
+static void codegen_statements(struct CGContext *cxt,
+                               struct Statement *stmts);
+
+static void codegen_var_decl_stmt(struct CGContext *cxt,
+                                  struct Statement *stmt)
 {
-    struct StackMachine *mc = context->machine;
+    char *mangled_name = mangle_name(stmt->var_decl.name);
+    char *copied_name = NULL;
+    struct CodegenEntry *entry = NULL;
+
+    begin_item(cxt->pr);
 
     if (stmt->var_decl.ref) {
-        pre_codegen_term(context, false, stmt->var_decl.rhs);
-        context->num_temps = 0;
-        struct RefPath * ref = codegen_ref(context, stmt->var_decl.rhs);
-        add_new_ref(context, stmt->var_decl.name, ref);
-        ref = NULL;
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, mangled_name);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, stmt->var_decl.rhs);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+
+        entry = alloc(sizeof(struct CodegenEntry));
+        memset(entry, 0, sizeof(*entry));
+        entry->is_ref = true;
+        copied_name = copy_string(stmt->var_decl.name);
+        hash_table_insert(cxt->env, copied_name, entry);
 
     } else {
-        if (is_memory_type(stmt->var_decl.type)) {
-            // New local variable: block of memory on the stack
-            add_named_mem_block(context, stmt->var_decl.name, stmt->var_decl.type);
-            do_codegen_for_term(context, STORE_TO_MEM, stmt->var_decl.name, stmt->var_decl.rhs);
-
-        } else {
-            // New local variable, of scalar type
-            add_new_local(context, stmt->var_decl.name,
-                          is_signed_integral_type(stmt->var_decl.type),
-                          size_of_integral_type(stmt->var_decl.type));
-            do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->var_decl.rhs);
-            stk_set_local(mc, stmt->var_decl.name);
-        }
+        declare_variable(cxt, mangled_name, stmt->var_decl.type, false);
+        copy_term_to_variable(cxt, mangled_name, false, stmt->var_decl.rhs);
     }
 
-    // Destroy any temporaries that were created by do_codegen_for_term
-    // (or pre_codegen_term for refs).
-    clean_up_temp_blocks(context);
-}
+    end_item(cxt->pr);
 
-static void codegen_assign_stmt(struct CGContext *context, struct Statement *stmt)
-{
-    struct StackMachine *mc = context->machine;
-    enum TermTag tag = stmt->assign.lhs->tag;
-    const struct Type *type = stmt->assign.lhs->type;
+    free(mangled_name);
 
-    if (is_memory_type(type)) {
-        // Compute the rhs into a memory block, and then copy to the lhs.
-        // (We can't compute directly into the lhs using STORE_TO_MEM, because the
-        // lhs value might be needed during the computation of the rhs.)
-        push_local_scope(context);
-        add_named_mem_block(context, "$assign", type);
-        do_codegen_for_term(context, STORE_TO_MEM, "$assign", stmt->assign.rhs);
-        clean_up_temp_blocks(context);
-        do_codegen_for_term(context, PUSH_ADDR, NULL, stmt->assign.lhs);
-        clean_up_temp_blocks(context);
-        stk_get_local(mc, "$assign");
-        memcpy_type(mc, type);
-        pop_local_scope(context);
+    codegen_statements(cxt, stmt->next);
 
-    } else {
-        // Compute the rhs onto the stack.
-        do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->assign.rhs);
-        clean_up_temp_blocks(context);
-
-        // Can we do a stk_set_local directly?
-        bool done = false;
-        if (tag == TM_VAR) {
-            const char *name;
-            struct CodegenItem *item;
-            look_up_local_variable(context, stmt->assign.lhs->var.name, &name, &item);
-
-            if (item->ctype != CT_REF && item->ctype != CT_POINTER_ARG) {
-                // Yes, we can
-                stk_set_local(mc, name);
-                done = true;
-            }
-        }
-
-        if (!done) {
-            // No, the lhs is in memory. Get its address then do stk_store.
-            do_codegen_for_term(context, PUSH_ADDR, NULL, stmt->assign.lhs);
-            clean_up_temp_blocks(context);
-            stk_swap(mc, 0, 1);
-            stk_store(mc, size_of_integral_type(type));
-        }
+    if (entry) {
+        hash_table_remove(cxt->env, copied_name);
+        free(copied_name);
+        free(entry);
     }
 }
 
-// Helper for codegen_swap_stmt.
-// If lvalue is in memory, push its addr, else push its value.
-// Return true if addr was pushed.
-// Sets *name if the term is TM_VAR.
-// Assumes no temporary blocks exist currently.
-static bool codegen_for_swap(struct CGContext *context, struct Term *lvalue, const char **name)
+static void codegen_assign_stmt(struct CGContext *cxt,
+                                struct Statement *stmt)
 {
-    bool need_addr = false;
-
-    if (lvalue->tag != TM_VAR) {
-        // A non-var term is a field projection or array projection
-        // (or combination thereof), so the value definitely resides
-        // in memory
-        need_addr = true;
-
-    } else {
-        // Even a TM_VAR might reside in memory, if it is CT_REF or CT_POINTER_ARG,
-        // or if the variable has a memory type
-        struct CodegenItem *item;
-        look_up_local_variable(context, lvalue->var.name, name, &item);
-        if (item->ctype == CT_REF || item->ctype == CT_POINTER_ARG || is_memory_type(lvalue->type)) {
-            need_addr = true;
-        }
-    }
-
-    // Push either the value or the address as appropriate.
-    do_codegen_for_term(context, need_addr ? PUSH_ADDR : PUSH_VALUE, NULL, lvalue);
-    clean_up_temp_blocks(context);
-
-    return need_addr;
+    copy_term_to_term(cxt, stmt->assign.lhs, stmt->assign.rhs);
 }
 
-static void codegen_swap_stmt(struct CGContext *context, struct Statement *stmt)
+static void codegen_swap_stmt(struct CGContext *cxt,
+                              struct Statement *stmt)
 {
-    struct StackMachine *mc = context->machine;
-    struct Type *type = stmt->swap.lhs->type;
+    char name[TEMP_NAME_LEN];
+    make_temporary(cxt, name, stmt->swap.lhs->type);
 
-    const char *lhs_name = NULL;
-    const char *rhs_name = NULL;
-
-    // put [lhs, rhs] on the stack
-    bool lhs_addr = codegen_for_swap(context, stmt->swap.lhs, &lhs_name);
-    bool rhs_addr = codegen_for_swap(context, stmt->swap.rhs, &rhs_name);
-
-    if (lhs_addr && rhs_addr) {
-        // Memory-to-memory swap.
-        push_local_scope(context);
-        add_named_mem_block(context, "$swap", type);
-
-        stk_get_local(mc, "$swap");  // [lhs rhs $swap]
-        stk_dup(mc, 1);  // [lhs rhs $swap rhs]
-        memcpy_type(mc, type);   // $swap = rhs. [lhs rhs]
-
-        stk_dup(mc, 1);  // [lhs rhs lhs]
-        memcpy_type(mc, type);  // rhs = lhs.  [lhs]
-
-        stk_get_local(mc, "$swap");   // [lhs $swap]
-        memcpy_type(mc, type);  // lhs = $swap. []
-
-        pop_local_scope(context);
-
-    } else if (lhs_addr) {
-        // [lhs_addr rhs]
-        stk_swap(mc, 0, 1);  // [rhs lhs_addr]
-        stk_dup(mc, 0);      // [rhs lhs_addr lhs_addr]
-        stk_load(mc, is_signed_integral_type(type), size_of_integral_type(type));  // [rhs lhs_addr lhs]
-        stk_set_local(mc, rhs_name);     // rhs = *lhs. [rhs lhs_addr]
-
-        stk_swap(mc, 0, 1);  // [lhs_addr rhs]
-        stk_store(mc, size_of_integral_type(type));  // *lhs = old_rhs. []
-
-    } else if (rhs_addr) {
-        // [lhs rhs_addr]
-        stk_dup(mc, 0);   // [lhs rhs_addr rhs_addr]
-        stk_load(mc, is_signed_integral_type(type), size_of_integral_type(type));  // [lhs rhs_addr rhs]
-        stk_set_local(mc, lhs_name);     // lhs = *rhs. [lhs rhs_addr]
-
-        stk_swap(mc, 0, 1);  // [rhs_addr lhs]
-        stk_store(mc, size_of_integral_type(type));  // *rhs = old_lhs. []
-
-    } else {
-        // We have two "register" values, we can just assign back to the variables.
-        // Note both terms are TM_VAR in this case.
-        stk_set_local(mc, lhs_name);
-        stk_set_local(mc, rhs_name);
-    }
+    // temp = rhs; rhs = lhs; lhs = temp;
+    copy_term_to_variable(cxt, name, false, stmt->swap.rhs);
+    copy_term_to_term(cxt, stmt->swap.rhs, stmt->swap.lhs);
+    copy_variable_to_term(cxt, stmt->swap.lhs, name);
 }
 
-static void codegen_return_stmt(struct CGContext *context, struct Statement *stmt)
+static void codegen_return_stmt(struct CGContext *cxt,
+                                struct Statement *stmt)
 {
-    struct StackMachine *mc = context->machine;
+    begin_item(cxt->pr);
 
     if (stmt->ret.value) {
-        if (is_memory_type(stmt->ret.value->type)) {
-            // save value to the "return" memory block
-            do_codegen_for_term(context, STORE_TO_MEM, "return", stmt->ret.value);
+        if (is_scalar_type(cxt, stmt->ret.value->type)) {
+            print_token(cxt->pr, "return");
+            codegen_term(cxt, EXPR, MODE_VALUE, stmt->ret.value);
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
         } else {
-            // leave value on the stack
-            do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->ret.value);
+            copy_term_to_variable(cxt, "ret", false, stmt->ret.value);
+            print_token(cxt->pr, "return");
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
         }
+    } else {
+        print_token(cxt->pr, "return");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
     }
 
-    stk_return_from_function(mc);
-
-    clean_up_temp_blocks(context);
+    end_item(cxt->pr);
 }
 
-static void codegen_if_stmt(struct CGContext *context, struct Statement *stmt)
+static void codegen_if_stmt(struct CGContext *cxt,
+                            struct Statement *stmt)
 {
-    struct StackMachine *mc = context->machine;
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "if");
+    print_token(cxt->pr, "(");
+    codegen_term(cxt, EXPR, MODE_VALUE, stmt->if_data.condition);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
 
-    do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->if_data.condition);
-    clean_up_temp_blocks(context);
+    increase_indent(cxt->pr);
+    codegen_statements(cxt, stmt->if_data.then_block);
+    decrease_indent(cxt->pr);
 
-    stk_cond_if_nonzero(mc, 1);
+    if (stmt->if_data.else_block) {
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "}");
+        print_token(cxt->pr, "else");
+        print_token(cxt->pr, "{");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
 
-    push_local_scope(context);
-    codegen_statements(context, stmt->if_data.then_block);
-    pop_local_scope(context);
+        increase_indent(cxt->pr);
+        codegen_statements(cxt, stmt->if_data.else_block);
+        decrease_indent(cxt->pr);
+    }
 
-    stk_cond_else(mc);
-
-    push_local_scope(context);
-    codegen_statements(context, stmt->if_data.else_block);
-    pop_local_scope(context);
-
-    stk_cond_endif(mc);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "}");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
 }
 
-static void codegen_while_stmt(struct CGContext *context, struct Statement *stmt)
+static void codegen_while_stmt(struct CGContext *cxt,
+                               struct Statement *stmt)
 {
-    struct StackMachine *mc = context->machine;
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "while");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, "1");
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
 
-    stk_loop_begin(mc);
+    increase_indent(cxt->pr);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "if");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, "!");
+    codegen_term(cxt, CAST_EXPR, MODE_VALUE, stmt->while_data.condition);
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, "break");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
+    codegen_statements(cxt, stmt->while_data.body);
+    decrease_indent(cxt->pr);
 
-    // If NOT condition, then go to end of loop
-    do_codegen_for_term(context, PUSH_VALUE, NULL, stmt->while_data.condition);
-    stk_cond_if_zero(mc, 1);
-
-    clean_up_temp_blocks(context);
-
-    stk_loop_goto_end(mc);
-    stk_cond_endif(mc);
-
-    // Do loop body (in new scope)
-    push_local_scope(context);
-    codegen_statements(context, stmt->while_data.body);
-    pop_local_scope(context);
-
-    // Jump back to top of loop
-    stk_loop_goto_beginning(mc);
-
-    stk_loop_end(mc);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "}");
+    new_line(cxt->pr);
+    end_item(cxt->pr);
 }
 
-static void codegen_statements(struct CGContext *context, struct Statement *stmts)
+static void codegen_statements(struct CGContext *cxt,
+                               struct Statement *stmts)
 {
-    while (stmts && stk_is_reachable(context->machine)) {
+    while (stmts) {
         if (!stmts->ghost) {
             switch (stmts->tag) {
             case ST_FIX:
@@ -2734,42 +2454,39 @@ static void codegen_statements(struct CGContext *context, struct Statement *stmt
                 fatal_error("codegen_statements: non-ghost fix/use/etc.");
 
             case ST_VAR_DECL:
-                codegen_var_decl_stmt(context, stmts);
-                break;
+                codegen_var_decl_stmt(cxt, stmts);
+                return;  // codegen_var_decl_stmt itself processes the tail stmts
 
             case ST_ASSIGN:
-                codegen_assign_stmt(context, stmts);
+                codegen_assign_stmt(cxt, stmts);
                 break;
 
             case ST_SWAP:
-                codegen_swap_stmt(context, stmts);
+                codegen_swap_stmt(cxt, stmts);
                 break;
 
             case ST_RETURN:
-                codegen_return_stmt(context, stmts);
+                codegen_return_stmt(cxt, stmts);
                 break;
 
             case ST_IF:
-                codegen_if_stmt(context, stmts);
+                codegen_if_stmt(cxt, stmts);
                 break;
 
             case ST_WHILE:
-                codegen_while_stmt(context, stmts);
+                codegen_while_stmt(cxt, stmts);
                 break;
 
             case ST_CALL:
-                do_codegen_for_term(context, PUSH_VALUE, NULL, stmts->call.term);
-                clean_up_temp_blocks(context);
+                codegen_call(cxt, EXPR, stmts->call.term, true);
                 break;
 
             case ST_MATCH:
-                do_codegen_for_term(context, PUSH_ADDR, NULL, stmts->match.scrutinee);
-                codegen_match(context, 0, NULL, stmts);
-                clean_up_temp_blocks(context);
+                codegen_match(cxt, stmts->match.scrutinee, stmts->match.arms, true);
                 break;
 
             case ST_MATCH_FAILURE:
-                // Just do nothing
+                // Do nothing. We should never reach this anyway.
                 break;
             }
         }
@@ -2779,162 +2496,321 @@ static void codegen_statements(struct CGContext *context, struct Statement *stmt
 }
 
 
-
 //
 // Code generation for decls
 //
 
-static void codegen_decl_const(struct HashTable *env,
-                               struct StackMachine *mc,
-                               struct Decl *decl)
+static void codegen_decl_const(struct CGContext *cxt,
+                               struct Decl *decl,
+                               bool is_interface)
 {
-    if (!decl->const_data.rhs) return;
+    char *mangled_name = mangle_name(decl->name);
+
+    // print prototype (if exported)
+    if (is_interface) {
+        if (is_scalar_type(cxt, decl->const_data.type)) {
+            print_token(cxt->h_pr, "extern");
+            print_token(cxt->h_pr, "const");
+            print_token(cxt->h_pr, scalar_type_to_name(decl->const_data.type));
+            print_token(cxt->h_pr, mangled_name);
+            print_token(cxt->h_pr, ";");
+            new_line(cxt->h_pr);
+            new_line(cxt->h_pr);
+        } else {
+            print_token(cxt->h_pr, "char");
+            print_token(cxt->h_pr, "*");
+            print_token(cxt->h_pr, mangled_name);
+            print_token(cxt->h_pr, "()");
+            print_token(cxt->h_pr, ";");
+            new_line(cxt->h_pr);
+            new_line(cxt->h_pr);
+        }
+    }
+
+    if (!decl->const_data.rhs) {
+        // interface decl
+        free(mangled_name);
+        return;
+    }
+
     if (!decl->const_data.value) fatal_error("constant value is not known");
 
-    struct StringLiteral *strings = NULL;
+    // print definition
+    if (is_scalar_type(cxt, decl->const_data.type)) {
+        print_token(cxt->pr, "const");
+        print_token(cxt->pr, scalar_type_to_name(decl->const_data.type));
+        print_token(cxt->pr, mangled_name);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, EXPR, MODE_VALUE, decl->const_data.value);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        new_line(cxt->pr);
 
-    // Generate the constant
-    char *name = mangle_name(decl->name);
-    stk_begin_global_constant(mc, name, normal_form_includes_nonempty_strings(decl->const_data.value), true);
-    free(name);
-    name = NULL;
-    codegen_normal_form(mc, env, &strings, decl->const_data.value);
-    stk_end_global_constant(mc);
+    } else {
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, mangled_name);
+        print_token(cxt->pr, "()");
+        new_line(cxt->pr);
+        print_token(cxt->pr, "{");
+        new_line(cxt->pr);
 
-    // Generate any string data required
-    create_string_literals(mc, strings, false);
+        increase_indent(cxt->pr);
+        print_token(cxt->pr, "static uint8_t init = 0;");
+        new_line(cxt->pr);
 
-    // Put the constant in the env
-    struct CodegenItem *new_item = alloc(sizeof(struct CodegenItem));
-    new_item->ctype = CT_GLOBAL_VAR;
-    hash_table_insert(env, copy_string(decl->name), new_item);
+        char temp_name[TEMP_NAME_LEN];
+        make_static_temporary(cxt, temp_name, decl->const_data.type);
+
+        print_token(cxt->pr, "if (!init) {");
+        new_line(cxt->pr);
+
+        increase_indent(cxt->pr);
+        copy_term_to_variable(cxt, temp_name, false, decl->const_data.value);
+
+        print_token(cxt->pr, "init = 1;");
+        new_line(cxt->pr);
+
+        decrease_indent(cxt->pr);
+        print_token(cxt->pr, "}");
+        new_line(cxt->pr);
+
+        print_token(cxt->pr, "return");
+        print_token(cxt->pr, temp_name);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+
+        decrease_indent(cxt->pr);
+        print_token(cxt->pr, "}");
+        new_line(cxt->pr);
+        new_line(cxt->pr);
+
+        struct CodegenEntry *entry = alloc(sizeof(struct CodegenEntry));
+        memset(entry, 0, sizeof(*entry));
+        entry->is_func_const = true;
+        hash_table_insert(cxt->env, copy_string(decl->name), entry);
+    }
+
+    free(mangled_name);
 }
 
-static void codegen_decl_function(struct HashTable *env,
-                                  struct StackMachine *mc,
+// returns newly allocated string
+static char* get_extern_name(struct Decl *decl)
+{
+    const char *dot = strrchr(decl->name, '.');
+    if (dot == NULL) {
+        fatal_error("unexpected: decl without '.' in name");
+    }
+    return copy_string(dot + 1);
+}
+
+static void print_function_header(struct CGContext *cxt,
                                   struct Decl *decl)
 {
+    // Start a new function
+    struct Type *ret_ty = decl->function_data.return_type;
+    if (ret_ty && is_scalar_type(cxt, ret_ty)) {
+        codegen_type(cxt, ret_ty);
+    } else {
+        print_token(cxt->pr, "void");
+    }
+
+    char *mangled_name;
+
     if (decl->function_data.is_extern) {
-        // Extern function. Just insert a CodegenItem and we're done.
-        struct CodegenItem *item = alloc(sizeof(struct CodegenItem));
-        item->ctype = CT_FUNCTION;
+        mangled_name = get_extern_name(decl);
+    } else {
+        mangled_name = mangle_name(decl->name);
+    }
+    print_token(cxt->pr, mangled_name);
+    free(mangled_name);
 
-        const char *dot = strrchr(decl->name, '.');
-        if (dot == NULL) {
-            fatal_error("unexpected: decl without '.' in name");
+    print_token(cxt->pr, "(");
+
+    // Add implicit "ret" argument if return type is aggregate
+    if (ret_ty && !is_scalar_type(cxt, ret_ty)) {
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, "ret");
+        if (decl->function_data.tyvars || decl->function_data.args) {
+            print_token(cxt->pr, ",");
         }
-        item->foreign_name = copy_string(dot + 1);
+    }
 
-        hash_table_insert(env, copy_string(decl->name), item);
+    // Add implicit size argument for each type variable
+    for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
+        print_token(cxt->pr, "uint64_t");
+        mangled_name = mangle_name(tv->name);
+        print_token(cxt->pr, mangled_name);
+        free(mangled_name);
+        if (tv->next || decl->function_data.args) {
+            print_token(cxt->pr, ",");
+        }
+    }
+
+    // Add the explicit arguments
+    for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
+        if (arg->ref) {
+            print_token(cxt->pr, "char");
+            print_token(cxt->pr, "*");
+        } else {
+            codegen_type(cxt, arg->type);
+        }
+        mangled_name = mangle_name(arg->name);
+        print_token(cxt->pr, mangled_name);
+        free(mangled_name);
+        if (arg->next != NULL) print_token(cxt->pr, ",");
+    }
+
+    print_token(cxt->pr, ")");
+}
+
+static bool found_in_interface(struct Module *module,
+                               const char *name)
+{
+    for (struct DeclGroup *group = module->interface; group; group = group->next) {
+        for (struct Decl *decl = group->decl; decl; decl = decl->next) {
+            if (strcmp(decl->name, name) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void codegen_decl_function(struct CGContext *cxt,
+                                  struct Module *module,
+                                  struct Decl *decl,
+                                  bool is_interface)
+{
+    // Write the header (only for interface decls)
+    if (is_interface) {
+        struct CPrinter *c_pr = cxt->pr;
+        cxt->pr = cxt->h_pr;
+        print_function_header(cxt, decl);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        new_line(cxt->pr);
+        cxt->pr = c_pr;
+    }
+
+    if (decl->function_data.is_extern) {
+        // Extern function. Just insert a CodegenEntry and we're done.
+        struct CodegenEntry *entry = alloc(sizeof(struct CodegenEntry));
+        memset(entry, 0, sizeof(*entry));
+        entry->foreign_name = get_extern_name(decl);
+        hash_table_insert(cxt->env, copy_string(decl->name), entry);
+
+        // We also need the prototype, if we haven't already put it in the header file
+        if (!is_interface) {
+            print_function_header(cxt, decl);
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
+            new_line(cxt->pr);
+        }
+
         return;
     }
 
     // Normal function.
-    // Create an item in the env (if not already created from an interface decl).
-    if (!hash_table_contains_key(env, decl->name)) {
-        struct CodegenItem *item = alloc(sizeof(struct CodegenItem));
-        item->ctype = CT_FUNCTION;
-        item->foreign_name = NULL;
-        hash_table_insert(env, copy_string(decl->name), item);
-    }
 
     if (!decl->function_data.body_specified) {
         // This must be an interface decl
         return;
     }
 
-    // Start a new function
-    char *fun_name = mangle_name(decl->name);
-    struct CGContext *context = new_cg_context(env, mc, fun_name);
-    free(fun_name);
-
-    // Add a new scope to hold the outermost locals, and arguments.
-    push_local_scope(context);
-
-    // If the return type is a struct then add an extra implicit pointer argument
-    if (decl->function_data.return_type
-    && is_memory_type(decl->function_data.return_type)) {
-        add_new_local(context, "return", false, 8);
+    // If this is not listed in the interface then we can make it "static"
+    if (!found_in_interface(module, decl->name)) {
+        print_token(cxt->pr, "static");
     }
 
-    // Add the type variables - and their hidden size arguments
-    context->tyvars = copy_tyvar_list(decl->function_data.tyvars);
-    for (struct TyVarList *tv = context->tyvars; tv; tv = tv->next) {
-        add_new_local(context, tv->name, false, 8);
-    }
+    // Start the function implementation (in the C file)
+    print_function_header(cxt, decl);
+    new_line(cxt->pr);
+    print_token(cxt->pr, "{");
+    new_line(cxt->pr);
 
-    // Add the arguments
+    // Add env entries for any ref arguments
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         if (arg->ref) {
-            // ref args are always passed by pointer
-            add_to_scope(context, arg->name, CT_POINTER_ARG, NULL);
-            stk_create_local(context->machine, arg->name, false, 8);
-
-        } else {
-            // non-ref args are passed by pointer if they are a
-            // "memory type" or by value if they are a "non-memory
-            // type" (int or bool)
-            int size = type_or_pointer_size(arg->type);
-            bool is_signed = is_signed_integral_type(arg->type);
-            add_new_local(context, arg->name, is_signed, size);
+            struct CodegenEntry *entry = alloc(sizeof(struct CodegenEntry));
+            memset(entry, 0, sizeof(*entry));
+            entry->is_ref = true;
+            hash_table_insert(cxt->env, arg->name, entry);
         }
     }
 
-    stk_finish_arguments(context->machine);
-
     // Generate code for the statements of the function
-    codegen_statements(context, decl->function_data.body);
+    increase_indent(cxt->pr);
+    codegen_statements(cxt, decl->function_data.body);
+    decrease_indent(cxt->pr);
 
-    // The scope is no longer needed
-    pop_local_scope(context);
+    print_token(cxt->pr, "}");
+    new_line(cxt->pr);
+    new_line(cxt->pr);
 
-    // Finalise the generated code
-    free_cg_context(context);
+    // Remove env entries for the arguments
+    for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
+        void *value = hash_table_lookup(cxt->env, arg->name);
+        if (value) {
+            free(value);
+            hash_table_remove(cxt->env, arg->name);
+        }
+    }
 }
 
 // codegens a single Decl
-static void codegen_decl(struct HashTable *env,
-                         struct StackMachine *mc,
-                         struct Decl *decl)
+static void codegen_decl(struct CGContext *cxt,
+                         struct Module *module,
+                         struct Decl *decl,
+                         bool is_interface)
 {
     if (decl->ghost) {
         return;
     }
 
+    reset_context(cxt);
+
     switch (decl->tag) {
     case DECL_CONST:
-        codegen_decl_const(env, mc, decl);
+        codegen_decl_const(cxt, decl, is_interface);
         break;
 
     case DECL_FUNCTION:
-        codegen_decl_function(env, mc, decl);
+        codegen_decl_function(cxt, module, decl, is_interface);
         break;
 
     case DECL_DATATYPE:
-    case DECL_TYPEDEF:
         // Nothing to do
+        break;
+
+    case DECL_TYPEDEF:
+        if (decl->typedef_data.rhs == NULL) {
+            // We need to record that this is an "abstract" type (and therefore
+            // its size cannot be calculated).
+            struct CodegenEntry *entry = alloc(sizeof(struct CodegenEntry));
+            memset(entry, 0, sizeof(*entry));
+            entry->is_abstract_type = true;
+            hash_table_insert(cxt->env, copy_string(decl->name), entry);
+        }
         break;
     }
 }
 
-static void codegen_root(struct HashTable *env,
-                         struct StackMachine *mc,
+static void codegen_root(FILE *file,
                          struct Module *module,
                          bool generate_main)
 {
-    // RTS functions
-    stk_make_rts_functions(mc);
-
     // C main function
     if (generate_main) {
-        stk_begin_function(mc, "main");
-        stk_prepare_function_call(mc, 0);
-        char *main_name = copy_string_2(module->name, "_main");
-        stk_emit_function_call(mc, main_name, false);
+        fprintf(file, "int main()\n");
+        fprintf(file, "{\n");
+        char *main_name = copy_string_2(module->name, ".main");
+        char *mangled_name = mangle_name(main_name);
         free(main_name);
-        stk_const(mc, 0);
-        stk_return_from_function(mc);
-        stk_end_function(mc);
+        fprintf(file, "    %s();\n", mangled_name);
+        free(mangled_name);
+        fprintf(file, "}\n");
     }
 }
 
@@ -2943,44 +2819,81 @@ struct HashTable * new_codegen_env()
     return new_hash_table();
 }
 
-static void free_codegen_item(void *context, const char *key, void *value)
+static void free_codegen_entry(void *context, const char *key, void *value)
 {
-    struct CodegenItem *item = value;
-    if (item->ctype == CT_FUNCTION) {
-        free((char*)item->foreign_name);
-    } else if (item->ctype == CT_REF) {
-        free_ref_path(item->path);
-    }
+    struct CodegenEntry *entry = value;
+    free((void*)entry->foreign_name);
     free((void*)key);
-    free(item);
+    free(value);
 }
 
 void free_codegen_env(struct HashTable *env)
 {
-    hash_table_remove(env, "$StringNum");
-    hash_table_for_each(env, free_codegen_item, NULL);
+    hash_table_for_each(env, free_codegen_entry, NULL);
     free_hash_table(env);
 }
 
-void codegen_module(FILE *asm_output_file, struct HashTable *env, struct Module *module, bool root, bool generate_main)
+static void print_includes(FILE *file, struct Import *imports)
 {
-    struct StackMachine *mc = stk_create(asm_output_file);
+    while (imports) {
+        if (strcmp(imports->module_name, "Int") != 0) {
+            fprintf(file, "#include \"%s.h\"\n", imports->module_name);
+        }
+        imports = imports->next;
+    }
+}
+
+void codegen_module(FILE *c_output_file,
+                    FILE *h_output_file,
+                    struct HashTable *codegen_env,
+                    struct Module *module,
+                    bool root,
+                    bool generate_main)
+{
+    const char *banner = "/* This file was generated automatically by the Babylon compiler. */\n\n";
+
+    fprintf(h_output_file, "%s", banner);
+    char *mangled_module_name = mangle_name(module->name);
+    fprintf(h_output_file, "#ifndef BAB_MODULE_%s\n", mangled_module_name);
+    fprintf(h_output_file, "#define BAB_MODULE_%s\n\n", mangled_module_name);
+    fprintf(h_output_file, "#include <stdint.h>\n\n");
+
+    print_includes(h_output_file, module->interface_imports);
+    fprintf(h_output_file, "\n");
+
+    fprintf(c_output_file, "%s", banner);
+    fprintf(c_output_file, "#include <stdint.h>\n");
+    fprintf(c_output_file, "#include <string.h>\n\n");
+
+    fprintf(c_output_file, "#include \"%s.h\"\n", module->name);
+    print_includes(c_output_file, module->implementation_imports);
+    fprintf(c_output_file, "\n");
+
+    struct CGContext cxt;
+    cxt.env = codegen_env;
+    cxt.pr = new_c_printer(c_output_file);
+    cxt.h_pr = new_c_printer(h_output_file);
+    cxt.tmp_num = 0;
 
     for (struct DeclGroup *decls = module->interface; decls; decls = decls->next) {
         for (struct Decl *decl = decls->decl; decl; decl = decl->next) {
-            codegen_decl(env, mc, decl);
+            codegen_decl(&cxt, module, decl, true);
         }
     }
 
     for (struct DeclGroup *decls = module->implementation; decls; decls = decls->next) {
         for (struct Decl *decl = decls->decl; decl; decl = decl->next) {
-            codegen_decl(env, mc, decl);
+            codegen_decl(&cxt, module, decl, false);
         }
     }
 
     if (root) {
-        codegen_root(env, mc, module, generate_main);
+        codegen_root(c_output_file, module, generate_main);
     }
 
-    stk_destroy(mc);
+    fprintf(h_output_file, "#endif  /* BAB_MODULE_%s */\n", mangled_module_name);
+
+    free(mangled_module_name);
+    free_c_printer(cxt.pr);
+    free_c_printer(cxt.h_pr);
 }

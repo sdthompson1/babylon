@@ -68,7 +68,24 @@ function while_loop(): i32
 
     return sum;
 }
-  
+
+
+function while_loop_2(): i32
+{
+    var x = {5, 5};
+
+    while x.0 > 0
+        invariant 0 <= x.0 <= 5;
+        invariant x.1 == 10 - x.0;
+        decreases x.0;
+    {
+        x.0 = x.0 - 1;
+        x.1 = x.1 + 1;
+    }
+
+    return x.1;
+}
+
 
 function f()
 {
@@ -109,6 +126,15 @@ function default_bool(): bool
 }
 
 
+function return_with_no_value()
+{
+    if (true) {
+        Test.print_i32(999);
+        return;
+    }
+    Test.print_i32(998);  // not printed
+}
+
 function main()
 {
     Test.print_i32( simple_if(1) );
@@ -122,9 +148,12 @@ function main()
     Test.print_i8( if_global_bool() );
 
     Test.print_i32( while_loop() );
+    Test.print_i32( while_loop_2() );
 
     Test.print_i32( call_stmt_in_loop() );
 
     Test.print_i32( default_int() );
     Test.print_bool( default_bool() );
+
+    return_with_no_value();
 }

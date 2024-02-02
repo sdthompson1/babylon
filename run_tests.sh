@@ -1,7 +1,7 @@
 #!/bin/bash
 
 COMPILER="build/babylon"
-CC="gcc -g test/test_support.c"
+CC="gcc -g -Wno-overflow -Wno-div-by-zero test/test_support.c"
 
 TEST_MODULE="test/Test.b"
 CASES_DIR="test/cases"
@@ -9,7 +9,6 @@ CASES_DIR="test/cases"
 OUT_DIR="test/output_tmp"
 
 PROG_EXT="b"
-ASM_EXT="s"
 
 # this might need to be increased on slow machines:
 TIMEOUT=5
@@ -115,7 +114,7 @@ run_test()
     fi
 
 
-    # Compile root module -- creates .s file(s).
+    # Compile root module -- creates .c file(s).
     $COMPILER --compile --main $OUT_DIR/$root_module >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
     compiler_result=$?
 
@@ -130,8 +129,8 @@ run_test()
         return 1
     fi
 
-    # Use gcc to link the .s files and test_support.c, making an executable file
-    $CC $OUT_DIR/*.s -o $OUT_DIR/test_binary || return 1
+    # Use gcc to link the .c files and test_support.c, making an executable file
+    $CC $OUT_DIR/*.c -o $OUT_DIR/test_binary || return 1
 
     # Run the compiled executable, capture stdout and stderr
     # (If it doesn't return zero status then that is a test failure)

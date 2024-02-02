@@ -145,5 +145,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_04_Casts.b
-//   gcc Demo_04_Casts.s ExampleLib.s example_lib.c
+//   gcc Demo_04_Casts.c ExampleLib.c example_lib.c
 //   ./a.out

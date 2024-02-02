@@ -17,6 +17,7 @@ repository.
 #include "typechecker.h"   // for TypeEnvEntry
 #include "util.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,12 +34,18 @@ static struct Term * eval_var(struct HashTable *env, struct Term *term)
 
 static struct Term * eval_cast(struct HashTable *env, struct Term *term)
 {
-    // a cast doesn't change the value, but it does change the type.
     struct Term *result = eval_to_normal_form(env, term->cast.operand);
     if (!result) return NULL;
-    free_type(result->type);
-    result->type = copy_type(term->type);
-    return result;
+
+    if (result->type->tag != TY_FINITE_INT || term->type->tag != TY_FINITE_INT) {
+        fatal_error("eval_cast: types are not as expected");
+    }
+
+    uint64_t value = normal_form_to_int(result);
+    free_term(result);
+    result = NULL;
+
+    return make_literal_of_type(term->cast.target_type, value);
 }
 
 static struct Term * eval_if(struct HashTable *env, struct Term *term)
@@ -183,18 +190,32 @@ uint64_t compute_binop(enum BinOp op, bool is_signed, uint64_t x, uint64_t y)
         return x ^ y;
 
     case BINOP_SHIFTLEFT:
-        return x << y;
+        if (y >= 64) {
+            return 0;
+        } else {
+            return (x + 0u) << y;
+        }
 
     case BINOP_SHIFTRIGHT:
         if (is_signed) {
-            // Strictly speaking, C11 doesn't guarantee that signed >> does what you would expect.
-            // Therefore compute the shift "manually".
             if (y == 0) {
                 return x;
+            } else if (x & UINT64_C(0x8000000000000000)) {
+                // Simulate a signed right shift
+                if (y >= 64) {
+                    return UINT64_MAX;
+                } else {
+                    uint64_t ones = (uint64_t)-1;
+                    ones <<= (64 - y);
+                    return ones | ((x + 0u) >> y);
+                }
             } else {
-                uint64_t ones = (uint64_t)-1;
-                ones <<= (64 - x);
-                return ones | (x >> y);
+                // Unsigned right shift
+                if (y >= 64) {
+                    return 0;
+                } else {
+                    return ((x + 0u) >> y);
+                }
             }
         } else {
             return x >> y;

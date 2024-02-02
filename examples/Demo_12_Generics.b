@@ -127,5 +127,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_12_Generics.b
-//   gcc Demo_12_Generics.s ExampleLib.s example_lib.c
+//   gcc Demo_12_Generics.c ExampleLib.c example_lib.c
 //   ./a.out

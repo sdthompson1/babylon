@@ -11,3 +11,5 @@ Arrays.b:38:5: Wrong number of array indices (expected 2)
 Arrays.b:43:16: Type mismatch (expected finite-sized integer)
 Arrays.b:44:20: Type mismatch (expected finite-sized integer)
 Arrays.b:45:13: Cannot index this term
+Arrays.b:54:19: Can't take reference to element of resizable array
+Arrays.b:57:19: Can't take reference to element of resizable array

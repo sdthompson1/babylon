@@ -222,7 +222,7 @@ function main()
 // commands:
 
 // babylon -c Demo_02_RequiresEnsures.b
-// gcc Demo_02_RequiresEnsures.s ExampleLib.s example_lib.c
+// gcc Demo_02_RequiresEnsures.c ExampleLib.c example_lib.c
 // ./a.out
 
 

@@ -36,7 +36,7 @@ static void print_usage_and_exit(char **argv)
 {
     printf("Usage: %s <options> <filename>\n", argv[0]);
     printf("Options:\n");
-    printf("  -c, --compile:          Compile the given file (and all its dependencies) to .s files\n");
+    printf("  -c, --compile:          Compile the given file (and all its dependencies) to .c files\n");
     printf("  -v, --verify:           Verify the code in the specified file, but not the imports\n");
     printf("  -V, --verify-all:       Verify the code in the specified file and all imports\n");
     printf("  -o, --output-path:      Set output path (default is same folder as the input)\n");

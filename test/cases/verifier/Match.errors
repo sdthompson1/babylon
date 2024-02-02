@@ -8,5 +8,3 @@ Match.b:123:5: Match might not be exhaustive
 Match.b:131:11: Operator precondition might not be met
 Match.b:157:13: Match might not be exhaustive
 Match.b:192:14: Reference may have become invalid due to change in datatype variant
-Match.b:204:5: Reference may have become invalid due to array size change
-Match.b:217:7: Reference may have become invalid due to array size change

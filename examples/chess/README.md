@@ -45,7 +45,7 @@ package is installed).
 Now run
 
     babylon -c src/ChessMain -o build
-    gcc build/*.s src/*.c -o chess `pkg-config sdl2 --cflags --libs` -lm
+    gcc build/*.c src/*.c -o chess `pkg-config sdl2 --cflags --libs` -lm
 
 to build the "chess" executable. Then you can type `./chess` to run
 the game.

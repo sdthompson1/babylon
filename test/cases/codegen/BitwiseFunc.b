@@ -16,7 +16,9 @@ function main()
 
     var shl: i32 = 3 << 5;
     var shr: i8 = i8(12) >> i8(1);
-    var shr_neg: i32 = -3 >> u8(1);
+    var shl_neg: i32 = (-3) << 5;
+    var shr_neg: i32 = (-3) >> u8(1);
+    var shl_u: u16 = u16(8) << u16(1);
     var shr_u: u16 = u16(8) >> u64(2);
 
     var shl_plus: i32 = (3 << 5) + 1;
@@ -57,8 +59,10 @@ function main()
     Test.print_i8(negative);
 
     Test.print_i32(shl);
+    Test.print_i32(shl_neg);
     Test.print_i8(shr);
     Test.print_i32(shr_neg);
+    Test.print_u16(shl_u);
     Test.print_u16(shr_u);
 
     Test.print_i32(shl_plus);

@@ -456,5 +456,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_03_Statements.b
-//   gcc Demo_03_Statements.s ExampleLib.s example_lib.c
+//   gcc Demo_03_Statements.c ExampleLib.c example_lib.c
 //   ./a.out

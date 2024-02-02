@@ -424,45 +424,9 @@ bool validate_ref_chain(struct VContext *context,
                 return false;
             }
 
-            // No further validation required for fixed-size arrays...
-            if (ref->fixed_size) {
-                return true;
-            }
-
-            // If variable-size, validate that the indexes are still in
-            // range of the (possibly new) size.
-            struct Sexpr *base = ref_chain_to_sexpr(context, ref->base);
-            if (!base) {
-                return false;
-            }
-
-            struct Sexpr *size = make_string_sexpr("$FLD1");
-            make_instance(&size, copy_sexpr(ref->fol_type->right->right->left));
-            size = make_list2_sexpr(size, base);
-            base = NULL;
-
-            // no need for the >= 0 check since that was already done when the ref was
-            // created.
-            struct Sexpr *in_bounds = array_index_in_range(ref->ndim, "$idx", "$size", NULL, true);
-            in_bounds = make_list3_sexpr(
-                make_string_sexpr("let"),
-                make_list2_sexpr(
-                    make_list2_sexpr(
-                        make_string_sexpr("$idx"),
-                        copy_sexpr(ref->array_index)),
-                    make_list2_sexpr(
-                        make_string_sexpr("$size"),
-                        size)),
-                in_bounds);
-
-            bool verify_result = verify_condition(context, location, in_bounds, "array ref valid");
-            free_sexpr(in_bounds);
-
-            if (!verify_result) {
-                report_ref_invalid_array_bounds(location);
-            }
-
-            return verify_result;
+            // Refs to elements of variable-size arrays are now illegal
+            // so there is nothing further to check
+            return true;
         }
         break;
 

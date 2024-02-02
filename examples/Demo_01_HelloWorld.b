@@ -56,19 +56,20 @@ function main()
 
 // babylon -c Demo_01_HelloWorld.b
 
-// This will compile the "Demo_01_HelloWorld.b" module, as well as
+// This will "compile" the Demo_01_HelloWorld.b module, as well as
 // all Babylon modules that it imports (i.e. "ExampleLib.b"), into
-// assembly code files (*.s files).
+// C code (*.c and *.h files).
 
-// (If you want to put the *.s files into a separate directory, you can
-// add the "-o" option, e.g. "babylon -c Demo_01_HelloWorld.b -o build"
+// (If you want to put the generated files into a separate directory, you
+// can add the "-o" option, e.g. "babylon -c Demo_01_HelloWorld.b -o build"
 // will put the files in a "build" directory.)
 
-// To produce an executable, these *.s files must be given to gcc, together
-// with example_lib.c (which contains the C functions we are using, as
-// discussed above):
+// To produce an executable, these *.c files, together with
+// example_lib.c (which contains the additional C functions we are
+// using, as discussed above), must be compiled with a C compiler.
+// For example we can use gcc as follows:
 
-// gcc Demo_01_HelloWorld.s ExampleLib.s example_lib.c
+// gcc Demo_01_HelloWorld.c ExampleLib.c example_lib.c
 
 // This should produce an executable "a.out" in the current directory.
 // Running this, you should then hopefully see the "Hello, world!"

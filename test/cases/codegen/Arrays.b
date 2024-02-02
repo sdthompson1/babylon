@@ -81,21 +81,6 @@ function f6(): i32
     return x;
 }
 
-function f7(): i32
-{
-    var a: i32[,];
-    resize_2d_array<i32>(a, 10, 10);
-    var x: i32 = 0;
-
-    ref r = a[1,1+2];
-    r = 2;
-    r = 3 + r;
-    x = a[1,3];
-
-    resize_2d_array<i32>(a, 0, 0);
-    return x;
-}
-
 function f8(): i32
 {
     var a: {i32,i32}[];
@@ -126,6 +111,15 @@ function f9(): u64
     return sz;
 }
 
+function f10()
+{
+    var a: i32[,,];
+    resize_3d_array<i32>(a, 5, 6, 7);
+    a[4,5,6] = 4567;
+    Test.print_i32(a[4,5,6]);
+    resize_3d_array<i32>(a, 0, 0, 0);
+}
+
 function main()
 {
     Test.print_u64(f1());
@@ -134,9 +128,9 @@ function main()
     Test.print_u64(f4());
     Test.print_u64(f5());
     Test.print_i32(f6());
-    Test.print_i32(f7());
     Test.print_i32(f8());
     Test.print_u64(f9());
+    f10();
 }
 
 }

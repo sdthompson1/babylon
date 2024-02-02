@@ -192,29 +192,3 @@ interface {}
       return r;  // Error, x is no longer Foo so r is invalid
     }
   }
-
-  function ref_pat_5()
-  {
-    var a: i32[];
-    resize_array<i32>(a, 10);
-    ref r = a[9];
-    resize_array<i32>(a, 11);
-    r = 100;   // OK, array is still big enough to access element 9
-    resize_array<i32>(a, 5);
-    r = 99;    // Error, array is too small
-    resize_array<i32>(a, 0);
-  }
-
-  function ref_pat_6()
-  {
-    var a: Foo[];
-    resize_array<Foo>(a, 10);
-    ref r = a[0];
-    r = Foo(20);
-    match r {
-    case Foo(ref s) =>
-      resize_array<Foo>(a, 0);
-      s = 99;    // Error, array is too small
-    }
-    resize_array<Foo>(a, 0);
-  }

@@ -29,25 +29,6 @@ function calls_bar(): i32
     return x + y;
 }
 
-function local_not_in_register(): i32
-{
-    var r1: i32;  var r2: i32;  var r3: i32;  var r4: i32;
-    var r5: i32;  var r6: i32;  var r7: i32;  var r8: i32;
-    var r9: i32;  var r10: i32;  var r11: i32;  var r12: i32;
-    var r13: i32;  var r14: i32;  var r15: i32;  var r16: i32;
-    var retval: i32;
-    var x1: i32;   var x2: i32;   var x3: i32;   var x4: i32;
-    var x5: i32;   var x6: i32;   var x7: i32;   var x8: i32;
-    var x9: i32;   var x10: i32;  var x11: i32;  var x12: i32;
-    var x13: i32;  var x14: i32;  var x15: i32;  var x16: i32;
-    retval = 99;
-    var y1: i32;   var y2: i32;   var y3: i32;   var y4: i32;
-    var y5: i32;   var y6: i32;   var y7: i32;   var y8: i32;
-    var y9: i32;   var y10: i32;  var y11: i32;  var y12: i32;
-    var y13: i32;  var y14: i32;  var y15: i32;  var y16: i32;
-    return retval;
-}
-
 function returns_bool(): bool
 {
     assert (2 > 1);    // Testing that "assert" doesn't impact codegen
@@ -93,7 +74,6 @@ function main()
     Test.print_i32( bar() );
     Test.print_i32( with_args(12, 4+1) );
     Test.print_i32( calls_bar() );
-    Test.print_i32( local_not_in_register() );
     Test.print_bool( returns_bool() );
     Test.print_i32( test_const );
     Test.print_i32( call_void_twice() );

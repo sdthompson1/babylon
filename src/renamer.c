@@ -1197,12 +1197,6 @@ bool rename_module(struct HashTable *renamer_env, struct Module *module, bool in
 
     clean_up_renamer_state(&state);
 
-    // Imports are no longer needed after renaming
-    free_import(module->interface_imports);
-    free_import(module->implementation_imports);
-    module->interface_imports = NULL;
-    module->implementation_imports = NULL;
-
     return !state.error;
 }
 

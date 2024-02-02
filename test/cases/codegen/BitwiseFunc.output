@@ -4,8 +4,10 @@
 6      // complex
 127    // negative
 96     // shl
+-96    // shl_neg
 6      // shr
 -2     // shr_neg
+16     // shl_u
 2      // shr_u
 97     // shl_plus
 2      // shr_plus

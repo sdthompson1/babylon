@@ -291,5 +291,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_13_Misc.b
-//   gcc Demo_13_Misc.s ExampleLib.s example_lib.c
+//   gcc Demo_13_Misc.c ExampleLib.c example_lib.c
 //   ./a.out

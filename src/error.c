@@ -88,7 +88,7 @@ void report_module_name_mismatch_filename(struct Location location, const char *
     print_error("Module name '%s' does not match filename\n", module_name);
 }
 
-void report_failed_to_open_asm_file(const char *filename)
+void report_failed_to_open_c_file(const char *filename)
 {
     print_error("Failed to open output file '%s'\n", filename);
 }
@@ -409,6 +409,12 @@ void report_cannot_take_ref_to_readonly(struct Location location)
     print_error("Can't take reference (expression is read-only)\n");
 }
 
+void report_cannot_take_ref_to_resizable_array_element(struct Location location)
+{
+    print_location(location);
+    print_error("Can't take reference to element of resizable array\n");
+}
+
 void report_cannot_take_sizeof(struct Term *term)
 {
     print_location(term->location);
@@ -726,12 +732,6 @@ void report_ref_invalid_variant_change(struct Location location)
 {
     print_location(location);
     print_error("Reference may have become invalid due to change in datatype variant\n");
-}
-
-void report_ref_invalid_array_bounds(struct Location location)
-{
-    print_location(location);
-    print_error("Reference may have become invalid due to array size change\n");
 }
 
 

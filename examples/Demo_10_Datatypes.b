@@ -234,5 +234,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_10_Datatypes.b
-//   gcc Demo_10_Datatypes.s ExampleLib.s example_lib.c
+//   gcc Demo_10_Datatypes.c ExampleLib.c example_lib.c
 //   ./a.out

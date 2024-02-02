@@ -12,8 +12,8 @@ function f1()
     r = 1;             // write through the reference
 }
 
-function f2(ref a: i32[])
-    requires sizeof(a) > u64(0);
+
+function f2(ref a: i32[10])
 {
     ref r = a[0];
     r = 1/0;          // Error + poisons a

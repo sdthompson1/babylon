@@ -6,6 +6,8 @@
 79      // complex_if(3, 0)
 99      // if_global_bool()
 55      // while_loop()
+10      // while_loop_2()
 987     // call_stmt_in_loop()
 0       // default_int()
 false   // default_bool()
+999     // return_with_no_value()

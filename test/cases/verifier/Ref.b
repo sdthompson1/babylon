@@ -30,7 +30,7 @@ interface {}
     assert (v.0.0 == 99);   // No error, v is poisoned
   }
 
-  function f4(x: i32[])
+  function f4(x: i32[10])
   {
-    ref v = x[0];  // Error, array index might be out of range
+    ref v = x[20];  // Error, array index might be out of range
   }

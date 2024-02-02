@@ -18,10 +18,12 @@ repository.
 struct HashTable;
 struct Module;
 
-// Codegen a module. Writes assembly code to the given FILE*.
+// Codegen a module. Writes C code to "c_output_file"
+// and header code to "h_output_file".
 // Also writes metadata into the codegen_env.
 
-void codegen_module(FILE *asm_output_file,
+void codegen_module(FILE *c_output_file,
+                    FILE *h_output_file,
                     struct HashTable *codegen_env,
                     struct Module *module,
                     bool root,   // Is this the root module?

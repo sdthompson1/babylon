@@ -28,8 +28,7 @@ function f7()
 
 function f9()
 {
-    var a: i32[];
-    resize_array<i32>(a, 100);
+    var a: i32[100];
 
     var i: u64 = 0;
     while (i < u64(100))
@@ -48,22 +47,17 @@ function f9()
     assert (r == 3);
     r = 4;
     assert (a[3] == 4);
-
-    resize_array<i32>(a, 0);
 }
 
 function f10()
 {
-    var a: i32[,];
-    resize_2d_array<i32>(a, 10, 20);
+    var a: i32[10,20];
     
     a[4,6] = 123;
     ref r = a[4,6];
     assert (r == 123);
     r = 456;
     assert (a[4,6] == 456);
-
-    resize_2d_array<i32>(a, 0, 0);
 }
 
 function f11(ref a: i32[])

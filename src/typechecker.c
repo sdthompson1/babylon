@@ -2297,6 +2297,42 @@ static void typecheck_attributes(struct TypecheckContext *tc_context, struct Att
 static void typecheck_statements(struct TypecheckContext *tc_context,
                                  struct Statement *statements);
 
+static bool contains_resizable_array_element(struct Term *term)
+{
+    if (term == NULL) {
+        return false;
+    }
+
+    switch (term->tag) {
+    case TM_FIELD_PROJ:
+        return contains_resizable_array_element(term->field_proj.lhs);
+
+    case TM_ARRAY_PROJ:
+        // A[i]; need to check if A contains a ref to a resizable array
+        // element, OR if A is a resizable array.
+        // (Note that i containing a ref to a resizable array element is
+        // fine, because the index is computed at the time the ref is taken,
+        // and not recomputed afterwards.)
+        return contains_resizable_array_element(term->array_proj.lhs)
+            || (term->array_proj.lhs
+                && term->array_proj.lhs->type
+                && term->array_proj.lhs->type->tag == TY_DYNAMIC_ARRAY);
+
+    case TM_STRING_LITERAL:
+        return false;
+
+    case TM_VAR:
+        // Even if the var is a ref, it would not contain any reference to a
+        // resizable array element, so we are fine
+        return false;
+
+    default:
+        // Not an lvalue, so there would have been a type error somewhere else
+        // (trying to take ref to non-lvalue) and we can just return false here.
+        return false;
+    }
+}
+
 static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
                                     struct Statement *stmt)
 {
@@ -2341,6 +2377,12 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
                 // Add an inferred type annotation to the var decl statement.
                 stmt->var_decl.type = copy_type(stmt->var_decl.rhs->type);
             }
+        }
+
+        // If this is a ref, the rhs must not be an element of a resizable array
+        if (stmt->var_decl.ref && contains_resizable_array_element(stmt->var_decl.rhs)) {
+            report_cannot_take_ref_to_resizable_array_element(stmt->var_decl.rhs->location);
+            tc_context->error = true;
         }
 
     } else {

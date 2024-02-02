@@ -2,7 +2,6 @@
 98     // bar()
 4      // with_args(12, 4+1)
 402    // calls_bar()
-99     // local_not_in_register()
 true   // returns_bool()
 98     // test_const
 1923   // call_void_twice()

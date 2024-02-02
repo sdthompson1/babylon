@@ -9,11 +9,12 @@ repository.
 
 
 #include "alloc.h"
+#include "cprint.h"
 #include "error.h"
 #include "size_expr.h"
-#include "stack_machine.h"
 #include "util.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -411,82 +412,77 @@ uint64_t get_size_expr_const(struct SizeExpr *expr)
     }
 }
 
-
-// assumption: list is not NULL
-static void eval_term_list(struct StackMachine *mc, struct SizeTermList *list)
+static void write_term_list(struct CPrinter *pr,
+                            struct SizeTermList *list)
 {
-    for (struct SizeTermList * t = list; t; t = t->next) {
-        // Evaluate the term
-        if (t->varname) {
-            stk_get_local(mc, t->varname);
-            if (t->multiplier > 1) {
-                stk_const(mc, t->multiplier);
-                stk_alu(mc, OP_MUL);
-            }
+    while (list) {
+        char buf[30];
+        sprintf(buf, "%" PRIu64, list->multiplier);
+        if (list->varname == NULL) {
+            print_token(pr, buf);
         } else {
-            stk_const(mc, t->multiplier);
+            if (list->multiplier != 1) {
+                print_token(pr, buf);
+                print_token(pr, "*");
+            }
+            print_token(pr, list->varname);
         }
-
-        // If this is not the first term, then add it to the previous term
-        if (t != list) {
-            stk_alu(mc, OP_ADD);
-        }
+        if (list->next) print_token(pr, "+");
+        list = list->next;
     }
 }
 
-void push_size_expr(struct StackMachine *mc, struct SizeExpr *expr)
+void write_size_expr(struct CPrinter *pr,
+                     struct SizeExpr *expr,
+                     char * (*new_temp_name)(void *cxt),
+                     void *cxt)
 {
-    // TODO: It might be possible to optimise the evaluation here,
-    // by pulling out "common terms".
-    // e.g. max(a + b + c, a + b + d) would be faster to evaluate as
-    // a + b + max(c, d).
+    if (expr && expr->next) {
+        // need to use "max"...
+        char *result_name = new_temp_name(cxt);
+        begin_item(pr);
+        print_token(pr, "uint64_t");
+        print_token(pr, result_name);
+        print_token(pr, "=");
+        print_token(pr, "0");
+        print_token(pr, ";");
+        new_line(pr);
+        end_item(pr);
 
-    // For now we just evaluate each TermList "as is" and take the
-    // max.
+        while (expr) {
+            char *temp_name = new_temp_name(cxt);
+            begin_item(pr);
+            print_token(pr, "uint64_t");
+            print_token(pr, temp_name);
+            print_token(pr, "=");
+            write_term_list(pr, expr->term_list);
+            print_token(pr, ";");
+            new_line(pr);
 
+            print_token(pr, result_name);
+            print_token(pr, "=");
+            print_token(pr, temp_name);
+            print_token(pr, ">");
+            print_token(pr, result_name);
+            print_token(pr, "?");
+            print_token(pr, temp_name);
+            print_token(pr, ":");
+            print_token(pr, result_name);
+            print_token(pr, ";");
+            new_line(pr);
+            end_item(pr);
 
-    if (expr == NULL) {
-        // special case
-        stk_const(mc, 0);
-        return;
-    }
-
-
-    // if there are multiple TermLists then create a temporary local
-    // to store the result
-    const char *local_name = "!size_tmp";
-    if (expr->next) {
-        stk_create_local(mc, local_name, false, 8);
-    }
-
-    for (struct SizeExpr *e = expr; e; e = e->next) {
-        // push the TermList's value on the stack
-        // note: e->term_list cannot be NULL because of the SizeExpr invariant
-        eval_term_list(mc, e->term_list);
-
-        // if we are using a local variable then do the max calculations...
-        if (expr->next) {
-            if (e == expr) {
-                // first time, set the local
-                stk_set_local(mc, local_name);
-            } else {
-                // not the first time
-                // dup, compare to local
-                stk_dup(mc, 0);                    // LHS, new value
-                stk_get_local(mc, local_name);     // RHS, old value
-                stk_alu(mc, OP_UGT);               // True if new > old
-                stk_cond_if_nonzero(mc, 1);
-                stk_set_local(mc, local_name);
-                stk_cond_else(mc);
-                stk_pop(mc);
-                stk_cond_endif(mc);
-            }
+            free(temp_name);
+            expr = expr->next;
         }
-    }
 
-    if (expr->next) {
-        // fetch the result of the calculation.
-        stk_get_local(mc, local_name);
-        stk_destroy_local(mc, local_name);
+        print_token(pr, result_name);
+        free(result_name);
+
+    } else if (expr) {
+        write_term_list(pr, expr->term_list);
+
+    } else {
+        print_token(pr, "0");
     }
 }

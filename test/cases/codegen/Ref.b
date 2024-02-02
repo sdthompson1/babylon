@@ -90,31 +90,23 @@ function f8(): i32
 // Complex refs
 function f9(): i32
 {
-    var a: i32[];
-    resize_array<i32>(a, 10);
+    var a: i32[10];
     
     ref r = a[{1,2,3}.1];
     r = 1000;
     var result = a[2];
     
-    resize_array<i32>(a, 0);
     return result;
 }
 
 function f10(): i32
 {
-    var a: {i32[],i32}[][];
-    resize_array<{i32[],i32}[]>(a, 10);
-    resize_array<{i32[],i32}>(a[1], 5);
-    resize_array<i32>(a[1][2].0, 8);
+    var a: {i32[6],i32}[10][5];
 
     ref r = a[2-1][1+1].0[3];
     r = 100;
     var result = a[1][2].0[3];
 
-    resize_array<i32>(a[1][2].0, 0);
-    resize_array<{i32[],i32}>(a[1], 0);
-    resize_array<{i32[],i32}[]>(a, 0);
     return result;
 }
 

@@ -34,7 +34,7 @@ struct SizeExpr * zero_size_expr();
 struct SizeExpr * const_size_expr(uint64_t value);
 
 // Return a new SizeExpr representing "multiplier" times the given variable name.
-// (varname is copied)
+// (varname is copied, and should be the "mangled" name.)
 // Multiplier should be >= 0, and it is assumed that the variable will always
 // be >= 0 as well.
 struct SizeExpr * var_size_expr(const char *varname, uint64_t multiplier);
@@ -60,10 +60,14 @@ bool is_size_expr_zero(struct SizeExpr *);
 uint64_t get_size_expr_const(struct SizeExpr *);
 
 
-// Compute the value of the SizeExpr and push it to the VM stack.
-// Assumes that the variables mentioned in the SizeExpr are available
-// as locals.
-struct StackMachine;
-void push_size_expr(struct StackMachine *mc, struct SizeExpr *size);
+// Print a size expr to a C printer.
+// Produces a C "additive expression" (and possibly some variable declarations).
+// The function "make_temp_name" creates a new temporary variable name, which
+// is then freed by print_size_expr.
+struct CPrinter;
+void write_size_expr(struct CPrinter *printer,
+                     struct SizeExpr *expr,
+                     char * (*new_temp_name)(void *temp_name_context),
+                     void *temp_name_context);
 
 #endif

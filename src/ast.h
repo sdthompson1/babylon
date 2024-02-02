@@ -407,7 +407,6 @@ struct Term {
         struct TermData_Allocated allocated;
         struct TermData_ArrayProj array_proj;
     };
-    int sethi_ullman_number;  // only used by code generator
 };
 
 
@@ -660,8 +659,8 @@ struct Module {
     const char *name;
     struct DeclGroup *interface;
     struct DeclGroup *implementation;
-    struct Import *interface_imports;   // cleared by renamer (as no longer needed after that)
-    struct Import *implementation_imports;  // ditto
+    struct Import *interface_imports;
+    struct Import *implementation_imports;
 
     uint8_t interface_checksum[SHA256_HASH_LENGTH];
     uint8_t implementation_checksum[SHA256_HASH_LENGTH];

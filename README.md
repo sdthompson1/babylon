@@ -79,11 +79,10 @@ The current status of the project is basically as follows:
     - "Verify" mode takes one or more input files, formulates
       verification conditions, and uses SMT solver(s) to verify those
       conditions (as described above).
-    - "Compile" mode works by creating assembly code files, which can
-      be separately assembled and linked to make an executable.
-       - The compiler is currently fairly basic (i.e. it produces
-         very inefficient code) and also can only produce code for
-         x86-64 and Linux at the moment.
+    - "Compile" mode works by translating the program to C files,
+      which can then be compiled by any C compiler. (Previous versions
+      produced assembly code directly, but I abandoned that approach
+      since it was too complicated and had too many bugs.)
 
  - By default, the language verifies that various operator
    preconditions are satisfied (additions don't overflow, divisions
@@ -112,9 +111,8 @@ The current status of the project is basically as follows:
    separate C functions, and then call those from the Babylon side.
    (Moreover, the C/Babylon interface isn't well documented, so you
    basically need to know something about how the compiler works, in
-   order to write the C functions correctly.) Clearly
-   this is not an ideal arrangement,
-   but again, I hope to improve this in the future.
+   order to write the C functions correctly.) Clearly this is not an
+   ideal arrangement, but again, I hope to improve this in the future.
 
  - I have created a few example programs (see below), which
    demonstrate the system, and act as a tutorial of sorts.
@@ -215,8 +213,6 @@ I would like to continue improving the language itself:
  - add recursion (currently recursive functions or recursive datatypes
    are not supported, mostly because I haven't got around to adding
    them yet)
- - maybe reconsider how "refs" work (as they have some limitations
-   currently)
  - maybe add support for higher order functions (if I can figure out
    how to do this in the SMT solvers)
  - loop features: infinite while loops, "break" and "continue"
@@ -233,10 +229,6 @@ The compiler could be made easier to use, e.g.:
  - better error messages
  - the provers to be used should be specified in some config file,
    rather than hard coded
-
-The compiler could produce more efficient code. Perhaps rather than
-trying to generate asm directly, I should just generate a C program
-and let a C compiler do the heavy lifting of optimisation.
 
 The compiler should also be portable to other architectures and
 operating systems (currently it only supports x86-64 and Linux).

@@ -68,12 +68,31 @@ static struct Term * make_unsigned_int_literal(uint64_t value)
     return make_int_literal_term(g_no_location, buf);
 }
 
+static uint64_t normalise_to_type(struct Type *type, uint64_t value)
+{
+    if (type->tag != TY_FINITE_INT) fatal_error("normalise_to_type called with wrong type");
+    if (type->int_data.num_bits == 64) return value;  // nothing needed
+
+    uint64_t ones = (uint64_t)-1;
+    ones <<= type->int_data.num_bits;
+
+    value = value & ~ones;  // mask to the bottom bits only
+
+    if (type->int_data.is_signed && (value & (ones >> 1))) {
+        // sign bit is set
+        value |= ones;
+    }
+
+    return value;
+}
+
 struct Term * make_literal_of_type(struct Type *type, uint64_t value)
 {
     struct Term *result = NULL;
 
     switch (type->tag) {
     case TY_FINITE_INT:
+        value = normalise_to_type(type, value);
         if (type->int_data.is_signed) {
             int64_t signed_value;
             memcpy(&signed_value, &value, sizeof(int64_t));

@@ -84,6 +84,24 @@ interface
                 array[i, j] == default<T>();
 
 
+    extern function resize_3d_array<T>(ref array: T[,,], dim0: u64, dim1: u64, dim2: u64)
+
+        // The total number of elements must not overflow u64.
+        requires Int.can_mul_u64(dim0, dim1);
+        requires Int.can_mul_u64(dim0 * dim1, dim2);
+
+        // For simplicity -- this can only be used with non-allocated types.
+        requires forall (x: T) !allocated(x);
+
+        // The array is resized to the new size.
+        ensures sizeof(array) == {dim0, dim1, dim2};
+
+        // For simplicity -- all elements are reset to default.
+        ensures forall (i: u64) forall (j: u64) forall (k: u64)
+            i < dim0 && j < dim1 && k < dim2 ==>
+                array[i, j, k] == default<T>();
+
+
 
     // A sample allocated abstract type.
     type AllocTest (allocated);

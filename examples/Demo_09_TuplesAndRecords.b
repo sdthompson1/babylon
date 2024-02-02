@@ -246,5 +246,5 @@ function main()
 
 // To run this example:
 //   babylon -c Demo_09_TuplesAndRecords.b
-//   gcc Demo_09_TuplesAndRecords.s ExampleLib.s example_lib.c
+//   gcc Demo_09_TuplesAndRecords.c ExampleLib.c example_lib.c
 //   ./a.out

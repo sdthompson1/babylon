@@ -26,7 +26,7 @@ char * sanitise_name(const char *var_name);
 void report_circular_dependency(struct Location location, const char *module_name);
 void report_module_not_found(struct Location location, const char *module_name, const char *filename);
 void report_module_name_mismatch_filename(struct Location location, const char *module_name);
-void report_failed_to_open_asm_file(const char *filename);
+void report_failed_to_open_c_file(const char *filename);
 
 // Lexer errors
 void report_lexical_error(struct Location location);
@@ -70,6 +70,7 @@ void report_cannot_swap(struct Term *term);
 void report_cannot_swap_readonly(struct Term *term);
 void report_cannot_take_ref(struct Location location);
 void report_cannot_take_ref_to_readonly(struct Location location);
+void report_cannot_take_ref_to_resizable_array_element(struct Location location);
 void report_cannot_take_sizeof(struct Term *term);
 void report_unexpected_return_value(struct Term *term);
 void report_missing_return_value(struct Statement *stmt);
@@ -134,7 +135,6 @@ void report_return_allocated(struct Location loc);
 void report_var_still_allocated(const char *name, struct Location loc);
 void report_var_still_allocated_at_return(const char *name, struct Location loc);
 void report_ref_invalid_variant_change(struct Location location);
-void report_ref_invalid_array_bounds(struct Location location);
 
 // Fatal errors (not expected in normal operation)
 #define fatal_error(err) fatal_error_impl(err, __FILE__, __LINE__)
