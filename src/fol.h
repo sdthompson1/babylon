@@ -136,7 +136,7 @@ In addition convert_fol_to_smt assumes that names do not contain the
 
 */
 
-struct DiskHashTable;
+struct CacheDb;
 struct Sexpr;
 
 enum FolResult {
@@ -147,7 +147,7 @@ enum FolResult {
 
 // this frees "problem" (and all children) after solving
 enum FolResult solve_fol_problem(struct Sexpr *problem,
-                                 struct DiskHashTable *cache_db,
+                                 struct CacheDb *cache_db,
                                  const char *debug_filename,
                                  bool print_progress_messages,
                                  int timeout_seconds);

@@ -40,7 +40,7 @@ main = shakeArgs shakeOptions{shakeFiles="build"} $ do
         need os
 
         flags <- getFlags
-        cmd_ "gcc" flags "-o" [out] os
+        cmd_ "gcc" flags "-o" [out] os ["-lsqlite3"]
 
     -- Compile Step
     "build//*.o" %> \out -> do

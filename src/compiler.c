@@ -7,13 +7,11 @@ For licensing information please see LICENCE.txt at the root of the
 repository.
 */
 
-#define _POSIX_C_SOURCE 200809L   // for O_RDWR (etc) for diskhash
-
 #include "alloc.h"
 #include "ast.h"
+#include "cache_db.h"
 #include "compiler.h"
 #include "debug_print.h"
-#include "diskhash.h"
 #include "error.h"
 #include "hash_table.h"
 #include "initial_env.h"
@@ -31,11 +29,6 @@ repository.
 
 #include <stdlib.h>
 #include <string.h>
-
-// for O_RDWR (etc) for diskhash
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 
 struct StringNode {
     const char *ptr;
@@ -79,36 +72,8 @@ struct LoadDetails {
     bool generate_main;
     bool auto_main;
 
-    DiskHashTable *cache_db;
+    struct CacheDb *cache_db;
 };
-
-static DiskHashTable * open_cache_db(const char *prefix)
-{
-    HashTableOpts opts = dht_zero_opts();
-    opts.key_len = SHA256_HASH_LENGTH;
-
-    char *filename = copy_string_2(prefix, "babylon.cache");
-
-    DiskHashTable *db = dht_open(filename,
-                                 opts,
-                                 O_CLOEXEC | O_RDWR,
-                                 NULL);
-
-    if (db == NULL) {
-        db = dht_open(filename,
-                      opts,
-                      O_CLOEXEC | O_RDWR | O_CREAT | O_EXCL,
-                      NULL);
-
-        if (db == NULL) {
-            fprintf(stderr, "Warning: failed to open '%s', disabling caching.\n", filename);
-        }
-    }
-
-    free(filename);
-
-    return db;
-}
 
 static void interpret_filename(struct LoadDetails *details, const char *filename)
 {
@@ -323,12 +288,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
             // If so, that means we have in the past verified a module with
             // identical text, and identical imported interfaces. Therefore
             // there is no need to verify it again.
-            bool found_in_cache =
-                (details->cache_db
-                 && dht_lookup(details->cache_db,
-                               (char*)full_module_fingerprint));
-
-            if (found_in_cache) {
+            if (sha256_exists_in_db(details->cache_db, full_module_fingerprint)) {
                 if (details->show_progress) {
                     fprintf(stderr, "Skipping module %s (cached)\n", module->name);
                 }
@@ -364,7 +324,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
         // the cache (if this was a full verification), so that we know
         // not to verify it again in future.
         if (!interface_only && details->cache_db) {
-            dht_insert(details->cache_db, (char*)full_module_fingerprint, NULL);
+            add_sha256_to_db(details->cache_db, full_module_fingerprint);
         }
     }
 
@@ -494,7 +454,8 @@ bool compile(struct CompileOptions *options)
 
     bool success = load_module_recursive(&details);
 
-    dht_free(details.cache_db);
+    close_cache_db(details.cache_db);
+    details.cache_db = NULL;
 
     free_verifier_env(details.verifier_env);
 

@@ -9,8 +9,8 @@ repository.
 
 
 #include "alloc.h"
+#include "cache_db.h"
 #include "convert_fol_to_smt.h"
-#include "diskhash.h"
 #include "error.h"
 #include "fol.h"
 #include "run_processes.h"
@@ -185,7 +185,7 @@ static enum FolResult solve_smt_problem(struct Sexpr *smt_problem,
 }
 
 enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
-                                 DiskHashTable *cache_db,
+                                 struct CacheDb *cache_db,
                                  const char *debug_filename,
                                  bool print_progress_messages,
                                  int timeout_seconds)
@@ -223,12 +223,7 @@ enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
         sha256_final(&ctx, hash);
     }
 
-    bool cache_hit = false;
-    if (cache_db) {
-        cache_hit = dht_lookup(cache_db, (char*)hash);
-    }
-
-    if (cache_hit) {
+    if (sha256_exists_in_db(cache_db, hash)) {
         free_sexpr(smt_problem);
         if (print_progress_messages) {
             fprintf(stderr, "(cached)\n");
@@ -240,8 +235,8 @@ enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
     enum FolResult result = solve_smt_problem(smt_problem, print_progress_messages, timeout_seconds);
 
     // successful results can be written back to the cache
-    if (result == FOL_RESULT_PROVED && cache_db) {
-        dht_insert(cache_db, (char*)hash, NULL);
+    if (result == FOL_RESULT_PROVED) {
+        add_sha256_to_db(cache_db, hash);
     }
 
     free_sexpr(smt_problem);

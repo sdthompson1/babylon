@@ -9,7 +9,6 @@ repository.
 
 #include "alloc.h"
 #include "ast.h"
-#include "diskhash.h"
 #include "error.h"
 #include "hash_table.h"
 #include "initial_env.h"

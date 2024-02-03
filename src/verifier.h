@@ -16,6 +16,7 @@ repository.
 
 #include <stdbool.h>
 
+struct CacheDb;
 struct Module;
 struct Sexpr;
 struct VerifierEnv;
@@ -26,7 +27,7 @@ void free_verifier_env(struct VerifierEnv *);
 
 
 struct VerifierOptions {
-    struct DiskHashTable *cache_db;
+    struct CacheDb *cache_db;
     const char *debug_filename_prefix;
     int timeout_seconds;
     bool interface_only;

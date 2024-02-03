@@ -14,6 +14,7 @@ repository.
 #include <stdbool.h>
 #include <stdint.h>
 
+struct CacheDb;
 struct FunArg;
 struct HashTable;
 struct Sexpr;
@@ -121,7 +122,7 @@ struct VContext {
     // Debug and Cache files
     const char *debug_filename_prefix;
     struct HashTable *debug_files_created;
-    struct DiskHashTable *cache_db;
+    struct CacheDb *cache_db;
 
     // Error and timeout handling
     int timeout_seconds;

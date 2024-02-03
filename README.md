@@ -163,10 +163,11 @@ This section describes how to build the Babylon compiler.
 A Linux machine, with gcc (or another C compiler) available, is
 required.
 
-The Babylon compiler itself is written in C, with no external
-dependencies, so it is easy to build. You can just run `gcc -O3 -o
-babylon src/*.c` to make an optimised `babylon` executable in the
-current directory.
+The Babylon compiler itself is written in C, and the only external
+dependency is sqlite3. The simplest way to build is to run `gcc -O3 -o
+babylon src/*.c -lsqlite3` to make an optimised `babylon` executable
+in the current directory. (Ensure that you have the libsqlite3-dev
+package, or equivalent for your OS, installed.)
 
 (Alternatively, you can install the "Shake" build system from
 https://shakebuild.com. Then you will be able to use the Shakefile.hs
