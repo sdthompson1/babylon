@@ -435,7 +435,9 @@ bool compile(struct CompileOptions *options)
         details.output_prefix = details.input_prefix;
     }
 
-    if (options->cache_mode == CACHE_DISABLED) {
+    // Open the cache unless (a) it is disabled or (b) we are only compiling,
+    // not verifying (in which case the cache is not needed).
+    if (options->cache_mode == CACHE_DISABLED || options->mode == CM_COMPILE) {
         details.cache_db = NULL;
     } else {
         details.cache_db = open_cache_db(details.output_prefix);
