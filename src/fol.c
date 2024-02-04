@@ -115,7 +115,7 @@ static enum FolResult interpret_result(struct Job *job,
 {
     if (is_unsat(proc->output, proc->output_length)) {
         if (print_progress_messages) {
-            fprintf(stderr, "(%s, %.1fs)\n", proc->cmd[0], job->time_in_seconds);
+            fprintf(stderr, "(%s, %.1fs)", proc->cmd[0], job->time_in_seconds);
         }
         return FOL_RESULT_PROVED;
     } else if (is_sat(proc->output, proc->output_length)) {
@@ -135,7 +135,7 @@ static enum FolResult interpret_result(struct Job *job,
                 proc->output[MAX_OUTPUT - 1] = 0;
             }
 
-            fprintf(stderr, "\nWARNING: unexpected output from prover [%s]: %s\n",
+            fprintf(stderr, "\n\nWARNING: unexpected output from prover [%s]: %s\n",
                     proc->cmd[0], proc->output);
         }
         return FOL_RESULT_UNKNOWN;
@@ -177,6 +177,10 @@ static enum FolResult solve_smt_problem(struct Sexpr *smt_problem,
 
     if (result == FOL_RESULT_UNKNOWN && !job.timeout && print_progress_messages) {
         fprintf(stderr, "('unknown', %.1fs)\n", job.time_in_seconds);
+    }
+
+    if (result != FOL_RESULT_UNKNOWN && print_progress_messages) {
+        fprintf(stderr, "\n");
     }
 
     free(job.procs);
