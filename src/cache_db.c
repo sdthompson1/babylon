@@ -72,6 +72,7 @@ void close_cache_db(struct CacheDb *db)
         sqlite3_finalize(db->insert_stmt);
         sqlite3_finalize(db->query_stmt);
         sqlite3_close(db->db);
+        free(db);
     }
 }
 
