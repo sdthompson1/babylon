@@ -31,15 +31,16 @@ struct CacheDb * open_cache_db(const char *prefix)
     struct CacheDb *db = alloc(sizeof(struct CacheDb));
     int rc = sqlite3_open(filename, &db->db);
 
-    free(filename);
-
     if (rc != SQLITE_OK) {
         fprintf(stderr, "Warning: failed to open '%s', disabling caching.\n", filename);
         fprintf(stderr, "(sqlite error message was: %s)\n", sqlite3_errmsg(db->db));
         sqlite3_close(db->db);
+        free(filename);
         free(db);
         return NULL;
     }
+
+    free(filename);
 
     // Make sure our table exists.
     // For now, we just want a one-column table containing the SHA256 key.
