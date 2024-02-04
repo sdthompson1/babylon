@@ -110,6 +110,10 @@ void report_main_not_found(const char *module_name);
 void report_main_wrong_type(const char *module_name);
 void report_both_body_and_extern(struct Location location);
 void report_non_compile_time_constant(struct Location location);
+void report_compile_time_overflow(struct Location location);
+void report_compile_time_division_by_zero(struct Location location);
+void report_compile_time_invalid_shift_amount(struct Location location);
+void report_compile_time_match_failure(struct Location location);
 void report_int_real_not_allowed(struct Location location);
 void report_can_only_show_hide_functions(struct Location location);
 

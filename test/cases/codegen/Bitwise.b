@@ -50,6 +50,9 @@ const iff2: bool = true <==> false;
 const imp_right_assoc: bool = false ==> false ==> false;
 const imp_brackets:    bool = (false ==> false) ==> false;
 
+// This will be accepted by the constant-evaluator (even though strictly speaking
+// the shift count is too big for an 8-bit operand), but it produces zero.
+const shr_too_much: u8 = u8(255) >> 8;
 
 function main()
 {
@@ -97,4 +100,6 @@ function main()
 
     Test.print_bool(imp_right_assoc);
     Test.print_bool(imp_brackets);
+
+    Test.print_u8(shr_too_much);
 }

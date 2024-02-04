@@ -53,10 +53,10 @@ const test7: bool =
     case E{} => false  // Type mismatch
   };
 
-const test8: bool =
-  match (de) {
-    case E{} => false  // Ok
-  };
+
+
+
+
 
 const test9: i32 =
   match (false) {

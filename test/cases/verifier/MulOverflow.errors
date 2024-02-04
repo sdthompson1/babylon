@@ -1,6 +1,6 @@
-MulOverflow.b:4:24: Operator precondition might not be met
-MulOverflow.b:7:28: Operator precondition might not be met
-MulOverflow.b:8:30: Operator precondition might not be met
-MulOverflow.b:11:33: Operator precondition might not be met
-MulOverflow.b:13:26: Operator precondition might not be met
-MulOverflow.b:14:26: Operator precondition might not be met
+MulOverflow.b:7:22: Operator precondition might not be met
+MulOverflow.b:10:26: Operator precondition might not be met
+MulOverflow.b:11:28: Operator precondition might not be met
+MulOverflow.b:14:31: Operator precondition might not be met
+MulOverflow.b:16:24: Operator precondition might not be met
+MulOverflow.b:17:24: Operator precondition might not be met

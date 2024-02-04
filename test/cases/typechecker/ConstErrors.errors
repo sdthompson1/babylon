@@ -1,9 +1,28 @@
 ConstErrors.b:20:12: Value is not a compile-time constant
-ConstErrors.b:21:12: Value is not a compile-time constant
-ConstErrors.b:22:12: Value is not a compile-time constant
+ConstErrors.b:21:15: Value is not a compile-time constant
+ConstErrors.b:22:14: Value is not a compile-time constant
+ConstErrors.b:23:12: Overflow in compile-time constant
+ConstErrors.b:24:12: Division by zero in compile-time constant
 ConstErrors.b:25:12: Value is not a compile-time constant
-ConstErrors.b:26:12: Value is not a compile-time constant
-ConstErrors.b:27:12: Value is not a compile-time constant
-ConstErrors.b:28:12: Value is not a compile-time constant
-ConstErrors.b:29:13: Value is not a compile-time constant
-ConstErrors.b:31:13: Value is not a compile-time constant
+ConstErrors.b:26:16: Value is not a compile-time constant
+ConstErrors.b:27:17: Value is not a compile-time constant
+ConstErrors.b:28:16: Value is not a compile-time constant
+ConstErrors.b:29:39: Value is not a compile-time constant
+ConstErrors.b:31:21: Value is not a compile-time constant
+ConstErrors.b:35:13: Invalid shift amount in compile-time constant
+ConstErrors.b:36:13: Overflow in compile-time constant
+ConstErrors.b:37:13: Overflow in compile-time constant
+ConstErrors.b:38:13: Overflow in compile-time constant
+ConstErrors.b:39:13: Overflow in compile-time constant
+ConstErrors.b:40:13: Overflow in compile-time constant
+ConstErrors.b:41:13: Overflow in compile-time constant
+ConstErrors.b:42:13: Overflow in compile-time constant
+ConstErrors.b:43:13: Overflow in compile-time constant
+ConstErrors.b:44:13: Overflow in compile-time constant
+ConstErrors.b:45:13: Overflow in compile-time constant
+ConstErrors.b:46:13: Overflow in compile-time constant
+ConstErrors.b:47:13: Overflow in compile-time constant
+ConstErrors.b:48:13: Overflow in compile-time constant
+ConstErrors.b:49:13: Invalid shift amount in compile-time constant
+ConstErrors.b:54:13: Overflow in compile-time constant
+ConstErrors.b:59:5: Pattern match failure in compile-time constant

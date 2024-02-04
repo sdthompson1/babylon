@@ -4,6 +4,7 @@
 6    // minus_no_space
 19000000000  // big_plus
 1000000000   // big_minus
+1000000000   // unsigned_minus
 -50           // mul8
 12000         // mul16
 22200000      // mul32

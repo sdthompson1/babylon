@@ -68,22 +68,41 @@ static struct Term * make_unsigned_int_literal(uint64_t value)
     return make_int_literal_term(g_no_location, buf);
 }
 
-static uint64_t normalise_to_type(struct Type *type, uint64_t value)
+bool is_value_in_range_for_type(struct Type *type, uint64_t value)
 {
-    if (type->tag != TY_FINITE_INT) fatal_error("normalise_to_type called with wrong type");
-    if (type->int_data.num_bits == 64) return value;  // nothing needed
-
-    uint64_t ones = (uint64_t)-1;
-    ones <<= type->int_data.num_bits;
-
-    value = value & ~ones;  // mask to the bottom bits only
-
-    if (type->int_data.is_signed && (value & (ones >> 1))) {
-        // sign bit is set
-        value |= ones;
+    if (type->tag == TY_BOOL) {
+        return value == 0 || value == 1;
     }
 
-    return value;
+    if (type->tag != TY_FINITE_INT) {
+        fatal_error("is_value_in_range_for_type called with wrong type");
+    }
+
+    int bits = type->int_data.num_bits;
+    bool s = type->int_data.is_signed;
+
+    switch (bits) {
+    case 8:
+        if (s) return value <= UINT64_C(0x7f)
+                   || value >= UINT64_C(0xffffffffffffff80);
+        else return value <= UINT64_C(0xff);
+
+    case 16:
+        if (s) return value <= UINT64_C(0x7fff)
+                   || value >= UINT64_C(0xffffffffffff8000);
+        else return value <= UINT64_C(0xffff);
+
+    case 32:
+        if (s) return value <= UINT64_C(0x7fffffff)
+                   || value >= UINT64_C(0xffffffff80000000);
+        else return value <= UINT64_C(0xffffffff);
+
+    case 64:
+        return true;
+
+    default:
+        fatal_error("is_value_in_range_for_type: invalid num_bits");
+    }
 }
 
 struct Term * make_literal_of_type(struct Type *type, uint64_t value)
@@ -92,7 +111,9 @@ struct Term * make_literal_of_type(struct Type *type, uint64_t value)
 
     switch (type->tag) {
     case TY_FINITE_INT:
-        value = normalise_to_type(type, value);
+        if (!is_value_in_range_for_type(type, value)) {
+            fatal_error("make_literal_of_type (TY_FINITE_INT): value is out of range");
+        }
         if (type->int_data.is_signed) {
             int64_t signed_value;
             memcpy(&signed_value, &value, sizeof(int64_t));
@@ -103,6 +124,9 @@ struct Term * make_literal_of_type(struct Type *type, uint64_t value)
         break;
 
     case TY_BOOL:
+        if (value != 0 && value != 1) {
+            fatal_error("make_literal_of_type (TY_BOOL): value is not 0 or 1");
+        }
         result = make_bool_literal_term(g_no_location, value != 0);
         break;
 

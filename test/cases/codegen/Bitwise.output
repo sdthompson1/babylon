@@ -32,3 +32,4 @@ true   // iff1
 false  // iff2
 true   // imp_right_assoc
 false  // imp_brackets
+0      // shr_too_much

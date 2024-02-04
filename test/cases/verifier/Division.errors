@@ -1,8 +1,8 @@
-Division.b:4:28: Operator precondition might not be met
-Division.b:7:33: Operator precondition might not be met
-Division.b:9:33: Operator precondition might not be met
-Division.b:12:37: Operator precondition might not be met
-Division.b:16:28: Operator precondition might not be met
-Division.b:22:33: Operator precondition might not be met
-Division.b:24:33: Operator precondition might not be met
-Division.b:27:37: Operator precondition might not be met
+Division.b:7:26: Operator precondition might not be met
+Division.b:10:31: Operator precondition might not be met
+Division.b:12:31: Operator precondition might not be met
+Division.b:15:35: Operator precondition might not be met
+Division.b:19:26: Operator precondition might not be met
+Division.b:25:31: Operator precondition might not be met
+Division.b:27:31: Operator precondition might not be met
+Division.b:30:35: Operator precondition might not be met

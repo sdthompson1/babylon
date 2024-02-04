@@ -327,7 +327,6 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                 if (normal == NULL) {
                     // Size is not a compile time constant
                     free_type(u64);
-                    report_non_compile_time_constant((*type)->fixed_array_data.sizes[i]->location);
                     return false;
                 }
                 free_term((*type)->fixed_array_data.sizes[i]);
@@ -2918,7 +2917,6 @@ static void evaluate_constant(struct TypecheckContext *tc_context,
         if (entry) {
             struct Term *value = eval_to_normal_form(tc_context->global_env, decl->const_data.rhs);
             if (value == NULL) {
-                report_non_compile_time_constant(decl->const_data.rhs->location);
                 tc_context->error = true;
             } else {
                 entry->value = value;

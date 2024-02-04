@@ -227,6 +227,30 @@ void report_non_compile_time_constant(struct Location location)
     print_error("Value is not a compile-time constant\n");
 }
 
+void report_compile_time_overflow(struct Location location)
+{
+    print_location(location);
+    print_error("Overflow in compile-time constant\n");
+}
+
+void report_compile_time_division_by_zero(struct Location location)
+{
+    print_location(location);
+    print_error("Division by zero in compile-time constant\n");
+}
+
+void report_compile_time_invalid_shift_amount(struct Location location)
+{
+    print_location(location);
+    print_error("Invalid shift amount in compile-time constant\n");
+}
+
+void report_compile_time_match_failure(struct Location location)
+{
+    print_location(location);
+    print_error("Pattern match failure in compile-time constant\n");
+}
+
 void report_int_real_not_allowed(struct Location location)
 {
     print_location(location);

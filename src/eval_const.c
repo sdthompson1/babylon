@@ -28,24 +28,47 @@ static struct Term * eval_var(struct HashTable *env, struct Term *term)
     if (entry && entry->value) {
         return copy_term(entry->value);
     } else {
+        report_non_compile_time_constant(term->location);
         return NULL;
     }
 }
 
 static struct Term * eval_cast(struct HashTable *env, struct Term *term)
 {
-    struct Term *result = eval_to_normal_form(env, term->cast.operand);
-    if (!result) return NULL;
+    struct Term *operand = eval_to_normal_form(env, term->cast.operand);
+    if (!operand) return NULL;
 
-    if (result->type->tag != TY_FINITE_INT || term->type->tag != TY_FINITE_INT) {
+    if (operand->type->tag != TY_FINITE_INT || term->type->tag != TY_FINITE_INT) {
         fatal_error("eval_cast: types are not as expected");
     }
 
-    uint64_t value = normal_form_to_int(result);
-    free_term(result);
-    result = NULL;
+    // Evaluate the operand to uint64 (either signed or unsigned as
+    // appropriate for the type)
+    uint64_t value = normal_form_to_int(operand);
 
-    return make_literal_of_type(term->cast.target_type, value);
+    // If casting unsigned to signed, or vice versa, then we need bit
+    // 63 clear, otherwise it is an overflow.
+    bool valid = true;
+    if (term->type->int_data.is_signed != operand->type->int_data.is_signed &&
+        (((value + 0u) & UINT64_C(0x8000000000000000)) != 0)) {
+        valid = false;
+    }
+    // Also if the value is out of range for the new type then it is
+    // an overflow.
+    if (!is_value_in_range_for_type(term->type, value)) {
+        valid = false;
+    }
+
+    free_term(operand);
+    operand = NULL;
+
+    if (!valid) {
+        report_compile_time_overflow(term->location);
+        return NULL;
+    }
+
+    // Return the same value, but in the new type.
+    return make_literal_of_type(term->type, value);
 }
 
 static struct Term * eval_if(struct HashTable *env, struct Term *term)
@@ -78,17 +101,42 @@ static struct Term * eval_if(struct HashTable *env, struct Term *term)
 }
 
 
-uint64_t compute_unop(enum UnOp op, uint64_t x)
+bool compute_unop(struct Location location,
+                  struct Type *type,
+                  enum UnOp op,
+                  uint64_t *x)
 {
     switch (op) {
     case UNOP_NEGATE:
-        return -x;
+        // Note: this is always signed, we do not (currently) allow negation of
+        // unsigned values.
+        // If the value is 0x800..00 (i.e. just bit 63 set) then it cannot be negated.
+        // Otherwise negation will succeed (at least as a 64-bit operation).
+        if (*x == UINT64_C(0x8000000000000000)) {
+            report_compile_time_overflow(location);
+            return false;
+        } else {
+            *x = -(*x);
+            return true;
+        }
 
     case UNOP_COMPLEMENT:
-        return ~x;
+        if (type->tag != TY_FINITE_INT) {
+            fatal_error("compute_unop: wrong type");
+        }
+        *x = ~(*x);
+        if (!type->int_data.is_signed) {
+            // We do not want to complement the zero-bits to the "left" of the
+            // value in this case!
+            uint64_t sign_bit = (UINT64_C(1) + 0u) << (type->int_data.num_bits - 1);
+            uint64_t keep_bits = (sign_bit - 1u) | sign_bit;
+            *x = (*x + 0u) & keep_bits;
+        }
+        return true;
 
     case UNOP_NOT:
-        return x ^ 1;
+        *x ^= 1;
+        return true;
     }
 
     fatal_error("bad unop");
@@ -104,35 +152,56 @@ static struct Term * eval_unop(struct HashTable *env, struct Term *term)
     uint64_t value = normal_form_to_int(operand);
     free_term(operand);
 
-    value = compute_unop(term->unop.operator, value);
-    return make_literal_of_type(term->type, value);
+    bool ok = compute_unop(term->location,
+                           term->type,
+                           term->unop.operator,
+                           &value);
+    if (ok) {
+        if (is_value_in_range_for_type(term->type, value)) {
+            return make_literal_of_type(term->type, value);
+        } else {
+            report_compile_time_overflow(term->location);
+            return NULL;
+        }
+    } else {
+        return NULL;
+    }
 }
 
-
-uint64_t compute_division(enum BinOp op, bool is_signed, uint64_t x, uint64_t y)
+bool compute_division(struct Location location,
+                      enum BinOp op,
+                      bool is_signed,
+                      uint64_t *x,
+                      uint64_t y)
 {
-    // This will just return 0 if the division is undefined or would overflow.
-
     if (y == 0) {
-        return 0;
+        report_compile_time_division_by_zero(location);
+        return false;
     }
 
     if (is_signed) {
         int64_t xs, ys;
-        memcpy(&xs, &x, sizeof(int64_t));
+        memcpy(&xs, x, sizeof(int64_t));
         memcpy(&ys, &y, sizeof(int64_t));
 
         if (xs == INT64_MIN && ys == -1) {
-            // would overflow
-            return 0;
+            report_compile_time_overflow(location);
+            return false;
         } else {
-            if (op == BINOP_DIVIDE) return xs / ys;
-            else return xs % ys;
+            int64_t result;
+            if (op == BINOP_DIVIDE) {
+                result = xs / ys;
+            } else {
+                result = xs % ys;
+            }
+            memcpy(x, &result, 8);
+            return true;
         }
 
     } else {
-        if (op == BINOP_DIVIDE) return x / y;
-        else return x % y;
+        if (op == BINOP_DIVIDE) *x = (*x + 0u) / y;
+        else *x = (*x + 0u) % y;
+        return true;
     }
 }
 
@@ -162,85 +231,191 @@ uint64_t compute_comparison(enum BinOp op, bool is_signed, uint64_t x, uint64_t 
     }
 }
 
-uint64_t compute_binop(enum BinOp op, bool is_signed, uint64_t x, uint64_t y)
+bool compute_addition(struct Location location,
+                      bool is_signed,
+                      uint64_t *x,
+                      uint64_t y)
+{
+    uint64_t result = (*x + 0u) + y;
+    if (is_signed) {
+        uint64_t sign_bit = UINT64_C(0x8000000000000000);
+        bool x_sign = (((*x + 0u) & sign_bit) != 0);
+        bool y_sign = (((y + 0u) & sign_bit) != 0);
+        bool result_sign = (((result + 0u) & sign_bit) != 0);
+        if (x_sign == y_sign && x_sign != result_sign) {
+            report_compile_time_overflow(location);
+            return false;
+        }
+    } else {
+        if (result < y) {
+            report_compile_time_overflow(location);
+            return false;
+        }
+    }
+    *x = result;
+    return true;
+}
+
+// Based on stack overflow answer:
+// https://stackoverflow.com/questions/31652875/fastest-way-to-multiply-two-64-bit-ints-to-128-bit-then-to-64-bit
+void umul64wide(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo)
+{
+    uint64_t a_lo = (uint64_t)(uint32_t)a;
+    uint64_t a_hi = (a + 0u) >> 32;
+    uint64_t b_lo = (uint64_t)(uint32_t)b;
+    uint64_t b_hi = (b + 0u) >> 32;
+
+    uint64_t p0 = (a_lo + 0u) * b_lo;
+    uint64_t p1 = (a_lo + 0u) * b_hi;
+    uint64_t p2 = (a_hi + 0u) * b_lo;
+    uint64_t p3 = (a_hi + 0u) * b_hi;
+
+    uint32_t cy = (uint32_t)( ( ((p0 + 0u) >> 32)
+                                + (uint32_t)p1
+                                + (uint32_t)p2)
+                              >> 32);
+
+    *lo = (p0 + 0u) + (p1 << 32) + (p2 << 32);
+    *hi = (p3 + 0u) + (p1 >> 32) + (p2 >> 32) + cy;
+}
+
+void mul64wide(int64_t a, int64_t b, int64_t *hi, int64_t *lo)
+{
+    umul64wide( (uint64_t)a, (uint64_t)b, (uint64_t*)hi, (uint64_t*)lo );
+    if (a < 0) *hi -= b;
+    if (b < 0) *hi -= a;
+}
+
+// returns true if good, false if overflow
+bool multiply_with_overflow_check(bool is_signed,
+                                  uint64_t x,
+                                  uint64_t y,
+                                  uint64_t *result)
+{
+    uint64_t hi;
+    if (is_signed) {
+        int64_t a, b;
+        memcpy(&a, &x, 8);
+        memcpy(&b, &y, 8);
+        mul64wide(a, b, (int64_t*)&hi, (int64_t*)result);
+        uint64_t sign_bit = (UINT64_C(1) + 0u) << 63;
+        if ((*result + 0u) & sign_bit) {
+            return hi == UINT64_MAX;
+        } else {
+            return hi == 0;
+        }
+    } else {
+        umul64wide(x, y, &hi, result);
+        return hi == 0;
+    }
+}
+
+bool compute_binop(struct Location location,
+                   enum BinOp op,
+                   bool is_signed,
+                   uint64_t *x,
+                   uint64_t y)
 {
     switch (op) {
     case BINOP_PLUS:
-        return x + y;
+        return compute_addition(location, is_signed, x, y);
 
     case BINOP_MINUS:
-        return x - y;
+        if (is_signed) {
+            // negate y, then add
+            y = -(y + 0u);
+            return compute_addition(location, is_signed, x, y);
+        } else {
+            // overflow if y > x
+            if (y > *x) {
+                report_compile_time_overflow(location);
+                return false;
+            } else {
+                *x = *x + 0u - y;
+                return true;
+            }
+        }
 
     case BINOP_TIMES:
-        return x * y;
+        {
+            uint64_t result;
+            if (multiply_with_overflow_check(is_signed, *x, y, &result)) {
+                *x = result;
+                return true;
+            } else {
+                report_compile_time_overflow(location);
+                return false;
+            }
+        }
 
     case BINOP_DIVIDE:
     case BINOP_MODULO:
-        return compute_division(op, is_signed, x, y);
+        return compute_division(location, op, is_signed, x, y);
 
     case BINOP_BITAND:
     case BINOP_AND:
-        return x & y;
+        *x = (*x + 0u) & y;
+        return true;
 
     case BINOP_BITOR:
     case BINOP_OR:
-        return x | y;
+        *x = (*x + 0u) | y;
+        return true;
 
     case BINOP_BITXOR:
-        return x ^ y;
+        *x = (*x + 0u) ^ y;
+        return true;
 
     case BINOP_SHIFTLEFT:
         if (y >= 64) {
-            return 0;
+            report_compile_time_invalid_shift_amount(location);
+            return false;
         } else {
-            return (x + 0u) << y;
+            *x = (*x + 0u) << y;
+            return true;
         }
 
     case BINOP_SHIFTRIGHT:
-        if (is_signed) {
-            if (y == 0) {
-                return x;
-            } else if (x & UINT64_C(0x8000000000000000)) {
-                // Simulate a signed right shift
-                if (y >= 64) {
-                    return UINT64_MAX;
-                } else {
-                    uint64_t ones = (uint64_t)-1;
-                    ones <<= (64 - y);
-                    return ones | ((x + 0u) >> y);
-                }
-            } else {
-                // Unsigned right shift
-                if (y >= 64) {
-                    return 0;
-                } else {
-                    return ((x + 0u) >> y);
-                }
-            }
-        } else {
-            return x >> y;
+        if (y >= 64) {
+            report_compile_time_invalid_shift_amount(location);
+            return false;
+        } else if (y == 0) {
+            // no-op
+            return true;
+        } else if (is_signed && ((*x + 0u) & UINT64_C(0x8000000000000000))) {
+            // Simulate a signed right shift (with signed bit set)
+            uint64_t ones = UINT64_MAX;
+            ones = (ones + 0u) << (64 - y);
+            *x = (ones + 0u) | ((*x + 0u) >> y);
+            return true;
         }
-        break;
+        // Unsigned right shift
+        *x = (*x + 0u) >> y;
+        return true;
 
     case BINOP_EQUAL:
     case BINOP_IFF:
-        return x == y;
+        *x = (*x == y);
+        return true;
 
     case BINOP_NOT_EQUAL:
-        return x != y;
+        *x = (*x != y);
+        return true;
 
     case BINOP_LESS:
     case BINOP_LESS_EQUAL:
     case BINOP_GREATER:
     case BINOP_GREATER_EQUAL:
-        return compute_comparison(op, is_signed, x, y);
+        *x = compute_comparison(op, is_signed, *x, y);
+        return true;
 
     case BINOP_IMPLIES:
-        if (x == 0) {
-            return 1;
+        if (*x == 0) {
+            *x = 1;
         } else {
-            return y;
+            *x = y;
         }
+        return true;
 
     case BINOP_IMPLIED_BY:
         fatal_error("this term should have been removed by typechecker");
@@ -256,21 +431,48 @@ static struct Term * eval_binop(struct HashTable *env, struct Term *term)
     }
 
     struct Term *lhs = eval_to_normal_form(env, term->binop.lhs);
-    struct Term *rhs = eval_to_normal_form(env, term->binop.list->rhs);
-    if (!lhs || !rhs) {
-        free_term(lhs);
-        free_term(rhs);
+    if (!lhs) {
         return NULL;
     }
-
-    bool is_signed = lhs->type->tag == TY_FINITE_INT ? lhs->type->int_data.is_signed : false;
     uint64_t lhs_value = normal_form_to_int(lhs);
-    uint64_t rhs_value = normal_form_to_int(rhs);
     free_term(lhs);
-    free_term(rhs);
 
-    uint64_t result = compute_binop(term->binop.list->operator, is_signed, lhs_value, rhs_value);
-    return make_literal_of_type(term->type, result);
+    // Short circuit operators require special handling, to prevent spurious
+    // errors with rhs evaluation
+    uint64_t rhs_value = 0;
+    enum BinOp op = term->binop.list->operator;
+    if ((op == BINOP_IMPLIES || op == BINOP_AND) && lhs_value == 0) {
+        rhs_value = 0;
+    } else if (op == BINOP_OR && lhs_value == 1) {
+        rhs_value = 0;
+    } else {
+        // rhs must be evaluated
+        struct Term *rhs = eval_to_normal_form(env, term->binop.list->rhs);
+        if (!rhs) {
+            return NULL;
+        }
+        rhs_value = normal_form_to_int(rhs);
+        free_term(rhs);
+    }
+
+    bool is_signed = term->binop.lhs->type->tag == TY_FINITE_INT ?
+        term->binop.lhs->type->int_data.is_signed :
+        false;
+    bool ok = compute_binop(term->location,
+                            op,
+                            is_signed,
+                            &lhs_value,
+                            rhs_value);
+    if (ok) {
+        if (is_value_in_range_for_type(term->type, lhs_value)) {
+            return make_literal_of_type(term->type, lhs_value);
+        } else {
+            report_compile_time_overflow(term->location);
+            return NULL;
+        }
+    } else {
+        return NULL;
+    }
 }
 
 
@@ -549,11 +751,6 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
     case TM_LET:
         return eval_let(env, term);
 
-    case TM_QUANTIFIER:
-    case TM_CALL:
-    case TM_TYAPP:
-        return NULL;
-
     case TM_RECORD:
         return eval_record(env, term);
 
@@ -570,11 +767,8 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
         return eval_match(env, term);
 
     case TM_MATCH_FAILURE:
-        {
-            struct Term *dflt = make_term(g_no_location, TM_DEFAULT);
-            dflt->type = copy_type(term->type);
-            return dflt;
-        }
+        report_compile_time_match_failure(term->location);
+        return NULL;
 
     case TM_SIZEOF:
         ;
@@ -591,8 +785,12 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
             return NULL;
         }
 
+    case TM_QUANTIFIER:
+    case TM_CALL:
+    case TM_TYAPP:
     case TM_ALLOCATED:
     case TM_ARRAY_PROJ:
+        report_non_compile_time_constant(term->location);
         return NULL;
     }
 

@@ -37,15 +37,10 @@ static bool verify_const_decl(struct VContext *context,
     struct Sexpr *fol_term = NULL;
 
     if (data->rhs) {
-        // Verify that the original rhs doesn't contain any errors
-        // (e.g. division by zero)
-        fol_term = verify_term(context, data->rhs);
-        if (!fol_term) {
-            ok = false;
-        } else if (data->value) {
-            // Now replace fol_term with data->value (original rhs reduced
-            // to normal form).
-            // This is done for two reasons:
+        if (data->value) {
+            // Set fol_term from data->value (which is the original rhs
+            // reduced to normal form).
+            // We use this, rather than data->rhs, for two reasons:
             // (1) Optimisation: the normal form is usually shorter and
             //     easier for the solver to deal with.
             // (2) Correctness: some term types (record-updates in
@@ -53,9 +48,15 @@ static bool verify_const_decl(struct VContext *context,
             //     "$RecordUpdate") into the local env. This wouldn't work
             //     for a global const decl. These terms do not occur in
             //     normal forms, so using the normal form will be safe.
-            free_sexpr(fol_term);
             fol_term = verify_term(context, data->value);
             if (!fol_term) fatal_error("normal form failed to verify");
+        } else {
+            // This is probably a ghost decl, where the rhs doesn't need
+            // to be evaluated to normal form.
+            // In this case, the RHS might fail to verify. That's fine, we
+            // just report the verification error and continue.
+            fol_term = verify_term(context, data->rhs);
+            if (!fol_term) ok = false;
         }
     }
 

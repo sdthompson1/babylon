@@ -23,10 +23,10 @@ interface {}
 
   // This is OK, even though only one case provided, because the
   // verifier can see that the scrutinee matches the given pattern
-  const c3 =
+  function f3() { var v = 
     match (D<Color>{Green}) {
       case D<Color>{Green} => 1
-    };
+    }; }
 
 
   // Integer case, non-exhaustive
@@ -69,16 +69,16 @@ interface {}
   // Regression tests (i.e. previous bugs that were fixed)
   datatype N = Z | S{i32};
   datatype E = A{N,N} | M{N,N};
-  const regression_test_1 =
+  function regression_test_1() { var v =
     match (A{Z,Z}) {
       case A{Z,Z} => 1
       case A{Z,Z} => 2
-    };
+    }; }
 
-  const regression_test_2 =
+  function regression_test_2() { var v =
     match ({1,true}) {
       case {2,true} => 0
-    };
+    }; }
 
 
 

@@ -15,6 +15,7 @@ const minus_no_space: i32 = 7 -1;
 
 const big_plus: i64  = 10000000000 + 9000000000;
 const big_minus: i64 = 10000000000 - 9000000000;
+const unsigned_minus: u64 = u64(10000000000) - u64(9000000000);
 
 const mul8:  i8  = i8(-10) * i8(5);
 const mul16: i16 = i16(300) * i16(40);
@@ -57,6 +58,7 @@ function main()
 
     Test.print_i64(big_plus);
     Test.print_i64(big_minus);
+    Test.print_i64(unsigned_minus);
 
     Test.print_i8(mul8);
     Test.print_i16(mul16);
