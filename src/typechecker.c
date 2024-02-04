@@ -1069,6 +1069,59 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
     return NULL;
 }
 
+enum Direction {
+    DIR_NEUTRAL,
+    DIR_POINTS_LEFT,
+    DIR_POINTS_RIGHT
+};
+
+enum Direction operator_direction(enum BinOp op)
+{
+    switch (op) {
+    case BINOP_LESS:
+    case BINOP_LESS_EQUAL:
+    case BINOP_IMPLIED_BY:
+        return DIR_POINTS_LEFT;
+
+    case BINOP_GREATER:
+    case BINOP_GREATER_EQUAL:
+    case BINOP_IMPLIES:
+        return DIR_POINTS_RIGHT;
+
+    case BINOP_EQUAL:
+    case BINOP_NOT_EQUAL:
+        return DIR_NEUTRAL;
+
+    default:
+        fatal_error("operator shouldn't be part of a chain");
+    }
+}
+
+static bool check_chain_direction(struct TypecheckContext *tc_context, struct Term *term)
+{
+    enum Direction dir = DIR_NEUTRAL;
+    if (term->tag != TM_BINOP) return true;
+    if (term->binop.list->next == NULL) return true;  // not a chain
+
+    for (struct OpTermList *node = term->binop.list; node; node = node->next) {
+        enum Direction new_dir = operator_direction(node->operator);
+        if ((new_dir == DIR_POINTS_LEFT && dir == DIR_POINTS_RIGHT) ||
+        (new_dir == DIR_POINTS_RIGHT && dir == DIR_POINTS_LEFT)) {
+            if (node->operator == BINOP_IMPLIES || node->operator == BINOP_IMPLIED_BY) {
+                report_implies_direction_error(node->rhs->location);
+            } else {
+                report_chaining_direction_error(node->rhs->location);
+            }
+            tc_context->error = true;
+            return false;
+        } else if (new_dir != DIR_NEUTRAL) {
+            dir = new_dir;
+        }
+    }
+
+    return true;
+}
+
 static void break_chain(struct TypecheckContext *tc_context, struct Term *term)
 {
     if (term->binop.list->next == NULL) {
@@ -1170,6 +1223,96 @@ static void break_chain(struct TypecheckContext *tc_context, struct Term *term)
     }
 }
 
+static struct Location get_location_from_op_term_list(struct OpTermList *list)
+{
+    struct Location loc = list->rhs->location;
+
+    // move to final (non-NULL) node in the list
+    while (list->next) {
+        list = list->next;
+    }
+
+    set_location_end(&loc, &list->rhs->location);
+
+    return loc;
+}
+
+static void reverse_implication_list(struct OpTermList **list)
+{
+    struct OpTermList *node = *list;
+    struct OpTermList *next = NULL;
+
+    while (node) {
+        node->operator = BINOP_IMPLIES;
+
+        // swap node->next and next
+        struct OpTermList *tmp = node->next;
+        node->next = next;
+        next = tmp;
+
+        // swap node and next
+        tmp = next;
+        next = node;
+        node = tmp;
+    }
+
+    // The reversed list ends up in 'next'
+    *list = next;
+}
+
+static void break_implies_chain(struct Term *term)
+{
+    if (term->binop.list->operator == BINOP_IMPLIES) {
+        // We want to turn A ==> B ==> C ==> D into A ==> (B ==> (C ==> D)).
+
+        // Let term be:
+        //   lhs = A
+        //   list = (==>, B, (==>, C, Tail))
+
+        // Let new_term be:
+        //   lhs = B
+        //   list = (==>, C, Tail)
+
+        // Rewrite term to:
+        //   lhs = A
+        //   list = (==>, break_implies_chain(new_term), NULL)
+
+        if (term->binop.list->next != NULL) {
+            struct Location new_loc = get_location_from_op_term_list(term->binop.list);
+            struct Term *new_term = make_term(new_loc, TM_BINOP);
+            new_term->type = copy_type(term->type);  // this will be TY_BOOL
+
+            new_term->binop.lhs = term->binop.list->rhs;
+            new_term->binop.list = term->binop.list->next;
+
+            break_implies_chain(new_term);
+
+            term->binop.list->rhs = new_term;
+            term->binop.list->next = NULL;
+        }
+
+    } else if (term->binop.list->operator == BINOP_IMPLIED_BY) {
+        // We want to turn A <== B <== C <== D into D ==> (C ==> (B ==> A)).
+
+        // We do this in two steps: first "reverse" the term, turning it into
+        // into D ==> C ==> B ==> A; then call break_implies_chain recursively
+        // to turn that into D ==> (C ==> (B ==> A)).
+
+        struct OpTermList *temp_list = alloc(sizeof(struct OpTermList));
+        temp_list->rhs = term->binop.lhs;
+        temp_list->next = term->binop.list;
+
+        reverse_implication_list(&temp_list);
+
+        term->binop.lhs = temp_list->rhs;
+        term->binop.list = temp_list->next;
+
+        free(temp_list);
+
+        break_implies_chain(term);
+    }
+}
+
 static void* typecheck_binop(void *context, struct Term *term, void *type_result, void *result1, void *result2)
 {
     struct TypecheckContext *tc_context = context;
@@ -1224,11 +1367,11 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
                 || op == BINOP_GREATER || op == BINOP_GREATER_EQUAL
                 || op == BINOP_EQUAL || op == BINOP_NOT_EQUAL) {
                     term->type = make_type(g_no_location, TY_BOOL);
-
                 } else {
                     term->type = copy_type(term->binop.lhs->type);
                 }
 
+                check_chain_direction(tc_context, term);
                 break_chain(tc_context, term);
             }
         }
@@ -1269,19 +1412,16 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
     case BINOP_IMPLIED_BY:
     case BINOP_IFF:
         {
+            // all operands must be bool
             bool ok = check_term_is_bool(tc_context, term->binop.lhs);
-            ok = check_term_is_bool(tc_context, term->binop.list->rhs) && ok;
+            for (struct OpTermList *node = term->binop.list; node; node = node->next) {
+                ok = check_term_is_bool(tc_context, node->rhs) && ok;
+            }
 
             if (ok) {
                 term->type = make_type(g_no_location, TY_BOOL);
-
-                if (op == BINOP_IMPLIED_BY) {
-                    // Reverse the order and change it to BINOP_IMPLIES
-                    struct Term *tmp = term->binop.lhs;
-                    term->binop.lhs = term->binop.list->rhs;
-                    term->binop.list->rhs = tmp;
-                    term->binop.list->operator = BINOP_IMPLIES;
-                }
+                check_chain_direction(tc_context, term);
+                break_implies_chain(term);
             }
         }
         break;

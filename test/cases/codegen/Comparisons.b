@@ -63,6 +63,10 @@ const ite3: i32 = if 1 == 1 then (if 9>6 then 100 else 200)
 const less_chain_true:  bool = 1 < 2 <= 3;
 const less_chain_false: bool = 1 < 2 < 1;
 const long_chain: bool = 1 < 2 < 3 < 4;
+const chain_including_equals: bool = 1 <= 2 == 2 < 3 == 3 < 4;
+const false_chain_including_equals: bool = 1 <= 2 == 3 < 4;
+const chain_including_not_equal: bool = 3 >= 2 != 3 > 1;
+const false_chain_including_not_equal: bool = 3 > 2 != 2 > 1;
 
 function main()
 {
@@ -116,4 +120,8 @@ function main()
     Test.print_bool(less_chain_true);
     Test.print_bool(less_chain_false);
     Test.print_bool(long_chain);
+    Test.print_bool(chain_including_equals);
+    Test.print_bool(false_chain_including_equals);
+    Test.print_bool(chain_including_not_equal);
+    Test.print_bool(false_chain_including_not_equal);
 }

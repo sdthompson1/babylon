@@ -22,7 +22,7 @@ repository.
 
 // -----------------------------------------------------------------------------
 
-#define MAX_PRECEDENCE 8
+#define MAX_PRECEDENCE 7
 
 struct OpData {
     enum BinOp operator;
@@ -31,23 +31,23 @@ struct OpData {
 
 struct OpData operators[] = {
     // note: if changing this table, also update MAX_PRECEDENCE if required
-    [TOK_TIMES] = { BINOP_TIMES, 8 },
-    [TOK_DIVIDE] = { BINOP_DIVIDE, 8 },
-    [TOK_MODULO] = { BINOP_MODULO, 8 },
-    [TOK_AND] = { BINOP_BITAND, 8 },
-    [TOK_LESS_LESS] = { BINOP_SHIFTLEFT, 8 },
-    [TOK_GREATER_GREATER] = { BINOP_SHIFTRIGHT, 8 },
+    // also update debug_print.c
+    [TOK_TIMES] = { BINOP_TIMES, 7 },
+    [TOK_DIVIDE] = { BINOP_DIVIDE, 7 },
+    [TOK_MODULO] = { BINOP_MODULO, 7 },
+    [TOK_AND] = { BINOP_BITAND, 7 },
+    [TOK_LESS_LESS] = { BINOP_SHIFTLEFT, 7 },
+    [TOK_GREATER_GREATER] = { BINOP_SHIFTRIGHT, 7 },
 
-    [TOK_PLUS] = { BINOP_PLUS, 7 },
-    [TOK_MINUS] = { BINOP_MINUS, 7 },
-    [TOK_BAR] = { BINOP_BITOR, 7 },
-    [TOK_HAT] = { BINOP_BITXOR, 7 },
+    [TOK_PLUS] = { BINOP_PLUS, 6 },
+    [TOK_MINUS] = { BINOP_MINUS, 6 },
+    [TOK_BAR] = { BINOP_BITOR, 6 },
+    [TOK_HAT] = { BINOP_BITXOR, 6 },
 
-    [TOK_GREATER] = { BINOP_GREATER, 6 },
-    [TOK_GREATER_EQUAL] = { BINOP_GREATER_EQUAL, 6 },
-    [TOK_LESS] = { BINOP_LESS, 6 },
-    [TOK_LESS_EQUAL] = { BINOP_LESS_EQUAL, 6 },
-
+    [TOK_GREATER] = { BINOP_GREATER, 5 },
+    [TOK_GREATER_EQUAL] = { BINOP_GREATER_EQUAL, 5 },
+    [TOK_LESS] = { BINOP_LESS, 5 },
+    [TOK_LESS_EQUAL] = { BINOP_LESS_EQUAL, 5 },
     [TOK_EQUAL_EQUAL] = { BINOP_EQUAL, 5 },
     [TOK_EXCLAM_EQUAL] = { BINOP_NOT_EQUAL, 5 },
 
@@ -111,12 +111,6 @@ static const struct Token * expect(struct ParserState *state, enum TokenType typ
         advance(state);
         return tok;
     }
-}
-
-static void set_location_end(struct Location *loc, const struct Location *from)
-{
-    loc->end_line_num = from->end_line_num;
-    loc->end_column_num = from->end_column_num;
 }
 
 
@@ -1230,14 +1224,25 @@ static bool can_chain(struct OpTermList *end_of_chain, enum BinOp new_op)
     switch (end_of_chain->operator) {
     case BINOP_LESS:
     case BINOP_LESS_EQUAL:
-        return new_op == BINOP_LESS || new_op == BINOP_LESS_EQUAL;
-
+    case BINOP_EQUAL:
+    case BINOP_NOT_EQUAL:
     case BINOP_GREATER:
     case BINOP_GREATER_EQUAL:
-        return new_op == BINOP_GREATER || new_op == BINOP_GREATER_EQUAL;
+        return new_op == BINOP_LESS
+            || new_op == BINOP_LESS_EQUAL
+            || new_op == BINOP_GREATER
+            || new_op == BINOP_GREATER_EQUAL
+            || new_op == BINOP_EQUAL
+            || new_op == BINOP_NOT_EQUAL;
 
-    case BINOP_EQUAL:
-        return new_op == BINOP_EQUAL;
+    case BINOP_IMPLIES:
+    case BINOP_IMPLIED_BY:
+        // ==> and <== do not chain (they associate) but it is convenient to parse
+        // them as if they chain, and then we can remove the chaining again in the
+        // typechecker. (The typechecker will also check whether the "direction" is
+        // consistent, e.g. A <== B ==> C is disallowed.)
+        return new_op == BINOP_IMPLIES
+            || new_op == BINOP_IMPLIED_BY;
 
     default:
         return false;
@@ -1264,9 +1269,8 @@ static struct Term * parse_operators(struct ParserState *state, int precedence, 
 
             advance(state);
 
-            // parse the rhs expression. use precedence + 1 for left associativity
-            // or precedence for right associativity (BINOP_IMPLIES)
-            struct Term *rhs_term = parse_operators(state, op_data->operator == BINOP_IMPLIES ? precedence : precedence + 1, allow_lbrace);
+            // parse the rhs expression. using precedence + 1 gives left associativity.
+            struct Term *rhs_term = parse_operators(state, precedence + 1, allow_lbrace);
 
             if (can_chain(end_of_chain, op_data->operator)) {
                 struct OpTermList *new_list = alloc(sizeof(struct OpTermList));

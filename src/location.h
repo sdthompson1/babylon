@@ -31,4 +31,6 @@ void format_location(const struct Location *loc,
                      bool include_end, bool include_slash,
                      char *buf, int len);
 
+void set_location_end(struct Location *loc, const struct Location *from);
+
 #endif

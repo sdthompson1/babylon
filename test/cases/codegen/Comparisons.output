@@ -48,3 +48,7 @@ false   //  le_un3
 true    //  less_chain_true
 false   //  less_chain_false 
 true    //  long_chain
+true    //  chain_including_equals
+false   //  false_chain_including_equals
+true    //  chain_including_not_equal
+false   //  false_chain_including_not_equal

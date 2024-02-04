@@ -116,6 +116,8 @@ void report_compile_time_invalid_shift_amount(struct Location location);
 void report_compile_time_match_failure(struct Location location);
 void report_int_real_not_allowed(struct Location location);
 void report_can_only_show_hide_functions(struct Location location);
+void report_chaining_direction_error(struct Location location);
+void report_implies_direction_error(struct Location location);
 
 // Verifier errors
 void report_operator_precondition_fail(struct Term *term);

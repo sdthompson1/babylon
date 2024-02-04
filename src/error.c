@@ -115,6 +115,18 @@ void report_syntax_error(struct Location location, const char *detail)
     print_error("\n");
 }
 
+void report_chaining_direction_error(struct Location location)
+{
+    print_location(location);
+    print_error("Incorrect chaining of <, <=, > or >= operators (all operators in chain must point in same direction)\n");
+}
+
+void report_implies_direction_error(struct Location location)
+{
+    print_location(location);
+    print_error("Ambiguity between <== and ==> operators (consider using parentheses to disambiguate)\n");
+}
+
 void report_not_in_scope(struct Location location, const char *name)
 {
     print_location(location);

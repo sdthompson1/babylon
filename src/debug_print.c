@@ -229,20 +229,18 @@ static int precedence(struct Term *term)
         case BINOP_BITAND:
         case BINOP_SHIFTLEFT:
         case BINOP_SHIFTRIGHT:
-            return 8;
+            return 7;
 
         case BINOP_PLUS:
         case BINOP_MINUS:
         case BINOP_BITOR:
         case BINOP_BITXOR:
-            return 7;
+            return 6;
 
         case BINOP_GREATER:
         case BINOP_GREATER_EQUAL:
         case BINOP_LESS:
         case BINOP_LESS_EQUAL:
-            return 6;
-
         case BINOP_EQUAL:
         case BINOP_NOT_EQUAL:
             return 5;
