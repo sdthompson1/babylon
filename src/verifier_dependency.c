@@ -86,11 +86,8 @@ static void enter_scope_pattern(const struct Sexpr *pat,
                                 struct Edge **fake_edges)
 {
     // pat is either (ctorname list_of_bound_vars)
-    // or the string "$wild" - which is shadowed
+    // or a string ("$wildNN") - which is shadowed
     if (pat->type == S_STRING) {
-        if (strcmp(pat->string, "$wild") != 0) {
-            fatal_error("unexpected pattern");
-        }
         add_shadowed_name(pat, shadowed_names);
     } else if (pat->type == S_PAIR) {
         get_names_from_sexpr(pat->left, found_names, shadowed_names, fake_edges);  // ctorname

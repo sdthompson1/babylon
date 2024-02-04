@@ -1986,6 +1986,8 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
 
     bool ok = true;
 
+    uint64_t wildcard_counter = 0;
+
     for (struct Arm *arm = term->match.arms; arm; arm = arm->next) {
         if (arm->pattern->tag == PAT_VARIANT) {
 
@@ -2045,9 +2047,24 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
                 remove_facts(cxt, fol_name);
             } else {
                 // It's a wildcard pattern...
-                // Note: it's not valid to use "_" as a wildcard pattern because "_" is reserved
-                // in SMT-LIB for indexed identifiers. Instead we just use a dummy variable name.
-                fol_name = copy_string("$wild");
+
+                // Note: it's not valid to use "_" as a wildcard
+                // pattern because "_" is reserved in SMT-LIB for
+                // indexed identifiers. Instead we just use a dummy
+                // variable name.
+
+                // Also: CVC5 seems to complain if two different arms
+                // of a match use the same "$wild" name, e.g.
+                // (match x ( ((CTOR $wild) rhs1) ($wild rhs2) ))
+                // seems to be rejected. AFAIK this is legal in SMT-LIB,
+                // but for the benefit of CVC5 we can generate different
+                // names ($wild0 and $wild1) here.
+
+                char buf[50];
+                sprintf(buf, "$wild%" PRIu64, wildcard_counter);
+                wildcard_counter++;
+
+                fol_name = copy_string(buf);
             }
 
             if (rhs_expr) {
@@ -2091,6 +2108,9 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
 
             if (rhs_expr) {
                 // Create a sexpr for this arm
+                // (We can just use "$wild" here, since we used "numbered" $wild
+                // variables above, and we should hit this case only once per
+                // match term)
                 struct Sexpr *arm_expr = make_list2_sexpr(make_string_sexpr("$wild"), rhs_expr);
                 *arm_tail = make_list1_sexpr(arm_expr);
                 arm_tail = &(*arm_tail)->right;
