@@ -258,7 +258,11 @@ struct Sexpr * pc_implies(struct VContext *context, struct Sexpr *rhs)
 void make_ite_pc_expr(struct Sexpr *** ret_val_ptr, struct VContext *context, struct Sexpr *expr)
 {
     if (**ret_val_ptr != NULL) {
-        fatal_error("make_ite_pc_expr: error, *ret_val_ptr should be NULL on entry");
+        // A previous optimisation has changed (ite true x NULL) into x; the new
+        // expr would go where the NULL is, but since the ite will never evaluate that
+        // branch anyway, we can just ignore it.
+        free_sexpr(expr);
+        return;
     }
 
     if (is_true(context->path_condition)) {
