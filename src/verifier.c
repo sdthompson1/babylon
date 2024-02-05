@@ -30,20 +30,14 @@ struct VerifierEnv * new_verifier_env()
     return env;
 }
 
-static void free_string_names_entry(void *context, const char *key, void *value)
-{
-    if (strcmp(key, "$DefaultArrayNum") != 0) {
-        free_term(value);
-    }
-    free((char*)key);
-}
-
 void free_verifier_env(struct VerifierEnv *env)
 {
     clear_verifier_env_hash_table(env->table);
     free_hash_table(env->table);
 
-    hash_table_for_each(env->string_names, free_string_names_entry, NULL);
+    if (!hash_table_empty(env->string_names)) {
+        fatal_error("string_names wasn't cleared between decls");
+    }
     free_hash_table(env->string_names);
 
     free(env);
@@ -97,6 +91,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.local_to_version = new_hash_table();
     cxt.local_counter = new_hash_table();
     cxt.string_names = verifier_env->string_names;
+    cxt.current_decl_name = NULL;
     cxt.refs = new_hash_table();
     cxt.var_decl_stack = NULL;
     cxt.new_values = NULL;

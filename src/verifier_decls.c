@@ -612,6 +612,20 @@ static bool verify_typedef_decl(struct VContext *context, struct Decl *decl)
     return true;
 }
 
+static void free_string_names_entry(void *context, const char *key, void *value)
+{
+    if (strcmp(key, "$DefaultArrayNum") != 0) {
+        free((char*)key);
+        free_term(value);
+    }
+}
+
+static void clear_string_names_hash_table(struct HashTable *string_names)
+{
+    hash_table_for_each(string_names, free_string_names_entry, NULL);
+    hash_table_clear(string_names);
+}
+
 static bool verify_decl(struct VContext *context, struct Decl *decl)
 {
     if (context->show_progress) {
@@ -627,6 +641,8 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     bool result = false;
 
     context->path_condition = make_string_sexpr("true");
+
+    context->current_decl_name = decl->name;
 
     // verify the decl
     switch (decl->tag) {
@@ -661,6 +677,9 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     context->num_facts = 0;
 
     hash_table_clear(context->local_hidden);
+
+    clear_string_names_hash_table(context->string_names);
+    context->current_decl_name = NULL;
 
     return result;
 }

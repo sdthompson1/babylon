@@ -45,5 +45,4 @@ bool verify_module(struct VerifierEnv *verifier_env,
                    struct Module *module,
                    struct VerifierOptions *options);
 
-
 #endif

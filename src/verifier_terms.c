@@ -579,20 +579,13 @@ static struct Sexpr *make_default(struct VContext *cxt, struct Type *type);
 static struct Sexpr *make_default_fixed_array(struct VContext *cxt,
                                               struct Type *array_type)
 {
-    const char *key;
-    void *value;
-    uintptr_t unique_num;
-    hash_table_lookup_2(cxt->string_names, "$DefaultArrayNum", &key, &value);
-    if (key == NULL) {
-        key = copy_string("$DefaultArrayNum");
-        unique_num = 0;
-    } else {
-        unique_num = ((uintptr_t) value) + 1;
-    }
-    hash_table_insert(cxt->string_names, key, (void*)unique_num);
+    const char *key = "$DefaultArrayNum";
+    void *value = hash_table_lookup(cxt->string_names, key);
+    uintptr_t unique_num = (uintptr_t)value;
+    hash_table_insert(cxt->string_names, key, (void*)(unique_num + 1));
 
     char name[60];
-    sprintf(name, "$DefaultArray.%" PRIuPTR, unique_num);
+    sprintf(name, "$DfltArr.%s.%" PRIuPTR, cxt->current_decl_name, unique_num);
 
     struct Sexpr *fol_type = verify_type(array_type);
 
@@ -763,12 +756,10 @@ static void* verify_int_literal(void *context, struct Term *term, void *type_res
 }
 
 
-enum { STRING_NAME_LEN = 50 };
-
 // returns true if this string has been seen before, false if it is new
 static bool get_name_for_string(struct VContext *cxt,
                                 struct Term *term,
-                                char out[STRING_NAME_LEN])
+                                char **out)
 {
     uint32_t length = term->string_literal.length;
     const uint8_t *data = term->string_literal.data;
@@ -776,29 +767,35 @@ static bool get_name_for_string(struct VContext *cxt,
     // Use (upto) the first 8 chars of the string as part of the
     // variable name, but editing out non-alphanumeric chars.
     // If this doesn't produce a unique name, add a numeric suffix.
-    enum { CODENAME_LEN = 8 };
-    uint8_t codename[CODENAME_LEN + 1] = "";
-    for (uint32_t i = 0; i < CODENAME_LEN && i < length; ++i) {
+    enum { CODENAME_LEN = 9 };
+    char codename[CODENAME_LEN + 1] = "";
+    codename[0] = '.';
+    codename[1] = 0;
+    for (uint32_t i = 0; i+1 < CODENAME_LEN && i < length; ++i) {
         if (isalnum(data[i])) {
-            codename[i] = data[i];
+            codename[i+1] = data[i];
         } else {
-            codename[i] = 'x';
+            codename[i+1] = 'x';
         }
-        codename[i+1] = 0;
+        codename[i+2] = 0;
     }
 
     // make it more pretty for empty strings :)
     if (length == 0) {
-        strcpy((char*)codename, "empty");
+        strcpy(codename, ".empty");
     }
 
     for (uint32_t n = 0; n < UINT32_MAX; ++n) {
-        int len = sprintf(out, "$String.%s", codename);
+        *out = copy_string_3("$String.", cxt->current_decl_name, codename);
         if (n != 0) {
-            sprintf(&out[len], ".%" PRIx32, n);
+            char buf[20];
+            sprintf(buf, ".%" PRIu32, n);
+            char *with_suffix = copy_string_2(*out, buf);
+            free(*out);
+            *out = with_suffix;
         }
 
-        struct Term *prev_term = hash_table_lookup(cxt->string_names, out);
+        struct Term *prev_term = hash_table_lookup(cxt->string_names, *out);
         if (prev_term
         && prev_term->string_literal.length == length
         && memcmp(prev_term->string_literal.data, data, length) == 0) {
@@ -809,11 +806,12 @@ static bool get_name_for_string(struct VContext *cxt,
         if (prev_term != NULL) {
             // There is a different string occupying this same hash,
             // so try the next hash value (next n)
+            free(*out);
             continue;
         }
 
         // We have a new string
-        hash_table_insert(cxt->string_names, copy_string(out), copy_term(term));
+        hash_table_insert(cxt->string_names, copy_string(*out), copy_term(term));
         return false;
     }
 
@@ -825,8 +823,8 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
     struct VContext *cxt = context;
 
     // find an unused string hash code.
-    char name[STRING_NAME_LEN];
-    bool seen_before = get_name_for_string(cxt, term, name);
+    char *name;
+    bool seen_before = get_name_for_string(cxt, term, &name);
 
     if (!seen_before) {
         // fol_type is (instance $PROD ((Array Int Int) Int))
@@ -910,7 +908,7 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
     }
 
     // return the result
-    return make_string_sexpr(name);
+    return make_string_sexpr_handover(name);
 }
 
 static void* verify_cast(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)

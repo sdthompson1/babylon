@@ -74,6 +74,7 @@ struct VContext {
 
     // Used for string literals and fixed-sized-arrays
     struct HashTable *string_names;
+    const char *current_decl_name;
 
     // Tracks references. Maps source-code local name (shared with
     // AST) to a RefChain struct (allocated).
