@@ -227,7 +227,7 @@ enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
         sha256_final(&ctx, hash);
     }
 
-    if (sha256_exists_in_db(cache_db, hash)) {
+    if (sha256_exists_in_db(cache_db, SMT_QUERY_HASH, hash)) {
         free_sexpr(smt_problem);
         if (print_progress_messages) {
             fprintf(stderr, "(cached)\n");
@@ -240,7 +240,7 @@ enum FolResult solve_fol_problem(struct Sexpr *fol_problem,
 
     // successful results can be written back to the cache
     if (result == FOL_RESULT_PROVED) {
-        add_sha256_to_db(cache_db, hash);
+        add_sha256_to_db(cache_db, SMT_QUERY_HASH, hash);
     }
 
     free_sexpr(smt_problem);

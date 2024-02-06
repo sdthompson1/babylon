@@ -291,7 +291,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
             // If so, that means we have in the past verified a module with
             // identical text, and identical imported interfaces. Therefore
             // there is no need to verify it again.
-            if (sha256_exists_in_db(details->cache_db, full_module_fingerprint)) {
+            if (sha256_exists_in_db(details->cache_db, MODULE_HASH, full_module_fingerprint)) {
                 if (details->show_progress) {
                     fprintf(stderr, "Skipping module %s (cached)\n", module->name);
                 }
@@ -327,7 +327,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
         // the cache (if this was a full verification), so that we know
         // not to verify it again in future.
         if (!interface_only) {
-            add_sha256_to_db(details->cache_db, full_module_fingerprint);
+            add_sha256_to_db(details->cache_db, MODULE_HASH, full_module_fingerprint);
         }
     }
 

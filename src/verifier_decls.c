@@ -707,7 +707,7 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     compute_decl_fingerprint(context->global_env, decl, fingerprint);
 
     bool skipped = false;
-    if (!context->interface_only && sha256_exists_in_db(context->cache_db, fingerprint)) {
+    if (!context->interface_only && sha256_exists_in_db(context->cache_db, DECL_HASH, fingerprint)) {
         skipped = true;
         context->interface_only = true;
     }
@@ -775,7 +775,7 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
 
     // On successful verification (not in interface_only mode), add to DB
     if (result && !context->interface_only) {
-        add_sha256_to_db(context->cache_db, fingerprint);
+        add_sha256_to_db(context->cache_db, DECL_HASH, fingerprint);
     }
 
     // If skipped, restore interface_only to false for the next decl
