@@ -713,7 +713,7 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     }
 
     if (context->show_progress) {
-        fprintf(stderr, "%s: ", skipped ? "Skipping" : "Verifying");
+        fprintf(stderr, "Verifying: ");
         for (const char *c = decl->name; *c; ++c) {
             if (*c != '^') {
                 fputc(*c, stderr);
