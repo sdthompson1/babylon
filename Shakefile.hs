@@ -8,8 +8,7 @@ import Development.Shake.Util
 normalFlags = ["-g"]
 optFlags = ["-O3"]
 covFlags = normalFlags ++ ["--coverage"]
-asanFlags = normalFlags ++ ["-fsanitize=address"]
-profFlags = normalFlags ++ ["-O3", "-g", "-pg"]
+sanFlags = normalFlags ++ ["-fsanitize=address,undefined"]
 
 getFlags = do
   mode <- getEnv "MODE"
@@ -19,8 +18,7 @@ getFlags = do
       case map toUpper m of
         "OPT" -> return optFlags
         "COV" -> return covFlags
-        "ASAN" -> return asanFlags
-        "PROF" -> return profFlags
+        "SAN" -> return sanFlags
         _ -> return normalFlags
 
 
