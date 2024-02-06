@@ -34,19 +34,5 @@ struct NameList * sort_name_list(struct NameList *list);
 void free_name_list(struct NameList *list);
 
 
-// Little-endian memory read/write functions
-uint16_t read_u16(const uint8_t *ptr);
-int16_t read_i16(const uint8_t *ptr);
-void write_u16(uint8_t *ptr, uint16_t value);
-uint32_t read_u32(const uint8_t *ptr);
-int32_t read_i32(const uint8_t *ptr);
-void write_u32(uint8_t *ptr, uint32_t value);
-uint64_t read_u64(const uint8_t *ptr);
-int64_t read_i64(const uint8_t *ptr);
-void write_u64(uint8_t *ptr, uint64_t value);
-
-
-#define GUARD_PAGE_SIZE 4096
-
 
 #endif
