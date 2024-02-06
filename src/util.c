@@ -11,6 +11,7 @@ repository.
 #include "alloc.h"
 #include "util.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -72,6 +73,56 @@ struct NameList * copy_name_list(struct NameList *list)
         list = list->next;
     }
     return result;
+}
+
+static struct NameList *sort_name_list_and_append(struct NameList *list,
+                                                  struct NameList *to_append)
+{
+    // Simple quicksort implementation.
+
+    // This has worst case O(n^2) performance, but should be O(n*log n) on
+    // average. We don't anticipate the namelists being all that long though,
+    // so hopefully the worst case performance won't be an issue.
+
+    // Base case: empty list.
+    if (list == NULL) {
+        return to_append;
+    }
+
+    // Break off the first element to act as pivot
+    struct NameList *pivot = list;
+    list = pivot->next;
+    pivot->next = NULL;
+
+    // Create empty "lower" and "upper" lists
+    struct NameList *lower = NULL;
+    struct NameList *upper = NULL;
+
+    // Repeatedly take one element from 'list' and add it to 'lower'
+    // if it is less than pivot, or 'upper' if it is greater than or
+    // equal to pivot.
+    while (list) {
+        struct NameList *list_next = list->next;
+        if (strcmp(list->name, pivot->name) < 0) {
+            list->next = lower;
+            lower = list;
+        } else {
+            list->next = upper;
+            upper = list;
+        }
+        list = list_next;
+    }
+
+    // We want to return sort(lower) ++ pivot ++ sort(upper) ++ to_append.
+    upper = sort_name_list_and_append(upper, to_append);
+    pivot->next = upper;
+    lower = sort_name_list_and_append(lower, pivot);
+    return lower;
+}
+
+struct NameList *sort_name_list(struct NameList *list)
+{
+    return sort_name_list_and_append(list, NULL);
 }
 
 void free_name_list(struct NameList *list)

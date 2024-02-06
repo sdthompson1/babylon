@@ -1725,6 +1725,7 @@ void free_decl(struct Decl *decl)
         }
 
         free_attributes(decl->attributes);
+        free_name_list(decl->dependency_names);
 
         struct Decl *to_free = decl;
         decl = decl->next;

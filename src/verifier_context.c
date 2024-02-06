@@ -75,6 +75,7 @@ struct Item * copy_item(const struct Item *item)
         result->fol_dummies = copy_sexpr(item->fol_dummies);
         result->preconds = copy_condition(item->preconds);
         result->postconds = copy_condition(item->postconds);
+        memcpy(result->fingerprint, item->fingerprint, SHA256_HASH_LENGTH);
         return result;
     } else {
         return NULL;

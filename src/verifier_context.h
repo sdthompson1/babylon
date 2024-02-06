@@ -40,6 +40,8 @@ struct Condition {
     struct Condition *next;
 };
 
+// Note: if adding new fields to Item, remember to update copy_item in
+// verifier_context.c.
 struct Item {
     struct Sexpr *fol_decl;     // FOL cmd e.g. (declare-fun ...). Could be NULL
     struct Sexpr *fol_axioms;   // list of FOL cmds e.g. ((assert ...) ...)
@@ -51,6 +53,8 @@ struct Item {
     struct Sexpr *fol_dummies;  // list of strings (dummy var names used in pre/post conds).
     struct Condition *preconds;
     struct Condition *postconds;
+
+    uint8_t fingerprint[SHA256_HASH_LENGTH];  // only nonzero for global decl items.
 };
 
 

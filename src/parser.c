@@ -75,13 +75,15 @@ struct ParserState {
     bool old;
 
     // checksumming
-    struct SHA256_CTX sha256;
+    struct SHA256_CTX sha256_module;
+    struct SHA256_CTX sha256_decl;
 };
 
 static void advance(struct ParserState *state)
 {
     if (state->token->type != TOK_EOF) {
-        sha256_add_token(&state->sha256, state->token);
+        sha256_add_token(&state->sha256_module, state->token);
+        sha256_add_token(&state->sha256_decl, state->token);
         state->token = state->token->next;
     }
 }
@@ -2229,10 +2231,18 @@ static struct DeclGroup * parse_decls(struct ParserState *state)
     struct Decl ** tail_link = &result->decl;
 
     while (true) {
+
+        sha256_init(&state->sha256_decl);
+        const char *decl_string = "DECL";
+        sha256_add_bytes(&state->sha256_decl, (const uint8_t*)decl_string, strlen(decl_string)+1);
+
         struct Decl * decl = parse_decl(state);
+
         if (decl == NULL) {
             break;
         } else {
+            sha256_final(&state->sha256_decl, decl->checksum);
+            decl->dependency_names = NULL;
             *tail_link = decl;
             tail_link = &decl->next;
         }
@@ -2323,8 +2333,10 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     state.error = false;
     state.postcondition = false;
     state.old = false;
-    sha256_init(&state.sha256);
-    sha256_add_bytes(&state.sha256, (const uint8_t*)"INT", 4);
+    sha256_init(&state.sha256_decl);
+    sha256_init(&state.sha256_module);
+    const char *mod_int = "MOD-INT";
+    sha256_add_bytes(&state.sha256_module, (const uint8_t*)mod_int, strlen(mod_int)+1);
 
     struct Module * result = alloc(sizeof(struct Module));
 
@@ -2355,7 +2367,7 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     expect(&state, TOK_RBRACE, "'}'");
 
     // pull out interface checksum
-    sha256_final(&state.sha256, result->interface_checksum);
+    sha256_final(&state.sha256_module, result->interface_checksum);
 
     // now for the implementation
     result->implementation_imports = NULL;
@@ -2371,8 +2383,9 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     } else {
         // Keep going...
 
-        sha256_init(&state.sha256);
-        sha256_add_bytes(&state.sha256, (const uint8_t*)"IMP", 4);
+        sha256_init(&state.sha256_module);
+        const char *mod_impl = "MOD-IMPL";
+        sha256_add_bytes(&state.sha256_module, (const uint8_t*)mod_impl, strlen(mod_impl)+1);
 
         // imports - zero or more
         result->implementation_imports = parse_imports(&state);
@@ -2380,7 +2393,7 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
         // main definitions - zero or more
         result->implementation = parse_decls(&state);
 
-        sha256_final(&state.sha256, result->implementation_checksum);
+        sha256_final(&state.sha256_module, result->implementation_checksum);
     }
 
     // We should now be at eof (unless 'done' was set above)

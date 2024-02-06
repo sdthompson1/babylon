@@ -152,14 +152,15 @@ bool load_imports(struct LoadDetails *details, struct Module *module, struct Imp
     return true;
 }
 
-static void add_import_hashes(struct SHA256_CTX *ctx, struct Import *imports, struct HashTable *loaded_modules)
+static void add_import_fingerprints(struct SHA256_CTX *ctx, struct Import *imports, struct HashTable *loaded_modules)
 {
     for (struct Import *import = imports; import; import = import->next) {
         const uint8_t *other_hash = hash_table_lookup(loaded_modules, import->module_name);
         if (other_hash == NULL) {
             fatal_error("module lookup failed");
         }
-        sha256_add_bytes(ctx, (uint8_t*)"D#", 3);
+        const char *imp_fpr = "IMP-FPR";  // "import fingerprint"
+        sha256_add_bytes(ctx, (uint8_t*)imp_fpr, strlen(imp_fpr)+1);
         sha256_add_bytes(ctx, other_hash, SHA256_HASH_LENGTH);
     }
 }
@@ -230,13 +231,14 @@ static bool load_module_from_disk(struct LoadDetails *details)
     // following:
     //  (a) the SHA256 hash of the interface tokens (as created by parser.c)
     //  (b) the fingerprints of any modules imported by the interface.
-    // (mixed with some arbitrary made-up strings like "IN#" or "D#" just
+    // (mixed with some arbitrary made-up strings like "INT-CHKSUM" just
     // to make it a bit more unique).
     struct SHA256_CTX ctx;
     sha256_init(&ctx);
-    sha256_add_bytes(&ctx, (const uint8_t*)"IN#", 4);
+    const char *int_chksum = "INT-CHKSUM";
+    sha256_add_bytes(&ctx, (const uint8_t*)int_chksum, strlen(int_chksum)+1);
     sha256_add_bytes(&ctx, module->interface_checksum, SHA256_HASH_LENGTH);
-    add_import_hashes(&ctx, module->interface_imports, details->loaded_modules);
+    add_import_fingerprints(&ctx, module->interface_imports, details->loaded_modules);
 
     // The interface fingerprint is stored in the loaded_modules hash table.
     uint8_t *interface_fingerprint = alloc(SHA256_HASH_LENGTH);
@@ -249,9 +251,10 @@ static bool load_module_from_disk(struct LoadDetails *details)
     //  (c) the SHA256 of the implementation tokens
     //  (d) the fingerprints of any modules imported by the implementation.
     uint8_t full_module_fingerprint[SHA256_HASH_LENGTH] = {0};
-    sha256_add_bytes(&ctx, (const uint8_t*)"IM#", 4);
+    const char *impl_chksum = "IMPL-CHKSUM";
+    sha256_add_bytes(&ctx, (const uint8_t*)impl_chksum, strlen(impl_chksum)+1);
     sha256_add_bytes(&ctx, module->implementation_checksum, SHA256_HASH_LENGTH);
-    add_import_hashes(&ctx, module->implementation_imports, details->loaded_modules);
+    add_import_fingerprints(&ctx, module->implementation_imports, details->loaded_modules);
     sha256_final(&ctx, full_module_fingerprint);
 
     // Rename (in place)
@@ -323,7 +326,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
         // Successful verification. Store the module's fingerprint in
         // the cache (if this was a full verification), so that we know
         // not to verify it again in future.
-        if (!interface_only && details->cache_db) {
+        if (!interface_only) {
             add_sha256_to_db(details->cache_db, full_module_fingerprint);
         }
     }

@@ -14,9 +14,32 @@ repository.
 #include "hash_table.h"
 #include "names.h"
 #include "scc.h"
+#include "util.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
+
+static void fill_dependency_names(struct HashTable *names, struct Decl *decl)
+{
+    struct NameList *list = NULL;
+    struct HashIterator *iter = new_hash_iterator(names);
+    const char *key;
+    void *value;
+    while (hash_iterator_next(iter, &key, &value)) {
+        // For this, we only care about dependencies on global names,
+        // i.e. names that contain a dot.
+        if (strchr(key, '.') != NULL) {
+            struct NameList *node = alloc(sizeof(struct NameList));
+            node->name = copy_string(key);
+            node->next = list;
+            list = node;
+        }
+    }
+    free_hash_iterator(iter);
+
+    decl->dependency_names = sort_name_list(list);
+}
 
 static void resolve_group(struct DeclGroup **group)
 {
@@ -53,6 +76,8 @@ static void resolve_group(struct DeclGroup **group)
     while (v) {
         struct HashTable *names_in_v = new_hash_table();
         names_used_in_decl(names_in_v, (struct Decl*) v->data);
+
+        fill_dependency_names(names_in_v, (struct Decl*) v->data);
 
         struct HashIterator *iterator = new_hash_iterator(names_in_v);
         const char *key;

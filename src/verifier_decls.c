@@ -10,6 +10,7 @@ repository.
 
 #include "alloc.h"
 #include "ast.h"
+#include "cache_db.h"
 #include "error.h"
 #include "hash_table.h"
 #include "sexpr.h"
@@ -612,6 +613,17 @@ static bool verify_typedef_decl(struct VContext *context, struct Decl *decl)
     return true;
 }
 
+static bool verify_datatype_decl(struct VContext *context, struct Decl *decl)
+{
+    // Datatype Items aren't directly used, although we still need one
+    // to hold the fingerprint.
+    struct Item *item = alloc(sizeof(struct Item));
+    memset(item, 0, sizeof(struct Item));
+    char *fol_name = copy_string_2("%", decl->name);
+    hash_table_insert(context->global_env, fol_name, item);
+    return true;
+}
+
 static void free_string_names_entry(void *context, const char *key, void *value)
 {
     if (strcmp(key, "$DefaultArrayNum") != 0) {
@@ -626,15 +638,88 @@ static void clear_string_names_hash_table(struct HashTable *string_names)
     hash_table_clear(string_names);
 }
 
+// Lookup the fingerprint of an existing (global) Decl.
+// Returns NULL if not found.
+static const uint8_t * lookup_decl_fingerprint(struct HashTable *global_env,
+                                               const char *name)
+{
+    char *fol_name = copy_string_2("%", name);
+    struct Item *item = hash_table_lookup(global_env, fol_name);
+    free(fol_name);
+
+    if (item) {
+        // Sanity check: the fingerprint should not be all zeroes.
+        bool found_nonzero = false;
+        for (int i = 0; i < SHA256_HASH_LENGTH; ++i) {
+            if (item->fingerprint[i] != 0) {
+                found_nonzero = true;
+                break;
+            }
+        }
+        if (found_nonzero) {
+            return item->fingerprint;
+        }
+    }
+
+    return NULL;
+}
+
+// Calculate the "fingerprint" of a Decl
+static void compute_decl_fingerprint(struct HashTable *global_env,
+                                     struct Decl *decl,
+                                     uint8_t fingerprint[SHA256_HASH_LENGTH])
+{
+    struct SHA256_CTX ctx;
+    sha256_init(&ctx);
+
+    // Start with "DECL-CHKSUM\0" + the decl's checksum
+    const char *decl_chksum = "DECL-CHKSUM";
+    sha256_add_bytes(&ctx, (const uint8_t*) decl_chksum, strlen(decl_chksum)+1);
+    sha256_add_bytes(&ctx, decl->checksum, SHA256_HASH_LENGTH);
+
+    // Add "DECL-INT-FPR\0" + the corresponding interface decl's fingerprint,
+    // if applicable.
+    const uint8_t *interface_fingerprint = lookup_decl_fingerprint(global_env, decl->name);
+    if (interface_fingerprint) {
+        const char *decl_int_fpr = "DECL-INT-FPR";
+        sha256_add_bytes(&ctx, (const uint8_t*) decl_int_fpr, strlen(decl_int_fpr)+1);
+        sha256_add_bytes(&ctx, interface_fingerprint, SHA256_HASH_LENGTH);
+    }
+
+    // Add "DEP-FPR\0" + the fingerprint of any other decl that this one
+    // (directly) depends on (in alphabetical order).
+    for (struct NameList *node = decl->dependency_names; node; node = node->next) {
+        const uint8_t* fingerprint_result = lookup_decl_fingerprint(global_env, node->name);
+        if (fingerprint_result) {  // (sometimes it won't be found e.g. data ctor names)
+            const char *dep_fpr = "DEP-FPR";
+            sha256_add_bytes(&ctx, (const uint8_t*) dep_fpr, strlen(dep_fpr)+1);
+            sha256_add_bytes(&ctx, fingerprint_result, SHA256_HASH_LENGTH);
+        }
+    }
+
+    sha256_final(&ctx, fingerprint);
+}
+
 static bool verify_decl(struct VContext *context, struct Decl *decl)
 {
+    // Compute fingerprint.
+    uint8_t fingerprint[SHA256_HASH_LENGTH];
+    compute_decl_fingerprint(context->global_env, decl, fingerprint);
+
+    bool skipped = false;
+    if (!context->interface_only && sha256_exists_in_db(context->cache_db, fingerprint)) {
+        skipped = true;
+        context->interface_only = true;
+    }
+
     if (context->show_progress) {
-        fprintf(stderr, "Verifying: ");
+        fprintf(stderr, "%s: ", skipped ? "Skipping" : "Verifying");
         for (const char *c = decl->name; *c; ++c) {
             if (*c != '^') {
                 fputc(*c, stderr);
             }
         }
+        if (skipped) fprintf(stderr, " (cached)");
         fprintf(stderr, "\n");
     }
 
@@ -655,8 +740,7 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
         break;
 
     case DECL_DATATYPE:
-        // Nothing needed
-        result = true;
+        result = verify_datatype_decl(context, decl);
         break;
 
     case DECL_TYPEDEF:
@@ -664,7 +748,7 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
         break;
     }
 
-    // clean up afterwards
+    // Clean up afterwards
     clear_verifier_env_hash_table(context->local_env);
     hash_table_clear(context->local_counter);
     clear_refs_hash_table(context->refs);
@@ -680,6 +764,24 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
 
     clear_string_names_hash_table(context->string_names);
     context->current_decl_name = NULL;
+
+    // Add fingerprint to the Item
+    char *fol_name = copy_string_2("%", decl->name);
+    struct Item *item = hash_table_lookup(context->global_env, fol_name);
+    free(fol_name);
+    if (item) {
+        memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
+    }
+
+    // On successful verification (not in interface_only mode), add to DB
+    if (result && !context->interface_only) {
+        add_sha256_to_db(context->cache_db, fingerprint);
+    }
+
+    // If skipped, restore interface_only to false for the next decl
+    if (skipped) {
+        context->interface_only = false;
+    }
 
     return result;
 }

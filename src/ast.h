@@ -632,8 +632,12 @@ struct Decl {
 
     struct Decl *next;   // next decl in same group
 
-    bool recursive;      // filled in by dependency resolver
     bool ghost;
+
+    bool recursive;      // filled in by dependency resolver
+    struct NameList *dependency_names; // filled in by dependency resolver
+
+    uint8_t checksum[SHA256_HASH_LENGTH];
 };
 
 

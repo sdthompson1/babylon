@@ -24,7 +24,13 @@ char * copy_string_2(const char *str1, const char *str2);
 char * copy_string_3(const char *str1, const char *str2, const char *str3);
 //char * copy_string_4(const char *str1, const char *str2, const char *str3, const char *str4);
 
+
 struct NameList * copy_name_list(struct NameList *list);
+
+// sort a NameList in place. returns new head pointer.
+struct NameList * sort_name_list(struct NameList *list);
+
+// free an entire NameList, also freeing the name pointers.
 void free_name_list(struct NameList *list);
 
 
