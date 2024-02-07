@@ -1,0 +1,15 @@
+Verifying: Main.Foo
+Verifying: Main.Bar
+Verifying: Main.f
+Checking Main.b:18:1-2 (end of function unreachable) (cached)
+Verifying: Main.g
+Checking Main.b:22:12-17 (binary operator) (cached)
+Checking Main.b:23:1-2 (end of function unreachable) (cached)
+Verifying: Main.h
+Checking Main.b:28:1-2 (end of function unreachable) (cached)
+Verifying: Main.i
+Checking Main.b:36:1-2 (end of function unreachable) (cached)
+Verifying: Main.bar_func
+Checking Main.b:42:12-17 (binary operator) (cached)
+Checking Main.b:43:1-2 (end of function unreachable) (cached)
+Verification successful

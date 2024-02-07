@@ -1,0 +1,11 @@
+Verifying: Main.f
+Checking Main.b:12:1-2 (end of function unreachable) (cvc5-Linux, )
+Verifying: Main.g
+Checking Main.b:16:12-19 (binary operator) (cvc5-Linux, )
+Checking Main.b:17:1-2 (end of function unreachable) (cached)
+Verifying: Main.h
+Checking Main.b:21:12-19 (binary operator) (cvc5-Linux, )
+Checking Main.b:22:1-2 (end of function unreachable) (cached)
+Verifying: Main.i
+Checking Main.b:27:1-2 (end of function unreachable) (cached)
+Verification successful

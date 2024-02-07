@@ -30,7 +30,8 @@ repository.
 
 static bool verify_const_decl(struct VContext *context,
                               const char *name,
-                              struct DeclData_Const *data)
+                              struct DeclData_Const *data,
+                              const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
     bool ok = true;
     char *fol_name = copy_string_2("%", name);
@@ -61,7 +62,8 @@ static bool verify_const_decl(struct VContext *context,
         }
     }
 
-    add_const_item(context, fol_name, data->type, fol_type, fol_term, false);
+    struct Item *item = add_const_item(context, fol_name, data->type, fol_type, fol_term, false);
+    memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
 
     return ok;
 }
@@ -375,7 +377,8 @@ static struct Sexpr * make_fol_dummy_subst(struct Item *from, struct Item *to)
 }
 
 static bool verify_function_decl(struct VContext *context,
-                                 struct Decl *decl)
+                                 struct Decl *decl,
+                                 const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
     // First let's see if there is an existing (interface) definition for this function
     char *fol_name = copy_string_2("%", decl->name);
@@ -544,6 +547,8 @@ static bool verify_function_decl(struct VContext *context,
     item->postconds = postconds;
     postconds = NULL;
 
+    memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
+
     // Free things
     free_sexpr(name_type_list);
     name_type_list = NULL;
@@ -596,31 +601,62 @@ static bool verify_function_decl(struct VContext *context,
     return ok;
 }
 
-static bool verify_typedef_decl(struct VContext *context, struct Decl *decl)
+static bool verify_typedef_decl(struct VContext *context,
+                                struct Decl *decl,
+                                const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
-    // If rhs != NULL we have a typedef (e.g. type Foo = Bar;). This
-    // would already have been substituted away by the typechecker, so
-    // we do not need to consider it here.
-
-    // If rhs == NULL we are declaraing a new abstract type (e.g. type
-    // Foo;). We need to do a "declare-sort" in this case.
+    struct Item *item;
 
     if (decl->typedef_data.rhs == NULL) {
-        add_tyvar_to_env(context, decl->name, false,
-                         decl->typedef_data.allocated ? ALLOC_ALWAYS : ALLOC_NEVER);
+        // We are declaring a new abstract type (e.g. "type Foo;").
+        // We need to add a "proper" Item in this case.
+        item = add_tyvar_to_env(context, decl->name, false,
+                                decl->typedef_data.allocated ? ALLOC_ALWAYS : ALLOC_NEVER);
+
+    } else {
+        // We are declaring a typedef (e.g. "type Foo = i32;").
+        // In this case, the typechecker will already have substituted out the
+        // typedef, so the verifier won't ever use the Item that we create here.
+        // So it can be a fake Item with most fields equal to zero.
+        // We do still need to fill in the fingerprint field though (recall that
+        // the fingerprints are used when checking decl->dependency_names, and
+        // decl->dependency_names is created pre-typechecking, so it might still
+        // contain references to typedef-names!).
+        item = alloc(sizeof(struct Item));
+        memset(item, 0, sizeof(struct Item));
+        char *fol_name = copy_string_2("%", decl->name);
+        hash_table_insert(context->global_env, fol_name, item);
     }
+
+    memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
 
     return true;
 }
 
-static bool verify_datatype_decl(struct VContext *context, struct Decl *decl)
+static bool verify_datatype_decl(struct VContext *context,
+                                 struct Decl *decl,
+                                 const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
     // Datatype Items aren't directly used, although we still need one
     // to hold the fingerprint.
     struct Item *item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
+    memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
+
     char *fol_name = copy_string_2("%", decl->name);
     hash_table_insert(context->global_env, fol_name, item);
+
+    // Also insert fake Items for the data ctors. These are again only used
+    // for fingerprinting.
+    for (struct DataCtor *ctor = decl->datatype_data.ctors; ctor; ctor = ctor->next) {
+        item = alloc(sizeof(struct Item));
+        memset(item, 0, sizeof(struct Item));
+        memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
+
+        char *fol_name = copy_string_2("%", ctor->name);
+        hash_table_insert(context->global_env, fol_name, item);
+    }
+
     return true;
 }
 
@@ -732,19 +768,19 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     // verify the decl
     switch (decl->tag) {
     case DECL_CONST:
-        result = verify_const_decl(context, decl->name, &decl->const_data);
+        result = verify_const_decl(context, decl->name, &decl->const_data, fingerprint);
         break;
 
     case DECL_FUNCTION:
-        result = verify_function_decl(context, decl);
+        result = verify_function_decl(context, decl, fingerprint);
         break;
 
     case DECL_DATATYPE:
-        result = verify_datatype_decl(context, decl);
+        result = verify_datatype_decl(context, decl, fingerprint);
         break;
 
     case DECL_TYPEDEF:
-        result = verify_typedef_decl(context, decl);
+        result = verify_typedef_decl(context, decl, fingerprint);
         break;
     }
 
@@ -764,14 +800,6 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
 
     clear_string_names_hash_table(context->string_names);
     context->current_decl_name = NULL;
-
-    // Add fingerprint to the Item
-    char *fol_name = copy_string_2("%", decl->name);
-    struct Item *item = hash_table_lookup(context->global_env, fol_name);
-    free(fol_name);
-    if (item) {
-        memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
-    }
 
     // On successful verification (not in interface_only mode), add to DB
     if (result && !context->interface_only) {

@@ -5,6 +5,7 @@ CC="gcc -g -Wno-overflow -Wno-div-by-zero test/test_support.c"
 
 TEST_MODULE="test/Test.b"
 CASES_DIR="test/cases"
+SEQUENCE_TESTS_DIR="test/sequence"
 
 OUT_DIR="test/output_tmp"
 
@@ -149,8 +150,11 @@ run_test()
     return 0
 }
 
-run_all_tests()
+run_main_tests()
 {
+    # $1 is the test directory ($CASES_DIR or a subdirectory)
+    # $2 is a pattern (might be empty)
+
     if [ -a $1/multi.txt ]
     then
         modules=""
@@ -170,12 +174,62 @@ run_all_tests()
                 run_test $1 $i $i || return 1
             elif [ -d $1/$i ]
             then
-                run_all_tests $1/$i $2 || return 1
+                run_main_tests $1/$i $2 || return 1
             fi
         done
     fi
     return 0
 }
+
+run_sequence_tests()
+{
+    # This runs a sequence of verification problems to check that the
+    # babylon.cache file is working as intended.
+
+    # Remove previous contents of output folder, if any
+    rm -f $OUT_DIR/* || return 1
+
+    # For each test in the sequence
+    for i in $SEQUENCE_TESTS_DIR/*
+    do
+        echo $i/Main.b
+
+        # Run the compiler, putting output into $OUT_DIR
+        $COMPILER --verify-all --verify-timeout $TIMEOUT $i/Main.b -o $OUT_DIR >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
+
+        # Clip out timings (e.g. 0.0s) from stderr.txt since these will vary between runs
+        sed -i -E -e 's/[0-9]+\.[0-9]s//g' $OUT_DIR/verifier_stderr.txt
+
+        # All these tests should succeed
+        if [ $? -ne 0 ]
+        then
+            echo "Verifier failed (unexpectedly)"
+            return 1
+        fi
+
+        # Stdout should be empty
+        check_file_empty $OUT_DIR/verifier_stdout.txt || return 1
+
+        # Stderr should match expected
+        filter_valgrind $OUT_DIR/verifier_stderr.txt || return 1
+        diff -u $i/expected.txt $OUT_DIR/verifier_stderr.txt || return 1
+    done
+
+    return 0
+}
+
+function run_all_tests()
+{
+    run_main_tests $1 $2 || return 1
+
+    if [[ -z $2 ]] || [[ $2 == sequence ]] || [[ $2 == seq ]]
+    then
+        run_sequence_tests || return 1
+    fi
+
+    return 0
+}
+
 
 COMPILER=$(pwd)/$COMPILER
 

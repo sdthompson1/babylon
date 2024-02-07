@@ -390,8 +390,8 @@ struct Item *add_const_item(struct VContext *context,
     return item;
 }
 
-void add_tyvar_to_env(struct VContext *context, const char *name, bool local,
-                      enum AllocFunc alloc_func)
+struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
+                               enum AllocFunc alloc_func)
 {
     struct HashTable *env = local ? context->local_env : context->global_env;
 
@@ -491,10 +491,11 @@ void add_tyvar_to_env(struct VContext *context, const char *name, bool local,
     item->fol_name = copy_string(valid_fol_name);
     hash_table_insert(env, valid_fol_name, item);
     valid_fol_name = NULL;
-    item = NULL;
 
     free((char*)fol_name);
     fol_name = NULL;
+
+    return item;
 }
 
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars)

@@ -1,0 +1,9 @@
+Verifying: Main.NEW_CONST
+Verifying: Main.Foo (cached)
+Verifying: Main.Bar (cached)
+Verifying: Main.f (cached)
+Verifying: Main.g (cached)
+Verifying: Main.h (cached)
+Verifying: Main.i (cached)
+Verifying: Main.bar_func (cached)
+Verification successful

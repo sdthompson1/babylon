@@ -257,6 +257,7 @@ void names_used_in_decl(struct HashTable *names, struct Decl *decl)
         }
         for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
             hash_table_insert(names, arg->name, NULL);
+            names_used_in_type(names, arg->type);
         }
         names_used_in_type(names, decl->function_data.return_type);
         names_used_in_attributes(names, decl->attributes);
