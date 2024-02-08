@@ -115,3 +115,16 @@ function test10()
 
     assert g(3) == 3;   // should succeed, g is now shown again
 }
+
+
+// Hiding a generic function
+ghost function id<T>(x: T): T
+{
+    return x;
+}
+
+ghost function generic_test()
+{
+    hide id;
+    assert id<i32>(10) == 10;  // Should fail
+}

@@ -211,6 +211,17 @@ static struct Sexpr *strip_define_fun(struct Sexpr *expr)
                             copy_sexpr(expr->right->right->right->left));
 }
 
+static struct Sexpr *try_strip_define_fun(struct Sexpr *expr,
+                                          const struct HashTable *hidden_names)
+{
+    const char *name = expr->right->left->string;
+    if (name[0] == '%' && hash_table_contains_key(hidden_names, &name[1])) {
+        return strip_define_fun(expr);
+    } else {
+        return copy_sexpr(expr);
+    }
+}
+
 static struct Sexpr *maybe_hide_defn(struct Sexpr *expr,
                                      const struct HashTable *hidden_names)
 {
@@ -219,10 +230,13 @@ static struct Sexpr *maybe_hide_defn(struct Sexpr *expr,
     // (declare-fun name (type type) type)
     if (hidden_names != NULL) {
         if (sexpr_equal_string(expr->left, "define-fun")) {
-            const char *name = expr->right->left->string;
-            if (name[0] == '%' && hash_table_contains_key(hidden_names, &name[1])) {
-                return strip_define_fun(expr);
-            }
+            return try_strip_define_fun(expr, hidden_names);
+        } else if (sexpr_equal_string(expr->left, "generic")) {
+            return make_list4_sexpr(
+                copy_sexpr(expr->left),
+                copy_sexpr(expr->right->left),
+                copy_sexpr(expr->right->right->left),
+                try_strip_define_fun(expr->right->right->right->left, hidden_names));
         }
     }
     return copy_sexpr(expr);
