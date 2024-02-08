@@ -189,6 +189,14 @@ static void get_names_from_sexpr(const struct Sexpr *expr,
     }
 }
 
+void get_free_var_names_in_sexpr(const struct Sexpr *expr,
+                                 struct HashTable *var_names,
+                                 struct HashTable *scratch)
+{
+    // this is a "public" version of get_names_from_sexpr
+    get_names_from_sexpr(expr, var_names, scratch, NULL);
+}
+
 static struct Sexpr *strip_define_fun(struct Sexpr *expr)
 {
     struct Sexpr *types = NULL;

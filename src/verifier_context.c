@@ -17,6 +17,7 @@ repository.
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
+#include "verifier_dependency.h"
 #include "verifier_types.h"
 
 #include <inttypes.h>
@@ -521,8 +522,13 @@ void remove_existing_item(struct HashTable *table, const char *fol_name)
 void remove_facts(struct VContext *cxt, const char *fol_name)
 {
     struct Sexpr ** ptr = &cxt->facts;
+
+    struct HashTable *names = new_hash_table();
+    struct HashTable *scratch = new_hash_table();
+
     while (*ptr) {
-        if (sexpr_contains_string((*ptr)->left, fol_name)) {
+        get_free_var_names_in_sexpr((*ptr)->left, names, scratch);
+        if (hash_table_contains_key(names, fol_name)) {
             free_sexpr((*ptr)->left);
             struct Sexpr *right = (*ptr)->right;
             free(*ptr);
@@ -531,7 +537,11 @@ void remove_facts(struct VContext *cxt, const char *fol_name)
         } else {
             ptr = &(*ptr)->right;
         }
+        hash_table_clear(names);
     }
+
+    free_hash_table(names);
+    free_hash_table(scratch);
 }
 
 void make_instance(struct Sexpr **expr,    // modified in place

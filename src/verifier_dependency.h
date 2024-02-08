@@ -14,6 +14,13 @@ repository.
 struct HashTable;
 struct Sexpr;
 
+// Get all free variable names in sexpr, e.g.
+// (+ %x (let ((%y 1)) %y)) will return "%x" but not "%y".
+void get_free_var_names_in_sexpr(const struct Sexpr *expr,
+                                 struct HashTable *var_names,
+                                 struct HashTable *scratch);
+
+
 // Analyse the dependencies of expr.
 
 // env1 and env2 are mappings from FOL-name to Item* (either can be NULL).
