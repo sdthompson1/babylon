@@ -231,7 +231,8 @@ static struct Sexpr *maybe_hide_defn(struct Sexpr *expr,
     if (hidden_names != NULL) {
         if (sexpr_equal_string(expr->left, "define-fun")) {
             return try_strip_define_fun(expr, hidden_names);
-        } else if (sexpr_equal_string(expr->left, "generic")) {
+        } else if (sexpr_equal_string(expr->left, "generic")
+                   && sexpr_equal_string(expr->right->right->right->left->left, "define-fun")) {
             return make_list4_sexpr(
                 copy_sexpr(expr->left),
                 copy_sexpr(expr->right->left),

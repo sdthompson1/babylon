@@ -128,3 +128,21 @@ ghost function generic_test()
     hide id;
     assert id<i32>(10) == 10;  // Should fail
 }
+
+
+// Hide a generic function whose body is already "hidden".
+
+extern function my_extern_func<T>(x: T): T;
+
+ghost function hide_extern_test()
+{
+    // We already don't know the implementation of my_extern_func, so
+    // hiding it should not change anything
+    hide my_extern_func;
+
+    // This assert should succeed
+    assert my_extern_func<i32>(0) + 0 == my_extern_func<i32>(0);
+
+    // This assert should fail
+    assert my_extern_func<i32>(0) == 10;
+}
