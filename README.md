@@ -101,11 +101,10 @@ The current status of the project is basically as follows:
       verification only on the most critical parts of their programs.
 
  - The language is reasonably complete, and it's certainly possible to
-   write programs in it (see examples below). However, there are
-   definitely missing features, and also things that could be done in
-   a better way, so programming is not as "ergonomic" as it could be.
-   (One example is that there is no "for" loop yet -- one must use
-   "while" loops instead.) Hopefully this will improve over time.
+   write programs in it (see examples below). However, I am still
+   tinkering with the language and its definition, and I expect to
+   make backwards-incompatible changes in the future, so potential
+   users should bear that in mind.
 
  - There is no standard library currently. To do I/O, one must write
    separate C functions, and then call those from the Babylon side.
@@ -210,6 +209,8 @@ There are several possible directions for future work.
 
 I would like to continue improving the language itself:
 
+ - new language features (e.g. refactoring how arrays work; exporting
+   types "abstractly" in module interfaces)
  - add "for" loops
  - add recursion (currently recursive functions or recursive datatypes
    are not supported, mostly because I haven't got around to adding
@@ -217,7 +218,6 @@ I would like to continue improving the language itself:
  - maybe add support for higher order functions (if I can figure out
    how to do this in the SMT solvers)
  - loop features: infinite while loops, "break" and "continue"
- - consider adding Haskell-like type classes (or something similar)
  - etc.
 
 The interface for calling C from Babylon should be improved (something
@@ -230,9 +230,6 @@ The compiler could be made easier to use, e.g.:
  - better error messages
  - the provers to be used should be specified in some config file,
    rather than hard coded
-
-The compiler should also be portable to other architectures and
-operating systems (currently it only supports x86-64 and Linux).
 
 Rewriting the compiler in its own language might be interesting, at
 some point -- but for now it probably makes sense to continue
@@ -257,8 +254,14 @@ more interested in the kind of lower-level programming that one might
 do in Rust or C. For example, I have explicitly-sized integers, like
 "i32" or "u64", whereas Dafny uses an infinite-sized "int" type.
 
-There are also many other verifcation and proof systems out there,
-including [Coq](https://coq.inria.fr/),
+[SPARK](https://en.wikipedia.org/wiki/SPARK_(programming_language)) is
+actually very close in its goals to Babylon -- it compiles to native
+code and has support for verification. The main difference is that it
+uses Ada syntax whereas Babylon has a more C-like syntax (with curly
+braces).
+
+More broadly, there are many other verifcation and proof systems out
+there, including [Coq](https://coq.inria.fr/),
 [Lean](https://lean-lang.org/), [Agda](https://github.com/agda/agda),
 [Liquid Haskell](https://ucsd-progsys.github.io/liquidhaskell/),
 [Whiley](https://whiley.org/),
@@ -276,6 +279,13 @@ trade-off, but for users who really require a cast-iron guarantee that
 the verification is correct (for example in safety-critical systems?),
 then Babylon would *not* be a good choice, and one of those other
 systems would be better.
+
+
+# Disclaimer
+
+For the avoidance of doubt: this project is currently considered an
+experimental prototype, not a fully working system, and is provided
+WITHOUT WARRANTY OF ANY KIND.
 
 
 # Contact
