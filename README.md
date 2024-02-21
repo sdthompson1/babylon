@@ -1,10 +1,11 @@
 
 # The "Babylon" programming language
 
-"Babylon" is an experimental new programming language that I am
-working on. The goal is to create a low-level imperative-style
-language, similar to C, but with support for program verification
-features (preconditions, postconditions and so on).
+"[Babylon](https://www.solarflare.org.uk/babylon)" is an experimental
+new programming language that I am working on. The goal is to create a
+low-level imperative-style language, similar to C, but with support
+for program verification features (preconditions, postconditions and
+so on).
 
 Here is a simple example program written in the language.
 
@@ -291,3 +292,5 @@ WITHOUT WARRANTY OF ANY KIND.
 # Contact
 
 I can be contacted by email at: stephen (at) solarflare.org.uk.
+
+Project website link: https://www.solarflare.org.uk/babylon
