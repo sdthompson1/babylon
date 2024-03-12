@@ -20,9 +20,9 @@ function f6(ref a: i32[,])
 
 function f7()
 {
-    var a: i8[];
+    var a: i8[*];
     assert (sizeof(a) == u64_zero);
-    var b: i8[,,];
+    var b: i8[*,*,*];
     assert (sizeof(b) == {u64_zero, u64_zero, u64_zero});
 }
 
@@ -76,7 +76,7 @@ function f13(ref a: i32[], ref b: i32[,])
 
 function f14()
 {
-    var a: i32[];
+    var a: i32[*];
     resize_array<i32>(a, 10);
     // Error: a was not deallocated
 }

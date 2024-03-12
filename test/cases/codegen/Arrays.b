@@ -7,7 +7,7 @@ interface {
 
 function f1(): u64
 {
-    var arr1: i32[];
+    var arr1: i32[*];
     resize_array<i32>(arr1, 10);
     var result = sizeof(arr1);
     resize_array<i32>(arr1, 0);
@@ -16,7 +16,7 @@ function f1(): u64
 
 function f2(): u64
 {
-    var arr2: i32[,];
+    var arr2: i32[*,*];
     resize_2d_array<i32>(arr2, 3, 4);
     var result = sizeof(arr2).0;
     resize_2d_array<i32>(arr2, 0, 0);
@@ -25,7 +25,7 @@ function f2(): u64
 
 function f3(): u64
 {
-    var arr2: i32[,];
+    var arr2: i32[*,*];
     resize_2d_array<i32>(arr2, 3, 4);
     var result = sizeof(arr2).1;
     resize_2d_array<i32>(arr2, 0, 0);
@@ -33,7 +33,7 @@ function f3(): u64
 }
 
 
-function sizeof_and_free<T>(ref a: T[]): u64
+function sizeof_and_free<T>(ref a: T[*]): u64
     requires !allocated(default<T>());
     requires forall (i:u64) i < sizeof(a) ==> !allocated(a[i]);
 {
@@ -44,7 +44,7 @@ function sizeof_and_free<T>(ref a: T[]): u64
 
 function f4(): u64
 {
-    var a: i32[];
+    var a: i32[*];
     resize_array<i32>(a, 123);
     var result = sizeof_and_free<i32>(a);
     return result;
@@ -52,7 +52,7 @@ function f4(): u64
 
 function f5(): u64
 {
-    var a: i32[,];
+    var a: i32[*,*];
     resize_2d_array<i32>(a, 3, 2+3);
     var result = sizeof(a).0 * sizeof(a).1;
     resize_2d_array<i32>(a, 0, 0);
@@ -61,7 +61,7 @@ function f5(): u64
 
 function f6(): i32
 {
-    var a: i32[];
+    var a: i32[*];
     resize_array<i32>(a, 10);
     var x: i32 = 0;
 
@@ -83,10 +83,10 @@ function f6(): i32
 
 function f8(): i32
 {
-    var a: {i32,i32}[];
+    var a: {i32,i32}[*];
     resize_array<{i32,i32}>(a, 10);
     
-    var b: i32[];
+    var b: i32[*];
     resize_array<i32>(b, 10);
     
     var x = 0;
@@ -106,14 +106,14 @@ function f8(): i32
 function f9(): u64
 {
     // a "default" array isn't allocated and so doesn't need to be freed
-    var a: i32[];
+    var a: i32[*];
     var sz = sizeof(a);
     return sz;
 }
 
 function f10()
 {
-    var a: i32[,,];
+    var a: i32[*,*,*];
     resize_3d_array<i32>(a, 5, 6, 7);
     a[4,5,6] = 4567;
     Test.print_i32(a[4,5,6]);

@@ -43,7 +43,7 @@ function f3()
 
 function f4()
 {
-    var a: i32[];
+    var a: i32[*];
     resize_array<i32>(a, 10);
     
     a[1] = 2;
@@ -59,16 +59,16 @@ function f4()
 
 function f5()
 {
-    var a: i32[];
-    var b: i32[];
+    var a: i32[*];
+    var b: i32[*];
     swap a[1/0], b[1/0];    // Error + poisons both arrays
     assert a[0] == 1;       // Should be ignored because a is now poisoned
 }
 
 function f6(): i32
 {
-    var a: i32[];
-    var b: i32[];
+    var a: i32[*];
+    var b: i32[*];
     swap a[1/0], b[1/0];    // Error + poisons both arrays
     return 100;
 }

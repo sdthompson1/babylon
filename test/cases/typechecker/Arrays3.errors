@@ -1,0 +1,35 @@
+Arrays3.b:8:25: Type mismatch
+Arrays3.b:9:25: Type mismatch
+Arrays3.b:13:20: Type mismatch
+Arrays3.b:14:20: Wrong number of array indices (expected 1)
+Arrays3.b:17:20: Type mismatch
+Arrays3.b:18:20: Wrong number of array indices (expected 2)
+Arrays3.b:24:25: Type mismatch
+Arrays3.b:25:25: Type mismatch
+Arrays3.b:29:20: Type mismatch
+Arrays3.b:30:20: Wrong number of array indices (expected 1)
+Arrays3.b:33:20: Type mismatch
+Arrays3.b:34:20: Wrong number of array indices (expected 2)
+Arrays3.b:40:25: Type mismatch
+Arrays3.b:41:25: Type mismatch
+Arrays3.b:45:20: Type mismatch
+Arrays3.b:46:20: Wrong number of array indices (expected 1)
+Arrays3.b:49:20: Type mismatch
+Arrays3.b:50:20: Wrong number of array indices (expected 2)
+Arrays3.b:62:17: Type mismatch
+Arrays3.b:62:21: Type mismatch
+Arrays3.b:63:17: Type mismatch
+Arrays3.b:63:21: Type mismatch
+Arrays3.b:75:13: Type mismatch
+Arrays3.b:75:17: Type mismatch
+Arrays3.b:80:12: Can't use an incomplete array type here
+Arrays3.b:85:19: Can't use an incomplete array type here
+Arrays3.b:103:16: Type mismatch
+Arrays3.b:107:16: Type mismatch
+Arrays3.b:120:5: Can't use an incomplete array type here
+Arrays3.b:120:10: Can't use an incomplete array type here
+Arrays3.b:122:24: Can't use an incomplete array type here
+Arrays3.b:128:10: Can't use an incomplete array type here
+Arrays3.b:135:20: Type mismatch (expected bool or numeric)
+Arrays3.b:142:24: Type mismatch
+Arrays3.b:147:19: Can't use an incomplete array type here

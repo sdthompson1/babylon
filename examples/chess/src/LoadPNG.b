@@ -12,7 +12,7 @@ interface {
     // Loads RGBA data in [row,col] order.
     extern function load_png(ref io: IO,
                              filename: u8[],
-                             ref pixels: RGBA[,],
+                             ref pixels: RGBA[*,*],
                              ref result: Result<{}>)
         requires valid_c_string(filename);
         requires !allocated(pixels);

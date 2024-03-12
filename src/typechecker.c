@@ -174,7 +174,7 @@ static struct Type * substitute_in_type(struct TyVarList *tyvars,
 
 // ----------------------------------------------------------------------------------------------------
 
-// Functions needed by TY_FIXED_ARRAY kind checking.
+// Functions needed by TY_ARRAY kind checking.
 
 static void typecheck_term(struct TypecheckContext *tc_context, struct Term *term);
 
@@ -300,46 +300,43 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
             return ok;
         }
 
-    case TY_FIXED_ARRAY:
-        if (!kindcheck_type(tc_context, &(*type)->fixed_array_data.element_type)) {
+    case TY_ARRAY:
+        if (!kindcheck_type(tc_context, &(*type)->array_data.element_type)) {
             return false;
         }
 
-        {
+        if ((*type)->array_data.sizes) {
             // Array sizes are u64
             struct Type *u64 = make_int_type(g_no_location, false, 64);
 
-            for (int i = 0; i < (*type)->fixed_array_data.ndim; ++i) {
-                typecheck_term(tc_context, (*type)->fixed_array_data.sizes[i]);
-                if ((*type)->fixed_array_data.sizes[i]->type == NULL) {
+            for (int i = 0; i < (*type)->array_data.ndim; ++i) {
+                typecheck_term(tc_context, (*type)->array_data.sizes[i]);
+                if ((*type)->array_data.sizes[i]->type == NULL) {
                     // Size doesn't typecheck
                     free_type(u64);
                     return false;
                 }
 
-                if (!match_term_to_type(tc_context, u64, &(*type)->fixed_array_data.sizes[i])) {
+                if (!match_term_to_type(tc_context, u64, &(*type)->array_data.sizes[i])) {
                     // Size doesn't have type u64
                     free_type(u64);
                     return false;
                 }
 
-                struct Term *normal = eval_to_normal_form(tc_context->global_env, (*type)->fixed_array_data.sizes[i]);
+                struct Term *normal = eval_to_normal_form(tc_context->global_env, (*type)->array_data.sizes[i]);
                 if (normal == NULL) {
                     // Size is not a compile time constant
                     free_type(u64);
                     return false;
                 }
-                free_term((*type)->fixed_array_data.sizes[i]);
-                (*type)->fixed_array_data.sizes[i] = normal;
+                free_term((*type)->array_data.sizes[i]);
+                (*type)->array_data.sizes[i] = normal;
             }
 
             free_type(u64);
         }
 
         return true;
-
-    case TY_DYNAMIC_ARRAY:
-        return kindcheck_type(tc_context, &(*type)->dynamic_array_data.element_type);
 
     case TY_VARIANT:
     case TY_FUNCTION:
@@ -446,8 +443,7 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
         case TY_BOOL:
         case TY_RECORD:
         case TY_VARIANT:
-        case TY_FIXED_ARRAY:
-        case TY_DYNAMIC_ARRAY:
+        case TY_ARRAY:
         case TY_MATH_INT:
         case TY_MATH_REAL:
             if (!types_equal(expected_type, (*term)->type)) {
@@ -487,6 +483,83 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
     }
 
     fatal_error("match_term_to_type: missing case");
+}
+
+// Wrap an array term in a cast if needed. Used for function parameter
+// passing where e.g. a T[50] can be passed to a T[].
+static void insert_array_cast_if_required(struct Type *expected_type,
+                                          struct Term **term)
+{
+    if (expected_type != NULL && (*term)->type != NULL
+    && expected_type->tag == TY_ARRAY && (*term)->type->tag == TY_ARRAY) {
+        // Insert cast in these cases:
+        // T[n] to T[]
+        // T[] to T[n]
+        // T[*] to T[]
+        // T[*] to T[n]
+        bool from_resizable = (*term)->type->array_data.resizable;
+        bool from_fixed_size = (*term)->type->array_data.sizes != NULL;
+        bool from_incomplete = !from_resizable && !from_fixed_size;
+        bool to_fixed_size = expected_type->array_data.sizes != NULL;
+        bool to_incomplete = !to_fixed_size && !expected_type->array_data.resizable;
+
+        if ((from_fixed_size && to_incomplete)
+        || (from_incomplete && to_fixed_size)
+        || (from_resizable && to_incomplete)
+        || (from_resizable && to_fixed_size)) {
+
+            struct Term *new_term = make_term((*term)->location, TM_CAST);
+            new_term->type = copy_type(expected_type);
+            new_term->cast.target_type = copy_type(expected_type);
+            new_term->cast.operand = *term;
+            *term = new_term;
+        }
+    }
+}
+
+static void cast_to_incomplete_array_if_required(struct Term **term)
+{
+    if ((*term)->type && (*term)->type->tag == TY_ARRAY) {
+        struct Type *target_type = make_type(g_no_location, TY_ARRAY);
+        target_type->array_data.element_type = copy_type((*term)->type->array_data.element_type);
+        target_type->array_data.ndim = (*term)->type->array_data.ndim;
+        target_type->array_data.resizable = false;
+        target_type->array_data.sizes = NULL;
+        insert_array_cast_if_required(target_type, term);
+    }
+}
+
+// Cast all array terms in a binop to T[] if required. Used for == and != operators.
+static void insert_binop_array_casts_if_required(struct Term *term)
+{
+    if (term->tag != TM_BINOP) {
+        fatal_error("this function can only be called on binop terms");
+    }
+
+    if (term->binop.lhs->type == NULL || term->binop.lhs->type->tag != TY_ARRAY) return;
+
+    bool all_same = true;
+    for (struct OpTermList *node = term->binop.list; node; node = node->next) {
+        if (node->rhs->type == NULL || node->rhs->type->tag != TY_ARRAY) {
+            return;
+        }
+        if (!types_equal(node->rhs->type, term->binop.lhs->type)) {
+            all_same = false;
+        }
+    }
+
+    if (all_same) {
+        // No casts are required.
+        return;
+    }
+
+    // If we get here, all terms in sight have type TY_ARRAY, but at least one
+    // differs in resizability and/or sizes.
+    // Cast everything in sight to T[].
+    cast_to_incomplete_array_if_required(&term->binop.lhs);
+    for (struct OpTermList *node = term->binop.list; node; node = node->next) {
+        cast_to_incomplete_array_if_required(&node->rhs);
+    }
 }
 
 // If term is not TY_BOOL, report error and return false.
@@ -614,6 +687,7 @@ enum BinopCategory {
 
 // Checks that binop args are valid.
 // If TY_FINITE_INT, cast all args to the same bitsize and signedness.
+// If TY_ARRAY (and BINOP_CAT_ANY_NON_FUNCTION), cast the arrays to T[] if required.
 static bool check_binop_args(struct TypecheckContext *tc_context,
                              struct Term *binop,
                              enum BinopCategory cat)
@@ -679,6 +753,11 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
         return false;
     }
 
+    // For == and != operators, we allow the operands to be cast to
+    // T[] if they don't all have the same type already. This allows
+    // more such expressions to typecheck.
+    insert_binop_array_casts_if_required(binop);
+
     // Check that all rhs terms have the same type as the lhs
     // (but allowing an inexact match in the case of TY_FINITE_INT).
     for (struct OpTermList *list = data->list; list; list = list->next) {
@@ -709,7 +788,8 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
 }
 
 // Check a type is valid for a variable i.e. it is not TY_FUNCTION or TY_FORALL.
-// Also, in non-ghost code, make sure it is not TY_MATH_INT or TY_MATH_REAL.
+// Also, in non-ghost code, make sure it is not TY_MATH_INT or TY_MATH_REAL,
+// and it is not an incomplete array type (T[]).
 // (precondition: the type should be valid, kind *)
 static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Location loc,
                                  struct Type *type)
@@ -751,9 +831,13 @@ static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Loc
         }
         return true;
 
-    case TY_FIXED_ARRAY:
-    case TY_DYNAMIC_ARRAY:
-        return true;
+    case TY_ARRAY:
+        if (!type->array_data.resizable && type->array_data.sizes == NULL && tc_context->executable) {
+            report_incomplete_array_type(loc);
+            tc_context->error = true;
+            return false;
+        }
+        return check_valid_var_type(tc_context, loc, type->array_data.element_type);
 
     case TY_FUNCTION:
         report_function_variable_not_allowed(loc);
@@ -950,12 +1034,19 @@ static void* typecheck_int_literal(void *context, struct Term *term, void *type_
 
 static void* typecheck_string_literal(void *context, struct Term *term, void *type_result)
 {
-    // String literals currently have type u8[].
-    // TODO: Maybe u8[N] (where N is the compile time known size of the
-    // string) might make more sense?
-    term->type = make_type(g_no_location, TY_DYNAMIC_ARRAY);
-    term->type->dynamic_array_data.element_type = make_int_type(g_no_location, false, 8);
-    term->type->dynamic_array_data.ndim = 1;
+    // String literals currently have type u8[N], where N is the
+    // (compile time known) size of the string.
+
+    char buf[50];
+    sprintf(buf, "%" PRIu32, term->string_literal.length);
+
+    term->type = make_type(g_no_location, TY_ARRAY);
+    term->type->array_data.element_type = make_int_type(g_no_location, false, 8);
+    term->type->array_data.ndim = 1;
+    term->type->array_data.resizable = false;
+    term->type->array_data.sizes = alloc(sizeof(struct Term *));
+    term->type->array_data.sizes[0] = make_int_literal_term(g_no_location, buf);
+
     return NULL;
 }
 
@@ -981,6 +1072,10 @@ static void* typecheck_cast(void *context, struct Term *term, void *type_result,
 
     // Casting is allowed from/to TY_FINITE_INT, TY_MATH_INT and TY_MATH_REAL.
     // In executable code, this is further restricted to just TY_FINITE_INT.
+
+    // (Note: TM_CAST also supports casting to/from array types, but
+    // currently, such TM_CAST terms are inserted by the typechecker
+    // only -- i.e. we should not see an array TM_CAST in the input.)
 
     enum TypeTag from_type = term->cast.operand->type->tag;
     enum TypeTag to_type = term->cast.target_type->tag;
@@ -1450,6 +1545,12 @@ static bool is_lvalue(const struct TypecheckContext *tc_context, struct Term *te
         return true;
     }
 
+    if (term->tag == TM_CAST && term->type && term->type->tag == TY_ARRAY) {
+        // Array casts inherit their "lvalueness" from the underlying operand.
+        // (Numeric casts are never lvalues.)
+        return is_lvalue(tc_context, term->cast.operand, ghost_out, readonly_out);
+    }
+
     if (term->tag != TM_VAR) {
         return false;
     }
@@ -1631,6 +1732,7 @@ static void* typecheck_call(void *context, struct Term *term, void *type_result,
             actual_list = term->call.args;
 
             while (dummy_list && actual_list) {
+                insert_array_cast_if_required(dummy_list->type, &actual_list->rhs);
                 if (!match_term_to_type(tc_context, dummy_list->type, &actual_list->rhs)) {
                     ok = false;
                 }
@@ -2231,13 +2333,14 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         return NULL;
     }
 
-    if (rhs->type->tag != TY_DYNAMIC_ARRAY && rhs->type->tag != TY_FIXED_ARRAY) {
+    if (rhs->type->tag != TY_ARRAY) {
         report_type_mismatch_string("array", rhs);
         tc_context->error = true;
         return NULL;
     }
 
-    if (rhs->type->tag == TY_DYNAMIC_ARRAY
+    if (rhs->type->tag == TY_ARRAY
+    && rhs->type->array_data.resizable
     && !is_lvalue(tc_context, rhs, NULL, NULL)
     && tc_context->executable) {
         // In executable code, passing an rvalue (of allocatable type)
@@ -2249,7 +2352,7 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         return NULL;
     }
 
-    int ndim = array_ndim(rhs->type);
+    int ndim = rhs->type->array_data.ndim;
     if (ndim == 1) {
         term->type = make_int_type(g_no_location, false, 64);
     } else {
@@ -2288,6 +2391,14 @@ static void * typecheck_allocated(void *context, struct Term *term, void *type_r
         return NULL;
     }
 
+    if (rhs->type->tag == TY_ARRAY
+    && rhs->type->array_data.sizes == NULL
+    && !rhs->type->array_data.resizable) {
+        report_incomplete_array_type(term->location);
+        tc_context->error = true;
+        return NULL;
+    }
+
     term->type = make_type(g_no_location, TY_BOOL);
     return NULL;
 }
@@ -2303,7 +2414,7 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
         return NULL;
     }
 
-    if (lhs->type->tag != TY_FIXED_ARRAY && lhs->type->tag != TY_DYNAMIC_ARRAY) {
+    if (lhs->type->tag != TY_ARRAY) {
         report_cannot_index(lhs);
         tc_context->error = true;
         return NULL;
@@ -2333,14 +2444,14 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
 
     free_type(u64);
 
-    if (num_indexes != array_ndim(lhs->type)) {
+    if (num_indexes != lhs->type->array_data.ndim) {
         report_wrong_number_of_indexes(term);
         tc_context->error = true;
         ok = false;
     }
 
     if (ok) {
-        term->type = copy_type(array_element_type(lhs->type));
+        term->type = copy_type(lhs->type->array_data.element_type);
     }
 
     return NULL;
@@ -2455,7 +2566,8 @@ static bool contains_resizable_array_element(struct Term *term)
         return contains_resizable_array_element(term->array_proj.lhs)
             || (term->array_proj.lhs
                 && term->array_proj.lhs->type
-                && term->array_proj.lhs->type->tag == TY_DYNAMIC_ARRAY);
+                && term->array_proj.lhs->type->tag == TY_ARRAY
+                && term->array_proj.lhs->type->array_data.resizable);
 
     case TM_STRING_LITERAL:
         return false;
@@ -2506,13 +2618,16 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
         // typecheck rhs
         typecheck_term(tc_context, stmt->var_decl.rhs);
-        if (stmt->var_decl.rhs->type) {
 
+        // rhs should be a valid var type
+        bool valid = check_valid_var_type(tc_context, stmt->var_decl.rhs->location, stmt->var_decl.rhs->type);
+
+        // if type checking of rhs successful:
+        if (stmt->var_decl.rhs->type && valid) {
             if (stmt->var_decl.type) {
                 // There is a type annotation. Ensure it is consistent with the rhs term.
                 match_term_to_type(tc_context, stmt->var_decl.type, &stmt->var_decl.rhs);
-
-            } else if (check_valid_var_type(tc_context, stmt->var_decl.rhs->location, stmt->var_decl.rhs->type)) {
+            } else {
                 // Add an inferred type annotation to the var decl statement.
                 stmt->var_decl.type = copy_type(stmt->var_decl.rhs->type);
             }
@@ -2667,7 +2782,13 @@ static void typecheck_assign_stmt(struct TypecheckContext *tc_context,
     typecheck_term(tc_context, stmt->assign.rhs);
 
     // The lhs and rhs types should match
-    match_term_to_type(tc_context, stmt->assign.lhs->type, &stmt->assign.rhs);
+    bool type_ok = match_term_to_type(tc_context, stmt->assign.lhs->type, &stmt->assign.rhs);
+
+    // Lhs and rhs should be valid var types
+    if (type_ok) {
+        check_valid_var_type(tc_context, stmt->assign.lhs->location, stmt->assign.lhs->type);
+        check_valid_var_type(tc_context, stmt->assign.rhs->location, stmt->assign.rhs->type);
+    }
 }
 
 static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
@@ -2701,6 +2822,9 @@ static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
         if (!types_equal(stmt->swap.lhs->type, stmt->swap.rhs->type)) {
             report_type_mismatch(stmt->swap.lhs->type, stmt->swap.rhs);
             tc_context->error = true;
+        } else {
+            // Check the (common) type is a valid var type.
+            check_valid_var_type(tc_context, stmt->swap.lhs->location, stmt->swap.lhs->type);
         }
     }
 }
@@ -2731,7 +2855,10 @@ static void typecheck_return_stmt(struct TypecheckContext *tc_context,
             tc_context->error = true;
         } else {
             typecheck_term(tc_context, stmt->ret.value);
-            match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
+            bool type_ok = match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
+            if (type_ok) {
+                check_valid_var_type(tc_context, stmt->ret.value->location, stmt->ret.value->type);
+            }
         }
     }
 }
@@ -3007,24 +3134,18 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
     if (decl->recursive) {
         report_illegal_recursion(decl);
         tc_context->error = true;
-    }
 
-    if (!decl->recursive) {
+    } else {
         // If we have a term then let's typecheck it.
-        // If we don't, and it's an interface (or ghost), leave it as NULL.
-        // Otherwise error.
         if (decl->const_data.rhs != NULL) {
             typecheck_term(tc_context, decl->const_data.rhs);
-
-        } else if (implementation && !decl->ghost) {
-            report_incomplete_definition(decl->location);
-            tc_context->error = true;
         }
 
         if (decl->const_data.type != NULL && decl->const_data.rhs != NULL) {
             // There is both a type annotation, and a RHS.
             // Coerce the RHS to match the type annotation.
             match_term_to_type(tc_context, decl->const_data.type, &decl->const_data.rhs);
+            check_valid_var_type(tc_context, decl->const_data.type->location, decl->const_data.type);
 
         } else if (decl->const_data.rhs != NULL) {
             // There is an RHS, but no type annotation.
@@ -3032,7 +3153,16 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
             decl->const_data.type = copy_type(decl->const_data.rhs->type);
             check_valid_var_type(tc_context, decl->const_data.rhs->location, decl->const_data.type);
 
-        } else if (decl->const_data.type == NULL) {
+        } else if (decl->const_data.type != NULL) {
+            // Type annotation only, without a rhs.
+            // Valid only in interface or ghost code.
+            if (implementation && !decl->ghost) {
+                report_incomplete_definition(decl->location);
+                tc_context->error = true;
+            }
+            check_valid_var_type(tc_context, decl->const_data.type->location, decl->const_data.type);
+
+        } else {
             // "const foo" with neither type annotation nor RHS term. This is invalid.
             report_incomplete_definition(decl->location);
             tc_context->error = true;
@@ -3108,10 +3238,17 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         if (kindcheck_type(tc_context, &arg->type)) {
 
             // arg types must be "valid for var" types
-            bool old_exec = tc_context->executable;
-            tc_context->executable = !decl->ghost;
-            check_valid_var_type(tc_context, arg->type->location, arg->type);
-            tc_context->executable = old_exec;
+            // (OR they can be an "incomplete array type" i.e. T[])
+            bool incomplete_array_type =
+                arg->type->tag == TY_ARRAY
+                && !arg->type->array_data.resizable
+                && arg->type->array_data.sizes == NULL;
+            if (!incomplete_array_type) {
+                bool old_exec = tc_context->executable;
+                tc_context->executable = !decl->ghost;
+                check_valid_var_type(tc_context, arg->type->location, arg->type);
+                tc_context->executable = old_exec;
+            }
 
             add_to_type_env(tc_context->local_env,
                             arg->name,

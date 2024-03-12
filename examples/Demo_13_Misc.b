@@ -114,11 +114,11 @@ function exist_test()
 function fun2()
 {
     // This is not allowed.
-    // var s: u8[] = "Hello, world!\n";
+    // var s = "Hello, world!\n";
 
     // This is allowed. s is effectively a pointer to some read-only
     // piece of memory containing the given string.
-    ref s: u8[] = "Hello, world!\n";  
+    ref s = "Hello, world!\n";  
 
     // We can take the sizeof a string, just like any other array.
     assert sizeof(s) == u64(14);  // 14 characters including the newline.
@@ -132,7 +132,7 @@ function fun2()
 
     // Also, unlike C, strings by default do not include a null
     // terminator character, but it is possible to add one by writing "\0":
-    ref c_string: u8[] = "This is a C-style string\0";
+    ref c_string = "This is a C-style string\0";
 
     // This is often needed when interfacing with functions written in C.
 }

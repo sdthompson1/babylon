@@ -98,7 +98,7 @@ function load_texture(ref mem: Mem,
         return;
     }
 
-    var img: LoadPNG.RGBA[,];
+    var img: LoadPNG.RGBA[*,*];
     var load_png_result: Result<{}>;
     LoadPNG.load_png(io, filename, img, load_png_result);
     
@@ -126,7 +126,7 @@ function load_texture(ref mem: Mem,
 
         // Now we have to get sb.buf into an error Result.
         // This is slightly awkward unfortunately - we have to swap it into place.
-        var empty_string: u8[];
+        var empty_string: u8[*];
         result = Error<{}>(empty_string);
         match result {
         case Error(ref err_msg) => swap err_msg, sb.buf;
@@ -418,7 +418,6 @@ function game_over_status(status: GameStatus): bool
 function handle_mouse_click(x: u32,
                             y: u32,
                             ref pos: Position,
-                            ref scratch_pos: Position,
                             ref selected: Maybe<Square>,
                             ref legal_moves: bool[,],
                             ref check: bool,
@@ -426,9 +425,7 @@ function handle_mouse_click(x: u32,
                             ref status_acknowledged: bool,
                             ref requires_redraw: bool)
     requires valid_ui_state(pos, selected, legal_moves, check, status);
-    requires sizeof(scratch_pos.board) == board_size;
     ensures valid_ui_state(pos, selected, legal_moves, check, status);
-    ensures sizeof(scratch_pos.board) == board_size;
 {
     if game_over_status(status) {
         if !status_acknowledged {
@@ -454,7 +451,7 @@ function handle_mouse_click(x: u32,
             make_move(pos, from, to);
             selected = Nothing<Square>;
             check = is_check(pos);
-            status = get_game_status(pos, scratch_pos);
+            status = get_game_status(pos);
             requires_redraw = true;
             return;
         }
@@ -481,7 +478,7 @@ function handle_mouse_click(x: u32,
     if !maybe_sq_equal(selected, clicked_square) {
         match clicked_square {
         case Just(sq) =>
-            get_legal_moves_from(pos, scratch_pos, sq, legal_moves);
+            get_legal_moves_from(pos, sq, legal_moves);
         case _ =>
         }
         selected = clicked_square;
@@ -493,20 +490,17 @@ function handle_mouse_click(x: u32,
 // Run the main program. This is called once all memory has been allocated
 // and the GameEngine has been started. No runtime errors (e.g. memory
 // allocation failures) are possible beyond this point (at least in theory!).
-function run_prog(ref engine: GameEngine,
-                  ref pos: Position,            // memory for current position
-                  ref scratch_pos: Position,    // memory for a scratch position
-                  ref legal_moves: bool[,])     // memory for storing legal move targets
+function run_prog(ref engine: GameEngine)
     requires textures_loaded(engine);
-    requires valid_position(pos);
-    requires sizeof(scratch_pos.board) == board_size;
-    requires sizeof(legal_moves) == board_size;
     ensures textures_loaded(engine);
 {
+    var pos: Position;
     setup_initial_position(pos);
 
+    var legal_moves: bool[x_size, y_size];
+
     var check: bool = is_check(pos);
-    var status: GameStatus = get_game_status(pos, scratch_pos);
+    var status: GameStatus = get_game_status(pos);
     var status_acknowledged = false;
 
     var requires_redraw = true;
@@ -522,7 +516,6 @@ function run_prog(ref engine: GameEngine,
     while fuel > u64(0)
         invariant textures_loaded(engine);
         invariant valid_ui_state(pos, selected, legal_moves, check, status);
-        invariant sizeof(scratch_pos.board) == board_size;
 
         decreases fuel;
     {
@@ -542,7 +535,7 @@ function run_prog(ref engine: GameEngine,
             requires_redraw = true;
 
         case MousePressed(m) =>
-            handle_mouse_click(m.x, m.y, pos, scratch_pos,
+            handle_mouse_click(m.x, m.y, pos,
                                selected, legal_moves, check, status,
                                status_acknowledged,
                                requires_redraw);
@@ -591,34 +584,7 @@ function main_prog(ref mem: Mem, ref io: IO)
             var ok = resize_array<u8>(mem, msg, 0);
 
         case Ok(_) =>
-            // Allocate arrays needed
-            var pos: Position;
-            var ok: bool = resize_2d_array<Maybe<Piece> >(mem, pos.board, x_size, y_size);
-
-            var scratch_pos: Position;
-            if ok {
-                ok = resize_2d_array<Maybe<Piece> >(mem, scratch_pos.board, x_size, y_size);
-            }
-
-            var legal_moves: bool[,];
-            if ok {
-                ok = resize_2d_array<bool>(mem, legal_moves, x_size, y_size);
-            }
-
-            if ok {
-                // Array allocation successful - Run the program!
-                run_prog(engine, pos, scratch_pos, legal_moves);
-
-            } else {
-                // Array allocation failed - Show error message
-                ref msg = "Failed to allocate arrays\0";
-                message_box(io, msg);
-            }
-
-            // Free the arrays
-            ok = resize_2d_array<Maybe<Piece> >(mem, pos.board, 0, 0);
-            ok = resize_2d_array<Maybe<Piece> >(mem, scratch_pos.board, 0, 0);
-            ok = resize_2d_array<bool>(mem, legal_moves, 0, 0);
+            run_prog(engine);
         }
 
         // Shut down the GameEngine.

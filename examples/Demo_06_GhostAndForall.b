@@ -240,7 +240,7 @@ function fun4()
     // Note that ghost arrays do not need to be freed when we are done
     // with them (unlike normal arrays).
 
-    ghost var a: i32[];     // create ghost array
+    ghost var a: i32[*];     // create ghost array
     ghost resize_array<i32>(a, 100);   // allocate 100 ghost integers
     ghost a[2] = 1;
     assert a[2] == 1;

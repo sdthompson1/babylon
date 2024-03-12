@@ -381,8 +381,7 @@ static void codegen_type(struct CGContext *cxt,
 
     case TY_RECORD:
     case TY_VARIANT:
-    case TY_FIXED_ARRAY:
-    case TY_DYNAMIC_ARRAY:
+    case TY_ARRAY:
         print_token(cxt->pr, "char");
         print_token(cxt->pr, "*");
         break;
@@ -531,25 +530,22 @@ static struct SizeExpr * get_size_of_type(struct CGContext *cxt,
             return result;
         }
 
-    case TY_FIXED_ARRAY:
-        {
-            struct SizeExpr *size = get_size_of_type(cxt, type->fixed_array_data.element_type);
-            for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
-                uint64_t dim = normal_form_to_int(type->fixed_array_data.sizes[i]);
+    case TY_ARRAY:
+        if (type->array_data.sizes != NULL) {
+            struct SizeExpr *size = get_size_of_type(cxt, type->array_data.element_type);
+            for (int i = 0; i < type->array_data.ndim; ++i) {
+                uint64_t dim = normal_form_to_int(type->array_data.sizes[i]);
                 struct SizeExpr *new_size = multiply_size_expr(dim, size);
                 free_size_expr(size);
                 size = new_size;
             }
 
             return size;
-        }
-
-    case TY_DYNAMIC_ARRAY:
-        {
-            // dynamic array descriptor = pointer to data + dimensions as u64's
+        } else {
+            // array descriptor: pointer to data + dimensions as u64's
             // note this is independent of the element size
             struct SizeExpr *size1 = var_size_expr("sizeof(void*)", 1);
-            struct SizeExpr *size2 = const_size_expr(8 * type->dynamic_array_data.ndim);
+            struct SizeExpr *size2 = const_size_expr(8 * type->array_data.ndim);
             struct SizeExpr *result = add_size_expr(size1, size2);
             free_size_expr(size1);
             free_size_expr(size2);
@@ -644,7 +640,7 @@ static void declare_aggregate(struct CGContext *cxt,
     print_token(cxt->pr, mangled_name);
     print_token(cxt->pr, "[");
 
-    // technically speaking array sizes are not allowed to be zero, hence,
+    // technically speaking array sizes (in C) are not allowed to be zero, hence,
     // we use the max of 1 and the actual size of the type
     struct SizeExpr *size = get_size_of_type(cxt, type);
     struct SizeExpr *one = const_size_expr(1);
@@ -965,10 +961,7 @@ static void codegen_string_literal(struct CGContext *cxt,
                                    enum TermMode mode,
                                    struct Term *term)
 {
-    // Currently string literals are TY_DYNAMIC_ARRAY, hence we need to create
-    // a descriptor here.
-
-    // Make the raw array of bytes
+    // A string literal is just an array of bytes (uint8_t)
     char raw_array[TEMP_NAME_LEN];
     get_temp_name(cxt, raw_array);
     begin_item(cxt->pr);
@@ -992,67 +985,13 @@ static void codegen_string_literal(struct CGContext *cxt,
     new_line(cxt->pr);
     end_item(cxt->pr);
 
-    // Make a pointer to the first byte of the raw array
-    char pointer[TEMP_NAME_LEN];
-    get_temp_name(cxt, pointer);
-    begin_item(cxt->pr);
-    print_token(cxt->pr, "void");
+    if (pri > CAST_EXPR) print_token(cxt->pr, "(");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, "char");
     print_token(cxt->pr, "*");
-    print_token(cxt->pr, pointer);
-    print_token(cxt->pr, "=");
-    print_token(cxt->pr, "(void*)");
+    print_token(cxt->pr, ")");
     print_token(cxt->pr, raw_array);
-    print_token(cxt->pr, ";");
-    new_line(cxt->pr);
-    end_item(cxt->pr);
-
-    // Make a constant giving the array size
-    char string_length[TEMP_NAME_LEN];
-    get_temp_name(cxt, string_length);
-    begin_item(cxt->pr);
-    print_token(cxt->pr, "uint64_t");
-    print_token(cxt->pr, string_length);
-    print_token(cxt->pr, "=");
-    char buf[30];
-    sprintf(buf, "%" PRIu32, term->string_literal.length);
-    print_token(cxt->pr, buf);
-    print_token(cxt->pr, ";");
-    new_line(cxt->pr);
-    end_item(cxt->pr);
-
-    // Make the descriptor
-    char descr[TEMP_NAME_LEN];
-    make_temporary(cxt, descr, term->type);
-
-    begin_item(cxt->pr);
-    print_token(cxt->pr, "memcpy");
-    print_token(cxt->pr, "(");
-    print_token(cxt->pr, descr);
-    print_token(cxt->pr, ",");
-    print_token(cxt->pr, "&");
-    print_token(cxt->pr, pointer);
-    print_token(cxt->pr, ",");
-    print_token(cxt->pr, "sizeof(void*)");
-    print_token(cxt->pr, ")");
-    print_token(cxt->pr, ";");
-    new_line(cxt->pr);
-    print_token(cxt->pr, "memcpy");
-    print_token(cxt->pr, "(");
-    print_token(cxt->pr, descr);
-    print_token(cxt->pr, "+");
-    print_token(cxt->pr, "sizeof(void*)");
-    print_token(cxt->pr, ",");
-    print_token(cxt->pr, "&");
-    print_token(cxt->pr, string_length);
-    print_token(cxt->pr, ",");
-    print_token(cxt->pr, "8");
-    print_token(cxt->pr, ")");
-    print_token(cxt->pr, ";");
-    new_line(cxt->pr);
-    end_item(cxt->pr);
-
-    // Return the descriptor
-    print_token(cxt->pr, descr);
+    if (pri > CAST_EXPR) print_token(cxt->pr, ")");
 }
 
 static void codegen_cast(struct CGContext *cxt,
@@ -1060,18 +999,123 @@ static void codegen_cast(struct CGContext *cxt,
                          enum TermMode mode,
                          struct Term *term)
 {
-    // Casting currently only works with scalar types so MODE_ADDR is unexpected here
-    if (mode != MODE_VALUE) fatal_error("unexpected: MODE_ADDR in codegen_cast");
+    if (term->type->tag == TY_ARRAY) {
+        const struct TypeData_Array *from = &term->cast.operand->type->array_data;
+        const struct TypeData_Array *to = &term->type->array_data;
 
-    if (pri > CAST_EXPR) print_token(cxt->pr, "(");
+        if (from->sizes != NULL && to->sizes == NULL) {
+            // Casting fixed-sized to descriptor
+            begin_item(cxt->pr);
+            char name[TEMP_NAME_LEN];
+            make_temporary(cxt, name, term->type);
 
-    print_token(cxt->pr, "(");
-    codegen_type(cxt, term->cast.target_type);
-    print_token(cxt->pr, ")");
+            // first field: pointer to data
+            char tmp[TEMP_NAME_LEN];
+            get_temp_name(cxt, tmp);
+            print_token(cxt->pr, "char");
+            print_token(cxt->pr, "*");
+            print_token(cxt->pr, tmp);
+            print_token(cxt->pr, "=");
+            codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, term->cast.operand);
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
 
-    codegen_term(cxt, CAST_EXPR, MODE_VALUE, term->cast.operand);
+            print_token(cxt->pr, "memcpy");
+            print_token(cxt->pr, "(");
+            print_token(cxt->pr, name);
+            print_token(cxt->pr, ",");
+            print_token(cxt->pr, "&");
+            print_token(cxt->pr, tmp);
+            print_token(cxt->pr, ",");
+            print_token(cxt->pr, "sizeof(char*)");
+            print_token(cxt->pr, ")");
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
 
-    if (pri > CAST_EXPR) print_token(cxt->pr, ")");
+            // subsequent fields: sizes (uint64)
+            for (int i = 0; i < from->ndim; ++i) {
+                get_temp_name(cxt, tmp);
+                print_token(cxt->pr, "uint64_t");
+                print_token(cxt->pr, tmp);
+                print_token(cxt->pr, "=");
+                char buf[50];
+                sprintf(buf, "UINT64_C(%" PRIu64 ")", normal_form_to_int(from->sizes[i]));
+                print_token(cxt->pr, buf);
+                print_token(cxt->pr, ";");
+                new_line(cxt->pr);
+
+                print_token(cxt->pr, "memcpy");
+                print_token(cxt->pr, "(");
+                print_token(cxt->pr, name);
+                print_token(cxt->pr, "+");
+                sprintf(buf, "%d", (i + 1) * 8);
+                print_token(cxt->pr, buf);
+                print_token(cxt->pr, ",");
+                print_token(cxt->pr, "&");
+                print_token(cxt->pr, tmp);
+                print_token(cxt->pr, ",");
+                print_token(cxt->pr, "8");  // sizeof(uint64_t)
+                print_token(cxt->pr, ")");
+                print_token(cxt->pr, ";");
+                new_line(cxt->pr);
+            }
+
+            end_item(cxt->pr);
+
+            // Return the descriptor.
+            print_token(cxt->pr, name);
+
+        } else if (from->sizes == NULL && to->sizes != NULL) {
+            // Casting descriptor to fixed-sized
+            if (mode != MODE_ADDR) {
+                fatal_error("Incorrect mode for array cast");
+            }
+            begin_item(cxt->pr);
+            char name[TEMP_NAME_LEN];
+            get_temp_name(cxt, name);
+            print_token(cxt->pr, "char");
+            print_token(cxt->pr, "*");
+            print_token(cxt->pr, name);
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
+
+            print_token(cxt->pr, "memcpy");
+            print_token(cxt->pr, "(");
+            print_token(cxt->pr, "&");
+            print_token(cxt->pr, name);
+            print_token(cxt->pr, ",");
+            codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, term->cast.operand);
+            print_token(cxt->pr, ",");
+            print_token(cxt->pr, "sizeof(char*)");
+            print_token(cxt->pr, ")");
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
+            end_item(cxt->pr);
+
+            print_token(cxt->pr, name);
+
+        } else {
+            // No-op cast
+            codegen_term(cxt, pri, mode, term->cast.operand);
+        }
+
+    } else if (term->type->tag == TY_FINITE_INT) {
+        // Integer casting currently only works with scalar types so MODE_ADDR is unexpected here
+        if (mode != MODE_VALUE) fatal_error("unexpected: MODE_ADDR in codegen_cast");
+
+        if (pri > CAST_EXPR) print_token(cxt->pr, "(");
+
+        print_token(cxt->pr, "(");
+        codegen_type(cxt, term->cast.target_type);
+        print_token(cxt->pr, ")");
+
+        codegen_term(cxt, CAST_EXPR, MODE_VALUE, term->cast.operand);
+
+        if (pri > CAST_EXPR) print_token(cxt->pr, ")");
+
+    } else {
+        fatal_error("codegen_cast failed");
+    }
 }
 
 static void codegen_if(struct CGContext *cxt,
@@ -1969,7 +2013,7 @@ static void codegen_sizeof(struct CGContext *cxt,
                            enum TermMode mode,
                            struct Term *term)
 {
-    if (term->sizeof_data.rhs->type->tag == TY_DYNAMIC_ARRAY) {
+    if (term->sizeof_data.rhs->type->array_data.sizes == NULL) {
         // This produces either a u64, or a tuple of u64s.
         // Either way, we can just memcpy directly from the descriptor.
         char name[TEMP_NAME_LEN];
@@ -1989,7 +2033,7 @@ static void codegen_sizeof(struct CGContext *cxt,
         print_token(cxt->pr, "sizeof(void*)");
         print_token(cxt->pr, ",");
 
-        uint64_t bytes_to_copy = 8 * term->sizeof_data.rhs->type->dynamic_array_data.ndim;
+        uint64_t bytes_to_copy = 8 * term->sizeof_data.rhs->type->array_data.ndim;
         char buf[50];
         sprintf(buf, "%" PRIu64, bytes_to_copy);
         print_token(cxt->pr, buf);
@@ -2002,10 +2046,10 @@ static void codegen_sizeof(struct CGContext *cxt,
         // Return the value that we just memcpy'd out.
         print_token(cxt->pr, name);
 
-    } else if (term->sizeof_data.rhs->type->tag == TY_FIXED_ARRAY) {
-        if (term->sizeof_data.rhs->type->fixed_array_data.ndim == 1) {
+    } else {
+        if (term->sizeof_data.rhs->type->array_data.ndim == 1) {
             // Just return the size directly as an integer literal
-            uint64_t size = normal_form_to_int(term->sizeof_data.rhs->type->fixed_array_data.sizes[0]);
+            uint64_t size = normal_form_to_int(term->sizeof_data.rhs->type->array_data.sizes[0]);
             char buf[50];
             sprintf(buf, "UINT64_C(%" PRIu64 ")", size);
             print_token(cxt->pr, buf);
@@ -2024,12 +2068,12 @@ static void codegen_sizeof(struct CGContext *cxt,
             new_line(cxt->pr);
             end_item(cxt->pr);
 
-            for (int i = 0; i < term->sizeof_data.rhs->type->fixed_array_data.ndim; ++i) {
+            for (int i = 0; i < term->sizeof_data.rhs->type->array_data.ndim; ++i) {
                 begin_item(cxt->pr);
                 print_token(cxt->pr, tmp);
                 print_token(cxt->pr, "=");
 
-                uint64_t size = normal_form_to_int(term->sizeof_data.rhs->type->fixed_array_data.sizes[i]);
+                uint64_t size = normal_form_to_int(term->sizeof_data.rhs->type->array_data.sizes[i]);
                 char buf[50];
                 sprintf(buf, "UINT64_C(%" PRIu64 ");", size);
                 print_token(cxt->pr, buf);
@@ -2056,9 +2100,6 @@ static void codegen_sizeof(struct CGContext *cxt,
 
             print_token(cxt->pr, tuple);
         }
-
-    } else {
-        fatal_error("codegen_sizeof: wrong type");
     }
 }
 
@@ -2069,18 +2110,20 @@ static void print_pointer_to_element(struct CGContext *cxt,
 {
     if (pri > ADD_EXPR) print_token(cxt->pr, "(");
 
-    if (array_term->type->tag == TY_FIXED_ARRAY) {
+    if (array_term->type->array_data.sizes != NULL) {
         codegen_term(cxt, ADD_EXPR, MODE_VALUE, array_term);
         print_token(cxt->pr, "+");
 
-        print_size_of_type(cxt, MULT_EXPR, array_term->type->fixed_array_data.element_type);
+        print_size_of_type(cxt, MULT_EXPR, array_term->type->array_data.element_type);
         print_token(cxt->pr, "*");
         print_token(cxt->pr, "(");
 
         // array[x,y,z] becomes:
         // base_ptr + element_size * (x + ndim0 * (y + ndim1 * (z)))
-        // Note this gives "column major" (i.e. Fortran-style) indexing.
-        struct Term **sizes = array_term->type->fixed_array_data.sizes;
+        // Note this gives "column major" (i.e. Fortran-style) indexing,
+        // i.e., the leftmost index is the most rapidly varying as one
+        // advances through the array memory.
+        struct Term **sizes = array_term->type->array_data.sizes;
         struct OpTermList *index = indexes;
         while (index) {
             codegen_term(cxt, ADD_EXPR, MODE_VALUE, index->rhs);
@@ -2096,7 +2139,7 @@ static void print_pointer_to_element(struct CGContext *cxt,
             index = index->next;
             ++sizes;
         }
-        for (int i = 0; i < array_term->type->fixed_array_data.ndim; ++i) {
+        for (int i = 0; i < array_term->type->array_data.ndim; ++i) {
             print_token(cxt->pr, ")");
         }
 
@@ -2135,7 +2178,7 @@ static void print_pointer_to_element(struct CGContext *cxt,
         print_token(cxt->pr, base_ptr);
         print_token(cxt->pr, "+");
 
-        print_size_of_type(cxt, MULT_EXPR, array_term->type->dynamic_array_data.element_type);
+        print_size_of_type(cxt, MULT_EXPR, array_term->type->array_data.element_type);
         print_token(cxt->pr, "*");
         print_token(cxt->pr, "(");
 
@@ -2187,7 +2230,7 @@ static void print_pointer_to_element(struct CGContext *cxt,
 
             index = index->next;
         }
-        for (int i = 0; i < array_term->type->dynamic_array_data.ndim; ++i) {
+        for (int i = 0; i < array_term->type->array_data.ndim; ++i) {
             print_token(cxt->pr, ")");
         }
     }

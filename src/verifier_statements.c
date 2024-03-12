@@ -1019,8 +1019,7 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
 
     case TY_VAR:
     case TY_VARIANT:
-    case TY_FIXED_ARRAY:
-    case TY_DYNAMIC_ARRAY:
+    case TY_ARRAY:
     case TY_FUNCTION:
     case TY_FORALL:
     case TY_LAMBDA:
@@ -1102,8 +1101,7 @@ static struct Sexpr *variant_bounded_expr(struct Type *type,
 
     case TY_VAR:
     case TY_VARIANT:
-    case TY_FIXED_ARRAY:
-    case TY_DYNAMIC_ARRAY:
+    case TY_ARRAY:
     case TY_FUNCTION:
     case TY_FORALL:
     case TY_LAMBDA:

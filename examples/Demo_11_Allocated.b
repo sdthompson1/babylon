@@ -34,7 +34,7 @@ import ExampleLib;
 
 function fun1()
 {
-    var a: i32[];
+    var a: i32[*];
     resize_array<i32>(a, 100);
 
     // var b = a;    // Not allowed, trying to copy an allocated array
@@ -54,9 +54,9 @@ function fun1()
 // the current version of the language). For example the following function
 // would not work.
 
-// function make_array(): i32[]
+// function make_array(): i32[*]
 // {
-//     var a: i32[];
+//     var a: i32[*];
 //     resize_array<i32>(a, 10);
 //
 //     var i = 0;
@@ -71,7 +71,7 @@ function fun1()
 // }
 
 // A workaround is to use a "ref" parameter, as follows.
-function make_array(ref a: i32[])
+function make_array(ref a: i32[*])
     ensures sizeof(a) == u64(10);
     ensures forall (i: i32) 0 <= i < 10 ==> a[i] == i;
 {
@@ -92,7 +92,7 @@ function make_array(ref a: i32[])
 // Now we can use the make_array function as follows.
 function fun2()
 {
-    var a: i32[];
+    var a: i32[*];
     make_array(a);
 
     print_i32(a[7]);   // prints 7
@@ -106,8 +106,8 @@ function fun2()
 // Swapping of allocated values is allowed (and is sometimes useful).
 function fun3()
 {
-    var a: i32[];
-    var b: i32[];
+    var a: i32[*];
+    var b: i32[*];
 
     resize_array<i32>(a, 10);
     resize_array<i32>(b, 5);
@@ -136,7 +136,7 @@ function fun4()
     assert !allocated(123);
 
     // An array is allocated if and only if its size is nonzero.
-    var a: i32[];
+    var a: i32[*];
     assert !allocated(a);
 
     resize_array<i32>(a, 10);
@@ -145,7 +145,7 @@ function fun4()
     resize_array<i32>(a, 0);
 
     // A tuple or record is allocated if any of its components are.
-    var t: {i32[], bool, i32};
+    var t: {i32[*], bool, i32};
     assert !allocated(t);
 
     resize_array<i32>(t.0, 10);
@@ -162,8 +162,8 @@ function fun4()
 // Because returning allocated values is not allowed, it requires that the
 // input record is not allocated.
 
-function fun5(x: {a1: i32[], a2: i32[], b: bool, i: i32})
-        : {a1: i32[], a2: i32[], b: bool, i: i32}
+function fun5(x: {a1: i32[*], a2: i32[*], b: bool, i: i32})
+        : {a1: i32[*], a2: i32[*], b: bool, i: i32}
     requires !allocated(x);
 {
     // If x was allocated then the following would not work, but because

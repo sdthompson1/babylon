@@ -14,13 +14,16 @@ import ExampleLib;
 
 function fun1()
 {
-    // An array type is indicated by writing [] after the type.
-    // For example, the following creates an array of i32 values.
-    var a: i32[];
+    // An array of fixed size can be created as follows:
+    var fixed_size: i32[10];     // Array of 10 i32's
+
+    // A "resizable" array can be created by using the notation [*],
+    // as follows:
+    var a: i32[*];      // Resizable array of i32's.
 
     // The size (number of elements) of an array can be accessed by the
     // "sizeof" operator. In this case the array is empty (has size zero)
-    // because arrays always start out empty by default.
+    // because resizable arrays always start out empty by default.
     assert sizeof(a) == u64(0);
 
 
@@ -28,11 +31,10 @@ function fun1()
     // instead of just 0 in the above (see also Demo_04_Casts.b).
     
 
-    // The language doesn't currently have a built-in way to set the size
-    // (or dimension) of an array. Instead we must call the function
-    // resize_array from the ExampleLib. This is done as follows (note that
-    // the array *element* type, not the array type itself, must be given in
-    // the < > brackets):
+    // The language doesn't currently have a built-in way to resize
+    // an array. Instead we must call the function resize_array from the
+    // ExampleLib. This is done as follows (note that the array *element*
+    // type, not the array type itself, must be given in the < > brackets):
     resize_array<i32>(a, 100);
 
     // The array a now has size 100:
@@ -55,8 +57,7 @@ function fun1()
 function fun2()
 {
     // Here we show how to access array elements.
-    var a: i32[];
-    resize_array<i32>(a, 10);
+    var a: i32[10];
 
     // Elements can be accessed using the [ ] operator (similar to C).
     // The array elements are numbered starting from zero, and going up
@@ -72,8 +73,6 @@ function fun2()
     // that the index, 10, is less than the size of the array, which is
     // also 10; so this would fail).
     // a[10] = 3;  // try to access element outside bounds of array
-
-    resize_array<i32>(a, 0);
 }
 
 
@@ -84,6 +83,17 @@ function fun2()
 
 
 // Here we show an example that counts how many zero values are in an array.
+
+// Note: The "a" parameter, below, is declared to have type i32[], which
+// means that it can either be a resizable array (i32[*]) or an array of
+// some fixed size (i32[n], for some n) -- the function does not care.
+// (We could also have declared "a" as, for example., "a: i32[10]" if we
+// wanted a particular size of array, or "a: i32[*]" if we wanted specifically
+// a resizable array, for whatever reason.)
+
+// Note 2: The i32[] notation cannot be used when declaring ordinary variables.
+// It can only be used in function arguments.
+
 function count_zeroes(a: i32[]): u64
 {
     var count: u64 = 0;
@@ -112,8 +122,7 @@ function count_zeroes(a: i32[]): u64
 // A simple example to demonstrate count_zeroes.
 function count_example()
 {
-    var a: i32[];
-    resize_array<i32>(a, 10);
+    var a: i32[10];
     a[0] = 1;
     a[1] = 2;
     a[2] = 3;
@@ -124,8 +133,6 @@ function count_example()
     print_string("The number of zeroes in the array is ");
     print_u64(count_zeroes(a));  // prints 7
     print_string("\n");
-
-    resize_array<i32>(a, 0);
 }
 
 function fun3()
@@ -133,9 +140,9 @@ function fun3()
     // It is possible to make an array of arrays. The trick is to first
     // resize the base array, then individually resize some of the "inner"
     // arrays.
-    var a: i32[][];   // array of arrays of i32
+    var a: i32[*][*];   // array of arrays of i32
 
-    resize_array<i32[]>(a, 10);   // make 10 inner arrays
+    resize_array<i32[*]>(a, 10);   // make 10 inner arrays
 
     resize_array<i32>(a[0], 5);   // allocate some of the inner arrays
     resize_array<i32>(a[1], 6);
@@ -148,14 +155,21 @@ function fun3()
     resize_array<i32>(a[0], 0);
     resize_array<i32>(a[1], 0);
     resize_array<i32>(a[2], 0);
-    resize_array<i32[]>(a, 0);
+    resize_array<i32[*]>(a, 0);
 }
 
 function fun4()
 {
     // It is also possible to have two-dimensional arrays.
-    // The notation for this is to write [,] after the type, as in:
-    var a: i32[,];
+    // Here is a fixed-size 2d array:
+    var fixed_size: i32[10, 20];
+
+    // And a resizable one:
+    var a: i32[*, *];
+
+    // Note you cannot mix fixed and variable sizes. E.g. the following
+    // would be illegal:
+    // var bad: i32[10, *];
 
     // The resize_2d_array function from ExampleLib can be used for the
     // allocation:
@@ -183,11 +197,12 @@ function fun4()
 
 
     // Theoretically, 3d and higher arrays (e.g. i32[,,]) are also supported:
-    var b: i32[,,];
+    var b: i32[*, *, *];
 
     // However, the ExampleLib doesn't currently contain a function to
-    // resize a 3d array, so before a 3d array could be used, a suitable C
-    // function would have to be written to allocate the required memory.
+    // resize a 3d array. If 3d arrays were wanted, either such a function
+    // would have to be written in C (and added to the ExampleLib), or,
+    // a fixed-size 3d array could be used instead.
 }
 
 

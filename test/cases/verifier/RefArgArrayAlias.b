@@ -12,7 +12,7 @@ function test1(ref a: i32[])
     foo(a[0], a[0]);    // Error, may alias
 }
 
-function test2(ref x: {a: i32[], b: i32[]}, i: u32, j: u32)
+function test2(ref x: {a: i32[*], b: i32[*]}, i: u32, j: u32)
     requires sizeof(x.a) > u64(10);
     requires sizeof(x.b) > u64(10);
     requires i < 10;

@@ -11,7 +11,7 @@ import Test;
 
 function main()
 {
-    var foo: i32[];
+    var foo: i32[*];
     resize_array<i32>(foo, 10);
     
     foo[{x=1}.x] = {x=2,y=3,z=4,a=5,b=6,c=7}.x;

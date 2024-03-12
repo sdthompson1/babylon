@@ -379,6 +379,11 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
         struct OpTermList **dim_terms_tail = &dim_terms;
         bool first = true;
 
+        bool found_size = false;
+        bool found_star = false;
+        bool found_empty = false;
+        int ndim = 0;
+
         do {
             struct Term *term = NULL;
 
@@ -400,21 +405,32 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
 
             // There might be a size-term next. If so it will start
             // with a token which is neither ',' nor ']'.
-            if (state->token->type != TOK_COMMA && state->token->type != TOK_RBRACKET) {
+            // Alternatively there might be a '*' next.
+            if (state->token->type == TOK_TIMES) {
+                found_star = true;
+                advance(state);
+            } else if (state->token->type != TOK_COMMA && state->token->type != TOK_RBRACKET) {
                 // Note: technically we should not report errors while
                 // parsing the array-size term (if report_errors is false).
                 // But we don't have a report_errors option in parse_term
                 // (yet). This is relatively harmless, it just means errors
                 // might get reported twice e.g. in a term like f<a[**]>
                 // (where ** is a parse error).
+                found_size = true;
                 term = parse_term(state, true);
                 if (term == NULL) {
                     free_op_term_list(dim_terms);
                     free_type(result);
                     return NULL;
                 }
+            } else {
+                found_empty = true;
             }
 
+            // Count total number of dimensions found.
+            ++ndim;
+
+            // Record the size-term if there is one.
             struct OpTermList *node = alloc(sizeof(struct OpTermList));
             node->operator = BINOP_PLUS;  // dummy value
             node->rhs = term;
@@ -424,21 +440,9 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
 
         } while (state->token->type != TOK_RBRACKET);
 
-        int ndim = 0;
-        bool found_size = false;
-        bool found_nosize = false;
-        for (struct OpTermList *node = dim_terms; node; node = node->next) {
-            ndim++;
-            if (node->rhs) {
-                found_size = true;
-            } else {
-                found_nosize = true;
-            }
-        }
-
-        if (found_size && found_nosize) {
+        if ((int)found_size + (int)found_empty + (int)found_star != 1) {
             if (report_errors) {
-                report_error(state, loc, "mixture of fixed and variable-sized dimensions");
+                report_error(state, loc, "invalid array specification");
             }
             free_op_term_list(dim_terms);
             free_type(result);
@@ -448,21 +452,19 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
         set_location_end(&loc, &state->token->location);
         advance(state);
 
-        struct Type *array_type;
+        struct Type *array_type = make_type(loc, TY_ARRAY);
+        array_type->array_data.element_type = result;
+        array_type->array_data.ndim = ndim;
+        array_type->array_data.resizable = found_star;
         if (found_size) {
-            array_type = make_type(loc, TY_FIXED_ARRAY);
-            array_type->fixed_array_data.element_type = result;
-            array_type->fixed_array_data.ndim = ndim;
-            array_type->fixed_array_data.sizes = alloc(sizeof(struct Term*) * ndim);
+            array_type->array_data.sizes = alloc(sizeof(struct Term*) * ndim);
             int i = 0;
             for (struct OpTermList *node = dim_terms; node; node = node->next) {
-                array_type->fixed_array_data.sizes[i++] = node->rhs;
+                array_type->array_data.sizes[i++] = node->rhs;
                 node->rhs = NULL;
             }
         } else {
-            array_type = make_type(loc, TY_DYNAMIC_ARRAY);
-            array_type->dynamic_array_data.element_type = result;
-            array_type->dynamic_array_data.ndim = ndim;
+            array_type->array_data.sizes = NULL;
         }
         result = array_type;
 

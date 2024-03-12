@@ -30,8 +30,7 @@ enum TypeTag {
     TY_MATH_REAL,
     TY_RECORD,
     TY_VARIANT,
-    TY_FIXED_ARRAY,    // fixed sized array
-    TY_DYNAMIC_ARRAY,  // variable sized array
+    TY_ARRAY,
     TY_FUNCTION,
     TY_FORALL,
     TY_LAMBDA,
@@ -73,15 +72,21 @@ struct TypeData_Variant {
     struct NameTypeList *variants;    // the types can be NULL, until after typechecking
 };
 
-struct TypeData_FixedArray {
+struct TypeData_Array {
     struct Type *element_type;
     int ndim;
-    struct Term **sizes;  // after typechecking, should always be TM_INT_LITERAL (in u64 range).
-};
 
-struct TypeData_DynamicArray {
-    struct Type *element_type;
-    int ndim;
+    // There are three types of arrays:
+    //   resizable=true, sizes==NULL:   dynamic-size array     T[*]
+    //   resizable=false, sizes!=NULL:  static-size array      T[n]
+    //   resizable=false, sizes==NULL:  incomplete array type  T[]
+    // After typechecking, sizes (if non-NULL) are always TM_INT_LITERAL,
+    // in u64 range.
+    bool resizable;
+
+    // sizes != NULL for fixed-sized arrays (only).
+    // after typechecking, should always be TM_INT_LITERAL (in u64 range).
+    struct Term **sizes;
 };
 
 struct TypeData_Function {
@@ -116,8 +121,7 @@ struct Type {
         struct TypeData_Int int_data;
         struct TypeData_Record record_data;
         struct TypeData_Variant variant_data;
-        struct TypeData_FixedArray fixed_array_data;
-        struct TypeData_DynamicArray dynamic_array_data;
+        struct TypeData_Array array_data;
         struct TypeData_Function function_data;
         struct TypeData_Forall forall_data;
         struct TypeData_Lambda lambda_data;
@@ -238,11 +242,14 @@ struct TermData_IntLiteral {
 };
 
 struct TermData_StringLiteral {
-    const uint8_t *data;  // *Not* NUL-terminated. May contain NUL characters.
+    const uint8_t *data;  // *Not* necessarily NUL-terminated, but may contain NUL characters.
     uint32_t length;
 };
 
 struct TermData_Cast {
+    // Currently this supports casting between numeric types (e.g. i32
+    // to i64, or real to int) or between array types (e.g. T[10] to
+    // T[]).
     struct Type *target_type;
     struct Term *operand;
 };
@@ -684,8 +691,7 @@ struct TypeTransform {
     void * (*transform_math_real) (void *context, struct Type *type_math_real);
     void * (*transform_record) (void *context, struct Type *type_record, void *fields_result);
     void * (*transform_variant) (void *context, struct Type *type_variant, void *variants_result);
-    void * (*transform_fixed_array) (void *context, struct Type *type_array, void *elt_type_result);
-    void * (*transform_dynamic_array) (void *context, struct Type *type_array, void *elt_type_result);
+    void * (*transform_array) (void *context, struct Type *type_array, void *elt_type_result);
     void * (*transform_function) (void *context, struct Type *type_function, void *args_result, void *return_type_result);
     void * (*transform_forall) (void *context, struct Type *type_forall, void *tyvars_result, void *child_type_result);
     void * (*transform_lambda) (void *context, struct Type *type_lambda, void *tyvars_result, void *type_result);
@@ -833,9 +839,6 @@ void free_module(struct Module *);
 
 int tyvar_list_length(const struct TyVarList *list);
 int type_list_length(const struct TypeList *list);
-
-int array_ndim(const struct Type *ty);
-struct Type *array_element_type(const struct Type *ty);
 
 // Checks for syntactic equality of types
 bool type_lists_equal(const struct TypeList *lhs, const struct TypeList *rhs);

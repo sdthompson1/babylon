@@ -9,7 +9,7 @@ import MemAlloc;
 
 interface {
 
-    type StringBuffer = {buf: u8[], pos: u64};
+    type StringBuffer = {buf: u8[*], pos: u64};
 
     function resize_string_buffer(ref mem: Mem,
                                   ref sb: StringBuffer,

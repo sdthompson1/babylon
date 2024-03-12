@@ -123,6 +123,9 @@ struct RefChain * copy_ref_chain(struct RefChain *ref)
         result->fixed_size = ref->fixed_size;
         break;
 
+    case RT_ARRAY_CAST:
+        break;
+
     case RT_SEXPR:
         result->sexpr = copy_sexpr(ref->sexpr);
         break;
@@ -1030,7 +1033,7 @@ struct Sexpr *for_all_array_elt(int ndim,
 struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
                              struct Sexpr *arr_expr, struct Type *array_type, struct Sexpr *rhs_expr)
 {
-    if (array_type->tag != TY_DYNAMIC_ARRAY) {
+    if (array_type->tag != TY_ARRAY || array_type->array_data.sizes != NULL) {
         fatal_error("match_arr_size: wrong type");
     }
     return make_list3_sexpr(
@@ -1047,10 +1050,10 @@ struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
 
 struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type)
 {
-    if (array_type->tag != TY_FIXED_ARRAY) {
+    if (array_type->tag != TY_ARRAY || array_type->array_data.sizes == NULL) {
         fatal_error("fixed_arr_size_sexpr: wrong type");
     }
-    struct TypeData_FixedArray *data = &array_type->fixed_array_data;
+    struct TypeData_Array *data = &array_type->array_data;
     if (data->ndim == 1) {
         return make_string_sexpr(data->sizes[0]->int_literal.data);
     } else {
@@ -1199,11 +1202,13 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
     case TY_VARIANT:
         return make_variant_predicate(type, var_name, validity_test_expr, conjunction);
 
-    case TY_FIXED_ARRAY:
-        {
-            // make an expression saying that all array elements in range are
-            // valid, and all out-of-range are equal to $ARBITRARY at that type
-            struct Type *elt_type = type->fixed_array_data.element_type;
+    case TY_ARRAY:
+        if (type->array_data.sizes != NULL) {
+            // Fixed-sized array.
+
+            // Make an expression saying that all array elements in range are
+            // valid, and all out-of-range are equal to $ARBITRARY at that type.
+            struct Type *elt_type = type->array_data.element_type;
             struct Sexpr *elt_valid = validity_test_expr(elt_type, "$elt");
             if (elt_valid == NULL) {
                 elt_valid = make_string_sexpr("true");
@@ -1219,16 +1224,16 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
                         make_string_sexpr("$size"),
                         fixed_arr_size_sexpr(type))),
                 for_all_array_elt(
-                    type->fixed_array_data.ndim,
+                    type->array_data.ndim,
                     elt_valid,
                     verify_type(elt_type)));
-        }
 
-    case TY_DYNAMIC_ARRAY:
-        {
-            // first make an expression saying that the size is valid
-            struct Type *elt_type = type->dynamic_array_data.element_type;
-            int ndim = type->dynamic_array_data.ndim;
+        } else {
+            // Allocatable or "incomplete-type" array.
+
+            // First make an expression saying that the size is valid.
+            struct Type *elt_type = type->array_data.element_type;
+            int ndim = type->array_data.ndim;
             struct Sexpr *size_valid = NULL;
 
             if (ndim == 1) {
@@ -1260,8 +1265,8 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
                                               make_list1_sexpr(make_list2_sexpr(pattern, conjunction(conditions))));
             }
 
-            // make an expression saying that all array elements in range are valid,
-            // and all out-of-range are equal to $ARBITRARY at that type
+            // Make an expression saying that all array elements in range are valid,
+            // and all out-of-range are equal to $ARBITRARY at that type.
             struct Sexpr *elt_valid = validity_test_expr(elt_type, "$elt");
             if (elt_valid == NULL) {
                 elt_valid = make_string_sexpr("true");
@@ -1349,11 +1354,11 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
     case TY_VARIANT:
         return make_variant_predicate(type, var_name, allocated_test_expr, disjunction);
 
-    case TY_FIXED_ARRAY:
-        {
+    case TY_ARRAY:
+        if (type->array_data.sizes != NULL) {
             // A fixed-array is allocated if any of its elements is...
-            struct Type *elt_type = type->fixed_array_data.element_type;
-            int ndim = type->fixed_array_data.ndim;
+            struct Type *elt_type = type->array_data.element_type;
+            int ndim = type->array_data.ndim;
 
             // "$elt" is allocated
             struct Sexpr *elt_alloc = allocated_test_expr(elt_type, "$elt");
@@ -1397,48 +1402,53 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
                         make_string_sexpr("$idx"),
                         array_index_type(ndim))),
                 inrange_and_alloc);
-        }
 
-    case TY_DYNAMIC_ARRAY:
-        ;
-        int ndim = type->dynamic_array_data.ndim;
-        struct Sexpr *size_zero = NULL;
+        } else if (type->array_data.resizable) {
+            // A resizable array type is allocated if its size is nonzero.
+            int ndim = type->array_data.ndim;
+            struct Sexpr *size_zero = NULL;
 
-        if (ndim == 1) {
-            size_zero = make_list3_sexpr(make_string_sexpr("distinct"),
-                                         make_string_sexpr("$size"),
-                                         make_string_sexpr("0"));
-        } else {
-            struct Sexpr *pattern = make_list1_sexpr(array_index_type(ndim));
-            struct Sexpr **pattern_tail = &pattern->right;
+            if (ndim == 1) {
+                size_zero = make_list3_sexpr(make_string_sexpr("distinct"),
+                                             make_string_sexpr("$size"),
+                                             make_string_sexpr("0"));
+            } else {
+                struct Sexpr *pattern = make_list1_sexpr(array_index_type(ndim));
+                struct Sexpr **pattern_tail = &pattern->right;
 
-            struct Sexpr *conditions = NULL;
-            struct Sexpr **cond_tail = &conditions;
+                struct Sexpr *conditions = NULL;
+                struct Sexpr **cond_tail = &conditions;
 
-            for (int i = 0; i < ndim; ++i) {
-                char buf[30];
-                sprintf(buf, "$v%d", i);
+                for (int i = 0; i < ndim; ++i) {
+                    char buf[30];
+                    sprintf(buf, "$v%d", i);
 
-                *pattern_tail = make_list1_sexpr(make_string_sexpr(buf));
-                pattern_tail = &(*pattern_tail)->right;
+                    *pattern_tail = make_list1_sexpr(make_string_sexpr(buf));
+                    pattern_tail = &(*pattern_tail)->right;
 
-                struct Sexpr *new_cond = make_list3_sexpr(make_string_sexpr("distinct"),
-                                                          make_string_sexpr(buf),
-                                                          make_string_sexpr("0"));
-                *cond_tail = make_list1_sexpr(new_cond);
-                cond_tail = &(*cond_tail)->right;
+                    struct Sexpr *new_cond = make_list3_sexpr(make_string_sexpr("distinct"),
+                                                              make_string_sexpr(buf),
+                                                              make_string_sexpr("0"));
+                    *cond_tail = make_list1_sexpr(new_cond);
+                    cond_tail = &(*cond_tail)->right;
+                }
+
+                size_zero = make_list3_sexpr(make_string_sexpr("match"),
+                                             make_string_sexpr("$size"),
+                                             make_list1_sexpr(make_list2_sexpr(pattern, conjunction(conditions))));
             }
 
-            size_zero = make_list3_sexpr(make_string_sexpr("match"),
-                                         make_string_sexpr("$size"),
-                                         make_list1_sexpr(make_list2_sexpr(pattern, conjunction(conditions))));
-        }
+            return match_arr_size(
+                "$arr", "$size",
+                make_string_sexpr(var_name),
+                type,
+                size_zero);
 
-        return match_arr_size(
-            "$arr", "$size",
-            make_string_sexpr(var_name),
-            type,
-            size_zero);
+        } else {
+            // The allocated status of an "incomplete" array type shouldn't
+            // ever be needed, currently.
+            fatal_error("checking if incomplete-type array is allocated - not currently supported");
+        }
 
     case TY_FUNCTION:
     case TY_FORALL:

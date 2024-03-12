@@ -36,7 +36,7 @@ interface
     // functions always succeed, and don't need a separate
     // dummy argument to ensure purity.
     
-    extern function resize_array<T>(ref array: T[], new_dim: u64)
+    extern function resize_array<T>(ref array: T[*], new_dim: u64)
     
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());
@@ -54,7 +54,7 @@ interface
         ensures forall (i: u64) old(sizeof(array)) <= i < new_dim ==> array[i] == default<T>();
 
 
-    extern function resize_2d_array<T>(ref array: T[,], dim0: u64, dim1: u64)
+    extern function resize_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);
@@ -84,7 +84,7 @@ interface
                 array[i, j] == default<T>();
 
 
-    extern function resize_3d_array<T>(ref array: T[,,], dim0: u64, dim1: u64, dim2: u64)
+    extern function resize_3d_array<T>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);

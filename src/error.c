@@ -214,7 +214,7 @@ void report_wrong_number_of_indexes(struct Term *term)
 {
     print_location(term->location);
     print_error("Wrong number of array indices (expected %d)\n",
-                array_ndim(term->array_proj.lhs->type));
+                term->array_proj.lhs->type->array_data.ndim);
 }
 
 void report_main_not_found(const char *module_name)
@@ -455,6 +455,12 @@ void report_cannot_take_sizeof(struct Term *term)
 {
     print_location(term->location);
     print_error("Can't use sizeof on this expression (not an lvalue)\n");
+}
+
+void report_incomplete_array_type(struct Location loc)
+{
+    print_location(loc);
+    print_error("Can't use an incomplete array type here\n");
 }
 
 void report_unexpected_return_value(struct Term *term)
@@ -768,6 +774,12 @@ void report_ref_invalid_variant_change(struct Location location)
 {
     print_location(location);
     print_error("Reference may have become invalid due to change in datatype variant\n");
+}
+
+void report_array_wrong_size(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Array might have the wrong size\n");
 }
 
 

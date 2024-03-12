@@ -3,18 +3,18 @@ interface {}
 
 import Test;
 
-function make_array(): i32[]
+function make_array(): i32[*]
 {
-    var a: i32[];
+    var a: i32[*];
     return a;
 }
 
 function f()
 {
-    var a: i32[];
+    var a: i32[*];
     resize_array<i32>(a, 100);
     
-    var b: i32[,];
+    var b: i32[*,*];
     resize_2d_array<i32>(b, 10, 10);
 
     var s: u64 = sizeof(a);    // OK
@@ -38,15 +38,15 @@ function f()
     b[1] = 99;            // Error, wrong number of indexes
 }
 
-function f2(a: i32[,])
+function f2(a: i32[*,*])
 {
     var i = (1+true) [1];      // Error, type error in lhs of array projection
     var j = a [1,2+true];      // Error, type error in dimension
     var k = 1 [2];             // Error, cannot index "1"
 }
 
-function ref_not_allowed(a: i32[],
-                         b: {x: i32[][4]})
+function ref_not_allowed(a: i32[*],
+                         b: {x: i32[*][4]})
 {
     // Error, ref to resizable array element not supported (because the
     // array might be reallocated, therefore moving the element to a
@@ -58,5 +58,5 @@ function ref_not_allowed(a: i32[],
 
     // A reference to a resizable array in itself is fine, just not the elements,
     // so this is NOT an error:
-    ref r3: i32[] = b.x[3];
+    ref r3: i32[*] = b.x[3];
 }

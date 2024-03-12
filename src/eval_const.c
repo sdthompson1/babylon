@@ -691,7 +691,7 @@ static struct Term * eval_match(struct HashTable *env, struct Term *term)
     return result;
 }
 
-static struct Term * make_sizeof_tuple(const struct TypeData_FixedArray *data)
+static struct Term * make_sizeof_tuple(const struct TypeData_Array *data)
 {
     struct NameTermList *output = NULL;
     struct NameTermList **tail = &output;
@@ -773,13 +773,13 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
     case TM_SIZEOF:
         ;
         struct Type *arr_type = term->sizeof_data.rhs->type;
-        if (arr_type->tag == TY_FIXED_ARRAY) {
+        if (arr_type->tag == TY_ARRAY && arr_type->array_data.sizes != NULL) {
             // fixed array sizes are already in normal-form, just need to
             // copy (and make into a tuple if necessary)
-            if (arr_type->fixed_array_data.ndim == 1) {
-                return copy_term(arr_type->fixed_array_data.sizes[0]);
+            if (arr_type->array_data.ndim == 1) {
+                return copy_term(arr_type->array_data.sizes[0]);
             } else {
-                return make_sizeof_tuple(&arr_type->fixed_array_data);
+                return make_sizeof_tuple(&arr_type->array_data);
             }
         } else {
             return NULL;

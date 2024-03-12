@@ -144,19 +144,22 @@ enum RefType {
     RT_FIELD,
     RT_VARIANT,
     RT_ARRAY_ELEMENT,
+    RT_ARRAY_CAST,
     RT_SEXPR    // used for const refs (e.g. ref x = "hello";)
 };
 
 struct RefChain {
     enum RefType ref_type;
 
-    // For RT_LOCAL_VAR or RT_SEXPR this contains the variable type - shared with AST.
+    // For RT_LOCAL_VAR, RT_ARRAY_CAST or RT_SEXPR this contains the variable/ref type
+    //  - shared with AST.
     // NULL for anything else.
     struct Type *type;
 
     // For RT_FIELD, RT_VARIANT or RT_ARRAY_ELEMENT, this contains the type of the
     // "lhs" (a record, variant or array type).
-    // For RT_LOCAL_VAR or RT_SEXPR this contains the type of the variable itself.
+    // For RT_LOCAL_VAR, RT_ARRAY_CAST or RT_SEXPR this contains the type of the
+    // reference itself.
     // Allocated on heap.
     struct Sexpr *fol_type;
 
@@ -282,11 +285,13 @@ struct Sexpr *for_all_array_elt(int ndim,
 
 // create "match arr_expr with (arr_name,size_name) => rhs_expr"
 // arr_expr, rhs_expr are handed over. arr_name, size_name are copied.
-// array_type must be TY_DYNAMIC_ARRAY.
+// array_type must be TY_ARRAY.
 struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
-                             struct Sexpr *arr_expr, struct Type *array_type, struct Sexpr *expr);
+                             struct Sexpr *arr_expr, struct Type *array_type,
+                             struct Sexpr *rhs_expr);
 
 // create a sexpr giving the size of a fixed-size array
+// (i.e. where array_type->array_data.sizes != NULL).
 struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type);
 
 

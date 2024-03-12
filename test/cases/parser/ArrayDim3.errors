@@ -1,1 +1,1 @@
-ArrayDim3.b:6:16: Syntax error (mixture of fixed and variable-sized dimensions)
+ArrayDim3.b:6:16: Syntax error (invalid array specification)

@@ -3,7 +3,7 @@ module Result
 import CString;
 
 interface {
-    datatype Result<T> = Ok(T) | Error(u8[]);
+    datatype Result<T> = Ok(T) | Error(u8[*]);
 
     function is_ok<T> (r: Result<T>): bool
     {

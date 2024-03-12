@@ -341,7 +341,7 @@ function sieve(n: u32)
     // a flag to true when the corresponding number is found NOT to be prime.
     // (So at the end, all numbers >= 2 marked "false" will be primes.)
 
-    var flag: bool[];
+    var flag: bool[*];
     resize_array<bool>(flag, n + u32(1));
 
     // Loop through all values of i from 2 to n (inclusive).

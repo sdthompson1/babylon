@@ -68,10 +68,10 @@ function fun1()
     var b = id<bool>(false);
     assert b == false;
 
-    var a1: i32[];           // An empty array
-    var a2 = id<i32[]>(a1);  // Works, a2 is now an empty array as well.
+    var a1: i32[*];           // An empty array
+    var a2 = id<i32[*]>(a1);  // Works, a2 is now an empty array as well.
 
-    // (If a1 was not empty, then the call id<i32[]>(a1) would be rejected
+    // (If a1 was not empty, then the call id<i32[*]>(a1) would be rejected
     // by the verifier.)
 }
 

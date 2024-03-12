@@ -35,13 +35,15 @@ static void * names_tyvar_list(void *context, struct TyVarList *node, void *next
     return NULL;
 }
 
-static void * names_fixed_array(void *context, struct Type *type, void *elt_type_result)
+static void * names_array(void *context, struct Type *type, void *elt_type_result)
 {
     // A quirk of TypeTransform is that it does not descend into
-    // the terms found in TY_FIXED_ARRAY, therefore we have to do that
+    // the terms found in TY_ARRAY, therefore we have to do that
     // ourselves here.
-    for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
-        names_used_in_term(context, type->fixed_array_data.sizes[i]);
+    if (type->array_data.sizes != NULL) {
+        for (int i = 0; i < type->array_data.ndim; ++i) {
+            names_used_in_term(context, type->array_data.sizes[i]);
+        }
     }
     return NULL;
 }
@@ -50,7 +52,7 @@ static void names_type_transform(struct TypeTransform *transform)
 {
     transform->transform_var = names_tyvar;
     transform->transform_tyvar_list = names_tyvar_list;
-    transform->transform_fixed_array = names_fixed_array;
+    transform->transform_array = names_array;
 }
 
 void names_used_in_type(struct HashTable *names, struct Type *type)
@@ -300,6 +302,9 @@ static const struct Term * get_lvalue_root(const struct Term *lvalue)
 
     case TM_ARRAY_PROJ:
         return get_lvalue_root(lvalue->array_proj.lhs);
+
+    case TM_CAST:
+        return get_lvalue_root(lvalue->cast.operand);
 
     default:
         return NULL;

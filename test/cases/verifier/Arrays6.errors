@@ -1,0 +1,4 @@
+Arrays6.b:25:5: Assert might not hold
+Arrays6.b:43:8: Aliasing rules violated: argument 1 might alias argument 2
+Arrays6.b:44:8: Aliasing rules violated: argument 1 might alias argument 2
+Arrays6.b:45:8: Aliasing rules violated: argument 1 might alias argument 2

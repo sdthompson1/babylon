@@ -72,6 +72,7 @@ void report_cannot_take_ref(struct Location location);
 void report_cannot_take_ref_to_readonly(struct Location location);
 void report_cannot_take_ref_to_resizable_array_element(struct Location location);
 void report_cannot_take_sizeof(struct Term *term);
+void report_incomplete_array_type(struct Location loc);
 void report_unexpected_return_value(struct Term *term);
 void report_missing_return_value(struct Statement *stmt);
 void report_call_of_non_function(struct Term *term);
@@ -141,6 +142,7 @@ void report_return_allocated(struct Location loc);
 void report_var_still_allocated(const char *name, struct Location loc);
 void report_var_still_allocated_at_return(const char *name, struct Location loc);
 void report_ref_invalid_variant_change(struct Location location);
+void report_array_wrong_size(struct Term *term);
 
 // Fatal errors (not expected in normal operation)
 #define fatal_error(err) fatal_error_impl(err, __FILE__, __LINE__)

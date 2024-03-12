@@ -429,13 +429,15 @@ static void * rename_var_type(void *context, struct Type *type)
     return NULL;
 }
 
-static void * rename_fixed_array(void *context, struct Type *type, void *elt_type_result)
+static void * rename_array(void *context, struct Type *type, void *elt_type_result)
 {
     // A quirk of TypeTransform is that it does not descend into
-    // the terms found in TY_FIXED_ARRAY, therefore we have to do that
+    // the terms found in TY_ARRAY, therefore we have to do that
     // ourselves here.
-    for (int i = 0; i < type->fixed_array_data.ndim; ++i) {
-        rename_term(context, type->fixed_array_data.sizes[i]);
+    if (type->array_data.sizes != NULL) {
+        for (int i = 0; i < type->array_data.ndim; ++i) {
+            rename_term(context, type->array_data.sizes[i]);
+        }
     }
     return NULL;
 }
@@ -443,7 +445,7 @@ static void * rename_fixed_array(void *context, struct Type *type, void *elt_typ
 static void renaming_type_transform(struct TypeTransform *tr)
 {
     tr->transform_var = rename_var_type;
-    tr->transform_fixed_array = rename_fixed_array;
+    tr->transform_array = rename_array;
 }
 
 static void rename_type(struct RenamerState *state, struct Type *type)

@@ -71,7 +71,7 @@ static struct Sexpr *convert_indexes(struct VContext *context,
                                      struct Sexpr *fol_lhs,   // handover
                                      struct Sexpr *fol_type)
 {
-    const int ndim = array_ndim(array_type);
+    const int ndim = array_type->array_data.ndim;
 
     bool ok = true;
     struct Sexpr *result = NULL;
@@ -96,7 +96,7 @@ static struct Sexpr *convert_indexes(struct VContext *context,
     if (ok) {
         struct Sexpr *size;
 
-        if (array_type->tag == TY_FIXED_ARRAY) {
+        if (array_type->array_data.sizes != NULL) {
             size = fixed_arr_size_sexpr(array_type);
             free_sexpr(fol_lhs);
         } else {
@@ -204,8 +204,8 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
             ref->fol_type = verify_type(term->array_proj.lhs->type);
             ref->base = base;
             ref->array_index = NULL;
-            ref->ndim = array_ndim(term->array_proj.lhs->type);
-            ref->fixed_size = (term->array_proj.lhs->type->tag == TY_FIXED_ARRAY);
+            ref->ndim = term->array_proj.lhs->type->array_data.ndim;
+            ref->fixed_size = (term->array_proj.lhs->type->array_data.sizes != NULL);
 
             // we need a sexpr for the lhs so that we can get the size
             struct Sexpr *fol_lhs = ref_chain_to_sexpr(context, base);
@@ -240,6 +240,34 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
             ref->base = NULL;
             ref->sexpr = verify_term(context, term);
             return ref;
+        }
+        break;
+
+    case TM_CAST:
+        // Array casts are considered lvalues. Numeric casts are not.
+        if (term->type->tag == TY_ARRAY) {
+            struct RefChain *base = ref_chain_for_term(context, term->cast.operand);
+            if (base == NULL) {
+                return NULL;
+            }
+
+            bool src_fixed = (term->cast.operand->type->array_data.sizes != NULL);
+            bool dest_fixed = (term->type->array_data.sizes != NULL);
+
+            if (src_fixed == dest_fixed) {
+                // No cast required, as far as verifier is concerned
+                return base;
+            } else {
+                struct RefChain *ref = alloc(sizeof(struct RefChain));
+                ref->ref_type = RT_ARRAY_CAST;
+                ref->type = term->type;
+                ref->fol_type = verify_type(term->type);
+                ref->base = base;
+                return ref;
+            }
+
+        } else {
+            return NULL;
         }
         break;
 
@@ -331,6 +359,12 @@ struct Sexpr *ref_chain_to_sexpr(struct VContext *cxt, struct RefChain *ref)
                                     expr,
                                     copy_sexpr(ref->array_index));
         }
+
+    case RT_ARRAY_CAST:
+        // This shouldn't be needed (because array-casts only appear
+        // in function actual arguments currently, and we shouldn't be
+        // calling ref_chain_to_sexpr on those.)
+        fatal_error("ref_chain_to_sexpr: RT_ARRAY_CAST: not implemented");
 
     case RT_SEXPR:
         return copy_sexpr(ref->sexpr);
@@ -424,11 +458,15 @@ bool validate_ref_chain(struct VContext *context,
                 return false;
             }
 
-            // Refs to elements of variable-size arrays are now illegal
+            // Refs to elements of resizable arrays are now illegal
             // so there is nothing further to check
             return true;
         }
         break;
+
+    case RT_ARRAY_CAST:
+        // Nothing to check here.
+        return validate_ref_chain(context, ref->base, location);
 
     case RT_SEXPR:
         // We assume RT_SEXPR is only used in cases where the
@@ -549,6 +587,44 @@ void update_reference(struct VContext *context,
         }
         break;
 
+    case RT_ARRAY_CAST:
+        if (ref->type->array_data.sizes != NULL) {
+            // ref r: T[n] = <some array descriptor>
+            // We are given a new array (T[n]). We need to construct
+            // ($PROD array size) and use that to update the base.
+
+            // ref->fol_type is something like (Array idx-type elem-type).
+
+            struct Sexpr *prod_ctor =
+                make_list3_sexpr(
+                    make_string_sexpr("instance"),
+                    make_string_sexpr("$PROD"),
+                    make_list2_sexpr(
+                        copy_sexpr(ref->fol_type),
+                        copy_sexpr(ref->fol_type->right->left)));
+
+            struct Sexpr *tuple = make_list3_sexpr(prod_ctor,
+                                                   rhs,
+                                                   fixed_arr_size_sexpr(ref->type));
+
+            update_reference(context, ref->base, tuple);
+
+        } else {
+            // ref r: T[] = <some array of size n>
+            // We are given a new descriptor (T[]). We need to extract the
+            // array ($FLD0) and use that to update the base.
+
+            // ref->fol_type is (instance $PROD (array-type size-type)).
+
+            struct Sexpr *arr = copy_sexpr(ref->fol_type);
+            free_sexpr(arr->right->left);
+            arr->right->left = make_string_sexpr("$FLD0");
+            arr = make_list2_sexpr(arr, rhs);
+
+            update_reference(context, ref->base, arr);
+        }
+        break;
+
     case RT_SEXPR:
         fatal_error("trying to update const reference");
 
@@ -593,12 +669,12 @@ static struct Sexpr *make_default_fixed_array(struct VContext *cxt,
     // default, and out-of-range elements are equal to $ARBITRARY
     struct Sexpr *equality =
         for_all_array_elt(
-            array_type->fixed_array_data.ndim,
+            array_type->array_data.ndim,
             make_list3_sexpr(
                 make_string_sexpr("="),
                 make_string_sexpr("$elt"),
-                make_default(cxt, array_type->fixed_array_data.element_type)),
-            verify_type(array_type->fixed_array_data.element_type));
+                make_default(cxt, array_type->array_data.element_type)),
+            verify_type(array_type->array_data.element_type));
 
     // to make the axiom we need to use "let" to assign values for
     // $arr and $size
@@ -683,13 +759,13 @@ static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
             return make_list2_sexpr(ctor, make_default(cxt, type->variant_data.variants->type));
         }
 
-    case TY_FIXED_ARRAY:
-        return make_default_fixed_array(cxt, type);
+    case TY_ARRAY:
+        if (type->array_data.sizes != NULL) {
+            return make_default_fixed_array(cxt, type);
 
-    case TY_DYNAMIC_ARRAY:
-        {
-            struct Sexpr *element_type = verify_type(type->dynamic_array_data.element_type);
-            struct Sexpr *index_type = array_index_type(type->dynamic_array_data.ndim);
+        } else if (type->array_data.resizable) {
+            struct Sexpr *element_type = verify_type(type->array_data.element_type);
+            struct Sexpr *index_type = array_index_type(type->array_data.ndim);
 
             // $ARBITRARY-ARRAY is an array where all elements are equal to
             // $ARBITRARY at the element type.
@@ -700,14 +776,14 @@ static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
             element_type = NULL;
 
             struct Sexpr *default_size;
-            if (type->dynamic_array_data.ndim == 1) {
+            if (type->array_data.ndim == 1) {
                 default_size = make_string_sexpr("0");
                 free_sexpr(index_type);
 
             } else {
                 struct Sexpr *zeroes = NULL;
                 struct Sexpr **tail = &zeroes;
-                for (int i = 0; i < type->dynamic_array_data.ndim; ++i) {
+                for (int i = 0; i < type->array_data.ndim; ++i) {
                     *tail = make_list1_sexpr(make_string_sexpr("0"));
                     tail = &(*tail)->right;
                 }
@@ -717,6 +793,8 @@ static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
 
             struct Sexpr *ctor = verify_type(type);
             return make_list3_sexpr(ctor, default_array, default_size);
+        } else {
+            fatal_error("unexpected: making default value of incomplete array type");
         }
 
     case TY_FUNCTION:
@@ -827,38 +905,15 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
     bool seen_before = get_name_for_string(cxt, term, &name);
 
     if (!seen_before) {
-        // fol_type is (instance $PROD ((Array Int Int) Int))
+        // fol_type is (Array Int Int)
         struct Sexpr *fol_type = verify_type(term->type);
 
-        // fld0 is the array.
-        struct Sexpr *fld0 = copy_sexpr(fol_type);
-        free_sexpr(fld0->right->left);
-        fld0->right->left = make_string_sexpr("$FLD0");
-        fld0 = make_list2_sexpr(fld0, make_string_sexpr(name));
+        struct Sexpr *axioms = NULL;
+        struct Sexpr **tail = &axioms;
 
-        // fld1 is the size.
-        struct Sexpr *fld1 = copy_sexpr(fol_type);
-        free_sexpr(fld1->right->left);
-        fld1->right->left = make_string_sexpr("$FLD1");
-        fld1 = make_list2_sexpr(fld1, make_string_sexpr(name));
-
-        // ((assert (= fld1 length)))
-        char num[40];
-        sprintf(num, "%" PRIu32, term->string_literal.length);
-        struct Sexpr *axioms =
-            make_list1_sexpr(
-                make_list2_sexpr(
-                    make_string_sexpr("assert"),
-                    make_list3_sexpr(
-                        make_string_sexpr("="),
-                        fld1,
-                        make_string_sexpr(num))));
-        fld1 = NULL;
-
-        struct Sexpr **tail = &axioms->right;
-
-        // for each INDEX: (assert (= (select fld0 INDEX) CHAR))
+        // for each INDEX: (assert (= (select name INDEX) CHAR))
         for (uint32_t i = 0; i < term->string_literal.length; ++i) {
+            char num[40];
             sprintf(num, "%" PRIu32, i);
             struct Sexpr *index = make_string_sexpr(num);
 
@@ -872,7 +927,7 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
                         make_string_sexpr("="),
                         make_list3_sexpr(
                             make_string_sexpr("select"),
-                            copy_sexpr(fld0),
+                            make_string_sexpr(name),
                             index),
                         character));
 
@@ -886,9 +941,6 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
         validity = make_list2_sexpr(make_string_sexpr("assert"), validity);
         *tail = make_list1_sexpr(validity);
         tail = &(*tail)->right;
-
-        free_sexpr(fld0);
-        fld0 = NULL;
 
         // make an Item for the string literal
         struct Item *item = alloc(sizeof(struct Item));
@@ -911,15 +963,8 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
     return make_string_sexpr_handover(name);
 }
 
-static void* verify_cast(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)
+static struct Sexpr* verify_numeric_cast(struct VContext *cxt, struct Term *term, struct Sexpr *operand)
 {
-    struct VContext *cxt = context;
-
-    struct Sexpr *operand = operand_result;
-    if (operand == NULL) {
-        return NULL;
-    }
-
     enum TypeTag from_tag = term->cast.operand->type->tag;
     enum TypeTag to_tag = term->type->tag;
 
@@ -988,6 +1033,69 @@ static void* verify_cast(void *context, struct Term *term, void *type_result, vo
     }
 
     return operand;
+}
+
+static struct Sexpr *verify_array_cast(struct VContext *cxt, struct Term *term, struct Sexpr *operand)
+{
+    if (term->type->array_data.sizes != NULL) {
+        if (term->cast.operand->type->array_data.sizes != NULL) {
+            return operand;
+        } else {
+            // Cast of T[*] or T[] to T[n].
+
+            // Verify that the array does have size n.
+            struct Sexpr *expected_size = fixed_arr_size_sexpr(term->type);
+            struct Sexpr *cond =
+                match_arr_size(
+                    "$arr", "$size",
+                    copy_sexpr(operand), term->cast.operand->type,
+                    make_list3_sexpr(
+                        make_string_sexpr("="),
+                        expected_size,   // handover
+                        make_string_sexpr("$size")));
+            expected_size = NULL;
+            bool verify_result = verify_condition(cxt, term->location, cond, "array size");
+            free_sexpr(cond);
+
+            if (!verify_result) {
+                report_array_wrong_size(term);
+                free_sexpr(operand);
+                return NULL;
+            }
+
+            // Just extract the Array (first field of array-tuple).
+            return match_arr_size(
+                "$arr", "$size",
+                operand, // handover
+                term->cast.operand->type,
+                make_string_sexpr("$arr"));
+        }
+    } else {
+        if (term->cast.operand->type->array_data.sizes == NULL) {
+            return operand;
+        } else {
+            // Cast of T[n] to T[].
+
+            // ctor = (instance $PROD (arraytype indextype))
+            struct Sexpr *ctor = verify_type(term->type);
+
+            // return (ctor operand size)
+            return make_list3_sexpr(ctor,
+                                    operand,
+                                    fixed_arr_size_sexpr(term->cast.operand->type));
+        }
+    }
+}
+
+static void* verify_cast(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)
+{
+    if (operand_result == NULL) {
+        return NULL;
+    } else if (term->type->tag == TY_ARRAY) {
+        return verify_array_cast(context, term, operand_result);
+    } else {
+        return verify_numeric_cast(context, term, operand_result);
+    }
 }
 
 static void* nr_verify_if(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
@@ -1514,19 +1622,28 @@ struct RefArgInfo {
     int arg_num;
     bool ref;
     struct Location *location;
-    struct RefChain *ref_chain;
+    struct RefChain *ref_chain;  // reversed, and casts removed
     struct RefArgInfo *next;
 };
 
-static struct RefChain * reverse_ref_chain(struct RefChain *r)
+static struct RefChain * reverse_ref_chain_and_remove_casts(struct RefChain *r)
 {
     struct RefChain *prev = NULL;
     struct RefChain *curr = r;
     while (curr) {
         struct RefChain *next = curr->base;
-        curr->base = prev;
-        prev = curr;
-        curr = next;
+
+        // array casts are irrelevant for aliasing detection; remove them
+        if (curr->ref_type == RT_ARRAY_CAST) {
+            curr->base = NULL;
+            free_ref_chain(curr);
+            curr = next;
+
+        } else {
+            curr->base = prev;
+            prev = curr;
+            curr = next;
+        }
     }
     return prev;
 }
@@ -1546,7 +1663,7 @@ static struct RefArgInfo * get_ref_arg_info(struct VContext *cxt,
     info->arg_num = arg_num;
     info->ref = formal->ref;
     info->location = &actual->rhs->location;
-    info->ref_chain = reverse_ref_chain(ref_chain_for_term(cxt, actual->rhs));
+    info->ref_chain = reverse_ref_chain_and_remove_casts(ref_chain_for_term(cxt, actual->rhs));
     info->next = next;
     return info;
 }
@@ -1588,6 +1705,9 @@ static bool alias_check(struct RefChain *r1,
                                                  copy_sexpr(r2->array_index));
         *equality_conditions = make_pair_sexpr(eq_expr, *equality_conditions);
         return true;
+
+    case RT_ARRAY_CAST:
+        fatal_error("RT_ARRAY_CAST should have been removed before now");
 
     case RT_SEXPR:
         return false;
@@ -2166,11 +2286,13 @@ static void * verify_sizeof(void *context, struct Term *term, void *type_result,
         return NULL;
     }
 
-    if (term->sizeof_data.rhs->type->tag == TY_FIXED_ARRAY) {
+    if (term->sizeof_data.rhs->type->array_data.sizes != NULL) {
+        // Static-sized array type
         free_sexpr(rhs_result);
         return fixed_arr_size_sexpr(term->sizeof_data.rhs->type);
 
     } else {
+        // Dynamic-sized or Incomplete array type
 
         struct Sexpr * array_type = verify_type(term->sizeof_data.rhs->type);
 
@@ -2240,7 +2362,7 @@ static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
     }
 
     struct Sexpr *expr;
-    if (lhs_type->tag == TY_DYNAMIC_ARRAY) {
+    if (lhs_type->array_data.sizes == NULL) {
         expr = make_string_sexpr("$FLD0");
         make_instance(&expr, copy_sexpr(fol_type->right->right->left));
         expr = make_list2_sexpr(expr, fol_lhs);

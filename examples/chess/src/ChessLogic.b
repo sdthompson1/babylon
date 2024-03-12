@@ -6,11 +6,16 @@ import Limits;
 import Maybe;
 
 interface {
+    // Constants
+    const x_size: i32 = 8;
+    const y_size: i32 = 8;
+    const board_size: {u64, u64} = {u64(x_size), u64(y_size)};
+
     // Types
     datatype PieceType = Pawn | Knight | Bishop | Rook | Queen | King;
     datatype Colour = White | Black;
     type Piece = {Colour, PieceType};
-    type Board = Maybe<Piece> [,];
+    type Board = Maybe<Piece> [x_size, y_size];
     type Square = {x:i32, y:i32};
 
     type Position = {
@@ -22,12 +27,6 @@ interface {
         castle_kingside_black: bool,
         castle_queenside_black: bool
     };
-
-
-    // Constants
-    const x_size: i32 = 8;
-    const y_size: i32 = 8;
-    const board_size: {u64, u64} = {u64(x_size), u64(y_size)};
     
 
     // Some helper functions
@@ -54,19 +53,19 @@ interface {
         return 0 <= sq.x < x_size && 0 <= sq.y < y_size;
     }
 
-    // Conditions for a position to be valid: board has correct size,
-    // and en_passant is reasonable.
-    // Note we do not check other conditions (e.g. that there exist
-    // two kings on the board) as that would probably be harder to
-    // do proofs for.
+    // Conditions for a position to be valid: we just check
+    // en_passant is reasonable, for now.
+    // (We do not check other conditions, e.g. that there exist
+    // two kings on the board, as that would be harder to
+    // do proofs for.)
     ghost function valid_position(pos: Position): bool
     {
-        return sizeof(pos.board) == board_size
-          && (match pos.en_passant {
-                 case Nothing => true
-                 case Just{x=x, y=y} =>
-                     0 <= x < x_size && (y == 2 || y == y_size - 3)
-              });
+        return
+            (match pos.en_passant {
+                case Nothing => true
+                case Just{x=x, y=y} =>
+                    0 <= x < x_size && (y == 2 || y == y_size - 3)
+            });
     }
 
     function has_piece_of_colour(pos: Position, col: Colour, sq: Square): bool
@@ -92,33 +91,19 @@ interface {
 
     // Functions to calculate legal chess moves.
 
-    ghost function is_legal_move(pos: Position,
-                                 from: Square,
-                                 to: Square): bool
+    function is_legal_move(pos: Position,
+                           from: Square,
+                           to: Square): bool
         requires valid_position(pos);
         requires valid_square(from);
         requires valid_square(to);
-
-    function compute_is_legal_move(pos: Position,
-                                   ref scratch_pos: Position,
-                                   from: Square,
-                                   to: Square): bool
-        requires valid_position(pos);
-        requires sizeof(scratch_pos.board) == board_size;
-        requires valid_square(from);
-        requires valid_square(to);
-        ensures sizeof(scratch_pos.board) == board_size;
-        ensures return == is_legal_move(pos, from, to);
 
     function get_legal_moves_from(pos: Position,
-                                  ref scratch_pos: Position,
                                   from: Square,
                                   ref to: bool[,])
         requires valid_position(pos);
-        requires sizeof(scratch_pos.board) == board_size;
         requires valid_square(from);
         requires sizeof(to) == board_size;
-        ensures sizeof(scratch_pos.board) == board_size;
         ensures sizeof(to) == board_size;
         ensures forall (sq:Square) valid_square(sq) ==>
             to[sq.x, sq.y] == is_legal_move(pos, from, sq);
@@ -146,11 +131,8 @@ interface {
         }
     }
 
-    function get_game_status(pos: Position,
-                             ref scratch_pos: Position): GameStatus
+    function get_game_status(pos: Position): GameStatus
         requires valid_position(pos);
-        requires sizeof(scratch_pos.board) == board_size;
-        ensures sizeof(scratch_pos.board) == board_size;
         ensures return == game_status(pos);    
 
 
@@ -255,37 +237,6 @@ ghost function before(lhs: Square, rhs: Square): bool
     return lhs.y < rhs.y ||
         (lhs.y == rhs.y && lhs.x < rhs.x);
 }
-
-
-
-// Make an identical copy of a Position
-function copy_position(ref dest: Position, src: Position)
-    requires valid_position(src);
-    requires sizeof(dest.board) == board_size;
-    ensures dest == src;
-{
-    var sq = first_square();
-    while !iteration_done(sq)
-        invariant valid_square(sq) || iteration_done(sq);
-        invariant sizeof(dest.board) == board_size;
-        invariant forall (other: Square)
-            valid_square(other) && before(other, sq) ==>
-                dest.board[other.x, other.y] == src.board[other.x, other.y];
-        decreases square_number(sq);
-    {
-        dest.board[sq.x, sq.y] = src.board[sq.x, sq.y];
-        next_square(sq);
-    }
-    
-    dest.castle_kingside_white = src.castle_kingside_white;
-    dest.castle_queenside_white = src.castle_queenside_white;
-    dest.castle_kingside_black = src.castle_kingside_black;
-    dest.castle_queenside_black = src.castle_queenside_black;
-    
-    dest.en_passant = src.en_passant;
-    dest.turn = src.turn;
-}
-
 
 
 // The initial chess position
@@ -673,44 +624,29 @@ function is_castling_move(pos: Position, from: Square, to: Square): bool
 }
 
 function castling_through_check(pos: Position,
-                                ref scratch_pos: Position,
                                 from: Square,
                                 to: Square): bool
     requires valid_position(pos);
-    requires scratch_pos == pos;
     requires valid_square(from);
     requires valid_square(to);
     requires (pos.board[from.x, from.y] == Just<Piece>{pos.turn, King});
-
-    ensures return ==> sizeof(scratch_pos.board) == board_size;
-    ensures !return ==> scratch_pos == pos;
 {
-    // We will move the king one space towards "to" on the scratch board, and
+    // We will move the king one space towards "to" on a scratch board, and
     // see if the resulting position is check.
 
     var modified_to = {x=from.x + sgn(to.x - from.x), y=to.y};
 
-    assert scratch_pos == pos;
-
+    var scratch_pos = pos;
     scratch_pos.board[from.x, from.y] = Nothing<Piece>;
-
-    var backup = scratch_pos.board[modified_to.x, modified_to.y];
     scratch_pos.board[modified_to.x, modified_to.y] = Just<Piece>{pos.turn, King};
 
-    if is_check(scratch_pos) {
-        return true;
-    }
-
-    // Put the scratch board back how it was originally
-    scratch_pos.board[modified_to.x, modified_to.y] = backup;
-    scratch_pos.board[from.x, from.y] = Just<Piece>{pos.turn, King};
-    return false;
+    return is_check(scratch_pos);
 }
 
 // Definition of whether a move is legal
-ghost function is_legal_move(pos: Position,
-                             from: Square,
-                             to: Square): bool
+function is_legal_move(pos: Position,
+                       from: Square,
+                       to: Square): bool
     requires valid_position(pos);
     requires valid_square(from);
     requires valid_square(to);
@@ -727,70 +663,20 @@ ghost function is_legal_move(pos: Position,
         return false;
     }
 
-    // Now copy our position to a scratch board
-    // (we can do this, because this is a ghost function)
-    var scratch_pos = pos;
-
     // If we are castling, confirm we are not trying to castle through check.
     if castling {
-        var bad = castling_through_check(pos, scratch_pos, from, to);
+        var bad = castling_through_check(pos, from, to);
         if bad {
             return false;
         }
     }
 
-    // Execute the move on the scratch position (but not changing the
+    // Execute the move on a scratch position (but not changing the
     // current player)
-    assert scratch_pos == pos;
+    var scratch_pos = pos;
     make_move_internal(scratch_pos, from, to);
 
     // The move is legal iff the new position is not check.
-    return !is_check(scratch_pos);
-}
-
-// An executable version of is_legal_move. This requires a scratch position
-// to be passed in (so that we don't have to allocate memory at runtime).
-function compute_is_legal_move(pos: Position,
-                               ref scratch_pos: Position,
-                               from: Square,
-                               to: Square): bool
-    requires valid_position(pos);
-    requires sizeof(scratch_pos.board) == board_size;
-    requires valid_square(from);
-    requires valid_square(to);
-    ensures sizeof(scratch_pos.board) == board_size;
-    ensures return == is_legal_move(pos, from, to);
-{
-    // We just mirror the structure of is_legal_move, but using the
-    // scratch position that we have been given.
-    
-    if !is_pseudo_legal_move(pos, from, to, pos.turn) {
-        return false;
-    }
-
-    var castling = is_castling_move(pos, from, to);
-    if castling && is_check(pos) {
-        // Trying to castle out of check
-        return false;
-    }
-
-    copy_position(scratch_pos, pos);
-
-    if castling {
-        var bad = castling_through_check(pos, scratch_pos, from, to);
-        if bad {
-            return false;
-        }
-    }
-
-    assert scratch_pos == pos;
-    make_move_internal(scratch_pos, from, to);
-
-    // These hide statements make it easier to prove the postcondition
-    // "return == is_legal_move(pos, from, to)".
-    hide is_pseudo_legal_move;
-    hide is_castling_move;
-
     return !is_check(scratch_pos);
 }
 
@@ -800,27 +686,22 @@ function compute_is_legal_move(pos: Position,
 // piece is clicked on.
 
 // It doesn't do anything fancy, it just loops through all the
-// squares on the board and calls "compute_is_legal_move" for each.
+// squares on the board and calls "is_legal_move" for each.
 
 function get_legal_moves_from(pos: Position,
-                              ref scratch_pos: Position,
                               from: Square,
                               ref to: bool[,])
     requires valid_position(pos);
-    requires sizeof(scratch_pos.board) == board_size;
     requires valid_square(from);
     requires sizeof(to) == board_size;
-    ensures sizeof(scratch_pos.board) == board_size;
     ensures sizeof(to) == board_size;
     ensures forall (sq:Square) valid_square(sq) ==>
         to[sq.x, sq.y] == is_legal_move(pos, from, sq);
 {
     hide is_legal_move;
-    hide compute_is_legal_move;
     
     var sq = first_square();
     while !iteration_done(sq)
-        invariant sizeof(scratch_pos.board) == board_size;
         invariant sizeof(to) == board_size;
         invariant valid_square(sq) || iteration_done(sq);
         invariant forall (other:Square)
@@ -828,7 +709,7 @@ function get_legal_moves_from(pos: Position,
                 to[other.x, other.y] == is_legal_move(pos, from, other);
         decreases square_number(sq);
     {
-        to[sq.x, sq.y] = compute_is_legal_move(pos, scratch_pos, from, sq);
+        to[sq.x, sq.y] = is_legal_move(pos, from, sq);
         next_square(sq);
     }
 }
@@ -951,16 +832,12 @@ function make_move(ref pos: Position, from: Square, to: Square)
 // Determining whether the game is over
 
 function exists_legal_move_from(pos: Position,
-                                ref scratch_pos: Position,
                                 from: Square): bool
     requires valid_position(pos);
-    requires sizeof(scratch_pos.board) == board_size;
     requires valid_square(from);
     ensures return <==> exists (to: Square)
         valid_square(to) && is_legal_move(pos, from, to);
-    ensures sizeof(scratch_pos.board) == board_size;
 {
-    hide compute_is_legal_move;
     hide is_legal_move;
 
     var to = first_square();
@@ -969,10 +846,9 @@ function exists_legal_move_from(pos: Position,
         invariant forall (other_to: Square)
             valid_square(other_to) && before(other_to, to) ==>
                 !is_legal_move(pos, from, other_to);
-        invariant sizeof(scratch_pos.board) == board_size;
         decreases square_number(to);
     {
-        var legal = compute_is_legal_move(pos, scratch_pos, from, to);
+        var legal = is_legal_move(pos, from, to);
         if legal {
             return true;
         }
@@ -982,15 +858,11 @@ function exists_legal_move_from(pos: Position,
     return false;
 }
 
-function get_game_status(pos: Position,
-                         ref scratch_pos: Position): GameStatus
+function get_game_status(pos: Position): GameStatus
     requires valid_position(pos);
-    requires sizeof(scratch_pos.board) == board_size;
-    ensures sizeof(scratch_pos.board) == board_size;
     ensures return == game_status(pos);    
 {
     hide is_legal_move;
-    hide compute_is_legal_move;
 
     var from = first_square();
     while !iteration_done(from)
@@ -998,10 +870,9 @@ function get_game_status(pos: Position,
         invariant forall (other_from: Square)
             valid_square(other_from) && before(other_from, from) ==>
                 !exists (to: Square) valid_square(to) && is_legal_move(pos, other_from, to);
-        invariant sizeof(scratch_pos.board) == board_size;                
         decreases square_number(from);
     {
-        var legal = exists_legal_move_from(pos, scratch_pos, from);
+        var legal = exists_legal_move_from(pos, from);
         if legal {
             return InProgress;
         }

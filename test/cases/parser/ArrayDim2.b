@@ -1,6 +1,6 @@
 // error while parsing array dimensions
 
-module ArrayDim
+module ArrayDim2
 
 interface {
     type foo = i32[ )

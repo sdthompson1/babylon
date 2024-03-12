@@ -11,7 +11,7 @@ function foo(ref a: i32[])
     requires sizeof(a) == u64(2);
     requires a[0] == 1;
 {
-    var empty: i32[];
+    var empty: i32[*];
     assert sizeof(empty) == u64(0);
 
     // This was previously succeeding, but a[1] is not equal to 1 (in general),

@@ -4,40 +4,40 @@ interface {}
 
 import Test;
 
-function f1(x: i32[])
+function f1(x: i32[*])
 {
     var y = x;    // Error, copying from (possibly) allocated variable
     return;       // Error, y still allocated
 }
 
-function f1a(x: i32[])
+function f1a(x: i32[*])
 {
-    var y: i32[];
+    var y: i32[*];
     y = x;        // Error, copying from (possibly) allocated variable
 }                 // Error, y still allocated
 
 function f2()
 {
-    var x: i32[];
-    var y: i32[];
+    var x: i32[*];
+    var y: i32[*];
     resize_array<i32>(x, 100);
     x = y;        // Error, copying to an allocated variable
 }
 
-function f3(ref x: i32[]): i32[]
+function f3(ref x: i32[*]): i32[*]
 {
     return x;  // Error, returning possibly allocated variable
 }
 
-function f4(): i32[]
+function f4(): i32[*]
 {
-    var x: i32[];
+    var x: i32[*];
     return x;     // Returning an empty array is OK
 }
 
 function f5()
 {
-    var x: i32[];
+    var x: i32[*];
     resize_array<i32>(x, 10);
     // Error, x still allocated
 }
@@ -48,7 +48,7 @@ ghost function f6()
 {
     assert allocated(1) == false;
 
-    var x: i32[];
+    var x: i32[*];
     assert allocated(x) == false;
     
     resize_array<i32>(x, 100);
@@ -107,12 +107,12 @@ ghost function f11(f: Foo)
 }
 
 // Copying is allowed in ghost function
-ghost function f12(x: i32[])
+ghost function f12(x: i32[*])
 {
-    var y: i32[];
+    var y: i32[*];
     y = x;              // OK (assign from maybe-allocated value)
 
-    var z: i32[] = x;   // OK (init from maybe-allocated value)
+    var z: i32[*] = x;   // OK (init from maybe-allocated value)
 
     match x {
     case xx => y = xx;  // OK (assign from maybe-allocated value within a match)
@@ -124,6 +124,6 @@ function f13()
 {
     // This shows it is impossible to use resize_array to manufacture
     // a value of type AllocTest.
-    var array: AllocTest[];
+    var array: AllocTest[*];
     resize_array<AllocTest>(array, 1);
 }
