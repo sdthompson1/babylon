@@ -1,5 +1,5 @@
 module Imported
 
 interface {
-    const STR: u8[13] = "StringTest123";
+    const STR: u8[14] = "StringTest123";
 }

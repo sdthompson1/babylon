@@ -2,11 +2,11 @@
 
 module GameEngine
 
-import CString;
 import IO;
 import Limits;
 import Maybe;
 import Result;
+import String;
 
 interface {
 
@@ -125,7 +125,7 @@ interface {
                                height: u32,
                                ref result: Result<{}>)
         requires is_nothing<GameEngine>(engine);
-        requires valid_c_string(title);
+        requires valid_string(title);
         requires !allocated(result);
         
         ensures valid_c_result<{}>(result);

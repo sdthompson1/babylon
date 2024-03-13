@@ -7,6 +7,7 @@ interface {
 import Test;
 
 function foo(str: u8[])
+    requires valid_string(str);
 {
     Test.print_string(str);
 }

@@ -20,8 +20,14 @@ interface
 
     extern function print_bool(b: bool);
 
-    extern function print_string(s: u8[]);
+    ghost function valid_string(s: u8[]): bool
+    {
+        return exists (i: u64) i < sizeof(s) && s[i] == 0;
+    }
 
+    // Print a null-terminated string
+    extern function print_string(s: u8[]);
+        requires valid_string(s);
 
     ghost function default<T>(): T
     {

@@ -3,10 +3,10 @@
 
 module MessageBox
 
-import CString;
 import IO;
+import String;
 
 interface {
     extern function message_box(ref io: IO, msg: u8[])
-        requires valid_c_string(msg);
+        requires valid_string(msg);
 }

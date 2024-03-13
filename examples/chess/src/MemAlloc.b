@@ -28,7 +28,7 @@ interface {
 
     // Resize a 1-D array.
     extern function resize_array<T>(ref mem: Mem,
-                                    ref array: T[],
+                                    ref array: T[*],
                                     new_size: u64): bool
                                    
         // This cannot be used to manufacture new allocated values.
@@ -60,7 +60,7 @@ interface {
 
     // Resize a 2-D array.
     extern function resize_2d_array<T>(ref mem: Mem,
-                                       ref array: T[,],
+                                       ref array: T[*,*],
                                        new_size_0: u64,
                                        new_size_1: u64): bool
                                       

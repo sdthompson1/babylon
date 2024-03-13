@@ -17,7 +17,7 @@ struct String {
 
 void print_string(const struct String *string)
 {
-    fwrite(string->data, 1, string->length, stdout);
+    printf("%s", string->data);
 }
 
 void print_i32(int32_t x)

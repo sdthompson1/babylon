@@ -121,7 +121,9 @@ function fun2()
     ref s = "Hello, world!\n";  
 
     // We can take the sizeof a string, just like any other array.
-    assert sizeof(s) == u64(14);  // 14 characters including the newline.
+    // sizeof(s) is 15 (13 text characters, the newline, and an implicit null byte
+    // at the end of the string).
+    assert sizeof(s) == u64(15);
 
     // We can also print it, via the reference.
     print_string(s);
@@ -129,12 +131,6 @@ function fun2()
     // We could also pass 's' to a function that takes a u8[] argument
     // (but not a "ref u8[]" argument, because that would imply that the
     // function was able to change the string, but 's' is read-only).
-
-    // Also, unlike C, strings by default do not include a null
-    // terminator character, but it is possible to add one by writing "\0":
-    ref c_string = "This is a C-style string\0";
-
-    // This is often needed when interfacing with functions written in C.
 }
 
 

@@ -229,11 +229,6 @@ static int lex_escape_sequence(struct LexerState *state)
     int output = -1;
 
     switch (ch) {
-    case '0':
-        // '\0' = null character (ascii 0)
-        output = 0;
-        break;
-
     case 't':
         // '\t' = tab (ascii 9)
         output = 9;
@@ -282,13 +277,16 @@ static void lex_string_literal(struct LexerState *state)
     uint32_t capacity = 0;
     const uint32_t MAX_STRING_LEN = 10000000u;
 
-    while (1) {
+    bool end = false;
+
+    while (!end) {
         struct Location ch_loc = state->location;
         int ch = read_next_char(state);
 
         if (ch == '\"') {
             // end of string
-            break;
+            end = true;
+            ch = 0;  // add null terminator
 
         } else if (ch == '\n' || ch == EOF) {
             // EOF or newline during string - error

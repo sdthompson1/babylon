@@ -3,7 +3,7 @@ interface {}
 
 function f1()
 {
-    assert (sizeof("ABC") == u64(3));
+    assert (sizeof("ABC") == u64(4));
     assert ("ABC" [1] == 66);     // 66 = ascii 'B'
 }
 
@@ -11,7 +11,7 @@ function f2()
 {
     ref s = "ABC";
     ref t = s;
-    assert (sizeof(t) == u64(3));
+    assert (sizeof(t) == u64(4));
     assert (t[0] == 65);         // 65 = ascii 'A'
 }
 
@@ -28,7 +28,7 @@ function f4()
 function f5()
 {
     // Escape codes
-    ref r = "\0\t\n\x01\xff\"\xAB";
+    ref r = "\x00\t\n\x01\xff\"\xAB";
     assert (r[0] == 0);
     assert (r[1] == 9);
     assert (r[2] == 10);
@@ -36,13 +36,14 @@ function f5()
     assert (r[4] == 255);
     assert (r[5] == 34);
     assert (r[6] == 171);
-    assert (sizeof(r) == u64(7));
+    assert (r[7] == 0);  // null terminator is added automatically (like in C)
+    assert (sizeof(r) == u64(8));
 }
 
 function big_string()
 {
     ref r = "123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890";
-    assert(sizeof(r) == u64(300));
+    assert(sizeof(r) == u64(301));
     assert(r[100] == 49);   // 49 = ascii '1'
 }
 

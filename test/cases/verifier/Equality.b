@@ -11,7 +11,7 @@ function f1()
     assert {str1, 99} == {str2, 99};    // Error
 }
 
-datatype X = X(u8[3]) | Y(i32);
+datatype X = X(u8[4]) | Y(i32);
 
 const gx = X("foo");
 const gx2 = X("bar");

@@ -1,6 +1,6 @@
 module Result
 
-import CString;
+import String;
 
 interface {
     datatype Result<T> = Ok(T) | Error(u8[*]);
@@ -32,7 +32,7 @@ interface {
     {
         return match r {
         case Ok(_) => true
-        case Error(msg) => valid_c_string(msg)
+        case Error(msg) => valid_string(msg)
         };
     }
 }

@@ -13,7 +13,6 @@ interface {
 }
 
 import ChessLogic;
-import CString;
 import GameEngine;
 import Int;
 import Limits;
@@ -21,6 +20,7 @@ import qualified LoadPNG;
 import Maybe;
 import MessageBox;
 import Result;
+import String;
 import StringBuffer;
 
 // Texture numbers
@@ -75,7 +75,7 @@ function load_texture(ref mem: Mem,
 
     requires texture_num <= HIGHEST_TEXTURE_NUM;
 
-    requires valid_c_string(filename);
+    requires valid_string(filename);
     
     requires valid_engine(engine);
     requires !engine_state(engine).textures[texture_num];
@@ -152,26 +152,26 @@ function load_textures(ref mem: Mem,
     ensures valid_c_result<{}>(result);
     ensures is_ok<{}>(result) ==> textures_loaded(engine);
 {
-    load_texture(mem, io, engine, result, piece_texture_num({Black,Pawn}), "images/black_pawn.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({Black,Knight}), "images/black_knight.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({Black,Bishop}), "images/black_bishop.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({Black,Rook}), "images/black_rook.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({Black,Queen}), "images/black_queen.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({Black,King}), "images/black_king.png\0");
+    load_texture(mem, io, engine, result, piece_texture_num({Black,Pawn}), "images/black_pawn.png");
+    load_texture(mem, io, engine, result, piece_texture_num({Black,Knight}), "images/black_knight.png");
+    load_texture(mem, io, engine, result, piece_texture_num({Black,Bishop}), "images/black_bishop.png");
+    load_texture(mem, io, engine, result, piece_texture_num({Black,Rook}), "images/black_rook.png");
+    load_texture(mem, io, engine, result, piece_texture_num({Black,Queen}), "images/black_queen.png");
+    load_texture(mem, io, engine, result, piece_texture_num({Black,King}), "images/black_king.png");
 
-    load_texture(mem, io, engine, result, piece_texture_num({White,Pawn}), "images/white_pawn.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({White,Knight}), "images/white_knight.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({White,Bishop}), "images/white_bishop.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({White,Rook}), "images/white_rook.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({White,Queen}), "images/white_queen.png\0");
-    load_texture(mem, io, engine, result, piece_texture_num({White,King}), "images/white_king.png\0");
+    load_texture(mem, io, engine, result, piece_texture_num({White,Pawn}), "images/white_pawn.png");
+    load_texture(mem, io, engine, result, piece_texture_num({White,Knight}), "images/white_knight.png");
+    load_texture(mem, io, engine, result, piece_texture_num({White,Bishop}), "images/white_bishop.png");
+    load_texture(mem, io, engine, result, piece_texture_num({White,Rook}), "images/white_rook.png");
+    load_texture(mem, io, engine, result, piece_texture_num({White,Queen}), "images/white_queen.png");
+    load_texture(mem, io, engine, result, piece_texture_num({White,King}), "images/white_king.png");
 
-    load_texture(mem, io, engine, result, TX_SELECTED, "images/selected.png\0");
-    load_texture(mem, io, engine, result, TX_POSSIBLE_MOVE, "images/possible_move.png\0");
-    load_texture(mem, io, engine, result, TX_CHECK, "images/check.png\0");
+    load_texture(mem, io, engine, result, TX_SELECTED, "images/selected.png");
+    load_texture(mem, io, engine, result, TX_POSSIBLE_MOVE, "images/possible_move.png");
+    load_texture(mem, io, engine, result, TX_CHECK, "images/check.png");
 
-    load_texture(mem, io, engine, result, TX_CHECKMATE_MSG, "images/checkmate.png\0");
-    load_texture(mem, io, engine, result, TX_STALEMATE_MSG, "images/stalemate.png\0");
+    load_texture(mem, io, engine, result, TX_CHECKMATE_MSG, "images/checkmate.png");
+    load_texture(mem, io, engine, result, TX_STALEMATE_MSG, "images/stalemate.png");
 }
 
 
@@ -561,7 +561,7 @@ function main_prog(ref mem: Mem, ref io: IO)
     var xsize = SQUARE_PIXEL_SIZE * x_size + 2 * MARGIN;
     var ysize = SQUARE_PIXEL_SIZE * y_size + 2 * MARGIN;
 
-    ref title = "Chess Demo\0";
+    ref title = "Chess Demo";
 
     var results = {Ok<{}>{}, Nothing<GameEngine>};
     

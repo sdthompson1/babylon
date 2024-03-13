@@ -1048,8 +1048,12 @@ static void codegen_cast(struct CGContext *cxt,
                 print_token(cxt->pr, "(");
                 print_token(cxt->pr, name);
                 print_token(cxt->pr, "+");
-                sprintf(buf, "%d", (i + 1) * 8);
-                print_token(cxt->pr, buf);
+                print_token(cxt->pr, "sizeof(char*)");
+                if (i > 0) {
+                    print_token(cxt->pr, "+");
+                    sprintf(buf, "%d", i * 8);
+                    print_token(cxt->pr, buf);
+                }
                 print_token(cxt->pr, ",");
                 print_token(cxt->pr, "&");
                 print_token(cxt->pr, tmp);

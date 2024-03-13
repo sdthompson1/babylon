@@ -23,9 +23,16 @@ import Int;   // note: module "Int" is built in to the compiler, for now at leas
 
 interface
 {
+    // A "valid string" is a u8[] array containing a null byte somewhere
+    // within it.
+    ghost function valid_string(s: u8[]): bool
+    {
+        return exists (i: u64) i < sizeof(s) && s[i] == 0;
+    }
+
     // Print a string to the terminal.
-    // The string is represented by an array of unsigned bytes (u8[]).
-    extern function print_string(string: u8[]);
+    extern function print_string(string: u8[])
+        requires valid_string(string);
 
     // Prints an integer to the terminal.
     // Note this does not print a new line after the number; you
@@ -53,7 +60,7 @@ interface
     // errors. The MemAlloc module in the Chess example shows one way of doing
     // that.
 
-    extern function resize_array<T>(ref array: T[], new_dim: u64)
+    extern function resize_array<T>(ref array: T[*], new_dim: u64)
     
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());
@@ -71,7 +78,7 @@ interface
         ensures forall (i: u64) old(sizeof(array)) <= i < new_dim ==> array[i] == default<T>();
 
 
-    extern function resize_2d_array<T>(ref array: T[,], dim0: u64, dim1: u64)
+    extern function resize_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);

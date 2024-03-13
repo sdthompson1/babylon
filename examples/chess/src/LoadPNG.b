@@ -2,9 +2,9 @@
 
 module LoadPNG
 
-import CString;
 import IO;
 import Result;
+import String;
 
 interface {
     type RGBA = {r: u8, g: u8, b: u8, a: u8};
@@ -14,7 +14,7 @@ interface {
                              filename: u8[],
                              ref pixels: RGBA[*,*],
                              ref result: Result<{}>)
-        requires valid_c_string(filename);
+        requires valid_string(filename);
         requires !allocated(pixels);
         requires !allocated(result);
         

@@ -3,9 +3,9 @@
 
 module StringBuffer
 
-import CString;
 import Maybe;
 import MemAlloc;
+import String;
 
 interface {
 
@@ -36,14 +36,14 @@ interface {
     // Same as append_string but stops at the first zero byte in 'str'
     function append_c_string(ref sb: StringBuffer, str: u8[])
         requires valid_string_buffer(sb);
-        requires valid_c_string(str);
+        requires valid_string(str);
         ensures valid_string_buffer(sb);
 
-    // Append "\0", removing the existing final character if necessary
+    // Append null byte, removing the existing final character if necessary
     function null_terminate(ref sb: StringBuffer)
         requires valid_string_buffer(sb);
         ensures valid_string_buffer(sb);
-        ensures valid_c_string(sb.buf);
+        ensures valid_string(sb.buf);
 
 }
 
@@ -89,7 +89,7 @@ function append_string(ref sb: StringBuffer,
 function append_c_string(ref sb: StringBuffer,
                          str: u8[])
     requires valid_string_buffer(sb);
-    requires valid_c_string(str);
+    requires valid_string(str);
     ensures valid_string_buffer(sb);
 {
     var i: u64 = 0;
@@ -106,7 +106,7 @@ function append_c_string(ref sb: StringBuffer,
 function null_terminate(ref sb: StringBuffer)
     requires valid_string_buffer(sb);
     ensures valid_string_buffer(sb);
-    ensures valid_c_string(sb.buf);    
+    ensures valid_string(sb.buf);    
 {
     if sb.pos < sizeof(sb.buf) {
         sb.buf[sb.pos] = 0;

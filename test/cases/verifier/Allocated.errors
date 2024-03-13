@@ -12,4 +12,4 @@ Allocated.b:90:24: Can't assign, right-hand-side might be allocated
 Allocated.b:90:5: 'v3' might still be allocated when it goes out of scope
 Allocated.b:88:5: 'v1' might still be allocated when it goes out of scope
 Allocated.b:106:5: Assert might not hold
-Allocated.b:128:5: Precondition at Test.b:42:9 might not be met
+Allocated.b:128:5: Precondition at Test.b:48:9 might not be met

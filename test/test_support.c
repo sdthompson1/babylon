@@ -49,13 +49,11 @@ void print_bool(bool b)
     puts(b ? "true" : "false");
 }
 
-void print_string(char *str)
+void print_string(void *str)
 {
     char *data;
     memcpy(&data, str, sizeof(data));
-    uint64_t length;
-    memcpy(&length, str + sizeof(char*), sizeof(length));
-    fwrite(data, 1, length, stdout);
+    printf("%s", data);
 }
 
 void resize_array(uint64_t elt_size, char *array, uint64_t new_dim)
