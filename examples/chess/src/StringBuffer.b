@@ -31,11 +31,6 @@ interface {
     // Append a string, truncating if there is not enough space
     function append_string(ref sb: StringBuffer, str: u8[])
         requires valid_string_buffer(sb);
-        ensures valid_string_buffer(sb);
-
-    // Same as append_string but stops at the first zero byte in 'str'
-    function append_c_string(ref sb: StringBuffer, str: u8[])
-        requires valid_string_buffer(sb);
         requires valid_string(str);
         ensures valid_string_buffer(sb);
 
@@ -72,22 +67,6 @@ function free_string_buffer(ref mem: Mem,
 
 function append_string(ref sb: StringBuffer,
                        str: u8[])
-    requires valid_string_buffer(sb);
-    ensures valid_string_buffer(sb);
-{
-    var i: u64 = 0;
-    while i < sizeof(str) && sb.pos < sizeof(sb.buf)
-        invariant valid_string_buffer(sb);
-        decreases ~i;
-    {
-        sb.buf[sb.pos] = str[i];
-        i = i + u64(1);
-        sb.pos = sb.pos + u64(1);
-    }
-}
-
-function append_c_string(ref sb: StringBuffer,
-                         str: u8[])
     requires valid_string_buffer(sb);
     requires valid_string(str);
     ensures valid_string_buffer(sb);

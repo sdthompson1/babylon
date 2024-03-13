@@ -117,9 +117,9 @@ function load_texture(ref mem: Mem,
         } else {
             // we allocated a buffer, write the new message into it.
             append_string(sb, "Failed to load ");
-            append_c_string(sb, filename);
+            append_string(sb, filename);
             append_string(sb, ":\n");
-            append_c_string(sb, msg);
+            append_string(sb, msg);
             null_terminate(sb);
             var free_result = resize_array<u8>(mem, msg, 0);
         }
