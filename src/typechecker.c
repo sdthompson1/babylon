@@ -485,18 +485,20 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
     fatal_error("match_term_to_type: missing case");
 }
 
-// Wrap an array term in a cast if needed. Used for function parameter
-// passing where e.g. a T[50] can be passed to a T[].
+// Wrap an array term in a cast if needed.
+// The following casts are allowed:
+//   T[n] to T[]
+//   T[] to T[n]
+//   T[*] to T[]
+//   T[*] to T[n]
+// If the target type is T[n] then there is a proof obligation that the
+// array does indeed have the expected size. (This is checked separately
+// in the verifier.)
 static void insert_array_cast_if_required(struct Type *expected_type,
                                           struct Term **term)
 {
     if (expected_type != NULL && (*term)->type != NULL
     && expected_type->tag == TY_ARRAY && (*term)->type->tag == TY_ARRAY) {
-        // Insert cast in these cases:
-        // T[n] to T[]
-        // T[] to T[n]
-        // T[*] to T[]
-        // T[*] to T[n]
         bool from_resizable = (*term)->type->array_data.resizable;
         bool from_fixed_size = (*term)->type->array_data.sizes != NULL;
         bool from_incomplete = !from_resizable && !from_fixed_size;
@@ -517,6 +519,8 @@ static void insert_array_cast_if_required(struct Type *expected_type,
     }
 }
 
+// Helper function for insert_binop_array_casts_if_required.
+// If term has type T[n] or T[*], then it will be cast to T[].
 static void cast_to_incomplete_array_if_required(struct Term **term)
 {
     if ((*term)->type && (*term)->type->tag == TY_ARRAY) {
@@ -788,8 +792,7 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
 }
 
 // Check a type is valid for a variable i.e. it is not TY_FUNCTION or TY_FORALL.
-// Also, in non-ghost code, make sure it is not TY_MATH_INT or TY_MATH_REAL,
-// and it is not an incomplete array type (T[]).
+// Also, in non-ghost code, make sure it is not TY_MATH_INT or TY_MATH_REAL.
 // (precondition: the type should be valid, kind *)
 static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Location loc,
                                  struct Type *type)
@@ -832,11 +835,6 @@ static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Loc
         return true;
 
     case TY_ARRAY:
-        if (!type->array_data.resizable && type->array_data.sizes == NULL && tc_context->executable) {
-            report_incomplete_array_type(loc);
-            tc_context->error = true;
-            return false;
-        }
         return check_valid_var_type(tc_context, loc, type->array_data.element_type);
 
     case TY_FUNCTION:
@@ -860,6 +858,61 @@ static bool check_valid_var_type(struct TypecheckContext *tc_context, struct Loc
 
     fatal_error("unrecognised type tag");
 }
+
+// Check a type is not, and does not contain, an incomplete array type.
+static bool check_not_incomplete_array(struct TypecheckContext *tc_context, struct Location loc,
+                                       struct Type *type)
+{
+    if (type == NULL) {
+        // don't report further errors in this case
+        return true;
+    }
+
+    switch (type->tag) {
+    case TY_VAR:
+    case TY_BOOL:
+    case TY_FINITE_INT:
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+    case TY_FUNCTION:
+        return true;
+
+    case TY_RECORD:
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            if (!check_not_incomplete_array(tc_context, loc, field->type)) {
+                return false;
+            }
+        }
+        return true;
+
+    case TY_VARIANT:
+        for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+            if (!check_not_incomplete_array(tc_context, loc, variant->type)) {
+                return false;
+            }
+        }
+        return true;
+
+    case TY_ARRAY:
+        if (!type->array_data.resizable && type->array_data.sizes == NULL) {
+            report_incomplete_array_type(loc);
+            tc_context->error = true;
+            return false;
+        }
+        return check_not_incomplete_array(tc_context, loc, type->array_data.element_type);
+
+    case TY_FORALL:
+        return check_not_incomplete_array(tc_context, loc, type->forall_data.type);
+
+    case TY_LAMBDA:
+    case TY_APP:
+        // this should be ruled out by kind-checking
+        fatal_error("check_not_incomplete_array called on invalid type");
+    }
+
+    fatal_error("unrecognised type tag");
+}
+
 
 
 // ----------------------------------------------------------------------------------------------------
@@ -2604,6 +2657,14 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         if (!check_valid_var_type(tc_context, stmt->var_decl.type->location, stmt->var_decl.type)) {
             return;
         }
+
+        // In executable code, non-ref variables must have a "complete" type
+        // (so that we know how much storage to allocate).
+        if (tc_context->executable
+        && !stmt->var_decl.ref
+        && !check_not_incomplete_array(tc_context, stmt->var_decl.type->location, stmt->var_decl.type)) {
+            return;
+        }
     }
 
     // If there is a right-hand-side, then typecheck it.
@@ -2618,22 +2679,32 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
         // typecheck rhs
         typecheck_term(tc_context, stmt->var_decl.rhs);
+        if (stmt->var_decl.rhs->type) {
 
-        // rhs should be a valid var type
-        bool valid = check_valid_var_type(tc_context, stmt->var_decl.rhs->location, stmt->var_decl.rhs->type);
-
-        // if type checking of rhs successful:
-        if (stmt->var_decl.rhs->type && valid) {
             if (stmt->var_decl.type) {
                 // There is a type annotation. Ensure it is consistent with the rhs term.
                 match_term_to_type(tc_context, stmt->var_decl.type, &stmt->var_decl.rhs);
+
             } else {
-                // Add an inferred type annotation to the var decl statement.
+                // We are inferring a type.
+                // Make sure it is a valid-for-var type.
+                if (!check_valid_var_type(tc_context, stmt->var_decl.rhs->location, stmt->var_decl.rhs->type)) {
+                    return;
+                }
+
+                // Make sure it is not an incomplete type (in non-ref, executable case).
+                if (tc_context->executable
+                && !stmt->var_decl.ref
+                && !check_not_incomplete_array(tc_context, stmt->var_decl.rhs->location, stmt->var_decl.rhs->type)) {
+                    return;
+                }
+
+                // Add the inferred type annotation to the var decl statement.
                 stmt->var_decl.type = copy_type(stmt->var_decl.rhs->type);
             }
         }
 
-        // If this is a ref, the rhs must not be an element of a resizable array
+        // If this is a ref, the rhs must not be an element of a resizable array.
         if (stmt->var_decl.ref && contains_resizable_array_element(stmt->var_decl.rhs)) {
             report_cannot_take_ref_to_resizable_array_element(stmt->var_decl.rhs->location);
             tc_context->error = true;
@@ -2784,10 +2855,12 @@ static void typecheck_assign_stmt(struct TypecheckContext *tc_context,
     // The lhs and rhs types should match
     bool type_ok = match_term_to_type(tc_context, stmt->assign.lhs->type, &stmt->assign.rhs);
 
-    // Lhs and rhs should be valid var types
-    if (type_ok) {
-        check_valid_var_type(tc_context, stmt->assign.lhs->location, stmt->assign.lhs->type);
-        check_valid_var_type(tc_context, stmt->assign.rhs->location, stmt->assign.rhs->type);
+    // In executable code, we do not currently allow assignment of incomplete array
+    // types (because the code generator would not produce the right code for it!).
+    if (type_ok && tc_context->executable) {
+        // Only the lhs type needs be checked (because both lhs and rhs have the same type
+        // at this point).
+        check_not_incomplete_array(tc_context, stmt->assign.lhs->location, stmt->assign.lhs->type);
     }
 }
 
@@ -2822,9 +2895,10 @@ static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
         if (!types_equal(stmt->swap.lhs->type, stmt->swap.rhs->type)) {
             report_type_mismatch(stmt->swap.lhs->type, stmt->swap.rhs);
             tc_context->error = true;
-        } else {
-            // Check the (common) type is a valid var type.
-            check_valid_var_type(tc_context, stmt->swap.lhs->location, stmt->swap.lhs->type);
+        } else if (tc_context->executable) {
+            // Similarly to assignment, we do not currently allow code generation for
+            // "swap A,B" where A and B are an incomplete array type (or contain one).
+            check_not_incomplete_array(tc_context, stmt->swap.lhs->location, stmt->swap.lhs->type);
         }
     }
 }
@@ -2856,8 +2930,10 @@ static void typecheck_return_stmt(struct TypecheckContext *tc_context,
         } else {
             typecheck_term(tc_context, stmt->ret.value);
             bool type_ok = match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
-            if (type_ok) {
-                check_valid_var_type(tc_context, stmt->ret.value->location, stmt->ret.value->type);
+            if (type_ok && tc_context->executable) {
+                // returning incomplete array type not yet supported
+                // (code generator cannot handle it currently)
+                check_not_incomplete_array(tc_context, stmt->ret.value->location, stmt->ret.value->type);
             }
         }
     }
@@ -3238,17 +3314,10 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         if (kindcheck_type(tc_context, &arg->type)) {
 
             // arg types must be "valid for var" types
-            // (OR they can be an "incomplete array type" i.e. T[])
-            bool incomplete_array_type =
-                arg->type->tag == TY_ARRAY
-                && !arg->type->array_data.resizable
-                && arg->type->array_data.sizes == NULL;
-            if (!incomplete_array_type) {
-                bool old_exec = tc_context->executable;
-                tc_context->executable = !decl->ghost;
-                check_valid_var_type(tc_context, arg->type->location, arg->type);
-                tc_context->executable = old_exec;
-            }
+            bool old_exec = tc_context->executable;
+            tc_context->executable = !decl->ghost;
+            check_valid_var_type(tc_context, arg->type->location, arg->type);
+            tc_context->executable = old_exec;
 
             add_to_type_env(tc_context->local_env,
                             arg->name,

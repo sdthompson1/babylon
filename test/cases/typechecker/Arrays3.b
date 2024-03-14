@@ -82,7 +82,7 @@ function test2()
     var z: i8[10]; // ok
 }
 
-function test3(): i8[]    // error, incomplete type not allowed as return type
+function test3(): i8[]    // this is allowed (but probably useless)
 {}
 
 function test4(): i8[*]   // ok
@@ -119,8 +119,8 @@ function test7(ref i1: i8[], ref i2: i8[])
     s1 = s2;    // ok
     i1 = i2;    // error, assign of incomplete types not implemented yet
 
-    var x = (let tmp = i1 in tmp[0]);  // error, let of incomplete types not implemented yet
-    var y = (let tmp = r1 in tmp[0]);  // ok
+    var x = (let tmp = i1 in tmp[0]);  // ok (copies descriptor)
+    var y = (let tmp = r1 in tmp[0]);  // ok (copies descriptor)
     var z = (let tmp = s1 in tmp[0]);  // ok (but inefficient, copies whole array)
 
     swap r1, r2;   // ok
@@ -145,4 +145,29 @@ ghost function test9(x: i32[], y: i32)
 ghost function test10(x: i32[])
 {
     var b: bool = allocated(x);  // Error, can't determine if T[] is allocated or not.
+}
+
+function incomplete_array_tuple(x: i32[], y: i32[]): {i32[], i32[]}
+{
+    return {x, y};  // error: returning an incomplete type not allowed (yet)
+}
+
+datatype Foo = Foo(i32[]);
+
+function incomplete_datatype(a: i32[])
+{
+    var x: Foo;     // error: putting incomplete array type into a variable
+    var y = Foo(a); // error: putting incomplete array type into a variable
+    ghost var gx: Foo;      // ok, ghost code
+    ghost var gy = Foo(a);  // ok, ghost code
+}
+
+function array_of_incomplete_arrays(ref x: i32[][10], ref y: i32[][10])
+{
+    x = y;   // error: assigning incomplete arrays not allowed
+    swap x[0], y[0];   // error: nor is swapping
+    
+    ghost var v: i32[][10] = x;  // ok, ghost code
+    ghost var w = y;  // ok
+    ghost swap v, w;  // ok
 }

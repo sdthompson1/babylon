@@ -1,7 +1,7 @@
 Datatype2.b:17:26: Type mismatch
 Datatype2.b:18:26: Type mismatch
 Datatype2.b:19:26: Duplicate field name 'x'
-Datatype2.b:20:20: Type mismatch (expected non-function value)
+Datatype2.b:20:20: Type mismatch
 Datatype2.b:21:14: Type mismatch (expected non-function value)
 Datatype2.b:22:13: Wrong number of arguments passed to function
 Datatype2.b:22:13: Function does not return a value

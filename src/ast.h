@@ -249,7 +249,7 @@ struct TermData_StringLiteral {
 struct TermData_Cast {
     // Currently this supports casting between numeric types (e.g. i32
     // to i64, or real to int) or between array types (e.g. T[10] to
-    // T[]).
+    // T[] or the reverse).
     struct Type *target_type;
     struct Term *operand;
 };
