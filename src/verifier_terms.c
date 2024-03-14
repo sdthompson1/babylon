@@ -763,7 +763,7 @@ static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
         if (type->array_data.sizes != NULL) {
             return make_default_fixed_array(cxt, type);
 
-        } else if (type->array_data.resizable) {
+        } else {
             struct Sexpr *element_type = verify_type(type->array_data.element_type);
             struct Sexpr *index_type = array_index_type(type->array_data.ndim);
 
@@ -793,8 +793,6 @@ static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
 
             struct Sexpr *ctor = verify_type(type);
             return make_list3_sexpr(ctor, default_array, default_size);
-        } else {
-            fatal_error("unexpected: making default value of incomplete array type");
         }
 
     case TY_FUNCTION:

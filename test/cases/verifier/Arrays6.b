@@ -44,3 +44,9 @@ function test2()
     f3(a[2], a[2]);     // aliasing violation
     f4(a[2], a[2][4]);  // aliasing violation
 }
+
+ghost function test3()
+{
+    var a: i32[];  // this is now allowed (in ghost code only) but can only make an array of size 0
+    assert sizeof(a) == u64(0);
+}
