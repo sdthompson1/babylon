@@ -2683,7 +2683,17 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
             if (stmt->var_decl.type) {
                 // There is a type annotation. Ensure it is consistent with the rhs term.
-                match_term_to_type(tc_context, stmt->var_decl.type, &stmt->var_decl.rhs);
+                if (stmt->var_decl.ref) {
+                    // "Refs" must match the type exactly, no casting allowed
+                    if (!types_equal(stmt->var_decl.type, stmt->var_decl.rhs->type)) {
+                        report_type_mismatch(stmt->var_decl.type, stmt->var_decl.rhs);
+                        tc_context->error = true;
+                    }
+                } else {
+                    // "Vars" are allowed to cast if required
+                    insert_array_cast_if_required(stmt->var_decl.type, &stmt->var_decl.rhs);
+                    match_term_to_type(tc_context, stmt->var_decl.type, &stmt->var_decl.rhs);
+                }
 
             } else {
                 // We are inferring a type.
@@ -3219,7 +3229,9 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         if (decl->const_data.type != NULL && decl->const_data.rhs != NULL) {
             // There is both a type annotation, and a RHS.
-            // Coerce the RHS to match the type annotation.
+            // Coerce the RHS to match the type annotation
+            // (including array-casting if required).
+            insert_array_cast_if_required(decl->const_data.type, &decl->const_data.rhs);
             match_term_to_type(tc_context, decl->const_data.type, &decl->const_data.rhs);
             check_valid_var_type(tc_context, decl->const_data.type->location, decl->const_data.type);
 

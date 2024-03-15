@@ -38,6 +38,22 @@ static struct Term * eval_cast(struct HashTable *env, struct Term *term)
     struct Term *operand = eval_to_normal_form(env, term->cast.operand);
     if (!operand) return NULL;
 
+    // Casting to array is allowed, but the operand must be TM_STRING_LITERAL
+    // and the target type must be T[]
+    if (term->type->tag == TY_ARRAY) {
+        if (operand->tag != TM_STRING_LITERAL || term->type->array_data.sizes || term->type->array_data.resizable) {
+            report_non_compile_time_constant(term->location);
+            return NULL;
+        }
+        struct Term *result = make_term(operand->location, TM_CAST);
+        result->type = copy_type(term->type);
+        result->cast.target_type = copy_type(term->type);
+        result->cast.operand = operand;
+        return result;
+    }
+
+    // Otherwise, the cast must be between different TY_FINITE_INT types
+    // (in this function we assume that TY_MATH_INT does not occur).
     if (operand->type->tag != TY_FINITE_INT || term->type->tag != TY_FINITE_INT) {
         fatal_error("eval_cast: types are not as expected");
     }

@@ -2,8 +2,8 @@ module Equality
 
 interface {}
 
-const str1 = "hello  ";
-const str2 = "goodbye";
+const str1: u8[] = "hello";
+const str2: u8[] = "goodbye";
 
 function f1()
 {

@@ -20,6 +20,9 @@ struct Term;
 // compile-time constant or contains an error (e.g. overflow or divide
 // by zero).
 
+// The input term is (currently) assumed to be a non-ghost term, e.g.
+// casts to/from TY_MATH_INT are not allowed.
+
 // If NULL is returned a suitable error message is printed.
 
 struct Term * eval_to_normal_form(struct HashTable *type_env,

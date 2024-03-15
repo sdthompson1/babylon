@@ -6,8 +6,12 @@ interface {
 
 import Test;
 
-const hello_string: u8[14] = "Hello world!\n";
+const hello_string: u8[] = "Hello world!\n";  // note cast: u8[14] to u8[]
 
+// unfortunately casting tuples of string literals does not currently work,
+// so the below must be written const strings_in_tuple = ...
+// rather than const strings_in_tuple: {u8[], u8[]} = ...
+// TODO: might want to fix this some day
 const strings_in_tuple = {"Test_String_1\n", "Test_String_2\n"};
 
 function copy_string(ref to: u8[], from: u8[])

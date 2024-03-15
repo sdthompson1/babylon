@@ -4,7 +4,7 @@ interface {}
 
 import Test;
 
-const str: u8[6] = "Hello";
+const str: u8[] = "Hello";
 
 function byref(ref s: u8[])
 {
