@@ -23,8 +23,6 @@ Arrays3.b:63:21: Type mismatch
 Arrays3.b:75:13: Type mismatch
 Arrays3.b:75:17: Type mismatch
 Arrays3.b:80:12: Can't use an incomplete array type here
-Arrays3.b:103:16: Type mismatch
-Arrays3.b:107:16: Type mismatch
 Arrays3.b:120:5: Can't use an incomplete array type here
 Arrays3.b:128:10: Can't use an incomplete array type here
 Arrays3.b:135:20: Type mismatch (expected bool or numeric)

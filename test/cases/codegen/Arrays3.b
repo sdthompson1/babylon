@@ -67,9 +67,24 @@ function test3()
     resize_2d_array<i32>(a, 0, 0);
 }
 
+function fn4(r: i8[]): i8[10]
+    requires sizeof(r) == u64(10);
+{
+    return r;
+}
+
+function test4()
+{
+    var x: i8[10];
+    x[3] = 33;
+    var y: i8[10] = fn4(x);
+    print_i8(y[3]);
+}
+
 function main()
 {
     test1();
     test2();
     test3();
+    test4();
 }

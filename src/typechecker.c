@@ -418,6 +418,8 @@ static bool kindcheck_type(struct TypecheckContext *tc_context, struct Type **ty
 
 // ----------------------------------------------------------------------------------------------------
 
+static void insert_array_cast_if_required(struct Type *expected_type, struct Term **term);
+
 // Coerces 'term' so that it has same type as 'expected_type' (assumed a valid type of kind *).
 // May modify 'term' by wrapping a cast around it.
 // If error detected, prints msg and sets tc_context->error.
@@ -439,11 +441,14 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
     } else {
 
         switch (expected_type->tag) {
+        case TY_ARRAY:
+            insert_array_cast_if_required(expected_type, term);
+            // Fall through
+
         case TY_VAR:
         case TY_BOOL:
         case TY_RECORD:
         case TY_VARIANT:
-        case TY_ARRAY:
         case TY_MATH_INT:
         case TY_MATH_REAL:
             if (!types_equal(expected_type, (*term)->type)) {
@@ -1785,7 +1790,6 @@ static void* typecheck_call(void *context, struct Term *term, void *type_result,
             actual_list = term->call.args;
 
             while (dummy_list && actual_list) {
-                insert_array_cast_if_required(dummy_list->type, &actual_list->rhs);
                 if (!match_term_to_type(tc_context, dummy_list->type, &actual_list->rhs)) {
                     ok = false;
                 }
@@ -2361,6 +2365,9 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
 
         // try to match the new arm's type to the previous one,
         // if applicable
+        // TODO: This could be done better, i.e. we could try to match all the arms
+        // to a common type (like we do with binop chains) instead of just matching
+        // them all to the first arm's type.
         if (result_type) {
             if (!match_term_to_type(context, result_type, (struct Term **) &arm->rhs)) {
                 consistent_type = false;
@@ -2691,7 +2698,6 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
                     }
                 } else {
                     // "Vars" are allowed to cast if required
-                    insert_array_cast_if_required(stmt->var_decl.type, &stmt->var_decl.rhs);
                     match_term_to_type(tc_context, stmt->var_decl.type, &stmt->var_decl.rhs);
                 }
 
@@ -3229,9 +3235,7 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         if (decl->const_data.type != NULL && decl->const_data.rhs != NULL) {
             // There is both a type annotation, and a RHS.
-            // Coerce the RHS to match the type annotation
-            // (including array-casting if required).
-            insert_array_cast_if_required(decl->const_data.type, &decl->const_data.rhs);
+            // Coerce the RHS to match the type annotation.
             match_term_to_type(tc_context, decl->const_data.type, &decl->const_data.rhs);
             check_valid_var_type(tc_context, decl->const_data.type->location, decl->const_data.type);
 

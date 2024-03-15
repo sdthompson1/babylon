@@ -100,11 +100,11 @@ function test5(): i8[10]   // ok
 function test6(r: i8[*], s: i8[10], i: i8[]): i8[10]
 {
     if true {
-        return r;   // error, return type has to match exactly (currently)
+        return r;   // ok
     } else if true {
         return s;   // ok
     } else {
-        return i;   // error, return type has to match exactly (currently)
+        return i;   // ok
     }
 }
 
