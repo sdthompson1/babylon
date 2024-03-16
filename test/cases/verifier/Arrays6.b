@@ -39,7 +39,7 @@ function f4(ref a: i32[], ref b: i32)
 
 function test2()
 {
-    var a: i32[11][10];
+    var a: i32[10][11];
     f2(a[2], a[2]);     // aliasing violation
     f3(a[2], a[2]);     // aliasing violation
     f4(a[2], a[2][4]);  // aliasing violation

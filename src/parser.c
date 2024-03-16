@@ -253,6 +253,20 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
     struct Type *result = NULL;
 
     switch (tag) {
+    case TOK_LPAREN:
+        advance(state);
+        result = parse_type(state, report_errors);
+        if (state->token->type == TOK_RPAREN) {
+            advance(state);
+        } else {
+            free_type(result);
+            result = NULL;
+            if (report_errors) {
+                expect(state, TOK_RPAREN, "')'");
+            }
+        }
+        break;
+
     case TOK_NAME:
         {
             const char *name = NULL;
@@ -372,6 +386,9 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
         break;
     }
 
+    struct Type *final_result = NULL;
+    struct Type **tail_ptr = &final_result;
+
     while (result && state->token->type == TOK_LBRACKET) {
         advance(state);
 
@@ -453,7 +470,7 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
         advance(state);
 
         struct Type *array_type = make_type(loc, TY_ARRAY);
-        array_type->array_data.element_type = result;
+        array_type->array_data.element_type = NULL;
         array_type->array_data.ndim = ndim;
         array_type->array_data.resizable = found_star;
         if (found_size) {
@@ -466,12 +483,14 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
         } else {
             array_type->array_data.sizes = NULL;
         }
-        result = array_type;
+        *tail_ptr = array_type;
+        tail_ptr = &array_type->array_data.element_type;
 
         free_op_term_list(dim_terms);
     }
 
-    return result;
+    *tail_ptr = result;
+    return final_result;
 }
 
 

@@ -71,7 +71,7 @@ function f5(a: bool[20])
 // Allocatable element type
 function f6()
 {
-    var a: i32[*][10];
+    var a: i32[10][*];
     assert !allocated(a);
 
     resize_array<i32>(a[3], 25);

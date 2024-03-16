@@ -162,12 +162,12 @@ function incomplete_datatype(a: i32[])
     ghost var gy = Foo(a);  // ok, ghost code
 }
 
-function array_of_incomplete_arrays(ref x: i32[][10], ref y: i32[][10])
+function array_of_incomplete_arrays(ref x: (i32[])[10], ref y: (i32[])[10])
 {
     x = y;   // error: assigning incomplete arrays not allowed
     swap x[0], y[0];   // error: nor is swapping
     
-    ghost var v: i32[][10] = x;  // ok, ghost code
+    ghost var v: (i32[])[10] = x;  // ok, ghost code
     ghost var w = y;  // ok
     ghost swap v, w;  // ok
 }

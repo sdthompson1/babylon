@@ -46,7 +46,7 @@ function f2(a: i32[*,*])
 }
 
 function ref_not_allowed(a: i32[*],
-                         b: {x: i32[*][4]})
+                         b: {x: i32[4][*]})
 {
     // Error, ref to resizable array element not supported (because the
     // array might be reallocated, therefore moving the element to a
