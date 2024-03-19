@@ -232,6 +232,7 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
         break;
 
     case TM_STRING_LITERAL:
+    case TM_ARRAY_LITERAL:
         {
             struct RefChain *ref = alloc(sizeof(struct RefChain));
             ref->ref_type = RT_SEXPR;
@@ -959,6 +960,85 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
 
     // return the result
     return make_string_sexpr_handover(name);
+}
+
+static void* verify_array_literal(void *context, struct Term *term, void *type_result, void *list_result)
+{
+    if (list_result == NULL && term->array_literal.terms != NULL) {
+        // verification error in one of the array element terms
+        return NULL;
+    }
+
+    struct VContext *cxt = context;
+    struct Sexpr *sub_exprs = list_result;
+
+    const char *key = "$ArrayLiteralNum";
+    void *value = hash_table_lookup(cxt->string_names, key);
+    uintptr_t unique_num = (uintptr_t)value;
+    hash_table_insert(cxt->string_names, key, (void*)(unique_num + 1));
+
+    char name[60];
+    sprintf(name, "$ArrLit.%s.%" PRIuPTR, cxt->current_decl_name, unique_num);
+
+    // fol_type is (Array Int ElemType)
+    struct Sexpr *fol_type = verify_type(term->type);
+
+    struct Sexpr *axioms = NULL;
+    struct Sexpr **tail = &axioms;
+
+    uint64_t index = 0;
+    while (sub_exprs) {
+        char num[50];
+        sprintf(num, "%" PRIu64, index++);
+        struct Sexpr *index_expr = make_string_sexpr(num);
+
+        struct Sexpr *axiom =
+            make_list2_sexpr(
+                make_string_sexpr("assert"),
+                make_list3_sexpr(
+                    make_string_sexpr("="),
+                    make_list3_sexpr(
+                        make_string_sexpr("select"),
+                        make_string_sexpr(name),
+                        index_expr),
+                    sub_exprs->left));
+        sub_exprs->left = NULL;
+
+        struct Sexpr *next = sub_exprs->right;
+        sub_exprs->right = NULL;
+
+        free_sexpr(sub_exprs);
+        sub_exprs = next;
+
+        *tail = make_list1_sexpr(axiom);
+        tail = &(*tail)->right;
+    }
+
+    // the result must also be a valid array
+    // (e.g. elements outside the valid range must be equal to $ARBITRARY)
+    struct Sexpr * validity = validity_test_expr(term->type, name);
+    validity = make_list2_sexpr(make_string_sexpr("assert"), validity);
+    *tail = make_list1_sexpr(validity);
+    tail = &(*tail)->right;
+
+    // make an Item for the array literal
+    struct Item *item = alloc(sizeof(struct Item));
+    memset(item, 0, sizeof(struct Item));
+
+    item->fol_decl = make_list3_sexpr(
+        make_string_sexpr("declare-const"),
+        make_string_sexpr(name),
+        copy_sexpr(fol_type));
+
+    item->fol_axioms = axioms;
+
+    item->fol_name = copy_string(name);
+    item->fol_type = fol_type;
+
+    hash_table_insert(cxt->global_env, copy_string(name), item);
+
+    // return the result
+    return make_string_sexpr(name);
 }
 
 static struct Sexpr* verify_numeric_cast(struct VContext *cxt, struct Term *term, struct Sexpr *operand)
@@ -2413,6 +2493,7 @@ struct Sexpr * verify_term(struct VContext *context, struct Term *term)
     tr.transform_bool_literal = verify_bool_literal;
     tr.transform_int_literal = verify_int_literal;
     tr.transform_string_literal = verify_string_literal;
+    tr.transform_array_literal = verify_array_literal;
     tr.transform_cast = verify_cast;
     tr.nr_transform_if = nr_verify_if;
     tr.transform_unop = verify_unop;

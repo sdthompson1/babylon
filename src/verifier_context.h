@@ -30,7 +30,8 @@ struct Sexpr;
 struct VerifierEnv {
     struct HashTable *table;
 
-    // this is used for tracking string literals and fixed-sized array defaults
+    // this is used for tracking string literals, fixed-sized array defaults,
+    // and array literals
     struct HashTable *string_names;
 };
 

@@ -1,0 +1,2 @@
+ArrayLit.b:10:5: Assert might not hold
+ArrayLit.b:15:20: Operator precondition might not be met

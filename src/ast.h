@@ -200,6 +200,55 @@ struct Arm {
 
 
 //
+// Unary and binary operators, and term lists
+//
+
+enum UnOp {
+    UNOP_NEGATE,
+    UNOP_COMPLEMENT,
+    UNOP_NOT
+};
+
+enum BinOp {
+    BINOP_PLUS,
+    BINOP_MINUS,
+    BINOP_TIMES,
+    BINOP_DIVIDE,
+    BINOP_MODULO,
+
+    BINOP_BITAND,
+    BINOP_BITOR,
+    BINOP_BITXOR,
+    BINOP_SHIFTLEFT,
+    BINOP_SHIFTRIGHT,
+
+    BINOP_EQUAL,
+    BINOP_NOT_EQUAL,
+    BINOP_LESS,
+    BINOP_LESS_EQUAL,
+    BINOP_GREATER,
+    BINOP_GREATER_EQUAL,
+
+    BINOP_AND,
+    BINOP_OR,
+    BINOP_IMPLIES,
+    BINOP_IMPLIED_BY,   // Converted to BINOP_IMPLIES by typechecker
+    BINOP_IFF
+};
+
+// This allows for chaining e.g. a < b <= c or a == b == c.
+// Note chaining is removed by the typechecker.
+// We also re-use this same struct for function calls (and other
+// places where a term list is required) but the operators are
+// ignored in that case.
+struct OpTermList {
+    enum BinOp operator;
+    struct Term *rhs;
+    struct OpTermList *next;
+};
+
+
+//
 // Terms
 //
 
@@ -209,6 +258,7 @@ enum TermTag {
     TM_BOOL_LITERAL,
     TM_INT_LITERAL,
     TM_STRING_LITERAL,
+    TM_ARRAY_LITERAL,
     TM_CAST,
     TM_IF,
     TM_UNOP,
@@ -246,6 +296,10 @@ struct TermData_StringLiteral {
     uint32_t length;
 };
 
+struct TermData_ArrayLiteral {
+    struct OpTermList *terms;
+};
+
 struct TermData_Cast {
     // Currently this supports casting between numeric types (e.g. i32
     // to i64, or real to int) or between array types (e.g. T[10] to
@@ -261,52 +315,9 @@ struct TermData_If {
 };
 
 
-enum UnOp {
-    UNOP_NEGATE,
-    UNOP_COMPLEMENT,
-    UNOP_NOT
-};
-
-enum BinOp {
-    BINOP_PLUS,
-    BINOP_MINUS,
-    BINOP_TIMES,
-    BINOP_DIVIDE,
-    BINOP_MODULO,
-
-    BINOP_BITAND,
-    BINOP_BITOR,
-    BINOP_BITXOR,
-    BINOP_SHIFTLEFT,
-    BINOP_SHIFTRIGHT,
-
-    BINOP_EQUAL,
-    BINOP_NOT_EQUAL,
-    BINOP_LESS,
-    BINOP_LESS_EQUAL,
-    BINOP_GREATER,
-    BINOP_GREATER_EQUAL,
-
-    BINOP_AND,
-    BINOP_OR,
-    BINOP_IMPLIES,
-    BINOP_IMPLIED_BY,   // Converted to BINOP_IMPLIES by typechecker
-    BINOP_IFF
-};
-
 struct TermData_UnOp {
     enum UnOp operator;
     struct Term *operand;
-};
-
-// This allows for chaining e.g. a < b <= c or a == b == c.
-// Note chaining is removed by the typechecker.
-// We also re-use this same struct for function calls, but the operators
-// are ignored in that case.
-struct OpTermList {
-    enum BinOp operator;
-    struct Term *rhs;
-    struct OpTermList *next;
 };
 
 struct TermData_BinOp {
@@ -397,6 +408,7 @@ struct Term {
         struct TermData_BoolLiteral bool_literal;
         struct TermData_IntLiteral int_literal;
         struct TermData_StringLiteral string_literal;
+        struct TermData_ArrayLiteral array_literal;
         struct TermData_Cast cast;
         struct TermData_If if_data;
         struct TermData_UnOp unop;
@@ -713,6 +725,7 @@ struct TermTransform {
     void * (*transform_bool_literal) (void *context, struct Term *term_bool_literal, void *type_result);
     void * (*transform_int_literal) (void *context, struct Term *term_int_literal, void *type_result);
     void * (*transform_string_literal) (void *context, struct Term *term_string_literal, void *type_result);
+    void * (*transform_array_literal) (void *context, struct Term *term_array_literal, void *type_result, void *term_list_result);
     void * (*transform_cast) (void *context, struct Term *term_cast, void *type_result, void *target_type_result, void *operand_result);
     void * (*transform_if) (void *context, struct Term *term_if, void *type_result, void *cond_result, void *then_result, void *else_result);
     void * (*transform_unop) (void *context, struct Term *term_unop, void *type_result, void *operand_result);

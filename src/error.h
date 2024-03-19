@@ -119,6 +119,8 @@ void report_int_real_not_allowed(struct Location location);
 void report_can_only_show_hide_functions(struct Location location);
 void report_chaining_direction_error(struct Location location);
 void report_implies_direction_error(struct Location location);
+void report_empty_array_literal(struct Location location);
+void report_const_out_of_bounds(struct Location location);  // array index out of bounds, during const evaluation
 
 // Verifier errors
 void report_operator_precondition_fail(struct Term *term);
@@ -134,7 +136,7 @@ void report_decreases_might_not_decrease(struct Attribute *attr);
 void report_decreases_not_bounded_below(struct Attribute *attr);
 void report_obtain_doesnt_exist(const struct Statement *stmt);
 void report_nonexhaustive_match(struct Location loc);
-void report_out_of_bounds(struct Location loc);
+void report_out_of_bounds(struct Location loc);  // array index out of bounds, during verification
 void report_possible_aliasing_violation(struct Location location, int n1, int n2);
 void report_assign_to_allocated(struct Location loc);
 void report_assign_from_allocated(struct Location loc);

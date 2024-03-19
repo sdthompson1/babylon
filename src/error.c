@@ -127,6 +127,18 @@ void report_implies_direction_error(struct Location location)
     print_error("Ambiguity between <== and ==> operators (consider using parentheses to disambiguate)\n");
 }
 
+void report_empty_array_literal(struct Location location)
+{
+    print_location(location);
+    print_error("Empty array literal: not currently supported.\n");
+}
+
+void report_const_out_of_bounds(struct Location location)
+{
+    print_location(location);
+    print_error("Array index out of bounds\n");
+}
+
 void report_not_in_scope(struct Location location, const char *name)
 {
     print_location(location);

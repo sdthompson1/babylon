@@ -190,6 +190,7 @@ static int precedence(struct Term *term)
     case TM_BOOL_LITERAL:
     case TM_INT_LITERAL:
     case TM_STRING_LITERAL:
+    case TM_ARRAY_LITERAL:
     case TM_CAST:
     case TM_CALL:
     case TM_TYAPP:
@@ -293,6 +294,19 @@ static void print_string_literal(FILE *file, const uint8_t *data, uint32_t lengt
         --length;
     }
     fputc('"', file);
+}
+
+static void print_array_literal(bool postcond, FILE *file, struct OpTermList *terms)
+{
+    fputc('[', file);
+    while (terms) {
+        print_term(postcond, file, terms->rhs);
+        if (terms->next) {
+            fprintf(file, ", ");
+        }
+        terms = terms->next;
+    }
+    fputc(']', file);
 }
 
 static void print_unop(bool postcond, FILE *file, struct Term *term)
@@ -401,6 +415,10 @@ static void print_term(bool postcond, FILE *file, struct Term *term)
 
     case TM_STRING_LITERAL:
         print_string_literal(file, term->string_literal.data, term->string_literal.length);
+        break;
+
+    case TM_ARRAY_LITERAL:
+        print_array_literal(postcond, file, term->array_literal.terms);
         break;
 
     case TM_CAST:

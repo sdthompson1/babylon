@@ -1095,6 +1095,15 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
             return result;
         }
 
+    case TOK_LBRACKET:
+        {
+            struct OpTermList *terms = parse_term_list(state, &loc);
+            struct Term *result = make_term(loc, TM_ARRAY_LITERAL);
+            result->array_literal.terms = terms;
+            return result;
+        }
+        break;
+
     case TOK_KW_SIZEOF:
         {
             advance(state);

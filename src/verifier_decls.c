@@ -662,7 +662,7 @@ static bool verify_datatype_decl(struct VContext *context,
 
 static void free_string_names_entry(void *context, const char *key, void *value)
 {
-    if (strcmp(key, "$DefaultArrayNum") != 0) {
+    if (strcmp(key, "$DefaultArrayNum") != 0 && strcmp(key, "$ArrayLiteralNum") != 0) {
         free((char*)key);
         free_term(value);
     }

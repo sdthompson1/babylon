@@ -692,6 +692,7 @@ static bool is_lvalue(struct Term *term)
 {
     return term->tag == TM_VAR
         || term->tag == TM_STRING_LITERAL
+        || term->tag == TM_ARRAY_LITERAL
         || term->tag == TM_FIELD_PROJ
         || term->tag == TM_ARRAY_PROJ;
 }
@@ -983,6 +984,67 @@ static void codegen_string_literal(struct CGContext *cxt,
     print_token(cxt->pr, "}");
     print_token(cxt->pr, ";");
     new_line(cxt->pr);
+    end_item(cxt->pr);
+
+    if (pri > CAST_EXPR) print_token(cxt->pr, "(");
+    print_token(cxt->pr, "(");
+    print_token(cxt->pr, "char");
+    print_token(cxt->pr, "*");
+    print_token(cxt->pr, ")");
+    print_token(cxt->pr, raw_array);
+    if (pri > CAST_EXPR) print_token(cxt->pr, ")");
+}
+
+static void codegen_array_literal(struct CGContext *cxt,
+                                  enum Priority pri,
+                                  enum TermMode mode,
+                                  struct Term *term)
+{
+    // An array literal is a char* array. We must memcpy the
+    // individual terms into position.
+    char raw_array[TEMP_NAME_LEN];
+    get_temp_name(cxt, raw_array);
+    begin_item(cxt->pr);
+    print_token(cxt->pr, "uint8_t");
+    print_token(cxt->pr, raw_array);
+    print_token(cxt->pr, "[");
+
+    char buf[50];
+    uint64_t len = 0;
+    for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
+        ++len;
+    }
+    sprintf(buf, "%" PRIu64, len);
+    print_token(cxt->pr, buf);
+    print_token(cxt->pr, "*");
+    print_size_of_type(cxt, CAST_EXPR, term->type->array_data.element_type);
+
+    print_token(cxt->pr, "]");
+    print_token(cxt->pr, ";");
+    new_line(cxt->pr);
+
+    uint64_t idx = 0;
+    for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
+        print_token(cxt->pr, "memcpy");
+        print_token(cxt->pr, "(");
+        print_token(cxt->pr, raw_array);
+        if (idx != 0) {
+            print_token(cxt->pr, "+");
+            sprintf(buf, "%" PRIu64, idx);
+            print_token(cxt->pr, buf);
+            print_token(cxt->pr, "*");
+            print_size_of_type(cxt, CAST_EXPR, term->type->array_data.element_type);
+        }
+        print_token(cxt->pr, ",");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, node->rhs);
+        print_token(cxt->pr, ",");
+        print_size_of_type(cxt, ASSIGN_EXPR, term->type->array_data.element_type);
+        print_token(cxt->pr, ")");
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        ++idx;
+    }
+
     end_item(cxt->pr);
 
     if (pri > CAST_EXPR) print_token(cxt->pr, "(");
@@ -2304,6 +2366,7 @@ static void codegen_term(struct CGContext *cxt,
         case TM_BOOL_LITERAL: codegen_bool_literal(cxt, pri, mode, term); break;
         case TM_INT_LITERAL: codegen_int_literal(cxt, pri, mode, term); break;
         case TM_STRING_LITERAL: codegen_string_literal(cxt, pri, mode, term); break;
+        case TM_ARRAY_LITERAL: codegen_array_literal(cxt, pri, mode, term); break;
         case TM_CAST: codegen_cast(cxt, pri, mode, term); break;
         case TM_IF: codegen_if(cxt, pri, mode, term); break;
         case TM_UNOP: codegen_unop(cxt, pri, mode, term); break;

@@ -39,9 +39,11 @@ static struct Term * eval_cast(struct HashTable *env, struct Term *term)
     if (!operand) return NULL;
 
     // Casting to array is allowed, but the operand must be TM_STRING_LITERAL
-    // and the target type must be T[]
+    // or TM_ARRAY_LITERAL, and the target type must be T[]
     if (term->type->tag == TY_ARRAY) {
-        if (operand->tag != TM_STRING_LITERAL || term->type->array_data.sizes || term->type->array_data.resizable) {
+        if ((operand->tag != TM_STRING_LITERAL && operand->tag != TM_ARRAY_LITERAL)
+        || term->type->array_data.sizes
+        || term->type->array_data.resizable) {
             report_non_compile_time_constant(term->location);
             return NULL;
         }
@@ -739,6 +741,80 @@ static struct Term * make_sizeof_tuple(const struct TypeData_Array *data)
     return result;
 }
 
+static struct Term * eval_array_literal(struct HashTable *env, struct Term *term)
+{
+    struct OpTermList *sub_terms = NULL;
+    struct OpTermList **tail = &sub_terms;
+
+    for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
+        struct Term *sub_term = eval_to_normal_form(env, node->rhs);
+        if (sub_term == NULL) {
+            free_op_term_list(sub_terms);
+            return NULL;
+        }
+        *tail = alloc(sizeof(struct OpTermList));
+        (*tail)->operator = BINOP_PLUS;  // dummy value
+        (*tail)->rhs = sub_term;
+        (*tail)->next = NULL;
+        tail = &(*tail)->next;
+    }
+
+    struct Term *result = make_term(g_no_location, TM_ARRAY_LITERAL);
+    result->type = copy_type(term->type);
+    result->array_literal.terms = sub_terms;
+    return result;
+}
+
+static struct Term * eval_array_proj(struct HashTable *env, struct Term *term)
+{
+    struct Term * lhs = eval_to_normal_form(env, term->array_proj.lhs);
+    if (lhs == NULL) {
+        return NULL;
+    }
+
+    if (term->array_proj.indexes == NULL || term->array_proj.indexes->next != NULL) {
+        // Array normal-forms can only be one-dimensional (currently), so this
+        // would not be type-correct
+        fatal_error("eval_array_proj: was expecting only one index");
+    }
+
+    if (lhs->tag == TM_CAST) {
+        // Casting T[n] to T[]. We can just ignore this.
+        struct Term *new_lhs = lhs->cast.operand;
+        lhs->cast.operand = NULL;
+        free_term(lhs);
+        lhs = new_lhs;
+    }
+    if (lhs->tag != TM_ARRAY_LITERAL) {
+        // TM_ARRAY_LITERAL is the only possible normal-form with an array type
+        // (once the cast has been stripped away)
+        fatal_error("eval_array_proj: unexpected term tag");
+    }
+
+    struct Term *index = eval_to_normal_form(env, term->array_proj.indexes->rhs);
+    if (index == NULL) {
+        free_term(lhs);
+        return NULL;
+    }
+
+    uint64_t i = normal_form_to_int(index);
+    free_term(index);
+    index = NULL;
+
+    for (struct OpTermList *node = lhs->array_literal.terms; node; node = node->next) {
+        if (i == 0) {
+            struct Term *result = copy_term(node->rhs);
+            free_term(lhs);
+            return result;
+        }
+        --i;
+    }
+
+    report_const_out_of_bounds(term->array_proj.indexes->rhs->location);
+    free_term(lhs);
+    return NULL;
+}
+
 struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
 {
     switch (term->tag) {
@@ -751,6 +827,9 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
     case TM_STRING_LITERAL:
         // These are already in normal-form
         return copy_term(term);
+
+    case TM_ARRAY_LITERAL:
+        return eval_array_literal(env, term);
 
     case TM_CAST:
         return eval_cast(env, term);
@@ -801,11 +880,13 @@ struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
             return NULL;
         }
 
+    case TM_ARRAY_PROJ:
+        return eval_array_proj(env, term);
+
     case TM_QUANTIFIER:
     case TM_CALL:
     case TM_TYAPP:
     case TM_ALLOCATED:
-    case TM_ARRAY_PROJ:
         report_non_compile_time_constant(term->location);
         return NULL;
     }

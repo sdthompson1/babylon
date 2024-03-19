@@ -18,7 +18,8 @@ repository.
 //  - TM_BOOL_LITERAL
 //  - TM_INT_LITERAL
 //  - TM_STRING_LITERAL
-//  - TM_CAST applied to TM_STRING_LITERAL (converting it to u8[])
+//  - TM_ARRAY_LITERAL with normal-form sub-terms
+//  - TM_CAST applied to TM_STRING_LITERAL or TM_ARRAY_LITERAL (casting T[n] to T[])
 //  - TM_RECORD with normal-form sub-terms
 //  - TM_VARIANT with normal-form payload
 

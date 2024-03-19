@@ -503,7 +503,8 @@ static void insert_array_cast_if_required(struct Type *expected_type,
                                           struct Term **term)
 {
     if (expected_type != NULL && (*term)->type != NULL
-    && expected_type->tag == TY_ARRAY && (*term)->type->tag == TY_ARRAY) {
+    && expected_type->tag == TY_ARRAY && (*term)->type->tag == TY_ARRAY
+    && types_equal(expected_type->array_data.element_type, (*term)->type->array_data.element_type)) {
         bool from_resizable = (*term)->type->array_data.resizable;
         bool from_fixed_size = (*term)->type->array_data.sizes != NULL;
         bool from_incomplete = !from_resizable && !from_fixed_size;
@@ -535,6 +536,7 @@ static void cast_to_incomplete_array_if_required(struct Term **term)
         target_type->array_data.resizable = false;
         target_type->array_data.sizes = NULL;
         insert_array_cast_if_required(target_type, term);
+        free_type(target_type);
     }
 }
 
@@ -1100,6 +1102,48 @@ static void* typecheck_string_literal(void *context, struct Term *term, void *ty
 
     term->type = make_type(g_no_location, TY_ARRAY);
     term->type->array_data.element_type = make_int_type(g_no_location, false, 8);
+    term->type->array_data.ndim = 1;
+    term->type->array_data.resizable = false;
+    term->type->array_data.sizes = alloc(sizeof(struct Term *));
+    term->type->array_data.sizes[0] = make_int_literal_term(g_no_location, buf);
+
+    return NULL;
+}
+
+static void* typecheck_array_literal(void *context, struct Term *term, void *type_result, void *list_result)
+{
+    struct TypecheckContext *tc_context = context;
+
+    if (term->array_literal.terms == NULL) {
+        // This isn't supported yet, as we don't know what the array type should
+        // be, if there are no elements to look at!
+        report_empty_array_literal(term->location);
+        tc_context->error = true;
+        return NULL;
+    }
+
+    struct Type *elem_type = term->array_literal.terms->rhs->type;
+    uint64_t num_elements = 0;
+
+    // For now: all terms in the array list must have the same type (without casting)
+    for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
+        if (node->rhs->type == NULL) {
+            return NULL;
+        }
+        if (node != term->array_literal.terms &&
+        !types_equal(node->rhs->type, elem_type)) {
+            report_type_mismatch(elem_type, node->rhs);
+            tc_context->error = true;
+            return NULL;
+        }
+        ++num_elements;
+    }
+
+    char buf[50];
+    sprintf(buf, "%" PRIu64, num_elements);
+
+    term->type = make_type(g_no_location, TY_ARRAY);
+    term->type->array_data.element_type = copy_type(elem_type);
     term->type->array_data.ndim = 1;
     term->type->array_data.resizable = false;
     term->type->array_data.sizes = alloc(sizeof(struct Term *));
@@ -2525,6 +2569,7 @@ static void typecheck_term(struct TypecheckContext *tc_context, struct Term *ter
     tr.transform_bool_literal = typecheck_bool_literal;
     tr.transform_int_literal = typecheck_int_literal;
     tr.transform_string_literal = typecheck_string_literal;
+    tr.transform_array_literal = typecheck_array_literal;
     tr.transform_cast = typecheck_cast;
     tr.transform_if = typecheck_if;
     tr.transform_unop = typecheck_unop;

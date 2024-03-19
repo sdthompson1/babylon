@@ -322,6 +322,17 @@ void * transform_term(struct TermTransform *tr, void *context, struct Term *term
         }
         break;
 
+    case TM_ARRAY_LITERAL:
+        {
+            void *terms_result = transform_op_term_list(tr, context, term->array_literal.terms);
+            if (tr->transform_array_literal) {
+                return tr->transform_array_literal(context, term, type_result, terms_result);
+            } else {
+                return NULL;
+            }
+        }
+        break;
+
     case TM_CAST:
         {
             void * target_type_result = transform_type(&tr->type_transform, context, term->cast.target_type);
@@ -1048,6 +1059,14 @@ static void* copy_string_literal_term(void *context, struct Term *term, void *ty
     return result;
 }
 
+static void* copy_array_literal_term(void *context, struct Term *term, void *type_result, void *list_result)
+{
+    struct Term *result = make_term(term->location, TM_ARRAY_LITERAL);
+    result->type = type_result;
+    result->array_literal.terms = list_result;
+    return result;
+}
+
 static void* copy_cast_term(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)
 {
     struct Term *result = make_term(term->location, TM_CAST);
@@ -1236,6 +1255,7 @@ static void copying_term_transform(struct TermTransform *tr)
     tr->transform_bool_literal = copy_bool_literal_term;
     tr->transform_int_literal = copy_int_literal_term;
     tr->transform_string_literal = copy_string_literal_term;
+    tr->transform_array_literal = copy_array_literal_term;
     tr->transform_cast = copy_cast_term;
     tr->transform_if = copy_if_term;
     tr->transform_unop = copy_unop_term;
@@ -1367,6 +1387,7 @@ static void freeing_term_transform(struct TermTransform *tr)
     tr->transform_bool_literal = free_term_0;
     tr->transform_int_literal = free_int_literal_term;
     tr->transform_string_literal = free_string_literal_term;
+    tr->transform_array_literal = free_term_1;
     tr->transform_cast = free_term_2;
     tr->transform_if = free_term_3;
     tr->transform_unop = free_term_1;
