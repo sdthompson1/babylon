@@ -67,6 +67,10 @@ struct CGContext {
     struct CPrinter *pr;
     struct CPrinter *h_pr;
     uint64_t tmp_num;
+
+    // This flag is true when generating a 'const' decl.
+    // Affects codegen for TM_CAST applied to TM_ARRAY_LITERAL.
+    bool in_const_decl;
 };
 
 static void reset_context(struct CGContext *cxt)
@@ -998,13 +1002,17 @@ static void codegen_string_literal(struct CGContext *cxt,
 static void codegen_array_literal(struct CGContext *cxt,
                                   enum Priority pri,
                                   enum TermMode mode,
-                                  struct Term *term)
+                                  struct Term *term,
+                                  bool use_static)
 {
     // An array literal is a char* array. We must memcpy the
     // individual terms into position.
     char raw_array[TEMP_NAME_LEN];
     get_temp_name(cxt, raw_array);
     begin_item(cxt->pr);
+    if (use_static) {
+        print_token(cxt->pr, "static");
+    }
     print_token(cxt->pr, "uint8_t");
     print_token(cxt->pr, raw_array);
     print_token(cxt->pr, "[");
@@ -1078,7 +1086,16 @@ static void codegen_cast(struct CGContext *cxt,
             print_token(cxt->pr, "*");
             print_token(cxt->pr, tmp);
             print_token(cxt->pr, "=");
-            codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, term->cast.operand);
+
+            // Unfortunately we need a special case here for TM_CAST
+            // applied to TM_ARRAY_LITERAL when we are in the context
+            // of a "const" decl. (We need to ensure that the array
+            // data ends up in "static" memory.)
+            if (cxt->in_const_decl && term->cast.operand->tag == TM_ARRAY_LITERAL) {
+                codegen_array_literal(cxt, ASSIGN_EXPR, MODE_ADDR, term->cast.operand, true);
+            } else {
+                codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, term->cast.operand);
+            }
             print_token(cxt->pr, ";");
             new_line(cxt->pr);
 
@@ -2366,7 +2383,7 @@ static void codegen_term(struct CGContext *cxt,
         case TM_BOOL_LITERAL: codegen_bool_literal(cxt, pri, mode, term); break;
         case TM_INT_LITERAL: codegen_int_literal(cxt, pri, mode, term); break;
         case TM_STRING_LITERAL: codegen_string_literal(cxt, pri, mode, term); break;
-        case TM_ARRAY_LITERAL: codegen_array_literal(cxt, pri, mode, term); break;
+        case TM_ARRAY_LITERAL: codegen_array_literal(cxt, pri, mode, term, false); break;
         case TM_CAST: codegen_cast(cxt, pri, mode, term); break;
         case TM_IF: codegen_if(cxt, pri, mode, term); break;
         case TM_UNOP: codegen_unop(cxt, pri, mode, term); break;
@@ -2676,7 +2693,9 @@ static void codegen_decl_const(struct CGContext *cxt,
         new_line(cxt->pr);
 
         increase_indent(cxt->pr);
+        cxt->in_const_decl = true;  // we need special handling of TM_CAST/TM_ARRAY_LITERAL here (unfortunately)
         copy_term_to_variable(cxt, temp_name, false, decl->const_data.value);
+        cxt->in_const_decl = false;
 
         print_token(cxt->pr, "init = 1;");
         new_line(cxt->pr);
@@ -2984,6 +3003,7 @@ void codegen_module(FILE *c_output_file,
     cxt.pr = new_c_printer(c_output_file);
     cxt.h_pr = new_c_printer(h_output_file);
     cxt.tmp_num = 0;
+    cxt.in_const_decl = false;
 
     for (struct DeclGroup *decls = module->interface; decls; decls = decls->next) {
         for (struct Decl *decl = decls->decl; decl; decl = decl->next) {
