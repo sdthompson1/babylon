@@ -26,7 +26,7 @@ struct VContext;
 
 void verify_condition(struct VContext *context,
                       struct Location location,
-                      struct Sexpr *condition,
+                      struct Sexpr *condition,    // NOT handed over
                       const char *description,    // NOT handed over
                       const char *error_msg);     // handover
 

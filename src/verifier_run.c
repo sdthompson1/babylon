@@ -72,15 +72,17 @@ const char * make_debug_filename(struct VContext *context,
 
 void verify_condition(struct VContext *context,
                       struct Location location,
-                      struct Sexpr *condition,
+                      struct Sexpr *condition,   // NOT handed over
                       const char *description,   // NOT handed over
                       const char *error_msg)     // handover
 {
     if (context->interface_only) {
+        free((char*)error_msg);
         return;
     }
 
     if (!fol_continue_after_error(context->fol_runner) && context->error_found) {
+        free((char*)error_msg);
         return;
     }
 
