@@ -6,5 +6,8 @@ Match.b:97:5: Assert might not hold
 Match.b:107:5: Assert might not hold
 Match.b:123:5: Match might not be exhaustive
 Match.b:131:11: Operator precondition might not be met
+Match.b:133:17: Operator precondition might not be met
+Match.b:131:5: Match might not be exhaustive
 Match.b:157:13: Match might not be exhaustive
+Match.b:157:5: Assert might not hold
 Match.b:192:14: Reference may have become invalid due to change in datatype variant

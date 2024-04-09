@@ -28,12 +28,11 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-static bool verify_const_decl(struct VContext *context,
+static void verify_const_decl(struct VContext *context,
                               const char *name,
                               struct DeclData_Const *data,
                               const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
-    bool ok = true;
     char *fol_name = copy_string_2("%", name);
     struct Sexpr *fol_type = verify_type(data->type);
     struct Sexpr *fol_term = NULL;
@@ -51,21 +50,17 @@ static bool verify_const_decl(struct VContext *context,
             //     for a global const decl. These terms do not occur in
             //     normal forms, so using the normal form will be safe.
             fol_term = verify_term(context, data->value);
-            if (!fol_term) fatal_error("normal form failed to verify");
         } else {
             // This is probably a ghost decl, where the rhs doesn't need
             // to be evaluated to normal form.
             // In this case, the RHS might fail to verify. That's fine, we
             // just report the verification error and continue.
             fol_term = verify_term(context, data->rhs);
-            if (!fol_term) ok = false;
         }
     }
 
     struct Item *item = add_const_item(context, fol_name, data->type, fol_type, fol_term, false);
     memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
-
-    return ok;
 }
 
 static void prepare_args(struct VContext *context,
@@ -107,13 +102,12 @@ static void prepare_args(struct VContext *context,
     }
 }
 
-static bool verify_function_attributes(struct VContext *context,
+static void verify_function_attributes(struct VContext *context,
                                        struct Attribute *attr,
                                        struct Type *ret_type,
                                        struct Condition ***precond_tail,
                                        struct Condition ***postcond_tail)
 {
-    bool ok = true;
     int num_facts_after_requires = get_num_facts(context);
 
     while (attr) {
@@ -123,39 +117,34 @@ static bool verify_function_attributes(struct VContext *context,
             {
                 struct Sexpr *cond = verify_term(context, attr->term);
 
+                // We can assume the condition while validating
+                // the rest of the attributes
+                add_fact(context, copy_sexpr(cond));
+
+                // We want to keep preconditions "permanently"
+                if (attr->tag == ATTR_REQUIRES) {
+                    num_facts_after_requires = get_num_facts(context);
+                }
+
+                // Insert lets so that we can use the condition "externally"
+                cond = insert_lets(context, cond);
+
+                // Save the condition to the appropriate list
                 if (cond) {
-                    // We can assume the condition while validating
-                    // the rest of the attributes
-                    add_fact(context, copy_sexpr(cond));
-
-                    // We want to keep preconditions "permanently"
-                    if (attr->tag == ATTR_REQUIRES) {
-                        num_facts_after_requires = get_num_facts(context);
-                    }
-
-                    // Insert lets so that we can use the condition "externally"
-                    cond = insert_lets(context, cond);
-
-                    // Save the condition to the appropriate list
-                    if (cond) {
-                        struct Condition ***tail_ptr =
-                            attr->tag == ATTR_REQUIRES ? precond_tail : postcond_tail;
-                        struct Condition *node = alloc(sizeof(struct Condition));
-                        node->location = attr->location;
-                        node->expr = cond;
-                        node->next = NULL;
-                        **tail_ptr = node;
-                        *tail_ptr = &node->next;
-                    } else {
-                        // this is unexpected, since pre/post
-                        // conditions do not have any "while" stmts or
-                        // similar constructs that would cause
-                        // insert_lets to fail.
-                        fatal_error("failed to add lets to pre/postcondition");
-                    }
-
+                    struct Condition ***tail_ptr =
+                        attr->tag == ATTR_REQUIRES ? precond_tail : postcond_tail;
+                    struct Condition *node = alloc(sizeof(struct Condition));
+                    node->location = attr->location;
+                    node->expr = cond;
+                    node->next = NULL;
+                    **tail_ptr = node;
+                    *tail_ptr = &node->next;
                 } else {
-                    ok = false;
+                    // this is unexpected, since pre/post
+                    // conditions do not have any "while" stmts or
+                    // similar constructs that would cause
+                    // insert_lets to fail.
+                    fatal_error("failed to add lets to pre/postcondition");
                 }
             }
             break;
@@ -170,8 +159,6 @@ static bool verify_function_attributes(struct VContext *context,
 
     // remove the postconditions afterwards (but not the preconditions)
     revert_facts(context, num_facts_after_requires);
-
-    return ok;
 }
 
 static struct Sexpr *make_and_sexpr(struct Condition *cond)
@@ -202,18 +189,20 @@ static struct Sexpr * apply_theta(struct Sexpr *theta, struct Condition *conditi
     return sexpr;
 }
 
-static bool check_implies(struct VContext *context,
+static void check_implies(struct VContext *context,
                           struct Location loc,
                           struct Sexpr *theta_premises_1,
                           struct Condition *premises_1,
                           struct Sexpr *theta_premises_2,
                           struct Condition *premises_2,
                           struct Sexpr *theta_conclusions,
-                          struct Condition *conclusions)
+                          struct Condition *conclusions,
+                          const char *err_msg)  // handover
 {
     if (!conclusions) {
         // there is nothing to check
-        return true;
+        free((char*)err_msg);
+        return;
     }
 
     struct Sexpr * sexpr = apply_theta(theta_conclusions, conclusions);
@@ -230,9 +219,9 @@ static bool check_implies(struct VContext *context,
                                  sexpr);
     }
 
-    bool result = verify_condition(context, loc, sexpr, "interface consistency");
+    verify_condition(context, loc, sexpr, "interface consistency", err_msg);
+    err_msg = NULL;
     free_sexpr(sexpr);
-    return result;
 }
 
 static struct Sexpr * make_generic_fun_params(const struct TyVarList *tyvars)
@@ -376,7 +365,7 @@ static struct Sexpr * make_fol_dummy_subst(struct Item *from, struct Item *to)
     return result;
 }
 
-static bool verify_function_decl(struct VContext *context,
+static void verify_function_decl(struct VContext *context,
                                  struct Decl *decl,
                                  const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
@@ -434,11 +423,11 @@ static bool verify_function_decl(struct VContext *context,
     struct Condition **precond_tail = &preconds;
     struct Condition *postconds = NULL;
     struct Condition **postcond_tail = &postconds;
-    bool ok = verify_function_attributes(context,
-                                         decl->attributes,
-                                         data->return_type,
-                                         &precond_tail,
-                                         &postcond_tail);
+    verify_function_attributes(context,
+                               decl->attributes,
+                               data->return_type,
+                               &precond_tail,
+                               &postcond_tail);
 
     // set funapp_sexpr to (%f %x %y)
     // (or just %f if no args)
@@ -455,7 +444,7 @@ static bool verify_function_decl(struct VContext *context,
 
         struct Sexpr *fun_defn_expr = NULL;
         struct Sexpr **fun_defn_tail = &fun_defn_expr;
-        ok = verify_statements(context, data->body, &fun_defn_tail) && ok;
+        verify_statements(context, data->body, &fun_defn_tail);
 
         if (context->var_decl_stack != NULL) {
             fatal_error("var decl stack not empty");
@@ -465,20 +454,17 @@ static bool verify_function_decl(struct VContext *context,
             // End of non-void function
             // Verify that this is unreachable code
             struct Sexpr *false_expr = make_string_sexpr("false");
-            bool verify_result = verify_condition(context,
-                                                  decl->function_data.end_loc,
-                                                  false_expr,
-                                                  "end of function unreachable");
+            verify_condition(context,
+                             decl->function_data.end_loc,
+                             false_expr,
+                             "end of function unreachable",
+                             err_msg_end_of_function_reached(decl->function_data.end_loc));
             free_sexpr(false_expr);
-            if (!verify_result) {
-                report_end_of_function_reached(decl->function_data.end_loc);
-                ok = false;
-            }
         } else {
             // End of void function
             // Verify that the postconditions hold
-            ok = verify_function_return(context, decl->function_data.end_loc,
-                                        NULL, decl->ghost, &fun_defn_tail) && ok;
+            verify_function_return(context, decl->function_data.end_loc,
+                                   NULL, decl->ghost, &fun_defn_tail);
         }
 
         context->postconds = NULL;
@@ -575,33 +561,27 @@ static bool verify_function_decl(struct VContext *context,
     // Confirm that the preconds and postconds are consistent with the interface (if applicable)
     if (interface_item) {
         struct Sexpr *theta = make_fol_dummy_subst(interface_item, item);
-        if (!check_implies(context,
-                           decl->location,
-                           theta, interface_item->preconds,
-                           NULL, NULL,
-                           NULL, item->preconds)) {
-            report_inconsistent_preconds(decl);
-            ok = false;
-        }
-        if (!check_implies(context,
-                           decl->location,
-                           theta, interface_item->preconds,
-                           NULL, item->postconds,
-                           theta, interface_item->postconds)) {
-            report_inconsistent_postconds(decl);
-            ok = false;
-        }
+        check_implies(context,
+                      decl->location,
+                      theta, interface_item->preconds,
+                      NULL, NULL,
+                      NULL, item->preconds,
+                      err_msg_inconsistent_preconds(decl));
+        check_implies(context,
+                      decl->location,
+                      theta, interface_item->preconds,
+                      NULL, item->postconds,
+                      theta, interface_item->postconds,
+                      err_msg_inconsistent_postconds(decl));
         free_sexpr(theta);
     }
 
     // Done, add Item to the env.
     remove_existing_item(context->global_env, fol_name);
     hash_table_insert(context->global_env, fol_name, item);
-
-    return ok;
 }
 
-static bool verify_typedef_decl(struct VContext *context,
+static void verify_typedef_decl(struct VContext *context,
                                 struct Decl *decl,
                                 const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
@@ -629,11 +609,9 @@ static bool verify_typedef_decl(struct VContext *context,
     }
 
     memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
-
-    return true;
 }
 
-static bool verify_datatype_decl(struct VContext *context,
+static void verify_datatype_decl(struct VContext *context,
                                  struct Decl *decl,
                                  const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
@@ -656,8 +634,6 @@ static bool verify_datatype_decl(struct VContext *context,
         char *fol_name = copy_string_2("%", ctor->name);
         hash_table_insert(context->global_env, fol_name, item);
     }
-
-    return true;
 }
 
 static void free_string_names_entry(void *context, const char *key, void *value)
@@ -736,7 +712,7 @@ static void compute_decl_fingerprint(struct HashTable *global_env,
     sha256_final(&ctx, fingerprint);
 }
 
-static bool verify_decl(struct VContext *context, struct Decl *decl)
+static void verify_decl(struct VContext *context, struct Decl *decl)
 {
     // Compute fingerprint.
     uint8_t fingerprint[SHA256_HASH_LENGTH];
@@ -749,17 +725,24 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     }
 
     if (context->show_progress) {
-        fprintf(stderr, "Verifying: ");
+        // Add a "dummy" job to print the "Verifying:" message at the appropriate
+        // point in the job queue.
+        char buf[200];
+        int i = 0;
         for (const char *c = decl->name; *c; ++c) {
             if (*c != '^') {
-                fputc(*c, stderr);
+                buf[i] = *c;
+                ++i;
+                if (i == sizeof(buf) - 1) {
+                    break;
+                }
             }
         }
-        if (skipped) fprintf(stderr, " (cached)");
-        fprintf(stderr, "\n");
+        buf[i] = 0;
+        const char *msg_tail = skipped ? " (cached)\n" : "\n";
+        char *msg = copy_string_3("Verifying: ", buf, msg_tail);
+        add_fol_message(context->fol_runner, msg, false, 0, NULL);
     }
-
-    bool result = false;
 
     context->path_condition = make_string_sexpr("true");
 
@@ -768,19 +751,19 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     // verify the decl
     switch (decl->tag) {
     case DECL_CONST:
-        result = verify_const_decl(context, decl->name, &decl->const_data, fingerprint);
+        verify_const_decl(context, decl->name, &decl->const_data, fingerprint);
         break;
 
     case DECL_FUNCTION:
-        result = verify_function_decl(context, decl, fingerprint);
+        verify_function_decl(context, decl, fingerprint);
         break;
 
     case DECL_DATATYPE:
-        result = verify_datatype_decl(context, decl, fingerprint);
+        verify_datatype_decl(context, decl, fingerprint);
         break;
 
     case DECL_TYPEDEF:
-        result = verify_typedef_decl(context, decl, fingerprint);
+        verify_typedef_decl(context, decl, fingerprint);
         break;
     }
 
@@ -802,28 +785,23 @@ static bool verify_decl(struct VContext *context, struct Decl *decl)
     context->current_decl_name = NULL;
 
     // On successful verification (not in interface_only mode), add to DB
-    if (result && !context->interface_only) {
-        add_sha256_to_db(context->cache_db, DECL_HASH, fingerprint);
+    if (!context->interface_only) {
+        add_fol_message(context->fol_runner, NULL, false, DECL_HASH, fingerprint);
     }
 
     // If skipped, restore interface_only to false for the next decl
     if (skipped) {
         context->interface_only = false;
     }
-
-    return result;
 }
 
-bool verify_decl_group(struct VContext *context, struct Decl *decl_group)
+void verify_decl_group(struct VContext *context, struct Decl *decl_group)
 {
     // for now no "per-group" setup required, just verify each decl separately
-    bool ok = true;
     struct Decl *decl = decl_group;
 
-    while (decl && (!context->error_found || context->continue_after_error)) {
-        ok = verify_decl(context, decl_group) && ok;
+    while (decl && (!context->error_found || fol_continue_after_error(context->fol_runner))) {
+        verify_decl(context, decl_group);
         decl = decl->next;
     }
-
-    return ok;
 }

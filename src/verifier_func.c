@@ -163,8 +163,7 @@ struct Sexpr * add_return_if_required(struct Sexpr *ret_defn, struct Sexpr *expr
 
 // Creates a tuple of ret_val and updated ref args (of the current function).
 // If there are no ref args, just returns a copy of ret_val.
-// Returns false if errors were found (e.g. poisoned ref arguments).
-static bool get_expanded_ret_val(struct VContext *context,
+static void get_expanded_ret_val(struct VContext *context,
                                  struct Sexpr *ret_val,
                                  struct Sexpr **output)
 {
@@ -177,11 +176,7 @@ static bool get_expanded_ret_val(struct VContext *context,
                 fatal_error("arg var not found in context");
             }
             if (hash_table_lookup(context->local_env, fol_name) == NULL) {
-                // Ref arg is poisoned, give up
-                free((char*)fol_name);
-                free_sexpr(refs);
-                *output = NULL;
-                return false;
+                fatal_error("arg var not found in local env");
             }
             *tail = make_list1_sexpr(make_string_sexpr_handover(fol_name));
             tail = &(*tail)->right;
@@ -213,16 +208,13 @@ static bool get_expanded_ret_val(struct VContext *context,
     } else {
         *output = NULL;
     }
-
-    return true;
 }
 
-static bool verify_postconditions(struct VContext *context,
+static void verify_postconditions(struct VContext *context,
                                   struct Location loc,
                                   struct Sexpr *expanded_ret_val)
 {
     struct Condition *postconds = context->postconds;
-    bool ok = true;
 
     while (postconds) {
 
@@ -235,18 +227,13 @@ static bool verify_postconditions(struct VContext *context,
         format_location(&postconds->location, true, false, buf1, sizeof(buf1));
         snprintf(buf2, sizeof(buf2), "postcondition at %s", buf1);
 
-        bool verify_result = verify_condition(context, loc, postcond_expr, buf2);
-        if (!verify_result) {
-            report_function_postcondition_fail(loc, postconds->location);
-            ok = false;
-        }
+        verify_condition(context, loc, postcond_expr, buf2,
+                         err_msg_function_postcondition_fail(loc, postconds->location));
 
         free_sexpr(postcond_expr);
 
         postconds = postconds->next;
     }
-
-    return ok;
 }
 
 static bool require_let_for(struct VContext *context, const char *name)
@@ -370,7 +357,7 @@ struct Sexpr * insert_lets(struct VContext *context,
     return expr;
 }
 
-bool verify_function_return(struct VContext *context,
+void verify_function_return(struct VContext *context,
                             struct Location location,
                             struct Term *return_term,
                             bool ghost,
@@ -378,31 +365,20 @@ bool verify_function_return(struct VContext *context,
 {
     // If this point in the code is unreachable we shouldn't try to continue
     if (sexpr_equal_string(context->path_condition, "false")) {
-        return true;
+        return;
     }
 
-    bool ok = true;
     struct Sexpr *ret_val = NULL;
 
     if (return_term) {
         ret_val = verify_term(context, return_term);
-        if (!ret_val) {
-            // Verification of return-value failed, no point continuing
-            free_sexpr(context->path_condition);
-            context->path_condition = make_string_sexpr("false");
-            return false;
-        }
 
         // Verify the value being returned is not allocated (except in ghost code)
         if (!ghost) {
             struct Sexpr *cond = non_allocated_condition(context, return_term->type, ret_val);
             if (cond) {
-                bool verify_result = verify_condition(context, location, cond, "return value not allocated");
-                if (!verify_result) {
-                    report_return_allocated(location);
-                    ok = false;
-                }
-
+                verify_condition(context, location, cond, "return value not allocated",
+                                 err_msg_return_allocated(location));
                 free_sexpr(cond);
             }
         }
@@ -410,27 +386,23 @@ bool verify_function_return(struct VContext *context,
 
     // Expand the ret val to include "new" values of ref vars
     struct Sexpr *expanded_ret_val;
-    bool ret_val_valid = get_expanded_ret_val(context, ret_val, &expanded_ret_val);
+    get_expanded_ret_val(context, ret_val, &expanded_ret_val);
     free_sexpr(ret_val);
 
-    if (ret_val_valid) {
-        // Verify that under the current path condition, each
-        // postcondition is true at this point
-        ok = verify_postconditions(context, location, expanded_ret_val) && ok;
+    // Verify that under the current path condition, each
+    // postcondition is true at this point
+    verify_postconditions(context, location, expanded_ret_val);
 
-        if (expanded_ret_val != NULL) {
-            // Add (ite current-path-condition expr NULL) onto the definition
-            // of this function.
-            // ("ret_val_ptr" always points to the NULL at the tail of this chain.)
-            make_ite_pc_expr(ret_val_ptr, context, expanded_ret_val);
-            expanded_ret_val = NULL;
-        }
+    if (expanded_ret_val != NULL) {
+        // Add (ite current-path-condition expr NULL) onto the definition
+        // of this function.
+        // ("ret_val_ptr" always points to the NULL at the tail of this chain.)
+        make_ite_pc_expr(ret_val_ptr, context, expanded_ret_val);
+        expanded_ret_val = NULL;
     }
 
     free_sexpr(expanded_ret_val);
 
     free_sexpr(context->path_condition);
     context->path_condition = make_string_sexpr("false");
-
-    return ok;
 }

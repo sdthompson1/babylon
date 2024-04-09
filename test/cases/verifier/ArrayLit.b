@@ -13,5 +13,5 @@ function test1()
 function test2()
 {
     var a = [1, 2, 3/0, 4];  // verification error in one of the elements
-    assert a[0] == 10;  // ignored, due to previous error
+    assert a[0] == 1;  // succeeds
 }

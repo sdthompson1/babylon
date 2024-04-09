@@ -32,7 +32,7 @@ interface {}
   function bad_field()
   {
     var y: Y = Y2 { 100, 0/0 };   // error
-    assert (y != y);    // no error reported, y is poisoned
+    assert (y != y);    // fails -- previous error defining y makes no difference
   }
 
 

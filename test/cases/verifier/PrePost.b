@@ -16,9 +16,9 @@ interface {}
   }   // error reported here
 
   function invalid_postcond()
-    ensures 1/0 == 1;      // Error reported here
+    ensures 1/0 == 1;      // Error reported here (1/0 is not allowed)
   {
-  }
+  }    // Also here, because we cannot know if 1/0 == 1
 
   function reach_end_of_func(): i32
   {
@@ -52,7 +52,7 @@ interface {}
   {
     assert (x < 200);    // succeeds (using precondition)
     assert (x < 50);     // fails (assert not true)
-    assert (1/0 == 1);   // fails (assert term doesn't verify)
+    assert (1/0 == 1);   // fails (assert term doesn't verify; then the assert itself fails)
   }
 
 

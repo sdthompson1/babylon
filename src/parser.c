@@ -1368,7 +1368,6 @@ static struct Attribute * parse_attributes(struct ParserState *state)
             {
                 struct Attribute *attr = alloc(sizeof(struct Attribute));
                 attr->location = state->token->location;
-                attr->valid = false;
 
                 switch (state->token->type) {
                 case TOK_KW_REQUIRES:

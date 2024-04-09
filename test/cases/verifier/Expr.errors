@@ -5,4 +5,6 @@ Expr.b:17:35: Operator precondition might not be met
 Expr.b:19:35: Operator precondition might not be met
 Expr.b:21:28: Operator precondition might not be met
 Expr.b:25:26: Operator precondition might not be met
+Expr.b:25:24: Operator precondition might not be met
 Expr.b:26:35: Operator precondition might not be met
+Expr.b:26:42: Operator precondition might not be met

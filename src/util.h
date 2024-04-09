@@ -22,7 +22,9 @@ struct NameList {
 char * copy_string(const char *input);
 char * copy_string_2(const char *str1, const char *str2);
 char * copy_string_3(const char *str1, const char *str2, const char *str3);
-//char * copy_string_4(const char *str1, const char *str2, const char *str3, const char *str4);
+char * copy_string_4(const char *str1, const char *str2, const char *str3, const char *str4);
+char * copy_string_5(const char *str1, const char *str2, const char *str3, const char *str4,
+                     const char *str5);
 
 
 struct NameList * copy_name_list(struct NameList *list);

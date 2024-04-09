@@ -19,11 +19,11 @@ struct Sexpr;
 struct Statement;
 struct VContext;
 
-bool verify_postconditions(struct VContext *context,
+void verify_postconditions(struct VContext *context,
                            struct Location loc,
                            struct Sexpr *ret_val);
 
-bool verify_statements(struct VContext *context,
+void verify_statements(struct VContext *context,
                        struct Statement *stmt,
                        struct Sexpr *** ret_val_ptr);
 

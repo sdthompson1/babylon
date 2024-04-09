@@ -2,4 +2,7 @@ Statements.b:15:5: Assert might not hold
 Statements.b:24:3: Control might reach end of function without returning a value
 Statements.b:56:5: Assert might not hold
 Statements.b:90:11: Operator precondition might not be met
+Statements.b:94:5: Assert might not hold
 Statements.b:100:9: Operator precondition might not be met
+Statements.b:102:7: Assert might not hold
+Statements.b:106:5: Assert might not hold

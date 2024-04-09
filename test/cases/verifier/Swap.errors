@@ -2,6 +2,16 @@ Swap.b:14:5: Assert might not hold
 Swap.b:24:5: Assert might not hold
 Swap.b:41:5: Assert might not hold
 Swap.b:64:12: Operator precondition might not be met
+Swap.b:64:12: Operator precondition might not be met
+Swap.b:64:10: Array index might be out of bounds
 Swap.b:64:20: Operator precondition might not be met
+Swap.b:64:20: Operator precondition might not be met
+Swap.b:64:18: Array index might be out of bounds
+Swap.b:65:12: Array index might be out of bounds
+Swap.b:65:5: Assert might not hold
 Swap.b:72:12: Operator precondition might not be met
+Swap.b:72:12: Operator precondition might not be met
+Swap.b:72:10: Array index might be out of bounds
 Swap.b:72:20: Operator precondition might not be met
+Swap.b:72:20: Operator precondition might not be met
+Swap.b:72:18: Array index might be out of bounds

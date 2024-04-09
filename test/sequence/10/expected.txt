@@ -1,5 +1,5 @@
 Verifying: Main.MyType
 Verifying: Main.f
-Checking Main.b:11:12-17 (binary operator) (cached)
-Checking Main.b:12:1-2 (end of function unreachable) (cached)
+Checking Main.b:11:12-17 (binary operator)
+Checking Main.b:12:1-2 (end of function unreachable)
 Verification successful

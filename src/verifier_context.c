@@ -871,11 +871,6 @@ struct Item * update_local(struct VContext *context,
                           true);
 }
 
-void poison_local(struct VContext *context, const char *local_name)
-{
-    bump_local(context, local_name);
-}
-
 char* lookup_local(struct VContext *context, const char *local_name)
 {
     uintptr_t version = (uintptr_t) hash_table_lookup(context->local_to_version, local_name);
@@ -924,30 +919,16 @@ static void update_variable_for_if(struct VContext *context,
     const char *then_fol_name = make_local_name(local_name, then_num - 1);
     const char *else_fol_name = make_local_name(local_name, else_num - 1);
 
-    // Check if any variable involved was "poisoned"; if so, we
-    // shouldn't try to create an ite-expression.
-    bool ok = fol_type != NULL &&
-        hash_table_lookup(context->local_env, then_fol_name) &&
-        hash_table_lookup(context->local_env, else_fol_name);
+    // update the variable, as if doing an assignment
+    // the new value is an ite-expression
+    struct Sexpr *ite_expr =
+        make_list4_sexpr(
+            make_string_sexpr("ite"),
+            copy_sexpr(cond_expr),
+            make_string_sexpr_handover(then_fol_name),
+            make_string_sexpr_handover(else_fol_name));
 
-    if (ok) {
-        // update the variable, as if doing an assignment
-        // the new value is an ite-expression
-        struct Sexpr *ite_expr =
-            make_list4_sexpr(
-                make_string_sexpr("ite"),
-                copy_sexpr(cond_expr),
-                make_string_sexpr_handover(then_fol_name),
-                make_string_sexpr_handover(else_fol_name));
-
-        update_local(context, local_name, NULL, fol_type, ite_expr);
-
-    } else {
-        poison_local(context, local_name);
-        free((char*)then_fol_name);
-        free((char*)else_fol_name);
-        free_sexpr(fol_type);
-    }
+    update_local(context, local_name, NULL, fol_type, ite_expr);
 }
 
 void resolve_if_branches(struct VContext *context,

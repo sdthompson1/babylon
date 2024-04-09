@@ -61,9 +61,9 @@ interface {}
   function var_fails_to_verify()
   {
     var x: i32 = 1/0;      // Error (Line 63)
-    var y: i32 = x + 1;    // Should not get another error as x is "poisoned"
+    var y: i32 = x + 1;    // Error, can't know what "x" is therefore might not be able to add 1 to it
 
     var z: i32 = 0;
     z = 1/0;               // Error (Line 67)
-    var w: i32 = z + 1;    // Again, not expecting another error
+    var w: i32 = z + 1;    // Error
   }

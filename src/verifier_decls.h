@@ -16,6 +16,6 @@ repository.
 struct Decl;
 struct VContext;
 
-bool verify_decl_group(struct VContext *context, struct Decl *decl_group);
+void verify_decl_group(struct VContext *context, struct Decl *decl_group);
 
 #endif

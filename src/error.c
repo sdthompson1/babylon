@@ -204,12 +204,6 @@ void report_ref_arg_not_allowed(struct Location location)
     print_error("Cannot pass ref arg here\n");
 }
 
-void report_aliasing_violation(struct Location location, int n1, int n2)
-{
-    print_location(location);
-    print_error("Aliasing rules violated: argument %d aliases argument %d\n", n1, n2);
-}
-
 void report_no_ref_in_postcondition(struct Location location)
 {
     print_location(location);
@@ -654,144 +648,165 @@ void report_field_name_missing(struct Location loc)
 // Verifier errors
 //
 
-void report_operator_precondition_fail(struct Term *term)
+static char * err_msg(struct Location loc, const char *msg)
 {
-    print_location(term->location);
-    print_error("Operator precondition might not be met\n");
+    if (loc.filename != NULL || loc.begin_line_num != 0) {
+        char buf[512];
+        format_location(&loc, false, true, buf, sizeof(buf));
+        return copy_string_3(buf, ": ", msg);
+    } else {
+        return copy_string(msg);
+    }
 }
 
-void report_function_precondition_fail(struct Term *term, struct Location loc)
+static char * err_msg_2(struct Location loc1, const char *msg1,
+                        struct Location loc2, const char *msg2)
 {
-    print_location(term->location);
-    print_error("Precondition at ");
-    print_location_no_colon(loc);
-    print_error(" might not be met\n");
+    char buf[512];
+    format_location(&loc2, false, true, buf, sizeof(buf));
+    char *msg = copy_string_3(msg1, buf, msg2);
+    char *result = err_msg(loc1, msg);
+    free(msg);
+    return result;
 }
 
-void report_function_postcondition_fail(struct Location return_loc, struct Location postcond_loc)
+char * err_msg_operator_precondition_fail(struct Term *term)
 {
-    print_location(return_loc);
-    print_error("Postcondition at ");
-    print_location_no_colon(postcond_loc);
-    print_error(" might not hold\n");
+    return err_msg(term->location, "Operator precondition might not be met\n");
 }
 
-void report_end_of_function_reached(struct Location loc)
+char * err_msg_function_precondition_fail(struct Term *term, struct Location loc)
 {
-    print_location(loc);
-    print_error("Control might reach end of function without returning a value\n");
+    return err_msg_2(term->location, "Precondition at ", loc, " might not be met\n");
 }
 
-void report_assert_failure(struct Statement *stmt)
+char * err_msg_function_postcondition_fail(struct Location return_loc, struct Location postcond_loc)
 {
-    print_location(stmt->location);
-    print_error("Assert might not hold\n");
+    return err_msg_2(return_loc, "Postcondition at ", postcond_loc, " might not hold\n");
 }
 
-void report_inconsistent_preconds(struct Decl *decl)
+char * err_msg_end_of_function_reached(struct Location loc)
 {
-    print_location(decl->location);
-    print_error("Implementation preconditions are not implied by the interface preconditions\n");
+    return err_msg(loc, "Control might reach end of function without returning a value\n");
 }
 
-void report_inconsistent_postconds(struct Decl *decl)
+char * err_msg_assert_failure(struct Statement *stmt)
 {
-    print_location(decl->location);
-    print_error("Implementation postconditions don't imply the interface postconditions\n");
+    return err_msg(stmt->location, "Assert might not hold\n");
 }
 
-void report_invariant_violated_on_entry(struct Attribute *attr)
+char * err_msg_inconsistent_preconds(struct Decl *decl)
 {
-    print_location(attr->location);
-    print_error("Invariant might not hold on entry to loop\n");
+    return err_msg(decl->location,
+                   "Implementation preconditions are not implied by the interface preconditions\n");
 }
 
-void report_invariant_violated_on_exit(struct Attribute *attr)
+char * err_msg_inconsistent_postconds(struct Decl *decl)
 {
-    print_location(attr->location);
-    print_error("Invariant might not hold on exit from loop\n");
+    return err_msg(decl->location,
+                   "Implementation postconditions don't imply the interface postconditions\n");
 }
 
-void report_decreases_might_not_decrease(struct Attribute *attr)
+char * err_msg_invariant_violated_on_entry(struct Attribute *attr)
 {
-    print_location(attr->location);
-    print_error("'decreases' value might not decrease\n");
+    return err_msg(attr->location,
+                   "Invariant might not hold on entry to loop\n");
 }
 
-void report_decreases_not_bounded_below(struct Attribute *attr)
+char * err_msg_invariant_violated_on_exit(struct Attribute *attr)
 {
-    print_location(attr->location);
-    print_error("'decreases' value (of type 'int') might not be bounded below by zero\n");
+    return err_msg(attr->location,
+                   "Invariant might not hold on exit from loop\n");
 }
 
-void report_obtain_doesnt_exist(const struct Statement *stmt)
+char * err_msg_decreases_might_not_decrease(struct Attribute *attr)
 {
-    print_location(stmt->location);
-    print_error("A value with the given property might not exist\n");
+    return err_msg(attr->location,
+                   "'decreases' value might not decrease\n");
 }
 
-void report_nonexhaustive_match(struct Location loc)
+char * err_msg_decreases_not_bounded_below(struct Attribute *attr)
 {
-    print_location(loc);
-    print_error("Match might not be exhaustive\n");
+    return err_msg(attr->location,
+                   "'decreases' value (of type 'int') might not be bounded below by zero\n");
 }
 
-void report_out_of_bounds(struct Location loc)
+char * err_msg_obtain_doesnt_exist(const struct Statement *stmt)
 {
-    print_location(loc);
-    print_error("Array index might be out of bounds\n");
+    return err_msg(stmt->location,
+                   "A value with the given property might not exist\n");
 }
 
-void report_possible_aliasing_violation(struct Location location, int n1, int n2)
+char * err_msg_nonexhaustive_match(struct Location loc)
 {
-    print_location(location);
-    print_error("Aliasing rules violated: argument %d might alias argument %d\n", n1, n2);
+    return err_msg(loc, "Match might not be exhaustive\n");
 }
 
-void report_assign_to_allocated(struct Location loc)
+char * err_msg_out_of_bounds(struct Location loc)
 {
-    print_location(loc);
-    print_error("Can't assign, left-hand-side might be allocated\n");
+    return err_msg(loc, "Array index might be out of bounds\n");
 }
 
-void report_assign_from_allocated(struct Location loc)
+char * err_msg_aliasing_violation(struct Location location, int n1, int n2)
 {
-    print_location(loc);
-    print_error("Can't assign, right-hand-side might be allocated\n");
+    char buf[200];
+    sprintf(buf, "Aliasing rules violated: argument %d aliases argument %d\n", n1, n2);
+    return err_msg(location, buf);
 }
 
-void report_return_allocated(struct Location loc)
+
+char * err_msg_possible_aliasing_violation(struct Location location, int n1, int n2)
 {
-    print_location(loc);
-    print_error("Return value might be allocated\n");
+    char buf[200];
+    sprintf(buf, "Aliasing rules violated: argument %d might alias argument %d\n", n1, n2);
+    return err_msg(location, buf);
 }
 
-void report_var_still_allocated(const char *name, struct Location loc)
+char * err_msg_assign_to_allocated(struct Location loc)
 {
-    print_location(loc);
+    return err_msg(loc, "Can't assign, left-hand-side might be allocated\n");
+}
+
+char * err_msg_assign_from_allocated(struct Location loc)
+{
+    return err_msg(loc, "Can't assign, right-hand-side might be allocated\n");
+}
+
+char * err_msg_return_allocated(struct Location loc)
+{
+    return err_msg(loc, "Return value might be allocated\n");
+}
+
+char * err_msg_var_still_allocated(const char *name, struct Location loc)
+{
     char *new_name = sanitise_name(name);
-    print_error("'%s' might still be allocated when it goes out of scope\n", new_name);
+    char *msg = copy_string_3("'", new_name, "' might still be allocated when it goes out of scope\n");
     free(new_name);
+    char *result = err_msg(loc, msg);
+    free(msg);
+    return result;
 }
 
-void report_var_still_allocated_at_return(const char *name, struct Location loc)
+char * err_msg_var_still_allocated_at_return(const char *name, struct Location loc)
 {
-    print_location(loc);
     char *new_name = sanitise_name(name);
-    print_error("'%s' might still be allocated at return statement\n", new_name);
+    char *msg = copy_string_3("'", new_name, "' might still be allocated at return statement\n");
     free(new_name);
+    char *result = err_msg(loc, msg);
+    free(msg);
+    return result;
 }
 
-void report_ref_invalid_variant_change(struct Location location)
+char * err_msg_ref_invalid_variant_change(struct Location location)
 {
-    print_location(location);
-    print_error("Reference may have become invalid due to change in datatype variant\n");
+    return err_msg(location,
+                   "Reference may have become invalid due to change in datatype variant\n");
 }
 
-void report_array_wrong_size(struct Term *term)
+char * err_msg_array_wrong_size(struct Term *term)
 {
-    print_location(term->location);
-    print_error("Array might have the wrong size\n");
+    return err_msg(term->location,
+                   "Array might have the wrong size\n");
 }
 
 

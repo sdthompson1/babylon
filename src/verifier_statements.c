@@ -27,68 +27,51 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-static bool verify_var_decl_stmt(struct VContext *context,
+static void verify_var_decl_stmt(struct VContext *context,
                                  struct Statement *stmt,
                                  struct Sexpr *** ret_val_ptr)
 {
-    bool valid = true;
     bool added_to_stack = false;
 
     if (stmt->var_decl.ref) {
         struct RefChain *ref = ref_chain_for_term(context, stmt->var_decl.rhs);
-        if (ref) {
-            hash_table_insert(context->refs, stmt->var_decl.name, ref);
-        } else {
-            poison_local(context, stmt->var_decl.name);
-            valid = false;
-        }
+        hash_table_insert(context->refs, stmt->var_decl.name, ref);
 
     } else {
         struct Sexpr * fol_type = verify_type(stmt->var_decl.type);
         struct Sexpr * fol_rhs = verify_term(context, stmt->var_decl.rhs);
-        valid = (fol_rhs != NULL);
 
-        if (valid) {
-            // the rhs mustn't be allocated (unless ghost)
-            if (!stmt->ghost) {
-                struct Sexpr *cond = non_allocated_condition(context, stmt->var_decl.type, fol_rhs);
-                if (cond) {
-                    bool verify_result = verify_condition(context,
-                                                          stmt->var_decl.rhs->location,
-                                                          cond,
-                                                          "RHS not allocated");
-                    if (!verify_result) {
-                        report_assign_from_allocated(stmt->var_decl.rhs->location);
-                        valid = false;
-                    }
-                    free_sexpr(cond);
-                }
+        // the rhs mustn't be allocated (unless ghost)
+        if (!stmt->ghost) {
+            struct Sexpr *cond = non_allocated_condition(context, stmt->var_decl.type, fol_rhs);
+            if (cond) {
+                verify_condition(context,
+                                 stmt->var_decl.rhs->location,
+                                 cond,
+                                 "RHS not allocated",
+                                 err_msg_assign_from_allocated(stmt->var_decl.rhs->location));
+                free_sexpr(cond);
             }
+        }
 
-            update_local(context,
-                         stmt->var_decl.name,
-                         stmt->var_decl.type,
-                         fol_type,
-                         fol_rhs);
+        update_local(context,
+                     stmt->var_decl.name,
+                     stmt->var_decl.type,
+                     fol_type,
+                     fol_rhs);
 
-            // add it to the var decl stack - if not ghost
-            if (!stmt->ghost) {
-                struct NameTypeList *node = alloc(sizeof(struct NameTypeList));
-                node->name = stmt->var_decl.name;
-                node->type = stmt->var_decl.type;
-                node->next = context->var_decl_stack;
-                context->var_decl_stack = node;
-                added_to_stack = true;
-            }
-
-        } else {
-            poison_local(context, stmt->var_decl.name);
-            free_sexpr(fol_type);
-            free_sexpr(fol_rhs);
+        // add it to the var decl stack - if not ghost
+        if (!stmt->ghost) {
+            struct NameTypeList *node = alloc(sizeof(struct NameTypeList));
+            node->name = stmt->var_decl.name;
+            node->type = stmt->var_decl.type;
+            node->next = context->var_decl_stack;
+            context->var_decl_stack = node;
+            added_to_stack = true;
         }
     }
 
-    valid = verify_statements(context, stmt->next, ret_val_ptr) && valid;
+    verify_statements(context, stmt->next, ret_val_ptr);
 
     if (added_to_stack) {
         // the variable must be non-allocated when it goes out of scope
@@ -100,15 +83,11 @@ static bool verify_var_decl_stmt(struct VContext *context,
                 free_sexpr(value);
 
                 if (cond) {
-                    bool verify_result = verify_condition(context,
-                                                          stmt->location,
-                                                          cond,
-                                                          "var deallocated");
-                    if (!verify_result) {
-                        report_var_still_allocated(stmt->var_decl.name, stmt->location);
-                        valid = false;
-                    }
-
+                    verify_condition(context,
+                                     stmt->location,
+                                     cond,
+                                     "var deallocated",
+                                     err_msg_var_still_allocated(stmt->var_decl.name, stmt->location));
                     free_sexpr(cond);
                 }
             } else {
@@ -120,8 +99,6 @@ static bool verify_var_decl_stmt(struct VContext *context,
         free(context->var_decl_stack);
         context->var_decl_stack = prev_node;
     }
-
-    return valid;
 }
 
 // new_expr is handed over
@@ -180,7 +157,7 @@ static void change_quantifier_to_let(struct VContext *context,
     }
 }
 
-static bool verify_fix_stmt(struct VContext *context, struct Statement *stmt)
+static void verify_fix_stmt(struct VContext *context, struct Statement *stmt)
 {
     struct Sexpr *fol_type = verify_type(stmt->fix.type);
 
@@ -191,11 +168,9 @@ static bool verify_fix_stmt(struct VContext *context, struct Statement *stmt)
                                      NULL);
 
     change_quantifier_to_let(context, stmt->fix.type, make_string_sexpr(item->fol_name));
-
-    return true;
 }
 
-static bool verify_obtain_stmt(struct VContext *context, struct Statement *stmt)
+static void verify_obtain_stmt(struct VContext *context, struct Statement *stmt)
 {
     struct Sexpr *fol_type = verify_type(stmt->obtain.type);
 
@@ -208,151 +183,87 @@ static bool verify_obtain_stmt(struct VContext *context, struct Statement *stmt)
 
     // Transform the condition
     struct Sexpr *cond = verify_term(context, stmt->obtain.condition);
-    if (cond) {
 
-        // Update the cond to say that the value must also be a valid
-        // value of its type.
-        struct Sexpr *var = make_string_sexpr(item->fol_name);
-        cond = insert_validity_condition(context,
-                                         QUANT_EXISTS,
-                                         stmt->obtain.type,
-                                         var,
-                                         cond);
+    // Update the cond to say that the value must also be a valid
+    // value of its type.
+    struct Sexpr *var = make_string_sexpr(item->fol_name);
+    cond = insert_validity_condition(context,
+                                     QUANT_EXISTS,
+                                     stmt->obtain.type,
+                                     var,
+                                     cond);
 
-        // Verify that such a value exists.
-        struct Sexpr *exists =
-            make_list3_sexpr(
-                make_string_sexpr("exists"),
-                make_list1_sexpr(
-                     make_list2_sexpr(
-                         var,
-                         copy_sexpr(item->fol_type))),
-                copy_sexpr(cond));
-        bool result = verify_condition(context, stmt->location, exists, "obtain");
-        free_sexpr(exists);
-        if (!result) {
-            report_obtain_doesnt_exist(stmt);
-            free_sexpr(cond);
-            return false;
-        }
+    // Verify that such a value exists.
+    struct Sexpr *exists =
+        make_list3_sexpr(
+            make_string_sexpr("exists"),
+            make_list1_sexpr(
+                 make_list2_sexpr(
+                     var,
+                     copy_sexpr(item->fol_type))),
+            copy_sexpr(cond));
+    verify_condition(context, stmt->location, exists, "obtain",
+                     err_msg_obtain_doesnt_exist(stmt));
+    free_sexpr(exists);
 
-        // We can now add the cond as an axiom of this item
-        item->fol_axioms =
-            make_pair_sexpr(
-                make_list2_sexpr(
-                    make_string_sexpr("assert"),
-                    cond),
-                item->fol_axioms);
-
-        return true;
-    } else {
-        return false;
-    }
+    // We can now add the cond as an axiom of this item
+    item->fol_axioms =
+        make_pair_sexpr(
+            make_list2_sexpr(
+                make_string_sexpr("assert"),
+                cond),
+            item->fol_axioms);
 }
 
-static bool verify_use_stmt(struct VContext *context, struct Statement *stmt)
+static void verify_use_stmt(struct VContext *context, struct Statement *stmt)
 {
     // Transform the given term
     struct Sexpr *witness = verify_term(context, stmt->use.term);
 
-    if (witness) {
-        // Change the goal from "exists x such-and-such" to "let
-        // x=term in such-and-such".
-        change_quantifier_to_let(context, stmt->use.term->type, witness);
-
-        return true;
-
-    } else {
-        return false;
-    }
+    // Change the goal from "exists x such-and-such" to "let
+    // x=term in such-and-such".
+    change_quantifier_to_let(context, stmt->use.term->type, witness);
 }
 
-static void poison_base_variable(struct VContext *context,
-                                 struct Term *term)
-{
-    switch (term->tag) {
-    case TM_VAR:
-        {
-            struct RefChain *ref = hash_table_lookup(context->refs, term->var.name);
-            if (ref) {
-                while (ref->base) {
-                    ref = ref->base;
-                }
-                if (ref->ref_type == RT_LOCAL_VAR) {
-                    poison_local(context, ref->variable_name);
-                }
-            } else {
-                poison_local(context, term->var.name);
-            }
-        }
-        break;
-
-    case TM_FIELD_PROJ:
-        poison_base_variable(context, term->field_proj.lhs);
-        break;
-
-    case TM_ARRAY_PROJ:
-        poison_base_variable(context, term->array_proj.lhs);
-        break;
-
-    default:
-        fatal_error("poison_base_variable unimplemented case");
-    }
-}
-
-static bool check_assign_allocated_conditions(struct VContext *context,
+static void check_assign_allocated_conditions(struct VContext *context,
                                               struct Statement *stmt,
                                               struct Sexpr *fol_rhs,   // copied/referenced
                                               struct RefChain *ref)    // copied/referenced
 {
     // Ghost stmts do not require allocation checks
-    if (stmt->ghost) return true;
-
-    bool result = true;
+    if (stmt->ghost) return;
 
     // Check LHS is not allocated
     struct Sexpr *fol_lhs = ref_chain_to_sexpr(context, ref);
-    if (fol_lhs) {
-        struct Sexpr *lhs_cond = non_allocated_condition(context,
-                                                         stmt->assign.lhs->type,
-                                                         fol_lhs);
-        if (lhs_cond) {
-            bool verify_result = verify_condition(context,
-                                                  stmt->assign.lhs->location,
-                                                  lhs_cond,
-                                                  "LHS not allocated");
-            if (!verify_result) {
-                report_assign_to_allocated(stmt->assign.lhs->location);
-                result = false;
-            }
-
-            free_sexpr(lhs_cond);
-        }
-
-        free_sexpr(fol_lhs);
+    struct Sexpr *lhs_cond = non_allocated_condition(context,
+                                                     stmt->assign.lhs->type,
+                                                     fol_lhs);
+    if (lhs_cond) {
+        verify_condition(context,
+                         stmt->assign.lhs->location,
+                         lhs_cond,
+                         "LHS not allocated",
+                         err_msg_assign_to_allocated(stmt->assign.lhs->location));
+        free_sexpr(lhs_cond);
     }
+
+    free_sexpr(fol_lhs);
 
     // Check RHS is not allocated
     struct Sexpr *rhs_cond = non_allocated_condition(context,
                                                      stmt->assign.rhs->type,
                                                      fol_rhs);
     if (rhs_cond) {
-        bool verify_result = verify_condition(context,
-                                              stmt->assign.rhs->location,
-                                              rhs_cond,
-                                              "RHS not allocated");
-        if (!verify_result) {
-            report_assign_from_allocated(stmt->assign.rhs->location);
-            result = false;
-        }
-
+        verify_condition(context,
+                         stmt->assign.rhs->location,
+                         rhs_cond,
+                         "RHS not allocated",
+                         err_msg_assign_from_allocated(stmt->assign.rhs->location));
         free_sexpr(rhs_cond);
     }
-
-    return result;
 }
 
-static bool verify_assign_stmt(struct VContext *context,
+static void verify_assign_stmt(struct VContext *context,
                                struct Statement *stmt)
 {
     // Verify the RHS
@@ -361,77 +272,39 @@ static bool verify_assign_stmt(struct VContext *context,
     // Construct reference chain for the LHS
     struct RefChain *ref = ref_chain_for_term(context, stmt->assign.lhs);
 
-    bool result = true;
-    if (fol_rhs == NULL || ref == NULL) {
-        // Verification failed
-        result = false;
-        poison_base_variable(context, stmt->assign.lhs);
+    // Check allocation conditions
+    check_assign_allocated_conditions(context, stmt, fol_rhs, ref);
 
-    } else {
-        // Check allocation conditions (this will not stop us doing the
-        // assignment, but it might raise an error)
-        if (!check_assign_allocated_conditions(context, stmt, fol_rhs, ref)) {
-            result = false;
-        }
+    // Do the assignment
+    update_reference(context, ref, fol_rhs);
+    fol_rhs = NULL;
 
-        // Do the assignment
-        update_reference(context, ref, fol_rhs);
-        fol_rhs = NULL;
-    }
-
-    free_sexpr(fol_rhs);
     free_ref_chain(ref);
-
-    return result;
 }
 
-static bool verify_swap_stmt(struct VContext *context,
+static void verify_swap_stmt(struct VContext *context,
                              struct Statement *stmt)
 {
     struct RefChain *ref_lhs = ref_chain_for_term(context, stmt->swap.lhs);
-    if (ref_lhs == NULL) {
-        poison_base_variable(context, stmt->swap.lhs);
-    }
-
-    struct Sexpr *lhs = NULL;
-    if (ref_lhs) {
-        lhs = ref_chain_to_sexpr(context, ref_lhs);
-    }
+    struct Sexpr *lhs = ref_chain_to_sexpr(context, ref_lhs);
 
     struct RefChain *ref_rhs = ref_chain_for_term(context, stmt->swap.rhs);
-    if (ref_rhs == NULL) {
-        poison_base_variable(context, stmt->swap.rhs);
-    }
+    struct Sexpr *rhs = ref_chain_to_sexpr(context, ref_rhs);
 
-    struct Sexpr *rhs = NULL;
-    if (ref_rhs) {
-        rhs = ref_chain_to_sexpr(context, ref_rhs);
-    }
+    update_reference(context, ref_lhs, rhs);
+    rhs = NULL;
 
-    bool ok = lhs != NULL && rhs != NULL;
+    update_reference(context, ref_rhs, lhs);
+    lhs = NULL;
 
-    if (ok) {
-        update_reference(context, ref_lhs, rhs);
-        rhs = NULL;
-
-        update_reference(context, ref_rhs, lhs);
-        lhs = NULL;
-    }
-
-    free_sexpr(lhs);
-    free_sexpr(rhs);
     free_ref_chain(ref_lhs);
     free_ref_chain(ref_rhs);
-
-    return ok;
 }
 
-static bool verify_return_stmt(struct VContext *context,
+static void verify_return_stmt(struct VContext *context,
                                struct Statement *stmt,
                                struct Sexpr *** ret_val_ptr)
 {
-    bool valid = true;
-
     // check that all (non-ghost) "vardecl" vars are deallocated before we return
     for (struct NameTypeList *node = context->var_decl_stack; node; node = node->next) {
         char *new_name = lookup_local(context, node->name);
@@ -445,17 +318,12 @@ static bool verify_return_stmt(struct VContext *context,
                     char *sanitised = sanitise_name(node->name);
                     char *msg = copy_string_3("'", sanitised, "' deallocated");
                     free(sanitised);
-                    bool verify_result = verify_condition(context,
-                                                          stmt->location,
-                                                          cond,
-                                                          msg);
+                    verify_condition(context,
+                                     stmt->location,
+                                     cond,
+                                     msg,
+                                     err_msg_var_still_allocated_at_return(node->name, stmt->location));
                     free(msg);
-
-                    if (!verify_result) {
-                        report_var_still_allocated_at_return(node->name, stmt->location);
-                        valid = false;
-                    }
-
                     free_sexpr(cond);
                 }
             } else {
@@ -465,25 +333,18 @@ static bool verify_return_stmt(struct VContext *context,
     }
 
     // verify the return itself (e.g. postconditions)
-    valid = verify_function_return(context,
-                                   stmt->location,
-                                   stmt->ret.value,
-                                   stmt->ghost,
-                                   ret_val_ptr) && valid;
-
-    return valid;
+    verify_function_return(context,
+                           stmt->location,
+                           stmt->ret.value,
+                           stmt->ghost,
+                           ret_val_ptr);
 }
 
-static bool verify_assert_stmt(struct VContext *context,
+static void verify_assert_stmt(struct VContext *context,
                                struct Statement *stmt)
 {
     struct Sexpr *expr = verify_term(context, stmt->assert_data.condition);
-    if (!expr) {
-        // Verification of the assert-condition failed
-        return false;
-    }
 
-    bool ok = true;
     int num_facts = get_num_facts(context);
 
     // If there is a proof, we should "execute" it now
@@ -498,17 +359,13 @@ static bool verify_assert_stmt(struct VContext *context,
     }
 
     // Execute the proof
-    ok = verify_statements(context, stmt->assert_data.proof, NULL);
+    verify_statements(context, stmt->assert_data.proof, NULL);
 
     // The head of context->assert_exprs is now a modified expression to be proved
     // (where some foralls have been replaced with lets).
     // Get the SMT solver to prove the modified expression.
-    if (ok) {
-        ok = verify_condition(context, stmt->location, context->assert_exprs->left, "assert");
-        if (!ok) {
-            report_assert_failure(stmt);
-        }
-    }
+    verify_condition(context, stmt->location, context->assert_exprs->left, "assert",
+                     err_msg_assert_failure(stmt));
 
     // remove the saved assert expression from the context
     struct Sexpr *tail = context->assert_exprs->right;
@@ -527,34 +384,23 @@ static bool verify_assert_stmt(struct VContext *context,
         context->local_hidden = hidden_backup;
         hidden_backup = NULL;
     }
-
-    // Done!
-    return ok;
 }
 
-static bool verify_assume_stmt(struct VContext *context,
+static void verify_assume_stmt(struct VContext *context,
                                struct Statement *stmt)
 {
     struct Sexpr *expr = verify_term(context, stmt->assume.condition);
-    if (!expr) {
-        return false;
-    }
 
     // Just add the fact without proving it!
     add_fact(context, expr);
-    return true;
 }
 
-static bool verify_if_stmt(struct VContext *context,
+static void verify_if_stmt(struct VContext *context,
                            struct Statement *stmt,
                            struct Sexpr *** ret_val_ptr)
 {
     // Verify the condition itself
     struct Sexpr *cond = verify_term(context, stmt->if_data.condition);
-    if (!cond) {
-        // Verification of the condition failed; no point continuing
-        return false;
-    }
 
     struct HashTable * hidden_backup = new_hash_table();
 
@@ -593,7 +439,7 @@ static bool verify_if_stmt(struct VContext *context,
         make_string_sexpr(cond_item->fol_name));
 
     // Verify the "then" branch
-    bool then_ok = verify_statements(context, stmt->if_data.then_block, ret_val_ptr);
+    verify_statements(context, stmt->if_data.then_block, ret_val_ptr);
 
     hash_table_copy(context->local_hidden, hidden_backup);
 
@@ -613,7 +459,7 @@ static bool verify_if_stmt(struct VContext *context,
         make_string_sexpr(cond_item->fol_name));
 
     // Verify the "else" branch
-    bool else_ok = verify_statements(context, stmt->if_data.else_block, ret_val_ptr);
+    verify_statements(context, stmt->if_data.else_block, ret_val_ptr);
 
     free_hash_table(context->local_hidden);
     context->local_hidden = hidden_backup;
@@ -649,22 +495,14 @@ static bool verify_if_stmt(struct VContext *context,
     free_hash_table(then_snapshot);
     free_hash_table(original_snapshot);
     free_hash_table(modified_vars);
-
-    return then_ok && else_ok;
 }
 
-static bool verify_match_stmt(struct VContext *context,
+static void verify_match_stmt(struct VContext *context,
                               struct Statement *stmt,
                               struct Sexpr *** ret_val_ptr)
 {
     // Verify the scrutinee
     struct Sexpr *scrut = verify_term(context, stmt->match.scrutinee);
-    if (!scrut) {
-        // this case is actually unreachable currently, because the match-compiler
-        // always turns the scrutinee into TM_VAR, which will always verify
-        return false;
-    }
-
 
     // Find all vars modified on all arms.
     // Also add any bound vars to the environment at this point.
@@ -672,12 +510,7 @@ static bool verify_match_stmt(struct VContext *context,
     for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
         // Add the payload variable as a reference
         if (arm->pattern->tag == PAT_VARIANT && arm->pattern->variant.payload->tag == PAT_VAR) {
-            if (!bind_payload(context, stmt->match.scrutinee, &arm->pattern->variant)) {
-                // (Note: I think this is unreachable currently, because it can only
-                // happen when the scrutinee fails to verify, but we checked for that
-                // already above.)
-                poison_local(context, arm->pattern->variant.payload->var.name);
-            }
+            bind_payload(context, stmt->match.scrutinee, &arm->pattern->variant);
         }
 
         // Now we can get the modified vars
@@ -699,8 +532,6 @@ static bool verify_match_stmt(struct VContext *context,
 
     struct Sexpr *all_check_exprs = NULL;
     struct Sexpr **check_expr_tail = &all_check_exprs;
-
-    bool all_ok = true;
 
     struct HashTable * hidden_backup = new_hash_table();
     hash_table_copy(hidden_backup, context->local_hidden);
@@ -760,10 +591,7 @@ static bool verify_match_stmt(struct VContext *context,
                       copy_sexpr(check_expr));
 
         // Verify the right-hand-side
-        bool rhs_ok = verify_statements(context, arm->rhs, ret_val_ptr);
-        if (!rhs_ok) {
-            all_ok = false;
-        }
+        verify_statements(context, arm->rhs, ret_val_ptr);
 
         hash_table_copy(context->local_hidden, hidden_backup);
 
@@ -799,66 +627,38 @@ static bool verify_match_stmt(struct VContext *context,
     // Set path condition to the OR of all captured path conditions
     context->path_condition = disjunction(captured_path_conditions);
     captured_path_conditions = NULL;
-
-    return all_ok;
 }
 
-static bool verify_match_failure_stmt(struct VContext *context,
+static void verify_match_failure_stmt(struct VContext *context,
                                       struct Statement *stmt)
 {
     // this should be unreachable
     struct Sexpr *condition = make_string_sexpr("false");
-    bool check_result = verify_condition(context, stmt->location, condition, "match exhaustive");
+    verify_condition(context, stmt->location, condition, "match exhaustive",
+                     err_msg_nonexhaustive_match(stmt->location));
     free_sexpr(condition);
-
-    if (!check_result) {
-        report_nonexhaustive_match(stmt->location);
-        return false;
-    } else {
-        return true;
-    }
 }
 
 
 // Verify that all invariants are currently true.
 // Leaves path conditions and facts unchanged.
-static bool check_invariants(struct VContext *context,
+static void check_invariants(struct VContext *context,
                              struct Statement *stmt,
                              bool on_exit)
 {
-    bool valid = true;
     int num_facts = get_num_facts(context);
 
     struct Attribute *attr = stmt->while_data.attributes;
     while (attr) {
-        if (attr->tag == ATTR_INVARIANT && attr->valid) {
+        if (attr->tag == ATTR_INVARIANT) {
             struct Sexpr *expr = verify_term(context, attr->term);
-            if (expr != NULL) {
-                bool verify_result = verify_condition(context, attr->term->location, expr,
-                                                      on_exit ? "invariant at exit" : "invariant at entry");
+            verify_condition(context, attr->term->location, expr,
+                             on_exit ? "invariant at exit" : "invariant at entry",
+                             on_exit ? err_msg_invariant_violated_on_exit(attr)
+                                     : err_msg_invariant_violated_on_entry(attr));
 
-                if (verify_result) {
-                    // Invariant was proved to be true
-                    // Add it as a fact for the next invariant
-                    add_fact(context, expr);
-
-                } else {
-                    // Invariant was not true (or not proved)
-                    free_sexpr(expr);
-
-                    if (on_exit) {
-                        report_invariant_violated_on_exit(attr);
-                    } else {
-                        report_invariant_violated_on_entry(attr);
-                    }
-
-                    valid = false;
-                }
-            } else {
-                // Invariant expression failed to validate
-                valid = false;
-                attr->valid = false;
-            }
+            // Add the invariant as a fact for the next invariant
+            add_fact(context, expr);
         }
 
         attr = attr->next;
@@ -866,8 +666,6 @@ static bool check_invariants(struct VContext *context,
 
     // Remove any added facts
     revert_facts(context, num_facts);
-
-    return valid;
 }
 
 // Get current value of the variant.
@@ -887,13 +685,10 @@ static struct Sexpr * get_variant_value(struct VContext *context,
 // Give all the modified variables new FOL-names, using declare-const so the solver
 // doesn't know anything about their value.
 // Also add all invariants as facts (given current path condition).
-// Returns false if any verification error occurred during the above.
-static bool havoc_variables(struct VContext *context,
+static void havoc_variables(struct VContext *context,
                             struct HashTable *modified_vars,
                             struct Statement *stmt)
 {
-    bool ok = true;
-
     // "Havoc" each modified variable
     struct HashIterator *iter = new_hash_iterator(modified_vars);
     const char *key;
@@ -908,19 +703,12 @@ static bool havoc_variables(struct VContext *context,
     // Re-assert the invariants
     struct Attribute *attr = stmt->while_data.attributes;
     while (attr) {
-        if (attr->tag == ATTR_INVARIANT && attr->valid) {
+        if (attr->tag == ATTR_INVARIANT) {
             struct Sexpr *expr = verify_term(context, attr->term);
-            if (expr == NULL) {
-                ok = false;
-                attr->valid = false;
-            } else {
-                add_fact(context, expr);
-            }
+            add_fact(context, expr);
         }
         attr = attr->next;
     }
-
-    return ok;
 }
 
 // Return a "<" expression comparing variant terms
@@ -1116,15 +904,11 @@ static struct Sexpr *variant_bounded_expr(struct Type *type,
 
 // Verify that the new variant is lower than the old.
 // May modify the path condition.
-static bool check_variant_has_decreased(struct VContext *context,
+static void check_variant_has_decreased(struct VContext *context,
                                         struct Statement *while_stmt,
                                         struct Sexpr *old_variant,
                                         struct Sexpr *new_variant)
 {
-    if (old_variant == NULL || new_variant == NULL) {
-        return false;
-    }
-
     struct Attribute *attr = while_stmt->while_data.attributes;
     while (attr) {
         if (attr->tag == ATTR_DECREASES) {
@@ -1135,36 +919,22 @@ static bool check_variant_has_decreased(struct VContext *context,
 
     // Assert that the loop-condition is still true.
     struct Sexpr *expr = verify_term(context, while_stmt->while_data.condition);
-    if (expr == NULL) {
-        // This means the while-condition failed to verify after the loop
-        // (example: the condition includes "x/y" and y became zero during the loop)
-        return false;
-    }
     context->path_condition = and_sexpr(context->path_condition, expr);
 
     // Compare the variants.
     struct Sexpr *cmp_expr = variant_cmp_expr(attr->term->type,
                                               copy_sexpr(old_variant), copy_sexpr(new_variant));
-    bool valid = verify_condition(context, attr->location, cmp_expr, "decreases");
+    verify_condition(context, attr->location, cmp_expr, "decreases",
+                     err_msg_decreases_might_not_decrease(attr));
     free_sexpr(cmp_expr);
-
-    if (!valid) {
-        report_decreases_might_not_decrease(attr);
-    }
-
-    return valid;
 }
 
 // Verify that the variant is bounded below - this is automatic for TY_FINITE_INT and TY_BOOL
 // but needs to be checked for TY_MATH_INT.
-static bool check_variant_is_bounded(struct VContext *context,
+static void check_variant_is_bounded(struct VContext *context,
                                      struct Statement *while_stmt,
                                      struct Sexpr *variant)
 {
-    if (variant == NULL) {
-        return false;
-    }
-
     struct Attribute *attr = while_stmt->while_data.attributes;
     while (attr) {
         if (attr->tag == ATTR_DECREASES) {
@@ -1175,31 +945,19 @@ static bool check_variant_is_bounded(struct VContext *context,
 
     struct Sexpr *bounded_expr = variant_bounded_expr(attr->term->type,
                                                       variant);
-    bool valid = true;
-
     if (bounded_expr) {
-        valid = verify_condition(context, attr->location, bounded_expr, "decreases bounded below");
+        verify_condition(context, attr->location, bounded_expr, "decreases bounded below",
+                         err_msg_decreases_not_bounded_below(attr));
         free_sexpr(bounded_expr);
-
-        if (!valid) {
-            report_decreases_not_bounded_below(attr);
-        }
     }
-
-    return valid;
 }
 
-bool verify_while_stmt(struct VContext *context,
+void verify_while_stmt(struct VContext *context,
                        struct Statement *stmt,
                        struct Sexpr *** ret_val_ptr)
 {
-    for (struct Attribute *attr = stmt->while_data.attributes; attr; attr = attr->next) {
-        attr->valid = true;
-    }
-
-
     // Verify that the invariants hold on entry.
-    bool valid = check_invariants(context, stmt, false);
+    check_invariants(context, stmt, false);
 
 
     // Find the variables modified in the loop.
@@ -1209,9 +967,8 @@ bool verify_while_stmt(struct VContext *context,
 
     // Reset all variables modified in the while loop to indeterminate values.
     // Also add facts to say that the invariants remain satisfied.
-    if (!havoc_variables(context, modified_vars, stmt)) {
-        valid = false;
-    }
+    havoc_variables(context, modified_vars, stmt);
+
 
     // We want to keep these new facts, but we will be removing any facts
     // generated during the while-loop itself
@@ -1222,26 +979,17 @@ bool verify_while_stmt(struct VContext *context,
     // (Because "while" is a keyword, we can be sure there is no source-code
     // variable named "while".)
     struct Sexpr *cond_expr = verify_term(context, stmt->while_data.condition);
-    struct Item *cond_item;
-    if (cond_expr == NULL) {
-        valid = false;
-        cond_item = NULL;
-    } else {
-        cond_item = update_local(context,
-                                 "while",
-                                 NULL,
-                                 make_string_sexpr("Bool"),
-                                 cond_expr);
-        cond_expr = NULL;
-    }
+    struct Item *cond_item = update_local(context,
+                                          "while",
+                                          NULL,
+                                          make_string_sexpr("Bool"),
+                                          cond_expr);
+    cond_expr = NULL;
 
     // Add a path condition that the loop-condition is true.
-    struct Sexpr *path_cond_before = NULL;
-    if (cond_item) {
-        path_cond_before = context->path_condition;
-        context->path_condition = and_sexpr(copy_sexpr(path_cond_before),
-                                            make_string_sexpr(cond_item->fol_name));
-    }
+    struct Sexpr *path_cond_before = context->path_condition;
+    context->path_condition = and_sexpr(copy_sexpr(path_cond_before),
+                                        make_string_sexpr(cond_item->fol_name));
 
     // Snapshot the current version numbers of each variable (as we will
     // need to reset back again after the loop)
@@ -1251,48 +999,33 @@ bool verify_while_stmt(struct VContext *context,
 
     // Get variant at start of loop
     struct Sexpr *initial_variant = get_variant_value(context, stmt);
-    if (!initial_variant) {
-        valid = false;
-    }
 
     // Verify that the initial variant is bounded
-    if (!check_variant_is_bounded(context, stmt, initial_variant)) {
-        valid = false;
-    }
+    check_variant_is_bounded(context, stmt, initial_variant);
 
     struct HashTable *hidden_backup = new_hash_table();
     hash_table_copy(hidden_backup, context->local_hidden);
 
     // Verify the loop body
-    if (!verify_statements(context, stmt->while_data.body, ret_val_ptr)) {
-        valid = false;
-    }
+    verify_statements(context, stmt->while_data.body, ret_val_ptr);
 
     // Verify that the invariant still holds
-    if (!check_invariants(context, stmt, true)) {
-        valid = false;
-    }
+    check_invariants(context, stmt, true);
 
     // Verify that the variant has decreased
-    if (initial_variant) {
-        struct Sexpr *new_variant = get_variant_value(context, stmt);
-        if (!check_variant_has_decreased(context, stmt, initial_variant, new_variant)) {
-            valid = false;
-        }
-        free_sexpr(new_variant);
-    }
+    struct Sexpr *new_variant = get_variant_value(context, stmt);
+    check_variant_has_decreased(context, stmt, initial_variant, new_variant);
+    free_sexpr(new_variant);
 
     free_sexpr(initial_variant);
     initial_variant = NULL;
 
 
     // Now consider instead the case where the loop condition is false.
-    if (cond_item) {
-        free_sexpr(context->path_condition);
-        context->path_condition = and_not_sexpr(path_cond_before,
-                                                make_string_sexpr(cond_item->fol_name));
-        path_cond_before = NULL;
-    }
+    free_sexpr(context->path_condition);
+    context->path_condition = and_not_sexpr(path_cond_before,
+                                            make_string_sexpr(cond_item->fol_name));
+    path_cond_before = NULL;
 
     revert_to_snapshot(context, snapshot);
     free_hash_table(snapshot);
@@ -1306,21 +1039,13 @@ bool verify_while_stmt(struct VContext *context,
     // are now considering the case where the loop condition is false
     // and the loop doesn't run).
     revert_facts(context, num_facts);
-
-
-    return valid;
 }
 
 
-static bool verify_call_stmt(struct VContext *context, struct Statement *stmt)
+static void verify_call_stmt(struct VContext *context, struct Statement *stmt)
 {
     struct Sexpr *fol_call_term = verify_call_term(context, stmt->call.term);
-    if (!fol_call_term) {
-        return false;
-    }
-
     free_sexpr(fol_call_term);
-    return true;
 }
 
 static void verify_show_hide_stmt(struct VContext *context, struct Statement *stmt)
@@ -1333,68 +1058,72 @@ static void verify_show_hide_stmt(struct VContext *context, struct Statement *st
 }
 
 
-bool verify_statements(struct VContext *context,
+void verify_statements(struct VContext *context,
                        struct Statement *stmt,
                        struct Sexpr *** ret_val_ptr)
 {
-    bool all_ok = true;
-
     while (stmt) {
+        if (context->error_found && !fol_continue_after_error(context->fol_runner)) {
+            // We might as well stop here
+            return;
+        }
+
         switch (stmt->tag) {
         case ST_VAR_DECL:
             // verify_var_decl_stmt will itself do the rest of the list
-            return verify_var_decl_stmt(context, stmt, ret_val_ptr) && all_ok;
+            verify_var_decl_stmt(context, stmt, ret_val_ptr);
+            return;
 
         case ST_FIX:
-            all_ok = verify_fix_stmt(context, stmt) && all_ok;
+            verify_fix_stmt(context, stmt);
             break;
 
         case ST_OBTAIN:
-            all_ok = verify_obtain_stmt(context, stmt) && all_ok;
+            verify_obtain_stmt(context, stmt);
             break;
 
         case ST_USE:
-            all_ok = verify_use_stmt(context, stmt) && all_ok;
+            verify_use_stmt(context, stmt);
             break;
 
         case ST_ASSIGN:
-            all_ok = verify_assign_stmt(context, stmt) && all_ok;
+            verify_assign_stmt(context, stmt);
             break;
 
         case ST_SWAP:
-            all_ok = verify_swap_stmt(context, stmt) && all_ok;
+            verify_swap_stmt(context, stmt);
             break;
 
         case ST_RETURN:
-            all_ok = verify_return_stmt(context, stmt, ret_val_ptr) && all_ok;
+            verify_return_stmt(context, stmt, ret_val_ptr);
             break;
 
         case ST_ASSERT:
-            all_ok = verify_assert_stmt(context, stmt) && all_ok;
+            verify_assert_stmt(context, stmt);
             break;
 
         case ST_ASSUME:
-            all_ok = verify_assume_stmt(context, stmt) && all_ok;
+            verify_assume_stmt(context, stmt);
             break;
 
         case ST_IF:
-            all_ok = verify_if_stmt(context, stmt, ret_val_ptr) && all_ok;
+            verify_if_stmt(context, stmt, ret_val_ptr);
             break;
 
         case ST_WHILE:
-            all_ok = verify_while_stmt(context, stmt, ret_val_ptr) && all_ok;
+            verify_while_stmt(context, stmt, ret_val_ptr);
             break;
 
         case ST_CALL:
-            all_ok = verify_call_stmt(context, stmt) && all_ok;
+            verify_call_stmt(context, stmt);
             break;
 
         case ST_MATCH:
-            all_ok = verify_match_stmt(context, stmt, ret_val_ptr) && all_ok;
+            verify_match_stmt(context, stmt, ret_val_ptr);
             break;
 
         case ST_MATCH_FAILURE:
-            all_ok = verify_match_failure_stmt(context, stmt) && all_ok;
+            verify_match_failure_stmt(context, stmt);
             break;
 
         case ST_SHOW_HIDE:
@@ -1404,6 +1133,4 @@ bool verify_statements(struct VContext *context,
 
         stmt = stmt->next;
     }
-
-    return all_ok;
 }

@@ -11,6 +11,8 @@ repository.
 #ifndef VERIFIER_CONTEXT_H
 #define VERIFIER_CONTEXT_H
 
+#include "fol.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -130,14 +132,14 @@ struct VContext {
     struct HashTable *debug_files_created;
     struct CacheDb *cache_db;
 
-    // Error and timeout handling
-    int timeout_seconds;
-    bool continue_after_error;
+    // Error handling
     bool error_found;
-
 
     // Hidden Names
     struct HashTable *local_hidden;
+
+    // FOL runner
+    struct FolRunner *fol_runner;
 };
 
 enum RefType {
@@ -328,7 +330,6 @@ int get_num_facts(struct VContext *context);
 void revert_facts(struct VContext *context, int num);
 
 
-
 //-------------------------------------------------------------------------------
 // Local variable helpers
 //-------------------------------------------------------------------------------
@@ -340,11 +341,6 @@ struct Item * update_local(struct VContext *context,
                            struct Type *type,       // Only needed if fol_term == NULL
                            struct Sexpr *fol_type,            // Handed over
                            struct Sexpr *fol_term);           // Handed over; can be NULL
-
-// Same as update_local but does not add any definition to the env.
-// Used in cases where a variable update failed to verify.
-void poison_local(struct VContext *context,
-                  const char *local_name);     // Shared with AST
 
 // Lookup the current "FOL-name" of a local.
 // Returns new allocated string (or NULL if not found).

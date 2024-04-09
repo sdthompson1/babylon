@@ -1,4 +1,4 @@
-Verifying: Main.MyType (cached)
+Verifying: Main.MyType
 Verifying: Main.NEW_CONST
-Verifying: Main.f (cached)
+Verifying: Main.f
 Verification successful

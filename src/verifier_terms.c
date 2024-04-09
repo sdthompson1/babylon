@@ -27,7 +27,7 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-bool bind_payload(struct VContext *context,
+void bind_payload(struct VContext *context,
                   struct Term *scrutinee,
                   struct PatData_Variant *pat_data)
 {
@@ -36,6 +36,12 @@ bool bind_payload(struct VContext *context,
     }
     if (pat_data->payload == NULL || pat_data->payload->tag != PAT_VAR) {
         fatal_error("payload pattern is wrong");
+    }
+    if (!ref_chain_is_lvalue(scrutinee)) {
+        // this should never trigger, because currently the match
+        // compiler always replaces the scrutinee with a simple
+        // variable (if it is not already such)
+        fatal_error("scrutinee is not an lvalue");
     }
 
     uint32_t variant_num = 0;
@@ -48,20 +54,14 @@ bool bind_payload(struct VContext *context,
 
     struct RefChain * ref_scrut = ref_chain_for_term(context, scrutinee);
 
-    if (ref_scrut) {
-        struct RefChain * ref_payload = alloc(sizeof(struct RefChain));
-        ref_payload->ref_type = RT_VARIANT;
-        ref_payload->type = NULL;
-        ref_payload->fol_type = verify_type(scrutinee->type);
-        ref_payload->base = ref_scrut;
-        ref_payload->index = variant_num;
+    struct RefChain * ref_payload = alloc(sizeof(struct RefChain));
+    ref_payload->ref_type = RT_VARIANT;
+    ref_payload->type = NULL;
+    ref_payload->fol_type = verify_type(scrutinee->type);
+    ref_payload->base = ref_scrut;
+    ref_payload->index = variant_num;
 
-        hash_table_insert(context->refs, pat_data->payload->var.name, ref_payload);
-        return true;
-
-    } else {
-        return false;
-    }
+    hash_table_insert(context->refs, pat_data->payload->var.name, ref_payload);
 }
 
 static struct Sexpr *convert_indexes(struct VContext *context,
@@ -73,7 +73,6 @@ static struct Sexpr *convert_indexes(struct VContext *context,
 {
     const int ndim = array_type->array_data.ndim;
 
-    bool ok = true;
     struct Sexpr *result = NULL;
 
     if (ndim > 1) {
@@ -81,65 +80,71 @@ static struct Sexpr *convert_indexes(struct VContext *context,
         struct Sexpr **tail = &result->right;
         for (struct OpTermList *index = indexes; index; index = index->next) {
             struct Sexpr *idx = verify_term(context, index->rhs);
-            if (idx == NULL) {
-                ok = false;
-            } else {
-                *tail = make_list1_sexpr(idx);
-                tail = &(*tail)->right;
-            }
+            *tail = make_list1_sexpr(idx);
+            tail = &(*tail)->right;
         }
     } else {
         result = verify_term(context, indexes->rhs);
-        ok = (result != NULL);
     }
 
-    if (ok) {
-        struct Sexpr *size;
+    struct Sexpr *size;
 
-        if (array_type->array_data.sizes != NULL) {
-            size = fixed_arr_size_sexpr(array_type);
-            free_sexpr(fol_lhs);
-        } else {
-            size = make_string_sexpr("$FLD1");
-            make_instance(&size, copy_sexpr(fol_type->right->right->left));
-            size = make_list2_sexpr(size, fol_lhs);  // handover fol_lhs
-        }
-        fol_lhs = NULL;
-
-        struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size", indexes, false);
-        in_bounds = make_list3_sexpr(
-            make_string_sexpr("let"),
-            make_list2_sexpr(
-                make_list2_sexpr(
-                    make_string_sexpr("$idx"),
-                    copy_sexpr(result)),
-                make_list2_sexpr(
-                    make_string_sexpr("$size"),
-                    size)),
-            in_bounds);
-
-        bool verify_result = verify_condition(context, location, in_bounds, "array bounds");
-        free_sexpr(in_bounds);
-
-        if (!verify_result) {
-            report_out_of_bounds(location);
-            ok = false;
-        }
-    } else {
+    if (array_type->array_data.sizes != NULL) {
+        size = fixed_arr_size_sexpr(array_type);
         free_sexpr(fol_lhs);
-        fol_lhs = NULL;
-    }
-
-    if (ok) {
-        return result;
     } else {
-        free_sexpr(result);
-        return NULL;
+        size = make_string_sexpr("$FLD1");
+        make_instance(&size, copy_sexpr(fol_type->right->right->left));
+        size = make_list2_sexpr(size, fol_lhs);  // handover fol_lhs
+    }
+    fol_lhs = NULL;
+
+    struct Sexpr *in_bounds = array_index_in_range(ndim, "$idx", "$size", indexes, false);
+    in_bounds = make_list3_sexpr(
+        make_string_sexpr("let"),
+        make_list2_sexpr(
+            make_list2_sexpr(
+                make_string_sexpr("$idx"),
+                copy_sexpr(result)),
+            make_list2_sexpr(
+                make_string_sexpr("$size"),
+                size)),
+        in_bounds);
+
+    verify_condition(context, location, in_bounds, "array bounds", err_msg_out_of_bounds(location));
+    free_sexpr(in_bounds);
+
+    return result;
+}
+
+// Determine whether a term is an lvalue.
+bool ref_chain_is_lvalue(const struct Term *term)
+{
+    switch (term->tag) {
+    case TM_VAR:
+        return true;
+
+    case TM_FIELD_PROJ:
+        return ref_chain_is_lvalue(term->field_proj.lhs);
+
+    case TM_ARRAY_PROJ:
+        return ref_chain_is_lvalue(term->array_proj.lhs);
+
+    case TM_STRING_LITERAL:
+    case TM_ARRAY_LITERAL:
+        return true;
+
+    case TM_CAST:
+        return (term->type->tag == TY_ARRAY
+                && ref_chain_is_lvalue(term->cast.operand));
+
+    default:
+        return false;
     }
 }
 
 // Make a new reference chain for an lvalue term.
-// Returns NULL on failure (e.g. array index out of range, or not lvalue)
+// Should not return NULL.
 struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
 {
     switch (term->tag) {
@@ -147,11 +152,8 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
         {
             struct RefChain *ref = hash_table_lookup(context->refs, term->var.name);
             if (ref) {
-                if (validate_ref_chain(context, ref, term->location)) {
-                    return copy_ref_chain(ref);
-                } else {
-                    return NULL;
-                }
+                validate_ref_chain(context, ref, term->location);
+                return copy_ref_chain(ref);
             } else {
                 ref = alloc(sizeof(struct RefChain));
                 ref->ref_type = RT_LOCAL_VAR;
@@ -168,9 +170,6 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
     case TM_FIELD_PROJ:
         {
             struct RefChain *base = ref_chain_for_term(context, term->field_proj.lhs);
-            if (base == NULL) {
-                return NULL;
-            }
 
             struct RefChain *ref = alloc(sizeof(struct RefChain));
             ref->ref_type = RT_FIELD;
@@ -194,9 +193,6 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
     case TM_ARRAY_PROJ:
         {
             struct RefChain *base = ref_chain_for_term(context, term->array_proj.lhs);
-            if (base == NULL) {
-                return NULL;
-            }
 
             struct RefChain *ref = alloc(sizeof(struct RefChain));
             ref->ref_type = RT_ARRAY_ELEMENT;
@@ -209,10 +205,6 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
 
             // we need a sexpr for the lhs so that we can get the size
             struct Sexpr *fol_lhs = ref_chain_to_sexpr(context, base);
-            if (fol_lhs == NULL) {
-                free_ref_chain(ref);
-                return NULL;
-            }
 
             struct Sexpr *index =
                 convert_indexes(context,
@@ -221,10 +213,6 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
                                 term->array_proj.indexes,
                                 fol_lhs,  // handover
                                 ref->fol_type);
-            if (index == NULL) {
-                free_ref_chain(ref);
-                return NULL;
-            }
             ref->array_index = index;
 
             return ref;
@@ -248,9 +236,6 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
         // Array casts are considered lvalues. Numeric casts are not.
         if (term->type->tag == TY_ARRAY) {
             struct RefChain *base = ref_chain_for_term(context, term->cast.operand);
-            if (base == NULL) {
-                return NULL;
-            }
 
             bool src_fixed = (term->cast.operand->type->array_data.sizes != NULL);
             bool dest_fixed = (term->type->array_data.sizes != NULL);
@@ -268,13 +253,12 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
             }
 
         } else {
-            return NULL;
+            fatal_error("ref_chain_for_term: not lvalue");
         }
         break;
 
     default:
-        // Not an lvalue.
-        return NULL;
+        fatal_error("ref_chain_for_term: not lvalue");
     }
 }
 
@@ -292,12 +276,8 @@ static struct Sexpr *translate_var(struct VContext *cxt, const char *var_name, b
 
     if (fol_name) {
         if (hash_table_lookup(cxt->local_env, fol_name) == NULL) {
-            // variable has been "poisoned"
-            free((void*)fol_name);
-            return NULL;
-
+            fatal_error("unexpected: name not found in hash table");
         } else {
-            // success
             return make_string_sexpr_handover(fol_name);
         }
     }
@@ -306,7 +286,7 @@ static struct Sexpr *translate_var(struct VContext *cxt, const char *var_name, b
     return make_string_sexpr_handover(copy_string_2("%", var_name));
 }
 
-// This can return NULL (if the base variable is poisoned).
+// This shouldn't return NULL.
 // Note: The caller should validate the reference (using validate_ref_chain) if it
 // is not known to be valid. A reference created by ref_chain_for_term can be assumed
 // to be valid just after it is created, but it might become invalid later on (e.g. if
@@ -321,9 +301,6 @@ struct Sexpr *ref_chain_to_sexpr(struct VContext *cxt, struct RefChain *ref)
     case RT_VARIANT:
         {
             struct Sexpr *base = ref_chain_to_sexpr(cxt, ref->base);
-            if (!base) {
-                return NULL;
-            }
 
             const char *prefix = ref->ref_type == RT_FIELD ? "$FLD" : "$INF";
             char selector[30];
@@ -341,9 +318,6 @@ struct Sexpr *ref_chain_to_sexpr(struct VContext *cxt, struct RefChain *ref)
     case RT_ARRAY_ELEMENT:
         {
             struct Sexpr *base = ref_chain_to_sexpr(cxt, ref->base);
-            if (!base) {
-                return NULL;
-            }
 
             struct Sexpr *expr;
             if (ref->fixed_size) {
@@ -379,9 +353,6 @@ static struct Sexpr *ref_chain_to_atomic_sexpr(struct VContext *cxt,
                                                struct Sexpr *fol_type)  // will be copied
 {
     struct Sexpr *expr = ref_chain_to_sexpr(cxt, ref);
-    if (!expr) {
-        return NULL;
-    }
     if (expr->type != S_STRING) {
         uintptr_t unique_num = (uintptr_t) hash_table_lookup(cxt->local_counter, "$RefUpdate");
         hash_table_insert(cxt->local_counter, "$RefUpdate", (void*)(unique_num + 1));
@@ -403,28 +374,24 @@ static struct Sexpr *ref_chain_to_atomic_sexpr(struct VContext *cxt,
 
 // Validate that a reference is valid - e.g. that the array hasn't been resized
 // or the variant hasn't been changed to a different tag.
-bool validate_ref_chain(struct VContext *context,
+void validate_ref_chain(struct VContext *context,
                         struct RefChain *ref,
                         struct Location location)
 {
     switch (ref->ref_type) {
     case RT_LOCAL_VAR:
-        return true;
+        break;
 
     case RT_FIELD:
-        return validate_ref_chain(context, ref->base, location);
+        validate_ref_chain(context, ref->base, location);
+        break;
 
     case RT_VARIANT:
         {
-            if (!validate_ref_chain(context, ref->base, location)) {
-                return false;
-            }
+            validate_ref_chain(context, ref->base, location);
 
             // Validate that the LHS is still of the same variant
             struct Sexpr *base = ref_chain_to_sexpr(context, ref->base);
-            if (!base) {
-                return false;
-            }
 
             char selector[30];
             sprintf(selector, "$IN%" PRIu32, ref->index);
@@ -440,44 +407,32 @@ bool validate_ref_chain(struct VContext *context,
                 base);
             base = NULL;
 
-            bool verify_result = verify_condition(context, location, expr, "variant ref valid");
+            verify_condition(context, location, expr, "variant ref valid",
+                             err_msg_ref_invalid_variant_change(location));
 
             free_sexpr(expr);
             expr = NULL;
-
-            if (!verify_result) {
-                report_ref_invalid_variant_change(location);
-            }
-
-            return verify_result;
         }
         break;
 
     case RT_ARRAY_ELEMENT:
-        {
-            if (!validate_ref_chain(context, ref->base, location)) {
-                return false;
-            }
+        validate_ref_chain(context, ref->base, location);
 
-            // Refs to elements of resizable arrays are now illegal
-            // so there is nothing further to check
-            return true;
-        }
+        // Refs to elements of resizable arrays are now illegal
+        // so there is nothing further to check
         break;
 
     case RT_ARRAY_CAST:
         // Nothing to check here.
-        return validate_ref_chain(context, ref->base, location);
+        validate_ref_chain(context, ref->base, location);
 
     case RT_SEXPR:
         // We assume RT_SEXPR is only used in cases where the
         // underlying s-expression can never become invalid. At the
         // time of writing, RT_SEXPR is only used for string literals,
         // so this should be correct.
-        return true;
+        break;
     }
-
-    fatal_error("validate_ref_chain: invalid ref_type");
 }
 
 // Update the target of the given reference chain to contain 'rhs'.
@@ -504,10 +459,6 @@ void update_reference(struct VContext *context,
             // Make an expression for the LHS of the field-projection
             // (If this is a complex expression, give it a name, to reduce duplication)
             struct Sexpr *lhs = ref_chain_to_atomic_sexpr(context, ref->base, ref->fol_type);
-            if (lhs == NULL) {
-                free_sexpr(rhs);
-                return;
-            }
 
             // Now set <LHS> to {<LHS> with <field> set to <RHS>}
             struct Sexpr *new_lhs = copy_record_fields(lhs, field_types);
@@ -552,10 +503,6 @@ void update_reference(struct VContext *context,
     case RT_ARRAY_ELEMENT:
         {
             struct Sexpr *lhs = ref_chain_to_atomic_sexpr(context, ref->base, ref->fol_type);
-            if (lhs == NULL) {
-                free_sexpr(rhs);
-                return;
-            }
 
             struct Sexpr *update = NULL;
 
@@ -640,11 +587,8 @@ static void* verify_var(void *context, struct Term *term, void *type_result)
     struct RefChain *ref = hash_table_lookup(cxt->refs, term->var.name);
     if (ref) {
         // reference variable
-        if (validate_ref_chain(cxt, ref, term->location)) {
-            return ref_chain_to_sexpr(context, ref);
-        } else {
-            return NULL;
-        }
+        validate_ref_chain(cxt, ref, term->location);
+        return ref_chain_to_sexpr(context, ref);
     } else {
         // normal local variable
         return translate_var(context, term->var.name, term->var.postcond_new);
@@ -964,11 +908,6 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
 
 static void* verify_array_literal(void *context, struct Term *term, void *type_result, void *list_result)
 {
-    if (list_result == NULL && term->array_literal.terms != NULL) {
-        // verification error in one of the array element terms
-        return NULL;
-    }
-
     struct VContext *cxt = context;
     struct Sexpr *sub_exprs = list_result;
 
@@ -1100,14 +1039,9 @@ static struct Sexpr* verify_numeric_cast(struct VContext *cxt, struct Term *term
             make_list2_sexpr(make_string_sexpr_handover(check_fun),
                              copy_sexpr(operand));
 
-        bool verify_result = verify_condition(cxt, term->location, condition_expr, "cast");
+        verify_condition(cxt, term->location, condition_expr, "cast",
+                         err_msg_operator_precondition_fail(term));
         free_sexpr(condition_expr);
-
-        if (!verify_result) {
-            report_operator_precondition_fail(term);
-            free_sexpr(operand);
-            return NULL;
-        }
     }
 
     return operand;
@@ -1132,14 +1066,8 @@ static struct Sexpr *verify_array_cast(struct VContext *cxt, struct Term *term, 
                         expected_size,   // handover
                         make_string_sexpr("$size")));
             expected_size = NULL;
-            bool verify_result = verify_condition(cxt, term->location, cond, "array size");
+            verify_condition(cxt, term->location, cond, "array size", err_msg_array_wrong_size(term));
             free_sexpr(cond);
-
-            if (!verify_result) {
-                report_array_wrong_size(term);
-                free_sexpr(operand);
-                return NULL;
-            }
 
             // Just extract the Array (first field of array-tuple).
             return match_arr_size(
@@ -1167,9 +1095,7 @@ static struct Sexpr *verify_array_cast(struct VContext *cxt, struct Term *term, 
 
 static void* verify_cast(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)
 {
-    if (operand_result == NULL) {
-        return NULL;
-    } else if (term->type->tag == TY_ARRAY) {
+    if (term->type->tag == TY_ARRAY) {
         return verify_array_cast(context, term, operand_result);
     } else {
         return verify_numeric_cast(context, term, operand_result);
@@ -1181,9 +1107,6 @@ static void* nr_verify_if(struct TermTransform *tr, void *context, struct Term *
     struct VContext *cxt = context;
 
     struct Sexpr *cond = transform_term(tr, context, term->if_data.cond);
-    if (cond == NULL) {
-        return NULL;
-    }
 
     // assume cond is true on the "then" branch
     struct Sexpr *old_pc = copy_sexpr(cxt->path_condition);
@@ -1200,13 +1123,6 @@ static void* nr_verify_if(struct TermTransform *tr, void *context, struct Term *
     free_sexpr(cxt->path_condition);
     cxt->path_condition = old_pc;
 
-    if (then_expr == NULL || else_expr == NULL) {
-        free_sexpr(cond);
-        free_sexpr(then_expr);
-        free_sexpr(else_expr);
-        return NULL;
-    }
-
     return make_list4_sexpr(make_string_sexpr("ite"), cond, then_expr, else_expr);
 }
 
@@ -1215,9 +1131,6 @@ static void* verify_unop(void *context, struct Term *term, void *type_result, vo
     struct VContext *cxt = context;
 
     struct Sexpr *operand = operand_result;
-    if (operand == NULL) {
-        return NULL;
-    }
 
     // Check Operator Preconditions
     char *check_fun = NULL;
@@ -1241,14 +1154,9 @@ static void* verify_unop(void *context, struct Term *term, void *type_result, vo
             make_list2_sexpr(make_string_sexpr_handover(check_fun),
                              copy_sexpr(operand));
 
-        bool verify_result = verify_condition(cxt, term->location, condition_expr, "unary operator");
+        verify_condition(cxt, term->location, condition_expr, "unary operator",
+                         err_msg_operator_precondition_fail(term));
         free_sexpr(condition_expr);
-
-        if (!verify_result) {
-            report_operator_precondition_fail(term);
-            free_sexpr(operand);
-            return NULL;
-        }
     }
 
     // Convert to Sexpr
@@ -1278,9 +1186,6 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
 
     // Transform/verify the LHS
     struct Sexpr *lhs = transform_term(tr, context, term->binop.lhs);
-    if (lhs == NULL) {
-        return NULL;
-    }
 
     // Transform/verify the RHS
     struct Sexpr *rhs;
@@ -1306,11 +1211,6 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
 
     } else {
         rhs = transform_term(tr, context, term->binop.list->rhs);
-    }
-
-    if (rhs == NULL) {
-        free_sexpr(lhs);
-        return NULL;
     }
 
     // "ty" string needed for some integer operations
@@ -1387,15 +1287,9 @@ static void* nr_verify_binop(struct TermTransform *tr, void *context, struct Ter
     }
 
     if (condition_expr) {
-        bool verify_result = verify_condition(cxt, term->location, condition_expr, "binary operator");
+        verify_condition(cxt, term->location, condition_expr, "binary operator",
+                         err_msg_operator_precondition_fail(term));
         free_sexpr(condition_expr);
-
-        if (!verify_result) {
-            report_operator_precondition_fail(term);
-            free_sexpr(lhs);
-            free_sexpr(rhs);
-            return NULL;
-        }
     }
 
     // Convert to Sexpr
@@ -1508,53 +1402,39 @@ static void* nr_verify_let(struct TermTransform *tr, void *context, struct Term 
 {
     struct VContext *cxt = context;
 
-    struct Item *item = NULL;
-
     // Transform/verify RHS
     struct Sexpr *rhs = transform_term(tr, context, term->let.rhs);
-    if (rhs == NULL) {
-        return NULL;
-    }
 
     // (Temporarily) add the new variable into the verifier env.
-    item = update_local(cxt,
-                        term->let.name,
-                        NULL,
-                        verify_type(term->let.rhs->type),
-                        copy_sexpr(rhs));
+    struct Item *item = update_local(cxt,
+                                     term->let.name,
+                                     NULL,
+                                     verify_type(term->let.rhs->type),
+                                     copy_sexpr(rhs));
 
     // Transform/verify body
     struct Sexpr *body = transform_term(tr, context, term->let.body);
 
     const char *fol_name = NULL;
-    if (item) {
-        // Remove the temporary definition, as we will be changing it into a "let", so
-        // we won't need a separate definition in the env any more
-        fol_name = item->fol_name;
-        item->fol_name = NULL;
-        remove_existing_item(cxt->local_env, fol_name);
 
-        // Any facts mentioning the let-bound variable are now (unfortunately)
-        // invalid. Rather than trying to make them valid, we just remove them.
-        remove_facts(cxt, fol_name);
-    }
+    // Remove the temporary definition, as we will be changing it into a "let", so
+    // we won't need a separate definition in the env any more
+    fol_name = item->fol_name;
+    item->fol_name = NULL;
+    remove_existing_item(cxt->local_env, fol_name);
 
-    if (body == NULL) {
-        // Body didn't successfully verify
-        free_sexpr(rhs);
-        free((char*)fol_name);
-        return NULL;
+    // Any facts mentioning the let-bound variable are now (unfortunately)
+    // invalid. Rather than trying to make them valid, we just remove them.
+    remove_facts(cxt, fol_name);
 
-    } else {
-        // Produce the final "let" sexpr
-        return make_list3_sexpr(
-            make_string_sexpr("let"),
-            make_list1_sexpr(
-                make_list2_sexpr(
-                    make_string_sexpr_handover(fol_name),
-                    rhs)),
-            body);
-    }
+    // Produce the final "let" sexpr
+    return make_list3_sexpr(
+        make_string_sexpr("let"),
+        make_list1_sexpr(
+            make_list2_sexpr(
+                make_string_sexpr_handover(fol_name),
+                rhs)),
+        body);
 }
 
 static void* nr_verify_quantifier(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
@@ -1583,29 +1463,22 @@ static void* nr_verify_quantifier(struct TermTransform *tr, void *context, struc
     // than trying to make them valid, we just remove them.
     remove_facts(cxt, fol_name);
 
-    if (body == NULL) {
-        // Body didn't successfully verify
-        free_sexpr(fol_type);
-        free((char*)fol_name);
-        return NULL;
-    } else {
-        // Produce the final "forall" or "exists" sexpr
-        const char *qname = NULL;
-        switch (term->quant.quant) {
-        case QUANT_FORALL: qname = "forall"; break;
-        case QUANT_EXISTS: qname = "exists"; break;
-        }
-
-        struct Sexpr *varlist =
-            make_list1_sexpr(
-                make_list2_sexpr(
-                    make_string_sexpr_handover(fol_name),
-                    fol_type));
-
-        body = insert_validity_condition(cxt, term->quant.quant, term->quant.type, varlist->left->left, body);
-
-        return make_list3_sexpr(make_string_sexpr(qname), varlist, body);
+    // Produce the final "forall" or "exists" sexpr
+    const char *qname = NULL;
+    switch (term->quant.quant) {
+    case QUANT_FORALL: qname = "forall"; break;
+    case QUANT_EXISTS: qname = "exists"; break;
     }
+
+    struct Sexpr *varlist =
+        make_list1_sexpr(
+            make_list2_sexpr(
+                make_string_sexpr_handover(fol_name),
+                fol_type));
+
+    body = insert_validity_condition(cxt, term->quant.quant, term->quant.type, varlist->left->left, body);
+
+    return make_list3_sexpr(make_string_sexpr(qname), varlist, body);
 }
 
 // copies (the relevant parts of) all sexpr inputs
@@ -1741,7 +1614,11 @@ static struct RefArgInfo * get_ref_arg_info(struct VContext *cxt,
     info->arg_num = arg_num;
     info->ref = formal->ref;
     info->location = &actual->rhs->location;
-    info->ref_chain = reverse_ref_chain_and_remove_casts(ref_chain_for_term(cxt, actual->rhs));
+    if (ref_chain_is_lvalue(actual->rhs)) {
+        info->ref_chain = reverse_ref_chain_and_remove_casts(ref_chain_for_term(cxt, actual->rhs));
+    } else {
+        info->ref_chain = NULL;
+    }
     info->next = next;
     return info;
 }
@@ -1794,13 +1671,10 @@ static bool alias_check(struct RefChain *r1,
     fatal_error("unknown ref_type");
 }
 
-// returns true on success, false if error found
-static bool verify_aliasing_for_args(struct VContext *cxt,
+static void verify_aliasing_for_args(struct VContext *cxt,
                                      struct RefArgInfo *arg1,
                                      struct RefArgInfo *arg2)
 {
-    bool result = true;
-
     struct RefChain *r1 = arg1->ref_chain;
     struct RefChain *r2 = arg2->ref_chain;
 
@@ -1810,29 +1684,27 @@ static bool verify_aliasing_for_args(struct VContext *cxt,
 
         if (may_alias) {
             if (equality_conditions == NULL) {
-                report_aliasing_violation(*arg2->location, arg2->arg_num, arg1->arg_num);
-                cxt->error_found = true;
-                result = false;
+                // There is definitely aliasing. Report error (at proper place in the output).
+                char * msg = err_msg_aliasing_violation(*arg2->location, arg2->arg_num, arg1->arg_num);
+                add_fol_message(cxt->fol_runner, msg, true, 0, NULL);
+
             } else {
-                equality_conditions = make_list2_sexpr(make_string_sexpr("not"), conjunction(equality_conditions));
-                result = verify_condition(cxt, *arg2->location, equality_conditions, "aliasing");
-                if (!result) {
-                    report_possible_aliasing_violation(*arg2->location, arg2->arg_num, arg1->arg_num);
-                }
+                equality_conditions = make_list2_sexpr(make_string_sexpr("not"),
+                                                       conjunction(equality_conditions));
+                verify_condition(cxt, *arg2->location, equality_conditions, "aliasing",
+                                 err_msg_possible_aliasing_violation(*arg2->location,
+                                                                     arg2->arg_num,
+                                                                     arg1->arg_num));
             }
         }
 
         free_sexpr(equality_conditions);
     }
-
-    return result;
 }
 
-static bool verify_aliasing(struct VContext *cxt, struct Term *term)
+static void verify_aliasing(struct VContext *cxt, struct Term *term)
 {
     // NOTE: Aliasing must be checked even for ghost calls
-
-    bool ok = true;
 
     // Consider all arguments
     struct RefArgInfo *info = get_ref_arg_info(cxt, 1, term->call.func->type->function_data.args, term->call.args);
@@ -1842,7 +1714,7 @@ static bool verify_aliasing(struct VContext *cxt, struct Term *term)
     for (struct RefArgInfo *arg1 = info; arg1; arg1 = arg1->next) {
         for (struct RefArgInfo *arg2 = info; arg2 != arg1; arg2 = arg2->next) {
             if (arg1->ref || arg2->ref) {
-                ok = verify_aliasing_for_args(cxt, arg1, arg2) && ok;
+                verify_aliasing_for_args(cxt, arg1, arg2);
             }
         }
     }
@@ -1854,8 +1726,6 @@ static bool verify_aliasing(struct VContext *cxt, struct Term *term)
         free(info);
         info = next;
     }
-
-    return ok;
 }
 
 // Given a list of type args to a function, make the "generic args" that
@@ -1934,12 +1804,6 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
     struct Sexpr **arg_tail = &args;
     for (struct OpTermList *arg = term->call.args; arg; arg = arg->next) {
         struct Sexpr *sexpr = verify_term(cxt, arg->rhs);
-        if (!sexpr) {
-            free((char*)func_fol_name);
-            free_sexpr(generic_args);
-            free_sexpr(args);
-            return NULL;
-        }
         *arg_tail = make_list1_sexpr(sexpr);
         arg_tail = &(*arg_tail)->right;
     }
@@ -1953,7 +1817,6 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
     // Verify each precondition, adding a "let" expression in front
     // for the term arguments, and doing a substitution for the type
     // arguments.
-    bool ok = true;
     struct Condition *preconds = item->preconds;
     while (preconds) {
         struct Sexpr *cond_expr = add_funarg_lets(item, preconds->expr, generic_args, args);
@@ -1962,63 +1825,54 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
         format_location(&preconds->location, true, false, buf1, sizeof(buf1));
         snprintf(buf2, sizeof(buf2), "precondition at %s", buf1);
 
-        bool verify_result = verify_condition(cxt, term->location, cond_expr, buf2);
+        verify_condition(cxt, term->location, cond_expr, buf2,
+                         err_msg_function_precondition_fail(term, preconds->location));
         free_sexpr(cond_expr);
-
-        if (!verify_result) {
-            report_function_precondition_fail(term, preconds->location);
-            ok = false;
-        }
 
         preconds = preconds->next;
     }
 
     // Check aliasing rules
-    ok = verify_aliasing(cxt, term) && ok;
+    verify_aliasing(cxt, term);
 
     // Make the call-expr
-    struct Sexpr *call_expr = NULL;    // (f *actual-arguments*)
-    struct Sexpr *call_expr_dummies = NULL;    // (f *dummy-arguments*)
-    if (ok) {
-        call_expr = make_string_sexpr(func_fol_name);
-        call_expr_dummies = make_string_sexpr(func_fol_name);
+    struct Sexpr *call_expr;            // (f *actual-arguments*)
+    struct Sexpr *call_expr_dummies;    // (f *dummy-arguments*)
 
-        // add the generic_args, if any
-        if (generic_args) {
-            make_instance(&call_expr, copy_sexpr(generic_args));
-            make_instance(&call_expr_dummies, copy_sexpr(item->fol_generic_vars));
-        }
+    call_expr = make_string_sexpr(func_fol_name);
+    call_expr_dummies = make_string_sexpr(func_fol_name);
 
-        // add the args, if any
-        if (args != NULL) {
-            call_expr = make_pair_sexpr(call_expr, copy_sexpr(args));
-            call_expr_dummies = make_pair_sexpr(call_expr_dummies, copy_sexpr(item->fol_dummies));
-        }
+    // add the generic_args, if any
+    if (generic_args) {
+        make_instance(&call_expr, copy_sexpr(generic_args));
+        make_instance(&call_expr_dummies, copy_sexpr(item->fol_generic_vars));
+    }
+
+    // add the args, if any
+    if (args != NULL) {
+        call_expr = make_pair_sexpr(call_expr, copy_sexpr(args));
+        call_expr_dummies = make_pair_sexpr(call_expr_dummies, copy_sexpr(item->fol_dummies));
     }
 
     // Add postconditions to the known facts.
-    if (ok) {
-        struct Condition *postconds = item->postconds;
-        while (postconds) {
-            struct Sexpr *cond_expr = add_return_if_required(
-                copy_sexpr(call_expr_dummies),
-                copy_sexpr(postconds->expr));
+    struct Condition *postconds = item->postconds;
+    while (postconds) {
+        struct Sexpr *cond_expr = add_return_if_required(
+            copy_sexpr(call_expr_dummies),
+            copy_sexpr(postconds->expr));
 
-            struct Sexpr *expr2 = add_funarg_lets(item, cond_expr, generic_args, args);
-            free_sexpr(cond_expr);
-            add_fact(cxt, expr2);
+        struct Sexpr *expr2 = add_funarg_lets(item, cond_expr, generic_args, args);
+        free_sexpr(cond_expr);
+        add_fact(cxt, expr2);
 
-            postconds = postconds->next;
-        }
+        postconds = postconds->next;
     }
 
     free_sexpr(call_expr_dummies);
     call_expr_dummies = NULL;
 
     // Handle any "refs"
-    if (ok) {
-        call_expr = handle_ref_args(cxt, term, call_expr);
-    }
+    call_expr = handle_ref_args(cxt, term, call_expr);
 
     free_sexpr(generic_args);
     free_sexpr(args);
@@ -2036,21 +1890,14 @@ static void * verify_record(void *context, struct Term *term, void *type_result,
 {
     struct Sexpr * types = verify_name_type_list(term->type->record_data.fields);
 
-    bool fields_ok = (fields_result || types == NULL);
-
     struct Sexpr * ctor = make_string_sexpr("$PROD");
     make_instance(&ctor, types);
     types = NULL;
 
-    if (fields_ok) {
-        if (fields_result) {
-            return make_pair_sexpr(ctor, fields_result);
-        } else {
-            return ctor;
-        }
+    if (fields_result) {
+        return make_pair_sexpr(ctor, fields_result);
     } else {
-        free_sexpr(ctor);
-        return NULL;
+        return ctor;
     }
 }
 
@@ -2111,10 +1958,6 @@ static void * verify_record_update(void *context, struct Term *term, void *type_
 
 static void * verify_field_proj(void *context, struct Term *term, void *type_result, void *lhs_result)
 {
-    if (lhs_result == NULL) {
-        return NULL;
-    }
-
     // find which field number we are looking at
     int num = 0;
     for (struct NameTypeList *field = term->field_proj.lhs->type->record_data.fields; field; field = field->next) {
@@ -2152,12 +1995,7 @@ static void * verify_variant(void *context, struct Term *term, void *type_result
     struct Sexpr * types = verify_name_type_list(term->type->variant_data.variants);
     make_instance(&ctor, types);
 
-    if (payload_result) {
-        return make_list2_sexpr(ctor, payload_result);
-    } else {
-        free_sexpr(ctor);
-        return NULL;
-    }
+    return make_list2_sexpr(ctor, payload_result);
 }
 
 static void * nr_verify_match(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
@@ -2165,9 +2003,6 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
     struct VContext *cxt = context;
 
     struct Sexpr *scrut_result = transform_term(tr, context, term->match.scrutinee);
-    if (scrut_result == NULL) {
-        return NULL;
-    }
 
     struct Type *variant_type = term->match.scrutinee->type;
 
@@ -2179,8 +2014,6 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
 
     struct Sexpr *check_exprs = NULL;
     struct Sexpr **check_tail = &check_exprs;
-
-    bool ok = true;
 
     uint64_t wildcard_counter = 0;
 
@@ -2263,22 +2096,15 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
                 fol_name = copy_string(buf);
             }
 
-            if (rhs_expr) {
-                // Create a sexpr for this arm
-                struct Sexpr *arm_expr =
+            // Create a sexpr for this arm
+            struct Sexpr *arm_expr =
+                make_list2_sexpr(
                     make_list2_sexpr(
-                        make_list2_sexpr(
-                            ctor,
-                            make_string_sexpr_handover(fol_name)),
-                        rhs_expr);
-                *arm_tail = make_list1_sexpr(arm_expr);
-                arm_tail = &(*arm_tail)->right;
-            } else {
-                // Verification failed, ignore this arm
-                free((char*)fol_name);
-                free_sexpr(ctor);
-                ok = false;
-            }
+                        ctor,
+                        make_string_sexpr_handover(fol_name)),
+                    rhs_expr);
+            *arm_tail = make_list1_sexpr(arm_expr);
+            arm_tail = &(*arm_tail)->right;
 
         } else {
             if (arm->pattern->tag != PAT_WILDCARD) {
@@ -2302,18 +2128,13 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
             free_sexpr(cxt->path_condition);
             cxt->path_condition = NULL;
 
-            if (rhs_expr) {
-                // Create a sexpr for this arm
-                // (We can just use "$wild" here, since we used "numbered" $wild
-                // variables above, and we should hit this case only once per
-                // match term)
-                struct Sexpr *arm_expr = make_list2_sexpr(make_string_sexpr("$wild"), rhs_expr);
-                *arm_tail = make_list1_sexpr(arm_expr);
-                arm_tail = &(*arm_tail)->right;
-            } else {
-                // Verification failed, ignore this arm
-                ok = false;
-            }
+            // Create a sexpr for this arm
+            // (We can just use "$wild" here, since we used "numbered" $wild
+            // variables above, and we should hit this case only once per
+            // match term)
+            struct Sexpr *arm_expr = make_list2_sexpr(make_string_sexpr("$wild"), rhs_expr);
+            *arm_tail = make_list1_sexpr(arm_expr);
+            arm_tail = &(*arm_tail)->right;
         }
     }
 
@@ -2324,46 +2145,31 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
     backup_path_condition = NULL;
 
     // Construct the final "match" expression
-    if (ok) {
-        return make_list3_sexpr(
-            make_string_sexpr("match"),
-            scrut_result,
-            arm_exprs);
-    } else {
-        free_sexpr(scrut_result);
-        free_sexpr(arm_exprs);
-        return NULL;
-    }
+    return make_list3_sexpr(
+        make_string_sexpr("match"),
+        scrut_result,
+        arm_exprs);
 }
 
 static void * verify_match_failure(void *context, struct Term *term, void *type_result)
 {
     // this should be unreachable
     struct Sexpr *condition = make_string_sexpr("false");
-    bool check_result = verify_condition(context, term->location, condition, "match exhaustive");
+    verify_condition(context, term->location, condition, "match exhaustive",
+                     err_msg_nonexhaustive_match(term->location));
     free_sexpr(condition);
 
-    if (!check_result) {
-        report_nonexhaustive_match(term->location);
-        return NULL;
-
-    } else {
-        // SMT-LIB does need an arm for all possible constructors
-        // even if they are unreachable. Just return an arbitrary
-        // value of the type in this case.
-        struct Sexpr *any = make_string_sexpr("$ARBITRARY");
-        make_instance(&any, make_list1_sexpr(verify_type(term->type)));
-        return any;
-    }
+    // SMT-LIB does need an arm for all possible constructors
+    // even if they are unreachable. Just return an arbitrary
+    // value of the type in this case.
+    struct Sexpr *any = make_string_sexpr("$ARBITRARY");
+    make_instance(&any, make_list1_sexpr(verify_type(term->type)));
+    return any;
 }
 
 static void * verify_sizeof(void *context, struct Term *term, void *type_result,
                             void *rhs_result)
 {
-    if (rhs_result == NULL) {
-        return NULL;
-    }
-
     if (term->sizeof_data.rhs->type->array_data.sizes != NULL) {
         // Static-sized array type
         free_sexpr(rhs_result);
@@ -2388,16 +2194,10 @@ static void * verify_allocated(void *context, struct Term *term, void *type_resu
                                void *rhs_result)
 {
     struct Sexpr *rhs = rhs_result;
-
-    if (rhs == NULL) {
-        return NULL;
-    }
-
     struct Sexpr *expr = NULL;
 
     if (rhs->type == S_STRING) {
         expr = allocated_test_expr(term->allocated.rhs->type, rhs->string);
-        free_sexpr(rhs);
     } else {
         expr = allocated_test_expr(term->allocated.rhs->type, "$alloc_term");
         if (expr) {
@@ -2405,8 +2205,11 @@ static void * verify_allocated(void *context, struct Term *term, void *type_resu
                                     make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$alloc_term"),
                                                                       rhs)),
                                     expr);
+            rhs = NULL;
         }
     }
+
+    free_sexpr(rhs);
 
     if (!expr) {
         expr = make_string_sexpr("false");
@@ -2419,9 +2222,6 @@ static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
                                    struct Term *term, void *type_result)
 {
     struct Sexpr *fol_lhs = transform_term(tr, context, term->array_proj.lhs);
-    if (fol_lhs == NULL) {
-        return NULL;
-    }
 
     struct Type *lhs_type = term->array_proj.lhs->type;
     struct Sexpr *fol_type = verify_type(lhs_type);
@@ -2433,11 +2233,6 @@ static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
                         term->array_proj.indexes,
                         copy_sexpr(fol_lhs),
                         fol_type);
-    if (index == NULL) {
-        free_sexpr(fol_type);
-        free_sexpr(fol_lhs);
-        return NULL;
-    }
 
     struct Sexpr *expr;
     if (lhs_type->array_data.sizes == NULL) {
@@ -2457,34 +2252,15 @@ static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
 
 static void * verify_op_term_list(void *context, struct OpTermList *op_term_list, void *rhs_result, void *next_result)
 {
-    struct Sexpr *rhs = rhs_result;
-    struct Sexpr *next = next_result;
-
-    bool ok = (rhs != NULL) && (op_term_list->next == NULL || next != NULL);
-
-    if (!ok) {
-        free_sexpr(rhs);
-        free_sexpr(next);
-        return NULL;
-    }
-
-    return make_pair_sexpr(rhs, next);
+    return make_pair_sexpr(rhs_result, next_result);
 }
 
 static void * verify_name_term_list(void *context, struct NameTermList *name_term_list, void *term_result, void *next_result)
 {
-    bool ok = (term_result != NULL) && (name_term_list->next == NULL || next_result != NULL);
-
-    if (ok) {
-        return make_pair_sexpr(term_result, next_result);
-    } else {
-        free_sexpr(term_result);
-        free_sexpr(next_result);
-        return NULL;
-    }
+    return make_pair_sexpr(term_result, next_result);
 }
 
-// Returns a converted Sexpr, or NULL if verification fails.
+// Returns a converted Sexpr. Should not return NULL.
 struct Sexpr * verify_term(struct VContext *context, struct Term *term)
 {
     struct TermTransform tr = {0};

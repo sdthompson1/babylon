@@ -136,21 +136,59 @@ In addition convert_fol_to_smt assumes that names do not contain the
 
 */
 
-struct CacheDb;
+#include "cache_db.h"
+
+struct FolRunner;
 struct Sexpr;
 
-enum FolResult {
-    FOL_RESULT_PROVED,
-    FOL_RESULT_DISPROVED,
-    FOL_RESULT_UNKNOWN
-};
 
-// this frees "problem" (and all children) after solving
-enum FolResult solve_fol_problem(struct Sexpr *problem,
-                                 struct CacheDb *cache_db,
-                                 const char *debug_filename,
-                                 bool print_progress_messages,
-                                 int timeout_seconds);
+// FOL problems are run asynchronously by a "FolRunner".
+// The CacheDb (if provided) should be kept alive for as long as the FolRunner is alive.
+struct FolRunner * new_fol_runner(struct CacheDb *cache_db,
+                                  int timeout_seconds,
+                                  bool continue_after_error);
 
+void free_fol_runner(struct FolRunner *runner);
+
+bool fol_continue_after_error(const struct FolRunner *runner);
+
+
+// Start a new FOL problem solution in the background.
+// (May block if job queue is too full.)
+void solve_fol_problem(struct FolRunner *runner,
+                       struct Sexpr *problem,          // handover
+                       bool show_progress,
+                       const char *announce_msg,       // handover
+                       const char *error_msg,          // handover
+                       const char *debug_filename);
+
+
+// Schedule a message to be printed when a particular point in the
+// output stream is reached.
+// If 'hash' is not NULL, arrange for the given hash to be added
+// to the cache, if error_found == false at the point when the message
+// is reached.
+// If is_error is true, the message will be considered an error msg,
+// otherwise it is a progress msg.
+void add_fol_message(struct FolRunner *runner,
+                     const char *msg,   // handover, can be NULL
+                     bool is_error,
+                     enum HashType hash_type,
+                     const uint8_t *hash);
+
+
+// Update the status of all FOL problems -- this will check for completed
+// child processes and launch any new ones required. This does not block.
+// (Note: this is called automatically as part of solve_fol_problem.)
+void update_fol_status(struct FolRunner *runner);
+
+
+// Block until the FOL problem queue is emptied.
+void wait_fol_complete(struct FolRunner *runner);
+
+
+// Returns true if any error has been observed from any of the child
+// processes so far. (This doesn't update status, it is just checking a flag.)
+bool fol_error_found(struct FolRunner *runner);
 
 #endif

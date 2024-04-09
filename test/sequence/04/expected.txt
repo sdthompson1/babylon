@@ -1,11 +1,11 @@
-Verifying: Main.A_NEW_CONSTANT (cached)
+Verifying: Main.A_NEW_CONSTANT
 Verifying: Main.f
-Checking Main.b:14:1-2 (end of function unreachable) (cached)
+Checking Main.b:14:1-2 (end of function unreachable)
 Verifying: Main.g
-Checking Main.b:18:12-19 (binary operator) (cvc5-Linux, )
-Checking Main.b:19:1-2 (end of function unreachable) (cached)
+Checking Main.b:18:12-19 (binary operator)
+Checking Main.b:19:1-2 (end of function unreachable)
 Verifying: Main.h
-Checking Main.b:23:12-19 (binary operator) (cvc5-Linux, )
-Checking Main.b:24:1-2 (end of function unreachable) (cached)
-Verifying: Main.i (cached)
+Checking Main.b:23:12-19 (binary operator)
+Checking Main.b:24:1-2 (end of function unreachable)
+Verifying: Main.i
 Verification successful

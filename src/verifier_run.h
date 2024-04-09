@@ -22,11 +22,12 @@ struct VContext;
 // Also the definitions of any symbols mentioned in "asserts" or "condition" are looked
 // up in "env", and those definitions are added to the FOL-program as well.
 
-// Note: if context->interface_only is true, the check is skipped and we return true.
+// Note: if context->interface_only is true, the check is skipped.
 
-bool verify_condition(struct VContext *context,
+void verify_condition(struct VContext *context,
                       struct Location location,
                       struct Sexpr *condition,
-                      const char *msg);
+                      const char *description,    // NOT handed over
+                      const char *error_msg);     // handover
 
 #endif

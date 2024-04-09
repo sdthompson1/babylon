@@ -24,13 +24,14 @@ struct Sexpr * verify_term(struct VContext *context, struct Term *term);
 struct Sexpr * verify_call_term(struct VContext *cxt,
                                 struct Term *term);
 
-bool bind_payload(struct VContext *context,
+void bind_payload(struct VContext *context,
                   struct Term *scrutinee,
                   struct PatData_Variant *pat_data);
 
+bool ref_chain_is_lvalue(const struct Term *term);
 struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term);
 
-bool validate_ref_chain(struct VContext *context, struct RefChain *ref, struct Location location);
+void validate_ref_chain(struct VContext *context, struct RefChain *ref, struct Location location);
 struct Sexpr *ref_chain_to_sexpr(struct VContext *context, struct RefChain *ref);
 void update_reference(struct VContext *context, struct RefChain *ref, struct Sexpr *expr);
 

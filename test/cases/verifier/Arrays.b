@@ -67,11 +67,11 @@ function f11(ref a: i32[])
 
 function f13(ref a: i32[], ref b: i32[,])
 {
-    a[1/0] = 1;    // Error, index failed to verify
-    a[999] = 1;    // No further error reported with "a"
+    a[1/0] = 1;    // Error, index failed to verify, failed to cast, might be out of bounds
+    a[999] = 1;    // Error, index out of bounds
 
-    b[1, 2/0] = 0;  // Error, index failed to verify
-    b[1, 999] = 0;  // No further error reported with "b"
+    b[1, 2/0] = 0;  // Error, index failed to verify, failed to cast, might be out of bounds
+    b[1, 999] = 0;  // Error, index out of bounds
 }
 
 function f14()

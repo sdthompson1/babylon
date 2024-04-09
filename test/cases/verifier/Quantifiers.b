@@ -9,7 +9,7 @@ interface {}
 
   function f2()
   {
-    assert (exists (x:i32) x == 1/0);   // Invalid, operator precondition failure
+    assert (exists (x:i32) x == 1/0);   // Invalid, operator precondition failure. (Then assert fails, because 1/0 might be outside the i32 range!!)
   }
 
   function f3(x: u8)

@@ -197,8 +197,13 @@ run_sequence_tests()
         # Run the compiler, putting output into $OUT_DIR
         $COMPILER --verify-all --verify-timeout $TIMEOUT $i/Main.b -o $OUT_DIR >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
 
-        # Clip out timings (e.g. 0.0s) from stderr.txt since these will vary between runs
-        sed -i -E -e 's/[0-9]+\.[0-9]s//g' $OUT_DIR/verifier_stderr.txt
+        # Clip out reports of which prover succeeded, like "(z3,
+        # 0.1s)", and also messages like "(cached)", as these may vary
+        # on different machines (due to differences in timing, number
+        # of parallel solvers allowed to run, or just different
+        # solvers being used).
+        sed -i -E -e 's/ \([^()]*, [0-9]+\.[0-9]s\)//g' $OUT_DIR/verifier_stderr.txt
+        sed -i -E -e 's/ \(cached\)//g' $OUT_DIR/verifier_stderr.txt
 
         # All these tests should succeed
         if [ $? -ne 0 ]
@@ -237,7 +242,7 @@ COMPILER=$(pwd)/$COMPILER
 getopts "v" VALGRIND
 if [[ $VALGRIND == "v" ]]
 then
-    COMPILER="valgrind --leak-check=full --num-callers=20 $COMPILER"
+    COMPILER="valgrind --leak-check=full --num-callers=40 $COMPILER"
     echo "Running tests using Valgrind..."
 fi
 shift $((OPTIND-1))

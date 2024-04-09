@@ -65,7 +65,7 @@ ghost function f7()
 
 ghost function f8()
 {
-    assert allocated(1/0);   // error reported on 1/0, but not on the 'allocated' itself.
+    assert allocated(1/0);   // with the new "parallel jobs" system this now reports error on both the "1/0" and the assert (it doesn't wait to see if 1/0 fails before starting the assert check!).
 }
 
 

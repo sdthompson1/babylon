@@ -44,7 +44,6 @@ char* copy_string_3(const char *str1, const char *str2, const char *str3)
     return result;
 }
 
-/*
 char* copy_string_4(const char *str1, const char *str2, const char *str3, const char *str4)
 {
     size_t len1 = strlen(str1);
@@ -58,7 +57,23 @@ char* copy_string_4(const char *str1, const char *str2, const char *str3, const 
     strcpy(result + len1 + len2 + len3, str4);
     return result;
 }
-*/
+
+char * copy_string_5(const char *str1, const char *str2, const char *str3, const char *str4,
+                     const char *str5)
+{
+    size_t len1 = strlen(str1);
+    size_t len2 = strlen(str2);
+    size_t len3 = strlen(str3);
+    size_t len4 = strlen(str4);
+    size_t len5 = strlen(str5);
+    char* result = alloc(len1 + len2 + len3 + len4 + len5 + 1);
+    strcpy(result, str1);
+    strcpy(result + len1, str2);
+    strcpy(result + len1 + len2, str3);
+    strcpy(result + len1 + len2 + len3, str4);
+    strcpy(result + len1 + len2 + len3 + len4, str5);
+    return result;
+}
 
 struct NameList * copy_name_list(struct NameList *list)
 {

@@ -103,7 +103,6 @@ void report_mixed_positional_and_named_fields(struct Location loc);
 void report_field_name_missing(struct Location location);
 void report_duplicate_field_name(struct Location location, const char *name);
 void report_ref_arg_not_allowed(struct Location location);
-void report_aliasing_violation(struct Location location, int n1, int n2);
 void report_no_ref_in_postcondition(struct Location location);
 void report_cannot_index(struct Term *term);
 void report_wrong_number_of_indexes(struct Term *term);
@@ -122,29 +121,30 @@ void report_implies_direction_error(struct Location location);
 void report_empty_array_literal(struct Location location);
 void report_const_out_of_bounds(struct Location location);  // array index out of bounds, during const evaluation
 
-// Verifier errors
-void report_operator_precondition_fail(struct Term *term);
-void report_function_precondition_fail(struct Term *term, struct Location precond_loc);
-void report_function_postcondition_fail(struct Location return_loc, struct Location postcond_loc);
-void report_end_of_function_reached(struct Location loc);
-void report_assert_failure(struct Statement *stmt);
-void report_inconsistent_preconds(struct Decl *decl);
-void report_inconsistent_postconds(struct Decl *decl);
-void report_invariant_violated_on_entry(struct Attribute *attr);
-void report_invariant_violated_on_exit(struct Attribute *attr);
-void report_decreases_might_not_decrease(struct Attribute *attr);
-void report_decreases_not_bounded_below(struct Attribute *attr);
-void report_obtain_doesnt_exist(const struct Statement *stmt);
-void report_nonexhaustive_match(struct Location loc);
-void report_out_of_bounds(struct Location loc);  // array index out of bounds, during verification
-void report_possible_aliasing_violation(struct Location location, int n1, int n2);
-void report_assign_to_allocated(struct Location loc);
-void report_assign_from_allocated(struct Location loc);
-void report_return_allocated(struct Location loc);
-void report_var_still_allocated(const char *name, struct Location loc);
-void report_var_still_allocated_at_return(const char *name, struct Location loc);
-void report_ref_invalid_variant_change(struct Location location);
-void report_array_wrong_size(struct Term *term);
+// Verifier errors - these allocate a new string and return it
+char * err_msg_operator_precondition_fail(struct Term *term);
+char * err_msg_function_precondition_fail(struct Term *term, struct Location precond_loc);
+char * err_msg_function_postcondition_fail(struct Location return_loc, struct Location postcond_loc);
+char * err_msg_end_of_function_reached(struct Location loc);
+char * err_msg_assert_failure(struct Statement *stmt);
+char * err_msg_inconsistent_preconds(struct Decl *decl);
+char * err_msg_inconsistent_postconds(struct Decl *decl);
+char * err_msg_invariant_violated_on_entry(struct Attribute *attr);
+char * err_msg_invariant_violated_on_exit(struct Attribute *attr);
+char * err_msg_decreases_might_not_decrease(struct Attribute *attr);
+char * err_msg_decreases_not_bounded_below(struct Attribute *attr);
+char * err_msg_obtain_doesnt_exist(const struct Statement *stmt);
+char * err_msg_nonexhaustive_match(struct Location loc);
+char * err_msg_out_of_bounds(struct Location loc);  // array index out of bounds, during verification
+char * err_msg_aliasing_violation(struct Location location, int n1, int n2);
+char * err_msg_possible_aliasing_violation(struct Location location, int n1, int n2);
+char * err_msg_assign_to_allocated(struct Location loc);
+char * err_msg_assign_from_allocated(struct Location loc);
+char * err_msg_return_allocated(struct Location loc);
+char * err_msg_var_still_allocated(const char *name, struct Location loc);
+char * err_msg_var_still_allocated_at_return(const char *name, struct Location loc);
+char * err_msg_ref_invalid_variant_change(struct Location location);
+char * err_msg_array_wrong_size(struct Term *term);
 
 // Fatal errors (not expected in normal operation)
 #define fatal_error(err) fatal_error_impl(err, __FILE__, __LINE__)

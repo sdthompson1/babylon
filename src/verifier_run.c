@@ -27,11 +27,11 @@ repository.
 static struct Sexpr * make_fol_problem(const struct HashTable *global_env,
                                        const struct HashTable *local_env,
                                        const struct HashTable *local_hidden,
-                                       struct Sexpr *initial_asserts,
+                                       struct Sexpr *initial_asserts,   // handover
                                        struct Sexpr *conjecture)
 {
     // Add initial asserts and the 'prove' command.
-    struct Sexpr *result = copy_sexpr(initial_asserts);
+    struct Sexpr *result = initial_asserts;
     struct Sexpr **tail_ptr = &result;
     while (*tail_ptr) {
         tail_ptr = &(*tail_ptr)->right;
@@ -70,33 +70,35 @@ const char * make_debug_filename(struct VContext *context,
     return NULL;
 }
 
-bool verify_condition(struct VContext *context,
+void verify_condition(struct VContext *context,
                       struct Location location,
                       struct Sexpr *condition,
-                      const char *msg)
+                      const char *description,   // NOT handed over
+                      const char *error_msg)     // handover
 {
     if (context->interface_only) {
-        return true;
+        return;
     }
 
-    if (!context->continue_after_error && context->error_found) {
-        return true;
+    if (!fol_continue_after_error(context->fol_runner) && context->error_found) {
+        return;
     }
 
     const char *debug_filename = make_debug_filename(context, location);
 
     // Progress message (TODO: show secondary location?)
-    if (context->show_progress) {
-        char buf[512];
-        format_location(&location, true, false, buf, sizeof(buf));
-        fprintf(stderr, "Checking %s", buf);
-        if (msg) {
-            fprintf(stderr, " (%s)", msg);
-        }
-        if (debug_filename) {
-            fprintf(stderr, " (%s.smt)", debug_filename);
-        }
-        fprintf(stderr, " ");
+    char buf[512];
+    format_location(&location, true, false, buf, sizeof(buf));
+    char *full_description = copy_string_2("Checking ", buf);
+    if (description) {
+        char *full_desc_new = copy_string_4(full_description, " (", description, ")");
+        free(full_description);
+        full_description = full_desc_new;
+    }
+    if (debug_filename) {
+        char *full_desc_new = copy_string_4(full_description, " (", debug_filename, ".smt)");
+        free(full_description);
+        full_description = full_desc_new;
     }
 
     // Make an "asserts" list out of the path condition and facts
@@ -118,18 +120,16 @@ bool verify_condition(struct VContext *context,
                                               initial_asserts,
                                               condition);
 
-    // Solve the FOL problem
-    enum FolResult result = solve_fol_problem(problem,
-                                              context->cache_db,
-                                              debug_filename,
-                                              context->show_progress,
-                                              context->timeout_seconds);
+    // Send the FOL problem for solving.
+    solve_fol_problem(context->fol_runner,
+                      problem,  // handover
+                      context->show_progress,
+                      full_description,   // handover
+                      error_msg,     // handover
+                      debug_filename);
 
-    free_sexpr(initial_asserts);
-
-    if (result != FOL_RESULT_PROVED) {
-        context->error_found = true;
-    }
-
-    return result == FOL_RESULT_PROVED;
+    // Update context->error_found if required.
+    // Note: solve_fol_problem has already called update_fol_status, so we just need
+    // to call fol_error_found here.
+    context->error_found = fol_error_found(context->fol_runner);
 }

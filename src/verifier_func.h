@@ -45,8 +45,7 @@ struct Sexpr * insert_lets(struct VContext *context, struct Sexpr *expr);
 //  - Verifies postconditions are true
 //  - If ghost==false, verifies that return value(s) are not allocated.
 //  - Inserts a definitional axiom for the current function if possible.
-// Returns true if successful.
-bool verify_function_return(struct VContext *context,
+void verify_function_return(struct VContext *context,
                             struct Location location,
                             struct Term *return_value,
                             bool ghost,

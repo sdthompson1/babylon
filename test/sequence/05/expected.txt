@@ -1,15 +1,15 @@
 Verifying: Main.Foo
 Verifying: Main.Bar
 Verifying: Main.f
-Checking Main.b:17:1-2 (end of function unreachable) (cached)
+Checking Main.b:17:1-2 (end of function unreachable)
 Verifying: Main.g
-Checking Main.b:21:12-17 (binary operator) (cvc5-Linux, )
-Checking Main.b:22:1-2 (end of function unreachable) (cached)
+Checking Main.b:21:12-17 (binary operator)
+Checking Main.b:22:1-2 (end of function unreachable)
 Verifying: Main.h
-Checking Main.b:27:1-2 (end of function unreachable) (cached)
+Checking Main.b:27:1-2 (end of function unreachable)
 Verifying: Main.i
-Checking Main.b:33:1-2 (end of function unreachable) (cached)
+Checking Main.b:33:1-2 (end of function unreachable)
 Verifying: Main.bar_func
-Checking Main.b:37:12-17 (binary operator) (cvc5-Linux, )
-Checking Main.b:38:1-2 (end of function unreachable) (cached)
+Checking Main.b:37:12-17 (binary operator)
+Checking Main.b:38:1-2 (end of function unreachable)
 Verification successful

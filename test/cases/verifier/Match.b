@@ -130,7 +130,7 @@ interface {}
   {
     match (1/0) {     // Error: scrutinee fails to verify
       case 1 =>
-        var x = 1/0;    // No error, arms are not checked if scrutinee fails.
+        var x = 1/0;    // Error. Also match not exhaustive because 1/0 might not be equal to 1.
     }
   }
 
@@ -154,7 +154,7 @@ interface {}
       case Foo(ref r) => r = 10;
       case Bar(_) =>
     }
-    assert (match (x) { case Foo(y) => y } == 10);    // Error, non exhaustive match
+    assert (match (x) { case Foo(y) => y } == 10);    // Error, non exhaustive match, also assert may not hold
   }
 
   function ref_pat_2()

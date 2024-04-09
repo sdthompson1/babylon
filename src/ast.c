@@ -1566,7 +1566,6 @@ struct Attribute * copy_attributes(struct Attribute *attr)
     }
 
     result->next = copy_attributes(attr->next);
-    result->valid = attr->valid;
 
     return result;
 }

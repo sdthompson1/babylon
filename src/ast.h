@@ -451,8 +451,6 @@ struct Attribute {
         struct Term *term;
     };
     struct Attribute *next;
-
-    bool valid;  // used during verification only
 };
 
 

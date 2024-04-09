@@ -17,7 +17,7 @@ interface {}
 
     r2 = 1/0;     // Error, divide by zero
 
-    assert (v.1 == 99);    // No error, v is poisoned by the failed assignment to it.
+    assert (v.1 == 99);    // Error, 1/0 is indeterminate, might not be equal to 99.
   }
 
   function f3()
@@ -27,7 +27,7 @@ interface {}
     
     r1.0 = 1/0;   // Error, divide by zero
 
-    assert (v.0.0 == 99);   // No error, v is poisoned
+    assert (v.0.0 == 99);   // Error, 1/0 is indeterminate
   }
 
   function f4(x: i32[10])

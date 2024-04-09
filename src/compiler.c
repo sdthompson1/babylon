@@ -13,6 +13,7 @@ repository.
 #include "compiler.h"
 #include "debug_print.h"
 #include "error.h"
+#include "fol.h"
 #include "hash_table.h"
 #include "initial_env.h"
 #include "location.h"
@@ -67,12 +68,11 @@ struct LoadDetails {
 
     bool show_progress;
     bool create_debug_files;
-    bool continue_after_verify_error;
-    int verify_timeout_seconds;
     bool generate_main;
     bool auto_main;
 
     struct CacheDb *cache_db;
+    struct FolRunner *fol_runner;
 };
 
 static void interpret_filename(struct LoadDetails *details, const char *filename)
@@ -310,11 +310,10 @@ static bool load_module_from_disk(struct LoadDetails *details)
         if (details->create_debug_files) {
             options.debug_filename_prefix = get_output_filename(details, "");
         }
-        options.timeout_seconds = details->verify_timeout_seconds;
         options.interface_only = interface_only;
         options.show_progress = !interface_only && details->show_progress;
-        options.continue_after_error = details->continue_after_verify_error;
         bool result = verify_module(details->verifier_env,
+                                    details->fol_runner,
                                     module,
                                     &options);
         free((char*)options.debug_filename_prefix);
@@ -323,11 +322,12 @@ static bool load_module_from_disk(struct LoadDetails *details)
             return false;
         }
 
-        // Successful verification. Store the module's fingerprint in
-        // the cache (if this was a full verification), so that we know
-        // not to verify it again in future.
+        // If this was a full verification (!interface_only), then
+        // schedule the module's fingerprint to be stored into the
+        // cache, so that we know not to verify the same module again
+        // in the future.
         if (!interface_only) {
-            add_sha256_to_db(details->cache_db, MODULE_HASH, full_module_fingerprint);
+            add_fol_message(details->fol_runner, NULL, false, MODULE_HASH, full_module_fingerprint);
         }
     }
 
@@ -338,7 +338,12 @@ static bool load_module_from_disk(struct LoadDetails *details)
             details->generate_main = hash_table_contains_key(details->type_env, main_name);
             free(main_name);
         }
-        if (details->generate_main && !typecheck_main_function(details->type_env, module->name)) {
+        // complete verification jobs before attempting to typecheck main
+        // (as we don't want the error messages "mixed")
+        wait_fol_complete(details->fol_runner);
+        if (!fol_error_found(details->fol_runner)
+        && details->generate_main
+        && !typecheck_main_function(details->type_env, module->name)) {
             free_module(module);
             return false;
         }
@@ -446,19 +451,28 @@ bool compile(struct CompileOptions *options)
         details.cache_db = open_cache_db(details.output_prefix);
     }
 
+    details.fol_runner = new_fol_runner(details.cache_db,
+                                        options->verify_timeout_seconds,
+                                        options->continue_after_verify_error);
+
     details.import_location = g_no_location;
     details.compile_mode = options->mode;
     details.root_module = true;
 
     details.show_progress = options->show_progress;
     details.create_debug_files = options->create_debug_files;
-    details.continue_after_verify_error = options->continue_after_verify_error;
-    details.verify_timeout_seconds = options->verify_timeout_seconds;
     details.generate_main = options->generate_main;
     details.auto_main = options->auto_main;
 
     bool success = load_module_recursive(&details);
 
+    // Wait for FOL runner to complete, and then get final status
+    wait_fol_complete(details.fol_runner);
+    success = success && !fol_error_found(details.fol_runner);
+    free_fol_runner(details.fol_runner);
+    details.fol_runner = NULL;
+
+    // Close cache DB (*after* FOL runner has finished!)
     close_cache_db(details.cache_db);
     details.cache_db = NULL;
 

@@ -10,6 +10,7 @@ repository.
 #include "alloc.h"
 #include "ast.h"
 #include "error.h"
+#include "fol.h"
 #include "hash_table.h"
 #include "initial_env.h"
 #include "sha256.h"
@@ -82,6 +83,7 @@ static void restore_impl_decls(struct HashTable *env, struct HashTable *backup_t
 }
 
 bool verify_module(struct VerifierEnv *verifier_env,
+                   struct FolRunner *runner,
                    struct Module *module,
                    struct VerifierOptions *options)
 {
@@ -104,10 +106,9 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.postconds = NULL;
     cxt.assert_exprs = NULL;
     cxt.show_progress = options->show_progress;
-    cxt.timeout_seconds = options->timeout_seconds;
-    cxt.continue_after_error = options->continue_after_error;
-    cxt.error_found = false;
+    cxt.error_found = fol_error_found(runner);
     cxt.local_hidden = new_hash_table();
+    cxt.fol_runner = runner;
 
     cxt.debug_filename_prefix = options->debug_filename_prefix;
     if (cxt.debug_filename_prefix) {
@@ -118,12 +119,10 @@ bool verify_module(struct VerifierEnv *verifier_env,
 
     cxt.cache_db = options->cache_db;
 
-    bool ok = true;
-
     // Verify each decl in the interface
     struct DeclGroup *group = module->interface;
     while (group) {
-        ok = verify_decl_group(&cxt, group->decl) && ok;
+        verify_decl_group(&cxt, group->decl);
         group = group->next;
     }
 
@@ -134,7 +133,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
         // Verify each decl in the implementation.
         group = module->implementation;
         while (group) {
-            ok = verify_decl_group(&cxt, group->decl) && ok;
+            verify_decl_group(&cxt, group->decl);
             group = group->next;
         }
 
@@ -154,9 +153,5 @@ bool verify_module(struct VerifierEnv *verifier_env,
         free_hash_table(cxt.debug_files_created);
     }
 
-    if (ok != (!cxt.error_found)) {
-        fatal_error("inconsistency between 'ok' and 'error_found' flags");
-    }
-
-    return ok;
+    return !cxt.error_found;
 }

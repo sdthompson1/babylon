@@ -91,7 +91,7 @@ interface {}
     } else {
       x = 99;
     }
-    assert (x == 98);  // No error reported because of previous failure
+    assert (x == 98);  // Error, assert might not be true
   }
 
   function verif_fail_if_condition()
@@ -99,11 +99,11 @@ interface {}
     var x: i32 = 0;
     if (1/0 == 1) {   // Error
       x = 1;
-      assert (false);     // No error, neither branch of the "if" is considered,
-    } else {               // because of the previous error
+      assert (false);     // Fails
+    } else {
       x = 2;
     }
-    assert (x == 0);      // No error, for the same reason
+    assert (x == 0);      // Fails
   }
 
   function path_conds(x: i32)

@@ -15,7 +15,7 @@ ghost function test()
 
 ghost function test2()
 {
-    obtain (z:i32) 1/0 == 0;    // Error, condition doesn't verify
+    obtain (z:i32) 1/0 == 0;    // Error, condition doesn't verify. (Then obtain fails; we don't know if 1/0 == 0 or not.)
 }
 
 ghost function test3()

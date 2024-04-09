@@ -61,14 +61,14 @@ function f5()
 {
     var a: i32[*];
     var b: i32[*];
-    swap a[1/0], b[1/0];    // Error + poisons both arrays
-    assert a[0] == 1;       // Should be ignored because a is now poisoned
+    swap a[1/0], b[1/0];    // Error
+    assert a[0] == 1;       // Error
 }
 
 function f6(): i32
 {
     var a: i32[*];
     var b: i32[*];
-    swap a[1/0], b[1/0];    // Error + poisons both arrays
+    swap a[1/0], b[1/0];    // Error
     return 100;
 }

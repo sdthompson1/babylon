@@ -87,8 +87,12 @@ struct CacheDb * open_cache_db(const char *prefix)
             fatal_error("sqlite3_prepare_v2 failed");
         }
 
+        // For SMT_QUERY_HASH we must use INSERT OR IGNORE, because of
+        // the parallel running of jobs. But for the other cache
+        // types, INSERT suffices.
         sprintf(buf,
-                "INSERT INTO %s (hash) VALUES (?)",
+                "INSERT%s INTO %s (hash) VALUES (?)",
+                i == SMT_QUERY_HASH ? " OR IGNORE" : "",
                 TABLE_NAMES[i]);
         rc = sqlite3_prepare_v2(db->db, buf, -1, &db->insert_stmt[i], NULL);
         if (rc != SQLITE_OK) {
