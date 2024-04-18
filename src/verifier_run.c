@@ -81,7 +81,7 @@ void verify_condition(struct VContext *context,
         return;
     }
 
-    if (!fol_continue_after_error(context->fol_runner) && context->error_found) {
+    if (!fol_continue_after_error() && context->error_found) {
         free((char*)error_msg);
         return;
     }
@@ -123,8 +123,7 @@ void verify_condition(struct VContext *context,
                                               condition);
 
     // Send the FOL problem for solving.
-    solve_fol_problem(context->fol_runner,
-                      problem,  // handover
+    solve_fol_problem(problem,  // handover
                       context->show_progress,
                       full_description,   // handover
                       error_msg,     // handover
@@ -133,5 +132,5 @@ void verify_condition(struct VContext *context,
     // Update context->error_found if required.
     // Note: solve_fol_problem has already called update_fol_status, so we just need
     // to call fol_error_found here.
-    context->error_found = fol_error_found(context->fol_runner);
+    context->error_found = fol_error_found();
 }

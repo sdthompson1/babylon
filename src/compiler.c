@@ -72,7 +72,6 @@ struct LoadDetails {
     bool auto_main;
 
     struct CacheDb *cache_db;
-    struct FolRunner *fol_runner;
 };
 
 static void interpret_filename(struct LoadDetails *details, const char *filename)
@@ -293,7 +292,9 @@ static bool load_module_from_disk(struct LoadDetails *details)
             // there is no need to verify it again.
             if (sha256_exists_in_db(details->cache_db, MODULE_HASH, full_module_fingerprint)) {
                 if (details->show_progress) {
-                    fprintf(stderr, "Skipping module %s (cached)\n", module->name);
+                    add_fol_message(copy_string_3("Skipping module ", module->name, " (cached)\n"),
+                                    false,  // is_error
+                                    0, NULL);
                 }
 
                 // No need to run a full verification.
@@ -313,7 +314,6 @@ static bool load_module_from_disk(struct LoadDetails *details)
         options.interface_only = interface_only;
         options.show_progress = !interface_only && details->show_progress;
         bool result = verify_module(details->verifier_env,
-                                    details->fol_runner,
                                     module,
                                     &options);
         free((char*)options.debug_filename_prefix);
@@ -327,7 +327,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
         // cache, so that we know not to verify the same module again
         // in the future.
         if (!interface_only) {
-            add_fol_message(details->fol_runner, NULL, false, MODULE_HASH, full_module_fingerprint);
+            add_fol_message(NULL, false, MODULE_HASH, full_module_fingerprint);
         }
     }
 
@@ -340,8 +340,8 @@ static bool load_module_from_disk(struct LoadDetails *details)
         }
         // complete verification jobs before attempting to typecheck main
         // (as we don't want the error messages "mixed")
-        wait_fol_complete(details->fol_runner);
-        if (!fol_error_found(details->fol_runner)
+        wait_fol_complete();
+        if (!fol_error_found()
         && details->generate_main
         && !typecheck_main_function(details->type_env, module->name)) {
             free_module(module);
@@ -379,6 +379,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
     }
 
     free_module(module);
+    update_fol_status();
     return true;
 }
 
@@ -451,9 +452,9 @@ bool compile(struct CompileOptions *options)
         details.cache_db = open_cache_db(details.output_prefix);
     }
 
-    details.fol_runner = new_fol_runner(details.cache_db,
-                                        options->verify_timeout_seconds,
-                                        options->continue_after_verify_error);
+    start_fol_runner(details.cache_db,
+                     options->verify_timeout_seconds,
+                     options->continue_after_verify_error);
 
     details.import_location = g_no_location;
     details.compile_mode = options->mode;
@@ -467,10 +468,9 @@ bool compile(struct CompileOptions *options)
     bool success = load_module_recursive(&details);
 
     // Wait for FOL runner to complete, and then get final status
-    wait_fol_complete(details.fol_runner);
-    success = success && !fol_error_found(details.fol_runner);
-    free_fol_runner(details.fol_runner);
-    details.fol_runner = NULL;
+    wait_fol_complete();
+    success = success && !fol_error_found();
+    stop_fol_runner();
 
     // Close cache DB (*after* FOL runner has finished!)
     close_cache_db(details.cache_db);

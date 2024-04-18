@@ -83,7 +83,6 @@ static void restore_impl_decls(struct HashTable *env, struct HashTable *backup_t
 }
 
 bool verify_module(struct VerifierEnv *verifier_env,
-                   struct FolRunner *runner,
                    struct Module *module,
                    struct VerifierOptions *options)
 {
@@ -106,9 +105,8 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.postconds = NULL;
     cxt.assert_exprs = NULL;
     cxt.show_progress = options->show_progress;
-    cxt.error_found = fol_error_found(runner);
+    cxt.error_found = fol_error_found();
     cxt.local_hidden = new_hash_table();
-    cxt.fol_runner = runner;
 
     cxt.debug_filename_prefix = options->debug_filename_prefix;
     if (cxt.debug_filename_prefix) {

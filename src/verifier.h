@@ -18,7 +18,6 @@ repository.
 #include <stdbool.h>
 
 struct CacheDb;
-struct FolRunner;
 struct Module;
 struct Sexpr;
 struct VerifierEnv;
@@ -44,7 +43,6 @@ struct VerifierOptions {
 // Also adds Items to the verifier_env.
 
 bool verify_module(struct VerifierEnv *verifier_env,
-                   struct FolRunner *runner,
                    struct Module *module,
                    struct VerifierOptions *options);
 

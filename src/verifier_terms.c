@@ -1686,7 +1686,7 @@ static void verify_aliasing_for_args(struct VContext *cxt,
             if (equality_conditions == NULL) {
                 // There is definitely aliasing. Report error (at proper place in the output).
                 char * msg = err_msg_aliasing_violation(*arg2->location, arg2->arg_num, arg1->arg_num);
-                add_fol_message(cxt->fol_runner, msg, true, 0, NULL);
+                add_fol_message(msg, true, 0, NULL);
 
             } else {
                 equality_conditions = make_list2_sexpr(make_string_sexpr("not"),

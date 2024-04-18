@@ -1063,7 +1063,7 @@ void verify_statements(struct VContext *context,
                        struct Sexpr *** ret_val_ptr)
 {
     while (stmt) {
-        if (context->error_found && !fol_continue_after_error(context->fol_runner)) {
+        if (context->error_found && !fol_continue_after_error()) {
             // We might as well stop here
             return;
         }

@@ -137,9 +137,6 @@ struct VContext {
 
     // Hidden Names
     struct HashTable *local_hidden;
-
-    // FOL runner
-    struct FolRunner *fol_runner;
 };
 
 enum RefType {

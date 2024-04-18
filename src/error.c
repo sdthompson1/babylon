@@ -11,6 +11,7 @@ repository.
 #include "alloc.h"
 #include "ast.h"
 #include "error.h"
+#include "fol.h"
 #include "op_name.h"
 #include "stringbuf.h"
 #include "util.h"
@@ -62,6 +63,8 @@ static void print_location_no_colon(struct Location location)
 
 static void print_location(struct Location location)
 {
+    wait_fol_complete();
+
     if (location.filename == NULL && location.begin_line_num == 0) {
         return;
     }

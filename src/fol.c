@@ -123,21 +123,26 @@ struct FolRunner {
     bool continue_after_error;
 };
 
+// We keep a global FolRunner object.
+struct FolRunner * g_fol_runner;
 
-struct FolRunner * new_fol_runner(struct CacheDb *cache_db,
-                                  int timeout_seconds,
-                                  bool continue_after_error)
+
+void start_fol_runner(struct CacheDb *cache_db,
+                      int timeout_seconds,
+                      bool continue_after_error)
 {
-    struct FolRunner *runner = alloc(sizeof(struct FolRunner));
-    runner->jobs_head = NULL;
-    runner->jobs_tail = &runner->jobs_head;
-    runner->num_jobs = 0;
-    runner->error_found = false;
-    runner->error_reached = false;
-    runner->cache_db = cache_db;
-    runner->timeout_seconds = timeout_seconds;
-    runner->continue_after_error = continue_after_error;
-    return runner;
+    if (g_fol_runner) {
+        fatal_error("fol runner already started");
+    }
+    g_fol_runner = alloc(sizeof(struct FolRunner));
+    g_fol_runner->jobs_head = NULL;
+    g_fol_runner->jobs_tail = &g_fol_runner->jobs_head;
+    g_fol_runner->num_jobs = 0;
+    g_fol_runner->error_found = false;
+    g_fol_runner->error_reached = false;
+    g_fol_runner->cache_db = cache_db;
+    g_fol_runner->timeout_seconds = timeout_seconds;
+    g_fol_runner->continue_after_error = continue_after_error;
 }
 
 static void free_job(struct Job *job)
@@ -149,19 +154,23 @@ static void free_job(struct Job *job)
     free(job);
 }
 
-void free_fol_runner(struct FolRunner *runner)
+void stop_fol_runner()
 {
-    while (runner->jobs_head) {
-        struct Job *next = runner->jobs_head->next;
-        free_job(runner->jobs_head);
-        runner->jobs_head = next;
+    if (!g_fol_runner) {
+        fatal_error("fol runner not started");
     }
-    free(runner);
+    wait_fol_complete();
+    while (g_fol_runner->jobs_head) {
+        struct Job *next = g_fol_runner->jobs_head->next;
+        free_job(g_fol_runner->jobs_head);
+        g_fol_runner->jobs_head = next;
+    }
+    free(g_fol_runner);
 }
 
-bool fol_continue_after_error(const struct FolRunner *runner)
+bool fol_continue_after_error()
 {
-    return runner->continue_after_error;
+    return g_fol_runner->continue_after_error;
 }
 
 static void print_problem(FILE *file, const struct Sexpr *problem)
@@ -228,17 +237,16 @@ static bool is_unknown(const char *output, int output_length)
         || output_length == 0;
 }
 
-void solve_fol_problem(struct FolRunner *runner,
-                       struct Sexpr *fol_problem,   // handover
+void solve_fol_problem(struct Sexpr *fol_problem,   // handover
                        bool show_progress,
                        const char *announce_msg,    // handover
                        const char *error_msg,       // handover
                        const char *debug_filename)
 {
     // Block until the queue has gone down to a reasonable size (if required).
-    while (runner->num_jobs > MAX_JOB_QUEUE_LENGTH) {
+    while (g_fol_runner->num_jobs > MAX_JOB_QUEUE_LENGTH) {
         update_processes(true);
-        update_fol_status(runner);
+        update_fol_status();
     }
 
     // Save .fol file for debugging if required.
@@ -276,7 +284,7 @@ void solve_fol_problem(struct FolRunner *runner,
         job->procs[i].cmd = PROVERS[i];
         job->procs[i].print_to_stdin = print_to_stdin;
         job->procs[i].context = smt_problem;
-        job->procs[i].timeout_in_seconds = runner->timeout_seconds;
+        job->procs[i].timeout_in_seconds = g_fol_runner->timeout_seconds;
     }
 
     job->num_started = 0;
@@ -293,14 +301,14 @@ void solve_fol_problem(struct FolRunner *runner,
     job->show_progress = show_progress;
 
     // Check the cache.
-    if (runner->cache_db) {
+    if (g_fol_runner->cache_db) {
         struct SHA256_CTX ctx;
         sha256_init(&ctx);
         sha256_add_bytes(&ctx, (const uint8_t*)"SMT", 4);
         hash_sexpr(smt_problem, &ctx);
         sha256_final(&ctx, job->hash);
 
-        if (sha256_exists_in_db(runner->cache_db, SMT_QUERY_HASH, job->hash)) {
+        if (sha256_exists_in_db(g_fol_runner->cache_db, SMT_QUERY_HASH, job->hash)) {
             // We can "complete" the job immediately.
             job->active = false;
             free_sexpr(job->smt_problem);
@@ -312,16 +320,15 @@ void solve_fol_problem(struct FolRunner *runner,
     }
 
     // Add the job to the list.
-    *(runner->jobs_tail) = job;
-    runner->jobs_tail = &(job->next);
-    ++(runner->num_jobs);
+    *(g_fol_runner->jobs_tail) = job;
+    g_fol_runner->jobs_tail = &(job->next);
+    ++(g_fol_runner->num_jobs);
 
     // Update status. This will launch the new job if appropriate.
-    update_fol_status(runner);
+    update_fol_status();
 }
 
-void add_fol_message(struct FolRunner *runner,
-                     const char *msg,   // handover
+void add_fol_message(const char *msg,   // handover
                      bool is_error,
                      enum HashType hash_type,
                      const uint8_t *hash)
@@ -348,12 +355,12 @@ void add_fol_message(struct FolRunner *runner,
     }
     job->show_progress = true;
 
-    *(runner->jobs_tail) = job;
-    runner->jobs_tail = &(job->next);
-    ++(runner->num_jobs);
+    *(g_fol_runner->jobs_tail) = job;
+    g_fol_runner->jobs_tail = &(job->next);
+    ++(g_fol_runner->num_jobs);
 
     if (is_error) {
-        runner->error_found = true;
+        g_fol_runner->error_found = true;
     }
 }
 
@@ -507,7 +514,7 @@ static bool has_running_processes(const struct Job *job)
 // Update a single job - not starting any new processes, but checking
 // for completed processes and the like.
 // Returns true if the job should be dropped from the head of the list.
-static bool update_job(struct FolRunner *runner, struct Job *job)
+static bool update_job(struct Job *job)
 {
     // If the job is active, but 'done', then we can set active to false,
     // and do other required updates.
@@ -538,24 +545,24 @@ static bool update_job(struct FolRunner *runner, struct Job *job)
 
                 free((char*)job->error_msg);
                 job->error_msg = NULL;
-                add_sha256_to_db(runner->cache_db, SMT_QUERY_HASH, job->hash);
+                add_sha256_to_db(g_fol_runner->cache_db, SMT_QUERY_HASH, job->hash);
 
             } else {
                 // Proof NOT found; retain the error msg, set error_flag.
                 // Also set error_found flag in the runner.
                 job->error_flag = true;
-                runner->error_found = true;
+                g_fol_runner->error_found = true;
             }
         }
     }
 
     // If the job is at the start of the list, then print any required
     // messages.
-    if (job == runner->jobs_head) {
+    if (job == g_fol_runner->jobs_head) {
 
         // Don't print anything to do with jobs beyond the first error,
         // UNLESS continue_after_error is true.
-        if (!runner->error_reached || runner->continue_after_error) {
+        if (!g_fol_runner->error_reached || g_fol_runner->continue_after_error) {
             if (job->announce_msg != NULL && job->show_progress) {
                 fprintf(stderr, "%s", job->announce_msg);
                 free((char*)job->announce_msg);
@@ -578,14 +585,14 @@ static bool update_job(struct FolRunner *runner, struct Job *job)
 
     // If the job is at the start of the list, and had an error, then
     // set error_reached.
-    if (job == runner->jobs_head && job->error_flag) {
-        runner->error_reached = true;
+    if (job == g_fol_runner->jobs_head && job->error_flag) {
+        g_fol_runner->error_reached = true;
     }
 
     // If error_reached and !continue_after_error, then we want to
     // wind up the queue -- kill all remaining child processes, and
     // set all remaining jobs to inactive.
-    if (runner->error_reached && !runner->continue_after_error) {
+    if (g_fol_runner->error_reached && !g_fol_runner->continue_after_error) {
         kill_job_processes(job);
         job->active = false;
     }
@@ -594,11 +601,11 @@ static bool update_job(struct FolRunner *runner, struct Job *job)
     // add_to_cache_db, and !error_reached, then add an item to the
     // DB. (This is used for updating the module and decl level
     // caches.)
-    if (job == runner->jobs_head
+    if (job == g_fol_runner->jobs_head
     && !job->active
     && job->add_to_cache_db
-    && !runner->error_reached) {
-        add_sha256_to_db(runner->cache_db, job->hash_type, job->hash);
+    && !g_fol_runner->error_reached) {
+        add_sha256_to_db(g_fol_runner->cache_db, job->hash_type, job->hash);
         job->add_to_cache_db = false;
     }
 
@@ -606,20 +613,20 @@ static bool update_job(struct FolRunner *runner, struct Job *job)
     //  - It is at the head of the list.
     //  - It is not active (i.e. we have obtained a result).
     //  - All processes have exited (or been killed).
-    return (job == runner->jobs_head && !job->active && !has_running_processes(job));
+    return (job == g_fol_runner->jobs_head && !job->active && !has_running_processes(job));
 }
 
 // This kicks off processes (for all jobs, starting from the front of the list)
 // until we have reached the maximum allowed number of parallel processes.
-static void start_new_processes(struct FolRunner *runner, int num_running)
+static void start_new_processes(int num_running)
 {
     // After an error is reached, we no longer start new processes
     // (unless continue_after_error is set).
-    if (runner->error_reached && !runner->continue_after_error) {
+    if (g_fol_runner->error_reached && !g_fol_runner->continue_after_error) {
         return;
     }
 
-    for (struct Job *job = runner->jobs_head; job; job = job->next) {
+    for (struct Job *job = g_fol_runner->jobs_head; job; job = job->next) {
         while (job->active && job->num_started < NUM_PROVERS) {
 
             // Stop here if we already have enough processes running.
@@ -641,7 +648,7 @@ static void start_new_processes(struct FolRunner *runner, int num_running)
     }
 }
 
-void update_fol_status(struct FolRunner *runner)
+void update_fol_status()
 {
     // Get updates from the Process subsystem (process.h).
     update_processes(false);
@@ -649,22 +656,22 @@ void update_fol_status(struct FolRunner *runner)
     // Update all Jobs as necessary.
     // Also count how many processes we have running.
     int running_processes = 0;
-    for (struct Job *job = runner->jobs_head; job; ) {
-        bool remove = update_job(runner, job);
+    for (struct Job *job = g_fol_runner->jobs_head; job; ) {
+        bool remove = update_job(job);
 
         if (remove) {
-            if (job != runner->jobs_head) fatal_error("only jobs at head of list can be removed");
+            if (job != g_fol_runner->jobs_head) fatal_error("only jobs at head of list can be removed");
 
             // remove job from list
-            runner->jobs_head = job->next;
-            if (job->next == NULL) runner->jobs_tail = &runner->jobs_head;
-            --(runner->num_jobs);
+            g_fol_runner->jobs_head = job->next;
+            if (job->next == NULL) g_fol_runner->jobs_tail = &g_fol_runner->jobs_head;
+            --(g_fol_runner->num_jobs);
 
             // free the job
             free_job(job);
 
             // move on
-            job = runner->jobs_head;
+            job = g_fol_runner->jobs_head;
 
         } else {
             // count processes
@@ -680,18 +687,20 @@ void update_fol_status(struct FolRunner *runner)
     }
 
     // Start new processes if required.
-    start_new_processes(runner, running_processes);
+    start_new_processes(running_processes);
 }
 
-void wait_fol_complete(struct FolRunner *runner)
+void wait_fol_complete()
 {
-    while (runner->jobs_head) {
-        update_processes(true);
-        update_fol_status(runner);
+    if (g_fol_runner) {
+        while (g_fol_runner->jobs_head) {
+            update_processes(true);
+            update_fol_status(g_fol_runner);
+        }
     }
 }
 
-bool fol_error_found(struct FolRunner *runner)
+bool fol_error_found()
 {
-    return runner->error_found;
+    return g_fol_runner->error_found;
 }

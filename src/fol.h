@@ -138,25 +138,24 @@ In addition convert_fol_to_smt assumes that names do not contain the
 
 #include "cache_db.h"
 
-struct FolRunner;
 struct Sexpr;
 
 
 // FOL problems are run asynchronously by a "FolRunner".
-// The CacheDb (if provided) should be kept alive for as long as the FolRunner is alive.
-struct FolRunner * new_fol_runner(struct CacheDb *cache_db,
-                                  int timeout_seconds,
-                                  bool continue_after_error);
+// The CacheDb (if provided) should be kept alive at least until stop_fol_runner is called.
+void start_fol_runner(struct CacheDb *cache_db,
+                      int timeout_seconds,
+                      bool continue_after_error);
 
-void free_fol_runner(struct FolRunner *runner);
+void stop_fol_runner();
 
-bool fol_continue_after_error(const struct FolRunner *runner);
+// this returns the continue_after_error flag that was passed to start_fol_runner
+bool fol_continue_after_error();
 
 
 // Start a new FOL problem solution in the background.
 // (May block if job queue is too full.)
-void solve_fol_problem(struct FolRunner *runner,
-                       struct Sexpr *problem,          // handover
+void solve_fol_problem(struct Sexpr *problem,          // handover
                        bool show_progress,
                        const char *announce_msg,       // handover
                        const char *error_msg,          // handover
@@ -170,8 +169,7 @@ void solve_fol_problem(struct FolRunner *runner,
 // is reached.
 // If is_error is true, the message will be considered an error msg,
 // otherwise it is a progress msg.
-void add_fol_message(struct FolRunner *runner,
-                     const char *msg,   // handover, can be NULL
+void add_fol_message(const char *msg,   // handover, can be NULL
                      bool is_error,
                      enum HashType hash_type,
                      const uint8_t *hash);
@@ -180,15 +178,16 @@ void add_fol_message(struct FolRunner *runner,
 // Update the status of all FOL problems -- this will check for completed
 // child processes and launch any new ones required. This does not block.
 // (Note: this is called automatically as part of solve_fol_problem.)
-void update_fol_status(struct FolRunner *runner);
+void update_fol_status();
 
 
 // Block until the FOL problem queue is emptied.
-void wait_fol_complete(struct FolRunner *runner);
+// (It is safe to call this even if FolRunner wasn't started.)
+void wait_fol_complete();
 
 
 // Returns true if any error has been observed from any of the child
 // processes so far. (This doesn't update status, it is just checking a flag.)
-bool fol_error_found(struct FolRunner *runner);
+bool fol_error_found();
 
 #endif

@@ -741,7 +741,7 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
         buf[i] = 0;
         const char *msg_tail = skipped ? " (cached)\n" : "\n";
         char *msg = copy_string_3("Verifying: ", buf, msg_tail);
-        add_fol_message(context->fol_runner, msg, false, 0, NULL);
+        add_fol_message(msg, false, 0, NULL);
     }
 
     context->path_condition = make_string_sexpr("true");
@@ -786,7 +786,7 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
 
     // On successful verification (not in interface_only mode), add to DB
     if (!context->interface_only) {
-        add_fol_message(context->fol_runner, NULL, false, DECL_HASH, fingerprint);
+        add_fol_message(NULL, false, DECL_HASH, fingerprint);
     }
 
     // If skipped, restore interface_only to false for the next decl
@@ -800,7 +800,7 @@ void verify_decl_group(struct VContext *context, struct Decl *decl_group)
     // for now no "per-group" setup required, just verify each decl separately
     struct Decl *decl = decl_group;
 
-    while (decl && (!context->error_found || fol_continue_after_error(context->fol_runner))) {
+    while (decl && (!context->error_found || fol_continue_after_error())) {
         verify_decl(context, decl_group);
         decl = decl->next;
     }
