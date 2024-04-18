@@ -87,12 +87,11 @@ struct CacheDb * open_cache_db(const char *prefix)
             fatal_error("sqlite3_prepare_v2 failed");
         }
 
-        // For SMT_QUERY_HASH we must use INSERT OR IGNORE, because of
-        // the parallel running of jobs. But for the other cache
-        // types, INSERT suffices.
+        // We must use ON CONFLICT DO NOTHING because we run jobs in parallel,
+        // so we might start a second verification of the same "thing", before
+        // realising that we already started a previous verification of it.
         sprintf(buf,
-                "INSERT%s INTO %s (hash) VALUES (?)",
-                i == SMT_QUERY_HASH ? " OR IGNORE" : "",
+                "INSERT INTO %s (hash) VALUES (?) ON CONFLICT(hash) DO NOTHING",
                 TABLE_NAMES[i]);
         rc = sqlite3_prepare_v2(db->db, buf, -1, &db->insert_stmt[i], NULL);
         if (rc != SQLITE_OK) {
@@ -115,6 +114,30 @@ void close_cache_db(struct CacheDb *db)
     }
 }
 
+static void fatal_sqlite_error(sqlite3 *db, int rc, const char *msg)
+{
+    switch (rc) {
+    case SQLITE_BUSY:
+        fprintf(stderr, "sqlite returned SQLITE_BUSY\n");
+        break;
+
+    case SQLITE_ERROR:
+        fprintf(stderr, "sqlite returned SQLITE_ERROR\n");
+        fprintf(stderr, "sqlite3_errmsg: %s\n", sqlite3_errmsg(db));
+        break;
+
+    case SQLITE_MISUSE:
+        fprintf(stderr, "sqlite returned SQLITE_MISUSE\n");
+        break;
+
+    default:
+        fprintf(stderr, "sqlite unknown result code %d\n", rc);
+        break;
+    }
+
+    fatal_error(msg);
+}
+
 bool sha256_exists_in_db(struct CacheDb *db,
                          enum HashType hash_type,
                          const uint8_t hash[SHA256_HASH_LENGTH])
@@ -133,7 +156,7 @@ bool sha256_exists_in_db(struct CacheDb *db,
     } else if (rc == SQLITE_ROW) {
         found = true;
     } else {
-        fatal_error("sha256_exists_in_db: sqlite3_step failed");
+        fatal_sqlite_error(db->db, rc, "sha256_exists_in_db: sqlite3_step failed");
     }
 
     rc = sqlite3_reset(db->query_stmt[hash_type]);
@@ -152,16 +175,16 @@ void add_sha256_to_db(struct CacheDb *db,
 
     int rc = sqlite3_bind_blob(db->insert_stmt[hash_type], 1, hash, SHA256_HASH_LENGTH, SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
-        fatal_error("add_sha256_to_db: sqlite3_bind_blob failed");
+        fatal_sqlite_error(db->db, rc, "add_sha256_to_db: sqlite3_bind_blob failed");
     }
 
     rc = sqlite3_step(db->insert_stmt[hash_type]);
     if (rc != SQLITE_DONE) {
-        fatal_error("add_sha256_to_db: sqlite3_step failed");
+        fatal_sqlite_error(db->db, rc, "add_sha256_to_db: sqlite3_step failed");
     }
 
     rc = sqlite3_reset(db->insert_stmt[hash_type]);
     if (rc != SQLITE_OK) {
-        fatal_error("sha256_exists_in_db: sqlite3_reset failed");
+        fatal_sqlite_error(db->db, rc, "sha256_exists_in_db: sqlite3_reset failed");
     }
 }

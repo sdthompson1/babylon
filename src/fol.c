@@ -54,7 +54,7 @@ static const char * PROVERS[NUM_PROVERS][MAX_ARGS] = {
 
 // Max number of SMT jobs that can be queueing up waiting to run.
 // There probably isn't much need to tune this, the default should work fine.
-#define MAX_JOB_QUEUE_LENGTH (((MAX_PROVER_PROCESSES / NUM_PROVERS) * 20) + 20)
+#define MAX_JOB_QUEUE_LENGTH (((MAX_PROVER_PROCESSES / NUM_PROVERS) * 200) + 20)
 
 
 // Job and FolRunner structs.
