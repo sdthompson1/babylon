@@ -206,80 +206,32 @@ explain how to use the compiler and verifier.
 
 # Future work
 
-There are several possible directions for future work.
-
-I would like to continue improving the language itself:
-
- - new language features (e.g. refactoring how arrays work; exporting
-   types "abstractly" in module interfaces)
- - add "for" loops
- - add recursion (currently recursive functions or recursive datatypes
-   are not supported, mostly because I haven't got around to adding
-   them yet)
- - maybe add support for higher order functions (if I can figure out
-   how to do this in the SMT solvers)
- - loop features: infinite while loops, "break" and "continue"
- - etc.
-
-The interface for calling C from Babylon should be improved (something
-like a "foreign function interface", as found in Haskell or other
-languages, is needed).
-
-A standard library should be added at some point.
-
-The compiler could be made easier to use, e.g.:
- - better error messages
- - the provers to be used should be specified in some config file,
-   rather than hard coded
-
-Rewriting the compiler in its own language might be interesting, at
-some point -- but for now it probably makes sense to continue
-improving the language itself, before starting on such a project.
-
-Finally, my main motivation for working on this project was that I
-wanted to explore whether it is feasible to use formally verified
-languages, combined with modern SMT solver technology, to create
-"real" programs. To this end, I would like to start writing some
-larger projects/applications in the Babylon language -- perhaps a
-simple 2-D game, using SDL for the graphics (like in the chess
-example).
-
+The [project webpage](https://www.solarflare.org.uk/babylon) includes
+a "Future work" section giving details of possible future directions
+for this project.
 
 
 # Related projects
 
-This whole project was very much inspired by
-[Dafny](https://dafny.org/). However, Dafny is targetting managed
-languages (for example, they use a garbage collector) whereas I am
-more interested in the kind of lower-level programming that one might
-do in Rust or C. For example, I have explicitly-sized integers, like
-"i32" or "u64", whereas Dafny uses an infinite-sized "int" type.
+Here is a (non-exhaustive) list of programming languages and other
+tools that can be used for software verification (or theorem proving
+more generally). These are in no particular order.
 
-[SPARK](https://en.wikipedia.org/wiki/SPARK_(programming_language)) is
-actually very close in its goals to Babylon -- it compiles to native
-code and has support for verification. The main difference is that it
-uses Ada syntax whereas Babylon has a more C-like syntax (with curly
-braces).
+ - [Dafny](https://dafny.org/)
+ - [SPARK](https://en.wikipedia.org/wiki/SPARK_(programming_language))
+ - [Frama-C](http://frama-c.com/index.html)
+ - [VCC](https://www.microsoft.com/en-us/research/project/vcc-a-verifier-for-concurrent-c/)
+ - [Eiffel](https://en.wikipedia.org/wiki/Eiffel_(programming_language))
+ - [Whiley](https://whiley.org/)
+ - [Liquid Haskell](https://ucsd-progsys.github.io/liquidhaskell/)
+ - [Agda](https://github.com/agda/agda)
+ - [Isabelle](https://isabelle.in.tum.de/)
+ - [Coq](https://coq.inria.fr/)
+ - [Lean](https://lean-lang.org/)
 
-More broadly, there are many other verifcation and proof systems out
-there, including [Coq](https://coq.inria.fr/),
-[Lean](https://lean-lang.org/), [Agda](https://github.com/agda/agda),
-[Liquid Haskell](https://ucsd-progsys.github.io/liquidhaskell/),
-[Whiley](https://whiley.org/),
-[Isabelle](https://isabelle.in.tum.de/), and so on. In fact too many
-to list here.
-
-One important distinction is that systems like Coq or Isabelle place a
-great emphasis on really making sure that the proofs are correct and
-trustworthy. On the other hand, systems like mine are willing to trust
-the results of an SMT solver, without further checks being made. This
-means that theoretically, a Babylon program could be successfully
-verified, yet not be correct, due to a bug in the SMT solver. (Or
-indeed a bug in the compiler itself!) Personally I am happy with this
-trade-off, but for users who really require a cast-iron guarantee that
-the verification is correct (for example in safety-critical systems?),
-then Babylon would *not* be a good choice, and one of those other
-systems would be better.
+A brief discussion of some of these can be found on the [project
+webpage](https://www.solarflare.org.uk/babylon) under the "Related
+projects" section.
 
 
 # Disclaimer
