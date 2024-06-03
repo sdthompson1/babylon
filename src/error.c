@@ -242,6 +242,18 @@ void report_both_body_and_extern(struct Location location)
     print_error("Function body provided for 'extern' function\n");
 }
 
+void report_impure_cannot_be_ghost(struct Decl *decl)
+{
+    print_location(decl->location);
+    print_error("'impure' function cannot be 'ghost'\n");
+}
+
+void report_extern_cannot_be_ghost(struct Decl *decl)
+{
+    print_location(decl->location);
+    print_error("'extern' function cannot be 'ghost'\n");
+}
+
 void report_non_compile_time_constant(struct Location location)
 {
     print_location(location);
@@ -560,6 +572,18 @@ void report_access_ghost_var_from_executable_code(struct Term *term)
 {
     print_location(term->location);
     print_error("Can't access a ghost variable or function from executable code\n");
+}
+
+void report_access_impure_fun_from_ghost_code(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Can't call an impure function from ghost code\n");
+}
+
+void report_access_impure_fun_from_pure_code(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Can't call an impure function from pure code\n");
 }
 
 void report_writing_nonghost_from_ghost_code(struct Location loc)

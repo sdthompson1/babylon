@@ -344,6 +344,11 @@ struct Item * update_local(struct VContext *context,
 // NOTE: Result might be poisoned, look in context->local_env to check.
 char * lookup_local(struct VContext *context, const char *local_name);
 
+// This ensures that the FOL name created in "update_local" has a numeric suffix (at least ".1").
+// This is a slight "hack" but unfortunately this is needed sometimes (i.e. when creating variables
+// to represent impure function call results).
+void ensure_nonzero_name(struct VContext *context, const char *local_name);
+
 
 //-------------------------------------------------------------------------------
 // Functions for "snapshotting" the current version number of each

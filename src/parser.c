@@ -2009,7 +2009,7 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
     return result;
 }
 
-static struct Decl * parse_function_decl(struct ParserState *state, bool is_extern)
+static struct Decl * parse_function_decl(struct ParserState *state, bool is_extern, bool impure)
 {
     struct Location loc = state->token->location;
     advance(state);
@@ -2067,6 +2067,7 @@ static struct Decl * parse_function_decl(struct ParserState *state, bool is_exte
     result->function_data.body_specified = body_specified;
     result->function_data.end_loc = end_loc;
     result->function_data.is_extern = is_extern;
+    result->function_data.impure = impure;
     result->attributes = attrs;
     result->next = NULL;
     result->recursive = false;
@@ -2205,13 +2206,29 @@ static struct Decl * parse_typedef_decl(struct ParserState *state)
 
 static struct Decl * parse_decl(struct ParserState *state)
 {
+    // check for 'ghost', 'impure' and 'extern' keywords
     bool ghost = false;
-    if (state->token->type == TOK_KW_GHOST) {
-        ghost = true;
+    bool extern_found = false;
+    bool impure = false;
+
+    while (state->token->type == TOK_KW_EXTERN
+           || state->token->type == TOK_KW_IMPURE
+           || state->token->type == TOK_KW_GHOST) {
+        if (state->token->type == TOK_KW_EXTERN) {
+            extern_found = true;
+        } else if (state->token->type == TOK_KW_IMPURE) {
+            impure = true;
+        } else {
+            ghost = true;
+        }
         advance(state);
     }
 
-    bool extern_function = false;
+    // 'extern' and 'impure' are only allowed with functions
+    if ((extern_found || impure) && state->token->type != TOK_KW_FUNCTION) {
+        expect(state, TOK_KW_FUNCTION, "'function'");  // print error message
+        return NULL;
+    }
 
     struct Decl *decl = NULL;
 
@@ -2220,18 +2237,8 @@ static struct Decl * parse_decl(struct ParserState *state)
         decl = parse_const_decl(state);
         break;
 
-    case TOK_KW_EXTERN:
-        // currently "extern" can only precede "function"
-        advance(state);
-        if (state->token->type != TOK_KW_FUNCTION) {
-            expect(state, TOK_KW_FUNCTION, "'function'");  // print error message
-            return NULL;
-        }
-        extern_function = true;
-        // Fall through
-
     case TOK_KW_FUNCTION:
-        decl = parse_function_decl(state, extern_function);
+        decl = parse_function_decl(state, extern_found, impure);
         break;
 
     case TOK_KW_DATATYPE:

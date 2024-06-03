@@ -44,6 +44,9 @@ struct TypecheckContext {
     // True if we are in executable code
     bool executable;
 
+    // True if the current function is marked "impure"
+    bool impure;
+
     // True if we are at the "top level scope" of a proof
     bool at_proof_top_level;
 
@@ -93,7 +96,8 @@ void add_to_type_env(struct HashTable *env,
                      struct Type *type,   // handed over
                      bool ghost,
                      bool read_only,
-                     bool constructor)
+                     bool constructor,
+                     bool impure)
 {
     remove_from_type_env(env, name);   // just in case there is an existing entry
 
@@ -103,6 +107,7 @@ void add_to_type_env(struct HashTable *env,
     entry->ghost = ghost;
     entry->read_only = read_only;
     entry->constructor = constructor;
+    entry->impure = impure;
 
     hash_table_insert(env, copy_string(name), entry);
 }
@@ -958,6 +963,18 @@ static void* typecheck_var(void *context, struct Term *term, void *type_result)
         return NULL;
     }
 
+    // Impure functions can only be accessed from impure, executable functions
+    if (entry->impure && !tc_context->executable) {
+        report_access_impure_fun_from_ghost_code(term);
+        tc_context->error = true;
+        return NULL;
+    }
+    if (entry->impure && !tc_context->impure) {
+        report_access_impure_fun_from_pure_code(term);
+        tc_context->error = true;
+        return NULL;
+    }
+
     // Term is OK, set the type.
     term->type = copy_type(entry->type);
 
@@ -1695,7 +1712,8 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
                     copy_type(term->let.rhs->type),   // handover
                     !tc_context->executable,   // ghost
                     true,                      // read-only
-                    false);                    // constructor
+                    false,                     // constructor
+                    false);                    // impure
 
     transform_term(tr, context, term->let.body);
 
@@ -1728,7 +1746,8 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
                     copy_type(term->quant.type),     // handover
                     true,    // ghost
                     true,    // read-only
-                    false);  // constructor
+                    false,   // constructor
+                    false);  // impure
 
     transform_term(tr, context, term->quant.body);
 
@@ -2272,7 +2291,8 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
                         copy_type(scrutinee_type),
                         !tc_context->executable,   // ghost
                         pat_read_only,             // read-only
-                        false);                    // constructor
+                        false,                     // constructor
+                        false);                    // impure
         return true;
 
     case PAT_BOOL:
@@ -2785,7 +2805,8 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
                         copy_type(stmt->var_decl.type),    // handover
                         !tc_context->executable,  // ghost
                         read_only,                // read_only
-                        false);                   // constructor
+                        false,                    // constructor
+                        false);                   // impure
     }
 }
 
@@ -2823,7 +2844,8 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
                         copy_type(stmt->fix.type),    // handover
                         true,      // ghost
                         true,      // read_only
-                        false);    // constructor
+                        false,     // constructor
+                        false);    // impure
     }
 }
 
@@ -2843,7 +2865,8 @@ static void typecheck_obtain_stmt(struct TypecheckContext *tc_context,
                     copy_type(stmt->obtain.type),   // handover
                     true,    // ghost
                     false,   // read_only
-                    false);  // constructor
+                    false,   // constructor
+                    false);  // impure
 
     // the condition is not executable
     bool old_exec = tc_context->executable;
@@ -3312,7 +3335,8 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
                         copy_type(decl->const_data.type),     // handover
                         decl->ghost,
                         true,    // read_only
-                        false);  // constructor
+                        false,   // constructor
+                        false);  // impure
     }
 }
 
@@ -3361,6 +3385,19 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         return;
     }
 
+    // ghost and extern are incompatible
+    // ghost and impure are incompatible
+    if (decl->ghost && decl->function_data.impure) {
+        report_impure_cannot_be_ghost(decl);
+        tc_context->error = true;
+        return;
+    }
+    if (decl->ghost && decl->function_data.is_extern) {
+        report_extern_cannot_be_ghost(decl);
+        tc_context->error = true;
+        return;
+    }
+
     bool kinds_ok = true;
 
     for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
@@ -3369,7 +3406,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         NULL,   // type (NULL for tyvars)
                         false,  // ghost
                         true,   // read_only
-                        false); // constructor
+                        false,  // constructor
+                        false); // impure
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         if (kindcheck_type(tc_context, &arg->type)) {
@@ -3385,7 +3423,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                             copy_type(arg->type),   // handover
                             decl->ghost,
                             !arg->ref,      // read_only
-                            false);         // constructor
+                            false,          // constructor
+                            false);         // impure
         } else {
             kinds_ok = false;
         }
@@ -3417,7 +3456,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         copy_type(ret_type),   // handover
                         decl->ghost,
                         false,    // read_only
-                        false);   // constructor
+                        false,    // constructor
+                        false);   // impure
     }
 
     // attributes are considered non-executable
@@ -3476,7 +3516,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         type,    // handover
                         decl->ghost,
                         true,    // read_only
-                        false);  // constructor
+                        false,   // constructor
+                        decl->function_data.impure);
     }
 }
 
@@ -3498,7 +3539,8 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                         NULL,
                         false,  // ghost
                         true,   // read_only
-                        false); // constructor
+                        false,  // constructor
+                        false); // impure
     }
 
     // kindcheck the payload types
@@ -3547,7 +3589,8 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                         datatype,      // handover
                         false,    // ghost
                         true,     // read_only
-                        false);   // constructor
+                        false,    // constructor
+                        false);   // impure
 
         // Now add each constructor. We have to wrap the variant_type
         // in a function from the appropriate payload type (unless
@@ -3580,7 +3623,8 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                             ctor_type,     // handover
                             false,   // ghost
                             true,    // read_only
-                            true);   // constructor
+                            true,    // constructor
+                            false);  // impure
 
             ctor = ctor->next;
         }
@@ -3617,7 +3661,8 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
                         NULL,
                         false,  // ghost
                         true,   // read_only
-                        false); // constructor
+                        false,  // constructor
+                        false); // impure
     }
 
     // kindcheck the rhs type (if applicable)
@@ -3644,7 +3689,8 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
                         ty,
                         false,   // ghost
                         true,    // read_only
-                        false);  // constructor
+                        false,   // constructor
+                        false);  // impure
     } else {
         tc_context->error = true;
     }
@@ -3663,6 +3709,12 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
         tc_context->local_env = new_hash_table();
 
         tc_context->executable = !decl->ghost;
+
+        tc_context->impure = false;
+        if (decl->tag == DECL_FUNCTION) {
+            tc_context->impure = decl->function_data.impure;
+        }
+
         tc_context->temp_name_counter = 1;
 
         switch (decl->tag) {
@@ -3983,6 +4035,7 @@ bool typecheck_module(struct HashTable *global_type_env,
     tc_context.local_env = NULL;
     tc_context.error = false;
     tc_context.executable = false;
+    tc_context.impure = false;
     tc_context.statement = NULL;
     tc_context.assert_term = NULL;
     tc_context.at_proof_top_level = false;

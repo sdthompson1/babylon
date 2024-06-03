@@ -32,6 +32,7 @@ struct TypeEnvEntry {
     bool ghost;
     bool read_only;
     bool constructor;
+    bool impure;
 };
 
 void add_to_type_env(struct HashTable *env,
@@ -39,7 +40,8 @@ void add_to_type_env(struct HashTable *env,
                      struct Type *type,   // handed over
                      bool ghost,
                      bool read_only,
-                     bool constructor);
+                     bool constructor,
+                     bool impure);
 
 void free_type_env(struct HashTable *type_env);
 

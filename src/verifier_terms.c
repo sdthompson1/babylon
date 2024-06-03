@@ -1783,21 +1783,24 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
                                 struct Term *term)
 {
     // Examine the function (and any type arguments)
-    const char *func_fol_name = NULL;
-    struct Sexpr *generic_args = NULL;
+    const char *func_src_code_name = NULL;  // shared with AST
+    struct Sexpr *generic_args = NULL;      // owned
+
     if (term->call.func->tag == TM_VAR) {
-        func_fol_name = copy_string_2("%", term->call.func->var.name);
+        func_src_code_name = term->call.func->var.name;
 
     } else if (term->call.func->tag == TM_TYAPP) {
         if (term->call.func->tyapp.lhs->tag != TM_VAR) {
             fatal_error("function not in expected form");
         }
-        func_fol_name = copy_string_2("%", term->call.func->tyapp.lhs->var.name);
+        func_src_code_name = term->call.func->tyapp.lhs->var.name;
         generic_args = make_generic_args(cxt, term->call.func->tyapp.tyargs);
 
     } else {
         fatal_error("Function not in expected form");
     }
+
+    const char *func_fol_name = copy_string_2("%", func_src_code_name);
 
     // Translate the arguments
     struct Sexpr *args = NULL;
@@ -1839,19 +1842,32 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
     struct Sexpr *call_expr;            // (f *actual-arguments*)
     struct Sexpr *call_expr_dummies;    // (f *dummy-arguments*)
 
-    call_expr = make_string_sexpr(func_fol_name);
-    call_expr_dummies = make_string_sexpr(func_fol_name);
+    if (item->fol_decl == NULL) {
+        // Impure function, doesn't have a decl. Make a new variable for the result.
+        // Subtle point: we cannot use %Module.funcname as the variable name, as that would conflict
+        // with the function name itself. Instead make sure we are using %Module.funcname.1 or higher.
+        ensure_nonzero_name(cxt, func_src_code_name);
+        struct Item *fn_item = update_local(cxt, func_src_code_name, term->type, verify_type(term->type), NULL);
+        call_expr = make_string_sexpr(fn_item->fol_name);
+        call_expr_dummies = make_string_sexpr(fn_item->fol_name);
 
-    // add the generic_args, if any
-    if (generic_args) {
-        make_instance(&call_expr, copy_sexpr(generic_args));
-        make_instance(&call_expr_dummies, copy_sexpr(item->fol_generic_vars));
-    }
+    } else {
+        // Normal function call
 
-    // add the args, if any
-    if (args != NULL) {
-        call_expr = make_pair_sexpr(call_expr, copy_sexpr(args));
-        call_expr_dummies = make_pair_sexpr(call_expr_dummies, copy_sexpr(item->fol_dummies));
+        call_expr = make_string_sexpr(func_fol_name);
+        call_expr_dummies = make_string_sexpr(func_fol_name);
+
+        // add the generic_args, if any
+        if (generic_args) {
+            make_instance(&call_expr, copy_sexpr(generic_args));
+            make_instance(&call_expr_dummies, copy_sexpr(item->fol_generic_vars));
+        }
+
+        // add the args, if any
+        if (args != NULL) {
+            call_expr = make_pair_sexpr(call_expr, copy_sexpr(args));
+            call_expr_dummies = make_pair_sexpr(call_expr_dummies, copy_sexpr(item->fol_dummies));
+        }
     }
 
     // Add postconditions to the known facts.

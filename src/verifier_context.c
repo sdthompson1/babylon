@@ -871,6 +871,13 @@ struct Item * update_local(struct VContext *context,
                           true);
 }
 
+void ensure_nonzero_name(struct VContext *context, const char *local_name)
+{
+    if (!hash_table_contains_key(context->local_counter, local_name)) {
+        bump_local(context, local_name);
+    }
+}
+
 char* lookup_local(struct VContext *context, const char *local_name)
 {
     uintptr_t version = (uintptr_t) hash_table_lookup(context->local_to_version, local_name);

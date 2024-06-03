@@ -48,6 +48,7 @@ enum TokenType {
     TOK_KW_I64,
     TOK_KW_IF,
     TOK_KW_IMPORT,
+    TOK_KW_IMPURE,
     TOK_KW_IN,
     TOK_KW_INT,
     TOK_KW_INTERFACE,

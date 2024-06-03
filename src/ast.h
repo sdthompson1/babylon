@@ -620,6 +620,7 @@ struct DeclData_Function {
     struct Location end_loc;
 
     bool is_extern;
+    bool impure;
 };
 
 struct DeclData_Datatype {

@@ -459,6 +459,8 @@ static void lex_keyword_or_name(struct LexerState *state)
         case 'm':
             if (strcmp(&buf[2], "port") == 0) {
                 add_simple_token(state, TOK_KW_IMPORT);
+            } else if (strcmp(&buf[2], "pure") == 0) {
+                add_simple_token(state, TOK_KW_IMPURE);
             }
             break;
 
@@ -880,6 +882,7 @@ void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
     case TOK_KW_I64: simple_token(ctx, "i64"); break;
     case TOK_KW_IF: simple_token(ctx, "if"); break;
     case TOK_KW_IMPORT: simple_token(ctx, "import"); break;
+    case TOK_KW_IMPURE: simple_token(ctx, "impure"); break;
     case TOK_KW_IN: simple_token(ctx, "in"); break;
     case TOK_KW_INT: simple_token(ctx, "int"); break;
     case TOK_KW_INTERFACE: simple_token(ctx, "interface"); break;

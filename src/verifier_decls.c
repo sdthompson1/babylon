@@ -408,15 +408,22 @@ static void verify_function_decl(struct VContext *context,
     memset(item, 0, sizeof(struct Item));
 
     // (declare-fun name type_list ret_type)
-    item->fol_decl = make_list4_sexpr(make_string_sexpr("declare-fun"),
-                                      make_string_sexpr(fol_name),
-                                      type_list,
-                                      copy_sexpr(fol_fake_ret_type));
+    // (Not needed for impure functions!)
+    if (!decl->function_data.impure) {
+        item->fol_decl = make_list4_sexpr(make_string_sexpr("declare-fun"),
+                                          make_string_sexpr(fol_name),
+                                          type_list,
+                                          copy_sexpr(fol_fake_ret_type));
+    } else {
+        free_sexpr(type_list);
+    }
     type_list = NULL;
 
     item->fol_axioms = NULL;
     item->fol_name = copy_string(fol_name);
     item->fol_type = NULL;
+
+    item->fol_generic_vars = make_generic_fun_params(data->tyvars);
 
     // Verify the preconds/postconds, and add the preconds to the list of known facts
     struct Condition *preconds = NULL;
@@ -431,13 +438,15 @@ static void verify_function_decl(struct VContext *context,
 
     // set funapp_sexpr to (%f %x %y)
     // (or just %f if no args)
-    if (name_list == NULL) {
-        context->funapp_sexpr = make_string_sexpr(fol_name);
-    } else {
-        context->funapp_sexpr =
-            make_pair_sexpr(make_string_sexpr(fol_name), copy_sexpr(name_list));
+    // (Not needed for impure functions)
+    if (!data->impure) {
+        if (name_list == NULL) {
+            context->funapp_sexpr = make_string_sexpr(fol_name);
+        } else {
+            context->funapp_sexpr =
+                make_pair_sexpr(make_string_sexpr(fol_name), copy_sexpr(name_list));
+        }
     }
-
 
     if (data->body_specified) {
         context->postconds = postconds;
@@ -450,20 +459,20 @@ static void verify_function_decl(struct VContext *context,
             fatal_error("var decl stack not empty");
         }
 
-        if (decl->function_data.return_type) {
+        if (data->return_type) {
             // End of non-void function
             // Verify that this is unreachable code
             struct Sexpr *false_expr = make_string_sexpr("false");
             verify_condition(context,
-                             decl->function_data.end_loc,
+                             data->end_loc,
                              false_expr,
                              "end of function unreachable",
-                             err_msg_end_of_function_reached(decl->function_data.end_loc));
+                             err_msg_end_of_function_reached(data->end_loc));
             free_sexpr(false_expr);
         } else {
             // End of void function
             // Verify that the postconditions hold
-            verify_function_return(context, decl->function_data.end_loc,
+            verify_function_return(context, data->end_loc,
                                    NULL, decl->ghost, &fun_defn_tail);
         }
 
@@ -471,7 +480,7 @@ static void verify_function_decl(struct VContext *context,
 
         // If we got a fun_defn_expr then let's change our declare-fun into
         // a define-fun.
-        if (fun_defn_expr != NULL) {
+        if (fun_defn_expr != NULL && !data->impure) {
             if (*fun_defn_tail == NULL) {
                 struct Sexpr *arbitrary = make_string_sexpr("$ARBITRARY");
                 make_instance(&arbitrary, make_list1_sexpr(copy_sexpr(fol_fake_ret_type)));
@@ -485,45 +494,50 @@ static void verify_function_decl(struct VContext *context,
                 free_sexpr(item->fol_decl->right->right->left);
                 item->fol_decl->right->right->left = copy_sexpr(name_type_list);
                 item->fol_decl->right->right->right->right = make_list1_sexpr(fun_defn_expr);
+                fun_defn_expr = NULL;
             }
+        } else if (fun_defn_expr != NULL) {
+            // Impure function - the translated body is not needed - discard it.
+            free_sexpr(fun_defn_expr);
+            fun_defn_expr = NULL;
         }
     }
 
-    // Add an axiom to say that the return-value(s) are valid,
-    // given that the input-value(s) are valid for their types,
-    // and the preconditions hold.
-    struct Sexpr **tail_ptr = &item->fol_axioms;
-    struct Sexpr *ret_validity = ret_validity_test(data->args, data->return_type, fol_fake_ret_type);
-    if (ret_validity) {
-        ret_validity = make_postcond_assert(context,
-                                            name_type_list,
-                                            preconds,
-                                            ret_validity);
-        *tail_ptr = make_list1_sexpr(ret_validity);
-        tail_ptr = &((*tail_ptr)->right);
+    if (!data->impure) {
+        // Add an axiom to say that the return-value(s) are valid,
+        // given that the input-value(s) are valid for their types,
+        // and the preconditions hold.
+        struct Sexpr **tail_ptr = &item->fol_axioms;
+        struct Sexpr *ret_validity = ret_validity_test(data->args, data->return_type, fol_fake_ret_type);
+        if (ret_validity) {
+            ret_validity = make_postcond_assert(context,
+                                                name_type_list,
+                                                preconds,
+                                                ret_validity);
+            *tail_ptr = make_list1_sexpr(ret_validity);
+            tail_ptr = &((*tail_ptr)->right);
+        }
+
+        // Add the postconditions as additional axioms
+        // (again, under appropriate assumptions on the input).
+        for (struct Condition *cond = postconds; cond; cond = cond->next) {
+            struct Sexpr *expr = copy_sexpr(cond->expr);
+
+            expr = make_postcond_assert(context,
+                                        name_type_list,
+                                        preconds,
+                                        expr);
+
+            *tail_ptr = make_list1_sexpr(expr);
+            tail_ptr = &((*tail_ptr)->right);
+        }
+
+        // Make the fol_decl and fol_axioms generic if required
+        make_generic(&item->fol_decl, item->fol_name, item->fol_generic_vars);
+        make_generic_list(item->fol_axioms, item->fol_name, item->fol_generic_vars);
     }
-
-    // Add the postconditions as additional axioms
-    // (again, under appropriate assumptions on the input).
-    for (struct Condition *cond = postconds; cond; cond = cond->next) {
-        struct Sexpr *expr = copy_sexpr(cond->expr);
-
-        expr = make_postcond_assert(context,
-                                    name_type_list,
-                                    preconds,
-                                    expr);
-
-        *tail_ptr = make_list1_sexpr(expr);
-        tail_ptr = &((*tail_ptr)->right);
-    }
-
-    // Make the fol_decl and fol_axioms generic if required
-    struct Sexpr *generic_vars = make_generic_fun_params(data->tyvars);
-    make_generic(&item->fol_decl, item->fol_name, generic_vars);
-    make_generic_list(item->fol_axioms, item->fol_name, generic_vars);
 
     // Save pre/post conditions to the Item
-    item->fol_generic_vars = generic_vars;
     item->fol_dummies = name_list;
     name_list = NULL;
 

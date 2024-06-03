@@ -720,6 +720,10 @@ static void print_function(int indent_level, FILE *file, struct Decl *decl)
         fprintf(file, "extern ");
     }
 
+    if (decl->function_data.impure) {
+        fprintf(file, "impure ");
+    }
+
     fprintf(file, "function %s", decl->name);
     print_bracketed_tyvar_list(file, decl->function_data.tyvars);
 
