@@ -67,7 +67,7 @@ function f6(): i32
 
     var i = 0;
     while i < 10
-        invariant sizeof(a) == u64(10);
+        invariant sizeof(a) == 10;
         invariant 0 <= i <= 10;
         decreases ~i;
     {

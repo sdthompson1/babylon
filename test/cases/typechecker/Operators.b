@@ -19,9 +19,9 @@ interface {}
 
 
   // Casts:
-  
-  // This is a type error, there is no type that can represent all i32 and all u64 values.
-  const incompat: i32 = i32(1) + u64(2);
+
+  // This is no longer a type error - it now casts to u64.
+  const cast_to_u64: u64 = i32(1) + u64(2);
 
   // This is fine, there is a type that can represent all i64 and all u32 values (namely i64).
   const cast_to_signed: i64 = i64(1) + u32(2);

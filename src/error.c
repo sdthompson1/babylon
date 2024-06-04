@@ -362,12 +362,6 @@ void report_function_variable_not_allowed(struct Location loc)
     // so that case is already covered I guess.
 }
 
-void report_cannot_match_binop_types(struct Term *term)
-{
-    print_location(term->location);
-    print_error("Incompatible types for '%s' operator\n", binop_name(term->binop.list->operator));
-}
-
 void report_invalid_cast(struct Term *term)
 {
     print_location(term->location);

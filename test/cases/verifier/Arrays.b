@@ -31,17 +31,17 @@ function f9()
     var a: i32[100];
 
     var i: u64 = 0;
-    while (i < u64(100))
-        invariant sizeof(a) == u64(100);
-        invariant i <= u64(100);
+    while (i < 100)
+        invariant sizeof(a) == 100;
+        invariant i <= 100;
         invariant forall (j:u64) j < i ==> a[j] == i32(j);
-        decreases u64(100) - i;
+        decreases 100 - i;
     {
         a[i] = i;
-        i = i + u64(1);
+        i = i + 1;
     }
 
-    assert (forall (i:u64) i < u64(100) ==> a[i] == i32(i));
+    assert (forall (i:u64) i < 100 ==> a[i] == i32(i));
 
     ref r = a[3];
     assert (r == 3);

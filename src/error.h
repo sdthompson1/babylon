@@ -53,7 +53,6 @@ void report_int_pattern_out_of_range(struct Type *scrut_type, struct Location lo
 void report_pattern_wrong_number_of_fields(struct Location location);
 void report_match_with_no_arms(struct Location location);
 void report_function_variable_not_allowed(struct Location loc);
-void report_cannot_match_binop_types(struct Term *term);
 void report_invalid_cast(struct Term *term);
 void report_return_var_outside_postcondition(struct Term *var_term);
 void report_return_var_void_function(struct Term *var_term);

@@ -676,10 +676,11 @@ static bool match_int_binop_types(struct TypecheckContext *tc_context, struct Te
     }
 
     if (num_bits_needed == 128) {
-        // we don't support 128-bit types so this fails
-        report_cannot_match_binop_types(term);
-        tc_context->error = true;
-        return false;
+        // Special case: trying to create an i128 result (e.g. u64 + i32), but
+        // there is no such thing as i128.
+        // Use u64 instead, and hope for the best.
+        num_bits_needed = 64;
+        need_signed = false;
     }
 
     // Now we've found a target type that can accommodate all the terms,
