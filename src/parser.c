@@ -2300,6 +2300,34 @@ static struct DeclGroup * parse_decls(struct ParserState *state)
 // Import Parsing
 //
 
+// returns new string, or NULL on parse error
+const char * parse_module_name(struct ParserState *state)
+{
+    char *result = NULL;
+    while (true) {
+        const struct Token *name_tok = expect(state, TOK_NAME, "module name");
+        if (name_tok == NULL) {
+            // error
+            free(result);
+            return NULL;
+        }
+        if (result) {
+            char *new_result = copy_string_3(result, ".", name_tok->data);
+            free(result);
+            result = new_result;
+        } else {
+            result = copy_string(name_tok->data);
+        }
+
+        if (state->token->type != TOK_DOT) {
+            return result;
+        }
+
+        // skip the dot
+        advance(state);
+    }
+}
+
 static struct Import * parse_imports(struct ParserState *state)
 {
     struct Import *list = NULL;
@@ -2310,38 +2338,32 @@ static struct Import * parse_imports(struct ParserState *state)
         struct Location loc = state->token->location;
         advance(state);
 
-        const struct Token *name_tok = expect(state, TOK_NAME, "module name or 'qualified'");
-        if (!name_tok) {
-            return NULL;
-        }
-
         // 'qualified' is not a keyword, it is just a name that has a
         // special meaning in this context (only)
         bool qualified = false;
-        if (strcmp(name_tok->data, "qualified") == 0) {
+        if (state->token->type == TOK_NAME && strcmp(state->token->data, "qualified") == 0) {
             qualified = true;
-            name_tok = expect(state, TOK_NAME, "module name");
-            if (!name_tok) {
-                return NULL;
-            }
+            advance(state);
         }
 
-        set_location_end(&loc, &name_tok->location);
-        const char * name = copy_string(name_tok->data);
-        const char * alias_name = NULL;
+        const char *name = parse_module_name(state);
+        if (name == NULL) {
+            break;
+        }
 
+        const char * alias_name = NULL;
         if (state->token->type == TOK_KW_AS) {
             advance(state);
             const struct Token *alias_tok = expect(state, TOK_NAME, "module alias name");
             if (alias_tok) {
                 alias_name = copy_string(alias_tok->data);
-                set_location_end(&loc, &alias_tok->location);
             }
         } else {
             alias_name = copy_string(name);
         }
 
-        expect(state, TOK_SEMICOLON, "';'");
+        const struct Token *end_token = expect(state, TOK_SEMICOLON, "';'");
+        if (end_token) set_location_end(&loc, &end_token->location);
 
         struct Import *import = alloc(sizeof(struct Import));
         import->location = loc;
@@ -2381,12 +2403,7 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     expect(&state, TOK_KW_MODULE, "'module'");
 
     // module-name
-    const struct Token *name_tok = expect(&state, TOK_NAME, "module name");
-    if (name_tok) {
-        result->name = copy_string(name_tok->data);
-    } else {
-        result->name = NULL;
-    }
+    result->name = parse_module_name(&state);
 
     // interface imports (zero or more)
     result->interface_imports = parse_imports(&state);

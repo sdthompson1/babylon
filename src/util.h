@@ -26,6 +26,8 @@ char * copy_string_4(const char *str1, const char *str2, const char *str3, const
 char * copy_string_5(const char *str1, const char *str2, const char *str3, const char *str4,
                      const char *str5);
 
+// Returns a newly allocated string, in which every '.' from the original is replaced with '/'.
+char * replace_dots_with_slashes(const char *str);
 
 struct NameList * copy_name_list(struct NameList *list);
 

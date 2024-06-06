@@ -27,6 +27,7 @@ void report_circular_dependency(struct Location location, const char *module_nam
 void report_module_not_found(struct Location location, const char *module_name, const char *filename);
 void report_module_name_mismatch_filename(struct Location location, const char *module_name);
 void report_failed_to_open_c_file(const char *filename);
+void report_mkdir_failed(const char *filename);
 
 // Lexer errors
 void report_lexical_error(struct Location location);

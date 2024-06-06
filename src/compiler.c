@@ -31,6 +31,10 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 struct StringNode {
     const char *ptr;
     struct StringNode *next;
@@ -112,16 +116,70 @@ static void interpret_filename(struct LoadDetails *details, const char *filename
 static FILE * open_module_file(const struct LoadDetails *details,
                                const char **filename)
 {
-    *filename = copy_string_3(details->input_prefix, details->module_name, ".b");
+    char *name = replace_dots_with_slashes(details->module_name);
+    *filename = copy_string_3(details->input_prefix, name, ".b");
+    free(name);
     return fopen(*filename, "rb");
 }
 
 
+// Returns true on success.
+static bool maybe_mkdir(const char *path, mode_t mode)
+{
+    errno = 0;
+
+    // Try to make the directory.
+    if (mkdir(path, mode) == 0) {
+        // Success.
+        return true;
+    }
+
+    if (errno != EEXIST) {
+        // Failed for some reason other than EEXIST.
+        return false;
+    }
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        // Failed to stat the existing thing.
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+        // There is an existing thing (not a directory) blocking the directory creation.
+        return false;
+    }
+
+    // The directory already exists so we are OK.
+    return true;
+}
+
+static void make_parent_dirs(char *path, size_t prefix_len)
+{
+    const mode_t mode = 0777;
+    for (char *p = path + prefix_len; *p; ++p) {
+        if (*p == '/') {
+            *p = 0;
+            if (!maybe_mkdir(path, mode)) {
+                report_mkdir_failed(path);
+                *p = '/';
+                break;
+            }
+            *p = '/';
+        }
+    }
+}
+
 static char * get_output_filename(const struct LoadDetails *details,
                                   const char *suffix)
 {
-    return copy_string_3(details->output_prefix, details->module_name, suffix);
+    char *name = replace_dots_with_slashes(details->module_name);
+    char *result = copy_string_3(details->output_prefix, name, suffix);
+    free(name);
+    make_parent_dirs(result, strlen(details->output_prefix));
+    return result;
 }
+
 
 static bool load_module_recursive(struct LoadDetails *details);
 

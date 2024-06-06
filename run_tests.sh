@@ -49,7 +49,8 @@ run_test()
 {
     # $1 is the test folder name
     # $2 is the root .b file name (including extension)
-    # Remaining args are the complete list of .b files to copy
+    # Remaining args are the complete list of files or folders to symlink
+    # into $OUT_DIR.
     folder=$1
     root_module=$2
     shift 2
@@ -57,9 +58,13 @@ run_test()
     echo $folder/$root_module
 
     # Remove previous contents of output folder, if any
-    rm -f $OUT_DIR/* || return 1
+    rm -fr $OUT_DIR/* || return 1
 
-    # Link the source-code (.b) file(s) into place
+    # Make 'build' folder (this prevents outputs going into any symlinked input folders,
+    # and also exercises the "mkdir" code in the compiler)
+    mkdir $OUT_DIR/build
+
+    # Link the source-code file(s) into place
     for filename in $@
     do
         ln -s $(pwd)/$folder/$filename $OUT_DIR/ || return 1
@@ -70,7 +75,7 @@ run_test()
     # Verify the root module (and all submodules)
     # (cd into the directory so that the error messages don't include the full path!)
     pushd $OUT_DIR >/dev/null
-    $COMPILER --verify-all --verify-continue --quiet --verify-timeout $TIMEOUT --main $root_module >verifier_stdout.txt 2>verifier_stderr.txt
+    $COMPILER --verify-all --verify-continue --quiet --verify-timeout $TIMEOUT --main $root_module -o build >verifier_stdout.txt 2>verifier_stderr.txt
     verifier_result=$?
     popd >/dev/null
 
@@ -116,7 +121,7 @@ run_test()
 
 
     # Compile root module -- creates .c file(s).
-    $COMPILER --compile --main $OUT_DIR/$root_module >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
+    $COMPILER --compile --main $OUT_DIR/$root_module -o $OUT_DIR/build >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
     compiler_result=$?
 
     # Stdout and stderr from the compiler should be empty, and
@@ -131,7 +136,7 @@ run_test()
     fi
 
     # Use gcc to link the .c files and test_support.c, making an executable file
-    $CC $OUT_DIR/*.c -o $OUT_DIR/test_binary || return 1
+    find $OUT_DIR/build -name '*.c' |xargs $CC -o $OUT_DIR/test_binary || return 1
 
     # Run the compiled executable, capture stdout and stderr
     # (If it doesn't return zero status then that is a test failure)
@@ -157,14 +162,14 @@ run_main_tests()
 
     if [ -a $1/multi.txt ]
     then
-        modules=""
-        for i in $1/*.$PROG_EXT
+        input_files=""
+        for i in $1/*
         do
-            modules+=" $(basename $i)"
+            input_files+=" $(basename $i)"
         done
         if [[ $1/Main.$PROG_EXT =~ $2 ]]
         then
-            run_test $1 Main.$PROG_EXT $modules || return 1
+            run_test $1 Main.$PROG_EXT $input_files || return 1
         fi
     else
         for i in $(ls $1)
@@ -187,7 +192,7 @@ run_sequence_tests()
     # babylon.cache file is working as intended.
 
     # Remove previous contents of output folder, if any
-    rm -f $OUT_DIR/* || return 1
+    rm -fr $OUT_DIR/* || return 1
 
     # For each test in the sequence
     for i in $SEQUENCE_TESTS_DIR/*

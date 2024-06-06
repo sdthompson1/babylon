@@ -75,6 +75,17 @@ char * copy_string_5(const char *str1, const char *str2, const char *str3, const
     return result;
 }
 
+char * replace_dots_with_slashes(const char *str)
+{
+    char *tmp = copy_string(str);
+    char *p = strchr(tmp, '.');
+    while (p) {
+        *p = '/';
+        p = strchr(p + 1, '.');
+    }
+    return tmp;
+}
+
 struct NameList * copy_name_list(struct NameList *list)
 {
     struct NameList *result = NULL;

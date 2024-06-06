@@ -96,6 +96,11 @@ void report_failed_to_open_c_file(const char *filename)
     print_error("Failed to open output file '%s'\n", filename);
 }
 
+void report_mkdir_failed(const char *filename)
+{
+    print_error("Failed to create directory '%s'\n", filename);
+}
+
 void report_lexical_error(struct Location location)
 {
     print_location(location);

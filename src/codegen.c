@@ -2962,11 +2962,53 @@ void free_codegen_env(struct HashTable *env)
     free_hash_table(env);
 }
 
-static void print_includes(FILE *file, struct Import *imports)
+static char * get_relative_module_name(const char *this_module_name, const char *import_module_name)
+{
+    // First strip out any common prefixes.
+    while (true) {
+        const char *dot_this = strchr(this_module_name, '.');
+        const char *dot_imp = strchr(import_module_name, '.');
+
+        if (dot_this == NULL || dot_imp == NULL) break;
+
+        size_t len1 = dot_this - this_module_name;
+        size_t len2 = dot_imp - import_module_name;
+        bool same = (len1 == len2 && memcmp(this_module_name, import_module_name, len1) == 0);
+
+        if (!same) break;
+
+        this_module_name = dot_this + 1;
+        import_module_name = dot_imp + 1;
+    }
+
+    // Now the number of dots remaining in this_module_name gives the number of "../" prefixes.
+    char *prefix = copy_string("");
+    while (true) {
+        char *dot_this = strchr(this_module_name, '.');
+        if (dot_this == NULL) break;
+
+        char *new_prefix = copy_string_2(prefix, "../");
+        free(prefix);
+        prefix = new_prefix;
+
+        this_module_name = dot_this + 1;
+    }
+
+    // Then we return the prefix, plus import_module_name with dots converted to slashes.
+    char *suffix = replace_dots_with_slashes(import_module_name);
+    char *result = copy_string_2(prefix, suffix);
+    free(prefix);
+    free(suffix);
+    return result;
+}
+
+static void print_includes(FILE *file, const char *this_module_name, struct Import *imports)
 {
     while (imports) {
         if (strcmp(imports->module_name, "Int") != 0) {
-            fprintf(file, "#include \"%s.h\"\n", imports->module_name);
+            char *name = get_relative_module_name(this_module_name, imports->module_name);
+            fprintf(file, "#include \"%s.h\"\n", name);
+            free(name);
         }
         imports = imports->next;
     }
@@ -2987,15 +3029,18 @@ void codegen_module(FILE *c_output_file,
     fprintf(h_output_file, "#define BAB_MODULE_%s\n\n", mangled_module_name);
     fprintf(h_output_file, "#include <stdint.h>\n\n");
 
-    print_includes(h_output_file, module->interface_imports);
+    print_includes(h_output_file, module->name, module->interface_imports);
     fprintf(h_output_file, "\n");
 
     fprintf(c_output_file, "%s", banner);
     fprintf(c_output_file, "#include <stdint.h>\n");
     fprintf(c_output_file, "#include <string.h>\n\n");
 
-    fprintf(c_output_file, "#include \"%s.h\"\n", module->name);
-    print_includes(c_output_file, module->implementation_imports);
+    char *name = get_relative_module_name(module->name, module->name);
+    fprintf(c_output_file, "#include \"%s.h\"\n", name);
+    free(name);
+
+    print_includes(c_output_file, module->name, module->implementation_imports);
     fprintf(c_output_file, "\n");
 
     struct CGContext cxt;
