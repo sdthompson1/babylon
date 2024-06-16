@@ -1,6 +1,7 @@
 Proofs.b:10:7: Can't assign (left-hand-side is read-only)
 Proofs.b:16:5: 'fix' not allowed outside of a proof
 Proofs.b:23:7: 'fix' not valid; the assert at Proofs.b:21:12 doesn't have a corresponding forall-variable
+Proofs.b:32:7: Type mismatch
 Proofs.b:32:7: 'fix' not valid; the type doesn't match the forall-variable at Proofs.b:29:28
 Proofs.b:42:9: 'fix' within a sub-block of a proof is not currently supported
 Proofs.b:50:20: Type mismatch

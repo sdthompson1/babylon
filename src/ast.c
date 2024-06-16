@@ -91,6 +91,14 @@ void * transform_type(struct TypeTransform *tr, void *context, struct Type *type
     }
 
     switch (type->tag) {
+    case TY_UNIVAR:
+        if (tr->nr_transform_univar) {
+            return tr->nr_transform_univar(tr, context, type);
+        } else {
+            return NULL;
+        }
+        break;
+
     case TY_VAR:
         if (tr->transform_var) {
             return tr->transform_var(context, type);
@@ -573,6 +581,15 @@ struct Type * make_int_type(struct Location loc, bool is_signed, int num_bits)
 }
 
 
+static void * copy_ty_univar(struct TypeTransform *tr, void *context, struct Type *type)
+{
+    // This creates a new reference to the UnivarNode instead of copying it
+    struct Type *result = make_type(type->location, TY_UNIVAR);
+    result->univar_data.node = type->univar_data.node;
+    result->univar_data.node->ref_count ++;
+    return result;
+}
+
 static void * copy_ty_var(void *context, struct Type *type)
 {
     struct Type *result = make_type(type->location, TY_VAR);
@@ -706,6 +723,7 @@ static void * copy_fun_arg_node(void *context, struct FunArg *list, void *type, 
 
 void copying_type_transform(struct TypeTransform *tr)
 {
+    tr->nr_transform_univar = copy_ty_univar;
     tr->transform_var = copy_ty_var;
     tr->transform_bool = copy_ty_bool;
     tr->transform_finite_int = copy_ty_finite_int;
@@ -745,6 +763,16 @@ struct TyVarList * copy_tyvar_list(const struct TyVarList *list)
     return transform_tyvar_list(&tr, NULL, (struct TyVarList*)list);
 }
 
+
+static void* free_ty_univar(struct TypeTransform *tr, void *context, struct Type *type)
+{
+    if (--(type->univar_data.node->ref_count) == 0) {
+        free_type(type->univar_data.node->type);
+        free(type->univar_data.node);
+    }
+    free(type);
+    return NULL;
+}
 
 static void* free_type_0(void *context, struct Type *type)
 {
@@ -812,6 +840,7 @@ static void * free_fun_arg_node(void *context, struct FunArg *node, void *type_r
 
 static void freeing_type_transform(struct TypeTransform *tr)
 {
+    tr->nr_transform_univar = free_ty_univar;
     tr->transform_var = free_var_type;
     tr->transform_bool = free_type_0;
     tr->transform_finite_int = free_type_0;
@@ -1831,7 +1860,7 @@ bool funarg_lists_equal(const struct FunArg *lhs, const struct FunArg *rhs)
     return (lhs == NULL && rhs == NULL);
 }
 
-static bool array_size_terms_equal(struct Term **lhs, struct Term **rhs, int ndim)
+bool array_size_terms_equal(struct Term **lhs, struct Term **rhs, int ndim)
 {
     if (lhs == NULL) {
         return rhs == NULL;
@@ -1863,6 +1892,9 @@ bool types_equal(const struct Type *lhs, const struct Type *rhs)
     }
 
     switch (lhs->tag) {
+    case TY_UNIVAR:
+        fatal_error("not allowed to call types_equal on TY_UNIVAR");
+
     case TY_BOOL:
         return true;
 

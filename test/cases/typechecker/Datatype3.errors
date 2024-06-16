@@ -6,4 +6,4 @@ Datatype3.b:13:15: Field 'z' not found
 Datatype3.b:17:12: Pattern has wrong number of fields
 Datatype3.b:18:12: Pattern has wrong number of fields
 Datatype3.b:29:14: Value is not a callable function
-Datatype3.b:30:14: Type mismatch (expected non-function value)
+Datatype3.b:30:14: Can't use function as a value

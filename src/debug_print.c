@@ -15,7 +15,6 @@ repository.
 
 #include <ctype.h>
 
-static void print_type(FILE *file, struct Type *type);
 static void print_term(bool postcond, FILE *file, struct Term *term);
 
 static void print_name_type_list(FILE *file, struct NameTypeList *list)
@@ -45,9 +44,19 @@ static void print_bracketed_tyvar_list(FILE *file, struct TyVarList *tyvar)
     }
 }
 
-static void print_type(FILE *file, struct Type *type)
+void print_type(FILE *file, struct Type *type)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fprintf(file, "<UNIVAR:%p = ", (void*)type->univar_data.node);
+        if (type->univar_data.node->type) {
+            print_type(file, type->univar_data.node->type);
+        } else {
+            fprintf(file, "NULL");
+        }
+        fprintf(file, ">");
+        break;
+
     case TY_VAR:
         fprintf(file, "%s", type->var_data.name);
         break;

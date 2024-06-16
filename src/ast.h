@@ -23,7 +23,8 @@ repository.
 //
 
 enum TypeTag {
-    TY_VAR,        // variable (or type-name)
+    TY_UNIVAR,      // unification variable. (removed after type-checking.)
+    TY_VAR,         // type variable (or type-name)
     TY_BOOL,
     TY_FINITE_INT,
     TY_MATH_INT,
@@ -56,6 +57,19 @@ struct NameTypeList {
     struct NameTypeList *next;
 };
 
+
+struct UnivarNode {
+    struct Type *type;
+    uint32_t ref_count;
+    bool must_be_executable;  // Type must be valid in executable code (e.g. not 'int' or 'real')
+    bool must_be_complete;    // Type must not be an "incomplete array" type (T[])
+    bool must_be_valid_decreases;   // Type must be usable in a "decreases" clause
+};
+
+
+struct TypeData_Univar {
+    struct UnivarNode *node;
+};
 
 struct TypeData_Int {
     bool is_signed;
@@ -117,6 +131,7 @@ struct Type {
     struct Location location;
     enum TypeTag tag;
     union {
+        struct TypeData_Univar univar_data;
         struct TypeData_Var var_data;
         struct TypeData_Int int_data;
         struct TypeData_Record record_data;
@@ -708,6 +723,8 @@ struct TypeTransform {
     void * (*transform_lambda) (void *context, struct Type *type_lambda, void *tyvars_result, void *type_result);
     void * (*transform_app) (void *context, struct Type *type_app, void *lhs_result, void *tyargs_result);
 
+    // transform_univar is always non-recursive
+    void * (*nr_transform_univar) (struct TypeTransform *tr, void *context, struct Type *type_univar);
 
     // these are called for each individual node in any
     // lists encountered
@@ -855,5 +872,6 @@ int type_list_length(const struct TypeList *list);
 // Checks for syntactic equality of types
 bool type_lists_equal(const struct TypeList *lhs, const struct TypeList *rhs);
 bool types_equal(const struct Type *lhs, const struct Type *rhs);
+bool array_size_terms_equal(struct Term **lhs, struct Term **rhs, int ndim);
 
 #endif

@@ -1,0 +1,9 @@
+Inference.b:18:25: Type mismatch
+Inference.b:20:25: Type mismatch (expected numeric type)
+Inference.b:33:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
+Inference.b:62:16: Type mismatch (expected bool or numeric)
+Inference.b:73:13: 'int' or 'real' types not allowed in executable code
+Inference.b:85:13: Type mismatch
+Inference.b:96:12: 'int' or 'real' types not allowed in executable code
+Inference.b:97:7: 'int' or 'real' types not allowed in executable code
+Inference.b:98:7: 'int' or 'real' types not allowed in executable code

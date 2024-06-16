@@ -17,7 +17,7 @@ interface {}
     var m2: Mono = Mono1 { x=1, y=2 };       // error, wrong type for y
     var m3: Mono = Mono2 { x=1, z=3 };       // error, x does not exist
     var m4: Mono = Mono1 { x=1, y=true, x=2 };   // error, x appears multiple times
-    var m5: Mono = Mono1;                    // error, fields missing
+    var m5: Mono = Mono1;                    // error, fields missing. (get "can't use function as value" because Mono1 is considered a function.)
     var m6 = Mono1;                          // error, fields missing
     var x = f0 { x=1 };                   // error, can't call f0 in this way
   }
@@ -27,7 +27,7 @@ interface {}
     var p1: Poly<i32,Mono> = Poly1<i32,Mono> { p=100 };    // ok
     var p2: Poly<i32,Mono> = Poly1<i32,Mono> { 100 };      // error, field name wasn't given
     var p3: Poly = Poly1<i32,Mono> { p=100 };              // error, missing type arguments
-    var p4: Poly<i32,Mono> = Poly1 { p=100 };              // error, missing type arguments
+    var p4: Poly<i32,Mono> = Poly1 { p=100 };              // ok, Poly1<i32,Mono> is inferred
     var p5: Poly<i32,Mono> = Poly2<i32,Mono> { r=1, s=Mono2{z=100}, t=3 };    // ok
     var p6: Poly<i32,Mono> = Poly2<i32,Mono> { s=Mono2{z=false}, r=1, t=3 };  // error, type mismatch (z)
     var p7: Poly<i32,Mono> = Poly2<i32,Mono> { s=99, r=1, t=3 };              // error, type mismatch (s)

@@ -41,7 +41,7 @@ function f()
 function f2(a: i32[*,*])
 {
     var i = (1+true) [1];      // Error, type error in lhs of array projection
-    var j = a [1,2+true];      // Error, type error in dimension
+    var j = a [1,true+2];      // Error, type error in dimension
     var k = 1 [2];             // Error, cannot index "1"
 }
 

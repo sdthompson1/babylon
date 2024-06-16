@@ -9,5 +9,5 @@ Record.b:13:13: Value is not a callable function
 Record.b:14:13: Value is not a callable function
 Record.b:15:13: Value is not a callable function
 Record.b:16:13: Value is not a callable function
-Record.b:18:17: Type mismatch (expected finite-sized integer)
-Record.b:21:15: Type mismatch (expected non-function value)
+Record.b:18:17: Type mismatch
+Record.b:21:15: Can't use function as a value

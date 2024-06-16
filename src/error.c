@@ -135,12 +135,6 @@ void report_implies_direction_error(struct Location location)
     print_error("Ambiguity between <== and ==> operators (consider using parentheses to disambiguate)\n");
 }
 
-void report_empty_array_literal(struct Location location)
-{
-    print_location(location);
-    print_error("Empty array literal: not currently supported.\n");
-}
-
 void report_const_out_of_bounds(struct Location location)
 {
     print_location(location);
@@ -355,16 +349,7 @@ void report_match_with_no_arms(struct Location location)
 void report_function_variable_not_allowed(struct Location loc)
 {
     print_location(loc);
-    print_error("Type mismatch (expected non-function value)\n");
-    // TODO: Print actual term type. It is likely something like
-    // "incomplete data constructor expression (type parameters required)"
-    // or "function returning xxx"
-    // TODO: Also, as noted above in report_type_mismatch, we could special-case the
-    // situation where the actual type is a function to a variant, because that
-    // signals that we have an expr like "Ctorname" or "Ctorname<i32>" which is
-    // missing either a type argument list, or a term argument list. Although if the
-    // type argument list is missing it tends to say "Wrong number of type arguments"
-    // so that case is already covered I guess.
+    print_error("Can't use function as a value\n");
 }
 
 void report_invalid_cast(struct Term *term)
@@ -517,6 +502,12 @@ void report_wrong_number_of_type_arguments(struct Location loc, int expected_num
 {
     print_location(loc);
     print_error("Wrong number of type arguments (expected: %d, actual: %d)\n", expected_num, actual_num);
+}
+
+void report_type_arguments_not_expected_here(struct Location loc)
+{
+    print_location(loc);
+    print_error("Type arguments not expected here\n");
 }
 
 void report_function_does_not_return_a_value(struct Term *term)

@@ -369,6 +369,9 @@ static void codegen_type(struct CGContext *cxt,
                          struct Type *type)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_VAR:
         if (is_abstract_type(cxt, type->var_data.name)) {
             print_token(cxt->pr, "void");
@@ -477,6 +480,9 @@ static struct SizeExpr * get_size_of_type(struct CGContext *cxt,
                                           struct Type *type)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_VAR:
         if (is_abstract_type(cxt, type->var_data.name)) {
             // Abstract types are always represented as void*

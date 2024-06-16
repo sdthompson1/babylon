@@ -20,6 +20,9 @@ repository.
 struct Sexpr * verify_type(struct Type *type)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_VAR:
         return make_string_sexpr_handover(copy_string_2("%", type->var_data.name));
 

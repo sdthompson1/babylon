@@ -20,9 +20,10 @@ interface {}
   {
     var a: i32 = x.0;   // ok
     var b: bool = x.1;  // type mismatch
-    var c = x<>.2;      // no such field  (empty <> are ignored)
+    var c = x.2;      // no such field
+    var d = x<>.2;    // type arguments not expected here (empty <> are no longer ignored!)
   }
 
-  function f5(): D
+  function f5(): D     // Type arguments missing; should be D<sometype>
   {
   }

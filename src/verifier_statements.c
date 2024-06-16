@@ -717,6 +717,9 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
                                        struct Sexpr *new_variant)   // handover
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_BOOL:
         // new_variant must be false and old_variant must be true, for a decrease
         return make_list3_sexpr(
@@ -824,6 +827,9 @@ static struct Sexpr *variant_bounded_expr(struct Type *type,
                                           struct Sexpr *variant)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_BOOL:
     case TY_FINITE_INT:
         return NULL;

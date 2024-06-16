@@ -3,5 +3,5 @@ Arrays2.b:19:7: Type mismatch
 Arrays2.b:20:7: Type mismatch
 Arrays2.b:21:7: Type mismatch
 Arrays2.b:29:12: Wrong number of type arguments (expected: 0, actual: 1)
-Arrays2.b:30:26: Type mismatch (expected finite-sized integer)
+Arrays2.b:30:26: Type mismatch
 Arrays2.b:31:16: Value is not a compile-time constant

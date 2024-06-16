@@ -40,5 +40,5 @@ interface {}
     var g = (if true then foo else foo)();    // Function not allowed in an if-expr
     var h = (let x = 1 in foo)();             // Function must be a simple variable (Not the best error message here, but it will do for now)
 
-    var i = bar(false, true, true);   // Wrong numbre of args. (No type errors on the args themselves, because the number of args is wrong.)
+    var i = bar(false, true, true);   // Wrong number of args. (No type errors reported for the args themselves, because the number of args is wrong.)
   }

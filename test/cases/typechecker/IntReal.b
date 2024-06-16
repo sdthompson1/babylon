@@ -13,7 +13,8 @@ function f1()
 
 function f2(x: real, i: int): int    // Not allowed
 {
-    return int(0);    // cast to int not allowed in executable code
+    var v = int(0);    // cast to int not allowed in executable code
+    return v;          // Won't report error, because the return-type of the function wasn't accepted
 }
 
 ghost function f3(x: real, i: int): int   // OK because ghost function

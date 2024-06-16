@@ -662,6 +662,9 @@ static struct Sexpr *make_default_fixed_array(struct VContext *cxt,
 static struct Sexpr *make_default(struct VContext *cxt, struct Type *type)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_VAR:
         return make_string_sexpr_handover(copy_string_2("$default-%", type->var_data.name));
 

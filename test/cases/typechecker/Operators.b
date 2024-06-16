@@ -48,3 +48,8 @@ interface {}
   // Misc:
   const shift_lhs_not_int: i32 = true << 1;
   const unop_bad_term: i32 = - (true + 1);
+
+  ghost function equality_type_mismatch(): bool
+  {
+      return {1} == {1,2};   // Type error: Different tuple sizes.
+  }

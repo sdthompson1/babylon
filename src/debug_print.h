@@ -15,6 +15,8 @@ repository.
 
 struct Module;
 
+void print_type(FILE *file, struct Type *type);
+
 void print_module(FILE *file, struct Module *module);
 
 #endif

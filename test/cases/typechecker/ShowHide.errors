@@ -1,3 +1,3 @@
 ShowHide.b:8:5: Attempting to show or hide non-function value
 ShowHide.b:9:5: Attempting to show or hide non-function value
-ShowHide.b:14:17: Type mismatch (expected finite-sized integer)
+ShowHide.b:14:17: Type mismatch

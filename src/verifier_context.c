@@ -1166,6 +1166,9 @@ struct Sexpr *make_variant_predicate(
 struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_VAR:
         ;
         char *valid_name = copy_string_2("$valid-%", type->var_data.name);
@@ -1324,6 +1327,9 @@ struct Sexpr * insert_validity_conditions(struct VContext *context,
 struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
 {
     switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
     case TY_VAR:
         ;
         char *alloc_name = copy_string_2("$allocated-%", type->var_data.name);

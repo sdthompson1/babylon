@@ -27,6 +27,6 @@ interface {}
   {
     var x1 = A;     // OK
     var x2 = A{};   // Error
-    var x3 = B;     // Error
+    var x3 = B;     // Error ("can't use function as a value")
     var x4 = B{};   // OK
   }

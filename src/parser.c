@@ -731,15 +731,10 @@ static struct Term * parse_tyarg_suffix(struct ParserState *state, struct Term *
         struct TypeList *tyargs;
         struct Location loc = base_term->location;
         if (parse_type_list(state, false, &tyargs, &loc)) {
-            if (tyargs == NULL) {
-                // empty list <>, ignore it
-                return base_term;
-            } else {
-                struct Term *tyapp = make_term(loc, TM_TYAPP);
-                tyapp->tyapp.lhs = base_term;
-                tyapp->tyapp.tyargs = tyargs;
-                return tyapp;
-            }
+            struct Term *tyapp = make_term(loc, TM_TYAPP);
+            tyapp->tyapp.lhs = base_term;
+            tyapp->tyapp.tyargs = tyargs;
+            return tyapp;
         } else {
             // no luck, backtrack
             state->token = backtrack_token;

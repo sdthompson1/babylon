@@ -6,22 +6,20 @@ Datatype.b:22:5: Can't assign (left-hand-side is not an lvalue)
 Datatype.b:28:26: Type mismatch
 Datatype.b:29:13: Wrong number of type arguments (expected: 1, actual: 2)
 Datatype.b:30:13: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:31:14: Wrong number of type arguments (expected: 1, actual: 0)
 Datatype.b:38:14: Type mismatch
-Datatype.b:40:22: Wrong number of type arguments (expected: 1, actual: 0)
 Datatype.b:42:14: Type mismatch
 Datatype.b:44:9: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:45:5: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:46:5: Wrong number of type arguments (expected: 0, actual: 2)
+Datatype.b:46:5: Type arguments not expected here
 Datatype.b:49:13: Wrong number of type arguments (expected: 1, actual: 0)
 Datatype.b:50:19: Wrong number of type arguments (expected: 1, actual: 0)
 Datatype.b:51:25: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:52:14: Wrong number of type arguments (expected: 1, actual: 0)
 Datatype.b:53:26: Type mismatch
 Datatype.b:57:21: Type mismatch (expected bool or numeric)
 Datatype.b:58:21: Type mismatch (expected numeric type)
 Datatype.b:59:21: Type mismatch (expected bool or numeric)
-Datatype.b:60:21: Type mismatch (expected bool or numeric)
+Datatype.b:60:21: Can't use function as a value
+Datatype.b:60:33: Can't use function as a value
 Datatype.b:65:13: Type mismatch (expected numeric type)
 Datatype.b:66:20: Type mismatch
-Datatype.b:67:13: Type mismatch (expected non-function type)
+Datatype.b:67:13: Can't use function as a value
+Datatype.b:67:25: Can't use function as a value
