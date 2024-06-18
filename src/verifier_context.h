@@ -341,7 +341,6 @@ struct Item * update_local(struct VContext *context,
 
 // Lookup the current "FOL-name" of a local.
 // Returns new allocated string (or NULL if not found).
-// NOTE: Result might be poisoned, look in context->local_env to check.
 char * lookup_local(struct VContext *context, const char *local_name);
 
 // This ensures that the FOL name created in "update_local" has a numeric suffix (at least ".1").

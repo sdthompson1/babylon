@@ -784,6 +784,7 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
     // Clean up afterwards
     clear_verifier_env_hash_table(context->local_env);
     hash_table_clear(context->local_counter);
+    hash_table_clear(context->local_to_version);
     clear_refs_hash_table(context->refs);
 
     free_sexpr(context->path_condition);

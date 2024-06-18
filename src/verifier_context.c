@@ -918,7 +918,7 @@ static void update_variable_for_if(struct VContext *context,
     struct Sexpr *fol_type = NULL;
     if (old_fol_name != NULL) {
         struct Item *item = hash_table_lookup(context->local_env, old_fol_name);
-        fol_type = item ? copy_sexpr(item->fol_type) : NULL;
+        fol_type = copy_sexpr(item->fol_type);
         free(old_fol_name);
         old_fol_name = NULL;
     }

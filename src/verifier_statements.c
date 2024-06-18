@@ -77,21 +77,17 @@ static void verify_var_decl_stmt(struct VContext *context,
         // the variable must be non-allocated when it goes out of scope
         char *new_name = lookup_local(context, stmt->var_decl.name);
         if (new_name) {
-            if (hash_table_contains_key(context->local_env, new_name)) {
-                struct Sexpr *value = make_string_sexpr_handover(new_name);
-                struct Sexpr *cond = non_allocated_condition(context, stmt->var_decl.type, value);
-                free_sexpr(value);
+            struct Sexpr *value = make_string_sexpr_handover(new_name);
+            struct Sexpr *cond = non_allocated_condition(context, stmt->var_decl.type, value);
+            free_sexpr(value);
 
-                if (cond) {
-                    verify_condition(context,
-                                     stmt->location,
-                                     cond,
-                                     "var deallocated",
-                                     err_msg_var_still_allocated(stmt->var_decl.name, stmt->location));
-                    free_sexpr(cond);
-                }
-            } else {
-                free(new_name);
+            if (cond) {
+                verify_condition(context,
+                                 stmt->location,
+                                 cond,
+                                 "var deallocated",
+                                 err_msg_var_still_allocated(stmt->var_decl.name, stmt->location));
+                free_sexpr(cond);
             }
         }
 
@@ -309,25 +305,21 @@ static void verify_return_stmt(struct VContext *context,
     for (struct NameTypeList *node = context->var_decl_stack; node; node = node->next) {
         char *new_name = lookup_local(context, node->name);
         if (new_name) {
-            if (hash_table_contains_key(context->local_env, new_name)) {
-                struct Sexpr *value = make_string_sexpr_handover(new_name);
-                struct Sexpr *cond = non_allocated_condition(context, node->type, value);
-                free_sexpr(value);
+            struct Sexpr *value = make_string_sexpr_handover(new_name);
+            struct Sexpr *cond = non_allocated_condition(context, node->type, value);
+            free_sexpr(value);
 
-                if (cond) {
-                    char *sanitised = sanitise_name(node->name);
-                    char *msg = copy_string_3("'", sanitised, "' deallocated");
-                    free(sanitised);
-                    verify_condition(context,
-                                     stmt->location,
-                                     cond,
-                                     msg,
-                                     err_msg_var_still_allocated_at_return(node->name, stmt->location));
-                    free(msg);
-                    free_sexpr(cond);
-                }
-            } else {
-                free(new_name);
+            if (cond) {
+                char *sanitised = sanitise_name(node->name);
+                char *msg = copy_string_3("'", sanitised, "' deallocated");
+                free(sanitised);
+                verify_condition(context,
+                                 stmt->location,
+                                 cond,
+                                 msg,
+                                 err_msg_var_still_allocated_at_return(node->name, stmt->location));
+                free(msg);
+                free_sexpr(cond);
             }
         }
     }
