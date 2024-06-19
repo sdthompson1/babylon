@@ -2405,6 +2405,8 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
                               struct Type *scrutinee_type,
                               bool scrutinee_lvalue, bool scrutinee_read_only)
 {
+    scrutinee_type = chase_univars(scrutinee_type);
+
     switch (pattern->tag) {
     case PAT_VAR:
 
