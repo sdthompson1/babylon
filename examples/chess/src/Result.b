@@ -15,11 +15,11 @@ interface {
 
     function is_error<T> (r: Result<T>): bool
     {
-        return !is_ok<T>(r);
+        return !is_ok(r);
     }
 
     ghost function from_ok<T> (r: Result<T>) : T
-        requires is_ok<T>(r);
+        requires is_ok(r);
     {
         match r {
         case Ok(value) =>

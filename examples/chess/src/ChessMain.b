@@ -82,18 +82,18 @@ function load_texture(ref mem: Mem,
 
     requires valid_c_result<{}>(result);
 
-    ensures is_error<{}>(old(result)) ==> result == old(result);
+    ensures is_error(old(result)) ==> result == old(result);
 
-    ensures is_ok<{}>(result) ==> engine_state(engine)
+    ensures is_ok(result) ==> engine_state(engine)
         == set_texture(old(engine_state(engine)), texture_num);
 
-    ensures is_error<{}>(result) ==> engine_state(engine)
+    ensures is_error(result) ==> engine_state(engine)
         == old(engine_state(engine));
 
     ensures valid_engine(engine);
-    ensures valid_c_result<{}>(result);    
+    ensures valid_c_result(result);    
 {
-    if is_error<{}>(result) {
+    if is_error(result) {
         // Do not attempt the load
         return;
     }
@@ -121,13 +121,13 @@ function load_texture(ref mem: Mem,
             append_string(sb, ":\n");
             append_string(sb, msg);
             null_terminate(sb);
-            var free_result = resize_array<u8>(mem, msg, 0);
+            var free_result = resize_array(mem, msg, 0);
         }
 
         // Now we have to get sb.buf into an error Result.
         // This is slightly awkward unfortunately - we have to swap it into place.
         var empty_string: u8[*];
-        result = Error<{}>(empty_string);
+        result = Error(empty_string);
         match result {
         case Error(ref err_msg) => swap err_msg, sb.buf;
         }
@@ -147,10 +147,10 @@ function load_textures(ref mem: Mem,
                        ref result: Result<{}>)
     requires valid_engine(engine);
     requires forall (i:u32) i <= HIGHEST_TEXTURE_NUM ==> !engine_state(engine).textures[i];
-    requires result == Ok<{}>{};
+    requires result == Ok{};
     ensures valid_engine(engine);
-    ensures valid_c_result<{}>(result);
-    ensures is_ok<{}>(result) ==> textures_loaded(engine);
+    ensures valid_c_result(result);
+    ensures is_ok(result) ==> textures_loaded(engine);
 {
     load_texture(mem, io, engine, result, piece_texture_num({Black,Pawn}), "images/black_pawn.png");
     load_texture(mem, io, engine, result, piece_texture_num({Black,Knight}), "images/black_knight.png");
@@ -228,10 +228,10 @@ function pixel_pos_to_square(x: u32, y: u32): Maybe<Square>
         var sq = { x = i32((x - MARGIN) / SQUARE_PIXEL_SIZE),
                    y = y_size - 1 - i32((y - MARGIN) / SQUARE_PIXEL_SIZE) };
         if valid_square(sq) {
-            return Just<Square>(sq);
+            return Just(sq);
         }
     }
-    return Nothing<Square>;
+    return Nothing;
 }
 
 
@@ -272,6 +272,7 @@ function draw_pieces(ref engine: GameEngine, pos: Position, check: bool)
     requires check == is_check(pos);
     requires engine_state(engine).colour == {r=u8(255), g=u8(255), b=u8(255), a=u8(255)};
     requires engine_state(engine).blend_mode == BlendMode_Blend;
+    ensures valid_engine(engine);
     ensures engine_state(engine) == old(engine_state(engine));
 {
     ghost var old_state = engine_state(engine);
@@ -279,6 +280,7 @@ function draw_pieces(ref engine: GameEngine, pos: Position, check: bool)
     var sq = first_square();
     while !iteration_done(sq)
         invariant valid_square(sq) || iteration_done(sq);
+        invariant valid_engine(engine);
         invariant engine_state(engine) == old_state;
         decreases square_number(sq);
     {
@@ -292,14 +294,14 @@ function draw_pieces(ref engine: GameEngine, pos: Position, check: bool)
                 case {c, King} =>
                     // Draw check highlight effect
                     if same_colour(c, pos.turn) {
-                        draw_texture(engine, TX_CHECK, Nothing<Rectangle>, pixel_pos.0, pixel_pos.1);
+                        draw_texture(engine, TX_CHECK, Nothing, pixel_pos.0, pixel_pos.1);
                     }
                 case _ =>
                 }
             }
 
             // Draw the piece
-            draw_texture(engine, piece_texture_num(p), Nothing<Rectangle>, pixel_pos.0, pixel_pos.1);
+            draw_texture(engine, piece_texture_num(p), Nothing, pixel_pos.0, pixel_pos.1);
 
         case Nothing =>
         }
@@ -315,6 +317,7 @@ function draw_legal_moves(ref engine: GameEngine,
     requires sizeof(legal_moves) == board_size;
     requires engine_state(engine).colour == {r=u8(255), g=u8(255), b=u8(255), a=u8(255)};
     requires engine_state(engine).blend_mode == BlendMode_Blend;
+    ensures valid_engine(engine);
     ensures engine_state(engine) == old(engine_state(engine));
 {
     ghost var old_state = engine_state(engine);
@@ -322,13 +325,14 @@ function draw_legal_moves(ref engine: GameEngine,
     var sq = first_square();
     while !iteration_done(sq)
         invariant valid_square(sq) || iteration_done(sq);
+        invariant valid_engine(engine);
         invariant engine_state(engine) == old_state;
         decreases square_number(sq);
     {
         if legal_moves[sq.x, sq.y] {
             // Draw a dot on this square
             var pixel_pos = square_pixel_position(sq);
-            draw_texture(engine, TX_POSSIBLE_MOVE, Nothing<Rectangle>, pixel_pos.0, pixel_pos.1);
+            draw_texture(engine, TX_POSSIBLE_MOVE, Nothing, pixel_pos.0, pixel_pos.1);
         }
         next_square(sq);
     }
@@ -369,7 +373,7 @@ function draw(ref engine: GameEngine,
     case Nothing =>
     case Just(sq) =>
         var pixel_pos = square_pixel_position(sq);
-        draw_texture(engine, TX_SELECTED, Nothing<Rectangle>, pixel_pos.0, pixel_pos.1);
+        draw_texture(engine, TX_SELECTED, Nothing, pixel_pos.0, pixel_pos.1);
         draw_legal_moves(engine, legal_moves);
     }
 
@@ -377,10 +381,10 @@ function draw(ref engine: GameEngine,
     if !status_acknowledged {
         match status {
         case Checkmate =>
-            draw_texture(engine, TX_CHECKMATE_MSG, Nothing<Rectangle>, CHECKMATE_MSG_X, CHECKMATE_MSG_Y);
+            draw_texture(engine, TX_CHECKMATE_MSG, Nothing, CHECKMATE_MSG_X, CHECKMATE_MSG_Y);
             
         case Stalemate =>
-            draw_texture(engine, TX_STALEMATE_MSG, Nothing<Rectangle>, CHECKMATE_MSG_X, CHECKMATE_MSG_Y);
+            draw_texture(engine, TX_STALEMATE_MSG, Nothing, CHECKMATE_MSG_X, CHECKMATE_MSG_Y);
             
         case _ =>
         }
@@ -449,7 +453,7 @@ function handle_mouse_click(x: u32,
         // If so, make the move, and return immediately
         if legal_moves[to.x, to.y] {
             make_move(pos, from, to);
-            selected = Nothing<Square>;
+            selected = Nothing;
             check = is_check(pos);
             status = get_game_status(pos);
             requires_redraw = true;
@@ -459,7 +463,7 @@ function handle_mouse_click(x: u32,
         // Are we clicking on the same piece that was already selected?
         // If so, then un-select it
         if to.x == from.x && to.y == from.y {
-            clicked_square = Nothing<Square>;
+            clicked_square = Nothing;
         }
     case _ =>
     }
@@ -467,8 +471,8 @@ function handle_mouse_click(x: u32,
     // Allow selecting our own pieces only
     match clicked_square {
     case Just(sq) =>
-        if !has_piece_of_colour(pos, pos.turn, sq) {
-            clicked_square = Nothing<Square>;
+        if !has_piece_with_colour(pos, pos.turn, sq) {
+            clicked_square = Nothing;
         }
     case _ =>
     }
@@ -504,7 +508,7 @@ function run_prog(ref engine: GameEngine)
     var status_acknowledged = false;
 
     var requires_redraw = true;
-    var selected: Maybe<Square> = Nothing<Square>;
+    var selected: Maybe<Square> = Nothing;
 
     // "Fuel" is a hack to allow us to write an infinite loop.
     // Even if 10^12 loop iterations are done per second (unlikely!), it will take over
@@ -563,17 +567,18 @@ function main_prog(ref mem: Mem, ref io: IO)
 
     ref title = "Chess Demo";
 
-    var results = {Ok<{}>{}, Nothing<GameEngine>};
-    
-    new_engine(io, results.1, title, xsize, ysize, results.0);
+    var engine: GameEngine;
+    var result: Result<{}>;
 
-    match results {
-    case {Error(ref msg), _} =>
+    new_engine(io, engine, title, xsize, ysize, result);
+
+    match result {
+    case Error(ref msg) =>
         // GameEngine failed to start. Show message and exit.
         message_box(io, msg);
-        var ok = resize_array<u8>(mem, msg, 0);
+        var ok = resize_array(mem, msg, 0);
 
-    case {Ok({}), Just(ref engine)} =>
+    case Ok(_) =>
         var tex_result: Result<{}>;
         load_textures(mem, io, engine, tex_result);
 
@@ -581,13 +586,13 @@ function main_prog(ref mem: Mem, ref io: IO)
         case Error(ref msg) =>
             // Textures failed to load. Show message and exit.
             message_box(io, msg);
-            var ok = resize_array<u8>(mem, msg, 0);
+            var ok = resize_array(mem, msg, 0);
 
         case Ok(_) =>
             run_prog(engine);
         }
 
         // Shut down the GameEngine.
-        free_engine(results.1);
+        free_engine(engine);
     }
 }

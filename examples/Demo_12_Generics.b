@@ -35,7 +35,7 @@ function id<T>(x: T): T
 //    specified as T.
 
 //  - The function has a precondition !allocated(x). This is necessary
-//    because there is nothing to stop T being an array type (for example)
+//    because there is nothing to stop T being a resizable array type (for example)
 //    and then the statement "return x" would be illegal, because (as
 //    discussed in the previous demo) it is not allowed to return an allocated
 //    value. If id was used at type i32 or bool (say), this precondition would
@@ -48,28 +48,24 @@ function id<T>(x: T): T
 
 function fun1()
 {
-    // When calling a generic function, we must specify the type being used
+    // When calling a generic function, we can optionally specify the type being used
     // in < > brackets. Here we call the id function with type i32:
     var i = id<i32>(100);
-    
+
+    // But in most cases we can just omit the type parameter and have
+    // the compiler infer it:
+    var j = id(100);
+
     print_i32(i);   // prints 100
     print_string("\n");
 
-    // Note: in other languages (like Java or C++) the < > brackets are not
-    // required when calling a generic function -- only when defining it.
-    // In other words the Java or C++ compiler can figure out what "T" is,
-    // simply by looking at the argument that was passed.
-    // However, the Babylon compiler is not that smart (yet) so, for now, the
-    // type parameters must always be explicitly given when calling a
-    // generic function.
-
     // We can also try the id function at other types:
     
-    var b = id<bool>(false);
+    var b = id(false);
     assert b == false;
 
     var a1: i32[*];           // An empty array
-    var a2 = id<i32[*]>(a1);  // Works, a2 is now an empty array as well.
+    var a2 = id(a1);          // Works, a2 is now an empty array as well.
 
     // (If a1 was not empty, then the call id<i32[*]>(a1) would be rejected
     // by the verifier.)
@@ -91,8 +87,6 @@ datatype Maybe<T> = Just(T) | Nothing;
 function is_just<T>(x: Maybe<T>): bool
 {
     match x {
-    // Note: there is no need to write <T> after the constructor names
-    // in "case" patterns.
     case Just(_) => return true;
     case Nothing => return false;
     }
@@ -100,16 +94,13 @@ function is_just<T>(x: Maybe<T>): bool
 
 function fun2()
 {
-    // When *creating* a generic value (as opposed to in "case" patterns) we do
-    // need to give the < > brackets. For example:
+    var m1: Maybe<i32> = Nothing;
+    var m2: Maybe<i32> = Just(100);
 
-    var m1: Maybe<i32> = Nothing<i32>;
-    var m2: Maybe<i32> = Just<i32>(100);
-
-    if is_just<i32>(m1) {
+    if is_just(m1) {
         print_string("m1 is just\n");
     }
-    if is_just<i32>(m2) {
+    if is_just(m2) {
         print_string("m2 is just\n");
     }
 }

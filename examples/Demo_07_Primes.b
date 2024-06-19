@@ -342,7 +342,7 @@ function sieve(n: u32)
     // (So at the end, all numbers >= 2 marked "false" will be primes.)
 
     var flag: bool[*];
-    resize_array<bool>(flag, n + u32(1));
+    resize_array(flag, n + u32(1));
 
     // Loop through all values of i from 2 to n (inclusive).
     var i: u32 = 2;
@@ -443,7 +443,7 @@ function sieve(n: u32)
     }
 
     // Free the array afterwards.
-    resize_array<bool>(flag, 0);
+    resize_array(flag, 0);
 }
          
 

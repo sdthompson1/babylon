@@ -19,5 +19,5 @@ interface {
         requires !allocated(result);
         
         ensures valid_c_result<{}>(result);
-        ensures is_ok<{}>(result) <==> allocated(pixels);
+        ensures is_ok(result) <==> allocated(pixels);
 }

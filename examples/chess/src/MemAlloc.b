@@ -13,6 +13,10 @@ interface {
     // they might sometimes succeed and sometimes fail, even with
     // identical inputs.
 
+    // (TODO: We could use the 'impure' keyword, then there would
+    // be no need for this Mem type. But this example was written before
+    // 'impure' was added to the language.)
+
     // Mem is marked 'allocated' just so that it can't be created
     // on the language side, and must be obtained from C.
 

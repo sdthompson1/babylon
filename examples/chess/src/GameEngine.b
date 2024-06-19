@@ -5,6 +5,7 @@ module GameEngine
 import IO;
 import Limits;
 import Maybe;
+import MemAlloc;  // for 'default'
 import Result;
 import String;
 
@@ -15,7 +16,11 @@ interface {
 
     // ** The GameEngine itself.
 
-    type GameEngine (allocated);
+    // Note: default() corresponds to a null pointer in C. A GameEngine is
+    // considered "allocated" if it is NOT a null pointer.
+    
+    type GameEngine
+        allocated(e) if e != default();
 
 
     // ** Graphics related types
@@ -73,7 +78,7 @@ interface {
 
     ghost function valid_engine(g: GameEngine): bool
     {
-        return valid_engine_state(engine_state(g));
+        return allocated(g) && valid_engine_state(engine_state(g));
     }
 
     // true if the given state is the initial engine state
@@ -116,31 +121,28 @@ interface {
     // ** Init/shutdown functions
 
     // Create a new GameEngine. This will open a window on the screen.
-    // ('engine' must be Nothing initially, and it will become 'Just' if the
-    // function is successful.)
     extern function new_engine(ref io: IO,
-                               ref engine: Maybe<GameEngine>,
+                               ref engine: GameEngine,
                                title: u8[],
                                width: u32,
                                height: u32,
                                ref result: Result<{}>)
-        requires is_nothing<GameEngine>(engine);
+        requires !allocated(engine);
         requires valid_string(title);
         requires !allocated(result);
         
-        ensures valid_c_result<{}>(result);
-        ensures Result.is_error<{}>(result) ==> is_nothing<GameEngine>(engine);
-        ensures Result.is_ok<{}>(result) ==>
-            is_just<GameEngine>(engine) &&
-            initial_engine_state(engine_state(from_just<GameEngine>(engine)));
+        ensures valid_c_result(result);
+        ensures Result.is_error(result) ==> !allocated(engine);
+        ensures Result.is_ok(result) ==>
+            allocated(engine) &&
+            initial_engine_state(engine_state(engine));
 
 
     // Shut down a GameEngine. The window will be closed.
     // (If any textures are still loaded, they will be unloaded automatically.)
-    extern function free_engine(ref engine: Maybe<GameEngine>)
-        requires is_just<GameEngine>(engine);
-        requires valid_engine(from_just<GameEngine>(engine));
-        ensures is_nothing<GameEngine>(engine);
+    extern function free_engine(ref engine: GameEngine)
+        requires valid_engine(engine);
+        ensures !allocated(engine);
 
 
     // ** Texture loading
@@ -167,6 +169,7 @@ interface {
         requires !allocated(result);
 
         ensures valid_c_result<{}>(result);
+        ensures valid_engine(engine);
 
         // on failure, state unchanged
         ensures !Result.is_ok<{}>(result) ==>
@@ -190,6 +193,7 @@ interface {
         requires engine_state(engine).textures[texture_num];
 
         // afterwards, the texture becomes unloaded
+        ensures valid_engine(engine);
         ensures engine_state(engine) ==
             clear_texture( old(engine_state(engine)), texture_num );
     
@@ -201,6 +205,7 @@ interface {
     extern function set_blend_mode(ref engine: GameEngine,
                                    blend_mode: BlendMode)
         requires valid_engine(engine);
+        ensures valid_engine(engine);
         ensures engine_state(engine) ==
             { old(engine_state(engine)) with blend_mode = blend_mode };
 
@@ -212,6 +217,7 @@ interface {
     extern function set_colour(ref engine: GameEngine,
                                colour: RGBA)
         requires valid_engine(engine);
+        ensures valid_engine(engine);
         ensures engine_state(engine) ==
             { old(engine_state(engine)) with colour = colour };
 
@@ -223,6 +229,7 @@ interface {
 
     extern function clear_screen(ref engine: GameEngine)
         requires valid_engine(engine);
+        ensures valid_engine(engine);
         ensures engine_state(engine) == old(engine_state(engine));
 
 
@@ -247,6 +254,7 @@ interface {
         requires engine_state(engine).textures[texture_num];
 
         // the engine state is unchanged
+        ensures valid_engine(engine);
         ensures engine_state(engine) == old(engine_state(engine));
     
 
@@ -256,6 +264,7 @@ interface {
     extern function fill_rectangle(ref engine: GameEngine,
                                    rect: Rectangle)
         requires valid_engine(engine);
+        ensures valid_engine(engine);
         ensures engine_state(engine) == old(engine_state(engine));
 
 
@@ -265,6 +274,7 @@ interface {
     // final image to the display.
     extern function present(ref engine: GameEngine)
         requires valid_engine(engine);
+        ensures valid_engine(engine);
         ensures engine_state(engine) == old(engine_state(engine));
 
 
@@ -273,6 +283,7 @@ interface {
     // This function will block until the next incoming event arrives.
     extern function wait_event(ref engine: GameEngine): Event
         requires valid_engine(engine);
+        ensures valid_engine(engine);
         ensures engine_state(engine) == old(engine_state(engine));
 
 }

@@ -110,11 +110,6 @@ struct GameEngine {
     bool draw_state_modified;
 };
 
-struct __attribute__((__packed__)) MaybeGameEngine {
-    uint8_t tag;
-    uint64_t value;
-};
-
 
 //--------------------------------------------------------------
 // SDL error message helper
@@ -129,7 +124,7 @@ struct String make_sdl_error_string(const char *prefix)
 // Init and shutdown
 
 void new_engine(void *io,
-                struct MaybeGameEngine *maybe_engine,
+                struct GameEngine **engine_out,
                 const struct String *title,
                 uint32_t width,
                 uint32_t height,
@@ -189,8 +184,7 @@ void new_engine(void *io,
 
     // Return result
     engine_created = true;
-    maybe_engine->tag = MAYBE_JUST;
-    maybe_engine->value = (uint64_t)engine;
+    *engine_out = engine;
     result->tag = RESULT_OK;
     return;
 
@@ -210,9 +204,9 @@ void new_engine(void *io,
 
 void destroy_texture(struct GameEngine **engine, uint32_t texture_num);
 
-void free_engine(struct MaybeGameEngine *maybe_engine)
+void free_engine(struct GameEngine **engine_ptr)
 {
-    struct GameEngine *engine = (struct GameEngine *) maybe_engine->value;
+    struct GameEngine *engine = *engine_ptr;
 
     for (uint32_t index = 0; index < engine->texture_array_size; ++index) {
         if (engine->texture_array[index].texture) {
@@ -227,7 +221,7 @@ void free_engine(struct MaybeGameEngine *maybe_engine)
     free(engine->texture_array);
     free(engine);
 
-    maybe_engine->tag = MAYBE_NOTHING;
+    *engine_ptr = NULL;
 }
 
 

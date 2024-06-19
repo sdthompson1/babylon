@@ -68,7 +68,7 @@ interface {
             });
     }
 
-    function has_piece_of_colour(pos: Position, col: Colour, sq: Square): bool
+    function has_piece_with_colour(pos: Position, col: Colour, sq: Square): bool
         requires valid_position(pos);
         requires valid_square(sq);
     {
@@ -252,38 +252,38 @@ function setup_initial_position(ref pos: Position)
         decreases square_number(sq);
     {
         if sq.y == 1 {
-            pos.board[sq.x, sq.y] = Just<Piece>{White, Pawn};
+            pos.board[sq.x, sq.y] = Just{White, Pawn};
         } else if sq.y == y_size - 2 {
-            pos.board[sq.x, sq.y] = Just<Piece>{Black, Pawn};
+            pos.board[sq.x, sq.y] = Just{Black, Pawn};
         } else {
-            pos.board[sq.x, sq.y] = Nothing<Piece>;
+            pos.board[sq.x, sq.y] = Nothing;
         }
         next_square(sq);
     }
 
     // Now setup the first and last ranks
-    pos.board[0,0] = Just<Piece> {White, Rook};
-    pos.board[1,0] = Just<Piece> {White, Knight};
-    pos.board[2,0] = Just<Piece> {White, Bishop};
-    pos.board[3,0] = Just<Piece> {White, Queen};
-    pos.board[4,0] = Just<Piece> {White, King};
-    pos.board[5,0] = Just<Piece> {White, Bishop};
-    pos.board[6,0] = Just<Piece> {White, Knight};
-    pos.board[7,0] = Just<Piece> {White, Rook};
+    pos.board[0,0] = Just {White, Rook};
+    pos.board[1,0] = Just {White, Knight};
+    pos.board[2,0] = Just {White, Bishop};
+    pos.board[3,0] = Just {White, Queen};
+    pos.board[4,0] = Just {White, King};
+    pos.board[5,0] = Just {White, Bishop};
+    pos.board[6,0] = Just {White, Knight};
+    pos.board[7,0] = Just {White, Rook};
 
     var y = y_size - 1;
-    pos.board[0,y] = Just<Piece> {Black, Rook};
-    pos.board[1,y] = Just<Piece> {Black, Knight};
-    pos.board[2,y] = Just<Piece> {Black, Bishop};
-    pos.board[3,y] = Just<Piece> {Black, Queen};
-    pos.board[4,y] = Just<Piece> {Black, King};
-    pos.board[5,y] = Just<Piece> {Black, Bishop};
-    pos.board[6,y] = Just<Piece> {Black, Knight};
-    pos.board[7,y] = Just<Piece> {Black, Rook};
+    pos.board[0,y] = Just {Black, Rook};
+    pos.board[1,y] = Just {Black, Knight};
+    pos.board[2,y] = Just {Black, Bishop};
+    pos.board[3,y] = Just {Black, Queen};
+    pos.board[4,y] = Just {Black, King};
+    pos.board[5,y] = Just {Black, Bishop};
+    pos.board[6,y] = Just {Black, Knight};
+    pos.board[7,y] = Just {Black, Rook};
 
     // Setup remaining state variables - White to go first.
     pos.turn = White;
-    pos.en_passant = Nothing<Square>;
+    pos.en_passant = Nothing;
     pos.castle_kingside_white = true;
     pos.castle_queenside_white = true;
     pos.castle_kingside_black = true;
@@ -317,7 +317,7 @@ function is_pseudo_legal_move(pos: Position,
             return false;
 
         // The "to" square must NOT contain a piece of my colour
-        } else if has_piece_of_colour(pos, col, to) {
+        } else if has_piece_with_colour(pos, col, to) {
             return false;
 
         } else {
@@ -557,7 +557,7 @@ function find_king(pos: Position, colour: Colour): Maybe<Square>
         case Nothing => true
         case Just(sq) =>
             valid_square(sq)
-            && pos.board[sq.x,sq.y] == Just<Piece>{colour, King}
+            && pos.board[sq.x,sq.y] == Just{colour, King}
     };
 {
     var sq = first_square();
@@ -566,15 +566,15 @@ function find_king(pos: Position, colour: Colour): Maybe<Square>
         decreases square_number(sq);
     {
         match pos.board[sq.x, sq.y] {
-        case Just<Piece>{king_col, King} =>
+        case Just{king_col, King} =>
             if same_colour(king_col, colour) {
-                return Just<Square>(sq);
+                return Just(sq);
             }
         case _ =>
         }
         next_square(sq);
     }
-    return Nothing<Square>;
+    return Nothing;
 }
 
 
@@ -629,7 +629,7 @@ function castling_through_check(pos: Position,
     requires valid_position(pos);
     requires valid_square(from);
     requires valid_square(to);
-    requires (pos.board[from.x, from.y] == Just<Piece>{pos.turn, King});
+    requires (pos.board[from.x, from.y] == Just{pos.turn, King});
 {
     // We will move the king one space towards "to" on a scratch board, and
     // see if the resulting position is check.
@@ -637,8 +637,8 @@ function castling_through_check(pos: Position,
     var modified_to = {x=from.x + sgn(to.x - from.x), y=to.y};
 
     var scratch_pos = pos;
-    scratch_pos.board[from.x, from.y] = Nothing<Piece>;
-    scratch_pos.board[modified_to.x, modified_to.y] = Just<Piece>{pos.turn, King};
+    scratch_pos.board[from.x, from.y] = Nothing;
+    scratch_pos.board[modified_to.x, modified_to.y] = Just{pos.turn, King};
 
     return is_check(scratch_pos);
 }
@@ -727,8 +727,8 @@ function make_move_internal(ref pos: Position, from: Square, to: Square)
 {
     // Update castling and en passant flags
     var old_en_passant = pos.en_passant;
-    pos.en_passant = Nothing<Square>;
-    
+    pos.en_passant = Nothing;
+
     match pos.board[from.x,from.y] {
     case Just{White,Rook} =>
         if from.y == 0 {
@@ -756,11 +756,11 @@ function make_move_internal(ref pos: Position, from: Square, to: Square)
         
     case Just{White,Pawn} =>
         if from.y == 1 && to.y == 3 {
-            pos.en_passant = Just<Square>{x = to.x, y = 2};
+            pos.en_passant = Just{x = to.x, y = 2};
         }
     case Just{Black,Pawn} =>
         if from.y == y_size - 2 && to.y == y_size - 4 {
-            pos.en_passant = Just<Square>{x = to.x, y = y_size - 3};
+            pos.en_passant = Just{x = to.x, y = y_size - 3};
         }
         
     case _ =>
@@ -769,7 +769,7 @@ function make_move_internal(ref pos: Position, from: Square, to: Square)
 
     // Move the piece
     pos.board[to.x, to.y] = pos.board[from.x, from.y];
-    pos.board[from.x, from.y] = Nothing<Piece>;
+    pos.board[from.x, from.y] = Nothing;
 
 
     // Handle castling, en passant captures, and pawn promotion.
@@ -780,8 +780,8 @@ function make_move_internal(ref pos: Position, from: Square, to: Square)
         if abs(to.x - from.x) == 2 {
             var old_rook_x = if to.x > from.x then x_size - 1 else 0;
             var new_rook_x = from.x + sgn(to.x - from.x);
-            pos.board[new_rook_x, to.y] = Just<Piece>{col, Rook};
-            pos.board[old_rook_x, to.y] = Nothing<Piece>;
+            pos.board[new_rook_x, to.y] = Just{col, Rook};
+            pos.board[old_rook_x, to.y] = Nothing;
         }
 
     case Just{col, Pawn} =>
@@ -793,9 +793,9 @@ function make_move_internal(ref pos: Position, from: Square, to: Square)
             if to.x == target_x && to.y == target_y {
                 match col {
                 case White =>
-                    pos.board[to.x, to.y - 1] = Nothing<Piece>;
+                    pos.board[to.x, to.y - 1] = Nothing;
                 case Black =>
-                    pos.board[to.x, to.y + 1] = Nothing<Piece>;
+                    pos.board[to.x, to.y + 1] = Nothing;
                 }
             }
         case _ =>
@@ -804,7 +804,7 @@ function make_move_internal(ref pos: Position, from: Square, to: Square)
         // Check for pawn promotion.
         // Currently we only support promotion to Queen.
         if to.y == y_size - 1 || to.y == 0 {
-            pos.board[to.x, to.y] = Just<Piece>{col, Queen};
+            pos.board[to.x, to.y] = Just{col, Queen};
         }
 
     case _ =>

@@ -33,9 +33,8 @@ function fun1()
 
     // The language doesn't currently have a built-in way to resize
     // an array. Instead we must call the function resize_array from the
-    // ExampleLib. This is done as follows (note that the array *element*
-    // type, not the array type itself, must be given in the < > brackets):
-    resize_array<i32>(a, 100);
+    // ExampleLib. This is done as follows:
+    resize_array(a, 100);
 
     // The array a now has size 100:
     assert sizeof(a) == u64(100);
@@ -45,7 +44,7 @@ function fun1()
     // system (using malloc or a related function). We must free this memory
     // before the array "a" goes out of scope. This is done by resizing
     // the array back to zero size again:
-    resize_array<i32>(a, 0);
+    resize_array(a, 0);
 
 
     // The verifier checks that all arrays have size zero before they go
@@ -142,20 +141,20 @@ function fun3()
     // arrays.
     var a: i32[*][*];   // array of arrays of i32
 
-    resize_array<i32[*]>(a, 10);   // make 10 inner arrays
+    resize_array(a, 10);   // make 10 inner arrays
 
-    resize_array<i32>(a[0], 5);   // allocate some of the inner arrays
-    resize_array<i32>(a[1], 6);
-    resize_array<i32>(a[2], 4);
+    resize_array(a[0], 5);   // allocate some of the inner arrays
+    resize_array(a[1], 6);
+    resize_array(a[2], 4);
 
     // For the deallocation, the system won't allow us to deallocate "a" until
     // all of the inner arrays have size zero. So we first have to free each
     // inner array, then free the outer array.
 
-    resize_array<i32>(a[0], 0);
-    resize_array<i32>(a[1], 0);
-    resize_array<i32>(a[2], 0);
-    resize_array<i32[*]>(a, 0);
+    resize_array(a[0], 0);
+    resize_array(a[1], 0);
+    resize_array(a[2], 0);
+    resize_array(a, 0);
 }
 
 function fun4()
@@ -173,7 +172,7 @@ function fun4()
 
     // The resize_2d_array function from ExampleLib can be used for the
     // allocation:
-    resize_2d_array<i32>(a, 10, 5);   // make a 10x5 array
+    resize_2d_array(a, 10, 5);   // make a 10x5 array
 
     // For 2d arrays, sizeof returns a tuple of u64 values.
     // Tuples will be covered in a future demo, but for now, be advised
@@ -192,11 +191,11 @@ function fun4()
     // a[20, 30] = 100;   // out of bounds
 
     // To free a 2d array we resize it to size 0, 0.
-    resize_2d_array<i32>(a, 0, 0);
+    resize_2d_array(a, 0, 0);
     assert sizeof(a) == {u64(0), u64(0)};
 
 
-    // Theoretically, 3d and higher arrays (e.g. i32[,,]) are also supported:
+    // Theoretically, 3d and higher arrays (e.g. i32[*,*,*]) are also supported:
     var b: i32[*, *, *];
 
     // However, the ExampleLib doesn't currently contain a function to

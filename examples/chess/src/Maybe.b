@@ -20,7 +20,7 @@ interface {
     }
 
     ghost function from_just<T>(x: Maybe<T>): T
-        requires is_just<T>(x);
+        requires is_just(x);
     {
         match x {
         case Just(j) => return j;

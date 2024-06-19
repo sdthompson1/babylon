@@ -241,11 +241,11 @@ function fun4()
     // with them (unlike normal arrays).
 
     ghost var a: i32[*];     // create ghost array
-    ghost resize_array<i32>(a, 100);   // allocate 100 ghost integers
+    ghost resize_array(a, 100);   // allocate 100 ghost integers
     ghost a[2] = 1;
     assert a[2] == 1;
 
-    // note: no need for "ghost resize_array<i32>(a, 0);" afterwards.
+    // note: no need for "ghost resize_array(a, 0);" afterwards.
 }
 
 

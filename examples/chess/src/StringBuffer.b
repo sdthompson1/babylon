@@ -50,7 +50,7 @@ function resize_string_buffer(ref mem: Mem,
     ensures return ==> sb.pos == u64(0);
     ensures capacity == u64(0) ==> return;
 {
-    var alloc_result = resize_array<u8>(mem, sb.buf, capacity);
+    var alloc_result = resize_array(mem, sb.buf, capacity);
     if alloc_result {
         sb.pos = u64(0);
     }
@@ -61,7 +61,7 @@ function free_string_buffer(ref mem: Mem,
                             ref sb: StringBuffer)
     ensures sizeof(sb.buf) == u64(0);
 {
-    var alloc_result = resize_array<u8>(mem, sb.buf, 0);
+    var alloc_result = resize_array(mem, sb.buf, 0);
     assert alloc_result;
 }
 
