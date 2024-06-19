@@ -103,8 +103,10 @@ static void prepare_args(struct VContext *context,
 }
 
 static void verify_function_attributes(struct VContext *context,
+                                       struct Location location,
                                        struct Attribute *attr,
                                        struct Type *ret_type,
+                                       bool need_alloc_check,
                                        struct Condition ***precond_tail,
                                        struct Condition ***postcond_tail)
 {
@@ -155,6 +157,23 @@ static void verify_function_attributes(struct VContext *context,
         }
 
         attr = attr->next;
+    }
+
+    // If need_alloc_check (currently true for 'extern' functions) and
+    // the function returns a value, then we verify that the return
+    // value is not allocated (given the preconditions and
+    // postconditions).
+    if (need_alloc_check && ret_type) {
+        struct Sexpr *is_alloc = allocated_test_expr(context, ret_type, "%return");
+        if (is_alloc != NULL) {  // NULL means it is never allocated
+            struct Sexpr *is_not_alloc = make_list2_sexpr(make_string_sexpr("not"), is_alloc);
+            verify_condition(context,
+                             location,
+                             is_not_alloc,
+                             "return value not allocated",
+                             err_msg_return_allocated(location));
+            free_sexpr(is_not_alloc);
+        }
     }
 
     // remove the postconditions afterwards (but not the preconditions)
@@ -431,8 +450,10 @@ static void verify_function_decl(struct VContext *context,
     struct Condition *postconds = NULL;
     struct Condition **postcond_tail = &postconds;
     verify_function_attributes(context,
+                               decl->location,
                                decl->attributes,
                                data->return_type,
+                               data->is_extern, // need_alloc_check
                                &precond_tail,
                                &postcond_tail);
 

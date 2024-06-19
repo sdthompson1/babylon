@@ -30,8 +30,7 @@ function f4(x: bool[]): bool
 }
 
 // Testing array-projection where the LHS is an rvalue.
-extern function make_array(): i32[*]
-    ensures sizeof(return) == u64(10);
+extern function make_array(): i32[10];
 
 extern function f5()
     requires make_array()[0] == 1;
