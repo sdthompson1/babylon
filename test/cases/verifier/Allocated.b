@@ -127,3 +127,13 @@ function f13()
     var array: AllocTest[*];
     resize_array<AllocTest>(array, 1);
 }
+
+
+// Alternative syntax for abstract allocated types.
+
+type AltSyntax allocated;
+
+function f14()
+{
+    var x: AltSyntax;  // Error: AltSyntax is allocated.
+}

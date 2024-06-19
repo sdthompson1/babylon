@@ -844,6 +844,12 @@ static void print_decls(int indent_level, FILE *file, struct Decl *decl)
             if (decl->typedef_data.rhs) {
                 fprintf(file, " = ");
                 print_type(file, decl->typedef_data.rhs);
+            } else if (decl->typedef_data.allocated) {
+                fprintf(file, " allocated");
+                if (decl->typedef_data.alloc_var) {
+                    fprintf(file, "(%s) = ", decl->typedef_data.alloc_var);
+                    print_term(false, file, decl->typedef_data.alloc_term);
+                }
             }
             fprintf(file, ";\n");
             break;

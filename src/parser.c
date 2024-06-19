@@ -2172,15 +2172,35 @@ static struct Decl * parse_typedef_decl(struct ParserState *state)
 
     struct Type *rhs = NULL;
     bool allocated = false;
+    const char *alloc_var = NULL;
+    struct Term *alloc_term = NULL;
+
     if (state->token->type == TOK_EQUAL) {
         advance(state);
         rhs = parse_type(state, true);
 
     } else if (state->token->type == TOK_LPAREN) {
+        // older syntax, type Foo (allocated);
         allocated = true;
         advance(state);
         expect(state, TOK_KW_ALLOCATED, "'allocated'");
         expect(state, TOK_RPAREN, "')'");
+
+    } else if (state->token->type == TOK_KW_ALLOCATED) {
+        // newer syntax, type Foo allocated [(x) if EXPR];
+        allocated = true;
+        advance(state);
+
+        if (state->token->type == TOK_LPAREN) {
+            advance(state);
+            const struct Token *var_tok = expect(state, TOK_NAME, "variable name");
+            if (var_tok) {
+                alloc_var = copy_string(var_tok->data);
+            }
+            expect(state, TOK_RPAREN, "'('");
+            expect(state, TOK_KW_IF, "'if'");
+            alloc_term = parse_term(state, true);
+        }
     }
 
     expect(state, TOK_SEMICOLON, "';'");
@@ -2192,6 +2212,8 @@ static struct Decl * parse_typedef_decl(struct ParserState *state)
     result->typedef_data.tyvars = tyvars;
     result->typedef_data.rhs = rhs;
     result->typedef_data.allocated = allocated;
+    result->typedef_data.alloc_var = alloc_var;
+    result->typedef_data.alloc_term = alloc_term;
     result->attributes = NULL;
     result->next = NULL;
     result->recursive = false;

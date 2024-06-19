@@ -1755,6 +1755,8 @@ void free_decl(struct Decl *decl)
         case DECL_TYPEDEF:
             free_tyvar_list(decl->typedef_data.tyvars);
             free_type(decl->typedef_data.rhs);
+            free((void*)decl->typedef_data.alloc_var);
+            free_term(decl->typedef_data.alloc_term);
             break;
         }
 

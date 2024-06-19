@@ -1,0 +1,6 @@
+AllocatedPredicate.b:24:5: Precondition at AllocatedPredicate.b:18:5 might not be met
+AllocatedPredicate.b:29:5: 'x' might still be allocated when it goes out of scope
+AllocatedPredicate.b:57:5: Can't assign, right-hand-side might be allocated
+AllocatedPredicate.b:57:5: 'x' might still be allocated when it goes out of scope
+AllocatedPredicate.b:73:5: Can't assign, right-hand-side might be allocated
+AllocatedPredicate.b:73:5: 'x' might still be allocated when it goes out of scope

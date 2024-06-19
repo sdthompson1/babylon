@@ -647,6 +647,8 @@ struct DeclData_Typedef {
     struct TyVarList *tyvars;
     struct Type *rhs;
     bool allocated;  // applicable to 'abstract' typedefs (rhs=NULL)
+    const char *alloc_var;   // variable name used in alloc-predicate, or NULL
+    struct Term *alloc_term; // boolean expression used in alloc-predicate, or NULL
 };
 
 struct Decl {

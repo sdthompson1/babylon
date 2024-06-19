@@ -10,3 +10,7 @@ interface {
     var x: i32 = return;
   }
 }
+
+type BadType
+    allocated(x) if return;
+

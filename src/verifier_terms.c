@@ -1756,7 +1756,7 @@ static struct Sexpr * make_generic_args(struct VContext *cxt, struct TypeList *t
         tail = &((*tail)->right);
 
         // allocated function
-        struct Sexpr *lam = allocated_test_expr(types->type, "$x");
+        struct Sexpr *lam = allocated_test_expr(cxt, types->type, "$x");
         if (lam == NULL) {
             lam = make_string_sexpr("false");
         }
@@ -2216,9 +2216,9 @@ static void * verify_allocated(void *context, struct Term *term, void *type_resu
     struct Sexpr *expr = NULL;
 
     if (rhs->type == S_STRING) {
-        expr = allocated_test_expr(term->allocated.rhs->type, rhs->string);
+        expr = allocated_test_expr(context, term->allocated.rhs->type, rhs->string);
     } else {
-        expr = allocated_test_expr(term->allocated.rhs->type, "$alloc_term");
+        expr = allocated_test_expr(context, term->allocated.rhs->type, "$alloc_term");
         if (expr) {
             expr = make_list3_sexpr(make_string_sexpr("let"),
                                     make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$alloc_term"),

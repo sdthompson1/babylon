@@ -216,16 +216,28 @@ struct Item *add_const_item(struct VContext *context,
                             struct Sexpr *fol_term,   // Handed over; can be NULL
                             bool local);
 
-enum AllocFunc {
-    ALLOC_ALWAYS,
-    ALLOC_UNKNOWN,
-    ALLOC_NEVER,
+// Options for adding the $allocated predicate for a new tyvar (see add_tyvar_to_env).
+struct AllocOptions {
+    // If want_allocated == false, no $allocated predicate will be added. Calling
+    // "allocated(x)" on variables of this type will return $ARBITRARY (TODO: this
+    // should really be a verifier error instead?).
+
+    // If want_allocated == true and fol_var == NULL, then an uninterpreted
+    // $allocated function will be added (with declare-fun). It will be unprovable
+    // whether this values of this type are allocated or not.
+
+    // If want_allocated == true and fol_var != NULL, then a $allocated function
+    // with the given dummy variable name, and body expression (assumed Bool), will
+    // be added. (These pointers are handed over when add_tyvar_to_env is called.)
+    bool want_allocated;
+    const char *fol_var;
+    struct Sexpr *body_expr;
 };
 
-// add type variable(s) to the env (declare-sort)
-// also add $default, $allocated and $valid items for each tyvar
+// Add type variable(s) to the env (declare-sort).
+// Also add $default, $allocated and $valid items for each tyvar.
 struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
-                               enum AllocFunc alloc_func);
+                               struct AllocOptions alloc_options);
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars);
 
 // Remove an existing Item from the HashTable if there is one
@@ -395,7 +407,9 @@ struct Sexpr * insert_validity_conditions(struct VContext *context,
 
 // returns an expression saying whether the given variable is allocated,
 // or NULL if it is always considered 'not allocated'
-struct Sexpr * allocated_test_expr(struct Type *type, const char *var_name);
+struct Sexpr * allocated_test_expr(struct VContext *context,
+                                   struct Type *type,
+                                   const char *var_name);
 
 // return a condition that checks that the given term is NOT allocated,
 // or NULL if no test is required

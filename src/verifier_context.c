@@ -395,7 +395,7 @@ struct Item *add_const_item(struct VContext *context,
 }
 
 struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
-                               enum AllocFunc alloc_func)
+                               struct AllocOptions alloc_options)
 {
     struct HashTable *env = local ? context->local_env : context->global_env;
 
@@ -441,44 +441,36 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     item = NULL;
 
 
-    // Add $allocated
-    item = alloc(sizeof(struct Item));
-    memset(item, 0, sizeof(struct Item));
+    // Add $allocated, if requested
+    if (alloc_options.want_allocated) {
+        item = alloc(sizeof(struct Item));
+        memset(item, 0, sizeof(struct Item));
 
-    const char *allocated_fol_name = copy_string_2("$allocated-", fol_name);
+        const char *allocated_fol_name = copy_string_2("$allocated-", fol_name);
 
-    if (alloc_func != ALLOC_UNKNOWN) {
-
-        struct Sexpr *defn;
-        if (alloc_func == ALLOC_ALWAYS) {
-            defn = make_string_sexpr("true");
+        if (alloc_options.fol_var != NULL) {
+            // (define-fun $allocated-%^name ((alloc_fol_var %^name)) Bool alloc_fol_term)
+            item->fol_decl = make_list5_sexpr(
+                make_string_sexpr("define-fun"),
+                make_string_sexpr(allocated_fol_name),
+                make_list1_sexpr(make_list2_sexpr(make_string_sexpr_handover(alloc_options.fol_var),
+                                                  make_string_sexpr(fol_name))),
+                make_string_sexpr("Bool"),
+                alloc_options.body_expr);
         } else {
-            defn = make_string_sexpr("false");
+            // (declare-fun $allocated-%^name (%^name) Bool)
+            item->fol_decl = make_list4_sexpr(
+                make_string_sexpr("declare-fun"),
+                make_string_sexpr(allocated_fol_name),
+                make_list1_sexpr(make_string_sexpr(fol_name)),
+                make_string_sexpr("Bool"));
         }
 
-        // (define-fun $allocated-%^name ((x %^name)) Bool defn)
-        item->fol_decl = make_list5_sexpr(
-            make_string_sexpr("define-fun"),
-            make_string_sexpr(allocated_fol_name),
-            make_list1_sexpr(make_list2_sexpr(make_string_sexpr("x"),
-                                              make_string_sexpr(fol_name))),
-            make_string_sexpr("Bool"),
-            defn);
-        defn = NULL;
-
-    } else {
-        // (declare-fun $allocated-%^name (%^name) Bool)
-        item->fol_decl = make_list4_sexpr(
-            make_string_sexpr("declare-fun"),
-            make_string_sexpr(allocated_fol_name),
-            make_list1_sexpr(make_string_sexpr(fol_name)),
-            make_string_sexpr("Bool"));
+        item->fol_name = copy_string(allocated_fol_name);
+        hash_table_insert(env, allocated_fol_name, item);
+        allocated_fol_name = NULL;
+        item = NULL;
     }
-
-    item->fol_name = copy_string(allocated_fol_name);
-    hash_table_insert(env, allocated_fol_name, item);
-    allocated_fol_name = NULL;
-    item = NULL;
 
     // Add $valid
     item = alloc(sizeof(struct Item));
@@ -505,7 +497,14 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars)
 {
     while (tyvars) {
-        add_tyvar_to_env(context, tyvars->name, true, ALLOC_UNKNOWN);
+        // It is unknown whether these tyvars are allocated or not.
+        struct AllocOptions opts;
+        opts.want_allocated = true;
+        opts.fol_var = NULL;
+        opts.body_expr = NULL;
+
+        add_tyvar_to_env(context, tyvars->name, true, opts);
+
         tyvars = tyvars->next;
     }
 }
@@ -1063,9 +1062,10 @@ struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type)
 }
 
 struct Sexpr *make_record_predicate(
+    struct VContext *context,
     struct Type *type,
     const char *var_name,
-    struct Sexpr * (*make_child_predicate)(struct Type *, const char *),
+    struct Sexpr * (*make_child_predicate)(struct VContext *, struct Type *, const char *),
     struct Sexpr * (*combine_func)(struct Sexpr *))
 {
     // (match var_name
@@ -1089,7 +1089,7 @@ struct Sexpr *make_record_predicate(
             *pattern_tail = make_list1_sexpr(make_string_sexpr(buf));
             pattern_tail = &(*pattern_tail)->right;
 
-            struct Sexpr *new_cond = make_child_predicate(field->type, buf);
+            struct Sexpr *new_cond = make_child_predicate(context, field->type, buf);
             if (new_cond) {
                 *cond_tail = make_list1_sexpr(new_cond);
                 cond_tail = &(*cond_tail)->right;
@@ -1114,9 +1114,10 @@ struct Sexpr *make_record_predicate(
 }
 
 struct Sexpr *make_variant_predicate(
+    struct VContext *context,
     struct Type *type,
     const char *var_name,
-    struct Sexpr * (*make_child_predicate)(struct Type *, const char *),
+    struct Sexpr * (*make_child_predicate)(struct VContext *, struct Type *, const char *),
     struct Sexpr * (*combine_func)(struct Sexpr *))
 {
     // (match var_name
@@ -1138,7 +1139,7 @@ struct Sexpr *make_variant_predicate(
             make_instance(&arm, verify_name_type_list(type->variant_data.variants));
             arm = make_list2_sexpr(arm, make_string_sexpr("$v"));
 
-            struct Sexpr *vexpr = make_child_predicate(variant->type, "$v");
+            struct Sexpr *vexpr = make_child_predicate(context, variant->type, "$v");
             if (vexpr) {
                 found_nontrivial = true;
             } else {
@@ -1161,6 +1162,10 @@ struct Sexpr *make_variant_predicate(
             return NULL;
         }
     }
+}
+
+static struct Sexpr *wrap_validity_test_expr(struct VContext *cxt, struct Type *type, const char *var_name) {
+    return validity_test_expr(type, var_name);
 }
 
 struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
@@ -1188,10 +1193,10 @@ struct Sexpr *validity_test_expr(struct Type *type, const char *var_name)
         return NULL;
 
     case TY_RECORD:
-        return make_record_predicate(type, var_name, validity_test_expr, conjunction);
+        return make_record_predicate(NULL, type, var_name, wrap_validity_test_expr, conjunction);
 
     case TY_VARIANT:
-        return make_variant_predicate(type, var_name, validity_test_expr, conjunction);
+        return make_variant_predicate(NULL, type, var_name, wrap_validity_test_expr, conjunction);
 
     case TY_ARRAY:
         if (type->array_data.sizes != NULL) {
@@ -1324,7 +1329,9 @@ struct Sexpr * insert_validity_conditions(struct VContext *context,
 }
 
 
-struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
+struct Sexpr *allocated_test_expr(struct VContext *context,
+                                  struct Type *type,
+                                  const char *var_name)
 {
     switch (type->tag) {
     case TY_UNIVAR:
@@ -1333,8 +1340,21 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
     case TY_VAR:
         ;
         char *alloc_name = copy_string_2("$allocated-%", type->var_data.name);
-        return make_list2_sexpr(make_string_sexpr_handover(alloc_name),
-                                make_string_sexpr(var_name));
+        if (hash_table_contains_key(context->global_env, alloc_name)
+        || hash_table_contains_key(context->local_env, alloc_name)) {
+            return make_list2_sexpr(make_string_sexpr_handover(alloc_name),
+                                    make_string_sexpr(var_name));
+        } else {
+            // This happens when a user tries to write something like
+            // "type Foo allocated(x) if !allocated(x);".
+            // In this case we set the allocated-expression to $ARBITRARY,
+            // to avoid contradictions.
+            free(alloc_name);
+            struct Sexpr *arbitrary_bool = make_string_sexpr("$ARBITRARY");
+            make_instance(&arbitrary_bool, make_list1_sexpr(make_string_sexpr("Bool")));
+            return arbitrary_bool;
+        }
+        break;
 
     case TY_BOOL:
     case TY_FINITE_INT:
@@ -1343,10 +1363,10 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
         return NULL;
 
     case TY_RECORD:
-        return make_record_predicate(type, var_name, allocated_test_expr, disjunction);
+        return make_record_predicate(context, type, var_name, allocated_test_expr, disjunction);
 
     case TY_VARIANT:
-        return make_variant_predicate(type, var_name, allocated_test_expr, disjunction);
+        return make_variant_predicate(context, type, var_name, allocated_test_expr, disjunction);
 
     case TY_ARRAY:
         if (type->array_data.sizes != NULL) {
@@ -1355,7 +1375,7 @@ struct Sexpr *allocated_test_expr(struct Type *type, const char *var_name)
             int ndim = type->array_data.ndim;
 
             // "$elt" is allocated
-            struct Sexpr *elt_alloc = allocated_test_expr(elt_type, "$elt");
+            struct Sexpr *elt_alloc = allocated_test_expr(context, elt_type, "$elt");
 
             if (elt_alloc == NULL) {
                 // This array is never allocated, because it is fixed-size
@@ -1460,9 +1480,9 @@ struct Sexpr * non_allocated_condition(struct VContext *context,
 {
     struct Sexpr *cond;
     if (fol_term->type == S_STRING) {
-        cond = allocated_test_expr(type, fol_term->string);
+        cond = allocated_test_expr(context, type, fol_term->string);
     } else {
-        cond = allocated_test_expr(type, "$copied");
+        cond = allocated_test_expr(context, type, "$copied");
     }
 
     if (cond) {

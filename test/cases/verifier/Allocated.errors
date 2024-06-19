@@ -15,3 +15,5 @@ Allocated.b:88:5: 'v1' might still be allocated when it goes out of scope
 Allocated.b:106:5: Assert might not hold
 Allocated.b:128:5: Precondition at Test.b:48:9 might not be met
 Allocated.b:127:5: 'array' might still be allocated when it goes out of scope
+Allocated.b:138:5: Can't assign, right-hand-side might be allocated
+Allocated.b:138:5: 'x' might still be allocated when it goes out of scope

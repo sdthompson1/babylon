@@ -602,10 +602,50 @@ static void verify_typedef_decl(struct VContext *context,
     struct Item *item;
 
     if (decl->typedef_data.rhs == NULL) {
+
         // We are declaring a new abstract type (e.g. "type Foo;").
         // We need to add a "proper" Item in this case.
-        item = add_tyvar_to_env(context, decl->name, false,
-                                decl->typedef_data.allocated ? ALLOC_ALWAYS : ALLOC_NEVER);
+
+        // Handle the allocated-predicate first.
+        struct AllocOptions opts;
+        opts.want_allocated = true;
+
+        if (decl->typedef_data.alloc_var) {
+
+            // Add the new type temporarily to the local env, so we
+            // can process the allocated-term. This should set want_allocated = false
+            // so that "recursive" references to allocated(x) are ignored.
+            struct AllocOptions inner_opts;
+            inner_opts.want_allocated = false;
+            item = add_tyvar_to_env(context, decl->name, true, inner_opts);
+
+            // Add the dummy variable to the env as well.
+            struct Type * dummy_type = make_type(g_no_location, TY_VAR);
+            dummy_type->var_data.name = copy_string(decl->name);
+            struct Item *inner_item = update_local(context,
+                                                   decl->typedef_data.alloc_var,
+                                                   dummy_type,
+                                                   copy_sexpr(item->fol_type),
+                                                   NULL);
+            opts.fol_var = copy_string(inner_item->fol_name);
+
+            // Verify the allocated-expression.
+            opts.body_expr = verify_term(context, decl->typedef_data.alloc_term);
+
+            // The dummy-type shouldn't be needed any more.
+            free_type(dummy_type);
+            dummy_type = NULL;
+
+        } else {
+
+            // In this case, the alloc-predicate should always return
+            // either true or false, depending on decl->typedef_data.allocated.
+            opts.fol_var = copy_string("%x");
+            opts.body_expr = make_string_sexpr(decl->typedef_data.allocated ? "true" : "false");
+        }
+
+        // Now add the type to the global env. (This hands over "opts".)
+        item = add_tyvar_to_env(context, decl->name, false, opts);
 
     } else {
         // We are declaring a typedef (e.g. "type Foo = i32;").
