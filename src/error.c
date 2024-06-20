@@ -394,6 +394,18 @@ void report_double_impl(struct Decl *interface)
     print_error("Multiple implementations of '%s'\n", interface->name);
 }
 
+void report_ghost_mismatch(struct Decl *interface)
+{
+    print_location(interface->location);
+    print_error("'%s': interface and implementation do not agree on whether they are 'ghost'\n", interface->name);
+}
+
+void report_impurity_mismatch(struct Decl *interface)
+{
+    print_location(interface->location);
+    print_error("'%s' has pure interface but impure implementation\n", interface->name);
+}
+
 void report_missing_impl(struct Decl *interface)
 {
     print_location(interface->location);

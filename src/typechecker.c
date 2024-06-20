@@ -4047,6 +4047,11 @@ static bool check_interface_function(struct Module *module,
         return false;
     }
 
+    if (!interface->function_data.impure && implementation->function_data.impure) {
+        report_impurity_mismatch(interface);
+        return false;
+    }
+
     return true;
 }
 
@@ -4058,6 +4063,11 @@ static bool check_interface(struct Module *module,
 {
     if (interface->tag != implementation->tag) {
         report_interface_mismatch_impl(interface);
+        return false;
+    }
+
+    if (interface->ghost != implementation->ghost) {
+        report_ghost_mismatch(interface);
         return false;
     }
 

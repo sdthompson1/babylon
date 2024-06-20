@@ -1,7 +1,10 @@
-InterfaceMismatchImpl.b:3:3: Interface for 'InterfaceMismatchImpl.a' doesn't match implementation
-InterfaceMismatchImpl.b:4:3: Interface for 'InterfaceMismatchImpl.b' doesn't match implementation
-InterfaceMismatchImpl.b:6:3: Interface for 'InterfaceMismatchImpl.diff_num_args' doesn't match implementation
-InterfaceMismatchImpl.b:7:3: Interface for 'InterfaceMismatchImpl.diff_arg_type' doesn't match implementation
-InterfaceMismatchImpl.b:8:3: Interface for 'InterfaceMismatchImpl.diff_ret_type' doesn't match implementation
-InterfaceMismatchImpl.b:9:3: Multiple implementations of 'InterfaceMismatchImpl.double_impl'
-InterfaceMismatchImpl.b:11:3: Interface for 'InterfaceMismatchImpl.fun_confused_with_const' doesn't match implementation
+InterfaceMismatchImpl.b:3:5: Interface for 'InterfaceMismatchImpl.a' doesn't match implementation
+InterfaceMismatchImpl.b:4:5: Interface for 'InterfaceMismatchImpl.b' doesn't match implementation
+InterfaceMismatchImpl.b:6:5: Interface for 'InterfaceMismatchImpl.diff_num_args' doesn't match implementation
+InterfaceMismatchImpl.b:7:5: Interface for 'InterfaceMismatchImpl.diff_arg_type' doesn't match implementation
+InterfaceMismatchImpl.b:8:5: Interface for 'InterfaceMismatchImpl.diff_ret_type' doesn't match implementation
+InterfaceMismatchImpl.b:9:5: Multiple implementations of 'InterfaceMismatchImpl.double_impl'
+InterfaceMismatchImpl.b:11:5: Interface for 'InterfaceMismatchImpl.fun_confused_with_const' doesn't match implementation
+InterfaceMismatchImpl.b:13:5: 'InterfaceMismatchImpl.pure_int_impure_impl' has pure interface but impure implementation
+InterfaceMismatchImpl.b:16:11: 'InterfaceMismatchImpl.ghost_int_real_impl': interface and implementation do not agree on whether they are 'ghost'
+InterfaceMismatchImpl.b:17:5: 'InterfaceMismatchImpl.real_int_ghost_impl': interface and implementation do not agree on whether they are 'ghost'

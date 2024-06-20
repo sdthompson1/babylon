@@ -62,6 +62,8 @@ void report_incomplete_definition(struct Location location);
 void report_interface_mismatch_impl(struct Decl *interface);
 void report_double_impl(struct Decl *interface);
 void report_missing_impl(struct Decl *interface);
+void report_ghost_mismatch(struct Decl *interface);
+void report_impurity_mismatch(struct Decl *interface);
 void report_illegal_recursion(struct Decl *decl);
 void report_abstract_type_with_tyvars(struct Location loc);
 void report_cannot_assign(struct Term *term);

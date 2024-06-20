@@ -8,7 +8,7 @@ interface {
   function add_one(x: i32): i32
     requires x < 100;
 
-  function add_one_lemma(x: i32)
+  ghost function add_one_lemma(x: i32)
     requires x < 100;
     ensures add_one(x) == x + 1;
 }
