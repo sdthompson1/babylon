@@ -55,3 +55,25 @@ impure function test6()
     // look inside the function body (which is a trivial "return 100" in this case).
     assert i == 100;
 }
+
+
+// Further tests: Impure function with no return type, or with ref args.
+
+impure function void_fn() {}
+
+impure function ref_fn(ref x: i32, ref y: i32): i32 { return 0; }
+
+impure function test7(b1: bool)
+{
+    void_fn();
+
+    var i: i32 = 1;
+    var j: i32 = 2;
+    var k = ref_fn(i, j);
+    assert k == k; // ok
+    if b1 {
+        assert i == 1;  // should fail
+    } else {
+        assert k == 0;  // should fail
+    }
+}

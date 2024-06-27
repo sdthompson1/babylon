@@ -1847,10 +1847,16 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
 
     if (item->fol_decl == NULL) {
         // Impure function, doesn't have a decl. Make a new variable for the result.
+
         // Subtle point: we cannot use %Module.funcname as the variable name, as that would conflict
         // with the function name itself. Instead make sure we are using %Module.funcname.1 or higher.
         ensure_nonzero_name(cxt, func_src_code_name);
-        struct Item *fn_item = update_local(cxt, func_src_code_name, term->type, verify_type(term->type), NULL);
+
+        struct TypeData_Function * data = &term->call.func->type->function_data;
+        struct Type * fake_ret_type = get_expanded_ret_type(data->args, data->return_type);
+        struct Item *fn_item = update_local(cxt, func_src_code_name, fake_ret_type, verify_type(fake_ret_type), NULL);
+        free_type(fake_ret_type);
+
         call_expr = make_string_sexpr(fn_item->fol_name);
         call_expr_dummies = make_string_sexpr(fn_item->fol_name);
 

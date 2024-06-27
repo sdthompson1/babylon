@@ -3,3 +3,5 @@ Impure.b:22:5: Assert might not hold
 Impure.b:35:5: Assert might not hold
 Impure.b:40:14: Precondition at Impure.b:27:5 might not be met
 Impure.b:56:5: Assert might not hold
+Impure.b:75:9: Assert might not hold
+Impure.b:77:9: Assert might not hold
