@@ -82,7 +82,7 @@ function test2()
     var z: i8[10]; // ok
 }
 
-function test3(): i8[]    // this is allowed (but probably useless)
+function test3(): i8[]    // this is not allowed
 {}
 
 function test4(): i8[*]   // ok
@@ -149,7 +149,7 @@ ghost function test10(x: i32[])
 
 function incomplete_array_tuple(x: i32[], y: i32[]): {i32[], i32[]}
 {
-    return {x, y};  // error: returning an incomplete type not allowed (yet)
+    return {x, y};  // error: returning an incomplete type not allowed (yet?)
 }
 
 datatype Foo = Foo(i32[]);

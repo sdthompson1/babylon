@@ -3182,16 +3182,7 @@ static void typecheck_return_stmt(struct TypecheckContext *tc_context,
             tc_context->error = true;
         } else {
             typecheck_term(tc_context, stmt->ret.value);
-            bool type_ok = match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
-            if (type_ok && tc_context->executable) {
-                // returning incomplete array type not yet supported
-                // (code generator cannot handle it currently)
-                struct UnivarNode node;
-                node.must_be_executable = true;
-                node.must_be_complete = true;
-                node.must_be_valid_decreases = false;
-                ensure_type_meets_flags(tc_context, &node, stmt->ret.value->type, &stmt->ret.value->location);
-            }
+            match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
         }
     }
 }
@@ -3603,6 +3594,18 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     if (ret_type) {
         if (kindcheck_type(tc_context, &decl->function_data.return_type)) {
             ret_type = decl->function_data.return_type;
+
+            if (tc_context->executable) {
+                // Returning incomplete array types not currently supported, in executable contexts
+                // (as we're not sure if the code generator will handle this correctly)
+                struct UnivarNode node;
+                node.must_be_executable = true;
+                node.must_be_complete = true;
+                node.must_be_valid_decreases = false;
+                if (!ensure_type_meets_flags(tc_context, &node, ret_type, &ret_type->location)) {
+                    ret_type_ok = false;
+                }
+            }
 
         } else {
             ret_type = NULL;
