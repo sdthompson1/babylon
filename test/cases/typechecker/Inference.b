@@ -97,3 +97,26 @@ function test7()
     g<int>();           // Error, can't use 'int' as type-parameter in executable code.
     g<MyTypedef>();     // Error, ditto.
 }
+
+
+function from_just<T>(x: Maybe<T>): T
+    // 'requires' conditions omitted
+{
+    return match x { case Just(a) => a };
+}
+
+function test8(): i32
+{
+    return from_just(Just{x=1, y=2}).x;
+}
+
+function test9(): u64
+{
+    var x: i32[10];
+    return sizeof(from_just(Just(x)));
+}
+
+function test10(): i32
+{
+    return from_just(Just([1,2,3]))[0];
+}

@@ -2286,9 +2286,11 @@ static void* typecheck_field_proj(void *context, struct Term *term, void *type_r
         return NULL;
     }
 
-    if (lhs->type->tag == TY_RECORD) {
+    struct Type *record_type = chase_univars(lhs->type);
+
+    if (record_type->tag == TY_RECORD) {
         // Check that the field name exists, and assign the proper type if so.
-        for (struct NameTypeList *field = lhs->type->record_data.fields; field; field = field->next) {
+        for (struct NameTypeList *field = record_type->record_data.fields; field; field = field->next) {
             if (strcmp(field->name, field_name) == 0) {
                 term->type = copy_type(field->type);
                 return NULL;
@@ -2604,14 +2606,16 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         return NULL;
     }
 
-    if (rhs->type->tag != TY_ARRAY) {
+    struct Type *array_type = chase_univars(rhs->type);
+
+    if (array_type->tag != TY_ARRAY) {
         report_type_mismatch_string("array", rhs);
         tc_context->error = true;
         return NULL;
     }
 
-    if (rhs->type->tag == TY_ARRAY
-    && rhs->type->array_data.resizable
+    if (array_type->tag == TY_ARRAY
+    && array_type->array_data.resizable
     && !is_lvalue(tc_context, rhs, NULL, NULL)
     && tc_context->executable) {
         // In executable code, passing an rvalue (of allocatable type)
@@ -2623,7 +2627,7 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         return NULL;
     }
 
-    int ndim = rhs->type->array_data.ndim;
+    int ndim = array_type->array_data.ndim;
     if (ndim == 1) {
         term->type = make_int_type(g_no_location, false, 64);
     } else {
@@ -2662,9 +2666,11 @@ static void * typecheck_allocated(void *context, struct Term *term, void *type_r
         return NULL;
     }
 
-    if (rhs->type->tag == TY_ARRAY
-    && rhs->type->array_data.sizes == NULL
-    && !rhs->type->array_data.resizable) {
+    struct Type *array_type = chase_univars(rhs->type);
+
+    if (array_type->tag == TY_ARRAY
+    && array_type->array_data.sizes == NULL
+    && !array_type->array_data.resizable) {
         report_incomplete_array_type(term->location);
         tc_context->error = true;
         return NULL;
@@ -2685,7 +2691,9 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
         return NULL;
     }
 
-    if (lhs->type->tag != TY_ARRAY) {
+    struct Type * array_type = chase_univars(lhs->type);
+
+    if (array_type->tag != TY_ARRAY) {
         report_cannot_index(lhs);
         tc_context->error = true;
         return NULL;
@@ -2715,14 +2723,14 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
 
     free_type(u64);
 
-    if (num_indexes != lhs->type->array_data.ndim) {
+    if (num_indexes != array_type->array_data.ndim) {
         report_wrong_number_of_indexes(term);
         tc_context->error = true;
         ok = false;
     }
 
     if (ok) {
-        term->type = copy_type(lhs->type->array_data.element_type);
+        term->type = copy_type(array_type->array_data.element_type);
     }
 
     return NULL;
