@@ -385,31 +385,41 @@ void report_incomplete_definition(struct Location location)
 void report_interface_mismatch_impl(struct Decl *interface)
 {
     print_location(interface->location);
-    print_error("Interface for '%s' doesn't match implementation\n", interface->name);
+    char *new_name = sanitise_name(interface->name);
+    print_error("Interface for '%s' doesn't match implementation\n", new_name);
+    free(new_name);
 }
 
 void report_double_impl(struct Decl *interface)
 {
     print_location(interface->location);
-    print_error("Multiple implementations of '%s'\n", interface->name);
+    char *new_name = sanitise_name(interface->name);
+    print_error("Multiple implementations of '%s'\n", new_name);
+    free(new_name);
 }
 
 void report_ghost_mismatch(struct Decl *interface)
 {
     print_location(interface->location);
-    print_error("'%s': interface and implementation do not agree on whether they are 'ghost'\n", interface->name);
+    char *new_name = sanitise_name(interface->name);
+    print_error("'%s': interface and implementation do not agree on whether they are 'ghost'\n", new_name);
+    free(new_name);
 }
 
 void report_impurity_mismatch(struct Decl *interface)
 {
     print_location(interface->location);
-    print_error("'%s' has pure interface but impure implementation\n", interface->name);
+    char *new_name = sanitise_name(interface->name);
+    print_error("'%s' has pure interface but impure implementation\n", new_name);
+    free(new_name);
 }
 
 void report_missing_impl(struct Decl *interface)
 {
     print_location(interface->location);
-    print_error("No implementation found for '%s'\n", interface->name);
+    char *new_name = sanitise_name(interface->name);
+    print_error("No implementation found for '%s'\n", new_name);
+    free(new_name);
 }
 
 void report_illegal_recursion(struct Decl *decl)
