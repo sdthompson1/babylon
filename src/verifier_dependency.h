@@ -13,6 +13,7 @@ repository.
 
 struct HashTable;
 struct Sexpr;
+struct StackedHashTable;
 
 // Get all free variable names in sexpr, e.g.
 // (+ %x (let ((%y 1)) %y)) will return "%x" but not "%y".
@@ -23,15 +24,17 @@ void get_free_var_names_in_sexpr(const struct Sexpr *expr,
 
 // Analyse the dependencies of expr.
 
-// env1 and env2 are mappings from FOL-name to Item* (either can be NULL).
+// "stack" maps from FOL-name to Item*.
+
+// If use_all_layers is true, uses all layers of the stack, otherwise uses only the top layer.
 
 // The result is a single sexpr containing a list of all declarations,
 // definitions and asserts that are relevant to expr (in a random order).
 // The given "tail_sexpr" (which is handed over) will also be appended
 // to the result.
 
-struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
-                                      const struct HashTable *env2,
+struct Sexpr * get_sexpr_dependencies(const struct StackedHashTable *stack,
+                                      bool use_all_layers,
                                       const struct HashTable *hidden_names,
                                       const struct Sexpr *expr,
                                       struct Sexpr *tail_sexpr);

@@ -24,8 +24,7 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-static struct Sexpr * make_fol_problem(const struct HashTable *global_env,
-                                       const struct HashTable *local_env,
+static struct Sexpr * make_fol_problem(const struct StackedHashTable *stack,
                                        const struct HashTable *local_hidden,
                                        struct Sexpr *initial_asserts,   // handover
                                        struct Sexpr *conjecture)
@@ -43,8 +42,7 @@ static struct Sexpr * make_fol_problem(const struct HashTable *global_env,
                 copy_sexpr(conjecture)));
 
     // Add the required dependency definitions/axioms.
-    return get_sexpr_dependencies(global_env, local_env, local_hidden,
-                                  result, result);
+    return get_sexpr_dependencies(stack, true, local_hidden, result, result);
 }
 
 const char * make_debug_filename(struct VContext *context,
@@ -76,7 +74,7 @@ void verify_condition(struct VContext *context,
                       const char *description,   // NOT handed over
                       const char *error_msg)     // handover
 {
-    if (context->interface_only) {
+    if (!context->run_solver) {
         free((char*)error_msg);
         return;
     }
@@ -116,8 +114,7 @@ void verify_condition(struct VContext *context,
     }
 
     // Make the FOL problem
-    struct Sexpr * problem = make_fol_problem(context->global_env,
-                                              context->local_env,
+    struct Sexpr * problem = make_fol_problem(context->stack,
                                               context->local_hidden,
                                               initial_asserts,
                                               condition);

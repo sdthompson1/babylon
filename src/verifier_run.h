@@ -22,7 +22,7 @@ struct VContext;
 // Also the definitions of any symbols mentioned in "asserts" or "condition" are looked
 // up in "env", and those definitions are added to the FOL-program as well.
 
-// Note: if context->interface_only is true, the check is skipped.
+// Note: if context->run_solver is false, the check is skipped.
 
 void verify_condition(struct VContext *context,
                       struct Location location,

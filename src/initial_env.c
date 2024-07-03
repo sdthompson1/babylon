@@ -14,6 +14,7 @@ repository.
 #include "hash_table.h"
 #include "initial_env.h"
 #include "sexpr.h"
+#include "stacked_hash_table.h"
 #include "typechecker.h"
 #include "util.h"
 #include "verifier_context.h"
@@ -755,7 +756,7 @@ static void setup_arbitrary_array(struct VerifierEnv *verifier_env)
     make_instance(&arbitrary_elt, make_list1_sexpr(make_string_sexpr("ELT")));
 
     add_fol_helper(
-        verifier_env->table,
+        verifier_env->stack->table,
         "$ARBITRARY-ARRAY",
 
         make_list4_sexpr(
@@ -797,11 +798,11 @@ static void setup_arbitrary_array(struct VerifierEnv *verifier_env)
 
 void setup_initial_verifier_env(struct VerifierEnv *verifier_env)
 {
-    add_integer_types(verifier_env->table);
+    add_integer_types(verifier_env->stack->table);
 
     // $ARBITRARY
     add_fol_helper(
-        verifier_env->table,
+        verifier_env->stack->table,
         "$ARBITRARY",
         make_list4_sexpr(
             make_string_sexpr("generic"),
@@ -819,7 +820,7 @@ void setup_initial_verifier_env(struct VerifierEnv *verifier_env)
     // (instance $PROD (tyargs)) is handled by the generic system, but
     // need to add "$PROD" (with no tyargs) as a special case
     add_fol_helper(
-        verifier_env->table,
+        verifier_env->stack->table,
         "$PROD",
         make_list3_sexpr(
             make_string_sexpr("declare-datatypes"),
@@ -836,7 +837,8 @@ void setup_initial_verifier_env(struct VerifierEnv *verifier_env)
 
 bool import_builtin_module(const char *name,
                            struct HashTable *renamer_env,
-                           struct HashTable *type_env,
+                           TypeEnv *type_env,
+                           TypeEnv *expanded_type_env,
                            struct VerifierEnv *verifier_env,
                            struct HashTable *codegen_env)
 {
@@ -868,6 +870,7 @@ bool import_builtin_module(const char *name,
                     fun_ty->function_data.return_type = make_type(g_no_location, TY_BOOL);
 
                     add_to_type_env(type_env, &buf[1], fun_ty, true, true, false, false);
+                    add_to_type_env(expanded_type_env, &buf[1], copy_type(fun_ty), true, true, false, false);
 
                     struct Sexpr *fol_decl =
                         make_list5_sexpr(
@@ -880,7 +883,7 @@ bool import_builtin_module(const char *name,
                                 make_string_sexpr("x"),
                                 make_string_sexpr("y")));
 
-                    add_fol_helper(verifier_env->table, buf, fol_decl, NULL);
+                    add_fol_helper(verifier_env->stack->table, buf, fol_decl, NULL);
 
                     struct NameList *node = alloc(sizeof(struct NameList));
                     node->name = copy_string(&buf[5]);

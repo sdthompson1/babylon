@@ -14,6 +14,7 @@ repository.
 #include "error.h"
 #include "hash_table.h"
 #include "sexpr.h"
+#include "stacked_hash_table.h"
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
@@ -390,7 +391,7 @@ static void verify_function_decl(struct VContext *context,
 {
     // First let's see if there is an existing (interface) definition for this function
     char *fol_name = copy_string_2("%", decl->name);
-    struct Item *interface_item = hash_table_lookup(context->global_env, fol_name);
+    struct Item *interface_item = stacked_hash_table_lookup(context->stack, fol_name);
 
     struct DeclData_Function *data = &decl->function_data;
 
@@ -612,8 +613,8 @@ static void verify_function_decl(struct VContext *context,
     }
 
     // Done, add Item to the env.
-    remove_existing_item(context->global_env, fol_name);
-    hash_table_insert(context->global_env, fol_name, item);
+    remove_existing_item(context->stack->base->table, fol_name);   // remove from global env
+    hash_table_insert(context->stack->base->table, fol_name, item);   // add to global env
 }
 
 static void verify_typedef_decl(struct VContext *context,
@@ -680,7 +681,7 @@ static void verify_typedef_decl(struct VContext *context,
         item = alloc(sizeof(struct Item));
         memset(item, 0, sizeof(struct Item));
         char *fol_name = copy_string_2("%", decl->name);
-        hash_table_insert(context->global_env, fol_name, item);
+        hash_table_insert(context->stack->base->table, fol_name, item);  // add to global env
     }
 
     memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
@@ -697,7 +698,7 @@ static void verify_datatype_decl(struct VContext *context,
     memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
 
     char *fol_name = copy_string_2("%", decl->name);
-    hash_table_insert(context->global_env, fol_name, item);
+    hash_table_insert(context->stack->base->table, fol_name, item);  // add to global env
 
     // Also insert fake Items for the data ctors. These are again only used
     // for fingerprinting.
@@ -707,7 +708,7 @@ static void verify_datatype_decl(struct VContext *context,
         memcpy(item->fingerprint, fingerprint, SHA256_HASH_LENGTH);
 
         char *fol_name = copy_string_2("%", ctor->name);
-        hash_table_insert(context->global_env, fol_name, item);
+        hash_table_insert(context->stack->base->table, fol_name, item);  // add to global env
     }
 }
 
@@ -727,11 +728,11 @@ static void clear_string_names_hash_table(struct HashTable *string_names)
 
 // Lookup the fingerprint of an existing (global) Decl.
 // Returns NULL if not found.
-static const uint8_t * lookup_decl_fingerprint(struct HashTable *global_env,
+static const uint8_t * lookup_decl_fingerprint(struct StackedHashTable *global_env,
                                                const char *name)
 {
     char *fol_name = copy_string_2("%", name);
-    struct Item *item = hash_table_lookup(global_env, fol_name);
+    struct Item *item = stacked_hash_table_lookup(global_env, fol_name);
     free(fol_name);
 
     if (item) {
@@ -752,7 +753,7 @@ static const uint8_t * lookup_decl_fingerprint(struct HashTable *global_env,
 }
 
 // Calculate the "fingerprint" of a Decl
-static void compute_decl_fingerprint(struct HashTable *global_env,
+static void compute_decl_fingerprint(struct StackedHashTable *global_env,
                                      struct Decl *decl,
                                      uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
@@ -791,12 +792,12 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
 {
     // Compute fingerprint.
     uint8_t fingerprint[SHA256_HASH_LENGTH];
-    compute_decl_fingerprint(context->global_env, decl, fingerprint);
+    compute_decl_fingerprint(context->stack, decl, fingerprint);
 
     bool skipped = false;
-    if (!context->interface_only && sha256_exists_in_db(context->cache_db, DECL_HASH, fingerprint)) {
+    if (context->run_solver && sha256_exists_in_db(context->cache_db, DECL_HASH, fingerprint)) {
         skipped = true;
-        context->interface_only = true;
+        context->run_solver = false;
     }
 
     if (context->show_progress) {
@@ -823,6 +824,8 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
 
     context->current_decl_name = decl->name;
 
+    context->stack = push_verifier_stack(context->stack);  // make a new layer for local variables
+
     // verify the decl
     switch (decl->tag) {
     case DECL_CONST:
@@ -843,7 +846,7 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
     }
 
     // Clean up afterwards
-    clear_verifier_env_hash_table(context->local_env);
+    context->stack = pop_verifier_stack(context->stack);  // remove the local variables
     hash_table_clear(context->local_counter);
     hash_table_clear(context->local_to_version);
     clear_refs_hash_table(context->refs);
@@ -860,14 +863,14 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
     clear_string_names_hash_table(context->string_names);
     context->current_decl_name = NULL;
 
-    // On successful verification (not in interface_only mode), add to DB
-    if (!context->interface_only) {
+    // On successful verification (in run_solver mode), add to DB
+    if (context->run_solver) {
         add_fol_message(NULL, false, DECL_HASH, fingerprint);
     }
 
-    // If skipped, restore interface_only to false for the next decl
+    // If skipped, restore run_solver to true for the next decl
     if (skipped) {
-        context->interface_only = false;
+        context->run_solver = true;
     }
 }
 

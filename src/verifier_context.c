@@ -14,6 +14,7 @@ repository.
 #include "hash_table.h"
 #include "names.h"
 #include "sexpr.h"
+#include "stacked_hash_table.h"
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
@@ -24,6 +25,35 @@ repository.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+struct StackedHashTable * push_verifier_stack(struct StackedHashTable *stack)
+{
+    struct StackedHashTable * layer = alloc(sizeof(struct StackedHashTable));
+    layer->table = new_hash_table();
+    layer->base = stack;
+    return layer;
+}
+
+static void free_key_and_item(void *context, const char *key, void *value)
+{
+    free((char*)key);
+    free_item((struct Item *)value);
+}
+
+struct StackedHashTable * pop_verifier_stack(struct StackedHashTable *stack)
+{
+    hash_table_for_each(stack->table, free_key_and_item, NULL);
+    free_hash_table(stack->table);
+    struct StackedHashTable *base = stack->base;
+    free(stack);
+    return base;
+}
+
+struct StackedHashTable * collapse_verifier_stack(struct StackedHashTable *stack)
+{
+    stacked_hash_table_collapse(stack, NULL, free_key_and_item);
+    return pop_verifier_stack(stack);
+}
 
 void free_conditions(struct Condition *cond)
 {
@@ -81,19 +111,6 @@ struct Item * copy_item(const struct Item *item)
     } else {
         return NULL;
     }
-}
-
-void clear_verifier_env_hash_table(struct HashTable *table)
-{
-    struct HashIterator *iter = new_hash_iterator(table);
-    const char *key;
-    void *value;
-    while (hash_iterator_next(iter, &key, &value)) {
-        free((char*)key);
-        free_item((struct Item*)value);
-    }
-    free_hash_iterator(iter);
-    hash_table_clear(table);
 }
 
 struct RefChain * copy_ref_chain(struct RefChain *ref)
@@ -387,7 +404,7 @@ struct Item *add_const_item(struct VContext *context,
     item->fol_dummies = NULL;
     item->preconds = item->postconds = NULL;
 
-    struct HashTable *table = local ? context->local_env : context->global_env;
+    struct HashTable *table = local ? context->stack->table : context->stack->base->table;
     remove_existing_item(table, fol_name);
     hash_table_insert(table, fol_name, item);
 
@@ -397,7 +414,7 @@ struct Item *add_const_item(struct VContext *context,
 struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
                                struct AllocOptions alloc_options)
 {
-    struct HashTable *env = local ? context->local_env : context->global_env;
+    struct HashTable *env = local ? context->stack->table : context->stack->base->table;
 
     struct Item *item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
@@ -916,7 +933,7 @@ static void update_variable_for_if(struct VContext *context,
     char *old_fol_name = lookup_local(context, local_name);
     struct Sexpr *fol_type = NULL;
     if (old_fol_name != NULL) {
-        struct Item *item = hash_table_lookup(context->local_env, old_fol_name);
+        struct Item *item = hash_table_lookup(context->stack->table, old_fol_name); // lookup in local env
         fol_type = copy_sexpr(item->fol_type);
         free(old_fol_name);
         old_fol_name = NULL;
@@ -1340,8 +1357,7 @@ struct Sexpr *allocated_test_expr(struct VContext *context,
     case TY_VAR:
         ;
         char *alloc_name = copy_string_2("$allocated-%", type->var_data.name);
-        if (hash_table_contains_key(context->global_env, alloc_name)
-        || hash_table_contains_key(context->local_env, alloc_name)) {
+        if (stacked_hash_table_lookup(context->stack, alloc_name) != NULL) {
             return make_list2_sexpr(make_string_sexpr_handover(alloc_name),
                                     make_string_sexpr(var_name));
         } else {

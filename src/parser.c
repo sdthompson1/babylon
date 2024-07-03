@@ -2211,6 +2211,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state)
     result->tag = DECL_TYPEDEF;
     result->typedef_data.tyvars = tyvars;
     result->typedef_data.rhs = rhs;
+    result->typedef_data.is_extern = (rhs == NULL); // Temporary.
     result->typedef_data.allocated = allocated;
     result->typedef_data.alloc_var = alloc_var;
     result->typedef_data.alloc_term = alloc_term;

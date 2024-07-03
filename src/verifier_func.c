@@ -14,6 +14,7 @@ repository.
 #include "hash_table.h"
 #include "scc.h"
 #include "sexpr.h"
+#include "stacked_hash_table.h"
 #include "verifier_context.h"
 #include "verifier_dependency.h"
 #include "verifier_func.h"
@@ -175,7 +176,7 @@ static void get_expanded_ret_val(struct VContext *context,
             if (fol_name == NULL) {
                 fatal_error("arg var not found in context");
             }
-            if (hash_table_lookup(context->local_env, fol_name) == NULL) {
+            if (hash_table_lookup(context->stack->table, fol_name) == NULL) {  // lookup in local env
                 fatal_error("arg var not found in local env");
             }
             *tail = make_list1_sexpr(make_string_sexpr_handover(fol_name));
@@ -187,7 +188,7 @@ static void get_expanded_ret_val(struct VContext *context,
         // As it happens, the type of %return in the env, is also the
         // constructor we need for the result-tuple (an instance of
         // $PROD).
-        struct Item *ret_item = hash_table_lookup(context->local_env, "%return");
+        struct Item *ret_item = hash_table_lookup(context->stack->table, "%return");  // lookup in local env
         if (ret_item == NULL) {
             fatal_error("could not find %return in env");
         }
@@ -269,7 +270,7 @@ static bool require_let_for(struct VContext *context, const char *name)
 struct Sexpr * insert_lets(struct VContext *context,
                            struct Sexpr *expr)
 {
-    struct Sexpr *deps = get_sexpr_dependencies(context->local_env, NULL, NULL, expr, NULL);
+    struct Sexpr *deps = get_sexpr_dependencies(context->stack, false, NULL, expr, NULL);
 
     // First of all, figure out which deps we want to keep.
     struct Sexpr *new_deps = NULL;

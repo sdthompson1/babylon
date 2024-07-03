@@ -433,7 +433,13 @@ void report_illegal_recursion(struct Decl *decl)
 void report_abstract_type_with_tyvars(struct Location location)
 {
     print_location(location);
-    print_error("Abstract type declarations cannot (currently) have type variables\n");
+    print_error("Abstract or 'extern' type declarations cannot (currently) have type variables\n");
+}
+
+void report_abstract_type_in_impl(struct Location location)
+{
+    print_location(location);
+    print_error("Abstract type declarations must be in the module interface, not implementation\n");
 }
 
 void report_cannot_assign(struct Term *term)

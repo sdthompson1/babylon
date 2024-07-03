@@ -12,6 +12,7 @@ repository.
 #include "hash_table.h"
 #include "scc.h"
 #include "sexpr.h"
+#include "stacked_hash_table.h"
 #include "verifier_context.h"
 #include "verifier_dependency.h"
 
@@ -243,8 +244,8 @@ static struct Sexpr *maybe_hide_defn(struct Sexpr *expr,
     return copy_sexpr(expr);
 }
 
-struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
-                                      const struct HashTable *env2,
+struct Sexpr * get_sexpr_dependencies(const struct StackedHashTable *stack,
+                                      bool use_all_layers,
                                       const struct HashTable *hidden_names,
                                       const struct Sexpr *expr,
                                       struct Sexpr *tail_sexpr) // handover
@@ -276,11 +277,10 @@ struct Sexpr * get_sexpr_dependencies(const struct HashTable *env1,
                 hash_table_insert(closed_set, name, NULL);
 
                 struct Item *item = NULL;
-                if (env1) {
-                    item = hash_table_lookup(env1, name);
-                }
-                if (!item && env2) {
-                    item = hash_table_lookup(env2, name);
+                if (use_all_layers) {
+                    item = stacked_hash_table_lookup(stack, name);
+                } else {
+                    item = hash_table_lookup(stack->table, name);
                 }
 
                 if (item) {

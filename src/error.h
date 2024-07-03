@@ -66,6 +66,7 @@ void report_ghost_mismatch(struct Decl *interface);
 void report_impurity_mismatch(struct Decl *interface);
 void report_illegal_recursion(struct Decl *decl);
 void report_abstract_type_with_tyvars(struct Location loc);
+void report_abstract_type_in_impl(struct Location loc);
 void report_cannot_assign(struct Term *term);
 void report_cannot_assign_to_readonly(struct Term *term);
 void report_cannot_swap(struct Term *term);

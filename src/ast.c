@@ -705,7 +705,7 @@ static void * copy_ty_list_node(void *context, struct TypeList *list, void *type
 static void * copy_field_list_node(void *context, struct NameTypeList *list, void *type, void *next)
 {
     struct NameTypeList *result = alloc(sizeof(struct NameTypeList));
-    result->name = copy_string(list->name);
+    result->name = list->name ? copy_string(list->name) : NULL;
     result->type = type;
     result->next = next;
     return result;
@@ -1261,7 +1261,7 @@ static void* copy_name_term_list(void *context, struct NameTermList *name_term_l
 {
     struct NameTermList *result = alloc(sizeof(struct NameTermList));
     result->location = name_term_list->location;
-    result->name = copy_string(name_term_list->name);
+    result->name = name_term_list->name ? copy_string(name_term_list->name) : NULL;
     result->term = term_result;
     result->next = next_result;
     return result;
@@ -1595,6 +1595,127 @@ struct Attribute * copy_attributes(struct Attribute *attr)
     }
 
     result->next = copy_attributes(attr->next);
+
+    return result;
+}
+
+struct FunArg * copy_fun_args(struct FunArg *arg)
+{
+    if (!arg) return NULL;
+
+    struct FunArg * result = alloc(sizeof(struct FunArg));
+    result->name = copy_string(arg->name);
+    result->type = copy_type(arg->type);
+    result->ref = arg->ref;
+    result->next = copy_fun_args(arg->next);
+
+    return result;
+}
+
+struct DataCtor * copy_data_ctors(struct DataCtor *ctor)
+{
+    if (!ctor) return NULL;
+
+    struct DataCtor * result = alloc(sizeof(struct DataCtor));
+    result->location = ctor->location;
+    result->name = copy_string(ctor->name);
+    result->payload = copy_type(ctor->payload);
+    result->next = copy_data_ctors(ctor->next);
+
+    return result;
+}
+
+struct Decl * copy_decl(struct Decl *decl)
+{
+    if (!decl) return NULL;
+
+    struct Decl *result = alloc(sizeof(struct Decl));
+    result->location = decl->location;
+    result->name = copy_string(decl->name);
+    result->tag = decl->tag;
+
+    switch (decl->tag) {
+    case DECL_CONST:
+        result->const_data.type = copy_type(decl->const_data.type);
+        result->const_data.rhs = copy_term(decl->const_data.rhs);
+        result->const_data.value = copy_term(decl->const_data.value);
+        break;
+
+    case DECL_FUNCTION:
+        result->function_data.tyvars = copy_tyvar_list(decl->function_data.tyvars);
+        result->function_data.args = copy_fun_args(decl->function_data.args);
+        result->function_data.return_type = copy_type(decl->function_data.return_type);
+        result->function_data.body = copy_statement(decl->function_data.body);
+        result->function_data.body_specified = decl->function_data.body_specified;
+        result->function_data.end_loc = decl->function_data.end_loc;
+        result->function_data.is_extern = decl->function_data.is_extern;
+        result->function_data.impure = decl->function_data.impure;
+        break;
+
+    case DECL_DATATYPE:
+        result->datatype_data.tyvars = copy_tyvar_list(decl->datatype_data.tyvars);
+        result->datatype_data.ctors = copy_data_ctors(decl->datatype_data.ctors);
+        break;
+
+    case DECL_TYPEDEF:
+        result->typedef_data.tyvars = copy_tyvar_list(decl->typedef_data.tyvars);
+        result->typedef_data.rhs = copy_type(decl->typedef_data.rhs);
+        result->typedef_data.is_extern = decl->typedef_data.is_extern;
+        result->typedef_data.allocated = decl->typedef_data.allocated;
+        result->typedef_data.alloc_var = decl->typedef_data.alloc_var ? copy_string(decl->typedef_data.alloc_var) : NULL;
+        result->typedef_data.alloc_term = copy_term(decl->typedef_data.alloc_term);
+        break;
+    }
+
+    result->attributes = copy_attributes(decl->attributes);
+    result->next = copy_decl(decl->next);
+    result->ghost = decl->ghost;
+    result->recursive = decl->recursive;
+    result->dependency_names = copy_name_list(decl->dependency_names);
+
+    memcpy(result->checksum, decl->checksum, SHA256_HASH_LENGTH);
+
+    return result;
+}
+
+struct DeclGroup * copy_decl_group(struct DeclGroup *group)
+{
+    if (group == NULL) return NULL;
+
+    struct DeclGroup * result = alloc(sizeof(struct DeclGroup));
+    result->decl = copy_decl(group->decl);
+    result->next = copy_decl_group(group->next);
+
+    return result;
+}
+
+struct Import * copy_import(struct Import *import)
+{
+    if (import == NULL) return NULL;
+
+    struct Import * result = alloc(sizeof(struct Import));
+    result->location = import->location;
+    result->module_name = copy_string(import->module_name);
+    result->alias_name = copy_string(import->alias_name);
+    result->qualified = import->qualified;
+    result->next = copy_import(import->next);
+
+    return result;
+}
+
+struct Module * copy_module(struct Module *module)
+{
+    if (module == NULL) return NULL;
+
+    struct Module * result = alloc(sizeof(struct Module));
+    result->name = copy_string(module->name);
+    result->interface = copy_decl_group(module->interface);
+    result->implementation = copy_decl_group(module->implementation);
+    result->interface_imports = copy_import(module->interface_imports);
+    result->implementation_imports = copy_import(module->implementation_imports);
+
+    memcpy(result->interface_checksum, module->interface_checksum, SHA256_HASH_LENGTH);
+    memcpy(result->implementation_checksum, module->implementation_checksum, SHA256_HASH_LENGTH);
 
     return result;
 }

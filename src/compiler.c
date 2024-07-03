@@ -17,6 +17,7 @@ repository.
 #include "hash_table.h"
 #include "initial_env.h"
 #include "location.h"
+#include "stacked_hash_table.h"
 #include "util.h"
 
 // compiler stages
@@ -57,7 +58,8 @@ struct LoadDetails {
     struct HashTable *loaded_modules;
 
     struct HashTable *renamer_env;
-    struct HashTable *type_env;
+    TypeEnv *type_env;
+    TypeEnv *expanded_type_env;  // used for codegen. contains 'expanded' versions of abstract types.
     struct VerifierEnv *verifier_env;
     struct HashTable *codegen_env;
     struct StringNode *strings;
@@ -222,6 +224,81 @@ static void add_import_fingerprints(struct SHA256_CTX *ctx, struct Import *impor
     }
 }
 
+static bool run_typechecker(struct LoadDetails *details,
+                            TypeEnv *env,
+                            struct Module *module,
+                            bool interface_only)
+{
+    if (!typecheck_module(env, module, interface_only)) {
+        return false;
+    }
+
+    // Print module post-typechecking (if requested)
+    if (details->create_debug_files) {
+        char *debug_filename = get_output_filename(details, interface_only ? ".tychk_int" : ".tychk_impl");
+        FILE *debug_file = fopen(debug_filename, "w");
+        free(debug_filename);
+        if (debug_file) {
+            print_module(debug_file, module);
+            fclose(debug_file);
+        }
+    }
+
+    return true;
+}
+
+static bool should_skip_module(struct LoadDetails *details,
+                               struct Module *module,
+                               const uint8_t full_module_fingerprint[SHA256_HASH_LENGTH])
+{
+    // See if we can find this module's fingerprint in the cache.
+    // If so, that means we have in the past verified a module with
+    // identical text, and identical imported interfaces. Therefore
+    // there is no need to verify it again.
+    if (sha256_exists_in_db(details->cache_db, MODULE_HASH, full_module_fingerprint)) {
+        if (details->show_progress) {
+                add_fol_message(copy_string_3("Skipping module ", module->name, " (cached)\n"),
+                                false,  // is_error
+                                0, NULL);
+        }
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static bool run_verifier(struct LoadDetails *details,
+                         struct Module *module,
+                         enum VerifierMode mode,
+                         const uint8_t full_module_fingerprint[SHA256_HASH_LENGTH])
+{
+    struct VerifierOptions options;
+    options.cache_db = details->cache_db;
+    options.debug_filename_prefix = NULL;
+    if (details->create_debug_files) {
+        options.debug_filename_prefix = get_output_filename(details, "");
+    }
+    options.mode = mode;
+    options.show_progress = details->show_progress;
+    bool result = verify_module(details->verifier_env,
+                                module,
+                                &options);
+    free((char*)options.debug_filename_prefix);
+    if (!result) {
+        return false;
+    }
+
+    // If this was a full verification (VM_LOAD_INTERFACE_CHECK_IMPL),
+    // then schedule the module's fingerprint to be stored into the
+    // cache, so that we know not to verify the same module again in
+    // the future.
+    if (mode == VM_LOAD_INTERFACE_CHECK_IMPL) {
+        add_fol_message(NULL, false, MODULE_HASH, full_module_fingerprint);
+    }
+
+    return true;
+}
+
 // Returns true if success, false if error (e.g. module not found, circular dependency)
 static bool load_module_from_disk(struct LoadDetails *details)
 {
@@ -323,80 +400,124 @@ static bool load_module_from_disk(struct LoadDetails *details)
     // Resolve dependencies (in place)
     resolve_dependencies(module);
 
-    // Typecheck
-    bool keep_all_types = false;
-    if (!typecheck_module(details->type_env, module, interface_only, keep_all_types)) {
-        free_module(module);
-        return false;
-    }
+    // We can skip verification if we are in CM_VERIFY (not CM_VERIFY_ALL) mode,
+    // and this is not the root module.
+    bool skip = (details->compile_mode == CM_VERIFY && !details->root_module);
 
-    // Print module post-typechecking (if requested)
-    if (details->create_debug_files) {
-        char *debug_filename = get_output_filename(details, ".tychk");
-        FILE *debug_file = fopen(debug_filename, "w");
-        free(debug_filename);
-        if (debug_file) {
-            print_module(debug_file, module);
-            fclose(debug_file);
+    // We can also skip verification if the module's fingerprint is in the cache
+    // (as this means the exact same module was verified on a previous run).
+    skip = skip ||
+        ((details->compile_mode == CM_VERIFY || details->compile_mode == CM_VERIFY_ALL)
+         && should_skip_module(details, module, full_module_fingerprint));
+
+    if (skip) {
+        // We can skip verification but we still need to typecheck, and
+        // load the module's interface into the verifier.
+
+        // Typecheck interface, keeping the results in type env.
+        details->type_env = push_type_env(details->type_env);
+        if (!run_typechecker(details, details->type_env, module, true)) {
+            free_module(module);
+            return false;
         }
-    }
+        details->type_env = collapse_type_env(details->type_env);
 
-    // Verify (if requested)
-    if (details->compile_mode == CM_VERIFY || details->compile_mode == CM_VERIFY_ALL) {
-        if (!interface_only) {
-            // See if we can find this module's fingerprint in the cache.
-            // If so, that means we have in the past verified a module with
-            // identical text, and identical imported interfaces. Therefore
-            // there is no need to verify it again.
-            if (sha256_exists_in_db(details->cache_db, MODULE_HASH, full_module_fingerprint)) {
-                if (details->show_progress) {
-                    add_fol_message(copy_string_3("Skipping module ", module->name, " (cached)\n"),
-                                    false,  // is_error
-                                    0, NULL);
-                }
-
-                // No need to run a full verification.
-                // We do still need to run in interface_only mode, so that
-                // any required decls are added to the verification context
-                // (i.e. in case they are imported by future modules).
-                interface_only = true;
-            }
+        // Verify the interface, keeping the results in verifier env.
+        push_verifier_env(details->verifier_env);
+        if (!run_verifier(details, module, VM_LOAD_INTERFACE, full_module_fingerprint)) {
+            free_module(module);
+            return false;
         }
+        collapse_verifier_env(details->verifier_env);
 
-        struct VerifierOptions options;
-        options.cache_db = details->cache_db;
-        options.debug_filename_prefix = NULL;
-        if (details->create_debug_files) {
-            options.debug_filename_prefix = get_output_filename(details, "");
-        }
-        options.interface_only = interface_only;
-        options.show_progress = !interface_only && details->show_progress;
-        bool result = verify_module(details->verifier_env,
-                                    module,
-                                    &options);
-        free((char*)options.debug_filename_prefix);
-        if (!result) {
+    } else if (details->compile_mode == CM_VERIFY || details->compile_mode == CM_VERIFY_ALL) {
+        // We need to do a full verification of the module.
+
+        // We do this in several steps, in order to be able to handle
+        // abstract types ("type Foo;" in the interface).
+
+        // First, typecheck and verify the interface, leaving new
+        // layers on top of the type and verifier envs for now. Do
+        // this on a separate copy of the module.
+
+        struct Module *copy = copy_module(module);
+
+        details->type_env = push_type_env(details->type_env);
+        if (!run_typechecker(details, details->type_env, copy, true)) {
+            free_module(copy);
             free_module(module);
             return false;
         }
 
-        // If this was a full verification (!interface_only), then
-        // schedule the module's fingerprint to be stored into the
-        // cache, so that we know not to verify the same module again
-        // in the future.
-        if (!interface_only) {
-            add_fol_message(NULL, false, MODULE_HASH, full_module_fingerprint);
+        push_verifier_env(details->verifier_env);
+        if (!run_verifier(details, copy, VM_CHECK_INTERFACE, full_module_fingerprint)) {
+            free_module(copy);
+            free_module(module);
+            return false;
         }
+
+        free_module(copy);
+
+        // Now typecheck and verify the whole module, using
+        // "temporary" type and verifier envs (which will be
+        // discarded).
+
+        TypeEnv * temp_type_env = push_type_env(details->type_env->base);
+        if (!run_typechecker(details, temp_type_env, module, false)) {
+            pop_type_env(temp_type_env);
+            free_module(module);
+            return false;
+        }
+        pop_type_env(temp_type_env);
+        temp_type_env = NULL;
+
+        struct HashTable *backup = detach_verifier_env_layer(details->verifier_env);
+        push_verifier_env(details->verifier_env);
+        bool verify_result = run_verifier(details, module, VM_LOAD_INTERFACE_CHECK_IMPL, full_module_fingerprint);
+        pop_verifier_env(details->verifier_env);
+        attach_verifier_env_layer(details->verifier_env, backup);
+        if (!verify_result) {
+            free_module(module);
+            return false;
+        }
+
+        // We can now keep the results from the INTERFACE typecheck
+        // and verification.
+        details->type_env = collapse_type_env(details->type_env);
+        collapse_verifier_env(details->verifier_env);
+
+    } else if (details->compile_mode == CM_COMPILE) {
+        // First typecheck the interface (using the "abstracted"
+        // types) - on a copy of the module.
+        struct Module *copy = copy_module(module);
+        details->type_env = push_type_env(details->type_env);
+        if (!run_typechecker(details, details->type_env, copy, true)) {
+            free_module(copy);
+            free_module(module);
+            return false;
+        }
+        free_module(copy);
+        copy = NULL;
+        details->type_env = collapse_type_env(details->type_env);
+
+        // Now typecheck the whole module (using the "expanded" types)
+        // - on the original module.
+        details->expanded_type_env = push_type_env(details->expanded_type_env);
+        if (!run_typechecker(details, details->expanded_type_env, module, false)) {
+            free_module(module);
+            return false;
+        }
+        details->expanded_type_env = collapse_type_env(details->expanded_type_env);
     }
 
     // Check existence of main (if this is the root)
     if (details->root_module) {
         if (details->auto_main) {
             char *main_name = copy_string_2(module->name, ".main");
-            details->generate_main = hash_table_contains_key(details->type_env, main_name);
+            details->generate_main = (type_env_lookup(details->type_env, main_name) != NULL);
             free(main_name);
         }
-        // complete verification jobs before attempting to typecheck main
+        // Complete verification jobs before attempting to typecheck main
         // (as we don't want the error messages "mixed")
         wait_fol_complete();
         if (!fol_error_found()
@@ -466,6 +587,7 @@ static bool load_module_recursive(struct LoadDetails *details)
     if (import_builtin_module(details->module_name,
                               details->renamer_env,
                               details->type_env,
+                              details->expanded_type_env,
                               details->verifier_env,
                               details->codegen_env)) {
         // HACK: just use a "fake" SHA256 hash for now.
@@ -490,7 +612,8 @@ bool compile(struct CompileOptions *options)
 
     details.loaded_modules = new_hash_table();
     details.renamer_env = new_hash_table();
-    details.type_env = new_hash_table();
+    details.type_env = new_type_env();
+    details.expanded_type_env = new_type_env();
     details.verifier_env = new_verifier_env();
     details.codegen_env = new_codegen_env();
     details.strings = NULL;
@@ -541,6 +664,7 @@ bool compile(struct CompileOptions *options)
 
     free_renamer_env(details.renamer_env);
     free_type_env(details.type_env);
+    free_type_env(details.expanded_type_env);
     free_codegen_env(details.codegen_env);
 
     struct StringNode *strings = details.strings;

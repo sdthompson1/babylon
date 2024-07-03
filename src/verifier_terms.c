@@ -13,6 +13,7 @@ repository.
 #include "error.h"
 #include "hash_table.h"
 #include "sexpr.h"
+#include "stacked_hash_table.h"
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
@@ -275,7 +276,7 @@ static struct Sexpr *translate_var(struct VContext *cxt, const char *var_name, b
     const char *fol_name = lookup_local(cxt, var_name);
 
     if (fol_name) {
-        if (hash_table_lookup(cxt->local_env, fol_name) == NULL) {
+        if (hash_table_lookup(cxt->stack->table, fol_name) == NULL) {  // lookup in local env
             fatal_error("unexpected: name not found in hash table");
         } else {
             return make_string_sexpr_handover(fol_name);
@@ -654,7 +655,7 @@ static struct Sexpr *make_default_fixed_array(struct VContext *cxt,
     item->fol_type = fol_type;
     fol_type = NULL;
 
-    hash_table_insert(cxt->global_env, copy_string(name), item);
+    hash_table_insert(cxt->stack->base->table, copy_string(name), item);   // add to global env
 
     return make_string_sexpr(name);
 }
@@ -902,7 +903,7 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
         item->fol_name = copy_string(name);
         item->fol_type = fol_type;
 
-        hash_table_insert(cxt->global_env, copy_string(name), item);
+        hash_table_insert(cxt->stack->base->table, copy_string(name), item);  // add to global env
     }
 
     // return the result
@@ -977,7 +978,7 @@ static void* verify_array_literal(void *context, struct Term *term, void *type_r
     item->fol_name = copy_string(name);
     item->fol_type = fol_type;
 
-    hash_table_insert(cxt->global_env, copy_string(name), item);
+    hash_table_insert(cxt->stack->base->table, copy_string(name), item);  // add to global env
 
     // return the result
     return make_string_sexpr(name);
@@ -1424,7 +1425,7 @@ static void* nr_verify_let(struct TermTransform *tr, void *context, struct Term 
     // we won't need a separate definition in the env any more
     fol_name = item->fol_name;
     item->fol_name = NULL;
-    remove_existing_item(cxt->local_env, fol_name);
+    remove_existing_item(cxt->stack->table, fol_name);  // remove from local env
 
     // Any facts mentioning the let-bound variable are now (unfortunately)
     // invalid. Rather than trying to make them valid, we just remove them.
@@ -1460,7 +1461,7 @@ static void* nr_verify_quantifier(struct TermTransform *tr, void *context, struc
     // so we won't need a separate definition in the env any more
     const char *fol_name = item->fol_name;
     item->fol_name = NULL;
-    remove_existing_item(cxt->local_env, fol_name);
+    remove_existing_item(cxt->stack->table, fol_name);   // remove from local env
 
     // Any facts mentioning the quantified variable are now (unfortunately) invalid. Rather
     // than trying to make them valid, we just remove them.
@@ -1815,7 +1816,7 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
     }
 
     // Look up preconditions
-    struct Item *item = hash_table_lookup(cxt->global_env, func_fol_name);
+    struct Item *item = stacked_hash_table_lookup(cxt->stack->base, func_fol_name);
     if (item == NULL) {
         fatal_error("Could not find function in env");
     }
@@ -2097,7 +2098,7 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
             if (item) {
                 fol_name = item->fol_name;
                 item->fol_name = NULL;
-                remove_existing_item(cxt->local_env, fol_name);
+                remove_existing_item(cxt->stack->table, fol_name);  // remove from local env
                 remove_facts(cxt, fol_name);
             } else {
                 // It's a wildcard pattern...

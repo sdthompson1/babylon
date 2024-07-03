@@ -12,10 +12,10 @@ repository.
 #include "ast.h"
 #include "error.h"
 #include "eval_const.h"
-#include "hash_table.h"
 #include "match_compiler.h"
 #include "names.h"
 #include "remove_univars.h"
+#include "stacked_hash_table.h"
 #include "subst_type.h"
 #include "typechecker.h"
 #include "util.h"
@@ -34,11 +34,8 @@ repository.
 
 // typechecker context
 struct TypecheckContext {
-    // Type env for globals
-    struct HashTable *global_env;
-
-    // Type env for locals
-    struct HashTable *local_env;
+    // Type environment
+    TypeEnv *type_env;
 
     // True if at least one type error has been detected
     bool error;
@@ -67,11 +64,12 @@ struct TypecheckContext {
 
 static struct TypeEnvEntry * lookup_type_info(const struct TypecheckContext *context, const char *name)
 {
-    struct TypeEnvEntry *entry = hash_table_lookup(context->local_env, name);
-    if (entry == NULL) {
-        entry = hash_table_lookup(context->global_env, name);
-    }
-    return entry;
+    return stacked_hash_table_lookup(context->type_env, name);
+}
+
+struct TypeEnvEntry * type_env_lookup(const TypeEnv *env, const char *name)
+{
+    return stacked_hash_table_lookup(env, name);
 }
 
 static void free_type_env_entry(struct TypeEnvEntry *entry)
@@ -81,19 +79,19 @@ static void free_type_env_entry(struct TypeEnvEntry *entry)
     free(entry);
 }
 
-static void remove_from_type_env(struct HashTable *env, const char *name)
+static void remove_from_type_env_hash_table(struct HashTable *table, const char *name)
 {
     const char *key;
     void *value;
-    hash_table_lookup_2(env, name, &key, &value);
+    hash_table_lookup_2(table, name, &key, &value);
     if (key) {
-        hash_table_remove(env, key);
+        hash_table_remove(table, key);
         free_type_env_entry(value);
         free((char*)key);
     }
 }
 
-void add_to_type_env(struct HashTable *env,
+void add_to_type_env(TypeEnv *env,
                      const char *name,    // copied
                      struct Type *type,   // handed over
                      bool ghost,
@@ -101,7 +99,7 @@ void add_to_type_env(struct HashTable *env,
                      bool constructor,
                      bool impure)
 {
-    remove_from_type_env(env, name);   // just in case there is an existing entry
+    remove_from_type_env_hash_table(env->table, name);   // just in case there is an existing entry
 
     struct TypeEnvEntry *entry = alloc(sizeof(struct TypeEnvEntry));
     entry->type = type;
@@ -111,7 +109,8 @@ void add_to_type_env(struct HashTable *env,
     entry->constructor = constructor;
     entry->impure = impure;
 
-    hash_table_insert(env, copy_string(name), entry);
+    // add to the topmost HashTable in the stack
+    hash_table_insert(env->table, copy_string(name), entry);
 }
 
 static void free_type_env_key_and_value(void *context, const char *key, void *value)
@@ -120,11 +119,40 @@ static void free_type_env_key_and_value(void *context, const char *key, void *va
     free_type_env_entry(value);
 }
 
-void free_type_env(struct HashTable *env)
+TypeEnv * new_type_env()
 {
-    if (env) {
-        hash_table_for_each(env, free_type_env_key_and_value, NULL);
-        free_hash_table(env);
+    TypeEnv * env = alloc(sizeof(TypeEnv));
+    env->table = new_hash_table();
+    env->base = NULL;
+    return env;
+}
+
+TypeEnv * push_type_env(TypeEnv *env)
+{
+    TypeEnv * new_env = new_type_env();
+    new_env->base = env;
+    return new_env;
+}
+
+TypeEnv * pop_type_env(TypeEnv *env)
+{
+    hash_table_for_each(env->table, free_type_env_key_and_value, NULL);
+    free_hash_table(env->table);
+    TypeEnv *prev = env->base;
+    free(env);
+    return prev;
+}
+
+TypeEnv * collapse_type_env(TypeEnv *env)
+{
+    stacked_hash_table_collapse(env, NULL, free_type_env_key_and_value);
+    return pop_type_env(env);
+}
+
+void free_type_env(TypeEnv *env)
+{
+    while (env) {
+        env = pop_type_env(env);
     }
 }
 
@@ -176,8 +204,8 @@ static bool kindcheck_type(struct TypecheckContext *tc_context, struct Type **ty
 
 
 // This can be applied to types of kind (*,*,...,*) -> *, for any
-// number of *'s (including zero) on the left-hand side. It also does
-// not check if the type is executable (even if tc_context->executable
+// number of *'s (including zero) on the left-hand side. It does
+// NOT check if the type is executable (even if tc_context->executable
 // is true). Otherwise it behaves like kindcheck_type.
 static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, struct Type **type);
 
@@ -286,7 +314,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                     return false;
                 }
 
-                struct Term *normal = eval_to_normal_form(tc_context->global_env, (*type)->array_data.sizes[i]);
+                struct Term *normal = eval_to_normal_form(tc_context->type_env, (*type)->array_data.sizes[i]);
                 if (normal == NULL) {
                     // Size is not a compile time constant
                     free_type(u64);
@@ -1952,7 +1980,7 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
         return NULL;
     }
 
-    add_to_type_env(tc_context->local_env,
+    add_to_type_env(tc_context->type_env,
                     term->let.name,
                     copy_type(term->let.rhs->type),   // handover
                     !tc_context->executable,   // ghost
@@ -1982,7 +2010,7 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
         return NULL;
     }
 
-    add_to_type_env(tc_context->local_env,
+    add_to_type_env(tc_context->type_env,
                     term->quant.name,
                     copy_type(term->quant.type),     // handover
                     true,    // ghost
@@ -2435,7 +2463,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             pat_read_only = false;
         }
 
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,
                         pattern->var.name,
                         copy_type(scrutinee_type),
                         !tc_context->executable,   // ghost
@@ -2959,7 +2987,7 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
     // Add the new variable to the env (if typechecking was successful).
     if (stmt->var_decl.type) {
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,
                         stmt->var_decl.name,
                         copy_type(stmt->var_decl.type),    // handover
                         !tc_context->executable,  // ghost
@@ -2999,7 +3027,7 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
         // Move down one level inside the term (in case there is another "fix" later on!)
         tc_context->assert_term = assert_term->quant.body;
 
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,
                         stmt->fix.name,
                         copy_type(stmt->fix.type),    // handover
                         true,      // ghost
@@ -3020,7 +3048,7 @@ static void typecheck_obtain_stmt(struct TypecheckContext *tc_context,
 
     // for "obtain", the name is in scope within the condition-term
     // (as well as afterwards)
-    add_to_type_env(tc_context->local_env,
+    add_to_type_env(tc_context->type_env,
                     stmt->obtain.name,
                     copy_type(stmt->obtain.type),   // handover
                     true,    // ghost
@@ -3494,7 +3522,7 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        add_to_type_env(tc_context->global_env,
+        add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         copy_type(decl->const_data.type),     // handover
                         decl->ghost,
@@ -3508,9 +3536,10 @@ static void evaluate_constant(struct TypecheckContext *tc_context,
                               struct Decl *decl)
 {
     if (decl->const_data.rhs && decl->const_data.rhs->type && !decl->ghost) {
-        struct TypeEnvEntry *entry = hash_table_lookup(tc_context->global_env, decl->name);
+        struct TypeEnvEntry *entry = lookup_type_info(tc_context, decl->name);
         if (entry) {
-            struct Term *value = eval_to_normal_form(tc_context->global_env, decl->const_data.rhs);
+            struct Term *value = eval_to_normal_form(tc_context->type_env->base,  // global env
+                                                     decl->const_data.rhs);
             if (value == NULL) {
                 tc_context->error = true;
             } else {
@@ -3565,7 +3594,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     bool kinds_ok = true;
 
     for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,   // local env
                         tv->name,
                         NULL,   // type (NULL for tyvars)
                         false,  // ghost
@@ -3575,7 +3604,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         if (kindcheck_type(tc_context, &arg->type)) {
-            add_to_type_env(tc_context->local_env,
+            add_to_type_env(tc_context->type_env,   // local env
                             arg->name,
                             copy_type(arg->type),   // handover
                             decl->ghost,
@@ -3614,7 +3643,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         }
     }
     if (ret_type_ok) {
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,   // local env
                         "return",
                         copy_type(ret_type),   // handover
                         decl->ghost,
@@ -3676,7 +3705,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        add_to_type_env(tc_context->global_env,
+        add_to_type_env(tc_context->type_env->base,   // global env
                         decl->name,
                         type,    // handover
                         decl->ghost,
@@ -3699,7 +3728,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->datatype_data.tyvars; tyvar; tyvar = tyvar->next) {
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,   // local env
                         tyvar->name,
                         NULL,
                         false,  // ghost
@@ -3749,7 +3778,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
             lambda_type->lambda_data.type = datatype;
             datatype = lambda_type;
         }
-        add_to_type_env(tc_context->global_env,
+        add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         datatype,      // handover
                         false,    // ghost
@@ -3783,7 +3812,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                 ctor_type = forall_type;
             }
 
-            add_to_type_env(tc_context->global_env,
+            add_to_type_env(tc_context->type_env->base,    // global env
                             ctor->name,
                             ctor_type,     // handover
                             false,   // ghost
@@ -3821,7 +3850,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->typedef_data.tyvars; tyvar; tyvar = tyvar->next) {
-        add_to_type_env(tc_context->local_env,
+        add_to_type_env(tc_context->type_env,   // local env
                         tyvar->name,
                         NULL,
                         false,  // ghost
@@ -3849,7 +3878,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
             ty = lambda_type;
         }
 
-        add_to_type_env(tc_context->global_env,
+        add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         ty,
                         false,   // ghost
@@ -3869,7 +3898,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
             if (decl->typedef_data.tyvars != NULL) {
                 fatal_error("this can't happen - abstract typedefs cannot have tyvars currently");
             }
-            add_to_type_env(tc_context->local_env,
+            add_to_type_env(tc_context->type_env,   // local env
                             decl->typedef_data.alloc_var,
                             ty,
                             true,   // ghost
@@ -3898,7 +3927,9 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
     for (struct Decl *decl = decls; decl; decl = decl->next) {
 
         tc_context->error = false;
-        tc_context->local_env = new_hash_table();
+
+        // make a "local" type environment for the decl
+        tc_context->type_env = push_type_env(tc_context->type_env);
 
         tc_context->executable =
             (decl->tag == DECL_CONST || decl->tag == DECL_FUNCTION)
@@ -3934,7 +3965,13 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
             break;
 
         case DECL_TYPEDEF:
-            typecheck_typedef_decl(tc_context, decl);
+            if (implementation && decl->typedef_data.rhs == NULL && !decl->typedef_data.is_extern) {
+                // "type Foo;" is only allowed in interface, not implementation
+                report_abstract_type_in_impl(decl->location);
+                tc_context->error = true;
+            } else {
+                typecheck_typedef_decl(tc_context, decl);
+            }
             break;
         }
 
@@ -3942,8 +3979,8 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
             overall_error = true;
         }
 
-        free_type_env(tc_context->local_env);
-        tc_context->local_env = NULL;
+        // remove the local env
+        tc_context->type_env = pop_type_env(tc_context->type_env);
     }
 
     tc_context->error = overall_error;
@@ -4072,6 +4109,20 @@ static bool check_interface(struct Module *module,
                             struct Decl *interface,
                             struct Decl *implementation)
 {
+    // Special case: "type Foo;" in interface, and any type/datatype in
+    // implementation, is allowed.
+    if (interface->tag == DECL_TYPEDEF
+    && interface->typedef_data.rhs == NULL
+    && !interface->typedef_data.is_extern) {
+        if (implementation->tag == DECL_TYPEDEF || implementation->tag == DECL_DATATYPE) {
+            return true;
+        } else {
+            report_interface_mismatch_impl(interface);
+            return false;
+        }
+    }
+
+    // Otherwise, interface and implementation must always have same tag
     if (interface->tag != implementation->tag) {
         report_interface_mismatch_impl(interface);
         return false;
@@ -4084,13 +4135,18 @@ static bool check_interface(struct Module *module,
 
     switch (interface->tag) {
     case DECL_CONST:
+        // Two 'const' decls must be consistent (e.g. same type)
         return check_interface_const(module, interface, implementation);
 
     case DECL_FUNCTION:
+        // Two 'function' decls must be consistent (e.g. same type)
         return check_interface_function(module, interface, implementation);
 
     case DECL_DATATYPE:
     case DECL_TYPEDEF:
+        // Two 'datatype' or 'type' decls are not allowed, except for
+        // the one "special case" given above (at the top of this
+        // function).
         report_duplicate_definition(interface->name, interface->location);
         return false;
     }
@@ -4116,8 +4172,12 @@ static bool requires_impl(struct Decl *interface)
             && function_body_required(interface);
 
     case DECL_DATATYPE:
-    case DECL_TYPEDEF:
         return false;
+
+    case DECL_TYPEDEF:
+        // A plain "type Foo;" requires an impl, but "extern type
+        // Foo;" does not, nor does "type Foo = RHS;".
+        return (interface->typedef_data.rhs == NULL && !interface->typedef_data.is_extern);
     }
 
     fatal_error("requires_impl failed");
@@ -4161,82 +4221,16 @@ static bool check_interfaces(struct Module *module)
 
 // ----------------------------------------------------------------------------------------------------
 
-static void remove_impl_only_names(struct HashTable *global_type_env,
-                                   struct Module *module)
-{
-    // dummy values, for their address
-    char NOTHING_IN_PARTICULAR;
-    char IMPL_ONLY_CONSTANT;
-
-    struct HashTable *int_names = new_hash_table();
-
-    for (struct DeclGroup *int_group = module->interface; int_group; int_group = int_group->next) {
-        for (struct Decl *int_decl = int_group->decl; int_decl; int_decl = int_decl->next) {
-
-            void * info = &NOTHING_IN_PARTICULAR;
-            if (int_decl->tag == DECL_CONST && int_decl->const_data.rhs == NULL) {
-                info = &IMPL_ONLY_CONSTANT;
-            }
-
-            hash_table_insert(int_names, int_decl->name, info);
-        }
-    }
-
-    for (struct DeclGroup *imp_group = module->implementation; imp_group; imp_group = imp_group->next) {
-        for (struct Decl *imp_decl = imp_group->decl; imp_decl; imp_decl = imp_decl->next) {
-
-            void *info = hash_table_lookup(int_names, imp_decl->name);
-            if (info == NULL) {
-                remove_from_type_env(global_type_env, imp_decl->name);
-
-                switch (imp_decl->tag) {
-                case DECL_CONST:
-                case DECL_FUNCTION:
-                case DECL_TYPEDEF:
-                    // no additional names to remove
-                    break;
-
-                case DECL_DATATYPE:
-                    // we must remove the ctor names as well
-                    for (struct DataCtor *ctor = imp_decl->datatype_data.ctors; ctor; ctor = ctor->next) {
-                        remove_from_type_env(global_type_env, ctor->name);
-                    }
-                    break;
-                }
-
-            } else if (info == &IMPL_ONLY_CONSTANT) {
-                // This is a case like
-                //   interface: const x: i32;
-                //   implementation: const x: i32 = 1000;
-                // Here we need to null out the 'value' field in the env, because, from
-                // the perspective of other modules, the compile-time value of this constant
-                // is unknown.
-                // (Keep the value field in the decl, since we will need it for code generation.)
-                struct TypeEnvEntry *entry = hash_table_lookup(global_type_env, imp_decl->name);
-                free_term(entry->value);
-                entry->value = NULL;
-            }
-        }
-    }
-
-    free_hash_table(int_names);
-}
-
-
-// ----------------------------------------------------------------------------------------------------
-
 //
 // Module typechecking
 //
 
-bool typecheck_module(struct HashTable *global_type_env,
+bool typecheck_module(TypeEnv *type_env,
                       struct Module *module,
-                      bool interface_only,
-                      bool keep_all)
+                      bool interface_only)
 {
     struct TypecheckContext tc_context;
-    tc_context.global_env = global_type_env;
-    tc_context.local_env = NULL;
+    tc_context.type_env = type_env;
     tc_context.error = false;
     tc_context.executable = false;
     tc_context.impure = false;
@@ -4256,20 +4250,16 @@ bool typecheck_module(struct HashTable *global_type_env,
         if (!tc_context.error) {
             tc_context.error = !check_interfaces(module);
         }
-
-        if (!keep_all) {
-            remove_impl_only_names(global_type_env, module);
-        }
     }
 
     return !tc_context.error;
 }
 
-bool typecheck_main_function(struct HashTable *type_env, const char *root_module_name)
+bool typecheck_main_function(TypeEnv *type_env, const char *root_module_name)
 {
     char *main_name = copy_string_2(root_module_name, ".main");
 
-    struct TypeEnvEntry *entry = hash_table_lookup(type_env, main_name);
+    struct TypeEnvEntry *entry = type_env_lookup(type_env, main_name);
 
     bool ok = (entry != NULL);
     if (!ok) {

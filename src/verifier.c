@@ -14,6 +14,7 @@ repository.
 #include "hash_table.h"
 #include "initial_env.h"
 #include "sha256.h"
+#include "stacked_hash_table.h"
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
@@ -25,7 +26,11 @@ repository.
 struct VerifierEnv * new_verifier_env()
 {
     struct VerifierEnv *env = alloc(sizeof(struct VerifierEnv));
-    env->table = new_hash_table();
+
+    env->stack = alloc(sizeof(struct StackedHashTable));
+    env->stack->table = new_hash_table();
+    env->stack->base = NULL;
+
     env->string_names = new_hash_table();
     setup_initial_verifier_env(env);
     return env;
@@ -33,8 +38,9 @@ struct VerifierEnv * new_verifier_env()
 
 void free_verifier_env(struct VerifierEnv *env)
 {
-    clear_verifier_env_hash_table(env->table);
-    free_hash_table(env->table);
+    while (env->stack) {
+        env->stack = pop_verifier_stack(env->stack);
+    }
 
     if (!hash_table_empty(env->string_names)) {
         fatal_error("string_names wasn't cleared between decls");
@@ -44,42 +50,36 @@ void free_verifier_env(struct VerifierEnv *env)
     free(env);
 }
 
-static void backup_name(struct HashTable *backup, struct HashTable *env, const char *decl_name)
+void push_verifier_env(struct VerifierEnv *env)
 {
-    const char *fol_name = copy_string_2("%", decl_name);
-    struct Item *item = copy_item(hash_table_lookup(env, fol_name));
-    hash_table_insert(backup, fol_name, item);
+    env->stack = push_verifier_stack(env->stack);
 }
 
-static struct HashTable * backup_impl_decls(struct HashTable *env,
-                                            struct Module *module)
+void pop_verifier_env(struct VerifierEnv *env)
 {
-    struct HashTable *backup_table = new_hash_table();
-
-    for (struct DeclGroup *group = module->implementation; group; group = group->next) {
-        for (struct Decl *decl = group->decl; decl; decl = decl->next) {
-            backup_name(backup_table, env, decl->name);
-        }
-    }
-
-    return backup_table;
+    env->stack = pop_verifier_stack(env->stack);
 }
 
-static void restore_impl_decls(struct HashTable *env, struct HashTable *backup_table)
+void collapse_verifier_env(struct VerifierEnv *env)
 {
-    struct HashIterator *iter = new_hash_iterator(backup_table);
-    const char *backup_name;
-    void *backup_item;
-    while (hash_iterator_next(iter, &backup_name, &backup_item)) {
-        remove_existing_item(env, backup_name);
-        if (backup_item != NULL) {
-            hash_table_insert(env, backup_name, backup_item);
-        } else {
-            free((void*)backup_name);
-        }
-    }
-    free_hash_iterator(iter);
-    free_hash_table(backup_table);
+    env->stack = collapse_verifier_stack(env->stack);
+}
+
+struct HashTable * detach_verifier_env_layer(struct VerifierEnv *env)
+{
+    struct HashTable * layer = env->stack->table;
+    struct StackedHashTable * base = env->stack->base;
+    free(env->stack);
+    env->stack = base;
+    return layer;
+}
+
+void attach_verifier_env_layer(struct VerifierEnv *env, struct HashTable *layer)
+{
+    struct StackedHashTable * node = alloc(sizeof(struct StackedHashTable));
+    node->table = layer;
+    node->base = env->stack;
+    env->stack = node;
 }
 
 bool verify_module(struct VerifierEnv *verifier_env,
@@ -87,8 +87,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
                    struct VerifierOptions *options)
 {
     struct VContext cxt;
-    cxt.global_env = verifier_env->table;
-    cxt.local_env = new_hash_table();
+    cxt.stack = verifier_env->stack;
     cxt.local_to_version = new_hash_table();
     cxt.local_counter = new_hash_table();
     cxt.string_names = verifier_env->string_names;
@@ -99,7 +98,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.path_condition = NULL;
     cxt.facts = NULL;
     cxt.num_facts = 0;
-    cxt.interface_only = options->interface_only;
+    cxt.run_solver = false;  // set properly below
     cxt.function_args = NULL;
     cxt.arglist_sexpr = cxt.funapp_sexpr = NULL;
     cxt.postconds = NULL;
@@ -118,15 +117,17 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.cache_db = options->cache_db;
 
     // Verify each decl in the interface
+    cxt.run_solver = options->mode == VM_CHECK_INTERFACE;
+    cxt.show_progress = options->show_progress && cxt.run_solver;
     struct DeclGroup *group = module->interface;
     while (group) {
         verify_decl_group(&cxt, group->decl);
         group = group->next;
     }
 
-    if (!cxt.interface_only) {
-        // Take backup copies of all implementation decls
-        struct HashTable * backup = backup_impl_decls(verifier_env->table, module);
+    if (options->mode == VM_LOAD_INTERFACE_CHECK_IMPL) {
+        cxt.run_solver = true;
+        cxt.show_progress = options->show_progress;
 
         // Verify each decl in the implementation.
         group = module->implementation;
@@ -134,16 +135,11 @@ bool verify_module(struct VerifierEnv *verifier_env,
             verify_decl_group(&cxt, group->decl);
             group = group->next;
         }
-
-        // Revert back to the backups, as we don't want to keep implementation
-        // things in the environment after the module is processed.
-        restore_impl_decls(verifier_env->table, backup);
     }
 
     free_hash_table(cxt.local_counter);
     free_hash_table(cxt.refs);
     free_hash_table(cxt.local_to_version);
-    free_hash_table(cxt.local_env);
     free_hash_table(cxt.local_hidden);
 
     if (cxt.debug_filename_prefix) {

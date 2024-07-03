@@ -644,11 +644,24 @@ struct DeclData_Datatype {
 };
 
 struct DeclData_Typedef {
+    // Type variables list
     struct TyVarList *tyvars;
+
+    // RHS of the typedef, *or* NULL if this is declaring an abstract or extern type.
     struct Type *rhs;
-    bool allocated;  // applicable to 'abstract' typedefs (rhs=NULL)
-    const char *alloc_var;   // variable name used in alloc-predicate, or NULL
-    struct Term *alloc_term; // boolean expression used in alloc-predicate, or NULL
+
+    // This is true for extern types.
+    // (applicable only if rhs == NULL)
+    bool is_extern;
+
+    // This is true if the type has "allocated" or "allocated(x) if ...".
+    // (applicable only if rhs == NULL)
+    bool allocated;
+
+    // These give the variable name and boolean expression from the allocated-predicate.
+    // (applicable only if rhs == NULL && allocated)
+    const char *alloc_var;
+    struct Term *alloc_term;
 };
 
 struct Decl {
@@ -854,6 +867,12 @@ struct Statement * make_statement(struct Location loc, enum StmtTag tag);
 
 struct Statement * copy_statement(struct Statement *);
 struct Attribute * copy_attributes(struct Attribute *);
+struct FunArg * copy_fun_args(struct FunArg *);
+struct DataCtor * copy_data_ctors(struct DataCtor *);
+struct Decl * copy_decl(struct Decl *);
+struct DeclGroup * copy_decl_group(struct DeclGroup *);
+struct Import * copy_import(struct Import *);
+struct Module * copy_module(struct Module *);
 
 void free_statement(struct Statement *stmt);
 void free_fun_arg(struct FunArg *);

@@ -12,9 +12,8 @@ repository.
 #include "ast.h"
 #include "error.h"
 #include "eval_const.h"
-#include "hash_table.h"
 #include "normal_form.h"
-#include "typechecker.h"   // for TypeEnvEntry
+#include "stacked_hash_table.h"
 #include "util.h"
 
 #include <inttypes.h>
@@ -22,9 +21,9 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-static struct Term * eval_var(struct HashTable *env, struct Term *term)
+static struct Term * eval_var(TypeEnv *env, struct Term *term)
 {
-    struct TypeEnvEntry *entry = hash_table_lookup(env, term->var.name);
+    struct TypeEnvEntry *entry = type_env_lookup(env, term->var.name);
     if (entry && entry->value) {
         return copy_term(entry->value);
     } else {
@@ -33,7 +32,7 @@ static struct Term * eval_var(struct HashTable *env, struct Term *term)
     }
 }
 
-static struct Term * eval_cast(struct HashTable *env, struct Term *term)
+static struct Term * eval_cast(TypeEnv *env, struct Term *term)
 {
     struct Term *operand = eval_to_normal_form(env, term->cast.operand);
     if (!operand) return NULL;
@@ -89,7 +88,7 @@ static struct Term * eval_cast(struct HashTable *env, struct Term *term)
     return make_literal_of_type(term->type, value);
 }
 
-static struct Term * eval_if(struct HashTable *env, struct Term *term)
+static struct Term * eval_if(TypeEnv *env, struct Term *term)
 {
     struct Term *condition = eval_to_normal_form(env, term->if_data.cond);
     if (condition == NULL) {
@@ -160,7 +159,7 @@ bool compute_unop(struct Location location,
     fatal_error("bad unop");
 }
 
-static struct Term * eval_unop(struct HashTable *env, struct Term *term)
+static struct Term * eval_unop(TypeEnv *env, struct Term *term)
 {
     struct Term * operand = eval_to_normal_form(env, term->unop.operand);
     if (!operand) {
@@ -442,7 +441,7 @@ bool compute_binop(struct Location location,
     fatal_error("bad binop");
 }
 
-static struct Term * eval_binop(struct HashTable *env, struct Term *term)
+static struct Term * eval_binop(TypeEnv *env, struct Term *term)
 {
     if (term->binop.list->next) {
         fatal_error("unexpected operator chaining");
@@ -494,33 +493,33 @@ static struct Term * eval_binop(struct HashTable *env, struct Term *term)
 }
 
 
-static struct Term * eval_let(struct HashTable *env, struct Term *term)
+static struct Term * eval_let(TypeEnv *env, struct Term *term)
 {
     struct Term *rhs = eval_to_normal_form(env, term->let.rhs);
     if (!rhs) return NULL;
 
     // We will temporarily add the let-bound variable to the env
     // (removing it again afterwards)
-    if (hash_table_contains_key(env, term->let.name)) {
+    if (type_env_lookup(env, term->let.name) != NULL) {
         fatal_error("let-var already in env (unexpected)");
     }
     struct TypeEnvEntry *entry = alloc(sizeof(struct TypeEnvEntry));
     // we only need to set entry->value, as that is the only thing we look at
     entry->value = rhs;
-    hash_table_insert(env, term->let.name, entry);
+    hash_table_insert(env->table, term->let.name, entry);
 
     // Evaluate the body
     struct Term *body = eval_to_normal_form(env, term->let.body);
 
     // Remove the bound variable from the env
-    hash_table_remove(env, term->let.name);
+    hash_table_remove(env->table, term->let.name);
     free_term(rhs);
     free(entry);
 
     return body;
 }
 
-static struct Term * eval_record(struct HashTable *env, struct Term *term)
+static struct Term * eval_record(TypeEnv *env, struct Term *term)
 {
     struct NameTermList *output = NULL;
     struct NameTermList **tail = &output;
@@ -546,7 +545,7 @@ static struct Term * eval_record(struct HashTable *env, struct Term *term)
     return result;
 }
 
-static struct Term * eval_record_update(struct HashTable *env, struct Term *term)
+static struct Term * eval_record_update(TypeEnv *env, struct Term *term)
 {
     // Evaluate LHS to normal form - this could be TM_DEFAULT or TM_RECORD
     struct Term *lhs = eval_to_normal_form(env, term->record_update.lhs);
@@ -595,7 +594,7 @@ static struct Term * eval_record_update(struct HashTable *env, struct Term *term
     return lhs;
 }
 
-static struct Term * eval_field_proj(struct HashTable *env, struct Term *term)
+static struct Term * eval_field_proj(TypeEnv *env, struct Term *term)
 {
     struct Term *lhs = eval_to_normal_form(env, term->field_proj.lhs);
     if (!lhs) {
@@ -623,7 +622,7 @@ static struct Term * eval_field_proj(struct HashTable *env, struct Term *term)
     fatal_error("projected field not found");
 }
 
-static struct Term * eval_variant(struct HashTable *env, struct Term *term)
+static struct Term * eval_variant(TypeEnv *env, struct Term *term)
 {
     struct Term *payload = eval_to_normal_form(env, term->variant.payload);
     if (!payload) return NULL;
@@ -635,7 +634,7 @@ static struct Term * eval_variant(struct HashTable *env, struct Term *term)
     return result;
 }
 
-static struct Term * eval_match(struct HashTable *env, struct Term *term)
+static struct Term * eval_match(TypeEnv *env, struct Term *term)
 {
     // After typechecking, match is only applied to variant types.
     if (term->match.scrutinee->type->tag != TY_VARIANT) {
@@ -686,12 +685,12 @@ static struct Term * eval_match(struct HashTable *env, struct Term *term)
     // Similarly to TM_LET, add the variable to the env
     struct TypeEnvEntry *entry = NULL;
     if (variable_name) {
-        if (hash_table_contains_key(env, variable_name)) {
+        if (type_env_lookup(env, variable_name) != NULL) {
             fatal_error("env already contains variable (unexpected)");
         }
         entry = alloc(sizeof(struct TypeEnvEntry));
         entry->value = payload;
-        hash_table_insert(env, variable_name, entry);
+        hash_table_insert(env->table, variable_name, entry);
     }
 
     // Now we can evaluate the arm's rhs
@@ -699,7 +698,7 @@ static struct Term * eval_match(struct HashTable *env, struct Term *term)
 
     // Remove the variable if necessary
     if (variable_name) {
-        hash_table_remove(env, variable_name);
+        hash_table_remove(env->table, variable_name);
         free(entry);
     }
 
@@ -741,7 +740,7 @@ static struct Term * make_sizeof_tuple(const struct TypeData_Array *data)
     return result;
 }
 
-static struct Term * eval_array_literal(struct HashTable *env, struct Term *term)
+static struct Term * eval_array_literal(TypeEnv *env, struct Term *term)
 {
     struct OpTermList *sub_terms = NULL;
     struct OpTermList **tail = &sub_terms;
@@ -765,7 +764,7 @@ static struct Term * eval_array_literal(struct HashTable *env, struct Term *term
     return result;
 }
 
-static struct Term * eval_array_proj(struct HashTable *env, struct Term *term)
+static struct Term * eval_array_proj(TypeEnv *env, struct Term *term)
 {
     struct Term * lhs = eval_to_normal_form(env, term->array_proj.lhs);
     if (lhs == NULL) {
@@ -815,7 +814,7 @@ static struct Term * eval_array_proj(struct HashTable *env, struct Term *term)
     return NULL;
 }
 
-struct Term * eval_to_normal_form(struct HashTable *env, struct Term *term)
+struct Term * eval_to_normal_form(TypeEnv *env, struct Term *term)
 {
     switch (term->tag) {
     case TM_VAR:

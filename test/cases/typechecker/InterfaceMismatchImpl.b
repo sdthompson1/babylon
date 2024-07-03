@@ -30,7 +30,7 @@ function diff_arg_type(x: i32)
 
 function diff_ret_type(): i16
 {
-  return 0;
+    return 0;
 }
 
 function double_impl()
@@ -39,7 +39,7 @@ function double_impl()
 
 function fun_confused_with_const(): i32
 {
-  return 10;
+    return 10;
 }
 
 impure function pure_int_impure_impl() {}

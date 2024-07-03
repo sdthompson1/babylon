@@ -20,17 +20,18 @@ struct CacheDb;
 struct FunArg;
 struct HashTable;
 struct Sexpr;
+struct StackedHashTable;
 
 
 //-------------------------------------------------------------------------------
 // Verifier env
 //-------------------------------------------------------------------------------
 
-// A VerifierEnv is a hash table in which the keys are global FOL
+// A VerifierEnv is a (stacked) hash table in which the keys are global FOL
 // names (beginning with "%" or "$") and the values are Items
 // (defined below). Both are allocated.
 struct VerifierEnv {
-    struct HashTable *table;
+    struct StackedHashTable *stack;
 
     // this is used for tracking string literals, fixed-sized array defaults,
     // and array literals
@@ -67,8 +68,7 @@ struct Item {
 
 struct VContext {
     // Mappings from FOL-name (allocated) to Item (allocated).
-    struct HashTable *global_env;
-    struct HashTable *local_env;
+    struct StackedHashTable *stack;
 
     // Maps source-code local name (shared with AST) to a "version number"
     // for that variable.
@@ -106,9 +106,10 @@ struct VContext {
     int num_facts;  // Cached length of the facts list
 
 
-    // True if we are in interface-only mode. (Most verification checks
-    // are skipped in this case.)
-    bool interface_only;
+    // True if we are supposed to actually run the solver (as opposed
+    // to just populating the environment with the translated
+    // expressions/decls)
+    bool run_solver;
 
     // Information for the current function, if applicable
     struct FunArg *function_args;
@@ -192,11 +193,14 @@ struct RefChain {
 // General helper functions
 //-------------------------------------------------------------------------------
 
+struct StackedHashTable * push_verifier_stack(struct StackedHashTable *stack);
+struct StackedHashTable * pop_verifier_stack(struct StackedHashTable *stack);
+struct StackedHashTable * collapse_verifier_stack(struct StackedHashTable *stack);  // frees top layer of "stack"
+
 void free_conditions(struct Condition *cond);
 
 void free_item(struct Item *item);
 struct Item *copy_item(const struct Item *item);
-void clear_verifier_env_hash_table(struct HashTable *table);
 
 struct RefChain *copy_ref_chain(struct RefChain *);
 void free_ref_chain(struct RefChain *);

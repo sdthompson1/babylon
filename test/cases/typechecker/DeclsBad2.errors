@@ -1,0 +1,6 @@
+DeclsBad2.b:7:1: Incomplete definition
+DeclsBad2.b:8:1: Incomplete definition
+DeclsBad2.b:10:1: Incomplete definition
+DeclsBad2.b:11:1: Incomplete definition
+DeclsBad2.b:13:1: Illegal recursive definition of 'DeclsBad2.rec_attr'
+DeclsBad2.b:22:5: Can't assign (left-hand-side is read-only)

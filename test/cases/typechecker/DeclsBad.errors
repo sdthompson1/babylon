@@ -1,10 +1,4 @@
-DeclsBad.b:3:18: Type mismatch
-DeclsBad.b:4:3: Illegal recursive definition of 'DeclsBad.r'
-DeclsBad.b:5:3: Incomplete definition
-DeclsBad.b:6:3: Incomplete definition
-DeclsBad.b:13:3: Incomplete definition
-DeclsBad.b:14:3: Incomplete definition
-DeclsBad.b:16:3: Incomplete definition
-DeclsBad.b:17:3: Incomplete definition
-DeclsBad.b:19:3: Illegal recursive definition of 'DeclsBad.rec_attr'
-DeclsBad.b:28:5: Can't assign (left-hand-side is read-only)
+DeclsBad.b:3:20: Type mismatch
+DeclsBad.b:4:5: Illegal recursive definition of 'DeclsBad.r'
+DeclsBad.b:5:5: Incomplete definition
+DeclsBad.b:6:5: Incomplete definition

@@ -11,6 +11,8 @@ repository.
 #ifndef EVAL_CONST_H
 #define EVAL_CONST_H
 
+#include "typechecker.h"
+
 #include <stdint.h>
 
 struct HashTable;
@@ -25,7 +27,7 @@ struct Term;
 
 // If NULL is returned a suitable error message is printed.
 
-struct Term * eval_to_normal_form(struct HashTable *type_env,
+struct Term * eval_to_normal_form(TypeEnv *type_env,
                                   struct Term *term);
 
 #endif
