@@ -59,3 +59,5 @@ function h(x: Type2): Type2
     case C{i=i, b=b} => return C{i=i, b=false};
     }
 }
+
+type BadAbstractType;  // error - not allowed in implementation

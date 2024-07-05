@@ -1,1 +1,2 @@
 AbstractType.b:49:12: Type mismatch
+AbstractType.b:63:1: Abstract type declarations must be in the module interface, not implementation
