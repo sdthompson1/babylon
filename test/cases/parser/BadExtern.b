@@ -1,4 +1,4 @@
-// Only functions can be 'extern' currently
+// Only functions and types can be 'extern' currently
 
 module BadExtern
 interface {

@@ -1,8 +1,8 @@
-module AbstractType
+module ExternType
 
 interface {}
 
-type Foo;
+extern type Foo;
 
 function f(x: Foo)
 {

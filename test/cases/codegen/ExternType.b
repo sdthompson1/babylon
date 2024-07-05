@@ -1,4 +1,4 @@
-module AbstractType
+module ExternType
 
 interface {
     function main();
@@ -7,7 +7,7 @@ interface {
 import Test;
 
 
-type Foo;
+extern type Foo;
 
 function foo(x: Foo)
 {

@@ -810,6 +810,11 @@ void * transform_name_term_list(struct TermTransform *transform, void *context, 
 void * transform_arm(struct TermTransform *transform, void *context, struct Arm *arm);
 void * transform_term(struct TermTransform *transform, void *context, struct Term *term);
 
+// This is a cut-down version of transform_term that just applies a single function
+// to every Type in a term.
+void forall_types_in_term(void (*fn)(void *context, struct Type **type),
+                          void *context,
+                          struct Term *term);
 
 
 

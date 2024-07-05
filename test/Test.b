@@ -109,8 +109,8 @@ interface
 
 
 
-    // A sample allocated abstract type.
-    type AllocTest (allocated);
+    // A sample allocated 'extern' type.
+    extern type AllocTest (allocated);
     datatype MaybeAllocTest = MA_Nothing | MA_Just(AllocTest);
     
     extern function allocate_alloc_test(ref r: MaybeAllocTest)

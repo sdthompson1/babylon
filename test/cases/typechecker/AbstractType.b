@@ -1,22 +1,61 @@
 module AbstractType
 
-interface {}
+interface {
+    type Type1;
+    function f(): Type1;
+    function g(): {Type1, bool};
 
-type Bad<a>;             // type variables can't be used with an abstract type
+    type Type2;
+    function h(x: Type2): Type2;
 
-type Good;
 
-extern function use_good(x: Good): Good;
+    function id<A>(x: A): A
+        requires !allocated(x);
+    {
+        return x;
+    }
 
-function f1(): Good
-{
-    var g1: Good;   // can default-construct
-    var g2: Good = use_good(g1);  // can pass as arg, and get result
-    return g2;      // can return from function
+    datatype Variant = V(Type1);
+
+    ghost function test1()
+    {
+        var a: i32[3] = [1,2,3];
+        var b: i8 = i8(1);
+        var c: i32 = if true then 1 else 2;
+        var d: i32 = -b;
+        var e: i32 = let x = 1 in x + 1;
+        var p: bool = forall (x:u32) x >= 0;
+        var q: Type1 = id<Type1>(f());
+        var r: {x: Type1, y: Type1} = {x = f(), y = f()};
+        var s = {r with x = f()};
+        var t: Type1 = r.x;
+        var u: Variant = V(f());
+        var w: Type1 = match u { case V(x) => x };
+        var x: u64 = sizeof(a);
+        var y: bool = allocated(a);
+        var z: i32 = a[0];
+    }
 }
 
-function f2(): Good
+type Type1 = i32;
+
+function f(): Type1
 {
-    var g: Good;
-    g = g * 2;    // trying to multiply won't work
+    return 100;
+}
+
+function g(): {Type1, bool}
+{
+    return 20;  // type error
+}
+
+datatype Type2 = A | B(i32) | C{i: i64, b: bool};
+
+function h(x: Type2): Type2
+{
+    match x {
+    case A => return B(0);
+    case B(_) => return A;
+    case C{i=i, b=b} => return C{i=i, b=false};
+    }
 }

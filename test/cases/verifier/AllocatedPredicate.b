@@ -7,7 +7,7 @@ import Test;
 // Define an abstract type which counts as "allocated" if it is not equal to the default.
 // Also define some extern functions which allocate and deallocate it.
 
-type MyType
+extern type MyType
     allocated(x) if x != default();
 
 extern function alloc_mytype(ref x: MyType)
@@ -45,7 +45,7 @@ function g3()
 // the "inner" use of allocated(x) with some arbitrary boolean constant).
 // (TODO: This example should ideally produce some kind of error or warning message instead.)
 
-type BadType
+extern type BadType
     allocated(x) if !allocated(x);
 
 function g4()
@@ -63,7 +63,7 @@ ghost function is_alloc<T>(x: T): bool
     return allocated(x);
 }
 
-type VeryBadType
+extern type VeryBadType
     allocated(x) if !is_alloc<VeryBadType>(x);
 
 function g5()

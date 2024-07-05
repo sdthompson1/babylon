@@ -69,8 +69,8 @@ ghost function f8()
 }
 
 
-// Allocated abstract types.
-type Foo (allocated);
+// Allocated 'extern' types.
+extern type Foo (allocated);
 
 datatype MaybeFoo = Nothing | Just(Foo);
 
@@ -129,9 +129,9 @@ function f13()
 }
 
 
-// Alternative syntax for abstract allocated types.
+// Alternative syntax for 'extern' allocated types.
 
-type AltSyntax allocated;
+extern type AltSyntax allocated;
 
 function f14()
 {

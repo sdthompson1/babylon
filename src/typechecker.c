@@ -3716,7 +3716,9 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
 }
 
 static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
-                                    struct Decl *decl)
+                                    struct Decl *decl,
+                                    bool implementation,
+                                    struct DeclGroup *interface_decls)
 {
     // datatypes cannot be recursive currently
     if (decl->recursive) {
@@ -3768,6 +3770,16 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
 
             *variant_tail = variant;
             variant_tail = &variant->next;
+        }
+
+        // If the type was previously abstract, but is now concrete,
+        // then we now replace all instances of the abstract type in
+        // interface decls with the concrete version.
+        if (implementation) {
+            struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, decl->name);
+            if (prev_entry && prev_entry->type == NULL && variant_type != NULL) {
+                substitute_type_in_decl_group(decl->name, variant_type, interface_decls);
+            }
         }
 
         // Add the datatype itself to the env (wrapping in TY_LAMBDA if necessary)
@@ -3831,7 +3843,9 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
 }
 
 static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
-                                   struct Decl *decl)
+                                   struct Decl *decl,
+                                   bool implementation,
+                                   struct DeclGroup *interface_decls)
 {
     // typedefs cannot be recursive
     if (decl->recursive) {
@@ -3878,6 +3892,16 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
             ty = lambda_type;
         }
 
+        // If the type was previously abstract, but is now concrete,
+        // then we now replace all instances of the abstract type in
+        // interface decls with the concrete version.
+        if (implementation) {
+            struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, decl->name);
+            if (prev_entry && prev_entry->type == NULL && ty != NULL) {
+                substitute_type_in_decl_group(decl->name, ty, interface_decls);
+            }
+        }
+
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         ty,
@@ -3920,7 +3944,8 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
 // This typechecks the decl and all "next" decls as well.
 static void typecheck_decls(struct TypecheckContext *tc_context,
                             struct Decl *decls,
-                            bool implementation)
+                            bool implementation,
+                            struct DeclGroup *interface_decls)
 {
     bool overall_error = tc_context->error;
 
@@ -3961,7 +3986,7 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
             break;
 
         case DECL_DATATYPE:
-            typecheck_datatype_decl(tc_context, decl);
+            typecheck_datatype_decl(tc_context, decl, implementation, interface_decls);
             break;
 
         case DECL_TYPEDEF:
@@ -3970,7 +3995,7 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
                 report_abstract_type_in_impl(decl->location);
                 tc_context->error = true;
             } else {
-                typecheck_typedef_decl(tc_context, decl);
+                typecheck_typedef_decl(tc_context, decl, implementation, interface_decls);
             }
             break;
         }
@@ -3989,10 +4014,11 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
 // This typechecks the DeclGroup and all "next" DeclGroups as well.
 static void typecheck_decl_groups(struct TypecheckContext *tc_context,
                                   struct DeclGroup *groups,
-                                  bool implementation)
+                                  bool implementation,
+                                  struct DeclGroup *interface_decls)
 {
     for (struct DeclGroup *group = groups; group; group = group->next) {
-        typecheck_decls(tc_context, group->decl, implementation);
+        typecheck_decls(tc_context, group->decl, implementation, interface_decls);
     }
 }
 
@@ -4240,11 +4266,11 @@ bool typecheck_module(TypeEnv *type_env,
     tc_context.postcondition = false;
     tc_context.temp_name_counter = 0;
 
-    typecheck_decl_groups(&tc_context, module->interface, false);
+    typecheck_decl_groups(&tc_context, module->interface, false, module->interface);
 
     if (!interface_only) {
 
-        typecheck_decl_groups(&tc_context, module->implementation, true);
+        typecheck_decl_groups(&tc_context, module->implementation, true, module->interface);
 
         // Only check interfaces if typechecking succeeded
         if (!tc_context.error) {

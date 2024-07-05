@@ -1,1 +1,1 @@
-BadExtern.b:5:12: Syntax error (expected 'function')
+BadExtern.b:5:12: Syntax error ('extern' can only be used with 'function' or 'type')

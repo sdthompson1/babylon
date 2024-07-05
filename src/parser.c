@@ -2158,7 +2158,7 @@ static struct Decl * parse_datatype_decl(struct ParserState *state)
     return result;
 }
 
-static struct Decl * parse_typedef_decl(struct ParserState *state)
+static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_found)
 {
     struct Location loc = state->token->location;
     advance(state);
@@ -2176,6 +2176,11 @@ static struct Decl * parse_typedef_decl(struct ParserState *state)
     struct Term *alloc_term = NULL;
 
     if (state->token->type == TOK_EQUAL) {
+        if (extern_found) {
+            report_error(state, state->token->location, "'extern' type cannot include a definition");
+            free_tyvar_list(tyvars);
+            return NULL;
+        }
         advance(state);
         rhs = parse_type(state, true);
 
@@ -2211,7 +2216,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state)
     result->tag = DECL_TYPEDEF;
     result->typedef_data.tyvars = tyvars;
     result->typedef_data.rhs = rhs;
-    result->typedef_data.is_extern = (rhs == NULL); // Temporary.
+    result->typedef_data.is_extern = extern_found;
     result->typedef_data.allocated = allocated;
     result->typedef_data.alloc_var = alloc_var;
     result->typedef_data.alloc_term = alloc_term;
@@ -2242,9 +2247,15 @@ static struct Decl * parse_decl(struct ParserState *state)
         advance(state);
     }
 
-    // 'extern' and 'impure' are only allowed with functions
-    if ((extern_found || impure) && state->token->type != TOK_KW_FUNCTION) {
+    // 'impure' is only allowed with functions
+    if (impure && state->token->type != TOK_KW_FUNCTION) {
         expect(state, TOK_KW_FUNCTION, "'function'");  // print error message
+        return NULL;
+    }
+
+    // 'extern' is only allowed with 'type' or 'function'
+    if (extern_found && state->token->type != TOK_KW_TYPE && state->token->type != TOK_KW_FUNCTION) {
+        report_error(state, state->token->location, "'extern' can only be used with 'function' or 'type'");
         return NULL;
     }
 
@@ -2270,7 +2281,7 @@ static struct Decl * parse_decl(struct ParserState *state)
         break;
 
     case TOK_KW_TYPE:
-        decl = parse_typedef_decl(state);
+        decl = parse_typedef_decl(state, extern_found);
         break;
 
     default:

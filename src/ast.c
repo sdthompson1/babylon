@@ -559,6 +559,140 @@ void * transform_term(struct TermTransform *tr, void *context, struct Term *term
     fatal_error("transform_term, bad tag");
 }
 
+void forall_types_in_term(void (*fn)(void *context, struct Type **type),
+                          void *context,
+                          struct Term *term)
+{
+    if (term == NULL) {
+        return;
+    }
+
+    fn(context, &term->type);
+
+    switch (term->tag) {
+    case TM_VAR:
+    case TM_DEFAULT:
+    case TM_BOOL_LITERAL:
+    case TM_INT_LITERAL:
+    case TM_STRING_LITERAL:
+        break;
+
+    case TM_ARRAY_LITERAL:
+        {
+            for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
+                forall_types_in_term(fn, context, node->rhs);
+            }
+        }
+        break;
+
+    case TM_CAST:
+        fn(context, &term->cast.target_type);
+        forall_types_in_term(fn, context, term->cast.operand);
+        break;
+
+    case TM_IF:
+        forall_types_in_term(fn, context, term->if_data.cond);
+        forall_types_in_term(fn, context, term->if_data.then_branch);
+        forall_types_in_term(fn, context, term->if_data.else_branch);
+        break;
+
+    case TM_UNOP:
+        forall_types_in_term(fn, context, term->unop.operand);
+        break;
+
+    case TM_BINOP:
+        {
+            forall_types_in_term(fn, context, term->binop.lhs);
+            for (struct OpTermList *node = term->binop.list; node; node = node->next) {
+                forall_types_in_term(fn, context, node->rhs);
+            }
+        }
+        break;
+
+    case TM_LET:
+        forall_types_in_term(fn, context, term->let.rhs);
+        forall_types_in_term(fn, context, term->let.body);
+        break;
+
+    case TM_QUANTIFIER:
+        fn(context, &term->quant.type);
+        forall_types_in_term(fn, context, term->quant.body);
+        break;
+
+    case TM_CALL:
+        {
+            forall_types_in_term(fn, context, term->call.func);
+            for (struct OpTermList *node = term->call.args; node; node = node->next) {
+                forall_types_in_term(fn, context, node->rhs);
+            }
+        }
+        break;
+
+    case TM_TYAPP:
+        {
+            forall_types_in_term(fn, context, term->tyapp.lhs);
+            for (struct TypeList *node = term->tyapp.tyargs; node; node = node->next) {
+                fn(context, &node->type);
+            }
+        }
+        break;
+
+    case TM_RECORD:
+        {
+            for (struct NameTermList *node = term->record.fields; node; node = node->next) {
+                forall_types_in_term(fn, context, node->term);
+            }
+        }
+        break;
+
+    case TM_RECORD_UPDATE:
+        {
+            forall_types_in_term(fn, context, term->record_update.lhs);
+            for (struct NameTermList *node = term->record_update.fields; node; node = node->next) {
+                forall_types_in_term(fn, context, node->term);
+            }
+        }
+        break;
+
+    case TM_FIELD_PROJ:
+        forall_types_in_term(fn, context, term->field_proj.lhs);
+        break;
+
+    case TM_VARIANT:
+        forall_types_in_term(fn, context, term->variant.payload);
+        break;
+
+    case TM_MATCH:
+        {
+            forall_types_in_term(fn, context, term->match.scrutinee);
+            for (struct Arm *arm = term->match.arms; arm; arm = arm->next) {
+                forall_types_in_term(fn, context, arm->rhs);
+            }
+        }
+        break;
+
+    case TM_MATCH_FAILURE:
+        break;
+
+    case TM_SIZEOF:
+        forall_types_in_term(fn, context, term->sizeof_data.rhs);
+        break;
+
+    case TM_ALLOCATED:
+        forall_types_in_term(fn, context, term->allocated.rhs);
+        break;
+
+    case TM_ARRAY_PROJ:
+        {
+            forall_types_in_term(fn, context, term->array_proj.lhs);
+            for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
+                forall_types_in_term(fn, context, node->rhs);
+            }
+        }
+        break;
+    }
+}
+
 
 //
 // Constructors/destructors -- Types
