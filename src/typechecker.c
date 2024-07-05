@@ -3715,6 +3715,20 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     }
 }
 
+static void replace_abstract_type_with_concrete(struct TypecheckContext *tc_context,
+                                                const char *name,
+                                                struct Type *new_type,
+                                                bool implementation,
+                                                struct DeclGroup *interface_decls)
+{
+    if (implementation) {
+        struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, name);
+        if (prev_entry && prev_entry->type == NULL && new_type != NULL) {
+            substitute_type_in_decl_group(name, new_type, interface_decls);
+        }
+    }
+}
+
 static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                                     struct Decl *decl,
                                     bool implementation,
@@ -3772,15 +3786,14 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
             variant_tail = &variant->next;
         }
 
-        // If the type was previously abstract, but is now concrete,
-        // then we now replace all instances of the abstract type in
-        // interface decls with the concrete version.
-        if (implementation) {
-            struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, decl->name);
-            if (prev_entry && prev_entry->type == NULL && variant_type != NULL) {
-                substitute_type_in_decl_group(decl->name, variant_type, interface_decls);
-            }
-        }
+        // If this datatype "overwrites" an abstract type ("type Foo;"),
+        // then go back through the interface and rewrite all occurrences
+        // of the abstract type to the concrete.
+        replace_abstract_type_with_concrete(tc_context,
+                                            decl->name,
+                                            variant_type,
+                                            implementation,
+                                            interface_decls);
 
         // Add the datatype itself to the env (wrapping in TY_LAMBDA if necessary)
         struct Type * datatype = copy_type(variant_type);
@@ -3895,13 +3908,13 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         // If the type was previously abstract, but is now concrete,
         // then we now replace all instances of the abstract type in
         // interface decls with the concrete version.
-        if (implementation) {
-            struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, decl->name);
-            if (prev_entry && prev_entry->type == NULL && ty != NULL) {
-                substitute_type_in_decl_group(decl->name, ty, interface_decls);
-            }
-        }
+        replace_abstract_type_with_concrete(tc_context,
+                                            decl->name,
+                                            ty,
+                                            implementation,
+                                            interface_decls);
 
+        // Add this typedef (or abstract/extern type) to the type env.
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         ty,
