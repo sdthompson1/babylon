@@ -745,7 +745,7 @@ static bool unify_types(struct TypecheckContext *tc_context,
     }
 
     if (!ok) {
-        report_type_mismatch_explicit(expected_type, actual_type, *loc);
+        report_type_mismatch(expected_type, actual_type, *loc);
         tc_context->error = true;
     }
     return ok;

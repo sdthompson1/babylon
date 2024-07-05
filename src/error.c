@@ -295,12 +295,7 @@ void report_can_only_show_hide_functions(struct Location location)
     print_error("Attempting to show or hide non-function value\n");
 }
 
-void report_type_mismatch(struct Type *expected_type, struct Term *term)
-{
-    report_type_mismatch_explicit(expected_type, term->type, term->location);
-}
-
-void report_type_mismatch_explicit(struct Type *expected_type, struct Type *actual_type, struct Location loc)
+void report_type_mismatch(struct Type *expected_type, struct Type *actual_type, struct Location loc)
 {
     print_location(loc);
     print_error("Type mismatch\n");

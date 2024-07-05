@@ -45,8 +45,7 @@ void report_duplicate_import(struct Import *import);           // two imports ha
 void report_import_clash_with_current(struct Import *import);  // import alias-name equals current module name
 
 // Typechecker errors
-void report_type_mismatch(struct Type *expected_type, struct Term *term);
-void report_type_mismatch_explicit(struct Type *expected, struct Type *actual, struct Location location);
+void report_type_mismatch(struct Type *expected, struct Type *actual, struct Location location);
 void report_type_mismatch_string(const char *expected_type, struct Term *term);
 void report_type_mismatch_pattern(struct Type *scrut_type, struct Location location);
 void report_invalid_decreases_type(struct Location location);
