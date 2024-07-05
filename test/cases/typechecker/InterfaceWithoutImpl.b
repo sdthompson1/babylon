@@ -5,11 +5,13 @@ interface {
 
   function foo(x: i32): i32;
   function bar(x: i32): i32;
+
+  type AbstractWithoutImpl;
 }
 
-  const x: i32 = 100;
+const x: i32 = 100;
 
-  function foo(x:i32): i32
-  {
+function foo(x:i32): i32
+{
     return x;
-  }
+}

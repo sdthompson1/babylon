@@ -1,2 +1,3 @@
 InterfaceWithoutImpl.b:4:3: No implementation found for 'InterfaceWithoutImpl.y'
 InterfaceWithoutImpl.b:7:3: No implementation found for 'InterfaceWithoutImpl.bar'
+InterfaceWithoutImpl.b:9:3: No implementation found for 'InterfaceWithoutImpl.AbstractWithoutImpl'
