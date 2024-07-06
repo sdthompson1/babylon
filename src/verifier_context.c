@@ -438,6 +438,7 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     item->postconds = NULL;
 
     hash_table_insert(env, copy_string(fol_name), item);
+    struct Item * tyvar_item = item;
     item = NULL;
 
 
@@ -508,7 +509,7 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     free((char*)fol_name);
     fol_name = NULL;
 
-    return item;
+    return tyvar_item;
 }
 
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars)

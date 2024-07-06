@@ -625,7 +625,7 @@ static void verify_typedef_decl(struct VContext *context,
 
     if (decl->typedef_data.rhs == NULL) {
 
-        // We are declaring a new abstract type (e.g. "type Foo;").
+        // We are declaring a new abstract type (e.g. "type Foo;" or "extern type Foo;").
         // We need to add a "proper" Item in this case.
 
         // Handle the allocated-predicate first.
@@ -647,7 +647,7 @@ static void verify_typedef_decl(struct VContext *context,
             struct Item *inner_item = update_local(context,
                                                    decl->typedef_data.alloc_var,
                                                    dummy_type,
-                                                   copy_sexpr(item->fol_type),
+                                                   verify_type(dummy_type),
                                                    NULL);
             opts.fol_var = copy_string(inner_item->fol_name);
 
