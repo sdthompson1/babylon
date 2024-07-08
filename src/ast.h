@@ -644,7 +644,7 @@ struct DeclData_Datatype {
 };
 
 enum AllocLevel {
-    ALLOC_UNKNOWN,   // used in verifier only
+    ALLOC_UNKNOWN,  // e.g. type variables
     ALLOC_NEVER,
     ALLOC_IF_NOT_DEFAULT,
     ALLOC_ALWAYS

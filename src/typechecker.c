@@ -97,7 +97,8 @@ void add_to_type_env(TypeEnv *env,
                      bool ghost,
                      bool read_only,
                      bool constructor,
-                     bool impure)
+                     bool impure,
+                     enum AllocLevel alloc_level)
 {
     remove_from_type_env_hash_table(env->table, name);   // just in case there is an existing entry
 
@@ -108,6 +109,7 @@ void add_to_type_env(TypeEnv *env,
     entry->read_only = read_only;
     entry->constructor = constructor;
     entry->impure = impure;
+    entry->alloc_level = alloc_level;
 
     // add to the topmost HashTable in the stack
     hash_table_insert(env->table, copy_string(name), entry);
@@ -416,6 +418,95 @@ static bool kindcheck_type(struct TypecheckContext *tc_context, struct Type **ty
     }
 
     return true;
+}
+
+
+// ----------------------------------------------------------------------------------------------------
+
+// Determines the "alloc level" of a kind-checked type.
+static enum AllocLevel get_alloc_level(struct TypecheckContext *tc_context, struct Type *type)
+{
+    switch (type->tag) {
+    case TY_UNIVAR:
+        if (type->univar_data.node->type) {
+            return get_alloc_level(tc_context, type->univar_data.node->type);
+        } else {
+            return ALLOC_UNKNOWN;
+        }
+        break;
+
+    case TY_VAR:
+        ;
+        struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
+        if (entry) {
+            return entry->alloc_level;
+        } else {
+            return ALLOC_UNKNOWN;
+        }
+        break;
+
+    case TY_BOOL:
+    case TY_FINITE_INT:
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        return ALLOC_NEVER;
+
+    case TY_RECORD:
+        {
+            enum AllocLevel level = ALLOC_NEVER;
+            for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+                enum AllocLevel new_level = get_alloc_level(tc_context, field->type);
+                if (new_level == ALLOC_UNKNOWN) {
+                    return ALLOC_UNKNOWN;
+                }
+                if (new_level > level) {
+                    level = new_level;
+                }
+            }
+            return level;
+        }
+
+    case TY_VARIANT:
+        if (type->variant_data.variants == NULL) {
+            fatal_error("unexpected: TY_VARIANT with no variants");
+        }
+        enum AllocLevel level = ALLOC_NEVER;
+        for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+            enum AllocLevel new_level = get_alloc_level(tc_context, variant->type);
+            if (variant != type->variant_data.variants && new_level == ALLOC_ALWAYS) {
+                // "non-first" variants only come into play if the
+                // variant type is not equal to its default...
+                new_level = ALLOC_IF_NOT_DEFAULT;
+            }
+            if (new_level == ALLOC_UNKNOWN) {
+                return ALLOC_UNKNOWN;
+            }
+            if (new_level > level) {
+                level = new_level;
+            }
+        }
+        return level;
+
+    case TY_ARRAY:
+        if (type->array_data.sizes == NULL) {
+            if (type->array_data.resizable) {
+                return ALLOC_IF_NOT_DEFAULT;
+            } else {
+                return ALLOC_UNKNOWN;
+            }
+        } else {
+            return get_alloc_level(tc_context, type->array_data.element_type);
+        }
+        break;
+
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+        return ALLOC_UNKNOWN;
+    }
+
+    fatal_error("invalid type tag");
 }
 
 
@@ -1986,7 +2077,8 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
                     !tc_context->executable,   // ghost
                     true,                      // read-only
                     false,                     // constructor
-                    false);                    // impure
+                    false,                     // impure
+                    ALLOC_UNKNOWN);
 
     transform_term(tr, context, term->let.body);
 
@@ -2016,7 +2108,8 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
                     true,    // ghost
                     true,    // read-only
                     false,   // constructor
-                    false);  // impure
+                    false,   // impure
+                    ALLOC_UNKNOWN);
 
     transform_term(tr, context, term->quant.body);
 
@@ -2469,7 +2562,8 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
                         !tc_context->executable,   // ghost
                         pat_read_only,             // read-only
                         false,                     // constructor
-                        false);                    // impure
+                        false,                     // impure
+                        ALLOC_UNKNOWN);
         return true;
 
     case PAT_BOOL:
@@ -2993,7 +3087,8 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
                         !tc_context->executable,  // ghost
                         read_only,                // read_only
                         false,                    // constructor
-                        false);                   // impure
+                        false,                    // impure
+                        ALLOC_UNKNOWN);
     }
 }
 
@@ -3033,7 +3128,8 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
                         true,      // ghost
                         true,      // read_only
                         false,     // constructor
-                        false);    // impure
+                        false,     // impure
+                        ALLOC_UNKNOWN);
     }
 }
 
@@ -3054,7 +3150,8 @@ static void typecheck_obtain_stmt(struct TypecheckContext *tc_context,
                     true,    // ghost
                     false,   // read_only
                     false,   // constructor
-                    false);  // impure
+                    false,   // impure
+                    ALLOC_UNKNOWN);
 
     // the condition is not executable
     bool old_exec = tc_context->executable;
@@ -3528,7 +3625,8 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
                         decl->ghost,
                         true,    // read_only
                         false,   // constructor
-                        false);  // impure
+                        false,   // impure
+                        ALLOC_UNKNOWN);
     }
 }
 
@@ -3600,7 +3698,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         false,  // ghost
                         true,   // read_only
                         false,  // constructor
-                        false); // impure
+                        false,  // impure
+                        ALLOC_UNKNOWN);
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         if (kindcheck_type(tc_context, &arg->type)) {
@@ -3610,7 +3709,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                             decl->ghost,
                             !arg->ref,      // read_only
                             false,          // constructor
-                            false);         // impure
+                            false,          // impure
+                            ALLOC_UNKNOWN);
         } else {
             kinds_ok = false;
         }
@@ -3649,7 +3749,8 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         decl->ghost,
                         false,    // read_only
                         false,    // constructor
-                        false);   // impure
+                        false,    // impure
+                        ALLOC_UNKNOWN);
     }
 
     // attributes are considered non-executable
@@ -3711,22 +3812,60 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         decl->ghost,
                         true,    // read_only
                         false,   // constructor
-                        decl->function_data.impure);
+                        decl->function_data.impure,
+                        ALLOC_UNKNOWN);
     }
 }
 
-static void replace_abstract_type_with_concrete(struct TypecheckContext *tc_context,
-                                                const char *name,
+static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_context,
+                                                struct Decl *decl,
                                                 struct Type *new_type,
                                                 bool implementation,
                                                 struct DeclGroup *interface_decls)
 {
     if (implementation) {
-        struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, name);
+        struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, decl->name);
+
         if (prev_entry && prev_entry->type == NULL && new_type != NULL) {
-            substitute_type_in_decl_group(name, new_type, interface_decls);
+
+            // The new type must not be incomplete.
+            struct UnivarNode node;
+            node.must_be_complete = true;
+            node.must_be_executable = node.must_be_valid_decreases = false;
+            if (!ensure_type_meets_flags(tc_context, &node, new_type, &decl->location)) {
+                return false;
+            }
+
+            // The alloc level must be compatible with the previously declared.
+            enum AllocLevel new_alloc_level = get_alloc_level(tc_context, new_type);
+            if (new_alloc_level == ALLOC_UNKNOWN || prev_entry->alloc_level == ALLOC_UNKNOWN) {
+                fatal_error("not expecting alloc_level to be unknown");
+            }
+            if (new_alloc_level > prev_entry->alloc_level) {
+                report_incompatible_alloc_level(decl->location);
+                tc_context->error = true;
+                return false;
+            }
+
+            substitute_type_in_decl_group(decl->name, new_type, interface_decls);
+        }
+
+        if (prev_entry && decl->tag == DECL_TYPEDEF && decl->typedef_data.rhs == NULL) {
+            // Special case -- no substitution in env needed, but we
+            // must still check the alloc levels.
+            enum AllocLevel new_alloc_level = decl->typedef_data.alloc_level;
+            if (new_alloc_level == ALLOC_UNKNOWN || prev_entry->alloc_level == ALLOC_UNKNOWN) {
+                fatal_error("not expecting alloc_level to be unknown");
+            }
+            if (new_alloc_level > prev_entry->alloc_level) {
+                report_incompatible_alloc_level(decl->location);
+                tc_context->error = true;
+                return false;
+            }
         }
     }
+
+    return true;
 }
 
 static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
@@ -3750,7 +3889,8 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                         false,  // ghost
                         true,   // read_only
                         false,  // constructor
-                        false); // impure
+                        false,  // impure
+                        ALLOC_UNKNOWN);
     }
 
     // kindcheck the payload types
@@ -3789,11 +3929,16 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         // If this datatype "overwrites" an abstract type ("type Foo;"),
         // then go back through the interface and rewrite all occurrences
         // of the abstract type to the concrete.
-        replace_abstract_type_with_concrete(tc_context,
-                                            decl->name,
-                                            variant_type,
-                                            implementation,
-                                            interface_decls);
+        // (Also, check for errors, e.g. the new type is incomplete, or
+        // doesn't match the declared alloc-level of the abstract type.)
+        if (!replace_abstract_type_with_concrete(tc_context,
+                                                 decl,
+                                                 variant_type,
+                                                 implementation,
+                                                 interface_decls)) {
+            free_type(variant_type);
+            return;
+        }
 
         // Add the datatype itself to the env (wrapping in TY_LAMBDA if necessary)
         struct Type * datatype = copy_type(variant_type);
@@ -3809,7 +3954,8 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                         false,    // ghost
                         true,     // read_only
                         false,    // constructor
-                        false);   // impure
+                        false,    // impure
+                        ALLOC_UNKNOWN);
 
         // Now add each constructor. We have to wrap the variant_type
         // in a function from the appropriate payload type (unless
@@ -3843,7 +3989,8 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                             false,   // ghost
                             true,    // read_only
                             true,    // constructor
-                            false);  // impure
+                            false,   // impure
+                            ALLOC_UNKNOWN);
 
             ctor = ctor->next;
         }
@@ -3883,7 +4030,8 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
                         false,  // ghost
                         true,   // read_only
                         false,  // constructor
-                        false); // impure
+                        false,  // impure
+                        ALLOC_UNKNOWN);
     }
 
     // kindcheck the rhs type (if applicable)
@@ -3908,11 +4056,15 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         // If the type was previously abstract, but is now concrete,
         // then we now replace all instances of the abstract type in
         // interface decls with the concrete version.
-        replace_abstract_type_with_concrete(tc_context,
-                                            decl->name,
-                                            ty,
-                                            implementation,
-                                            interface_decls);
+        // (Also checking for errors.)
+        if (!replace_abstract_type_with_concrete(tc_context,
+                                                 decl,
+                                                 ty,
+                                                 implementation,
+                                                 interface_decls)) {
+            free_type(ty);
+            return;
+        }
 
         // Add this typedef (or abstract/extern type) to the type env.
         add_to_type_env(tc_context->type_env->base,    // global env
@@ -3921,7 +4073,8 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
                         false,   // ghost
                         true,    // read_only
                         false,   // constructor
-                        false);  // impure
+                        false,   // impure
+                        decl->typedef_data.alloc_level);
 
     } else {
         tc_context->error = true;

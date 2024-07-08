@@ -869,8 +869,8 @@ bool import_builtin_module(const char *name,
                     fun_ty->function_data.args->next->next = NULL;
                     fun_ty->function_data.return_type = make_type(g_no_location, TY_BOOL);
 
-                    add_to_type_env(type_env, &buf[1], fun_ty, true, true, false, false);
-                    add_to_type_env(expanded_type_env, &buf[1], copy_type(fun_ty), true, true, false, false);
+                    add_to_type_env(type_env, &buf[1], fun_ty, true, true, false, false, ALLOC_UNKNOWN);
+                    add_to_type_env(expanded_type_env, &buf[1], copy_type(fun_ty), true, true, false, false, ALLOC_UNKNOWN);
 
                     struct Sexpr *fol_decl =
                         make_list5_sexpr(

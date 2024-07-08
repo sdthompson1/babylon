@@ -34,6 +34,8 @@ struct TypeEnvEntry {
     bool read_only;
     bool constructor;
     bool impure;
+
+    enum AllocLevel alloc_level;  // for tyvars
 };
 
 // Create a new type env, with one (empty) layer.
@@ -58,7 +60,8 @@ void add_to_type_env(TypeEnv *env,
                      bool ghost,
                      bool read_only,
                      bool constructor,
-                     bool impure);
+                     bool impure,
+                     enum AllocLevel alloc_level); // only relevant for abstract or extern types
 
 // Lookup an entry in a type env.
 struct TypeEnvEntry * type_env_lookup(const TypeEnv *env, const char *name);

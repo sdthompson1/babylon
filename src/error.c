@@ -141,6 +141,12 @@ void report_const_out_of_bounds(struct Location location)
     print_error("Array index out of bounds\n");
 }
 
+void report_incompatible_alloc_level(struct Location location)
+{
+    print_location(location);
+    print_error("Type might be allocated, but this was not declared in the interface\n");
+}
+
 void report_not_in_scope(struct Location location, const char *name)
 {
     print_location(location);

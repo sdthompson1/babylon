@@ -126,6 +126,7 @@ void report_can_only_show_hide_functions(struct Location location);
 void report_chaining_direction_error(struct Location location);
 void report_implies_direction_error(struct Location location);
 void report_const_out_of_bounds(struct Location location);  // array index out of bounds, during const evaluation
+void report_incompatible_alloc_level(struct Location location);
 
 // Verifier errors - these allocate a new string and return it
 char * err_msg_operator_precondition_fail(struct Term *term);
