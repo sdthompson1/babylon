@@ -1795,9 +1795,7 @@ struct Decl * copy_decl(struct Decl *decl)
         result->typedef_data.tyvars = copy_tyvar_list(decl->typedef_data.tyvars);
         result->typedef_data.rhs = copy_type(decl->typedef_data.rhs);
         result->typedef_data.is_extern = decl->typedef_data.is_extern;
-        result->typedef_data.allocated = decl->typedef_data.allocated;
-        result->typedef_data.alloc_var = decl->typedef_data.alloc_var ? copy_string(decl->typedef_data.alloc_var) : NULL;
-        result->typedef_data.alloc_term = copy_term(decl->typedef_data.alloc_term);
+        result->typedef_data.alloc_level = decl->typedef_data.alloc_level;
         break;
     }
 
@@ -2010,8 +2008,6 @@ void free_decl(struct Decl *decl)
         case DECL_TYPEDEF:
             free_tyvar_list(decl->typedef_data.tyvars);
             free_type(decl->typedef_data.rhs);
-            free((void*)decl->typedef_data.alloc_var);
-            free_term(decl->typedef_data.alloc_term);
             break;
         }
 

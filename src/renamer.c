@@ -1003,11 +1003,6 @@ static void rename_typedef_decl(struct RenamerState *state, struct Decl *decl)
     }
 
     rename_type(state, decl->typedef_data.rhs);
-
-    if (decl->typedef_data.alloc_var) {
-        add_new_local_name(state, decl->location, &decl->typedef_data.alloc_var, NULL, NULL, NULL);
-        rename_term(state, decl->typedef_data.alloc_term);
-    }
 }
 
 // Rename all the local names in a single Decl

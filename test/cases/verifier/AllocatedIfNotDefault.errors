@@ -1,0 +1,2 @@
+AllocatedIfNotDefault.b:23:5: Precondition at AllocatedIfNotDefault.b:17:5 might not be met
+AllocatedIfNotDefault.b:28:5: 'x' might still be allocated when it goes out of scope

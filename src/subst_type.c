@@ -484,7 +484,6 @@ static void do_substitute_type_in_decl(const char *name,
 
     case DECL_TYPEDEF:
         substitute_type_in_place(name, replacement, &decl->typedef_data.rhs);
-        substitute_type_in_term(name, replacement, decl->typedef_data.alloc_term);
         break;
     }
 

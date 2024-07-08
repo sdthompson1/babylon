@@ -3923,32 +3923,6 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
                         false,   // constructor
                         false);  // impure
 
-        // Check the allocated-predicate, if there is one:
-        if (decl->typedef_data.alloc_var) {
-
-            // The type of the alloc_var is the typedef itself.
-            if (decl->typedef_data.rhs) {
-                fatal_error("this can't happen - parser won't create a typedef with both rhs and allocated");
-            }
-            ty = make_type(g_no_location, TY_VAR);
-            ty->var_data.name = copy_string(decl->name);
-            if (decl->typedef_data.tyvars != NULL) {
-                fatal_error("this can't happen - abstract typedefs cannot have tyvars currently");
-            }
-            add_to_type_env(tc_context->type_env,   // local env
-                            decl->typedef_data.alloc_var,
-                            ty,
-                            true,   // ghost
-                            true,   // read_only
-                            false,  // constructor
-                            false); // impure
-
-            // The type of the alloc_term should be bool.
-            typecheck_term(tc_context, decl->typedef_data.alloc_term);
-            check_term_is_bool(tc_context, decl->typedef_data.alloc_term);
-            remove_univars_from_term(decl->typedef_data.alloc_term);
-        }
-
     } else {
         tc_context->error = true;
     }

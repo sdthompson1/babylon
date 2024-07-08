@@ -2171,9 +2171,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
     struct TyVarList *tyvars = parse_tyvar_list(state);
 
     struct Type *rhs = NULL;
-    bool allocated = false;
-    const char *alloc_var = NULL;
-    struct Term *alloc_term = NULL;
+    enum AllocLevel alloc_level = ALLOC_NEVER;
 
     if (state->token->type == TOK_EQUAL) {
         if (extern_found) {
@@ -2185,27 +2183,18 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
         rhs = parse_type(state, true);
 
     } else if (state->token->type == TOK_LPAREN) {
-        // older syntax, type Foo (allocated);
-        allocated = true;
         advance(state);
-        expect(state, TOK_KW_ALLOCATED, "'allocated'");
-        expect(state, TOK_RPAREN, "')'");
-
-    } else if (state->token->type == TOK_KW_ALLOCATED) {
-        // newer syntax, type Foo allocated [(x) if EXPR];
-        allocated = true;
-        advance(state);
-
-        if (state->token->type == TOK_LPAREN) {
-            advance(state);
-            const struct Token *var_tok = expect(state, TOK_NAME, "variable name");
-            if (var_tok) {
-                alloc_var = copy_string(var_tok->data);
-            }
-            expect(state, TOK_RPAREN, "'('");
-            expect(state, TOK_KW_IF, "'if'");
-            alloc_term = parse_term(state, true);
+        if (state->token->type == TOK_KW_ALLOCATED) {
+            alloc_level = ALLOC_ALWAYS;
+        } else if (state->token->type == TOK_NAME && strcmp(state->token->data, "allocated_if_not_default") == 0) {
+            alloc_level = ALLOC_IF_NOT_DEFAULT;
+        } else {
+            expect(state, TOK_KW_ALLOCATED, "'allocated' or 'allocated_if_not_default'"); // show error message
+            free_tyvar_list(tyvars);
+            return NULL;
         }
+        advance(state);
+        expect(state, TOK_RPAREN, "')'");
     }
 
     expect(state, TOK_SEMICOLON, "';'");
@@ -2217,9 +2206,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
     result->typedef_data.tyvars = tyvars;
     result->typedef_data.rhs = rhs;
     result->typedef_data.is_extern = extern_found;
-    result->typedef_data.allocated = allocated;
-    result->typedef_data.alloc_var = alloc_var;
-    result->typedef_data.alloc_term = alloc_term;
+    result->typedef_data.alloc_level = alloc_level;
     result->attributes = NULL;
     result->next = NULL;
     result->recursive = false;

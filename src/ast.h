@@ -643,6 +643,13 @@ struct DeclData_Datatype {
     struct DataCtor *ctors;
 };
 
+enum AllocLevel {
+    ALLOC_UNKNOWN,   // used in verifier only
+    ALLOC_NEVER,
+    ALLOC_IF_NOT_DEFAULT,
+    ALLOC_ALWAYS
+};
+
 struct DeclData_Typedef {
     // Type variables list
     struct TyVarList *tyvars;
@@ -654,14 +661,9 @@ struct DeclData_Typedef {
     // (applicable only if rhs == NULL)
     bool is_extern;
 
-    // This is true if the type has "allocated" or "allocated(x) if ...".
-    // (applicable only if rhs == NULL)
-    bool allocated;
-
-    // These give the variable name and boolean expression from the allocated-predicate.
-    // (applicable only if rhs == NULL && allocated)
-    const char *alloc_var;
-    struct Term *alloc_term;
+    // This determines whether the type has "allocated" or
+    // "allocated_if_not_default" (applicable only if rhs == NULL)
+    enum AllocLevel alloc_level;
 };
 
 struct Decl {

@@ -279,21 +279,6 @@ void names_used_in_decl(struct HashTable *names, struct Decl *decl)
             hash_table_insert(names, tyvar->name, NULL);
         }
         names_used_in_type(names, decl->typedef_data.rhs);
-        if (decl->typedef_data.alloc_var) {
-            // Special case: If the name of a typedef appears in its own allocated-predicate,
-            // as in for example:
-            //    type Foo
-            //        allocated(x) if some_func<Foo>(x);
-            // then we don't consider that a "use" of the name Foo within Foo's decl.
-            // (Reasoning: If we did not have this rule, then Foo would be considered a recursive
-            // typedef, and therefore it would be disallowed, but we don't want this.)
-            hash_table_insert(names, decl->typedef_data.alloc_var, NULL);
-            bool self_name_exists = hash_table_contains_key(names, decl->name);
-            names_used_in_term(names, decl->typedef_data.alloc_term);
-            if (!self_name_exists) {
-                hash_table_remove(names, decl->name);
-            }
-        }
         break;
     }
 }

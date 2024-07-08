@@ -617,10 +617,20 @@ static void verify_function_decl(struct VContext *context,
     hash_table_insert(context->stack->base->table, fol_name, item);   // add to global env
 }
 
+static void remove_previous_abstract_type(struct VContext *context,
+                                          const char *name)
+{
+    char *fol_name = copy_string_2("%", name);
+    remove_existing_item(context->stack->base->table, fol_name);
+    free(fol_name);
+}
+
 static void verify_typedef_decl(struct VContext *context,
                                 struct Decl *decl,
                                 const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
+    remove_previous_abstract_type(context, decl->name);
+
     struct Item *item;
 
     if (decl->typedef_data.rhs == NULL) {
@@ -628,46 +638,7 @@ static void verify_typedef_decl(struct VContext *context,
         // We are declaring a new abstract type (e.g. "type Foo;" or "extern type Foo;").
         // We need to add a "proper" Item in this case.
 
-        // Handle the allocated-predicate first.
-        struct AllocOptions opts;
-        opts.want_allocated = true;
-
-        if (decl->typedef_data.alloc_var) {
-
-            // Add the new type temporarily to the local env, so we
-            // can process the allocated-term. This should set want_allocated = false
-            // so that "recursive" references to allocated(x) are ignored.
-            struct AllocOptions inner_opts;
-            inner_opts.want_allocated = false;
-            item = add_tyvar_to_env(context, decl->name, true, inner_opts);
-
-            // Add the dummy variable to the env as well.
-            struct Type * dummy_type = make_type(g_no_location, TY_VAR);
-            dummy_type->var_data.name = copy_string(decl->name);
-            struct Item *inner_item = update_local(context,
-                                                   decl->typedef_data.alloc_var,
-                                                   dummy_type,
-                                                   verify_type(dummy_type),
-                                                   NULL);
-            opts.fol_var = copy_string(inner_item->fol_name);
-
-            // Verify the allocated-expression.
-            opts.body_expr = verify_term(context, decl->typedef_data.alloc_term);
-
-            // The dummy-type shouldn't be needed any more.
-            free_type(dummy_type);
-            dummy_type = NULL;
-
-        } else {
-
-            // In this case, the alloc-predicate should always return
-            // either true or false, depending on decl->typedef_data.allocated.
-            opts.fol_var = copy_string("%x");
-            opts.body_expr = make_string_sexpr(decl->typedef_data.allocated ? "true" : "false");
-        }
-
-        // Now add the type to the global env. (This hands over "opts".)
-        item = add_tyvar_to_env(context, decl->name, false, opts);
+        item = add_tyvar_to_env(context, decl->name, false, decl->typedef_data.alloc_level);
 
     } else {
         // We are declaring a typedef (e.g. "type Foo = i32;").
@@ -691,6 +662,8 @@ static void verify_datatype_decl(struct VContext *context,
                                  struct Decl *decl,
                                  const uint8_t fingerprint[SHA256_HASH_LENGTH])
 {
+    remove_previous_abstract_type(context, decl->name);
+
     // Datatype Items aren't directly used, although we still need one
     // to hold the fingerprint.
     struct Item *item = alloc(sizeof(struct Item));

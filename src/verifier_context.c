@@ -412,7 +412,7 @@ struct Item *add_const_item(struct VContext *context,
 }
 
 struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
-                               struct AllocOptions alloc_options)
+                               enum AllocLevel alloc_level)
 {
     struct HashTable *env = local ? context->stack->table : context->stack->base->table;
 
@@ -459,36 +459,57 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     item = NULL;
 
 
-    // Add $allocated, if requested
-    if (alloc_options.want_allocated) {
-        item = alloc(sizeof(struct Item));
-        memset(item, 0, sizeof(struct Item));
+    // Add $allocated
+    item = alloc(sizeof(struct Item));
+    memset(item, 0, sizeof(struct Item));
 
-        const char *allocated_fol_name = copy_string_2("$allocated-", fol_name);
+    const char *allocated_fol_name = copy_string_2("$allocated-", fol_name);
 
-        if (alloc_options.fol_var != NULL) {
-            // (define-fun $allocated-%^name ((alloc_fol_var %^name)) Bool alloc_fol_term)
-            item->fol_decl = make_list5_sexpr(
-                make_string_sexpr("define-fun"),
-                make_string_sexpr(allocated_fol_name),
-                make_list1_sexpr(make_list2_sexpr(make_string_sexpr_handover(alloc_options.fol_var),
-                                                  make_string_sexpr(fol_name))),
-                make_string_sexpr("Bool"),
-                alloc_options.body_expr);
-        } else {
-            // (declare-fun $allocated-%^name (%^name) Bool)
-            item->fol_decl = make_list4_sexpr(
-                make_string_sexpr("declare-fun"),
-                make_string_sexpr(allocated_fol_name),
-                make_list1_sexpr(make_string_sexpr(fol_name)),
-                make_string_sexpr("Bool"));
+    if (alloc_level != ALLOC_UNKNOWN) {
+        // (define-fun $allocated-%^name ((alloc_fol_var %^name)) Bool alloc_fol_term)
+
+        struct Sexpr *alloc_expr;
+        switch (alloc_level) {
+        case ALLOC_ALWAYS:
+            alloc_expr = make_string_sexpr("true");
+            break;
+
+        case ALLOC_NEVER:
+            alloc_expr = make_string_sexpr("false");
+            break;
+
+        case ALLOC_IF_NOT_DEFAULT:
+            alloc_expr = make_list3_sexpr(
+                make_string_sexpr("distinct"),
+                make_string_sexpr("$x"),
+                make_string_sexpr_handover(copy_string_2("$default-", fol_name)));
+            break;
+
+        case ALLOC_UNKNOWN:
+            fatal_error("unreachable");
         }
 
-        item->fol_name = copy_string(allocated_fol_name);
-        hash_table_insert(env, allocated_fol_name, item);
-        allocated_fol_name = NULL;
-        item = NULL;
+        item->fol_decl = make_list5_sexpr(
+            make_string_sexpr("define-fun"),
+            make_string_sexpr(allocated_fol_name),
+            make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$x"),
+                                              make_string_sexpr(fol_name))),
+            make_string_sexpr("Bool"),
+            alloc_expr);
+
+    } else {
+        // (declare-fun $allocated-%^name (%^name) Bool)
+        item->fol_decl = make_list4_sexpr(
+            make_string_sexpr("declare-fun"),
+            make_string_sexpr(allocated_fol_name),
+            make_list1_sexpr(make_string_sexpr(fol_name)),
+            make_string_sexpr("Bool"));
     }
+
+    item->fol_name = copy_string(allocated_fol_name);
+    hash_table_insert(env, allocated_fol_name, item);
+    allocated_fol_name = NULL;
+    item = NULL;
 
     // Add $valid
     item = alloc(sizeof(struct Item));
@@ -515,14 +536,8 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars)
 {
     while (tyvars) {
-        // It is unknown whether these tyvars are allocated or not.
-        struct AllocOptions opts;
-        opts.want_allocated = true;
-        opts.fol_var = NULL;
-        opts.body_expr = NULL;
-
-        add_tyvar_to_env(context, tyvars->name, true, opts);
-
+        // Note: It is unknown whether these tyvars are allocated or not.
+        add_tyvar_to_env(context, tyvars->name, true, ALLOC_UNKNOWN);
         tyvars = tyvars->next;
     }
 }
