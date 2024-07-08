@@ -7,5 +7,5 @@
 module IO
 
 interface {
-    type IO (allocated);
+    extern type IO (allocated);
 }

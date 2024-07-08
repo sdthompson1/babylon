@@ -16,11 +16,10 @@ interface {
 
     // ** The GameEngine itself.
 
-    // Note: default() corresponds to a null pointer in C. A GameEngine is
-    // considered "allocated" if it is NOT a null pointer.
+    // Note: The "default" value of an extern type is the C null pointer value.
+    // A GameEngine is considered "allocated" if it is NOT a null pointer (i.e. "not default").
     
-    type GameEngine
-        allocated(e) if e != default();
+    extern type GameEngine (allocated_if_not_default);
 
 
     // ** Graphics related types

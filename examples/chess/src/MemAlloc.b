@@ -20,7 +20,7 @@ interface {
     // Mem is marked 'allocated' just so that it can't be created
     // on the language side, and must be obtained from C.
 
-    type Mem (allocated);
+    extern type Mem (allocated);
 
 
     ghost function default<T>(): T
