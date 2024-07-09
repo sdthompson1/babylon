@@ -468,7 +468,7 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     if (alloc_level != ALLOC_UNKNOWN) {
         // (define-fun $allocated-%^name ((alloc_fol_var %^name)) Bool alloc_fol_term)
 
-        struct Sexpr *alloc_expr;
+        struct Sexpr *alloc_expr = NULL;
         switch (alloc_level) {
         case ALLOC_ALWAYS:
             alloc_expr = make_string_sexpr("true");
