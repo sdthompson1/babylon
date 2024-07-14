@@ -91,6 +91,6 @@ datatype Poly<a> = P1 {a} | P2{a, i32};
 
 const test_poly: i32 =
   match (P1<i32>{100}) {
-    case P1<i32>{_} => 0
-    case P2<i32>{y, _} => y
+    case P1{_} => 0
+    case P2{y, _} => y
   };

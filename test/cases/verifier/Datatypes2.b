@@ -48,7 +48,7 @@ interface {}
   {
     var b: X<i8> = X<i8> { i8(10), i8(20), 30 };
     match (b) {
-      case X<i8>(ref p) =>
+      case X(ref p) =>
         assert (p.0 == 10);
         assert (p.1 == 20);
         assert (p.2 == 30);

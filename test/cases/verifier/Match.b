@@ -7,25 +7,25 @@ interface {}
   function f1(d: D<Color>): i32
   {
     return match (d) {   // Error: non-exhaustive
-      case D<Color>{Red} => 1
-      case D<Color>{Green} => 2
+      case D{Red} => 1
+      case D{Green} => 2
     };
   }
 
   function f2(d: D<Color>): i32
   {
     return match (d) {   // OK: All cases covered
-      case D<Color>{Red} => 1
-      case D<Color>{Green} => 2
-      case D<Color>{Blue} => 3
+      case D{Red} => 1
+      case D{Green} => 2
+      case D{Blue} => 3
     };
   }
 
   // This is OK, even though only one case provided, because the
   // verifier can see that the scrutinee matches the given pattern
   function f3() { var v = 
-    match (D<Color>{Green}) {
-      case D<Color>{Green} => 1
+    match (D{Green}) {
+      case D{Green} => 1
     }; }
 
 

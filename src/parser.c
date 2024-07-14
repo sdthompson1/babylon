@@ -595,12 +595,6 @@ static struct Pattern * parse_pattern(struct ParserState *state)
                     name = new_name;
                 }
 
-                struct TypeList *tyargs = NULL;
-                if (state->token->type == TOK_LESS) {
-                    parse_type_list(state, true, &tyargs, &loc);
-                }
-                free_type_list(tyargs);  // tyargs are ignored for the moment
-
                 bool have_payload = false;
                 bool paren = false;
                 if (state->token->type == TOK_LBRACE) {
