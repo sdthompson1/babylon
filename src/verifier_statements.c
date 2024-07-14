@@ -660,18 +660,17 @@ static void check_invariants(struct VContext *context,
     revert_facts(context, num_facts);
 }
 
-// Get current value of the variant.
-static struct Sexpr * get_variant_value(struct VContext *context,
-                                        struct Statement *stmt)
+// Find the variant attribute, or report error
+static struct Attribute * find_variant(struct Statement *stmt)
 {
-    struct Attribute *attr = stmt->while_data.attributes;
-    while (attr) {
+    for (struct Attribute *attr = stmt->while_data.attributes; attr; attr = attr->next) {
         if (attr->tag == ATTR_DECREASES) {
-            return verify_term(context, attr->term);
+            return attr;
         }
-        attr = attr->next;
     }
-    fatal_error("no decreases attribute");
+    const char * msg = err_msg_missing_decreases(stmt->location);
+    add_fol_message(msg, true, 0, NULL);
+    return NULL;
 }
 
 // Give all the modified variables new FOL-names, using declare-const so the solver
@@ -904,48 +903,33 @@ static struct Sexpr *variant_bounded_expr(struct Type *type,
 // May modify the path condition.
 static void check_variant_has_decreased(struct VContext *context,
                                         struct Statement *while_stmt,
+                                        struct Attribute *variant_attr,
                                         struct Sexpr *old_variant,
                                         struct Sexpr *new_variant)
 {
-    struct Attribute *attr = while_stmt->while_data.attributes;
-    while (attr) {
-        if (attr->tag == ATTR_DECREASES) {
-            break;
-        }
-        attr = attr->next;
-    }
-
     // Assert that the loop-condition is still true.
     struct Sexpr *expr = verify_term(context, while_stmt->while_data.condition);
     context->path_condition = and_sexpr(context->path_condition, expr);
 
     // Compare the variants.
-    struct Sexpr *cmp_expr = variant_cmp_expr(attr->term->type,
+    struct Sexpr *cmp_expr = variant_cmp_expr(variant_attr->term->type,
                                               copy_sexpr(old_variant), copy_sexpr(new_variant));
-    verify_condition(context, attr->location, cmp_expr, "decreases",
-                     err_msg_decreases_might_not_decrease(attr));
+    verify_condition(context, variant_attr->location, cmp_expr, "decreases",
+                     err_msg_decreases_might_not_decrease(variant_attr));
     free_sexpr(cmp_expr);
 }
 
 // Verify that the variant is bounded below - this is automatic for TY_FINITE_INT and TY_BOOL
 // but needs to be checked for TY_MATH_INT.
 static void check_variant_is_bounded(struct VContext *context,
-                                     struct Statement *while_stmt,
+                                     struct Attribute *variant_attr,
                                      struct Sexpr *variant)
 {
-    struct Attribute *attr = while_stmt->while_data.attributes;
-    while (attr) {
-        if (attr->tag == ATTR_DECREASES) {
-            break;
-        }
-        attr = attr->next;
-    }
-
-    struct Sexpr *bounded_expr = variant_bounded_expr(attr->term->type,
+    struct Sexpr *bounded_expr = variant_bounded_expr(variant_attr->term->type,
                                                       variant);
     if (bounded_expr) {
-        verify_condition(context, attr->location, bounded_expr, "decreases bounded below",
-                         err_msg_decreases_not_bounded_below(attr));
+        verify_condition(context, variant_attr->location, bounded_expr, "decreases bounded below",
+                         err_msg_decreases_not_bounded_below(variant_attr));
         free_sexpr(bounded_expr);
     }
 }
@@ -995,11 +979,14 @@ void verify_while_stmt(struct VContext *context,
     free_hash_table(modified_vars);
     modified_vars = NULL;
 
+    // Find the variant attribute (or report error)
+    struct Attribute *variant_attr = find_variant(stmt);
+
     // Get variant at start of loop
-    struct Sexpr *initial_variant = get_variant_value(context, stmt);
+    struct Sexpr *initial_variant = variant_attr ? verify_term(context, variant_attr->term) : NULL;
 
     // Verify that the initial variant is bounded
-    check_variant_is_bounded(context, stmt, initial_variant);
+    if (variant_attr) check_variant_is_bounded(context, variant_attr, initial_variant);
 
     struct HashTable *hidden_backup = new_hash_table();
     hash_table_copy(hidden_backup, context->local_hidden);
@@ -1011,9 +998,11 @@ void verify_while_stmt(struct VContext *context,
     check_invariants(context, stmt, true);
 
     // Verify that the variant has decreased
-    struct Sexpr *new_variant = get_variant_value(context, stmt);
-    check_variant_has_decreased(context, stmt, initial_variant, new_variant);
-    free_sexpr(new_variant);
+    if (variant_attr) {
+        struct Sexpr *new_variant = verify_term(context, variant_attr->term);
+        check_variant_has_decreased(context, stmt, variant_attr, initial_variant, new_variant);
+        free_sexpr(new_variant);
+    }
 
     free_sexpr(initial_variant);
     initial_variant = NULL;

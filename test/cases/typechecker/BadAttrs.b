@@ -10,7 +10,7 @@ function f()
 
 function g()
 {
-    while (true)        // Decreases Missing
+    while (true)
         requires true;   // Requires not allowed here
         ensures true;    // Ensures not allowed here
     {

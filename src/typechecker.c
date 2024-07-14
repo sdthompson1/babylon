@@ -3398,11 +3398,6 @@ static void typecheck_while_stmt(struct TypecheckContext *tc_context,
         }
     }
 
-    if (!decreases_found) {
-        report_missing_decreases(stmt->location);
-        tc_context->error = true;
-    }
-
     bool old_top_level = tc_context->at_proof_top_level;
     tc_context->at_proof_top_level = false;
     typecheck_statements(tc_context, stmt->while_data.body);

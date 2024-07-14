@@ -310,3 +310,9 @@ function f22()
         assert x == 98;   // Should fail (x modified via r)
     }
 }
+
+function f23()
+{
+    // Missing "decreases". (This is now a verifier error, not a typechecking error.)
+    while (true) { }
+}

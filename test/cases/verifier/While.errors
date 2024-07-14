@@ -23,3 +23,4 @@ While.b:267:9: Assert might not hold
 While.b:285:9: Assert might not hold
 While.b:297:9: Assert might not hold
 While.b:310:9: Assert might not hold
+While.b:317:5: A 'decreases' clause is required

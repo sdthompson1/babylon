@@ -569,12 +569,6 @@ void report_duplicate_decreases(struct Attribute *attr)
     print_error("Duplicate 'decreases' clause\n");
 }
 
-void report_missing_decreases(struct Location loc)
-{
-    print_location(loc);
-    print_error("A 'decreases' clause is required\n");
-}
-
 void report_executable_quantifier(struct Term *term)
 {
     print_location(term->location);
@@ -763,6 +757,11 @@ char * err_msg_invariant_violated_on_exit(struct Attribute *attr)
 {
     return err_msg(attr->location,
                    "Invariant might not hold on exit from loop\n");
+}
+
+char * err_msg_missing_decreases(struct Location loc)
+{
+    return err_msg(loc, "A 'decreases' clause is required\n");
 }
 
 char * err_msg_decreases_might_not_decrease(struct Attribute *attr)
