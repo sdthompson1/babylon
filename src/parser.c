@@ -2386,8 +2386,9 @@ static struct Import * parse_imports(struct ParserState *state)
             break;
         }
 
+        // 'as' is also not a keyword
         const char * alias_name = NULL;
-        if (state->token->type == TOK_KW_AS) {
+        if (state->token->type == TOK_NAME && strcmp(state->token->data, "as") == 0) {
             advance(state);
             const struct Token *alias_tok = expect(state, TOK_NAME, "module alias name");
             if (alias_tok) {

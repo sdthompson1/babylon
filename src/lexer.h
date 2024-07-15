@@ -24,7 +24,6 @@ enum TokenType {
     TOK_NAME,
 
     TOK_KW_ALLOCATED,
-    TOK_KW_AS,
     TOK_KW_ASSERT,
     TOK_KW_ASSUME,
     TOK_KW_BOOL,

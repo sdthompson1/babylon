@@ -357,8 +357,6 @@ static void lex_keyword_or_name(struct LexerState *state)
     case 'a':
         if (strcmp(&buf[1], "llocated") == 0) {
             add_simple_token(state, TOK_KW_ALLOCATED);
-        } else if (strcmp(&buf[1], "s") == 0) {
-            add_simple_token(state, TOK_KW_AS);
         } else if (strcmp(&buf[1], "ssert") == 0) {
             add_simple_token(state, TOK_KW_ASSERT);
         } else if (strcmp(&buf[1], "ssume") == 0) {
@@ -860,7 +858,6 @@ void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
     case TOK_NAME: complex_token(ctx, token, "VARNAM"); break;
 
     case TOK_KW_ALLOCATED: simple_token(ctx, "allocated"); break;
-    case TOK_KW_AS: simple_token(ctx, "as"); break;
     case TOK_KW_ASSERT: simple_token(ctx, "assert"); break;
     case TOK_KW_ASSUME: simple_token(ctx, "assume"); break;
     case TOK_KW_BOOL: simple_token(ctx, "bool"); break;
