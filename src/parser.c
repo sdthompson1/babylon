@@ -916,6 +916,12 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
                 struct Pattern *p = parse_pattern(state);
                 expect(state, TOK_EQUAL_GREATER, "'=>'");
                 struct Term *rhs = parse_term(state, true);
+
+                // optional semicolon after the term
+                if (state->token->type == TOK_SEMICOLON) {
+                    advance(state);
+                }
+
                 *tail = make_arm(p, rhs, rhs ? &rhs->location : NULL, case_loc);
                 tail = &(*tail)->next;
             }

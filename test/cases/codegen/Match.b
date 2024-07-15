@@ -59,7 +59,7 @@ function test_tuples()
 
     var test_tup2 =
         match ({{S{1},S{2}},{S{3},S{4}}}) {
-            case {{S{10},_},_} => 1
+            case {{S{10},_},_} => 1;  // (new) optional semicolon syntax in match terms
             case {_,{S{x},_}} => x
             case _ => 4
         };
