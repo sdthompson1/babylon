@@ -71,8 +71,8 @@ function default_init_4<T>()
 
 function default_init_5()
 {
-    var a: D<Simple<Color> >;
-    var b: D<Simple<Color> >;
+    var a: D<Simple<Color>>;  // single '>>' token, parser must split into '>' and '>'
+    var b: D<Simple<Color> >; // two separate '>' tokens
     assert (a == b);
     assert (a != b);   // fails
 }

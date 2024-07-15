@@ -68,6 +68,9 @@ struct OpData operators[] = {
 
 struct ParserState {
     const struct Token *token;
+
+    struct Token fake_token; // used for splitting '>>' into two '>' tokens when needed
+
     bool error;
 
     // context for "old" parsing
@@ -127,7 +130,7 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors);
 static struct Term * parse_term(struct ParserState *state, bool allow_lbrace);
 
 // Assumption: current token is '<'.
-// The list is closed by '>'.
+// The list is closed by '>' (or '>>' which is automatically split into two '>' tokens in this case).
 // End of "loc_out" is set to end of list.
 static bool parse_type_list(struct ParserState *state,
                             bool report_errors,
@@ -141,7 +144,7 @@ static bool parse_type_list(struct ParserState *state,
 
     bool success = true;
 
-    while (state->token->type != TOK_GREATER) {
+    while (state->token->type != TOK_GREATER && state->token->type != TOK_GREATER_GREATER) {
         if (types != NULL) {
             // not the first type in the list, so we need a comma
             if (state->token->type == TOK_COMMA) {
@@ -172,9 +175,19 @@ static bool parse_type_list(struct ParserState *state,
 
     if (success) {
         set_location_end(loc_out, &state->token->location);
-        advance(state);
+
+        if (state->token->type == TOK_GREATER_GREATER) {
+            state->fake_token = *state->token;
+            state->fake_token.type = TOK_GREATER;
+            state->fake_token.location.end_column_num++;
+            state->token = &state->fake_token;
+        } else {
+            advance(state);
+        }
+
         *output = types;
         return true;
+
     } else {
         free_type_list(types);
         return false;
