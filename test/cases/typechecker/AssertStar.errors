@@ -1,0 +1,1 @@
+AssertStar.b:7:5: 'assert *' not allowed outside of a proof

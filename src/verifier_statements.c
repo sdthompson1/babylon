@@ -335,7 +335,13 @@ static void verify_return_stmt(struct VContext *context,
 static void verify_assert_stmt(struct VContext *context,
                                struct Statement *stmt)
 {
-    struct Sexpr *expr = verify_term(context, stmt->assert_data.condition);
+    struct Sexpr *expr;
+    if (stmt->assert_data.condition) {
+        expr = verify_term(context, stmt->assert_data.condition);
+    } else {
+        // "assert *;"
+        expr = copy_sexpr(context->assert_exprs->left);
+    }
 
     int num_facts = get_num_facts(context);
 

@@ -1637,9 +1637,15 @@ static struct Statement * parse_assert_stmt(struct ParserState *state)
 {
     struct Location loc = state->token->location;
     advance(state);
-    struct Term *term = parse_term(state, false);
-    if (term) {
-        set_location_end(&loc, &term->location);
+
+    struct Term *term = NULL;
+    if (state->token->type == TOK_TIMES) {
+        advance(state);
+    } else {
+        term = parse_term(state, false);
+        if (term) {
+            set_location_end(&loc, &term->location);
+        }
     }
 
     struct Statement *proof = NULL;

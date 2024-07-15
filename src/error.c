@@ -623,6 +623,12 @@ void report_use_outside_proof(struct Statement *stmt)
     print_error("'use' not allowed outside of a proof\n");
 }
 
+void report_assert_star_outside_proof(struct Statement *stmt)
+{
+    print_location(stmt->location);
+    print_error("'assert *' not allowed outside of a proof\n");
+}
+
 void report_fix_at_wrong_scope(struct Statement *stmt)
 {
     print_location(stmt->location);

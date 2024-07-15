@@ -3321,10 +3321,22 @@ static void typecheck_assert_stmt(struct TypecheckContext *tc_context,
     tc_context->executable = false;
 
     struct Term *old_assert_term = tc_context->assert_term;
-    tc_context->assert_term = stmt->assert_data.condition;
+    if (stmt->assert_data.condition) {
+        tc_context->assert_term = stmt->assert_data.condition;
+    } else {
+        // "assert *"
+        // If old_assert_term is null, this is an error.
+        // Otherwise, leave tc_context->assert_term unchanged.
+        if (old_assert_term == NULL) {
+            report_assert_star_outside_proof(stmt);
+            tc_context->error = true;
+        }
+    }
 
-    typecheck_term(tc_context, stmt->assert_data.condition);
-    check_term_is_bool(tc_context, stmt->assert_data.condition);
+    if (stmt->assert_data.condition) {
+        typecheck_term(tc_context, stmt->assert_data.condition);
+        check_term_is_bool(tc_context, stmt->assert_data.condition);
+    }
 
     if (stmt->assert_data.proof) {
         bool old_top_level = tc_context->at_proof_top_level;

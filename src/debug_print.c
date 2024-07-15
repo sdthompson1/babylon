@@ -643,7 +643,11 @@ static void print_statements(int indent_level, FILE *file, struct Statement *stm
 
         case ST_ASSERT:
             fprintf(file, "assert ");
-            print_paren_term(false, file, stmt->assert_data.condition, true);
+            if (stmt->assert_data.condition) {
+                print_term(false, file, stmt->assert_data.condition);
+            } else {
+                fprintf(file, "*");
+            }
             if (stmt->assert_data.proof) {
                 fprintf(file, " {\n");
                 print_statements(indent_level + 1, file, stmt->assert_data.proof);
@@ -887,7 +891,7 @@ static void print_imports(FILE *file, struct Import *import)
     }
 }
 
-void print_module(FILE *file, struct Module *module)
+void print_module(FILE *file, struct Module *module, bool interface_only)
 {
     fprintf(file, "module %s\n", module->name);
 
@@ -897,7 +901,8 @@ void print_module(FILE *file, struct Module *module)
     print_decl_groups(1, file, module->interface);
     fprintf(file, "}\n");
 
-    print_imports(file, module->implementation_imports);
-
-    print_decl_groups(0, file, module->implementation);
+    if (!interface_only) {
+        print_imports(file, module->implementation_imports);
+        print_decl_groups(0, file, module->implementation);
+    }
 }

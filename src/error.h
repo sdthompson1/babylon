@@ -96,6 +96,7 @@ void report_writing_nonghost_from_ghost_code(struct Location loc);
 void report_cant_return_in_ghost_code(struct Statement *stmt);
 void report_fix_outside_proof(struct Statement *stmt);
 void report_use_outside_proof(struct Statement *stmt);
+void report_assert_star_outside_proof(struct Statement *stmt);
 void report_fix_at_wrong_scope(struct Statement *stmt);
 void report_use_at_wrong_scope(struct Statement *stmt);
 void report_fix_no_forall_variable(struct Statement *stmt, struct Term *assert_term);

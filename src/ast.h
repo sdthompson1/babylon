@@ -529,8 +529,8 @@ struct StmtData_Return {
 };
 
 struct StmtData_Assert {
-    struct Term *condition;
-    struct Statement *proof;  // may be NULL
+    struct Term *condition;   // NULL means 'assert *'
+    struct Statement *proof;  // NULL means no proof present
 };
 
 struct StmtData_Assume {

@@ -239,7 +239,7 @@ static bool run_typechecker(struct LoadDetails *details,
         FILE *debug_file = fopen(debug_filename, "w");
         free(debug_filename);
         if (debug_file) {
-            print_module(debug_file, module);
+            print_module(debug_file, module, interface_only);
             fclose(debug_file);
         }
     }
