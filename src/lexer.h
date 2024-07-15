@@ -29,6 +29,7 @@ enum TokenType {
     TOK_KW_ASSUME,
     TOK_KW_BOOL,
     TOK_KW_CASE,
+    TOK_KW_CAST,
     TOK_KW_CONST,
     TOK_KW_DATATYPE,
     TOK_KW_DECREASES,

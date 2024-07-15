@@ -375,6 +375,8 @@ static void lex_keyword_or_name(struct LexerState *state)
     case 'c':
         if (strcmp(&buf[1], "ase") == 0) {
             add_simple_token(state, TOK_KW_CASE);
+        } else if (strcmp(&buf[1], "ast") == 0) {
+            add_simple_token(state, TOK_KW_CAST);
         } else if (strcmp(&buf[1], "onst") == 0) {
             add_simple_token(state, TOK_KW_CONST);
         }
@@ -863,6 +865,7 @@ void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
     case TOK_KW_ASSUME: simple_token(ctx, "assume"); break;
     case TOK_KW_BOOL: simple_token(ctx, "bool"); break;
     case TOK_KW_CASE: simple_token(ctx, "case"); break;
+    case TOK_KW_CAST: simple_token(ctx, "cast"); break;
     case TOK_KW_CONST: simple_token(ctx, "const"); break;
     case TOK_KW_DATATYPE: simple_token(ctx, "datatype"); break;
     case TOK_KW_DECREASES: simple_token(ctx, "decreases"); break;

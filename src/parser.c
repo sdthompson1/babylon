@@ -1020,6 +1020,25 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
         }
         break;
 
+    case TOK_KW_CAST:
+        {
+            advance(state);
+            expect(state, TOK_LESS, "'<'");
+            struct Type *type = parse_type(state, true);
+            expect(state, TOK_GREATER, "'>'");
+            struct Term *operand = parse_paren_term(state);
+
+            struct Term *result = make_term(loc, TM_CAST);
+            result->cast.target_type = type;
+            result->cast.operand = operand;
+
+            if (operand) {
+                set_location_end(&result->location, &operand->location);
+            }
+            return result;
+        }
+        break;
+
     case TOK_KW_FALSE:
         advance(state);
         return make_bool_literal_term(loc, false);
