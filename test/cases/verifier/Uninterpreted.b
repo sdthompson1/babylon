@@ -47,3 +47,14 @@ function test6()
     ghost var f2v = f2(v);
     assert f2v == true || f2v == false;
 }
+
+
+// Uninterpreted function with precondition.
+ghost function with_precond(x: i32): bool;
+    requires x > 10;
+
+function test7()
+{
+    ghost var v1 = with_precond(20);
+    ghost var v2 = with_precond(5);   // Error, precondition not met.
+}

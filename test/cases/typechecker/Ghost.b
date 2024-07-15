@@ -1,12 +1,12 @@
 module Ghost
 interface {}
 
-  ghost function byref(ref x: i32)
-  {}
+ghost function byref(ref x: i32)
+{}
 
-  // Executable function
-  function f()
-  {
+// Executable function
+function f()
+{
     var v: i32       = 50;
     ghost var g: i32 = 100;
 
@@ -38,4 +38,13 @@ interface {}
 
     ghost byref(g);  // OK, writing to ghost variable
     ghost byref(v);  // Error, trying to write to nonghost variable from ghost stmt.
-  }
+}
+
+
+// Uninterpreted ghost function, with preconditions - allowed
+ghost function uninterp_1(x: i32): i32
+    requires x > 10;
+
+// Uninterpreted ghost function, with postcondition - not allowed
+ghost function uninterp_2(): i32
+    ensures return > 10;

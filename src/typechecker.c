@@ -3643,13 +3643,23 @@ static void evaluate_constant(struct TypecheckContext *tc_context,
     }
 }
 
+static bool has_postcondition(struct Attribute *attr)
+{
+    for (; attr; attr = attr->next) {
+        if (attr->tag == ATTR_ENSURES) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool function_body_required(struct Decl *decl)
 {
     // extern => no body required
-    // ghost, without pre/post conditions => no body required
+    // ghost, without post-conditions => no body required
     // all other cases => a function body is required.
     return !(decl->function_data.is_extern
-             || (decl->ghost && decl->attributes == NULL));
+             || (decl->ghost && !has_postcondition(decl->attributes)));
 }
 
 static bool function_body_allowed(struct Decl *decl)
