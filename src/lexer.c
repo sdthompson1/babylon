@@ -229,9 +229,19 @@ static int lex_escape_sequence(struct LexerState *state)
     int output = -1;
 
     switch (ch) {
-    case 't':
-        // '\t' = tab (ascii 9)
-        output = 9;
+    case 'a':
+        // '\a' = alert/bell (ascii 7)
+        output = 7;
+        break;
+
+    case 'b':
+        // '\b' = backspace (ascii 8)
+        output = 8;
+        break;
+
+    case 'f':
+        // '\f' = form feed (ascii 12)
+        output = 12;
         break;
 
     case 'n':
@@ -239,9 +249,29 @@ static int lex_escape_sequence(struct LexerState *state)
         output = 10;
         break;
 
+    case 'r':
+        // '\r' = carriage return (ascii 13)
+        output = 13;
+        break;
+
+    case 't':
+        // '\t' = tab (ascii 9)
+        output = 9;
+        break;
+
+    case 'v':
+        // '\v' = vertical tab (ascii 11)
+        output = 11;
+        break;
+
     case '"':
         // '\"' = double quote (ascii 34)
         output = 34;
+        break;
+
+    case '\\':
+        // '\\' = backslash (ascii 92)
+        output = 92;
         break;
 
     case 'x':

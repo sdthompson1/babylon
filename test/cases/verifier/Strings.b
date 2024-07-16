@@ -38,6 +38,23 @@ function f5()
     assert (r[6] == 171);
     assert (r[7] == 0);  // null terminator is added automatically (like in C)
     assert (sizeof(r) == u64(8));
+
+    // More escape codes
+    ref s = "\a\b\f\n\r\t\v\"\\\x10";
+    assert s[0] == 7;
+    assert s[1] == 8;
+    assert s[2] == 12;
+    assert s[3] == 10;
+    assert s[4] == 13;
+    assert s[5] == 9;
+    assert s[6] == 11;
+    assert s[7] == 34;
+    assert s[8] == 92;
+    assert s[9] == 16;
+    assert s[10] == 0;
+    assert sizeof(s) == 11;
+
+    assert s[0] == 1; // Error
 }
 
 function big_string()
