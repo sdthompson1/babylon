@@ -34,10 +34,30 @@ function f3(): {u8, bool, i32}
 }
 
 
+function g1(ref x: i32): i32
+    requires 0 <= x <= 10;
+{
+    x = x + 1;
+    return x + 2;
+}
+
+function call_g1(ref x: i32): i32
+    requires 0 <= x <= 8;
+{
+    x = x + 2;
+    return g1(x);
+}
+
+
 function main()
 {
     Test.print_i32  ( g() );
     Test.print_u8   ( f3().0 );
     Test.print_bool ( f3().1 );
     Test.print_i32  ( f3().2 );
+
+    var x = 1;
+    var r = call_g1(x);
+    Test.print_i32(x);  // 4
+    Test.print_i32(r);  // 6
 }

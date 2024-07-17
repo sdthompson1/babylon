@@ -52,3 +52,17 @@ function f8(x: i32)
 }
 
 
+function id(x: i32): i32
+{
+    return x;
+}
+
+function f9(b: bool): i32
+{
+    var x: i32;
+    if b {
+        return f3(x);  // Allowed
+    } else {
+        return id(f3(x));  // Not allowed
+    }
+}

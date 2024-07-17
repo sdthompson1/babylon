@@ -2167,6 +2167,8 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
             allow_ref = (stmt->assign.rhs == term);
         } else if (stmt->tag == ST_VAR_DECL) {
             allow_ref = (stmt->var_decl.rhs == term);
+        } else if (stmt->tag == ST_RETURN) {
+            allow_ref = (stmt->ret.value == term);
         }
     }
 
