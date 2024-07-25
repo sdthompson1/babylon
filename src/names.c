@@ -392,6 +392,9 @@ static void get_modified_vars_impl(struct HashTable *names,
             break;
 
         case ST_RETURN:
+            if (stmt->ret.value) {
+                get_modified_vars_from_call(names, refs, stmt->ret.value);
+            }
             break;
 
         case ST_ASSERT:
