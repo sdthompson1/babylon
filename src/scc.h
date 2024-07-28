@@ -19,6 +19,7 @@ struct Edge;
 struct Vertex {
     void *data;
     struct Edge *edges;
+    struct Vertex *prev; // optional; not actually used by SCC algorithm
     struct Vertex *next;
 
     // for internal use by the algorithm (does not need to be initialised)
