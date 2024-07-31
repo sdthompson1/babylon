@@ -751,11 +751,12 @@ static void compute_decl_fingerprint(struct StackedHashTable *global_env,
     // (directly) depends on (in alphabetical order).
     for (struct NameList *node = decl->dependency_names; node; node = node->next) {
         const uint8_t* fingerprint_result = lookup_decl_fingerprint(global_env, node->name);
-        if (fingerprint_result) {  // (sometimes it won't be found e.g. data ctor names)
-            const char *dep_fpr = "DEP-FPR";
-            sha256_add_bytes(&ctx, (const uint8_t*) dep_fpr, strlen(dep_fpr)+1);
-            sha256_add_bytes(&ctx, fingerprint_result, SHA256_HASH_LENGTH);
+        if (!fingerprint_result) {
+            fatal_error("could not find fingerprint for decl");
         }
+        const char *dep_fpr = "DEP-FPR";
+        sha256_add_bytes(&ctx, (const uint8_t*) dep_fpr, strlen(dep_fpr)+1);
+        sha256_add_bytes(&ctx, fingerprint_result, SHA256_HASH_LENGTH);
     }
 
     sha256_final(&ctx, fingerprint);

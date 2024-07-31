@@ -105,13 +105,13 @@ static void add_vertex(struct Graph *graph, struct Decl *decl, bool impl)
         }
 
         hash_table_insert(graph->name_to_vertex, decl->name, vertex);
+    }
 
-        // Also add the data ctor names (as "alternative names" for
-        // this vertex), if applicable
-        if (decl->tag == DECL_DATATYPE) {
-            for (struct DataCtor *ctor = decl->datatype_data.ctors; ctor; ctor = ctor->next) {
-                hash_table_insert(graph->name_to_vertex, ctor->name, vertex);
-            }
+    // Also add the data ctor names (as "alternative names" for
+    // this vertex), if applicable.
+    if (decl->tag == DECL_DATATYPE) {
+        for (struct DataCtor *ctor = decl->datatype_data.ctors; ctor; ctor = ctor->next) {
+            hash_table_insert(graph->name_to_vertex, ctor->name, vertex);
         }
     }
 
@@ -150,18 +150,24 @@ static void add_edges(struct Graph *graph, struct Decl *decl)
                 decl->recursive = true;
             }
 
-        } else if (to_vertex != NULL) {
-            // add new edge to the front of the list
-            struct Edge *edge = alloc(sizeof(struct Edge));
-            edge->target = to_vertex;
-            edge->next = vertex->edges;
-            vertex->edges = edge;
+        } else {
+            if (to_vertex != NULL) {
+                // add new edge to the front of the list
+                struct Edge *edge = alloc(sizeof(struct Edge));
+                edge->target = to_vertex;
+                edge->next = vertex->edges;
+                vertex->edges = edge;
+            }
 
-            // add to dependency_names
-            struct NameList *node = alloc(sizeof(struct NameList));
-            node->name = copy_string(to_vertex->data);
-            node->next = decl->dependency_names;
-            decl->dependency_names = node;
+            // If it is a global name (containing a '.'), add to dependency_names.
+            // Note that this should happen regardless of whether to_vertex is NULL or not,
+            // because we want to catch both intra- and inter-module dependencies.
+            if (strchr(key, '.') != NULL) {
+                struct NameList *node = alloc(sizeof(struct NameList));
+                node->name = copy_string(key);
+                node->next = decl->dependency_names;
+                decl->dependency_names = node;
+            }
         }
     }
 

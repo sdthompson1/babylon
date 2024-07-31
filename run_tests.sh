@@ -209,6 +209,7 @@ run_sequence_tests()
         # solvers being used).
         sed -i -E -e 's/ \([^()]*, [0-9]+\.[0-9]s\)//g' $OUT_DIR/verifier_stderr.txt
         sed -i -E -e 's/ \(cached\)//g' $OUT_DIR/verifier_stderr.txt
+        sed -i -E -e "s/ \\([^()]* returned '[a-z]+'\\)//g" $OUT_DIR/verifier_stderr.txt
 
         # All these tests should succeed
         if [ $? -ne 0 ]

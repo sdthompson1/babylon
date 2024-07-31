@@ -105,6 +105,7 @@ static void add_fol_helper(struct HashTable *env,
     item->fol_generic_vars = NULL;
     item->fol_dummies = NULL;
     item->preconds = item->postconds = NULL;
+    memset(item->fingerprint, 0xab, SHA256_HASH_LENGTH);  // Dummy fingerprint
     hash_table_insert(env, copy_string(name), item);
 }
 

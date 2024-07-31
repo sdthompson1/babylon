@@ -248,6 +248,7 @@ void names_used_in_decl(struct HashTable *names, struct Decl *decl)
 {
     switch (decl->tag) {
     case DECL_CONST:
+        names_used_in_type(names, decl->const_data.type);
         names_used_in_term(names, decl->const_data.rhs);
         break;
 

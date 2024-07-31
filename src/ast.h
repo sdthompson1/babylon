@@ -630,7 +630,7 @@ struct DeclData_Function {
     struct Type *return_type;  // can be NULL
 
     struct Statement *body;    // can be NULL if body is empty
-    bool body_specified;       // true if 'begin' and 'end' given (even if empty)
+    bool body_specified;       // true if '{' and '}' given (even if empty)
 
     struct Location end_loc;
 

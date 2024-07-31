@@ -1,0 +1,5 @@
+Verifying: Foo.Foo
+Verifying: Main.foo
+Checking Main.b:12:5-15:6 (match exhaustive)
+test/sequence/12/Main.b:12:5: Match might not be exhaustive
+Verification failed
