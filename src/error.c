@@ -48,6 +48,12 @@ static const char *attribute_name(enum AttrTag tag)
 
 static void print_error(const char *format, ...)
 {
+    if (fol_error_found()) {
+        // Suppress type errors if a verifier error has previously
+        // been found.
+        return;
+    }
+
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
