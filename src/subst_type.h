@@ -11,6 +11,8 @@ repository.
 #ifndef SUBST_TYPE_H
 #define SUBST_TYPE_H
 
+#include "typechecker.h"  // for TypeEnv typedef
+
 struct HashTable;
 struct Type;
 struct TypeList;
@@ -37,7 +39,8 @@ struct Type * substitute_in_type_from_hashtable(struct HashTable *theta,
 
 
 // Function to substitute all types in a DeclGroup (and all "next"
-// DeclGroups), in place.
+// DeclGroups), in place. (Each Decl is also looked up in the given
+// TypeEnv and env_entry->type is substituted as well.)
 
 // This is a different implementation to the above, and this time it
 // can cope with TY_FORALL or TY_LAMBDA types (doing proper capture
@@ -46,6 +49,7 @@ struct Type * substitute_in_type_from_hashtable(struct HashTable *theta,
 
 void substitute_type_in_decl_group(const char *tyvar_name,
                                    struct Type *replacement,
-                                   struct DeclGroup *group);
+                                   struct DeclGroup *group,
+                                   TypeEnv *type_env);
 
 #endif

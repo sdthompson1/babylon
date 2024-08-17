@@ -3866,7 +3866,7 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
                 return false;
             }
 
-            substitute_type_in_decl_group(decl->name, new_type, interface_decls);
+            substitute_type_in_decl_group(decl->name, new_type, interface_decls, tc_context->type_env);
         }
 
         if (prev_entry && decl->tag == DECL_TYPEDEF && decl->typedef_data.rhs == NULL) {

@@ -10,6 +10,7 @@ repository.
 #include "ast.h"
 #include "error.h"
 #include "hash_table.h"
+#include "subst_type.h"
 #include "util.h"
 
 #include <inttypes.h>
@@ -490,9 +491,10 @@ static void do_substitute_type_in_decl(const char *name,
     substitute_type_in_attributes(name, replacement, decl->attributes);
 }
 
-static void substitute_type_in_decl(const char *name,
+static void substitute_type_in_decls(const char *name,
                                      struct Type *replacement,
-                                     struct Decl *decl)
+                                     struct Decl *decl,
+                                     TypeEnv *type_env)
 {
     for (; decl; decl = decl->next) {
 
@@ -522,15 +524,22 @@ static void substitute_type_in_decl(const char *name,
 
         // Now we are free to do the substitution in the decl
         do_substitute_type_in_decl(name, replacement, decl);
+
+        // Also substitute the type env entry, if any
+        struct TypeEnvEntry *entry = type_env_lookup(type_env, decl->name);
+        if (entry && entry->type) {
+            substitute_type_in_place(name, replacement, &entry->type);
+        }
     }
 }
 
 void substitute_type_in_decl_group(const char *name,
                                    struct Type *replacement,
-                                   struct DeclGroup *group)
+                                   struct DeclGroup *group,
+                                   TypeEnv *type_env)
 {
     while (group) {
-        substitute_type_in_decl(name, replacement, group->decl);
+        substitute_type_in_decls(name, replacement, group->decl, type_env);
         group = group->next;
     }
 }
