@@ -2014,6 +2014,7 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
             expect(state, TOK_COMMA, "',' or ')'");
         }
 
+        // 'ref' is allowed either before the var name, or after the colon.
         bool ref = false;
         if (state->token->type == TOK_KW_REF) {
             ref = true;
@@ -2026,6 +2027,11 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
         }
 
         expect(state, TOK_COLON, "':'");
+
+        if (!ref && state->token->type == TOK_KW_REF) {
+            ref = true;
+            advance(state);
+        }
 
         struct Type *type = parse_type(state, true);
 

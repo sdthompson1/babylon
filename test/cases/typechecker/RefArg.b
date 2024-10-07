@@ -1,7 +1,7 @@
 module RefArg
 interface {}
 
-function f1(ref x: i32, ref y: i32, z: i32)
+function f1(ref x: i32, y: ref i32, z: i32)
 {
     x = 99;
 }
