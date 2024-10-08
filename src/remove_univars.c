@@ -24,6 +24,7 @@ static void * remove_ty_univar(struct TypeTransform *tr, void *context, struct T
         // This is the last usage of this node, so just "take out" the base type,
         // then free the node.
         base_type = type->univar_data.node->type;
+        free_trait_list(type->univar_data.node->traits);
         free(type->univar_data.node);
     }
 

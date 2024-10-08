@@ -920,6 +920,7 @@ static void* free_ty_univar(struct TypeTransform *tr, void *context, struct Type
 {
     if (--(type->univar_data.node->ref_count) == 0) {
         free_type(type->univar_data.node->type);
+        free_trait_list(type->univar_data.node->traits);
         free(type->univar_data.node);
     }
     free(type);

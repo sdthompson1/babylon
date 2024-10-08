@@ -622,6 +622,19 @@ static void remove_previous_abstract_type(struct VContext *context,
 {
     char *fol_name = copy_string_2("%", name);
     remove_existing_item(context->stack->base->table, fol_name);
+
+    char *default_name = copy_string_2("$default-", fol_name);
+    remove_existing_item(context->stack->base->table, default_name);
+    free(default_name);
+
+    char *allocated_name = copy_string_2("$allocated-", fol_name);
+    remove_existing_item(context->stack->base->table, allocated_name);
+    free(allocated_name);
+
+    char *valid_name = copy_string_2("$valid-", fol_name);
+    remove_existing_item(context->stack->base->table, valid_name);
+    free(valid_name);
+
     free(fol_name);
 }
 

@@ -454,6 +454,11 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
         make_string_sexpr(default_fol_name),
         make_string_sexpr(fol_name));
     item->fol_name = copy_string(default_fol_name);
+
+    if (hash_table_contains_key(env, default_fol_name)) {
+        fatal_error("adding default_fol_name: key already exists");
+    }
+
     hash_table_insert(env, default_fol_name, item);
     default_fol_name = NULL;
     item = NULL;
@@ -507,6 +512,11 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     }
 
     item->fol_name = copy_string(allocated_fol_name);
+
+    if (hash_table_contains_key(env, allocated_fol_name)) {
+        fatal_error("adding allocated_fol_name: key already exists");
+    }
+
     hash_table_insert(env, allocated_fol_name, item);
     allocated_fol_name = NULL;
     item = NULL;
@@ -524,6 +534,11 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
         make_list1_sexpr(make_string_sexpr(fol_name)),
         make_string_sexpr("Bool"));
     item->fol_name = copy_string(valid_fol_name);
+
+    if (hash_table_contains_key(env, valid_fol_name)) {
+        fatal_error("adding valid_fol_name: key already exists");
+    }
+
     hash_table_insert(env, valid_fol_name, item);
     valid_fol_name = NULL;
 
