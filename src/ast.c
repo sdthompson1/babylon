@@ -824,6 +824,8 @@ static void * copy_tyvar_list_node(void *context, struct TyVarList *list, void *
 {
     struct TyVarList *result = alloc(sizeof(struct TyVarList));
     result->name = copy_string(list->name);
+    result->location = list->location;
+    result->traits = copy_trait_list(list->traits);
     result->next = next;
     return result;
 }
@@ -890,6 +892,22 @@ struct TypeList * copy_type_list(const struct TypeList *type_list)
     return transform_type_list(&tr, NULL, (struct TypeList*)type_list);
 }
 
+struct TraitList * copy_trait_list(struct TraitList *list)
+{
+    struct TraitList *result = NULL;
+    struct TraitList **tail_ptr = &result;
+    while (list) {
+        struct TraitList *new_node = alloc(sizeof(struct TraitList));
+        new_node->trait = list->trait;
+        new_node->location = list->location;
+        new_node->next = NULL;
+        *tail_ptr = new_node;
+        tail_ptr = &new_node->next;
+        list = list->next;
+    }
+    return result;
+}
+
 struct TyVarList * copy_tyvar_list(const struct TyVarList *list)
 {
     struct TypeTransform tr = {0};
@@ -948,6 +966,7 @@ static void* free_array_type(void *context, struct Type *type, void *elt_type_re
 static void * free_tyvar_list_node(void *context, struct TyVarList *node, void *next_result)
 {
     free((char*)node->name);
+    free_trait_list(node->traits);
     free(node);
     return NULL;
 }
@@ -1005,6 +1024,15 @@ void free_tyvar_list(struct TyVarList *tyvars)
     struct TypeTransform tr;
     freeing_type_transform(&tr);
     transform_tyvar_list(&tr, NULL, tyvars);
+}
+
+void free_trait_list(struct TraitList *list)
+{
+    while (list) {
+        struct TraitList *next = list->next;
+        free(list);
+        list = next;
+    }
 }
 
 void free_type_list(struct TypeList *types)
@@ -1794,6 +1822,7 @@ struct Decl * copy_decl(struct Decl *decl)
     case DECL_TYPEDEF:
         result->typedef_data.tyvars = copy_tyvar_list(decl->typedef_data.tyvars);
         result->typedef_data.rhs = copy_type(decl->typedef_data.rhs);
+        result->typedef_data.traits = copy_trait_list(decl->typedef_data.traits);
         result->typedef_data.is_extern = decl->typedef_data.is_extern;
         result->typedef_data.alloc_level = decl->typedef_data.alloc_level;
         break;
@@ -2007,6 +2036,7 @@ void free_decl(struct Decl *decl)
 
         case DECL_TYPEDEF:
             free_tyvar_list(decl->typedef_data.tyvars);
+            free_trait_list(decl->typedef_data.traits);
             free_type(decl->typedef_data.rhs);
             break;
         }

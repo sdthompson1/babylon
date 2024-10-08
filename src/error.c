@@ -46,6 +46,17 @@ static const char *attribute_name(enum AttrTag tag)
     return "???";
 }
 
+static const char *trait_name(enum Trait trait)
+{
+    switch (trait) {
+    case TRAIT_COPY: return "Copy";
+    case TRAIT_DEFAULT: return "Default";
+    case TRAIT_DROP: return "Drop";
+    case TRAIT_MOVE: return "Move";
+    }
+    return "???";
+}
+
 static void print_error(const char *format, ...)
 {
     if (fol_error_found()) {
@@ -693,6 +704,24 @@ void report_field_name_missing(struct Location loc)
 {
     print_location(loc);
     print_error("A field name is required\n");
+}
+
+void report_duplicate_trait(struct TraitList *trait)
+{
+    print_location(trait->location);
+    print_error("Duplicate trait\n");
+}
+
+void report_type_does_not_satisfy_trait_bound(struct Type *type, enum Trait trait, const struct Location *optional_loc)
+{
+    print_location(optional_loc ? *optional_loc : type->location);
+    print_error("Type does not satisfy '%s' trait requirement\n", trait_name(trait));
+}
+
+void report_cannot_default_init(struct Statement *stmt)
+{
+    print_location(stmt->location);
+    print_error("Cannot initialize variable: no value provided and type does not have 'Default' trait\n");
 }
 
 

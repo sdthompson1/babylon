@@ -127,6 +127,9 @@ void report_chaining_direction_error(struct Location location);
 void report_implies_direction_error(struct Location location);
 void report_const_out_of_bounds(struct Location location);  // array index out of bounds, during const evaluation
 void report_incompatible_alloc_level(struct Location location);
+void report_duplicate_trait(struct TraitList *trait);
+void report_type_does_not_satisfy_trait_bound(struct Type *type, enum Trait trait, const struct Location *optional_loc);
+void report_cannot_default_init(struct Statement *stmt);
 
 // Verifier errors - these allocate a new string and return it
 char * err_msg_operator_precondition_fail(struct Term *term);

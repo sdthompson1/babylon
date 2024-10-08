@@ -33,7 +33,7 @@ function f3(): u64
 }
 
 
-function sizeof_and_free<T>(ref a: T[*]): u64
+function sizeof_and_free<T: Default>(ref a: T[*]): u64
     requires !allocated(default<T>());
     requires forall (i:u64) i < sizeof(a) ==> !allocated(a[i]);
 {

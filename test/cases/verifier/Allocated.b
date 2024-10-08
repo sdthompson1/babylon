@@ -83,14 +83,14 @@ ghost function f9()
     assert !allocated(Nothing);
 }
 
-function f10()
-{
-    var v1: Foo;  // error, can't create var if the default is allocated
-    var v2: MaybeFoo;    // ok, the default is Nothing
-    var v3: MaybeFoo = Just(v1);   // error, this is allocated
 
-    // Errors: v1, v3 still allocated on function exit
-}
+
+
+
+
+
+
+
 
 
 // Returning allocated() from a function
@@ -117,13 +117,4 @@ ghost function f12(x: i32[*])
     match x {
     case xx => y = xx;  // OK (assign from maybe-allocated value within a match)
     }
-}
-
-
-function f13()
-{
-    // This shows it is impossible to use resize_array to manufacture
-    // a value of type AllocTest.
-    var array: AllocTest[*];
-    resize_array<AllocTest>(array, 1);
 }

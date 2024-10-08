@@ -1,0 +1,3 @@
+TraitExport.b:4:5: Interface for 'TraitExport.Type1' doesn't match implementation
+TraitExport.b:8:5: Interface for 'TraitExport.f1' doesn't match implementation
+TraitExport.b:12:5: Interface for 'TraitExport.Type3' doesn't match implementation

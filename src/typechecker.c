@@ -75,6 +75,7 @@ struct TypeEnvEntry * type_env_lookup(const TypeEnv *env, const char *name)
 static void free_type_env_entry(struct TypeEnvEntry *entry)
 {
     free_type(entry->type);
+    free_trait_list(entry->traits);
     free_term(entry->value);
     free(entry);
 }
@@ -94,6 +95,7 @@ static void remove_from_type_env_hash_table(struct HashTable *table, const char 
 void add_to_type_env(TypeEnv *env,
                      const char *name,    // copied
                      struct Type *type,   // handed over
+                     struct TraitList *traits,  // handed over
                      bool ghost,
                      bool read_only,
                      bool constructor,
@@ -104,6 +106,7 @@ void add_to_type_env(TypeEnv *env,
 
     struct TypeEnvEntry *entry = alloc(sizeof(struct TypeEnvEntry));
     entry->type = type;
+    entry->traits = traits;
     entry->value = NULL;
     entry->ghost = ghost;
     entry->read_only = read_only;
@@ -158,6 +161,135 @@ void free_type_env(TypeEnv *env)
     }
 }
 
+
+// ----------------------------------------------------------------------------------------------------
+
+// Determining whether a type has a given trait.
+
+// Returns true if the given trait is in the given list.
+// This also returns true if 'trait' is Move and the list contains Copy, because Copy
+// always implies Move.
+static bool trait_in_list(struct TraitList *traits, enum Trait trait)
+{
+    while (traits) {
+        if (traits->trait == trait) {
+            return true;
+        }
+        if (trait == TRAIT_MOVE && traits->trait == TRAIT_COPY) {
+            return true;
+        }
+        traits = traits->next;
+    }
+    return false;
+}
+
+// Returns true if 'type' has 'trait', false otherwise.
+// This does NOT work on TY_FUNCTION, TY_FORALL, TY_APP or TY_LAMBDA currently.
+static bool type_has_trait(struct TypecheckContext *tc_context,
+                           struct Type *type,
+                           enum Trait trait)
+{
+    switch (type->tag) {
+    case TY_UNIVAR:
+        if (type->univar_data.node->type) {
+            return type_has_trait(tc_context, type->univar_data.node->type, trait);
+        } else {
+            return trait_in_list(type->univar_data.node->traits, trait);
+        }
+        break;
+
+    case TY_VAR:
+        {
+            struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
+            if (entry) {
+                return trait_in_list(entry->traits, trait);
+            } else {
+                fatal_error("tyvar not found in env");
+            }
+        }
+        break;
+
+    case TY_BOOL:
+    case TY_FINITE_INT:
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        return (trait == TRAIT_COPY || trait == TRAIT_MOVE ||
+                trait == TRAIT_DEFAULT || trait == TRAIT_DROP);
+
+    case TY_RECORD:
+        if (type->record_data.fields == NULL) {
+            // Empty record is "plain old data" i.e. has all four traits
+            return (trait == TRAIT_COPY || trait == TRAIT_MOVE ||
+                    trait == TRAIT_DEFAULT || trait == TRAIT_DROP);
+        } else {
+            // A non-empty record has a trait if ALL its fields do.
+            // Note: this is applicable to the four built-in traits, but would not be applicable
+            // to user-defined traits (if and when we implement those).
+            for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+                if (!type_has_trait(tc_context, field->type, trait)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        break;
+
+    case TY_VARIANT:
+        // Similar to records, except that we do not need to worry about empty variants --
+        // all our variant types have at least one possible variant.
+        {
+            for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+                if (!type_has_trait(tc_context, variant->type, trait)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        break;
+
+    case TY_ARRAY:
+        if (type->array_data.resizable) {
+            // T[*] has Move+Default, but not Copy (memcpying would create two pointers to the
+            // same allocated data), nor Drop (dropping would be a memory leak).
+            return (trait == TRAIT_MOVE || trait == TRAIT_DEFAULT);
+        } else if (type->array_data.sizes != NULL) {
+            // T[n] has the same traits as T
+            return type_has_trait(tc_context, type->array_data.element_type, trait);
+        } else {
+            // T[] is really just a "reference" to part of an array; therefore it
+            // does not have any of Copy, Move, Default or Drop.
+            return false;
+        }
+        break;
+
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+        fatal_error("type_has_trait: unimplemented case");
+    }
+
+    fatal_error("type_has_trait: unhandled case");
+}
+
+static bool check_type_has_traits(struct TypecheckContext *tc_context,
+                                  struct Type *type,
+                                  struct TraitList *traits,
+                                  const struct Location *loc)
+{
+    bool result = true;
+
+    while (traits) {
+        if (!type_has_trait(tc_context, type, traits->trait)) {
+            report_type_does_not_satisfy_trait_bound(type, traits->trait, loc);
+            tc_context->error = true;
+            result = false;
+        }
+        traits = traits->next;
+    }
+
+    return result;
+}
 
 // ----------------------------------------------------------------------------------------------------
 
@@ -364,12 +496,24 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                 }
             }
 
-            // kindcheck each tyarg
+            // Kindcheck each tyarg, and check trait bounds
+            struct TyVarList *tyvar = (*type)->app_data.lhs->tag == TY_LAMBDA ?
+                (*type)->app_data.lhs->lambda_data.tyvars :
+                NULL;
+
             for (struct TypeList *node = (*type)->app_data.tyargs; node; node = node->next) {
+
                 // the tyargs should be proper types (not type constructors)
                 if (!kindcheck_type(tc_context, &node->type)) {
                     ok = false;
                 }
+
+                // the tyarg should meet each required trait bound
+                if (tyvar && !check_type_has_traits(tc_context, node->type, tyvar->traits, NULL)) {
+                    ok = false;
+                }
+
+                if (tyvar) tyvar = tyvar->next;
             }
 
             if (!ok) {
@@ -533,6 +677,7 @@ static struct Type * new_univar_type(struct TypecheckContext *tc_context)
     type->univar_data.node->must_be_executable = tc_context->executable;
     type->univar_data.node->must_be_complete = false;
     type->univar_data.node->must_be_valid_decreases = false;
+    type->univar_data.node->traits = NULL;
     type->univar_data.node->type = NULL;
     type->univar_data.node->ref_count = 1;
     return type;
@@ -650,6 +795,11 @@ static bool update_univar_type(struct TypecheckContext *tc_context,
     }
 
     if (!ensure_type_meets_flags(tc_context, lhs->univar_data.node, rhs, loc)) {
+        return false;
+    }
+
+    // The proposed rhs type must have all the types demanded by the lhs
+    if (!check_type_has_traits(tc_context, rhs, lhs->univar_data.node->traits, loc)) {
         return false;
     }
 
@@ -1150,6 +1300,7 @@ static void infer_type_arguments(struct TypecheckContext *tc_context,
     struct HashTable *theta = new_hash_table();
     for (struct TyVarList *tyvar = term->type->forall_data.tyvars; tyvar; tyvar = tyvar->next) {
         struct Type *ty = new_univar_type(tc_context);
+        ty->univar_data.node->traits = copy_trait_list(tyvar->traits);
         *tail = alloc(sizeof(struct TypeList));
         (*tail)->type = copy_type(ty);
         (*tail)->next = NULL;
@@ -1328,20 +1479,25 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
         return;
     }
 
-    // Kind-check all type arguments and count them
-    int num_tyargs_present = 0;
-    for (struct TypeList *tyarg = term->tyapp.tyargs; tyarg; tyarg = tyarg->next) {
-        if (!kindcheck_type(tc_context, &tyarg->type)) {
-            return;
-        }
-        ++num_tyargs_present;
-    }
-
     // LHS must be TY_FORALL.
     if (term->tyapp.lhs->type->tag != TY_FORALL) {
         report_type_arguments_not_expected_here(term->location);
         tc_context->error = true;
         return;
+    }
+
+    // Kind-check all type arguments, check trait bounds, and count the number of tyargs
+    int num_tyargs_present = 0;
+    struct TyVarList *tyvar = term->tyapp.lhs->type->forall_data.tyvars;
+    for (struct TypeList *tyarg = term->tyapp.tyargs; tyarg; tyarg = tyarg->next) {
+        if (!kindcheck_type(tc_context, &tyarg->type)) {
+            return;
+        }
+        if (tyvar && !check_type_has_traits(tc_context, tyarg->type, tyvar->traits, NULL)) {
+            return;
+        }
+        ++num_tyargs_present;
+        if (tyvar) tyvar = tyvar->next;
     }
 
     // The number of type arguments given should correspond to the
@@ -2074,6 +2230,7 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
     add_to_type_env(tc_context->type_env,
                     term->let.name,
                     copy_type(term->let.rhs->type),   // handover
+                    NULL,
                     !tc_context->executable,   // ghost
                     true,                      // read-only
                     false,                     // constructor
@@ -2105,6 +2262,7 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
     add_to_type_env(tc_context->type_env,
                     term->quant.name,
                     copy_type(term->quant.type),     // handover
+                    NULL,
                     true,    // ghost
                     true,    // read-only
                     false,   // constructor
@@ -2561,6 +2719,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         add_to_type_env(tc_context->type_env,
                         pattern->var.name,
                         copy_type(scrutinee_type),
+                        NULL,
                         !tc_context->executable,   // ghost
                         pat_read_only,             // read-only
                         false,                     // constructor
@@ -3075,7 +3234,14 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         }
 
     } else {
-        // If there is no right-hand-side, then manufacture one (as a DEFAULT expression)
+        // If there is no right-hand-side, then manufacture one (as a DEFAULT expression).
+        // This requires the Default trait (in non-ghost code).
+
+        if (tc_context->executable && !type_has_trait(tc_context, stmt->var_decl.type, TRAIT_DEFAULT)) {
+            report_cannot_default_init(stmt);
+            tc_context->error = true;
+        }
+        
         struct Term *default_rhs = make_term(stmt->location, TM_DEFAULT);
         default_rhs->type = copy_type(stmt->var_decl.type);
         stmt->var_decl.rhs = default_rhs;
@@ -3086,6 +3252,7 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env,
                         stmt->var_decl.name,
                         copy_type(stmt->var_decl.type),    // handover
+                        NULL,
                         !tc_context->executable,  // ghost
                         read_only,                // read_only
                         false,                    // constructor
@@ -3127,6 +3294,7 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env,
                         stmt->fix.name,
                         copy_type(stmt->fix.type),    // handover
+                        NULL,
                         true,      // ghost
                         true,      // read_only
                         false,     // constructor
@@ -3149,6 +3317,7 @@ static void typecheck_obtain_stmt(struct TypecheckContext *tc_context,
     add_to_type_env(tc_context->type_env,
                     stmt->obtain.name,
                     copy_type(stmt->obtain.type),   // handover
+                    NULL,
                     true,    // ghost
                     false,   // read_only
                     false,   // constructor
@@ -3578,6 +3747,36 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
 // Decl typechecking
 //
 
+static bool check_tyvar_list_valid(struct TypecheckContext *tc_context,
+                                   struct TyVarList *tyvars)
+{
+    // Note: the renamer has already ruled out duplicate tyvars, so we don't need
+    // to check that.
+
+    // We do need to check that any trait-lists attached to a tyvar are valid, i.e. no
+    // trait is listed more than once.
+
+    bool result = true;
+
+    for (struct TyVarList *tyvar = tyvars; tyvar; tyvar = tyvar->next) {
+
+        // for now there are only 4 traits so we can just check duplicates using a bitmask
+        unsigned int traits_found = 0;
+        for (struct TraitList *trait = tyvar->traits; trait; trait = trait->next) {
+            unsigned int bitmask = (1 << trait->trait);
+            if (traits_found & bitmask) {
+                report_duplicate_trait(trait);
+                tc_context->error = true;
+                result = false;
+            }
+            traits_found |= bitmask;
+        }
+    }
+
+    return result;
+}
+
+
 static void typecheck_const_decl(struct TypecheckContext *tc_context,
                                  struct Decl *decl,
                                  bool implementation)
@@ -3631,6 +3830,7 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         copy_type(decl->const_data.type),     // handover
+                        NULL,
                         decl->ghost,
                         true,    // read_only
                         false,   // constructor
@@ -3708,12 +3908,18 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         return;
     }
 
+    // any trait bounds must be valid
+    if (!check_tyvar_list_valid(tc_context, decl->function_data.tyvars)) {
+        return;
+    }
+
     bool kinds_ok = true;
 
     for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
         add_to_type_env(tc_context->type_env,   // local env
                         tv->name,
                         NULL,   // type (NULL for tyvars)
+                        copy_trait_list(tv->traits),
                         false,  // ghost
                         true,   // read_only
                         false,  // constructor
@@ -3725,6 +3931,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
             add_to_type_env(tc_context->type_env,   // local env
                             arg->name,
                             copy_type(arg->type),   // handover
+                            NULL,
                             decl->ghost,
                             !arg->ref,      // read_only
                             false,          // constructor
@@ -3765,6 +3972,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env,   // local env
                         "return",
                         copy_type(ret_type),   // handover
+                        NULL,
                         decl->ghost,
                         false,    // read_only
                         false,    // constructor
@@ -3828,6 +4036,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env->base,   // global env
                         decl->name,
                         type,    // handover
+                        NULL,
                         decl->ghost,
                         true,    // read_only
                         false,   // constructor
@@ -3899,12 +4108,18 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         return;
     }
 
+    // any trait bounds must be valid
+    if (!check_tyvar_list_valid(tc_context, decl->datatype_data.tyvars)) {
+        return;
+    }
+
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->datatype_data.tyvars; tyvar; tyvar = tyvar->next) {
         add_to_type_env(tc_context->type_env,   // local env
                         tyvar->name,
                         NULL,
+                        copy_trait_list(tyvar->traits),
                         false,  // ghost
                         true,   // read_only
                         false,  // constructor
@@ -3970,6 +4185,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         datatype,      // handover
+                        NULL,
                         false,    // ghost
                         true,     // read_only
                         false,    // constructor
@@ -4005,6 +4221,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
             add_to_type_env(tc_context->type_env->base,    // global env
                             ctor->name,
                             ctor_type,     // handover
+                            NULL,
                             false,   // ghost
                             true,    // read_only
                             true,    // constructor
@@ -4040,12 +4257,18 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         return;
     }
 
+    // any trait bounds must be valid
+    if (!check_tyvar_list_valid(tc_context, decl->typedef_data.tyvars)) {
+        return;
+    }
+
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->typedef_data.tyvars; tyvar; tyvar = tyvar->next) {
         add_to_type_env(tc_context->type_env,   // local env
                         tyvar->name,
                         NULL,
+                        copy_trait_list(tyvar->traits),
                         false,  // ghost
                         true,   // read_only
                         false,  // constructor
@@ -4062,7 +4285,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         // construct the rhs type (wrapping in TY_LAMBDA if necessary)
         struct Type *ty = NULL;
         if (decl->typedef_data.rhs) {
-            // (if rhs is NULL, this will become a new "tyvar" instead)
+            // note rhs might be NULL, in which case ty will be NULL as well
             ty = copy_type(decl->typedef_data.rhs);
         }
         if (decl->typedef_data.tyvars) {
@@ -4088,7 +4311,8 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         // Add this typedef (or abstract/extern type) to the type env.
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
-                        ty,
+                        ty,      // NULL for abstract/extern types, non-NULL for typedefs
+                        copy_trait_list(decl->typedef_data.traits),
                         false,   // ghost
                         true,    // read_only
                         false,   // constructor
@@ -4245,6 +4469,15 @@ static bool check_interface_function(struct Module *module,
             return false;
         }
 
+        // Every trait required by the implementation must actually be present,
+        // according to the interface (but not vice versa).
+        for (struct TraitList *impl_trait = tv2->traits; impl_trait; impl_trait = impl_trait->next) {
+            if (!trait_in_list(tv1->traits, impl_trait->trait)) {
+                report_interface_mismatch_impl(interface);
+                return false;
+            }
+        }
+
         tv1 = tv1->next;
         tv2 = tv2->next;
     }
@@ -4288,9 +4521,37 @@ static bool check_interface_function(struct Module *module,
     return true;
 }
 
+// Decl must be a typedef or datatype. Checks that the declared type has all the traits listed.
+static bool check_decl_has_traits(struct TypecheckContext *tc_context,
+                                  struct Decl *decl,
+                                  struct TraitList *traits)
+{
+    struct TypeEnvEntry *entry = type_env_lookup(tc_context->type_env, decl->name);
+    if (entry == NULL) {
+        fatal_error("check_decl_has_traits: not found in env");
+    }
+
+    if (entry->type) {
+        for (struct TraitList *trait = traits; trait; trait = trait->next) {
+            if (!type_has_trait(tc_context, entry->type, trait->trait)) {
+                return false;
+            }
+        }
+        return true;
+    } else {
+        for (struct TraitList *trait = traits; trait; trait = trait->next) {
+            if (!trait_in_list(entry->traits, trait->trait)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 // Check an interface and implementation to make sure they are compatible.
 // Return false if not.
-static bool check_interface(struct Module *module,
+static bool check_interface(struct TypecheckContext *tc_context,
+                            struct Module *module,
                             struct Decl *interface,
                             struct Decl *implementation)
 {
@@ -4300,6 +4561,15 @@ static bool check_interface(struct Module *module,
     && interface->typedef_data.rhs == NULL
     && !interface->typedef_data.is_extern) {
         if (implementation->tag == DECL_TYPEDEF || implementation->tag == DECL_DATATYPE) {
+
+            // The interface traits must be a subset of the implementation traits.
+            // (i.e. when abstracting a type, you can "hide" certain traits but you cannot
+            // add new ones.)
+            if (!check_decl_has_traits(tc_context, implementation, interface->typedef_data.traits)) {
+                report_interface_mismatch_impl(interface);
+                return false;
+            }
+
             return true;
         } else {
             report_interface_mismatch_impl(interface);
@@ -4370,7 +4640,7 @@ static bool requires_impl(struct Decl *interface)
 
 // Check all interfaces to make sure they are compatible with any corresponding implementations.
 // Return false if any problem found.
-static bool check_interfaces(struct Module *module)
+static bool check_interfaces(struct TypecheckContext *tc_context, struct Module *module)
 {
     bool all_ok = true;
 
@@ -4385,7 +4655,7 @@ static bool check_interfaces(struct Module *module)
                 !found_impl && imp_decl;
                 imp_decl = imp_decl->next) {
                     if (strcmp(imp_decl->name, int_decl->name) == 0) {
-                        if (!check_interface(module, int_decl, imp_decl)) {
+                        if (!check_interface(tc_context, module, int_decl, imp_decl)) {
                             all_ok = false;
                         }
                         found_impl = true;
@@ -4433,7 +4703,7 @@ bool typecheck_module(TypeEnv *type_env,
 
         // Only check interfaces if typechecking succeeded
         if (!tc_context.error) {
-            tc_context.error = !check_interfaces(module);
+            tc_context.error = !check_interfaces(&tc_context, module);
         }
     }
 

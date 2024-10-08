@@ -60,7 +60,7 @@ function default_init_3()
     assert (a != b);   // fails
 }
 
-function default_init_4<T>()
+function default_init_4<T: Default>()
     requires !allocated(default<T>());
 {
     var a: T;
@@ -77,7 +77,7 @@ function default_init_5()
     assert (a != b);   // fails
 }
   
-function default_init_shadow<Color>()
+function default_init_shadow<Color: Default>()
     requires !allocated(default<Color>());
 {
     var a: Color;

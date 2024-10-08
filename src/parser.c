@@ -1960,6 +1960,53 @@ static struct Decl * parse_const_decl(struct ParserState *state)
     return result;
 }
 
+static struct TraitList *parse_trait_list(struct ParserState *state, struct Location *loc)
+{
+    // For now, only the four fixed names Copy, Default, Drop, Move are accepted.
+    // At least one trait must be present.
+    struct TraitList *result = NULL;
+    struct TraitList **tail_ptr = &result;
+    while (true) {
+        if (state->token->type == TOK_NAME) {
+            enum Trait t;
+            if (strcmp(state->token->data, "Copy") == 0) {
+                t = TRAIT_COPY;
+            } else if (strcmp(state->token->data, "Default") == 0) {
+                t = TRAIT_DEFAULT;
+            } else if (strcmp(state->token->data, "Drop") == 0) {
+                t = TRAIT_DROP;
+            } else if (strcmp(state->token->data, "Move") == 0) {
+                t = TRAIT_MOVE;
+            } else {
+                report_error(state, state->token->location, "invalid trait name: must be Copy, Default, Drop or Move");
+                free_trait_list(result);
+                return NULL;
+            }
+
+            struct TraitList *node = alloc(sizeof(struct TraitList));
+            node->trait = t;
+            node->location = state->token->location;
+            node->next = NULL;
+            *tail_ptr = node;
+            tail_ptr = &node->next;
+
+            set_location_end(loc, &state->token->location);
+
+            advance(state);
+
+            if (state->token->type == TOK_PLUS) {
+                advance(state);
+            } else {
+                return result;
+            }
+        } else {
+            report_error(state, state->token->location, "expected trait name");
+            free_trait_list(result);
+            return NULL;
+        }
+    }
+}
+
 static struct TyVarList *parse_tyvar_list(struct ParserState *state)
 {
     if (state->token->type != TOK_LESS) {
@@ -1986,8 +2033,18 @@ static struct TyVarList *parse_tyvar_list(struct ParserState *state)
             break;
         }
 
+        struct Location loc = name_tok->location;
+
+        struct TraitList *traits = NULL;
+        if (state->token->type == TOK_COLON) {
+            advance(state);
+            traits = parse_trait_list(state, &loc);
+        }
+
         struct TyVarList * tyvar = alloc(sizeof(struct TyVarList));
         tyvar->name = copy_string(name_tok->data);
+        tyvar->traits = traits;
+        tyvar->location = loc;
         tyvar->next = NULL;
         *next_ptr = tyvar;
         next_ptr = &tyvar->next;
@@ -2215,6 +2272,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
     struct TyVarList *tyvars = parse_tyvar_list(state);
 
     struct Type *rhs = NULL;
+    struct TraitList *traits = NULL;
     enum AllocLevel alloc_level = ALLOC_NEVER;
 
     if (state->token->type == TOK_EQUAL) {
@@ -2226,7 +2284,12 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
         advance(state);
         rhs = parse_type(state, true);
 
+    } else if (state->token->type == TOK_COLON) {
+        advance(state);
+        traits = parse_trait_list(state, &loc);
+
     } else if (state->token->type == TOK_LPAREN) {
+        // deprecated - 'allocated' types
         advance(state);
         if (state->token->type == TOK_KW_ALLOCATED) {
             alloc_level = ALLOC_ALWAYS;
@@ -2249,6 +2312,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
     result->tag = DECL_TYPEDEF;
     result->typedef_data.tyvars = tyvars;
     result->typedef_data.rhs = rhs;
+    result->typedef_data.traits = traits;
     result->typedef_data.is_extern = extern_found;
     result->typedef_data.alloc_level = alloc_level;
     result->attributes = NULL;

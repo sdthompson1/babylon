@@ -1,0 +1,5 @@
+TraitNotSatisfied.b:11:20: Type does not satisfy 'Copy' trait requirement
+TraitNotSatisfied.b:12:10: Type does not satisfy 'Drop' trait requirement
+TraitNotSatisfied.b:34:16: Type does not satisfy 'Drop' trait requirement
+TraitNotSatisfied.b:36:16: Type does not satisfy 'Drop' trait requirement
+TraitNotSatisfied.b:47:10: Type does not satisfy 'Drop' trait requirement

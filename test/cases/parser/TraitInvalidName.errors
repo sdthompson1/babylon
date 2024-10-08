@@ -1,0 +1,1 @@
+TraitInvalidName.b:5:15: Syntax error (invalid trait name: must be Copy, Default, Drop or Move)

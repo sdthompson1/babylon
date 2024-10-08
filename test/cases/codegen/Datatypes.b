@@ -49,7 +49,7 @@ function default_init_1()
     c = Red;
 }
 
-function default_init_2<a>()
+function default_init_2<a: Default>()
     requires !allocated(default<a>());
 {
     var x: a;
@@ -74,7 +74,7 @@ function fields_1()
     m4 = m5;
 }
 
-function fields_2<a,b>(x: a, y: b): Multi<Multi<a,b>, i32>
+function fields_2<a: Default, b: Default>(x: a, y: b): Multi<Multi<a,b>, i32>
     requires !allocated(default<Multi<a,b> >());
     requires !allocated(x);
     requires !allocated(y);

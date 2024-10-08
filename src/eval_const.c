@@ -504,6 +504,7 @@ static struct Term * eval_let(TypeEnv *env, struct Term *term)
         fatal_error("let-var already in env (unexpected)");
     }
     struct TypeEnvEntry *entry = alloc(sizeof(struct TypeEnvEntry));
+    memset(entry, 0, sizeof(struct TypeEnvEntry));
     // we only need to set entry->value, as that is the only thing we look at
     entry->value = rhs;
     hash_table_insert(env->table, term->let.name, entry);
@@ -689,6 +690,7 @@ static struct Term * eval_match(TypeEnv *env, struct Term *term)
             fatal_error("env already contains variable (unexpected)");
         }
         entry = alloc(sizeof(struct TypeEnvEntry));
+        memset(entry, 0, sizeof(struct TypeEnvEntry));
         entry->value = payload;
         hash_table_insert(env->table, variable_name, entry);
     }

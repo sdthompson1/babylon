@@ -29,7 +29,7 @@ interface
     extern function print_string(s: u8[]);
         requires valid_string(s);
 
-    ghost function default<T>(): T
+    ghost function default<T: Default>(): T
     {
         var x: T;
         return x;
@@ -42,7 +42,7 @@ interface
     // functions always succeed, and don't need a separate
     // dummy argument to ensure purity.
     
-    extern function resize_array<T>(ref array: T[*], new_dim: u64)
+    extern function resize_array<T: Default>(ref array: T[*], new_dim: u64)
     
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());
@@ -60,7 +60,7 @@ interface
         ensures forall (i: u64) old(sizeof(array)) <= i < new_dim ==> array[i] == default<T>();
 
 
-    extern function resize_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64)
+    extern function resize_2d_array<T: Default>(ref array: T[*,*], dim0: u64, dim1: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);
@@ -90,7 +90,7 @@ interface
                 array[i, j] == default<T>();
 
 
-    extern function resize_3d_array<T>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
+    extern function resize_3d_array<T: Default>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);
@@ -106,18 +106,4 @@ interface
         ensures forall (i: u64) forall (j: u64) forall (k: u64)
             i < dim0 && j < dim1 && k < dim2 ==>
                 array[i, j, k] == default<T>();
-
-
-
-    // A sample allocated 'extern' type.
-    extern type AllocTest (allocated);
-    datatype MaybeAllocTest = MA_Nothing | MA_Just(AllocTest);
-    
-    extern function allocate_alloc_test(ref r: MaybeAllocTest)
-        requires !allocated(r);
-        ensures allocated(r);
-
-    extern function free_alloc_test(ref r: MaybeAllocTest)
-        requires allocated(r);
-        ensures !allocated(r);
 }

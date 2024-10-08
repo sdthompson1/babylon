@@ -28,6 +28,9 @@ struct TypeEnvEntry {
     struct Type *type;   // Type of the term, or target type of a datatype/typedef (NULL for tyvars).
                          // Kind-checked, but not necessarily kind *.
 
+    struct TraitList *traits;  // If type==NULL this specifies the traits that the tyvar is
+                               // guaranteed to have (if any).
+
     struct Term *value;  // For global constants - normal-form value of this constant, if known.
 
     bool ghost;
@@ -56,7 +59,8 @@ TypeEnv * collapse_type_env(TypeEnv *env);
 // Adds a name to the top "layer" of the hash table.
 void add_to_type_env(TypeEnv *env,
                      const char *name,    // copied
-                     struct Type *type,   // handed over
+                     struct Type *type,   // handed over. NULL for tyvars.
+                     struct TraitList *traits,  // handed over. only valid when type==NULL.
                      bool ghost,
                      bool read_only,
                      bool constructor,

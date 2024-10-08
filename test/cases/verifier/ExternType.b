@@ -2,7 +2,7 @@ module ExternType
 
 interface {}
 
-extern type Foo;
+extern type Foo: Default;
 
 function f(x: Foo)
 {

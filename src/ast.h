@@ -19,6 +19,26 @@ repository.
 
 
 //
+// Traits
+//
+
+// For now there is just a fixed list of possible traits.
+// Note: TRAIT_COPY implies TRAIT_MOVE, but there are no other "subtrait" relationships currently.
+enum Trait {
+    TRAIT_COPY,     // can memcpy
+    TRAIT_DEFAULT,  // can default-init (by zero-fill)
+    TRAIT_DROP,     // can allow to go out of scope
+    TRAIT_MOVE      // can memcpy, but this "invalidates" the original (unless Copy also present)
+};
+
+struct TraitList {
+    enum Trait trait;
+    struct Location location;
+    struct TraitList *next;
+};
+
+
+//
 // Types
 //
 
@@ -48,6 +68,8 @@ struct TypeList {
 
 struct TyVarList {
     const char *name;
+    struct Location location;  // location of this tyvar (name + traits)
+    struct TraitList *traits;  // any required traits for this tyvar
     struct TyVarList *next;
 };
 
@@ -64,6 +86,7 @@ struct UnivarNode {
     bool must_be_executable;  // Type must be valid in executable code (e.g. not 'int' or 'real')
     bool must_be_complete;    // Type must not be an "incomplete array" type (T[])
     bool must_be_valid_decreases;   // Type must be usable in a "decreases" clause
+    struct TraitList *traits;
 };
 
 
@@ -657,11 +680,14 @@ struct DeclData_Typedef {
     // RHS of the typedef, *or* NULL if this is declaring an abstract or extern type.
     struct Type *rhs;
 
+    // Traits (applicable to abstract or extern types only)
+    struct TraitList *traits;
+
     // This is true for extern types.
     // (applicable only if rhs == NULL)
     bool is_extern;
 
-    // This determines whether the type has "allocated" or
+    // deprecated - This determines whether the type has "allocated" or
     // "allocated_if_not_default" (applicable only if rhs == NULL)
     enum AllocLevel alloc_level;
 };
@@ -831,11 +857,13 @@ void copying_type_transform(struct TypeTransform *tr);
 struct Type * copy_type(const struct Type *type);
 struct TypeList * copy_type_list(const struct TypeList *type_list);
 struct TyVarList * copy_tyvar_list(const struct TyVarList *tyvars);
+struct TraitList * copy_trait_list(struct TraitList *traits);
 
 void free_type(struct Type *type);
 void free_tyvar_list(struct TyVarList *tyvars);
 void free_type_list(struct TypeList *types);
 void free_name_type_list(struct NameTypeList *types);
+void free_trait_list(struct TraitList *traits);
 
 
 //
