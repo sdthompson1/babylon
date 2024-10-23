@@ -1,6 +1,6 @@
 module Generic
 interface {
-  function id<a>(x: a): a;
+  function id<a: Copy>(x: a): a;
 
   function test2()
   {
@@ -11,12 +11,12 @@ interface {
   }
 
 
-  function test3<a>(x: i32): i32    // Redundant type parameter, but that's OK
+  function test3<a: Copy>(x: i32): i32    // Redundant type parameter, but that's OK
   {
   }
 
 
-  function test4<a,b>(x: a, y: b)
+  function test4<a: Copy, b: Copy>(x: a, y: b)
   {
     var v1: a = id<a>(y);     // Error, y has type b, doesn't match a
     var v2: b = id<a>(x);     // Error, rhs has type a, doesn't match b

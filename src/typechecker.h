@@ -24,6 +24,16 @@ struct Module;
 // A type_env is a StackedHashTable from a symbol name to a TypeEnvEntry.
 typedef struct StackedHashTable TypeEnv;
 
+enum TypeFlag {
+    FLAG_GHOST       = (1 << 0),    // ghost term variable
+    FLAG_READ_ONLY   = (1 << 1),    // read-only variable (e.g. a function argument)
+    FLAG_DATA_CTOR   = (1 << 2),    // data constructor name
+    FLAG_IMPURE      = (1 << 3),    // impure function
+    FLAG_REF         = (1 << 4),    // variable is a reference to something else
+    FLAG_PARTIAL_REF = (1 << 5),    // variable is a reference to only part of the mentioned "root_name"
+    FLAG_EMPTY       = (1 << 6),    // variable has been "moved out of"
+};
+
 struct TypeEnvEntry {
     struct Type *type;   // Type of the term, or target type of a datatype/typedef (NULL for tyvars).
                          // Kind-checked, but not necessarily kind *.
@@ -31,14 +41,14 @@ struct TypeEnvEntry {
     struct TraitList *traits;  // If type==NULL this specifies the traits that the tyvar is
                                // guaranteed to have (if any).
 
+    const char *root_name;     // For references, names the "root variable" of the reference.
+
     struct Term *value;  // For global constants - normal-form value of this constant, if known.
 
-    bool ghost;
-    bool read_only;
-    bool constructor;
-    bool impure;
+    struct Location created_location;  // Where was the variable created.
+    struct Location *moved_location;   // If FLAG_EMPTY is set, indicates where moved. Allocated.
 
-    enum AllocLevel alloc_level;  // for tyvars
+    uint8_t flags;   // Bitmask of TypeFlag
 };
 
 // Create a new type env, with one (empty) layer.
@@ -57,15 +67,13 @@ TypeEnv * pop_type_env(TypeEnv *env);
 TypeEnv * collapse_type_env(TypeEnv *env);
 
 // Adds a name to the top "layer" of the hash table.
-void add_to_type_env(TypeEnv *env,
-                     const char *name,    // copied
-                     struct Type *type,   // handed over. NULL for tyvars.
-                     struct TraitList *traits,  // handed over. only valid when type==NULL.
-                     bool ghost,
-                     bool read_only,
-                     bool constructor,
-                     bool impure,
-                     enum AllocLevel alloc_level); // only relevant for abstract or extern types
+struct TypeEnvEntry *
+    add_to_type_env(TypeEnv *env,
+                    const char *name,    // copied
+                    struct Type *type,   // handed over. NULL for tyvars.
+                    struct TraitList *traits,  // handed over. only valid when type==NULL.
+                    uint8_t flags,
+                    struct Location location); // location the variable/entity was created
 
 // Lookup an entry in a type env.
 struct TypeEnvEntry * type_env_lookup(const TypeEnv *env, const char *name);

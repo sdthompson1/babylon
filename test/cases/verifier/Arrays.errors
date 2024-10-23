@@ -7,4 +7,3 @@ Arrays.b:73:10: Operator precondition might not be met
 Arrays.b:73:10: Operator precondition might not be met
 Arrays.b:73:5: Array index might be out of bounds
 Arrays.b:74:5: Array index might be out of bounds
-Arrays.b:79:5: 'a' might still be allocated when it goes out of scope

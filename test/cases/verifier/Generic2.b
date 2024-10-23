@@ -4,7 +4,7 @@ interface {}
 
 datatype Maybe<a> = Nothing | Just(a);
 
-function is_just<T> (x: Maybe<T>): bool
+function is_just<T: Copy> (x: Maybe<T>): bool
 {
     match x {
     case Nothing => return false;

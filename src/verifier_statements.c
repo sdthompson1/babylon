@@ -31,8 +31,6 @@ static void verify_var_decl_stmt(struct VContext *context,
                                  struct Statement *stmt,
                                  struct Sexpr *** ret_val_ptr)
 {
-    bool added_to_stack = false;
-
     if (stmt->var_decl.ref) {
         struct RefChain *ref = ref_chain_for_term(context, stmt->var_decl.rhs);
         hash_table_insert(context->refs, stmt->var_decl.name, ref);
@@ -41,60 +39,14 @@ static void verify_var_decl_stmt(struct VContext *context,
         struct Sexpr * fol_type = verify_type(stmt->var_decl.type);
         struct Sexpr * fol_rhs = verify_term(context, stmt->var_decl.rhs);
 
-        // the rhs mustn't be allocated (unless ghost)
-        if (!stmt->ghost) {
-            struct Sexpr *cond = non_allocated_condition(context, stmt->var_decl.type, fol_rhs);
-            if (cond) {
-                verify_condition(context,
-                                 stmt->var_decl.rhs->location,
-                                 cond,
-                                 "RHS not allocated",
-                                 err_msg_assign_from_allocated(stmt->var_decl.rhs->location));
-                free_sexpr(cond);
-            }
-        }
-
         update_local(context,
                      stmt->var_decl.name,
                      stmt->var_decl.type,
                      fol_type,
                      fol_rhs);
-
-        // add it to the var decl stack - if not ghost
-        if (!stmt->ghost) {
-            struct NameTypeList *node = alloc(sizeof(struct NameTypeList));
-            node->name = stmt->var_decl.name;
-            node->type = stmt->var_decl.type;
-            node->next = context->var_decl_stack;
-            context->var_decl_stack = node;
-            added_to_stack = true;
-        }
     }
 
     verify_statements(context, stmt->next, ret_val_ptr);
-
-    if (added_to_stack) {
-        // the variable must be non-allocated when it goes out of scope
-        char *new_name = lookup_local(context, stmt->var_decl.name);
-        if (new_name) {
-            struct Sexpr *value = make_string_sexpr_handover(new_name);
-            struct Sexpr *cond = non_allocated_condition(context, stmt->var_decl.type, value);
-            free_sexpr(value);
-
-            if (cond) {
-                verify_condition(context,
-                                 stmt->location,
-                                 cond,
-                                 "var deallocated",
-                                 err_msg_var_still_allocated(stmt->var_decl.name, stmt->location));
-                free_sexpr(cond);
-            }
-        }
-
-        struct NameTypeList *prev_node = context->var_decl_stack->next;
-        free(context->var_decl_stack);
-        context->var_decl_stack = prev_node;
-    }
 }
 
 // new_expr is handed over
@@ -221,44 +173,6 @@ static void verify_use_stmt(struct VContext *context, struct Statement *stmt)
     change_quantifier_to_let(context, stmt->use.term->type, witness);
 }
 
-static void check_assign_allocated_conditions(struct VContext *context,
-                                              struct Statement *stmt,
-                                              struct Sexpr *fol_rhs,   // copied/referenced
-                                              struct RefChain *ref)    // copied/referenced
-{
-    // Ghost stmts do not require allocation checks
-    if (stmt->ghost) return;
-
-    // Check LHS is not allocated
-    struct Sexpr *fol_lhs = ref_chain_to_sexpr(context, ref);
-    struct Sexpr *lhs_cond = non_allocated_condition(context,
-                                                     stmt->assign.lhs->type,
-                                                     fol_lhs);
-    if (lhs_cond) {
-        verify_condition(context,
-                         stmt->assign.lhs->location,
-                         lhs_cond,
-                         "LHS not allocated",
-                         err_msg_assign_to_allocated(stmt->assign.lhs->location));
-        free_sexpr(lhs_cond);
-    }
-
-    free_sexpr(fol_lhs);
-
-    // Check RHS is not allocated
-    struct Sexpr *rhs_cond = non_allocated_condition(context,
-                                                     stmt->assign.rhs->type,
-                                                     fol_rhs);
-    if (rhs_cond) {
-        verify_condition(context,
-                         stmt->assign.rhs->location,
-                         rhs_cond,
-                         "RHS not allocated",
-                         err_msg_assign_from_allocated(stmt->assign.rhs->location));
-        free_sexpr(rhs_cond);
-    }
-}
-
 static void verify_assign_stmt(struct VContext *context,
                                struct Statement *stmt)
 {
@@ -267,9 +181,6 @@ static void verify_assign_stmt(struct VContext *context,
 
     // Construct reference chain for the LHS
     struct RefChain *ref = ref_chain_for_term(context, stmt->assign.lhs);
-
-    // Check allocation conditions
-    check_assign_allocated_conditions(context, stmt, fol_rhs, ref);
 
     // Do the assignment
     update_reference(context, ref, fol_rhs);
@@ -301,34 +212,10 @@ static void verify_return_stmt(struct VContext *context,
                                struct Statement *stmt,
                                struct Sexpr *** ret_val_ptr)
 {
-    // check that all (non-ghost) "vardecl" vars are deallocated before we return
-    for (struct NameTypeList *node = context->var_decl_stack; node; node = node->next) {
-        char *new_name = lookup_local(context, node->name);
-        if (new_name) {
-            struct Sexpr *value = make_string_sexpr_handover(new_name);
-            struct Sexpr *cond = non_allocated_condition(context, node->type, value);
-            free_sexpr(value);
-
-            if (cond) {
-                char *sanitised = sanitise_name(node->name);
-                char *msg = copy_string_3("'", sanitised, "' deallocated");
-                free(sanitised);
-                verify_condition(context,
-                                 stmt->location,
-                                 cond,
-                                 msg,
-                                 err_msg_var_still_allocated_at_return(node->name, stmt->location));
-                free(msg);
-                free_sexpr(cond);
-            }
-        }
-    }
-
-    // verify the return itself (e.g. postconditions)
+    // verify the return (e.g. postconditions)
     verify_function_return(context,
                            stmt->location,
                            stmt->ret.value,
-                           stmt->ghost,
                            ret_val_ptr);
 }
 
@@ -708,6 +595,40 @@ static void havoc_variables(struct VContext *context,
     }
 }
 
+static bool valid_decreases_type(struct Type *type)
+{
+    switch (type->tag) {
+    case TY_UNIVAR:
+        fatal_error("TY_UNIVAR should have been removed");
+
+    case TY_BOOL:
+    case TY_FINITE_INT:
+    case TY_MATH_INT:
+        return true;
+
+    case TY_RECORD:
+        ;
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            if (!valid_decreases_type(field->type)) {
+                return false;
+            }
+        }
+        return true;
+
+    case TY_VAR:
+    case TY_VARIANT:
+    case TY_ARRAY:
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+    case TY_MATH_REAL:
+        return false;
+    }
+
+    fatal_error("valid_decreases_type: unhandled case");
+}
+
 // Return a "<" expression comparing variant terms
 static struct Sexpr * variant_cmp_expr(struct Type *type,
                                        struct Sexpr *old_variant,   // handover
@@ -813,7 +734,6 @@ static struct Sexpr * variant_cmp_expr(struct Type *type,
     case TY_LAMBDA:
     case TY_APP:
     case TY_MATH_REAL:
-        // the typechecker shouldn't allow these as 'decreases' expressions
         fatal_error("decreases clause - unexpected type");
     }
 
@@ -898,8 +818,9 @@ static struct Sexpr *variant_bounded_expr(struct Type *type,
     case TY_LAMBDA:
     case TY_APP:
     case TY_MATH_REAL:
-        // the typechecker shouldn't allow these as 'decreases' expressions
-        fatal_error("decreases clause - unexpected type");
+        // inappropriate decreases-type
+        // this will be caught later; for now just return 'true'
+        return make_string_sexpr("true");
     }
 
     fatal_error("decreases clause - unhandled case");
@@ -918,11 +839,16 @@ static void check_variant_has_decreased(struct VContext *context,
     context->path_condition = and_sexpr(context->path_condition, expr);
 
     // Compare the variants.
-    struct Sexpr *cmp_expr = variant_cmp_expr(variant_attr->term->type,
-                                              copy_sexpr(old_variant), copy_sexpr(new_variant));
-    verify_condition(context, variant_attr->location, cmp_expr, "decreases",
-                     err_msg_decreases_might_not_decrease(variant_attr));
-    free_sexpr(cmp_expr);
+    if (valid_decreases_type(variant_attr->term->type)) {
+        struct Sexpr *cmp_expr = variant_cmp_expr(variant_attr->term->type,
+                                                  copy_sexpr(old_variant), copy_sexpr(new_variant));
+        verify_condition(context, variant_attr->location, cmp_expr, "decreases",
+                         err_msg_decreases_might_not_decrease(variant_attr));
+        free_sexpr(cmp_expr);
+    } else {
+        const char *msg = err_msg_wrong_decreases_type(variant_attr);
+        add_fol_message(msg, true, 0, NULL);
+    }
 }
 
 // Verify that the variant is bounded below - this is automatic for TY_FINITE_INT and TY_BOOL

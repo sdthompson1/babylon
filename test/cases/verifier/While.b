@@ -316,3 +316,15 @@ function f23()
     // Missing "decreases". (This is now a verifier error, not a typechecking error.)
     while (true) { }
 }
+
+function f24()
+{
+    // Incorrect "decreases" type. (This is now a verifier error, not a typechecking error.)
+    while true
+        decreases real(0);
+    {}
+
+    while true
+        decreases {real(0), int(0)};
+    {}
+}

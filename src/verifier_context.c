@@ -411,8 +411,7 @@ struct Item *add_const_item(struct VContext *context,
     return item;
 }
 
-struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
-                               enum AllocLevel alloc_level)
+struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local)
 {
     struct HashTable *env = local ? context->stack->table : context->stack->base->table;
 
@@ -464,63 +463,6 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     item = NULL;
 
 
-    // Add $allocated
-    item = alloc(sizeof(struct Item));
-    memset(item, 0, sizeof(struct Item));
-
-    const char *allocated_fol_name = copy_string_2("$allocated-", fol_name);
-
-    if (alloc_level != ALLOC_UNKNOWN) {
-        // (define-fun $allocated-%^name ((alloc_fol_var %^name)) Bool alloc_fol_term)
-
-        struct Sexpr *alloc_expr = NULL;
-        switch (alloc_level) {
-        case ALLOC_ALWAYS:
-            alloc_expr = make_string_sexpr("true");
-            break;
-
-        case ALLOC_NEVER:
-            alloc_expr = make_string_sexpr("false");
-            break;
-
-        case ALLOC_IF_NOT_DEFAULT:
-            alloc_expr = make_list3_sexpr(
-                make_string_sexpr("distinct"),
-                make_string_sexpr("$x"),
-                make_string_sexpr_handover(copy_string_2("$default-", fol_name)));
-            break;
-
-        case ALLOC_UNKNOWN:
-            fatal_error("unreachable");
-        }
-
-        item->fol_decl = make_list5_sexpr(
-            make_string_sexpr("define-fun"),
-            make_string_sexpr(allocated_fol_name),
-            make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$x"),
-                                              make_string_sexpr(fol_name))),
-            make_string_sexpr("Bool"),
-            alloc_expr);
-
-    } else {
-        // (declare-fun $allocated-%^name (%^name) Bool)
-        item->fol_decl = make_list4_sexpr(
-            make_string_sexpr("declare-fun"),
-            make_string_sexpr(allocated_fol_name),
-            make_list1_sexpr(make_string_sexpr(fol_name)),
-            make_string_sexpr("Bool"));
-    }
-
-    item->fol_name = copy_string(allocated_fol_name);
-
-    if (hash_table_contains_key(env, allocated_fol_name)) {
-        fatal_error("adding allocated_fol_name: key already exists");
-    }
-
-    hash_table_insert(env, allocated_fol_name, item);
-    allocated_fol_name = NULL;
-    item = NULL;
-
     // Add $valid
     item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
@@ -551,8 +493,7 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars)
 {
     while (tyvars) {
-        // Note: It is unknown whether these tyvars are allocated or not.
-        add_tyvar_to_env(context, tyvars->name, true, ALLOC_UNKNOWN);
+        add_tyvar_to_env(context, tyvars->name, true);
         tyvars = tyvars->next;
     }
 }
@@ -1374,174 +1315,4 @@ struct Sexpr * insert_validity_conditions(struct VContext *context,
         }
     }
     return term;
-}
-
-
-struct Sexpr *allocated_test_expr(struct VContext *context,
-                                  struct Type *type,
-                                  const char *var_name)
-{
-    switch (type->tag) {
-    case TY_UNIVAR:
-        fatal_error("TY_UNIVAR should have been removed");
-
-    case TY_VAR:
-        ;
-        char *alloc_name = copy_string_2("$allocated-%", type->var_data.name);
-        if (stacked_hash_table_lookup(context->stack, alloc_name) != NULL) {
-            return make_list2_sexpr(make_string_sexpr_handover(alloc_name),
-                                    make_string_sexpr(var_name));
-        } else {
-            // This happens when a user tries to write something like
-            // "type Foo allocated(x) if !allocated(x);".
-            // In this case we set the allocated-expression to $ARBITRARY,
-            // to avoid contradictions.
-            free(alloc_name);
-            struct Sexpr *arbitrary_bool = make_string_sexpr("$ARBITRARY");
-            make_instance(&arbitrary_bool, make_list1_sexpr(make_string_sexpr("Bool")));
-            return arbitrary_bool;
-        }
-        break;
-
-    case TY_BOOL:
-    case TY_FINITE_INT:
-    case TY_MATH_INT:
-    case TY_MATH_REAL:
-        return NULL;
-
-    case TY_RECORD:
-        return make_record_predicate(context, type, var_name, allocated_test_expr, disjunction);
-
-    case TY_VARIANT:
-        return make_variant_predicate(context, type, var_name, allocated_test_expr, disjunction);
-
-    case TY_ARRAY:
-        if (type->array_data.sizes != NULL) {
-            // A fixed-array is allocated if any of its elements is...
-            struct Type *elt_type = type->array_data.element_type;
-            int ndim = type->array_data.ndim;
-
-            // "$elt" is allocated
-            struct Sexpr *elt_alloc = allocated_test_expr(context, elt_type, "$elt");
-
-            if (elt_alloc == NULL) {
-                // This array is never allocated, because it is fixed-size
-                // and its elements are of a non-allocated type.
-                return NULL;
-            }
-
-            // "$idx" is in range
-            struct Sexpr *inrange = array_index_in_range(ndim, "$idx", "$size", NULL, false);
-
-            // "$idx" is in range, and the element at $idx is allocated
-            struct Sexpr *inrange_and_alloc =
-                make_list3_sexpr(
-                    make_string_sexpr("and"),
-                    make_list3_sexpr(
-                        make_string_sexpr("let"),
-                        make_list1_sexpr(
-                            make_list2_sexpr(
-                                make_string_sexpr("$size"),
-                                fixed_arr_size_sexpr(type))),
-                        inrange),
-                    make_list3_sexpr(
-                        make_string_sexpr("let"),
-                        make_list1_sexpr(
-                            make_list2_sexpr(
-                                make_string_sexpr("$elt"),
-                                make_list3_sexpr(
-                                    make_string_sexpr("select"),
-                                    make_string_sexpr(var_name),
-                                    make_string_sexpr("$idx")))),
-                        elt_alloc));
-
-            // there exists $idx such that inrange_and_alloc is true
-            return make_list3_sexpr(
-                make_string_sexpr("exists"),
-                make_list1_sexpr(
-                    make_list2_sexpr(
-                        make_string_sexpr("$idx"),
-                        array_index_type(ndim))),
-                inrange_and_alloc);
-
-        } else if (type->array_data.resizable) {
-            // A resizable array type is allocated if its size is nonzero.
-            int ndim = type->array_data.ndim;
-            struct Sexpr *size_zero = NULL;
-
-            if (ndim == 1) {
-                size_zero = make_list3_sexpr(make_string_sexpr("distinct"),
-                                             make_string_sexpr("$size"),
-                                             make_string_sexpr("0"));
-            } else {
-                struct Sexpr *pattern = make_list1_sexpr(array_index_type(ndim));
-                struct Sexpr **pattern_tail = &pattern->right;
-
-                struct Sexpr *conditions = NULL;
-                struct Sexpr **cond_tail = &conditions;
-
-                for (int i = 0; i < ndim; ++i) {
-                    char buf[30];
-                    sprintf(buf, "$v%d", i);
-
-                    *pattern_tail = make_list1_sexpr(make_string_sexpr(buf));
-                    pattern_tail = &(*pattern_tail)->right;
-
-                    struct Sexpr *new_cond = make_list3_sexpr(make_string_sexpr("distinct"),
-                                                              make_string_sexpr(buf),
-                                                              make_string_sexpr("0"));
-                    *cond_tail = make_list1_sexpr(new_cond);
-                    cond_tail = &(*cond_tail)->right;
-                }
-
-                size_zero = make_list3_sexpr(make_string_sexpr("match"),
-                                             make_string_sexpr("$size"),
-                                             make_list1_sexpr(make_list2_sexpr(pattern, conjunction(conditions))));
-            }
-
-            return match_arr_size(
-                "$arr", "$size",
-                make_string_sexpr(var_name),
-                type,
-                size_zero);
-
-        } else {
-            // The allocated status of an "incomplete" array type shouldn't
-            // ever be needed, currently.
-            fatal_error("checking if incomplete-type array is allocated - not currently supported");
-        }
-
-    case TY_FUNCTION:
-    case TY_FORALL:
-    case TY_LAMBDA:
-    case TY_APP:
-        fatal_error("allocated_test_expr - unexpected case");
-    }
-
-    fatal_error("allocated_test_expr - unknown type");
-}
-
-struct Sexpr * non_allocated_condition(struct VContext *context,
-                                       struct Type *type,
-                                       struct Sexpr *fol_term)   // copied/referenced only
-{
-    struct Sexpr *cond;
-    if (fol_term->type == S_STRING) {
-        cond = allocated_test_expr(context, type, fol_term->string);
-    } else {
-        cond = allocated_test_expr(context, type, "$copied");
-    }
-
-    if (cond) {
-        cond = make_list2_sexpr(make_string_sexpr("not"), cond);
-
-        if (fol_term->type != S_STRING) {
-            cond = make_list3_sexpr(
-                make_string_sexpr("let"),
-                make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$copied"), copy_sexpr(fol_term))),
-                cond);
-        }
-    }
-
-    return cond;
 }

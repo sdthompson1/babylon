@@ -9,4 +9,4 @@ datatype DType<a: Copy + Copy> = DType;
 type Typedef<a: Default + Copy + Default> = a;
 
 // Error: Move listed twice
-function f<a: Move + Default + Move + Drop>() {}
+function f<a: Move + Default + Move>() {}

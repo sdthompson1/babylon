@@ -1,7 +1,7 @@
 module AbstractType
 
 interface {
-    type Abstr : Copy+Drop;
+    type Abstr : Copy;
 }
 
-extern type Abstr : Move+Copy+Default+Drop;
+extern type Abstr : Move+Copy+Default;

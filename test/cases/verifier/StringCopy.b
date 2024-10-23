@@ -27,13 +27,13 @@ function copy_string(ref to: u8[], from: u8[])
 
 function main()
 {
-    var tmp: u8[*];
-    resize_array<u8>(tmp, sizeof(hello_string));
+    var tmp: u8[*] = 
+        alloc_array(sizeof(hello_string));
 
     copy_string(tmp, hello_string);
     assert tmp[5] == 32;   // ascii space = 32
 
-    resize_array<u8>(tmp, 0);
+    free_array(tmp);
 
     assert strings_in_tuple.0[0] == strings_in_tuple.1[0];
     assert sizeof(strings_in_tuple.0) == sizeof(strings_in_tuple.1);

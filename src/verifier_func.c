@@ -361,7 +361,6 @@ struct Sexpr * insert_lets(struct VContext *context,
 void verify_function_return(struct VContext *context,
                             struct Location location,
                             struct Term *return_term,
-                            bool ghost,
                             struct Sexpr *** ret_val_ptr)
 {
     // If this point in the code is unreachable we shouldn't try to continue
@@ -370,19 +369,8 @@ void verify_function_return(struct VContext *context,
     }
 
     struct Sexpr *ret_val = NULL;
-
     if (return_term) {
         ret_val = verify_term(context, return_term);
-
-        // Verify the value being returned is not allocated (except in ghost code)
-        if (!ghost) {
-            struct Sexpr *cond = non_allocated_condition(context, return_term->type, ret_val);
-            if (cond) {
-                verify_condition(context, location, cond, "return value not allocated",
-                                 err_msg_return_allocated(location));
-                free_sexpr(cond);
-            }
-        }
     }
 
     // Expand the ret val to include "new" values of ref vars

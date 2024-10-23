@@ -24,3 +24,11 @@ interface {}
 
   const c1: bool = true;
   const c2: bool = exists (x:i32) x == 42;   // Error, const is considered executable code
+
+
+  datatype Maybe<a> = Just(a) | Nothing;
+  
+  ghost function fn4(): bool
+  {
+    return forall (x: Maybe) x == x;    // Error, type is invalid
+  }

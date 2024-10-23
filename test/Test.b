@@ -29,81 +29,37 @@ interface
     extern function print_string(s: u8[]);
         requires valid_string(s);
 
-    ghost function default<T: Default>(): T
+    ghost function default<T>(): T
     {
         var x: T;
         return x;
     }
 
 
-    // For the purposes of the tests, memory allocation always
-    // succeeds (the C implementation will abort the program
-    // if we are out of memory). Therefore these "resize"
-    // functions always succeed, and don't need a separate
-    // dummy argument to ensure purity.
-    
-    extern function resize_array<T: Default>(ref array: T[*], new_dim: u64)
-    
-        // This cannot be used to manufacture new allocated values.
-        requires !allocated(default<T>());
-        
-        // Any elements being deleted must be non-allocated.
-        requires forall (i: u64) new_dim <= i < sizeof(array) ==> !allocated(array[i]);
+    // Array allocation and freeing. We assume memory allocation always succeeds;
+    // therefore these do not need to return "Maybe" and do not need to be marked "impure".
 
-        // The array is resized to the new size.
-        ensures sizeof(array) == new_dim;
+    extern function alloc_array<T: Move+Default>(dim: u64): T[*]
+        ensures sizeof(return) == dim;
+        ensures forall (i: u64) i < dim ==> return[i] == default<T>();
 
-        // The existing contents are preserved.
-        ensures forall (i: u64) i < old(sizeof(array)) && i < new_dim ==> array[i] == old(array[i]);
+    extern function free_array<T: Move>(move array: T[*]);
 
-        // The new elements are equal to the default for their type.
-        ensures forall (i: u64) old(sizeof(array)) <= i < new_dim ==> array[i] == default<T>();
+    extern function alloc_2d_array<T: Move+Default>(dim0: u64, dim1: u64): T[*,*]
+        requires can_mul_u64(dim0, dim1);
+        ensures sizeof(return) == {dim0, dim1};
+        ensures forall (i: u64) i < dim0 ==>
+            forall (j: u64) j < dim1 ==> return[i, j] == default<T>();
 
+    extern function free_2d_array<T: Move>(move array: T[*, *]);
 
-    extern function resize_2d_array<T: Default>(ref array: T[*,*], dim0: u64, dim1: u64)
+    extern function alloc_3d_array<T: Move+Default>(dim0: u64, dim1: u64, dim2: u64): T[*,*,*]
+        requires can_mul_u64(dim0, dim1);
+        requires can_mul_u64(dim0 * dim1, dim2);
+        ensures sizeof(return) == {dim0, dim1, dim2};
+        ensures forall (i: u64) i < dim0 ==>
+            forall (j: u64) j < dim1 ==>
+               forall (k: u64) k < dim2 ==> return[i, j, k] == default<T>();
 
-        // The total number of elements must not overflow u64.
-        requires Int.can_mul_u64(dim0, dim1);
-
-        // This cannot be used to manufacture new allocated values.
-        requires !allocated(default<T>());
-
-        // Any elements being deleted must be non-allocated.
-        requires forall (i: u64) forall (j: u64)
-            i < sizeof(array).0 && j < sizeof(array).1 &&
-            (i >= dim0 || i >= dim1) ==>
-                !allocated(array[i, j]);
-
-        // The array is resized to the new size.
-        ensures sizeof(array) == {dim0, dim1};
-
-        // The existing contents are preserved.
-        ensures forall (i: u64) forall (j: u64)
-            i < old(sizeof(array)).0 && i < dim0 &&
-            j < old(sizeof(array)).1 && j < dim1 ==>
-                array[i, j] == old(array[i, j]);
-
-        // The new elements are equal to the default for their type.
-        ensures forall (i: u64) forall (j: u64)
-            i < dim0 && j < dim1 &&
-            (i >= old(sizeof(array)).0 || j >= old(sizeof(array)).1) ==>
-                array[i, j] == default<T>();
-
-
-    extern function resize_3d_array<T: Default>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
-
-        // The total number of elements must not overflow u64.
-        requires Int.can_mul_u64(dim0, dim1);
-        requires Int.can_mul_u64(dim0 * dim1, dim2);
-
-        // For simplicity -- this can only be used with non-allocated types.
-        requires forall (x: T) !allocated(x);
-
-        // The array is resized to the new size.
-        ensures sizeof(array) == {dim0, dim1, dim2};
-
-        // For simplicity -- all elements are reset to default.
-        ensures forall (i: u64) forall (j: u64) forall (k: u64)
-            i < dim0 && j < dim1 && k < dim2 ==>
-                array[i, j, k] == default<T>();
+    extern function free_3d_array<T: Move>(move array: T[*, *, *]);
 }

@@ -1,0 +1,4 @@
+Datatype4.b:12:13: Cannot move value, 'Move' trait is missing
+Datatype4.b:13:13: Cannot move value, 'Move' trait is missing
+Datatype4.b:15:29: Type does not satisfy 'Move' trait requirement
+Datatype4.b:15:5: Cannot drop variable 'd' (created at Datatype4.b:15:5), 'Copy' trait is missing

@@ -1,1 +1,1 @@
-TraitDefaultInit.b:9:5: Cannot initialize variable: no value provided and type does not have 'Default' trait
+TraitDefaultInit.b:9:5: Cannot default-initialize variable, 'Default' trait is missing

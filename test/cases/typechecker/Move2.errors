@@ -1,0 +1,7 @@
+Move2.b:9:18: Cannot drop value, 'Copy' trait is missing
+Move2.b:14:12: Cannot drop value, 'Copy' trait is missing
+Move2.b:30:1: Cannot drop variable 'x' (created at Move2.b:30:16), 'Copy' trait is missing
+Move2.b:40:12: Use of moved variable 'r' (was moved at Move2.b:39:16)
+Move2.b:47:20: Variable 'a' moved on some code paths but not others
+Move2.b:68:13: Cannot drop value, 'Copy' trait is missing
+Move2.b:78:10: Field 'b' was not matched (and does not have 'Copy' trait)

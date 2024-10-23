@@ -35,8 +35,8 @@ function test1()
 
 function test2()
 {
-    var a: i32[*,*];
-    resize_2d_array<i32>(a, 10, 8);
+    var a: i32[*,*] =
+        alloc_2d_array<i32>(10, 8);
 
     a[3,3] = 3333;
 
@@ -49,13 +49,13 @@ function test2()
 
     assert a[3,3] == 0;   // negative test
 
-    resize_2d_array<i32>(a, 0, 0);
+    free_2d_array<i32>(a);
 }
 
 function test3()
 {
-    var a: i32[*,*];
-    resize_2d_array<i32>(a, 10, 20);
+    var a: i32[*,*] =
+        alloc_2d_array<i32>(10, 20);
 
     a[3,3] = 3333;
 
@@ -68,7 +68,7 @@ function test3()
 
     assert a[3,3] == 0;   // negative test
 
-    resize_2d_array<i32>(a, 0, 0);
+    free_2d_array<i32>(a);
 }
 
 
@@ -98,8 +98,8 @@ function test4()
 
 function test_wrong_size()
 {
-    var a: i32[*,*];
-    resize_2d_array<i32>(a, 5, 5);
+    var a: i32[*,*] =
+        alloc_2d_array<i32>(5, 5);
     f2(a);  // error, size doesn't match
-    resize_2d_array<i32>(a, 0, 0);
+    free_2d_array<i32>(a);
 }

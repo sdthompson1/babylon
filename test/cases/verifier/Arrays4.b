@@ -67,16 +67,3 @@ function f5(a: bool[20])
     assert sizeof(a) == u64(20);
     assert forall (i: u64) i < u64(20) ==> a[i] == true || a[i] == false;
 }
-
-// Allocatable element type
-function f6()
-{
-    var a: i32[10][*];
-    assert !allocated(a);
-
-    resize_array<i32>(a[3], 25);
-    assert allocated(a);
-
-    resize_array<i32>(a[3], 0);
-    assert !allocated(a);
-}

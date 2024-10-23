@@ -887,7 +887,6 @@ struct Term * eval_to_normal_form(TypeEnv *env, struct Term *term)
     case TM_QUANTIFIER:
     case TM_CALL:
     case TM_TYAPP:
-    case TM_ALLOCATED:
         report_non_compile_time_constant(term->location);
         return NULL;
     }

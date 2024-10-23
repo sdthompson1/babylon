@@ -863,15 +863,17 @@ bool import_builtin_module(const char *name,
                     fun_ty->function_data.args->name = NULL;
                     fun_ty->function_data.args->type = make_int_type(g_no_location, s, sizes[j]);
                     fun_ty->function_data.args->ref = false;
+                    fun_ty->function_data.args->move = false;
                     fun_ty->function_data.args->next = alloc(sizeof(struct FunArg));
                     fun_ty->function_data.args->next->name = NULL;
                     fun_ty->function_data.args->next->type = make_int_type(g_no_location, s, sizes[j]);
                     fun_ty->function_data.args->next->ref = false;
+                    fun_ty->function_data.args->next->move = false;
                     fun_ty->function_data.args->next->next = NULL;
                     fun_ty->function_data.return_type = make_type(g_no_location, TY_BOOL);
 
-                    add_to_type_env(type_env, &buf[1], fun_ty, NULL, true, true, false, false, ALLOC_UNKNOWN);
-                    add_to_type_env(expanded_type_env, &buf[1], copy_type(fun_ty), NULL, true, true, false, false, ALLOC_UNKNOWN);
+                    add_to_type_env(type_env, &buf[1], fun_ty, NULL, FLAG_GHOST | FLAG_READ_ONLY, g_no_location);
+                    add_to_type_env(expanded_type_env, &buf[1], copy_type(fun_ty), NULL, FLAG_GHOST | FLAG_READ_ONLY, g_no_location);
 
                     struct Sexpr *fol_decl =
                         make_list5_sexpr(

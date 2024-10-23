@@ -30,7 +30,7 @@ ghost function test2()
         while true
             decreases x;     // Adds constraint: typeof(x) must be valid-for-decreases.
         {
-            x = x - real(1);  // This should infer x :: real, which then fails the constraint (real is not valid for decreases).
+            x = x - real(1);  // this is now valid from typechecking pov (but verifier won't verify it).
         }
     }
 }
@@ -69,8 +69,8 @@ ghost function f(x: Maybe<real>)
 
 function test5()
 {
-    var x = Nothing;   // This line is OK, type of x is not known yet.
-    ghost f(x);   // This is trying to give x the type Maybe<real>, which is illegal in executable code.
+    var x = Nothing;   // This line is OK, x is given type Maybe<alpha_Move>.
+    ghost f(x);   // Error, can't unify "alpha_Move" with "real".
 }
 
 function f64(x: Maybe<i64>) { }
@@ -87,19 +87,19 @@ function test6(): Maybe<i64>
 }
 
 
-function g<T>() { }
+function g<T: Copy>() { }
 
 type MyTypedef = int;
 
 function test7()
 {
-    var x: MyTypedef;   // Error, no 'int' in executable code.
-    g<int>();           // Error, can't use 'int' as type-parameter in executable code.
-    g<MyTypedef>();     // Error, ditto.
+    var x: MyTypedef;   // Error, 'int' doesn't have Default trait
+    g<int>();           // Error, 'int' doesn't have Copy trait
+    g<MyTypedef>();     // Error, 'MyTypedef' doesn't have Copy trait
 }
 
 
-function from_just<T>(x: Maybe<T>): T
+function from_just<T: Copy>(x: Maybe<T>): T
     // 'requires' conditions omitted
 {
     return match x { case Just(a) => a };

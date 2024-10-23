@@ -2,7 +2,7 @@ module ExternType
 
 interface {}
 
-extern type Foo: Default;
+extern type Foo: Copy+Default;
 
 function f(x: Foo)
 {

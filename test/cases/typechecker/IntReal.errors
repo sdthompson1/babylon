@@ -4,7 +4,6 @@ IntReal.b:14:16: 'int' or 'real' types not allowed in executable code
 IntReal.b:14:25: 'int' or 'real' types not allowed in executable code
 IntReal.b:14:31: 'int' or 'real' types not allowed in executable code
 IntReal.b:16:13: 'int' or 'real' types not allowed in executable code
-IntReal.b:34:19: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
 IntReal.b:41:23: Type mismatch
 IntReal.b:46:14: Type mismatch (expected finite-sized integer)
 IntReal.b:47:14: Type mismatch (expected finite-sized integer)
@@ -17,3 +16,8 @@ IntReal.b:66:17: Type mismatch (expected finite-sized integer)
 IntReal.b:67:17: Type mismatch (expected finite-sized integer)
 IntReal.b:75:18: 'int' or 'real' types not allowed in executable code
 IntReal.b:76:12: 'int' or 'real' types not allowed in executable code
+IntReal.b:82:12: 'int' or 'real' types not allowed in executable code
+IntReal.b:83:12: 'int' or 'real' types not allowed in executable code
+IntReal.b:84:11: 'int' or 'real' types not allowed in executable code
+IntReal.b:85:11: 'int' or 'real' types not allowed in executable code
+IntReal.b:88:11: 'int' or 'real' types not allowed in executable code

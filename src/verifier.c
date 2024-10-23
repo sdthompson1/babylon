@@ -93,7 +93,6 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.string_names = verifier_env->string_names;
     cxt.current_decl_name = NULL;
     cxt.refs = new_hash_table();
-    cxt.var_decl_stack = NULL;
     cxt.new_values = NULL;
     cxt.path_condition = NULL;
     cxt.facts = NULL;

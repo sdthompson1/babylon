@@ -24,12 +24,12 @@ function f7()
     assert (sizeof(a) == u64_zero);
     var b: i8[*,*,*];
     assert (sizeof(b) == {u64_zero, u64_zero, u64_zero});
+    free_array(a); free_3d_array(b);
 }
 
 function f9()
 {
     var a: i32[100];
-
     var i: u64 = 0;
     while (i < 100)
         invariant sizeof(a) == 100;
@@ -72,11 +72,4 @@ function f13(ref a: i32[], ref b: i32[,])
 
     b[1, 2/0] = 0;  // Error, index failed to verify, failed to cast, might be out of bounds
     b[1, 999] = 0;  // Error, index out of bounds
-}
-
-function f14()
-{
-    var a: i32[*];
-    resize_array<i32>(a, 10);
-    // Error: a was not deallocated
 }

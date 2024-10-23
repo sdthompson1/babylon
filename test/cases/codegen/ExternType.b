@@ -7,7 +7,7 @@ interface {
 import Test;
 
 
-extern type Foo: Default;
+extern type Foo: Default+Copy;
 
 function foo(x: Foo)
 {

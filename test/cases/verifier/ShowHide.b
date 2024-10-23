@@ -132,8 +132,8 @@ ghost function generic_test()
 
 // Hide a generic function whose body is already "hidden".
 
-extern function my_extern_func<T>(x: T): T;
-    ensures !allocated(return);
+extern function my_extern_func<T: Move>(x: T): T;
+
 
 ghost function hide_extern_test()
 {

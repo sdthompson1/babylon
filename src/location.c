@@ -8,7 +8,7 @@ repository.
 */
 
 
-
+#include "alloc.h"
 #include "location.h"
 
 #include <stdio.h>
@@ -64,4 +64,11 @@ void set_location_end(struct Location *loc, const struct Location *from)
 {
     loc->end_line_num = from->end_line_num;
     loc->end_column_num = from->end_column_num;
+}
+
+struct Location * shallow_copy_location(struct Location *loc)
+{
+    struct Location * result = alloc(sizeof(struct Location));
+    memcpy(result, loc, sizeof(struct Location));
+    return result;
 }

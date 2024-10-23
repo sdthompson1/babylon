@@ -23,7 +23,6 @@ enum TokenType {
     TOK_STRING_LITERAL,
     TOK_NAME,
 
-    TOK_KW_ALLOCATED,
     TOK_KW_ASSERT,
     TOK_KW_ASSUME,
     TOK_KW_BOOL,
@@ -56,6 +55,7 @@ enum TokenType {
     TOK_KW_LET,
     TOK_KW_MATCH,
     TOK_KW_MODULE,
+    TOK_KW_MOVE,
     TOK_KW_OBTAIN,
     TOK_KW_OLD,
     TOK_KW_REAL,

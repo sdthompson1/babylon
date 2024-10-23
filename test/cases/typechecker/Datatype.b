@@ -22,7 +22,7 @@ interface {}
     Green = Blue;            // error, not an lvalue
   }
 
-  function bar<a>(m: Maybe<a>)
+  function bar<a: Copy>(m: Maybe<a>)
   {
     var m2: Maybe<a>   = m;    // ok
     var m3: Maybe<i32> = m;    // error

@@ -22,15 +22,22 @@ Arrays3.b:63:17: Type mismatch
 Arrays3.b:63:21: Type mismatch
 Arrays3.b:75:13: Type mismatch
 Arrays3.b:75:17: Type mismatch
-Arrays3.b:80:12: Can't use an incomplete array type here
-Arrays3.b:85:19: Can't use an incomplete array type here
-Arrays3.b:120:5: Can't use an incomplete array type here
-Arrays3.b:128:10: Can't use an incomplete array type here
+Arrays3.b:75:5: Cannot drop variable 'r1' (created at Arrays3.b:55:5), 'Copy' trait is missing
+Arrays3.b:75:5: Cannot drop variable 'r2' (created at Arrays3.b:56:5), 'Copy' trait is missing
+Arrays3.b:80:5: Cannot default-initialize variable, 'Default' trait is missing
+Arrays3.b:82:5: Cannot drop variable 'y' (created at Arrays3.b:81:5), 'Copy' trait is missing
+Arrays3.b:85:19: Return type does not have 'Move' trait
+Arrays3.b:103:16: Cannot move from reference
+Arrays3.b:107:16: Cannot move value, 'Move' trait is missing
+Arrays3.b:120:5: Cannot move value, 'Move' trait is missing
+Arrays3.b:122:5: Cannot overwrite previous value, 'Copy' trait is missing
+Arrays3.b:124:10: Cannot move value, 'Move' trait is missing
+Arrays3.b:126:24: Cannot move value, 'Move' trait is missing
+Arrays3.b:127:30: Cannot drop variable 'tmp' (created at Arrays3.b:127:13), 'Copy' trait is missing
 Arrays3.b:135:20: Type mismatch (expected bool or numeric)
 Arrays3.b:142:24: Type mismatch
-Arrays3.b:147:19: Can't use an incomplete array type here
-Arrays3.b:150:54: Can't use an incomplete array type here
-Arrays3.b:159:12: Can't use an incomplete array type here
-Arrays3.b:160:13: Can't use an incomplete array type here
-Arrays3.b:167:5: Can't use an incomplete array type here
-Arrays3.b:168:10: Can't use an incomplete array type here
+Arrays3.b:150:54: Return type does not have 'Move' trait
+Arrays3.b:159:5: Cannot default-initialize variable, 'Default' trait is missing
+Arrays3.b:160:17: Cannot move value, 'Move' trait is missing
+Arrays3.b:167:9: Cannot move value, 'Move' trait is missing
+Arrays3.b:168:5: Cannot move value, 'Move' trait is missing

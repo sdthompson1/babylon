@@ -51,7 +51,6 @@ static const char *trait_name(enum Trait trait)
     switch (trait) {
     case TRAIT_COPY: return "Copy";
     case TRAIT_DEFAULT: return "Default";
-    case TRAIT_DROP: return "Drop";
     case TRAIT_MOVE: return "Move";
     }
     return "???";
@@ -226,7 +225,7 @@ void report_duplicate_field_name(struct Location location, const char *name)
 void report_ref_arg_not_allowed(struct Location location)
 {
     print_location(location);
-    print_error("Cannot pass ref arg here\n");
+    print_error("Cannot pass 'ref' arg here\n");
 }
 
 void report_no_ref_in_postcondition(struct Location location)
@@ -274,6 +273,12 @@ void report_extern_cannot_be_ghost(struct Decl *decl)
 {
     print_location(decl->location);
     print_error("'extern' function cannot be 'ghost'\n");
+}
+
+void report_move_cannot_be_ghost(struct Location location)
+{
+    print_location(location);
+    print_error("'move' cannot be used with ghost functions\n");
 }
 
 void report_non_compile_time_constant(struct Location location)
@@ -502,18 +507,6 @@ void report_cannot_take_ref_to_resizable_array_element(struct Location location)
     print_error("Can't take reference to element of resizable array\n");
 }
 
-void report_cannot_take_sizeof(struct Term *term)
-{
-    print_location(term->location);
-    print_error("Can't use sizeof on this expression (not an lvalue)\n");
-}
-
-void report_incomplete_array_type(struct Location loc)
-{
-    print_location(loc);
-    print_error("Can't use an incomplete array type here\n");
-}
-
 void report_unexpected_return_value(struct Term *term)
 {
     print_location(term->location);
@@ -590,12 +583,6 @@ void report_executable_quantifier(struct Term *term)
 {
     print_location(term->location);
     print_error("Quantifiers cannot be used in executable code\n");
-}
-
-void report_executable_allocated(struct Term *term)
-{
-    print_location(term->location);
-    print_error("'allocated' cannot be used in executable code\n");
 }
 
 void report_access_ghost_var_from_executable_code(struct Term *term)
@@ -721,7 +708,89 @@ void report_type_does_not_satisfy_trait_bound(struct Type *type, enum Trait trai
 void report_cannot_default_init(struct Statement *stmt)
 {
     print_location(stmt->location);
-    print_error("Cannot initialize variable: no value provided and type does not have 'Default' trait\n");
+    print_error("Cannot default-initialize variable, 'Default' trait is missing\n");
+}
+
+void report_using_moved_variable(const char *name, struct Location use_location, struct Location moved_location)
+{
+    print_location(use_location);
+    print_error("Use of moved variable '%s' (was moved at ", name);
+    print_location_no_colon(moved_location);
+    print_error(")\n");
+}
+
+void report_move_inconsistency(const char *name, struct Location loc)
+{
+    print_location(loc);
+    print_error("Variable '%s' moved on some code paths but not others\n", name);
+}
+
+void report_move_from_part(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Cannot move from part of an object\n");
+}
+
+void report_move_to_part(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Cannot move to part of an object\n");
+}
+
+void report_cannot_overwrite(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Cannot overwrite previous value, 'Copy' trait is missing\n");
+}
+
+void report_cannot_drop(struct Location loc)
+{
+    print_location(loc);
+    print_error("Cannot drop value, 'Copy' trait is missing\n");
+}
+
+void report_cannot_drop_var(const char *name, struct Location create_loc, struct Location drop_loc)
+{
+    print_location(drop_loc);
+    char *new_name = sanitise_name(name);
+    print_error("Cannot drop variable '%s' (created at ", new_name);
+    free(new_name);
+    print_location_no_colon(create_loc);
+    print_error("), 'Copy' trait is missing\n");
+}
+
+void report_field_not_matched(const char *name, struct Location loc)
+{
+    print_location(loc);
+    char *new_name = sanitise_name(name);
+    print_error("Field '%s' was not matched (and does not have 'Copy' trait)\n", new_name);
+    free(new_name);
+}
+
+void report_cannot_match_by_value(const char *name, struct Location loc)
+{
+    print_location(loc);
+    char *new_name = sanitise_name(name);
+    print_error("Cannot match '%s' by value ('Copy' trait is required)\n", new_name);
+    free(new_name);
+}
+
+void report_cannot_move(struct Location loc)
+{
+    print_location(loc);
+    print_error("Cannot move value, 'Move' trait is missing\n");
+}
+
+void report_cannot_move_from_reference(struct Location loc)
+{
+    print_location(loc);
+    print_error("Cannot move from reference\n");
+}
+
+void report_return_type_not_movable(struct Location loc)
+{
+    print_location(loc);
+    print_error("Return type does not have 'Move' trait\n");
 }
 
 
@@ -805,6 +874,12 @@ char * err_msg_missing_decreases(struct Location loc)
     return err_msg(loc, "A 'decreases' clause is required\n");
 }
 
+char * err_msg_wrong_decreases_type(struct Attribute *attr)
+{
+    return err_msg(attr->location,
+                   "Inappropriate type for 'decreases' term\n");
+}
+
 char * err_msg_decreases_might_not_decrease(struct Attribute *attr)
 {
     return err_msg(attr->location,
@@ -846,41 +921,6 @@ char * err_msg_possible_aliasing_violation(struct Location location, int n1, int
     char buf[200];
     sprintf(buf, "Aliasing rules violated: argument %d might alias argument %d\n", n1, n2);
     return err_msg(location, buf);
-}
-
-char * err_msg_assign_to_allocated(struct Location loc)
-{
-    return err_msg(loc, "Can't assign, left-hand-side might be allocated\n");
-}
-
-char * err_msg_assign_from_allocated(struct Location loc)
-{
-    return err_msg(loc, "Can't assign, right-hand-side might be allocated\n");
-}
-
-char * err_msg_return_allocated(struct Location loc)
-{
-    return err_msg(loc, "Return value might be allocated\n");
-}
-
-char * err_msg_var_still_allocated(const char *name, struct Location loc)
-{
-    char *new_name = sanitise_name(name);
-    char *msg = copy_string_3("'", new_name, "' might still be allocated when it goes out of scope\n");
-    free(new_name);
-    char *result = err_msg(loc, msg);
-    free(msg);
-    return result;
-}
-
-char * err_msg_var_still_allocated_at_return(const char *name, struct Location loc)
-{
-    char *new_name = sanitise_name(name);
-    char *msg = copy_string_3("'", new_name, "' might still be allocated at return statement\n");
-    free(new_name);
-    char *result = err_msg(loc, msg);
-    free(msg);
-    return result;
 }
 
 char * err_msg_ref_invalid_variant_change(struct Location location)

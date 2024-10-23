@@ -1141,16 +1141,6 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
             return result;
         }
 
-    case TOK_KW_ALLOCATED:
-        {
-            advance(state);
-            struct Term *term = parse_paren_term(state);
-            set_location_end(&loc, &term->location);
-            struct Term *result = make_term(loc, TM_ALLOCATED);
-            result->allocated.rhs = term;
-            return result;
-        }
-
     default:
         {
             // failed to parse term
@@ -1962,7 +1952,7 @@ static struct Decl * parse_const_decl(struct ParserState *state)
 
 static struct TraitList *parse_trait_list(struct ParserState *state, struct Location *loc)
 {
-    // For now, only the four fixed names Copy, Default, Drop, Move are accepted.
+    // For now, only the three fixed names Copy, Default, Move are accepted.
     // At least one trait must be present.
     struct TraitList *result = NULL;
     struct TraitList **tail_ptr = &result;
@@ -1973,12 +1963,10 @@ static struct TraitList *parse_trait_list(struct ParserState *state, struct Loca
                 t = TRAIT_COPY;
             } else if (strcmp(state->token->data, "Default") == 0) {
                 t = TRAIT_DEFAULT;
-            } else if (strcmp(state->token->data, "Drop") == 0) {
-                t = TRAIT_DROP;
             } else if (strcmp(state->token->data, "Move") == 0) {
                 t = TRAIT_MOVE;
             } else {
-                report_error(state, state->token->location, "invalid trait name: must be Copy, Default, Drop or Move");
+                report_error(state, state->token->location, "invalid trait name: must be Copy, Default or Move");
                 free_trait_list(result);
                 return NULL;
             }
@@ -2071,10 +2059,14 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
             expect(state, TOK_COMMA, "',' or ')'");
         }
 
-        // 'ref' is allowed either before the var name, or after the colon.
+        // 'ref'/'move' are allowed either before the var name, or after the colon.
         bool ref = false;
+        bool move = false;
         if (state->token->type == TOK_KW_REF) {
             ref = true;
+            advance(state);
+        } else if (state->token->type == TOK_KW_MOVE) {
+            move = true;
             advance(state);
         }
 
@@ -2085,17 +2077,24 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
 
         expect(state, TOK_COLON, "':'");
 
-        if (!ref && state->token->type == TOK_KW_REF) {
-            ref = true;
-            advance(state);
+        if (!ref && !move) {
+            if (state->token->type == TOK_KW_REF) {
+                ref = true;
+                advance(state);
+            } else if (state->token->type == TOK_KW_MOVE) {
+                move = true;
+                advance(state);
+            }
         }
 
         struct Type *type = parse_type(state, true);
 
         struct FunArg * funarg = alloc(sizeof(struct FunArg));
         funarg->name = copy_string(name_tok->data);
+        funarg->location = name_tok->location;
         funarg->type = type;
         funarg->ref = ref;
+        funarg->move = move;
         funarg->next = NULL;
         *next_ptr = funarg;
         next_ptr = &funarg->next;
@@ -2273,7 +2272,6 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
 
     struct Type *rhs = NULL;
     struct TraitList *traits = NULL;
-    enum AllocLevel alloc_level = ALLOC_NEVER;
 
     if (state->token->type == TOK_EQUAL) {
         if (extern_found) {
@@ -2287,21 +2285,6 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
     } else if (state->token->type == TOK_COLON) {
         advance(state);
         traits = parse_trait_list(state, &loc);
-
-    } else if (state->token->type == TOK_LPAREN) {
-        // deprecated - 'allocated' types
-        advance(state);
-        if (state->token->type == TOK_KW_ALLOCATED) {
-            alloc_level = ALLOC_ALWAYS;
-        } else if (state->token->type == TOK_NAME && strcmp(state->token->data, "allocated_if_not_default") == 0) {
-            alloc_level = ALLOC_IF_NOT_DEFAULT;
-        } else {
-            expect(state, TOK_KW_ALLOCATED, "'allocated' or 'allocated_if_not_default'"); // show error message
-            free_tyvar_list(tyvars);
-            return NULL;
-        }
-        advance(state);
-        expect(state, TOK_RPAREN, "')'");
     }
 
     expect(state, TOK_SEMICOLON, "';'");
@@ -2314,7 +2297,6 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
     result->typedef_data.rhs = rhs;
     result->typedef_data.traits = traits;
     result->typedef_data.is_extern = extern_found;
-    result->typedef_data.alloc_level = alloc_level;
     result->attributes = NULL;
     result->next = NULL;
     result->recursive = false;

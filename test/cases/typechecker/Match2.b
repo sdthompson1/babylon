@@ -23,4 +23,15 @@ function test()
     }
 }
 
+function test2()
+{
+    match {1,2,3,4} {
+    case {3, 6, x, y} =>
+        x = 99;   // this is ok: x is "copied"
+
+    case {ref x, y, _, _} =>
+        x = 99;   // error: x is a ref to a readonly expression (a temporary)
+    }
+}
+
 

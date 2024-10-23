@@ -32,14 +32,14 @@ function copy_string(ref to: u8[], from: u8[])
 
 function main()
 {
-    var tmp: u8[*];
-    resize_array<u8>(tmp, sizeof(hello_string));
+    var tmp: u8[*] = alloc_array(sizeof(hello_string));
+
     
     copy_string(tmp, hello_string);
 
     Test.print_string(tmp);
 
-    resize_array<u8>(tmp, 0);
+    free_array(tmp);
 
     Test.print_string(strings_in_tuple.0);
     Test.print_string(strings_in_tuple.1);

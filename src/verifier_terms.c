@@ -1734,13 +1734,12 @@ static void verify_aliasing(struct VContext *cxt, struct Term *term)
 
 // Given a list of type args to a function, make the "generic args" that
 // must be passed to the function in the FOL representation.
-// Each type arg expands into 4 sexpr args:
+// Each type arg expands into 3 sexpr args:
 //  - the type itself
 //  - a default value of the type
-//  - a "$lambda" expression representing the "allocated" function for that type
+//  - a "$lambda" representing the "valid" function for that type
 //    (note lambdas are expanded out by substitute_in_sexpr so they do not reach the
 //    SMT solver itself).
-//  - a "$lambda" representing the "valid" function for that type.
 static struct Sexpr * make_generic_args(struct VContext *cxt, struct TypeList *types)
 {
     struct Sexpr *list = NULL;
@@ -1756,19 +1755,8 @@ static struct Sexpr * make_generic_args(struct VContext *cxt, struct TypeList *t
         *tail = make_list1_sexpr(dflt);
         tail = &((*tail)->right);
 
-        // allocated function
-        struct Sexpr *lam = allocated_test_expr(cxt, types->type, "$x");
-        if (lam == NULL) {
-            lam = make_string_sexpr("false");
-        }
-        lam = make_list3_sexpr(make_string_sexpr("$lambda"),
-                               make_list1_sexpr(make_string_sexpr("$x")),
-                               lam);
-        *tail = make_list1_sexpr(lam);
-        tail = &((*tail)->right);
-
         // validity function
-        lam = validity_test_expr(types->type, "$x");
+        struct Sexpr *lam = validity_test_expr(types->type, "$x");
         if (lam == NULL) {
             lam = make_string_sexpr("true");
         }
@@ -2216,34 +2204,6 @@ static void * verify_sizeof(void *context, struct Term *term, void *type_result,
     }
 }
 
-static void * verify_allocated(void *context, struct Term *term, void *type_result,
-                               void *rhs_result)
-{
-    struct Sexpr *rhs = rhs_result;
-    struct Sexpr *expr = NULL;
-
-    if (rhs->type == S_STRING) {
-        expr = allocated_test_expr(context, term->allocated.rhs->type, rhs->string);
-    } else {
-        expr = allocated_test_expr(context, term->allocated.rhs->type, "$alloc_term");
-        if (expr) {
-            expr = make_list3_sexpr(make_string_sexpr("let"),
-                                    make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$alloc_term"),
-                                                                      rhs)),
-                                    expr);
-            rhs = NULL;
-        }
-    }
-
-    free_sexpr(rhs);
-
-    if (!expr) {
-        expr = make_string_sexpr("false");
-    }
-
-    return expr;
-}
-
 static void * nr_verify_array_proj(struct TermTransform *tr, void *context,
                                    struct Term *term, void *type_result)
 {
@@ -2310,7 +2270,6 @@ struct Sexpr * verify_term(struct VContext *context, struct Term *term)
     tr.nr_transform_match = nr_verify_match;
     tr.transform_match_failure = verify_match_failure;
     tr.transform_sizeof = verify_sizeof;
-    tr.transform_allocated = verify_allocated;
     tr.nr_transform_array_proj = nr_verify_array_proj;
     tr.transform_op_term_list = verify_op_term_list;
     tr.transform_name_term_list = verify_name_term_list;

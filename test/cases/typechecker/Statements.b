@@ -134,25 +134,25 @@ interface {}
     {
     }
 
-    while (true)
-      decreases {x=1};        // Can't use record as decreases
-    {
-    }
 
-    while (true)
-      decreases {1,{2,3}};    // Tuple is ok (even nested)
-    {
-    }
 
-    while (true)
-      decreases {1,{true,{x=1}}};   // error: non-decreasable type embedded within tuple
-    {
-    }
 
-    while (true)
-      decreases {};       // empty tuple is accepted
-    {
-    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   }
 
 
