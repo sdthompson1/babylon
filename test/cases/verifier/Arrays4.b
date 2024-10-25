@@ -74,9 +74,9 @@ function f6()
     var a: i32[10][*];
     assert !allocated(a);
 
-    resize_array<i32>(a[3], 25);
+    alloc_array<i32>(a[3], 25);
     assert allocated(a);
 
-    resize_array<i32>(a[3], 0);
+    free_array<i32>(a[3]);
     assert !allocated(a);
 }

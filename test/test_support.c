@@ -56,132 +56,97 @@ void print_string(void *str)
     printf("%s", data);
 }
 
-void resize_array(uint64_t elt_size, char *array, uint64_t new_dim)
+void alloc_array(uint64_t elt_size, char *array, uint64_t dim)
 {
-    // Note: we assume size_t is 64-bit, and that reallocarray is available.
+    // Note: we assume (in this function, and in free_array) that
+    // size_t is 64-bit, and that NULL is represented as a zero
+    // bit-pattern.
 
-    // This will resize the array. Elements at positions less than both
-    // new_dim and old_dim will be preserved. Elements above old_dim,
-    // but below new_dim, will be zero-initialised.
-
-    void *old_data;
-    memcpy(&old_data, array, sizeof(void*));
-    uint64_t old_dim;
-    memcpy(&old_dim, array + sizeof(void*), 8);
-
-    bool freeing = (new_dim == 0 || elt_size == 0);
-
-    if (freeing) {
-        // To avoid confusion, let's explicitly call free, rather than realloc with a zero size
-        free(old_data);
-
-        void *new_data = NULL;
-        memcpy(array, &new_data, sizeof(void*));
-        memcpy(array + sizeof(void*), &new_dim, 8);
-
-    } else {
-        // Call reallocarray with non-zero size(s).
-        void *p = reallocarray(old_data, new_dim, elt_size);
-
+    // Allocate some new space. Use calloc to ensure the new
+    // elements are zero-initialized.
+    // Note: Ensure we use NULL, rather than some calloc-produced
+    // dummy memory block, when the dim is zero (because the language
+    // doesn't count zero-sized arrays as allocated and will not
+    // free them).
+    void *p = NULL;
+    if (dim != 0) {
+        p = calloc(dim, elt_size);
         if (p == NULL) {
             // We are out of memory, abort program.
             abort();
         }
-
-        // reallocarray will have preserved any existing array data, so
-        // now we just have to zero out any new bytes (between old_dim and
-        // new_dim).
-        if (new_dim > old_dim) {
-            memset((char*)p + old_dim * elt_size,
-                   0,
-                   (new_dim - old_dim) * elt_size);
-        }
-
-        memcpy(array, &p, sizeof(void*));
-        memcpy(array + sizeof(void*), &new_dim, 8);
     }
+
+    // Write the pointer and size into the descriptor.
+    memcpy(array, &p, sizeof(void*));
+    memcpy(array + sizeof(void*), &dim, 8);
 }
 
-void resize_2d_array(uint64_t elt_size, char *array, uint64_t new_dim1, uint64_t new_dim2)
+void free_array(uint64_t elt_size, char *array)
 {
-    // This is the 2d equivalent of resize_array.
+    // Read the pointer out of the descriptor.
+    void *p;
+    memcpy(&p, array, sizeof(void*));
 
-    // We can't use realloc as we have to not only copy the existing
-    // data, but "reformat" it (if dim2 has changed).
+    // Free the pointer.
+    // Note: freeing NULL is acceptable in C, so if the array
+    // was already empty, then this will do nothing, which is fine.
+    free(p);
 
-    // To keep things simple we will just calloc a new buffer, then copy the
-    // old data to it (row by row), then free the old buffer.
+    // Write NULL, and the new size (0), back to the descriptor.
+    memset(array, 0, sizeof(void*) + 8);
+}
 
-    void *old_data;
-    uint64_t old_dim1, old_dim2;
-    memcpy(&old_data, array, sizeof(void*));
-    memcpy(&old_dim1, array + sizeof(void*), 8);
-    memcpy(&old_dim2, array + sizeof(void*) + 8, 8);
-
-    bool freeing = (new_dim1 == 0 || new_dim2 == 0 || elt_size == 0);
-
-    if (freeing) {
-        free(old_data);
-
-        void *new_data = NULL;
-        memcpy(array, &new_data, sizeof(void*));
-        memcpy(array + sizeof(void*), &new_dim1, 8);
-        memcpy(array + sizeof(void*) + 8, &new_dim2, 8);
-
-    } else {
-        // Note: multiplication of new_dim1 and new_dim2 is guaranteed not to overflow
-        // because of the precondition in Test.b.
-        // calloc will take care of the case where the multiplication by elt_size overflows.
-        // calloc will also zero out any "new" bytes, as required.
-        void *p = calloc(new_dim1 * new_dim2, elt_size);
-
+void alloc_2d_array(uint64_t elt_size, char *array, uint64_t dim0, uint64_t dim1)
+{
+    void *p = NULL;
+    if (dim0 != 0 && dim1 != 0) {  // both dimensions have to be nonzero to allocate anything
+        // Note: Multiplying the dimensions is guaranteed safe by the function precondition
+        uint64_t dim = dim0 * dim1;
+        p = calloc(dim, elt_size);
         if (p == NULL) {
             abort();
         }
-
-        // Copy old elements to the correct positions in new array.
-        // (We can memcpy entire rows at once.)
-        uint64_t copy_width = old_dim2 < new_dim2 ? old_dim2 : new_dim2;
-        for (uint64_t i = old_dim1; i < old_dim1 && i < new_dim1; ++i) {
-            memcpy((char*)p + i * new_dim2 * elt_size,
-                   (char*)old_data + i * old_dim2 * elt_size,
-                   copy_width * elt_size);
-        }
-
-        memcpy(array, &p, sizeof(void*));
-        memcpy(array + sizeof(void*), &new_dim1, 8);
-        memcpy(array + sizeof(void*) + 8, &new_dim2, 8);
     }
+
+    memcpy(array, &p, sizeof(void*));
+    memcpy(array + sizeof(void*), &dim0, 8);
+    memcpy(array + sizeof(void*) + 8, &dim1, 8);
 }
 
-void resize_3d_array(uint64_t elt_size, char *array,
-                     uint64_t new_dim1, uint64_t new_dim2, uint64_t new_dim3)
+void free_2d_array(uint64_t elt_size, char *array)
 {
-    // This is similar to resize_2d_array except that we use a simplified implementation
-    // where the existing contents of the array are lost.
+    void *p;
+    memcpy(&p, array, sizeof(void*));
+    free(p);
+    memset(array, 0, sizeof(void*) + 16);
+}
 
-    void *old_data;
-    uint64_t old_dim1, old_dim2, old_dim3;
-    memcpy(&old_data, array, sizeof(void*));
-    memcpy(&old_dim1, array + sizeof(void*), 8);
-    memcpy(&old_dim2, array + sizeof(void*) + 8, 8);
-    memcpy(&old_dim3, array + sizeof(void*) + 16, 8);
-
-    free(old_data);
-
-    if (new_dim1 != 0 && new_dim2 != 0 && new_dim3 != 0 && elt_size != 0) {
-        void *new_data = calloc(new_dim1 * new_dim2 * new_dim3, elt_size);
-        if (new_data == NULL) abort();
-        memcpy(array, &new_data, sizeof(void*));
-    } else {
-        void *new_data = NULL;
-        memcpy(array, &new_data, sizeof(void*));
+void alloc_3d_array(uint64_t elt_size, char *array, uint64_t dim0, uint64_t dim1, uint64_t dim2)
+{
+    void *p = NULL;
+    if (dim0 != 0 && dim1 != 0 && dim2 != 0) {
+        uint64_t dim = dim0 * dim1 * dim2;
+        p = calloc(dim, elt_size);
+        if (p == NULL) {
+            abort();
+        }
     }
 
-    memcpy(array + sizeof(void*), &new_dim1, 8);
-    memcpy(array + sizeof(void*) + 8, &new_dim2, 8);
-    memcpy(array + sizeof(void*) + 16, &new_dim3, 8);
+    memcpy(array, &p, sizeof(void*));
+    memcpy(array + sizeof(void*), &dim0, 8);
+    memcpy(array + sizeof(void*) + 8, &dim1, 8);
+    memcpy(array + sizeof(void*) + 16, &dim2, 8);
 }
+
+void free_3d_array(uint64_t elt_size, char *array)
+{
+    void *p;
+    memcpy(&p, array, sizeof(void*));
+    free(p);
+    memset(array, 0, sizeof(void*) + 24);
+}
+
 
 void allocate_alloc_test(char *maybe)
 {

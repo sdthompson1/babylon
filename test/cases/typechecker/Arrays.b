@@ -12,10 +12,10 @@ function make_array(): i32[*]
 function f()
 {
     var a: i32[*];
-    resize_array<i32>(a, 100);
+    alloc_array<i32>(a, 100);
     
     var b: i32[*,*];
-    resize_2d_array<i32>(b, 10, 10);
+    alloc_2d_array<i32>(b, 10, 10);
 
     var s: u64 = sizeof(a);    // OK
     var t: u64 = sizeof(b);    // Error, type mismatch

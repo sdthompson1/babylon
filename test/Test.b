@@ -38,29 +38,35 @@ interface
 
     // For the purposes of the tests, memory allocation always
     // succeeds (the C implementation will abort the program
-    // if we are out of memory). Therefore these "resize"
-    // functions always succeed, and don't need a separate
-    // dummy argument to ensure purity.
+    // if we are out of memory). Therefore these "alloc_array"
+    // functions always succeed, and don't need to be declared
+    // "impure".
     
-    extern function resize_array<T>(ref array: T[*], new_dim: u64)
+    extern function alloc_array<T>(ref array: T[*], dim: u64)
     
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());
         
-        // Any elements being deleted must be non-allocated.
-        requires forall (i: u64) new_dim <= i < sizeof(array) ==> !allocated(array[i]);
+        // The array must be empty initially.
+        requires sizeof(array) == u64(0);
 
         // The array is resized to the new size.
-        ensures sizeof(array) == new_dim;
-
-        // The existing contents are preserved.
-        ensures forall (i: u64) i < old(sizeof(array)) && i < new_dim ==> array[i] == old(array[i]);
+        ensures sizeof(array) == dim;
 
         // The new elements are equal to the default for their type.
-        ensures forall (i: u64) old(sizeof(array)) <= i < new_dim ==> array[i] == default<T>();
+        ensures forall (i: u64) i < dim ==> array[i] == default<T>();
 
 
-    extern function resize_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64)
+    extern function free_array<T>(ref array: T[*])
+
+        // Any elements being deleted must be non-allocated.
+        requires forall (i: u64) i < sizeof(array) ==> !allocated(array[i]);
+
+        // The array is resized to zero size.
+        ensures sizeof(array) == u64(0);
+
+
+    extern function alloc_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);
@@ -68,44 +74,57 @@ interface
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());
 
-        // Any elements being deleted must be non-allocated.
-        requires forall (i: u64) forall (j: u64)
-            i < sizeof(array).0 && j < sizeof(array).1 &&
-            (i >= dim0 || i >= dim1) ==>
-                !allocated(array[i, j]);
+        // The array must be empty initially.
+        requires sizeof(array) == {u64(0), u64(0)};
 
         // The array is resized to the new size.
         ensures sizeof(array) == {dim0, dim1};
 
-        // The existing contents are preserved.
-        ensures forall (i: u64) forall (j: u64)
-            i < old(sizeof(array)).0 && i < dim0 &&
-            j < old(sizeof(array)).1 && j < dim1 ==>
-                array[i, j] == old(array[i, j]);
-
         // The new elements are equal to the default for their type.
         ensures forall (i: u64) forall (j: u64)
-            i < dim0 && j < dim1 &&
-            (i >= old(sizeof(array)).0 || j >= old(sizeof(array)).1) ==>
+            i < dim0 && j < dim1 ==>
                 array[i, j] == default<T>();
 
+    extern function free_2d_array<T>(ref array: T[*,*])
 
-    extern function resize_3d_array<T>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
+        // Any elements being deleted must be non-allocated.
+        requires forall (i: u64) forall (j: u64)
+            i < sizeof(array).0 && j < sizeof(array).1 ==>
+                !allocated(array[i, j]);
+
+        // The array is resized to zero size.
+        ensures sizeof(array) == {u64(0), u64(0)};
+
+
+    extern function alloc_3d_array<T>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
 
         // The total number of elements must not overflow u64.
         requires Int.can_mul_u64(dim0, dim1);
         requires Int.can_mul_u64(dim0 * dim1, dim2);
 
-        // For simplicity -- this can only be used with non-allocated types.
-        requires forall (x: T) !allocated(x);
+        // This cannot be used to manufacture new allocated values.
+        requires !allocated(default<T>());
+
+        // The array must be empty initially.
+        requires sizeof(array) == {u64(0), u64(0), u64(0)};
 
         // The array is resized to the new size.
         ensures sizeof(array) == {dim0, dim1, dim2};
 
-        // For simplicity -- all elements are reset to default.
+        // The new elements are equal to the default for their type.
         ensures forall (i: u64) forall (j: u64) forall (k: u64)
             i < dim0 && j < dim1 && k < dim2 ==>
                 array[i, j, k] == default<T>();
+
+    extern function free_3d_array<T>(ref array: T[*,*,*])
+
+        // Any elements being deleted must be non-allocated.
+        requires forall (i: u64) forall (j: u64) forall (k: u64)
+            i < sizeof(array).0 && j < sizeof(array).1 && k < sizeof(array).2 ==>
+                !allocated(array[i, j, k]);
+
+        // The array is resized to zero size.
+        ensures sizeof(array) == {u64(0), u64(0), u64(0)};
 
 
 

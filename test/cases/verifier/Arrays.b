@@ -77,6 +77,6 @@ function f13(ref a: i32[], ref b: i32[,])
 function f14()
 {
     var a: i32[*];
-    resize_array<i32>(a, 10);
+    alloc_array<i32>(a, 10);
     // Error: a was not deallocated
 }

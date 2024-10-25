@@ -44,7 +44,7 @@ function f3()
 function f4()
 {
     var a: i32[*];
-    resize_array<i32>(a, 10);
+    alloc_array<i32>(a, 10);
     
     a[1] = 2;
     a[3] = 3;
@@ -54,7 +54,7 @@ function f4()
     assert a[1] == 3;
     assert a[3] == 2;
 
-    resize_array<i32>(a, 0);
+    free_array<i32>(a);
 }
 
 function f5()

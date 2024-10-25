@@ -20,7 +20,7 @@ function f2()
 {
     var x: i32[*];
     var y: i32[*];
-    resize_array<i32>(x, 100);
+    alloc_array<i32>(x, 100);
     x = y;        // Error, copying to an allocated variable
 }
 
@@ -38,7 +38,7 @@ function f4(): i32[*]
 function f5()
 {
     var x: i32[*];
-    resize_array<i32>(x, 10);
+    alloc_array<i32>(x, 10);
     // Error, x still allocated
 }
 
@@ -51,7 +51,7 @@ ghost function f6()
     var x: i32[*];
     assert allocated(x) == false;
     
-    resize_array<i32>(x, 100);
+    alloc_array<i32>(x, 100);
     assert allocated(x) == true;
 
     // note: no error that x still allocated, because this
@@ -122,8 +122,8 @@ ghost function f12(x: i32[*])
 
 function f13()
 {
-    // This shows it is impossible to use resize_array to manufacture
+    // This shows it is impossible to use alloc_array to manufacture
     // a value of type AllocTest.
     var array: AllocTest[*];
-    resize_array<AllocTest>(array, 1);
+    alloc_array<AllocTest>(array, 1);
 }
