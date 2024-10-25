@@ -195,6 +195,7 @@ void get_free_var_names_in_sexpr(const struct Sexpr *expr,
                                  struct HashTable *scratch)
 {
     // this is a "public" version of get_names_from_sexpr
+    hash_table_clear(scratch);
     get_names_from_sexpr(expr, var_names, scratch, NULL);
 }
 

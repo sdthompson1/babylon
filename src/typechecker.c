@@ -3800,7 +3800,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         tc_context->error = true;
     }
 
-    if (kinds_ok) {
+    if (kinds_ok && ret_type_ok) {
         // Construct the function type and put it in the env
         struct Type *type = make_type(g_no_location, TY_FUNCTION);
 

@@ -1,2 +1,0 @@
-ConstRef.b:18:15: Aliasing rules violated: argument 2 might alias argument 3
-ConstRef.b:19:9: Aliasing rules violated: argument 1 might alias argument 3

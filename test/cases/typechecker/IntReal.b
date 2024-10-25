@@ -78,3 +78,17 @@ function f6()
     ghost var gx: {i32, int};   // OK
     ghost var gy: ContainsInt;  // OK
 }
+
+const c1 = real(2);  // Error, cannot have real consts
+const c2 = int(3);   // Error, cannot have int consts
+const c3: real = 0;  // Error
+const c4: int = 0;   // Error
+
+type BadRecord = {i32, int};
+const c5: BadRecord = {2, int(3)};  // Error, int embedded within a record
+const c6 = {2, int(3)};  // Error, int embedded within a record
+
+function f7()
+{
+    var v: BadRecord;   // Error, int embedded within a record
+}

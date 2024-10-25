@@ -17,3 +17,10 @@ IntReal.b:66:17: Type mismatch (expected finite-sized integer)
 IntReal.b:67:17: Type mismatch (expected finite-sized integer)
 IntReal.b:75:18: 'int' or 'real' types not allowed in executable code
 IntReal.b:76:12: 'int' or 'real' types not allowed in executable code
+IntReal.b:82:12: 'int' or 'real' types not allowed in executable code
+IntReal.b:83:12: 'int' or 'real' types not allowed in executable code
+IntReal.b:84:11: 'int' or 'real' types not allowed in executable code
+IntReal.b:85:11: 'int' or 'real' types not allowed in executable code
+IntReal.b:88:11: 'int' or 'real' types not allowed in executable code
+IntReal.b:89:16: 'int' or 'real' types not allowed in executable code
+IntReal.b:93:12: 'int' or 'real' types not allowed in executable code
