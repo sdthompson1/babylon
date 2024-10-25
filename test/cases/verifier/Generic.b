@@ -1,13 +1,13 @@
 module Generic
 interface {}
-  function id<a: Copy>(x: a): a
-
+  function id<a>(x: a): a
+    requires !allocated(x);
   {
     return x;
   }
 
-  function fst<a: Copy, b: Copy> (x: a, y: b): a
-
+  function fst<a,b> (x: a, y: b): a
+    requires !allocated(x);
   {
     return x;
   }
@@ -24,8 +24,8 @@ interface {}
     assert (fst<i32, bool>(99, false) == 100);  // Failure, returns 99
   }
 
-  function calls_id<T: Copy>(x: T): T
-
+  function calls_id<T>(x: T): T
+    requires !allocated(x);
   {
     var T: T = x;      // This is fine, variable "T" is distinct from type "T"
     return id<T>(T);   // Fine, this is basically id(x) which is x

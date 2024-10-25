@@ -31,7 +31,7 @@ ghost function f4()
 
     var r: real = real(1);
     while r > real(0)
-        decreases r;     // this is now accepted as well (but verifier will fail)
+        decreases r;     // 'real' decreases value not accepted
     {}
 }
 
@@ -78,11 +78,3 @@ function f6()
     ghost var gx: {i32, int};   // OK
     ghost var gy: ContainsInt;  // OK
 }
-
-const c1 = real(2);  // Error, cannot have real consts
-const c2 = int(3);   // Error, cannot have int consts
-const c3: real = 0;  // Error
-const c4: int = 0;   // Error
-
-type BadRecord = {i32, int};
-const c5: BadRecord = {2, int(3)};   // Error, "int" embedded within a record

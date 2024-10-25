@@ -100,28 +100,16 @@ function stmt_test_2(): i32
     }
 }
 
-function stmt_test_3(): i32
-{
-    match (M{S{111}, S{222}}) {
-    case M{S{ref x}, S{ref y}} =>
-        // note: x,y can be matched by 'ref' even though the match-expr is a temporary;
-        // the temporary will be "kept alive" long enough such that the refs are still valid.
-        return x + y;
-    }
-}
-
 function test_statements()
 {
     var s1: i32 = stmt_test(A{Z,Z});
     var s2: i32 = stmt_test(A{S{123},Z});
     var s3: i32 = stmt_test(M{S{123},S{456}});
     var s4: i32 = stmt_test_2();
-    var s5: i32 = stmt_test_3();
     Test.print_i32(s1);
     Test.print_i32(s2);
     Test.print_i32(s3);
     Test.print_i32(s4);
-    Test.print_i32(s5);
 }
 
 function scope_test(v: E)

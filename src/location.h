@@ -33,6 +33,4 @@ void format_location(const struct Location *loc,
 
 void set_location_end(struct Location *loc, const struct Location *from);
 
-struct Location * shallow_copy_location(struct Location *loc);
-
 #endif

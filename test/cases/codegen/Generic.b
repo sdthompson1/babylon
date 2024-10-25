@@ -6,8 +6,8 @@ interface { function main(); }
 
 import Test;
 
-function id<a: Copy>(x: a): a
-
+function id<a>(x: a): a
+    requires !allocated(x);
 {
     return x;
 }

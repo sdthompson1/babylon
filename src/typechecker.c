@@ -72,58 +72,10 @@ struct TypeEnvEntry * type_env_lookup(const TypeEnv *env, const char *name)
     return stacked_hash_table_lookup(env, name);
 }
 
-// Get "root name" of an lvalue expression, following references.
-// For non-lvalues, returns NULL.
-static const char * get_root_name(struct TypecheckContext *cxt, struct Term *term)
-{
-    const char *name = NULL;
-
-    while (name == NULL) {
-        switch (term->tag) {
-        case TM_VAR:
-            name = term->var.name;
-            break;
-
-        case TM_FIELD_PROJ:
-            term = term->field_proj.lhs;
-            break;
-
-        case TM_ARRAY_PROJ:
-            term = term->array_proj.lhs;
-            break;
-
-        case TM_TYAPP:
-            term = term->tyapp.lhs;
-            break;
-
-        case TM_STRING_LITERAL:
-            // This doesn't have a root name
-            return NULL;
-
-        default:
-            // Not an lvalue
-            return NULL;
-        }
-    }
-
-    while (true) {
-        struct TypeEnvEntry *entry = lookup_type_info(cxt, name);
-        if (entry && entry->root_name) {
-            name = entry->root_name;
-        } else {
-            break;
-        }
-    }
-
-    return name;
-}
-
 static void free_type_env_entry(struct TypeEnvEntry *entry)
 {
     free_type(entry->type);
-    free_trait_list(entry->traits);
     free_term(entry->value);
-    free(entry->moved_location);
     free(entry);
 }
 
@@ -139,31 +91,28 @@ static void remove_from_type_env_hash_table(struct HashTable *table, const char 
     }
 }
 
-struct TypeEnvEntry *
-    add_to_type_env(TypeEnv *env,
-                    const char *name,    // copied
-                    struct Type *type,   // handed over
-                    struct TraitList *traits,  // handed over
-                    uint8_t flags,
-                    struct Location location)
+void add_to_type_env(TypeEnv *env,
+                     const char *name,    // copied
+                     struct Type *type,   // handed over
+                     bool ghost,
+                     bool read_only,
+                     bool constructor,
+                     bool impure,
+                     enum AllocLevel alloc_level)
 {
-    if (hash_table_contains_key(env->table, name)) {
-        fatal_error("add_to_type_env: already exists");
-    }
+    remove_from_type_env_hash_table(env->table, name);   // just in case there is an existing entry
 
     struct TypeEnvEntry *entry = alloc(sizeof(struct TypeEnvEntry));
     entry->type = type;
-    entry->traits = traits;
-    entry->root_name = NULL;
     entry->value = NULL;
-    entry->created_location = location;
-    entry->moved_location = NULL;
-    entry->flags = flags;
+    entry->ghost = ghost;
+    entry->read_only = read_only;
+    entry->constructor = constructor;
+    entry->impure = impure;
+    entry->alloc_level = alloc_level;
 
     // add to the topmost HashTable in the stack
     hash_table_insert(env->table, copy_string(name), entry);
-
-    return entry;
 }
 
 static void free_type_env_key_and_value(void *context, const char *key, void *value)
@@ -212,272 +161,18 @@ void free_type_env(TypeEnv *env)
 
 // ----------------------------------------------------------------------------------------------------
 
-// Determining whether a type has a given trait.
+// Functions needed by kind checking.
 
-// Returns true if the given trait is in the given list.
-// This also returns true if 'trait' is Move and the list contains Copy, because Copy
-// always implies Move.
-static bool trait_in_list(struct TraitList *traits, enum Trait trait)
-{
-    while (traits) {
-        if (traits->trait == trait) {
-            return true;
-        }
-        if (trait == TRAIT_MOVE && traits->trait == TRAIT_COPY) {
-            return true;
-        }
-        traits = traits->next;
-    }
-    return false;
-}
-
-// Returns true if 'type' has 'trait', false otherwise.
-// (If 'type' is an unresolved UNIVAR, this will unify it with the given trait
-// and return true.)
-static bool type_has_trait(struct TypecheckContext *tc_context,
-                           struct Type *type,
-                           enum Trait trait)
-{
-    switch (type->tag) {
-    case TY_UNIVAR:
-        if (type->univar_data.node->type) {
-            return type_has_trait(tc_context, type->univar_data.node->type, trait);
-        } else {
-            if (!trait_in_list(type->univar_data.node->traits, trait)) {
-                struct TraitList *node = alloc(sizeof(struct TraitList));
-                node->trait = trait;
-                node->next = type->univar_data.node->traits;
-                type->univar_data.node->traits = node;
-            }
-            return true;
-        }
-        break;
-
-    case TY_VAR:
-        {
-            struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
-            if (entry) {
-                return trait_in_list(entry->traits, trait);
-            } else {
-                fatal_error("tyvar not found in env");
-            }
-        }
-        break;
-
-    case TY_BOOL:
-    case TY_FINITE_INT:
-        return (trait == TRAIT_COPY || trait == TRAIT_MOVE ||
-                trait == TRAIT_DEFAULT);
-
-    case TY_MATH_INT:
-    case TY_MATH_REAL:
-        // These are ghost-only types, and have no traits
-        return false;
-
-    case TY_RECORD:
-        if (type->record_data.fields == NULL) {
-            // Empty record is "plain old data" i.e. has all three traits
-            return (trait == TRAIT_COPY || trait == TRAIT_MOVE ||
-                    trait == TRAIT_DEFAULT);
-        } else {
-            // A non-empty record has a trait if ALL its fields do.
-            // Note: this is applicable to the four built-in traits, but would not be applicable
-            // to user-defined traits (if and when we implement those).
-            for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-                if (!type_has_trait(tc_context, field->type, trait)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        break;
-
-    case TY_VARIANT:
-        // Similar to records, except that we do not need to worry about empty variants --
-        // all our variant types have at least one possible variant.
-        {
-            for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
-                if (!type_has_trait(tc_context, variant->type, trait)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        break;
-
-    case TY_ARRAY:
-        if (type->array_data.resizable) {
-            // T[*] has Move+Default, but not Copy (memcpying would create two pointers to the
-            // same allocated data).
-            return (trait == TRAIT_MOVE || trait == TRAIT_DEFAULT);
-        } else if (type->array_data.sizes != NULL) {
-            // T[n] has the same traits as T
-            return type_has_trait(tc_context, type->array_data.element_type, trait);
-        } else {
-            // T[] is really just a "reference" to part of an array; therefore it
-            // does not have any of Copy, Move, Default.
-            return false;
-        }
-        break;
-
-    case TY_FUNCTION:
-    case TY_FORALL:
-    case TY_LAMBDA:
-    case TY_APP:
-        // these types are considered to have no traits (for now at least)
-        return false;
-    }
-
-    fatal_error("type_has_trait: unhandled case");
-}
-
-static bool check_type_has_traits(struct TypecheckContext *tc_context,
-                                  struct Type *type,
-                                  struct TraitList *traits,
-                                  const struct Location *loc)
-{
-    bool result = true;
-
-    while (traits) {
-        if (!type_has_trait(tc_context, type, traits->trait)) {
-            report_type_does_not_satisfy_trait_bound(type, traits->trait, loc);
-            tc_context->error = true;
-            result = false;
-        }
-        traits = traits->next;
-    }
-
-    return result;
-}
-
-// Return true if a type mentions 'int' or 'real' anywhere. Note: this
-// is not implemented for TY_UNIVAR or certain other cases.
-static bool type_contains_int_or_real(struct Type *type)
-{
-    switch (type->tag) {
-    case TY_UNIVAR:
-        fatal_error("type_contains_int_or_real: unimplemented case");
-
-    case TY_VAR:
-    case TY_BOOL:
-    case TY_FINITE_INT:
-        return false;
-
-    case TY_MATH_INT:
-    case TY_MATH_REAL:
-        return true;
-
-    case TY_RECORD:
-        ;
-        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-            if (type_contains_int_or_real(field->type)) {
-                return true;
-            }
-        }
-        return false;
-
-    case TY_VARIANT:
-        ;
-        for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
-            if (type_contains_int_or_real(variant->type)) {
-                return true;
-            }
-        }
-        return false;
-
-    case TY_ARRAY:
-        return type_contains_int_or_real(type->array_data.element_type);
-
-    case TY_FUNCTION:
-        fatal_error("type_contains_int_or_real: unimplemented case");
-
-    case TY_FORALL:
-        return type_contains_int_or_real(type->forall_data.type);
-
-    case TY_LAMBDA:
-        return type_contains_int_or_real(type->lambda_data.type);
-
-    case TY_APP:
-        fatal_error("type_contains_int_or_real: unimplemented case");
-    }
-
-    fatal_error("type_contains_int_or_real: unhandled case");
-}
-
-// ----------------------------------------------------------------------------------------------------
-
-// Flag an error if a variable is being "dropped" illegally.
-static void flag_error_if_dropped(struct TypecheckContext *tc_context,
-                                  const char *name,
-                                  struct Location drop_location)
-{
-    // At end of scope, all vars must either be ghost vars, be
-    // references, have the Copy trait, or be empty.
-    struct TypeEnvEntry *entry = lookup_type_info(tc_context, name);
-    if (entry
-    && entry->type    // not a tyvar
-    && strcmp(name, "return") != 0    // 'return' variable doesn't count
-    && (entry->flags & (FLAG_GHOST | FLAG_EMPTY | FLAG_REF)) == 0
-    && !type_has_trait(tc_context, entry->type, TRAIT_COPY)) {
-        report_cannot_drop_var(name, entry->created_location, drop_location);
-        tc_context->error = true;
-    }
-}
-
-// Remove a local variable from scope and flag error if it was illegally dropped.
-static void remove_from_scope(struct TypecheckContext *tc_context,
-                              const char *name,
-                              struct Location drop_location)
-{
-    flag_error_if_dropped(tc_context, name, drop_location);
-
-    // We assume local variables live in the "top" level of the StackedHashTable
-    remove_from_type_env_hash_table(tc_context->type_env->table, name);
-}
-
-// This is used at return stmts or function ends, to make sure that no "movable"
-// variables are still in scope.
-static void flag_error_if_any_dropped(struct TypecheckContext *tc_context, struct Location location)
-{
-    struct HashIterator * iter = new_hash_iterator(tc_context->type_env->table);
-    const char *key;
-    void *value;
-    while (hash_iterator_next(iter, &key, &value)) {
-        flag_error_if_dropped(tc_context, key, location);
-    }
-    free_hash_iterator(iter);
-}
-
-
-// ----------------------------------------------------------------------------------------------------
-
-// Term typechecking function prototypes.
-
-enum TypecheckMode {
-    MODE_WRITABLE_REF,  // term must be writable lvalue
-    MODE_WRITABLE_REF_POSSIBLY_EMPTY,   // term must be writable lvalue, but can be empty
-    MODE_ANY_REF,       // term must be lvalue
-    MODE_INSPECT,       // term must be lvalue OR droppable rvalue
-    MODE_MOVE           // term must be copyable or movable; in latter case we take ownership
-};
-
-static bool is_writable_mode(enum TypecheckMode mode)
-{
-    return mode == MODE_WRITABLE_REF || mode == MODE_WRITABLE_REF_POSSIBLY_EMPTY;
-}
-
-static bool is_ref_mode(enum TypecheckMode mode)
-{
-    return mode == MODE_ANY_REF || is_writable_mode(mode);
-}
-
-static void typecheck_term(struct TypecheckContext *tc_context,
-                           enum TypecheckMode mode,
-                           struct Term *term);
+static void typecheck_term(struct TypecheckContext *tc_context, struct Term *term);
 
 static bool match_term_to_type(struct TypecheckContext *tc_context,
                                struct Type *expected_type,
                                struct Term **term);
+
+static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
+                                    struct UnivarNode *node,
+                                    struct Type *type,
+                                    const struct Location *loc);
 
 // ----------------------------------------------------------------------------------------------------
 
@@ -541,13 +236,6 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                     free_type(*type);
                     *type = copy_type(entry->type);
                     (*type)->location = loc;  // preserve original location for error messages
-
-                    // don't allow using typedefs to get round the int-or-real check!
-                    if (tc_context->executable && type_contains_int_or_real(*type)) {
-                        report_int_real_not_allowed(loc);
-                        tc_context->error = true;
-                        return false;
-                    }
                 }
             }
         }
@@ -555,15 +243,9 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
 
     case TY_BOOL:
     case TY_FINITE_INT:
-        return true;
-
     case TY_MATH_INT:
     case TY_MATH_REAL:
-        if (tc_context->executable) {
-            report_int_real_not_allowed((*type)->location);
-            tc_context->error = true;
-            return false;
-        }
+        // nothing to do
         return true;
 
     case TY_RECORD:
@@ -621,7 +303,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
             struct Type *u64 = make_int_type(g_no_location, false, 64);
 
             for (int i = 0; i < (*type)->array_data.ndim; ++i) {
-                typecheck_term(tc_context, MODE_INSPECT, (*type)->array_data.sizes[i]);
+                typecheck_term(tc_context, (*type)->array_data.sizes[i]);
                 if ((*type)->array_data.sizes[i]->type == NULL) {
                     // Size doesn't typecheck
                     free_type(u64);
@@ -682,24 +364,12 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                 }
             }
 
-            // Kindcheck each tyarg, and check trait bounds
-            struct TyVarList *tyvar = (*type)->app_data.lhs->tag == TY_LAMBDA ?
-                (*type)->app_data.lhs->lambda_data.tyvars :
-                NULL;
-
+            // kindcheck each tyarg
             for (struct TypeList *node = (*type)->app_data.tyargs; node; node = node->next) {
-
                 // the tyargs should be proper types (not type constructors)
                 if (!kindcheck_type(tc_context, &node->type)) {
                     ok = false;
                 }
-
-                // the tyarg should meet each required trait bound
-                if (tyvar && !check_type_has_traits(tc_context, node->type, tyvar->traits, NULL)) {
-                    ok = false;
-                }
-
-                if (tyvar) tyvar = tyvar->next;
             }
 
             if (!ok) {
@@ -736,7 +406,107 @@ static bool kindcheck_type(struct TypecheckContext *tc_context, struct Type **ty
         return false;
     }
 
+    // Check it is executable (if applicable) -
+    // kindcheck_type_constructor will not do this.
+    if (tc_context->executable) {
+        struct UnivarNode node;
+        node.must_be_executable = true;
+        node.must_be_complete = node.must_be_valid_decreases = false;
+        if (!ensure_type_meets_flags(tc_context, &node, *type, &(*type)->location)) {
+            return false;
+        }
+    }
+
     return true;
+}
+
+
+// ----------------------------------------------------------------------------------------------------
+
+// Determines the "alloc level" of a kind-checked type.
+static enum AllocLevel get_alloc_level(struct TypecheckContext *tc_context, struct Type *type)
+{
+    switch (type->tag) {
+    case TY_UNIVAR:
+        if (type->univar_data.node->type) {
+            return get_alloc_level(tc_context, type->univar_data.node->type);
+        } else {
+            return ALLOC_UNKNOWN;
+        }
+        break;
+
+    case TY_VAR:
+        ;
+        struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
+        if (entry) {
+            return entry->alloc_level;
+        } else {
+            return ALLOC_UNKNOWN;
+        }
+        break;
+
+    case TY_BOOL:
+    case TY_FINITE_INT:
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        return ALLOC_NEVER;
+
+    case TY_RECORD:
+        {
+            enum AllocLevel level = ALLOC_NEVER;
+            for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+                enum AllocLevel new_level = get_alloc_level(tc_context, field->type);
+                if (new_level == ALLOC_UNKNOWN) {
+                    return ALLOC_UNKNOWN;
+                }
+                if (new_level > level) {
+                    level = new_level;
+                }
+            }
+            return level;
+        }
+
+    case TY_VARIANT:
+        if (type->variant_data.variants == NULL) {
+            fatal_error("unexpected: TY_VARIANT with no variants");
+        }
+        enum AllocLevel level = ALLOC_NEVER;
+        for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+            enum AllocLevel new_level = get_alloc_level(tc_context, variant->type);
+            if (variant != type->variant_data.variants && new_level == ALLOC_ALWAYS) {
+                // "non-first" variants only come into play if the
+                // variant type is not equal to its default...
+                new_level = ALLOC_IF_NOT_DEFAULT;
+            }
+            if (new_level == ALLOC_UNKNOWN) {
+                return ALLOC_UNKNOWN;
+            }
+            if (new_level > level) {
+                level = new_level;
+            }
+        }
+        return level;
+
+    case TY_ARRAY:
+        if (type->array_data.sizes == NULL) {
+            if (type->array_data.resizable) {
+                return ALLOC_IF_NOT_DEFAULT;
+            } else {
+                return ALLOC_UNKNOWN;
+            }
+        } else {
+            return get_alloc_level(tc_context, type->array_data.element_type);
+        }
+        break;
+
+    case TY_FUNCTION:
+    case TY_FORALL:
+    case TY_LAMBDA:
+    case TY_APP:
+        return ALLOC_UNKNOWN;
+    }
+
+    fatal_error("invalid type tag");
 }
 
 
@@ -753,15 +523,117 @@ static struct Type * chase_univars(struct Type *type)
     return type;
 }
 
-// Make a new "empty" TY_UNIVAR type.
+// Make a new "empty" TY_UNIVAR type. The requirements will be
+// must_be_executable if tc_context->executable is true, or no
+// requirements otherwise.
 static struct Type * new_univar_type(struct TypecheckContext *tc_context)
 {
     struct Type *type = make_type(g_no_location, TY_UNIVAR);
     type->univar_data.node = alloc(sizeof(struct UnivarNode));
-    type->univar_data.node->traits = NULL;
+    type->univar_data.node->must_be_executable = tc_context->executable;
+    type->univar_data.node->must_be_complete = false;
+    type->univar_data.node->must_be_valid_decreases = false;
     type->univar_data.node->type = NULL;
     type->univar_data.node->ref_count = 1;
     return type;
+}
+
+// Ensure type 'type' meets the requirement flags present in 'node'.
+// If not, an error is raised. Returns true if successful.
+static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
+                                    struct UnivarNode *node,
+                                    struct Type *type,
+                                    const struct Location *loc)
+{
+    if (type == NULL) {
+        // ignore this error
+        return false;
+    }
+
+    type = chase_univars(type);
+
+    // must_be_valid_decreases is checked separately
+    if (node->must_be_valid_decreases) {
+        // Only TY_FINITE_INT, TY_MATH_INT, TY_BOOL, and tuples of
+        // those, are currently acceptable for 'decreases'.
+        if (type->tag == TY_UNIVAR) {
+            type->univar_data.node->must_be_valid_decreases = node->must_be_valid_decreases;
+        } else if (type->tag == TY_RECORD) {
+            for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+                if (!isdigit((unsigned char)field->name[0])) {
+                    // must be a tuple, not a record
+                    report_invalid_decreases_type(*loc);
+                    tc_context->error = true;
+                    return false;
+                }
+            }
+        } else if (type->tag != TY_FINITE_INT && type->tag != TY_MATH_INT && type->tag != TY_BOOL) {
+            report_invalid_decreases_type(*loc);
+            tc_context->error = true;
+            return false;
+        }
+    }
+
+    // Check must_be_executable and must_be_complete, and check
+    // recursively for any "child" types:
+    switch (type->tag) {
+    case TY_UNIVAR:
+        type->univar_data.node->must_be_executable = node->must_be_executable;
+        type->univar_data.node->must_be_complete = node->must_be_complete;
+        return true;
+
+    case TY_VAR:
+    case TY_BOOL:
+    case TY_FINITE_INT:
+        return true;
+
+    case TY_MATH_INT:
+    case TY_MATH_REAL:
+        if (node->must_be_executable) {
+            report_int_real_not_allowed(*loc);
+            tc_context->error = true;
+            return false;
+        }
+        return true;
+
+    case TY_RECORD:
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            if (!ensure_type_meets_flags(tc_context, node, field->type, loc)) {
+                return false;
+            }
+        }
+        return true;
+
+    case TY_VARIANT:
+        for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
+            if (!ensure_type_meets_flags(tc_context, node, variant->type, loc)) {
+                return false;
+            }
+        }
+        return true;
+
+    case TY_ARRAY:
+        if (node->must_be_complete) {
+            if (!type->array_data.resizable && type->array_data.sizes == NULL) {
+                report_incomplete_array_type(*loc);
+                tc_context->error = true;
+                return false;
+            }
+        }
+        return ensure_type_meets_flags(tc_context, node, type->array_data.element_type, loc);
+
+    case TY_FUNCTION:
+        fatal_error("TY_FUNCTION was not expected here");
+
+    case TY_FORALL:
+        fatal_error("TY_FORALL was not expected here");
+
+    case TY_LAMBDA:
+    case TY_APP:
+        fatal_error("This type should have been removed by kind-checking");
+    }
+
+    fatal_error("unrecognised type tag");
 }
 
 // Unify types by setting LHS := RHS. LHS must be a "NULL" TY_UNIVAR
@@ -777,8 +649,7 @@ static bool update_univar_type(struct TypecheckContext *tc_context,
         fatal_error("update_univar_type: incorrect input");
     }
 
-    // The proposed rhs type must have all the types demanded by the lhs
-    if (!check_type_has_traits(tc_context, rhs, lhs->univar_data.node->traits, loc)) {
+    if (!ensure_type_meets_flags(tc_context, lhs->univar_data.node, rhs, loc)) {
         return false;
     }
 
@@ -1255,7 +1126,9 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
 
 // ----------------------------------------------------------------------------------------------------
 
-// Term typechecking helpers.
+//
+// Term typechecking
+//
 
 static void free_type_value(void *context, const char *key, void *value)
 {
@@ -1277,7 +1150,6 @@ static void infer_type_arguments(struct TypecheckContext *tc_context,
     struct HashTable *theta = new_hash_table();
     for (struct TyVarList *tyvar = term->type->forall_data.tyvars; tyvar; tyvar = tyvar->next) {
         struct Type *ty = new_univar_type(tc_context);
-        ty->univar_data.node->traits = copy_trait_list(tyvar->traits);
         *tail = alloc(sizeof(struct TypeList));
         (*tail)->type = copy_type(ty);
         (*tail)->next = NULL;
@@ -1331,7 +1203,7 @@ static void reduce_constructor(struct TypecheckContext *tc_context,
     if (entry == NULL) {
         fatal_error("could not find variable information");
     }
-    if ((entry->flags & FLAG_DATA_CTOR) == 0) {
+    if (!entry->constructor) {
         return;
     }
 
@@ -1376,7 +1248,6 @@ static void reduce_constructor(struct TypecheckContext *tc_context,
 //   If both are true, the term is the lhs of a TM_TYAPP which is itself the lhs of
 //     a TM_CALL, e.g. f<i32>(100).
 static void typecheck_var_term(struct TypecheckContext *tc_context,
-                               enum TypecheckMode mode,
                                struct Term *term,
                                bool func_call_lhs,
                                bool tyapp_lhs)
@@ -1400,51 +1271,21 @@ static void typecheck_var_term(struct TypecheckContext *tc_context,
         fatal_error("missing type for variable, this is unexpected");
     }
 
-    // If the variable (or its root) is "empty" (has been moved out
-    // of), then this is an error, even in ghost code.
-    // Exception: MODE_WRITABLE_REF_POSSIBLY_EMPTY.
-    if (mode != MODE_WRITABLE_REF_POSSIBLY_EMPTY) {
-        const char *root_name = get_root_name(tc_context, term);
-        struct TypeEnvEntry *root_entry = lookup_type_info(tc_context, root_name);
-        if (root_entry && (root_entry->flags & FLAG_EMPTY) != 0) {
-            report_using_moved_variable(term->var.name, term->location, *root_entry->moved_location);
-            tc_context->error = true;
-            return;
-        }
-    }
-
     // Ghost variables can only be accessed from *nonexecutable* contexts.
-    if ((entry->flags & FLAG_GHOST) != 0 && tc_context->executable) {
+    if (entry->ghost && tc_context->executable) {
         report_access_ghost_var_from_executable_code(term);
         tc_context->error = true;
         return;
     }
 
     // Impure functions can only be accessed from impure, executable functions.
-    if ((entry->flags & FLAG_IMPURE) != 0 && !tc_context->executable) {
+    if (entry->impure && !tc_context->executable) {
         report_access_impure_fun_from_ghost_code(term);
         tc_context->error = true;
         return;
     }
-    if ((entry->flags & FLAG_IMPURE) != 0 && !tc_context->impure) {
+    if (entry->impure && !tc_context->impure) {
         report_access_impure_fun_from_pure_code(term);
-        tc_context->error = true;
-        return;
-    }
-
-    // If the variable is readonly, then WRITABLE_REF modes are not permitted.
-    if ((entry->flags & FLAG_READ_ONLY) != 0 && is_writable_mode(mode)) {
-        report_cannot_take_ref_to_readonly(term->location);
-        tc_context->error = true;
-        return;
-    }
-
-    // If the variable is not a ghost, but we are in ghost code, then writable modes
-    // are not permitted, because that would mean that ghost code is modifying a real variable.
-    if (!tc_context->executable
-    && (entry->flags & FLAG_GHOST) == 0
-    && is_writable_mode(mode)) {
-        report_writing_nonghost_from_ghost_code(term->location);
         tc_context->error = true;
         return;
     }
@@ -1463,32 +1304,6 @@ static void typecheck_var_term(struct TypecheckContext *tc_context,
         tc_context->error = true;
         free_type(term->type);
         term->type = NULL;
-        return;
-    }
-
-    // In executable code, in mode MODE_MOVE, the variable must have the Move trait
-    // and, unless it also has Copy trait, it will be "moved out of" at this point.
-    // Also, moving out of a ref or readonly variable is illegal (as we don't "own" it).
-    if (tc_context->executable && mode == MODE_MOVE && !tyapp_lhs) {
-        if (!type_has_trait(tc_context, term->type, TRAIT_MOVE)) {
-            report_cannot_move(term->location);
-            tc_context->error = true;
-            free_type(term->type);
-            term->type = NULL;
-            return;
-        }
-        if ((entry->flags & FLAG_DATA_CTOR) == 0 && !type_has_trait(tc_context, term->type, TRAIT_COPY)) {
-            if (entry->flags & FLAG_REF) {
-                report_cannot_move_from_reference(term->location);
-                tc_context->error = true;
-                free_type(term->type);
-                term->type = NULL;
-                return;
-            }
-            entry->flags |= FLAG_EMPTY;
-            free(entry->moved_location);
-            entry->moved_location = shallow_copy_location(&term->location);
-        }
     }
 
     // Change constructor TM_VARs into TM_VARIANTs, if applicable.
@@ -1496,7 +1311,6 @@ static void typecheck_var_term(struct TypecheckContext *tc_context,
 }
 
 static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
-                                 enum TypecheckMode mode,
                                  struct Term *term,
                                  bool func_call_lhs)
 {
@@ -1506,12 +1320,21 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
 
     // Typecheck the LHS
     if (term->tyapp.lhs->tag == TM_VAR) {
-        typecheck_var_term(tc_context, mode, term->tyapp.lhs, func_call_lhs, true);
+        typecheck_var_term(tc_context, term->tyapp.lhs, func_call_lhs, true);
     } else {
-        typecheck_term(tc_context, mode, term->tyapp.lhs);
+        typecheck_term(tc_context, term->tyapp.lhs);
     }
     if (term->tyapp.lhs->type == NULL) {
         return;
+    }
+
+    // Kind-check all type arguments and count them
+    int num_tyargs_present = 0;
+    for (struct TypeList *tyarg = term->tyapp.tyargs; tyarg; tyarg = tyarg->next) {
+        if (!kindcheck_type(tc_context, &tyarg->type)) {
+            return;
+        }
+        ++num_tyargs_present;
     }
 
     // LHS must be TY_FORALL.
@@ -1524,23 +1347,10 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
     // The number of type arguments given should correspond to the
     // number expected by the TY_FORALL.
     int num_tyargs_expected = tyvar_list_length(term->tyapp.lhs->type->forall_data.tyvars);
-    int num_tyargs_present = type_list_length(term->tyapp.tyargs);
     if (num_tyargs_expected != num_tyargs_present) {
         report_wrong_number_of_type_arguments(term->location, num_tyargs_expected, num_tyargs_present);
         tc_context->error = true;
         return;
-    }
-
-    // Kind-check all type arguments, and check trait bounds
-    struct TyVarList *tyvar = term->tyapp.lhs->type->forall_data.tyvars;
-    for (struct TypeList *tyarg = term->tyapp.tyargs; tyarg; tyarg = tyarg->next) {
-        if (!kindcheck_type(tc_context, &tyarg->type)) {
-            return;
-        }
-        if (tyvar && !check_type_has_traits(tc_context, tyarg->type, tyvar->traits, NULL)) {
-            return;
-        }
-        tyvar = tyvar->next;
     }
 
     // LHS should be TM_VAR - because this is the only thing that can
@@ -1563,69 +1373,21 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
         return;
     }
 
-    // In executable code, in MODE_MOVE, the Move trait is required.
-    if (tc_context->executable && mode == MODE_MOVE) {
-        if (!type_has_trait(tc_context, term->type, TRAIT_MOVE)) {
-            report_cannot_move(term->location);
-            tc_context->error = true;
-            free_type(term->type);
-            term->type = NULL;
-            return;
-        }
-    }
-
     // Change constructor tyapps (e.g. Nothing<i32>) into TM_VARIANTs, if applicable.
     reduce_constructor(tc_context, term);
 }
 
-// Helper for flag_moved_variables_in_term.
-struct FlagMovedVar {
-    struct TypecheckContext *tc_context;
-    bool error_flag;
-};
-
-static void* flag_moved_var(void *context, struct Term *term_var, void *type_result)
+static void* typecheck_var(void *context, struct Term *term, void *type_result)
 {
-    struct FlagMovedVar *cxt = context;
-    struct TypeEnvEntry *entry = lookup_type_info(cxt->tc_context, term_var->var.name);
-    if (entry && (entry->flags & FLAG_EMPTY) != 0) {
-        report_using_moved_variable(term_var->var.name, term_var->location, *entry->moved_location);
-        cxt->tc_context->error = true;
-        cxt->error_flag = true;
-    }
+    typecheck_var_term(context, term, false, false);
     return NULL;
 }
 
-// This flags an error if any variable in the given term is empty (has been moved).
-// Returns true if OK or false if any errors found.
-static bool flag_moved_vars_in_term(struct TypecheckContext *tc_context, struct Term *term)
-{
-    struct TermTransform tr = {0};
-    tr.transform_var = flag_moved_var;
-    struct FlagMovedVar cxt = { tc_context, false };
-    transform_term(&tr, &cxt, term);
-    return !cxt.error_flag;
-}
-
-
-// ----------------------------------------------------------------------------------------------------
-
-//
-// Term typechecking
-//
-
-static void typecheck_var(struct TypecheckContext *context,
-                          enum TypecheckMode mode,
-                          struct Term *term)
-{
-    typecheck_var_term(context, mode, term, false, false);
-}
-
-static void typecheck_bool_literal(struct TypecheckContext *context,
-                                   struct Term *term)
+static void* typecheck_bool_literal(void *context, struct Term *term, void *type_result)
 {
     // Bool literals are always of type bool
     term->type = make_type(g_no_location, TY_BOOL);
+    return NULL;
 }
 
 static bool string_to_int(const char *p,
@@ -1694,9 +1456,10 @@ static bool int_value_in_range(int num_bits, bool is_signed, uint64_t abs_value,
     fatal_error("invalid num_bits for integer");
 }
 
-static void typecheck_int_literal(struct TypecheckContext *tc_context,
-                                  struct Term *term)
+static void* typecheck_int_literal(void *context, struct Term *term, void *type_result)
 {
+    struct TypecheckContext* tc_context = context;
+
     // Int literals are typed as i32, u32, i64 or u64 (in that order of preference).
     // Typechecking can fail, if the literal is outside the i64 or u64 range.
 
@@ -1730,19 +1493,12 @@ static void typecheck_int_literal(struct TypecheckContext *tc_context,
         report_int_literal_too_big(term->location);
         tc_context->error = true;
     }
+
+    return NULL;
 }
 
-static void typecheck_string_literal(struct TypecheckContext *tc_context,
-                                     enum TypecheckMode mode,
-                                     struct Term *term)
+static void* typecheck_string_literal(void *context, struct Term *term, void *type_result)
 {
-    // String literals are considered read-only lvalues.
-    if (is_writable_mode(mode)) {
-        report_cannot_take_ref_to_readonly(term->location);
-        tc_context->error = true;
-        return;
-    }
-
     // String literals currently have type u8[N], where N is the
     // (compile time known) size of the string.
 
@@ -1755,26 +1511,25 @@ static void typecheck_string_literal(struct TypecheckContext *tc_context,
     term->type->array_data.resizable = false;
     term->type->array_data.sizes = alloc(sizeof(struct Term *));
     term->type->array_data.sizes[0] = make_int_literal_term(g_no_location, buf);
+
+    return NULL;
 }
 
-static void typecheck_array_literal(struct TypecheckContext *tc_context,
-                                    struct Term *term)
+static void* typecheck_array_literal(void *context, struct Term *term, void *type_result, void *list_result)
 {
+    struct TypecheckContext *tc_context = context;
+
     struct Type *elem_type = new_univar_type(tc_context);
     uint64_t num_elements = 0;
 
-    // Typecheck all the element terms. We are taking ownership of the values (and putting
-    // them into the array that we are constructing) so use MODE_MOVE.
     for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
-        typecheck_term(tc_context, MODE_MOVE, node->rhs);
         if (node->rhs->type == NULL || !match_term_to_type(tc_context, elem_type, &node->rhs)) {
             free_type(elem_type);
-            return;
+            return NULL;
         }
         ++num_elements;
     }
 
-    // Array literal type is T[n] where n is the number of elements and T is the element type.
     char buf[50];
     sprintf(buf, "%" PRIu64, num_elements);
 
@@ -1784,6 +1539,8 @@ static void typecheck_array_literal(struct TypecheckContext *tc_context,
     term->type->array_data.resizable = false;
     term->type->array_data.sizes = alloc(sizeof(struct Term *));
     term->type->array_data.sizes[0] = make_int_literal_term(g_no_location, buf);
+
+    return NULL;
 }
 
 static bool valid_cast_type(enum TypeTag tag)
@@ -1793,17 +1550,17 @@ static bool valid_cast_type(enum TypeTag tag)
         || tag == TY_MATH_REAL;
 }
 
-static void typecheck_cast(struct TypecheckContext *tc_context,
-                           struct Term *term)
+static void* typecheck_cast(void *context, struct Term *term, void *type_result, void *target_type_result, void *operand_result)
 {
-    typecheck_term(tc_context, MODE_INSPECT, term->cast.operand);
+    struct TypecheckContext *tc_context = context;
+
     if (term->cast.operand->type == NULL) {
-        return;
+        return NULL;
     }
 
     // all user-supplied types must be kindchecked!
-    if (!kindcheck_type(tc_context, &term->cast.target_type)) {
-        return;
+    if (!kindcheck_type(context, &term->cast.target_type)) {
+        return NULL;
     }
 
     // Casting is allowed from/to TY_FINITE_INT, TY_MATH_INT and TY_MATH_REAL.
@@ -1825,150 +1582,38 @@ static void typecheck_cast(struct TypecheckContext *tc_context,
     } else {
         term->type = copy_type(term->cast.target_type);
     }
+
+    return NULL;
 }
 
-// Returns a HashTable where the keys are the names mentioned in which_vars,
-// and the values are either NULL if the variable is currently full,
-// or a Location pointer from the AST (the location where it was moved) if
-// the variable is currently empty.
-static struct HashTable * backup_empty_flags(struct TypecheckContext *tc_context,
-                                             struct HashTable *which_vars)
+static void* typecheck_if(void *context, struct Term *term, void *type_result, void *cond_result, void *then_result, void *else_result)
 {
-    struct HashTable *result = new_hash_table();
+    struct TypecheckContext *tc_context = context;
 
-    struct HashIterator *iter = new_hash_iterator(which_vars);
-    const char *key;
-    void *value;
-    while (hash_iterator_next(iter, &key, &value)) {
-        struct TypeEnvEntry *entry = lookup_type_info(tc_context, key);
-        if (entry) {
-            hash_table_insert(result,
-                              key,
-                              (entry->flags & FLAG_EMPTY) ?
-                                  shallow_copy_location(entry->moved_location) :
-                                  NULL);
-        }
-    }
-    free_hash_iterator(iter);
-
-    return result;
-}
-
-static void reset_empty_flags(struct TypecheckContext *tc_context,
-                              struct HashTable *empty_flags_backup)
-{
-    struct HashIterator *iter = new_hash_iterator(empty_flags_backup);
-    const char *key;
-    void *value;
-    while (hash_iterator_next(iter, &key, &value)) {
-        struct TypeEnvEntry *entry = lookup_type_info(tc_context, key);
-        if (entry) {
-            if (value == NULL) {
-                // not empty
-                entry->flags &= ~(uint8_t)FLAG_EMPTY;
-            } else {
-                // empty
-                entry->flags |= (uint8_t)FLAG_EMPTY;
-            }
-        }
-    }
-    free_hash_iterator(iter);
-}
-
-static bool check_empty_flags_consistency(struct TypecheckContext *tc_context,
-                                          struct HashTable *which_vars,
-                                          struct HashTable *backup1,
-                                          struct HashTable *backup2)
-{
-    bool result = true;
-    struct HashIterator *iter = new_hash_iterator(which_vars);
-    const char *key;
-    void *value;
-    while (hash_iterator_next(iter, &key, &value)) {
-        struct Location *loc1 = hash_table_lookup(backup1, key);
-        struct Location *loc2 = hash_table_lookup(backup2, key);
-        if (loc1 != NULL && loc2 == NULL) {
-            report_move_inconsistency(key, *loc1);
-            tc_context->error = true;
-            result = false;
-        } else if (loc1 == NULL && loc2 != NULL) {
-            report_move_inconsistency(key, *loc2);
-            tc_context->error = true;
-            result = false;
-        }
-    }
-    free_hash_iterator(iter);
-    return result;
-}
-
-static void free_empty_flags_backup(struct HashTable *backup)
-{
-    hash_table_for_each(backup, ht_free_value, NULL);
-    free_hash_table(backup);
-}
-
-static void typecheck_if(struct TypecheckContext *tc_context,
-                         struct Term *term)
-{
-    typecheck_term(tc_context, MODE_INSPECT, term->if_data.cond);
     bool cond_ok = check_term_is_bool(tc_context,
                                       term->if_data.cond);
 
-    // For checking the move semantics, we must "back up" the
-    // full/empty status of each variable after the then-branch, and
-    // confirm it is the same after the else-branch.
-
-    // find vars mentioned in 'then' branch
-    struct HashTable * mentioned_vars = new_hash_table();
-    names_used_in_term(mentioned_vars, term->if_data.then_branch);
-
-    // backup flags of all vars mentioned on 'then' branch, before we start
-    struct HashTable * empty_flags_before = backup_empty_flags(tc_context, mentioned_vars);
-
-    // now find vars mentioned in either branch
-    names_used_in_term(mentioned_vars, term->if_data.else_branch);
-
-    // typecheck the 'then' branch, and backup empty-flags after it
-    typecheck_term(tc_context, MODE_MOVE, term->if_data.then_branch);
-    struct HashTable *empty_flags_after_then = backup_empty_flags(tc_context, mentioned_vars);
-
-    // reset empty-flags back to where we were originally
-    reset_empty_flags(tc_context, empty_flags_before);
-    free_empty_flags_backup(empty_flags_before);
-
-    // typecheck the 'else' branch, and backup empty-flags after it
-    typecheck_term(tc_context, MODE_MOVE, term->if_data.else_branch);
-    struct HashTable *empty_flags_after_else = backup_empty_flags(tc_context, mentioned_vars);
-
-    // types of 'then' and 'else' must be the same
     bool branches_ok =
         match_term_to_type(tc_context,
                            term->if_data.then_branch->type,
                            &term->if_data.else_branch);
 
-    // empty-flags after 'then' and after 'else' must be the same
-    bool flags_ok = check_empty_flags_consistency(tc_context, mentioned_vars, empty_flags_after_then, empty_flags_after_else);
-
-    // free hash tables
-    free_empty_flags_backup(empty_flags_after_then);
-    free_empty_flags_backup(empty_flags_after_else);
-    free_hash_table(mentioned_vars);
-
-    // set term type only if no error encountered
-    if (cond_ok && branches_ok && flags_ok) {
+    if (cond_ok && branches_ok) {
         term->type = copy_type(term->if_data.then_branch->type);
     }
+
+    return NULL;
 }
 
-static void typecheck_unop(struct TypecheckContext *tc_context,
-                           struct Term *term)
+static void* typecheck_unop(void *context, struct Term *term, void *type_result, void *operand_result)
 {
+    struct TypecheckContext *tc_context = context;
+
     struct Term *operand = term->unop.operand;
     enum UnOp operator = term->unop.operator;
 
-    typecheck_term(tc_context, MODE_INSPECT, term->unop.operand);
     if (operand->type == NULL) {
-        return;
+        return NULL;
     }
 
     bool ok = true;
@@ -2006,6 +1651,8 @@ static void typecheck_unop(struct TypecheckContext *tc_context,
     if (ok) {
         term->type = copy_type(type);
     }
+
+    return NULL;
 }
 
 enum Direction {
@@ -2252,13 +1899,9 @@ static void break_implies_chain(struct Term *term)
     }
 }
 
-static void typecheck_binop(struct TypecheckContext *tc_context,
-                            struct Term *term)
+static void* typecheck_binop(void *context, struct Term *term, void *type_result, void *result1, void *result2)
 {
-    typecheck_term(tc_context, MODE_INSPECT, term->binop.lhs);
-    for (struct OpTermList *node = term->binop.list; node; node = node->next) {
-        typecheck_term(tc_context, MODE_INSPECT, node->rhs);
-    }
+    struct TypecheckContext *tc_context = context;
 
     enum BinOp op = term->binop.list->operator;
 
@@ -2365,153 +2008,110 @@ static void typecheck_binop(struct TypecheckContext *tc_context,
         }
         break;
     }
+
+    return NULL;
 }
 
-static bool is_lvalue(struct TypecheckContext *tc_context, struct Term *term)
+static bool is_lvalue(const struct TypecheckContext *tc_context, struct Term *term,
+                      bool *ghost_out, bool *readonly_out)
 {
-    switch (term->tag) {
-    case TM_FIELD_PROJ:
+    if (term->tag == TM_FIELD_PROJ) {
         // X.field is an lvalue if and only if X is.
-        return is_lvalue(tc_context, term->field_proj.lhs);
+        return is_lvalue(tc_context, term->field_proj.lhs, ghost_out, readonly_out);
+    }
 
-    case TM_ARRAY_PROJ:
+    if (term->tag == TM_ARRAY_PROJ) {
         // X[i,j] is an lvalue if and only if X is.
-        return is_lvalue(tc_context, term->array_proj.lhs);
+        return is_lvalue(tc_context, term->array_proj.lhs, ghost_out, readonly_out);
+    }
 
-    case TM_TYAPP:
-        // X<T> is considered an lvalue if X is.
-        return is_lvalue(tc_context, term->tyapp.lhs);
-
-    case TM_STRING_LITERAL:
-        // A string literal is a non-modifiable lvalue.
+    if (term->tag == TM_STRING_LITERAL) {
+        // a string literal is a non-modifiable lvalue
+        if (ghost_out) *ghost_out = false;
+        if (readonly_out) *readonly_out = true;
         return true;
+    }
 
-    case TM_VAR:
-        ;
-        struct TypeEnvEntry *entry = lookup_type_info(tc_context, term->var.name);
+    if (term->tag == TM_CAST && term->type && chase_univars(term->type)->tag == TY_ARRAY) {
+        // Array casts inherit their "lvalueness" from the underlying operand.
+        // (Numeric casts are never lvalues.)
+        return is_lvalue(tc_context, term->cast.operand, ghost_out, readonly_out);
+    }
 
-        if (entry == NULL) {
-            // this happens when a variable was 'poisoned' due to a previous error.
-            // let's pretend it's an lvalue, this will help avoid further errors.
-            return true;
-        }
-
-        if (entry->flags & FLAG_DATA_CTOR) {
-            // a constructor isn't considered an lvalue
-            return false;
-        }
-
-        return true;
-
-    default:
-        // Nothing else is an lvalue.
+    if (term->tag != TM_VAR) {
         return false;
     }
-}
 
-static bool is_read_only_lvalue(struct TypecheckContext *tc_context, struct Term *term)
-{
-    switch (term->tag) {
-    case TM_FIELD_PROJ:
-        return is_read_only_lvalue(tc_context, term->field_proj.lhs);
-    case TM_ARRAY_PROJ:
-        return is_read_only_lvalue(tc_context, term->array_proj.lhs);
-    case TM_TYAPP:
-        return is_read_only_lvalue(tc_context, term->tyapp.lhs);
-    case TM_STRING_LITERAL:
+    struct TypeEnvEntry *entry = lookup_type_info(tc_context, term->var.name);
+
+    if (entry == NULL) {
+        // this happens when a variable was 'poisoned' due to a previous error.
+        // let's pretend it's an lvalue, this will help avoid further errors.
+        if (ghost_out) *ghost_out = false;
+        if (readonly_out) *readonly_out = false;
         return true;
+    }
 
-    case TM_VAR:
-        ;
-        struct TypeEnvEntry *entry = lookup_type_info(tc_context, term->var.name);
-        if (entry == NULL) {
-            return false;
-        }
-        if (entry->flags & FLAG_DATA_CTOR) {
-            return false;   // not an lvalue
-        }
-        if (entry->flags & FLAG_READ_ONLY) {
-            return true;
-        }
-        if (!tc_context->executable && ((entry->flags & FLAG_GHOST) == 0)) {
-            // Ghost access to a non-ghost variable is always read-only.
-            return true;
-        }
-        return false;
-
-    default:
+    if (entry->constructor) {
+        // a constructor isn't considered an lvalue
         return false;
     }
+
+    if (ghost_out) *ghost_out = entry->ghost;
+    if (readonly_out) *readonly_out = entry->read_only;
+    return true;
 }
 
-static bool is_nonghost_lvalue(struct TypecheckContext *tc_context, struct Term *term)
+static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
 {
-    switch (term->tag) {
-    case TM_FIELD_PROJ:
-        return is_nonghost_lvalue(tc_context, term->field_proj.lhs);
-    case TM_ARRAY_PROJ:
-        return is_nonghost_lvalue(tc_context, term->array_proj.lhs);
-    case TM_TYAPP:
-        return is_nonghost_lvalue(tc_context, term->tyapp.lhs);
-    case TM_STRING_LITERAL:
-        return true;
-    case TM_VAR:
-        ;
-        struct TypeEnvEntry *entry = lookup_type_info(tc_context, term->var.name);
-        return (entry && ((entry->flags & FLAG_GHOST) == 0));
-    default:
-        return false;
-    }
-}
+    struct TypecheckContext *tc_context = context;
 
-static void typecheck_let(struct TypecheckContext *tc_context,
-                          struct Term *term)
-{
-    typecheck_term(tc_context, MODE_MOVE, term->let.rhs);
+    transform_term(tr, context, term->let.rhs);
     if (!term->let.rhs->type) {
-        return;
+        return NULL;
     }
 
     add_to_type_env(tc_context->type_env,
                     term->let.name,
                     copy_type(term->let.rhs->type),   // handover
-                    NULL,
-                    FLAG_READ_ONLY | (tc_context->executable ? 0 : FLAG_GHOST),
-                    term->location);
+                    !tc_context->executable,   // ghost
+                    true,                      // read-only
+                    false,                     // constructor
+                    false,                     // impure
+                    ALLOC_UNKNOWN);
 
-    typecheck_term(tc_context, MODE_MOVE, term->let.body);
+    transform_term(tr, context, term->let.body);
 
-    remove_from_scope(tc_context, term->let.name, term->let.body->location);
+    term->type = copy_type(term->let.body->type);
 
-    if (term->let.body->type) {
-        term->type = copy_type(term->let.body->type);
-    }
+    return NULL;
 }
 
-static void typecheck_quantifier(struct TypecheckContext *tc_context,
-                                 struct Term *term)
+static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
 {
+    struct TypecheckContext *tc_context = context;
+
     if (tc_context->executable) {
         report_executable_quantifier(term);
         tc_context->error = true;
-        return;
+        return NULL;
     }
 
     // user-supplied type annotation, requires kindchecking
     if (!kindcheck_type(tc_context, &term->quant.type)) {
-        return;
+        return NULL;
     }
 
     add_to_type_env(tc_context->type_env,
                     term->quant.name,
                     copy_type(term->quant.type),     // handover
-                    NULL,
-                    FLAG_GHOST | FLAG_READ_ONLY,
-                    term->location);
+                    true,    // ghost
+                    true,    // read-only
+                    false,   // constructor
+                    false,   // impure
+                    ALLOC_UNKNOWN);
 
-    typecheck_term(tc_context, MODE_INSPECT, term->quant.body);
-
-    remove_from_scope(tc_context, term->quant.name, term->quant.body->location);
+    transform_term(tr, context, term->quant.body);
 
     // Quantifier body must be boolean
     bool ok = check_term_is_bool(tc_context, term->quant.body);
@@ -2520,34 +2120,43 @@ static void typecheck_quantifier(struct TypecheckContext *tc_context,
     if (ok) {
         term->type = make_type(g_no_location, TY_BOOL);
     }
+
+    return NULL;
 }
 
-static void typecheck_call(struct TypecheckContext *tc_context,
-                           struct Term *term)
+static void* nr_typecheck_call(struct TermTransform *tr, void *context,
+                               struct Term *term, void *type_result)
 {
+    struct TypecheckContext *tc_context = context;
+
+    // Typecheck the arguments.
+    transform_op_term_list(tr, context, term->call.args);
+
     // Typecheck the LHS.
     if (term->call.func->tag == TM_VAR) {
-        typecheck_var_term(tc_context, MODE_INSPECT, term->call.func, true, false);
+        typecheck_var_term(tc_context, term->call.func, true, false);
     } else if (term->call.func->tag == TM_TYAPP) {
-        typecheck_tyapp_term(tc_context, MODE_INSPECT, term->call.func, true);
+        typecheck_tyapp_term(tc_context, term->call.func, true);
     } else {
         // This is probably a type error, but we'll typecheck the 'func' term anyway
-        typecheck_term(tc_context, MODE_INSPECT, term->call.func);
+        typecheck_term(tc_context, term->call.func);
     }
 
     struct Type * fun_type = chase_univars(term->call.func->type);
     if (fun_type == NULL) {
         // LHS term didn't typecheck. (Don't print further errors.)
-        return;
+        return NULL;
     }
     if (fun_type->tag != TY_FUNCTION) {
         // LHS term isn't a function; we can't call it.
         report_call_of_non_function(term->call.func);
         tc_context->error = true;
-        return;
+        return NULL;
     }
 
-    // Check whether we are allowed to pass ref/move arguments.
+    bool ok = true;
+
+    // Check whether we are allowed to pass ref arguments.
     struct Statement *stmt = tc_context->statement;
     bool allow_ref = false;
     bool ignoring_ret_val = false;
@@ -2563,8 +2172,6 @@ static void typecheck_call(struct TypecheckContext *tc_context,
         }
     }
 
-    bool ok = true;
-
     // Check that the correct number of term arguments have been supplied
     struct FunArg *dummy_list = fun_type->function_data.args;
     struct OpTermList *actual_list = term->call.args;
@@ -2578,33 +2185,43 @@ static void typecheck_call(struct TypecheckContext *tc_context,
         ok = false;
 
     } else {
-        // Check the actual arguments
+        // Check that the actual arguments match the function's formal parameter types
         dummy_list = fun_type->function_data.args;
         actual_list = term->call.args;
 
         while (dummy_list && actual_list) {
-            // Typecheck the actual argument, in the appropriate mode.
-            enum TypecheckMode arg_mode;
-            if (dummy_list->ref) arg_mode = MODE_WRITABLE_REF;
-            else if (dummy_list->move) arg_mode = MODE_MOVE;
-            else arg_mode = MODE_INSPECT;
-
-            typecheck_term(tc_context, arg_mode, actual_list->rhs);
-
-            // The type must match the dummy argument type.
             if (!match_term_to_type(tc_context, dummy_list->type, &actual_list->rhs)) {
                 ok = false;
             }
 
-            // If allow_ref is false and the dummy argument is marked "ref" then this
-            // is an error.
-            if (!allow_ref && dummy_list->ref) {
-                report_ref_arg_not_allowed(actual_list->rhs->location);
-                tc_context->error = true;
-                ok = false;
+            // For typechecking purposes, 'ref' arguments must be
+            // writable lvalues (and allow_ref must be true).
+            if (dummy_list->ref) {
+
+                bool ghost = false;
+                bool read_only = false;
+                bool lvalue = is_lvalue(tc_context, actual_list->rhs, &ghost, &read_only);
+
+                if (!allow_ref) {
+                    report_ref_arg_not_allowed(actual_list->rhs->location);
+                    tc_context->error = true;
+                    ok = false;
+                } else if (!lvalue) {
+                    report_cannot_take_ref(actual_list->rhs->location);
+                    tc_context->error = true;
+                    ok = false;
+                } else if (read_only) {
+                    report_cannot_take_ref_to_readonly(actual_list->rhs->location);
+                    tc_context->error = true;
+                    ok = false;
+                } else if (!ghost && !tc_context->executable) {
+                    // Trying to write to a non-ghost variable in a ghost context.
+                    report_writing_nonghost_from_ghost_code(term->location);
+                    tc_context->error = true;
+                    ok = false;
+                }
             }
 
-            // Move on to next argument.
             dummy_list = dummy_list->next;
             actual_list = actual_list->next;
         }
@@ -2626,47 +2243,30 @@ static void typecheck_call(struct TypecheckContext *tc_context,
     }
 
     if (ok) {
-        // The above checks might have missed an error in a situation like this:
-        // function is: f(ref a, move b)
-        // call term is: f(a.x, a)
-        // Here, the ref to a.x typechecks fine, but then a is moved, so the ref to a.x
-        // is now invalid (but because we already typechecked a.x, this is not detected).
-        // To fix this, we now recheck all "ref" args to see if the variables involved have
-        // been moved. (This check is only done if ok=true, otherwise we might report the
-        // same error more than once.)
-        for (dummy_list = fun_type->function_data.args, actual_list = term->call.args;
-             dummy_list;
-             dummy_list = dummy_list->next, actual_list = actual_list->next) {
-            if (dummy_list->ref) {
-                if (!flag_moved_vars_in_term(tc_context, actual_list->rhs)) {
-                    ok = false;
-                }
-            }
-        }
-    }
-
-    if (ok) {
         term->type = copy_type(fun_type->function_data.return_type);
 
         // Reduce constructor TM_CALLs to TM_VARIANTs, if applicable.
         reduce_constructor(tc_context, term);
     }
+
+    return NULL;
 }
 
-static void typecheck_tyapp(struct TypecheckContext *tc_context,
-                            enum TypecheckMode mode,
-                            struct Term *term)
+static void * nr_typecheck_tyapp(struct TermTransform *tr, void *context,
+                                 struct Term *term, void *type_result)
 {
-    typecheck_tyapp_term(tc_context, mode, term, false);
+    typecheck_tyapp_term(context, term, false);
+    return NULL;
 }
 
-static void typecheck_record(struct TypecheckContext *tc_context,
-                             struct Term *term)
+static void* typecheck_record(void *context, struct Term *term, void *type_result, void *fields_result)
 {
     // Tuple or record term
 
-    // First pass: number the positional fields,
-    // and check for mixed positional and named fields.
+    struct TypecheckContext *tc_context = context;
+
+    // first pass: number the positional fields,
+    // and check for mixed positional and named fields
     int field_num = 0;
     bool found_number = false;
     bool found_name = false;
@@ -2681,10 +2281,10 @@ static void typecheck_record(struct TypecheckContext *tc_context,
     if (found_number && found_name) {
         report_mixed_positional_and_named_fields(term->location);
         tc_context->error = true;
-        return;
+        return NULL;
     }
 
-    // Second pass: check for duplicate fieldnames, and gather a list of field-types.
+    // second pass: check for duplicate fieldnames, and gather a list of field-types
     struct NameTypeList *field_types = NULL;
     struct NameTypeList **tail = &field_types;
 
@@ -2701,10 +2301,6 @@ static void typecheck_record(struct TypecheckContext *tc_context,
         }
 
         hash_table_insert(found_field_names, field->name, NULL);
-
-        // Use MODE_MOVE because we are taking ownership of the values and putting
-        // them into the fields of the new record.
-        typecheck_term(tc_context, MODE_MOVE, field->term);
 
         struct NameTypeList *node = alloc(sizeof(struct NameTypeList));
         node->name = copy_string(field->name);
@@ -2730,21 +2326,24 @@ static void typecheck_record(struct TypecheckContext *tc_context,
     } else {
         free_name_type_list(field_types);
     }
+
+    return NULL;
 }
 
-static void typecheck_record_update(struct TypecheckContext *tc_context,
-                                    struct Term *term)
+static void* typecheck_record_update(void *context, struct Term *term, void *type_result,
+                                     void *lhs_result, void *fields_result)
 {
+    struct TypecheckContext *tc_context = context;
+
     // LHS must be a record type
-    typecheck_term(tc_context, MODE_MOVE, term->record_update.lhs);
     struct Type *lhs_ty = term->record_update.lhs->type;
     if (lhs_ty == NULL) {
-        return;
+        return NULL;
     }
     if (lhs_ty->tag != TY_RECORD) {
         report_updating_non_record(term->record_update.lhs->location);
         tc_context->error = true;
-        return;
+        return NULL;
     }
 
     bool ok = true;
@@ -2774,14 +2373,7 @@ static void typecheck_record_update(struct TypecheckContext *tc_context,
             continue;
         }
 
-        // If the field type does not have the Copy trait then this is an error because
-        // we are overwriting (i.e. dropping) the old value of the field
-        if (!type_has_trait(tc_context, search->type, TRAIT_COPY)) {
-            report_cannot_overwrite(update->term);
-        }
-
         // Check the type matches
-        typecheck_term(tc_context, MODE_MOVE, update->term);
         if (!match_term_to_type(tc_context, search->type, &update->term)) {
             ok = false;
             continue;
@@ -2801,18 +2393,20 @@ static void typecheck_record_update(struct TypecheckContext *tc_context,
         // Result has same type as the original record
         term->type = copy_type(lhs_ty);
     }
+
+    return NULL;
 }
 
-static void typecheck_field_proj(struct TypecheckContext *tc_context,
-                                 enum TypecheckMode mode,
-                                 struct Term *term)
+static void* typecheck_field_proj(void *context, struct Term *term, void *type_result,
+                                  void *lhs_result)
 {
+    struct TypecheckContext *tc_context = context;
+
     struct Term *lhs = term->field_proj.lhs;
     const char *field_name = term->field_proj.field_name;
 
-    typecheck_term(tc_context, mode == MODE_MOVE ? MODE_INSPECT : mode, lhs);
     if (lhs->type == NULL) {
-        return;
+        return NULL;
     }
 
     struct Type *record_type = chase_univars(lhs->type);
@@ -2821,19 +2415,8 @@ static void typecheck_field_proj(struct TypecheckContext *tc_context,
         // Check that the field name exists, and assign the proper type if so.
         for (struct NameTypeList *field = record_type->record_data.fields; field; field = field->next) {
             if (strcmp(field->name, field_name) == 0) {
-
-                // We do not support moving out only a single field while leaving the
-                // other fields intact.
-                if (tc_context->executable &&
-                mode == MODE_MOVE &&
-                !type_has_trait(tc_context, field->type, TRAIT_COPY)) {
-                    report_move_from_part(term);
-                    tc_context->error = true;
-                    return;
-                }
-
                 term->type = copy_type(field->type);
-                return;
+                return NULL;
             }
         }
         report_field_not_found(term->location, field_name);
@@ -2844,6 +2427,8 @@ static void typecheck_field_proj(struct TypecheckContext *tc_context,
         report_cannot_access_fields_in(lhs);
         tc_context->error = true;
     }
+
+    return NULL;
 }
 
 static bool int_literal_in_range(struct Type *int_type, const char *str)
@@ -2857,24 +2442,19 @@ static bool int_literal_in_range(struct Type *int_type, const char *str)
     return int_value_in_range(int_type->int_data.num_bits, int_type->int_data.is_signed, abs_value, negative);
 }
 
-// Allowed 'mode' values for typecheck_pattern:
-//  - MODE_MOVE - scrutinee is being moved or copied
-//  - MODE_WRITABLE_REF - scrutinee is being "referenced" and is read/write
-//  - MODE_INSPECT - scrutinee is being "referenced" and is read-only
-static bool typecheck_pattern(struct TypecheckContext *tc_context,
-                              struct Pattern *pattern,
+static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
-                              enum TypecheckMode mode,
-                              const char *root_name,
-                              bool whole_object);
+                              bool scrutinee_lvalue, bool scrutinee_read_only);
 
 static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
                                      struct Location location,
                                      struct NamePatternList *fields,
                                      struct Type *scrutinee_type,
-                                     enum TypecheckMode mode,
-                                     const char *root_name)
+                                     bool scrutinee_lvalue,
+                                     bool scrutinee_read_only)
 {
+    // TODO: perhaps we could allow "punning" like in Ocaml.
+
     // first pass: number the positional fields,
     // and check for mixed positional and named fields
     bool found_number = false;
@@ -2936,20 +2516,8 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
             tc_context->error = true;
             ok = false;
         } else if (!typecheck_pattern(tc_context, field->pattern, search->type,
-                                      mode, root_name, false)) {
+                                      scrutinee_lvalue, scrutinee_read_only)) {
             ok = false;
-        }
-    }
-
-    // Also check for any "missing" fields without Copy trait (in MODE_MOVE).
-    // (Such fields are illegal because they are being dropped/leaked.)
-    if (tc_context->executable && mode == MODE_MOVE) {
-        for (struct NameTypeList *field = scrutinee_type->record_data.fields; field; field = field->next) {
-            if (!hash_table_contains_key(found_field_names, field->name)
-            && !type_has_trait(tc_context, field->type, TRAIT_COPY)) {
-                report_field_not_matched(field->name, location);
-                ok = false;
-            }
         }
     }
 
@@ -2958,72 +2526,46 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
     return ok;
 }
 
-static bool typecheck_pattern(struct TypecheckContext *tc_context,
-                              struct Pattern *pattern,
+static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
-                              enum TypecheckMode mode,
-                              const char *root_name,
-                              bool whole_object)
+                              bool scrutinee_lvalue, bool scrutinee_read_only)
 {
     scrutinee_type = chase_univars(scrutinee_type);
 
     switch (pattern->tag) {
     case PAT_VAR:
-        ;
+
+        // no ref patterns in postconditions
+        if (pattern->var.ref && tc_context->postcondition) {
+            report_no_ref_in_postcondition(pattern->location);
+            tc_context->error = true;
+            return false;
+        }
+
+        // for ref pattern, scrutinee must be lvalue
+        if (pattern->var.ref && !scrutinee_lvalue) {
+            report_cannot_take_ref(pattern->location);
+            tc_context->error = true;
+            return false;
+        }
 
         bool pat_read_only;
         if (pattern->var.ref) {
-            // 'ref' pattern - readonly in MODE_INSPECT, or read/write in MODE_WRITABLE_REF
-            pat_read_only = (mode == MODE_INSPECT);
-
-            // MODE_MOVE is not possible at this point
-            if (mode == MODE_MOVE) {
-                fatal_error("wrong match mode was used");
-            }
-
-            // Ref patterns not allowed in postconditions
-            if (tc_context->postcondition) {
-                report_no_ref_in_postcondition(pattern->location);
-                tc_context->error = true;
-                return false;
-            }
-
+            // matching by ref - the ref inherits "read-onlyness" from the scrutinee
+            pat_read_only = scrutinee_read_only;
         } else {
-            // Non-'ref' pattern - in MODE_INSPECT or MODE_WRITABLE_REF this is a copy (so we need
-            // to check Copy trait); in MODE_MOVE this is a move (and the trait check would already
-            // have been done when the scrutinee was typechecked).
-            // Either way, the variable is writable.
+            // matching by value - allow changing the variable
             pat_read_only = false;
-            if (mode != MODE_MOVE) {
-                if (!type_has_trait(tc_context, scrutinee_type, TRAIT_COPY)) {
-                    report_cannot_match_by_value(pattern->var.name, pattern->location);
-                    tc_context->error = true;
-                    return false;
-                }
-            }
         }
 
-        uint8_t flags = 0;
-        if (pat_read_only) flags |= FLAG_READ_ONLY;
-        if (!tc_context->executable) flags |= FLAG_GHOST;
-        if (pattern->var.ref) {
-            flags |= FLAG_REF;
-            if (!whole_object) {
-                flags |= FLAG_PARTIAL_REF;
-            }
-        }
-
-        struct TypeEnvEntry *entry =
-            add_to_type_env(tc_context->type_env,
-                            pattern->var.name,
-                            copy_type(scrutinee_type),
-                            NULL,
-                            flags,
-                            pattern->location);
-        if (pattern->var.ref) {
-            entry->root_name = root_name;
-        }
-
+        add_to_type_env(tc_context->type_env,
+                        pattern->var.name,
+                        copy_type(scrutinee_type),
+                        !tc_context->executable,   // ghost
+                        pat_read_only,             // read-only
+                        false,                     // constructor
+                        false,                     // impure
+                        ALLOC_UNKNOWN);
         return true;
 
     case PAT_BOOL:
@@ -3055,7 +2597,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context,
             return false;
         } else {
             return typecheck_record_pattern(tc_context, pattern->location, pattern->record.fields,
-                                            scrutinee_type, mode, root_name);
+                                            scrutinee_type, scrutinee_lvalue, scrutinee_read_only);
         }
 
     case PAT_VARIANT:
@@ -3074,7 +2616,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context,
             // Instead we go looking for the constructor name in the environment.
             bool requires_payload = false;
             struct TypeEnvEntry * info = lookup_type_info(tc_context, pattern->variant.variant_name);
-            if (info && (info->flags & FLAG_DATA_CTOR)) {
+            if (info && info->constructor) {
                 struct Type *ty = info->type;
                 if (ty->tag == TY_FORALL) {
                     ty = ty->forall_data.type;
@@ -3106,7 +2648,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context,
 
             if (has_payload) {
                 return typecheck_pattern(tc_context, pattern->variant.payload, payload_type,
-                                         mode, root_name, false);
+                                         scrutinee_lvalue, scrutinee_read_only);
             } else {
                 // we have a pattern w/o a payload (like "Red")
                 // but in the core language (post-typechecking), all variants have a payload,
@@ -3119,143 +2661,20 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context,
         }
 
     case PAT_WILDCARD:
-        // In MODE_MOVE we cannot "ignore" sub-parts of the value, unless those sub-parts
-        // themselves have the Copy trait (think of a record with some Copy fields and
-        // some Move fields).
-        if (tc_context->executable && mode == MODE_MOVE
-        && !type_has_trait(tc_context, scrutinee_type, TRAIT_COPY)) {
-            report_cannot_drop(pattern->location);
-            tc_context->error = true;
-            return false;
-        }
         return true;
     }
 
     fatal_error("typecheck_pattern: missing case");
 }
 
-static void pattern_var_flags(struct Pattern *pattern, bool *ref_var, bool *non_ref_var)
+static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
 {
-    if (pattern != NULL) {
-        switch (pattern->tag) {
-        case PAT_VAR:
-            if (pattern->var.ref) {
-                *ref_var = true;
-            } else {
-                *non_ref_var = true;
-            }
-            break;
+    struct TypecheckContext *tc_context = context;
 
-        case PAT_BOOL:
-        case PAT_INT:
-            break;
+    // typecheck the scrutinee.
+    transform_term(tr, context, term->match.scrutinee);
 
-        case PAT_RECORD:
-            ;
-            for (struct NamePatternList *field = pattern->record.fields; field; field = field->next) {
-                pattern_var_flags(field->pattern, ref_var, non_ref_var);
-            }
-            break;
-
-        case PAT_VARIANT:
-            pattern_var_flags(pattern->variant.payload, ref_var, non_ref_var);
-            break;
-
-        case PAT_WILDCARD:
-            break;
-        }
-    }
-}
-
-static enum TypecheckMode get_reference_match_mode(struct TypecheckContext *tc_context,
-                                                   struct Term *scrutinee)
-{
-    if (is_lvalue(tc_context, scrutinee) && !is_read_only_lvalue(tc_context, scrutinee)) {
-        return MODE_WRITABLE_REF;
-    } else {
-        return MODE_INSPECT;
-    }
-}
-
-static enum TypecheckMode get_match_mode(struct TypecheckContext *tc_context,
-                                         struct Term *scrutinee,
-                                         struct Arm *arms)
-{
-    // The current rule is:
-    //  - If at least one arm contains a 'ref' var then this is a REFERENCE match.
-    //  - Otherwise, if at least one arm contains a 'non-ref' var, then this is a MOVE OR
-    //    COPY match.
-    //  - Otherwise, this is a REFERENCE match.
-    // (These heuristics seem to do the right thing in most cases, but we can keep this under
-    // review and tweak later if required.)
-    bool ref_var = false;
-    bool non_ref_var = false;
-    for (struct Arm *arm = arms; arm; arm = arm->next) {
-        pattern_var_flags(arm->pattern, &ref_var, &non_ref_var);
-    }
-    if (ref_var) {
-        return get_reference_match_mode(tc_context, scrutinee);
-    } else if (non_ref_var) {
-        return MODE_MOVE;
-    } else {
-        return get_reference_match_mode(tc_context, scrutinee);
-    }
-}
-
-static void remove_pattern_from_scope(struct TypecheckContext *tc_context,
-                                      struct Pattern *pattern,
-                                      struct Location drop_location)
-{
-    if (!pattern) return;
-
-    switch (pattern->tag) {
-    case PAT_VAR:
-        remove_from_scope(tc_context, pattern->var.name, drop_location);
-        break;
-
-    case PAT_BOOL:
-    case PAT_INT:
-        break;
-
-    case PAT_RECORD:
-        for (struct NamePatternList *field = pattern->record.fields; field; field = field->next) {
-            remove_pattern_from_scope(tc_context, field->pattern, drop_location);
-        }
-        break;
-
-    case PAT_VARIANT:
-        remove_pattern_from_scope(tc_context, pattern->variant.payload, drop_location);
-        break;
-
-    case PAT_WILDCARD:
-        break;
-    }
-}
-
-static bool is_whole_object(struct TypecheckContext *tc_context, struct Term *term)
-{
-    // A "whole object" is a plain var term that is not itself a
-    // ref to some sub-part of an object (FLAG_PARTIAL_REF).
-    if (term->tag == TM_VAR) {
-        struct TypeEnvEntry *entry = lookup_type_info(tc_context, term->var.name);
-        return (entry && (entry->flags & FLAG_PARTIAL_REF) == 0);
-    } else {
-        return false;
-    }
-}
-
-static void typecheck_match(struct TypecheckContext *tc_context, struct Term *term)
-{
-    // Determine mode for the match
-    enum TypecheckMode mode = get_match_mode(tc_context, term->match.scrutinee, term->match.arms);
-
-    // Typecheck the scrutinee
-    typecheck_term(tc_context, mode, term->match.scrutinee);
-
-    const char *root = get_root_name(tc_context, term->match.scrutinee);
-    bool whole_object = is_whole_object(tc_context, term->match.scrutinee);
-
-    // There must be at least one arm
+    // there must be at least one arm
     if (term->match.arms == NULL) {
         report_match_with_no_arms(term->location);
         tc_context->error = true;
@@ -3265,19 +2684,21 @@ static void typecheck_match(struct TypecheckContext *tc_context, struct Term *te
     bool consistent_type = true;
     bool patterns_ok = true;
 
-    // For each arm
+    // for each arm
     for (struct Arm *arm = term->match.arms; arm; arm = arm->next) {
 
         // check the pattern, add any pattern-variables into the environment
         if (term->match.scrutinee->type) {
-            if (!typecheck_pattern(tc_context, arm->pattern, term->match.scrutinee->type,
-                                   mode, root, whole_object)) {
+            bool read_only = false;
+            bool lvalue = is_lvalue(context, term->match.scrutinee, NULL, &read_only);
+            if (!typecheck_pattern(context, arm->pattern, term->match.scrutinee->type,
+                                   lvalue, read_only)) {
                 patterns_ok = false;
             }
         }
 
         // check the rhs
-        typecheck_term(tc_context, MODE_MOVE, arm->rhs);
+        transform_term(tr, context, arm->rhs);
 
         // try to match the new arm's type to the previous one,
         // if applicable
@@ -3285,35 +2706,49 @@ static void typecheck_match(struct TypecheckContext *tc_context, struct Term *te
         // to a common type (like we do with binop chains) instead of just matching
         // them all to the first arm's type.
         if (result_type) {
-            if (!match_term_to_type(tc_context, result_type, (struct Term **) &arm->rhs)) {
+            if (!match_term_to_type(context, result_type, (struct Term **) &arm->rhs)) {
                 consistent_type = false;
             }
         } else {
             result_type = ((struct Term*)arm->rhs)->type;
         }
-
-        // Remove variables from scope again
-        remove_pattern_from_scope(tc_context, arm->pattern, ((struct Term *)arm->rhs)->location);
     }
 
     if (term->match.scrutinee->type && patterns_ok && result_type && consistent_type) {
         term->type = copy_type(result_type);
     }
+
+    return NULL;
 }
 
-static void typecheck_sizeof(struct TypecheckContext *tc_context, struct Term *term)
+static void* typecheck_sizeof(void *context, struct Term *term, void *type_result, void *rhs_result)
 {
+    struct TypecheckContext *tc_context = context;
+
     struct Term *rhs = term->sizeof_data.rhs;
-    typecheck_term(tc_context, MODE_INSPECT, rhs);
     if (!rhs->type) {
-        return;
+        return NULL;
     }
 
     struct Type *array_type = chase_univars(rhs->type);
+
     if (array_type->tag != TY_ARRAY) {
         report_type_mismatch_string("array", rhs);
         tc_context->error = true;
-        return;
+        return NULL;
+    }
+
+    if (array_type->tag == TY_ARRAY
+    && array_type->array_data.resizable
+    && !is_lvalue(tc_context, rhs, NULL, NULL)
+    && tc_context->executable) {
+        // In executable code, passing an rvalue (of allocatable type)
+        // to sizeof would "lose" the rvalue, so we would never be able
+        // to free it.
+        // In ghost code it is fine.
+        report_cannot_take_sizeof(rhs);
+        tc_context->error = true;
+        return NULL;
     }
 
     int ndim = array_type->array_data.ndim;
@@ -3336,24 +2771,56 @@ static void typecheck_sizeof(struct TypecheckContext *tc_context, struct Term *t
         term->type = make_type(g_no_location, TY_RECORD);
         term->type->record_data.fields = list;
     }
+
+    return NULL;
 }
 
-static void typecheck_array_proj(struct TypecheckContext *tc_context,
-                                 enum TypecheckMode mode,
-                                 struct Term *term)
+static void * typecheck_allocated(void *context, struct Term *term, void *type_result, void *rhs_result)
 {
+    struct TypecheckContext *tc_context = context;
+
+    struct Term *rhs = term->allocated.rhs;
+    if (!rhs->type) {
+        return NULL;
+    }
+
+    if (tc_context->executable) {
+        report_executable_allocated(term);
+        tc_context->error = true;
+        return NULL;
+    }
+
+    struct Type *array_type = chase_univars(rhs->type);
+
+    if (array_type->tag == TY_ARRAY
+    && array_type->array_data.sizes == NULL
+    && !array_type->array_data.resizable) {
+        report_incomplete_array_type(term->location);
+        tc_context->error = true;
+        return NULL;
+    }
+
+    term->type = make_type(g_no_location, TY_BOOL);
+    return NULL;
+}
+
+static void * typecheck_array_proj(void *context, struct Term *term, void *type_result, void *lhs_result, void *index_results)
+{
+    struct TypecheckContext *tc_context = context;
+
     // lhs must be an array
     struct Term *lhs = term->array_proj.lhs;
-    typecheck_term(tc_context, mode == MODE_MOVE ? MODE_INSPECT : mode, lhs);
+
     if (lhs->type == NULL) {
-        return;
+        return NULL;
     }
 
     struct Type * array_type = chase_univars(lhs->type);
+
     if (array_type->tag != TY_ARRAY) {
         report_cannot_index(lhs);
         tc_context->error = true;
-        return;
+        return NULL;
     }
 
     // indexes are u64
@@ -3363,10 +2830,9 @@ static void typecheck_array_proj(struct TypecheckContext *tc_context,
     struct Type *u64 = make_int_type(g_no_location, false, 64);
 
     for (struct OpTermList *node = term->array_proj.indexes; node; node = node->next) {
-        typecheck_term(tc_context, MODE_INSPECT, node->rhs);
         if (node->rhs->type == NULL) {
             free_type(u64);
-            return;
+            return NULL;
         }
 
         if (!match_term_to_type(tc_context, u64, &node->rhs)) {
@@ -3387,148 +2853,43 @@ static void typecheck_array_proj(struct TypecheckContext *tc_context,
         ok = false;
     }
 
-    // Moving a single element out of an array is not allowed.
-    if (tc_context->executable &&
-    mode == MODE_MOVE &&
-    !type_has_trait(tc_context, array_type->array_data.element_type, TRAIT_COPY)) {
-        report_move_from_part(term);
-        tc_context->error = true;
-        ok = false;
-    }
-
     if (ok) {
         term->type = copy_type(array_type->array_data.element_type);
     }
+
+    return NULL;
 }
 
 // Typecheck a term.
 // The term (and all its sub-terms) will either be given a type of
 // kind * (valid according to the kind-checking rules), OR an error
 // will be reported and the term's type will be set to NULL.
-static void typecheck_term(struct TypecheckContext *tc_context,
-                           enum TypecheckMode mode,
-                           struct Term *term)
+static void typecheck_term(struct TypecheckContext *tc_context, struct Term *term)
 {
-    bool must_be_droppable = false;
+    struct TermTransform tr = {0};
 
-    if (mode == MODE_INSPECT) {
-        if (is_lvalue(tc_context, term)) {
-            // Check as a reference.
-            mode = MODE_ANY_REF;
-        } else {
-            // Check as a temporary value. No-one is taking ownership of the
-            // temporary, so we must be able to drop it afterwards.
-            mode = MODE_MOVE;
-            must_be_droppable = true;
-        }
-    } else if (is_ref_mode(mode)
-    && !is_lvalue(tc_context, term)) {
-        report_cannot_take_ref(term->location);
-        tc_context->error = true;
-        return;
-    }
+    tr.transform_var = typecheck_var;
+    tr.transform_bool_literal = typecheck_bool_literal;
+    tr.transform_int_literal = typecheck_int_literal;
+    tr.transform_string_literal = typecheck_string_literal;
+    tr.transform_array_literal = typecheck_array_literal;
+    tr.transform_cast = typecheck_cast;
+    tr.transform_if = typecheck_if;
+    tr.transform_unop = typecheck_unop;
+    tr.transform_binop = typecheck_binop;
+    tr.nr_transform_let = nr_typecheck_let;
+    tr.nr_transform_quantifier = nr_typecheck_quantifier;
+    tr.nr_transform_call = nr_typecheck_call;
+    tr.nr_transform_tyapp = nr_typecheck_tyapp;
+    tr.transform_record = typecheck_record;
+    tr.transform_record_update = typecheck_record_update;
+    tr.transform_field_proj = typecheck_field_proj;
+    tr.nr_transform_match = nr_typecheck_match;
+    tr.transform_sizeof = typecheck_sizeof;
+    tr.transform_allocated = typecheck_allocated;
+    tr.transform_array_proj = typecheck_array_proj;
 
-    switch (term->tag) {
-    case TM_VAR:
-        // lvalue
-        typecheck_var(tc_context, mode, term);
-        break;
-
-    case TM_DEFAULT:
-        fatal_error("unexpected: typechecking TM_DEFAULT");
-
-    case TM_BOOL_LITERAL:
-        typecheck_bool_literal(tc_context, term);
-        break;
-
-    case TM_INT_LITERAL:
-        typecheck_int_literal(tc_context, term);
-        break;
-
-    case TM_STRING_LITERAL:
-        // lvalue
-        typecheck_string_literal(tc_context, mode, term);
-        break;
-
-    case TM_ARRAY_LITERAL:
-        typecheck_array_literal(tc_context, term);
-        break;
-
-    case TM_CAST:
-        typecheck_cast(tc_context, term);
-        break;
-
-    case TM_IF:
-        typecheck_if(tc_context, term);
-        break;
-
-    case TM_UNOP:
-        typecheck_unop(tc_context, term);
-        break;
-
-    case TM_BINOP:
-        typecheck_binop(tc_context, term);
-        break;
-
-    case TM_LET:
-        typecheck_let(tc_context, term);
-        break;
-
-    case TM_QUANTIFIER:
-        typecheck_quantifier(tc_context, term);
-        break;
-
-    case TM_CALL:
-        typecheck_call(tc_context, term);
-        break;
-
-    case TM_TYAPP:
-        // lvalue (potentially)
-        typecheck_tyapp(tc_context, mode, term);
-        break;
-
-    case TM_RECORD:
-        typecheck_record(tc_context, term);
-        break;
-
-    case TM_RECORD_UPDATE:
-        typecheck_record_update(tc_context, term);
-        break;
-
-    case TM_FIELD_PROJ:
-        // lvalue (potentially)
-        typecheck_field_proj(tc_context, mode, term);
-        break;
-
-    case TM_VARIANT:
-        fatal_error("unexpected: typechecking TM_VARIANT");
-
-    case TM_MATCH:
-        typecheck_match(tc_context, term);
-        break;
-
-    case TM_MATCH_FAILURE:
-        fatal_error("unexpected: typechecking TM_MATCH_FAILURE");
-
-    case TM_SIZEOF:
-        typecheck_sizeof(tc_context, term);
-        break;
-
-    case TM_ARRAY_PROJ:
-        // lvalue (potentially)
-        typecheck_array_proj(tc_context, mode, term);
-        break;
-    }
-
-    if (must_be_droppable
-    && tc_context->executable
-    && term->type != NULL
-    && !type_has_trait(tc_context, term->type, TRAIT_COPY)) {
-        report_cannot_drop(term->location);
-        tc_context->error = true;
-        free_type(term->type);
-        term->type = NULL;
-    }
+    transform_term(&tr, tc_context, term);
 }
 
 
@@ -3563,16 +2924,22 @@ static void typecheck_attributes(struct TypecheckContext *tc_context, struct Att
                 tc_context->postcondition = true;
             }
 
-            typecheck_term(tc_context, MODE_MOVE, attr->term);
+            typecheck_term(tc_context, attr->term);
 
             if (attr->tag == ATTR_ENSURES) {
                 tc_context->postcondition = false;
             }
 
             // requires, ensures, invariant must be bool
-            // decreases can be anything (verifier will deal with it)
+            // decreases must be int, bool, or tuple of those
             if (attr->tag != ATTR_DECREASES) {
                 check_term_is_bool(tc_context, attr->term);
+            } else {
+                struct UnivarNode node;
+                node.must_be_executable = false;
+                node.must_be_complete = false;
+                node.must_be_valid_decreases = true;
+                ensure_type_meets_flags(tc_context, &node, attr->term->type, &attr->term->location);
             }
 
             break;
@@ -3644,6 +3011,18 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         if (!kindcheck_type(tc_context, &stmt->var_decl.type)) {
             return;
         }
+
+        // In executable code, non-ref variables must have a "complete" type
+        // (so that we know how much storage to allocate).
+        if (tc_context->executable && !stmt->var_decl.ref) {
+            struct UnivarNode node;
+            node.must_be_executable = true;
+            node.must_be_complete = true;
+            node.must_be_valid_decreases = false;
+            if (!ensure_type_meets_flags(tc_context, &node, stmt->var_decl.type, &stmt->var_decl.type->location)) {
+                return;
+            }
+        }
     }
 
     // If there is a right-hand-side, then typecheck it.
@@ -3651,14 +3030,13 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
     if (stmt->var_decl.rhs) {
 
         // If this is a ref, the rhs must be an lvalue (either read-only or read-write)
-        enum TypecheckMode rhs_mode = MODE_MOVE;
-        if (stmt->var_decl.ref) {
-            rhs_mode = MODE_ANY_REF;
-            read_only = is_read_only_lvalue(tc_context, stmt->var_decl.rhs);
+        if (stmt->var_decl.ref && !is_lvalue(tc_context, stmt->var_decl.rhs, NULL, &read_only)) {
+            report_cannot_take_ref(stmt->var_decl.rhs->location);
+            tc_context->error = true;
         }
 
         // typecheck rhs
-        typecheck_term(tc_context, rhs_mode, stmt->var_decl.rhs);
+        typecheck_term(tc_context, stmt->var_decl.rhs);
         if (stmt->var_decl.rhs->type) {
 
             if (stmt->var_decl.type) {
@@ -3674,6 +3052,17 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
             } else {
                 // We are inferring a type.
 
+                // Make sure it is not an incomplete type (in non-ref, executable case).
+                if (tc_context->executable && !stmt->var_decl.ref) {
+                    struct UnivarNode node;
+                    node.must_be_executable = true;
+                    node.must_be_complete = true;
+                    node.must_be_valid_decreases = false;
+                    if (!ensure_type_meets_flags(tc_context, &node, stmt->var_decl.rhs->type, &stmt->var_decl.rhs->location)) {
+                        return;
+                    }
+                }
+
                 // Add the inferred type annotation to the var decl statement.
                 stmt->var_decl.type = copy_type(stmt->var_decl.rhs->type);
             }
@@ -3686,15 +3075,7 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         }
 
     } else {
-        // If there is no right-hand-side, then manufacture one (as a DEFAULT expression).
-        // This requires the Default trait (in non-ghost code).
-
-        if (tc_context->executable && !type_has_trait(tc_context, stmt->var_decl.type, TRAIT_DEFAULT)) {
-            report_cannot_default_init(stmt);
-            tc_context->error = true;
-            return; // don't add the variable to the env
-        }
-        
+        // If there is no right-hand-side, then manufacture one (as a DEFAULT expression)
         struct Term *default_rhs = make_term(stmt->location, TM_DEFAULT);
         default_rhs->type = copy_type(stmt->var_decl.type);
         stmt->var_decl.rhs = default_rhs;
@@ -3702,25 +3083,14 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
     // Add the new variable to the env (if typechecking was successful).
     if (stmt->var_decl.type) {
-        uint8_t flags = 0;
-        if (!tc_context->executable) flags |= FLAG_GHOST;
-        if (read_only) flags |= FLAG_READ_ONLY;
-        if (stmt->var_decl.ref) {
-            flags |= FLAG_REF;
-            if (!is_whole_object(tc_context, stmt->var_decl.rhs)) {
-                flags |= FLAG_PARTIAL_REF;
-            }
-        }
-        struct TypeEnvEntry *entry =
-            add_to_type_env(tc_context->type_env,
-                            stmt->var_decl.name,
-                            copy_type(stmt->var_decl.type),    // handover
-                            NULL,
-                            flags,
-                            stmt->location);
-        if (stmt->var_decl.ref) {
-            entry->root_name = get_root_name(tc_context, stmt->var_decl.rhs);
-        }
+        add_to_type_env(tc_context->type_env,
+                        stmt->var_decl.name,
+                        copy_type(stmt->var_decl.type),    // handover
+                        !tc_context->executable,  // ghost
+                        read_only,                // read_only
+                        false,                    // constructor
+                        false,                    // impure
+                        ALLOC_UNKNOWN);
     }
 }
 
@@ -3757,9 +3127,11 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env,
                         stmt->fix.name,
                         copy_type(stmt->fix.type),    // handover
-                        NULL,
-                        FLAG_GHOST | FLAG_READ_ONLY,
-                        stmt->location);
+                        true,      // ghost
+                        true,      // read_only
+                        false,     // constructor
+                        false,     // impure
+                        ALLOC_UNKNOWN);
     }
 }
 
@@ -3777,15 +3149,17 @@ static void typecheck_obtain_stmt(struct TypecheckContext *tc_context,
     add_to_type_env(tc_context->type_env,
                     stmt->obtain.name,
                     copy_type(stmt->obtain.type),   // handover
-                    NULL,
-                    FLAG_GHOST,
-                    stmt->location);
+                    true,    // ghost
+                    false,   // read_only
+                    false,   // constructor
+                    false,   // impure
+                    ALLOC_UNKNOWN);
 
     // the condition is not executable
     bool old_exec = tc_context->executable;
     tc_context->executable = false;
 
-    typecheck_term(tc_context, MODE_MOVE, stmt->obtain.condition);
+    typecheck_term(tc_context, stmt->obtain.condition);
     check_term_is_bool(tc_context, stmt->obtain.condition);
 
     tc_context->executable = old_exec;
@@ -3811,7 +3185,7 @@ static void typecheck_use_stmt(struct TypecheckContext *tc_context,
 
     } else {
         // Typecheck the provided term - it should match the type in the quantifier
-        typecheck_term(tc_context, MODE_MOVE, stmt->use.term);
+        typecheck_term(tc_context, stmt->use.term);
         if (stmt->use.term->type) {
             match_term_to_type(tc_context, assert_term->quant.type, &stmt->use.term);
         }
@@ -3824,88 +3198,68 @@ static void typecheck_use_stmt(struct TypecheckContext *tc_context,
 static void typecheck_assign_stmt(struct TypecheckContext *tc_context,
                                   struct Statement *stmt)
 {
-    // Lhs should be a writable lvalue.
-    // typecheck_term will verify this, but for the sake of better error
-    // messages, we verify it again here:
-    if (!is_lvalue(tc_context, stmt->assign.lhs)) {
+    // lhs should be a writable lvalue
+    bool lhs_is_ghost_var = false;
+    bool lhs_read_only = false;
+    bool lvalue = is_lvalue(tc_context, stmt->assign.lhs, &lhs_is_ghost_var, &lhs_read_only);
+    if (!lvalue) {
         report_cannot_assign(stmt->assign.lhs);
         tc_context->error = true;
-    } else if (is_read_only_lvalue(tc_context, stmt->assign.lhs)) {
-        if (!tc_context->executable && is_nonghost_lvalue(tc_context, stmt->assign.lhs)) {
-            // give better error message in this specific case
-            report_writing_nonghost_from_ghost_code(stmt->assign.lhs->location);
-        } else {
-            // more general error message
-            report_cannot_assign_to_readonly(stmt->assign.lhs);
-        }
+    } else if (lhs_read_only) {
+        report_cannot_assign_to_readonly(stmt->assign.lhs);
+        tc_context->error = true;
+    } else if (!lhs_is_ghost_var && !tc_context->executable) {
+        // Note: typecheck_term reports the error if lhs is ghost
+        // and we are in executable code.
+        // Here we have to check the opposite error: writing nonghost
+        // var from ghost code.
+        report_writing_nonghost_from_ghost_code(stmt->location);
         tc_context->error = true;
     } else {
-        // Proceed with typechecking
-        typecheck_term(tc_context, MODE_WRITABLE_REF_POSSIBLY_EMPTY, stmt->assign.lhs);
+        // No ghost/readonly/lvalue related errors, so proceed with typechecking
+        typecheck_term(tc_context, stmt->assign.lhs);
     }
 
     // Always typecheck the rhs
-    typecheck_term(tc_context, MODE_MOVE, stmt->assign.rhs);
+    typecheck_term(tc_context, stmt->assign.rhs);
 
     // The lhs and rhs types should match
     bool type_ok = match_term_to_type(tc_context, stmt->assign.lhs->type, &stmt->assign.rhs);
 
-    // Trait checks
+    // In executable code, we do not currently allow assignment of incomplete array
+    // types (because the code generator would not produce the right code for it!).
     if (type_ok && tc_context->executable) {
-
-        const char *root = get_root_name(tc_context, stmt->assign.lhs);
-        if (!root) {
-            fatal_error("could not find root name for assignment lhs");
-        }
-
-        struct TypeEnvEntry *root_entry = lookup_type_info(tc_context, root);
-        bool root_empty = root_entry != NULL && (root_entry->flags & FLAG_EMPTY) != 0;
-
-        if (root_empty) {
-
-            // LHS is empty to begin with, so it is full after the assignment
-            // (assuming we weren't assigning to only part of an object).
-
-            if (!is_whole_object(tc_context, stmt->assign.lhs)) {
-                report_move_to_part(stmt->assign.lhs);
-                tc_context->error = true;
-            } else {
-                root_entry->flags &= ~((uint8_t)FLAG_EMPTY);
-            }
-
-        } else {
-
-            // LHS isn't empty to begin with, so we need to make sure
-            // we can drop the old value.
-
-            if (!type_has_trait(tc_context, stmt->assign.lhs->type, TRAIT_COPY)) {
-                report_cannot_overwrite(stmt->assign.lhs);
-            }
-        }
+        // Only the lhs type needs be checked (because both lhs and rhs have the same type
+        // at this point).
+        struct UnivarNode node;
+        node.must_be_executable = true;
+        node.must_be_complete = true;
+        node.must_be_valid_decreases = false;
+        ensure_type_meets_flags(tc_context, &node, stmt->assign.lhs->type, &stmt->assign.lhs->location);
     }
 }
 
 static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
                                 struct Statement *stmt)
 {
-    // Both sides should be non-empty writable lvalues.
-    // (MODE_WRITABLE_REF will ensure this, but we also check again
-    // here, for the sake of better error messages.)
+    // both sides should be writable lvalues
     for (int i = 0; i < 2; ++i) {
         struct Term *term = (i == 0) ? stmt->swap.lhs : stmt->swap.rhs;
-        if (!is_lvalue(tc_context, term)) {
+
+        bool ghost = false;
+        bool read_only = false;
+        bool lvalue = is_lvalue(tc_context, term, &ghost, &read_only);
+        if (!lvalue) {
             report_cannot_swap(term);
             tc_context->error = true;
-        } else if (is_read_only_lvalue(tc_context, term)) {
-            if (!tc_context->executable && is_nonghost_lvalue(tc_context, term)) {
-                // better error message for this specific case
-                report_writing_nonghost_from_ghost_code(term->location);
-            } else {
-                report_cannot_swap_readonly(term);
-            }
+        } else if (read_only) {
+            report_cannot_swap_readonly(term);
+            tc_context->error = true;
+        } else if (!ghost && !tc_context->executable) {
+            report_writing_nonghost_from_ghost_code(term->location);
             tc_context->error = true;
         } else {
-            typecheck_term(tc_context, MODE_WRITABLE_REF, term);
+            typecheck_term(tc_context, term);
         }
     }
 
@@ -3914,11 +3268,14 @@ static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
     // The types must match exactly.
     if (stmt->swap.lhs->type && stmt->swap.rhs->type) {
         unify_types(tc_context, stmt->swap.lhs->type, stmt->swap.rhs->type, &stmt->swap.rhs->location, true);
-
-        // The common type must have the Move trait (except in ghost code).
-        if (tc_context->executable && !type_has_trait(tc_context, stmt->swap.lhs->type, TRAIT_MOVE)) {
-            report_cannot_move(stmt->location);
-            tc_context->error = true;
+        if (tc_context->executable) {
+            // Similarly to assignment, we do not currently allow code generation for
+            // "swap A,B" where A and B are an incomplete array type (or contain one).
+            struct UnivarNode node;
+            node.must_be_executable = true;
+            node.must_be_complete = true;
+            node.must_be_valid_decreases = false;
+            ensure_type_meets_flags(tc_context, &node, stmt->swap.lhs->type, &stmt->swap.lhs->location);
         }
     }
 }
@@ -3931,12 +3288,12 @@ static void typecheck_return_stmt(struct TypecheckContext *tc_context,
 
     if (!return_info) {
         // This can happen if the return-type couldn't be processed
-        // (e.g. didn't have the required trait(s)).
+        // (e.g. was 'real' in an executable context).
         // Just skip over the return-stmt in this case.
         return;
     }
 
-    if (!tc_context->executable && (return_info->flags & FLAG_GHOST) == 0) {
+    if (!tc_context->executable && !return_info->ghost) {
         report_cant_return_in_ghost_code(stmt);
         tc_context->error = true;
 
@@ -3946,17 +3303,13 @@ static void typecheck_return_stmt(struct TypecheckContext *tc_context,
             tc_context->error = true;
         }
 
-        flag_error_if_any_dropped(tc_context, stmt->location);
-
     } else {
         if (stmt->ret.value == NULL) {
             report_missing_return_value(stmt);
             tc_context->error = true;
         } else {
-            typecheck_term(tc_context, MODE_MOVE, stmt->ret.value);
+            typecheck_term(tc_context, stmt->ret.value);
             match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
-
-            flag_error_if_any_dropped(tc_context, stmt->location);
         }
     }
 }
@@ -3983,7 +3336,7 @@ static void typecheck_assert_stmt(struct TypecheckContext *tc_context,
     }
 
     if (stmt->assert_data.condition) {
-        typecheck_term(tc_context, MODE_MOVE, stmt->assert_data.condition);
+        typecheck_term(tc_context, stmt->assert_data.condition);
         check_term_is_bool(tc_context, stmt->assert_data.condition);
     }
 
@@ -4008,7 +3361,7 @@ static void typecheck_assume_stmt(struct TypecheckContext *tc_context,
     bool old_exec = tc_context->executable;
     tc_context->executable = false;
 
-    typecheck_term(tc_context, MODE_MOVE, stmt->assume.condition);
+    typecheck_term(tc_context, stmt->assume.condition);
     check_term_is_bool(tc_context, stmt->assume.condition);
 
     tc_context->executable = old_exec;
@@ -4017,29 +3370,14 @@ static void typecheck_assume_stmt(struct TypecheckContext *tc_context,
 static void typecheck_if_stmt(struct TypecheckContext *tc_context,
                               struct Statement *stmt)
 {
-    typecheck_term(tc_context, MODE_MOVE, stmt->if_data.condition);
+    typecheck_term(tc_context, stmt->if_data.condition);
     check_term_is_bool(tc_context, stmt->if_data.condition);
 
     bool old_top_level = tc_context->at_proof_top_level;
     tc_context->at_proof_top_level = false;
 
-    // similarly to 'typecheck_if', backup and restore "empty-flags" around the then-block
-    struct HashTable *mentioned_vars = new_hash_table();
-    names_used_in_statements(mentioned_vars, stmt->if_data.then_block);
-    struct HashTable *empty_flags_before = backup_empty_flags(tc_context, mentioned_vars);
-    names_used_in_statements(mentioned_vars, stmt->if_data.else_block);
-
     typecheck_statements(tc_context, stmt->if_data.then_block);
-    struct HashTable *empty_flags_after_then = backup_empty_flags(tc_context, mentioned_vars);
-    reset_empty_flags(tc_context, empty_flags_before);
-    free_empty_flags_backup(empty_flags_before);
-
     typecheck_statements(tc_context, stmt->if_data.else_block);
-    struct HashTable *empty_flags_after_else = backup_empty_flags(tc_context, mentioned_vars);
-    check_empty_flags_consistency(tc_context, mentioned_vars, empty_flags_after_then, empty_flags_after_else);
-    free_empty_flags_backup(empty_flags_after_then);
-    free_empty_flags_backup(empty_flags_after_else);
-    free_hash_table(mentioned_vars);
 
     tc_context->at_proof_top_level = old_top_level;
 }
@@ -4047,7 +3385,7 @@ static void typecheck_if_stmt(struct TypecheckContext *tc_context,
 static void typecheck_while_stmt(struct TypecheckContext *tc_context,
                                  struct Statement *stmt)
 {
-    typecheck_term(tc_context, MODE_MOVE, stmt->while_data.condition);
+    typecheck_term(tc_context, stmt->while_data.condition);
     check_term_is_bool(tc_context, stmt->while_data.condition);
 
     // invariants, variants should be considered non-executable
@@ -4076,68 +3414,44 @@ static void typecheck_while_stmt(struct TypecheckContext *tc_context,
 
     bool old_top_level = tc_context->at_proof_top_level;
     tc_context->at_proof_top_level = false;
-
-    struct HashTable *mentioned_vars = new_hash_table();
-    names_used_in_statements(mentioned_vars, stmt->while_data.body);
-    struct HashTable *empty_flags_before = backup_empty_flags(tc_context, mentioned_vars);
-
     typecheck_statements(tc_context, stmt->while_data.body);
-
-    struct HashTable *empty_flags_after = backup_empty_flags(tc_context, mentioned_vars);
-    check_empty_flags_consistency(tc_context, mentioned_vars, empty_flags_before, empty_flags_after);
-    free_empty_flags_backup(empty_flags_before);
-    free_empty_flags_backup(empty_flags_after);
-    free_hash_table(mentioned_vars);
-
     tc_context->at_proof_top_level = old_top_level;
 }
 
 static void typecheck_call_stmt(struct TypecheckContext *tc_context,
                                 struct Statement *stmt)
 {
-    typecheck_term(tc_context, MODE_INSPECT, stmt->call.term);
+    typecheck_term(tc_context, stmt->call.term);
 }
 
 static void typecheck_match_stmt(struct TypecheckContext *tc_context,
                                  struct Statement *stmt)
 {
-    // Determine mode for the match
-    enum TypecheckMode mode = get_match_mode(tc_context, stmt->match.scrutinee, stmt->match.arms);
-
-    // Typecheck the scrutinee
-    typecheck_term(tc_context, mode, stmt->match.scrutinee);
-
-    const char *root = get_root_name(tc_context, stmt->match.scrutinee);
-    bool whole_object = is_whole_object(tc_context, stmt->match.scrutinee);
+    // typecheck the scrutinee
+    typecheck_term(tc_context, stmt->match.scrutinee);
 
     bool old_top_level = tc_context->at_proof_top_level;
     tc_context->at_proof_top_level = false;
 
-    // There must be at least one arm
+    // there must be at least one arm
     if (stmt->match.arms == NULL) {
         report_match_with_no_arms(stmt->location);
         tc_context->error = true;
     }
 
-    // For each arm
+    // for each arm
     for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
 
         // check the pattern, add any pattern-variables into the environment
         if (stmt->match.scrutinee->type) {
+            bool read_only = false;
+            bool lvalue = is_lvalue(tc_context, stmt->match.scrutinee, NULL, &read_only);
             typecheck_pattern(tc_context, arm->pattern, stmt->match.scrutinee->type,
-                              mode, root, whole_object);
+                              lvalue, read_only);
         }
 
         // check the rhs
         typecheck_statements(tc_context, arm->rhs);
-
-        // remove variables from scope
-        struct Statement *last_stmt = NULL;
-        for (struct Statement *stmt = arm->rhs; stmt; stmt = stmt->next) {
-            last_stmt = stmt;
-        }
-        remove_pattern_from_scope(tc_context, arm->pattern,
-                                  last_stmt ? last_stmt->location : arm->location);
     }
 
     tc_context->at_proof_top_level = old_top_level;
@@ -4173,13 +3487,9 @@ static void typecheck_show_hide_stmt(struct TypecheckContext *tc_context,
 static void typecheck_statements(struct TypecheckContext *tc_context,
                                  struct Statement *statements)
 {
-    struct Statement *last_stmt = NULL;
-
     // Check each statement individually
     struct Statement *stmt = statements;
     while (stmt) {
-
-        last_stmt = stmt;
 
         bool old_exec = tc_context->executable;
         if (old_exec == false) {
@@ -4259,17 +3569,6 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
         tc_context->executable = old_exec;
         tc_context->statement = NULL;
     }
-
-    // Report any variables that are dropping out of scope (but don't have Copy trait).
-    // Exception: if last stmt in the block was 'return', then we don't need to do this,
-    // as it would already have been done at the 'return' stmt.
-    if (last_stmt && last_stmt->tag != ST_RETURN) {
-        for (stmt = statements; stmt; stmt = stmt->next) {
-            if (stmt->tag == ST_VAR_DECL) {
-                remove_from_scope(tc_context, stmt->var_decl.name, last_stmt->location);
-            }
-        }
-    }
 }
 
 
@@ -4278,36 +3577,6 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
 //
 // Decl typechecking
 //
-
-static bool check_tyvar_list_valid(struct TypecheckContext *tc_context,
-                                   struct TyVarList *tyvars)
-{
-    // Note: the renamer has already ruled out duplicate tyvars, so we don't need
-    // to check that.
-
-    // We do need to check that any trait-lists attached to a tyvar are valid, i.e. no
-    // trait is listed more than once.
-
-    bool result = true;
-
-    for (struct TyVarList *tyvar = tyvars; tyvar; tyvar = tyvar->next) {
-
-        // for now there are only 4 traits so we can just check duplicates using a bitmask
-        unsigned int traits_found = 0;
-        for (struct TraitList *trait = tyvar->traits; trait; trait = trait->next) {
-            unsigned int bitmask = (1 << trait->trait);
-            if (traits_found & bitmask) {
-                report_duplicate_trait(trait);
-                tc_context->error = true;
-                result = false;
-            }
-            traits_found |= bitmask;
-        }
-    }
-
-    return result;
-}
-
 
 static void typecheck_const_decl(struct TypecheckContext *tc_context,
                                  struct Decl *decl,
@@ -4327,7 +3596,7 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
     } else {
         // If we have a term then let's typecheck it.
         if (decl->const_data.rhs != NULL) {
-            typecheck_term(tc_context, MODE_MOVE, decl->const_data.rhs);
+            typecheck_term(tc_context, decl->const_data.rhs);
         }
 
         if (decl->const_data.type != NULL && decl->const_data.rhs != NULL) {
@@ -4359,15 +3628,14 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        // remove previous (interface) decl if there was one
-        remove_from_type_env_hash_table(tc_context->type_env->base->table, decl->name);
-
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         copy_type(decl->const_data.type),     // handover
-                        NULL,
-                        (decl->ghost ? FLAG_GHOST : 0) | FLAG_READ_ONLY,
-                        decl->location);
+                        decl->ghost,
+                        true,    // read_only
+                        false,   // constructor
+                        false,   // impure
+                        ALLOC_UNKNOWN);
     }
 }
 
@@ -4416,17 +3684,6 @@ static bool function_body_allowed(struct Decl *decl)
 }
 
 
-static bool last_stmt_is_return(struct Statement *stmt)
-{
-    while (stmt) {
-        if (stmt->tag == ST_RETURN && stmt->next == NULL) {
-            return true;
-        }
-        stmt = stmt->next;
-    }
-    return false;
-}
-
 static void typecheck_function_decl(struct TypecheckContext *tc_context,
                                     struct Decl *decl,
                                     bool implementation)
@@ -4451,47 +3708,28 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         return;
     }
 
-    // any trait bounds must be valid
-    if (!check_tyvar_list_valid(tc_context, decl->function_data.tyvars)) {
-        return;
-    }
-
     bool kinds_ok = true;
 
     for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
         add_to_type_env(tc_context->type_env,   // local env
                         tv->name,
                         NULL,   // type (NULL for tyvars)
-                        copy_trait_list(tv->traits),
-                        FLAG_READ_ONLY,
-                        tv->location);
+                        false,  // ghost
+                        true,   // read_only
+                        false,  // constructor
+                        false,  // impure
+                        ALLOC_UNKNOWN);
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
-        if (arg->move && decl->ghost) {
-            report_move_cannot_be_ghost(arg->location);
-            tc_context->error = true;
-        }
-
         if (kindcheck_type(tc_context, &arg->type)) {
-
-            uint8_t flags = 0;
-
-            if (decl->ghost) flags |= FLAG_GHOST;
-
-            if (arg->ref) flags |= FLAG_REF;
-            else if (!arg->move) flags |= (FLAG_REF | FLAG_READ_ONLY);
-
-            if (arg->move && !type_has_trait(tc_context, arg->type, TRAIT_MOVE)) {
-                report_type_does_not_satisfy_trait_bound(arg->type, TRAIT_MOVE, NULL);
-                kinds_ok = false;
-            }
-
             add_to_type_env(tc_context->type_env,   // local env
                             arg->name,
                             copy_type(arg->type),   // handover
-                            NULL,
-                            flags,
-                            arg->location);
+                            decl->ghost,
+                            !arg->ref,      // read_only
+                            false,          // constructor
+                            false,          // impure
+                            ALLOC_UNKNOWN);
         } else {
             kinds_ok = false;
         }
@@ -4505,26 +3743,33 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         if (kindcheck_type(tc_context, &decl->function_data.return_type)) {
             ret_type = decl->function_data.return_type;
 
-            // Return types must be movable (except in ghost code)
-            if (tc_context->executable && !type_has_trait(tc_context, ret_type, TRAIT_MOVE)) {
-                report_return_type_not_movable(ret_type->location);
-                tc_context->error = true;
-                ret_type = NULL;
-                kinds_ok = ret_type_ok = false;
+            if (tc_context->executable) {
+                // Returning incomplete array types not currently supported, in executable contexts
+                // (as we're not sure if the code generator will handle this correctly)
+                struct UnivarNode node;
+                node.must_be_executable = true;
+                node.must_be_complete = true;
+                node.must_be_valid_decreases = false;
+                if (!ensure_type_meets_flags(tc_context, &node, ret_type, &ret_type->location)) {
+                    ret_type_ok = false;
+                }
             }
 
         } else {
             ret_type = NULL;
-            kinds_ok = ret_type_ok = false;
+            kinds_ok = false;
+            ret_type_ok = false;
         }
     }
     if (ret_type_ok) {
         add_to_type_env(tc_context->type_env,   // local env
                         "return",
                         copy_type(ret_type),   // handover
-                        NULL,
-                        decl->ghost ? FLAG_GHOST : 0,
-                        decl->location);
+                        decl->ghost,
+                        false,    // read_only
+                        false,    // constructor
+                        false,    // impure
+                        ALLOC_UNKNOWN);
     }
 
     // attributes are considered non-executable
@@ -4548,12 +3793,6 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         } else {
             // typecheck the function body
             typecheck_statements(tc_context, decl->function_data.body);
-
-            // Ensure no "move" variables are still in scope after the main statement body.
-            // Optimisation: This is not required if final stmt was a return.
-            if (kinds_ok && !last_stmt_is_return(decl->function_data.body)) {
-                flag_error_if_any_dropped(tc_context, decl->location);
-            }
         }
 
     } else if (implementation && function_body_required(decl)) {
@@ -4561,7 +3800,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         tc_context->error = true;
     }
 
-    if (kinds_ok && ret_type_ok) {
+    if (kinds_ok) {
         // Construct the function type and put it in the env
         struct Type *type = make_type(g_no_location, TY_FUNCTION);
 
@@ -4571,7 +3810,6 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
             (*next_ptr)->name = NULL;
             (*next_ptr)->type = copy_type(arg->type);
             (*next_ptr)->ref = arg->ref;
-            (*next_ptr)->move = arg->move;
             next_ptr = &((*next_ptr)->next);
         }
         *next_ptr = NULL;
@@ -4587,23 +3825,18 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        uint8_t flags = FLAG_READ_ONLY;
-        if (decl->ghost) flags |= FLAG_GHOST;
-        if (decl->function_data.impure) flags |= FLAG_IMPURE;
-
-        // remove previous (interface) decl if there was one
-        remove_from_type_env_hash_table(tc_context->type_env->base->table, decl->name);
-
         add_to_type_env(tc_context->type_env->base,   // global env
                         decl->name,
                         type,    // handover
-                        NULL,
-                        flags,
-                        decl->location);
+                        decl->ghost,
+                        true,    // read_only
+                        false,   // constructor
+                        decl->function_data.impure,
+                        ALLOC_UNKNOWN);
     }
 }
 
-static void replace_abstract_type_with_concrete(struct TypecheckContext *tc_context,
+static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_context,
                                                 struct Decl *decl,
                                                 struct Type *new_type,
                                                 bool implementation,
@@ -4613,9 +3846,45 @@ static void replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
         struct TypeEnvEntry *prev_entry = lookup_type_info(tc_context, decl->name);
 
         if (prev_entry && prev_entry->type == NULL && new_type != NULL) {
+
+            // The new type must not be incomplete.
+            struct UnivarNode node;
+            node.must_be_complete = true;
+            node.must_be_executable = node.must_be_valid_decreases = false;
+            if (!ensure_type_meets_flags(tc_context, &node, new_type, &decl->location)) {
+                return false;
+            }
+
+            // The alloc level must be compatible with the previously declared.
+            enum AllocLevel new_alloc_level = get_alloc_level(tc_context, new_type);
+            if (new_alloc_level == ALLOC_UNKNOWN || prev_entry->alloc_level == ALLOC_UNKNOWN) {
+                fatal_error("not expecting alloc_level to be unknown");
+            }
+            if (new_alloc_level > prev_entry->alloc_level) {
+                report_incompatible_alloc_level(decl->location);
+                tc_context->error = true;
+                return false;
+            }
+
             substitute_type_in_decl_group(decl->name, new_type, interface_decls, tc_context->type_env);
         }
+
+        if (prev_entry && decl->tag == DECL_TYPEDEF && decl->typedef_data.rhs == NULL) {
+            // Special case -- no substitution in env needed, but we
+            // must still check the alloc levels.
+            enum AllocLevel new_alloc_level = decl->typedef_data.alloc_level;
+            if (new_alloc_level == ALLOC_UNKNOWN || prev_entry->alloc_level == ALLOC_UNKNOWN) {
+                fatal_error("not expecting alloc_level to be unknown");
+            }
+            if (new_alloc_level > prev_entry->alloc_level) {
+                report_incompatible_alloc_level(decl->location);
+                tc_context->error = true;
+                return false;
+            }
+        }
     }
+
+    return true;
 }
 
 static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
@@ -4630,20 +3899,17 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         return;
     }
 
-    // any trait bounds must be valid
-    if (!check_tyvar_list_valid(tc_context, decl->datatype_data.tyvars)) {
-        return;
-    }
-
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->datatype_data.tyvars; tyvar; tyvar = tyvar->next) {
         add_to_type_env(tc_context->type_env,   // local env
                         tyvar->name,
                         NULL,
-                        copy_trait_list(tyvar->traits),
-                        FLAG_READ_ONLY,
-                        tyvar->location);
+                        false,  // ghost
+                        true,   // read_only
+                        false,  // constructor
+                        false,  // impure
+                        ALLOC_UNKNOWN);
     }
 
     // kindcheck the payload types
@@ -4682,14 +3948,16 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         // If this datatype "overwrites" an abstract type ("type Foo;"),
         // then go back through the interface and rewrite all occurrences
         // of the abstract type to the concrete.
-        replace_abstract_type_with_concrete(tc_context,
-                                            decl,
-                                            variant_type,
-                                            implementation,
-                                            interface_decls);
-
-        // remove previous (interface) decl if there was one
-        remove_from_type_env_hash_table(tc_context->type_env->base->table, decl->name);
+        // (Also, check for errors, e.g. the new type is incomplete, or
+        // doesn't match the declared alloc-level of the abstract type.)
+        if (!replace_abstract_type_with_concrete(tc_context,
+                                                 decl,
+                                                 variant_type,
+                                                 implementation,
+                                                 interface_decls)) {
+            free_type(variant_type);
+            return;
+        }
 
         // Add the datatype itself to the env (wrapping in TY_LAMBDA if necessary)
         struct Type * datatype = copy_type(variant_type);
@@ -4702,9 +3970,11 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         datatype,      // handover
-                        NULL,
-                        FLAG_READ_ONLY,
-                        decl->location);
+                        false,    // ghost
+                        true,     // read_only
+                        false,    // constructor
+                        false,    // impure
+                        ALLOC_UNKNOWN);
 
         // Now add each constructor. We have to wrap the variant_type
         // in a function from the appropriate payload type (unless
@@ -4720,7 +3990,6 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                 func_type->function_data.args->name = NULL;
                 func_type->function_data.args->type = copy_type(ctor->payload);
                 func_type->function_data.args->ref = false;
-                func_type->function_data.args->move = true;
                 func_type->function_data.args->next = NULL;
                 func_type->function_data.return_type = ctor_type;
                 ctor_type = func_type;
@@ -4733,15 +4002,14 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                 ctor_type = forall_type;
             }
 
-            // remove previous ctor if there was one
-            remove_from_type_env_hash_table(tc_context->type_env->base->table, ctor->name);
-
             add_to_type_env(tc_context->type_env->base,    // global env
                             ctor->name,
                             ctor_type,     // handover
-                            NULL,
-                            FLAG_READ_ONLY | FLAG_DATA_CTOR,
-                            ctor->location);
+                            false,   // ghost
+                            true,    // read_only
+                            true,    // constructor
+                            false,   // impure
+                            ALLOC_UNKNOWN);
 
             ctor = ctor->next;
         }
@@ -4772,20 +4040,17 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         return;
     }
 
-    // any trait bounds must be valid
-    if (!check_tyvar_list_valid(tc_context, decl->typedef_data.tyvars)) {
-        return;
-    }
-
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->typedef_data.tyvars; tyvar; tyvar = tyvar->next) {
         add_to_type_env(tc_context->type_env,   // local env
                         tyvar->name,
                         NULL,
-                        copy_trait_list(tyvar->traits),
-                        FLAG_READ_ONLY,
-                        tyvar->location);
+                        false,  // ghost
+                        true,   // read_only
+                        false,  // constructor
+                        false,  // impure
+                        ALLOC_UNKNOWN);
     }
 
     // kindcheck the rhs type (if applicable)
@@ -4797,7 +4062,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         // construct the rhs type (wrapping in TY_LAMBDA if necessary)
         struct Type *ty = NULL;
         if (decl->typedef_data.rhs) {
-            // note rhs might be NULL, in which case ty will be NULL as well
+            // (if rhs is NULL, this will become a new "tyvar" instead)
             ty = copy_type(decl->typedef_data.rhs);
         }
         if (decl->typedef_data.tyvars) {
@@ -4810,22 +4075,25 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         // If the type was previously abstract, but is now concrete,
         // then we now replace all instances of the abstract type in
         // interface decls with the concrete version.
-        replace_abstract_type_with_concrete(tc_context,
-                                            decl,
-                                            ty,
-                                            implementation,
-                                            interface_decls);
-
-        // remove previous (interface) decl if there was one
-        remove_from_type_env_hash_table(tc_context->type_env->base->table, decl->name);
+        // (Also checking for errors.)
+        if (!replace_abstract_type_with_concrete(tc_context,
+                                                 decl,
+                                                 ty,
+                                                 implementation,
+                                                 interface_decls)) {
+            free_type(ty);
+            return;
+        }
 
         // Add this typedef (or abstract/extern type) to the type env.
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
-                        ty,      // NULL for abstract/extern types, non-NULL for typedefs
-                        copy_trait_list(decl->typedef_data.traits),
-                        FLAG_READ_ONLY,
-                        decl->location);
+                        ty,
+                        false,   // ghost
+                        true,    // read_only
+                        false,   // constructor
+                        false,   // impure
+                        decl->typedef_data.alloc_level);
 
     } else {
         tc_context->error = true;
@@ -4977,15 +4245,6 @@ static bool check_interface_function(struct Module *module,
             return false;
         }
 
-        // Every trait required by the implementation must actually be present,
-        // according to the interface (but not vice versa).
-        for (struct TraitList *impl_trait = tv2->traits; impl_trait; impl_trait = impl_trait->next) {
-            if (!trait_in_list(tv1->traits, impl_trait->trait)) {
-                report_interface_mismatch_impl(interface);
-                return false;
-            }
-        }
-
         tv1 = tv1->next;
         tv2 = tv2->next;
     }
@@ -5029,37 +4288,9 @@ static bool check_interface_function(struct Module *module,
     return true;
 }
 
-// Decl must be a typedef or datatype. Checks that the declared type has all the traits listed.
-static bool check_decl_has_traits(struct TypecheckContext *tc_context,
-                                  struct Decl *decl,
-                                  struct TraitList *traits)
-{
-    struct TypeEnvEntry *entry = type_env_lookup(tc_context->type_env, decl->name);
-    if (entry == NULL) {
-        fatal_error("check_decl_has_traits: not found in env");
-    }
-
-    if (entry->type) {
-        for (struct TraitList *trait = traits; trait; trait = trait->next) {
-            if (!type_has_trait(tc_context, entry->type, trait->trait)) {
-                return false;
-            }
-        }
-        return true;
-    } else {
-        for (struct TraitList *trait = traits; trait; trait = trait->next) {
-            if (!trait_in_list(entry->traits, trait->trait)) {
-                return false;
-            }
-        }
-        return true;
-    }
-}
-
 // Check an interface and implementation to make sure they are compatible.
 // Return false if not.
-static bool check_interface(struct TypecheckContext *tc_context,
-                            struct Module *module,
+static bool check_interface(struct Module *module,
                             struct Decl *interface,
                             struct Decl *implementation)
 {
@@ -5069,15 +4300,6 @@ static bool check_interface(struct TypecheckContext *tc_context,
     && interface->typedef_data.rhs == NULL
     && !interface->typedef_data.is_extern) {
         if (implementation->tag == DECL_TYPEDEF || implementation->tag == DECL_DATATYPE) {
-
-            // The interface traits must be a subset of the implementation traits.
-            // (i.e. when abstracting a type, you can "hide" certain traits but you cannot
-            // add new ones.)
-            if (!check_decl_has_traits(tc_context, implementation, interface->typedef_data.traits)) {
-                report_interface_mismatch_impl(interface);
-                return false;
-            }
-
             return true;
         } else {
             report_interface_mismatch_impl(interface);
@@ -5148,7 +4370,7 @@ static bool requires_impl(struct Decl *interface)
 
 // Check all interfaces to make sure they are compatible with any corresponding implementations.
 // Return false if any problem found.
-static bool check_interfaces(struct TypecheckContext *tc_context, struct Module *module)
+static bool check_interfaces(struct Module *module)
 {
     bool all_ok = true;
 
@@ -5163,7 +4385,7 @@ static bool check_interfaces(struct TypecheckContext *tc_context, struct Module 
                 !found_impl && imp_decl;
                 imp_decl = imp_decl->next) {
                     if (strcmp(imp_decl->name, int_decl->name) == 0) {
-                        if (!check_interface(tc_context, module, int_decl, imp_decl)) {
+                        if (!check_interface(module, int_decl, imp_decl)) {
                             all_ok = false;
                         }
                         found_impl = true;
@@ -5211,7 +4433,7 @@ bool typecheck_module(TypeEnv *type_env,
 
         // Only check interfaces if typechecking succeeded
         if (!tc_context.error) {
-            tc_context.error = !check_interfaces(&tc_context, module);
+            tc_context.error = !check_interfaces(module);
         }
     }
 
@@ -5230,7 +4452,8 @@ bool typecheck_main_function(TypeEnv *type_env, const char *root_module_name)
 
     } else {
 
-        ok = (entry->flags & (FLAG_GHOST | FLAG_DATA_CTOR)) == 0
+        ok = !entry->ghost
+            && !entry->constructor
             && entry->type->tag == TY_FUNCTION
             && entry->type->function_data.args == NULL
             && entry->type->function_data.return_type == NULL;

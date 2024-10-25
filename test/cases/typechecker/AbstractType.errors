@@ -1,2 +1,8 @@
 AbstractType.b:62:12: Type mismatch
 AbstractType.b:76:1: Abstract type declarations must be in the module interface, not implementation
+AbstractType.b:79:1: Can't use an incomplete array type here
+AbstractType.b:81:1: Type might be allocated, but this was not declared in the interface
+AbstractType.b:84:1: Type might be allocated, but this was not declared in the interface
+AbstractType.b:89:1: Can't use an incomplete array type here
+AbstractType.b:91:1: Type might be allocated, but this was not declared in the interface
+AbstractType.b:95:8: Type might be allocated, but this was not declared in the interface

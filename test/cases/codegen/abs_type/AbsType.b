@@ -1,7 +1,7 @@
 module AbsType
 
 interface {
-    type AbsType: Copy;
+    type AbsType;
 
     function make_abs(): AbsType;
 

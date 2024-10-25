@@ -23,7 +23,7 @@ function f4()
 {
     var x1: i32;
     var x2 = f3(x1);       // OK
-    var x3 = f3(f3(x1));   // Error, ref isn't lvalue
+    var x3 = f3(f3(x1));   // Error, can't have refs in sub-expressions
     var x4 = f3(x1) + 1;   // Error, can't have refs in sub-expressions
 }
 

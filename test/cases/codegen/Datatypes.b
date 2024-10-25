@@ -17,14 +17,14 @@ function f1(c: Color): Color
 
 datatype Multi<a,b> = M1 {a,a,b} | M2 {b,a,b} | M3;
 
-function f2<a:Copy, b:Copy>(m: Multi<a,b>): Multi<a,b>
-
+function f2<a,b>(m: Multi<a,b>): Multi<a,b>
+    requires !allocated(m);
 {
     var m_copy: Multi<a,b> = m;
     return m_copy;
 }
 
-function f3<a:Copy>(m: Multi<i32,a>): Multi<i16,i8>
+function f3<a>(m: Multi<i32,a>): Multi<i16,i8>
 {
     var c2: Multi<bool,i64> = f2<bool,i64>(M3<bool,i64>);
     var test_var = c2;
@@ -49,8 +49,8 @@ function default_init_1()
     c = Red;
 }
 
-function default_init_2<a: Copy+Default>()
-
+function default_init_2<a>()
+    requires !allocated(default<a>());
 {
     var x: a;
 }
@@ -74,10 +74,10 @@ function fields_1()
     m4 = m5;
 }
 
-function fields_2<a: Default+Copy, b: Default+Copy>(x: a, y: b): Multi<Multi<a,b>, i32>
-
-
-
+function fields_2<a,b>(x: a, y: b): Multi<Multi<a,b>, i32>
+    requires !allocated(default<Multi<a,b> >());
+    requires !allocated(x);
+    requires !allocated(y);
 {
     var m1: Multi<a, b>;
     var m2: Multi<a, b> = M1<a, b> { x, x, y };

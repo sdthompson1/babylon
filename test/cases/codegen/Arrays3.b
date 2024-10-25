@@ -35,7 +35,8 @@ function test1()
 
 function test2()
 {
-    var a: i32[*,*] = alloc_2d_array(10, 8);
+    var a: i32[*,*];
+    resize_2d_array<i32>(a, 10, 8);
 
     a[3,3] = 3333;
 
@@ -46,12 +47,13 @@ function test2()
     print_i32(a[3,3]);
     print_i32(a[1,1]);
 
-    free_2d_array(a);
+    resize_2d_array<i32>(a, 0, 0);
 }
 
 function test3()
 {
-    var a: i32[*,*] = alloc_2d_array(10, 20);
+    var a: i32[*,*];
+    resize_2d_array<i32>(a, 10, 20);
 
     a[3,3] = 3333;
 
@@ -62,10 +64,10 @@ function test3()
     print_i32(a[3,3]);
     print_i32(a[1,1]);
 
-    free_2d_array<i32>(a);
+    resize_2d_array<i32>(a, 0, 0);
 }
 
-function fn4(move r: i8[*]): i8[*]
+function fn4(r: i8[]): i8[10]
     requires sizeof(r) == u64(10);
 {
     return r;
@@ -73,11 +75,10 @@ function fn4(move r: i8[*]): i8[*]
 
 function test4()
 {
-    var x: i8[*] = alloc_array(10);
+    var x: i8[10];
     x[3] = 33;
-    var y: i8[*] = fn4(x);
+    var y: i8[10] = fn4(x);
     print_i8(y[3]);
-    free_array(y);
 }
 
 function main()

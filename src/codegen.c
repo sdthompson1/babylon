@@ -2404,6 +2404,7 @@ static void codegen_term(struct CGContext *cxt,
         case TM_VARIANT: codegen_variant(cxt, pri, mode, term); break;
         case TM_MATCH: codegen_match(cxt, term->match.scrutinee, term->match.arms, false); break;
         case TM_SIZEOF: codegen_sizeof(cxt, pri, mode, term); break;
+        case TM_ALLOCATED: fatal_error("unexpected: codegen_term called on TM_ALLOCATED");
         case TM_ARRAY_PROJ: codegen_array_proj(cxt, pri, mode, term); break;
         }
     }

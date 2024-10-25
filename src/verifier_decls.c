@@ -107,6 +107,7 @@ static void verify_function_attributes(struct VContext *context,
                                        struct Location location,
                                        struct Attribute *attr,
                                        struct Type *ret_type,
+                                       bool need_alloc_check,
                                        struct Condition ***precond_tail,
                                        struct Condition ***postcond_tail)
 {
@@ -157,6 +158,23 @@ static void verify_function_attributes(struct VContext *context,
         }
 
         attr = attr->next;
+    }
+
+    // If need_alloc_check (currently true for 'extern' functions) and
+    // the function returns a value, then we verify that the return
+    // value is not allocated (given the preconditions and
+    // postconditions).
+    if (need_alloc_check && ret_type) {
+        struct Sexpr *is_alloc = allocated_test_expr(context, ret_type, "%return");
+        if (is_alloc != NULL) {  // NULL means it is never allocated
+            struct Sexpr *is_not_alloc = make_list2_sexpr(make_string_sexpr("not"), is_alloc);
+            verify_condition(context,
+                             location,
+                             is_not_alloc,
+                             "return value not allocated",
+                             err_msg_return_allocated(location));
+            free_sexpr(is_not_alloc);
+        }
     }
 
     // remove the postconditions afterwards (but not the preconditions)
@@ -231,14 +249,18 @@ static struct Sexpr * make_generic_fun_params(const struct TyVarList *tyvars)
     struct Sexpr *list = NULL;
     struct Sexpr **tail = &list;
     while (tyvars) {
-        // Each type variable expands into three generic params:
+        // Each type variable expands into four generic params:
         //  - the type itself
         //  - a default value of that type
+        //  - a function telling whether a value of the type is "allocated" or not
         //  - a function telling whether a value of the type is valid or not.
         *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("%", tyvars->name)));
         tail = &((*tail)->right);
 
         *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("$default-%", tyvars->name)));
+        tail = &((*tail)->right);
+
+        *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("$allocated-%", tyvars->name)));
         tail = &((*tail)->right);
 
         *tail = make_list1_sexpr(make_string_sexpr_handover(copy_string_2("$valid-%", tyvars->name)));
@@ -432,6 +454,7 @@ static void verify_function_decl(struct VContext *context,
                                decl->location,
                                decl->attributes,
                                data->return_type,
+                               data->is_extern, // need_alloc_check
                                &precond_tail,
                                &postcond_tail);
 
@@ -454,6 +477,10 @@ static void verify_function_decl(struct VContext *context,
         struct Sexpr **fun_defn_tail = &fun_defn_expr;
         verify_statements(context, data->body, &fun_defn_tail);
 
+        if (context->var_decl_stack != NULL) {
+            fatal_error("var decl stack not empty");
+        }
+
         if (data->return_type) {
             // End of non-void function
             // Verify that this is unreachable code
@@ -468,7 +495,7 @@ static void verify_function_decl(struct VContext *context,
             // End of void function
             // Verify that the postconditions hold
             verify_function_return(context, data->end_loc,
-                                   NULL, &fun_defn_tail);
+                                   NULL, decl->ghost, &fun_defn_tail);
         }
 
         context->postconds = NULL;
@@ -595,15 +622,6 @@ static void remove_previous_abstract_type(struct VContext *context,
 {
     char *fol_name = copy_string_2("%", name);
     remove_existing_item(context->stack->base->table, fol_name);
-
-    char *default_name = copy_string_2("$default-", fol_name);
-    remove_existing_item(context->stack->base->table, default_name);
-    free(default_name);
-
-    char *valid_name = copy_string_2("$valid-", fol_name);
-    remove_existing_item(context->stack->base->table, valid_name);
-    free(valid_name);
-
     free(fol_name);
 }
 
@@ -620,7 +638,7 @@ static void verify_typedef_decl(struct VContext *context,
         // We are declaring a new abstract type (e.g. "type Foo;" or "extern type Foo;").
         // We need to add a "proper" Item in this case.
 
-        item = add_tyvar_to_env(context, decl->name, false);
+        item = add_tyvar_to_env(context, decl->name, false, decl->typedef_data.alloc_level);
 
     } else {
         // We are declaring a typedef (e.g. "type Foo = i32;").

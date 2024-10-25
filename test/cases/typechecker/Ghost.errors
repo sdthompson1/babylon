@@ -2,5 +2,5 @@ Ghost.b:13:5: Can't access a ghost variable or function from executable code
 Ghost.b:17:11: Can't write to a non-ghost variable from ghost code
 Ghost.b:22:7: Can't return from ghost code (in an executable function)
 Ghost.b:29:7: Can't write to a non-ghost variable from ghost code
-Ghost.b:40:17: Can't write to a non-ghost variable from ghost code
+Ghost.b:40:11: Can't write to a non-ghost variable from ghost code
 Ghost.b:49:7: Incomplete definition

@@ -87,6 +87,10 @@ struct VContext {
     // AST) to a RefChain struct (allocated).
     struct HashTable *refs;
 
+    // Stack of ST_VAR_DECL variables.
+    // (Both name and type are shared with AST.)
+    struct NameTypeList *var_decl_stack;
+
     // Cached "new" values for postconditions
     struct HashTable *new_values;
 
@@ -217,8 +221,9 @@ struct Item *add_const_item(struct VContext *context,
                             bool local);
 
 // Add type variable(s) to the env (declare-sort).
-// Also add $default and $valid items for each tyvar.
-struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local);
+// Also add $default, $allocated and $valid items for each tyvar.
+struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool local,
+                               enum AllocLevel alloc_level);
 void add_tyvars_to_env(struct VContext *context, const struct TyVarList *tyvars);
 
 // Remove an existing Item from the HashTable if there is one
@@ -380,5 +385,22 @@ struct Sexpr * insert_validity_conditions(struct VContext *context,
                                           struct FunArg *fun_args,
                                           struct Sexpr *funapp_sexpr,
                                           struct Sexpr *term);
+
+
+//-------------------------------------------------------------------------------
+// "Allocated" predicate
+//-------------------------------------------------------------------------------
+
+// returns an expression saying whether the given variable is allocated,
+// or NULL if it is always considered 'not allocated'
+struct Sexpr * allocated_test_expr(struct VContext *context,
+                                   struct Type *type,
+                                   const char *var_name);
+
+// return a condition that checks that the given term is NOT allocated,
+// or NULL if no test is required
+struct Sexpr * non_allocated_condition(struct VContext *context,
+                                       struct Type *type,
+                                       struct Sexpr *fol_term); // copied
 
 #endif

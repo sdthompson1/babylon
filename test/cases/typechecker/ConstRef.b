@@ -21,7 +21,7 @@ function f2()
     }
 
     match (1 + 2) {
-    case ref r =>    // this is now ok; lifetime of (1+2) temporary is extended to match lifetime of r.
+    case ref r =>    // error, can't take ref to an rvalue
     }
 }
 

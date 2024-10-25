@@ -530,6 +530,17 @@ void * transform_term(struct TermTransform *tr, void *context, struct Term *term
         }
         break;
 
+    case TM_ALLOCATED:
+        {
+            void *rhs_result = transform_term(tr, context, term->allocated.rhs);
+            if (tr->transform_allocated) {
+                return tr->transform_allocated(context, term, type_result, rhs_result);
+            } else {
+                return NULL;
+            }
+        }
+        break;
+
     case TM_ARRAY_PROJ:
         if (tr->nr_transform_array_proj) {
             return tr->nr_transform_array_proj(tr, context, term, type_result);
@@ -665,6 +676,10 @@ void forall_types_in_term(void (*fn)(void *context, struct Type **type),
 
     case TM_SIZEOF:
         forall_types_in_term(fn, context, term->sizeof_data.rhs);
+        break;
+
+    case TM_ALLOCATED:
+        forall_types_in_term(fn, context, term->allocated.rhs);
         break;
 
     case TM_ARRAY_PROJ:
@@ -809,8 +824,6 @@ static void * copy_tyvar_list_node(void *context, struct TyVarList *list, void *
 {
     struct TyVarList *result = alloc(sizeof(struct TyVarList));
     result->name = copy_string(list->name);
-    result->location = list->location;
-    result->traits = copy_trait_list(list->traits);
     result->next = next;
     return result;
 }
@@ -838,7 +851,6 @@ static void * copy_fun_arg_node(void *context, struct FunArg *list, void *type, 
     result->name = list->name ? copy_string(list->name) : NULL;
     result->type = type;
     result->ref = list->ref;
-    result->move = list->move;
     result->next = next;
     return result;
 }
@@ -878,22 +890,6 @@ struct TypeList * copy_type_list(const struct TypeList *type_list)
     return transform_type_list(&tr, NULL, (struct TypeList*)type_list);
 }
 
-struct TraitList * copy_trait_list(struct TraitList *list)
-{
-    struct TraitList *result = NULL;
-    struct TraitList **tail_ptr = &result;
-    while (list) {
-        struct TraitList *new_node = alloc(sizeof(struct TraitList));
-        new_node->trait = list->trait;
-        new_node->location = list->location;
-        new_node->next = NULL;
-        *tail_ptr = new_node;
-        tail_ptr = &new_node->next;
-        list = list->next;
-    }
-    return result;
-}
-
 struct TyVarList * copy_tyvar_list(const struct TyVarList *list)
 {
     struct TypeTransform tr = {0};
@@ -906,7 +902,6 @@ static void* free_ty_univar(struct TypeTransform *tr, void *context, struct Type
 {
     if (--(type->univar_data.node->ref_count) == 0) {
         free_type(type->univar_data.node->type);
-        free_trait_list(type->univar_data.node->traits);
         free(type->univar_data.node);
     }
     free(type);
@@ -953,7 +948,6 @@ static void* free_array_type(void *context, struct Type *type, void *elt_type_re
 static void * free_tyvar_list_node(void *context, struct TyVarList *node, void *next_result)
 {
     free((char*)node->name);
-    free_trait_list(node->traits);
     free(node);
     return NULL;
 }
@@ -1011,15 +1005,6 @@ void free_tyvar_list(struct TyVarList *tyvars)
     struct TypeTransform tr;
     freeing_type_transform(&tr);
     transform_tyvar_list(&tr, NULL, tyvars);
-}
-
-void free_trait_list(struct TraitList *list)
-{
-    while (list) {
-        struct TraitList *next = list->next;
-        free(list);
-        list = next;
-    }
 }
 
 void free_type_list(struct TypeList *types)
@@ -1380,6 +1365,14 @@ static void* copy_sizeof_term(void *context, struct Term *term, void *type_resul
     return result;
 }
 
+static void* copy_allocated_term(void *context, struct Term *term, void *type_result, void *rhs_result)
+{
+    struct Term *result = make_term(term->location, TM_ALLOCATED);
+    result->type = type_result;
+    result->allocated.rhs = rhs_result;
+    return result;
+}
+
 static void* copy_array_proj_term(void *context, struct Term *term, void *type_result, void *lhs_result, void *index_results)
 {
     struct Term *result = make_term(term->location, TM_ARRAY_PROJ);
@@ -1441,6 +1434,7 @@ static void copying_term_transform(struct TermTransform *tr)
     tr->transform_match = copy_match_term;
     tr->transform_match_failure = copy_match_failure_term;
     tr->transform_sizeof = copy_sizeof_term;
+    tr->transform_allocated = copy_allocated_term;
     tr->transform_array_proj = copy_array_proj_term;
     tr->transform_op_term_list = copy_op_term_list;
     tr->transform_name_term_list = copy_name_term_list;
@@ -1572,6 +1566,7 @@ static void freeing_term_transform(struct TermTransform *tr)
     tr->transform_match = free_term_2;
     tr->transform_match_failure = free_term_0;
     tr->transform_sizeof = free_term_1;
+    tr->transform_allocated = free_term_1;
     tr->transform_array_proj = free_term_2;
     tr->transform_op_term_list = free_op_term_list_node;
     tr->transform_name_term_list = free_name_term_list_node;
@@ -1746,7 +1741,6 @@ struct FunArg * copy_fun_args(struct FunArg *arg)
     result->name = copy_string(arg->name);
     result->type = copy_type(arg->type);
     result->ref = arg->ref;
-    result->move = arg->move;
     result->next = copy_fun_args(arg->next);
 
     return result;
@@ -1800,8 +1794,8 @@ struct Decl * copy_decl(struct Decl *decl)
     case DECL_TYPEDEF:
         result->typedef_data.tyvars = copy_tyvar_list(decl->typedef_data.tyvars);
         result->typedef_data.rhs = copy_type(decl->typedef_data.rhs);
-        result->typedef_data.traits = copy_trait_list(decl->typedef_data.traits);
         result->typedef_data.is_extern = decl->typedef_data.is_extern;
+        result->typedef_data.alloc_level = decl->typedef_data.alloc_level;
         break;
     }
 
@@ -2013,7 +2007,6 @@ void free_decl(struct Decl *decl)
 
         case DECL_TYPEDEF:
             free_tyvar_list(decl->typedef_data.tyvars);
-            free_trait_list(decl->typedef_data.traits);
             free_type(decl->typedef_data.rhs);
             break;
         }

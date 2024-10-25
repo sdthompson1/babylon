@@ -43,10 +43,12 @@ struct Sexpr * insert_lets(struct VContext *context, struct Sexpr *expr);
 // Verify a return statement, or the implicit return at the end of a void function
 //  - Verifies the given return-value (if any) is valid
 //  - Verifies postconditions are true
+//  - If ghost==false, verifies that return value(s) are not allocated.
 //  - Inserts a definitional axiom for the current function if possible.
 void verify_function_return(struct VContext *context,
                             struct Location location,
                             struct Term *return_value,
+                            bool ghost,
                             struct Sexpr *** ret_val_ptr);
 
 #endif

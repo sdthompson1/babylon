@@ -1,16 +1,16 @@
 module AbstractType
 
 interface {
-    type Type1: Copy;
+    type Type1;
     function f(): Type1;
     function g(): {Type1, bool};
 
-    type Type2: Move;
+    type Type2;
     function h(x: Type2): Type2;
 
 
-    function id<A: Copy>(x: A): A
-
+    function id<A>(x: A): A
+        requires !allocated(x);
     {
         return x;
     }
@@ -32,17 +32,17 @@ interface {
         var u: Variant = V(f());
         var w: Type1 = match u { case V(x) => x };
         var x: u64 = sizeof(a);
-
+        var y: bool = allocated(a);
         var z: i32 = a[0];
     }
 
-
+    type Abs1;
     type Abs2;
-
-
-
+    type Abs3 (allocated_if_not_default);
+    type Abs4 (allocated);
+    type Abs5;
     type Abs6;
-
+    type Abs7 (allocated_if_not_default);
     type Abs8;
 
 
@@ -75,4 +75,21 @@ function h(x: Type2): Type2
 
 type BadAbstractType;  // error - not allowed in implementation
 
+
+type Abs1 = {x: i32[], y: bool};  // Illegal, can't incomplete type to implement an abstract type.
+
+type Abs2 = i32[*];   // Illegal, can't use allocatable type when wasn't declared in the interface.
+
+extern type AlwaysAlloc (allocated);
+type Abs3 = AlwaysAlloc;  // Error, does not match "allocated" declaration in interface.
+
+type Abs4 = i32;   // This is fine, the interface is "conservative" but that's ok.
+
+
+datatype Abs5 = Abs5Ctor(i32[]);  // Error, incomplete type disguised inside data-constructor.
+
+datatype Abs6 = Abs6Ctor((bool[*])[10]);   // Error, this is allocated_if_not_default but interface says not allocated.
+
 datatype Abs7 = Abs7Ctor((bool[*])[10]);   // This is ok.
+
+extern type Abs8 (allocated);    // Error, interface does not say it is allocated.

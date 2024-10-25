@@ -209,6 +209,7 @@ static int precedence(struct Term *term)
     case TM_VARIANT:
     case TM_MATCH_FAILURE:
     case TM_SIZEOF:
+    case TM_ALLOCATED:
     case TM_ARRAY_PROJ:
         return 20;
 
@@ -524,6 +525,11 @@ static void print_term(bool postcond, FILE *file, struct Term *term)
     case TM_SIZEOF:
         fprintf(file, "sizeof");
         print_paren_term(postcond, file, term->sizeof_data.rhs, true);
+        break;
+
+    case TM_ALLOCATED:
+        fprintf(file, "allocated");
+        print_paren_term(postcond, file, term->allocated.rhs, true);
         break;
 
     case TM_ARRAY_PROJ:
@@ -842,6 +848,16 @@ static void print_decls(int indent_level, FILE *file, struct Decl *decl)
             if (decl->typedef_data.rhs) {
                 fprintf(file, " = ");
                 print_type(file, decl->typedef_data.rhs);
+            } else if (decl->typedef_data.alloc_level != ALLOC_NEVER) {
+                fprintf(file, " (");
+                if (decl->typedef_data.alloc_level == ALLOC_ALWAYS) {
+                    fprintf(file, "allocated");
+                } else if (decl->typedef_data.alloc_level == ALLOC_IF_NOT_DEFAULT) {
+                    fprintf(file, "allocated_if_not_default");
+                } else {
+                    fprintf(file, "????");
+                }
+                fprintf(file, ")");
             }
             fprintf(file, ";\n");
             break;

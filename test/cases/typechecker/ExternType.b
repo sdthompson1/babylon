@@ -4,7 +4,7 @@ interface {}
 
 extern type Bad<a>;             // type variables can't be used with an abstract type
 
-extern type Good: Default+Copy;
+extern type Good;
 
 extern function use_good(x: Good): Good;
 

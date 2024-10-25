@@ -385,7 +385,9 @@ static void lex_keyword_or_name(struct LexerState *state)
 
     switch (buf[0]) {
     case 'a':
-        if (strcmp(&buf[1], "ssert") == 0) {
+        if (strcmp(&buf[1], "llocated") == 0) {
+            add_simple_token(state, TOK_KW_ALLOCATED);
+        } else if (strcmp(&buf[1], "ssert") == 0) {
             add_simple_token(state, TOK_KW_ASSERT);
         } else if (strcmp(&buf[1], "ssume") == 0) {
             add_simple_token(state, TOK_KW_ASSUME);
@@ -517,8 +519,6 @@ static void lex_keyword_or_name(struct LexerState *state)
             add_simple_token(state, TOK_KW_MATCH);
         } else if (strcmp(&buf[1], "odule") == 0) {
             add_simple_token(state, TOK_KW_MODULE);
-        } else if (strcmp(&buf[1], "ove") == 0) {
-            add_simple_token(state, TOK_KW_MOVE);
         }
         break;
 
@@ -887,6 +887,7 @@ void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
     case TOK_STRING_LITERAL: complex_token(ctx, token, "STRLIT"); break;
     case TOK_NAME: complex_token(ctx, token, "VARNAM"); break;
 
+    case TOK_KW_ALLOCATED: simple_token(ctx, "allocated"); break;
     case TOK_KW_ASSERT: simple_token(ctx, "assert"); break;
     case TOK_KW_ASSUME: simple_token(ctx, "assume"); break;
     case TOK_KW_BOOL: simple_token(ctx, "bool"); break;
@@ -919,7 +920,6 @@ void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
     case TOK_KW_LET: simple_token(ctx, "let"); break;
     case TOK_KW_MATCH: simple_token(ctx, "match"); break;
     case TOK_KW_MODULE: simple_token(ctx, "module"); break;
-    case TOK_KW_MOVE: simple_token(ctx, "move"); break;
     case TOK_KW_OBTAIN: simple_token(ctx, "obtain"); break;
     case TOK_KW_OLD: simple_token(ctx, "old"); break;
     case TOK_KW_REAL: simple_token(ctx, "real"); break;

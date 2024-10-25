@@ -19,6 +19,4 @@ function foo(ref a: i32[])
     // Unfortunately it now times out, rather than failing outright, but I didn't
     // find any way to repro the bug otherwise.
     assert a[1] == 1;
-
-    free_array(empty);
 }

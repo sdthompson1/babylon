@@ -7,54 +7,62 @@ interface {
 
 function f1(): u64
 {
-    var arr1: i32[*] = alloc_array(10);
+    var arr1: i32[*];
+    resize_array<i32>(arr1, 10);
     var result = sizeof(arr1);
-    free_array(arr1);
+    resize_array<i32>(arr1, 0);
     return result;
 }
 
 function f2(): u64
 {
-    var arr2: i32[*,*] = alloc_2d_array(3, 4);
+    var arr2: i32[*,*];
+    resize_2d_array<i32>(arr2, 3, 4);
     var result = sizeof(arr2).0;
-    free_2d_array(arr2);
+    resize_2d_array<i32>(arr2, 0, 0);
     return result;
 }
 
 function f3(): u64
 {
-    var arr2: i32[*,*] = alloc_2d_array(3, 4);
+    var arr2: i32[*,*];
+    resize_2d_array<i32>(arr2, 3, 4);
     var result = sizeof(arr2).1;
-    free_2d_array(arr2);
+    resize_2d_array<i32>(arr2, 0, 0);
     return result;
 }
 
 
-function sizeof_and_free<T: Move>(move a: T[*]): u64
+function sizeof_and_free<T>(ref a: T[*]): u64
+    requires !allocated(default<T>());
+    requires forall (i:u64) i < sizeof(a) ==> !allocated(a[i]);
 {
     var result = sizeof(a);
-    free_array(a);
+    resize_array<T>(a, 0);
     return result;
 }
 
 function f4(): u64
 {
-    var a: i32[*] = alloc_array(123);
-    var result = sizeof_and_free(a);
+    var a: i32[*];
+    resize_array<i32>(a, 123);
+    var result = sizeof_and_free<i32>(a);
     return result;
 }
 
 function f5(): u64
 {
-    var a: i32[*,*] = alloc_2d_array<i32>(3, 2+3);
+    var a: i32[*,*];
+    resize_2d_array<i32>(a, 3, 2+3);
     var result = sizeof(a).0 * sizeof(a).1;
-    free_2d_array<i32>(a);
+    resize_2d_array<i32>(a, 0, 0);
     return result;
 }
 
 function f6(): i32
 {
-    var a: i32[*] = alloc_array(10);
+    var a: i32[*];
+    resize_array<i32>(a, 10);
     var x: i32 = 0;
 
     var i = 0;
@@ -69,14 +77,17 @@ function f6(): i32
     
     x = a[3];
 
-    free_array(a);
+    resize_array<i32>(a, 0);
     return x;
 }
 
 function f8(): i32
 {
-    var a: {i32,i32}[*] = alloc_array(10);    
-    var b: i32[*] = alloc_array(10);
+    var a: {i32,i32}[*];
+    resize_array<{i32,i32}>(a, 10);
+    
+    var b: i32[*];
+    resize_array<i32>(b, 10);
     
     var x = 0;
 
@@ -86,27 +97,27 @@ function f8(): i32
     a[3] = a[2];
     x = a[3].0 + a[3].1;    // x = 120
 
-    free_array(b);
-    free_array(a);
+    resize_array<i32>(b, 0);
+    resize_array<{i32,i32}>(a, 0);
 
     return x;
 }
 
 function f9(): u64
 {
-    // a "default" array has size 0 - but still needs to be freed
+    // a "default" array isn't allocated and so doesn't need to be freed
     var a: i32[*];
     var sz = sizeof(a);
-    free_array(a);
     return sz;
 }
 
 function f10()
 {
-    var a: i32[*,*,*] = alloc_3d_array(5, 6, 7);
+    var a: i32[*,*,*];
+    resize_3d_array<i32>(a, 5, 6, 7);
     a[4,5,6] = 4567;
     Test.print_i32(a[4,5,6]);
-    free_3d_array(a);
+    resize_3d_array<i32>(a, 0, 0, 0);
 }
 
 function main()

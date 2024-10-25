@@ -1,7 +1,7 @@
 module AbsType
 
 interface {
-    type Foo : Default+Copy;
+    type Foo;
 
     ghost function valid_foo(foo: Foo): bool;
 

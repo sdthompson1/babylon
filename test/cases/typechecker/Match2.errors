@@ -1,2 +1,1 @@
 Match2.b:22:12: Type mismatch in pattern
-Match2.b:33:9: Can't assign (left-hand-side is read-only)

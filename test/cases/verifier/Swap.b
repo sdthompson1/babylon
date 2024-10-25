@@ -43,8 +43,8 @@ function f3()
 
 function f4()
 {
-    var a: i32[*] =
-        alloc_array<i32>(10);
+    var a: i32[*];
+    resize_array<i32>(a, 10);
     
     a[1] = 2;
     a[3] = 3;
@@ -54,7 +54,7 @@ function f4()
     assert a[1] == 3;
     assert a[3] == 2;
 
-    free_array<i32>(a);
+    resize_array<i32>(a, 0);
 }
 
 function f5()
@@ -63,13 +63,12 @@ function f5()
     var b: i32[*];
     swap a[1/0], b[1/0];    // Error
     assert a[0] == 1;       // Error
-    free_array(a); free_array(b);
 }
+
 function f6(): i32
 {
     var a: i32[*];
     var b: i32[*];
     swap a[1/0], b[1/0];    // Error
-    free_array(a); free_array(b);
     return 100;
 }

@@ -23,6 +23,8 @@ Statements.b:121:17: Type mismatch
 Statements.b:127:21: Type mismatch
 Statements.b:129:20: Type mismatch
 Statements.b:133:17: Can't use function as a value
+Statements.b:138:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
+Statements.b:148:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
 Statements.b:170:5: Function return value is being ignored
 Statements.b:172:8: Type mismatch
 Statements.b:180:5: Match with no cases
