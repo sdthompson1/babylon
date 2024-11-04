@@ -530,8 +530,8 @@ static bool load_module_from_disk(struct LoadDetails *details)
 
     // Compile (if requested)
     if (details->compile_mode == CM_COMPILE) {
-        char *c_filename = get_output_filename(details, ".c");
-        char *h_filename = get_output_filename(details, ".h");
+        char *c_filename = get_output_filename(details, ".b.c");
+        char *h_filename = get_output_filename(details, ".b.h");
         FILE *c_file = fopen(c_filename, "w");
         FILE *h_file = fopen(h_filename, "w");
         if (!c_file || !h_file) {

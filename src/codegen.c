@@ -3013,7 +3013,7 @@ static void print_includes(FILE *file, const char *this_module_name, struct Impo
     while (imports) {
         if (strcmp(imports->module_name, "Int") != 0) {
             char *name = get_relative_module_name(this_module_name, imports->module_name);
-            fprintf(file, "#include \"%s.h\"\n", name);
+            fprintf(file, "#include \"%s.b.h\"\n", name);
             free(name);
         }
         imports = imports->next;
@@ -3043,7 +3043,7 @@ void codegen_module(FILE *c_output_file,
     fprintf(c_output_file, "#include <string.h>\n\n");
 
     char *name = get_relative_module_name(module->name, module->name);
-    fprintf(c_output_file, "#include \"%s.h\"\n", name);
+    fprintf(c_output_file, "#include \"%s.b.h\"\n", name);
     free(name);
 
     print_includes(c_output_file, module->name, module->implementation_imports);

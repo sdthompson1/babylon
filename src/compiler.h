@@ -55,7 +55,7 @@ struct CompileOptions {
 //  - Returns true if successful, false if errors.
 //
 //  - For now only verification OR compilation can be done, not both. Verification just
-//    prints errors and returns a pass/fail result. Compilation additionally creates .s
+//    prints errors and returns a pass/fail result. Compilation additionally creates .b.c
 //    files alongside each input file.
 //
 bool compile(struct CompileOptions *options);
