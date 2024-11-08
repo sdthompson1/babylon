@@ -1,3 +1,3 @@
-TypedefRecursive.b:4:1: Illegal recursive definition of 'TypedefRecursive.Bad'
-TypedefRecursive.b:6:1: Illegal recursive definition of 'TypedefRecursive.Bad1'
-TypedefRecursive.b:7:1: Illegal recursive definition of 'TypedefRecursive.Bad2'
+src/TypedefRecursive.b:4:1: Illegal recursive definition of 'test-binary:TypedefRecursive.Bad'
+src/TypedefRecursive.b:6:1: Illegal recursive definition of 'test-binary:TypedefRecursive.Bad1'
+src/TypedefRecursive.b:7:1: Illegal recursive definition of 'test-binary:TypedefRecursive.Bad2'

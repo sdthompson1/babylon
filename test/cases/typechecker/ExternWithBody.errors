@@ -1,1 +1,1 @@
-ExternWithBody.b:5:12: Function body provided for 'extern' function
+src/ExternWithBody.b:5:12: Function body provided for 'extern' function

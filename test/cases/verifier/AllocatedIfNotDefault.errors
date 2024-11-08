@@ -1,2 +1,2 @@
-AllocatedIfNotDefault.b:23:5: Precondition at AllocatedIfNotDefault.b:17:5 might not be met
-AllocatedIfNotDefault.b:28:5: 'x' might still be allocated when it goes out of scope
+src/AllocatedIfNotDefault.b:23:5: Precondition at src/AllocatedIfNotDefault.b:17:5 might not be met
+src/AllocatedIfNotDefault.b:28:5: 'x' might still be allocated when it goes out of scope

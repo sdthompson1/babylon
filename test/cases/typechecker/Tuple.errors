@@ -1,7 +1,7 @@
-Tuple.b:5:19: Wrong number of type arguments (expected: 1, actual: 0)
-Tuple.b:5:21: Wrong number of type arguments (expected: 1, actual: 0)
-Tuple.b:16:8: Type mismatch
-Tuple.b:22:19: Type mismatch
-Tuple.b:23:13: Field '2' not found
-Tuple.b:24:13: Type arguments not expected here
-Tuple.b:27:18: Wrong number of type arguments (expected: 1, actual: 0)
+src/Tuple.b:5:19: Wrong number of type arguments (expected: 1, actual: 0)
+src/Tuple.b:5:21: Wrong number of type arguments (expected: 1, actual: 0)
+src/Tuple.b:16:8: Type mismatch
+src/Tuple.b:22:19: Type mismatch
+src/Tuple.b:23:13: Field '2' not found
+src/Tuple.b:24:13: Type arguments not expected here
+src/Tuple.b:27:18: Wrong number of type arguments (expected: 1, actual: 0)

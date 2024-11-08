@@ -1,0 +1,10 @@
+[package]
+name = "test-binary"
+version = "0.1"
+
+[modules]
+main-module = "MODULE_NAME"
+main-function = "main"
+
+[dependencies]
+test-support = "0.1"

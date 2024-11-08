@@ -91,6 +91,8 @@ bool typecheck_module(TypeEnv *type_env,
 // given module. If so, returns true; otherwise prints error
 // message(s) and returns false.
 
-bool typecheck_main_function(TypeEnv *type_env, const char *root_module_name);
+bool typecheck_main_function(TypeEnv *type_env,
+                             const char *main_module_name,
+                             const char *main_function_name);
 
 #endif

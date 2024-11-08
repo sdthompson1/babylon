@@ -1,2 +1,2 @@
-ExternType.b:5:8: Abstract or 'extern' type declarations cannot (currently) have type variables
-ExternType.b:21:9: Type mismatch (expected numeric type)
+src/ExternType.b:5:8: Abstract or 'extern' type declarations cannot (currently) have type variables
+src/ExternType.b:21:9: Type mismatch (expected numeric type)

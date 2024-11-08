@@ -1,0 +1,9 @@
+[package]
+name = "root"
+version = "0.1"
+
+[modules]
+main-module = "Main"
+
+[dependencies]
+bad-package = "0.1"

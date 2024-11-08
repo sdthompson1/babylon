@@ -1,5 +1,5 @@
-Arrays5.b:33:5: Assert might not hold
-Arrays5.b:50:5: Assert might not hold
-Arrays5.b:69:5: Assert might not hold
-Arrays5.b:93:5: Assert might not hold
-Arrays5.b:103:8: Array might have the wrong size
+src/Arrays5.b:33:5: Assert might not hold
+src/Arrays5.b:50:5: Assert might not hold
+src/Arrays5.b:69:5: Assert might not hold
+src/Arrays5.b:93:5: Assert might not hold
+src/Arrays5.b:103:8: Array might have the wrong size

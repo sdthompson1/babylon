@@ -1,1 +1,1 @@
-TypedefDuplicate.b:4:1: Duplicate definition of 'TypedefDuplicate.Foo'
+src/TypedefDuplicate.b:4:1: Duplicate definition of 'test-binary:TypedefDuplicate.Foo'

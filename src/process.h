@@ -19,10 +19,10 @@ repository.
 
 // Status codes for a child process.
 enum ProcStatus {
-    PROC_RUNNING,
-    PROC_SUCCESS,
-    PROC_TIMED_OUT,
-    PROC_FAILED_TO_START
+    PROC_RUNNING,         // process is still running
+    PROC_SUCCESS,         // process ended "on its own" without us killing it
+    PROC_TIMED_OUT,       // we killed the process due to timeout
+    PROC_FAILED_TO_START  // process never started in the first place
 };
 
 // Struct representing a child process.
@@ -30,13 +30,21 @@ struct Process {
     // Input
     const char ** cmd;
 
-    void (*print_to_stdin)(void *context, FILE *pipe);
+    void (*print_to_stdin)(void *context, FILE *pipe);   // can be NULL
     void *context;
 
     int timeout_in_seconds;
 
+    // By default, stdout is captured to "output" array (below) and stderr
+    // is redirected to /dev/null.
+    // If show_stdout = true and/or show_stderr = true, then stdout and/or
+    // stderr are just output normally instead.
+    bool show_stdout;
+    bool show_stderr;
+
     // Output
     enum ProcStatus status;
+    int exit_status;  // as returned by WEXITSTATUS. set to -1 if WIFEXITED was false.
 
     double runtime_in_seconds;
 

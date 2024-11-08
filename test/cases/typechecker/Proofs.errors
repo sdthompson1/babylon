@@ -1,12 +1,12 @@
-Proofs.b:10:7: Can't assign (left-hand-side is read-only)
-Proofs.b:16:5: 'fix' not allowed outside of a proof
-Proofs.b:23:7: 'fix' not valid; the assert at Proofs.b:21:12 doesn't have a corresponding forall-variable
-Proofs.b:32:7: Type mismatch
-Proofs.b:32:7: 'fix' not valid; the type doesn't match the forall-variable at Proofs.b:29:28
-Proofs.b:42:9: 'fix' within a sub-block of a proof is not currently supported
-Proofs.b:50:20: Type mismatch
-Proofs.b:62:5: Can't access a ghost variable or function from executable code
-Proofs.b:68:5: 'use' not allowed outside of a proof
-Proofs.b:74:7: 'use' not valid; the assert at Proofs.b:73:12 doesn't have a corresponding exists-variable
-Proofs.b:81:11: Type mismatch
-Proofs.b:89:9: 'use' within a sub-block of a proof is not currently supported
+src/Proofs.b:10:7: Can't assign (left-hand-side is read-only)
+src/Proofs.b:16:5: 'fix' not allowed outside of a proof
+src/Proofs.b:23:7: 'fix' not valid; the assert at src/Proofs.b:21:12 doesn't have a corresponding forall-variable
+src/Proofs.b:32:7: Type mismatch
+src/Proofs.b:32:7: 'fix' not valid; the type doesn't match the forall-variable at src/Proofs.b:29:28
+src/Proofs.b:42:9: 'fix' within a sub-block of a proof is not currently supported
+src/Proofs.b:50:20: Type mismatch
+src/Proofs.b:62:5: Can't access a ghost variable or function from executable code
+src/Proofs.b:68:5: 'use' not allowed outside of a proof
+src/Proofs.b:74:7: 'use' not valid; the assert at src/Proofs.b:73:12 doesn't have a corresponding exists-variable
+src/Proofs.b:81:11: Type mismatch
+src/Proofs.b:89:9: 'use' within a sub-block of a proof is not currently supported

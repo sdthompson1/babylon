@@ -1,0 +1,9 @@
+[package]
+name = "sequence-test"
+version = "0.1"
+
+[modules]
+exported-modules = ["MODULE_NAME"]
+
+[dependencies]
+test-support = "0.1"

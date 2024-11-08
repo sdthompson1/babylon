@@ -104,9 +104,11 @@ static bool is_abstract_type(struct CGContext *cxt, const char *name)
 // Identifiers are encoded into C as follows:
 
 // "."         => "z_"
+// "/"         => "zs"
 // "@"         => "za"
 // "^"         => "zh"
 // Leading "_" => "zu"
+// "-"         => "zm"
 // "z"         => "zz"
 
 // Any other underscore, any digit 0-9, or any letter a-z or A-Z maps
@@ -130,6 +132,11 @@ static uint64_t encode_chars(const char *input, char *output)
             if (output) { *output++ = 'z'; *output++ = '_'; }
             break;
 
+        case '/':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = 's'; }
+            break;
+
         case '@':
             num += 2;
             if (output) { *output++ = 'z'; *output++ = 'a'; }
@@ -143,6 +150,11 @@ static uint64_t encode_chars(const char *input, char *output)
         case 'z':
             num += 2;
             if (output) { *output++ = 'z'; *output++ = 'z'; }
+            break;
+
+        case '-':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = 'm'; }
             break;
 
         case '_':
@@ -2932,21 +2944,19 @@ static void codegen_decl(struct CGContext *cxt,
     }
 }
 
-static void codegen_root(FILE *file,
-                         struct Module *module,
-                         bool generate_main)
+void codegen_main_function(FILE *file,
+                           struct Module *module,
+                           const char *function_name)
 {
     // C main function
-    if (generate_main) {
-        fprintf(file, "int main()\n");
-        fprintf(file, "{\n");
-        char *main_name = copy_string_2(module->name, ".main");
-        char *mangled_name = mangle_name(main_name);
-        free(main_name);
-        fprintf(file, "    %s();\n", mangled_name);
-        free(mangled_name);
-        fprintf(file, "}\n");
-    }
+    fprintf(file, "int main()\n");
+    fprintf(file, "{\n");
+    char *main_name = copy_string_3(module->name, ".", function_name);
+    char *mangled_name = mangle_name(main_name);
+    free(main_name);
+    fprintf(file, "    %s();\n", mangled_name);
+    free(mangled_name);
+    fprintf(file, "}\n");
 }
 
 struct HashTable * new_codegen_env()
@@ -2970,41 +2980,46 @@ void free_codegen_env(struct HashTable *env)
 
 static char * get_relative_module_name(const char *this_module_name, const char *import_module_name)
 {
+    char *this_module = replace_dots_with_slashes(this_module_name);
+    char *import_module = replace_dots_with_slashes(import_module_name);
+
     // First strip out any common prefixes.
+    const char *p = this_module;
+    const char *q = import_module;
     while (true) {
-        const char *dot_this = strchr(this_module_name, '.');
-        const char *dot_imp = strchr(import_module_name, '.');
+        const char *slash_p = strchr(p, '/');
+        const char *slash_q = strchr(q, '/');
 
-        if (dot_this == NULL || dot_imp == NULL) break;
+        if (slash_p == NULL || slash_q == NULL) break;
 
-        size_t len1 = dot_this - this_module_name;
-        size_t len2 = dot_imp - import_module_name;
-        bool same = (len1 == len2 && memcmp(this_module_name, import_module_name, len1) == 0);
+        size_t len1 = slash_p - p;
+        size_t len2 = slash_q - q;
+        bool same = (len1 == len2 && memcmp(p, q, len1) == 0);
 
         if (!same) break;
 
-        this_module_name = dot_this + 1;
-        import_module_name = dot_imp + 1;
+        p = slash_p + 1;
+        q = slash_q + 1;
     }
 
-    // Now the number of dots remaining in this_module_name gives the number of "../" prefixes.
+    // Now the number of slashes remaining in p gives the number of "../" prefixes.
     char *prefix = copy_string("");
     while (true) {
-        char *dot_this = strchr(this_module_name, '.');
-        if (dot_this == NULL) break;
+        char *slash_p = strchr(p, '/');
+        if (slash_p == NULL) break;
 
         char *new_prefix = copy_string_2(prefix, "../");
         free(prefix);
         prefix = new_prefix;
 
-        this_module_name = dot_this + 1;
+        p = slash_p + 1;
     }
 
-    // Then we return the prefix, plus import_module_name with dots converted to slashes.
-    char *suffix = replace_dots_with_slashes(import_module_name);
-    char *result = copy_string_2(prefix, suffix);
+    // Then we return the prefix plus q.
+    char *result = copy_string_2(prefix, q);
     free(prefix);
-    free(suffix);
+    free(this_module);
+    free(import_module);
     return result;
 }
 
@@ -3023,9 +3038,7 @@ static void print_includes(FILE *file, const char *this_module_name, struct Impo
 void codegen_module(FILE *c_output_file,
                     FILE *h_output_file,
                     struct HashTable *codegen_env,
-                    struct Module *module,
-                    bool root,
-                    bool generate_main)
+                    struct Module *module)
 {
     const char *banner = "/* This file was generated automatically by the Babylon compiler. */\n\n";
 
@@ -3066,10 +3079,6 @@ void codegen_module(FILE *c_output_file,
         for (struct Decl *decl = decls->decl; decl; decl = decl->next) {
             codegen_decl(&cxt, module, decl, false);
         }
-    }
-
-    if (root) {
-        codegen_root(c_output_file, module, generate_main);
     }
 
     fprintf(h_output_file, "#endif  /* BAB_MODULE_%s */\n", mangled_module_name);

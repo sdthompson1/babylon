@@ -1,1 +1,1 @@
-ExternType2.b:4:12: Duplicate definition of 'ExternType2.Foo'
+src/ExternType2.b:4:12: Duplicate definition of 'test-binary:ExternType2.Foo'

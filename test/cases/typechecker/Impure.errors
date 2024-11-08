@@ -1,6 +1,6 @@
-Impure.b:7:14: 'extern' function cannot be 'ghost'
-Impure.b:11:12: Can't call an impure function from ghost code
-Impure.b:11:21: Can't call an impure function from ghost code
-Impure.b:12:12: Can't call an impure function from ghost code
-Impure.b:17:12: Can't call an impure function from pure code
-Impure.b:25:14: 'impure' function cannot be 'ghost'
+src/Impure.b:7:14: 'extern' function cannot be 'ghost'
+src/Impure.b:11:12: Can't call an impure function from ghost code
+src/Impure.b:11:21: Can't call an impure function from ghost code
+src/Impure.b:12:12: Can't call an impure function from ghost code
+src/Impure.b:17:12: Can't call an impure function from pure code
+src/Impure.b:25:14: 'impure' function cannot be 'ghost'

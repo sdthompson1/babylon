@@ -1,1 +1,1 @@
-NoInterface.b:2:1: Syntax error (expected 'interface')
+src/NoInterface.b:2:1: Syntax error (expected 'interface')

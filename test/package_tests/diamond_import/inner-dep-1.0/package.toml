@@ -1,0 +1,9 @@
+[package]
+name = "inner-dep"
+version = "1.0"
+
+[modules]
+exported-modules = ["Hello"]
+
+[dependencies]
+test-support = "0.1"

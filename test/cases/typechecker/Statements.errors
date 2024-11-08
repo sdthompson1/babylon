@@ -1,32 +1,32 @@
-Statements.b:5:12: Return value not expected
-Statements.b:10:12: Type mismatch
-Statements.b:15:5: Return value expected
-Statements.b:20:19: Type mismatch
-Statements.b:26:9: Type mismatch
-Statements.b:31:18: Type mismatch
-Statements.b:36:5: Incomplete definition
-Statements.b:43:5: Can't assign (left-hand-side is not an lvalue)
-Statements.b:48:19: Type mismatch
-Statements.b:59:22: Type mismatch
-Statements.b:60:13: Type mismatch
-Statements.b:61:16: Type mismatch
-Statements.b:64:22: Can't use function as a value
-Statements.b:68:13: Can't use function as a value
-Statements.b:73:21: Can't use function as a value
-Statements.b:90:12: Can't access a ghost variable or function from executable code
-Statements.b:104:5: Can't assign (left-hand-side is read-only)
-Statements.b:105:5: Can't assign (left-hand-side is read-only)
-Statements.b:113:12: Type mismatch
-Statements.b:114:17: Type mismatch
-Statements.b:120:11: Type mismatch
-Statements.b:121:17: Type mismatch
-Statements.b:127:21: Type mismatch
-Statements.b:129:20: Type mismatch
-Statements.b:133:17: Can't use function as a value
-Statements.b:138:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
-Statements.b:148:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
-Statements.b:170:5: Function return value is being ignored
-Statements.b:172:8: Type mismatch
-Statements.b:180:5: Match with no cases
-Statements.b:198:29: Type mismatch
-Statements.b:200:12: Type mismatch in pattern
+src/Statements.b:5:12: Return value not expected
+src/Statements.b:10:12: Type mismatch
+src/Statements.b:15:5: Return value expected
+src/Statements.b:20:19: Type mismatch
+src/Statements.b:26:9: Type mismatch
+src/Statements.b:31:18: Type mismatch
+src/Statements.b:36:5: Incomplete definition
+src/Statements.b:43:5: Can't assign (left-hand-side is not an lvalue)
+src/Statements.b:48:19: Type mismatch
+src/Statements.b:59:22: Type mismatch
+src/Statements.b:60:13: Type mismatch
+src/Statements.b:61:16: Type mismatch
+src/Statements.b:64:22: Can't use function as a value
+src/Statements.b:68:13: Can't use function as a value
+src/Statements.b:73:21: Can't use function as a value
+src/Statements.b:90:12: Can't access a ghost variable or function from executable code
+src/Statements.b:104:5: Can't assign (left-hand-side is read-only)
+src/Statements.b:105:5: Can't assign (left-hand-side is read-only)
+src/Statements.b:113:12: Type mismatch
+src/Statements.b:114:17: Type mismatch
+src/Statements.b:120:11: Type mismatch
+src/Statements.b:121:17: Type mismatch
+src/Statements.b:127:21: Type mismatch
+src/Statements.b:129:20: Type mismatch
+src/Statements.b:133:17: Can't use function as a value
+src/Statements.b:138:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
+src/Statements.b:148:17: Invalid type for 'decreases' (must be integer, bool, or tuple of the above)
+src/Statements.b:170:5: Function return value is being ignored
+src/Statements.b:172:8: Type mismatch
+src/Statements.b:180:5: Match with no cases
+src/Statements.b:198:29: Type mismatch
+src/Statements.b:200:12: Type mismatch in pattern

@@ -1,10 +1,10 @@
-PrePost.b:9:5: Postcondition at PrePost.b:7:5 might not hold
-PrePost.b:16:3: Postcondition at PrePost.b:13:5 might not hold
-PrePost.b:19:13: Operator precondition might not be met
-PrePost.b:21:3: Postcondition at PrePost.b:19:5 might not hold
-PrePost.b:25:3: Control might reach end of function without returning a value
-PrePost.b:44:18: Precondition at PrePost.b:31:5 might not be met
-PrePost.b:54:5: Assert might not hold
-PrePost.b:55:13: Operator precondition might not be met
-PrePost.b:55:5: Assert might not hold
-PrePost.b:71:7: Assert might not hold
+src/PrePost.b:9:5: Postcondition at src/PrePost.b:7:5 might not hold
+src/PrePost.b:16:3: Postcondition at src/PrePost.b:13:5 might not hold
+src/PrePost.b:19:13: Operator precondition might not be met
+src/PrePost.b:21:3: Postcondition at src/PrePost.b:19:5 might not hold
+src/PrePost.b:25:3: Control might reach end of function without returning a value
+src/PrePost.b:44:18: Precondition at src/PrePost.b:31:5 might not be met
+src/PrePost.b:54:5: Assert might not hold
+src/PrePost.b:55:13: Operator precondition might not be met
+src/PrePost.b:55:5: Assert might not hold
+src/PrePost.b:71:7: Assert might not hold

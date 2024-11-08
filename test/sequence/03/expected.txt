@@ -1,6 +1,6 @@
-Verifying: Main.A_NEW_CONSTANT
-Verifying: Main.f
-Verifying: Main.g
-Verifying: Main.h
-Verifying: Main.i
+Verifying: sequence-test/Main.A_NEW_CONSTANT
+Verifying: sequence-test/Main.f
+Verifying: sequence-test/Main.g
+Verifying: sequence-test/Main.h
+Verifying: sequence-test/Main.i
 Verification successful

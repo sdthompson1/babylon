@@ -1,0 +1,9 @@
+[package]
+name = "dep1"
+version = "0.1"
+
+[modules]
+exported-modules = ["A"]
+
+[dependencies]
+inner-dep = "0.1"

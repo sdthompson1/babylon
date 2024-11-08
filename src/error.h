@@ -21,7 +21,6 @@ struct NameList;
 // returns newly allocated string
 char * sanitise_name(const char *var_name);
 
-
 // Loader / compiler "front-end" errors
 void report_circular_dependency(struct Location location, const char *module_name);
 void report_module_not_found(struct Location location, const char *module_name, const char *filename);
@@ -111,8 +110,8 @@ void report_ref_arg_not_allowed(struct Location location);
 void report_no_ref_in_postcondition(struct Location location);
 void report_cannot_index(struct Term *term);
 void report_wrong_number_of_indexes(struct Term *term);
-void report_main_not_found(const char *module_name);
-void report_main_wrong_type(const char *module_name);
+void report_main_not_found(const char *module_name, const char *function_name);
+void report_main_wrong_type(const char *module_name, const char *function_name);
 void report_both_body_and_extern(struct Location location);
 void report_impure_cannot_be_ghost(struct Decl *decl);
 void report_extern_cannot_be_ghost(struct Decl *decl);

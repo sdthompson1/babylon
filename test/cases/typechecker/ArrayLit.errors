@@ -1,8 +1,8 @@
-ArrayLit.b:5:19: Type mismatch
-ArrayLit.b:7:16: Type mismatch
-ArrayLit.b:11:20: Type mismatch
-ArrayLit.b:16:27: Value is not a compile-time constant
-ArrayLit.b:21:27: Array index out of bounds
-ArrayLit.b:23:18: Value is not a compile-time constant
-ArrayLit.b:25:27: Value is not a compile-time constant
-ArrayLit.b:28:21: Array index out of bounds
+src/ArrayLit.b:5:19: Type mismatch
+src/ArrayLit.b:7:16: Type mismatch
+src/ArrayLit.b:11:20: Type mismatch
+src/ArrayLit.b:16:27: Value is not a compile-time constant
+src/ArrayLit.b:21:27: Array index out of bounds
+src/ArrayLit.b:23:18: Value is not a compile-time constant
+src/ArrayLit.b:25:27: Value is not a compile-time constant
+src/ArrayLit.b:28:21: Array index out of bounds

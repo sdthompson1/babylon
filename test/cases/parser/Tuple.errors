@@ -1,1 +1,1 @@
-Tuple.b:5:17: Syntax error (expected ',' or '}')
+src/Tuple.b:5:17: Syntax error (expected ',' or '}')

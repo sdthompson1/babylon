@@ -1,15 +1,15 @@
-Arrays.b:21:18: Type mismatch
-Arrays.b:24:19: Can't use sizeof on this expression (not an lvalue)
-Arrays.b:26:19: Type mismatch (expected array)
-Arrays.b:27:22: Type mismatch
-Arrays.b:30:13: Type mismatch
-Arrays.b:32:19: Type mismatch
-Arrays.b:33:7: Type mismatch
-Arrays.b:34:5: Wrong number of array indices (expected 1)
-Arrays.b:37:19: Type mismatch
-Arrays.b:38:5: Wrong number of array indices (expected 2)
-Arrays.b:43:16: Type mismatch
-Arrays.b:44:18: Type mismatch (expected numeric type)
-Arrays.b:45:13: Cannot index this term
-Arrays.b:54:19: Can't take reference to element of resizable array
-Arrays.b:57:19: Can't take reference to element of resizable array
+src/Arrays.b:21:18: Type mismatch
+src/Arrays.b:24:19: Can't use sizeof on this expression (not an lvalue)
+src/Arrays.b:26:19: Type mismatch (expected array)
+src/Arrays.b:27:22: Type mismatch
+src/Arrays.b:30:13: Type mismatch
+src/Arrays.b:32:19: Type mismatch
+src/Arrays.b:33:7: Type mismatch
+src/Arrays.b:34:5: Wrong number of array indices (expected 1)
+src/Arrays.b:37:19: Type mismatch
+src/Arrays.b:38:5: Wrong number of array indices (expected 2)
+src/Arrays.b:43:16: Type mismatch
+src/Arrays.b:44:18: Type mismatch (expected numeric type)
+src/Arrays.b:45:13: Cannot index this term
+src/Arrays.b:54:19: Can't take reference to element of resizable array
+src/Arrays.b:57:19: Can't take reference to element of resizable array

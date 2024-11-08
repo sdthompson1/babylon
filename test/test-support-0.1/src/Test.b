@@ -2,12 +2,12 @@
 
 module Test
 
-import Int;
-
 interface
 {
-    // Note: These functions are defined in test_support.c.
-    
+    const I32_MIN: i32 = -2147483648;
+    const I32_MAX: i32 = 2147483647;
+    const U64_MAX: u64 = 18446744073709551615;
+
     extern function print_i8 (x: i8);
     extern function print_i16(x: i16);
     extern function print_i32(x: i32);
@@ -69,7 +69,7 @@ interface
     extern function alloc_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64)
 
         // The total number of elements must not overflow u64.
-        requires Int.can_mul_u64(dim0, dim1);
+        requires int(dim0) * int(dim1) <= int(U64_MAX);
 
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());
@@ -99,8 +99,7 @@ interface
     extern function alloc_3d_array<T>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64)
 
         // The total number of elements must not overflow u64.
-        requires Int.can_mul_u64(dim0, dim1);
-        requires Int.can_mul_u64(dim0 * dim1, dim2);
+        requires int(dim0) * int(dim1) * int(dim2) <= int(U64_MAX);
 
         // This cannot be used to manufacture new allocated values.
         requires !allocated(default<T>());

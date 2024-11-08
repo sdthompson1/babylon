@@ -1,8 +1,8 @@
-Verifying: Foo.Foo
-Verifying: Foo.foo
-Verifying: Foo.foo
-Verifying: Main.test
+Verifying: sequence-test/Foo.Foo
+Verifying: sequence-test/Foo.foo
+Verifying: sequence-test/Foo.foo
+Verifying: sequence-test/Main.test
 Checking Main.b:10:10-17 (variant ref valid)
 Checking Main.b:13:9-24 (assert)
-test/sequence/14/Main.b:13:9: Assert might not hold
+test/output_tmp/src/Main.b:13:9: Assert might not hold
 Verification failed

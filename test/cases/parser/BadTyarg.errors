@@ -1,1 +1,1 @@
-BadTyarg.b:3:17: Syntax error (expected ',' or '>')
+src/BadTyarg.b:3:17: Syntax error (expected ',' or '>')

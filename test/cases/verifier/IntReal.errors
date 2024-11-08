@@ -1,6 +1,6 @@
-IntReal.b:22:13: Operator precondition might not be met
-IntReal.b:53:13: Operator precondition might not be met
-IntReal.b:59:13: Operator precondition might not be met
-IntReal.b:68:13: Operator precondition might not be met
-IntReal.b:106:9: 'decreases' value (of type 'int') might not be bounded below by zero
-IntReal.b:120:9: 'decreases' value (of type 'int') might not be bounded below by zero
+src/IntReal.b:22:13: Operator precondition might not be met
+src/IntReal.b:53:13: Operator precondition might not be met
+src/IntReal.b:59:13: Operator precondition might not be met
+src/IntReal.b:68:13: Operator precondition might not be met
+src/IntReal.b:106:9: 'decreases' value (of type 'int') might not be bounded below by zero
+src/IntReal.b:120:9: 'decreases' value (of type 'int') might not be bounded below by zero

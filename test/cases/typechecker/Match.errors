@@ -1,9 +1,9 @@
-Match.b:30:3: Type mismatch
-Match.b:38:20: Type mismatch
-Match.b:42:15: Match with no cases
-Match.b:53:10: Type mismatch in pattern
-Match.b:70:10: Type mismatch in pattern
-Match.b:71:10: Type mismatch in pattern
-Match.b:72:10: Type mismatch in pattern
-Match.b:73:10: Type mismatch in pattern
-Match.b:85:11: Type mismatch in pattern
+src/Match.b:30:3: Type mismatch
+src/Match.b:38:20: Type mismatch
+src/Match.b:42:15: Match with no cases
+src/Match.b:53:10: Type mismatch in pattern
+src/Match.b:70:10: Type mismatch in pattern
+src/Match.b:71:10: Type mismatch in pattern
+src/Match.b:72:10: Type mismatch in pattern
+src/Match.b:73:10: Type mismatch in pattern
+src/Match.b:85:11: Type mismatch in pattern

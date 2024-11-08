@@ -1,4 +1,4 @@
-PrePostErrors.b:4:14: Type mismatch
-PrePostErrors.b:5:13: Type mismatch
-PrePostErrors.b:9:23: Type mismatch
-PrePostErrors.b:14:5: 'requires' must come before 'ensures'
+src/PrePostErrors.b:4:14: Type mismatch
+src/PrePostErrors.b:5:13: Type mismatch
+src/PrePostErrors.b:9:23: Type mismatch
+src/PrePostErrors.b:14:5: 'requires' must come before 'ensures'

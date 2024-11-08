@@ -160,3 +160,14 @@ void free_name_list(struct NameList *list)
         list = next;
     }
 }
+
+bool name_list_contains_string(const struct NameList *list, const char *str)
+{
+    while (list) {
+        if (strcmp(list->name, str) == 0) {
+            return true;
+        }
+        list = list->next;
+    }
+    return false;
+}

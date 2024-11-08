@@ -1,9 +1,9 @@
-Verifying: Main.NEW_CONST
-Verifying: Main.Foo
-Verifying: Main.Bar
-Verifying: Main.f
-Verifying: Main.g
-Verifying: Main.h
-Verifying: Main.i
-Verifying: Main.bar_func
+Verifying: sequence-test/Main.NEW_CONST
+Verifying: sequence-test/Main.Foo
+Verifying: sequence-test/Main.Bar
+Verifying: sequence-test/Main.f
+Verifying: sequence-test/Main.g
+Verifying: sequence-test/Main.h
+Verifying: sequence-test/Main.i
+Verifying: sequence-test/Main.bar_func
 Verification successful

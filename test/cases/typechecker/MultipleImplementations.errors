@@ -1,4 +1,4 @@
-MultipleImplementations.b:3:5: Multiple implementations of 'MultipleImplementations.x'
-MultipleImplementations.b:5:5: Duplicate definition of 'MultipleImplementations.DT1'
-MultipleImplementations.b:6:5: Duplicate definition of 'MultipleImplementations.DT2'
-MultipleImplementations.b:9:11: Multiple implementations of 'MultipleImplementations.bar'
+src/MultipleImplementations.b:3:5: Multiple implementations of 'test-binary:MultipleImplementations.x'
+src/MultipleImplementations.b:5:5: Duplicate definition of 'test-binary:MultipleImplementations.DT1'
+src/MultipleImplementations.b:6:5: Duplicate definition of 'test-binary:MultipleImplementations.DT2'
+src/MultipleImplementations.b:9:11: Multiple implementations of 'test-binary:MultipleImplementations.bar'

@@ -25,9 +25,14 @@ struct Module;
 void codegen_module(FILE *c_output_file,
                     FILE *h_output_file,
                     struct HashTable *codegen_env,
-                    struct Module *module,
-                    bool root,   // Is this the root module?
-                    bool generate_main);  // Should 'main' be generated? (relevant only if root==true)
+                    struct Module *module);
+
+
+// Write out a C 'main' function that calls the given Babylon function.
+
+void codegen_main_function(FILE *c_output_file,
+                           struct Module *module,
+                           const char *function_name);
 
 
 // Access the codegen_env

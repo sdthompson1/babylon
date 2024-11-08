@@ -1,1 +1,1 @@
-ArrayDim.b:6:23: Syntax error (expected ',' or ']')
+src/ArrayDim.b:6:23: Syntax error (expected ',' or ']')

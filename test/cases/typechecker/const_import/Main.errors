@@ -1,1 +1,1 @@
-Main.b:9:18: Value is not a compile-time constant
+src/Main.b:9:18: Value is not a compile-time constant

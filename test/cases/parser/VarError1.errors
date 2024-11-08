@@ -1,1 +1,1 @@
-VarError1.b:6:3: Syntax error (expected variable name)
+src/VarError1.b:6:3: Syntax error (expected variable name)

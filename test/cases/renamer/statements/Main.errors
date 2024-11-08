@@ -1,2 +1,2 @@
-Main.b:12:9: Not in scope: 'A.bar'
-Main.b:15:13: Not in scope: 'A.bar'
+src/Main.b:12:9: Not in scope: 'A.bar'
+src/Main.b:15:13: Not in scope: 'A.bar'

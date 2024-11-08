@@ -11,6 +11,7 @@ repository.
 #ifndef UTIL_H
 #define UTIL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 struct NameList {
@@ -37,6 +38,7 @@ struct NameList * sort_name_list(struct NameList *list);
 // free an entire NameList, also freeing the name pointers.
 void free_name_list(struct NameList *list);
 
+bool name_list_contains_string(const struct NameList *list, const char *str);
 
 
 #endif

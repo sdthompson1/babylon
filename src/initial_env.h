@@ -20,11 +20,4 @@ struct VerifierEnv;
 
 void setup_initial_verifier_env(struct VerifierEnv *verifier_env);
 
-bool import_builtin_module(const char *name,
-                           struct HashTable *renamer_env,
-                           TypeEnv *type_env,
-                           TypeEnv *expanded_type_env,
-                           struct VerifierEnv *verifier_env,
-                           struct HashTable *codegen_env);
-
 #endif

@@ -1,1 +1,1 @@
-Main.b:4:15: Syntax error (expected module alias name)
+src/Main.b:4:15: Syntax error (expected module alias name)

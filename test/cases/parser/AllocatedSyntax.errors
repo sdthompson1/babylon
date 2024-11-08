@@ -1,1 +1,1 @@
-AllocatedSyntax.b:5:11: Syntax error (expected 'allocated' or 'allocated_if_not_default')
+src/AllocatedSyntax.b:5:11: Syntax error (expected 'allocated' or 'allocated_if_not_default')

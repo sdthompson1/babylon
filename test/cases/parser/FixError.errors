@@ -1,1 +1,1 @@
-FixError.b:6:3: Syntax error (expected variable name)
+src/FixError.b:6:3: Syntax error (expected variable name)

@@ -1,1 +1,1 @@
-Main.b:4:1: Can't import as 'Main', would clash with current module name
+src/Main.b:4:1: Can't import as 'Main', would clash with current module name

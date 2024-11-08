@@ -1,1 +1,1 @@
-Main.b:5:1: Multiple imports of module 'Foo'
+src/Main.b:5:1: Multiple imports of module 'Foo'

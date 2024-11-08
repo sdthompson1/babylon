@@ -4440,15 +4440,17 @@ bool typecheck_module(TypeEnv *type_env,
     return !tc_context.error;
 }
 
-bool typecheck_main_function(TypeEnv *type_env, const char *root_module_name)
+bool typecheck_main_function(TypeEnv *type_env,
+                             const char *main_module_name,
+                             const char *main_function_name)
 {
-    char *main_name = copy_string_2(root_module_name, ".main");
+    char *main_name = copy_string_3(main_module_name, ".", main_function_name);
 
     struct TypeEnvEntry *entry = type_env_lookup(type_env, main_name);
 
     bool ok = (entry != NULL);
     if (!ok) {
-        report_main_not_found(root_module_name);
+        report_main_not_found(main_module_name, main_function_name);
 
     } else {
 
@@ -4459,7 +4461,7 @@ bool typecheck_main_function(TypeEnv *type_env, const char *root_module_name)
             && entry->type->function_data.return_type == NULL;
 
         if (!ok) {
-            report_main_wrong_type(root_module_name);
+            report_main_wrong_type(main_module_name, main_function_name);
         }
     }
 

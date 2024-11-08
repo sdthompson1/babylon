@@ -1,0 +1,7 @@
+[package]
+name = "test-support"
+description = "Supporting package for the Babylon compiler test cases"
+version = "0.1"
+
+[modules]
+exported-modules = ["Test"]

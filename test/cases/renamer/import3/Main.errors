@@ -1,2 +1,2 @@
-Main.b:9:12: Name 'same_name' is ambiguous: could refer to 'A.same_name' or 'B.same_name'
-Main.b:12:12: Not in scope: 'q'
+src/Main.b:9:12: Name 'same_name' is ambiguous: could refer to 'test-binary:A.same_name' or 'test-binary:B.same_name'
+src/Main.b:12:12: Not in scope: 'q'

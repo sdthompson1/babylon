@@ -28,8 +28,9 @@ repository.
 #include <unistd.h>
 
 // Uncommenting the following will allow stderr messages from the child
-// processes to be printed. This can be useful e.g. to check whether the
-// child processes are starting correctly or not.
+// processes to be printed (regardless of process "show_stderr" setting).
+// This can be useful e.g. to check whether the child processes are
+// starting correctly or not.
 //#define DEBUG_OUTPUT
 
 
@@ -189,8 +190,16 @@ static void fork_child(struct ProcessState *state)
         close(pipes[0][1]);
         close(pipes[1][0]);
 
-        if (dup2(pipes[0][0], STDIN_FILENO) == -1 || dup2(pipes[1][1], STDOUT_FILENO) == -1) {
+        // Redirect stdin to our pipe
+        if (dup2(pipes[0][0], STDIN_FILENO) == -1) {
             exit(1);
+        }
+
+        // Redirect stdout to our pipe, UNLESS show_stdout is true.
+        if (!state->process->show_stdout) {
+            if (dup2(pipes[1][1], STDOUT_FILENO) == -1) {
+                exit(1);
+            }
         }
 
         close(pipes[0][0]);
@@ -220,14 +229,16 @@ static void fork_child(struct ProcessState *state)
         }
 
 #ifndef DEBUG_OUTPUT
-        // Let's redirect stderr to null to prevent unwanted messages such as
-        // "cvc5 interrupted by user".
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull == -1) {
-            exit(1);
-        }
-        if (dup2(devnull, STDERR_FILENO) == -1) {
-            exit(1);
+        if (!state->process->show_stderr) {
+            // Redirect stderr to null to prevent unwanted messages such as
+            // "cvc5 interrupted by user".
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull == -1) {
+                exit(1);
+            }
+            if (dup2(devnull, STDERR_FILENO) == -1) {
+                exit(1);
+            }
         }
 #endif
 
@@ -236,10 +247,10 @@ static void fork_child(struct ProcessState *state)
 
         // Error.
         // (Note: the message will go to stderr, so it will only be visible
-        // if DEBUG_OUTPUT is defined)
-        fprintf(stderr, "couldn't start prover: %s\n", state->process->cmd[0]);
+        // if DEBUG_OUTPUT is defined or if process->show_stderr is true.)
+        fprintf(stderr, "couldn't start child process: %s\n", state->process->cmd[0]);
         perror("exec failed");
-        exit(1);
+        exit(1);  // Exit the child process
 
     } else {
         // This is the parent process
@@ -251,7 +262,9 @@ static void fork_child(struct ProcessState *state)
 
         FILE *child_input = fdopen(pipes[0][1], "w");
         if (child_input) {
-            state->process->print_to_stdin(state->process->context, child_input);
+            if (state->process->print_to_stdin) {
+                state->process->print_to_stdin(state->process->context, child_input);
+            }
             fclose(child_input);
         } else {
             close(pipes[0][1]);
@@ -311,13 +324,18 @@ static bool read_child_process_output(struct ProcessState *state, const fd_set *
 static bool reap_child(struct ProcessState *state)
 {
     if (state->pid != 0) {
-        int wait_result = waitpid(state->pid, NULL, WNOHANG);
+        int wstatus;
+        int wait_result = waitpid(state->pid, &wstatus, WNOHANG);
         if (wait_result < 0) {
             fatal_error("waitpid failed");
 
         } else if (wait_result > 0) {
             // process no longer exists
             state->pid = 0;
+
+            if (WIFEXITED(wstatus)) {
+                state->process->exit_status = WEXITSTATUS(wstatus);
+            }
 
             // set the "runtime_in_seconds"
             // note this will only be as accurate as the frequency of calls to update_processes
@@ -513,6 +531,7 @@ void launch_process(struct Process *process)
 {
     setup_signals();   // one-time setup
 
+    process->exit_status = -1;
     process->runtime_in_seconds = 0.0;
     process->output_length = 0;
 

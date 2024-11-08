@@ -1,8 +1,8 @@
-Generic.b:8:19: Wrong number of type arguments (expected: 1, actual: 0)
-Generic.b:9:18: Wrong number of type arguments (expected: 1, actual: 2)
-Generic.b:10:19: Type mismatch
-Generic.b:21:23: Type mismatch
-Generic.b:22:17: Type mismatch
-Generic.b:23:13: Wrong number of type arguments (expected: 0, actual: 1)
-Generic.b:29:14: Type arguments not expected here
-Generic.b:30:14: Can't use function as a value
+src/Generic.b:8:19: Wrong number of type arguments (expected: 1, actual: 0)
+src/Generic.b:9:18: Wrong number of type arguments (expected: 1, actual: 2)
+src/Generic.b:10:19: Type mismatch
+src/Generic.b:21:23: Type mismatch
+src/Generic.b:22:17: Type mismatch
+src/Generic.b:23:13: Wrong number of type arguments (expected: 0, actual: 1)
+src/Generic.b:29:14: Type arguments not expected here
+src/Generic.b:30:14: Can't use function as a value

@@ -1,1 +1,1 @@
-RecursiveTyapp.b:6:1: Illegal recursive definition of 'RecursiveTyapp.illegal_rec'
+src/RecursiveTyapp.b:6:1: Illegal recursive definition of 'test-binary:RecursiveTyapp.illegal_rec'

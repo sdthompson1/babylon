@@ -1,2 +1,2 @@
-Ref.b:7:18: Can't take reference (expression is not an lvalue)
-Ref.b:11:18: Type mismatch
+src/Ref.b:7:18: Can't take reference (expression is not an lvalue)
+src/Ref.b:11:18: Type mismatch

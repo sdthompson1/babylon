@@ -1,25 +1,25 @@
-Datatype.b:11:3: Illegal recursive definition of 'Datatype.Recursive'
-Datatype.b:13:42: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:19:20: Type mismatch
-Datatype.b:20:20: Type mismatch
-Datatype.b:22:5: Can't assign (left-hand-side is not an lvalue)
-Datatype.b:28:26: Type mismatch
-Datatype.b:29:13: Wrong number of type arguments (expected: 1, actual: 2)
-Datatype.b:30:13: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:38:14: Type mismatch
-Datatype.b:42:14: Type mismatch
-Datatype.b:44:9: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:46:5: Type arguments not expected here
-Datatype.b:49:13: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:50:19: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:51:25: Wrong number of type arguments (expected: 1, actual: 0)
-Datatype.b:53:26: Type mismatch
-Datatype.b:57:21: Type mismatch (expected bool or numeric)
-Datatype.b:58:21: Type mismatch (expected numeric type)
-Datatype.b:59:21: Type mismatch (expected bool or numeric)
-Datatype.b:60:21: Can't use function as a value
-Datatype.b:60:33: Can't use function as a value
-Datatype.b:65:13: Type mismatch (expected numeric type)
-Datatype.b:66:20: Type mismatch
-Datatype.b:67:13: Can't use function as a value
-Datatype.b:67:25: Can't use function as a value
+src/Datatype.b:11:3: Illegal recursive definition of 'test-binary:Datatype.Recursive'
+src/Datatype.b:13:42: Wrong number of type arguments (expected: 1, actual: 0)
+src/Datatype.b:19:20: Type mismatch
+src/Datatype.b:20:20: Type mismatch
+src/Datatype.b:22:5: Can't assign (left-hand-side is not an lvalue)
+src/Datatype.b:28:26: Type mismatch
+src/Datatype.b:29:13: Wrong number of type arguments (expected: 1, actual: 2)
+src/Datatype.b:30:13: Wrong number of type arguments (expected: 1, actual: 0)
+src/Datatype.b:38:14: Type mismatch
+src/Datatype.b:42:14: Type mismatch
+src/Datatype.b:44:9: Wrong number of type arguments (expected: 1, actual: 0)
+src/Datatype.b:46:5: Type arguments not expected here
+src/Datatype.b:49:13: Wrong number of type arguments (expected: 1, actual: 0)
+src/Datatype.b:50:19: Wrong number of type arguments (expected: 1, actual: 0)
+src/Datatype.b:51:25: Wrong number of type arguments (expected: 1, actual: 0)
+src/Datatype.b:53:26: Type mismatch
+src/Datatype.b:57:21: Type mismatch (expected bool or numeric)
+src/Datatype.b:58:21: Type mismatch (expected numeric type)
+src/Datatype.b:59:21: Type mismatch (expected bool or numeric)
+src/Datatype.b:60:21: Can't use function as a value
+src/Datatype.b:60:33: Can't use function as a value
+src/Datatype.b:65:13: Type mismatch (expected numeric type)
+src/Datatype.b:66:20: Type mismatch
+src/Datatype.b:67:13: Can't use function as a value
+src/Datatype.b:67:25: Can't use function as a value

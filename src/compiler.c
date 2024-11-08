@@ -17,6 +17,8 @@ repository.
 #include "hash_table.h"
 #include "initial_env.h"
 #include "location.h"
+#include "package.h"
+#include "process.h"
 #include "stacked_hash_table.h"
 #include "util.h"
 
@@ -51,7 +53,7 @@ static void add_string(struct StringNode **node, const char *ptr)
 
 
 struct LoadDetails {
-    // key = module name (allocated)
+    // key = module name ("package-name/ModuleName"; allocated)
     // value = NULL if module loading still in progress, or the module's
     // interface-fingerprint (32 bytes, allocated on heap) if the module
     // is fully loaded.
@@ -64,65 +66,26 @@ struct LoadDetails {
     struct HashTable *codegen_env;
     struct StringNode *strings;
 
+    const char *root_package_name;
+
+    const char *importer_package_name;
     const char *module_name;
-    const char *input_prefix;
+    struct PackageLoader *package_loader;
     const char *output_prefix;
     struct Location import_location;  // location of import stmt if any
 
     enum CompileMode compile_mode;
-    bool root_module;
+    struct NameList *requested_modules;
+    const char *main_module_name;
+    const char *main_function_name;
 
     bool show_progress;
     bool create_debug_files;
-    bool generate_main;
-    bool auto_main;
 
     struct CacheDb *cache_db;
+
+    struct NameList *obj_files;  // object files to link
 };
-
-static void interpret_filename(struct LoadDetails *details, const char *filename)
-{
-    const char *slash = strrchr(filename, '/');
-    if (slash == NULL) {
-        details->input_prefix = copy_string("");
-    } else {
-        // +2 for the '/' character and null terminator
-        char *prefix = alloc(slash - filename + 2);
-        memcpy(prefix, filename, slash - filename + 1);
-        prefix[slash - filename + 1] = 0;
-        details->input_prefix = prefix;
-        filename = slash + 1;
-    }
-    add_string(&details->strings, details->input_prefix);
-
-    char *modname = NULL;
-    const char *dot = strrchr(filename, '.');
-    if (dot != NULL) {
-        if (strcmp(dot, ".b") == 0 && dot != filename) {
-            modname = alloc(dot - filename + 1);  // +1 for null terminator
-            memcpy(modname, filename, dot - filename);
-            modname[dot - filename] = 0;
-        }
-    }
-
-    if (modname == NULL) {
-        // Assume entire filename (after the last slash) is the module name
-        modname = copy_string(filename);
-    }
-
-    details->module_name = modname;
-    add_string(&details->strings, modname);
-}
-
-// *filename result is malloc'd.
-static FILE * open_module_file(const struct LoadDetails *details,
-                               const char **filename)
-{
-    char *name = replace_dots_with_slashes(details->module_name);
-    *filename = copy_string_3(details->input_prefix, name, ".b");
-    free(name);
-    return fopen(*filename, "rb");
-}
 
 
 // Returns true on success.
@@ -173,10 +136,12 @@ static void make_parent_dirs(char *path, size_t prefix_len)
 }
 
 static char * get_output_filename(const struct LoadDetails *details,
+                                  const struct Module *module,
+                                  const char *prefix,
                                   const char *suffix)
 {
-    char *name = replace_dots_with_slashes(details->module_name);
-    char *result = copy_string_3(details->output_prefix, name, suffix);
+    char *name = replace_dots_with_slashes(module->name);
+    char *result = copy_string_4(details->output_prefix, prefix, name, suffix);
     free(name);
     make_parent_dirs(result, strlen(details->output_prefix));
     return result;
@@ -185,23 +150,26 @@ static char * get_output_filename(const struct LoadDetails *details,
 
 static bool load_module_recursive(struct LoadDetails *details);
 
-bool load_imports(struct LoadDetails *details, struct Module *module, struct Import *imports)
+bool load_imports(struct LoadDetails *details,
+                  const char *importer_package_name,
+                  struct Module *module,
+                  struct Import *imports)
 {
     for (struct Import *import = imports; import; import = import->next) {
 
+        const char *old_package_name = details->importer_package_name;
         const char *old_module_name = details->module_name;
         struct Location old_import_location = details->import_location;
-        bool old_root_module = details->root_module;
 
+        details->importer_package_name = importer_package_name;
         details->module_name = import->module_name;
         details->import_location = import->location;
-        details->root_module = false;
 
         bool load_success = load_module_recursive(details);
 
+        details->importer_package_name = old_package_name;
         details->module_name = old_module_name;
         details->import_location = old_import_location;
-        details->root_module = old_root_module;
 
         if (!load_success) {
             return false;
@@ -235,7 +203,10 @@ static bool run_typechecker(struct LoadDetails *details,
 
     // Print module post-typechecking (if requested)
     if (details->create_debug_files) {
-        char *debug_filename = get_output_filename(details, interface_only ? ".tychk_int" : ".tychk_impl");
+        char *debug_filename = get_output_filename(details,
+                                                   module,
+                                                   "debug_typecheck/",
+                                                   interface_only ? ".tychk_int" : ".tychk_impl");
         FILE *debug_file = fopen(debug_filename, "w");
         free(debug_filename);
         if (debug_file) {
@@ -276,7 +247,7 @@ static bool run_verifier(struct LoadDetails *details,
     options.cache_db = details->cache_db;
     options.debug_filename_prefix = NULL;
     if (details->create_debug_files) {
-        options.debug_filename_prefix = get_output_filename(details, "");
+        options.debug_filename_prefix = get_output_filename(details, module, "debug_verify/", "");
     }
     options.mode = mode;
     options.show_progress = details->show_progress;
@@ -299,38 +270,127 @@ static bool run_verifier(struct LoadDetails *details,
     return true;
 }
 
+static bool compile_c_file(struct LoadDetails *details,
+                           const char *c_filename,
+                           const char *o_filename)
+{
+    char *include_dir = copy_string_2(details->output_prefix, "c");
+
+    // Cmd line is hard coded for now. TODO: setup "compiler config" file
+    // and make this configurable.
+    const char *cmd[] = {
+        "gcc",
+        "-c",
+        "-g",
+        "-I",
+        include_dir,
+        c_filename,
+        "-o",
+        o_filename,
+        "-Wno-overflow", // needed for tests to pass
+        "-Wno-div-by-zero", // needed for tests to pass
+        NULL
+    };
+
+    struct Process proc;
+    memset(&proc, 0, sizeof(proc));
+    proc.cmd = cmd;
+    proc.timeout_in_seconds = 100000;  // more than 1 day; should be enough!
+    proc.show_stdout = true;  // allow the compiler to print to stdout (although most compilers don't, it seems)
+    proc.show_stderr = true;  // allow the compiler to print to stderr
+    launch_process(&proc);
+
+    free(include_dir);
+
+    // Wait for the compile job to finish before continuing.
+    // (TODO: Parallel compilation jobs might be a good thing to add sometime - see also
+    // the parallel job system in fol.c - maybe that could be abstracted out and re-used here?)
+    while (proc.status == PROC_RUNNING) {
+        update_processes(true);
+    }
+
+    struct NameList *node = alloc(sizeof(struct NameList));
+    node->name = copy_string(o_filename);
+    node->next = details->obj_files;
+    details->obj_files = node;
+
+    // If the C compiler returns non-zero exit status, treat that as a failure.
+    return proc.status == PROC_SUCCESS && proc.exit_status == 0;
+}
+
+static bool run_linker(const struct LoadDetails *details)
+{
+    int num = 0;
+    for (struct NameList *node = details->obj_files; node; node = node->next) {
+        ++num;
+    }
+
+    char *exe_name = copy_string_3(details->output_prefix, "bin/", details->root_package_name);
+    make_parent_dirs(exe_name, strlen(details->output_prefix));
+
+    // $(CC) -o $(exe_filename) $(obj_filenames)
+
+    const char **cmd = alloc(sizeof(char*) * (num + 4));
+    cmd[0] = "gcc";  // hard coded for now
+    cmd[1] = "-o";
+    cmd[2] = exe_name;
+    int i = 0;
+    for (struct NameList *node = details->obj_files; node; node = node->next, ++i) {
+        cmd[3 + i] = node->name;
+    }
+    cmd[3 + num] = NULL;
+
+    struct Process proc;
+    memset(&proc, 0, sizeof(proc));
+    proc.cmd = cmd;
+    proc.timeout_in_seconds = 1000000;
+    proc.show_stderr = true;
+    launch_process(&proc);
+
+    free(exe_name);
+    free(cmd);
+
+    while (proc.status == PROC_RUNNING) {
+        update_processes(true);
+    }
+
+    return proc.status == PROC_SUCCESS && proc.exit_status == 0;
+}
+
+
 // Returns true if success, false if error (e.g. module not found, circular dependency)
-static bool load_module_from_disk(struct LoadDetails *details)
+static bool load_module_from_disk(struct LoadDetails *details,
+                                  struct ModulePathInfo *info)
 {
     // Lex
     const struct Token *token = NULL;
     bool found = false;
 
-    bool interface_only;
-    if (details->root_module) {
-        // Always load the root module in full.
-        interface_only = false;
-    } else if (details->compile_mode == CM_COMPILE || details->compile_mode == CM_VERIFY_ALL) {
-        // In these modes we need to fully load all modules (not just the root).
-        interface_only = false;
-    } else {
-        // Otherwise, we don't need to fully load this module - we only need its interface.
-        interface_only = true;
-    }
+    // If this module was explicitly requested, or if "all" modules were implicitly requested
+    // (because requested_modules list was empty), then process the whole module.
+    // Otherwise process only the interface.
+    bool explicitly_requested =
+        info
+        && strcmp(details->root_package_name, info->package_name) == 0
+        && name_list_contains_string(details->requested_modules, details->module_name);
+    bool process_whole_module =
+        details->requested_modules == NULL
+        || explicitly_requested;
+    bool interface_only = !process_whole_module;
 
     // Load from filesystem
-    const char *filename;
-    FILE *file = open_module_file(details, &filename);
-    add_string(&details->strings, filename);
+    FILE *file = info ? fopen(info->b_filename, "rb") : NULL;
     if (file) {
         found = true;
-        token = lex(filename, file, interface_only);
+        token = lex(info->b_filename, file, interface_only);
         fclose(file);
     }
 
     if (token == NULL) {
         if (!found) {
-            report_module_not_found(details->import_location, details->module_name, filename);
+            report_module_not_found(details->import_location,
+                                    details->module_name,
+                                    info ? info->b_filename : NULL);
         }
         return false;
     }
@@ -354,8 +414,23 @@ static bool load_module_from_disk(struct LoadDetails *details)
     free_token((void*)token);
 
     // Ensure all imports are loaded
-    if (!load_imports(details, module, module->interface_imports)
-    || !load_imports(details, module, module->implementation_imports)) {
+    if (!load_imports(details, info->package_name, module, module->interface_imports)) {
+        free_module(module);
+        return false;
+    }
+    if (!interface_only) {
+        if (!load_imports(details, info->package_name, module, module->implementation_imports)) {
+            free_module(module);
+            return false;
+        }
+    }
+
+    // Rename (in place)
+    if (!rename_module(details->renamer_env,
+                       details->package_loader,
+                       info->package_name,
+                       module,
+                       interface_only)) {
         free_module(module);
         return false;
     }
@@ -375,6 +450,9 @@ static bool load_module_from_disk(struct LoadDetails *details)
     add_import_fingerprints(&ctx, module->interface_imports, details->loaded_modules);
 
     // The interface fingerprint is stored in the loaded_modules hash table.
+    // Note: module->name is already in the table (with value NULL), so we do NOT
+    // call copy_string(module->name), instead we just pass module->name so that it
+    // finds the existing key (and updates the value).
     uint8_t *interface_fingerprint = alloc(SHA256_HASH_LENGTH);
     struct SHA256_CTX ctx2 = ctx;
     sha256_final(&ctx2, interface_fingerprint);
@@ -385,29 +463,24 @@ static bool load_module_from_disk(struct LoadDetails *details)
     //  (c) the SHA256 of the implementation tokens
     //  (d) the fingerprints of any modules imported by the implementation.
     uint8_t full_module_fingerprint[SHA256_HASH_LENGTH] = {0};
-    const char *impl_chksum = "IMPL-CHKSUM";
-    sha256_add_bytes(&ctx, (const uint8_t*)impl_chksum, strlen(impl_chksum)+1);
-    sha256_add_bytes(&ctx, module->implementation_checksum, SHA256_HASH_LENGTH);
-    add_import_fingerprints(&ctx, module->implementation_imports, details->loaded_modules);
-    sha256_final(&ctx, full_module_fingerprint);
-
-    // Rename (in place)
-    if (!rename_module(details->renamer_env, module, interface_only)) {
-        free_module(module);
-        return false;
+    if (!interface_only) {
+        const char *impl_chksum = "IMPL-CHKSUM";
+        sha256_add_bytes(&ctx, (const uint8_t*)impl_chksum, strlen(impl_chksum)+1);
+        sha256_add_bytes(&ctx, module->implementation_checksum, SHA256_HASH_LENGTH);
+        add_import_fingerprints(&ctx, module->implementation_imports, details->loaded_modules);
+        sha256_final(&ctx, full_module_fingerprint);
     }
 
     // Resolve dependencies (in place)
     resolve_dependencies(module);
 
-    // We can skip verification if we are in CM_VERIFY (not CM_VERIFY_ALL) mode,
-    // and this is not the root module.
-    bool skip = (details->compile_mode == CM_VERIFY && !details->root_module);
+    // We skip verification in interface_only mode.
+    bool skip = (details->compile_mode == CM_VERIFY && interface_only);
 
     // We can also skip verification if the module's fingerprint is in the cache
     // (as this means the exact same module was verified on a previous run).
     skip = skip ||
-        ((details->compile_mode == CM_VERIFY || details->compile_mode == CM_VERIFY_ALL)
+        (details->compile_mode == CM_VERIFY
          && should_skip_module(details, module, full_module_fingerprint));
 
     if (skip) {
@@ -430,7 +503,7 @@ static bool load_module_from_disk(struct LoadDetails *details)
         }
         collapse_verifier_env(details->verifier_env);
 
-    } else if (details->compile_mode == CM_VERIFY || details->compile_mode == CM_VERIFY_ALL) {
+    } else if (details->compile_mode == CM_VERIFY) {
         // We need to do a full verification of the module.
 
         // We do this in several steps, in order to be able to handle
@@ -510,19 +583,19 @@ static bool load_module_from_disk(struct LoadDetails *details)
         details->expanded_type_env = collapse_type_env(details->expanded_type_env);
     }
 
-    // Check existence of main (if this is the root)
-    if (details->root_module) {
-        if (details->auto_main) {
-            char *main_name = copy_string_2(module->name, ".main");
-            details->generate_main = (type_env_lookup(details->type_env, main_name) != NULL);
-            free(main_name);
-        }
+    // If main_module and main_function are both set, and this is the main_module,
+    // then check that the main_function exists and has the expected type.
+    const bool main_function_required =
+        details->main_module_name
+        && details->main_function_name
+        && strcmp(info->package_name, details->root_package_name) == 0
+        && strcmp(details->module_name, details->main_module_name) == 0;
+    if (main_function_required) {
         // Complete verification jobs before attempting to typecheck main
         // (as we don't want the error messages "mixed")
         wait_fol_complete();
         if (!fol_error_found()
-        && details->generate_main
-        && !typecheck_main_function(details->type_env, module->name)) {
+        && !typecheck_main_function(details->type_env, module->name, details->main_function_name)) {
             free_module(module);
             return false;
         }
@@ -530,8 +603,9 @@ static bool load_module_from_disk(struct LoadDetails *details)
 
     // Compile (if requested)
     if (details->compile_mode == CM_COMPILE) {
-        char *c_filename = get_output_filename(details, ".b.c");
-        char *h_filename = get_output_filename(details, ".b.h");
+        // Generate C code
+        char *c_filename = get_output_filename(details, module, "c/", ".b.c");
+        char *h_filename = get_output_filename(details, module, "c/", ".b.h");
         FILE *c_file = fopen(c_filename, "w");
         FILE *h_file = fopen(h_filename, "w");
         if (!c_file || !h_file) {
@@ -550,11 +624,40 @@ static bool load_module_from_disk(struct LoadDetails *details)
             free_module(module);
             return false;
         }
-        free(c_filename);
         free(h_filename);
-        codegen_module(c_file, h_file, details->codegen_env, module, details->root_module, details->generate_main);
+        codegen_module(c_file, h_file, details->codegen_env, module);
+
+        if (main_function_required) {
+            codegen_main_function(c_file, module, details->main_function_name);
+        }
+
         fclose(c_file);
         fclose(h_file);
+
+        // Now compile the C to an object file
+        char *o_filename = get_output_filename(details, module, "obj/", ".b.o");
+        bool ok = compile_c_file(details, c_filename, o_filename);
+        free(o_filename);
+        if (!ok) {
+            fprintf(stderr, "Compilation of %s failed\n", c_filename);
+        }
+        free(c_filename);
+        if (!ok) {
+            free_module(module);
+            return false;
+        }
+
+        // If there is a user-supplied C file then compile that as well
+        if (info->c_filename) {
+            o_filename = get_output_filename(details, module, "obj/", ".o");
+            ok = compile_c_file(details, info->c_filename, o_filename);
+            free(o_filename);
+            if (!ok) {
+                fprintf(stderr, "Compilation of %s failed\n", info->c_filename);
+                free_module(module);
+                return false;
+            }
+        }
     }
 
     free_module(module);
@@ -565,50 +668,82 @@ static bool load_module_from_disk(struct LoadDetails *details)
 // Returns true if success, false if error (e.g. module not found, circular dependency)
 static bool load_module_recursive(struct LoadDetails *details)
 {
+    // Check if we have already seen this module...
+    struct ModulePathInfo *info = find_module(details->package_loader,
+                                              details->importer_package_name,
+                                              details->module_name);
+    char *full_module_name =
+        info ? copy_string_3(info->package_name, "/", details->module_name) : NULL;
+
     const char *key_out = NULL;
     void *value_out = NULL;
-    hash_table_lookup_2(details->loaded_modules, details->module_name, &key_out, &value_out);
+    if (info) {
+        hash_table_lookup_2(details->loaded_modules, full_module_name, &key_out, &value_out);
+    }
 
     if (value_out != NULL) {
         // Module was previously loaded. Nothing to do.
+        free(full_module_name);
         return true;
     }
 
     if (key_out != NULL) {
         // Circular dependency.
         report_circular_dependency(details->import_location, details->module_name);
+        free(full_module_name);
         return false;
     }
 
     // The module is now loading
-    hash_table_insert(details->loaded_modules, copy_string(details->module_name), NULL);
-
-    // Load the module, either as a built-in module, or from disk.
-    if (import_builtin_module(details->module_name,
-                              details->renamer_env,
-                              details->type_env,
-                              details->expanded_type_env,
-                              details->verifier_env,
-                              details->codegen_env)) {
-        // HACK: just use a "fake" SHA256 hash for now.
-        // TODO: We probably should remove builtin modules sometime.
-        char *hash = alloc(SHA256_HASH_LENGTH);
-        for (int i = 0; i < SHA256_HASH_LENGTH; ++i) {
-            hash[i] = i;
-        }
-        hash_table_insert(details->loaded_modules, details->module_name, hash);
+    if (info) {
+        hash_table_insert(details->loaded_modules, full_module_name, NULL);
     } else {
-        if (!load_module_from_disk(details)) {
-            return false;
-        }
+        free(full_module_name);
     }
 
-    return true;
+    // Load the module
+    return load_module_from_disk(details, info);
+}
+
+static void free_all_strings(struct StringNode *strings)
+{
+    while (strings) {
+        free((char*)strings->ptr);
+        struct StringNode *to_free = strings;
+        strings = strings->next;
+        free(to_free);
+    }
 }
 
 bool compile(struct CompileOptions *options)
 {
     struct LoadDetails details;
+    details.strings = NULL;
+
+    const char *root_prefix = options->root_package_prefix ? options->root_package_prefix : "";
+
+    details.package_loader = alloc_package_loader();
+    if (!load_root_package_and_dependencies(details.package_loader,
+                                            root_prefix,
+                                            options->search_path)) {
+        free_package_loader(details.package_loader);
+        return false;
+    }
+
+    if (options->output_prefix) {
+        details.output_prefix = options->output_prefix;
+    } else {
+        char *str = copy_string_2(root_prefix, "build/");
+        add_string(&details.strings, str);
+        details.output_prefix = str;
+    }
+
+    if (!maybe_mkdir(details.output_prefix, 0777)) {
+        fprintf(stderr, "Output path '%s' doesn't exist and couldn't be created\n", details.output_prefix);
+        free_package_loader(details.package_loader);
+        free_all_strings(details.strings);
+        return false;
+    }
 
     details.loaded_modules = new_hash_table();
     details.renamer_env = new_hash_table();
@@ -616,14 +751,10 @@ bool compile(struct CompileOptions *options)
     details.expanded_type_env = new_type_env();
     details.verifier_env = new_verifier_env();
     details.codegen_env = new_codegen_env();
-    details.strings = NULL;
 
-    interpret_filename(&details, options->filename);
-    if (options->output_prefix) {
-        details.output_prefix = options->output_prefix;
-    } else {
-        details.output_prefix = details.input_prefix;
-    }
+    details.importer_package_name = details.root_package_name =
+        get_root_package_name(details.package_loader);
+
 
     // Open the cache unless (a) it is disabled or (b) we are only compiling,
     // not verifying (in which case the cache is not needed).
@@ -639,19 +770,49 @@ bool compile(struct CompileOptions *options)
 
     details.import_location = g_no_location;
     details.compile_mode = options->mode;
-    details.root_module = true;
 
+    if (options->requested_modules && options->mode == CM_COMPILE) {
+        fatal_error("Requested modules not currently supported for CM_COMPILE");
+    }
+
+    details.requested_modules = options->requested_modules;
     details.show_progress = options->show_progress;
     details.create_debug_files = options->create_debug_files;
-    details.generate_main = options->generate_main;
-    details.auto_main = options->auto_main;
 
-    bool success = load_module_recursive(&details);
+    details.main_module_name = get_root_main_module(details.package_loader);
+    details.main_function_name = get_root_main_function(details.package_loader);
+    details.obj_files = NULL;
+
+    bool success = true;
+    if (options->requested_modules == NULL) {
+        for (struct NameList * names = get_root_exported_modules(details.package_loader); success && names; names = names->next) {
+            details.module_name = names->name;
+            success = load_module_recursive(&details);
+        }
+        if (details.main_module_name && success) {
+            details.module_name = details.main_module_name;
+            success = load_module_recursive(&details);
+        }
+    } else {
+        for (struct NameList *names = options->requested_modules; success && names; names = names->next) {
+            details.module_name = names->name;
+            success = load_module_recursive(&details);
+        }
+    }
 
     // Wait for FOL runner to complete, and then get final status
     wait_fol_complete();
     success = success && !fol_error_found();
     stop_fol_runner();
+
+    // If everything is ok we can now link
+    // Note: Linking only happens when a main_module is defined.
+    if (options->mode == CM_COMPILE
+    && success
+    && details.obj_files != NULL
+    && details.main_module_name) {
+        success = run_linker(&details);
+    }
 
     // Close cache DB (*after* FOL runner has finished!)
     close_cache_db(details.cache_db);
@@ -667,13 +828,10 @@ bool compile(struct CompileOptions *options)
     free_type_env(details.expanded_type_env);
     free_codegen_env(details.codegen_env);
 
-    struct StringNode *strings = details.strings;
-    while (strings) {
-        free((char*)strings->ptr);
-        struct StringNode *to_free = strings;
-        strings = strings->next;
-        free(to_free);
-    }
+    free_all_strings(details.strings);
+    free_name_list(details.obj_files);
+
+    free_package_loader(details.package_loader);
 
     return success;
 }

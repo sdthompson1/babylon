@@ -1,1 +1,1 @@
-StringCopy.b:44:5: Assert might not hold
+src/StringCopy.b:44:5: Assert might not hold

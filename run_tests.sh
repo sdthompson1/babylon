@@ -1,11 +1,10 @@
 #!/bin/bash
 
 COMPILER="build/babylon"
-CC="gcc -g -Wno-overflow -Wno-div-by-zero test/test_support.c"
 
-TEST_MODULE="test/Test.b"
 CASES_DIR="test/cases"
 SEQUENCE_TESTS_DIR="test/sequence"
+PACKAGE_TESTS_DIR="test/package_tests"
 
 OUT_DIR="test/output_tmp"
 
@@ -45,6 +44,14 @@ filter_valgrind()
     return 0
 }
 
+write_package_file()
+{
+    template_file=$1
+    root_module=$2
+    cp test/$template_file $OUT_DIR/package.toml
+    sed -i -e "s/MODULE_NAME/${root_module%.$PROG_EXT}/g" $OUT_DIR/package.toml
+}
+
 run_test()
 {
     # $1 is the test folder name
@@ -60,22 +67,21 @@ run_test()
     # Remove previous contents of output folder, if any
     rm -fr $OUT_DIR/* || return 1
 
-    # Make 'build' folder (this prevents outputs going into any symlinked input folders,
-    # and also exercises the "mkdir" code in the compiler)
-    mkdir $OUT_DIR/build
+    # Make the package.toml file
+    write_package_file package_template.toml $root_module
 
-    # Link the source-code file(s) into place
+    # Make the src directory, and link the source-code file(s) into place
+    mkdir $OUT_DIR/src
     for filename in $@
     do
-        ln -s $(pwd)/$folder/$filename $OUT_DIR/ || return 1
+        ln -s $(pwd)/$folder/$filename $OUT_DIR/src/ || return 1
     done
-    ln -s $(pwd)/$TEST_MODULE $OUT_DIR/ || return 1
 
 
-    # Verify the root module (and all submodules)
+    # Verify the test module (and any imports)
     # (cd into the directory so that the error messages don't include the full path!)
     pushd $OUT_DIR >/dev/null
-    $COMPILER --verify-all --verify-continue --quiet --verify-timeout $TIMEOUT --main $root_module -o build >verifier_stdout.txt 2>verifier_stderr.txt
+    $COMPILER --verify --verify-continue --quiet --verify-timeout $TIMEOUT --package-path .. >verifier_stdout.txt 2>verifier_stderr.txt
     verifier_result=$?
     popd >/dev/null
 
@@ -120,8 +126,8 @@ run_test()
     fi
 
 
-    # Compile root module -- creates .c file(s).
-    $COMPILER --compile --main $OUT_DIR/$root_module -o $OUT_DIR/build >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
+    # Compile the package, creates $OUT_DIR/build/bin/test-binary
+    $COMPILER --compile --root $OUT_DIR --package-path test >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
     compiler_result=$?
 
     # Stdout and stderr from the compiler should be empty, and
@@ -135,12 +141,9 @@ run_test()
         return 1
     fi
 
-    # Use gcc to link the .c files and test_support.c, making an executable file
-    find $OUT_DIR/build -name '*.c' |xargs $CC -o $OUT_DIR/test_binary || return 1
-
     # Run the compiled executable, capture stdout and stderr
     # (If it doesn't return zero status then that is a test failure)
-    $OUT_DIR/test_binary >$OUT_DIR/prog_stdout.txt 2>$OUT_DIR/prog_stderr.txt || return 1
+    $OUT_DIR/build/bin/test-binary >$OUT_DIR/prog_stdout.txt 2>$OUT_DIR/prog_stderr.txt || return 1
 
     # Stderr from the compiled program should be empty
     check_file_empty prog_stderr.txt || return 1
@@ -194,13 +197,22 @@ run_sequence_tests()
     # Remove previous contents of output folder, if any
     rm -fr $OUT_DIR/* || return 1
 
+    # Make a package.toml file
+    write_package_file sequence/sequence_test.toml Main
+    mkdir $OUT_DIR/src
+
     # For each test in the sequence
-    for i in $SEQUENCE_TESTS_DIR/*
+    for i in $SEQUENCE_TESTS_DIR/??
     do
-        echo $i/Main.b
+        echo $i/Main.$PROG_EXT
 
         # Run the compiler, putting output into $OUT_DIR
-        $COMPILER --verify-all --verify-timeout $TIMEOUT $i/Main.b -o $OUT_DIR >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
+        rm -f $OUT_DIR/src/*.$PROG_EXT
+        for bfile in $i/*.$PROG_EXT
+        do
+            ln -s ../../../$bfile $OUT_DIR/src/
+        done
+        $COMPILER --verify --verify-timeout $TIMEOUT -r $OUT_DIR -p test >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
 
         # Clip out reports of which prover succeeded, like "(z3,
         # 0.1s)", and also messages like "(cached)", as these may vary
@@ -229,6 +241,62 @@ run_sequence_tests()
     return 0
 }
 
+function run_package_tests()
+{
+    for i in $(ls $PACKAGE_TESTS_DIR)
+    do
+        echo "$PACKAGE_TESTS_DIR/$i"
+
+        rm -rf $OUT_DIR/* || return 1
+        cp -r $PACKAGE_TESTS_DIR/$i/* $OUT_DIR/ || return 1
+
+        # Verify
+        $COMPILER -v --quiet -p $OUT_DIR -p test/ -r $OUT_DIR/root >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
+        verifier_result=$?
+        filter_valgrind $OUT_DIR/verifier_stderr.txt || return 1
+
+        if [ -a $OUT_DIR/verifier_stderr.expected ]
+        then
+            diff -u $OUT_DIR/verifier_stderr.expected $OUT_DIR/verifier_stderr.txt || return 1
+            expected_verifier_result=1
+        else
+            check_file_empty verifier_stdout.txt || return 1
+            check_file_empty verifier_stderr.txt || return 1
+            expected_verifier_result=0
+        fi
+        if [ $verifier_result -ne $expected_verifier_result ]
+        then
+            echo "Verifier gave nonzero exit status"
+            return 1
+        fi
+        if [ $verifier_result -ne 0 ]
+        then
+            continue
+        fi
+
+        # Compile
+        $COMPILER -c -p $OUT_DIR -p test -r $OUT_DIR/root >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
+        compiler_result=$?
+        filter_valgrind $OUT_DIR/compiler_stderr.txt || return 1
+
+        check_file_empty compiler_stdout.txt || return 1
+        check_file_empty compiler_stderr.txt || return 1
+        if [ $compiler_result -ne 0 ]
+        then
+            echo "Compiler gave nonzero exit status"
+            return 1
+        fi
+
+        # Run
+        $OUT_DIR/root/build/bin/root >$OUT_DIR/prog_stdout.txt 2>$OUT_DIR/prog_stderr.txt || return 1
+        check_file_empty $OUT_DIR/prog_stderr.txt || return 1
+        diff -u $OUT_DIR/prog_stdout.expected $OUT_DIR/prog_stdout.txt || return 1
+
+    done
+
+    return 0
+}
+
 function run_all_tests()
 {
     run_main_tests $1 $2 || return 1
@@ -236,6 +304,11 @@ function run_all_tests()
     if [[ -z $2 ]] || [[ $2 == sequence ]] || [[ $2 == seq ]]
     then
         run_sequence_tests || return 1
+    fi
+
+    if [[ -z $2 ]] || [[ $2 == package ]]
+    then
+        run_package_tests || return 1
     fi
 
     return 0

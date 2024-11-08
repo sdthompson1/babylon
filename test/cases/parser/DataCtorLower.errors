@@ -1,1 +1,1 @@
-DataCtorLower.b:4:22: Syntax error (data constructor names must begin with an uppercase letter)
+src/DataCtorLower.b:4:22: Syntax error (data constructor names must begin with an uppercase letter)

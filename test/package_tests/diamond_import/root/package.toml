@@ -1,0 +1,13 @@
+[package]
+name = "root"
+description = "Test of diamond-shaped package import: root depends on dep1 and dep2, which both depend on inner-dep, at different versions."
+version = "0.1"
+
+[modules]
+main-module = "Main"
+main-function = "main"
+
+[dependencies]
+dep1 = "0.1"
+dep2 = "0.1"
+test-support = "0.1"

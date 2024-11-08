@@ -1,26 +1,26 @@
-While.b:7:7: Invariant might not hold on entry to loop
-While.b:18:7: Invariant might not hold on exit from loop
-While.b:30:7: 'decreases' value might not decrease
-While.b:40:17: Operator precondition might not be met
-While.b:40:7: Invariant might not hold on entry to loop
-While.b:40:17: Operator precondition might not be met
-While.b:40:17: Operator precondition might not be met
-While.b:41:7: 'decreases' value might not decrease
-While.b:50:17: Operator precondition might not be met
-While.b:50:17: Operator precondition might not be met
-While.b:50:7: 'decreases' value might not decrease
-While.b:60:17: Operator precondition might not be met
-While.b:60:7: Invariant might not hold on exit from loop
-While.b:71:12: Operator precondition might not be met
-While.b:83:17: Operator precondition might not be met
-While.b:106:20: Operator precondition might not be met
-While.b:104:7: 'decreases' value might not decrease
-While.b:176:5: Assert might not hold
-While.b:187:7: Assert might not hold
-While.b:216:7: 'decreases' value might not decrease
-While.b:248:5: Assert might not hold
-While.b:267:9: Assert might not hold
-While.b:285:9: Assert might not hold
-While.b:297:9: Assert might not hold
-While.b:310:9: Assert might not hold
-While.b:317:5: A 'decreases' clause is required
+src/While.b:7:7: Invariant might not hold on entry to loop
+src/While.b:18:7: Invariant might not hold on exit from loop
+src/While.b:30:7: 'decreases' value might not decrease
+src/While.b:40:17: Operator precondition might not be met
+src/While.b:40:7: Invariant might not hold on entry to loop
+src/While.b:40:17: Operator precondition might not be met
+src/While.b:40:17: Operator precondition might not be met
+src/While.b:41:7: 'decreases' value might not decrease
+src/While.b:50:17: Operator precondition might not be met
+src/While.b:50:17: Operator precondition might not be met
+src/While.b:50:7: 'decreases' value might not decrease
+src/While.b:60:17: Operator precondition might not be met
+src/While.b:60:7: Invariant might not hold on exit from loop
+src/While.b:71:12: Operator precondition might not be met
+src/While.b:83:17: Operator precondition might not be met
+src/While.b:106:20: Operator precondition might not be met
+src/While.b:104:7: 'decreases' value might not decrease
+src/While.b:176:5: Assert might not hold
+src/While.b:187:7: Assert might not hold
+src/While.b:216:7: 'decreases' value might not decrease
+src/While.b:248:5: Assert might not hold
+src/While.b:267:9: Assert might not hold
+src/While.b:285:9: Assert might not hold
+src/While.b:297:9: Assert might not hold
+src/While.b:310:9: Assert might not hold
+src/While.b:317:5: A 'decreases' clause is required

@@ -1,2 +1,2 @@
-Allocated.b:8:12: 'allocated' cannot be used in executable code
-Allocated.b:13:26: Type mismatch
+src/Allocated.b:8:12: 'allocated' cannot be used in executable code
+src/Allocated.b:13:26: Type mismatch

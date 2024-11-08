@@ -21,8 +21,7 @@ struct CompileResult;
 
 enum CompileMode {
     CM_COMPILE,
-    CM_VERIFY,
-    CM_VERIFY_ALL
+    CM_VERIFY
 };
 
 enum CacheMode {
@@ -31,26 +30,32 @@ enum CacheMode {
 };
 
 struct CompileOptions {
-    const char *filename;
-    const char *output_prefix;
+    const char *root_package_prefix;  // optional (NULL means "")
+    const char *output_prefix;   // optional (NULL means root_package_prefix + "build/")
+    struct NameList *search_path;  // search path for dependent packages (each entry is a "prefix")
+
+    // The list of module names to compile/verify.
+    // Empty means do everything accessible from main_module and exported_modules.
+    // NOTE: Currently this is only supported for CM_VERIFY. For CM_COMPILE it must be empty.
+    struct NameList *requested_modules;
+
     enum CompileMode mode;
     enum CacheMode cache_mode;
     bool show_progress;
     bool create_debug_files;
     bool continue_after_verify_error;
     int verify_timeout_seconds;
-    bool generate_main;
-    bool auto_main;
 };
 
 
 //
 // Loads and "compiles" a module (and its imports) from the filesystem.
 //
-//  - The filename for the root module must be given.
+//  - The "prefix" for the package.toml file for the root package must be given.
+//     - This is either an empty string to use the current directory, or a relative
+//       or absolute path ending in a slash.
 //
-//  - The root module, together with any imported modules, are loaded from the filesystem.
-//     - For now, there is no "search path", modules are looked for in the current directory.
+//  - The root package, together with any dependencies, are loaded from the filesystem.
 //
 //  - Returns true if successful, false if errors.
 //

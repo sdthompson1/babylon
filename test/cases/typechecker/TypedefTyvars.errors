@@ -1,2 +1,2 @@
-TypedefTyvars.b:16:12: Wrong number of type arguments (expected: 2, actual: 3)
-TypedefTyvars.b:21:12: Wrong number of type arguments (expected: 2, actual: 1)
+src/TypedefTyvars.b:16:12: Wrong number of type arguments (expected: 2, actual: 3)
+src/TypedefTyvars.b:21:12: Wrong number of type arguments (expected: 2, actual: 1)

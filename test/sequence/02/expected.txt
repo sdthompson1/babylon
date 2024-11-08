@@ -1,2 +1,2 @@
-Skipping module Main
+Skipping module sequence-test/Main
 Verification successful

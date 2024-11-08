@@ -285,6 +285,8 @@ void solve_fol_problem(struct Sexpr *fol_problem,   // handover
         job->procs[i].print_to_stdin = print_to_stdin;
         job->procs[i].context = smt_problem;
         job->procs[i].timeout_in_seconds = g_fol_runner->timeout_seconds;
+        job->procs[i].show_stdout = false;  // Redirect stdout to the "output" array so that we can check it later.
+        job->procs[i].show_stderr = false;  // Redirect stderr to /dev/null as this is often just unwanted spam (like "cvc5 interrupted by user").
     }
 
     job->num_started = 0;

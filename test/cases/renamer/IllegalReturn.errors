@@ -1,2 +1,2 @@
-IllegalReturn.b:4:13: 'return' used as variable, but this function does not return a value
-IllegalReturn.b:10:18: 'return' cannot be used as a variable in this context
+src/IllegalReturn.b:4:13: 'return' used as variable, but this function does not return a value
+src/IllegalReturn.b:10:18: 'return' cannot be used as a variable in this context

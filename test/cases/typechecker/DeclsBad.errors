@@ -1,4 +1,4 @@
-DeclsBad.b:3:20: Type mismatch
-DeclsBad.b:4:5: Illegal recursive definition of 'DeclsBad.r'
-DeclsBad.b:5:5: Incomplete definition
-DeclsBad.b:6:5: Incomplete definition
+src/DeclsBad.b:3:20: Type mismatch
+src/DeclsBad.b:4:5: Illegal recursive definition of 'test-binary:DeclsBad.r'
+src/DeclsBad.b:5:5: Incomplete definition
+src/DeclsBad.b:6:5: Incomplete definition

@@ -26,8 +26,14 @@ char * sanitise_name(const char *var_name)
     char * new_name = alloc(strlen(var_name) + 1);
     char * p = new_name;
     while (*var_name != 0 && *var_name != '@') {
+        // remove '^' characters from type names
         if (*var_name != '^') {
-            *p++ = *var_name;
+            if (*var_name == '/') {
+                // convert '/' package-name separator to ':' for error messages
+                *p++ = ':';
+            } else {
+                *p++ = *var_name;
+            }
         }
         ++var_name;
     }
@@ -88,7 +94,11 @@ void report_circular_dependency(struct Location location, const char *module_nam
 void report_module_not_found(struct Location location, const char *module_name, const char *filename)
 {
     print_location(location);
-    print_error("Module '%s' ('%s') not found\n", module_name, filename);
+    if (filename) {
+        print_error("Module '%s' ('%s') not found\n", module_name, filename);
+    } else {
+        print_error("Module '%s' not found\n", module_name);
+    }
 }
 
 void report_module_name_mismatch_filename(struct Location location, const char *module_name)
@@ -237,14 +247,18 @@ void report_wrong_number_of_indexes(struct Term *term)
                 term->array_proj.lhs->type->array_data.ndim);
 }
 
-void report_main_not_found(const char *module_name)
+void report_main_not_found(const char *module_name, const char *function_name)
 {
-    print_error("'main' function not found (check interface for module '%s')\n", module_name);
+    char *new_name = sanitise_name(module_name);
+    print_error("Main function ('%s.%s') not found (or not exported in module interface)\n", new_name, function_name);
+    free(new_name);
 }
 
-void report_main_wrong_type(const char *module_name)
+void report_main_wrong_type(const char *module_name, const char *function_name)
 {
-    print_error("'%s.main' has the wrong type - expected a non-ghost function with no arguments and no return value\n", module_name);
+    char *new_name = sanitise_name(module_name);
+    print_error("'%s.%s' has the wrong type - expected a non-ghost function with no arguments and no return value\n", new_name, function_name);
+    free(new_name);
 }
 
 void report_both_body_and_extern(struct Location location)

@@ -1,2 +1,2 @@
-ShowHide.b:7:5: Not in scope: 'foo'
-ShowHide.b:8:5: Not in scope: 'foo'
+src/ShowHide.b:7:5: Not in scope: 'foo'
+src/ShowHide.b:8:5: Not in scope: 'foo'

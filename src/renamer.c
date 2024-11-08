@@ -12,6 +12,7 @@ repository.
 #include "ast.h"
 #include "error.h"
 #include "hash_table.h"
+#include "package.h"
 #include "renamer.h"
 #include "util.h"
 
@@ -36,12 +37,16 @@ struct LocalName {
 
 struct RenamerState {
     // Renamer env.
-    // Key = module name (allocated)
+    // Key = pkg-name/ModuleName (allocated)
     // Value = NameList of (unqualified) names exported by this module.
+    // (Note: we use '/' in the key to separate the pkg-name from
+    // the ModName; ':' might have been better, but ':' is not a legal
+    // character for SMT-LIB variable names, unfortunately.)
     struct HashTable *renamer_env;
 
     // Information about the current module
     struct Module *module;
+    const char *module_name_without_package;  // current module name, without its package-name
     bool error;
 
     // Current scope number
@@ -63,8 +68,9 @@ struct RenamerState {
     struct HashTable *implementation_names;
 
     // Global names from other modules
-    // Key = name (qualified or unqualified) (allocated)
-    // Value = NameList of qualified names that it can resolve to (allocated)
+    // Key = name ("xyz" or "ModAlias.xyz") (allocated)
+    // Value = NameList of qualified names ("pkg-name/ModName.name") that it can
+    //   resolve to (allocated)
     struct HashTable *imported_names;
 
 
@@ -105,6 +111,7 @@ static void init_renamer_state(struct RenamerState *state)
     state->imported_names = new_hash_table();
     state->module_aliases = new_hash_table();
     state->match_compiler_counter = NULL;
+    state->module_name_without_package = NULL;
 }
 
 static void reset_local_names(struct RenamerState *state)
@@ -130,6 +137,7 @@ static void clean_up_renamer_state(struct RenamerState *state)
 
     free_hash_table(state->module_aliases);
 
+    free((char*)state->module_name_without_package);
 }
 
 
@@ -264,21 +272,21 @@ static struct NameList * resolve_unqualified_name(struct RenamerState *state,
 }
 
 
-// Resolves a qualified name "A.B" to a global name, either from the
-// current or an imported module.
+// Resolves a qualified name "A.B" to a global name "pkg-name/ModName.B",
+// either from the current or an imported module.
 static struct NameList * resolve_qualified_name(struct RenamerState *state,
                                                 const char *A, const char *B)
 {
-    if (state->module && strcmp(state->module->name, A) == 0) {
+    if (state->module && strcmp(state->module_name_without_package, A) == 0) {
 
         // A is our "self" module name. If B is in the interface or
         // implementation of the current module, then the result is
-        // "A.B", otherwise it an empty list.
+        // "CurrentModuleName.B", otherwise it an empty list.
 
         if (hash_table_contains_key(state->interface_names, B) ||
         hash_table_contains_key(state->implementation_names, B)) {
             struct NameList *new_node = alloc(sizeof(struct NameList));
-            new_node->name = copy_string_3(A, ".", B);
+            new_node->name = copy_string_3(state->module->name, ".", B);
             new_node->next = NULL;
             return new_node;
         } else {
@@ -366,7 +374,7 @@ void handle_resolution_failure(struct RenamerState *state,
         if (split_on_dot(name, &A, &B)) {
 
             if (hash_table_contains_key(state->module_aliases, A)
-            || strcmp(A, state->module->name) == 0) {
+            || strcmp(A, state->module_name_without_package) == 0) {
                 // "A" is a valid module-name, so we can't say that "A
                 // is not in scope". But the module doesn't export
                 // "B", so saying "A.B not in scope" is valid.
@@ -1103,6 +1111,25 @@ static void rename_decls(struct RenamerState *state,
     }
 }
 
+// Resolve imports i.e. change "import ModName;" into "import package-name/ModName;".
+static void resolve_imports(struct PackageLoader *package_loader,
+                            const char *my_package_name,
+                            struct Import *import)
+{
+    while (import) {
+        struct ModulePathInfo *info = find_module(package_loader, my_package_name, import->module_name);
+        if (info == NULL) {
+            // This is unexpected because we should already have
+            // loaded (and renamed) any imported modules before we get
+            // to this point
+            fatal_error("resolve_imports failed");
+        }
+        char *new_name = copy_string_3(info->package_name, "/", import->module_name);
+        free((char*)import->module_name);
+        import->module_name = new_name;
+        import = import->next;
+    }
+}
 
 // Helper for add_one_import.
 static void insert_import(struct RenamerState *state, const char *name, const char *maps_to)
@@ -1141,7 +1168,7 @@ static void add_one_import(struct RenamerState *state, struct Import *import)
 static void add_imports_to_scope(struct RenamerState *state, struct Import *imports)
 {
     for (struct Import *import = imports; import; import = import->next) {
-        if (strcmp(import->alias_name, state->module->name) == 0) {
+        if (strcmp(import->alias_name, state->module_name_without_package) == 0) {
             report_import_clash_with_current(import);
             state->error = true;
         } else if (hash_table_contains_key(state->module_aliases, import->alias_name)) {
@@ -1176,23 +1203,36 @@ static void add_exported_names(struct RenamerState *state)
     hash_table_insert(state->renamer_env, copy_string(state->module->name), list);
 }
 
-bool rename_module(struct HashTable *renamer_env, struct Module *module, bool interface_only)
+bool rename_module(struct HashTable *renamer_env,
+                   struct PackageLoader *package_loader,
+                   const char *package_name,
+                   struct Module *module,
+                   bool interface_only)
 {
     struct RenamerState state;
     init_renamer_state(&state);
     state.renamer_env = renamer_env;
     state.module = module;
+    state.module_name_without_package = copy_string(module->name);
 
+    char *new_name = copy_string_3(package_name, "/", module->name);
+    free((char*)module->name);
+    module->name = new_name;
+
+    resolve_imports(package_loader, package_name, module->interface_imports);
     add_imports_to_scope(&state, module->interface_imports);
 
     if (module->interface) {
         rename_decls(&state, module->interface->decl, true);
     }
 
-    add_imports_to_scope(&state, module->implementation_imports);
+    if (!interface_only) {
+        resolve_imports(package_loader, package_name, module->implementation_imports);
+        add_imports_to_scope(&state, module->implementation_imports);
 
-    if (module->implementation) {
-        rename_decls(&state, module->implementation->decl, false);
+        if (module->implementation) {
+            rename_decls(&state, module->implementation->decl, false);
+        }
     }
 
     add_exported_names(&state);

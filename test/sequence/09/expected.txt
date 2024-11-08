@@ -1,4 +1,4 @@
-Verifying: Main.MyType
-Verifying: Main.NEW_CONST
-Verifying: Main.f
+Verifying: sequence-test/Main.MyType
+Verifying: sequence-test/Main.NEW_CONST
+Verifying: sequence-test/Main.f
 Verification successful
