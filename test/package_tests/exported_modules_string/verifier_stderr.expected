@@ -1,0 +1,1 @@
+test/output_tmp/root/package.toml: 'exported-modules' has incorrect type (should be array)

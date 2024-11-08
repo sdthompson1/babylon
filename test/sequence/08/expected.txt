@@ -1,5 +1,5 @@
-Verifying: sequence-test/Main.MyType
-Verifying: sequence-test/Main.f
+Verifying: sequence-test:Main.MyType
+Verifying: sequence-test:Main.f
 Checking Main.b:12:12-17 (binary operator)
 Checking Main.b:13:1-2 (end of function unreachable)
 Verification successful

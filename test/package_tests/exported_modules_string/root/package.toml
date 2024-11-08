@@ -1,0 +1,8 @@
+[package]
+name = "root"
+version = "0.1"
+
+[modules]
+# In this test we set "exported-modules" to a string, when
+# it should be an array.
+exported-modules = "Main"

@@ -790,20 +790,10 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
     if (context->show_progress) {
         // Add a "dummy" job to print the "Verifying:" message at the appropriate
         // point in the job queue.
-        char buf[200];
-        int i = 0;
-        for (const char *c = decl->name; *c; ++c) {
-            if (*c != '^') {
-                buf[i] = *c;
-                ++i;
-                if (i == sizeof(buf) - 1) {
-                    break;
-                }
-            }
-        }
-        buf[i] = 0;
+        char *new_name = sanitise_name(decl->name);
         const char *msg_tail = skipped ? " (cached)\n" : "\n";
-        char *msg = copy_string_3("Verifying: ", buf, msg_tail);
+        char *msg = copy_string_3("Verifying: ", new_name, msg_tail);
+        free(new_name);
         add_fol_message(msg, false, 0, NULL);
     }
 

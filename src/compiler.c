@@ -228,9 +228,11 @@ static bool should_skip_module(struct LoadDetails *details,
     // there is no need to verify it again.
     if (sha256_exists_in_db(details->cache_db, MODULE_HASH, full_module_fingerprint)) {
         if (details->show_progress) {
-                add_fol_message(copy_string_3("Skipping module ", module->name, " (cached)\n"),
-                                false,  // is_error
-                                0, NULL);
+            char *new_name = sanitise_name(module->name);
+            add_fol_message(copy_string_3("Skipping module ", new_name, " (cached)\n"),
+                            false,  // is_error
+                            0, NULL);
+            free(new_name);
         }
         return true;
     } else {

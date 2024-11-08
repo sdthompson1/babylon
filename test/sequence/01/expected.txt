@@ -1,11 +1,11 @@
-Verifying: sequence-test/Main.f
+Verifying: sequence-test:Main.f
 Checking Main.b:12:1-2 (end of function unreachable)
-Verifying: sequence-test/Main.g
+Verifying: sequence-test:Main.g
 Checking Main.b:16:12-19 (binary operator)
 Checking Main.b:17:1-2 (end of function unreachable)
-Verifying: sequence-test/Main.h
+Verifying: sequence-test:Main.h
 Checking Main.b:21:12-19 (binary operator)
 Checking Main.b:22:1-2 (end of function unreachable)
-Verifying: sequence-test/Main.i
+Verifying: sequence-test:Main.i
 Checking Main.b:27:1-2 (end of function unreachable)
 Verification successful

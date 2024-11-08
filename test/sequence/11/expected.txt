@@ -1,4 +1,4 @@
-Verifying: sequence-test/Foo.Foo
-Verifying: sequence-test/Main.foo
+Verifying: sequence-test:Foo.Foo
+Verifying: sequence-test:Main.foo
 Checking Main.b:13:1-2 (end of function unreachable)
 Verification successful

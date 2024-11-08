@@ -131,6 +131,38 @@ static void free_package(struct Package *package)
 }
 
 
+// Replacement for toml_table_array that prints an error (as well as
+// returning NULL) if the value is present but not actually an array.
+static toml_array_t* toml_table_array_ext(const char *filename,
+                                          const toml_table_t *table,
+                                          const char *key,
+                                          bool *error)
+{
+    if (error) *error = false;
+
+    toml_array_t * arr = toml_table_array(table, key);
+    if (arr != NULL) {
+        return arr;
+    }
+
+    // toml_table_array returns NULL if either the key is not found
+    // or the key has non-array type. We have to figure out which it is.
+    int len = toml_table_len(table);
+    for (int i = 0; i < len; ++i) {
+        int keylen;
+        if (strcmp(toml_table_key(table, i, &keylen), key) == 0) {
+            // Found the key as a non-array key
+            fprintf(stderr, "%s: '%s' has incorrect type (should be array)\n", filename, key);
+            if (error) *error = true;
+            break;
+        }
+    }
+
+    // Either way, we return NULL
+    return NULL;
+}
+
+
 // Helper function used by numeric_compare.
 static bool all_digits(const char *a)
 {
@@ -229,7 +261,7 @@ static char* read_string(const char *filename,
     } else if (dflt) {
         return copy_string(dflt);
     } else {
-        fprintf(stderr, "%s: '%s' missing\n", filename, key);
+        fprintf(stderr, "%s: '%s' missing or invalid\n", filename, key);
         return NULL;
     }
 }
@@ -403,7 +435,13 @@ static struct Package *
         main_function = NULL;
     }
 
-    toml_array_t *exports_array = toml_table_array(modules_tbl, "exported-modules");
+    bool exports_array_error = false;
+    toml_array_t *exports_array =
+        toml_table_array_ext(filename,
+                             modules_tbl,
+                             "exported-modules",
+                             &exports_array_error);
+    if (exports_array_error) goto end;
     if (exports_array) {
         bool error;
         exported_modules = read_string_list(filename, exports_array, &error);
