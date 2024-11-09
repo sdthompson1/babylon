@@ -30,6 +30,12 @@ enum CacheMode {
 };
 
 struct CompileOptions {
+    const char *pkg_config_cmd;
+    const char *cc_cmd;
+    const char *ld_cmd;
+    struct NameList *cflags;
+    struct NameList *libs;
+
     const char *root_package_prefix;  // optional (NULL means "")
     const char *output_prefix;   // optional (NULL means root_package_prefix + "build/")
     struct NameList *search_path;  // search path for dependent packages (each entry is a "prefix")

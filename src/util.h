@@ -30,6 +30,11 @@ char * copy_string_5(const char *str1, const char *str2, const char *str3, const
 // Returns a newly allocated string, in which every '.' from the original is replaced with '/'.
 char * replace_dots_with_slashes(const char *str);
 
+
+// NameList helper functions:
+
+int name_list_length(struct NameList *list);
+
 struct NameList * copy_name_list(struct NameList *list);
 
 // sort a NameList in place. returns new head pointer.

@@ -10,9 +10,11 @@ repository.
 #define _POSIX_C_SOURCE 200809L   // required by toml-c.h
 
 #include "alloc.h"
+#include "dep_list.h"
 #include "error.h"
 #include "hash_table.h"
 #include "package.h"
+#include "system_packages.h"
 
 #include "toml-c.h"
 
@@ -25,12 +27,6 @@ repository.
 
 struct Package;
 
-struct DepList {
-    char *name;                   // allocated
-    char *min_version;            // allocated
-    struct DepList *next;
-};
-
 struct Package {
     // Package name
     char *name;
@@ -42,9 +38,8 @@ struct Package {
     // Babylon packages that this package depends on.
     struct DepList *deps;
 
-    // "System packages" that this package depends on. System packages can be interpreted
-    // in a system-specific way, but for now it just means "pkg-config" packages.
-    struct DepList *system_packages;
+    // cflags (from system packages)
+    struct NameList *cflags;
 
     // Path prefix for the package.toml file. Ends in slash, or is "".
     char *prefix;
@@ -75,6 +70,17 @@ struct PackageLoader {
 
     // Points to one of the entries in the packages hash table.
     struct Package * root_package;
+
+    // Our copy of the pkg_config_cmd
+    char *pkg_config_cmd;
+
+    // Key = system_package name (allocated).
+    // Value = min version required (allocated).
+    // This is freed after "libs" is constructed.
+    struct HashTable *all_system_packages;
+
+    // All "libs" from all system packages.
+    struct NameList *libs;
 };
 
 
@@ -122,7 +128,7 @@ static void free_package(struct Package *package)
     free(package->name);
     free(package->version);
     free_dep_list(package->deps);
-    free_dep_list(package->system_packages);
+    free_name_list(package->cflags);
     free(package->prefix);
     free_name_list(package->exported_modules);
     free(package->main_module);
@@ -245,6 +251,79 @@ static int version_compare(char *a, char *b)
     return r;
 }
 
+
+// Given a list of system_packages,
+// update "all_system_packages" hashtable,
+// and fill in "cflags" for this package.
+// Returns false if the pkg-config command fails.
+static bool resolve_system_packages(const char *pkg_config_cmd,
+                                    struct DepList *system_packages,
+                                    struct NameList **cflags,
+                                    struct HashTable *all_system_packages)
+{
+    // Call pkg-config to get the cflags
+    bool result = system_package_cflags(pkg_config_cmd, system_packages, cflags);
+
+    // Add the min versions to 'all_system_packages'
+    // (updating existing entries if required)
+    for (struct DepList *node = system_packages; node; node = node->next) {
+        const char *key;
+        void *value;
+        hash_table_lookup_2(all_system_packages, node->name, &key, &value);
+        if (key && version_compare(node->min_version, value) > 0) {
+            hash_table_remove(all_system_packages, key);
+            free((char*)key);
+            free(value);
+            key = NULL;
+            value = NULL;
+        }
+        if (!key) {
+            hash_table_insert(all_system_packages,
+                              copy_string(node->name),
+                              copy_string(node->min_version));
+        }
+    }
+
+    // Return success or failure status
+    return result;
+}
+
+static bool resolve_libs(const char *pkg_config_cmd,
+                         struct HashTable **all_system_packages,
+                         struct NameList **libs)
+{
+    struct DepList *pkgs = NULL;
+    struct DepList **tail = &pkgs;
+
+    struct HashIterator *iter = new_hash_iterator(*all_system_packages);
+    const char *key;
+    void *value;
+    while (hash_iterator_next(iter, &key, &value)) {
+        struct DepList *node = alloc(sizeof(struct DepList));
+        node->name = (char*)key;
+        node->min_version = value;
+        node->next = NULL;
+        *tail = node;
+        tail = &node->next;
+    }
+    free_hash_iterator(iter);
+
+    bool success = system_package_libs(pkg_config_cmd, pkgs, libs);
+
+    while (pkgs) {
+        struct DepList *next = pkgs->next;
+        free(pkgs);
+        pkgs = next;
+    }
+
+    hash_table_for_each(*all_system_packages, ht_free_key_and_value, NULL);
+    free_hash_table(*all_system_packages);
+    *all_system_packages = NULL;
+
+    return success;
+}
+
+
 // Reads a string from a toml table. Returns newly allocated string.
 // If key not present, or not a string:
 //   - if 'dflt' is NULL, prints error and returns NULL;
@@ -344,7 +423,9 @@ static bool valid_package_name(const char *name)
 //  - If package not found at the given prefix, sets *error = false and returns NULL.
 //  - On error (e.g. toml parsing error), sets *error = true and returns NULL.
 static struct Package *
-    load_package(const char *prefix,   // ends in '/' or is ""
+    load_package(const char *pkg_config_cmd,
+                 struct HashTable *all_system_packages,
+                 const char *prefix,   // ends in '/' or is ""
                  const char *filename,  // equals prefix + "package.toml"
                  const char *requested_name,  // NULL means "anything"
                  const char *requested_version,  // NULL means "anything"
@@ -359,7 +440,7 @@ static struct Package *
     char *main_function = NULL;
     struct DepList *deps = NULL;
     struct DepList *system_packages = NULL;
-
+    struct NameList *cflags = NULL;
     struct Package *package = NULL;
     *error = true;
 
@@ -465,13 +546,19 @@ static struct Package *
     }
 
 
+    // Resolve system packages to cflags.
+    // TODO: introduce some caching in case several packages use the same system_package?
+    if (!resolve_system_packages(pkg_config_cmd, system_packages, &cflags, all_system_packages)) {
+        goto end;
+    }
+
     // Success. Create the Package struct.
     *error = false;
     package = alloc(sizeof(struct Package));
     package->name = name; name = NULL;
     package->version = version; version = NULL;
     package->deps = deps; deps = NULL;
-    package->system_packages = system_packages; system_packages = NULL;
+    package->cflags = cflags; cflags = NULL;
     package->prefix = copy_string(prefix);
     package->exported_modules = exported_modules; exported_modules = NULL;
     package->main_module = main_module; main_module = NULL;
@@ -489,6 +576,7 @@ static struct Package *
     free_name_list(exported_modules);
     free_dep_list(deps);
     free_dep_list(system_packages);
+    free_name_list(cflags);
     return package;
 }
 
@@ -633,7 +721,9 @@ static struct Package *
         free(filename);
         filename = copy_string_2(path, PACKAGE_TOML_NAME);
         bool error;
-        package = load_package(path,
+        package = load_package(loader->pkg_config_cmd,
+                               loader->all_system_packages,
+                               path,
                                filename,
                                requested_name,
                                requested_version,
@@ -649,7 +739,9 @@ static struct Package *
             path = copy_string_5(node->name, requested_name, "-", requested_version, "/");
             free(filename);
             filename = copy_string_2(path, PACKAGE_TOML_NAME);
-            package = load_package(path,
+            package = load_package(loader->pkg_config_cmd,
+                                   loader->all_system_packages,
+                                   path,
                                    filename,
                                    requested_name,
                                    requested_version,
@@ -728,12 +820,15 @@ static struct Package * load_dependencies(struct PackageLoader *loader,
     return package;
 }
 
-struct PackageLoader * alloc_package_loader()
+struct PackageLoader * alloc_package_loader(const char *pkg_config_cmd)
 {
     struct PackageLoader * loader = alloc(sizeof(struct PackageLoader));
     loader->packages = new_hash_table();
     loader->path_infos = new_hash_table();
     loader->root_package = NULL;
+    loader->pkg_config_cmd = copy_string(pkg_config_cmd);
+    loader->all_system_packages = new_hash_table();
+    loader->libs = NULL;
     return loader;
 }
 
@@ -756,6 +851,15 @@ void free_package_loader(struct PackageLoader *loader)
     free_hash_iterator(iter);
     free_hash_table(loader->path_infos);
 
+    free(loader->pkg_config_cmd);
+
+    if (loader->all_system_packages) {
+        hash_table_for_each(loader->all_system_packages, ht_free_key_and_value, NULL);
+        free_hash_table(loader->all_system_packages);
+    }
+
+    free_name_list(loader->libs);
+
     free(loader);
 }
 
@@ -766,7 +870,13 @@ bool load_root_package_and_dependencies(struct PackageLoader *loader,
     // Load root package (filename = prefix + "package.toml")
     char *filename = copy_string_2(prefix, PACKAGE_TOML_NAME);
     bool error;
-    struct Package *package = load_package(prefix, filename, NULL, NULL, &error);
+    struct Package *package = load_package(loader->pkg_config_cmd,
+                                           loader->all_system_packages,
+                                           prefix,
+                                           filename,
+                                           NULL,
+                                           NULL,
+                                           &error);
     if (package == NULL && !error) {
         fprintf(stderr, "File not found: %s\n", filename);
     }
@@ -813,7 +923,8 @@ bool load_root_package_and_dependencies(struct PackageLoader *loader,
     loader->root_package = package;
     free(original_version);
 
-    return (package != NULL);
+    // Call pkg-config to fill in libs.
+    return resolve_libs(loader->pkg_config_cmd, &loader->all_system_packages, &loader->libs);
 }
 
 const char * get_root_package_name(struct PackageLoader *loader)
@@ -893,4 +1004,19 @@ struct ModulePathInfo * find_module(struct PackageLoader *loader,
     // Add to cache and return.
     hash_table_insert(loader->path_infos, cache_key, info);
     return info;
+}
+
+struct NameList * get_package_cflags(struct PackageLoader *loader,
+                                     const char *package_name)
+{
+    struct Package *pkg = hash_table_lookup(loader->packages, package_name);
+    if (pkg == NULL) {
+        fatal_error("get_package_cflags: package not found");
+    }
+    return pkg->cflags;
+}
+
+struct NameList * get_package_libs(struct PackageLoader *loader)
+{
+    return loader->libs;
 }

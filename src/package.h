@@ -16,7 +16,7 @@ repository.
 
 struct PackageLoader;
 
-struct PackageLoader * alloc_package_loader();
+struct PackageLoader * alloc_package_loader(const char *pkg_config_cmd);
 void free_package_loader(struct PackageLoader *loader);
 
 // Load the root package from prefix+"package.toml",
@@ -47,5 +47,14 @@ struct ModulePathInfo {
 struct ModulePathInfo * find_module(struct PackageLoader *loader,
                                     const char *importer_package,
                                     const char *module_name);
+
+// Return cflags (coming from system packages) for a given package.
+// Returns a "cached" list (so caller should not free it).
+struct NameList * get_package_cflags(struct PackageLoader *loader,
+                                     const char *package_name);
+
+// Return combined list of libs for the root package and all dependencies.
+// Returns a "cached" list (so caller should not free it).
+struct NameList * get_package_libs(struct PackageLoader *loader);
 
 #endif

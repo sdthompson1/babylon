@@ -15,7 +15,7 @@ repository.
 #include <stdio.h>
 
 // Maximum number of stdout bytes (from the child process) that we keep.
-#define MAX_OUTPUT 200
+#define MAX_OUTPUT 800
 
 // Status codes for a child process.
 enum ProcStatus {

@@ -240,6 +240,11 @@ int main(int argc, char **argv)
 
     // Compile
     struct CompileOptions copt;
+    copt.pkg_config_cmd = "pkg-config";
+    copt.cc_cmd = "gcc";
+    copt.ld_cmd = "gcc";
+    copt.cflags = NULL;
+    copt.libs = NULL;
     copt.root_package_prefix = make_prefix(options.root_path);
     copt.output_prefix = make_prefix(options.output_path);
     copt.search_path = make_search_path(options.package_paths); free_name_list(options.package_paths);

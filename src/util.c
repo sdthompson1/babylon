@@ -86,6 +86,16 @@ char * replace_dots_with_slashes(const char *str)
     return tmp;
 }
 
+int name_list_length(struct NameList *list)
+{
+    int n = 0;
+    while (list) {
+        ++n;
+        list = list->next;
+    }
+    return n;
+}
+
 struct NameList * copy_name_list(struct NameList *list)
 {
     struct NameList *result = NULL;

@@ -85,6 +85,12 @@ struct LoadDetails {
     struct CacheDb *cache_db;
 
     struct NameList *obj_files;  // object files to link
+
+    // Compile settings
+    const char *cc_cmd;
+    const char *ld_cmd;
+    struct NameList *cflags;
+    struct NameList *libs;
 };
 
 
@@ -273,26 +279,34 @@ static bool run_verifier(struct LoadDetails *details,
 }
 
 static bool compile_c_file(struct LoadDetails *details,
+                           const char *package_name,
                            const char *c_filename,
                            const char *o_filename)
 {
     char *include_dir = copy_string_2(details->output_prefix, "c");
 
-    // Cmd line is hard coded for now. TODO: setup "compiler config" file
-    // and make this configurable.
-    const char *cmd[] = {
-        "gcc",
-        "-c",
-        "-g",
-        "-I",
-        include_dir,
-        c_filename,
-        "-o",
-        o_filename,
-        "-Wno-overflow", // needed for tests to pass
-        "-Wno-div-by-zero", // needed for tests to pass
-        NULL
-    };
+    struct NameList *pkg_cflags = get_package_cflags(details->package_loader, package_name);
+
+    // $(CC) $(CFLAGS) -I include_dir -c filename.c -o filename.o
+
+    int num_cflags = name_list_length(pkg_cflags) + name_list_length(details->cflags);
+
+    const char **cmd = alloc(sizeof(char*) * (8 + num_cflags));
+    cmd[0] = details->cc_cmd;
+    int idx = 1;
+    for (struct NameList *node = details->cflags; node; node = node->next) {
+        cmd[idx++] = node->name;
+    }
+    for (struct NameList *node = pkg_cflags; node; node = node->next) {
+        cmd[idx++] = node->name;
+    }
+    cmd[idx++] = "-I";
+    cmd[idx++] = include_dir;
+    cmd[idx++] = "-c";
+    cmd[idx++] = c_filename;
+    cmd[idx++] = "-o";
+    cmd[idx++] = o_filename;
+    cmd[idx++] = NULL;
 
     struct Process proc;
     memset(&proc, 0, sizeof(proc));
@@ -302,6 +316,7 @@ static bool compile_c_file(struct LoadDetails *details,
     proc.show_stderr = true;  // allow the compiler to print to stderr
     launch_process(&proc);
 
+    free(cmd);
     free(include_dir);
 
     // Wait for the compile job to finish before continuing.
@@ -322,25 +337,32 @@ static bool compile_c_file(struct LoadDetails *details,
 
 static bool run_linker(const struct LoadDetails *details)
 {
-    int num = 0;
-    for (struct NameList *node = details->obj_files; node; node = node->next) {
-        ++num;
-    }
+    struct NameList *pkg_libs = get_package_libs(details->package_loader);
 
     char *exe_name = copy_string_3(details->output_prefix, "bin/", details->root_package_name);
     make_parent_dirs(exe_name, strlen(details->output_prefix));
 
-    // $(CC) -o $(exe_filename) $(obj_filenames)
+    // $(LD) -o exe_name object-files-list $(LIBS)
 
-    const char **cmd = alloc(sizeof(char*) * (num + 4));
-    cmd[0] = "gcc";  // hard coded for now
+    int num_objects = name_list_length(details->obj_files);
+    int num_libs = name_list_length(pkg_libs) + name_list_length(details->libs);
+
+    const char **cmd = alloc(sizeof(char*) * (4 + num_objects + num_libs));
+
+    cmd[0] = details->ld_cmd;
     cmd[1] = "-o";
     cmd[2] = exe_name;
-    int i = 0;
-    for (struct NameList *node = details->obj_files; node; node = node->next, ++i) {
-        cmd[3 + i] = node->name;
+    int idx = 3;
+    for (struct NameList *node = details->obj_files; node; node = node->next) {
+        cmd[idx++] = node->name;
     }
-    cmd[3 + num] = NULL;
+    for (struct NameList *node = details->libs; node; node = node->next) {
+        cmd[idx++] = node->name;
+    }
+    for (struct NameList *node = pkg_libs; node; node = node->next) {
+        cmd[idx++] = node->name;
+    }
+    cmd[idx++] = NULL;
 
     struct Process proc;
     memset(&proc, 0, sizeof(proc));
@@ -638,7 +660,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
 
         // Now compile the C to an object file
         char *o_filename = get_output_filename(details, module, "obj/", ".b.o");
-        bool ok = compile_c_file(details, c_filename, o_filename);
+        bool ok = compile_c_file(details, info->package_name, c_filename, o_filename);
         free(o_filename);
         if (!ok) {
             fprintf(stderr, "Compilation of %s failed\n", c_filename);
@@ -652,7 +674,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
         // If there is a user-supplied C file then compile that as well
         if (info->c_filename) {
             o_filename = get_output_filename(details, module, "obj/", ".o");
-            ok = compile_c_file(details, info->c_filename, o_filename);
+            ok = compile_c_file(details, info->package_name, info->c_filename, o_filename);
             free(o_filename);
             if (!ok) {
                 fprintf(stderr, "Compilation of %s failed\n", info->c_filename);
@@ -724,7 +746,7 @@ bool compile(struct CompileOptions *options)
 
     const char *root_prefix = options->root_package_prefix ? options->root_package_prefix : "";
 
-    details.package_loader = alloc_package_loader();
+    details.package_loader = alloc_package_loader(options->pkg_config_cmd);
     if (!load_root_package_and_dependencies(details.package_loader,
                                             root_prefix,
                                             options->search_path)) {
@@ -784,6 +806,11 @@ bool compile(struct CompileOptions *options)
     details.main_module_name = get_root_main_module(details.package_loader);
     details.main_function_name = get_root_main_function(details.package_loader);
     details.obj_files = NULL;
+
+    details.cc_cmd = options->cc_cmd;
+    details.ld_cmd = options->ld_cmd;
+    details.cflags = options->cflags;
+    details.libs = options->libs;
 
     bool success = true;
     if (options->requested_modules == NULL) {

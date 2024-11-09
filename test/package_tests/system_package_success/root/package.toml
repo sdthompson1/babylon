@@ -1,0 +1,9 @@
+[package]
+name = "root"
+version = "1.0"
+
+[modules]
+main-module = "Main"
+
+[system-packages]
+zlib = "1.0"
