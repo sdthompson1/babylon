@@ -13,6 +13,7 @@ repository.
 
 #include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 
 static char* copy_string_section(const char *p, const char *q)
 {
@@ -72,11 +73,7 @@ static bool run_pkg_config(const char *pkg_config_cmd,
                            const char *request,
                            struct NameList **output_list)
 {
-    if (packages == NULL) {
-        // Nothing to do
-        if (output_list) *output_list = NULL;
-        return true;
-    }
+    bool found_math = false;
 
     int n = 0;
     for (struct DepList *node = packages; node; node = node->next) {
@@ -89,36 +86,59 @@ static bool run_pkg_config(const char *pkg_config_cmd,
     cmd[1] = request;
     int i = 2;
     for (struct DepList *node = packages; node; node = node->next) {
-        cmd[i] = copy_string_3(node->name, " >= ", node->min_version);
-        ++i;
+        // "math" is not sent to pkg-config but interpreted specially
+        if (strcmp(node->name, "math") == 0) {
+            found_math = true;
+        } else {
+            cmd[i] = copy_string_3(node->name, " >= ", node->min_version);
+            ++i;
+        }
     }
     cmd[i] = NULL;
 
-    struct Process proc;
-    proc.cmd = cmd;
-    proc.print_to_stdin = NULL;
-    proc.timeout_in_seconds = 10000;
-    proc.show_stdout = false;
-    proc.show_stderr = true;
+    bool pkg_config_error = false;
+    if (output_list) *output_list = NULL;
 
-    launch_process(&proc);
+    if (i > 2) {
 
-    for (i = 2; i < 2 + n; ++i) {
+        struct Process proc;
+        proc.cmd = cmd;
+        proc.print_to_stdin = NULL;
+        proc.timeout_in_seconds = 10000;
+        proc.show_stdout = false;
+        proc.show_stderr = true;
+
+        launch_process(&proc);
+        while (proc.status == PROC_RUNNING) {
+            update_processes(true);
+        }
+
+        if (proc.status == PROC_SUCCESS && proc.exit_status == 0) {
+            if (output_list) *output_list = split_string(proc.output, proc.output_length);
+        } else {
+            pkg_config_error = true;
+        }
+    }
+
+    for (i = 2; cmd[i] != NULL; ++i) {
         free((char*)cmd[i]);
     }
     free(cmd);
     cmd = NULL;
 
-    while (proc.status == PROC_RUNNING) {
-        update_processes(true);
-    }
-
-    if (proc.status != PROC_SUCCESS || proc.exit_status != 0) {
-        if (output_list) *output_list = NULL;
+    if (pkg_config_error) {
         return false;
     }
 
-    if (output_list) *output_list = split_string(proc.output, proc.output_length);
+    // If "math" was requested (at any version) then add "-lm"
+    // (for --libs only)
+    if (output_list && found_math && strcmp(request, "--libs") == 0) {
+        struct NameList *node = alloc(sizeof(struct NameList));
+        node->name = copy_string("-lm");
+        node->next = *output_list;
+        *output_list = node;
+    }
+
     return true;
 }
 
