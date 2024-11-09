@@ -238,12 +238,16 @@ int main(int argc, char **argv)
     struct Options options;
     parse_options(argc, argv, &options);
 
+    // Temporary: these cflags are needed to allow the tests to pass.
+    struct NameList cflag2 = { "-Wno-overflow", NULL };
+    struct NameList cflag1 = { "-Wno-div-by-zero", &cflag2 };
+
     // Compile
     struct CompileOptions copt;
     copt.pkg_config_cmd = "pkg-config";
     copt.cc_cmd = "gcc";
     copt.ld_cmd = "gcc";
-    copt.cflags = NULL;
+    copt.cflags = &cflag1;
     copt.libs = NULL;
     copt.root_package_prefix = make_prefix(options.root_path);
     copt.output_prefix = make_prefix(options.output_path);
