@@ -191,3 +191,9 @@ int32_t c_test_fun()
 {
     return 42;
 }
+
+// Used in codegen/ExternName.b
+void c_function_with_custom_name()
+{
+    printf("Hello from c_function_with_custom_name!\n");
+}

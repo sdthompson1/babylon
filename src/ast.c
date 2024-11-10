@@ -1784,6 +1784,7 @@ struct Decl * copy_decl(struct Decl *decl)
         result->function_data.end_loc = decl->function_data.end_loc;
         result->function_data.is_extern = decl->function_data.is_extern;
         result->function_data.impure = decl->function_data.impure;
+        result->function_data.extern_name = decl->function_data.extern_name ? copy_string(decl->function_data.extern_name) : NULL;
         break;
 
     case DECL_DATATYPE:
@@ -1998,6 +1999,7 @@ void free_decl(struct Decl *decl)
             free_fun_arg(decl->function_data.args);
             free_type(decl->function_data.return_type);
             free_statement(decl->function_data.body);
+            free((char*)decl->function_data.extern_name);
             break;
 
         case DECL_DATATYPE:

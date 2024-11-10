@@ -636,6 +636,8 @@ struct DeclData_Function {
 
     bool is_extern;
     bool impure;
+
+    const char *extern_name;   // can be NULL
 };
 
 struct DeclData_Datatype {

@@ -2073,6 +2073,15 @@ static struct Decl * parse_function_decl(struct ParserState *state, bool is_exte
         }
     }
 
+    const char *extern_name = NULL;
+    if (is_extern && state->token->type == TOK_EQUAL) {
+        advance(state);
+        const struct Token *str_tok = expect(state, TOK_STRING_LITERAL, "string");
+        if (str_tok != NULL) {
+            extern_name = copy_string(str_tok->data);
+        }
+    }
+
     // optional semicolon after the return type (even if there are
     // attributes or a body)
     if (state->token->type == TOK_SEMICOLON) {
@@ -2107,6 +2116,7 @@ static struct Decl * parse_function_decl(struct ParserState *state, bool is_exte
     result->function_data.end_loc = end_loc;
     result->function_data.is_extern = is_extern;
     result->function_data.impure = impure;
+    result->function_data.extern_name = extern_name;
     result->attributes = attrs;
     result->next = NULL;
     result->recursive = false;

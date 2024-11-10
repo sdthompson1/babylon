@@ -279,6 +279,12 @@ void report_extern_cannot_be_ghost(struct Decl *decl)
     print_error("'extern' function cannot be 'ghost'\n");
 }
 
+void report_invalid_extern_name(struct Decl *decl)
+{
+    print_location(decl->location);
+    print_error("Invalid 'extern' name\n");
+}
+
 void report_non_compile_time_constant(struct Location location)
 {
     print_location(location);

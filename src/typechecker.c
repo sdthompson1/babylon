@@ -3684,6 +3684,26 @@ static bool function_body_allowed(struct Decl *decl)
 }
 
 
+static bool is_valid_extern_name(const char *name)
+{
+    if (name == NULL) return true;   // not having an extern name is OK
+
+    // If there is an extern name, it must be alphanumeric/underscores
+    // only, and starting with a letter.
+    // (This also means it cannot be empty - isalpha(0) will return false.)
+    if (!isalpha((unsigned char)*name)) {
+        return false;
+    }
+
+    for (const char *p = name+1; *p; ++p) {
+        if (!isalnum((unsigned char)*p) && *p != '_') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void typecheck_function_decl(struct TypecheckContext *tc_context,
                                     struct Decl *decl,
                                     bool implementation)
@@ -3797,6 +3817,11 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
 
     } else if (implementation && function_body_required(decl)) {
         report_incomplete_definition(decl->location);
+        tc_context->error = true;
+    }
+
+    if (decl->function_data.is_extern && !is_valid_extern_name(decl->function_data.extern_name)) {
+        report_invalid_extern_name(decl);
         tc_context->error = true;
     }
 

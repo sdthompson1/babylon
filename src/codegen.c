@@ -2744,11 +2744,18 @@ static void codegen_decl_const(struct CGContext *cxt,
 // returns newly allocated string
 static char* get_extern_name(struct Decl *decl)
 {
-    const char *dot = strrchr(decl->name, '.');
-    if (dot == NULL) {
-        fatal_error("unexpected: decl without '.' in name");
+    if (decl->tag != DECL_FUNCTION) {
+        fatal_error("get_extern_name: this should only be called on function decls");
     }
-    return copy_string(dot + 1);
+    if (decl->function_data.extern_name) {
+        return copy_string(decl->function_data.extern_name);
+    } else {
+        const char *dot = strrchr(decl->name, '.');
+        if (dot == NULL) {
+            fatal_error("unexpected: decl without '.' in name");
+        }
+        return copy_string(dot + 1);
+    }
 }
 
 static void print_function_header(struct CGContext *cxt,

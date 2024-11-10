@@ -115,6 +115,7 @@ void report_main_wrong_type(const char *module_name, const char *function_name);
 void report_both_body_and_extern(struct Location location);
 void report_impure_cannot_be_ghost(struct Decl *decl);
 void report_extern_cannot_be_ghost(struct Decl *decl);
+void report_invalid_extern_name(struct Decl *decl);
 void report_non_compile_time_constant(struct Location location);
 void report_compile_time_overflow(struct Location location);
 void report_compile_time_division_by_zero(struct Location location);
