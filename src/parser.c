@@ -2243,7 +2243,7 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
         } else if (state->token->type == TOK_NAME && strcmp(state->token->data, "allocated_always") == 0) {
             alloc_level = ALLOC_ALWAYS;
         } else {
-            expect(state, TOK_KW_ALLOCATED, "'allocated' or 'allocated_if_not_default'"); // show error message
+            expect(state, TOK_KW_ALLOCATED, "'allocated' or 'allocated_always'"); // show error message
             free_tyvar_list(tyvars);
             return NULL;
         }
