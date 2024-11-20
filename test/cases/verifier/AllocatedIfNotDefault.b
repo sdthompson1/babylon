@@ -7,7 +7,7 @@ import Test;
 // Define an abstract type which counts as "allocated" if it is not equal to the default.
 // Also define some extern functions which allocate and deallocate it.
 
-extern type MyType (allocated_if_not_default);
+extern type MyType (allocated);
 
 extern function alloc_mytype(ref x: MyType)
     requires !allocated(x);

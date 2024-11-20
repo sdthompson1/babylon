@@ -664,7 +664,7 @@ struct DeclData_Typedef {
     bool is_extern;
 
     // This determines whether the type has "allocated" or
-    // "allocated_if_not_default" (applicable only if rhs == NULL)
+    // "allocated_always" (applicable only if rhs == NULL)
     enum AllocLevel alloc_level;
 };
 
