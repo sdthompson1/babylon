@@ -1,0 +1,11 @@
+[package]
+name = "example09-tuples-records"
+description = "Introduces tuples and record types."
+version = "0.1"
+
+[modules]
+main-module = "Example09"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

@@ -1,0 +1,11 @@
+[package]
+name = "example10-datatypes"
+description = "Introduces datatypes and typedefs."
+version = "0.1"
+
+[modules]
+main-module = "Example10"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

@@ -1,7 +1,5 @@
 .gdb_history
-build
-gcov
-Shakefile
-Shakefile.hi
-Shakefile.o
-test/output_tmp
+/build
+/gcov
+/test/output_tmp
+/packages/*/build/

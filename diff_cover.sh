@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# This script can be run after `make cover` or `make incr-cover`
+# to find code lines that have been modified or added since the
+# latest commit, but are not covered by the tests.
+
 # Explanation:
 # - Run git blame.
 # - Look for '^00000000' which indicates the line isn't checked in yet.

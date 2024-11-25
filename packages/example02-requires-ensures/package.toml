@@ -1,0 +1,11 @@
+[package]
+name = "example02-requires-ensures"
+description = "Explains 'requires' and 'ensures' conditions"
+version = "0.1"
+
+[modules]
+main-module = "Example02"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

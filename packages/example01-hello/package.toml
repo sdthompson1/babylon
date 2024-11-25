@@ -1,0 +1,11 @@
+[package]
+name = "example01-hello"
+description = "Hello World example program"
+version = "0.1"
+
+[modules]
+main-module = "Example01"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

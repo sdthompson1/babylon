@@ -1,0 +1,12 @@
+[package]
+name = "example15-infinite-primes"
+description = "A proof that there are infinitely many primes."
+version = "0.1"
+
+[modules]
+# This example doesn't have any executable code, but it does export
+# some ghost functions.
+exported-modules = ["Example15"]
+
+[dependencies]
+# There are no dependencies; this is a self-contained package.

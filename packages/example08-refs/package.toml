@@ -1,0 +1,11 @@
+[package]
+name = "example08-refs"
+description = "Explains references (the 'ref' keyword)."
+version = "0.1"
+
+[modules]
+main-module = "Example08"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

@@ -1,0 +1,12 @@
+[package]
+name = "example05-arrays"
+description = "Introduces arrays"
+version = "0.1"
+
+[modules]
+main-module = "Example05"
+main-function = "main"
+
+[dependencies]
+coretypes = "0.1"
+io = "0.1"

@@ -1,0 +1,11 @@
+[package]
+name = "example03-statements"
+description = "Explains some of the statements available in the language"
+version = "0.1"
+
+[modules]
+main-module = "Example03"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

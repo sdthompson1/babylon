@@ -1,0 +1,12 @@
+[package]
+name = "example11-allocated"
+description = "Explains the rules around 'allocated' values."
+version = "0.1"
+
+[modules]
+main-module = "Example11"
+main-function = "main"
+
+[dependencies]
+coretypes = "0.1"
+io = "0.1"

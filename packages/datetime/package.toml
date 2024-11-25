@@ -1,0 +1,13 @@
+[package]
+name = "datetime"
+description = "A simple date/time library"
+version = "0.1"
+
+[modules]
+exported-modules = [
+    "DateTime",
+    "Timer"
+]
+
+[dependencies]
+coretypes = "0.1"

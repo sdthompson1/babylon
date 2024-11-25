@@ -1,0 +1,13 @@
+[package]
+name = "io"
+description = "A basic file I/O library"
+version = "0.1"
+
+[modules]
+exported-modules = [
+    "Console",
+    "File"
+]
+
+[dependencies]
+coretypes = "0.1"

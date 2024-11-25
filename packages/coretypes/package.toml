@@ -1,0 +1,21 @@
+[package]
+name = "coretypes"
+description = "Provides core types and definitions useful for many programs"
+version = "0.1"
+
+[modules]
+exported-modules = [
+   "Array",
+   "Ascii",
+   "Default",
+   "Either",
+   "Int",
+   "IntBitwise",
+   "IntDivision",
+   "IntSaturate",
+   "IntWrap",
+   "Maybe",
+   "Ord",
+   "String",
+   "StringBuffer"
+]

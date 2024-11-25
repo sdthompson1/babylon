@@ -160,23 +160,13 @@ correctly implemented -- but perhaps that could be a future project!*
 
 This section describes how to build the Babylon compiler.
 
-A Linux machine, with gcc (or another C compiler) available, is
-required.
+A Linux machine, with the `gcc` and `make` commands and the `sqlite3`
+library available, is required.
 
-The Babylon compiler itself is written in C, and the only external
-dependency is sqlite3. The simplest way to build is to run `gcc -O3 -o
-babylon src/*.c -lsqlite3` to make an optimised `babylon` executable
-in the current directory. (Ensure that you have the libsqlite3-dev
-package, or equivalent for your OS, installed.)
+To build the compiler you can simply run "make". An executable file
+`build/babylon` will appear.
 
-(Alternatively, you can install the "Shake" build system from
-https://shakebuild.com. Then you will be able to use the Shakefile.hs
-that I created. This gives the ability to do incremental builds, as
-opposed to a full rebuild. This is only really necessary if you intend
-to work on the compiler itself, however -- the "gcc" command given
-above probably works well enough for most users.)
-
-As well as building the compiler, you will need to make sure that at
+If you want to use the verifier, you will need to make sure that at
 least one (and preferably all three) of the commands `z3`,
 `cvc5-Linux` and `vampire` are available on your system. You might be
 able to get pre-built binaries at the following links:
@@ -192,13 +182,11 @@ if they have different names on your system), look at
 [src/fol.c](src/fol.c), and edit the `PROVERS` array and/or the
 `NUM_PROVERS` define.
 
-If you want to run the test suite you can just run the `run_tests.sh`
-script. This looks for the compiler in `./build/babylon` (although you
-can edit this at the top of the script) and it writes temporary files
-into `test/output_tmp`.
+You can also run `make check` to run a suite of compiler self-tests,
+if you wish.
 
 For instructions on how to use the compiler, take a look at the
-"Demo" programs in the [examples](examples) folder, and read the
+"example" folders within the [packages](packages) folder, and read the
 comments. This will take you through the basics of the language and
 explain how to use the compiler and verifier.
 

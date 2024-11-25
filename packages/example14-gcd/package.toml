@@ -1,0 +1,12 @@
+[package]
+name = "example14-gcd"
+description = "A program to calculate the greatest common divisor (GCD) of two integers."
+version = "0.1"
+
+[modules]
+main-module = "Example14"
+main-function = "main"
+
+[dependencies]
+coretypes = "0.1"
+io = "0.1"

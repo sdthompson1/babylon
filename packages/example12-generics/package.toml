@@ -1,0 +1,11 @@
+[package]
+name = "example12-generics"
+description = "Introduces generic functions and generic types."
+version = "0.1"
+
+[modules]
+main-module = "Example12"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

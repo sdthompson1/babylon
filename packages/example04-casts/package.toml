@@ -1,0 +1,11 @@
+[package]
+name = "example04-casts"
+description = "Explains numeric casting (i.e. converting values from one integer type to another)"
+version = "0.1"
+
+[modules]
+main-module = "Example04"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

@@ -1,0 +1,12 @@
+[package]
+name = "random"
+description = "A simple pseudo-random number generator, together with facilities for getting random bytes from the operating system"
+version = "0.1"
+
+[modules]
+exported-modules = [
+   "Random"
+]
+
+[dependencies]
+coretypes = "0.1"

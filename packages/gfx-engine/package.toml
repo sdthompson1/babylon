@@ -1,0 +1,19 @@
+[package]
+name = "gfx-engine"
+description = "Provides simple 2D graphics output and mouse/keyboard input facilities"
+version = "0.1"
+
+[modules]
+exported-modules = [
+    "GfxEngine",
+    "Key",
+    "LoadPNG",
+    "MessageBox"
+]
+
+[dependencies]
+coretypes = "0.1"
+
+[system-packages]
+sdl2 = "2.0"
+math = ""   # "pow" function is used by stb-image

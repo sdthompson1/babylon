@@ -1,0 +1,13 @@
+[package]
+name = "example07-primes"
+description = '''Illustrates how to prove properties of prime numbers, and 
+prints all primes up to and including 2^31 - 1.'''
+version = "0.1"
+
+[modules]
+main-module = "Example07"
+main-function = "main"
+
+[dependencies]
+coretypes = "0.1"
+io = "0.1"

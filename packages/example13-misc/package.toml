@@ -1,0 +1,11 @@
+[package]
+name = "example13-misc"
+description = "Covers some miscellaneous topics."
+version = "0.1"
+
+[modules]
+main-module = "Example13"
+main-function = "main"
+
+[dependencies]
+io = "0.1"

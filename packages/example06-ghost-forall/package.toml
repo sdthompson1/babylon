@@ -1,0 +1,12 @@
+[package]
+name = "example06-ghost-forall"
+description = "Explains ghost variables and functions, and 'forall' and 'exists' keywords"
+version = "0.1"
+
+[modules]
+main-module = "Example06"
+main-function = "main"
+
+[dependencies]
+coretypes = "0.1"
+io = "0.1"
