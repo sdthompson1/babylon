@@ -319,6 +319,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                 struct Term *normal = eval_to_normal_form(tc_context->type_env, (*type)->array_data.sizes[i]);
                 if (normal == NULL) {
                     // Size is not a compile time constant
+                    tc_context->error = true;
                     free_type(u64);
                     return false;
                 }
