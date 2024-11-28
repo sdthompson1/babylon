@@ -8,6 +8,16 @@
 #   `make debug` -- build a debug executable as `build/bab.debug`
 #
 #
+# Installing:
+#
+#   `make install` -- install the `bab` command to /usr/local/bin/
+#      (PREFIX variable also supported, e.g. use `make install
+#      PREFIX=$HOME` to install in $HOME/bin)
+#
+#   `make uninstall` -- removes the installed `bab` command if present
+#      (PREFIX variable also supported -- see above)
+#
+#
 # Demos/Examples:
 #
 #   `make chess` -- builds the chess demo (requires libsdl).
@@ -73,9 +83,13 @@ COVERAGE_CFLAGS := --coverage
 LIBS := -lsqlite3
 
 # Output binary name
-DEBUG_EXE := build/bab.debug
-RELEASE_EXE := build/bab
-COVERAGE_EXE := build/bab.coverage
+BINARY_NAME := bab
+DEBUG_EXE := build/$(BINARY_NAME).debug
+RELEASE_EXE := build/$(BINARY_NAME)
+COVERAGE_EXE := build/$(BINARY_NAME).coverage
+
+# Install location
+PREFIX := /usr/local
 
 # File patterns
 SRCS := $(wildcard src/*.c)
@@ -92,7 +106,8 @@ DEPS := $(patsubst src/%.c,build/deps/%.d,$(SRCS))
 	sequence-tests sequence-tests-valgrind \
 	package-tests package-tests-valgrind \
 	packages \
-	chess verify-chess
+	chess verify-chess \
+	install uninstall
 
 # Default build
 all: release
@@ -155,6 +170,17 @@ build/coverage/%.o: src/%.c
 	@mkdir -p build/deps
 	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/deps/%.d,$<) $(COVERAGE_CFLAGS) -c $< -o $@
 
+
+#
+# Install and Uninstall
+#
+
+install: $(RELEASE_EXE)
+	install -d $(PREFIX)/bin
+	install -m755 $(RELEASE_EXE) $(PREFIX)/bin/$(BINARY_NAME)
+
+uninstall:
+	rm -f $(PREFIX)/bin/$(BINARY_NAME)
 
 
 #
