@@ -88,8 +88,78 @@ function u64_rol(x: u64, y: u64): u64
     if y == 0 || y == 64 {
         return x;
     } else {
-        // note: this is slow to verify (approx 30 sec, using cvc5, on my machine)
-        return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        // Unfortunately, verifying the following statement is very slow:
+        // return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+
+        // To work around this, we split into cases based on y
+        // (this is not optimal, but it is good enough for now -- eventually, building
+        // a rotate operator into the compiler might be a better solution).
+
+        match y {
+        case 1 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 2 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 3 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 4 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 5 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 6 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 7 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 8 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 9 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 10 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 11 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 12 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 13 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 14 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 15 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 16 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 17 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 18 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 19 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 20 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 21 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 22 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 23 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 24 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 25 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 26 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 27 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 28 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 29 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 30 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 31 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 32 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 33 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 34 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 35 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 36 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 37 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 38 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 39 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 40 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 41 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 42 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 43 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 44 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 45 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 46 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 47 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 48 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 49 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 50 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 51 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 52 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 53 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 54 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 55 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 56 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 57 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 58 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 59 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 60 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 61 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 62 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        case 63 => return ((x & (U64_MAX >> y)) << y) | (x >> (64 - y));
+        }
     }
 }
 

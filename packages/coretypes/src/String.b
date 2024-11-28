@@ -361,14 +361,18 @@ function strstr(str: u8[], to_find: u8[], start: u64): Maybe<u64>
         decreases ~pos;
     {
         if strstr_helper(str, to_find, pos) {
+            hide strstr_witness;
             return Just(pos);
         }
         if str[pos] == 0 {
             // reached end of str, so result cannot be 'pos' or greater
             assert forall (j: u64) j >= pos ==> !strstr_witness(str, to_find, j);
+            hide strstr_witness;
             return Nothing;
         }
+        assert !strstr_witness(str, to_find, pos);
         pos = pos + 1;
+        hide strstr_witness;
     }
 }
 
@@ -665,6 +669,7 @@ function i64_to_string(num: i64, ref str: u8[])
     } else {
         integer_to_string(true, -num, str);
     }
+    hide valid_string;
 }
 
 function u64_to_string(num: u64, ref str: u8[])

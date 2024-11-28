@@ -310,7 +310,7 @@ ghost function int_euclid_div_unique(x: int, y: int, q: int, r: int)
             int_euclid_div_step_up(xx, y);
             xx = xx + y;
             qq = qq + int(1);
-        }        
+        }
     } else {
         // Step qq downwards towards q.
         while qq > q
@@ -324,6 +324,7 @@ ghost function int_euclid_div_unique(x: int, y: int, q: int, r: int)
             qq = qq - int(1);
         }
     }
+    hide int_euclid_div;
 }
 
 // Implementing Euclidean division for all four of the signed integer types.
