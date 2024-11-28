@@ -9,6 +9,7 @@ repository.
 
 
 #include "alloc.h"
+#include "config_file.h"
 #include "convert_fol_to_smt.h"
 #include "error.h"
 #include "fol.h"
@@ -22,39 +23,12 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-// Prover command lines (hard-coded for now).
-// TODO: This should be loaded from a config file, or some such.
-// TODO: If any prover in the list fails to start, we should print some sort of warning/error
-// message to stderr. (Currently this only happens if ALL provers fail to start.)
-#define NUM_PROVERS 3
-#define MAX_ARGS 10
-static const char * PROVERS[NUM_PROVERS][MAX_ARGS] = {
-    { "z3",
-      "-memory:3000",
-      "-in",
-      NULL },
-
-    { "vampire",
-      "--memory_limit", "3000",
-      "--forced_options", "output_mode=smtcomp",
-      "--input_syntax", "smtlib2",
-      NULL },
-
-    { "cvc5-Linux",
-      "--lang", "smt2.6",
-      NULL }
-};
-
-// Max number of simultaneous child processes -- adjust to suit your
-// machine.
-// It works best if this value is at least equal to NUM_PROVERS, and
-// preferably higher -- but make sure you have enough RAM for your
-// chosen number of processes.
-#define MAX_PROVER_PROCESSES 3
 
 // Max number of SMT jobs that can be queueing up waiting to run.
-// There probably isn't much need to tune this, the default should work fine.
-#define MAX_JOB_QUEUE_LENGTH (((MAX_PROVER_PROCESSES / NUM_PROVERS) * 200) + 20)
+// This is mostly just a "safety feature" -- in practice, the job queue is unlikely ever
+// to reach this size, but we do want to put some kind of upper bound on the size, just
+// to prevent it from consuming an unbounded amount of memory.
+#define MAX_JOB_QUEUE_LENGTH 10000
 
 
 // Job and FolRunner structs.
@@ -62,7 +36,7 @@ struct Job {
     struct Job *next;
 
     // Child processess (see process.h)
-    struct Process procs[NUM_PROVERS];
+    struct Process *procs;   // array of struct Process (one per prover)
     int num_started;
 
     // When the job comes to the head of the list, the announce_msg is printed.
@@ -118,8 +92,10 @@ struct FolRunner {
     bool error_reached;       // true if an error-job has reached the head of the list
 
     // Configuration
+    struct ProverConfig *provers;
+    int num_provers;
     struct CacheDb *cache_db;
-    int timeout_seconds;
+    int max_child_processes;
     bool continue_after_error;
 };
 
@@ -127,8 +103,19 @@ struct FolRunner {
 struct FolRunner * g_fol_runner;
 
 
+static int count_provers(struct ProverConfig *provers)
+{
+    int n = 0;
+    while (provers) {
+        provers = provers->next;
+        n++;
+    }
+    return n;
+}
+
 void start_fol_runner(struct CacheDb *cache_db,
-                      int timeout_seconds,
+                      struct ProverConfig *provers,
+                      int max_child_processes,
                       bool continue_after_error)
 {
     if (g_fol_runner) {
@@ -141,12 +128,15 @@ void start_fol_runner(struct CacheDb *cache_db,
     g_fol_runner->error_found = false;
     g_fol_runner->error_reached = false;
     g_fol_runner->cache_db = cache_db;
-    g_fol_runner->timeout_seconds = timeout_seconds;
+    g_fol_runner->provers = provers;
+    g_fol_runner->num_provers = count_provers(provers);
+    g_fol_runner->max_child_processes = max_child_processes;
     g_fol_runner->continue_after_error = continue_after_error;
 }
 
 static void free_job(struct Job *job)
 {
+    free(job->procs);
     free((char*)job->announce_msg);
     free((char*)job->completion_msg);
     free((char*)job->error_msg);
@@ -231,10 +221,7 @@ static bool is_unsat(const char *output, int output_length)
 
 static bool is_unknown(const char *output, int output_length)
 {
-    // Note that sometimes vampire returns empty results -- we treat
-    // that the same as "unknown".
-    return (output_length >= 7 && memcmp(output, "unknown", 7) == 0)
-        || output_length == 0;
+    return output_length >= 7 && memcmp(output, "unknown", 7) == 0;
 }
 
 void solve_fol_problem(struct Sexpr *fol_problem,   // handover
@@ -279,14 +266,25 @@ void solve_fol_problem(struct Sexpr *fol_problem,   // handover
     struct Job *job = alloc(sizeof(struct Job));
 
     job->next = NULL;
+    job->procs = alloc(sizeof(struct Process) * g_fol_runner->num_provers);
 
-    for (int i = 0; i < NUM_PROVERS; ++i) {
-        job->procs[i].cmd = PROVERS[i];
+    int i = 0;
+    for (struct ProverConfig *cfg = g_fol_runner->provers; cfg; cfg = cfg->next, ++i) {
+
+        default_init_process(&job->procs[i]);
+
+        if (cfg->format != FORMAT_SMTLIB) {
+            fatal_error("unimplemented prover format (only SMTLIB currently supported)");
+        }
+
+        job->procs[i].cmd = cfg->command_and_arguments;
         job->procs[i].print_to_stdin = print_to_stdin;
         job->procs[i].context = smt_problem;
-        job->procs[i].timeout_in_seconds = g_fol_runner->timeout_seconds;
+        job->procs[i].timeout_in_seconds = cfg->timeout;
+        job->procs[i].signal_num = cfg->signal;
+        job->procs[i].kill_timeout_in_seconds = cfg->kill_timeout;
         job->procs[i].show_stdout = false;  // Redirect stdout to the "output" array so that we can check it later.
-        job->procs[i].show_stderr = false;  // Redirect stderr to /dev/null as this is often just unwanted spam (like "cvc5 interrupted by user").
+        job->procs[i].show_stderr = cfg->show_stderr;
     }
 
     job->num_started = 0;
@@ -343,6 +341,7 @@ void add_fol_message(const char *msg,   // handover
     struct Job *job = alloc(sizeof(struct Job));
 
     job->next = NULL;
+    job->procs = NULL;
     job->num_started = 0;
     job->announce_msg = is_error ? NULL : msg;
     job->completion_msg = NULL;
@@ -372,6 +371,11 @@ static bool is_job_done(struct Job *job, bool *unsat)
 {
     // If a prover has found 'sat' or 'unsat' then the job is done,
     // even if other provers are still running.
+
+    // Similarly, if any prover failed to start, then we count that as
+    // an immediate failure of the job (even if other provers were
+    // able to start).
+
     bool found_running = false;
 
     for (int i = 0; i < job->num_started; ++i) {
@@ -381,6 +385,9 @@ static bool is_job_done(struct Job *job, bool *unsat)
         case PROC_RUNNING:
             found_running = true;
             break;
+
+        case PROC_FAILED_TO_START:
+            return true;
 
         case PROC_SUCCESS:
             if (is_sat(proc->output, proc->output_length)) {
@@ -392,15 +399,14 @@ static bool is_job_done(struct Job *job, bool *unsat)
             break;
 
         case PROC_TIMED_OUT:
-        case PROC_FAILED_TO_START:
             break;
         }
     }
 
     // OK, nobody found 'sat' or 'unsat' yet, so the job is done if
-    // and only if all provers have finished running. (And it is not
-    // 'unsat'.)
-    return (job->num_started == NUM_PROVERS && !found_running);
+    // and only if all provers have finished running. (*unsat should
+    // NOT be set in this case, because no prover found a proof.)
+    return (job->num_started == g_fol_runner->num_provers && !found_running);
 }
 
 // Append msg to job->completion_msg (if needed).
@@ -422,41 +428,94 @@ static void fill_completion_msg(struct Job *job)
 {
     // First of all, if any job has an unexpected output, we should
     // include that in the message
-    for (int i = 0; i < job->num_started; ++i) {
+    struct ProverConfig *cfg = g_fol_runner->provers;
+    for (int i = 0; i < job->num_started; ++i, cfg = cfg->next) {
         struct Process *proc = &job->procs[i];
         if (proc->status == PROC_SUCCESS) {
-            if (!is_sat(proc->output, proc->output_length)
-            && !is_unsat(proc->output, proc->output_length)
-            && !is_unknown(proc->output, proc->output_length)) {
-                // null-terminate the output for printing
-                if (proc->output_length < MAX_OUTPUT) {
-                    proc->output[proc->output_length] = 0;
-                } else {
-                    proc->output[MAX_OUTPUT - 1] = 0;
+
+            bool good_output =
+                is_sat(proc->output, proc->output_length)
+                || is_unsat(proc->output, proc->output_length)
+                || is_unknown(proc->output, proc->output_length);
+
+            if (cfg->ignore_empty_output && proc->output_length == 0) {
+                // treat empty output as "good" in this case
+                good_output = true;
+            }
+
+            bool good_exit_status = (proc->exit_status == 0) || cfg->ignore_exit_status;
+
+            bool problem = !good_output || !good_exit_status;
+
+            if (problem) {
+                char *msg = NULL;
+
+                if (!good_exit_status) {
+                    char buf[50];
+                    sprintf(buf, "%d", proc->exit_status);
+                    msg = copy_string_5("\n\nWARNING: unexpected exit status [",
+                                        buf,
+                                        "] from prover [",
+                                        cfg->name,
+                                        "]\n");
                 }
 
-                char *msg =
-                    copy_string_5("\n\nWARNING: unexpected output from prover [",
-                                  proc->cmd[0],
-                                  "]: ",
-                                  proc->output,
-                                  "\n");
+                if (!good_output) {
+                    // null-terminate the output for printing
+                    if (proc->output_length < MAX_OUTPUT) {
+                        proc->output[proc->output_length] = 0;
+                    } else {
+                        proc->output[MAX_OUTPUT - 1] = 0;
+                    }
+
+                    char *msg2 = copy_string_5("\n\nWARNING: unexpected output from prover [",
+                                               cfg->name,
+                                               "]: ",
+                                               proc->output,
+                                               "\n");
+
+                    char *msg_combined = copy_string_2(msg ? msg : "", msg2);
+                    free(msg);
+                    free(msg2);
+                    msg = msg_combined;
+                }
+
                 set_completion_msg(job, msg);
             }
         }
     }
 
-    // Let's see if any job completed with sat or unsat, and therefore
-    // we can print an appropriate message. (Also look for timeouts
-    // etc. while we're here.)
+    // Let's see if any job completed with sat or unsat (or failed to
+    // start) and therefore we can print an appropriate message.
     bool found_timeout = false;
-    bool all_failed_to_start = true;
-    for (int i = 0; i < job->num_started; ++i) {
+    bool found_unknown = false;
+    bool found_error = false;
+    cfg = g_fol_runner->provers;
+    for (int i = 0; i < job->num_started; ++i, cfg = cfg->next) {
         struct Process *proc = &job->procs[i];
-        if (proc->status == PROC_SUCCESS) {
+
+        switch (proc->status) {
+        case PROC_RUNNING:
+            // The job is still running. This can happen if e.g. one
+            // prover returned "unsat" but others are still working.
+            // We don't need to do anything here.
+            break;
+
+        case PROC_FAILED_TO_START:
+            // If any prover failed to start, then the whole job fails (as
+            // the user will likely want to debug their configuration before
+            // continuing).
+            set_completion_msg(job, copy_string("\n### ERROR: Failed to start one of the provers.\n### Please check the compiler config file.\n\n"));
+            return;
+
+        case PROC_TIMED_OUT:
+            found_timeout = true;
+            break;
+
+        case PROC_SUCCESS:
             if (is_sat(proc->output, proc->output_length)) {
                 char *msg = copy_string_3(" (",
-                                          proc->cmd[0],
+                                          cfg->name,
                                           " returned 'sat')\n");
                 set_completion_msg(job, msg);
                 return;
@@ -465,31 +524,53 @@ static void fill_completion_msg(struct Job *job)
                 char buf[50];
                 sprintf(buf, ", %.1fs)\n", proc->runtime_in_seconds);
                 char *msg = copy_string_3(" (",
-                                          proc->cmd[0],
+                                          cfg->name,
                                           buf);
                 set_completion_msg(job, msg);
                 return;
+
+            } else if (is_unknown(proc->output, proc->output_length)) {
+                found_unknown = true;
+            } else {
+                found_error = true;
             }
-        } else if (proc->status == PROC_TIMED_OUT) {
-            found_timeout = true;
-        }
-        if (proc->status != PROC_FAILED_TO_START) {
-            all_failed_to_start = false;
+
+            break;
         }
     }
 
-    if (found_timeout) {
-        set_completion_msg(job, copy_string(" (timed out)\n"));
-    } else if (all_failed_to_start) {
-        // If one prover fails to start, we do not currently report this, as e.g. it might
-        // just not be installed on the user's machine.
-        // If all provers fail to start, clearly there is a problem, so we have a special
-        // message for this.
-        set_completion_msg(job, copy_string(" (failed, provers could not be executed)\n"));
+    if (g_fol_runner->num_provers == 0) {
+        set_completion_msg(job, copy_string("\n\n### ERROR: No provers configured!\n### Please check the compiler config file.\n\n"));
+
     } else {
-        // At least one prover successfully executed, but it returned
-        // neither 'sat' nor 'unsat'.
-        set_completion_msg(job, copy_string(" (provers gave up)\n"));
+        // Construct message
+        const char *base_msg = " (provers ";
+
+        const char *msg2 = "";
+        if (found_timeout) {
+            msg2 = "timed out";
+        }
+
+        const char *msg3 = "";
+        if (found_unknown) {
+            if (found_timeout) {
+                msg3 = " or gave up";
+            } else {
+                msg3 = "gave up";
+            }
+        }
+
+        const char *msg4 = "";
+        if (found_error) {
+            if (found_unknown || found_timeout) {
+                msg4 = " or returned invalid output";
+            } else {
+                msg4 = "returned invalid output";
+            }
+        }
+
+        char *msg = copy_string_5(base_msg, msg2, msg3, msg4, ")\n");
+        set_completion_msg(job, msg);
     }
 }
 
@@ -529,7 +610,7 @@ static bool update_job(struct Job *job)
             // did not "win" the race.
             kill_job_processes(job);
 
-            // Set completion message ("(z3, 1.0s)" or "(timed out)"
+            // Set completion message ("(z3, 1.0s)" or "(provers gave up)"
             // or whatever).
             fill_completion_msg(job);
 
@@ -629,10 +710,10 @@ static void start_new_processes(int num_running)
     }
 
     for (struct Job *job = g_fol_runner->jobs_head; job; job = job->next) {
-        while (job->active && job->num_started < NUM_PROVERS) {
+        while (job->active && job->num_started < g_fol_runner->num_provers) {
 
             // Stop here if we already have enough processes running.
-            if (num_running >= MAX_PROVER_PROCESSES) {
+            if (num_running >= g_fol_runner->max_child_processes) {
                 return;
             }
 
@@ -641,7 +722,7 @@ static void start_new_processes(int num_running)
             ++(job->num_started);
             ++num_running;
 
-            if (job->num_started == NUM_PROVERS) {
+            if (job->num_started == g_fol_runner->num_provers) {
                 // That was the last process for this job. We can free smt_problem now.
                 free_sexpr(job->smt_problem);
                 job->smt_problem = NULL;

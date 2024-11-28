@@ -17,6 +17,7 @@ repository.
 #include "hash_table.h"
 #include "initial_env.h"
 #include "location.h"
+#include "make_dir.h"
 #include "package.h"
 #include "process.h"
 #include "stacked_hash_table.h"
@@ -33,10 +34,6 @@ repository.
 
 #include <stdlib.h>
 #include <string.h>
-
-#include <errno.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 struct StringNode {
     const char *ptr;
@@ -93,37 +90,6 @@ struct LoadDetails {
     struct NameList *libs;
 };
 
-
-// Returns true on success.
-static bool maybe_mkdir(const char *path, mode_t mode)
-{
-    errno = 0;
-
-    // Try to make the directory.
-    if (mkdir(path, mode) == 0) {
-        // Success.
-        return true;
-    }
-
-    if (errno != EEXIST) {
-        // Failed for some reason other than EEXIST.
-        return false;
-    }
-
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        // Failed to stat the existing thing.
-        return false;
-    }
-
-    if (!S_ISDIR(st.st_mode)) {
-        // There is an existing thing (not a directory) blocking the directory creation.
-        return false;
-    }
-
-    // The directory already exists so we are OK.
-    return true;
-}
 
 static void make_parent_dirs(char *path, size_t prefix_len)
 {
@@ -309,9 +275,8 @@ static bool compile_c_file(struct LoadDetails *details,
     cmd[idx++] = NULL;
 
     struct Process proc;
-    memset(&proc, 0, sizeof(proc));
+    default_init_process(&proc);
     proc.cmd = cmd;
-    proc.timeout_in_seconds = 100000;  // more than 1 day; should be enough!
     proc.show_stdout = true;  // allow the compiler to print to stdout (although most compilers don't, it seems)
     proc.show_stderr = true;  // allow the compiler to print to stderr
     launch_process(&proc);
@@ -331,7 +296,8 @@ static bool compile_c_file(struct LoadDetails *details,
     node->next = details->obj_files;
     details->obj_files = node;
 
-    // If the C compiler returns non-zero exit status, treat that as a failure.
+    // The compilation is considered to have succeeded if the child process ran
+    // to completion AND its exit status was zero.
     return proc.status == PROC_SUCCESS && proc.exit_status == 0;
 }
 
@@ -365,9 +331,8 @@ static bool run_linker(const struct LoadDetails *details)
     cmd[idx++] = NULL;
 
     struct Process proc;
-    memset(&proc, 0, sizeof(proc));
+    default_init_process(&proc);
     proc.cmd = cmd;
-    proc.timeout_in_seconds = 1000000;
     proc.show_stderr = true;
     launch_process(&proc);
 
@@ -789,7 +754,8 @@ bool compile(struct CompileOptions *options)
     }
 
     start_fol_runner(details.cache_db,
-                     options->verify_timeout_seconds,
+                     options->provers,
+                     options->max_child_processes,
                      options->continue_after_verify_error);
 
     details.import_location = g_no_location;

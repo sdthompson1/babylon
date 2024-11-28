@@ -1,0 +1,39 @@
+# Config file used for the unit tests ("make check").
+
+# This assumes that z3, cvc5-Linux and vampire are available on the system.
+
+[packages]
+paths = []            # Local directories to search for Babylon packages
+
+[c-compiler]
+cc = "gcc"                  # C compiler command
+ld = "gcc"                  # Linker command
+pkg-config = "pkg-config"   # pkg-config command
+cflags = ["-Wno-overflow", "-Wno-div-by-zero"]  # C compiler additional arguments (needed for some tests)
+libs = []                   # Linker additional arguments
+
+[verifier]
+use-cache = true      # Whether to use the verifier cache
+max-processes = 0     # Number of worker processes. 0 means to guess automatically
+                      # based on available CPU cores and memory.
+
+[provers.z3]
+command = "z3"
+arguments = ["-in"]
+format = "smtlib"
+
+[provers.cvc5]
+command = "cvc5-Linux"
+arguments = ["--lang", "smt2.6"]
+format = "smtlib"
+show-stderr = false   # Suppress unwanted "cvc5 interrupted by user" messages
+
+[provers.vampire]
+command = "vampire"
+arguments = ["--forced_options", "output_mode=smtcomp",
+             "--input_syntax", "smtlib2"]
+format = "smtlib"
+signal = "SIGINT"             # Vampire doesn't seem to respond to SIGTERM; use SIGINT instead
+show-stderr = false           # Suppress unwanted vampire debug output
+ignore-empty-output = true    # Vampire sometimes doesn't print any output; ignore this
+ignore-exit-status = true     # Vampire sometimes returns with non-zero exit status; ignore this

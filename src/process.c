@@ -27,12 +27,6 @@ repository.
 #include <time.h>
 #include <unistd.h>
 
-// Uncommenting the following will allow stderr messages from the child
-// processes to be printed (regardless of process "show_stderr" setting).
-// This can be useful e.g. to check whether the child processes are
-// starting correctly or not.
-//#define DEBUG_OUTPUT
-
 
 // ------------------------------------------------------------------------
 
@@ -40,17 +34,21 @@ struct ProcessState {
     struct ProcessState *next;
     struct Process *process;
 
-    bool sent_sigint;
+    bool sent_initial_signal;
     bool sent_sigkill;
+    bool failure_message_received;
 
     pid_t pid;                   // 0 if process no longer exists.
     int child_stdout;            // -1 if not open.
+    int failure_pipe;            // -1 if not open.
 
     struct timespec start_time;  // Time process started.
     struct timespec kill_time;   // Valid if pid != 0 && !sent_sigkill. Time next signal to be sent.
 };
 
 struct ProcessState * g_process_states = NULL;
+
+int g_max_allowed_child_processes = 0;
 
 // ------------------------------------------------------------------------
 
@@ -132,20 +130,24 @@ static void init_process_state(struct ProcessState *state, struct Process *proce
 {
     state->next = NULL;
     state->process = process;
-    state->sent_sigint = false;
+    state->sent_initial_signal = false;
     state->sent_sigkill = false;
+    state->failure_message_received = false;
     state->pid = 0;
     state->child_stdout = -1;
+    state->failure_pipe = -1;
 }
 
 static void cleanup_process_states()
 {
     struct ProcessState **state = &g_process_states;
     while (*state) {
-        if ((*state)->pid == 0 && (*state)->child_stdout == -1) {
+        if ((*state)->pid == 0 && (*state)->child_stdout == -1 && (*state)->failure_pipe == -1) {
             // This process is complete. We can remove it from the list.
-            if ((*state)->sent_sigint || (*state)->sent_sigkill) {
+            if ((*state)->sent_initial_signal || (*state)->sent_sigkill) {
                 (*state)->process->status = PROC_TIMED_OUT;
+            } else if ((*state)->failure_message_received) {
+                (*state)->process->status = PROC_FAILED_TO_START;
             } else {
                 (*state)->process->status = PROC_SUCCESS;
             }
@@ -160,11 +162,19 @@ static void cleanup_process_states()
 
 // ------------------------------------------------------------------------
 
+static void send_failure_msg(int fd)
+{
+    ssize_t result = write(fd, "-", 1);
+    (void)result;  // Ignore write errors, as there is nothing we can do about them anyway.
+}
+
 static void fork_child(struct ProcessState *state)
 {
     // pipes[0]: child stdin. (read end) (write end)
     // pipes[1]: child stdout. (read end) (write end)
-    int pipes[2][2];
+    // pipes[2]: "failure" pipe - child writes one byte to this pipe if the
+    //   desired command could not be run (e.g. exec failure).
+    int pipes[3][2];
 
     if (pipe(pipes[0]) != 0) {
         return;
@@ -174,36 +184,61 @@ static void fork_child(struct ProcessState *state)
         close(pipes[0][1]);
         return;
     }
+    if (pipe(pipes[2]) != 0) {
+        for (int i = 0; i < 2; ++i) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+        return;
+    }
 
     pid_t child_pid = fork();
 
     if (child_pid == -1) {
         // Fork failed.
-        close(pipes[0][0]);
-        close(pipes[0][1]);
-        close(pipes[1][0]);
-        close(pipes[1][1]);
+        // (Leave state->pid as zero to indicate the failure to our caller.)
+        for (int i = 0; i < 3; ++i) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
 
     } else if (child_pid == 0) {
         // This is the child process.
 
+        // Close the unwanted ends of the pipes.
         close(pipes[0][1]);
         close(pipes[1][0]);
+        close(pipes[2][0]);
 
-        // Redirect stdin to our pipe
+        // Redirect stdin to our pipe.
         if (dup2(pipes[0][0], STDIN_FILENO) == -1) {
+            perror("dup2 (stdin) failed");
+            send_failure_msg(pipes[2][1]);
             exit(1);
         }
 
         // Redirect stdout to our pipe, UNLESS show_stdout is true.
         if (!state->process->show_stdout) {
             if (dup2(pipes[1][1], STDOUT_FILENO) == -1) {
+                perror("dup2 (stdout) failed");
+                send_failure_msg(pipes[2][1]);
                 exit(1);
             }
         }
 
+        // Close the original stdin/stdout pipes as these have now been
+        // reopened as the actual stdin and stdout.
         close(pipes[0][0]);
         close(pipes[1][1]);
+
+        // Set FD_CLOEXEC on pipes[2] (our "failure pipe") so that this pipe
+        // remains open only when exec fails. (At this point all six pipes
+        // are accounted for!)
+        if (fcntl(pipes[2][1], F_SETFD, FD_CLOEXEC) == -1) {
+            perror("fcntl failed");
+            send_failure_msg(pipes[2][1]);
+            exit(1);
+        }
 
         // Restore default SIGPIPE behaviour (it was ignored in the parent process).
         {
@@ -213,6 +248,7 @@ static void fork_child(struct ProcessState *state)
             sa.sa_handler = SIG_DFL;
             if (sigaction(SIGPIPE, &sa, NULL)) {
                 perror("sigaction failed");
+                send_failure_msg(pipes[2][1]);
                 exit(1);
             }
         }
@@ -224,42 +260,54 @@ static void fork_child(struct ProcessState *state)
             sigaddset(&sigmask, SIGCHLD);
             if (sigprocmask(SIG_UNBLOCK, &sigmask, NULL) < 0) {
                 perror("sigprocmask failed");
+                send_failure_msg(pipes[2][1]);
                 exit(1);
             }
         }
 
-#ifndef DEBUG_OUTPUT
         if (!state->process->show_stderr) {
             // Redirect stderr to null to prevent unwanted messages such as
             // "cvc5 interrupted by user".
             int devnull = open("/dev/null", O_WRONLY);
             if (devnull == -1) {
+                perror("opening /dev/null failed");
+                send_failure_msg(pipes[2][1]);
                 exit(1);
             }
             if (dup2(devnull, STDERR_FILENO) == -1) {
+                perror("dup2 (devnull) failed");
+                send_failure_msg(pipes[2][1]);
                 exit(1);
             }
         }
-#endif
 
         // Call exec.
         execvp(state->process->cmd[0], (char * const*) state->process->cmd);
 
         // Error.
-        // (Note: the message will go to stderr, so it will only be visible
-        // if DEBUG_OUTPUT is defined or if process->show_stderr is true.)
-        fprintf(stderr, "couldn't start child process: %s\n", state->process->cmd[0]);
+        // Print a message to stderr so that the user can investigate what has gone wrong.
+        // Then notify the parent, and exit.
+        int errno_bak = errno;  // backup errno in case fprintf changes it (I don't know if it can or not)
+        fprintf(stderr, "\nCouldn't start child process: %s\n", state->process->cmd[0]);
+        errno = errno_bak;
         perror("exec failed");
-        exit(1);  // Exit the child process
+        send_failure_msg(pipes[2][1]);
+        exit(1);
+
+        // (The child process has definitely exited by this point.)
 
     } else {
         // This is the parent process
 
         state->pid = child_pid;
 
+        // Close the unwanted ends of the pipes.
         close(pipes[0][0]);
         close(pipes[1][1]);
+        close(pipes[2][1]);
 
+        // Print data to the child's stdin, if applicable. Then close our end of
+        // the "stdin" pipe.
         FILE *child_input = fdopen(pipes[0][1], "w");
         if (child_input) {
             if (state->process->print_to_stdin) {
@@ -270,8 +318,11 @@ static void fork_child(struct ProcessState *state)
             close(pipes[0][1]);
         }
 
+        // Capture the stdout and failure pipes and store them in the ProcessState.
         state->child_stdout = pipes[1][0];
+        state->failure_pipe = pipes[2][0];
 
+        // Set kill_time to "timeout_in_seconds" from now.
         get_current_time(&state->start_time);
         state->kill_time = state->start_time;
         state->kill_time.tv_sec += state->process->timeout_in_seconds;
@@ -312,6 +363,31 @@ static bool read_child_process_output(struct ProcessState *state, const fd_set *
                 state->child_stdout = -1;
             }
         }
+
+        return true;
+
+    } else {
+        return false;
+    }
+}
+
+// Read from the "failure pipe" and update the "failure_message_received" flag if necessary.
+// Returns true if any action was taken.
+static bool read_child_process_failure_pipe(struct ProcessState *state, const fd_set *fds)
+{
+    int fd = state->failure_pipe;
+    if (fd >= 0 && FD_ISSET(fd, fds)) {
+        char byte_read;
+        ssize_t nread = read(fd, &byte_read, 1);
+
+        if (nread >= 1) {
+            // We have received the failure message from the child process!
+            state->failure_message_received = true;
+        }
+
+        // Either way, the fd is no longer needed.
+        close(fd);
+        state->failure_pipe = -1;
 
         return true;
 
@@ -363,15 +439,15 @@ static bool send_signal_if_required(struct ProcessState *state)
     if (state->pid != 0 && !state->sent_sigkill
     && time_greater_or_equal(&time_now, &state->kill_time)) {
 
-        // Decide whether to send SIGINT or SIGKILL
+        // Decide whether to send initial signal (process->signal_num) or SIGKILL
         int sig;
-        if (!state->sent_sigint) {
-            sig = SIGINT;
-            state->sent_sigint = true;
+        if (!state->sent_initial_signal) {
+            sig = state->process->signal_num;
+            state->sent_initial_signal = true;
 
             // Allow 10 seconds before sending SIGKILL
             state->kill_time = time_now;
-            state->kill_time.tv_sec += 10;
+            state->kill_time.tv_sec += state->process->kill_timeout_in_seconds;
 
         } else {
             sig = SIGKILL;
@@ -381,7 +457,7 @@ static bool send_signal_if_required(struct ProcessState *state)
         // Send the signal
         kill(state->pid, sig);
 
-        // Also close their FD, as we no longer care about what they are writing.
+        // Also close their "stdout" FD, as we no longer care about what they are writing.
         if (state->child_stdout >= 0) {
             close(state->child_stdout);
             state->child_stdout = -1;
@@ -413,8 +489,15 @@ static bool check_processes(bool block)
     bool found_pid = false;
 
     for (struct ProcessState *state = g_process_states; state; state = state->next) {
-        // Add the FD from this process to the set.
+        // Add the FD's from this process to the set.
         int fd = state->child_stdout;
+        if (fd >= 0) {
+            FD_SET(fd, &fds);
+            if (fd + 1 > nfds) {
+                nfds = fd + 1;
+            }
+        }
+        fd = state->failure_pipe;
         if (fd >= 0) {
             FD_SET(fd, &fds);
             if (fd + 1 > nfds) {
@@ -481,9 +564,10 @@ static bool check_processes(bool block)
     bool did_something = false;
 
     if (select_result > 0) {
-        // Check if we can read any data from the child stdouts.
+        // Check if we can read any data from the child stdouts or failure pipes.
         for (struct ProcessState *state = g_process_states; state; state = state->next) {
             did_something = read_child_process_output(state, &fds) || did_something;
+            did_something = read_child_process_failure_pipe(state, &fds) || did_something;
         }
 
         // Check if we can read anything from our signalfd.
@@ -554,10 +638,11 @@ void launch_process(struct Process *process)
 void kill_process(struct Process *proc)
 {
     for (struct ProcessState *state = g_process_states; state; state = state->next) {
-        if (state->process == proc && !state->sent_sigint) {
-            // SIGINT not sent to this process yet. Set kill_time to
-            // the current time which means we will send SIGINT at the
-            // next opportunity.
+        if (state->process == proc && !state->sent_initial_signal) {
+            // Initial signal (e.g. SIGTERM or SIGINT) not sent to
+            // this process yet. Set kill_time to the current time
+            // which means we will send the signal at the next
+            // opportunity.
             get_current_time(&state->kill_time);
 
             // Now actually send the signal.
@@ -567,4 +652,12 @@ void kill_process(struct Process *proc)
             return;
         }
     }
+}
+
+void default_init_process(struct Process *proc)
+{
+    memset(proc, 0, sizeof(*proc));
+    proc->timeout_in_seconds = 999999;  // effectively infinite
+    proc->signal_num = SIGTERM;
+    proc->kill_timeout_in_seconds = 10;
 }

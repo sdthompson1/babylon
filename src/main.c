@@ -11,6 +11,7 @@ repository.
 #include "alloc.h"
 #include "ast.h"
 #include "compiler.h"
+#include "config_file.h"
 #include "error.h"
 #include "util.h"
 
@@ -18,24 +19,6 @@ repository.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-struct Options {
-    bool mode_set;
-    enum CompileMode mode;
-    enum CacheMode cache_mode;
-    const char *root_path;
-
-    struct NameList *package_paths;
-    struct NameList *requested_modules;
-    struct NameList **package_paths_tail;
-    struct NameList **requested_modules_tail;
-
-    const char *output_path;
-    bool quiet;
-    bool debug;
-    bool verify_continue;
-    int verify_timeout;
-};
 
 static void print_usage_and_exit(char **argv)
 {
@@ -56,26 +39,16 @@ static void print_usage_and_exit(char **argv)
     exit(1);
 }
 
-
-static void ensure_mode_not_set(struct Options *options, char **argv)
+static void error_compile_mode_already_set(char **argv)
 {
-    if (options->mode_set) {
-        fprintf(stderr, "%s: Options -c and -v are mutually exclusive\n", argv[0]);
-        exit(1);
-    }
+    fprintf(stderr, "%s: Options -c and -v are mutually exclusive\n", argv[0]);
+    exit(1);
 }
 
-static void parse_options(int argc, char **argv, struct Options *options)
+static void parse_options(int argc, char **argv, struct CompileOptions *copt)
 {
-    memset(options, 0, sizeof(struct Options));
-    options->cache_mode = CACHE_ENABLED;
-    options->verify_timeout = 60;
-
-    options->package_paths_tail = &options->package_paths;
-    options->requested_modules_tail = &options->requested_modules;
-
-    enum { OPT_VERIFY_CONTINUE = 2,
-           OPT_NO_CACHE = 5 };
+    enum { OPT_VERIFY_CONTINUE = 1,
+           OPT_NO_CACHE = 2 };
 
     static struct option long_options[] = {
         {"help",            no_argument,       NULL, 'h'},
@@ -91,7 +64,11 @@ static void parse_options(int argc, char **argv, struct Options *options)
         {"debug",           no_argument,       NULL, 'd'},
     };
 
+    bool compile_mode_set = false;
     bool error_found = false;
+
+    struct NameList **package_paths_tail = &copt->search_path;
+    struct NameList **requested_modules_tail = &copt->requested_modules;
 
     while (true) {
         int option_index = 0;
@@ -107,75 +84,86 @@ static void parse_options(int argc, char **argv, struct Options *options)
             break;
 
         case 'c':
-            ensure_mode_not_set(options, argv);
-            options->mode = CM_COMPILE;
-            options->mode_set = true;
+            if (compile_mode_set) {
+                error_compile_mode_already_set(argv);
+            }
+            copt->mode = CM_COMPILE;
+            compile_mode_set = true;
             break;
 
         case 'v':
-            ensure_mode_not_set(options, argv);
-            options->mode = CM_VERIFY;
-            options->mode_set = true;
+            if (compile_mode_set) {
+                error_compile_mode_already_set(argv);
+            }
+            copt->mode = CM_VERIFY;
+            compile_mode_set = true;
             break;
 
         case 'r':
-            if (options->root_path) {
+            if (copt->root_package_prefix) {
                 fprintf(stderr, "Only one root path can be specified at a time\n");
                 exit(1);
             }
-            options->root_path = optarg;
+            copt->root_package_prefix = copy_string(optarg);
             break;
 
         case 'p':
             {
                 struct NameList *node = alloc(sizeof(struct NameList));
                 node->name = copy_string(optarg);
-                node->next = NULL;
-                *options->package_paths_tail = node;
-                options->package_paths_tail = &node->next;
+                node->next = *package_paths_tail;
+                *package_paths_tail = node;
+                package_paths_tail = &node->next;
             }
             break;
 
         case 'o':
-            if (options->output_path) {
+            if (copt->output_prefix) {
                 fprintf(stderr, "Only one output path can be specified at a time\n");
                 exit(1);
             }
-            options->output_path = optarg;
+            copt->output_prefix = copy_string(optarg);
             break;
 
         case 'm':
             {
                 struct NameList *node = alloc(sizeof(struct NameList));
                 node->name = copy_string(optarg);
-                node->next = NULL;
-                *options->requested_modules_tail = node;
-                options->requested_modules_tail = &node->next;
+                node->next = *requested_modules_tail;
+                *requested_modules_tail = node;
+                requested_modules_tail = &node->next;
             }
             break;
 
         case 'q':
-            options->quiet = true;
+            copt->show_progress = false;
             break;
 
         case OPT_VERIFY_CONTINUE:
-            options->verify_continue = true;
+            copt->continue_after_verify_error = true;
             break;
 
         case 't':
-            options->verify_timeout = atoi(optarg);
-            if (options->verify_timeout <= 0) {
-                fprintf(stderr, "Invalid timeout value: %s\n", optarg);
-                exit(1);
+            {
+                int timeout = atoi(optarg);
+                if (timeout <= 0) {
+                    fprintf(stderr, "Invalid timeout value: %s\n", optarg);
+                    exit(1);
+                }
+
+                // overwrite the timeout for every prover
+                for (struct ProverConfig *pr = copt->provers; pr; pr = pr->next) {
+                    pr->timeout = timeout;
+                }
             }
             break;
 
         case OPT_NO_CACHE:
-            options->cache_mode = CACHE_DISABLED;
+            copt->cache_mode = CACHE_DISABLED;
             break;
 
         case 'd':
-            options->debug = true;
+            copt->create_debug_files = true;
             break;
 
         case '?':
@@ -197,77 +185,108 @@ static void parse_options(int argc, char **argv, struct Options *options)
         exit(1);
     }
 
-    if (!options->mode_set) {
+    if (!compile_mode_set) {
         fprintf(stderr, "%s: Nothing to do. Please specify one of -c or -v.\n", argv[0]);
+        exit(1);
+    }
+
+    if (copt->mode == CM_COMPILE && copt->requested_modules != NULL) {
+        fprintf(stderr, "%s: -m option is incompatible with -c\n", argv[0]);
         exit(1);
     }
 }
 
-static char * make_prefix(const char *path)
+static void add_trailing_slash(const char **path)
 {
-    if (path == NULL) {
-        return NULL;
-    }
-
-    size_t len = strlen(path);
-    if (len == 0 || path[len - 1] == '/') {
-        return copy_string(path);
-    } else {
-        return copy_string_2(path, "/");
+    // A NULL path is left unchanged.
+    if (*path != NULL) {
+        // If the path is non-empty and doesn't end in "/", then append "/".
+        size_t len = strlen(*path);
+        if (len > 0 && (*path)[len - 1] != '/') {
+            char *path2 = copy_string_2(*path, "/");
+            free((char*)*path);
+            *path = path2;
+        }
     }
 }
 
-static struct NameList * make_search_path(struct NameList *package_dirs)
+static void add_trailing_slash_namelist(struct NameList *dirs)
 {
-    struct NameList *result = NULL;
-    struct NameList **tail = &result;
-
-    for (struct NameList *in = package_dirs; in; in = in->next) {
-        struct NameList *out = alloc(sizeof(struct NameList));
-        out->name = make_prefix(in->name);
-        out->next = NULL;
-        *tail = out;
-        tail = &out->next;
+    for (struct NameList *dir = dirs; dir; dir = dir->next) {
+        add_trailing_slash(&dir->name);
     }
+}
 
-    return result;
+static void free_string_array(const char **arr)
+{
+    void *mem = arr;
+    while (*arr) {
+        free((char*)*arr);
+        arr++;
+    }
+    free(mem);
 }
 
 int main(int argc, char **argv)
 {
-    struct Options options;
-    parse_options(argc, argv, &options);
+    // Read config file.
+    struct CompilerConfig *cfg = load_config_file();
 
-    // Temporary: these cflags are needed to allow the tests to pass.
-    struct NameList cflag2 = { "-Wno-overflow", NULL };
-    struct NameList cflag1 = { "-Wno-div-by-zero", &cflag2 };
-
-    // Compile
+    // Transfer config to CompileOptions.
     struct CompileOptions copt;
-    copt.pkg_config_cmd = "pkg-config";
-    copt.cc_cmd = "gcc";
-    copt.ld_cmd = "gcc";
-    copt.cflags = &cflag1;
-    copt.libs = NULL;
-    copt.root_package_prefix = make_prefix(options.root_path);
-    copt.output_prefix = make_prefix(options.output_path);
-    copt.search_path = make_search_path(options.package_paths); free_name_list(options.package_paths);
-    copt.requested_modules = options.mode == CM_COMPILE ? NULL : options.requested_modules;
-    copt.mode = options.mode;
-    copt.cache_mode = options.cache_mode;
-    copt.show_progress = !options.quiet;
-    copt.create_debug_files = options.debug;
-    copt.continue_after_verify_error = options.verify_continue;
-    copt.verify_timeout_seconds = options.verify_timeout;
+    copt.pkg_config_cmd = cfg->pkg_config;
+    copt.cc_cmd = cfg->c_compiler;
+    copt.ld_cmd = cfg->linker;
+    copt.cflags = cfg->cflags;
+    copt.libs = cfg->libs;
+    copt.root_package_prefix = NULL;   // Set via cmd line, -r
+    copt.output_prefix = NULL;         // Set via cmd line, -o
+    copt.search_path = cfg->package_paths;   // Augmented via cmd line, -p
+    copt.requested_modules = NULL;     // Set via cmd line, -m
+    // NOTE: copt.mode is set via cmd line (-c or -v), and not initialized here
+    copt.cache_mode = (cfg->use_verifier_cache ? CACHE_ENABLED : CACHE_DISABLED); // Can be overridden by cmd line, --no-cache
+    copt.show_progress = true;         // Set via cmd line, -q
+    copt.create_debug_files = false;   // Set via cmd line, -d
+    copt.continue_after_verify_error = false;    // Set via cmd line, --verify-continue
+    copt.max_child_processes = cfg->max_verifier_processes;
+    copt.provers = cfg->provers;
 
+    // CompilerConfig is no longer needed after this point.
+    free(cfg);
+
+    // Read command line arguments, adding the results to the CompileOptions.
+    parse_options(argc, argv, &copt);
+
+    // Make sure the "path" settings all have a trailing slash if required
+    add_trailing_slash(&copt.root_package_prefix);
+    add_trailing_slash(&copt.output_prefix);
+    add_trailing_slash_namelist(copt.search_path);
+
+    // Run the compiler.
     bool success = compile(&copt);
 
-    free((char*)copt.output_prefix);
+    // Free config/options that are no longer required.
+    free((char*)copt.pkg_config_cmd);
+    free((char*)copt.cc_cmd);
+    free((char*)copt.ld_cmd);
+    free_name_list(copt.cflags);
+    free_name_list(copt.libs);
     free((char*)copt.root_package_prefix);
+    free((char*)copt.output_prefix);
     free_name_list(copt.search_path);
     free_name_list(copt.requested_modules);
 
-    if ((options.mode == CM_VERIFY) && !options.quiet) {
+    struct ProverConfig *pr = copt.provers;
+    while (pr) {
+        struct ProverConfig *next = pr->next;
+        free((char*)pr->name);
+        free_string_array(pr->command_and_arguments);
+        free(pr);
+        pr = next;
+    }
+
+    // Report success or failure on stderr (for verification jobs).
+    if ((copt.mode == CM_VERIFY) && copt.show_progress) {
         if (success) {
             fprintf(stderr, "Verification successful\n");
         } else {
@@ -275,5 +294,6 @@ int main(int argc, char **argv)
         }
     }
 
+    // Return correct exit code.
     return success ? 0 : 1;
 }

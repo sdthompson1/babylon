@@ -13,6 +13,10 @@ repository.
 #include "dep_list.h"
 #include "util.h"
 
+// On success, these return true and populate 'output'.
+
+// On failure, print error message(s), return false, leave 'output' unchanged.
+
 bool system_package_cflags(const char *pkg_config_cmd,
                            struct DepList *packages,
                            struct NameList **output);

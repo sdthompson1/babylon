@@ -138,13 +138,15 @@ In addition convert_fol_to_smt assumes that names do not contain the
 
 #include "cache_db.h"
 
+struct ProverConfig;
 struct Sexpr;
 
 
 // FOL problems are run asynchronously by a "FolRunner".
 // The CacheDb (if provided) should be kept alive at least until stop_fol_runner is called.
 void start_fol_runner(struct CacheDb *cache_db,
-                      int timeout_seconds,
+                      struct ProverConfig *provers,
+                      int max_child_processes,
                       bool continue_after_error);
 
 void stop_fol_runner();

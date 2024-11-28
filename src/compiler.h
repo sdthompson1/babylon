@@ -50,7 +50,8 @@ struct CompileOptions {
     bool show_progress;
     bool create_debug_files;
     bool continue_after_verify_error;
-    int verify_timeout_seconds;
+    int max_child_processes;
+    struct ProverConfig *provers;
 };
 
 

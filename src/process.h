@@ -19,10 +19,10 @@ repository.
 
 // Status codes for a child process.
 enum ProcStatus {
-    PROC_RUNNING,         // process is still running
-    PROC_SUCCESS,         // process ended "on its own" without us killing it
-    PROC_TIMED_OUT,       // we killed the process due to timeout
-    PROC_FAILED_TO_START  // process never started in the first place
+    PROC_RUNNING,         // process is still running (or about to start running).
+    PROC_SUCCESS,         // process ended "on its own" without us killing it. (exit_status will be valid.)
+    PROC_TIMED_OUT,       // we killed the process due to timeout.
+    PROC_FAILED_TO_START  // process never started in the first place (e.g. exec failure).
 };
 
 // Struct representing a child process.
@@ -34,6 +34,8 @@ struct Process {
     void *context;
 
     int timeout_in_seconds;
+    int signal_num;  // Signal to send on initial timeout
+    int kill_timeout_in_seconds;  // Time between initial timeout and sending SIGKILL. (<= 0 to disable.)
 
     // By default, stdout is captured to "output" array (below) and stderr
     // is redirected to /dev/null.
@@ -51,6 +53,8 @@ struct Process {
     char output[MAX_OUTPUT];
     int output_length;
 };
+
+void default_init_process(struct Process *proc);
 
 // Launch a new child process.
 // The Process struct must not be released/freed until after the

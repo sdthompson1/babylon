@@ -99,13 +99,11 @@ static bool run_pkg_config(const char *pkg_config_cmd,
     bool pkg_config_error = false;
     if (output_list) *output_list = NULL;
 
-    if (i > 2) {
+    if (i > 2) {  // if i <= 2, then there are no system packages, so do not run pkg-config
 
         struct Process proc;
+        default_init_process(&proc);
         proc.cmd = cmd;
-        proc.print_to_stdin = NULL;
-        proc.timeout_in_seconds = 10000;
-        proc.show_stdout = false;
         proc.show_stderr = true;
 
         launch_process(&proc);
@@ -114,8 +112,21 @@ static bool run_pkg_config(const char *pkg_config_cmd,
         }
 
         if (proc.status == PROC_SUCCESS && proc.exit_status == 0) {
+            // pkg-config returned status 0 which means that it successfully printed
+            // the cflags or libs. Put these in "output_list".
             if (output_list) *output_list = split_string(proc.output, proc.output_length);
         } else {
+            // There are two cases:
+            // (1) The pkg-config process failed to start (proc.status != PROC_SUCCESS):
+            //   Print an error message so that the user can debug (e.g.: maybe pkg-config is
+            //   not installed, or "pkg-config" is not set correctly in the compiler config
+            //   file).
+            // (2) The pkg-config process ran to completion but returned non-zero exit status:
+            //   pkg-config would have already printed some error messages on stderr, so we
+            //   don't need to do anything else.
+            if (proc.status != PROC_SUCCESS) {
+                fprintf(stderr, "Error: Could not resolve system-packages: pkg-config command failed.\n");
+            }
             pkg_config_error = true;
         }
     }
