@@ -164,7 +164,7 @@ A Linux machine, with the `gcc` and `make` commands and the `sqlite3`
 library available, is required.
 
 To build the compiler you can simply run "make". An executable file
-`build/babylon` will appear.
+`build/bab` will appear.
 
 If you want to use the verifier, you will need to make sure that at
 least one (and preferably all three) of the commands `z3`,

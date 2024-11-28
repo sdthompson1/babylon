@@ -2,12 +2,12 @@
 
 # This script will confirm that all the packages in this folder
 # can be compiled and verified using the Babylon compiler
-# (which is assumed to exist at ../build/babylon).
+# (which is assumed to exist at ../build/bab).
 
 # If a "PACKAGENAME/build" folder does not already exist for
 # each package then it will be created.
 
-COMPILER="../build/babylon"
+COMPILER="../build/bab"
 
 make_package()
 {

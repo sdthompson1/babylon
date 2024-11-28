@@ -3,9 +3,9 @@
 # Building:
 #
 #   `make`, `make all`, or `make release` -- build the compiler
-#      executable as `build/babylon`
+#      executable as `build/bab`
 #
-#   `make debug` -- build a debug executable as `build/babylon.debug`
+#   `make debug` -- build a debug executable as `build/bab.debug`
 #
 #
 # Demos/Examples:
@@ -53,7 +53,7 @@
 # Coverage Checks:
 #
 #   `make cover` -- build the compiler in coverage mode (creating
-#      output `build/babylon.coverage`) and run the same tests that
+#      output `build/bab.coverage`) and run the same tests that
 #      `make check` would, but in coverage mode. Requires gcov installed.
 #      Test coverage statistics will be printed to stdout and detailed
 #      results will appear in the `gcov` directory.
@@ -73,9 +73,9 @@ COVERAGE_CFLAGS := --coverage
 LIBS := -lsqlite3
 
 # Output binary name
-DEBUG_EXE := build/babylon.debug
-RELEASE_EXE := build/babylon
-COVERAGE_EXE := build/babylon.coverage
+DEBUG_EXE := build/bab.debug
+RELEASE_EXE := build/bab
+COVERAGE_EXE := build/bab.coverage
 
 # File patterns
 SRCS := $(wildcard src/*.c)
@@ -139,11 +139,11 @@ cover: $(COVERAGE_EXE)
 	mkdir -p gcov/build
 	ln -sf ../test gcov/
 	ln -sf ../src gcov/
-	cd gcov; ./test/run_tests.sh -c ../build/babylon.coverage -msp
+	cd gcov; ./test/run_tests.sh -c ../build/bab.coverage -msp
 	cd gcov; gcov -o ../build/coverage ../src/*.c
 
 incr-cover: $(COVERAGE_EXE)
-	cd gcov; ./test/run_tests.sh -c ../build/babylon.coverage $(flags)
+	cd gcov; ./test/run_tests.sh -c ../build/bab.coverage $(flags)
 	cd gcov; gcov -o ../build/coverage ../src/*.c
 
 $(COVERAGE_EXE): $(COVERAGE_OBJS)

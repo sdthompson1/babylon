@@ -1,6 +1,6 @@
 #!/bin/bash
 
-COMPILER="build/babylon"
+COMPILER="build/bab"
 
 CASES_DIR="test/cases"
 SEQUENCE_TESTS_DIR="test/sequence"
