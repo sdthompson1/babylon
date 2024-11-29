@@ -3033,11 +3033,9 @@ static char * get_relative_module_name(const char *this_module_name, const char 
 static void print_includes(FILE *file, const char *this_module_name, struct Import *imports)
 {
     while (imports) {
-        if (strcmp(imports->module_name, "Int") != 0) {
-            char *name = get_relative_module_name(this_module_name, imports->module_name);
-            fprintf(file, "#include \"%s.b.h\"\n", name);
-            free(name);
-        }
+        char *name = get_relative_module_name(this_module_name, imports->module_name);
+        fprintf(file, "#include \"%s.b.h\"\n", name);
+        free(name);
         imports = imports->next;
     }
 }
