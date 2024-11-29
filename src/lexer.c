@@ -14,6 +14,7 @@ repository.
 #include "sha256.h"
 
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -167,6 +168,50 @@ static void add_simple_token(struct LexerState *state, enum TokenType type)
     add_token(state, type, NULL, 0);
 }
 
+static void lex_hex_literal(struct LexerState *state)
+{
+    uint64_t result = 0;
+    int ch;
+    bool got_digit = false;
+
+    while (1) {
+        ch = peek_next_char(state);
+        if (!isxdigit(ch)) {
+            break;
+        }
+        read_next_char(state);
+
+        got_digit = true;
+
+        if ((result & UINT64_C(0xF000000000000000)) != 0) {
+            // No room for any more digits
+            report_error(state);
+            return;
+        }
+
+        result <<= 4;
+
+        if ('0' <= ch && ch <= '9') {
+            result |= (ch - '0');
+        } else if ('a' <= ch && ch <= 'f') {
+            result |= (ch - 'a' + 10);
+        } else {
+            result |= (ch - 'A' + 10);
+        }
+    }
+
+    if (!got_digit) {
+        // bare "0x" not followed by hex digit -- error
+        report_error(state);
+        return;
+    }
+
+    // Convert back to decimal
+    char buf[100];
+    sprintf(buf, "%" PRIu64, result);
+    add_token(state, TOK_INT_LITERAL, buf, strlen(buf) + 1);
+}
+
 static void lex_int_literal(struct LexerState *state)
 {
     // Allocate plenty of space, this means that (most) over-sized literals will get the "integer literal too big"
@@ -182,6 +227,13 @@ static void lex_int_literal(struct LexerState *state)
             break;
         }
         read_next_char(state);
+
+        // Check for "0x" as a special case
+        if (index == 0 && ch == '0' && peek_next_char(state) == 'x') {
+            read_next_char(state);
+            lex_hex_literal(state);
+            return;
+        }
 
         if (index >= sizeof(buf) - 1) {
             // Integer literal too long

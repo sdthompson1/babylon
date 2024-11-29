@@ -70,7 +70,7 @@
 #
 #   `make incr-cover` -- Incremental coverage. Re-runs tests and
 #      adds results to existing coverage stats. `flags` may be used,
-#      e.g. `make incr-coverage flags="-m -f Arith" will re-run only
+#      e.g. `make incr-coverage flags="-m Arith" will re-run only
 #      "main tests" with Arith in their name.
 
 
