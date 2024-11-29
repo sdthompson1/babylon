@@ -321,6 +321,11 @@ static int lex_escape_sequence(struct LexerState *state)
         output = 34;
         break;
 
+    case '\'':
+        // '\'' = single quote (ascii 39)
+        output = 39;
+        break;
+
     case '\\':
         // '\\' = backslash (ascii 92)
         output = 92;
@@ -350,6 +355,39 @@ static int lex_escape_sequence(struct LexerState *state)
     }
 
     return output;
+}
+
+static void lex_char_literal(struct LexerState *state)
+{
+    struct Location ch_loc = state->location;
+    int ch = read_next_char(state);
+
+    if (ch == '\'' || ch == '\n' || ch == EOF) {
+        // empty char literal, or lone quote at end of line or end of file
+        state->location = ch_loc;
+        reset_location(state);
+        report_error(state);
+        return;
+
+    } else if (ch == '\\') {
+        // escape sequence
+        ch = lex_escape_sequence(state);
+
+    } else {
+        // ch is a valid character. do nothing
+    }
+
+    if (peek_next_char(state) != '\'') {
+        // quote was not closed
+        report_error(state);
+        return;
+    }
+    read_next_char(state);
+
+    char buf[100];
+    sprintf(buf, "%d", ch);
+
+    add_token(state, TOK_INT_LITERAL, buf, strlen(buf) + 1);
 }
 
 static void lex_string_literal(struct LexerState *state)
@@ -666,6 +704,10 @@ static void lex_token(struct LexerState *state, int ch)
         read_next_char(state);
 
         switch (ch) {
+        case '\'':
+            lex_char_literal(state);
+            break;
+
         case '\"':
             lex_string_literal(state);
             break;

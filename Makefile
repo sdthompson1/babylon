@@ -151,7 +151,8 @@ build/release/%.o: src/%.c
 #
 cover: $(COVERAGE_EXE)
 	rm -fr gcov
-	mkdir -p gcov/build
+	mkdir gcov
+	rm -f build/coverage/*.gcda
 	ln -sf ../test gcov/
 	ln -sf ../src gcov/
 	cd gcov; ./test/run_tests.sh -c ../build/bab.coverage -msp
