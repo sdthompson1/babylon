@@ -513,9 +513,9 @@ function string_to_integer(str: u8[]): Maybe<{bool, u64}>
 
     // Skip a single plus or minus character
     var minus = false;
-    if str[i] == 43 {   // ascii '+'
+    if str[i] == '+' {
         i = i + 1;
-    } else if str[i] == 45 {    // ascii '-'
+    } else if str[i] == '-' {
         i = i + 1;
         minus = true;
     }
@@ -526,8 +526,8 @@ function string_to_integer(str: u8[]): Maybe<{bool, u64}>
         invariant i <= strlen(str);
         decreases ~i;
     {
-        if 48 <= str[i] <= 57 {         // 48 = ascii '0'; 57 = ascii '9'
-            var d = str[i] - 48;
+        if isdigit(str[i]) {
+            var d = str[i] - '0';
 
             var too_big = (number > (U64_MAX - d)/10);
             assert too_big <==> int(number) * int(10) + int(d) > int(U64_MAX);
@@ -615,14 +615,14 @@ function integer_to_string(sign: bool, num: u64, ref str: u8[])
 
     // Handle the special case of zero.
     if num == 0 {
-        str[0] = 48;    // ascii '0'
+        str[0] = '0';
         str[1] = 0;
         return;
     }
     
     // Write initial minus sign if required.
     if sign {
-        str[0] = 45;    // ascii '-'
+        str[0] = '-';
         i = 1;
     } 
 
@@ -634,7 +634,7 @@ function integer_to_string(sign: bool, num: u64, ref str: u8[])
         invariant forall (k: u8) k < j ==> str[k] != 0;
         decreases ~j;
     {
-        str[j] = (number % 10) + 48;  // 48 = ascii '0'
+        str[j] = (number % 10) + '0';
         number = number / 10;
         j = j + 1;
     }
