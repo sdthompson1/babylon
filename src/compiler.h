@@ -52,6 +52,9 @@ struct CompileOptions {
     bool continue_after_verify_error;
     int max_child_processes;
     struct ProverConfig *provers;
+
+    bool run_c_compiler;
+    bool print_c_compiler_commands;
 };
 
 

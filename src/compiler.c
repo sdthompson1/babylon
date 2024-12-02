@@ -32,6 +32,7 @@ repository.
 #include "verifier.h"
 #include "codegen.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -88,6 +89,8 @@ struct LoadDetails {
     const char *ld_cmd;
     struct NameList *cflags;
     struct NameList *libs;
+    bool run_c_compiler;
+    bool print_c_compiler_commands;
 };
 
 
@@ -244,6 +247,66 @@ static bool run_verifier(struct LoadDetails *details,
     return true;
 }
 
+static bool needs_quote(const char *str)
+{
+    while (*str) {
+        char c = *str;
+        // These are "known safe" characters:
+        if (isalnum(c) || c == ',' || c == '.' || c == '_' || c == '+'
+        || c == ':' || c == '@' || c == '%' || c == '/' || c == '-') {
+            ++str;
+        } else {
+            // Unsafe character found - needs quoting
+            return true;
+        }
+    }
+    return false;
+}
+
+static void print_quoted(const char *p)
+{
+    bool in_quote = false;
+    while (*p) {
+        if (*p == '\'') {
+            if (in_quote) {
+                putchar('\'');
+                in_quote = false;
+            }
+            printf("\\'");
+        } else {
+            if (!in_quote) {
+                putchar('\'');
+                in_quote = true;
+            }
+            putchar(*p);
+        }
+        ++p;
+    }
+    if (in_quote) {
+        putchar('\'');
+    }
+}
+
+static void print_cmd_array(const char **cmd)
+{
+    // Print 'cmd' quoting any arguments as necessary.
+    // Note this assumes a Bash-like shell.
+    bool first = true;
+    while (*cmd) {
+        if (!first) {
+            printf(" ");
+        }
+        if (needs_quote(*cmd)) {
+            print_quoted(*cmd);
+        } else {
+            printf("%s", *cmd);
+        }
+        ++cmd;
+        first = false;
+    }
+    printf("\n");
+}
+
 static bool compile_c_file(struct LoadDetails *details,
                            const char *package_name,
                            const char *c_filename,
@@ -273,6 +336,10 @@ static bool compile_c_file(struct LoadDetails *details,
     cmd[idx++] = "-o";
     cmd[idx++] = o_filename;
     cmd[idx++] = NULL;
+
+    if (details->print_c_compiler_commands) {
+        print_cmd_array(cmd);
+    }
 
     struct Process proc;
     default_init_process(&proc);
@@ -329,6 +396,10 @@ static bool run_linker(const struct LoadDetails *details)
         cmd[idx++] = node->name;
     }
     cmd[idx++] = NULL;
+
+    if (details->print_c_compiler_commands) {
+        print_cmd_array(cmd);
+    }
 
     struct Process proc;
     default_init_process(&proc);
@@ -624,27 +695,29 @@ static bool load_module_from_disk(struct LoadDetails *details,
         fclose(h_file);
 
         // Now compile the C to an object file
-        char *o_filename = get_output_filename(details, module, "obj/", ".b.o");
-        bool ok = compile_c_file(details, info->package_name, c_filename, o_filename);
-        free(o_filename);
-        if (!ok) {
-            fprintf(stderr, "Compilation of %s failed\n", c_filename);
-        }
-        free(c_filename);
-        if (!ok) {
-            free_module(module);
-            return false;
-        }
-
-        // If there is a user-supplied C file then compile that as well
-        if (info->c_filename) {
-            o_filename = get_output_filename(details, module, "obj/", ".o");
-            ok = compile_c_file(details, info->package_name, info->c_filename, o_filename);
+        if (details->run_c_compiler) {
+            char *o_filename = get_output_filename(details, module, "obj/", ".b.o");
+            bool ok = compile_c_file(details, info->package_name, c_filename, o_filename);
             free(o_filename);
             if (!ok) {
-                fprintf(stderr, "Compilation of %s failed\n", info->c_filename);
+                fprintf(stderr, "Compilation of %s failed\n", c_filename);
+            }
+            free(c_filename);
+            if (!ok) {
                 free_module(module);
                 return false;
+            }
+
+            // If there is a user-supplied C file then compile that as well
+            if (info->c_filename) {
+                o_filename = get_output_filename(details, module, "obj/", ".o");
+                ok = compile_c_file(details, info->package_name, info->c_filename, o_filename);
+                free(o_filename);
+                if (!ok) {
+                    fprintf(stderr, "Compilation of %s failed\n", info->c_filename);
+                    free_module(module);
+                    return false;
+                }
             }
         }
     }
@@ -777,6 +850,8 @@ bool compile(struct CompileOptions *options)
     details.ld_cmd = options->ld_cmd;
     details.cflags = options->cflags;
     details.libs = options->libs;
+    details.run_c_compiler = options->run_c_compiler;
+    details.print_c_compiler_commands = options->print_c_compiler_commands;
 
     bool success = true;
     if (options->requested_modules == NULL) {
@@ -803,6 +878,7 @@ bool compile(struct CompileOptions *options)
     // If everything is ok we can now link
     // Note: Linking only happens when a main_module is defined.
     if (options->mode == CM_COMPILE
+    && options->run_c_compiler
     && success
     && details.obj_files != NULL
     && details.main_module_name) {

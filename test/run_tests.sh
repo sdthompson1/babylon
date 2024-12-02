@@ -89,7 +89,7 @@ run_test()
     # Verify the test module (and any imports)
     # (cd into the directory so that the error messages don't include the full path!)
     pushd $OUT_DIR >/dev/null
-    XDG_CONFIG_HOME=../config $COMPILER --verify --verify-continue --quiet --verify-timeout $TIMEOUT --package-path .. >verifier_stdout.txt 2>verifier_stderr.txt
+    XDG_CONFIG_HOME=../config $COMPILER verify --continue --quiet --timeout $TIMEOUT --package-path .. >verifier_stdout.txt 2>verifier_stderr.txt
     verifier_result=$?
     popd >/dev/null
 
@@ -135,7 +135,7 @@ run_test()
 
 
     # Compile the package, creates $OUT_DIR/build/bin/test-binary
-    XDG_CONFIG_HOME=test/config $COMPILER --compile --root $OUT_DIR --package-path test >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
+    XDG_CONFIG_HOME=test/config $COMPILER compile --root $OUT_DIR --package-path test >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
     compiler_result=$?
 
     # Stdout and stderr from the compiler should be empty, and
@@ -220,7 +220,7 @@ run_sequence_tests()
         do
             ln -s ../../../$bfile $OUT_DIR/src/
         done
-        XDG_CONFIG_HOME=test/config $COMPILER --verify --verify-timeout $TIMEOUT -r $OUT_DIR -p test >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
+        XDG_CONFIG_HOME=test/config $COMPILER verify --timeout $TIMEOUT -r $OUT_DIR -p test >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
 
         # Clip out reports of which prover succeeded, like "(z3,
         # 0.1s)", and also messages like "(cached)", as these may vary
@@ -259,7 +259,7 @@ function run_package_tests()
         cp -r $PACKAGE_TESTS_DIR/$i/* $OUT_DIR/ || return 1
 
         # Verify
-        XDG_CONFIG_HOME=test/config $COMPILER -v --quiet -p $OUT_DIR -p test/ -r $OUT_DIR/root >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
+        XDG_CONFIG_HOME=test/config $COMPILER verify --quiet -p $OUT_DIR -p test/ -r $OUT_DIR/root >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
         verifier_result=$?
         cp $OUT_DIR/verifier_stderr.txt $OUT_DIR/verifier_stderr_unfiltered.txt
         filter_valgrind $OUT_DIR/verifier_stderr.txt || return 1
@@ -285,7 +285,7 @@ function run_package_tests()
         fi
 
         # Compile
-        XDG_CONFIG_HOME=test/config $COMPILER -c -p $OUT_DIR -p test -r $OUT_DIR/root >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
+        XDG_CONFIG_HOME=test/config $COMPILER compile -p $OUT_DIR -p test -r $OUT_DIR/root >$OUT_DIR/compiler_stdout.txt 2>$OUT_DIR/compiler_stderr.txt
         compiler_result=$?
         filter_valgrind $OUT_DIR/compiler_stderr.txt || return 1
 

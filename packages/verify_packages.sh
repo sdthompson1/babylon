@@ -17,10 +17,10 @@ make_package()
     echo "### $package"
 
     # Compile the package
-    $COMPILER -c -p . -r $package || return 1
+    $COMPILER compile -p . -r $package || return 1
 
     # Verify the package
-    $COMPILER -v -p . -r $package || return 1
+    $COMPILER verify -p . -r $package || return 1
 
     return 0
 }

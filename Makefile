@@ -240,10 +240,10 @@ packages: $(RELEASE_EXE)
 #
 
 chess: $(RELEASE_EXE)
-	cd packages; ../$(RELEASE_EXE) -c -p . -r chess
+	cd packages; ../$(RELEASE_EXE) compile -p . -r chess
 	@echo "Build successful!"
 	@echo "To run the chess example, cd into packages/chess"
 	@echo "and then type: ./build/bin/chess"
 
 verify-chess: $(RELEASE_EXE)
-	cd packages; ../$(RELEASE_EXE) -v -p . -r chess
+	cd packages; ../$(RELEASE_EXE) verify -p . -r chess
