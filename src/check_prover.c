@@ -157,7 +157,7 @@ static char * additional_prover_config(enum StandardProver prover)
         return copy_string("");
 
     case PROVER_CVC4:
-        return copy_string("show-stderr = false   # Suppress unwanted \"CVC4 interrupted by SIGTERM\" messages\n");
+        return copy_string("signal = \"SIGHUP\"     # cvc4 is slow to respond to SIGTERM; use SIGHUP instead\n");
 
     case PROVER_CVC5:
         return copy_string("show-stderr = false   # Suppress unwanted \"cvc5 interrupted by SIGTERM\" messages\n");
