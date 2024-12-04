@@ -22,8 +22,8 @@ bool check_prover(struct ProverConfig *config);
 // Enum for standard, "known" provers.
 enum StandardProver {
     PROVER_Z3 = 0,
-    PROVER_CVC4,
     PROVER_CVC5,
+    PROVER_CVC4,
     PROVER_VAMPIRE,
     NUM_STD_PROVERS
 };
