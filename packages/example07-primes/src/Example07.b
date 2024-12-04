@@ -4,6 +4,11 @@
 // numbers, and write a program to compute all primes up to and including
 // 2^31 - 1.
 
+// NOTE: This file is a good example of why having multiple SMT solvers
+// installed is useful. In my testing (as of December 2024), I found that
+// z3, cvc5 and alt-ergo (or alternatively, z3, cvc5 and vampire), working
+// together, can successfully verify this module, but using only one or
+// two out of the three does not work.
 
 module Example07
 
