@@ -215,38 +215,40 @@ ghost function int_euclid_div_unique_base_case(x: int, y: int, q: int, r: int)
 // Some lemmas needed for the inductive step.
 
 ghost function mod_lemma_1(x: int, y: int)
-    requires y > int(0);
+    requires y != int(0);
     ensures (x + y) % y == x % y
         || (x + y) % y == x % y + y;
 {
-    if x == int(0) { return; }
-    assert x > int(0) ==> int(0) <= x % y < int(y);
-    assert x > int(0) ==> int(0) <= (x + y) % y < int(y);
-    return;
+    // This can be proved by induction
+    var k = int(0);
+    assert k % y == int(0);
+    assert (k + y) % y == int(0);
+    if x >= int(0) {
+        while k < x
+            invariant int(0) <= k <= x;
+            invariant (k + y) % y == k % y || (k + y) % y == k % y + y;
+            decreases x - k;
+        {
+            k = k + int(1);
+        }
+    } else {
+        while k > x
+            invariant x <= k <= int(0);
+            invariant (k + y) % y == k % y || (k + y) % y == k % y + y;
+            decreases k - x;
+        {
+            k = k - int(1);
+        }
+    }
 }
 
 ghost function mod_lemma_2(x: int, y: int)
-    requires y < int(0);
-    ensures (x + y) % y == x % y
-        || (x + y) % y == x % y + y;
-{}
-
-ghost function mod_lemma_3(x: int, y: int)
-    requires y > int(0);
+    requires y != int(0);
     ensures (x - y) % y == x % y
         || (x - y) % y == x % y - y;
 {
-    if x == int(0) { return; }
-    assert x > int(0) ==> int(0) <= x % y < int(y);
-    assert x > int(0) ==> int(0) <= (x + y) % y < int(y);
-    return;
+    mod_lemma_1(x, -y);
 }
-
-ghost function mod_lemma_4(x: int, y: int)
-    requires y < int(0);
-    ensures (x - y) % y == x % y
-        || (x - y) % y == x % y - y;
-{}
 
 // There are two inductive steps: one for increasing the quotient (induction upwards
 // from zero) and one for reducing the quotient (induction downwards from zero).
@@ -259,11 +261,8 @@ ghost function int_euclid_div_step_up(x: int, y: int)
     if (x + y) % y == x % y {
         assert (x + y) / y == x / y + int(1);
         return;
-    } else if y > int(0) {
-        mod_lemma_1(x, y);
-        return;
     } else {
-        mod_lemma_2(x, y);
+        mod_lemma_1(x, y);
         return;
     }
 }
@@ -276,11 +275,8 @@ ghost function int_euclid_div_step_down(x: int, y: int)
     if (x - y) % y == x % y {
         assert (x - y) / y == x / y - int(1);
         return;
-    } else if y > int(0) {
-        mod_lemma_3(x, y);
-        return;
     } else {
-        mod_lemma_4(x, y);
+        mod_lemma_2(x, y);
         return;
     }
 }
