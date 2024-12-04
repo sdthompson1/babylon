@@ -23,7 +23,7 @@ arguments = ["-in"]
 format = "smtlib"
 
 [provers.cvc5]
-command = "cvc5-Linux"
+command = "cvc5"
 arguments = ["--lang", "smt2.6"]
 format = "smtlib"
 show-stderr = false   # Suppress unwanted "cvc5 interrupted by user" messages

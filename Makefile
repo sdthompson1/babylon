@@ -40,6 +40,9 @@
 # Testing:
 #
 #   `make check` -- run the most important compiler self-tests.
+#      (Note: the tests assume that the commands "z3", "cvc5" and "vampire"
+#      are all available. The tests do *not* use your usual babylon.toml config
+#      file, but a hard coded one in test/config/babylon/babylon.toml.)
 #
 #   `make check-valgrind` -- runs the same tests that `make check` would,
 #      but using Valgrind. This checks for memory leaks but is somewhat
