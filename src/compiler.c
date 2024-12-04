@@ -11,6 +11,7 @@ repository.
 #include "ast.h"
 #include "cache_db.h"
 #include "compiler.h"
+#include "config_file.h"
 #include "debug_print.h"
 #include "error.h"
 #include "fol.h"
@@ -828,6 +829,7 @@ bool compile(struct CompileOptions *options)
 
     start_fol_runner(details.cache_db,
                      options->provers,
+                     options->config_filename,
                      options->max_child_processes,
                      options->continue_after_verify_error);
 
@@ -905,4 +907,22 @@ bool compile(struct CompileOptions *options)
     free_package_loader(details.package_loader);
 
     return success;
+}
+
+void free_compile_options(struct CompileOptions *copt)
+{
+    if (copt) {
+        free((char*)copt->config_filename);
+        free((char*)copt->pkg_config_cmd);
+        free((char*)copt->cc_cmd);
+        free((char*)copt->ld_cmd);
+        free_name_list(copt->cflags);
+        free_name_list(copt->libs);
+        free((char*)copt->root_package_prefix);
+        free((char*)copt->output_prefix);
+        free_name_list(copt->search_path);
+        free_name_list(copt->requested_modules);
+        free_prover_config(copt->provers);
+        free(copt);
+    }
 }

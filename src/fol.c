@@ -93,6 +93,7 @@ struct FolRunner {
 
     // Configuration
     struct ProverConfig *provers;
+    const char *config_filename;
     int num_provers;
     struct CacheDb *cache_db;
     int max_child_processes;
@@ -115,6 +116,7 @@ static int count_provers(struct ProverConfig *provers)
 
 void start_fol_runner(struct CacheDb *cache_db,
                       struct ProverConfig *provers,
+                      const char *config_filename,
                       int max_child_processes,
                       bool continue_after_error)
 {
@@ -129,6 +131,7 @@ void start_fol_runner(struct CacheDb *cache_db,
     g_fol_runner->error_reached = false;
     g_fol_runner->cache_db = cache_db;
     g_fol_runner->provers = provers;
+    g_fol_runner->config_filename = config_filename;
     g_fol_runner->num_provers = count_provers(provers);
     g_fol_runner->max_child_processes = max_child_processes;
     g_fol_runner->continue_after_error = continue_after_error;
@@ -505,7 +508,11 @@ static void fill_completion_msg(struct Job *job)
             // If any prover failed to start, then the whole job fails (as
             // the user will likely want to debug their configuration before
             // continuing).
-            set_completion_msg(job, copy_string("\n### ERROR: Failed to start one of the provers.\n### Please check the compiler config file.\n\n"));
+            set_completion_msg(job,
+                               copy_string_3("\n\nERROR: Failed to start one of the provers.\n"
+                                             "Please check the compiler config file: ",
+                                             g_fol_runner->config_filename,
+                                             "\n\n"));
             return;
 
         case PROC_TIMED_OUT:
@@ -540,7 +547,11 @@ static void fill_completion_msg(struct Job *job)
     }
 
     if (g_fol_runner->num_provers == 0) {
-        set_completion_msg(job, copy_string("\n\n### ERROR: No provers configured!\n### Please check the compiler config file.\n\n"));
+        set_completion_msg(job,
+                           copy_string_3("\n\nERROR: No provers configured!\n"
+                                         "Please check the compiler config file: ",
+                                         g_fol_runner->config_filename,
+                                         "\n\n"));
 
     } else {
         // Construct message

@@ -265,6 +265,13 @@ static void fork_child(struct ProcessState *state)
             }
         }
 
+        // Create a copy of stderr for our own use.
+        // Mark it "CLOEXEC" so the new process doesn't get to see it (if exec succeeds).
+        int copy_of_stderr = dup(STDERR_FILENO);
+        if (copy_of_stderr != -1) {
+            fcntl(copy_of_stderr, F_SETFD, FD_CLOEXEC);
+        }
+
         if (!state->process->show_stderr) {
             // Redirect stderr to null to prevent unwanted messages such as
             // "cvc5 interrupted by user".
@@ -284,13 +291,17 @@ static void fork_child(struct ProcessState *state)
         // Call exec.
         execvp(state->process->cmd[0], (char * const*) state->process->cmd);
 
-        // Error.
-        // Print a message to stderr so that the user can investigate what has gone wrong.
+        // If we get here, exec failed.
+
+        // Print a message to stderr (if requested).
         // Then notify the parent, and exit.
-        int errno_bak = errno;  // backup errno in case fprintf changes it (I don't know if it can or not)
-        fprintf(stderr, "\nCouldn't start child process: %s\n", state->process->cmd[0]);
-        errno = errno_bak;
-        perror("exec failed");
+        if (state->process->show_exec_errors) {
+            dup2(copy_of_stderr, STDERR_FILENO);  // restore the copy of stderr from above
+            int errno_bak = errno;  // backup errno in case fprintf changes it (I don't know if it can or not)
+            fprintf(stderr, "\nCouldn't start child process: %s\n", state->process->cmd[0]);
+            errno = errno_bak;
+            perror("exec failed");
+        }
         send_failure_msg(pipes[2][1]);
         exit(1);
 
@@ -660,4 +671,5 @@ void default_init_process(struct Process *proc)
     proc->timeout_in_seconds = 999999;  // effectively infinite
     proc->signal_num = SIGTERM;
     proc->kill_timeout_in_seconds = 10;
+    proc->show_exec_errors = true;
 }

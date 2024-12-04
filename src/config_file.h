@@ -35,6 +35,8 @@ struct ProverConfig {
 };
 
 struct CompilerConfig {
+    const char *config_filename;
+
     // [packages] section
     struct NameList *package_paths;
 
@@ -54,5 +56,8 @@ struct CompilerConfig {
 };
 
 struct CompilerConfig *load_config_file();
+
+void free_prover_config(struct ProverConfig *p);
+void free_compiler_config(struct CompilerConfig *cfg);
 
 #endif

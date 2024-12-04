@@ -10,6 +10,7 @@ repository.
 
 #include "alloc.h"
 #include "ast.h"
+#include "check_config.h"
 #include "compiler.h"
 #include "config_file.h"
 #include "error.h"
@@ -149,7 +150,7 @@ static bool print_help_for_subcommand(enum Subcommand cmd, char **argv, const ch
 
     case CMD_BUILD:
         printf("Verify and then compile a Babylon package.\n\n");
-        // TODO: Print usage
+        // TODO: Print usage of 'bab build'
         break;
 
     case CMD_TRANSLATE:
@@ -159,7 +160,7 @@ static bool print_help_for_subcommand(enum Subcommand cmd, char **argv, const ch
 
     case CMD_CHECK_CONFIG:
         printf("Check that the compiler configuration file is valid.\n\n");
-        // TODO: Print usage
+        printf("Usage: %s check-config\n\n", argv[0]);
         break;
 
     case CMD_VERSION:
@@ -193,6 +194,33 @@ static bool help_subcommand(int argc, char **argv)
 
 //------------------------------------------------------------------------
 // Compile / Translate Subcommands
+
+// This "moves" all the settings from cfg to a new CompileOptions struct.
+// cfg is not freed, but it is "nulled out".
+static struct CompileOptions * transfer_compiler_config(struct CompilerConfig *cfg)
+{
+    struct CompileOptions *copt = alloc(sizeof(struct CompileOptions));
+    copt->config_filename = cfg->config_filename; cfg->config_filename = NULL;
+    copt->pkg_config_cmd = cfg->pkg_config; cfg->pkg_config = NULL;
+    copt->cc_cmd = cfg->c_compiler; cfg->c_compiler = NULL;
+    copt->ld_cmd = cfg->linker; cfg->linker = NULL;
+    copt->cflags = cfg->cflags; cfg->cflags = NULL;
+    copt->libs = cfg->libs; cfg->libs = NULL;
+    copt->root_package_prefix = NULL;   // Set via cmd line
+    copt->output_prefix = NULL;         // Set via cmd line, -o
+    copt->search_path = cfg->package_paths; cfg->package_paths = NULL;   // Augmented via cmd line, -p
+    copt->requested_modules = NULL;     // Set via cmd line, -m
+    // NOTE: copt->mode is set via cmd line, and not initialized here
+    copt->cache_mode = (cfg->use_verifier_cache ? CACHE_ENABLED : CACHE_DISABLED); // Can be overridden by cmd line, --no-cache
+    copt->show_progress = true;         // Set via cmd line, -q
+    copt->create_debug_files = false;   // Set via cmd line, -d
+    copt->continue_after_verify_error = false;    // Set via cmd line, --continue
+    copt->max_child_processes = cfg->max_verifier_processes;
+    copt->provers = cfg->provers; cfg->provers = NULL;
+    copt->run_c_compiler = false;
+    copt->print_c_compiler_commands = false;
+    return copt;
+}
 
 static void parse_r_argument(struct CompileOptions *copt)
 {
@@ -260,13 +288,12 @@ static void adjust_compile_options(struct CompileOptions *copt)
     add_trailing_slash_namelist(copt->search_path);
 }
 
-// This will exit on error, or if --help is used.
+// This will exit on error
 static void parse_compile_or_translate_options_or_exit(int argc, char **argv,
                                                        struct CompileOptions *copt,
                                                        enum Subcommand cmd)
 {
     static struct option long_options[] = {
-        {"help",            no_argument,       NULL, 'h'},
         {"root",            required_argument, NULL, 'r'},
         {"package-path",    required_argument, NULL, 'p'},
         {"output-path",     required_argument, NULL, 'o'},
@@ -285,10 +312,6 @@ static void parse_compile_or_translate_options_or_exit(int argc, char **argv,
         }
 
         switch (c) {
-        case 'h':
-            print_help_for_subcommand(cmd, argv, NULL);
-            exit(0);
-
         case 'r':
             parse_r_argument(copt);
             break;
@@ -323,15 +346,20 @@ static void parse_compile_or_translate_options_or_exit(int argc, char **argv,
 }
 
 static bool compile_or_translate_subcommand(int argc, char **argv,
-                                            struct CompileOptions *copt,
+                                            struct CompilerConfig *cfg,
                                             enum Subcommand cmd)
 {
+    struct CompileOptions *copt = transfer_compiler_config(cfg);
+
     copt->mode = CM_COMPILE;
     copt->run_c_compiler = (cmd == CMD_COMPILE);
 
     parse_compile_or_translate_options_or_exit(argc, argv, copt, cmd);
 
-    return compile(copt);
+    bool result = compile(copt);
+
+    free_compile_options(copt);
+    return result;
 }
 
 //------------------------------------------------------------------------
@@ -343,7 +371,6 @@ static void parse_verify_options_or_exit(int argc, char **argv,
     enum { OPT_CONTINUE = 1, OPT_NO_CACHE = 2 };
 
     static struct option long_options[] = {
-        {"help",            no_argument,       NULL, 'h'},
         {"root",            required_argument, NULL, 'r'},
         {"package-path",    required_argument, NULL, 'p'},
         {"output-path",     required_argument, NULL, 'o'},
@@ -367,10 +394,6 @@ static void parse_verify_options_or_exit(int argc, char **argv,
         }
 
         switch (c) {
-        case 'h':
-            print_help_for_subcommand(CMD_VERIFY, argv, NULL);
-            exit(0);
-
         case 'r':
             parse_r_argument(copt);
             break;
@@ -437,8 +460,10 @@ static void parse_verify_options_or_exit(int argc, char **argv,
     adjust_compile_options(copt);
 }
 
-static bool verify_subcommand(int argc, char **argv, struct CompileOptions *copt)
+static bool verify_subcommand(int argc, char **argv, struct CompilerConfig *cfg)
 {
+    struct CompileOptions *copt = transfer_compiler_config(cfg);
+
     copt->mode = CM_VERIFY;
 
     parse_verify_options_or_exit(argc, argv, copt);
@@ -453,6 +478,7 @@ static bool verify_subcommand(int argc, char **argv, struct CompileOptions *copt
         }
     }
 
+    free_compile_options(copt);
     return success;
 }
 
@@ -464,44 +490,10 @@ static void print_version()
     printf("bab %s\n", VERSION_STRING);
 }
 
-static void free_string_array(const char **arr)
-{
-    void *mem = arr;
-    while (*arr) {
-        free((char*)*arr);
-        arr++;
-    }
-    free(mem);
-}
-
 int main(int argc, char **argv)
 {
     // Read config file.
     struct CompilerConfig *cfg = load_config_file();
-
-    // Transfer config to CompileOptions.
-    struct CompileOptions copt;
-    copt.pkg_config_cmd = cfg->pkg_config;
-    copt.cc_cmd = cfg->c_compiler;
-    copt.ld_cmd = cfg->linker;
-    copt.cflags = cfg->cflags;
-    copt.libs = cfg->libs;
-    copt.root_package_prefix = NULL;   // Set via cmd line
-    copt.output_prefix = NULL;         // Set via cmd line, -o
-    copt.search_path = cfg->package_paths;   // Augmented via cmd line, -p
-    copt.requested_modules = NULL;     // Set via cmd line, -m
-    // NOTE: copt.mode is set via cmd line, and not initialized here
-    copt.cache_mode = (cfg->use_verifier_cache ? CACHE_ENABLED : CACHE_DISABLED); // Can be overridden by cmd line, --no-cache
-    copt.show_progress = true;         // Set via cmd line, -q
-    copt.create_debug_files = false;   // Set via cmd line, -d
-    copt.continue_after_verify_error = false;    // Set via cmd line, --continue
-    copt.max_child_processes = cfg->max_verifier_processes;
-    copt.provers = cfg->provers;
-    copt.run_c_compiler = false;
-    copt.print_c_compiler_commands = false;
-
-    // CompilerConfig is no longer needed after this point.
-    free(cfg);
 
     // Determine the subcommand in use.
     int idx;
@@ -528,9 +520,22 @@ int main(int argc, char **argv)
         }
     }
 
+    // Find out which subcommand was used (if known)
+    enum Subcommand cmd = string_to_subcommand(argv[idx]);
+
+    // Determine if '-h' or '--help' was used (this is done here, so that we don't have
+    // to implement '--help' separately in each subcommand!)
+    if (cmd != CMD_UNKNOWN) {
+        for (int i = 1; i < argc; ++i) {
+            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+                print_help_for_subcommand(cmd, argv, NULL);
+                exit(0);
+            }
+        }
+    }
+
     // Execute the subcommand.
     bool success = false;
-    enum Subcommand cmd = string_to_subcommand(argv[idx]);
     switch (cmd) {
     case CMD_UNKNOWN:
         // This prints the "unknown command" message
@@ -543,11 +548,11 @@ int main(int argc, char **argv)
 
     case CMD_COMPILE:
     case CMD_TRANSLATE:
-        success = compile_or_translate_subcommand(argc, argv, &copt, cmd);
+        success = compile_or_translate_subcommand(argc, argv, cfg, cmd);
         break;
 
     case CMD_VERIFY:
-        success = verify_subcommand(argc, argv, &copt);
+        success = verify_subcommand(argc, argv, cfg);
         break;
 
     case CMD_BUILD:
@@ -555,7 +560,7 @@ int main(int argc, char **argv)
         break;
 
     case CMD_CHECK_CONFIG:
-        fprintf(stderr, "TODO: 'check-config' command is not implemented yet\n");
+        success = check_config(cfg);
         break;
 
     case CMD_VERSION:
@@ -564,24 +569,7 @@ int main(int argc, char **argv)
         break;
     }
 
-    // Free the config.
-    free((char*)copt.pkg_config_cmd);
-    free((char*)copt.cc_cmd);
-    free((char*)copt.ld_cmd);
-    free_name_list(copt.cflags);
-    free_name_list(copt.libs);
-    free((char*)copt.root_package_prefix);
-    free((char*)copt.output_prefix);
-    free_name_list(copt.search_path);
-    free_name_list(copt.requested_modules);
-    struct ProverConfig *pr = copt.provers;
-    while (pr) {
-        struct ProverConfig *next = pr->next;
-        free((char*)pr->name);
-        free_string_array(pr->command_and_arguments);
-        free(pr);
-        pr = next;
-    }
+    free_compiler_config(cfg);
 
     // Return correct exit code.
     return success ? 0 : 1;

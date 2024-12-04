@@ -30,6 +30,8 @@ enum CacheMode {
 };
 
 struct CompileOptions {
+    const char *config_filename;   // for error messages
+
     const char *pkg_config_cmd;
     const char *cc_cmd;
     const char *ld_cmd;
@@ -57,6 +59,7 @@ struct CompileOptions {
     bool print_c_compiler_commands;
 };
 
+void free_compile_options(struct CompileOptions *copt);
 
 //
 // Loads and "compiles" a module (and its imports) from the filesystem.

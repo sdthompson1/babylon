@@ -146,6 +146,7 @@ struct Sexpr;
 // The CacheDb (if provided) should be kept alive at least until stop_fol_runner is called.
 void start_fol_runner(struct CacheDb *cache_db,
                       struct ProverConfig *provers,
+                      const char *config_filename,  // for error messages
                       int max_child_processes,
                       bool continue_after_error);
 

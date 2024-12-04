@@ -44,6 +44,10 @@ struct Process {
     bool show_stdout;
     bool show_stderr;
 
+    // If show_exec_errors is true (which is the default), then if execvp() fails,
+    // the child process will print the error to stderr.
+    bool show_exec_errors;
+
     // Output
     enum ProcStatus status;
     int exit_status;  // as returned by WEXITSTATUS. set to -1 if WIFEXITED was false.

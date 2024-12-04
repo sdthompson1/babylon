@@ -11,6 +11,7 @@ repository.
 #define _GNU_SOURCE    // for NSIG
 
 #include "alloc.h"
+#include "check_prover.h"
 #include "config_file.h"
 #include "error.h"
 #include "make_dir.h"
@@ -59,53 +60,8 @@ static void make_config_dir_if_required(char *base_dir)
 {
     const char *dir = copy_string_2(base_dir, "/" CONFIG_DIR_NAME);
     if (!maybe_mkdir(dir, 0777)) {
-        fprintf(stderr, "Error: Failed to create config directory: %s\n", dir);
+        fprintf(stderr, "## Failed to create config directory: %s\n", dir);
         exit(1);
-    }
-}
-
-enum KnownProver {
-    PROVER_Z3,
-    PROVER_CVC5,
-    PROVER_VAMPIRE
-};
-
-// Suggest a specific prover. Returns allocated string.
-static char * suggest_prover(enum KnownProver prover)
-{
-    switch (prover) {
-    case PROVER_Z3:
-        return copy_string("[provers.z3]\n"
-                           "command = \"z3\"\n"
-                           "arguments = [\"-in\"]\n"
-                           "format = \"smtlib\"\n"
-                           "timeout = 60          # In seconds\n"
-                           "\n");
-
-    case PROVER_CVC5:
-        return copy_string("[provers.cvc5]\n"
-                           "command = \"cvc5-Linux\"\n"
-                           "arguments = [\"--lang\", \"smt2.6\"]\n"
-                           "format = \"smtlib\"\n"
-                           "timeout = 60          # In seconds\n"
-                           "show-stderr = false   # Suppress unwanted \"cvc5 interrupted by user\" messages\n"
-                           "\n");
-
-    case PROVER_VAMPIRE:
-        return copy_string("[provers.vampire]\n"
-                           "command = \"vampire\"\n"
-                           "arguments = [\"--forced_options\", \"output_mode=smtcomp\",\n"
-                           "             \"--input_syntax\", \"smtlib2\"]\n"
-                           "format = \"smtlib\"\n"
-                           "timeout = 60                  # In seconds\n"
-                           "signal = \"SIGINT\"             # Vampire doesn't seem to respond to SIGTERM; use SIGINT instead\n"
-                           "show-stderr = false           # Suppress unwanted vampire debug output\n"
-                           "ignore-empty-output = true    # Vampire sometimes doesn't print any output; ignore this\n"
-                           "ignore-exit-status = true     # Vampire sometimes returns with non-zero exit status; ignore this\n"
-                           "\n");
-
-    default:
-        fatal_error("bad KnownProver enum value");
     }
 }
 
@@ -113,19 +69,43 @@ static char * suggest_prover(enum KnownProver prover)
 // Returns an allocated string.
 static char * suggest_prover_config()
 {
-    char * txt1 = suggest_prover(PROVER_Z3);
-    char * txt2 = suggest_prover(PROVER_CVC5);
-    char * txt3 = suggest_prover(PROVER_VAMPIRE);
+    char * provers_text = NULL;
+    char * config_text = NULL;
 
-    char * final = copy_string_3(txt1 ? txt1 : "",
-                                 txt2 ? txt2 : "",
-                                 txt3 ? txt3 : "");
+    for (int i = 0; i < NUM_STD_PROVERS; ++i) {
+        char *cfg_txt;
+        bool ok = detect_standard_prover(i, &cfg_txt);
 
-    free(txt3);
-    free(txt2);
-    free(txt1);
+        if (ok) {
+            if (provers_text == NULL) {
+                provers_text = copy_string(standard_prover_name(i));
+            } else {
+                char *str = copy_string_3(provers_text, ", ", standard_prover_name(i));
+                free(provers_text);
+                provers_text = str;
+            }
+        }
 
-    return final;
+        if (config_text == NULL) {
+            config_text = cfg_txt;
+        } else {
+            char *str = copy_string_3(config_text, "\n", cfg_txt);
+            free(config_text);
+            free(cfg_txt);
+            config_text = str;
+        }
+    }
+
+    if (provers_text) {
+        fprintf(stderr, "## The following provers were detected and configured: [%s].\n", provers_text);
+        free(provers_text);
+    } else {
+        fprintf(stderr,
+                "## WARNING: No provers were detected on this system. Please install one or\n"
+                "## more SMT solvers and/or edit the config file manually.\n");
+    }
+
+    return config_text;
 }
 
 // Create a default config at 'filename', or exit process on failure.
@@ -133,12 +113,11 @@ static void create_default_config_file(char *filename)
 {
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
-        fprintf(stderr, "Config file %s doesn't exist,\n"
-                "and I was unable to create it.\n", filename);
+        fprintf(stderr, "## Creating config file failed!\n");
         exit(1);
     }
 
-    char *prover_config_text = suggest_prover_config(NULL);
+    char *prover_config_text = suggest_prover_config();
 
     const char *BASE_CONFIG_TEXT =
         "# Config file for the Babylon compiler.\n"
@@ -409,10 +388,13 @@ static void parse_provers(const char *filename,
     }
 }
 
+// this takes ownership of 'filename'
 static struct CompilerConfig * parse_compiler_config(const char *filename, toml_table_t *main_table)
 {
     struct CompilerConfig *cfg = alloc(sizeof(struct CompilerConfig));
     memset(cfg, 0, sizeof(*cfg));
+
+    cfg->config_filename = filename;
 
     parse_packages(filename, main_table, cfg);
     parse_c_compiler(filename, main_table, cfg);
@@ -435,6 +417,7 @@ struct CompilerConfig * load_config_file()
     if (file == NULL && errno == ENOENT) {
         // Config file doesn't exist; create a default config file
         // (or exit process!).
+        fprintf(stderr, "## Config file [%s] does not exist; creating it.\n", filename);
         make_config_dir_if_required(base_dir);
         create_default_config_file(filename);
 
@@ -459,8 +442,41 @@ struct CompilerConfig * load_config_file()
 
     toml_free(main_table);
     fclose(file);
-    free(filename);
     free(base_dir);
 
     return cfg;
+}
+
+static void free_string_array(const char **arr)
+{
+    void *mem = arr;
+    while (*arr) {
+        free((char*)*arr);
+        arr++;
+    }
+    free(mem);
+}
+
+void free_prover_config(struct ProverConfig *p)
+{
+    while (p) {
+        struct ProverConfig *next = p->next;
+        free((char*)p->name);
+        free_string_array(p->command_and_arguments);
+        free(p);
+        p = next;
+    }
+}
+
+void free_compiler_config(struct CompilerConfig *cfg)
+{
+    free((char*)cfg->config_filename);
+    free_name_list(cfg->package_paths);
+    free((char*)cfg->c_compiler);
+    free((char*)cfg->linker);
+    free_name_list(cfg->cflags);
+    free_name_list(cfg->libs);
+    free((char*)cfg->pkg_config);
+    free_prover_config(cfg->provers);
+    free(cfg);
 }
