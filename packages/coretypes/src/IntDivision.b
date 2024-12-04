@@ -16,8 +16,8 @@ interface {
         ensures int(0) <= return.rem < int_abs(y);
 
     // Lemma: The result of Euclidean division is unique; i.e. if {q,r}
-    // is any pair of integers such that x = q*y + r, then {q,r} is
-    // equal to int_euclid_div(x,y).
+    // is any pair of integers such that x = q*y + r, and r is in the
+    // correct range, then {q,r} is equal to int_euclid_div(x,y).
     
     ghost function int_euclid_div_unique(x: int, y: int, q: int, r: int)
         requires y != int(0);
@@ -173,6 +173,7 @@ interface {
 
 }
 
+
 // We can define int_euclid_div in terms of the / and % operators.
 
 ghost function int_euclid_div(x: int, y: int): {quot: int, rem: int}
@@ -191,98 +192,22 @@ ghost function int_euclid_div(x: int, y: int): {quot: int, rem: int}
     }
 }
 
-// To prove int_euclid_div_unique we proceed by induction.
+// Proof of int_euclid_div_unique.
 
-// The base case is when |x| < |y|, i.e. the quotient is zero.
-
-ghost function int_euclid_div_unique_base_case(x: int, y: int, q: int, r: int)
+ghost function division_uniqueness(x: int, y: int, q1: int, r1: int, q2: int, r2: int)
     requires y != int(0);
-    requires int_abs(x) < int_abs(y);
-    requires x == q * y + r;
-    requires int(0) <= r < int_abs(y);
-    ensures {quot = q, rem = r} == int_euclid_div(x, y);
+    requires x == q1 * y + r1;
+    requires int(0) <= r1 < int_abs(y);
+    requires x == q2 * y + r2;
+    requires int(0) <= r2 < int_abs(y);
+    ensures q1 == q2;
+    ensures r1 == r2;
 {
-    assert x / y == int(0);
-    if x >= int(0) {
-        return;
-    } else if y > int(0) {
-        return;
-    } else {
-        return;
-    }    
+    assert q1 == q2;
+    assert r1 == x - q1 * y;
+    assert r2 == x - q2 * y;
+    assert r1 == r2;
 }
-
-// Some lemmas needed for the inductive step.
-
-ghost function mod_lemma_1(x: int, y: int)
-    requires y != int(0);
-    ensures (x + y) % y == x % y
-        || (x + y) % y == x % y + y;
-{
-    // This can be proved by induction
-    var k = int(0);
-    assert k % y == int(0);
-    assert (k + y) % y == int(0);
-    if x >= int(0) {
-        while k < x
-            invariant int(0) <= k <= x;
-            invariant (k + y) % y == k % y || (k + y) % y == k % y + y;
-            decreases x - k;
-        {
-            k = k + int(1);
-        }
-    } else {
-        while k > x
-            invariant x <= k <= int(0);
-            invariant (k + y) % y == k % y || (k + y) % y == k % y + y;
-            decreases k - x;
-        {
-            k = k - int(1);
-        }
-    }
-}
-
-ghost function mod_lemma_2(x: int, y: int)
-    requires y != int(0);
-    ensures (x - y) % y == x % y
-        || (x - y) % y == x % y - y;
-{
-    mod_lemma_1(x, -y);
-}
-
-// There are two inductive steps: one for increasing the quotient (induction upwards
-// from zero) and one for reducing the quotient (induction downwards from zero).
-
-ghost function int_euclid_div_step_up(x: int, y: int)
-    requires y != int(0);
-    ensures int_euclid_div(x + y, y).quot == int_euclid_div(x, y).quot + int(1);
-    ensures int_euclid_div(x + y, y).rem == int_euclid_div(x, y).rem;
-{
-    if (x + y) % y == x % y {
-        assert (x + y) / y == x / y + int(1);
-        return;
-    } else {
-        mod_lemma_1(x, y);
-        return;
-    }
-}
-
-ghost function int_euclid_div_step_down(x: int, y: int)
-    requires y != int(0);
-    ensures int_euclid_div(x - y, y).quot == int_euclid_div(x, y).quot - int(1);
-    ensures int_euclid_div(x - y, y).rem == int_euclid_div(x, y).rem;
-{
-    if (x - y) % y == x % y {
-        assert (x - y) / y == x / y - int(1);
-        return;
-    } else {
-        mod_lemma_2(x, y);
-        return;
-    }
-}
-
-// Now we can write the required induction proof as two while-loops
-// (one going upwards from zero, and another going downwards from zero).
 
 ghost function int_euclid_div_unique(x: int, y: int, q: int, r: int)
     requires y != int(0);
@@ -290,37 +215,8 @@ ghost function int_euclid_div_unique(x: int, y: int, q: int, r: int)
     requires int(0) <= r < int_abs(y);
     ensures {quot = q, rem = r} == int_euclid_div(x, y);
 {
-    var xx: int = r;
-    var qq: int = int(0);
-
-    int_euclid_div_unique_base_case(xx, y, qq, r);
-
-    if q >= int(0) {
-        // Step qq upwards towards q.
-        while qq < q
-            invariant qq <= q;
-            invariant xx == qq * y + r;
-            invariant {quot = qq, rem = r} == int_euclid_div(xx, y);
-            decreases q - qq;
-        {
-            int_euclid_div_step_up(xx, y);
-            xx = xx + y;
-            qq = qq + int(1);
-        }
-    } else {
-        // Step qq downwards towards q.
-        while qq > q
-            invariant qq >= q;
-            invariant xx == qq * y + r;
-            invariant {quot = qq, rem = r} == int_euclid_div(xx, y);
-            decreases qq - q;
-        {
-            int_euclid_div_step_down(xx, y);
-            xx = xx - y;
-            qq = qq - int(1);
-        }
-    }
-    hide int_euclid_div;
+    var div = int_euclid_div(x, y);
+    division_uniqueness(x, y, div.quot, div.rem, q, r);
 }
 
 // Implementing Euclidean division for all four of the signed integer types.
