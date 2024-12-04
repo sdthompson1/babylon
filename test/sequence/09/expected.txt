@@ -1,4 +1,4 @@
-Verifying: sequence-test:Main.MyType
+Verifying: sequence-test:Main.MyType (cached)
 Verifying: sequence-test:Main.NEW_CONST
-Verifying: sequence-test:Main.f
+Verifying: sequence-test:Main.f (cached)
 Verification successful

@@ -19,11 +19,6 @@ struct HashTable;
 
 struct CompileResult;
 
-enum CompileMode {
-    CM_COMPILE,
-    CM_VERIFY
-};
-
 enum CacheMode {
     CACHE_DISABLED,
     CACHE_ENABLED
@@ -44,10 +39,13 @@ struct CompileOptions {
 
     // The list of module names to compile/verify.
     // Empty means do everything accessible from main_module and exported_modules.
-    // NOTE: Currently this is only supported for CM_VERIFY. For CM_COMPILE it must be empty.
+    // NOTE: Currently this is only supported when do_compile=false. Otherwise it must be empty.
     struct NameList *requested_modules;
 
-    enum CompileMode mode;
+    // do_compile and do_verify cannot both be false.
+    bool do_compile;
+    bool do_verify;
+
     enum CacheMode cache_mode;
     bool show_progress;
     bool create_debug_files;

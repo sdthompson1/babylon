@@ -1,4 +1,4 @@
-Verifying: sequence-test:Main.A_NEW_CONSTANT
+Verifying: sequence-test:Main.A_NEW_CONSTANT (cached)
 Verifying: sequence-test:Main.f
 Checking Main.b:14:1-2 (end of function unreachable)
 Verifying: sequence-test:Main.g
@@ -7,5 +7,5 @@ Checking Main.b:19:1-2 (end of function unreachable)
 Verifying: sequence-test:Main.h
 Checking Main.b:23:12-19 (binary operator)
 Checking Main.b:24:1-2 (end of function unreachable)
-Verifying: sequence-test:Main.i
+Verifying: sequence-test:Main.i (cached)
 Verification successful

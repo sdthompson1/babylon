@@ -1,9 +1,9 @@
 Verifying: sequence-test:Main.NEW_CONST
-Verifying: sequence-test:Main.Foo
-Verifying: sequence-test:Main.Bar
-Verifying: sequence-test:Main.f
-Verifying: sequence-test:Main.g
-Verifying: sequence-test:Main.h
-Verifying: sequence-test:Main.i
-Verifying: sequence-test:Main.bar_func
+Verifying: sequence-test:Main.Foo (cached)
+Verifying: sequence-test:Main.Bar (cached)
+Verifying: sequence-test:Main.f (cached)
+Verifying: sequence-test:Main.g (cached)
+Verifying: sequence-test:Main.h (cached)
+Verifying: sequence-test:Main.i (cached)
+Verifying: sequence-test:Main.bar_func (cached)
 Verification successful

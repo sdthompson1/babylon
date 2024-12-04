@@ -1,2 +1,2 @@
-Skipping module sequence-test:Main
+Verifying: sequence-test:Main (cached)
 Verification successful

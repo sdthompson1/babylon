@@ -1,6 +1,6 @@
 Verifying: sequence-test:Main.A_NEW_CONSTANT
-Verifying: sequence-test:Main.f
-Verifying: sequence-test:Main.g
-Verifying: sequence-test:Main.h
-Verifying: sequence-test:Main.i
+Verifying: sequence-test:Main.f (cached)
+Verifying: sequence-test:Main.g (cached)
+Verifying: sequence-test:Main.h (cached)
+Verifying: sequence-test:Main.i (cached)
 Verification successful

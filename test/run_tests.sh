@@ -223,12 +223,12 @@ run_sequence_tests()
         XDG_CONFIG_HOME=test/config $COMPILER verify --timeout $TIMEOUT -r $OUT_DIR -p test >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
 
         # Clip out reports of which prover succeeded, like "(z3,
-        # 0.1s)", and also messages like "(cached)", as these may vary
-        # on different machines (due to differences in timing, number
-        # of parallel solvers allowed to run, or just different
-        # solvers being used).
+        # 0.1s)", and also messages like "(cached)" (in certain
+        # cases), as these may vary on different machines (due to
+        # differences in timing, number of parallel solvers allowed to
+        # run, or just different solvers being used).
         sed -i -E -e 's/ \([^()]*, [0-9]+\.[0-9]s\)//g' $OUT_DIR/verifier_stderr.txt
-        sed -i -E -e 's/ \(cached\)//g' $OUT_DIR/verifier_stderr.txt
+        sed -i -E -e 's/^Checking(.*) \(cached\)$/Checking\1/g' $OUT_DIR/verifier_stderr.txt
         sed -i -E -e "s/ \\([^()]* returned '[a-z]+'\\)//g" $OUT_DIR/verifier_stderr.txt
 
         # All these tests should succeed

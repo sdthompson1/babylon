@@ -73,7 +73,8 @@ struct LoadDetails {
     const char *output_prefix;
     struct Location import_location;  // location of import stmt if any
 
-    enum CompileMode compile_mode;
+    bool do_compile;
+    bool do_verify;
     struct NameList *requested_modules;
     const char *main_module_name;
     const char *main_function_name;
@@ -205,7 +206,7 @@ static bool should_skip_module(struct LoadDetails *details,
     if (sha256_exists_in_db(details->cache_db, MODULE_HASH, full_module_fingerprint)) {
         if (details->show_progress) {
             char *new_name = sanitise_name(module->name);
-            add_fol_message(copy_string_3("Skipping module ", new_name, " (cached)\n"),
+            add_fol_message(copy_string_3("Verifying: ", new_name, " (cached)\n"),
                             false,  // is_error
                             0, NULL);
             free(new_name);
@@ -536,106 +537,96 @@ static bool load_module_from_disk(struct LoadDetails *details,
     resolve_dependencies(module);
 
     // We skip verification in interface_only mode.
-    bool skip = (details->compile_mode == CM_VERIFY && interface_only);
+    bool skip = interface_only;
 
     // We can also skip verification if the module's fingerprint is in the cache
     // (as this means the exact same module was verified on a previous run).
-    skip = skip ||
-        (details->compile_mode == CM_VERIFY
-         && should_skip_module(details, module, full_module_fingerprint));
+    skip = skip || should_skip_module(details, module, full_module_fingerprint);
 
-    if (skip) {
-        // We can skip verification but we still need to typecheck, and
-        // load the module's interface into the verifier.
 
-        // Typecheck interface, keeping the results in type env.
-        details->type_env = push_type_env(details->type_env);
-        if (!run_typechecker(details, details->type_env, module, true)) {
-            free_module(module);
-            return false;
-        }
-        details->type_env = collapse_type_env(details->type_env);
+    // Compile and/or verify the module.
 
-        // Verify the interface, keeping the results in verifier env.
-        push_verifier_env(details->verifier_env);
-        if (!run_verifier(details, module, VM_LOAD_INTERFACE, full_module_fingerprint)) {
-            free_module(module);
-            return false;
-        }
-        collapse_verifier_env(details->verifier_env);
+    // We do this in several "passes", in order to be able to handle
+    // abstract types ("type Foo;" in the interface).
 
-    } else if (details->compile_mode == CM_VERIFY) {
-        // We need to do a full verification of the module.
+    // Pass 1: typecheck and verify the interface, leaving new
+    // layers on top of the type and verifier envs for now. Do
+    // this on a separate copy of the module.
 
-        // We do this in several steps, in order to be able to handle
-        // abstract types ("type Foo;" in the interface).
+    struct Module *copy = copy_module(module);
 
-        // First, typecheck and verify the interface, leaving new
-        // layers on top of the type and verifier envs for now. Do
-        // this on a separate copy of the module.
-
-        struct Module *copy = copy_module(module);
-
-        details->type_env = push_type_env(details->type_env);
-        if (!run_typechecker(details, details->type_env, copy, true)) {
-            free_module(copy);
-            free_module(module);
-            return false;
-        }
-
-        push_verifier_env(details->verifier_env);
-        if (!run_verifier(details, copy, VM_CHECK_INTERFACE, full_module_fingerprint)) {
-            free_module(copy);
-            free_module(module);
-            return false;
-        }
-
+    details->type_env = push_type_env(details->type_env);
+    if (!run_typechecker(details, details->type_env, copy, true)) {
         free_module(copy);
+        free_module(module);
+        return false;
+    }
 
-        // Now typecheck and verify the whole module, using
+    if (details->do_verify) {
+        push_verifier_env(details->verifier_env);
+        if (!run_verifier(details,
+                          copy,
+                          skip ? VM_LOAD_INTERFACE : VM_CHECK_INTERFACE,
+                          full_module_fingerprint)) {
+            free_module(copy);
+            free_module(module);
+            return false;
+        }
+    }
+
+    free_module(copy);
+
+    if (!skip) {
+        // Pass 2: typecheck and verify the whole module, using
         // "temporary" type and verifier envs (which will be
         // discarded).
 
+        // For codegen this is done on a copy of the module, but for
+        // verification, this can be done directly on the original module.
+        struct Module *pass_2_module;
+        if (details->do_compile) {
+            pass_2_module = copy_module(module);
+        } else {
+            pass_2_module = module;
+        }
+
         TypeEnv * temp_type_env = push_type_env(details->type_env->base);
-        if (!run_typechecker(details, temp_type_env, module, false)) {
+        if (!run_typechecker(details, temp_type_env, pass_2_module, false)) {
             pop_type_env(temp_type_env);
+            if (pass_2_module != module) free_module(pass_2_module);
             free_module(module);
             return false;
         }
         pop_type_env(temp_type_env);
         temp_type_env = NULL;
 
-        struct HashTable *backup = detach_verifier_env_layer(details->verifier_env);
-        push_verifier_env(details->verifier_env);
-        bool verify_result = run_verifier(details, module, VM_LOAD_INTERFACE_CHECK_IMPL, full_module_fingerprint);
-        pop_verifier_env(details->verifier_env);
-        attach_verifier_env_layer(details->verifier_env, backup);
-        if (!verify_result) {
-            free_module(module);
-            return false;
+        if (details->do_verify) {
+            struct HashTable *backup = detach_verifier_env_layer(details->verifier_env);
+            push_verifier_env(details->verifier_env);
+            bool verify_result = run_verifier(details, pass_2_module, VM_LOAD_INTERFACE_CHECK_IMPL, full_module_fingerprint);
+            pop_verifier_env(details->verifier_env);
+            attach_verifier_env_layer(details->verifier_env, backup);
+            if (!verify_result) {
+                if (pass_2_module != module) free_module(pass_2_module);
+                free_module(module);
+                return false;
+            }
         }
 
-        // We can now keep the results from the INTERFACE typecheck
-        // and verification.
-        details->type_env = collapse_type_env(details->type_env);
+        if (pass_2_module != module) free_module(pass_2_module);
+    }
+
+    // We can now keep the results from the INTERFACE typecheck
+    // and verification.
+    details->type_env = collapse_type_env(details->type_env);
+    if (details->do_verify) {
         collapse_verifier_env(details->verifier_env);
+    }
 
-    } else if (details->compile_mode == CM_COMPILE) {
-        // First typecheck the interface (using the "abstracted"
-        // types) - on a copy of the module.
-        struct Module *copy = copy_module(module);
-        details->type_env = push_type_env(details->type_env);
-        if (!run_typechecker(details, details->type_env, copy, true)) {
-            free_module(copy);
-            free_module(module);
-            return false;
-        }
-        free_module(copy);
-        copy = NULL;
-        details->type_env = collapse_type_env(details->type_env);
-
-        // Now typecheck the whole module (using the "expanded" types)
-        // - on the original module.
+    // Pass 3 (Codegen only):
+    // Typecheck the whole module, using the "expanded" types.
+    // Do this on the original module.
+    if (details->do_compile) {
         details->expanded_type_env = push_type_env(details->expanded_type_env);
         if (!run_typechecker(details, details->expanded_type_env, module, false)) {
             free_module(module);
@@ -643,6 +634,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
         }
         details->expanded_type_env = collapse_type_env(details->expanded_type_env);
     }
+
 
     // If main_module and main_function are both set, and this is the main_module,
     // then check that the main_function exists and has the expected type.
@@ -662,8 +654,8 @@ static bool load_module_from_disk(struct LoadDetails *details,
         }
     }
 
-    // Compile (if requested)
-    if (details->compile_mode == CM_COMPILE) {
+    // Compile (i.e. translate to C code, and optionally invoke the C compiler), if requested.
+    if (details->do_compile) {
         // Generate C code
         char *c_filename = get_output_filename(details, module, "c/", ".b.c");
         char *h_filename = get_output_filename(details, module, "c/", ".b.h");
@@ -695,7 +687,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
         fclose(c_file);
         fclose(h_file);
 
-        // Now compile the C to an object file
+        // Now compile the C to an object file (if requested)
         if (details->run_c_compiler) {
             char *o_filename = get_output_filename(details, module, "obj/", ".b.o");
             bool ok = compile_c_file(details, info->package_name, c_filename, o_filename);
@@ -780,6 +772,10 @@ static void free_all_strings(struct StringNode *strings)
 
 bool compile(struct CompileOptions *options)
 {
+    if (!options->do_compile && !options->do_verify) {
+        fatal_error("nothing to do");
+    }
+
     struct LoadDetails details;
     details.strings = NULL;
 
@@ -821,7 +817,7 @@ bool compile(struct CompileOptions *options)
 
     // Open the cache unless (a) it is disabled or (b) we are only compiling,
     // not verifying (in which case the cache is not needed).
-    if (options->cache_mode == CACHE_DISABLED || options->mode == CM_COMPILE) {
+    if (options->cache_mode == CACHE_DISABLED || !options->do_verify) {
         details.cache_db = NULL;
     } else {
         details.cache_db = open_cache_db(details.output_prefix);
@@ -834,10 +830,11 @@ bool compile(struct CompileOptions *options)
                      options->continue_after_verify_error);
 
     details.import_location = g_no_location;
-    details.compile_mode = options->mode;
+    details.do_compile = options->do_compile;
+    details.do_verify = options->do_verify;
 
-    if (options->requested_modules && options->mode == CM_COMPILE) {
-        fatal_error("Requested modules not currently supported for CM_COMPILE");
+    if (options->requested_modules && options->do_compile) {
+        fatal_error("Requested modules not currently supported when do_compile = true");
     }
 
     details.requested_modules = options->requested_modules;
@@ -879,7 +876,7 @@ bool compile(struct CompileOptions *options)
 
     // If everything is ok we can now link
     // Note: Linking only happens when a main_module is defined.
-    if (options->mode == CM_COMPILE
+    if (options->do_compile
     && options->run_c_compiler
     && success
     && details.obj_files != NULL

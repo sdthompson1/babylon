@@ -57,6 +57,21 @@ enum Subcommand string_to_subcommand(const char *p)
     }
 }
 
+const char * subcommand_to_string(enum Subcommand cmd)
+{
+    switch (cmd) {
+    case CMD_UNKNOWN: return "?";
+    case CMD_HELP: return "help";
+    case CMD_COMPILE: return "compile";
+    case CMD_VERIFY: return "verify";
+    case CMD_BUILD: return "build";
+    case CMD_TRANSLATE: return "translate";
+    case CMD_CHECK_CONFIG: return "check-config";
+    case CMD_VERSION: return "version";
+    }
+    fatal_error("bad subcommand value");
+}
+
 //------------------------------------------------------------------------
 // Help Subcommand
 
@@ -84,9 +99,25 @@ static void print_path_options(FILE *file)
     fprintf(file, "  -o, --output-path <path>     Set the output path (default: '<build-root>/build')\n");
 }
 
-static void print_compile_options(FILE *file)
+static void print_compile_or_build_options(FILE *file)
 {
     fprintf(file, "  -v, --verbose                Print compiler and linker commands as they are executed\n");
+}
+
+static void print_verify_options(FILE *file)
+{
+    fprintf(file,
+            "  -m, --module <module-name>   Verify only the specified module(s)\n"
+            "                               (default is to verify all relevant modules)\n");
+}
+
+static void print_verify_or_build_options(FILE *file)
+{
+    fprintf(file,
+            "  -q, --quiet                  Suppress progress messages\n"
+            "      --continue               Continue verifying after first error\n"
+            "  -t, --timeout <seconds>      Set prover timeout\n"
+            "      --no-cache               Do not use the cache\n");
 }
 
 static void print_debug_options(FILE *file)
@@ -94,32 +125,23 @@ static void print_debug_options(FILE *file)
     fprintf(file, "  -d, --debug                  Create debug output files\n");
 }
 
-static void print_compile_or_translate_usage(FILE *file, char **argv, enum Subcommand cmd)
+// This works for compile, translate, verify and build subcommands
+static void print_compilation_usage(FILE *file, char **argv, enum Subcommand cmd)
 {
-    fprintf(file, "Usage: %s %s [<options>]\n", argv[0], cmd == CMD_COMPILE ? "compile" : "translate");
+    fprintf(file, "Usage: %s %s [<options>]\n", argv[0], subcommand_to_string(cmd));
     fprintf(file, "\n");
     fprintf(file, "Options:\n");
     print_path_options(file);  // -r, -p, -o
-    if (cmd == CMD_COMPILE) {
-        print_compile_options(file);  // -v
+    if (cmd == CMD_COMPILE || cmd == CMD_BUILD) {
+        print_compile_or_build_options(file);  // -v
+    }
+    if (cmd == CMD_VERIFY) {
+        print_verify_options(file);  // -m
+    }
+    if (cmd == CMD_VERIFY || cmd == CMD_BUILD) {
+        print_verify_or_build_options(file);  // -q, -t, etc.
     }
     print_debug_options(file);  // -d
-    fprintf(file, "\n");
-}
-
-static void print_verify_usage(FILE *file, char **argv)
-{
-    fprintf(file, "Usage: %s verify [<options>]\n", argv[0]);
-    fprintf(file, "\n");
-    fprintf(file, "Options:\n");
-    print_path_options(file);  // -p, -o
-    fprintf(file,
-            "  -m, --module <module-name>   Verify only the specified module(s)\n"
-            "                               (default is to verify all relevant modules)\n"
-            "  -q, --quiet                  Suppress progress messages\n"
-            "      --continue               Continue verifying after first error\n"
-            "  -t, --timeout <seconds>      Set prover timeout\n"
-            "      --no-cache               Do not use the cache\n");
     fprintf(file, "\n");
 }
 
@@ -140,22 +162,22 @@ static bool print_help_for_subcommand(enum Subcommand cmd, char **argv, const ch
 
     case CMD_COMPILE:
         printf("Compile a Babylon package to object files (*.o) or to an executable binary.\n\n");
-        print_compile_or_translate_usage(stdout, argv, cmd);
+        print_compilation_usage(stdout, argv, cmd);
         break;
 
     case CMD_VERIFY:
         printf("Verify a Babylon package.\n\n");
-        print_verify_usage(stdout, argv);
+        print_compilation_usage(stdout, argv, cmd);
         break;
 
     case CMD_BUILD:
         printf("Verify and then compile a Babylon package.\n\n");
-        // TODO: Print usage of 'bab build'
+        print_compilation_usage(stdout, argv, cmd);
         break;
 
     case CMD_TRANSLATE:
         printf("Translate a Babylon package to C code (*.c files).\n\n");
-        print_compile_or_translate_usage(stdout, argv, cmd);
+        print_compilation_usage(stdout, argv, cmd);
         break;
 
     case CMD_CHECK_CONFIG:
@@ -193,7 +215,7 @@ static bool help_subcommand(int argc, char **argv)
 }
 
 //------------------------------------------------------------------------
-// Compile / Translate Subcommands
+// Compilation Subcommands (translate, compile, verify, build)
 
 // This "moves" all the settings from cfg to a new CompileOptions struct.
 // cfg is not freed, but it is "nulled out".
@@ -210,7 +232,8 @@ static struct CompileOptions * transfer_compiler_config(struct CompilerConfig *c
     copt->output_prefix = NULL;         // Set via cmd line, -o
     copt->search_path = cfg->package_paths; cfg->package_paths = NULL;   // Augmented via cmd line, -p
     copt->requested_modules = NULL;     // Set via cmd line, -m
-    // NOTE: copt->mode is set via cmd line, and not initialized here
+    copt->do_compile = false;
+    copt->do_verify = false;
     copt->cache_mode = (cfg->use_verifier_cache ? CACHE_ENABLED : CACHE_DISABLED); // Can be overridden by cmd line, --no-cache
     copt->show_progress = true;         // Set via cmd line, -q
     copt->create_debug_files = false;   // Set via cmd line, -d
@@ -289,23 +312,92 @@ static void adjust_compile_options(struct CompileOptions *copt)
 }
 
 // This will exit on error
-static void parse_compile_or_translate_options_or_exit(int argc, char **argv,
-                                                       struct CompileOptions *copt,
-                                                       enum Subcommand cmd)
+static void parse_compilation_options_or_exit(int argc, char **argv,
+                                              struct CompileOptions *copt,
+                                              enum Subcommand cmd)
 {
-    static struct option long_options[] = {
-        {"root",            required_argument, NULL, 'r'},
-        {"package-path",    required_argument, NULL, 'p'},
-        {"output-path",     required_argument, NULL, 'o'},
-        {"verbose",         no_argument,       NULL, 'v'},
-        {"debug",           no_argument,       NULL, 'd'},
-        {0,                 0,                 0,    0  }
-    };
+    enum { OPT_CONTINUE = 1, OPT_NO_CACHE = 2 };
+
+    // Make sure to increase these sizes if adding many more options!
+    struct option long_options[20];
+    memset(long_options, 0, sizeof(long_options));
+
+    char short_options[40];
+    memset(short_options, 0, sizeof(short_options));
+
+    // Add the options
+    struct option *opt = long_options;
+    char *optchar = short_options;
+
+    opt->name = "root";
+    opt->has_arg = required_argument;
+    opt->val = 'r';
+    *optchar++ = 'r'; *optchar++ = ':';
+    ++opt;
+
+    opt->name = "package-path";
+    opt->has_arg = required_argument;
+    opt->val = 'p';
+    *optchar++ = 'p'; *optchar++ = ':';
+    ++opt;
+
+    opt->name = "output-path";
+    opt->has_arg = required_argument;
+    opt->val = 'o';
+    *optchar++ = 'o'; *optchar++ = ':';
+    ++opt;
+
+    if (cmd == CMD_COMPILE || cmd == CMD_BUILD) {
+        opt->name = "verbose";
+        opt->has_arg = no_argument;
+        opt->val = 'v';
+        *optchar++ = 'v';
+        ++opt;
+    }
+
+    if (cmd == CMD_VERIFY) {
+        opt->name = "module";
+        opt->has_arg = required_argument;
+        opt->val = 'm';
+        *optchar++ = 'm'; *optchar++ = ':';
+        ++opt;
+    }
+
+    if (cmd == CMD_VERIFY || cmd == CMD_BUILD) {
+        opt->name = "quiet";
+        opt->has_arg = no_argument;
+        opt->val = 'q';
+        *optchar++ = 'q';
+        ++opt;
+
+        opt->name = "continue";
+        opt->has_arg = no_argument;
+        opt->val = OPT_CONTINUE;
+        ++opt;
+
+        opt->name = "timeout";
+        opt->has_arg = required_argument;
+        opt->val = 't';
+        *optchar++ = 't'; *optchar++ = ':';
+        ++opt;
+
+        opt->name = "no-cache";
+        opt->has_arg = no_argument;
+        opt->val = OPT_NO_CACHE;
+        ++opt;
+    }
+
+    opt->name = "debug";
+    opt->has_arg = no_argument;
+    opt->val = 'd';
+    *optchar++ = 'd';
+    ++opt;
 
     struct NameList **package_paths_tail = &copt->search_path;
+    struct NameList **requested_modules_tail = &copt->requested_modules;
 
     while (true) {
-        int c = getopt_long(argc, argv, "hr:p:o:vd", long_options, NULL);
+        int c = getopt_long(argc, argv, short_options, long_options, NULL);
 
         if (c == -1) {
             break;
@@ -326,84 +418,6 @@ static void parse_compile_or_translate_options_or_exit(int argc, char **argv,
 
         case 'v':
             copt->print_c_compiler_commands = true;
-            break;
-
-        case 'd':
-            copt->create_debug_files = true;
-            break;
-
-        case '?':
-            // getopt_long already printed an error message
-            exit(1);
-
-        default:
-            fatal_error("unexpected result from getopt_long");
-        }
-    }
-
-    check_unwanted_args(argc, argv);
-    adjust_compile_options(copt);
-}
-
-static bool compile_or_translate_subcommand(int argc, char **argv,
-                                            struct CompilerConfig *cfg,
-                                            enum Subcommand cmd)
-{
-    struct CompileOptions *copt = transfer_compiler_config(cfg);
-
-    copt->mode = CM_COMPILE;
-    copt->run_c_compiler = (cmd == CMD_COMPILE);
-
-    parse_compile_or_translate_options_or_exit(argc, argv, copt, cmd);
-
-    bool result = compile(copt);
-
-    free_compile_options(copt);
-    return result;
-}
-
-//------------------------------------------------------------------------
-// Verify Subcommand
-
-static void parse_verify_options_or_exit(int argc, char **argv,
-                                         struct CompileOptions *copt)
-{
-    enum { OPT_CONTINUE = 1, OPT_NO_CACHE = 2 };
-
-    static struct option long_options[] = {
-        {"root",            required_argument, NULL, 'r'},
-        {"package-path",    required_argument, NULL, 'p'},
-        {"output-path",     required_argument, NULL, 'o'},
-        {"module",          required_argument, NULL, 'm'},
-        {"quiet",           no_argument,       NULL, 'q'},
-        {"continue",        no_argument,       NULL, OPT_CONTINUE},
-        {"timeout",         required_argument, NULL, 't'},
-        {"no-cache",        no_argument,       NULL, OPT_NO_CACHE},
-        {"debug",           no_argument,       NULL, 'd'},
-        {0,                 0,                 0,    0  }
-    };
-
-    struct NameList **package_paths_tail = &copt->search_path;
-    struct NameList **requested_modules_tail = &copt->requested_modules;
-
-    while (true) {
-        int c = getopt_long(argc, argv, "hr:p:o:vd", long_options, NULL);
-
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-        case 'r':
-            parse_r_argument(copt);
-            break;
-
-        case 'p':
-            parse_p_argument(copt, &package_paths_tail);
-            break;
-
-        case 'o':
-            parse_o_argument(copt);
             break;
 
         case 'm':
@@ -460,21 +474,32 @@ static void parse_verify_options_or_exit(int argc, char **argv,
     adjust_compile_options(copt);
 }
 
-static bool verify_subcommand(int argc, char **argv, struct CompilerConfig *cfg)
+static bool compilation_subcommand(int argc, char **argv,
+                                   struct CompilerConfig *cfg,
+                                   enum Subcommand cmd)
 {
     struct CompileOptions *copt = transfer_compiler_config(cfg);
 
-    copt->mode = CM_VERIFY;
+    if (cmd == CMD_TRANSLATE || cmd == CMD_COMPILE) {
+        copt->do_compile = true;
+    } else if (cmd == CMD_VERIFY) {
+        copt->do_verify = true;
+    } else {
+        copt->do_compile = copt->do_verify = true;
+    }
 
-    parse_verify_options_or_exit(argc, argv, copt);
+    copt->run_c_compiler = (cmd == CMD_COMPILE || cmd == CMD_BUILD);
+
+    parse_compilation_options_or_exit(argc, argv, copt, cmd);
 
     bool success = compile(copt);
 
-    if (copt->show_progress) {
+    if (copt->show_progress && (cmd == CMD_VERIFY || cmd == CMD_BUILD)) {
+        const char *msg = (cmd == CMD_VERIFY ? "Verification" : "Build");
         if (success) {
-            fprintf(stderr, "Verification successful\n");
+            fprintf(stderr, "%s successful\n", msg);
         } else {
-            fprintf(stderr, "Verification failed\n");
+            fprintf(stderr, "%s failed\n", msg);
         }
     }
 
@@ -548,15 +573,9 @@ int main(int argc, char **argv)
 
     case CMD_COMPILE:
     case CMD_TRANSLATE:
-        success = compile_or_translate_subcommand(argc, argv, cfg, cmd);
-        break;
-
     case CMD_VERIFY:
-        success = verify_subcommand(argc, argv, cfg);
-        break;
-
     case CMD_BUILD:
-        fprintf(stderr, "TODO: 'build' command is not implemented yet.\n");
+        success = compilation_subcommand(argc, argv, cfg, cmd);
         break;
 
     case CMD_CHECK_CONFIG:
