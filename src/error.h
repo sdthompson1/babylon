@@ -81,6 +81,7 @@ void report_updating_non_record(struct Location loc);
 void report_wrong_number_of_arguments(struct Term *term);
 void report_wrong_number_of_type_arguments(struct Location loc, int num_expected, int num_actual);
 void report_type_arguments_not_expected_here(struct Location loc);
+void report_cannot_abstract_with_tyargs(struct Location loc);
 void report_function_does_not_return_a_value(struct Term *term);
 void report_function_return_value_ignored(struct Term *term);
 void report_requires_after_ensures(struct Attribute *attr);

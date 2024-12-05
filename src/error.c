@@ -565,6 +565,12 @@ void report_type_arguments_not_expected_here(struct Location loc)
     print_error("Type arguments not expected here\n");
 }
 
+void report_cannot_abstract_with_tyargs(struct Location loc)
+{
+    print_location(loc);
+    print_error("Cannot use type arguments here (type was declared in the interface to have no type arguments)\n");
+}
+
 void report_function_does_not_return_a_value(struct Term *term)
 {
     print_location(term->location);

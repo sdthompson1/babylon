@@ -3873,6 +3873,15 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
 
         if (prev_entry && prev_entry->type == NULL && new_type != NULL) {
 
+            // The decl must not have tyvars.
+            // (e.g. we do not allow "type Foo;" in interface but
+            // "datatype Foo<a> = ...;" in implementation.)
+            if (decl->tag == DECL_DATATYPE && decl->datatype_data.tyvars != NULL) {
+                report_cannot_abstract_with_tyargs(decl->location);
+                tc_context->error = true;
+                return false;
+            }
+
             // The new type must not be incomplete.
             struct UnivarNode node;
             node.must_be_complete = true;
