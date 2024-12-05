@@ -262,10 +262,6 @@ void solve_fol_problem(struct Sexpr *fol_problem,   // handover
 
         default_init_process(&job->procs[i]);
 
-        if (cfg->format != FORMAT_SMTLIB) {
-            fatal_error("unimplemented prover format (only SMTLIB currently supported)");
-        }
-
         job->procs[i].cmd = cfg->command_and_arguments;
         job->procs[i].print_to_stdin = print_to_stdin;
         job->procs[i].context = smt_problem;

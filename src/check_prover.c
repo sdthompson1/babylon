@@ -79,8 +79,6 @@ static bool test_job_successful(struct Process *proc)
 
 bool check_prover(struct ProverConfig *pr)
 {
-    if (pr->format != FORMAT_SMTLIB) fatal_error("unsupported prover format");
-
     printf(" - Checking prover [%s]\n", pr->name);
 
     struct Process proc;
@@ -288,9 +286,8 @@ bool detect_standard_prover(enum StandardProver prover, char **config)
         free(str3);
         str3 = str;
     }
-    char *str4 = copy_string_3("]\n",
-                               "format = \"smtlib\"\n",
-                               "timeout = 60          # In seconds\n");
+    char *str4 = copy_string("]\n"
+                             "timeout = 60          # In seconds\n");
     char *str5 = additional_prover_config(prover);
 
     char *result = copy_string_5(str1, str2, str3, str4, str5);

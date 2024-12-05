@@ -14,16 +14,10 @@ repository.
 
 #include <stdbool.h>
 
-enum ProverFormat {
-    FORMAT_SMTLIB,
-    FORMAT_TPTP
-};
-
 struct ProverConfig {
     struct ProverConfig *next;
     const char *name;
     const char **command_and_arguments;  // terminated by a NULL char* pointer
-    enum ProverFormat format;
 
     bool show_stderr;
     bool ignore_empty_output;

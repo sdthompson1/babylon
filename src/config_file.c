@@ -322,17 +322,6 @@ static void parse_prover(const char *filename,
     // this next call frees command and arguments
     cfg->command_and_arguments = make_cmd_array(command, arguments);
 
-    char *fmt_str = read_toml_string(filename, table, "format", "smtlib");
-    if (strcmp(fmt_str, "smtlib") == 0) {
-        cfg->format = FORMAT_SMTLIB;
-    } else if (strcmp(fmt_str, "tptp") == 0) {
-        cfg->format = FORMAT_TPTP;
-    } else {
-        fprintf(stderr, "%s: Invalid value for 'format': '%s'\n", filename, fmt_str);
-        exit(1);
-    }
-    free(fmt_str);
-
     toml_value_t val = toml_table_bool(table, "show-stderr");
     cfg->show_stderr = val.ok ? val.u.b : true;  // Default true
 
