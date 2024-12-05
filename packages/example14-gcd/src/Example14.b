@@ -316,6 +316,14 @@ function gcd(a_input: i32, b_input: i32): i32
         }
     }
 
+    // This is to help with proving the postcondition.
+    // We hide the actual definition of 'divides' (which involves the nonlinear % operator)
+    // and instead expose only the properties of 'divides' that we need.
+    assert forall (k: i32) k != 0 && k != I32_MIN ==> divides(k, k);
+    assert forall (k: i32) k != 0 ==> divides(k, 0);
+    assert forall (j: i32) forall (k: i32) j > 0 && k > 0 && divides(j, k) ==> j <= k;
+    hide divides;
+    
     return a;
 }
 

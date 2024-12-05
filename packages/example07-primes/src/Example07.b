@@ -4,11 +4,12 @@
 // numbers, and write a program to compute all primes up to and including
 // 2^31 - 1.
 
-// NOTE: This file is a good example of why having multiple SMT solvers
-// installed is useful. In my testing (as of December 2024), I found that
-// z3, cvc5 and alt-ergo (or alternatively, z3, cvc5 and vampire), working
-// together, can successfully verify this module, but using only one or
-// two out of the three does not work.
+
+// Note: This file has been tested with the following combinations of provers:
+//   z3 4.13.3 + cvc5 1.2.0 + vampire 4.9: Verification succeeds
+//   z3 4.13.3 + cvc5 1.2.0 + alt-ergo 2.6.0: Verification succeeds
+//   z3 4.13.3 + cvc5 1.2.0: Verification fails (i.e. cvc5 and z3 alone are not enough!)
+
 
 module Example07
 
@@ -34,6 +35,13 @@ ghost function is_prime(n: u32): bool
 // An alternative definition is that a number is prime if it is >= 2 and
 // not divisible by any *prime* number less than itself.
 
+// Note: Arguably, this defintion should have "is_prime_alt" rather than
+// "is_prime" on the right-hand-side (because it should be a self-contained
+// definition, not reliant on our previous "is_prime" definition).
+// However, the Babylon compiler doesn't support recursive definitions yet.
+// The below definition (in terms of is_prime) will be good enough for our
+// purposes here.
+
 ghost function is_prime_alt(n: u32): bool
 {
     return n >= 2 &&
@@ -43,7 +51,6 @@ ghost function is_prime_alt(n: u32): bool
 
 // We would like to prove that is_prime_alt is equivalent to is_prime,
 // i.e. both functions return the same value given the same input.
-
 
 
 // First we will need to prove the following lemma:
@@ -450,6 +457,10 @@ impure function sieve(n: u32)
 
         // Move on to the next value of i.
         i = i + 1;
+
+        // This helps for proving the invariant:
+        assert forall (p: u32) is_prime(p) ==> p != 0;
+        hide is_prime;
     }
 
     // Free the array afterwards.

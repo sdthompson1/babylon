@@ -167,6 +167,7 @@ function u64_wrap_sub(x: u64, y: u64): u64
     }
 }
 
+
 // Lemma for multiplying out (xh * M + xl) * (yh * M + yl).
 ghost function mul_split_lemma(x: int, y: int,
                                xh: int, xl: int,
@@ -175,6 +176,90 @@ ghost function mul_split_lemma(x: int, y: int,
     requires x == xh * M + xl;
     requires y == yh * M + yl;
     ensures x * y == xh * yh * (M*M) + (xh * yl + xl * yh) * M + xl * yl;
+{}
+
+
+// Modulo calculations.
+
+// (Note: When I was using z3 version 4.12.something, this was all solved automatically.
+// But with z3 version 4.13.3, it seems I have to write out all these lemmas manually.
+// A bit unfortunate.)
+
+// (TODO: Adding some of these to IntDivision.b might be a good idea.)
+
+// (x*M + y)%M = y%M.
+ghost function mod_remove_multiple_of_m(x: int, y: int, M: int)
+    requires x >= int(0);
+    requires y >= int(0);
+    requires M > int(0);
+    ensures (x * M + y) % M == y % M;
+{
+    assert (x*M + y) == (x + y/M)*M + y%M;
+}
+
+// (x + y)%M = (x%M + y)%M.
+ghost function add_inner_mod(x: int, y: int, M: int)
+    requires x >= int(0);
+    requires y >= int(0);
+    requires M > int(0);
+    ensures (x + y) % M == ((x%M) + y) % M;
+{
+    assert x + y == x/M*M + x%M + y;
+    mod_remove_multiple_of_m(x/M, x%M + y, M);
+}
+
+// If b%M = c%M, then (a+b)%M = (a+c)%M.
+ghost function mod_plus(a: int, b: int, c: int, M: int)
+    requires a >= int(0);
+    requires b >= int(0);
+    requires c >= int(0);
+    requires M > int(0);
+    requires b % M == c % M;
+    ensures (a + b) % M == (a + c) % M;
+{
+    add_inner_mod(b, a, M);   // (a + b) % M == (a + b%M) % M
+    add_inner_mod(c, a, M);   // (a + c) % M == (a + c%M) % M
+    // The result now follows from b%M == c%M.
+}
+
+// In (a + b*M) % (M*M), you can replace b with b%M.
+ghost function mod_mul_m_lemma(a: int, b: int, M: int)
+    requires a >= int(0);
+    requires b >= int(0);
+    requires M > int(0);
+    ensures (a + b * M) % (M*M) == (a + (b%M)*M) % (M*M);
+{
+    assert (b*M) % (M*M) == ((b%M)*M) % (M*M) {
+        assert b*M == (b*M) / (M*M) * (M*M) + (b*M) % (M*M);
+    }
+    mod_plus(a, b*M, b%M*M, M*M);
+}
+
+ghost function mul_mod_lemma(a: int, b: int, c: int, d: int, M: int)
+    requires a >= int(0);
+    requires b >= int(0);
+    requires c >= int(0);
+    requires d >= int(0);
+    requires M > int(0);
+    ensures (a * M * M + (b + c) * M + d) % (M*M)
+        == ((d + (c%M)*M) % (M*M) + (b%M)*M) % (M*M);
+{
+    assert (a * M * M + (b + c) * M + d) % (M*M) == ((b + c) * M + d) % (M*M) {
+        mod_remove_multiple_of_m(a, (b + c) * M + d, M*M);
+    }
+    assert ((b + c) * M + d) % (M*M) == ((d + c * M) % (M*M) + b * M) % (M*M) {
+        add_inner_mod(d + c * M, b * M, M*M);
+    }
+    assert ((d+c*M)%(M*M) + b * M) % (M*M) == ((d+c*M)%(M*M) + (b%M) * M) % (M*M) {
+        mod_mul_m_lemma((d+c*M)%(M*M), b, M);
+    }
+    assert (d+c*M)%(M*M) == (d+(c%M)*M)%(M*M) {
+        mod_mul_m_lemma(d, c, M);
+    }
+}
+
+ghost function u64_non_neg(x: u64)
+    ensures x >= 0;
 {}
 
 function u64_wrap_mul(x: u64, y: u64): u64
@@ -189,6 +274,7 @@ function u64_wrap_mul(x: u64, y: u64): u64
     var yl = y % TWO_TO_32;
 
     ghost mul_split_lemma(int(x), int(y), int(xh), int(xl), int(yh), int(yl), int(TWO_TO_32));
+        // proves x*y == (xh*yh)*2^64 + (xh*yl + xl*yh)*2^32 + xl*yl
 
     // Calculate partial products.
     ghost var hi_hi: u64 = xh * yh;
@@ -200,15 +286,11 @@ function u64_wrap_mul(x: u64, y: u64): u64
     var z: u64 = u64_wrap_add(lo_lo, (lo_hi % TWO_TO_32) * TWO_TO_32);
     var result: u64 = u64_wrap_add(z, (hi_lo % TWO_TO_32) * TWO_TO_32);
 
-    // For proof, we need to calculate the high half of the product as well.
-    ghost var high_result: u64 = hi_hi + (lo_hi / TWO_TO_32) + (hi_lo / TWO_TO_32);
-    ghost if z < lo_lo {
-        high_result = high_result + 1;
-    }
-    ghost if result < z {
-        high_result = high_result + 1;
-    }
-    assert int(x) * int(y) == int(high_result) * (int(U64_MAX) + int(1)) + int(result);
+    // Proving the postcondition
+    ghost u64_non_neg(hi_lo);
+    ghost u64_non_neg(lo_hi);
+    ghost u64_non_neg(lo_lo);
+    ghost mul_mod_lemma(int(hi_hi), int(hi_lo), int(lo_hi), int(lo_lo), int(TWO_TO_32));
 
     // Return the low 64-bit half of the product.
     return result;
