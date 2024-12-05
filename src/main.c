@@ -521,37 +521,31 @@ int main(int argc, char **argv)
     struct CompilerConfig *cfg = load_config_file();
 
     // Determine the subcommand in use.
-    int idx;
-    for (idx = 1; idx < argc; ++idx) {
-        if (argv[idx][0] != '-') {
-            break;
-        }
-    }
-    if (idx == argc) {
-        // No subcommand specified.
-        if (argc == 1 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-            // "bab" or "bab -h" or "bab --help"
-            print_general_help(stdout, argv);
-            exit(0);
-        } else if (strcmp(argv[1], "-V") == 0 || strcmp(argv[1], "--version") == 0) {
-            // "bab -V" or "bab --version"
-            print_version();
-            exit(0);
-        } else {
-            // "bab --something-else"
-            fprintf(stderr, "Unexpected argument: %s\n", argv[1]);
-            fprintf(stderr, "Try '%s --help' for help.\n", argv[0]);
-            exit(1);
-        }
+    // This will always be in arg position 1.
+    if (argc == 1 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
+        // "bab" or "bab -h" or "bab --help"
+        print_general_help(stdout, argv);
+        exit(0);
+    } else if (strcmp(argv[1], "-V") == 0 || strcmp(argv[1], "--version") == 0) {
+        // "bab -V" or "bab --version"
+        print_version();
+        exit(0);
+    } else if (argv[1][0] == '-') {
+        // "bab --something-else"
+        fprintf(stderr, "Unexpected argument: %s\n", argv[1]);
+        fprintf(stderr, "Try '%s --help' for help.\n", argv[0]);
+        exit(1);
     }
 
-    // Find out which subcommand was used (if known)
-    enum Subcommand cmd = string_to_subcommand(argv[idx]);
+    // At this point, argv[1] is being interpreted as a subcommand name.
+    // Find out which subcommand was used.
+    enum Subcommand cmd = string_to_subcommand(argv[1]);
 
-    // Determine if '-h' or '--help' was used (this is done here, so that we don't have
-    // to implement '--help' separately in each subcommand!)
+    // Determine if '-h' or '--help' was used with a subcommand
+    // (this is done here, so that we don't have to implement '--help'
+    // separately in each subcommand!)
     if (cmd != CMD_UNKNOWN) {
-        for (int i = 1; i < argc; ++i) {
+        for (int i = 2; i < argc; ++i) {
             if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
                 print_help_for_subcommand(cmd, argv, NULL);
                 exit(0);
@@ -564,7 +558,7 @@ int main(int argc, char **argv)
     switch (cmd) {
     case CMD_UNKNOWN:
         // This prints the "unknown command" message
-        print_help_for_subcommand(cmd, argv, argv[idx]);
+        print_help_for_subcommand(cmd, argv, argv[1]);
         break;
 
     case CMD_HELP:
