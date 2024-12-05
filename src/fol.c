@@ -9,6 +9,7 @@ repository.
 
 
 #include "alloc.h"
+#include "check_prover.h"  // for is_sat, is_unsat etc.
 #include "config_file.h"
 #include "convert_fol_to_smt.h"
 #include "error.h"
@@ -210,21 +211,6 @@ static void hash_sexpr(struct Sexpr *expr, struct SHA256_CTX *ctx)
     }
 
     fatal_error("invalid sexpr");
-}
-
-static bool is_sat(const char *output, int output_length)
-{
-    return output_length >= 3 && memcmp(output, "sat", 3) == 0;
-}
-
-static bool is_unsat(const char *output, int output_length)
-{
-    return output_length >= 5 && memcmp(output, "unsat", 5) == 0;
-}
-
-static bool is_unknown(const char *output, int output_length)
-{
-    return output_length >= 7 && memcmp(output, "unknown", 7) == 0;
 }
 
 void solve_fol_problem(struct Sexpr *fol_problem,   // handover

@@ -14,9 +14,37 @@ repository.
 #include "process.h"
 #include "util.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static bool match_string(const char *buf, int buf_len,
+                         const char *str, int str_len)
+{
+    // We only check the beginning of 'buf' for a match - i.e. there can
+    // be garbage afterwards.
+    // We also skip any whitespace at the beginning of 'buf'.
+    int i = 0;
+    while (i < buf_len && isspace(buf[i])) ++i;
+    return (i + str_len <= buf_len && memcmp(&buf[i], str, str_len) == 0);
+}
+
+bool is_unsat(const char *buf, int len)
+{
+    return match_string(buf, len, "unsat", 5);
+}
+
+bool is_sat(const char *buf, int len)
+{
+    return match_string(buf, len, "sat", 3);
+}
+
+bool is_unknown(const char *buf, int len)
+{
+    return match_string(buf, len, "unknown", 7);
+}
+
 
 static void print_test_job(void *context, FILE *pipe)
 {
@@ -29,13 +57,15 @@ static void print_test_job(void *context, FILE *pipe)
 
 static void run_test_job(const char **cmd,
                          struct Process *proc,
-                         bool show_errors)
+                         bool show_stderr,
+                         bool show_exec_errors)
 {
     default_init_process(proc);
     proc->cmd = cmd;
     proc->print_to_stdin = print_test_job;
     proc->context = NULL;
-    proc->show_stderr = proc->show_exec_errors = show_errors;
+    proc->show_stderr = show_stderr;
+    proc->show_exec_errors = show_exec_errors;
 
     launch_process(proc);
     while (proc->status == PROC_RUNNING) update_processes(true);
@@ -43,9 +73,8 @@ static void run_test_job(const char **cmd,
 
 static bool test_job_successful(struct Process *proc)
 {
-    return (proc->status == PROC_SUCCESS
-            && proc->output_length >= 5
-            && memcmp(proc->output, "unsat", 5) == 0);
+    if (proc->status != PROC_SUCCESS) return false;
+    return is_unsat(proc->output, proc->output_length);
 }
 
 bool check_prover(struct ProverConfig *pr)
@@ -55,7 +84,7 @@ bool check_prover(struct ProverConfig *pr)
     printf(" - Checking prover [%s]\n", pr->name);
 
     struct Process proc;
-    run_test_job(pr->command_and_arguments, &proc, true);
+    run_test_job(pr->command_and_arguments, &proc, pr->show_stderr, true);
 
     if (test_job_successful(&proc)) {
         return true;
@@ -81,6 +110,7 @@ const char * standard_prover_name(enum StandardProver prover)
     case PROVER_CVC4: return "cvc4";
     case PROVER_CVC5: return "cvc5";
     case PROVER_VAMPIRE: return "vampire";
+    case PROVER_ALT_ERGO: return "alt-ergo";
     case NUM_STD_PROVERS: break;
     }
 
@@ -143,6 +173,15 @@ static bool standard_prover_command(enum StandardProver prover, int n, const cha
             return false;
         }
 
+    case PROVER_ALT_ERGO:
+        if (n == 0) {
+            cmd[0] = "alt-ergo";
+            cmd[1] = NULL;
+            return true;
+        } else {
+            return false;
+        }
+
     case NUM_STD_PROVERS:
         break;
     }
@@ -167,6 +206,9 @@ static char * additional_prover_config(enum StandardProver prover)
                            "show-stderr = false           # Suppress unwanted vampire debug output\n"
                            "ignore-empty-output = true    # Vampire sometimes doesn't print any output; ignore this\n"
                            "ignore-exit-status = true     # Vampire sometimes returns with non-zero exit status; ignore this\n");
+
+    case PROVER_ALT_ERGO:
+        return copy_string("show-stderr = false   # Suppress unwanted alt-ergo debug output\n");
 
     case NUM_STD_PROVERS:
         break;
@@ -219,7 +261,7 @@ bool detect_standard_prover(enum StandardProver prover, char **config)
         if (!found) break;
 
         struct Process proc;
-        run_test_job(cmd, &proc, false);
+        run_test_job(cmd, &proc, false, false);  // silence all output for the auto-detection
 
         if (test_job_successful(&proc)) {
             ok = true;
