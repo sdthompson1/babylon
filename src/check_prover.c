@@ -247,6 +247,8 @@ static char * comment_out(const char *str)
         ++to;
     }
 
+    *to = 0;  // null terminate the string
+
     return result;
 }
 
