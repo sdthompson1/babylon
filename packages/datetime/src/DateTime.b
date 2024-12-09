@@ -319,10 +319,10 @@ interface {
         requires valid_date_time(dt);
         ensures 0 <= return <= 6;
         ensures int(return) ==
-            int_floor_div(int_floor_div(int(date_time_to_epoch_second(dt)),
-                                        int(SECONDS_PER_DAY)).quot
-                              + int(EPOCH_WEEKDAY),
-                          int(7)).rem;
+            int_mod(int_floor_div(int(date_time_to_epoch_second(dt)),
+                                  int(SECONDS_PER_DAY)).quot
+                        + int(EPOCH_WEEKDAY),
+                    int(7));
 
     // Lemma: Adding N days to a date causes the weekday to increase by N (mod 7).
     // (This is assuming the result of the addition did not clip to DATE_TIME_MIN
@@ -331,7 +331,7 @@ interface {
         requires valid_date_time(dt);
         requires add_days(dt, days) != DATE_TIME_MIN;
         requires add_days(dt, days) != DATE_TIME_MAX;
-        ensures day_of_week(add_days(dt, days)) == i64_floor_div(day_of_week(dt) + i64(days), 7).rem;
+        ensures day_of_week(add_days(dt, days)) == i64_mod(day_of_week(dt) + i64(days), 7);
 
 
     // Interacting with the system clock.
@@ -800,13 +800,13 @@ function day_of_week(dt: DateTime): i8
     requires valid_date_time(dt);
     ensures 0 <= return <= 6;
     ensures int(return) ==
-        int_floor_div(int_floor_div(int(date_time_to_epoch_second(dt)),
-                                 int(SECONDS_PER_DAY)).quot
-                          + int(EPOCH_WEEKDAY),
-                      int(7)).rem;
+        int_mod(int_floor_div(int(date_time_to_epoch_second(dt)),
+                              int(SECONDS_PER_DAY)).quot
+                    + int(EPOCH_WEEKDAY),
+                int(7));
 {
     var s: i64 = date_to_epoch_day{year = dt.year, month = dt.month, day = dt.day};
-    return i64_floor_div(s + EPOCH_WEEKDAY, 7).rem;
+    return i64_mod(s + EPOCH_WEEKDAY, 7);
 }
 
 // Test cases.
@@ -818,36 +818,24 @@ ghost function day_of_week_tests()
 
 // Day of week addition property.
 
-ghost function mod7_lemma(day_of_week_dt: int,
-                          dt_epoch_day: int,
-                          day_of_week_add: int,
-                          add_epoch_day: int,
-                          days: int)
-    requires add_epoch_day == dt_epoch_day + days;
-    requires day_of_week_dt == int_floor_div(dt_epoch_day + int(EPOCH_WEEKDAY), int(7)).rem;
-    requires day_of_week_add == int_floor_div(add_epoch_day + int(EPOCH_WEEKDAY), int(7)).rem;
-    ensures day_of_week_add == int_floor_div(day_of_week_dt + days, int(7)).rem;
-{}
-
 ghost function day_of_week_add_days(dt: DateTime, days: i32)
     requires valid_date_time(dt);
     requires add_days(dt, days) != DATE_TIME_MIN;
     requires add_days(dt, days) != DATE_TIME_MAX;
-    ensures day_of_week(add_days(dt, days)) == i64_floor_div(day_of_week(dt) + i64(days), 7).rem;
+    ensures day_of_week(add_days(dt, days)) == i64_mod(day_of_week(dt) + i64(days), 7);
 {
     hide date_to_epoch_day;
 
-    var dt_epoch_day = date_to_epoch_day{year=dt.year, month=dt.month, day=dt.day};
+    var d = int(date_to_epoch_day{year=dt.year, month=dt.month, day=dt.day});
+    assert d == int_floor_div(int(date_time_to_epoch_second(dt)), int(SECONDS_PER_DAY)).quot;
 
     var add = add_days(dt, days);
-    var add_epoch_day = date_to_epoch_day{year=add.year, month=add.month, day=add.day};
+    var a = int(date_to_epoch_day{year=add.year, month=add.month, day = add.day});
+    assert a == d + int(days);  // this relies on the preconditions (i.e. 'add' was not clamped at DATE_TIME_MIN or DATE_TIME_MAX)
 
-    mod7_lemma(int(day_of_week(dt)),
-               int(dt_epoch_day),
-               int(day_of_week(add)),
-               int(add_epoch_day),
-               int(days));
+    var w = int(EPOCH_WEEKDAY);
+    assert int(day_of_week(dt)) == int_mod(d + w, int(7));
+    assert int(day_of_week(add_days(dt, days))) == int_mod(d + int(days) + w, int(7));
 
-    hide day_of_week;
-    hide add_days;
+    mod_add(d + w, int(days), int(7));
 }

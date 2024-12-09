@@ -94,8 +94,7 @@ ghost function divides_linear(a: i32, b: i32, c: i32, x: i32, y: i32)
     // Again the solver cannot prove this on its own, so we need to give
     // it some help.
 
-    // The first thing is to separate out the case a == -1 and do that
-    // separately.
+    // The first thing is to separate out the case a == -1.
 
     if (a == -1) {
         // When a == -1 the theorem is trivial (-1 divides anything), so
