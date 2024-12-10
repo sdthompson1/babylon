@@ -22,6 +22,51 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
+static char * get_new_name(const char *old_name, uint32_t counter)
+{
+    // Special treatment for certain names, to make the generated SMT
+    // problems slightly more readable.
+
+    // For example, if the sum type "(instance $SUM (Int Int))" gets
+    // encoded as "$SUM-3", then it makes more sense for the two
+    // constructors to be called $IN-3-0 and $IN-3-1, than the default
+    // $IN0-3 and $IN1-3.
+
+    // This applies to $FLD, $IN and $INF.
+
+    const char *p = NULL;
+
+    if (old_name[0] == '$') {
+        if (old_name[1] == 'F' && old_name[2] == 'L' && old_name[3] == 'D' && isdigit(old_name[4])) {
+            p = &old_name[4];
+        } else if (old_name[1] == 'I' && old_name[2] == 'N') {
+            if (old_name[3] == 'F' && isdigit(old_name[4])) {
+                p = &old_name[4];
+            } else if (isdigit(old_name[3])) {
+                p = &old_name[3];
+            }
+        }
+    }
+
+    char suffix[30];
+    sprintf(suffix, "-%" PRIu32, counter);
+
+    if (p == NULL) {
+        return copy_string_2(old_name, suffix);
+
+    } else {
+        char prefix[10];
+        char *out = prefix;
+        const char *in = old_name;
+        while (in < p) {
+            *out++ = *in++;
+        }
+        *out = 0;
+
+        return copy_string_4(prefix, suffix, "-", p);
+    }
+}
+
 // assumption: name does not contain '!' nor '-'
 static char* make_encoded_name(struct HashTable *encodings,
                                struct StringBuf *buf,
@@ -65,9 +110,7 @@ static char* make_encoded_name(struct HashTable *encodings,
             }
 
             // we will use the name plus "-" plus the counter value.
-            char suffix[30];
-            sprintf(suffix, "-%" PRIu32, *v);
-            char *new_name = copy_string_2(name, suffix);
+            char *new_name = get_new_name(name, *v);
 
             // save the new_name so that next time we see this name+arguments combo,
             // we will encode it to the same thing.
