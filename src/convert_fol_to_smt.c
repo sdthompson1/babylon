@@ -23,49 +23,92 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
-static char * get_new_name(const char *old_name, uint32_t counter)
+static const char * get_lookup_key(const char *old_name)
 {
-    // Special treatment for certain names, to make the generated SMT
-    // problems slightly more readable.
-
-    // For example, if the sum type "(instance $SUM (Int Int))" gets
-    // encoded as "$SUM-3", then it makes more sense for the two
-    // constructors to be called $IN-3-0 and $IN-3-1, than the default
-    // $IN0-3 and $IN1-3.
-
-    // This applies to $FLD, $IN and $INF.
-
-    const char *p = NULL;
-
     if (old_name[0] == '$') {
-        if (old_name[1] == 'F' && old_name[2] == 'L' && old_name[3] == 'D' && isdigit(old_name[4])) {
-            p = &old_name[4];
+        if (old_name[1] == 'F' && old_name[2] == 'L' && old_name[3] == 'D' && isdigit((unsigned char)old_name[4])) {
+            return "$PROD";
         } else if (old_name[1] == 'I' && old_name[2] == 'N') {
-            if (old_name[3] == 'F' && isdigit(old_name[4])) {
-                p = &old_name[4];
-            } else if (isdigit(old_name[3])) {
-                p = &old_name[3];
+            if (old_name[3] == 'F' && isdigit((unsigned char)old_name[4])) {
+                return "$SUM";
+            } else if (isdigit((unsigned char)old_name[3])) {
+                return "$SUM";
             }
         }
     }
+    return old_name;
+}
+
+static char * get_new_name(const char *old_name, uint32_t counter)
+{
+    // Most names expand to <name> + "-" + <counter>
+    // But names like $FLD0 expand to e.g. $FLD-<counter>-0
+    // (which makes the generated SMT problems slightly more readable - arguably).
 
     char suffix[30];
     sprintf(suffix, "-%" PRIu32, counter);
 
-    if (p == NULL) {
+    if (get_lookup_key(old_name) == old_name) {
         return copy_string_2(old_name, suffix);
 
     } else {
         char prefix[10];
-        char *out = prefix;
-        const char *in = old_name;
-        while (in < p) {
-            *out++ = *in++;
+        const char *p = old_name;
+        int idx = 0;
+        while (!isdigit((unsigned char)*p)) {
+            prefix[idx++] = *p++;
+            if (idx == sizeof(prefix)) fatal_error("name too long");
         }
-        *out = 0;
+        prefix[idx] = 0;
 
         return copy_string_4(prefix, suffix, "-", p);
     }
+}
+
+static uintptr_t get_number(struct HashTable *encodings,
+                            struct StringBuf *buf,
+                            const char *name,
+                            struct Sexpr *args)
+{
+    // Make a key out of "!" + get_lookup_key(name) + formatted arguments.
+    const char *lookup_key = get_lookup_key(name);
+    stringbuf_clear(buf);
+    stringbuf_append(buf, "!");
+    stringbuf_append(buf, lookup_key);
+    format_sexpr(buf, args);
+
+    // If this has been encountered before, then return the number.
+    const char *key;
+    void *value;
+    hash_table_lookup_2(encodings, buf->data, &key, &value);
+    if (key) {
+        return (uintptr_t) value;
+    }
+
+    // Otherwise, search for lookup_key only.
+    // This will give us the "next free number".
+    hash_table_lookup_2(encodings, lookup_key, &key, &value);
+    uintptr_t n = 0;
+    if (key) {
+        n = (uintptr_t) value;
+    }
+
+    // "n" will be used for this variable, so insert it into
+    // the hash table (under buf->data).
+    hash_table_insert(encodings, copy_string(buf->data), (void*)n);
+
+    // Now increase n by one and put it back into the table under
+    // "lookup_key".
+    uintptr_t next = n + 1;
+    if (key) {
+        // Update existing key
+        hash_table_insert(encodings, key, (void*)next);
+    } else {
+        // Create new key
+        hash_table_insert(encodings, copy_string(lookup_key), (void*)next);
+    }
+
+    return n;
 }
 
 // assumption: name does not contain '!' nor '-'
@@ -76,48 +119,9 @@ static char* make_encoded_name(struct HashTable *encodings,
 {
     if (args == NULL) {
         return copy_string(name);
-
     } else {
-        // make a key out of "!" + name + formatted arguments.
-        stringbuf_clear(buf);
-        stringbuf_append(buf, "!");
-        stringbuf_append(buf, name);
-        format_sexpr(buf, args);
-
-        // have we encountered this key before?
-        void *value = hash_table_lookup(encodings, buf->data);
-        if (value) {
-            // yes, return the existing name
-            return copy_string(value);
-
-        } else {
-            // no
-            // have we at least encountered this name before?
-            uint32_t *v = hash_table_lookup(encodings, name);
-
-            if (v == NULL) {
-                // no. make a new counter for this name starting at zero
-                v = malloc(sizeof(uint32_t));
-                *v = 0;
-                hash_table_insert(encodings, copy_string(name), v);
-
-            } else if (*v == UINT32_MAX) {
-                fatal_error("make_encoded_name: overflow");
-
-            } else {
-                // yes, encountered this name before.
-                // use the previous counter value plus one.
-                *v += 1;
-            }
-
-            // we will use the name plus "-" plus the counter value.
-            char *new_name = get_new_name(name, *v);
-
-            // save the new_name so that next time we see this name+arguments combo,
-            // we will encode it to the same thing.
-            hash_table_insert(encodings, copy_string(buf->data), copy_string(new_name));
-            return new_name;
-        }
+        uintptr_t n = get_number(encodings, buf, name, args);
+        return get_new_name(name, n);
     }
 }
 
@@ -456,7 +460,7 @@ struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
     hash_table_for_each(closed_set, ht_free_key, NULL);
     free_hash_table(closed_set);
 
-    hash_table_for_each(encodings, ht_free_key_and_value, NULL);
+    hash_table_for_each(encodings, ht_free_key, NULL);
     free_hash_table(encodings);
 
     // Reorder the decls list to respect dependencies.
