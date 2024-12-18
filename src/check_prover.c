@@ -200,13 +200,12 @@ static char * additional_prover_config(enum StandardProver prover)
         return copy_string("show-stderr = false   # Suppress unwanted \"cvc5 interrupted by SIGTERM\" messages\n");
 
     case PROVER_VAMPIRE:
-        return copy_string("signal = \"SIGINT\"             # Vampire doesn't seem to respond to SIGTERM; use SIGINT instead\n"
-                           "show-stderr = false           # Suppress unwanted vampire debug output\n"
-                           "ignore-empty-output = true    # Vampire sometimes doesn't print any output; ignore this\n"
-                           "ignore-exit-status = true     # Vampire sometimes returns with non-zero exit status; ignore this\n");
+        return copy_string("signal = \"SIGKILL\"    # Vampire doesn't always respond to SIGTERM/SIGINT/etc; use SIGKILL instead\n");
 
     case PROVER_ALT_ERGO:
-        return copy_string("show-stderr = false   # Suppress unwanted alt-ergo debug output\n");
+        return copy_string("show-stderr = false   # Suppress unwanted alt-ergo debug output\n"
+                           "ignore-empty-output = true   # Ignore alt-ergo crashes (e.g. assert failures)\n"
+                           "ignore-exit-status = true    # Ignore alt-ergo crashes (e.g. assert failures)\n");
 
     case NUM_STD_PROVERS:
         break;
