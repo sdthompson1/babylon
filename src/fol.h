@@ -132,7 +132,7 @@ The verifier also uses certain other conventions e.g.
    defined in the Main module.
 
 In addition convert_fol_to_smt assumes that names do not contain the
-"-" or "!" characters.
+"-", "~" or "!" characters.
 
 */
 

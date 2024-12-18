@@ -11,6 +11,7 @@ repository.
 #include "convert_fol_to_smt.h"
 #include "error.h"
 #include "hash_table.h"
+#include "remove_smt_shadowing.h"
 #include "sexpr.h"
 #include "stringbuf.h"
 #include "util.h"
@@ -465,7 +466,15 @@ struct Sexpr * convert_fol_to_smt(struct Sexpr * fol_problem)
         decls_tail = &(*decls_tail)->right;
     }
 
-    // Join the two lists, and return the combined list.
+    // Join the two lists.
     *decls_tail = asserts_result;
+
+    // Final pass: remove shadowing, e.g. "let x=1 in let x=2 in .."
+    // becomes "let x=1 in let x~1=2 in ...".
+    // (This is not strictly speaking required, but experience has
+    // shown that SMT solvers sometimes give warnings or errors when
+    // variable shadowing is used, so it is safest to remove it.)
+    remove_smt_shadowing(decls_result);
+
     return decls_result;
 }

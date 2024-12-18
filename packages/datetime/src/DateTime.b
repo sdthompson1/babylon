@@ -828,14 +828,16 @@ ghost function day_of_week_add_days(dt: DateTime, days: i32)
 
     var d = int(date_to_epoch_day{year=dt.year, month=dt.month, day=dt.day});
     assert d == int_floor_div(int(date_time_to_epoch_second(dt)), int(SECONDS_PER_DAY)).quot;
-
+    
     var add = add_days(dt, days);
     var a = int(date_to_epoch_day{year=add.year, month=add.month, day = add.day});
     assert a == d + int(days);  // this relies on the preconditions (i.e. 'add' was not clamped at DATE_TIME_MIN or DATE_TIME_MAX)
 
     var w = int(EPOCH_WEEKDAY);
     assert int(day_of_week(dt)) == int_mod(d + w, int(7));
-    assert int(day_of_week(add_days(dt, days))) == int_mod(d + int(days) + w, int(7));
+    assert int(day_of_week(add_days(dt, days))) == int_mod(d + int(days) + w, int(7)) {
+        assert int(day_of_week(add)) == int_mod(a + w, int(7));
+    }
 
     mod_add(d + w, int(days), int(7));
 }
