@@ -1388,20 +1388,8 @@ struct Sexpr *allocated_test_expr(struct VContext *context,
     case TY_VAR:
         ;
         char *alloc_name = copy_string_2("$allocated-%", type->var_data.name);
-        if (stacked_hash_table_lookup(context->stack, alloc_name) != NULL) {
-            return make_list2_sexpr(make_string_sexpr_handover(alloc_name),
-                                    make_string_sexpr(var_name));
-        } else {
-            // This happens when a user tries to write something like
-            // "type Foo allocated(x) if !allocated(x);".
-            // In this case we set the allocated-expression to $ARBITRARY,
-            // to avoid contradictions.
-            free(alloc_name);
-            struct Sexpr *arbitrary_bool = make_string_sexpr("$ARBITRARY");
-            make_instance(&arbitrary_bool, make_list1_sexpr(make_string_sexpr("Bool")));
-            return arbitrary_bool;
-        }
-        break;
+        return make_list2_sexpr(make_string_sexpr_handover(alloc_name),
+                                make_string_sexpr(var_name));
 
     case TY_BOOL:
     case TY_FINITE_INT:
