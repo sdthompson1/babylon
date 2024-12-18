@@ -113,8 +113,7 @@ prefixes all names that it defines with either "%" or "$".
 
 The renamer might have already added some other characters e.g.
 
- - "^" indicates a type, e.g. "%^a" (a type variable) or
-   "%Main.^Color" (a datatype Color defined in module Main).
+ - "^" indicates a type, e.g. "%^T" for a type variable "T".
 
  - "@" indicates different source-code level names for a variable,
       e.g. if a function has two local variables "x" in different
@@ -126,10 +125,6 @@ The verifier also uses certain other conventions e.g.
    a local variable might be called "%x" when it is first defined, but
    "%x.1" after its first assignment. (This can also be combined with
    "@" e.g. "%x@2.3" might be version 3 of variable x in scope 2.)
-
- - Datatype field names include the constructor name, e.g.
-   "%Main.^MyType-myfield" for a field myfield of a datatype MyType
-   defined in the Main module.
 
 In addition convert_fol_to_smt assumes that names do not contain the
 "-", "~" or "!" characters.
