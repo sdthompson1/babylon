@@ -1732,6 +1732,7 @@ static void break_chain(struct TypecheckContext *tc_context, struct Term *term)
         struct Term * term_b = term->binop.list->rhs;
         struct OpTermList * tail_list = term->binop.list->next;
         free(term->binop.list);
+        term->binop.list = NULL;
 
         struct Term * tm1 = make_term(term->location, TM_BINOP);
         tm1->type = copy_type(term->type);
