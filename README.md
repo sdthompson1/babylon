@@ -103,17 +103,18 @@ Here is a simple example Babylon program:
 Further examples can be found in the [packages](packages) folder of
 this repository. Some highlights:
 
- - [Demo_07_Primes.b](packages/Demo_07_Primes.b) is a more efficient
-   prime number calculator using the Sieve of Eratosthenes.
+ - [Example07.b](packages/example07-primes/src/Example07.b) is a more
+   efficient prime number calculator using the Sieve of Eratosthenes.
 
- - [Demo_14_GCD.b](packages/Demo_14_GCD.b) implements Euclid's
-   algorithm for finding the greatest common divisor of two numbers.
+ - [Example14.b](packages/example14-gcd/src/Example14.b) implements
+   Euclid's algorithm for finding the greatest common divisor of two
+   numbers.
 
  - [chess](packages/chess) implements a simple interactive chess game.
    This uses [SDL](https://www.libsdl.org/) to do the graphics and
    mouse input.
 
-![](examples/chess/screenshot.png)
+![](packages/chess/screenshot.png)
 
 *A screenshot of the chess demo. The Babylon compiler verifies that
 this program cannot crash at runtime (or at least, the parts written
