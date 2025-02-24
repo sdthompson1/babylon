@@ -1,9 +1,9 @@
 
 # The "Babylon" programming language
 
-[Babylon](https://www.solarflare.org.uk/babylon) is a new programming
-language designed to support formal verification within the context of
-a low-level, C- or Rust-like language.
+**Babylon** is a new programming language designed to support formal
+verification within the context of a low-level, C- or Rust-like
+language.
 
 Design goals:
 
