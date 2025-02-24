@@ -329,6 +329,10 @@ static struct DepList *read_deps(const char *filename,
 
 static bool valid_package_name(const char *name)
 {
+    if (*name == 0) {
+        // Package names must not be empty
+        return false;
+    }
     for (const char *p = name; *p; p++) {
         if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') {
             return false;
