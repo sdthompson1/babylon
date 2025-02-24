@@ -431,15 +431,15 @@ no verification checks are required.
 The language includes the following binary operators, which are parsed
 in the following order of precedence:
 
-| `*` `/` `%` `&` `<<` `>>`   |
-| `+` `-` `|` `^`             |
-| `>` `>=` `<` `<=` `==` `!=` |
-| `&&`                        |
-| `||`                        |
-| `==>` `<==`                 |
-| `<==>`                      |
+ - `*` `/` `%` `&` `<<` `>>`
+ - `+` `-` `|` `^`
+ - `>` `>=` `<` `<=` `==` `!=`
+ - `&&`
+ - `||`
+ - `==>` `<==`
+ - `<==>`
 
-Operators nearer the top of this table have higher precedence than
+Operators nearer the top of this list have higher precedence than
 those below, e.g. `1 + 2 * 3` is parsed as `1 + (2 * 3)` rather than
 `(1 + 2) * 3`.
 
@@ -1679,7 +1679,7 @@ assert exists (x: i32) x > 10
 {
     use 11;
 }
-```.
+```
 
 Here, the `use` statement converts the goal from `exists (x: i32) x >
 10` to `11 > 10`, which is easily provable. (To be fair, in this case,
