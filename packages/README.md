@@ -36,3 +36,9 @@ how the language and compiler work.
 
 **chess** is a somewhat larger example implementing an interactive
 chess game.
+
+
+# See Also
+
+See also the [docs](../docs) folder, which contains the documentation
+for the Babylon language and its compiler.
