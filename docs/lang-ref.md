@@ -1227,7 +1227,7 @@ function f(ref x: i32): i32
     x = 1;
     return 2;
 }
-```,
+```
 
 then the call `v = f(b[3]);` would be valid (assuming the array `b`
 has at least four elements); this would set `b[3]` to 1 (since this is
