@@ -200,7 +200,11 @@ static char * additional_prover_config(enum StandardProver prover)
         return copy_string("show-stderr = false   # Suppress unwanted \"cvc5 interrupted by SIGTERM\" messages\n");
 
     case PROVER_VAMPIRE:
-        return copy_string("signal = \"SIGKILL\"    # Vampire doesn't always respond to SIGTERM/SIGINT/etc; use SIGKILL instead\n");
+        // Note: I have occasionally seen exit status 1 from Vampire, even in non-error
+        // scenarios -- particularly in 'sat' cases. I will set ignore-exit-status to
+        // true for now, but maybe we can review this later (with future Vampire versions).
+        return copy_string("signal = \"SIGKILL\"    # Vampire doesn't always respond to SIGTERM/SIGINT/etc; use SIGKILL instead\n"
+                           "ignore-exit-status = true\n");
 
     case PROVER_ALT_ERGO:
         return copy_string("show-stderr = false   # Suppress unwanted alt-ergo debug output\n"
