@@ -771,7 +771,7 @@ void wait_fol_complete()
     if (g_fol_runner) {
         while (g_fol_runner->jobs_head) {
             update_processes(true);
-            update_fol_status(g_fol_runner);
+            update_fol_status();
         }
     }
 }
