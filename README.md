@@ -42,13 +42,13 @@ Future goals include:
 
  - New language features (currently some important features are
    missing, e.g. recursion).
- - Self-hosted compiler implementation (currently the compiler is
-   written in C).
- - Resource consumption limits (e.g. being able to prove bounds on
-   memory allocation or number of CPU operations carried out by a
-   program).
- - Formal rigorous definition of the language (e.g. using Isabelle
-   or Coq).
+ - Formally verified language implementation in Isabelle (this would
+   increase confidence in the correctness of the compiler, as well as
+   demonstrating that the language itself has desirable properties
+   e.g. type safety).
+ - Resource consumption limits (e.g. provide ways for users to
+   prove bounds on memory allocation or number of CPU operations
+   carried out by their programs).
  - Miscellaneous other improvements.
 
 

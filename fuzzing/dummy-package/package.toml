@@ -1,0 +1,13 @@
+# This is a "dummy" Babylon package for use with the `bab fuzz` command.
+# It consists of:
+#  - This package.toml file.
+#  - An empty Main.b file (this will be replaced with AFL-generated
+#    random data at fuzzing time).
+
+[package]
+name = "dummy-package"
+version = "0.1"
+
+[modules]
+main-module = "Main"
+main-function = "main"
