@@ -177,6 +177,11 @@ static void lex_hex_literal(struct LexerState *state)
     while (1) {
         ch = peek_next_char(state);
         if (!isxdigit(ch)) {
+            if (isalpha(ch)) {
+                // Hex literal immediately followed by a letter (e.g. "0x1g") is an error
+                report_error(state);
+                return;
+            }
             break;
         }
         read_next_char(state);
@@ -224,6 +229,11 @@ static void lex_int_literal(struct LexerState *state)
         // Keep consuming digits until no more are available
         ch = peek_next_char(state);
         if (!isdigit(ch)) {
+            if (isalpha(ch)) {
+                // Int literal immediately followed by a letter (e.g. "1a") is an error
+                report_error(state);
+                return;
+            }
             break;
         }
         read_next_char(state);
