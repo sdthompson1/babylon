@@ -247,20 +247,21 @@ definition lex_char_escape :: "char Lexer" where
       return (char_of (hex_digits_to_nat [digit1, digit2]))
     }"
 
-definition lex_character :: "char Lexer" where
-  "lex_character = 
-    (satisfy (\<lambda>c. c \<noteq> double_quote \<and> c \<noteq> newline \<and> c \<noteq> backslash))
-    <|> (expect (CHR 0x5c) \<then> lex_char_escape)"
+(* lex one character from a char or string literal *)
+definition lex_character :: "char \<Rightarrow> char Lexer" where
+  "lex_character quote = 
+    (satisfy (\<lambda>c. c \<noteq> quote \<and> c \<noteq> newline \<and> c \<noteq> backslash))
+    <|> (expect backslash \<then> lex_char_escape)"
 
 definition lex_char_literal :: "Token Lexer" where
   "lex_char_literal = do {
-    ch \<leftarrow> between (expect single_quote) (expect single_quote) lex_character;
+    ch \<leftarrow> between (expect single_quote) (expect single_quote) (lex_character single_quote);
     return (NAT_NUM (of_char ch))
   }"
 
 definition lex_string_literal :: "Token Lexer" where
   "lex_string_literal = do {
-    chars \<leftarrow> between (expect double_quote) (expect double_quote) (many lex_character);
+    chars \<leftarrow> between (expect double_quote) (expect double_quote) (many (lex_character double_quote));
     return (STRING chars)
    }"
 
@@ -430,6 +431,11 @@ lemma test_newline_in_string:
 
 lemma test_newline_in_char:
   shows "lex ''BadChar.b'' [single_quote, newline, single_quote] 
+          = LR_Error (Location ''BadChar.b'' 1 2 1 3)"
+  by eval
+
+lemma test_quote_in_char:
+  shows "lex ''BadChar.b'' [single_quote, single_quote, single_quote]
           = LR_Error (Location ''BadChar.b'' 1 2 1 3)"
   by eval
 
