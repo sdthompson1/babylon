@@ -93,6 +93,8 @@ struct LoadDetails {
     struct NameList *libs;
     bool run_c_compiler;
     bool print_c_compiler_commands;
+
+    const char *main_filename_override;
 };
 
 
@@ -125,12 +127,12 @@ static char * get_output_filename(const struct LoadDetails *details,
 }
 
 
-static bool load_module_recursive(struct LoadDetails *details);
+static enum CompileResult load_module_recursive(struct LoadDetails *details);
 
-bool load_imports(struct LoadDetails *details,
-                  const char *importer_package_name,
-                  struct Module *module,
-                  struct Import *imports)
+enum CompileResult load_imports(struct LoadDetails *details,
+                                const char *importer_package_name,
+                                struct Module *module,
+                                struct Import *imports)
 {
     for (struct Import *import = imports; import; import = import->next) {
 
@@ -142,18 +144,18 @@ bool load_imports(struct LoadDetails *details,
         details->module_name = import->module_name;
         details->import_location = import->location;
 
-        bool load_success = load_module_recursive(details);
+        enum CompileResult cr = load_module_recursive(details);
 
         details->importer_package_name = old_package_name;
         details->module_name = old_module_name;
         details->import_location = old_import_location;
 
-        if (!load_success) {
-            return false;
+        if (cr != CR_SUCCESS) {
+            return cr;
         }
     }
 
-    return true;
+    return CR_SUCCESS;
 }
 
 static void add_import_fingerprints(struct SHA256_CTX *ctx, struct Import *imports, struct HashTable *loaded_modules)
@@ -420,9 +422,8 @@ static bool run_linker(const struct LoadDetails *details)
 }
 
 
-// Returns true if success, false if error (e.g. module not found, circular dependency)
-static bool load_module_from_disk(struct LoadDetails *details,
-                                  struct ModulePathInfo *info)
+static enum CompileResult load_module_from_disk(struct LoadDetails *details,
+                                                struct ModulePathInfo *info)
 {
     // Lex
     const struct Token *token = NULL;
@@ -454,14 +455,14 @@ static bool load_module_from_disk(struct LoadDetails *details,
                                     details->module_name,
                                     info ? info->b_filename : NULL);
         }
-        return false;
+        return CR_LEX_ERROR;
     }
 
     // Parse
     struct Module *module = parse_module(token, interface_only);
     if (module == NULL) {
         free_token((void*)token);
-        return false;
+        return CR_PARSE_ERROR;
     }
 
     if (strcmp(module->name, details->module_name) != 0) {
@@ -470,20 +471,22 @@ static bool load_module_from_disk(struct LoadDetails *details,
         report_module_name_mismatch_filename(loc, module->name);
         free_module(module);
         free_token((void*)token);
-        return false;
+        return CR_RENAME_ERROR;
     }
 
     free_token((void*)token);
 
     // Ensure all imports are loaded
-    if (!load_imports(details, info->package_name, module, module->interface_imports)) {
+    enum CompileResult import_result = load_imports(details, info->package_name, module, module->interface_imports);
+    if (import_result != CR_SUCCESS) {
         free_module(module);
-        return false;
+        return import_result;
     }
     if (!interface_only) {
-        if (!load_imports(details, info->package_name, module, module->implementation_imports)) {
+        import_result = load_imports(details, info->package_name, module, module->implementation_imports);
+        if (import_result != CR_SUCCESS) {
             free_module(module);
-            return false;
+            return import_result;
         }
     }
 
@@ -494,7 +497,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
                        module,
                        interface_only)) {
         free_module(module);
-        return false;
+        return CR_RENAME_ERROR;
     }
 
     // Create a "fingerprint" of this module's interface.
@@ -559,7 +562,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
     if (!run_typechecker(details, details->type_env, copy, true)) {
         free_module(copy);
         free_module(module);
-        return false;
+        return CR_TYPE_ERROR;
     }
 
     if (details->do_verify) {
@@ -570,7 +573,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
                           full_module_fingerprint)) {
             free_module(copy);
             free_module(module);
-            return false;
+            return CR_VERIFY_ERROR;
         }
     }
 
@@ -581,8 +584,9 @@ static bool load_module_from_disk(struct LoadDetails *details,
         // "temporary" type and verifier envs (which will be
         // discarded).
 
-        // For codegen this is done on a copy of the module, but for
-        // verification, this can be done directly on the original module.
+        // For codegen this is done on a copy of the module, but if
+        // codegen is not being done, this can be done directly on the
+        // original module.
         struct Module *pass_2_module;
         if (details->do_compile) {
             pass_2_module = copy_module(module);
@@ -595,7 +599,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
             pop_type_env(temp_type_env);
             if (pass_2_module != module) free_module(pass_2_module);
             free_module(module);
-            return false;
+            return CR_TYPE_ERROR;
         }
         pop_type_env(temp_type_env);
         temp_type_env = NULL;
@@ -609,7 +613,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
             if (!verify_result) {
                 if (pass_2_module != module) free_module(pass_2_module);
                 free_module(module);
-                return false;
+                return CR_VERIFY_ERROR;
             }
         }
 
@@ -630,7 +634,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
         details->expanded_type_env = push_type_env(details->expanded_type_env);
         if (!run_typechecker(details, details->expanded_type_env, module, false)) {
             free_module(module);
-            return false;
+            return CR_TYPE_ERROR;
         }
         details->expanded_type_env = collapse_type_env(details->expanded_type_env);
     }
@@ -650,7 +654,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
         if (!fol_error_found()
         && !typecheck_main_function(details->type_env, module->name, details->main_function_name)) {
             free_module(module);
-            return false;
+            return CR_TYPE_ERROR;
         }
     }
 
@@ -675,7 +679,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
             free(c_filename);
             free(h_filename);
             free_module(module);
-            return false;
+            return CR_COMPILE_ERROR;
         }
         free(h_filename);
         codegen_module(c_file, h_file, details->codegen_env, module);
@@ -698,7 +702,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
             free(c_filename);
             if (!ok) {
                 free_module(module);
-                return false;
+                return CR_COMPILE_ERROR;
             }
 
             // If there is a user-supplied C file then compile that as well
@@ -709,7 +713,7 @@ static bool load_module_from_disk(struct LoadDetails *details,
                 if (!ok) {
                     fprintf(stderr, "Compilation of %s failed\n", info->c_filename);
                     free_module(module);
-                    return false;
+                    return CR_COMPILE_ERROR;
                 }
             }
         }
@@ -717,16 +721,33 @@ static bool load_module_from_disk(struct LoadDetails *details,
 
     free_module(module);
     update_fol_status();
-    return true;
+    return CR_SUCCESS;
 }
 
-// Returns true if success, false if error (e.g. module not found, circular dependency)
-static bool load_module_recursive(struct LoadDetails *details)
+static struct ModulePathInfo * find_module_with_override(struct LoadDetails *details)
+{
+    // This function implements the "main_filename_override" feature if it is in use,
+    // or defers to find_module (from package.c) otherwise
+
+    if (details->main_filename_override != NULL
+    && strcmp(details->importer_package_name, details->root_package_name) == 0
+    && strcmp(details->module_name, "Main") == 0) {
+        static struct ModulePathInfo info;
+        info.package_name = details->root_package_name;
+        info.b_filename = details->main_filename_override;
+        info.c_filename = NULL;
+        return &info;
+    }
+
+    return find_module(details->package_loader,
+                       details->importer_package_name,
+                       details->module_name);
+}
+
+static enum CompileResult load_module_recursive(struct LoadDetails *details)
 {
     // Check if we have already seen this module...
-    struct ModulePathInfo *info = find_module(details->package_loader,
-                                              details->importer_package_name,
-                                              details->module_name);
+    struct ModulePathInfo *info = find_module_with_override(details);
     char *full_module_name =
         info ? copy_string_3(info->package_name, "/", details->module_name) : NULL;
 
@@ -739,14 +760,14 @@ static bool load_module_recursive(struct LoadDetails *details)
     if (value_out != NULL) {
         // Module was previously loaded. Nothing to do.
         free(full_module_name);
-        return true;
+        return CR_SUCCESS;
     }
 
     if (key_out != NULL) {
-        // Circular dependency.
+        // Circular dependency. (Counts as a renamer error.)
         report_circular_dependency(details->import_location, details->module_name);
         free(full_module_name);
-        return false;
+        return CR_RENAME_ERROR;
     }
 
     // The module is now loading
@@ -770,12 +791,8 @@ static void free_all_strings(struct StringNode *strings)
     }
 }
 
-bool compile(struct CompileOptions *options)
+enum CompileResult compile(struct CompileOptions *options)
 {
-    if (!options->do_compile && !options->do_verify) {
-        fatal_error("nothing to do");
-    }
-
     struct LoadDetails details;
     details.strings = NULL;
 
@@ -786,7 +803,7 @@ bool compile(struct CompileOptions *options)
                                             root_prefix,
                                             options->search_path)) {
         free_package_loader(details.package_loader);
-        return false;
+        return CR_LEX_ERROR;
     }
 
     if (options->output_prefix) {
@@ -801,7 +818,7 @@ bool compile(struct CompileOptions *options)
         fprintf(stderr, "Output path '%s' doesn't exist and couldn't be created\n", details.output_prefix);
         free_package_loader(details.package_loader);
         free_all_strings(details.strings);
-        return false;
+        return CR_LEX_ERROR;
     }
 
     details.loaded_modules = new_hash_table();
@@ -852,36 +869,47 @@ bool compile(struct CompileOptions *options)
     details.run_c_compiler = options->run_c_compiler;
     details.print_c_compiler_commands = options->print_c_compiler_commands;
 
-    bool success = true;
+    details.main_filename_override = options->main_filename_override;
+
+    enum CompileResult compile_result = CR_SUCCESS;
     if (options->requested_modules == NULL) {
-        for (struct NameList * names = get_root_exported_modules(details.package_loader); success && names; names = names->next) {
+        for (struct NameList * names = get_root_exported_modules(details.package_loader);
+        compile_result == CR_SUCCESS && names != NULL;
+        names = names->next) {
             details.module_name = names->name;
-            success = load_module_recursive(&details);
+            compile_result = load_module_recursive(&details);
         }
-        if (details.main_module_name && success) {
+        if (details.main_module_name && compile_result == CR_SUCCESS) {
             details.module_name = details.main_module_name;
-            success = load_module_recursive(&details);
+            compile_result = load_module_recursive(&details);
         }
     } else {
-        for (struct NameList *names = options->requested_modules; success && names; names = names->next) {
+        for (struct NameList *names = options->requested_modules;
+        compile_result == CR_SUCCESS && names != NULL;
+        names = names->next) {
             details.module_name = names->name;
-            success = load_module_recursive(&details);
+            compile_result = load_module_recursive(&details);
         }
     }
 
     // Wait for FOL runner to complete, and then get final status
     wait_fol_complete();
-    success = success && !fol_error_found();
+    if (compile_result == CR_SUCCESS && fol_error_found()) {
+        compile_result = CR_VERIFY_ERROR;
+    }
     stop_fol_runner();
 
     // If everything is ok we can now link
     // Note: Linking only happens when a main_module is defined.
     if (options->do_compile
     && options->run_c_compiler
-    && success
+    && compile_result == CR_SUCCESS
     && details.obj_files != NULL
     && details.main_module_name) {
-        success = run_linker(&details);
+        bool success = run_linker(&details);
+        if (!success) {
+            compile_result = CR_COMPILE_ERROR;
+        }
     }
 
     // Close cache DB (*after* FOL runner has finished!)
@@ -903,7 +931,7 @@ bool compile(struct CompileOptions *options)
 
     free_package_loader(details.package_loader);
 
-    return success;
+    return compile_result;
 }
 
 void free_compile_options(struct CompileOptions *copt)

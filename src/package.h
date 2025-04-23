@@ -35,9 +35,9 @@ const char * get_root_main_module(struct PackageLoader *loader); // can be NULL
 const char * get_root_main_function(struct PackageLoader *loader);  // can be NULL
 
 struct ModulePathInfo {
-    char *package_name;     // package name that the module was found in
-    char *b_filename;       // path to .b file
-    char *c_filename;       // path to .c file if it exists
+    const char *package_name;     // package name that the module was found in
+    const char *b_filename;       // path to .b file
+    const char *c_filename;       // path to .c file if it exists
 };
 
 // Look for a given module relative to a given "importer" package.

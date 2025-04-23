@@ -106,9 +106,9 @@ static struct DepList * copy_dep_list(struct DepList *deps)
 static void free_path_info(struct ModulePathInfo *info)
 {
     if (info) {
-        free(info->package_name);
-        free(info->b_filename);
-        free(info->c_filename);
+        free((char*) info->package_name);
+        free((char*) info->b_filename);
+        free((char*) info->c_filename);
         free(info);
     }
 }

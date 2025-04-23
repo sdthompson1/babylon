@@ -17,8 +17,6 @@ repository.
 struct Env;
 struct HashTable;
 
-struct CompileResult;
-
 enum CacheMode {
     CACHE_DISABLED,
     CACHE_ENABLED
@@ -42,7 +40,6 @@ struct CompileOptions {
     // NOTE: Currently this is only supported when do_compile=false. Otherwise it must be empty.
     struct NameList *requested_modules;
 
-    // do_compile and do_verify cannot both be false.
     bool do_compile;
     bool do_verify;
 
@@ -55,9 +52,24 @@ struct CompileOptions {
 
     bool run_c_compiler;
     bool print_c_compiler_commands;
+
+    // If this is non-NULL then a module called "Main" in the root package will
+    // use this filename instead of the usual "Main.b". (Used for the fuzzing mode.)
+    const char *main_filename_override;
 };
 
 void free_compile_options(struct CompileOptions *copt);
+
+// Possible results of a "compile" call
+enum CompileResult {
+    CR_SUCCESS = 0,
+    CR_LEX_ERROR = 1,      // lexer failed, or couldn't open input files, or package.toml problem
+    CR_PARSE_ERROR = 2,    // parser failed
+    CR_RENAME_ERROR = 3,   // renamer failed, or module name mismatch filename, or circular import
+    CR_TYPE_ERROR = 4,     // typechecker failed, or main function has wrong type
+    CR_VERIFY_ERROR = 5,   // verifier failed
+    CR_COMPILE_ERROR = 6   // couldn't open .c output file, or external compiler or linker command failed
+};
 
 //
 // Loads and "compiles" a module (and its imports) from the filesystem.
@@ -74,7 +86,7 @@ void free_compile_options(struct CompileOptions *copt);
 //    prints errors and returns a pass/fail result. Compilation additionally creates .b.c
 //    files alongside each input file.
 //
-bool compile(struct CompileOptions *options);
+enum CompileResult compile(struct CompileOptions *options);
 
 
 #endif

@@ -22,6 +22,10 @@ repository.
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 //------------------------------------------------------------------------
 // Subcommand Names
 
@@ -33,7 +37,8 @@ enum Subcommand {
     CMD_BUILD,
     CMD_TRANSLATE,
     CMD_CHECK_CONFIG,
-    CMD_VERSION
+    CMD_VERSION,
+    CMD_FUZZ
 };
 
 enum Subcommand string_to_subcommand(const char *p)
@@ -52,6 +57,8 @@ enum Subcommand string_to_subcommand(const char *p)
         return CMD_CHECK_CONFIG;
     } else if (strcmp(p, "version") == 0) {
         return CMD_VERSION;
+    } else if (strcmp(p, "fuzz") == 0) {
+        return CMD_FUZZ;
     } else {
         return CMD_UNKNOWN;
     }
@@ -68,6 +75,7 @@ const char * subcommand_to_string(enum Subcommand cmd)
     case CMD_TRANSLATE: return "translate";
     case CMD_CHECK_CONFIG: return "check-config";
     case CMD_VERSION: return "version";
+    case CMD_FUZZ: return "fuzz";
     }
     fatal_error("bad subcommand value");
 }
@@ -91,12 +99,14 @@ static void print_general_help(FILE *file, char **argv)
     fprintf(file, "\n");
 }
 
-static void print_path_options(FILE *file)
+static void print_path_options(FILE *file, enum Subcommand cmd)
 {
     fprintf(file, "  -r, --root <path>            Specify build root directory (default '.')\n");
     fprintf(file, "  -p, --package-path <path>    Specify a directory to search for dependency packages\n");
     fprintf(file, "                               (multiple -p options may be given)\n");
-    fprintf(file, "  -o, --output-path <path>     Set the output path (default: '<build-root>/build')\n");
+    if (cmd != CMD_FUZZ) {
+        fprintf(file, "  -o, --output-path <path>     Set the output path (default: '<build-root>/build')\n");
+    }
 }
 
 static void print_compile_or_build_options(FILE *file)
@@ -125,13 +135,26 @@ static void print_debug_options(FILE *file)
     fprintf(file, "  -d, --debug                  Create debug output files\n");
 }
 
+static void print_fuzz_options(FILE *file)
+{
+    fprintf(file,
+            "  --oracle COMMAND             Use COMMAND as oracle\n"
+            "  --max-status NUMBER          Maximum status code that the oracle can return\n"
+            "  --main-file FILENAME         Override Main.b from root package with the given file\n");
+    fprintf(file, "\n");
+    fprintf(file,
+            "This is used for fuzz testing the lexer, parser and typechecker stages\n"
+            "of the compiler, with the help of an external tool like AFL++. Please see\n"
+            "fuzzing/README.md for more details.\n");
+}
+
 // This works for compile, translate, verify and build subcommands
 static void print_compilation_usage(FILE *file, char **argv, enum Subcommand cmd)
 {
     fprintf(file, "Usage: %s %s [<options>]\n", argv[0], subcommand_to_string(cmd));
     fprintf(file, "\n");
     fprintf(file, "Options:\n");
-    print_path_options(file);  // -r, -p, -o
+    print_path_options(file, cmd);  // -r, -p, -o
     if (cmd == CMD_COMPILE || cmd == CMD_BUILD) {
         print_compile_or_build_options(file);  // -v
     }
@@ -141,7 +164,12 @@ static void print_compilation_usage(FILE *file, char **argv, enum Subcommand cmd
     if (cmd == CMD_VERIFY || cmd == CMD_BUILD) {
         print_verify_or_build_options(file);  // -q, -t, etc.
     }
-    print_debug_options(file);  // -d
+    if (cmd != CMD_FUZZ) {
+        print_debug_options(file);  // -d
+    }
+    if (cmd == CMD_FUZZ) {
+        print_fuzz_options(file);
+    }
     fprintf(file, "\n");
 }
 
@@ -189,6 +217,11 @@ static bool print_help_for_subcommand(enum Subcommand cmd, char **argv, const ch
         printf("Report the compiler version.\n\n");
         printf("Usage: %s version\n\n", argv[0]);
         break;
+
+    case CMD_FUZZ:
+        printf("Fuzz testing mode.\n\n");
+        print_compilation_usage(stdout, argv, cmd);
+        break;
     }
 
     return true;
@@ -215,7 +248,13 @@ static bool help_subcommand(int argc, char **argv)
 }
 
 //------------------------------------------------------------------------
-// Compilation Subcommands (translate, compile, verify, build)
+// Compilation Subcommands (translate, compile, verify, build, fuzz)
+
+// Special settings for the "fuzz" command
+struct FuzzSettings {
+    char *oracle;
+    int max_status;
+};
 
 // This "moves" all the settings from cfg to a new CompileOptions struct.
 // cfg is not freed, but it is "nulled out".
@@ -242,6 +281,7 @@ static struct CompileOptions * transfer_compiler_config(struct CompilerConfig *c
     copt->provers = cfg->provers; cfg->provers = NULL;
     copt->run_c_compiler = false;
     copt->print_c_compiler_commands = false;
+    copt->main_filename_override = NULL;
     return copt;
 }
 
@@ -314,9 +354,18 @@ static void adjust_compile_options(struct CompileOptions *copt)
 // This will exit on error
 static void parse_compilation_options_or_exit(int argc, char **argv,
                                               struct CompileOptions *copt,
+                                              struct FuzzSettings *fuzz_settings,
                                               enum Subcommand cmd)
 {
-    enum { OPT_CONTINUE = 1, OPT_NO_CACHE = 2 };
+    enum {
+        OPT_CONTINUE = 1,
+        OPT_NO_CACHE = 2,
+
+        // options for CMD_FUZZ
+        OPT_MAIN_FILE = 3,
+        OPT_ORACLE = 4,
+        OPT_MAX_STATUS = 5
+    };
 
     // Make sure to increase these sizes if adding many more options!
     struct option long_options[20];
@@ -341,11 +390,13 @@ static void parse_compilation_options_or_exit(int argc, char **argv,
     *optchar++ = 'p'; *optchar++ = ':';
     ++opt;
 
-    opt->name = "output-path";
-    opt->has_arg = required_argument;
-    opt->val = 'o';
-    *optchar++ = 'o'; *optchar++ = ':';
-    ++opt;
+    if (cmd != CMD_FUZZ) {
+        opt->name = "output-path";
+        opt->has_arg = required_argument;
+        opt->val = 'o';
+        *optchar++ = 'o'; *optchar++ = ':';
+        ++opt;
+    }
 
     if (cmd == CMD_COMPILE || cmd == CMD_BUILD) {
         opt->name = "verbose";
@@ -387,11 +438,30 @@ static void parse_compilation_options_or_exit(int argc, char **argv,
         ++opt;
     }
 
-    opt->name = "debug";
-    opt->has_arg = no_argument;
-    opt->val = 'd';
-    *optchar++ = 'd';
-    ++opt;
+    if (cmd != CMD_FUZZ) {
+        opt->name = "debug";
+        opt->has_arg = no_argument;
+        opt->val = 'd';
+        *optchar++ = 'd';
+        ++opt;
+    }
+
+    if (cmd == CMD_FUZZ) {
+        opt->name = "main-file";
+        opt->has_arg = required_argument;
+        opt->val = OPT_MAIN_FILE;
+        ++opt;
+
+        opt->name = "oracle";
+        opt->has_arg = required_argument;
+        opt->val = OPT_ORACLE;
+        ++opt;
+
+        opt->name = "max-status";
+        opt->has_arg = required_argument;
+        opt->val = OPT_MAX_STATUS;
+        ++opt;
+    }
 
     struct NameList **package_paths_tail = &copt->search_path;
     struct NameList **requested_modules_tail = &copt->requested_modules;
@@ -461,6 +531,20 @@ static void parse_compilation_options_or_exit(int argc, char **argv,
             copt->create_debug_files = true;
             break;
 
+        case OPT_MAIN_FILE:
+            free((char*) copt->main_filename_override);
+            copt->main_filename_override = copy_string(optarg);
+            break;
+
+        case OPT_ORACLE:
+            free(fuzz_settings->oracle);
+            fuzz_settings->oracle = copy_string(optarg);
+            break;
+
+        case OPT_MAX_STATUS:
+            fuzz_settings->max_status = atoi(optarg);
+            break;
+
         case '?':
             // getopt_long already printed an error message
             exit(1);
@@ -474,37 +558,115 @@ static void parse_compilation_options_or_exit(int argc, char **argv,
     adjust_compile_options(copt);
 }
 
+// Returns -1 on error, or 0-255 if the command exited with that status
+static int run_oracle(const char *command, const char *argument)
+{
+    if (command == NULL) {
+        fprintf(stderr, "No oracle command specified - please use --oracle option\n");
+        return -1;
+    }
+
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        // Fork failed
+        perror("fork failed");
+        return -1;
+
+    } else if (pid == 0) {
+        // Child process
+        execlp(command, command, argument, (char*)NULL);
+
+        // If exec returns, it failed
+        perror("execl failed");
+        exit(EXIT_FAILURE);
+
+    } else {
+        // Parent process
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            perror("waitpid failed");
+            return -1;
+        }
+
+        if (WIFEXITED(status)) {
+            return WEXITSTATUS(status);
+        } else {
+            fprintf(stderr, "Oracle command did not exit normally\n");
+            return -1;
+        }
+    }
+}
+
 static bool compilation_subcommand(int argc, char **argv,
                                    struct CompilerConfig *cfg,
                                    enum Subcommand cmd)
 {
     struct CompileOptions *copt = transfer_compiler_config(cfg);
 
-    if (cmd == CMD_TRANSLATE || cmd == CMD_COMPILE) {
+    struct FuzzSettings fuzz_settings = {0};
+    fuzz_settings.max_status = 99999;
+
+    switch (cmd) {
+    case CMD_TRANSLATE:
         copt->do_compile = true;
-    } else if (cmd == CMD_VERIFY) {
+        break;
+
+    case CMD_COMPILE:
+        copt->do_compile = true;
+        copt->run_c_compiler = true;
+        break;
+
+    case CMD_VERIFY:
         copt->do_verify = true;
-    } else {
-        copt->do_compile = copt->do_verify = true;
+        break;
+
+    case CMD_BUILD:
+        copt->do_compile = true;
+        copt->do_verify = true;
+        copt->run_c_compiler = true;
+        break;
+
+    case CMD_FUZZ:
+        break;
+
+    default:
+        fatal_error("compilation_subcommand called incorrectly");
     }
 
-    copt->run_c_compiler = (cmd == CMD_COMPILE || cmd == CMD_BUILD);
+    parse_compilation_options_or_exit(argc, argv, copt, &fuzz_settings, cmd);
 
-    parse_compilation_options_or_exit(argc, argv, copt, cmd);
-
-    bool success = compile(copt);
+    enum CompileResult compile_result = compile(copt);
 
     if (copt->show_progress && (cmd == CMD_VERIFY || cmd == CMD_BUILD)) {
         const char *msg = (cmd == CMD_VERIFY ? "Verification" : "Build");
-        if (success) {
+        if (compile_result == CR_SUCCESS) {
             fprintf(stderr, "%s successful\n", msg);
         } else {
             fprintf(stderr, "%s failed\n", msg);
         }
     }
 
+    if (cmd == CMD_FUZZ) {
+        // CMD_FUZZ logic: call abort() if compile result doesn't match oracle
+        int oracle_result = run_oracle(fuzz_settings.oracle, copt->main_filename_override);
+
+        int effective_compile_result = (int)compile_result;
+        if (effective_compile_result > fuzz_settings.max_status) {
+            effective_compile_result = 0;
+        }
+
+        if (effective_compile_result != oracle_result) {
+            printf("Compile result = %d\n", (int)compile_result);
+            printf("Oracle result = %d\n", oracle_result);
+            abort();
+        }
+
+        free(fuzz_settings.oracle);
+    }
+
     free_compile_options(copt);
-    return success;
+    return (compile_result == CR_SUCCESS);
 }
 
 //------------------------------------------------------------------------
@@ -569,6 +731,7 @@ int main(int argc, char **argv)
     case CMD_TRANSLATE:
     case CMD_VERIFY:
     case CMD_BUILD:
+    case CMD_FUZZ:
         success = compilation_subcommand(argc, argv, cfg, cmd);
         break;
 
