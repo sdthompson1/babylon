@@ -223,10 +223,12 @@ static void lex_int_literal(struct LexerState *state)
     // type error, rather than a lexical error (from this buffer filling up).
     char buf[1000];
     unsigned int index = 0;
+    bool first_char = true;
     int ch;
 
+    // Read digit chars in a loop
     while (1) {
-        // Keep consuming digits until no more are available
+        // Check that next char is a valid decimal digit
         ch = peek_next_char(state);
         if (!isdigit(ch)) {
             if (isalpha(ch)) {
@@ -236,14 +238,18 @@ static void lex_int_literal(struct LexerState *state)
             }
             break;
         }
+
+        // Read in the next char
         read_next_char(state);
 
         // Check for "0x" as a special case
-        if (index == 0 && ch == '0' && peek_next_char(state) == 'x') {
+        if (first_char && ch == '0' && peek_next_char(state) == 'x') {
             read_next_char(state);
             lex_hex_literal(state);
             return;
         }
+
+        first_char = false;
 
         if (index >= sizeof(buf) - 1) {
             // Integer literal too long
