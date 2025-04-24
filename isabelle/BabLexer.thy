@@ -88,18 +88,21 @@ definition line_comment :: "unit Lexer" where
   }"
 
 (* Read a block comment (beginning "/*" and ending "*/") *)
-definition block_comment :: "unit Lexer" where
-  "block_comment = do {
+fun block_comment :: "nat \<Rightarrow> unit Lexer" where
+  "block_comment 0 = undefined"  (* out of fuel *)
+| "block_comment (Suc fuel) = do {
     expect_string ''/*'';
-    many_till any_token (expect_string ''*/'');
+    many_till (delay (\<lambda>_. block_comment fuel) <|> (any_token \<then> return ()))
+              (expect_string ''*/'');
     return ()
    }"
 
 (* Skip comments and whitespace (if any). *)
 definition skip_comments_and_whitespace :: "unit Lexer" where
   "skip_comments_and_whitespace = do {
+    count \<leftarrow> get_num_tokens;
     many (line_comment <|> 
-          block_comment <|> 
+          block_comment (Suc count) <|> 
           (satisfy is_whitespace \<then> return ()));
     return ()
    }"
@@ -414,8 +417,11 @@ lemma test_comments:
   by eval
 
 lemma test_comment_without_newline:
-  shows "lex ''Comment.b'' ''//foo''
-          = LR_Success []"
+  shows "lex ''Comment.b'' ''//foo'' = LR_Success []"
+  by eval
+
+lemma test_nested_comment:
+  shows "lex ''Nested.b'' ''/* foo /* bar */ baz */'' = LR_Success []"
   by eval
 
 (* Lexical errors *)
