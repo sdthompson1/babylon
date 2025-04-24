@@ -92,7 +92,8 @@ fun block_comment :: "nat \<Rightarrow> unit Lexer" where
   "block_comment 0 = undefined"  (* out of fuel *)
 | "block_comment (Suc fuel) = do {
     expect_string ''/*'';
-    many_till (delay (\<lambda>_. block_comment fuel) <|> (any_token \<then> return ()))
+    many_till ( delay (\<lambda>_. block_comment fuel) 
+                  <|> (not_parser (expect_string ''/*'') \<then> any_token \<then> return ()) )
               (expect_string ''*/'');
     return ()
    }"
@@ -178,16 +179,21 @@ definition name_to_keyword :: "string \<Rightarrow> Keyword option" where
    (sequence of alphanumeric or underscore -- no need to filter out
    all-digits or lone underscore cases, as these will be higher 
    priority in lex_token) *)
+(* Max accepted length: 200 chars *)
 definition lex_ident_or_keyword_or_underscore :: "Token Lexer" where
   "lex_ident_or_keyword_or_underscore = do {
-    init \<leftarrow> satisfy (\<lambda>c. is_alpha c \<or> c = CHR ''_'');
-    rest \<leftarrow> many (satisfy (\<lambda>c. is_alpha c \<or> is_decimal_digit c \<or> c = CHR ''_''));
-    let word = init # rest;
-    (if word = ''_'' then
-      return UNDERSCORE
-     else (case name_to_keyword word of
-            Some kw \<Rightarrow> return (KEYWORD kw)
-          | None \<Rightarrow> return (NAME word)))
+    init \<leftarrow> located (satisfy (\<lambda>c. is_alpha c \<or> c = CHR ''_''));
+    rest \<leftarrow> located (many (satisfy (\<lambda>c. is_alpha c \<or> is_decimal_digit c \<or> c = CHR ''_'')));
+    if length (snd rest) \<ge> 199 then
+      fail_at (merge_locations (fst init) (fst rest))
+    else do {
+      let word = (snd init) # (snd rest);
+      if word = ''_'' then
+        return UNDERSCORE
+      else (case name_to_keyword word of
+             Some kw \<Rightarrow> return (KEYWORD kw)
+           | None \<Rightarrow> return (NAME word))
+    }
   }"
 
 
@@ -195,9 +201,19 @@ definition lex_ident_or_keyword_or_underscore :: "Token Lexer" where
 definition decimal_digit_to_nat :: "char \<Rightarrow> nat" where
   "decimal_digit_to_nat c = of_char c - of_char (CHR ''0'')"
 
-definition decimal_digits_to_nat :: "string \<Rightarrow> nat" where
-  "decimal_digits_to_nat s =
-    foldl (\<lambda>acc d. acc*10 + decimal_digit_to_nat d) 0 s"
+fun strip_leading_zeros :: "char list \<Rightarrow> char list" where
+  "strip_leading_zeros (CHR ''0'' # xs) = strip_leading_zeros xs"
+| "strip_leading_zeros xs = xs"
+
+(* Convert decimal digits to NAT_NUM token. Max allowed value = 2^64 - 1. *)
+(* Note: using (of_nat num :: int) is a hack to get this to work inside the Isabelle jEdit
+   environment (trying to compute 2^64 as nat in that environment does not work) *)
+fun decimal_digits_to_nat :: "Location \<times> string \<Rightarrow> Token Lexer" where
+  "decimal_digits_to_nat (loc, s) =
+    (if length (strip_leading_zeros s) > 20 then fail_at loc
+     else let num = foldl (\<lambda>acc d. acc*10 + decimal_digit_to_nat d) 0 s
+          in (if (of_nat num :: int) \<ge> 2 ^ 64 then fail_at loc
+              else return (NAT_NUM num)))"
 
 definition hex_digit_to_nat :: "char \<Rightarrow> nat" where
   "hex_digit_to_nat c =
@@ -208,9 +224,11 @@ definition hex_digit_to_nat :: "char \<Rightarrow> nat" where
      else
       decimal_digit_to_nat c)"
 
-definition hex_digits_to_nat :: "string \<Rightarrow> nat" where
-  "hex_digits_to_nat s =
-    foldl (\<lambda>acc d. acc*16 + hex_digit_to_nat d) 0 s"
+(* Convert hex digits to nat. Max allowed value = 2^64 - 1. *)
+fun hex_digits_to_nat :: "Location \<times> string \<Rightarrow> Token Lexer" where
+  "hex_digits_to_nat (loc, s) =
+    (if length (strip_leading_zeros s) > 16 then fail_at loc
+     else return (NAT_NUM (foldl (\<lambda>acc d. acc*16 + hex_digit_to_nat d) 0 s)))"
 
 (* Natural number literal token *)
 (* Note: we enforce that a numeric literal cannot be immediately followed by a letter,
@@ -220,13 +238,13 @@ definition lex_nat_num :: "Token Lexer" where
   "lex_nat_num = do {
       expect (CHR ''0'');
       (expect (CHR ''x'') <|> expect (CHR ''X''));
-      digits \<leftarrow> many1 (satisfy is_hex_digit);
+      digits \<leftarrow> located (many1 (satisfy is_hex_digit));
       not_parser (satisfy is_alpha);
-      return (NAT_NUM (hex_digits_to_nat digits))
+      hex_digits_to_nat digits
     } <|> do {
-      digits \<leftarrow> many1 (satisfy is_decimal_digit);
+      digits \<leftarrow> located (many1 (satisfy is_decimal_digit));
       not_parser (satisfy is_alpha);
-      return (NAT_NUM (decimal_digits_to_nat digits))
+      decimal_digits_to_nat digits
     }"
 
 
@@ -247,7 +265,7 @@ definition lex_char_escape :: "char Lexer" where
       expect (CHR ''x'');
       digit1 \<leftarrow> satisfy is_hex_digit;
       digit2 \<leftarrow> satisfy is_hex_digit;
-      return (char_of (hex_digits_to_nat [digit1, digit2]))
+      return (char_of (16 * hex_digit_to_nat digit1 + hex_digit_to_nat digit2))
     }"
 
 (* lex one character from a char or string literal *)
@@ -475,10 +493,35 @@ lemma test_invalid_hex_number:
           = LR_Error (Location ''BadNum.b'' 1 4 1 5)"
   by eval
 
+(* Note: the failure location in this test case is slightly wrong (it should cover the
+   whole hex literal) but this is a bit of an edge case, so we won't worry about it too
+   much. The important thing is that it reports failure. *)
+lemma test_too_big_hex_number:
+  shows "lex ''BadNum.b'' ''0x10000000000000000''
+          = LR_Error (Location ''BadNum.b'' 1 3 1 20)"
+  by eval
+
+(* We can't test 2^64 as an input, because it raises Interrupt_Breakdown (in the Isabelle
+   jEdit environment), but we can test a 21-digit number. *)
+lemma test_too_big_number:
+  shows "lex ''BadNum.b'' ''999999999999999999999''
+          = LR_Error (Location ''BadNum.b'' 1 1 1 22)"
+  by eval
+
+(* Names over 200 chars are rejected. This one is 201 chars. *)
+lemma test_too_big_name:
+  shows "lex ''Test.b'' ''abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890z''
+          = LR_Error (Location ''Test.b'' 1 1 1 202)"
+  by eval
+
 lemma test_unclosed_comment:
   shows "lex ''BadComment.b'' (''foo'' @ [newline] @ '' /* '' @ [newline])
           = LR_Error (Location ''BadComment.b'' 2 2 2 4)"
   by eval
 
+lemma test_unclosed_comment_2:
+  shows "lex ''BadComment.b'' (''/* /*/ A'')
+          = LR_Error (Location ''BadComment.b'' 1 1 1 3)"
+  by eval
 
 end

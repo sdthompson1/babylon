@@ -11,6 +11,6 @@ definition test_parser :: "'a Parser \<Rightarrow> string \<Rightarrow> 'a Parse
     LR_Success result \<Rightarrow> run_parser p ''Test.b'' result
     | LR_Error loc \<Rightarrow> PR_Error loc)"
 
-value "lex ''foo'' (''00xA'')"
+value "lex ''Test.b'' ''0x10000000000000000''"
 
-(* value "test_parser (parse_unop_expr 10) ''123lo''" *)
+(* value "test_parser (parse_unop_expr 10) ''123''" *)
