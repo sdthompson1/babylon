@@ -16,6 +16,7 @@ repository.
 #include "util.h"
 
 #include <ctype.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -666,9 +667,17 @@ static struct Pattern * parse_pattern(struct ParserState *state)
     case TOK_INT_LITERAL:
         {
             struct Pattern *p = make_pattern(loc, PAT_INT);
-            p->int_data.data =
-                negative ? copy_string_2("-", state->token->data)
-                         : copy_string(state->token->data);
+            p->int_data.is_negative = negative;
+            if (negative) {
+                if (state->token->value > ((uint64_t)INT64_MAX) + UINT64_C(1)) {
+                    // Negating a number greater than INT64_MAX + 1 is impossible
+                    report_int_literal_too_big(loc);
+                    state->error = true;
+                }
+                p->int_data.value = - state->token->value;
+            } else {
+                p->int_data.value = state->token->value;
+            }
             advance(state);
             return p;
         }
@@ -1001,9 +1010,9 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
 
     case TOK_INT_LITERAL:
         {
-            const char *data = state->token->data;
+            uint64_t value = state->token->value;
             advance(state);
-            return make_int_literal_term(loc, data);
+            return make_unsigned_int_literal_term(loc, value);
         }
 
     case TOK_STRING_LITERAL:
@@ -1212,7 +1221,14 @@ static struct Term * parse_call_or_proj_expr(struct ParserState *state, bool all
             struct Term *new_term = make_term(term->location, TM_FIELD_PROJ);
             set_location_end(&new_term->location, &state->token->location);
             new_term->field_proj.lhs = term;
-            new_term->field_proj.field_name = copy_string(state->token->data);
+
+            if (state->token->type == TOK_INT_LITERAL) {
+                char buf[50];
+                sprintf(buf, "%" PRIu64, state->token->value);
+                new_term->field_proj.field_name = copy_string(buf);
+            } else {
+                new_term->field_proj.field_name = copy_string(state->token->data);
+            }
 
             advance(state);
 
@@ -1245,15 +1261,21 @@ static struct Term * parse_unop_expr(struct ParserState *state, bool allow_lbrac
         if (rhs) {
             set_location_end(&loc, &rhs->location);
 
-            if (tok == TOK_MINUS && rhs->tag == TM_INT_LITERAL && rhs->int_literal.data[0] != '-') {
+            if (tok == TOK_MINUS && rhs->tag == TM_INT_LITERAL && !rhs->int_literal.is_negative) {
                 // Optimise unary minus applied to an int literal.
                 // (The alternative is to keep the term as a TM_UNOP
                 // applied to a TM_INT_LITERAL, but this causes
                 // problems when trying to write the most negative
                 // integer as a literal.)
-                char *new_data = copy_string_2("-", rhs->int_literal.data);
-                free((char*)rhs->int_literal.data);
-                rhs->int_literal.data = new_data;
+
+                // Negating a number greater than (INT64_MAX+1) is impossible
+                if (rhs->int_literal.value > ((uint64_t)INT64_MAX) + UINT64_C(1)) {
+                    report_int_literal_too_big(loc);
+                    state->error = true;
+                }
+
+                rhs->int_literal.value = - rhs->int_literal.value;
+                rhs->int_literal.is_negative = true;
                 rhs->location = loc;
                 return rhs;
             }

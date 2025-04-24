@@ -174,8 +174,9 @@ struct PatData_Bool {
 };
 
 struct PatData_Int {
-    const char *data;  // contains only digits 0-9 and possibly a single initial '-'.
-    // No leading 0's unless the number is zero in which case there is a single 0.
+    // This works similarly to TermData_IntLiteral (see below).
+    bool is_negative;
+    uint64_t value;
 };
 
 struct PatData_Record {
@@ -303,7 +304,15 @@ struct TermData_BoolLiteral {
 };
 
 struct TermData_IntLiteral {
-    const char *data;  // contains only digits 0-9 (no redundant leading zeroes) and possibly a single initial '-'.
+    // If is_negative is true, this is a negative integer literal between -1
+    // and INT64_MIN inclusive. 'value' holds the twos complement form of the
+    // value (i.e. bit 63 will be set).
+
+    // If is_negative is false, this is a non-negative integer literal between 0
+    // and UINT64_MAX inclusive. 'value' holds the unsigned value directly.
+
+    bool is_negative;
+    uint64_t value;
 };
 
 struct TermData_StringLiteral {
@@ -857,7 +866,8 @@ void free_pattern(struct Pattern *pattern);
 // Note: the following will copy any char* arguments.
 struct Term * make_term(struct Location loc, enum TermTag tag);
 struct Term * make_bool_literal_term(struct Location loc, bool value);
-struct Term * make_int_literal_term(struct Location loc, const char *data);
+struct Term * make_unsigned_int_literal_term(struct Location loc, uint64_t value);
+struct Term * make_signed_int_literal_term(struct Location loc, int64_t value);
 struct Term * make_string_literal_term(struct Location loc, const uint8_t *data, uint32_t length);
 struct Term * make_var_term(struct Location loc, const char *name);
 

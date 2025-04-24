@@ -292,6 +292,8 @@ struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
 // (i.e. where array_type->array_data.sizes != NULL).
 struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type);
 
+// create a sexpr for an int literal
+struct Sexpr *int_literal_sexpr(uint64_t value, bool negative);
 
 //-------------------------------------------------------------------------------
 // Fact and path condition helpers

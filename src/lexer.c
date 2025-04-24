@@ -118,12 +118,8 @@ static void skip_block_comment(struct LexerState *state, struct Location start_l
     }
 }
 
-static void report_error(struct LexerState *state)
+static void advance_to_whitespace(struct LexerState *state)
 {
-    report_lexical_error(state->location);
-
-    state->error = true;
-
     // Move on to next whitespace char, we should be safe on a whitespace char.
     while (true) {
         int ch = read_next_char(state);
@@ -131,8 +127,14 @@ static void report_error(struct LexerState *state)
             break;
         }
     }
-
     reset_location(state);
+}
+
+static void report_error(struct LexerState *state)
+{
+    report_lexical_error(state->location);
+    state->error = true;
+    advance_to_whitespace(state);
 }
 
 // data will be malloc-copied (unless it is NULL)
@@ -168,6 +170,13 @@ static void add_simple_token(struct LexerState *state, enum TokenType type)
     add_token(state, type, NULL, 0);
 }
 
+static void add_int_literal_token(struct LexerState *state, uint64_t value)
+{
+    // Use add_simple_token and fix up the result afterwards
+    add_simple_token(state, TOK_INT_LITERAL);
+    state->tail->value = value;
+}
+
 static void lex_hex_literal(struct LexerState *state)
 {
     uint64_t result = 0;
@@ -190,7 +199,9 @@ static void lex_hex_literal(struct LexerState *state)
 
         if ((result & UINT64_C(0xF000000000000000)) != 0) {
             // No room for any more digits
-            report_error(state);
+            report_int_literal_too_big(state->location);
+            state->error = true;
+            advance_to_whitespace(state);
             return;
         }
 
@@ -211,20 +222,14 @@ static void lex_hex_literal(struct LexerState *state)
         return;
     }
 
-    // Convert back to decimal
-    char buf[100];
-    sprintf(buf, "%" PRIu64, result);
-    add_token(state, TOK_INT_LITERAL, buf, strlen(buf) + 1);
+    add_int_literal_token(state, result);
 }
 
 static void lex_int_literal(struct LexerState *state)
 {
-    // Allocate plenty of space, this means that (most) over-sized literals will get the "integer literal too big"
-    // type error, rather than a lexical error (from this buffer filling up).
-    char buf[1000];
-    unsigned int index = 0;
     bool first_char = true;
     int ch;
+    uint64_t value = 0;
 
     // Read digit chars in a loop
     while (1) {
@@ -239,38 +244,37 @@ static void lex_int_literal(struct LexerState *state)
             break;
         }
 
-        // Read in the next char
+        // It's a digit, so read it in
         read_next_char(state);
 
         // Check for "0x" as a special case
-        if (first_char && ch == '0' && peek_next_char(state) == 'x') {
-            read_next_char(state);
-            lex_hex_literal(state);
-            return;
+        if (first_char && ch == '0') {
+            int next_ch = peek_next_char(state);
+            if (next_ch == 'x' || next_ch == 'X') {
+                read_next_char(state);
+                lex_hex_literal(state);
+                return;
+            }
         }
 
         first_char = false;
 
-        if (index >= sizeof(buf) - 1) {
-            // Integer literal too long
-            report_error(state);
+        // Check if int literal is too big
+        uint64_t digit = (ch - '0');
+
+        if (value >= UINT64_C(1844674407370955162) || (value == UINT64_C(1844674407370955161) && digit >= 6)) {
+            // the number is about to become larger than UINT64_MAX - we cannot accept this
+            report_int_literal_too_big(state->location);
+            state->error = true;
+            advance_to_whitespace(state);
             return;
         }
 
-        // Do not add leading zeroes
-        if (index != 0 || ch != '0') {
-            buf[index++] = ch;
-        }
+        // Add this digit to the value
+        value = value * 10 + digit;
     }
 
-    if (index == 0) {
-        // Must have been zero
-        buf[index++] = '0';
-    }
-
-    buf[index] = 0;
-
-    add_token(state, TOK_INT_LITERAL, buf, strlen(buf) + 1);
+    add_int_literal_token(state, value);
 }
 
 static int read_hex_digit(struct LexerState *state)
@@ -400,10 +404,13 @@ static void lex_char_literal(struct LexerState *state)
     }
     read_next_char(state);
 
-    char buf[100];
-    sprintf(buf, "%d", ch);
+    // TOK_INT_LITERAL can only hold non-negative values, so do a quick
+    // sanity check here:
+    if (ch < 0) {
+        fatal_error("negative character value (not possible?)");
+    }
 
-    add_token(state, TOK_INT_LITERAL, buf, strlen(buf) + 1);
+    add_int_literal_token(state, ch);
 }
 
 static void lex_string_literal(struct LexerState *state)
@@ -966,21 +973,13 @@ void free_token(struct Token *token)
 {
     if (token != NULL) {
         free_token(token->next);
-        free(token->data);
+        if (token->type != TOK_INT_LITERAL) {
+            free(token->data);
+        }
         free(token);
     }
 }
 
-
-static void complex_token(struct SHA256_CTX *ctx, const struct Token *token, const char *str)
-{
-    // add the string including terminating null
-    sha256_add_bytes(ctx, (uint8_t*)str, strlen(str)+1);
-
-    // add the argument, with its length
-    sha256_add_bytes(ctx, (uint8_t*)&token->length, sizeof(token->length));
-    sha256_add_bytes(ctx, (uint8_t*)token->data, token->length);
-}
 
 static void simple_token(struct SHA256_CTX *ctx, const char *str)
 {
@@ -988,14 +987,33 @@ static void simple_token(struct SHA256_CTX *ctx, const char *str)
     sha256_add_bytes(ctx, (uint8_t*)str, strlen(str)+1);
 }
 
+static void string_token(struct SHA256_CTX *ctx, const struct Token *token, const char *str)
+{
+    // add the string including terminating null
+    sha256_add_bytes(ctx, (uint8_t*)str, strlen(str)+1);
+
+    // add the 'data' with its length
+    sha256_add_bytes(ctx, (uint8_t*)&token->length, sizeof(token->length));
+    sha256_add_bytes(ctx, (uint8_t*)token->data, token->length);
+}
+
+static void int_token(struct SHA256_CTX *ctx, const struct Token *token, const char *str)
+{
+    // add the string including terminating null
+    sha256_add_bytes(ctx, (uint8_t*)str, strlen(str)+1);
+
+    // add the 'value'
+    sha256_add_bytes(ctx, (uint8_t*)&token->value, sizeof(token->value));
+}
+
 void sha256_add_token(struct SHA256_CTX *ctx, const struct Token *token)
 {
     // each token must have a unique identifying string
 
     switch (token->type) {
-    case TOK_INT_LITERAL: complex_token(ctx, token, "INTLIT"); break;
-    case TOK_STRING_LITERAL: complex_token(ctx, token, "STRLIT"); break;
-    case TOK_NAME: complex_token(ctx, token, "VARNAM"); break;
+    case TOK_INT_LITERAL: int_token(ctx, token, "INTLIT"); break;
+    case TOK_STRING_LITERAL: string_token(ctx, token, "STRLIT"); break;
+    case TOK_NAME: string_token(ctx, token, "VARNAM"); break;
 
     case TOK_KW_ALLOCATED: simple_token(ctx, "allocated"); break;
     case TOK_KW_ASSERT: simple_token(ctx, "assert"); break;

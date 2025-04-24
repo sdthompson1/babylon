@@ -28,6 +28,5 @@ const test_u16: bool =
   match (u16(100)) {
     case 40000 => true  // OK
     case -1 => true     // Error
-    case 123456789012345678901234567890 => true  // Error
     case _ => true
   };

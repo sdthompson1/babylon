@@ -278,6 +278,17 @@ const char * scrutinee_term_to_string(struct Term *term)
     }
 }
 
+// Helper function - convert PAT_INT patterns to a string representation
+static void pat_int_to_buf(struct Pattern *pat, char buf[50])
+{
+    // For PAT_INT the convention is that chosen_ctor will be a string, where
+    // the first character is either '+' or '-' depending on whether the int is
+    // positive or negative, and the remaining characters are the hex representation
+    // of the value.
+    buf[0] = (pat->int_data.is_negative ? '-' : '+');
+    sprintf(&buf[1], "%" PRIx64, pat->int_data.value);
+}
+
 
 struct TermInfo {
     struct Term *term;
@@ -341,7 +352,11 @@ static void choose_test(struct MC_Clause *match,
         break;
 
     case PAT_INT:
-        *chosen_ctor = copy_string(best_test->pattern->int_data.data);
+        {
+            char buf[50];
+            pat_int_to_buf(best_test->pattern, buf);
+            *chosen_ctor = copy_string(buf);
+        }
         break;
 
     case PAT_RECORD:
@@ -375,7 +390,11 @@ static bool same_ctor(struct Pattern *p, const char *ctor)
         break;
 
     case PAT_INT:
-        return strcmp(p->int_data.data, ctor) == 0;
+        {
+            char buf[50];
+            pat_int_to_buf(p, buf);
+            return strcmp(buf, ctor) == 0;
+        }
 
     case PAT_RECORD:
         return true;
@@ -519,7 +538,6 @@ static struct MC_Test * explode_test(
         break;
 
     case PAT_INT:
-        free((void*)test->pattern->int_data.data);
         result = other_tests;
         break;
 
@@ -689,7 +707,13 @@ static struct MC_Output * split_up_match(
             cond_term->binop.lhs = chosen_scrutinee;
             cond_term->binop.list = alloc(sizeof(struct OpTermList));
             cond_term->binop.list->operator = BINOP_EQUAL;
-            cond_term->binop.list->rhs = make_int_literal_term(chosen_location, chosen_ctor);
+
+            // sscanf is guaranteed to work, because we wrote the value using sprintf originally
+            uint64_t value;
+            sscanf(&chosen_ctor[1], "%" PRIx64, &value);
+            cond_term->binop.list->rhs = make_unsigned_int_literal_term(chosen_location, value);
+            cond_term->binop.list->rhs->int_literal.is_negative = (chosen_ctor[0] == '-');
+
             cond_term->binop.list->rhs->type = copy_type(chosen_scrutinee->type);
             cond_term->binop.list->next = NULL;
             free((void*)chosen_ctor);

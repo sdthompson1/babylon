@@ -1066,7 +1066,8 @@ struct Pattern * copy_pattern(const struct Pattern *input)
         break;
 
     case PAT_INT:
-        output->int_data.data = copy_string(input->int_data.data);
+        output->int_data.is_negative = input->int_data.is_negative;
+        output->int_data.value = input->int_data.value;
         break;
 
     case PAT_RECORD:
@@ -1108,7 +1109,6 @@ void free_pattern(struct Pattern *pattern)
             break;
 
         case PAT_INT:
-            free((void*)pattern->int_data.data);
             break;
 
         case PAT_RECORD:
@@ -1149,10 +1149,19 @@ struct Term * make_bool_literal_term(struct Location loc, bool value)
     return result;
 }
 
-struct Term * make_int_literal_term(struct Location loc, const char *data)
+struct Term * make_unsigned_int_literal_term(struct Location loc, uint64_t value)
 {
     struct Term * result = make_term(loc, TM_INT_LITERAL);
-    result->int_literal.data = copy_string(data);
+    result->int_literal.is_negative = false;
+    result->int_literal.value = value;
+    return result;
+}
+
+struct Term * make_signed_int_literal_term(struct Location loc, int64_t value)
+{
+    struct Term * result = make_term(loc, TM_INT_LITERAL);
+    result->int_literal.is_negative = (value < 0);
+    memcpy(&result->int_literal.value, &value, sizeof(value));
     return result;
 }
 
@@ -1203,7 +1212,8 @@ static void* copy_int_literal_term(void *context, struct Term *term, void *type_
 {
     struct Term *result = make_term(term->location, TM_INT_LITERAL);
     result->type = type_result;
-    result->int_literal.data = copy_string(term->int_literal.data);
+    result->int_literal.is_negative = term->int_literal.is_negative;
+    result->int_literal.value = term->int_literal.value;
     return result;
 }
 
@@ -1481,13 +1491,6 @@ static void* free_var_term(void *context, struct Term *term, void *type_result)
     return NULL;
 }
 
-static void* free_int_literal_term(void *context, struct Term *term, void *type_result)
-{
-    free((void*)term->int_literal.data);
-    free(term);
-    return NULL;
-}
-
 static void* free_string_literal_term(void *context, struct Term *term, void *type_result)
 {
     free((void*)term->string_literal.data);
@@ -1548,7 +1551,7 @@ static void freeing_term_transform(struct TermTransform *tr)
     tr->transform_var = free_var_term;
     tr->transform_default = free_term_0;
     tr->transform_bool_literal = free_term_0;
-    tr->transform_int_literal = free_int_literal_term;
+    tr->transform_int_literal = free_term_0;
     tr->transform_string_literal = free_string_literal_term;
     tr->transform_array_literal = free_term_1;
     tr->transform_cast = free_term_2;
@@ -2131,7 +2134,10 @@ bool array_size_terms_equal(struct Term **lhs, struct Term **rhs, int ndim)
             if (lhs[i]->tag != TM_INT_LITERAL || rhs[i]->tag != TM_INT_LITERAL) {
                 fatal_error("can't compare array types, sizes have not been normalised to TM_INT_LITERAL");
             }
-            if (strcmp(lhs[i]->int_literal.data, rhs[i]->int_literal.data) != 0) {
+            if (lhs[i]->int_literal.is_negative || rhs[i]->int_literal.is_negative) {
+                fatal_error("negative array size - this is unexpected");
+            }
+            if (lhs[i]->int_literal.value != rhs[i]->int_literal.value) {
                 return false;
             }
         }

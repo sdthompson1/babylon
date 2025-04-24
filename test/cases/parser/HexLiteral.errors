@@ -1,1 +1,1 @@
-src/HexLiteral.b:5:18: Lexical error
+src/HexLiteral.b:5:18: Integer literal too big

@@ -770,14 +770,9 @@ static void* verify_bool_literal(void *context, struct Term *term, void *type_re
 
 static void* verify_int_literal(void *context, struct Term *term, void *type_result)
 {
-    // int literals are already confirmed to be in range (by typechecker)
+    // int literals are already confirmed to be in range (by lexer and parser)
     // so we can just convert to an s-expr
-    if (term->int_literal.data[0] == '-') {
-        return make_list2_sexpr(make_string_sexpr("-"),
-                                make_string_sexpr(&term->int_literal.data[1]));
-    } else {
-        return make_string_sexpr(term->int_literal.data);
-    }
+    return int_literal_sexpr(term->int_literal.value, term->int_literal.is_negative);
 }
 
 

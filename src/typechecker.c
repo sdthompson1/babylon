@@ -1391,64 +1391,37 @@ static void* typecheck_bool_literal(void *context, struct Term *term, void *type
     return NULL;
 }
 
-static bool string_to_int(const char *p,
-                          uint64_t *abs_value_out,
-                          bool *negative_out)
+static bool int_value_in_range(int num_bits, bool is_signed, uint64_t value, bool negative)
 {
-    uint64_t abs_value = 0;
-    bool negative = false;
+    int64_t signed_value;
+    memcpy(&signed_value, &value, sizeof(value));
 
-    if (*p == '-') {
-        p++;
-        negative = true;
-    }
-
-    while (*p) {
-        uint64_t digit = (*p++ - '0');
-
-        if (abs_value >= UINT64_C(1844674407370955162) || (abs_value == UINT64_C(1844674407370955161) && digit >= 6)) {
-            // this case is where the absolute value of the number is larger than UINT64_MAX
-            return false;
-        }
-
-        abs_value = abs_value * 10 + digit;
-    }
-
-    *abs_value_out = abs_value;
-    *negative_out = negative;
-    return true;
-}
-
-static bool int_value_in_range(int num_bits, bool is_signed, uint64_t abs_value, bool negative)
-{
     switch (num_bits) {
     case 8:
         if (is_signed) {
-            return abs_value <= 127
-                || (negative && abs_value == 128);
+            return (negative && signed_value >= -128) || (!negative && value <= 127);
         } else {
-            return !negative && abs_value <= 255;
+            return !negative && value <= 255;
         }
 
     case 16:
         if (is_signed) {
-            return abs_value <= 32767
-                || (negative && abs_value == 32768);
+            return (negative && signed_value >= -32768) || (!negative && value <= 32767);
         } else {
-            return !negative && abs_value <= 65535;
+            return !negative && value <= 65535;
         }
 
     case 32:
         if (is_signed) {
-            return abs_value <= UINT64_C(2147483647)
-                || (negative && abs_value == UINT64_C(2147483648));
+            return (negative && signed_value >= -INT64_C(2147483648))
+                || (!negative && value <= UINT64_C(2147483647));
         } else {
-            return !negative && abs_value <= UINT64_C(4294967295);
+            return !negative && value <= UINT64_C(4294967295);
         }
 
     case 64:
         if (is_signed) {
-            return abs_value <= UINT64_C(9223372036854775807) || (negative && abs_value == UINT64_C(9223372036854775808));
+            return negative || value <= INT64_C(9223372036854775807);
         } else {
             return !negative;
         }
@@ -1459,40 +1432,28 @@ static bool int_value_in_range(int num_bits, bool is_signed, uint64_t abs_value,
 
 static void* typecheck_int_literal(void *context, struct Term *term, void *type_result)
 {
-    struct TypecheckContext* tc_context = context;
-
     // Int literals are typed as i32, u32, i64 or u64 (in that order of preference).
-    // Typechecking can fail, if the literal is outside the i64 or u64 range.
 
-    // Read the absolute value of the number into a uint64_t, and read the sign bit
-    uint64_t abs_value;
-    bool negative;
-    bool valid = string_to_int(term->int_literal.data, &abs_value, &negative);
+    // By construction, all int literals are within either the u64 or i64 range,
+    // so at least one of those types will be valid -- we just have to find which one.
 
-    // Fill in the type based on the size of the literal
-    if (valid) {
-        if (int_value_in_range(32, true, abs_value, negative)) {
-            term->type = make_int_type(g_no_location, true, 32);
+    uint64_t value = term->int_literal.value;
+    bool negative = term->int_literal.is_negative;
 
-        } else if (int_value_in_range(32, false, abs_value, negative)) {
-            term->type = make_int_type(g_no_location, false, 32);
+    if (int_value_in_range(32, true, value, negative)) {
+        term->type = make_int_type(g_no_location, true, 32);
 
-        } else if (int_value_in_range(64, true, abs_value, negative)) {
-            term->type = make_int_type(g_no_location, true, 64);
-        
-        } else if (int_value_in_range(64, false, abs_value, negative)) {
-            term->type = make_int_type(g_no_location, false, 64);
-        
-        } else {
-            // this case is where the absolute value of the number fits into a uint64_t, but the sign is negative and
-            // the number is outside the int64_t range
-            valid = false;
-        }
-    }
+    } else if (int_value_in_range(32, false, value, negative)) {
+        term->type = make_int_type(g_no_location, false, 32);
 
-    if (!valid) {
-        report_int_literal_too_big(term->location);
-        tc_context->error = true;
+    } else if (int_value_in_range(64, true, value, negative)) {
+        term->type = make_int_type(g_no_location, true, 64);
+
+    } else if (int_value_in_range(64, false, value, negative)) {
+        term->type = make_int_type(g_no_location, false, 64);
+
+    } else {
+        fatal_error("invalid int literal - out of range (this should be impossible)");
     }
 
     return NULL;
@@ -1503,15 +1464,12 @@ static void* typecheck_string_literal(void *context, struct Term *term, void *ty
     // String literals currently have type u8[N], where N is the
     // (compile time known) size of the string.
 
-    char buf[50];
-    sprintf(buf, "%" PRIu32, term->string_literal.length);
-
     term->type = make_type(g_no_location, TY_ARRAY);
     term->type->array_data.element_type = make_int_type(g_no_location, false, 8);
     term->type->array_data.ndim = 1;
     term->type->array_data.resizable = false;
     term->type->array_data.sizes = alloc(sizeof(struct Term *));
-    term->type->array_data.sizes[0] = make_int_literal_term(g_no_location, buf);
+    term->type->array_data.sizes[0] = make_unsigned_int_literal_term(g_no_location, term->string_literal.length);
 
     return NULL;
 }
@@ -1531,15 +1489,12 @@ static void* typecheck_array_literal(void *context, struct Term *term, void *typ
         ++num_elements;
     }
 
-    char buf[50];
-    sprintf(buf, "%" PRIu64, num_elements);
-
     term->type = make_type(g_no_location, TY_ARRAY);
     term->type->array_data.element_type = elem_type;
     term->type->array_data.ndim = 1;
     term->type->array_data.resizable = false;
     term->type->array_data.sizes = alloc(sizeof(struct Term *));
-    term->type->array_data.sizes[0] = make_int_literal_term(g_no_location, buf);
+    term->type->array_data.sizes[0] = make_unsigned_int_literal_term(g_no_location, num_elements);
 
     return NULL;
 }
@@ -2433,17 +2388,6 @@ static void* typecheck_field_proj(void *context, struct Term *term, void *type_r
     return NULL;
 }
 
-static bool int_literal_in_range(struct Type *int_type, const char *str)
-{
-    uint64_t abs_value;
-    bool negative;
-    if (!string_to_int(str, &abs_value, &negative)) {
-        return false;
-    }
-
-    return int_value_in_range(int_type->int_data.num_bits, int_type->int_data.is_signed, abs_value, negative);
-}
-
 static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
                               bool scrutinee_lvalue, bool scrutinee_read_only);
@@ -2584,7 +2528,10 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             report_type_mismatch_pattern(scrutinee_type, pattern->location);
             tc_context->error = true;
             return false;
-        } else if (!int_literal_in_range(scrutinee_type, pattern->int_data.data)) {
+        } else if (!int_value_in_range(scrutinee_type->int_data.num_bits,
+                                       scrutinee_type->int_data.is_signed,
+                                       pattern->int_data.value,
+                                       pattern->int_data.is_negative)) {
             report_int_pattern_out_of_range(scrutinee_type, pattern->location);
             tc_context->error = true;
             return false;

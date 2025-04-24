@@ -1090,14 +1090,16 @@ struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type)
     }
     struct TypeData_Array *data = &array_type->array_data;
     if (data->ndim == 1) {
-        return make_string_sexpr(data->sizes[0]->int_literal.data);
+        return int_literal_sexpr(data->sizes[0]->int_literal.value,
+                                 data->sizes[0]->int_literal.is_negative);
     } else {
         struct Sexpr *list = NULL;
         struct Sexpr *ints = NULL;
         struct Sexpr **tail = &list;
         struct Sexpr **ints_tail = &ints;
         for (int i = 0; i < data->ndim; ++i) {
-            *tail = make_list1_sexpr(make_string_sexpr(data->sizes[i]->int_literal.data));
+            *tail = make_list1_sexpr(int_literal_sexpr(data->sizes[i]->int_literal.value,
+                                                       data->sizes[i]->int_literal.is_negative));
             *ints_tail = make_list1_sexpr(make_string_sexpr("Int"));
             tail = &(*tail)->right;
             ints_tail = &(*ints_tail)->right;
@@ -1106,6 +1108,23 @@ struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type)
         make_instance(&prod, ints);
         ints = NULL;
         return make_pair_sexpr(prod, list);
+    }
+}
+
+struct Sexpr *int_literal_sexpr(uint64_t value, bool negative)
+{
+    char buf[50];
+
+    if (negative) {
+        value = - value;
+    }
+
+    sprintf(buf, "%" PRIu64, value);
+
+    if (negative) {
+        return make_list2_sexpr(make_string_sexpr("-"), make_string_sexpr(buf));
+    } else {
+        return make_string_sexpr(buf);
     }
 }
 

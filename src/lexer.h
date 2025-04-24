@@ -129,8 +129,16 @@ struct Token {
     struct Token *next;
     struct Location location;
     enum TokenType type;
-    char *data;
-    uint32_t length;
+
+    union {
+        struct {
+            // for TOK_STRING_LITERAL and TOK_NAME
+            char *data;
+            uint32_t length;
+        };
+        // for TOK_INT_LITERAL
+        uint64_t value;
+    };
 };
 
 // Note: filename is NOT copied, make sure it is somewhere permanent.

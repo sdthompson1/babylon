@@ -14,6 +14,8 @@ repository.
 #include "op_name.h"
 
 #include <ctype.h>
+#include <inttypes.h>
+#include <string.h>
 
 static void print_term(bool postcond, FILE *file, struct Term *term);
 
@@ -171,7 +173,13 @@ static void print_pattern(FILE *file, struct Pattern *pattern)
         break;
 
     case PAT_INT:
-        fprintf(file, "%s", pattern->int_data.data);
+        if (pattern->int_data.is_negative) {
+            int64_t num;
+            memcpy(&num, &pattern->int_data.value, sizeof(num));
+            fprintf(file, "%" PRIi64, num);
+        } else {
+            fprintf(file, "%" PRIu64, pattern->int_data.value);
+        }
         break;
 
     case PAT_RECORD:
@@ -419,7 +427,13 @@ static void print_term(bool postcond, FILE *file, struct Term *term)
         break;
 
     case TM_INT_LITERAL:
-        fprintf(file, "%s", term->int_literal.data);
+        if (term->int_literal.is_negative) {
+            int64_t num;
+            memcpy(&num, &term->int_literal.value, sizeof(num));
+            fprintf(file, "%" PRIi64, num);
+        } else {
+            fprintf(file, "%" PRIu64, term->int_literal.value);
+        }
         break;
 
     case TM_STRING_LITERAL:

@@ -24,11 +24,8 @@ repository.
 //  - TM_VARIANT with normal-form payload
 
 
-// Given an int literal string, return the value as uint64_t
-// (to interpret as signed, memcpy the result to int64_t)
-uint64_t parse_int_literal(const char *data);
-
 // Convert a TM_DEFAULT (int or bool type), TM_INT_LITERAL, or TM_BOOL_LITERAL to uint64_t
+// (If the value is negative, it will be returned in twos complement form)
 uint64_t normal_form_to_int(const struct Term *term);
 
 // Determine if a given value (sign extended to 64 bits, and cast to uint64_t)
@@ -41,4 +38,3 @@ bool is_value_in_range_for_type(struct Type *type, uint64_t value);
 struct Term * make_literal_of_type(struct Type *type, uint64_t value);
 
 #endif
-

@@ -936,7 +936,7 @@ static void codegen_int_literal(struct CGContext *cxt,
 
     char buf[50];
 
-    uint64_t num = parse_int_literal(term->int_literal.data);
+    uint64_t num = term->int_literal.value;
 
     // Use the INTn_C or UINTn_C macros to ensure we get the correct types for
     // our integer literals.
@@ -957,7 +957,7 @@ static void codegen_int_literal(struct CGContext *cxt,
         if (pri > UNARY_EXPR) print_token(cxt->pr, ")");
 
     } else if (term->type->int_data.is_signed
-               && term->int_literal.data[0] == '-') {
+               && term->int_literal.is_negative) {
         num = -num;
         sprintf(buf,
                 "-INT%d_C(%" PRIu64 ")",
@@ -969,10 +969,10 @@ static void codegen_int_literal(struct CGContext *cxt,
 
     } else {
         sprintf(buf,
-                "%sINT%d_C(%s)",
+                "%sINT%d_C(%" PRIu64 ")",
                 term->type->int_data.is_signed ? "" : "U",
                 term->type->int_data.num_bits,
-                term->int_literal.data);
+                num);
         if (pri > POSTFIX_EXPR) print_token(cxt->pr, "(");
         print_token(cxt->pr, buf);
         if (pri > POSTFIX_EXPR) print_token(cxt->pr, ")");

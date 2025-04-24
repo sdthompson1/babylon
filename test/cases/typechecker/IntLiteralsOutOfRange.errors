@@ -1,3 +1,1 @@
-src/IntLiteralsOutOfRange.b:4:30: Integer literal too big
-src/IntLiteralsOutOfRange.b:7:31: Overflow in compile-time constant
-src/IntLiteralsOutOfRange.b:9:22: Integer literal too big
+src/IntLiteralsOutOfRange.b:6:31: Overflow in compile-time constant

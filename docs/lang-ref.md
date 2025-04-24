@@ -195,9 +195,9 @@ language, which are as follows:
 - Integer literals: Any consecutive sequence of the digits `0` to `9`,
   optionally preceded by a minus sign (`-`), is considered an integer
   literal written in decimal format. Hexadecimal literals are also
-  allowed; these consist of the sequence `0x` followed by one or more
-  valid hex digits (`0` to `9`, `a` to `f`, or `A` to `F`). (Negative
-  hex literals are not supported.)
+  allowed; these consist of the sequence `0x` (or `0X`) followed by
+  one or more valid hex digits (`0` to `9`, `a` to `f`, or `A` to
+  `F`). (Negative hex literals are not supported.)
 
 - String literals: A sequence of non-`"` characters enclosed within a
   pair of `"`s is a string literal. For example, `"hello"`. It is an

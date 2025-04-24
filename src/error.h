@@ -31,6 +31,7 @@ void report_mkdir_failed(const char *filename);
 // Lexer errors
 void report_lexical_error(struct Location location);
 void report_unclosed_block_comment(struct Location location);
+void report_int_literal_too_big(struct Location location);   // Note: this is also a parser error
 
 // Parser errors
 void report_syntax_error(struct Location location, const char *detail);
@@ -55,7 +56,6 @@ void report_function_variable_not_allowed(struct Location loc);
 void report_invalid_cast(struct Term *term);
 void report_return_var_outside_postcondition(struct Term *var_term);
 void report_return_var_void_function(struct Term *var_term);
-void report_int_literal_too_big(struct Location location);
 void report_incomplete_definition(struct Location location);
 void report_interface_mismatch_impl(struct Decl *interface);
 void report_double_impl(struct Decl *interface);
