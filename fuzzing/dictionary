@@ -14,7 +14,7 @@ block_comment_end="*/"
 
 int_literal="123"
 string_literal="\"hello\""
-string_literal_with_escapes="\"\x00\xff\\n\""
+string_literal_with_escapes="\"\\x00\\xff\\n\""
 name="abc"
 
 kw_allocated="allocated"
