@@ -1144,7 +1144,9 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
         {
             advance(state);
             struct Term *term = parse_paren_term(state);
-            set_location_end(&loc, &term->location);
+            if (term) {
+                set_location_end(&loc, &term->location);
+            }
             struct Term *result = make_term(loc, TM_SIZEOF);
             result->sizeof_data.rhs = term;
             return result;
@@ -1154,7 +1156,9 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
         {
             advance(state);
             struct Term *term = parse_paren_term(state);
-            set_location_end(&loc, &term->location);
+            if (term) {
+                set_location_end(&loc, &term->location);
+            }
             struct Term *result = make_term(loc, TM_ALLOCATED);
             result->allocated.rhs = term;
             return result;
@@ -1197,7 +1201,9 @@ static struct Term * parse_call_or_proj_expr(struct ParserState *state, bool all
 
             struct Location loc = term->location;
             struct Term * argument = parse_atomic_expr(state, true);
-            set_location_end(&loc, &argument->location);
+            if (argument) {
+                set_location_end(&loc, &argument->location);
+            }
 
             struct Term *call = make_term(loc, TM_CALL);
             call->call.func = term;
@@ -1375,7 +1381,7 @@ static struct Term * parse_operators(struct ParserState *state, int precedence, 
                 end_of_chain = new_term->binop.list;
             }
 
-            if (rhs_term) {
+            if (term && rhs_term) {
                 set_location_end(&term->location, &rhs_term->location);
             }
 
