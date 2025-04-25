@@ -184,7 +184,7 @@ definition lex_ident_or_keyword_or_underscore :: "Token Lexer" where
   "lex_ident_or_keyword_or_underscore = do {
     init \<leftarrow> located (satisfy (\<lambda>c. is_alpha c \<or> c = CHR ''_''));
     rest \<leftarrow> located (many (satisfy (\<lambda>c. is_alpha c \<or> is_decimal_digit c \<or> c = CHR ''_'')));
-    if length (snd rest) \<ge> 199 then
+    if length (snd rest) > 199 then
       fail_at (merge_locations (fst init) (fst rest))
     else do {
       let word = (snd init) # (snd rest);
