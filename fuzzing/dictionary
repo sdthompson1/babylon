@@ -5,8 +5,8 @@
 # more rapidly than if it was just flipping bits completely at random.
 
 ws_space=" "
-ws_tab="\t"
-ws_newline="\n"
+ws_tab="\x09"
+ws_newline="\x0a"
 
 line_comment="//"
 block_comment_start="/*"
