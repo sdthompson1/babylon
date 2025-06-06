@@ -5,10 +5,9 @@ begin
 
 (* Code Export *)
 
-(* 0 = Success *)
-(* 1 = Lex error *)
-(* 2 = Parse error *)
-fun run_compiler :: "string \<Rightarrow> nat"
+datatype CompileResult = CR_Success | CR_LexError | CR_ParseError
+
+fun run_compiler :: "string \<Rightarrow> CompileResult"
   where
 "run_compiler str =
   (case lex ''Main'' str of
@@ -16,11 +15,11 @@ fun run_compiler :: "string \<Rightarrow> nat"
       (case run_parser parse_module ''stdin'' tokens of
         PR_Success m _ _ \<Rightarrow>
           (case post_parse_module m of
-            [] \<Rightarrow> 0
-            | _ \<Rightarrow> 2)
-      | PR_Error _ \<Rightarrow> 2)
-  | LR_Error _ \<Rightarrow> 1)"
+            [] \<Rightarrow> CR_Success
+            | _ \<Rightarrow> CR_ParseError)
+      | PR_Error _ \<Rightarrow> CR_ParseError)
+  | LR_Error _ \<Rightarrow> CR_LexError)"
 
-export_code run_compiler in Haskell
+export_code run_compiler CR_Success CR_LexError CR_ParseError in Haskell
 
 end
