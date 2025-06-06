@@ -13,4 +13,4 @@ definition test_parser :: "'a Parser \<Rightarrow> string \<Rightarrow> 'a Parse
 
 value "lex ''Test.b'' ''0x10000000000000000''"
 
-(* value "test_parser (parse_unop_expr 10) ''123''" *)
+value "test_parser (parse_module) ''module Foo interface { const x: i32 = 1000; }''"

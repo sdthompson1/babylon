@@ -17,8 +17,11 @@ fun parse_test :: "string \<Rightarrow> bool"
 "parse_test str = 
   (case lex ''Main'' str of
     LR_Success tokens \<Rightarrow> 
-      (case run_parser (parse_type \<then> eof) ''stdin'' tokens of
-        PR_Success _ _ _ \<Rightarrow> True
+      (case run_parser parse_module ''stdin'' tokens of
+        PR_Success m _ _ \<Rightarrow>
+          (case post_parse_module m of
+            [] \<Rightarrow> True
+            | _ \<Rightarrow> False)
       | PR_Error _ \<Rightarrow> False)
   | LR_Error _ \<Rightarrow> False)"
 
