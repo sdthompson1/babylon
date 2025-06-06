@@ -5,26 +5,22 @@ begin
 
 (* Code Export *)
 
-fun lex_test :: "string \<Rightarrow> bool"
+(* 0 = Success *)
+(* 1 = Lex error *)
+(* 2 = Parse error *)
+fun run_compiler :: "string \<Rightarrow> nat"
   where
-"lex_test str =
-  (case lex ''Main'' str of
-    LR_Success _ \<Rightarrow> True
-  | LR_Error _ \<Rightarrow> False)"
-
-fun parse_test :: "string \<Rightarrow> bool"
-  where
-"parse_test str = 
+"run_compiler str =
   (case lex ''Main'' str of
     LR_Success tokens \<Rightarrow> 
       (case run_parser parse_module ''stdin'' tokens of
         PR_Success m _ _ \<Rightarrow>
           (case post_parse_module m of
-            [] \<Rightarrow> True
-            | _ \<Rightarrow> False)
-      | PR_Error _ \<Rightarrow> False)
-  | LR_Error _ \<Rightarrow> False)"
+            [] \<Rightarrow> 0
+            | _ \<Rightarrow> 2)
+      | PR_Error _ \<Rightarrow> 2)
+  | LR_Error _ \<Rightarrow> 1)"
 
-export_code parse_test lex_test in Haskell
+export_code run_compiler in Haskell
 
 end
