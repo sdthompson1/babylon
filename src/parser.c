@@ -1722,6 +1722,8 @@ static struct Statement * parse_assume_stmt(struct ParserState *state)
         set_location_end(&loc, &term->location);
     }
 
+    expect(state, TOK_SEMICOLON, "';'");
+
     struct Statement *stmt = make_statement(loc, ST_ASSUME);
     stmt->assume.condition = term;
     return stmt;
@@ -1922,6 +1924,7 @@ static struct Statement * parse_statements(struct ParserState *state)
 
     while (state->token->type != TOK_RBRACE && state->token->type != TOK_KW_CASE) {
 
+        // Allow "empty" statements; just skip them
         if (state->token->type == TOK_SEMICOLON) {
             advance(state);
             continue;
