@@ -494,36 +494,39 @@ lemma test_invalid_hex_number:
           = LR_Error (Location ''BadNum.b'' 1 4 1 5)"
   by eval
 
-(* Note: the failure location in this test case is slightly wrong (it should cover the
-   whole hex literal) but this is a bit of an edge case, so we won't worry about it too
+(* Note: the failure location in this test case is wrong (it should cover the
+   hex literal) but this is a bit of an edge case, so we won't worry about it too
    much. The important thing is that it reports failure. *)
 lemma test_too_big_hex_number:
   shows "lex ''BadNum.b'' ''0x10000000000000000''
-          = LR_Error (Location ''BadNum.b'' 1 3 1 20)"
+          = LR_Error (Location ''BadNum.b'' 1 20 1 20)"
   by eval
 
 (* We can't test 2^64 as an input, because it raises Interrupt_Breakdown (in the Isabelle
    jEdit environment), but we can test a 21-digit number. *)
+(* As above, error location is wrong. *)
 lemma test_too_big_number:
   shows "lex ''BadNum.b'' ''999999999999999999999''
-          = LR_Error (Location ''BadNum.b'' 1 1 1 22)"
+          = LR_Error (Location ''BadNum.b'' 1 22 1 22)"
   by eval
 
 (* Names over 200 chars are rejected. This one is 201 chars. *)
+(* As above, error location is wrong. *)
 lemma test_too_big_name:
   shows "lex ''Test.b'' ''abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890z''
-          = LR_Error (Location ''Test.b'' 1 1 1 202)"
+          = LR_Error (Location ''Test.b'' 1 202 1 202)"
   by eval
 
-(* Note: error location (at EOF) is not ideal here, but it is good enough for now *)
+(* As above, error location is wrong. *)
 lemma test_unclosed_comment:
   shows "lex ''BadComment.b'' (''foo'' @ [newline] @ '' /* '' @ [newline])
           = LR_Error (Location ''BadComment.b'' 2 6 2 6)"
   by eval
 
+(* As above, error location is wrong. *)
 lemma test_unclosed_comment_2:
   shows "lex ''BadComment.b'' (''/* /*/ A'')
-          = LR_Error (Location ''BadComment.b'' 1 4 1 5)"
+          = LR_Error (Location ''BadComment.b'' 1 9 1 9)"
   by eval
 
 end
