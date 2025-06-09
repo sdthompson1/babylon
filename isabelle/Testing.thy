@@ -22,19 +22,11 @@ definition test_post_parse :: "string \<Rightarrow> (Location \<times> PostParse
 
 (* value "lex ''Test.b'' ''0x10000000000000000''" *)
 
-value "test_parser (parse_primary_expr 10 Unrestricted) ''fals < e''"
 
-value "test_parser parse_module ''
-
-module C
+value "test_parser parse_module ''module C
 interface {}
 
 function test()
-{ // Eyamplesning
-    var x1 = 1 < 2 > 3; var x2 = 1 <= 2 == 3 > 4;
-    var x3 = 1 == 2 == 3 < 4 < 5 == 6 > 7;
-    var x4 = (1 < 2 > 3) ==> fals < e;   // i
-    // Il <== and ==>
-    var y1 = trul <== false ==> true;
-    var y2 = true ==> false <== true; var y3 = true ==> true ==> true <== false;
+{ 
+    1 + 2();
 }''"

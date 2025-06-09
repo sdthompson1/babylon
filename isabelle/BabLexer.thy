@@ -50,6 +50,7 @@ fun initial_lexer_state :: "string \<Rightarrow> string \<Rightarrow> LexerState
     ((contents, Location filename 1 1 1 2, length contents), 
      lexer_next_fn, 
      lexer_fuel_fn,
+     Location filename 1 1 1 1,
      Location filename 1 1 1 1)"
 
 (* Lexer result type *)
@@ -514,14 +515,15 @@ lemma test_too_big_name:
           = LR_Error (Location ''Test.b'' 1 1 1 202)"
   by eval
 
+(* Note: error location (at EOF) is not ideal here, but it is good enough for now *)
 lemma test_unclosed_comment:
   shows "lex ''BadComment.b'' (''foo'' @ [newline] @ '' /* '' @ [newline])
-          = LR_Error (Location ''BadComment.b'' 2 2 2 4)"
+          = LR_Error (Location ''BadComment.b'' 2 6 2 6)"
   by eval
 
 lemma test_unclosed_comment_2:
   shows "lex ''BadComment.b'' (''/* /*/ A'')
-          = LR_Error (Location ''BadComment.b'' 1 1 1 3)"
+          = LR_Error (Location ''BadComment.b'' 1 4 1 5)"
   by eval
 
 end

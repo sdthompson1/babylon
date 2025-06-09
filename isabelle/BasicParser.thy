@@ -10,9 +10,10 @@ begin
        - Given stream, return its length (i.e. number of tokens remaining).
     - A cached "current location" (points to a zero-width location at the end of the most
       recently read token).
+    - A cached "error location" (used with <|> to give better error messages).
 *)
 type_synonym ('s, 'c) BasicParserState =
-  "'s \<times> ('s \<Rightarrow> ('c \<times> Location \<times> 's) option) \<times> ('s \<Rightarrow> nat) \<times> Location"
+  "'s \<times> ('s \<Rightarrow> ('c \<times> Location \<times> 's) option) \<times> ('s \<Rightarrow> nat) \<times> Location \<times> Location"
 
 (* Parse result contains:
     - On success, result of type 'a, location of consumed input 
@@ -28,9 +29,17 @@ type_synonym ('a, 's, 'c) BasicParser =
   "('s, 'c) BasicParserState \<Rightarrow> ('a, 's, 'c) BasicParseResult"
 
 
-(* Helper(s) to read components of the state *)
+(* Helper(s) to access components of the state *)
 fun cur_loc_from_state :: "('s, 'c) BasicParserState \<Rightarrow> Location" where
-  "cur_loc_from_state (_, _, _, cur_loc) = cur_loc"
+  "cur_loc_from_state (_, _, _, cur_loc, _) = cur_loc"
+
+fun get_state_err_loc :: "Location \<Rightarrow> ('s, 'c) BasicParserState \<Rightarrow> Location" where
+  "get_state_err_loc loc1 (_, _, _, _, loc2) = max_location loc1 loc2"
+
+fun update_state_err_loc :: "Location 
+                              \<Rightarrow> ('s, 'c) BasicParserState 
+                              \<Rightarrow> ('s, 'c) BasicParserState" where
+  "update_state_err_loc loc1 (a, b, c, d, loc2) = (a, b, c, d, max_location loc1 loc2)"
 
 
 (* Monad operations *)
@@ -43,11 +52,11 @@ fun return :: "'a \<Rightarrow> ('a, 's, 'c) BasicParser" where
 (* Fail at "current location" *)
 fun fail :: "('a, 's, 'c) BasicParser" where
   "fail state =
-    PR_Error (cur_loc_from_state state)"
+    PR_Error (get_state_err_loc (cur_loc_from_state state) state)"
 
 (* Fail at a given location *)
 definition fail_at :: "Location \<Rightarrow> ('a, 's, 'c) BasicParser" where
-  "fail_at loc state = PR_Error loc"
+  "fail_at loc state = PR_Error (get_state_err_loc loc state)"
 
 (* Monadic bind operator *)
 definition bind :: "('a, 's, 'c) BasicParser 
@@ -62,8 +71,9 @@ definition bind :: "('a, 's, 'c) BasicParser
           | PR_Success y loc2 state2 \<Rightarrow>
               PR_Success y (merge_locations loc1 loc2) state2))"
 
-(* Alternation. If both parsers fail, we return the "maximum" of the
-   two error locations, as that will probably be the most helpful. *)
+(* Alternation. If both parsers fail, we return the "rightmost" error
+   location seen so far (from all previous <|> operators as well as this one),
+   as that will likely be closest to the "real" error. *)
 definition or :: "('a, 's, 'c) BasicParser 
                     \<Rightarrow> ('a, 's, 'c) BasicParser 
                     \<Rightarrow> ('a, 's, 'c) BasicParser" where
@@ -71,10 +81,11 @@ definition or :: "('a, 's, 'c) BasicParser
     (case p1 state of
        PR_Success x loc1 state1 \<Rightarrow> PR_Success x loc1 state1
      | PR_Error loc1 \<Rightarrow>
-        (case p2 state of
+        (let state1 = update_state_err_loc loc1 state in
+        case p2 state1 of
            PR_Success x loc2 state2 \<Rightarrow> PR_Success x loc2 state2
          | PR_Error loc2 \<Rightarrow>
-            PR_Error (max_location loc1 loc2)))"
+            PR_Error (get_state_err_loc loc2 state1)))"
 
 
 (* Syntax for do-notation and alternatives. *)
@@ -88,16 +99,16 @@ notation or (infixr "<|>" 60)
 
 (* Consume any non-EOF token. Returns the token and updates "cur_loc" to the end of that token. *)
 fun any_token :: "('c, 's, 'c) BasicParser" where
-  "any_token (stream, next_fn, fuel_fn, cur_loc) = 
+  "any_token (stream, next_fn, fuel_fn, cur_loc, err_loc) = 
     (case next_fn stream of
-      None \<Rightarrow> PR_Error cur_loc
+      None \<Rightarrow> PR_Error (max_location cur_loc err_loc)
     | Some (tok, loc, newStream) \<Rightarrow> 
-        PR_Success tok loc (newStream, next_fn, fuel_fn, get_location_end loc))"
+        PR_Success tok loc (newStream, next_fn, fuel_fn, get_location_end loc, err_loc))"
 
 (* Get number of input tokens remaining. *)
 fun get_num_tokens :: "(nat, 's, 'c) BasicParser" where
-  "get_num_tokens (stream, next_fn, fuel_fn, cur_loc) =
-    PR_Success (fuel_fn stream) cur_loc (stream, next_fn, fuel_fn, cur_loc)"
+  "get_num_tokens (stream, next_fn, fuel_fn, cur_loc, err_loc) =
+    PR_Success (fuel_fn stream) cur_loc (stream, next_fn, fuel_fn, cur_loc, err_loc)"
 
 (* Parse p but don't consume any input.
    If p fails, so does look_ahead p. *)
@@ -129,25 +140,15 @@ definition delay :: "(unit \<Rightarrow> ('a, 's, 'c) BasicParser) \<Rightarrow>
 
 (* Modify the remaining stream in-place. (Use with care.) *)
 fun modify_stream :: "('s \<Rightarrow> 's) \<Rightarrow> (unit, 's, 'c) BasicParser" where
-  "modify_stream f (stream, getNextTok, getLength, curLoc) = 
-    PR_Success () curLoc (f stream, getNextTok, getLength, curLoc)"
+  "modify_stream f (stream, getNextTok, getLength, curLoc, errLoc) = 
+    PR_Success () curLoc (f stream, getNextTok, getLength, curLoc, errLoc)"
 
 
 (* Derived parsers *)
 
-(* Try 'introducer'. If it fails, return None. If it succeeds, parse 'tail' and
-   wrap its result in Some. *)
-(* The purpose of 'introducer' is to get better error messages. If 'introducer'
-   succeeds then we are committed to parsing 'tail' or giving an error; there is
-   no backtracking if 'tail' fails. *)
-definition optional :: "('a, 's, 'c) BasicParser \<Rightarrow> 
-                        ('b, 's, 'c) BasicParser \<Rightarrow>
-                        ('b option, 's, 'c) BasicParser" where
-  "optional introducer tail = do {
-    found \<leftarrow> (introducer \<then> return True) <|> (return False);
-    if found then (tail \<bind> return \<circ> Some) else return None
-  }"
-
+(* Try the given parser; if it fails, return None instead of failing. *)
+definition optional :: "('a, 's, 'c) BasicParser \<Rightarrow> ('a option, 's, 'c) BasicParser" where
+  "optional p = (p \<bind> return \<circ> Some) <|> return None"
 
 (* Parse begin, then (one instance of) p, then end, 
    returning the result of p. *)
@@ -161,22 +162,6 @@ definition between :: "('open, 's, 'c) BasicParser
     close;
     return x
   }"
-
-
-(* Optional item between delimiters. If the opening delimiter is present then we 
-   commit to parsing whatever is between them, but if the opening delimiter is missing
-   then it's fine and we just return None. *)
-definition optional_between :: "('open, 's, 'c) BasicParser
-                        \<Rightarrow> ('close, 's, 'c) BasicParser
-                        \<Rightarrow> ('a, 's, 'c) BasicParser
-                        \<Rightarrow> ('a option, 's, 'c) BasicParser" where
-  "optional_between open close p = optional open (do {
-    x \<leftarrow> p;
-    close;
-    return x
-  })"
-
-
 
 (* Helper function for "many" *)
 fun many_helper :: "nat \<Rightarrow> ('a, 's, 'c) BasicParser \<Rightarrow> ('a list, 's, 'c) BasicParser" where
@@ -245,10 +230,9 @@ definition sep_end_by :: "('a, 's, 'c) BasicParser \<Rightarrow>
   "sep_end_by p sep = 
     (do {
       result \<leftarrow> sep_by p sep;
-      optional sep (return ());
+      optional sep;
       return result
     })"
-
 
 (* Parse eof *)
 definition eof :: "(unit, 's, 'c) BasicParser" where

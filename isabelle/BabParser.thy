@@ -24,7 +24,11 @@ fun parser_fuel_fn :: "ParserStream \<Rightarrow> nat" where
 
 fun initial_parser_state :: "string \<Rightarrow> (Location \<times> Token) list \<Rightarrow> ParserState" where
   "initial_parser_state filename tokens =
-    ((tokens, length tokens), parser_next_fn, parser_fuel_fn, Location filename 1 1 1 1)"
+    ((tokens, length tokens), 
+     parser_next_fn, 
+     parser_fuel_fn, 
+     Location filename 1 1 1 1,
+     Location filename 1 1 1 1)"
 
 
 (* General helper functions *)
@@ -69,13 +73,6 @@ definition right_angle :: "unit Parser" where
 
 definition angles :: "'a Parser \<Rightarrow> 'a Parser" where
   "angles = between left_angle right_angle"
-
-
-definition optional_braces :: "'a Parser \<Rightarrow> 'a option Parser" where
-  "optional_braces = optional_between (expect LBRACE) (expect RBRACE)"
-
-definition optional_angles :: "'a Parser \<Rightarrow> 'a option Parser" where
-  "optional_angles = optional_between left_angle right_angle"
 
 
 definition comma_list :: "'a Parser \<Rightarrow> 'a list Parser" where
@@ -261,12 +258,9 @@ where
     )"
 
 (* Parse optional angle-brackets-type-list *)
-| "parse_optional_tyargs fuel = do {
-    tyargs \<leftarrow> optional_angles (comma_list (delay (\<lambda>_. parse_type_fuelled fuel)));
-    case tyargs of
-      Some list \<Rightarrow> return list
-      | None \<Rightarrow> return []
-    }"
+| "parse_optional_tyargs fuel = 
+    angles (comma_list (delay (\<lambda>_. parse_type_fuelled fuel)))
+      <|> return []"
 
 (* Parse a "name : type" pair *)
 | "parse_name_type_pair fuel = do {
@@ -435,12 +429,10 @@ where
           return (\<lambda>loc. BabTm_Tuple loc terms)
         })
     <|> braces (delay (\<lambda>_. (do {
-          baseTermOption \<leftarrow> optional
-            (not_parser (parse_name \<then> expect EQUAL))
-            (do {
-              term \<leftarrow> parse_term_min fuel 0 Unrestricted;
-              expect (KEYWORD KW_WITH);
-              return term });
+          baseTermOption \<leftarrow> optional (do {
+            term \<leftarrow> parse_term_min fuel 0 Unrestricted;
+            expect (KEYWORD KW_WITH);
+            return term });
           namesTerms \<leftarrow> comma_list (delay (\<lambda>_. 
             (do {
               name \<leftarrow> parse_name;
@@ -499,7 +491,7 @@ definition parse_var_decl_stmt :: "BabStatement Parser" where
     varOrRef \<leftarrow> (expect (KEYWORD KW_REF) \<then> return Ref)
                 <|> (expect (KEYWORD KW_VAR) \<then> return Var);
     name \<leftarrow> parse_name;
-    maybeType \<leftarrow> optional (expect COLON) parse_type;
+    maybeType \<leftarrow> optional (expect COLON \<then> parse_type);
     maybeRhs \<leftarrow> (do {
       expect EQUAL;
       tm \<leftarrow> parse_term;
@@ -553,14 +545,16 @@ definition parse_swap_stmt :: "BabStatement Parser" where
 definition parse_return_stmt :: "BabStatement Parser" where
   "parse_return_stmt = with_loc (do {
     expect (KEYWORD KW_RETURN);
-    maybeTerm \<leftarrow> optional (not_parser (expect SEMICOLON)) parse_term;
+    maybeTerm \<leftarrow> optional parse_term;
     expect SEMICOLON;
     return (\<lambda>loc. BabStmt_Return loc maybeTerm)
   })"
 
 (* both of these begin with a term (as opposed to a keyword) *)
+(* also, they must start with LPAREN or NAME *)
 definition parse_assignment_or_call_stmt :: "BabStatement Parser" where
   "parse_assignment_or_call_stmt = with_loc (do {
+    look_ahead (expect LPAREN <|> satisfy is_name_token);
     lhs \<leftarrow> parse_term;
     result \<leftarrow> (do {
       expect EQUAL;
@@ -671,8 +665,8 @@ definition parse_const_decl :: "BabDeclaration Parser" where
     });
     expect (KEYWORD KW_CONST);
     name \<leftarrow> parse_name;
-    type \<leftarrow> optional (expect COLON) parse_type;
-    rhs \<leftarrow> optional (expect EQUAL) parse_term;
+    type \<leftarrow> optional (expect COLON \<then> parse_type);
+    rhs \<leftarrow> optional (expect EQUAL \<then> parse_term);
     expect SEMICOLON;
     return (\<lambda>loc. BabDecl_Const \<lparr> DC_Location = loc,
                                   DC_Name = name,
@@ -683,10 +677,10 @@ definition parse_const_decl :: "BabDeclaration Parser" where
 
 definition parse_fun_arg :: "(string \<times> VarOrRef \<times> BabType) Parser" where
   "parse_fun_arg = do {
-    ref0 \<leftarrow> optional (expect (KEYWORD KW_REF)) (return ());
+    ref0 \<leftarrow> optional (expect (KEYWORD KW_REF));
     name \<leftarrow> parse_name;
     expect COLON;
-    ref \<leftarrow> (if ref0 = None then optional (expect (KEYWORD KW_REF)) (return ()) else return ref0);
+    ref \<leftarrow> (if ref0 = None then optional (expect (KEYWORD KW_REF)) else return ref0);
     type \<leftarrow> parse_type;
     return (name, if ref = None then Var else Ref, type)
   }"
@@ -702,15 +696,16 @@ definition parse_function_decl :: "BabDeclaration Parser" where
     name \<leftarrow> parse_name;
     tyvars \<leftarrow> (angles (comma_list parse_name)) <|> (return []);
     args \<leftarrow> parens (comma_list parse_fun_arg);
-    retType \<leftarrow> optional (expect COLON) parse_type;
+    retType \<leftarrow> optional (expect COLON \<then> parse_type);
     externName \<leftarrow> (if Extern \<in> markerSet then
-      (optional (expect EQUAL) (do {
+      (optional (do {
+        expect EQUAL;
         t \<leftarrow> satisfy is_string_token;
         case t of STRING s \<Rightarrow> return s }))
       else return None);
-    optional (expect SEMICOLON) (return ());
+    optional (expect SEMICOLON);
     attrs \<leftarrow> many parse_attribute;
-    body \<leftarrow> optional_braces (many parse_statement);
+    body \<leftarrow> optional (braces (many parse_statement));
     return (\<lambda>loc. BabDecl_Function \<lparr> DF_Location = loc,
                                      DF_Name = name,
                                      DF_TyArgs = tyvars,
@@ -726,7 +721,10 @@ definition parse_function_decl :: "BabDeclaration Parser" where
 definition parse_data_ctor :: "DataCtor Parser" where
   "parse_data_ctor = with_loc (do {
     name \<leftarrow> parse_name;
-    payload \<leftarrow> optional (look_ahead (expect LPAREN <|> expect LBRACE)) parse_type;
+    payload \<leftarrow> optional (do {
+      look_ahead (expect LPAREN <|> expect LBRACE);
+      parse_type
+    });
     return (\<lambda>loc. (loc, name, payload))
   })"
 
