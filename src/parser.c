@@ -150,6 +150,12 @@ static bool parse_type_list(struct ParserState *state,
             // not the first type in the list, so we need a comma
             if (state->token->type == TOK_COMMA) {
                 advance(state);
+
+                // allow trailing comma
+                if (state->token->type == TOK_GREATER || state->token->type == TOK_GREATER_GREATER) {
+                    break;
+                }
+
             } else {
                 if (report_errors) {
                     // report an "expected" error

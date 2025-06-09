@@ -1,0 +1,2 @@
+src/TyvarComma.b:4:15: Not in scope: 'C'    // Renamer errors expected, but parser should succeed!
+src/TyvarComma.b:4:17: Not in scope: 'a'
