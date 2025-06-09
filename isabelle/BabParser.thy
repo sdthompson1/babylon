@@ -829,10 +829,12 @@ definition run_parser :: "'a Parser \<Rightarrow> string \<Rightarrow> (Location
 
 (* POST-PARSING CHECKS *)
 
+(* For historical reasons, the following are considered parsing errors (rather than,
+   say, typechecking errors). The distinction is important for fuzz testing. *)
+
 datatype PostParseError = 
   PPE_MixedArrayDimension
   | PPE_OldOutsidePostcondition
-  | PPE_ReturnOutsidePostcondition
   | PPE_DataCtorWrongCase
 
 fun array_dims_valid :: "BabDimension list \<Rightarrow> bool" where
@@ -846,9 +848,9 @@ fun array_dims_valid :: "BabDimension list \<Rightarrow> bool" where
 definition ttsize :: "BabType + BabTerm \<Rightarrow> nat"
   where "ttsize = case_sum bab_type_size bab_term_size"
 
-(* note: these functions return PPE_OldOutsidePostcondition and/or 
-   PPE_ReturnOutsidePostcondition if applicable. These must be filtered out
-   afterwards if the term actually is part of a postcondition. *)
+(* note: these functions return PPE_OldOutsidePostcondition errors, if any "old"
+   term is found. These must be filtered out afterwards if the term actually 
+   is part of a postcondition. *)
 function post_parse_type :: "BabType \<Rightarrow> (Location \<times> PostParseError) list"
   and post_parse_term :: "BabTerm \<Rightarrow> (Location \<times> PostParseError) list"
 where
@@ -868,9 +870,7 @@ where
     (case lit of
       BabLit_Array tms \<Rightarrow> concat (map post_parse_term tms)
       | _ \<Rightarrow> [])"
-| "post_parse_term (BabTm_Name loc name types) = 
-     (if name = ''return'' then [(loc, PPE_ReturnOutsidePostcondition)] else [])
-     @ concat (map post_parse_type types)"
+| "post_parse_term (BabTm_Name loc name types) = concat (map post_parse_type types)"
 | "post_parse_term (BabTm_Cast _ ty tm) = post_parse_type ty @ post_parse_term tm"
 | "post_parse_term (BabTm_If _ tm1 tm2 tm3) = 
     post_parse_term tm1 @ post_parse_term tm2 @ post_parse_term tm3"
@@ -1086,7 +1086,7 @@ qed
 fun post_parse_attribute :: "BabAttribute \<Rightarrow> (Location \<times> PostParseError) list" where
   "post_parse_attribute (BabAttr_Requires _ tm) = post_parse_term tm"
 | "post_parse_attribute (BabAttr_Ensures _ tm) = 
-    filter (\<lambda>(_, err). err \<notin> {PPE_ReturnOutsidePostcondition, PPE_OldOutsidePostcondition})
+    filter (\<lambda>(_, err). err \<noteq> PPE_OldOutsidePostcondition)
       (post_parse_term tm)"
 | "post_parse_attribute (BabAttr_Invariant _ tm) = post_parse_term tm"
 | "post_parse_attribute (BabAttr_Decreases _ tm) = post_parse_term tm"
