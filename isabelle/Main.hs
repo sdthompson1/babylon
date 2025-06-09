@@ -25,7 +25,7 @@ main = do
     hSetEncoding file latin1
     contents <- hGetContents file
     let str = map makeChar contents
-    if lex_test str then
-      exitSuccess
-    else
-      exitWith (ExitFailure 1)  -- CR_LEX_ERROR
+    case run_compiler str of
+      CR_Success -> exitSuccess
+      CR_LexError -> exitWith (ExitFailure 1)
+      CR_ParseError -> exitWith (ExitFailure 2)
