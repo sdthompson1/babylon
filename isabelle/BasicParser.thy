@@ -135,12 +135,18 @@ fun modify_stream :: "('s \<Rightarrow> 's) \<Rightarrow> (unit, 's, 'c) BasicPa
 
 (* Derived parsers *)
 
-(* Try the given parser; if it fails, return None instead of failing. *)
-definition optional :: "('a, 's, 'c) BasicParser \<Rightarrow> ('a option, 's, 'c) BasicParser" where
-  "optional parser = do {
-    x \<leftarrow> parser;
-    return (Some x)
-  } <|> return None"
+(* Try 'introducer'. If it fails, return None. If it succeeds, parse 'tail' and
+   wrap its result in Some. *)
+(* The purpose of 'introducer' is to get better error messages. If 'introducer'
+   succeeds then we are committed to parsing 'tail' or giving an error; there is
+   no backtracking if 'tail' fails. *)
+definition optional :: "('a, 's, 'c) BasicParser \<Rightarrow> 
+                        ('b, 's, 'c) BasicParser \<Rightarrow>
+                        ('b option, 's, 'c) BasicParser" where
+  "optional introducer tail = do {
+    found \<leftarrow> (introducer \<then> return True) <|> (return False);
+    if found then (tail \<bind> return \<circ> Some) else return None
+  }"
 
 
 (* Parse begin, then (one instance of) p, then end, 
@@ -154,21 +160,32 @@ definition between :: "('open, 's, 'c) BasicParser
     x \<leftarrow> p;
     close;
     return x
-   }"
+  }"
+
+
+(* Optional item between delimiters. If the opening delimiter is present then we 
+   commit to parsing whatever is between them, but if the opening delimiter is missing
+   then it's fine and we just return None. *)
+definition optional_between :: "('open, 's, 'c) BasicParser
+                        \<Rightarrow> ('close, 's, 'c) BasicParser
+                        \<Rightarrow> ('a, 's, 'c) BasicParser
+                        \<Rightarrow> ('a option, 's, 'c) BasicParser" where
+  "optional_between open close p = optional open (do {
+    x \<leftarrow> p;
+    close;
+    return x
+  })"
+
 
 
 (* Helper function for "many" *)
 fun many_helper :: "nat \<Rightarrow> ('a, 's, 'c) BasicParser \<Rightarrow> ('a list, 's, 'c) BasicParser" where
   "many_helper 0 _ = undefined"  (* ran out of fuel *)
-| "many_helper (Suc fuel) parser = do {
-    result \<leftarrow> optional parser;
-    case result of
-      None \<Rightarrow> return []
-    | Some firstItem \<Rightarrow> do {
-        nextItems \<leftarrow> many_helper fuel parser;
-        return (firstItem # nextItems)
-      }
-   }"
+| "many_helper (Suc fuel) parser = (do {
+      firstItem \<leftarrow> parser;
+      nextItems \<leftarrow> many_helper fuel parser;
+      return (firstItem # nextItems)
+  }) <|> return []"
 
 (* Parse 0 or more of the given parser; return all results in a list. *)
 definition many :: "('a, 's, 'c) BasicParser \<Rightarrow> ('a list, 's, 'c) BasicParser" where
@@ -228,7 +245,7 @@ definition sep_end_by :: "('a, 's, 'c) BasicParser \<Rightarrow>
   "sep_end_by p sep = 
     (do {
       result \<leftarrow> sep_by p sep;
-      optional sep;
+      optional sep (return ());
       return result
     })"
 

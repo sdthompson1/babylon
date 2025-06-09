@@ -71,6 +71,13 @@ definition angles :: "'a Parser \<Rightarrow> 'a Parser" where
   "angles = between left_angle right_angle"
 
 
+definition optional_braces :: "'a Parser \<Rightarrow> 'a option Parser" where
+  "optional_braces = optional_between (expect LBRACE) (expect RBRACE)"
+
+definition optional_angles :: "'a Parser \<Rightarrow> 'a option Parser" where
+  "optional_angles = optional_between left_angle right_angle"
+
+
 definition comma_list :: "'a Parser \<Rightarrow> 'a list Parser" where
   "comma_list p = sep_end_by p (expect COMMA)"
 
@@ -248,15 +255,18 @@ where
           return (\<lambda>loc. BabTy_Tuple loc fieldTypes)
          })
     <|> (do {
-          fieldTypes \<leftarrow> braces (comma_list (parse_name_type_pair fuel));
+          fieldTypes \<leftarrow> braces (comma_list (delay (\<lambda>_. parse_name_type_pair fuel)));
           return (\<lambda>loc. BabTy_Record loc fieldTypes)
          })
     )"
 
 (* Parse optional angle-brackets-type-list *)
-| "parse_optional_tyargs fuel = 
-    angles (comma_list (delay (\<lambda>_. parse_type_fuelled fuel)))
-    <|> return []"
+| "parse_optional_tyargs fuel = do {
+    tyargs \<leftarrow> optional_angles (comma_list (delay (\<lambda>_. parse_type_fuelled fuel)));
+    case tyargs of
+      Some list \<Rightarrow> return list
+      | None \<Rightarrow> return []
+    }"
 
 (* Parse a "name : type" pair *)
 | "parse_name_type_pair fuel = do {
@@ -282,7 +292,7 @@ where
 | "parse_term_min (Suc fuel) min_prec restrict = with_loc (do {
     left \<leftarrow> parse_unop_expr fuel restrict;
     others \<leftarrow> many (parse_operator_and_term fuel min_prec restrict);
-    return (\<lambda>loc. BabTm_Binop loc left others)
+    return (if others = [] then (\<lambda>_. left) else (\<lambda>loc. BabTm_Binop loc left others))
   })"
 
 (* Parse operator-term pair at given precedence or higher *)
@@ -381,7 +391,7 @@ where
         })
     <|> (do {
           quant \<leftarrow> (expect (KEYWORD KW_FORALL) <|> expect (KEYWORD KW_EXISTS));
-          name_ty \<leftarrow> parens (parse_name_type_pair fuel);
+          name_ty \<leftarrow> parens (delay (\<lambda>_. parse_name_type_pair fuel));
           tm \<leftarrow> delay (\<lambda>_. parse_term_min fuel 0 Unrestricted);
           let q = (if quant = KEYWORD KW_FORALL then Quant_Forall else Quant_Exists);
           return (\<lambda>loc. BabTm_Quantifier loc q (fst name_ty) (snd name_ty) tm)
@@ -424,11 +434,13 @@ where
           terms \<leftarrow> braces (comma_list (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted)));
           return (\<lambda>loc. BabTm_Tuple loc terms)
         })
-    <|> braces (do {
-          baseTermOption \<leftarrow> optional (do {
-            term \<leftarrow> parse_term_min fuel 0 Unrestricted;
-            expect (KEYWORD KW_WITH);
-            return term });
+    <|> braces (delay (\<lambda>_. (do {
+          baseTermOption \<leftarrow> optional
+            (not_parser (parse_name \<then> expect EQUAL))
+            (do {
+              term \<leftarrow> parse_term_min fuel 0 Unrestricted;
+              expect (KEYWORD KW_WITH);
+              return term });
           namesTerms \<leftarrow> comma_list (delay (\<lambda>_. 
             (do {
               name \<leftarrow> parse_name;
@@ -439,7 +451,7 @@ where
           return (\<lambda>loc. case baseTermOption of
             None \<Rightarrow> BabTm_Record loc namesTerms
             | Some baseTerm \<Rightarrow> BabTm_RecordUpdate loc baseTerm namesTerms)
-        })
+        })))
    )"
 
 
@@ -487,10 +499,7 @@ definition parse_var_decl_stmt :: "BabStatement Parser" where
     varOrRef \<leftarrow> (expect (KEYWORD KW_REF) \<then> return Ref)
                 <|> (expect (KEYWORD KW_VAR) \<then> return Var);
     name \<leftarrow> parse_name;
-    maybeType \<leftarrow> optional (do {
-      expect COLON;
-      parse_type
-    });
+    maybeType \<leftarrow> optional (expect COLON) parse_type;
     maybeRhs \<leftarrow> (do {
       expect EQUAL;
       tm \<leftarrow> parse_term;
@@ -544,7 +553,7 @@ definition parse_swap_stmt :: "BabStatement Parser" where
 definition parse_return_stmt :: "BabStatement Parser" where
   "parse_return_stmt = with_loc (do {
     expect (KEYWORD KW_RETURN);
-    maybeTerm \<leftarrow> optional parse_term;
+    maybeTerm \<leftarrow> optional (not_parser (expect SEMICOLON)) parse_term;
     expect SEMICOLON;
     return (\<lambda>loc. BabStmt_Return loc maybeTerm)
   })"
@@ -567,7 +576,9 @@ definition parse_assignment_or_call_stmt :: "BabStatement Parser" where
 
 definition parse_assume_stmt :: "BabStatement Parser" where
   "parse_assume_stmt = with_loc (do {
+    expect (KEYWORD KW_ASSUME);
     cond \<leftarrow> parse_term;
+    expect SEMICOLON;
     return (\<lambda>loc. BabStmt_Assume loc cond)
   })"
 
@@ -617,6 +628,7 @@ where
   })"
 
 | "parse_while_stmt fuel = with_loc (do {
+    expect (KEYWORD KW_WHILE);
     cond \<leftarrow> parse_restricted_term;
     attrs \<leftarrow> many parse_attribute;
     body \<leftarrow> many (delay (\<lambda>_. parse_stmt_fuelled fuel));
@@ -659,8 +671,8 @@ definition parse_const_decl :: "BabDeclaration Parser" where
     });
     expect (KEYWORD KW_CONST);
     name \<leftarrow> parse_name;
-    type \<leftarrow> optional (expect COLON \<then> parse_type);
-    rhs \<leftarrow> optional (expect EQUAL \<then> parse_term);
+    type \<leftarrow> optional (expect COLON) parse_type;
+    rhs \<leftarrow> optional (expect EQUAL) parse_term;
     expect SEMICOLON;
     return (\<lambda>loc. BabDecl_Const \<lparr> DC_Location = loc,
                                   DC_Name = name,
@@ -671,10 +683,10 @@ definition parse_const_decl :: "BabDeclaration Parser" where
 
 definition parse_fun_arg :: "(string \<times> VarOrRef \<times> BabType) Parser" where
   "parse_fun_arg = do {
-    ref0 \<leftarrow> optional (expect (KEYWORD KW_REF));
+    ref0 \<leftarrow> optional (expect (KEYWORD KW_REF)) (return ());
     name \<leftarrow> parse_name;
     expect COLON;
-    ref \<leftarrow> (if ref0 = None then optional (expect (KEYWORD KW_REF)) else return ref0);
+    ref \<leftarrow> (if ref0 = None then optional (expect (KEYWORD KW_REF)) (return ()) else return ref0);
     type \<leftarrow> parse_type;
     return (name, if ref = None then Var else Ref, type)
   }"
@@ -690,16 +702,15 @@ definition parse_function_decl :: "BabDeclaration Parser" where
     name \<leftarrow> parse_name;
     tyvars \<leftarrow> (angles (comma_list parse_name)) <|> (return []);
     args \<leftarrow> parens (comma_list parse_fun_arg);
-    retType \<leftarrow> optional (expect COLON \<then> parse_type);
+    retType \<leftarrow> optional (expect COLON) parse_type;
     externName \<leftarrow> (if Extern \<in> markerSet then
-      (optional (do {
-        expect EQUAL;
+      (optional (expect EQUAL) (do {
         t \<leftarrow> satisfy is_string_token;
         case t of STRING s \<Rightarrow> return s }))
       else return None);
-    optional (expect SEMICOLON);
+    optional (expect SEMICOLON) (return ());
     attrs \<leftarrow> many parse_attribute;
-    body \<leftarrow> optional (braces (many parse_statement));
+    body \<leftarrow> optional_braces (many parse_statement);
     return (\<lambda>loc. BabDecl_Function \<lparr> DF_Location = loc,
                                      DF_Name = name,
                                      DF_TyArgs = tyvars,
@@ -715,10 +726,7 @@ definition parse_function_decl :: "BabDeclaration Parser" where
 definition parse_data_ctor :: "DataCtor Parser" where
   "parse_data_ctor = with_loc (do {
     name \<leftarrow> parse_name;
-    payload \<leftarrow> optional (do {
-      look_ahead (expect LPAREN <|> expect LBRACE);
-      parse_type
-    });
+    payload \<leftarrow> optional (look_ahead (expect LPAREN <|> expect LBRACE)) parse_type;
     return (\<lambda>loc. (loc, name, payload))
   })"
 
@@ -1141,6 +1149,22 @@ fun post_parse_module :: "BabModule \<Rightarrow> (Location \<times> PostParseEr
   "post_parse_module module =
     concat (map post_parse_declaration (Mod_Interface module))
     @ concat (map post_parse_declaration (Mod_Implementation module))"
+
+
+(* Some basic tests *)
+
+definition parser_fails :: "'a Parser \<Rightarrow> (Location \<times> Token) list \<Rightarrow> bool" where
+  "parser_fails p toks = (case run_parser p ''Test.b'' toks of
+    PR_Success _ _ _ \<Rightarrow> False
+    | PR_Error _ \<Rightarrow> True)"
+
+lemma parse_empty_term:
+  shows "parser_fails parse_term []"
+  by eval
+
+lemma parse_empty_statement:
+  shows "parser_fails parse_statement []"
+  by eval
 
 
 end
