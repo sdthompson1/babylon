@@ -590,6 +590,7 @@ fun parse_assert_stmt :: "nat \<Rightarrow> BabStatement Parser"
   and parse_if_stmt :: "nat \<Rightarrow> BabStatement Parser"
   and parse_while_stmt :: "nat \<Rightarrow> BabStatement Parser"
   and parse_stmt_fuelled :: "nat \<Rightarrow> BabStatement Parser"
+  and parse_stmts_fuelled :: "nat \<Rightarrow> BabStatement list Parser"
 where
   "parse_assert_stmt fuel = with_loc (do {
     expect (KEYWORD KW_ASSERT);
@@ -597,19 +598,19 @@ where
       (parse_restricted_term \<bind> return \<circ> Some) 
       <|> (expect STAR \<then> return None);
     proof \<leftarrow> 
-      braces (many (delay (\<lambda>_. parse_stmt_fuelled fuel)))
-      <|> (expect SEMICOLON \<then> return []);
+      braces (delay (\<lambda>_. parse_stmts_fuelled fuel))
+        <|> (expect SEMICOLON \<then> return []);
     return (\<lambda>loc. BabStmt_Assert loc maybeCond proof)
   })"
 
 | "parse_if_stmt fuel = with_loc (do {
     expect (KEYWORD KW_IF);
     cond \<leftarrow> parse_restricted_term;
-    thenBlock \<leftarrow> braces (many (delay (\<lambda>_. parse_stmt_fuelled fuel)));
+    thenBlock \<leftarrow> braces (delay (\<lambda>_. parse_stmts_fuelled fuel));
     elseBlock \<leftarrow>
       (do {
         expect (KEYWORD KW_ELSE);
-        braces (many (delay (\<lambda>_. parse_stmt_fuelled fuel))) 
+        braces (delay (\<lambda>_. parse_stmts_fuelled fuel))
       })
       <|> (do {
         expect (KEYWORD KW_ELSE);
@@ -625,7 +626,7 @@ where
     expect (KEYWORD KW_WHILE);
     cond \<leftarrow> parse_restricted_term;
     attrs \<leftarrow> many parse_attribute;
-    body \<leftarrow> many (delay (\<lambda>_. parse_stmt_fuelled fuel));
+    body \<leftarrow> delay (\<lambda>_. parse_stmts_fuelled fuel);
     return (\<lambda>loc. BabStmt_While loc cond attrs body)
   })"
 
@@ -644,12 +645,19 @@ where
     <|> parse_if_stmt fuel
     <|> parse_while_stmt fuel"
 
+| "parse_stmts_fuelled fuel = do {
+    maybeStmts \<leftarrow> many (delay (\<lambda>_. 
+      (parse_stmt_fuelled fuel \<bind> return \<circ> Some)
+        <|> (expect SEMICOLON \<then> return None)));
+    return (List.map_filter id maybeStmts)
+  }"
+
 
 (* Top-level statement parser *)
-definition parse_statement :: "BabStatement Parser" where
-  "parse_statement = do {
+definition parse_statements :: "BabStatement list Parser" where
+  "parse_statements = do {
     count \<leftarrow> get_num_tokens;
-    parse_stmt_fuelled (Suc count)
+    parse_stmts_fuelled (Suc count)
   }"
 
 
@@ -705,7 +713,7 @@ definition parse_function_decl :: "BabDeclaration Parser" where
       else return None);
     optional (expect SEMICOLON);
     attrs \<leftarrow> many parse_attribute;
-    body \<leftarrow> optional (braces (many parse_statement));
+    body \<leftarrow> optional (braces parse_statements);
     return (\<lambda>loc. BabDecl_Function \<lparr> DF_Location = loc,
                                      DF_Name = name,
                                      DF_TyArgs = tyvars,
@@ -1158,10 +1166,6 @@ definition parser_fails :: "'a Parser \<Rightarrow> (Location \<times> Token) li
 
 lemma parse_empty_term:
   shows "parser_fails parse_term []"
-  by eval
-
-lemma parse_empty_statement:
-  shows "parser_fails parse_statement []"
   by eval
 
 
