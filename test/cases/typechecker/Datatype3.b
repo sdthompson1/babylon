@@ -1,6 +1,6 @@
 module Datatype3
 interface {}
-  function f1( x: {i32, fld: i32},      // Error: mixed positional and named fields
+  function f1(
                y: {f1: i8, f1: i8} )    // Error: duplicate fieldname
   {
   }
@@ -8,7 +8,7 @@ interface {}
   function f2()
   {
     match ({x=1, y=2}) {
-      case {p1,   x=p2} =>       // Error: mixed positional and named fields
+
       case {x=p1, x=p2} =>       // Error: duplicate fieldname
       case {z=99} =>             // Error: 'z' not found
     }

@@ -13,5 +13,4 @@ src/Datatype2.b:39:27: Type mismatch
 src/Datatype2.b:43:28: Field 'z' not found
 src/Datatype2.b:44:28: Cannot access fields in this expression
 src/Datatype2.b:45:29: Cannot access fields in this expression
-src/Datatype2.b:49:16: Mixture of named and unnamed fields
 src/Datatype2.b:54:20: Duplicate field name 'field1'

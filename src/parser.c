@@ -202,6 +202,7 @@ static bool parse_type_list(struct ParserState *state,
 }
 
 // Parse a NameTypeList. The names are optional and will be set to NULL if omitted.
+// (Mixing names and positional fields is an error.)
 // Current token is assumed to be '{', and list is closed by '}'.
 // The end of 'loc' is set to the end of the list.
 // (If 'error' is non-NULL, sets *error to true on error - this is needed when
@@ -215,6 +216,9 @@ static struct NameTypeList *parse_name_type_list(struct ParserState *state,
 
     struct NameTypeList *list = NULL;
     struct NameTypeList **tail = &list;
+
+    bool found_named = false;
+    bool found_positional = false;
 
     while (state->token->type != TOK_RBRACE) {
 
@@ -232,17 +236,34 @@ static struct NameTypeList *parse_name_type_list(struct ParserState *state,
         // See if there is a field name
         const char *field_name = NULL;
 
+        struct Location err_loc = state->token->location;
+
         if (state->token->type == TOK_NAME
         && state->token->next
         && state->token->next->type == TOK_COLON) {
+            found_named = true;
             field_name = copy_string(state->token->data);
             advance(state);
             advance(state);
+        } else {
+            found_positional = true;
         }
 
         // Parse the type
         struct Type *type = parse_type(state, report_errors);
         if (!type) {
+            free((char*)field_name);
+            free_name_type_list(list);
+            if (error) *error = true;
+            return NULL;
+        }
+
+        // Report error if positional and named fields are mixed
+        if (found_named && found_positional) {
+            if (report_errors) {
+                report_mixed_positional_and_named_fields(err_loc);
+                state->error = true;
+            }
             free((char*)field_name);
             free_name_type_list(list);
             if (error) *error = true;
@@ -524,6 +545,7 @@ static struct Pattern * parse_pattern(struct ParserState *state);
 
 // Assumption: current token is '{'. parses upto and including '}'.
 // The end of 'loc' is updated to be the end of the final '}' token.
+// (Report error if named and positional fields are mixed.)
 static struct NamePatternList * parse_name_pattern_list(struct ParserState *state,
                                                         struct Location *loc)
 {
@@ -531,6 +553,9 @@ static struct NamePatternList * parse_name_pattern_list(struct ParserState *stat
 
     struct NamePatternList *list = NULL;
     struct NamePatternList **tail = &list;
+
+    bool found_named = false;
+    bool found_positional = false;
 
     while (state->token->type != TOK_RBRACE) {
 
@@ -540,20 +565,33 @@ static struct NamePatternList * parse_name_pattern_list(struct ParserState *stat
 
         const char *field_name = NULL;
 
+        struct Location err_loc = state->token->location;
+
         if (state->token->type == TOK_NAME
         && state->token->next
         && state->token->next->type == TOK_EQUAL) {
 
+            found_named = true;
             field_name = copy_string(state->token->data);
 
             advance(state);
             advance(state);
+
+        } else {
+            found_positional = true;
         }
 
         struct Pattern *p = parse_pattern(state);
 
         if (!p) {
             // parse error
+            free((void*)field_name);
+            break;
+        }
+
+        if (found_named && found_positional) {
+            report_mixed_positional_and_named_fields(err_loc);
+            state->error = true;
             free((void*)field_name);
             break;
         }
@@ -774,6 +812,7 @@ static struct Term * parse_tyarg_suffix(struct ParserState *state, struct Term *
 // Returns the parsed NameTermList, sets end of loc,
 // and writes the term appearing before "with" (if any) into *with
 // (which should be NULL initially).
+// (Reports error if named and positional fields are mixed.)
 static struct NameTermList * parse_name_term_list(struct ParserState *state,
                                                   struct Location *loc,
                                                   struct Term **with)
@@ -782,6 +821,9 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
 
     struct NameTermList *list = NULL;
     struct NameTermList **next_ptr = &list;
+
+    bool found_named = false;
+    bool found_positional = false;
 
     while (state->token->type != TOK_RBRACE) {
 
@@ -796,10 +838,14 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
         && state->token->next
         && state->token->next->type == TOK_EQUAL) {
 
+            found_named = true;
             field_name = copy_string(state->token->data);
 
             advance(state);
             advance(state);
+
+        } else {
+            found_positional = true;
         }
 
         struct Term *initialiser = parse_term(state, true);
@@ -807,6 +853,12 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
         if (initialiser == NULL) {
             // parse error
             free((void*)field_name);
+            break;
+        }
+
+        if (found_named && found_positional) {
+            report_mixed_positional_and_named_fields(field_loc);
+            state->error = true;
             break;
         }
 
@@ -822,6 +874,7 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
             }
             *with = initialiser;
             advance(state);
+            found_positional = false;  // (this was misinterpreted as a positional field above)
             continue;
         }
 

@@ -250,23 +250,12 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
 
     case TY_RECORD:
         {
-            // first pass: number the positional fields,
-            // and check for mixed positional and named fields
-            bool found_number = false;
-            bool found_name = false;
+            // first pass: number the positional fields
             int field_num = 0;
             for (struct NameTypeList *field = (*type)->record_data.fields; field; field = field->next) {
                 if (field->name == NULL) {
-                    found_number = true;
                     field->name = field_num_to_string(field_num++);
-                } else {
-                    found_name = true;
                 }
-            }
-            if (found_number && found_name) {
-                report_mixed_positional_and_named_fields((*type)->location);
-                tc_context->error = true;
-                return false;
             }
 
             // second pass: check kinds, and check for duplicate fieldnames
@@ -2222,23 +2211,12 @@ static void* typecheck_record(void *context, struct Term *term, void *type_resul
 
     struct TypecheckContext *tc_context = context;
 
-    // first pass: number the positional fields,
-    // and check for mixed positional and named fields
+    // first pass: number the positional fields
     int field_num = 0;
-    bool found_number = false;
-    bool found_name = false;
     for (struct NameTermList *field = term->record.fields; field; field = field->next) {
         if (field->name == NULL) {
-            found_number = true;
             field->name = field_num_to_string(field_num++);
-        } else {
-            found_name = true;
         }
-    }
-    if (found_number && found_name) {
-        report_mixed_positional_and_named_fields(term->location);
-        tc_context->error = true;
-        return NULL;
     }
 
     // second pass: check for duplicate fieldnames, and gather a list of field-types
@@ -2401,27 +2379,16 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
 {
     // TODO: perhaps we could allow "punning" like in Ocaml.
 
-    // first pass: number the positional fields,
-    // and check for mixed positional and named fields
-    bool found_number = false;
-    bool found_name = false;
+    // first pass: number the positional fields
     int field_num = 0;
     for (struct NamePatternList *field = fields; field; field = field->next) {
         if (field->name == NULL) {
-            found_number = true;
             field->name = field_num_to_string(field_num++);
-        } else {
-            found_name = true;
         }
-    }
-    if (found_number && found_name) {
-        report_mixed_positional_and_named_fields(location);
-        tc_context->error = true;
-        return false;
     }
 
     // also in the case of numbered fields, check we have the correct number
-    if (found_number) {
+    if (field_num != 0) {
         int num_expected_fields = 0;
         for (struct NameTypeList *x = scrutinee_type->record_data.fields; x; x = x->next) {
             ++num_expected_fields;

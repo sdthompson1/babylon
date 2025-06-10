@@ -1,6 +1,4 @@
-src/Datatype3.b:3:19: Mixture of named and unnamed fields
 src/Datatype3.b:4:19: Duplicate field name 'f1'
-src/Datatype3.b:11:12: Mixture of named and unnamed fields
 src/Datatype3.b:12:12: Duplicate field name 'x'
 src/Datatype3.b:13:15: Field 'z' not found
 src/Datatype3.b:17:12: Pattern has wrong number of fields

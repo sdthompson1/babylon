@@ -44,10 +44,10 @@ interface {}
   const badrecord        = 1234.a;   // error, can't take fields of a number
   const badlhs           = (1.a).b;  // also error
 
-  function f4()
-  {
-    var tup4 = { x=1, false };    // error, mixed positional and named
-  }
+
+
+
+
 
 
   // Duplicate field name
