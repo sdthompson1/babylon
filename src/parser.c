@@ -266,6 +266,7 @@ static struct NameTypeList *parse_name_type_list(struct ParserState *state,
             }
             free((char*)field_name);
             free_name_type_list(list);
+            free_type(type);
             if (error) *error = true;
             return NULL;
         }
@@ -593,6 +594,7 @@ static struct NamePatternList * parse_name_pattern_list(struct ParserState *stat
             report_mixed_positional_and_named_fields(err_loc);
             state->error = true;
             free((void*)field_name);
+            free_pattern(p);
             break;
         }
 
@@ -859,6 +861,8 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
         if (found_named && found_positional) {
             report_mixed_positional_and_named_fields(field_loc);
             state->error = true;
+            free((void*)field_name);
+            free_term(initialiser);
             break;
         }
 
