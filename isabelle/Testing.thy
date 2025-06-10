@@ -23,13 +23,10 @@ definition test_post_parse :: "string \<Rightarrow> (Location \<times> PostParse
 (* value "lex ''Test.b'' ''0x10000000000000000''" *)
 
 
-value "test_parser parse_module ''module Gic1
-interface {
-  function f<a>();
+value "test_parser parse_module ''module Main
+interface {}
 
-  function test()
-  {
-   ;  // This is  f<i32>;
-  }
-}
-''"
+function foo(): i32
+{
+    return (match 1 { case 2 => 3; case 3 => 0 });
+}''"

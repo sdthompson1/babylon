@@ -169,6 +169,17 @@ datatype BabBinop =
   | BabBinop_ImpliedBy
   | BabBinop_Iff
 
+datatype VarOrRef = Var | Ref
+
+datatype BabPattern = 
+    BabPat_Var Location VarOrRef string
+  | BabPat_Bool Location bool
+  | BabPat_Int Location int
+  | BabPat_Tuple Location "BabPattern list"
+  | BabPat_Record Location "(string \<times> BabPattern) list"
+  | BabPat_Variant Location string "BabPattern option"
+  | BabPat_Wildcard Location
+
 datatype BabLiteral =
   BabLit_Bool bool
   | BabLit_Int int
@@ -202,12 +213,12 @@ and BabTerm =
   | BabTm_Quantifier Location Quantifier string BabType BabTerm
   | BabTm_Call Location BabTerm "BabTerm list"
   | BabTm_Tuple Location "BabTerm list"
-  | BabTm_Record Location "(string * BabTerm) list"
-  | BabTm_RecordUpdate Location BabTerm "(string * BabTerm) list"
+  | BabTm_Record Location "(string \<times> BabTerm) list"
+  | BabTm_RecordUpdate Location BabTerm "(string \<times> BabTerm) list"
   | BabTm_TupleProj Location BabTerm nat
   | BabTm_RecordProj Location BabTerm string
   | BabTm_ArrayProj Location BabTerm "BabTerm list"
-  (* omitted for now: BabTm_Match *)
+  | BabTm_Match Location BabTerm "(BabPattern \<times> BabTerm) list"
   | BabTm_Sizeof Location BabTerm
   | BabTm_Allocated Location BabTerm
   | BabTm_Old Location BabTerm
@@ -219,21 +230,22 @@ datatype BabAttribute =
   | BabAttr_Decreases Location BabTerm
 
 datatype ShowOrHide = Show | Hide
-datatype VarOrRef = Var | Ref
+datatype GhostOrNot = Ghost | NotGhost
 
 datatype BabStatement =
-  BabStmt_VarDecl Location string VarOrRef "BabType option" "BabTerm option"
+  BabStmt_VarDecl Location GhostOrNot string VarOrRef "BabType option" "BabTerm option"
   | BabStmt_Fix Location string BabType
   | BabStmt_Obtain Location string BabType BabTerm
   | BabStmt_Use Location BabTerm
-  | BabStmt_Assign Location BabTerm BabTerm
-  | BabStmt_Swap Location BabTerm BabTerm
-  | BabStmt_Return Location "BabTerm option"
+  | BabStmt_Assign Location GhostOrNot BabTerm BabTerm
+  | BabStmt_Swap Location GhostOrNot BabTerm BabTerm
+  | BabStmt_Return Location GhostOrNot "BabTerm option"
   | BabStmt_Assert Location "BabTerm option" "BabStatement list"
   | BabStmt_Assume Location BabTerm
-  | BabStmt_If Location BabTerm "BabStatement list" "BabStatement list"
-  | BabStmt_While Location BabTerm "BabAttribute list" "BabStatement list"
-  | BabStmt_Call Location BabTerm   (* BabTm_Call term *)
+  | BabStmt_If Location GhostOrNot BabTerm "BabStatement list" "BabStatement list"
+  | BabStmt_While Location GhostOrNot BabTerm "BabAttribute list" "BabStatement list"
+  | BabStmt_Call Location GhostOrNot BabTerm   (* BabTm_Call term *)
+  | BabStmt_Match Location GhostOrNot BabTerm "(BabPattern \<times> BabStatement list) list"
   | BabStmt_ShowHide Location ShowOrHide string
 
 datatype AllocLevel = AllocNever | AllocIfNotDefault | AllocAlways
@@ -243,7 +255,7 @@ record DeclConst =
   DC_Name :: string
   DC_Type :: "BabType option"
   DC_Value :: "BabTerm option"
-  DC_Ghost :: bool
+  DC_Ghost :: GhostOrNot
 
 record DeclFun =
   DF_Location :: Location
@@ -253,7 +265,7 @@ record DeclFun =
   DF_ReturnType :: "BabType option"
   DF_Body :: "(BabStatement list) option"
   DF_Attributes :: "BabAttribute list"
-  DF_Ghost :: bool
+  DF_Ghost :: GhostOrNot
   DF_Extern :: bool
   DF_Impure :: bool
 
@@ -391,6 +403,8 @@ where
 | "bab_term_size (BabTm_RecordProj _ tm _) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_ArrayProj _ tm indices) = 
     1 + bab_term_size tm + sum_list (map bab_term_size indices)"
+| "bab_term_size (BabTm_Match _ scrut arms) =
+    1 + bab_term_size scrut + sum_list (map (bab_term_size \<circ> snd) arms)"
 | "bab_term_size (BabTm_Sizeof _ tm) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_Allocated _ tm) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_Old _ tm) = 1 + bab_term_size tm"
