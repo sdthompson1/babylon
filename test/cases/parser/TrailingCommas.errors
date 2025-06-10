@@ -1,0 +1,5 @@
+src/TrailingCommas.b:13:11: Not in scope: 'foo'
+src/TrailingCommas.b:20:14: Not in scope: 'a'
+src/TrailingCommas.b:20:25: Not in scope: 'c'
+src/TrailingCommas.b:21:18: Not in scope: 'c'
+src/TrailingCommas.b:26:5: Not in scope: 'some_function'

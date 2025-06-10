@@ -146,16 +146,18 @@ static bool parse_type_list(struct ParserState *state,
     bool success = true;
 
     while (state->token->type != TOK_GREATER && state->token->type != TOK_GREATER_GREATER) {
+
+        // allow a trailing comma
+        if (state->token->type == TOK_COMMA
+        && (state->token->next->type == TOK_GREATER || state->token->next->type == TOK_GREATER_GREATER)) {
+            advance(state);
+            break;
+        }
+
         if (types != NULL) {
             // not the first type in the list, so we need a comma
             if (state->token->type == TOK_COMMA) {
                 advance(state);
-
-                // allow trailing comma
-                if (state->token->type == TOK_GREATER || state->token->type == TOK_GREATER_GREATER) {
-                    break;
-                }
-
             } else {
                 if (report_errors) {
                     // report an "expected" error
@@ -221,6 +223,12 @@ static struct NameTypeList *parse_name_type_list(struct ParserState *state,
     bool found_positional = false;
 
     while (state->token->type != TOK_RBRACE) {
+
+        // Allow a trailing comma
+        if (state->token->type == TOK_COMMA && state->token->next->type == TOK_RBRACE) {
+            advance(state);
+            break;
+        }
 
         // If this is not the first item, we need to see a comma
         if (list != NULL) {
@@ -447,6 +455,7 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
             struct Term *term = NULL;
 
             // need a comma before each dimension other than the first
+            // (note: trailing commas NOT allowed for array dimension lists)
             if (!first) {
                 if (state->token->type == TOK_COMMA) {
                     advance(state);
@@ -560,6 +569,13 @@ static struct NamePatternList * parse_name_pattern_list(struct ParserState *stat
 
     while (state->token->type != TOK_RBRACE) {
 
+        // Allow a trailing comma
+        if (state->token->type == TOK_COMMA && state->token->next->type == TOK_RBRACE) {
+            advance(state);
+            break;
+        }
+
+        // Require a comma before each element other than the first
         if (list != NULL) {
             expect(state, TOK_COMMA, "',' or '}'");
         }
@@ -829,6 +845,13 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
 
     while (state->token->type != TOK_RBRACE) {
 
+        // Allow a trailing comma
+        if (state->token->type == TOK_COMMA && state->token->next->type == TOK_RBRACE) {
+            advance(state);
+            break;
+        }
+
+        // Require a comma before each element other than the first
         if (list != NULL) {
             expect(state, TOK_COMMA, "',' or '}'");
         }
@@ -902,7 +925,9 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
 // assumption: current token is '(' or '['
 // returns the parsed OpTermList (setting operator to BINOP_PLUS) and also
 // sets end of loc
-static struct OpTermList * parse_term_list(struct ParserState *state, struct Location *loc)
+static struct OpTermList * parse_term_list(struct ParserState *state,
+                                           struct Location *loc,
+                                           bool allow_trailing_comma)
 {
     enum TokenType ending_token = TOK_RPAREN;
     const char *msg = "',' or ')'";
@@ -918,6 +943,13 @@ static struct OpTermList * parse_term_list(struct ParserState *state, struct Loc
 
     while (state->token->type != ending_token) {
 
+        // Allow trailing comma (if applicable)
+        if (allow_trailing_comma && state->token->type == TOK_COMMA && state->token->next->type == ending_token) {
+            advance(state);
+            break;
+        }
+
+        // Require a comma before each term other than the first
         if (list != NULL) {
             expect(state, TOK_COMMA, msg);
         }
@@ -1196,7 +1228,7 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
 
     case TOK_LBRACKET:
         {
-            struct OpTermList *terms = parse_term_list(state, &loc);
+            struct OpTermList *terms = parse_term_list(state, &loc, true); // trailing comma allowed
             struct Term *result = make_term(loc, TM_ARRAY_LITERAL);
             result->array_literal.terms = terms;
             return result;
@@ -1250,7 +1282,7 @@ static struct Term * parse_call_or_proj_expr(struct ParserState *state, bool all
 
             struct Term *call = make_term(term->location, TM_CALL);
             call->call.func = term;
-            call->call.args = parse_term_list(state, &call->location);
+            call->call.args = parse_term_list(state, &call->location, true); // trailing comma allowed
             term = call;
 
         } else if (state->token->type == TOK_LBRACE && allow_lbrace) {
@@ -1308,7 +1340,7 @@ static struct Term * parse_call_or_proj_expr(struct ParserState *state, bool all
 
             struct Term * proj = make_term(term->location, TM_ARRAY_PROJ);
             proj->array_proj.lhs = term;
-            proj->array_proj.indexes = parse_term_list(state, &proj->location);
+            proj->array_proj.indexes = parse_term_list(state, &proj->location, false); // trailing comma NOT allowed
             term = proj;
 
         } else {
@@ -2071,6 +2103,14 @@ static struct TyVarList *parse_tyvar_list(struct ParserState *state)
             break;
         }
 
+        // Allow trailing comma
+        if (state->token->type == TOK_COMMA && state->token->next->type == TOK_GREATER) {
+            advance(state);
+            advance(state);
+            break;
+        }
+
+        // Require a comma before each tyvar other than the first
         if (!first) {
             expect(state, TOK_COMMA, "',' or '>'");
         }
@@ -2104,6 +2144,15 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
             break;
         }
 
+        // Allow trailing comma
+        if (state->token->type == TOK_COMMA && state->token->next->type == TOK_RPAREN) {
+            advance(state);
+            set_location_end(loc, &state->token->location);
+            advance(state);
+            break;
+        }
+
+        // Require a comma before each element other than the first
         if (!first) {
             expect(state, TOK_COMMA, "',' or ')'");
         }
