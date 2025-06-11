@@ -115,7 +115,9 @@ fun begins_with_capital :: "string \<Rightarrow> bool" where
 
 fun parse_pattern_fuelled :: "nat \<Rightarrow> BabPattern Parser" where
   "parse_pattern_fuelled 0 = undefined"  (* out of fuel *)
-| "parse_pattern_fuelled (Suc fuel) = with_loc ((do {
+| "parse_pattern_fuelled (Suc fuel) = 
+   parens (delay (\<lambda>_. parse_pattern_fuelled fuel))
+   <|> with_loc ((do {
     ref \<leftarrow> (expect (KEYWORD KW_REF) \<then> return Ref) <|> return Var;
     name \<leftarrow> parse_dotted_name;
     if begins_with_capital name then (do {
@@ -269,12 +271,15 @@ definition parse_unop :: "BabUnop Parser" where
 
 (* helper to make unop term *)
 (* note: '-' followed by an int literal is combined into a single
-   int literal. This avoids problems with the most negative integer. *)
-fun make_unop_term :: "Location \<times> BabUnop \<Rightarrow> BabTerm \<Rightarrow> BabTerm" where
-  "make_unop_term (loc1, BabUnop_Negate) (BabTm_Literal loc2 (BabLit_Int i))
-    = BabTm_Literal (merge_locations loc1 loc2) (BabLit_Int (-i))"
-| "make_unop_term (loc, op) tm
-    = BabTm_Unop (merge_locations loc (bab_term_location tm)) op tm"
+   int literal. This avoids problems with the most negative integer.
+   (If the resulting negative integer would be out of range, this returns None.) *)
+fun make_unop_term :: "Location \<times> BabUnop \<Rightarrow> BabTerm option \<Rightarrow> BabTerm option" where
+  "make_unop_term _ None = None"
+| "make_unop_term (loc1, BabUnop_Negate) (Some (BabTm_Literal loc2 (BabLit_Int i)))
+    = (if i \<le> 2 ^ 63 then Some (BabTm_Literal (merge_locations loc1 loc2) (BabLit_Int (-i)))
+       else None)"
+| "make_unop_term (loc, op) (Some tm)
+    = Some (BabTm_Unop (merge_locations loc (bab_term_location tm)) op tm)"
 
 (* Note: a "restricted" term is one that cannot contain the curly-brace function
    call syntax (e.g. `f{1,2,3}`). This is used to avoid ambiguities in certain
@@ -376,7 +381,10 @@ where
 | "parse_unop_expr fuel restrict = do {
     ops \<leftarrow> many (located parse_unop);
     tm \<leftarrow> parse_call_or_proj_expr fuel restrict;
-    return (foldr make_unop_term ops tm)
+    let maybeResult = foldr make_unop_term ops (Some tm);
+    case maybeResult of
+      None \<Rightarrow> fail
+      | Some result \<Rightarrow> return result
   }"
 
 (* Parse function call, field projection or array projection *)
@@ -962,6 +970,7 @@ definition run_parser :: "'a Parser \<Rightarrow> string \<Rightarrow> (Location
 datatype PostParseError = 
   PPE_MixedArrayDimension
   | PPE_OldOutsidePostcondition
+  | PPE_OldUsedWithReturn
   | PPE_DataCtorWrongCase
 
 fun array_dims_valid :: "BabDimension list \<Rightarrow> bool" where
@@ -972,294 +981,316 @@ fun array_dims_valid :: "BabDimension list \<Rightarrow> bool" where
                                                  BabDim_Fixed _ \<Rightarrow> True
                                                  | _ \<Rightarrow> False) dims"
 
-definition ttsize :: "BabType + BabTerm \<Rightarrow> nat"
-  where "ttsize = case_sum bab_type_size bab_term_size"
+abbreviation ttsize :: "BabType + BabTerm \<Rightarrow> nat"
+  where "ttsize \<equiv> case_sum bab_type_size bab_term_size"
+
+abbreviation bool_typeterm_to_typeterm :: "bool \<times> BabType + bool \<times> BabTerm \<Rightarrow> BabType + BabTerm"
+  where "bool_typeterm_to_typeterm \<equiv> map_sum snd snd"
+
+abbreviation bool_ttsize :: "bool \<times> BabType + bool \<times> BabTerm \<Rightarrow> nat"
+  where "bool_ttsize \<equiv> ttsize \<circ> bool_typeterm_to_typeterm"
+
 
 (* note: these functions return PPE_OldOutsidePostcondition errors, if any "old"
    term is found. These must be filtered out afterwards if the term actually 
    is part of a postcondition. *)
-function post_parse_type :: "BabType \<Rightarrow> (Location \<times> PostParseError) list"
-  and post_parse_term :: "BabTerm \<Rightarrow> (Location \<times> PostParseError) list"
+function post_parse_type :: "bool \<Rightarrow> BabType \<Rightarrow> (Location \<times> PostParseError) list"
+  and post_parse_term :: "bool \<Rightarrow> BabTerm \<Rightarrow> (Location \<times> PostParseError) list"
 where
-  "post_parse_type (BabTy_Name _ _ types) = concat (map post_parse_type types)"
-| "post_parse_type (BabTy_Bool _) = []"
-| "post_parse_type (BabTy_FiniteInt _ _ _) = []"
-| "post_parse_type (BabTy_MathInt _) = []"
-| "post_parse_type (BabTy_MathReal _) = []"
-| "post_parse_type (BabTy_Tuple _ types) = concat (map post_parse_type types)"
-| "post_parse_type (BabTy_Record _ fieldTypes) = concat (map (post_parse_type \<circ> snd) fieldTypes)"
-| "post_parse_type (BabTy_Array loc eltType dims) =
-    post_parse_type eltType
+  "post_parse_type old (BabTy_Name loc name types) = concat (map (post_parse_type old) types)"
+| "post_parse_type _ (BabTy_Bool _) = []"
+| "post_parse_type _ (BabTy_FiniteInt _ _ _) = []"
+| "post_parse_type _ (BabTy_MathInt _) = []"
+| "post_parse_type _ (BabTy_MathReal _) = []"
+| "post_parse_type old (BabTy_Tuple _ types) = concat (map (post_parse_type old) types)"
+| "post_parse_type old (BabTy_Record _ fieldTypes) = concat (map (post_parse_type old \<circ> snd) fieldTypes)"
+| "post_parse_type old (BabTy_Array loc eltType dims) =
+    post_parse_type old eltType
     @ (if array_dims_valid dims then [] else [(loc, PPE_MixedArrayDimension)])
-    @ (concat (map post_parse_term (concat (map array_dim_terms dims))))"
+    @ (concat (map (post_parse_term old) (concat (map array_dim_terms dims))))"
 
-| "post_parse_term (BabTm_Literal _ lit) = 
+| "post_parse_term old (BabTm_Literal _ lit) = 
     (case lit of
-      BabLit_Array tms \<Rightarrow> concat (map post_parse_term tms)
+      BabLit_Array tms \<Rightarrow> concat (map (post_parse_term old) tms)
       | _ \<Rightarrow> [])"
-| "post_parse_term (BabTm_Name loc name types) = concat (map post_parse_type types)"
-| "post_parse_term (BabTm_Cast _ ty tm) = post_parse_type ty @ post_parse_term tm"
-| "post_parse_term (BabTm_If _ tm1 tm2 tm3) = 
-    post_parse_term tm1 @ post_parse_term tm2 @ post_parse_term tm3"
-| "post_parse_term (BabTm_Unop _ _ tm) = post_parse_term tm"
-| "post_parse_term (BabTm_Binop _ tm lst) = post_parse_term tm
-      @ concat (map (post_parse_term \<circ> snd) lst)"
-| "post_parse_term (BabTm_Let _ _ tm1 tm2) = post_parse_term tm1 @ post_parse_term tm2"
-| "post_parse_term (BabTm_Quantifier _ _ _ ty tm) = post_parse_type ty @ post_parse_term tm"
-| "post_parse_term (BabTm_Call _ tm tms) = post_parse_term tm @ concat (map post_parse_term tms)"
-| "post_parse_term (BabTm_Tuple _ tms) = concat (map post_parse_term tms)"
-| "post_parse_term (BabTm_Record _ flds) = concat (map (post_parse_term \<circ> snd) flds)"
-| "post_parse_term (BabTm_RecordUpdate _ tm flds) = post_parse_term tm
-      @ concat (map (post_parse_term \<circ> snd) flds)"
-| "post_parse_term (BabTm_TupleProj _ tm _) = post_parse_term tm"
-| "post_parse_term (BabTm_RecordProj _ tm _) = post_parse_term tm"
-| "post_parse_term (BabTm_ArrayProj _ tm tms) = post_parse_term tm 
-      @ concat (map post_parse_term tms)"
-| "post_parse_term (BabTm_Match _ scrut arms) = post_parse_term scrut
-      @ concat (map (post_parse_term \<circ> snd) arms)"
-| "post_parse_term (BabTm_Sizeof _ tm) = post_parse_term tm"
-| "post_parse_term (BabTm_Allocated _ tm) = post_parse_term tm"
-| "post_parse_term (BabTm_Old loc tm) = (loc, PPE_OldOutsidePostcondition) # post_parse_term tm"
+| "post_parse_term old (BabTm_Name loc name types) = 
+      (if old \<and> name = ''return'' then [(loc, PPE_OldUsedWithReturn)] else [])
+      @ concat (map (post_parse_type old) types)"
+| "post_parse_term old (BabTm_Cast _ ty tm) = post_parse_type old ty @ post_parse_term old tm"
+| "post_parse_term old (BabTm_If _ tm1 tm2 tm3) = 
+    post_parse_term old tm1 @ post_parse_term old tm2 @ post_parse_term old tm3"
+| "post_parse_term old (BabTm_Unop _ _ tm) = post_parse_term old tm"
+| "post_parse_term old (BabTm_Binop _ tm lst) = post_parse_term old tm
+      @ concat (map (post_parse_term old \<circ> snd) lst)"
+| "post_parse_term old (BabTm_Let _ _ tm1 tm2) = post_parse_term old tm1 @ post_parse_term old tm2"
+| "post_parse_term old (BabTm_Quantifier _ _ _ ty tm) = 
+      post_parse_type old ty @ post_parse_term old tm"
+| "post_parse_term old (BabTm_Call _ tm tms) = 
+      post_parse_term old tm @ concat (map (post_parse_term old) tms)"
+| "post_parse_term old (BabTm_Tuple _ tms) = concat (map (post_parse_term old) tms)"
+| "post_parse_term old (BabTm_Record _ flds) = concat (map (post_parse_term old \<circ> snd) flds)"
+| "post_parse_term old (BabTm_RecordUpdate _ tm flds) = post_parse_term old tm
+      @ concat (map (post_parse_term old \<circ> snd) flds)"
+| "post_parse_term old (BabTm_TupleProj _ tm _) = post_parse_term old tm"
+| "post_parse_term old (BabTm_RecordProj _ tm _) = post_parse_term old tm"
+| "post_parse_term old (BabTm_ArrayProj _ tm tms) = post_parse_term old tm 
+      @ concat (map (post_parse_term old) tms)"
+| "post_parse_term old (BabTm_Match _ scrut arms) = post_parse_term old scrut
+      @ concat (map (post_parse_term old \<circ> snd) arms)"
+| "post_parse_term old (BabTm_Sizeof _ tm) = post_parse_term old tm"
+| "post_parse_term old (BabTm_Allocated _ tm) = post_parse_term old tm"
+| "post_parse_term _ (BabTm_Old loc tm) = 
+      (loc, PPE_OldOutsidePostcondition) 
+      # post_parse_term True tm"
 
   by pat_completeness auto
 
 termination
-proof (relation "measure ttsize")
-  show "wf (measure ttsize)" by auto
+proof (relation "measure bool_ttsize")
+  show "wf (measure bool_ttsize)" by auto
 
 next
-  fix x loc name types
+  fix old x loc name types
   show "x \<in> set types \<Longrightarrow>
-       (Inl x, Inl (BabTy_Name loc name types)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_type_smaller_than_list
+       (Inl (old, x), Inl (old, BabTy_Name loc name types)) \<in> measure bool_ttsize"
+    using bab_type_smaller_than_list by auto
+
+next
+  fix old loc types x
+  show "x \<in> set types \<Longrightarrow>
+       (Inl (old, x), Inl (old, BabTy_Tuple loc types)) \<in> measure bool_ttsize"
+    using bab_type_smaller_than_list by auto
+
+next
+  fix old loc fieldTypes x
+  have "x \<in> set fieldTypes \<Longrightarrow>
+       (Inl (snd x), Inl (BabTy_Record loc fieldTypes)) \<in> measure ttsize"
+    using bab_type_smaller_than_fieldlist
+    by (metis bab_type_size.simps(7) in_measure old.sum.simps(5) plus_1_eq_Suc
+        surjective_pairing) 
+  thus "x \<in> set fieldTypes \<Longrightarrow>
+       (Inl (old, snd x), Inl (old, BabTy_Record loc fieldTypes)) \<in> measure bool_ttsize"
+    by simp
+
+next
+  fix old loc eltType dims
+  show "(Inl (old, eltType), Inl (old, BabTy_Array loc eltType dims)) \<in> measure bool_ttsize"
     by auto
 
 next
-  fix loc types x
-  show "x \<in> set types \<Longrightarrow>
-       (Inl x, Inl (BabTy_Tuple loc types)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_type_smaller_than_list by auto
-
-next
-  fix loc fieldTypes x
-  show "x \<in> set fieldTypes \<Longrightarrow>
-       (Inl (snd x), Inl (BabTy_Record loc fieldTypes)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_type_smaller_than_fieldlist
-    by (metis bab_type_size.simps(7) eq_snd_iff in_measure old.sum.simps(5)
-        plus_1_eq_Suc) 
-
-next
-  fix loc eltType dims
-  show "(Inl eltType, Inl (BabTy_Array loc eltType dims)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
-
-next
-  fix loc eltType dims x
+  fix old loc eltType dims x
   show "x \<in> set (concat (map array_dim_terms dims)) \<Longrightarrow>
-       (Inr x, Inl (BabTy_Array loc eltType dims)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_arraydim by force
+       (Inr (old, x), Inl (old, BabTy_Array loc eltType dims)) \<in> measure bool_ttsize"
+    using bab_term_smaller_than_arraydim by force
 
 next
-  fix loc lit tms tm
+  fix old loc lit tms tm
   show "lit = BabLit_Array tms \<Longrightarrow>
        tm \<in> set tms \<Longrightarrow> 
-       (Inr tm, Inr (BabTm_Literal loc lit)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_list by force
+       (Inr (old, tm), Inr (old, BabTm_Literal loc lit)) \<in> measure bool_ttsize"
+    using bab_term_smaller_than_list by force
 
 next
-  fix ty types loc name
-  show "ty \<in> set types \<Longrightarrow> (Inl ty, Inr (BabTm_Name loc name types)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_type_smaller_than_list by force
+  fix old ty types loc name
+  show "ty \<in> set types \<Longrightarrow> (Inl (old, ty), Inr (old, BabTm_Name loc name types)) \<in> measure bool_ttsize"
+    using bab_type_smaller_than_list by force
 
 next
-  fix loc ty tm
-  show "(Inl ty, Inr (BabTm_Cast loc ty tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc ty tm
+  show "(Inl (old, ty), Inr (old, BabTm_Cast loc ty tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc ty tm
-  show "(Inr tm, Inr (BabTm_Cast loc ty tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc ty tm
+  show "(Inr (old, tm), Inr (old, BabTm_Cast loc ty tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm1 tm2 tm3
-  show "(Inr tm1, Inr (BabTm_If loc tm1 tm2 tm3)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm1 tm2 tm3
+  show "(Inr (old, tm1), Inr (old, BabTm_If loc tm1 tm2 tm3)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm1 tm2 tm3
-  show "(Inr tm2, Inr (BabTm_If loc tm1 tm2 tm3)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm1 tm2 tm3
+  show "(Inr (old, tm2), Inr (old, BabTm_If loc tm1 tm2 tm3)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm1 tm2 tm3
-  show "(Inr tm3, Inr (BabTm_If loc tm1 tm2 tm3)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm1 tm2 tm3
+  show "(Inr (old, tm3), Inr (old, BabTm_If loc tm1 tm2 tm3)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc op tm
-  show "(Inr tm, Inr (BabTm_Unop loc op tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc op tm
+  show "(Inr (old, tm), Inr (old, BabTm_Unop loc op tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm lst
-  show "(Inr tm, Inr (BabTm_Binop loc tm lst)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm lst
+  show "(Inr (old, tm), Inr (old, BabTm_Binop loc tm lst)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm
+  fix old loc tm
   fix lst :: "(BabBinop \<times> BabTerm) list"
   fix x :: "BabBinop \<times> BabTerm"
   assume Elem: "x \<in> set lst"
-  show "(Inr (snd x), Inr (BabTm_Binop loc tm lst)) \<in> measure ttsize"
+  show "(Inr (old, snd x), Inr (old, BabTm_Binop loc tm lst)) \<in> measure bool_ttsize"
   proof (cases x)
     case (Pair op rhs)
     have "bab_term_size rhs < Suc (sum_list (map (bab_term_size \<circ> snd) lst))"
-      unfolding ttsize_def using bab_term_smaller_than_fieldlist Pair Elem by auto
+      using bab_term_smaller_than_fieldlist Pair Elem by auto
+    hence "(Inr (snd x), Inr (BabTm_Binop loc tm lst)) \<in> measure ttsize"
+      using Pair by auto
     thus ?thesis
-      by (simp add: Pair ttsize_def)
+      by auto
   qed
 
 next
-  fix loc name tm1 tm2
-  show "(Inr tm1, Inr (BabTm_Let loc name tm1 tm2)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc name tm1 tm2
+  show "(Inr (old, tm1), Inr (old, BabTm_Let loc name tm1 tm2)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc name tm1 tm2
-  show "(Inr tm2, Inr (BabTm_Let loc name tm1 tm2)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc name tm1 tm2
+  show "(Inr (old, tm2), Inr (old, BabTm_Let loc name tm1 tm2)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc quant name ty tm
-  show "(Inl ty, Inr (BabTm_Quantifier loc quant name ty tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc quant name ty tm
+  show "(Inl (old, ty), Inr (old, BabTm_Quantifier loc quant name ty tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc quant name ty tm
-  show "(Inr tm, Inr (BabTm_Quantifier loc quant name ty tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc quant name ty tm
+  show "(Inr (old, tm), Inr (old, BabTm_Quantifier loc quant name ty tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm tms
-  show "(Inr tm, Inr (BabTm_Call loc tm tms)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm tms
+  show "(Inr (old, tm), Inr (old, BabTm_Call loc tm tms)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm tms x
-  show "x \<in> set tms \<Longrightarrow> (Inr x, Inr (BabTm_Call loc tm tms)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_list by force
+  fix old loc tm tms x
+  show "x \<in> set tms \<Longrightarrow> (Inr (old, x), Inr (old, BabTm_Call loc tm tms)) \<in> measure bool_ttsize"
+    using bab_term_smaller_than_list by force
 
 next
-  fix loc tms x
-  show "x \<in> set tms \<Longrightarrow> (Inr x, Inr (BabTm_Tuple loc tms)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_list by force
+  fix old loc tms x
+  show "x \<in> set tms \<Longrightarrow> (Inr (old, x), Inr (old, BabTm_Tuple loc tms)) \<in> measure bool_ttsize"
+    using bab_term_smaller_than_list by force
 
 next
-  fix loc flds x
-  show "x \<in> set flds \<Longrightarrow> (Inr (snd x), Inr (BabTm_Record loc flds)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_fieldlist
+  fix old loc flds x
+  have "x \<in> set flds \<Longrightarrow> (Inr (snd x), Inr (BabTm_Record loc flds)) \<in> measure ttsize"
+    using bab_term_smaller_than_fieldlist
     by (metis bab_term_size.simps(11) in_measure old.sum.simps(6) plus_1_eq_Suc
         prod.exhaust_sel)
+  thus "x \<in> set flds \<Longrightarrow> (Inr (old, snd x), Inr (old, BabTm_Record loc flds)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm flds 
-  show "(Inr tm, Inr (BabTm_RecordUpdate loc tm flds)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_fieldlist by force
+  fix old loc tm flds 
+  show "(Inr (old, tm), Inr (old, BabTm_RecordUpdate loc tm flds)) \<in> measure bool_ttsize"
+    using bab_term_smaller_than_fieldlist by force
 
 next
-  fix loc tm flds x
-  show "x \<in> set flds \<Longrightarrow> (Inr (snd x), Inr (BabTm_RecordUpdate loc tm flds)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_fieldlist
+  fix old loc tm flds x
+  have "x \<in> set flds \<Longrightarrow> (Inr (snd x), Inr (BabTm_RecordUpdate loc tm flds)) \<in> measure ttsize"
+    using bab_term_smaller_than_fieldlist
     by (metis add_Suc_shift bab_term_size.simps(12) in_measure old.sum.simps(6) plus_1_eq_Suc
         surjective_pairing trans_less_add2) 
+  thus "x \<in> set flds \<Longrightarrow> (Inr (old, snd x), Inr (old, BabTm_RecordUpdate loc tm flds)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm idx
-  show "(Inr tm, Inr (BabTm_TupleProj loc tm idx)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm idx
+  show "(Inr (old, tm), Inr (old, BabTm_TupleProj loc tm idx)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm name
-  show "(Inr tm, Inr (BabTm_RecordProj loc tm name)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm name
+  show "(Inr (old, tm), Inr (old, BabTm_RecordProj loc tm name)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm tms
-  show "(Inr tm, Inr (BabTm_ArrayProj loc tm tms)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm tms
+  show "(Inr (old, tm), Inr (old, BabTm_ArrayProj loc tm tms)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm tms x
-  show "x \<in> set tms \<Longrightarrow> (Inr x, Inr (BabTm_ArrayProj loc tm tms)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_list by force
+  fix old loc tm tms x
+  show "x \<in> set tms \<Longrightarrow> (Inr (old, x), Inr (old, BabTm_ArrayProj loc tm tms)) \<in> measure bool_ttsize"
+    using bab_term_smaller_than_list by force
 
 next
-  fix loc tm
-  show "(Inr tm, Inr (BabTm_Sizeof loc tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm
+  show "(Inr (old, tm), Inr (old, BabTm_Sizeof loc tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm
-  show "(Inr tm, Inr (BabTm_Allocated loc tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm
+  show "(Inr (old, tm), Inr (old, BabTm_Allocated loc tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc tm
-  show "(Inr tm, Inr (BabTm_Old loc tm)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc tm
+  show "(Inr (True, tm), Inr (old, BabTm_Old loc tm)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc scrut arms
-  show "(Inr scrut, Inr (BabTm_Match loc scrut arms)) \<in> measure ttsize"
-    unfolding ttsize_def by auto
+  fix old loc scrut arms
+  show "(Inr (old, scrut), Inr (old, BabTm_Match loc scrut arms)) \<in> measure bool_ttsize"
+    by auto
 
 next
-  fix loc scrut arms x
-  show "x \<in> set arms \<Longrightarrow> (Inr (snd x), Inr (BabTm_Match loc scrut arms)) \<in> measure ttsize"
-    unfolding ttsize_def using bab_term_smaller_than_fieldlist
+  fix old loc scrut arms x
+  have "x \<in> set arms \<Longrightarrow> (Inr (snd x), Inr (BabTm_Match loc scrut arms)) \<in> measure ttsize"
+    using bab_term_smaller_than_fieldlist
     by (metis add_Suc_shift bab_term_size.simps(16) in_measure old.sum.simps(6) plus_1_eq_Suc
         surjective_pairing trans_less_add2) 
-
+  thus "x \<in> set arms \<Longrightarrow> (Inr (old, snd x), Inr (old, BabTm_Match loc scrut arms)) \<in> measure bool_ttsize"
+    by auto
 qed
 
 
 fun post_parse_attribute :: "BabAttribute \<Rightarrow> (Location \<times> PostParseError) list" where
-  "post_parse_attribute (BabAttr_Requires _ tm) = post_parse_term tm"
+  "post_parse_attribute (BabAttr_Requires _ tm) = post_parse_term False tm"
 | "post_parse_attribute (BabAttr_Ensures _ tm) = 
     filter (\<lambda>(_, err). err \<noteq> PPE_OldOutsidePostcondition)
-      (post_parse_term tm)"
-| "post_parse_attribute (BabAttr_Invariant _ tm) = post_parse_term tm"
-| "post_parse_attribute (BabAttr_Decreases _ tm) = post_parse_term tm"
+      (post_parse_term False tm)"
+| "post_parse_attribute (BabAttr_Invariant _ tm) = post_parse_term False tm"
+| "post_parse_attribute (BabAttr_Decreases _ tm) = post_parse_term False tm"
 
 
 fun post_parse_statement :: "BabStatement \<Rightarrow> (Location \<times> PostParseError) list"
 and post_parse_stmt_arm :: "BabPattern \<times> BabStatement list \<Rightarrow> (Location \<times> PostParseError) list"
 where
   "post_parse_statement (BabStmt_VarDecl _ _ _ _ maybeType maybeTerm) =
-    case_option [] post_parse_type maybeType 
-    @ case_option [] post_parse_term maybeTerm"
-| "post_parse_statement (BabStmt_Fix _ _ ty) = post_parse_type ty"
-| "post_parse_statement (BabStmt_Obtain _ _ ty tm) = post_parse_type ty @ post_parse_term tm"
-| "post_parse_statement (BabStmt_Use _ tm) = post_parse_term tm"
-| "post_parse_statement (BabStmt_Assign _ _ tm1 tm2) = post_parse_term tm1 @ post_parse_term tm2"
-| "post_parse_statement (BabStmt_Swap _ _ tm1 tm2) = post_parse_term tm1 @ post_parse_term tm2"
-| "post_parse_statement (BabStmt_Return _ _ maybeTm) = case_option [] post_parse_term maybeTm"
+    case_option [] (post_parse_type False) maybeType 
+    @ case_option [] (post_parse_term False) maybeTerm"
+| "post_parse_statement (BabStmt_Fix _ _ ty) = post_parse_type False ty"
+| "post_parse_statement (BabStmt_Obtain _ _ ty tm) = post_parse_type False ty @ post_parse_term False tm"
+| "post_parse_statement (BabStmt_Use _ tm) = post_parse_term False tm"
+| "post_parse_statement (BabStmt_Assign _ _ tm1 tm2) = post_parse_term False tm1 @ post_parse_term False tm2"
+| "post_parse_statement (BabStmt_Swap _ _ tm1 tm2) = post_parse_term False tm1 @ post_parse_term False tm2"
+| "post_parse_statement (BabStmt_Return _ _ maybeTm) = case_option [] (post_parse_term False) maybeTm"
 | "post_parse_statement (BabStmt_Assert _ maybeTm stmts) =
-    case_option [] post_parse_term maybeTm
+    case_option [] (post_parse_term False) maybeTm
     @ concat (map post_parse_statement stmts)"
-| "post_parse_statement (BabStmt_Assume _ tm) = post_parse_term tm"
+| "post_parse_statement (BabStmt_Assume _ tm) = post_parse_term False tm"
 | "post_parse_statement (BabStmt_If _ _ tm stmts1 stmts2) =
-    post_parse_term tm
+    post_parse_term False tm
     @ concat (map post_parse_statement stmts1)
     @ concat (map post_parse_statement stmts2)"
 | "post_parse_statement (BabStmt_While _ _ tm attrs stmts) =
-    post_parse_term tm
+    post_parse_term False tm
     @ concat (map post_parse_attribute attrs)
     @ concat (map post_parse_statement stmts)"
-| "post_parse_statement (BabStmt_Call _ _ tm) = post_parse_term tm"
+| "post_parse_statement (BabStmt_Call _ _ tm) = post_parse_term False tm"
 | "post_parse_statement (BabStmt_Match _ _ scrut arms) = 
-    post_parse_term scrut @ concat (map post_parse_stmt_arm arms)"
+    post_parse_term False scrut @ concat (map post_parse_stmt_arm arms)"
 | "post_parse_statement (BabStmt_ShowHide _ _ _) = []"
 | "post_parse_stmt_arm (pat, stmts) = concat (map post_parse_statement stmts)"
 
@@ -1268,22 +1299,22 @@ fun post_parse_data_ctor :: "Location \<times> string \<times> (BabType option)
     \<Rightarrow> (Location \<times> PostParseError) list" where
 "post_parse_data_ctor (loc, name, maybeTy) =
    (if begins_with_capital name then [] else [(loc, PPE_DataCtorWrongCase)])
-   @ case_option [] post_parse_type maybeTy"
+   @ case_option [] (post_parse_type False) maybeTy"
 
 
 fun post_parse_declaration :: "BabDeclaration \<Rightarrow> (Location \<times> PostParseError) list" where
   "post_parse_declaration (BabDecl_Const cst) =
-    case_option [] post_parse_type (DC_Type cst)
-    @ case_option [] post_parse_term (DC_Value cst)"
+    case_option [] (post_parse_type False) (DC_Type cst)
+    @ case_option [] (post_parse_term False) (DC_Value cst)"
 | "post_parse_declaration (BabDecl_Function fun) =
-    concat (map (\<lambda>(_,_,ty). post_parse_type ty) (DF_TmArgs fun))
-    @ case_option [] post_parse_type (DF_ReturnType fun)
+    concat (map (\<lambda>(_,_,ty). post_parse_type False ty) (DF_TmArgs fun))
+    @ case_option [] (post_parse_type False) (DF_ReturnType fun)
     @ case_option [] (concat \<circ> map post_parse_statement) (DF_Body fun)
     @ concat (map post_parse_attribute (DF_Attributes fun))"
 | "post_parse_declaration (BabDecl_Datatype dtype) =
     concat (map post_parse_data_ctor (DD_Ctors dtype))"
 | "post_parse_declaration (BabDecl_Typedef tydef) =
-    case_option [] post_parse_type (DT_Definition tydef)"
+    case_option [] (post_parse_type False) (DT_Definition tydef)"
 
 
 fun post_parse_module :: "BabModule \<Rightarrow> (Location \<times> PostParseError) list" where
