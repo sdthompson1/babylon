@@ -105,7 +105,6 @@ void report_fix_wrong_type(struct Statement *stmt, struct Term *assert_term);
 void report_cannot_access_fields_in(struct Term *term);
 void report_field_not_found(struct Location loc, const char *field_name);
 void report_mixed_positional_and_named_fields(struct Location loc);
-void report_field_name_missing(struct Location location);
 void report_duplicate_field_name(struct Location location, const char *name);
 void report_ref_arg_not_allowed(struct Location location);
 void report_no_ref_in_postcondition(struct Location location);

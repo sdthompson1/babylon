@@ -8,7 +8,7 @@ interface {}
   const e: {f1: i32, f2: bool} = { a with xx = false };  // Error, updating nonexistent field
   const f: {f1: i32, f2: bool} = { a with f1 = 1, f1 = 2 };  // Error, updating same field twice
   const g: {f1: i32, f2: bool} = { 100 with f1 = 1 };   // Error, updating something that's not a record
-  const h: {f1: i32, f2: bool} = { a with 1, false };   // Error, trying to update without using the field-names
+
 
   const i = a(1);          // Error, trying to "call" a record
   const j = a(1,2);        // Error, trying to "call" a record

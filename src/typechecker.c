@@ -2286,12 +2286,9 @@ static void* typecheck_record_update(void *context, struct Term *term, void *typ
     // For each update-field
     for (struct NameTermList *update = term->record_update.fields; update; update = update->next) {
 
-        // Names must be given for all updates
+        // Names must be given for all updates (this is now ensured by the parser)
         if (update->name == NULL) {
-            report_field_name_missing(update->location);
-            tc_context->error = true;
-            ok = false;
-            continue;
+            fatal_error("Field name missing - parser should have ruled this out");
         }
 
         // Look for this field in the record type

@@ -21,6 +21,7 @@ function test()
     match v {
     case A(100) =>
     }
+
+    // Parenthesized pattern
+    match 1 { case (2) => }
 }
-
-

@@ -715,12 +715,6 @@ void report_mixed_positional_and_named_fields(struct Location loc)
     print_error("Mixture of named and unnamed fields\n");
 }
 
-void report_field_name_missing(struct Location loc)
-{
-    print_location(loc);
-    print_error("A field name is required\n");
-}
-
 
 //
 // Verifier errors

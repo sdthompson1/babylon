@@ -3,8 +3,6 @@ src/Record.b:7:48: Type mismatch
 src/Record.b:8:43: Field 'xx' not found
 src/Record.b:9:51: Duplicate field name 'f1'
 src/Record.b:10:36: Record update applied to non-record value
-src/Record.b:11:43: A field name is required
-src/Record.b:11:46: A field name is required
 src/Record.b:13:13: Value is not a callable function
 src/Record.b:14:13: Value is not a callable function
 src/Record.b:15:13: Value is not a callable function

@@ -671,20 +671,9 @@ static struct Pattern * parse_pattern(struct ParserState *state)
                     name = new_name;
                 }
 
-                bool have_payload = false;
-                bool paren = false;
-                if (state->token->type == TOK_LBRACE) {
-                    have_payload = true;
-                } else if (state->token->type == TOK_LPAREN) {
-                    have_payload = true;
-                    paren = true;
-                    advance(state);
-                }
-
-                struct Pattern *payload = have_payload ? parse_pattern(state) : NULL;
-
-                if (paren) {
-                    expect(state, TOK_RPAREN, "')'");
+                struct Pattern *payload = NULL;
+                if (state->token->type == TOK_LBRACE || state->token->type == TOK_LPAREN) {
+                    payload = parse_pattern(state);
                 }
 
                 struct Pattern *p = make_pattern(loc, PAT_VARIANT);
@@ -751,6 +740,15 @@ static struct Pattern * parse_pattern(struct ParserState *state)
             struct NamePatternList *list = parse_name_pattern_list(state, &loc);
             struct Pattern *p = make_pattern(loc, PAT_RECORD);
             p->record.fields = list;
+            return p;
+        }
+        break;
+
+    case TOK_LPAREN:
+        {
+            advance(state);
+            struct Pattern *p = parse_pattern(state);
+            expect(state, TOK_RPAREN, "')'");
             return p;
         }
         break;
@@ -905,7 +903,14 @@ static struct NameTermList * parse_name_term_list(struct ParserState *state,
             continue;
         }
 
-        
+        // Report an error if "with" is used with positional (rather than named) fields
+        if (*with && found_positional && initialiser) {
+            report_error(state, initialiser->location, "a field name is required");
+            free_term(initialiser);
+            free((void*)field_name);
+            break;
+        }
+
         struct NameTermList *node = alloc(sizeof(struct NameTermList));
         node->location = field_loc;
         node->name = field_name;
@@ -2469,6 +2474,9 @@ static struct Decl * parse_decl(struct ParserState *state)
         break;
 
     default:
+        if (ghost || extern_found || impure) {
+            report_error(state, state->token->location, "expected 'type', 'datatype', 'function' or 'const'");
+        }
         break;
     };
 
