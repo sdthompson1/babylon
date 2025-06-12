@@ -394,6 +394,8 @@ where
     return (foldl (\<lambda>tm f. f tm) tm suffixes)
   }"
 
+(* TODO: Accepting <Tyargs> after field-proj or tuple-proj is a temporary
+hack and will be removed at some point *)
 | "parse_call_or_proj_suffix fuel restrict =
     (do {
       loc_and_args \<leftarrow> located (parens (comma_list (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted))));
@@ -413,6 +415,7 @@ where
   <|> (do {
         expect DOT;
         loc_and_fld \<leftarrow> located (satisfy is_nat_num_token);
+        parse_optional_tyargs fuel;
         (case loc_and_fld of
           (loc, NAT_NUM n) \<Rightarrow>
             return (\<lambda>tm. BabTm_TupleProj (merge_locations (bab_term_location tm) loc)
@@ -422,6 +425,7 @@ where
   <|> (do {
         expect DOT;
         loc_and_fld \<leftarrow> located (satisfy is_name_token);
+        parse_optional_tyargs fuel;
         (case loc_and_fld of
           (loc, NAME n) \<Rightarrow>
             return (\<lambda>tm. BabTm_RecordProj (merge_locations (bab_term_location tm) loc)
