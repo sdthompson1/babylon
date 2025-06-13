@@ -22,7 +22,7 @@ definition test_post_parse :: "string \<Rightarrow> (Location \<times> PostParse
 
 (* value "lex ''Test.b'' ''0x10000000000000000''" *)
 
-value "test_parser parse_term ''y.0''"
+value "test_parser parse_term ''{a=1,b=2,c=3,4,5,6,}''"
 
 value "test_parser parse_module ''module Main
 interface {}

@@ -281,16 +281,37 @@ fun make_unop_term :: "Location \<times> BabUnop \<Rightarrow> BabTerm option \<
 | "make_unop_term (loc, op) (Some tm)
     = Some (BabTm_Unop (merge_locations loc (bab_term_location tm)) op tm)"
 
+
+(* Helper for making tuple or record terms *)
+fun make_tuple_or_record :: "BabTerm option \<Rightarrow> (string \<times> BabTerm) list \<Rightarrow> BabTerm list
+                             \<Rightarrow> (Location \<Rightarrow> BabTerm) Parser" where
+  "make_tuple_or_record (Some with) flds [] = return (\<lambda>loc. BabTm_RecordUpdate loc with flds)"
+| "make_tuple_or_record (Some _) _ (tm#_) = fail_at (bab_term_location tm)"
+| "make_tuple_or_record None flds [] = return (\<lambda>loc. BabTm_Record loc flds)"
+| "make_tuple_or_record None [] tms = return (\<lambda>loc. BabTm_Tuple loc tms)"
+| "make_tuple_or_record None ((_,tm1)#_) (tm2#_) = 
+    fail_at (max_location (bab_term_location tm1) (bab_term_location tm2))" 
+
+
+(* Helpers for case sums *)
+fun case_sum_3 :: "('a \<Rightarrow> 'r) \<Rightarrow> ('b \<Rightarrow> 'r) \<Rightarrow> ('c \<Rightarrow> 'r)
+                    \<Rightarrow> ('a + 'b + 'c \<Rightarrow> 'r)" where
+  "case_sum_3 a b c = case_sum a (case_sum b c)"
+
+fun case_sum_5 :: "('a \<Rightarrow> 'r) \<Rightarrow> ('b \<Rightarrow> 'r) \<Rightarrow> ('c \<Rightarrow> 'r) \<Rightarrow> ('d \<Rightarrow> 'r) \<Rightarrow> ('e \<Rightarrow> 'r)
+                    \<Rightarrow> ('a + 'b + 'c + 'd + 'e \<Rightarrow> 'r)" where
+  "case_sum_5 a b c d e = case_sum a (case_sum b (case_sum c (case_sum d e)))"
+
+
 (* Note: a "restricted" term is one that cannot contain the curly-brace function
    call syntax (e.g. `f{1,2,3}`). This is used to avoid ambiguities in certain
    contexts e.g. if-conditions. It is our equivalent of the following Rust issue:
    https://github.com/rust-lang/rust/issues/50090. *)
 datatype Restrict = Restricted | Unrestricted
 
-
 (* Mutually recursive type and term parsing functions *)
 
-fun parse_type_fuelled :: "nat \<Rightarrow> BabType Parser"
+function parse_type_fuelled :: "nat \<Rightarrow> BabType Parser"
   and parse_basic_type :: "nat \<Rightarrow> BabType Parser"
   and parse_optional_tyargs :: "nat \<Rightarrow> BabType list Parser"
   and parse_name_type_pair :: "nat \<Rightarrow> (string \<times> BabType) Parser"
@@ -302,6 +323,8 @@ fun parse_type_fuelled :: "nat \<Rightarrow> BabType Parser"
   and parse_call_or_proj_expr :: "nat \<Rightarrow> Restrict \<Rightarrow> BabTerm Parser"
   and parse_call_or_proj_suffix :: "nat \<Rightarrow> Restrict \<Rightarrow> (BabTerm \<Rightarrow> BabTerm) Parser"
   and parse_primary_expr :: "nat \<Rightarrow> Restrict \<Rightarrow> BabTerm Parser"
+  and parse_tuple_or_record :: "nat \<Rightarrow> BabTerm option \<times> (string \<times> BabTerm) list \<times> BabTerm list \<Rightarrow> 
+                                (BabTerm option \<times> (string \<times> BabTerm) list \<times> BabTerm list) Parser"
 where
 
 (* Parse a type *)
@@ -317,7 +340,8 @@ where
    array types, e.g. i32[2][3] vs. (i32[3])[2] *)
 (* Note: in a type, Foo.Bar is always a qualified name, not a
    field projection (i.e. there is no ambiguity with dots) *)
-| "parse_basic_type fuel =
+| "parse_basic_type 0 = undefined"
+| "parse_basic_type (Suc fuel) =
   (parens (delay (\<lambda>_. parse_type_fuelled fuel)))
   <|> parse_numeric_type
   <|> with_loc (
@@ -338,12 +362,14 @@ where
     )"
 
 (* Parse optional angle-brackets-type-list *)
-| "parse_optional_tyargs fuel = 
+| "parse_optional_tyargs 0 = undefined"
+| "parse_optional_tyargs (Suc fuel) = 
     angles (comma_list (delay (\<lambda>_. parse_type_fuelled fuel)))
       <|> return []"
 
 (* Parse a "name : type" pair *)
-| "parse_name_type_pair fuel = do {
+| "parse_name_type_pair 0 = undefined"
+| "parse_name_type_pair (Suc fuel) = do {
     name \<leftarrow> parse_name;
     expect COLON;
     ty \<leftarrow> parse_type_fuelled fuel;
@@ -352,11 +378,13 @@ where
 
 
 (* Parse an array-dimension-list in brackets *)
-| "parse_array_suffix fuel = 
+| "parse_array_suffix 0 = undefined"
+| "parse_array_suffix (Suc fuel) = 
     brackets (comma_list_no_trailing (parse_array_dimension fuel))"
 
 (* Parse a single array dimension *)
-| "parse_array_dimension fuel =
+| "parse_array_dimension 0 = undefined"
+| "parse_array_dimension (Suc fuel) =
     (expect STAR \<then> return BabDim_Allocatable)
     <|> (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted) \<bind> (return \<circ> BabDim_Fixed))
     <|> (return BabDim_Unknown)"
@@ -370,7 +398,8 @@ where
   })"
 
 (* Parse operator-term pair at given precedence or higher *)
-| "parse_operator_and_term fuel min_prec restrict =
+| "parse_operator_and_term 0 _ _ = undefined"
+| "parse_operator_and_term (Suc fuel) min_prec restrict =
     do {
       p \<leftarrow> binop_of_at_least_prec min_prec;
       term \<leftarrow> parse_term_min fuel (Suc (fst p)) restrict;
@@ -378,7 +407,8 @@ where
     }"
 
 (* Parse unary operator expression *)
-| "parse_unop_expr fuel restrict = do {
+| "parse_unop_expr 0 _ = undefined"
+| "parse_unop_expr (Suc fuel) restrict = do {
     ops \<leftarrow> many (located parse_unop);
     tm \<leftarrow> parse_call_or_proj_expr fuel restrict;
     let maybeResult = foldr make_unop_term ops (Some tm);
@@ -388,7 +418,8 @@ where
   }"
 
 (* Parse function call, field projection or array projection *)
-| "parse_call_or_proj_expr fuel restrict = do {
+| "parse_call_or_proj_expr 0 _ = undefined"
+| "parse_call_or_proj_expr (Suc fuel) restrict = do {
     tm \<leftarrow> parse_primary_expr fuel restrict;
     suffixes \<leftarrow> many (parse_call_or_proj_suffix fuel restrict);
     return (foldl (\<lambda>tm f. f tm) tm suffixes)
@@ -396,7 +427,8 @@ where
 
 (* TODO: Accepting <Tyargs> after field-proj or tuple-proj is a temporary
 hack and will be removed at some point *)
-| "parse_call_or_proj_suffix fuel restrict =
+| "parse_call_or_proj_suffix 0 _ = undefined"
+| "parse_call_or_proj_suffix (Suc fuel) restrict =
     (do {
       loc_and_args \<leftarrow> located (parens (comma_list (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted))));
       return (\<lambda>tm. BabTm_Call (merge_locations (bab_term_location tm) (fst loc_and_args))
@@ -440,7 +472,8 @@ hack and will be removed at some point *)
       })"
 
 (* Parse a primary expression, e.g. variable name, literal, parenthesized expression *)
-| "parse_primary_expr fuel restrict =
+| "parse_primary_expr 0 _ = undefined"
+| "parse_primary_expr (Suc fuel) restrict =
     (parens (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted)))
   <|> with_loc (
         (int_literal \<bind> (\<lambda>lit. return (\<lambda>loc. BabTm_Literal loc lit)))
@@ -525,45 +558,78 @@ hack and will be removed at some point *)
           return (\<lambda>loc. BabTm_Literal loc (BabLit_Array terms))
         })
     <|> (do {
-          terms \<leftarrow> braces (comma_list (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted)));
-          return (\<lambda>loc. BabTm_Tuple loc terms)
+          expect LBRACE;
+          param \<leftarrow> parse_tuple_or_record fuel (None, [], []);
+          case param of (with, flds, terms) \<Rightarrow>
+            make_tuple_or_record with (List.rev flds) (List.rev terms)
         })
-    <|> braces (delay (\<lambda>_. (do {
-          baseTermOption \<leftarrow> optional (do {
-            term \<leftarrow> parse_term_min fuel 0 Unrestricted;
-            expect (KEYWORD KW_WITH);
-            return term });
-          namesTerms \<leftarrow> comma_list (delay (\<lambda>_. 
-            (do {
-              name \<leftarrow> parse_name;
-              expect EQUAL;
-              value \<leftarrow> parse_term_min fuel 0 Unrestricted;
-              return (name, value)
-            })));
-          return (\<lambda>loc. case baseTermOption of
-            None \<Rightarrow> BabTm_Record loc namesTerms
-            | Some baseTerm \<Rightarrow> BabTm_RecordUpdate loc baseTerm namesTerms)
-        })))
    )"
+
+| "parse_tuple_or_record 0 _ = undefined"
+| "parse_tuple_or_record (Suc fuel) param =
+    (case param of (with, flds, terms) \<Rightarrow>
+      (optional (expect COMMA) \<then> expect RBRACE \<then> return param)
+      <|> (do {
+        (if flds \<noteq> [] \<or> terms \<noteq> [] then expect COMMA else return COMMA);
+        maybeName \<leftarrow> optional (do {
+          name \<leftarrow> parse_name;
+          expect EQUAL;
+          return name
+        });
+        term \<leftarrow> parse_term_min fuel 0 Unrestricted;
+        foundWith \<leftarrow> (if with = None \<and> maybeName = None
+          then optional (expect (KEYWORD KW_WITH)) else return None);
+        let newParam =
+          (if foundWith \<noteq> None then (Some term, flds, terms)
+          else case maybeName of
+            Some name \<Rightarrow> (with, (name,term)#flds, terms)
+            | None \<Rightarrow> (with, flds, term#terms));
+        parse_tuple_or_record fuel newParam
+      }))"
+
+  by pat_completeness auto
+  termination by (relation "measure 
+    (case_sum_5
+      (case_sum
+        (case_sum_3 id id id)
+        (case_sum_3 id id id))
+      (case_sum_3
+        (\<lambda>x. case x of (a,_,_) \<Rightarrow> a)
+        (\<lambda>x. case x of (a,_,_) \<Rightarrow> a)
+        fst)
+      (case_sum fst fst)
+      fst
+      (\<lambda>x. case x of (a,_,_,_) \<Rightarrow> a))", 
+    auto)
+
+
+(* This should be more than enough fuel for the above *)
+(* (Also note that if fuel runs out, it will cause the compiler to
+   crash; it will not cause incorrect output to be generated.) *)
+definition parser_required_fuel :: "nat Parser" where
+  "parser_required_fuel = do {
+    count \<leftarrow> get_num_tokens;
+    return (16*(count+1))
+  }"
 
 
 (* Top-level type and term parsers *)
 definition parse_type :: "BabType Parser" where
   "parse_type = do {
-    count \<leftarrow> get_num_tokens;
-    parse_type_fuelled (Suc count)
+    fuel \<leftarrow> parser_required_fuel;
+    parse_type_fuelled fuel
   }"
 
 definition parse_term :: "BabTerm Parser" where
   "parse_term = do {
-    count \<leftarrow> get_num_tokens;
-    parse_term_min (Suc count) 0 Unrestricted
+    fuel \<leftarrow> parser_required_fuel;
+    parse_term_min fuel 0 Unrestricted
   }"
 
 definition parse_restricted_term :: "BabTerm Parser" where
   "parse_restricted_term = do {
-    count \<leftarrow> get_num_tokens;
-    parse_term_min (Suc count) 0 Restricted
+    fuel \<leftarrow> parser_required_fuel;
+    parse_term_min fuel 0 Restricted
   }"
 
 
