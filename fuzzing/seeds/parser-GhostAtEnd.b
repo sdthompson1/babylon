@@ -1,0 +1,4 @@
+module GhostAtEnd
+interface {}
+
+ghost
