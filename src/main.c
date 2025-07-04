@@ -25,6 +25,11 @@ repository.
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdint.h>
+
+#ifdef __AFL_FUZZ_INIT
+__AFL_FUZZ_INIT()
+#endif
 
 //------------------------------------------------------------------------
 // Subcommand Names
@@ -248,12 +253,15 @@ static bool help_subcommand(int argc, char **argv)
 }
 
 //------------------------------------------------------------------------
-// Compilation Subcommands (translate, compile, verify, build, fuzz)
+// Compilation Subcommands (translate, compile, verify, build)
 
 // Special settings for the "fuzz" command
 struct FuzzSettings {
     char *oracle;
     int max_status;
+    int child_stdin_fd;
+    int child_stdout_fd;
+    pid_t child_pid;
 };
 
 // This "moves" all the settings from cfg to a new CompileOptions struct.
@@ -282,6 +290,8 @@ static struct CompileOptions * transfer_compiler_config(struct CompilerConfig *c
     copt->run_c_compiler = false;
     copt->print_c_compiler_commands = false;
     copt->main_filename_override = NULL;
+    copt->main_file_buf = NULL;
+    copt->main_file_len = 0;
     return copt;
 }
 
@@ -558,54 +568,11 @@ static void parse_compilation_options_or_exit(int argc, char **argv,
     adjust_compile_options(copt);
 }
 
-// Returns -1 on error, or 0-255 if the command exited with that status
-static int run_oracle(const char *command, const char *argument)
-{
-    if (command == NULL) {
-        fprintf(stderr, "No oracle command specified - please use --oracle option\n");
-        return -1;
-    }
-
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        // Fork failed
-        perror("fork failed");
-        return -1;
-
-    } else if (pid == 0) {
-        // Child process
-        execlp(command, command, argument, (char*)NULL);
-
-        // If exec returns, it failed
-        perror("execl failed");
-        exit(EXIT_FAILURE);
-
-    } else {
-        // Parent process
-        int status;
-        if (waitpid(pid, &status, 0) == -1) {
-            perror("waitpid failed");
-            return -1;
-        }
-
-        if (WIFEXITED(status)) {
-            return WEXITSTATUS(status);
-        } else {
-            fprintf(stderr, "Oracle command did not exit normally\n");
-            return -1;
-        }
-    }
-}
-
 static bool compilation_subcommand(int argc, char **argv,
                                    struct CompilerConfig *cfg,
                                    enum Subcommand cmd)
 {
     struct CompileOptions *copt = transfer_compiler_config(cfg);
-
-    struct FuzzSettings fuzz_settings = {0};
-    fuzz_settings.max_status = 99999;
 
     switch (cmd) {
     case CMD_TRANSLATE:
@@ -627,14 +594,11 @@ static bool compilation_subcommand(int argc, char **argv,
         copt->run_c_compiler = true;
         break;
 
-    case CMD_FUZZ:
-        break;
-
     default:
         fatal_error("compilation_subcommand called incorrectly");
     }
 
-    parse_compilation_options_or_exit(argc, argv, copt, &fuzz_settings, cmd);
+    parse_compilation_options_or_exit(argc, argv, copt, NULL, cmd);
 
     enum CompileResult compile_result = compile(copt);
 
@@ -647,9 +611,197 @@ static bool compilation_subcommand(int argc, char **argv,
         }
     }
 
-    if (cmd == CMD_FUZZ) {
-        // CMD_FUZZ logic: call abort() if compile result doesn't match oracle
-        int oracle_result = run_oracle(fuzz_settings.oracle, copt->main_filename_override);
+    free_compile_options(copt);
+    return (compile_result == CR_SUCCESS);
+}
+
+//------------------------------------------------------------------------
+// Fuzz Subcommand
+
+// Initialize the persistent oracle child process
+static int init_oracle_child(struct FuzzSettings *fuzz_settings)
+{
+    if (fuzz_settings->oracle == NULL) {
+        fprintf(stderr, "No oracle command specified - please use --oracle option\n");
+        return -1;
+    }
+
+    int stdin_pipe[2];
+    int stdout_pipe[2];
+
+    if (pipe(stdin_pipe) == -1 || pipe(stdout_pipe) == -1) {
+        perror("pipe failed");
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork failed");
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        return -1;
+    } else if (pid == 0) {
+        // Child process
+        close(stdin_pipe[1]);   // Close write end of stdin pipe
+        close(stdout_pipe[0]);  // Close read end of stdout pipe
+
+        dup2(stdin_pipe[0], STDIN_FILENO);   // Redirect stdin
+        dup2(stdout_pipe[1], STDOUT_FILENO); // Redirect stdout
+
+        close(stdin_pipe[0]);
+        close(stdout_pipe[1]);
+
+        execlp(fuzz_settings->oracle, fuzz_settings->oracle, (char*)NULL);
+        perror("execl failed");
+        exit(EXIT_FAILURE);
+    } else {
+        // Parent process
+        close(stdin_pipe[0]);   // Close read end of stdin pipe
+        close(stdout_pipe[1]);  // Close write end of stdout pipe
+
+        fuzz_settings->child_stdin_fd = stdin_pipe[1];
+        fuzz_settings->child_stdout_fd = stdout_pipe[0];
+        fuzz_settings->child_pid = pid;
+        return 0;
+    }
+}
+
+// Clean up the oracle child process
+static void cleanup_oracle_child(struct FuzzSettings *fuzz_settings)
+{
+    if (fuzz_settings->child_stdin_fd != -1) {
+        close(fuzz_settings->child_stdin_fd);
+        fuzz_settings->child_stdin_fd = -1;
+    }
+    if (fuzz_settings->child_stdout_fd != -1) {
+        close(fuzz_settings->child_stdout_fd);
+        fuzz_settings->child_stdout_fd = -1;
+    }
+    if (fuzz_settings->child_pid != -1) {
+        waitpid(fuzz_settings->child_pid, NULL, 0);
+        fuzz_settings->child_pid = -1;
+    }
+}
+
+// Read file contents into a buffer
+static unsigned char* read_file_contents(const char *filename, size_t *file_size)
+{
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("fopen failed (check --main-file option)");
+        return NULL;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    if (size < 0) {
+        perror("ftell failed");
+        fclose(file);
+        return NULL;
+    }
+    *file_size = (size_t)size;
+    fseek(file, 0, SEEK_SET);
+
+    unsigned char *buffer = alloc(*file_size);
+    size_t bytes_read = fread(buffer, 1, *file_size, file);
+    fclose(file);
+
+    if (bytes_read != *file_size) {
+        fprintf(stderr, "Failed to read entire file\n");
+        free(buffer);
+        return NULL;
+    }
+
+    return buffer;
+}
+
+// Returns -1 on error, or 0-255 if the oracle returned that status
+static int run_oracle(struct FuzzSettings *fuzz_settings, const char *filename, const unsigned char *buf, uint64_t buflen)
+{
+    // Initialize child process if not already done
+    if (fuzz_settings->child_pid == -1) {
+        if (init_oracle_child(fuzz_settings) != 0) {
+            return -1;
+        }
+    }
+
+    // Read file contents
+    size_t file_size = 0;
+    unsigned char *file_contents = NULL;
+    if (buf == NULL) {
+        file_contents = read_file_contents(filename, &file_size);
+        if (!file_contents) {
+            return -1;
+        }
+        buf = file_contents;
+        buflen = file_size;
+    }
+
+    // Write length as 4-byte little-endian unsigned integer
+    uint32_t length = (uint32_t)buflen;
+    unsigned char length_bytes[4];
+    length_bytes[0] = length & 0xFF;
+    length_bytes[1] = (length >> 8) & 0xFF;
+    length_bytes[2] = (length >> 16) & 0xFF;
+    length_bytes[3] = (length >> 24) & 0xFF;
+
+    ssize_t bytes_written = write(fuzz_settings->child_stdin_fd, length_bytes, 4);
+    if (bytes_written != 4) {
+        perror("Failed to write length to oracle");
+        free(file_contents);
+        return -1;
+    }
+
+    // Write file contents
+    bytes_written = write(fuzz_settings->child_stdin_fd, buf, buflen);
+    if (bytes_written != (ssize_t)buflen) {
+        perror("Failed to write file contents to oracle");
+        free(file_contents);
+        return -1;
+    }
+
+    free(file_contents);
+
+    // Read single byte response from oracle
+    unsigned char response;
+    ssize_t bytes_read = read(fuzz_settings->child_stdout_fd, &response, 1);
+    if (bytes_read != 1) {
+        perror("Failed to read response from oracle");
+        return -1;
+    }
+
+    return (int)response;
+}
+
+static void fuzz_subcommand(int argc, char **argv,
+                            struct CompilerConfig *cfg,
+                            unsigned char *afl_buf)
+{
+    struct FuzzSettings fuzz_settings = {0};
+    fuzz_settings.max_status = 99999;
+    fuzz_settings.child_stdin_fd = -1;
+    fuzz_settings.child_stdout_fd = -1;
+    fuzz_settings.child_pid = -1;
+
+    struct CompileOptions *copt = transfer_compiler_config(cfg);
+    parse_compilation_options_or_exit(argc, argv, copt, &fuzz_settings, CMD_FUZZ);
+
+#ifdef __AFL_LOOP
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wgnu-statement-expression"
+    while (__AFL_LOOP(10000)) {
+#pragma GCC diagnostic pop
+
+        int len = __AFL_FUZZ_TESTCASE_LEN;
+        if (len < 8) continue;
+        copt->main_file_buf = afl_buf;
+        copt->main_file_len = len;
+#endif
+
+        enum CompileResult compile_result = compile(copt);
+        int oracle_result = run_oracle(&fuzz_settings, copt->main_filename_override, copt->main_file_buf, copt->main_file_len);
 
         int effective_compile_result = (int)compile_result;
         if (effective_compile_result > fuzz_settings.max_status) {
@@ -662,11 +814,14 @@ static bool compilation_subcommand(int argc, char **argv,
             abort();
         }
 
-        free(fuzz_settings.oracle);
-    }
+        printf("Compile result: %d, oracle result: %d\n", (int)compile_result, oracle_result);
 
-    free_compile_options(copt);
-    return (compile_result == CR_SUCCESS);
+#ifdef __AFL_LOOP
+    }
+#endif
+
+    cleanup_oracle_child(&fuzz_settings);
+    free(fuzz_settings.oracle);
 }
 
 //------------------------------------------------------------------------
@@ -679,6 +834,16 @@ static void print_version()
 
 int main(int argc, char **argv)
 {
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    __AFL_INIT();
+#endif
+
+#ifdef __AFL_FUZZ_TESTCASE_BUF
+    unsigned char *afl_buf = __AFL_FUZZ_TESTCASE_BUF;
+#else
+    unsigned char *afl_buf = NULL;
+#endif
+
     // Read config file.
     struct CompilerConfig *cfg = load_config_file();
 
@@ -731,8 +896,12 @@ int main(int argc, char **argv)
     case CMD_TRANSLATE:
     case CMD_VERIFY:
     case CMD_BUILD:
-    case CMD_FUZZ:
         success = compilation_subcommand(argc, argv, cfg, cmd);
+        break;
+
+    case CMD_FUZZ:
+        fuzz_subcommand(argc, argv, cfg, afl_buf);
+        success = true;
         break;
 
     case CMD_CHECK_CONFIG:

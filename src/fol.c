@@ -160,6 +160,7 @@ void stop_fol_runner()
         g_fol_runner->jobs_head = next;
     }
     free(g_fol_runner);
+    g_fol_runner = NULL;
 }
 
 bool fol_continue_after_error()

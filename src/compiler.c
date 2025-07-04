@@ -7,6 +7,8 @@ For licensing information please see LICENCE.txt at the root of the
 repository.
 */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include "alloc.h"
 #include "ast.h"
 #include "cache_db.h"
@@ -95,6 +97,8 @@ struct LoadDetails {
     bool print_c_compiler_commands;
 
     const char *main_filename_override;
+    const unsigned char *main_file_buf;
+    size_t main_file_len;
 };
 
 
@@ -442,7 +446,19 @@ static enum CompileResult load_module_from_disk(struct LoadDetails *details,
     bool interface_only = !process_whole_module;
 
     // Load from filesystem
-    FILE *file = info ? fopen(info->b_filename, "rb") : NULL;
+    FILE *file = NULL;
+    if (info) {
+        // Check if this filename matches main_filename_override and we have buffer data
+        if (details->main_filename_override != NULL
+            && details->main_file_buf != NULL
+            && strcmp(info->b_filename, details->main_filename_override) == 0) {
+            // Use memory buffer instead of filesystem
+            file = fmemopen((void*)details->main_file_buf, details->main_file_len, "rb");
+        } else {
+            // Normal filesystem access
+            file = fopen(info->b_filename, "rb");
+        }
+    }
     if (file) {
         found = true;
         token = lex(info->b_filename, file, interface_only);
@@ -870,6 +886,8 @@ enum CompileResult compile(struct CompileOptions *options)
     details.print_c_compiler_commands = options->print_c_compiler_commands;
 
     details.main_filename_override = options->main_filename_override;
+    details.main_file_buf = options->main_file_buf;
+    details.main_file_len = options->main_file_len;
 
     enum CompileResult compile_result = CR_SUCCESS;
     if (options->requested_modules == NULL) {

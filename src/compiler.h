@@ -53,9 +53,17 @@ struct CompileOptions {
     bool run_c_compiler;
     bool print_c_compiler_commands;
 
-    // If this is non-NULL then a module called "Main" in the root package will
-    // use this filename instead of the usual "Main.b". (Used for the fuzzing mode.)
+    // If this is non-NULL then a module called "Main" in the root
+    // package will use this filename instead of the usual "Main.b".
+    // (Used for the fuzzing mode.)
     const char *main_filename_override;
+    
+    // If main_filename_override is set and matches a file being
+    // loaded, and main_file_buf is non-NULL, then use this buffer
+    // instead of reading from the filesystem. (Used for the fuzzing
+    // mode.)
+    const unsigned char *main_file_buf;
+    size_t main_file_len;
 };
 
 void free_compile_options(struct CompileOptions *copt);
