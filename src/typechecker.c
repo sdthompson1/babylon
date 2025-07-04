@@ -1916,13 +1916,13 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
 
             bool ok = true;
 
-            if (chase_univars(term->binop.lhs->type)->tag != TY_FINITE_INT) {
+            if (term->binop.lhs->type && chase_univars(term->binop.lhs->type)->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", term->binop.lhs);
                 tc_context->error = true;
                 ok = false;
             }
 
-            if (chase_univars(term->binop.list->rhs->type)->tag != TY_FINITE_INT) {
+            if (term->binop.list->rhs->type && chase_univars(term->binop.list->rhs->type)->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", term->binop.list->rhs);
                 tc_context->error = true;
                 ok = false;
@@ -2342,22 +2342,23 @@ static void* typecheck_field_proj(void *context, struct Term *term, void *type_r
     }
 
     struct Type *record_type = chase_univars(lhs->type);
-
-    if (record_type->tag == TY_RECORD) {
-        // Check that the field name exists, and assign the proper type if so.
-        for (struct NameTypeList *field = record_type->record_data.fields; field; field = field->next) {
-            if (strcmp(field->name, field_name) == 0) {
-                term->type = copy_type(field->type);
-                return NULL;
+    if (record_type) {
+        if (record_type->tag == TY_RECORD) {
+            // Check that the field name exists, and assign the proper type if so.
+            for (struct NameTypeList *field = record_type->record_data.fields; field; field = field->next) {
+                if (strcmp(field->name, field_name) == 0) {
+                    term->type = copy_type(field->type);
+                    return NULL;
+                }
             }
-        }
-        report_field_not_found(term->location, field_name);
-        tc_context->error = true;
+            report_field_not_found(term->location, field_name);
+            tc_context->error = true;
 
-    } else {
-        // LHS is not something we can project fields from.
-        report_cannot_access_fields_in(lhs);
-        tc_context->error = true;
+        } else {
+            // LHS is not something we can project fields from.
+            report_cannot_access_fields_in(lhs);
+            tc_context->error = true;
+        }
     }
 
     return NULL;
@@ -2441,6 +2442,9 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
                               bool scrutinee_lvalue, bool scrutinee_read_only)
 {
     scrutinee_type = chase_univars(scrutinee_type);
+    if (!scrutinee_type) {
+        return false;
+    }
 
     switch (pattern->tag) {
     case PAT_VAR:
