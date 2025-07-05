@@ -81,7 +81,12 @@ struct ParserState {
     // checksumming
     struct SHA256_CTX sha256_module;
     struct SHA256_CTX sha256_decl;
+
+    // stack overflow check
+    int nesting_depth;
 };
+
+#define MAX_NESTING_DEPTH 1000
 
 static void advance(struct ParserState *state)
 {
@@ -294,7 +299,7 @@ static struct NameTypeList *parse_name_type_list(struct ParserState *state,
     return list;
 }
 
-static struct Type * parse_type(struct ParserState *state, bool report_errors)
+static struct Type * parse_type_impl(struct ParserState *state, bool report_errors)
 {
     struct Location loc = state->token->location;
     enum TokenType tag = state->token->type;
@@ -544,6 +549,16 @@ static struct Type * parse_type(struct ParserState *state, bool report_errors)
     return final_result;
 }
 
+static struct Type * parse_type(struct ParserState *state, bool report_errors)
+{
+    if (++ state->nesting_depth > MAX_NESTING_DEPTH) {
+        fatal_error("excessive nesting depth");
+    }
+    struct Type * type = parse_type_impl(state, report_errors);
+    -- state->nesting_depth;
+    return type;
+}
+
 
 // -----------------------------------------------------------------------------
 
@@ -627,7 +642,7 @@ static struct NamePatternList * parse_name_pattern_list(struct ParserState *stat
     return list;
 }
 
-static struct Pattern * parse_pattern(struct ParserState *state)
+static struct Pattern * parse_pattern_impl(struct ParserState *state)
 {
     struct Location loc = state->token->location;
     bool negative = false;
@@ -757,6 +772,16 @@ static struct Pattern * parse_pattern(struct ParserState *state)
         report_error(state, loc, "expected pattern");
         return NULL;
     }
+}
+
+static struct Pattern * parse_pattern(struct ParserState *state)
+{
+    if (++ state->nesting_depth > MAX_NESTING_DEPTH) {
+        fatal_error("excessive nesting depth");
+    }
+    struct Pattern * pattern = parse_pattern_impl(state);
+    -- state->nesting_depth;
+    return pattern;
 }
 
 static struct Arm * make_arm(struct Pattern *p, void *r,
@@ -1499,7 +1524,12 @@ static struct Term * parse_operators(struct ParserState *state, int precedence, 
 
 static struct Term * parse_term(struct ParserState *state, bool allow_lbrace)
 {
-    return parse_operators(state, 1, allow_lbrace);
+    if (++ state->nesting_depth > MAX_NESTING_DEPTH) {
+        fatal_error("excessive nesting depth");
+    }
+    struct Term * term = parse_operators(state, 1, allow_lbrace);
+    -- state->nesting_depth;
+    return term;
 }
 
 
@@ -1938,7 +1968,7 @@ static struct Statement * parse_show_hide_stmt(struct ParserState *state)
     return new_stmt;
 }
 
-static struct Statement * parse_statement(struct ParserState *state)
+static struct Statement * parse_statement_impl(struct ParserState *state)
 {
     bool ghost = false;
     if (state->token->type == TOK_KW_GHOST) {
@@ -2008,6 +2038,16 @@ static struct Statement * parse_statement(struct ParserState *state)
         stmt->ghost = ghost;
     }
 
+    return stmt;
+}
+
+static struct Statement * parse_statement(struct ParserState *state)
+{
+    if (++ state->nesting_depth > MAX_NESTING_DEPTH) {
+        fatal_error("excessive nesting depth");
+    }
+    struct Statement * stmt = parse_statement_impl(state);
+    -- state->nesting_depth;
     return stmt;
 }
 
@@ -2620,6 +2660,7 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     state.error = false;
     state.postcondition = false;
     state.old = false;
+    state.nesting_depth = 0;
     sha256_init(&state.sha256_decl);
     sha256_init(&state.sha256_module);
     const char *mod_int = "MOD-INT";
