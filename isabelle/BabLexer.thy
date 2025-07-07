@@ -56,6 +56,10 @@ fun initial_lexer_state :: "string \<Rightarrow> string \<Rightarrow> LexerState
 (* Lexer result type *)
 datatype LexResult = LR_Success "(Location \<times> Token) list" | LR_Error Location
 
+fun lr_is_error :: "LexResult \<Rightarrow> bool" where
+  "lr_is_error (LR_Success _) = False"
+| "lr_is_error (LR_Error _) = True"
+
 
 (* Character predicates *)
 definition char_in_range :: "char \<Rightarrow> char \<Rightarrow> char \<Rightarrow> bool" where
@@ -176,6 +180,22 @@ definition name_to_keyword :: "string \<Rightarrow> Keyword option" where
   | ''with'' \<Rightarrow> Some KW_WITH
   | _ \<Rightarrow> None)"
 
+fun validate_dotted_component :: "string \<Rightarrow> bool" where
+  "validate_dotted_component name =
+    (name \<noteq> [] \<and> name \<noteq> ''_'' \<and>
+      (is_decimal_digit (hd name) \<longrightarrow> list_all is_decimal_digit name))"
+
+fun split_on_dot :: "string \<Rightarrow> string list" where
+  "split_on_dot [] = [[]]"
+| "split_on_dot (c # cs) =
+    (if c = CHR ''.'' then [] # split_on_dot cs
+     else (case split_on_dot cs of
+      (x # xs) \<Rightarrow> (c # x) # xs))"
+
+fun validate_dotted_name :: "string \<Rightarrow> bool" where
+  "validate_dotted_name name =
+    list_all validate_dotted_component (split_on_dot name)"
+
 (* Read an identifier, keyword, or lone underscore
    (sequence of alphanumeric or underscore -- no need to filter out
    all-digits or lone underscore cases, as these will be higher 
@@ -184,8 +204,9 @@ definition name_to_keyword :: "string \<Rightarrow> Keyword option" where
 definition lex_ident_or_keyword_or_underscore :: "Token Lexer" where
   "lex_ident_or_keyword_or_underscore = do {
     init \<leftarrow> located (satisfy (\<lambda>c. is_alpha c \<or> c = CHR ''_''));
-    rest \<leftarrow> located (many (satisfy (\<lambda>c. is_alpha c \<or> is_decimal_digit c \<or> c = CHR ''_'')));
-    if length (snd rest) > 199 then
+    rest \<leftarrow> located (many (satisfy (\<lambda>c. is_alpha c \<or> is_decimal_digit c 
+                      \<or> c = CHR ''_'' \<or> c = CHR ''.'')));
+    if length (snd rest) > 999 then
       fail_at (merge_locations (fst init) (fst rest))
     else do {
       let word = (snd init) # (snd rest);
@@ -193,7 +214,11 @@ definition lex_ident_or_keyword_or_underscore :: "Token Lexer" where
         return UNDERSCORE
       else (case name_to_keyword word of
              Some kw \<Rightarrow> return (KEYWORD kw)
-           | None \<Rightarrow> return (NAME word))
+           | None \<Rightarrow> 
+              (if validate_dotted_name word then
+                return (NAME word)
+               else
+                fail_at (merge_locations (fst init) (fst rest))))
     }
   }"
 
@@ -510,13 +535,6 @@ lemma test_too_big_number:
           = LR_Error (Location ''BadNum.b'' 1 22 1 22)"
   by eval
 
-(* Names over 200 chars are rejected. This one is 201 chars. *)
-(* As above, error location is wrong. *)
-lemma test_too_big_name:
-  shows "lex ''Test.b'' ''abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890abcdefghij1234567890123456789012345678901234567890z''
-          = LR_Error (Location ''Test.b'' 1 202 1 202)"
-  by eval
-
 (* As above, error location is wrong. *)
 lemma test_unclosed_comment:
   shows "lex ''BadComment.b'' (''foo'' @ [newline] @ '' /* '' @ [newline])
@@ -527,6 +545,32 @@ lemma test_unclosed_comment:
 lemma test_unclosed_comment_2:
   shows "lex ''BadComment.b'' (''/* /*/ A'')
           = LR_Error (Location ''BadComment.b'' 1 9 1 9)"
+  by eval
+
+(* Valid and invalid dotted names *)
+lemma test_normal_name:
+  shows "lex ''Test.b'' ''abc'' = LR_Success [(Location ''Test.b'' 1 1 1 4, NAME ''abc'')]"
+  by eval
+
+lemma test_dotted_name:
+  shows "lex ''Test.b'' ''abc.def''
+          = LR_Success [(Location ''Test.b'' 1 1 1 8, NAME ''abc.def'')]"
+  by eval
+
+lemma test_empty_component:
+  shows "lr_is_error (lex ''Test.b'' ''abc..def'')"
+  by eval
+
+lemma test_underscore_component:
+  shows "lr_is_error (lex ''Test.b'' ''abc._.def'')"
+  by eval
+
+lemma test_bad_numeric_component:
+  shows "lr_is_error (lex ''Test.b'' ''abc.0a'')"
+  by eval
+
+lemma test_good_numeric_component:
+  shows "\<not> lr_is_error (lex ''Test.b'' ''abc.0'')"
   by eval
 
 end

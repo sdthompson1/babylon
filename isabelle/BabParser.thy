@@ -97,15 +97,6 @@ definition parse_nat_num :: "nat Parser" where
   }"
 
 
-(* This can be used in contexts where names can only be interpreted
-as dotted, e.g. names in types (as opposed to names in terms where
-a dotted name could also be a field projection). *)
-definition parse_dotted_name :: "string Parser" where
-  "parse_dotted_name = do {
-    names \<leftarrow> sep_by_1 parse_name (expect DOT);
-    return (concat (intersperse ''.'' names))
-  }"
-
 
 (* PATTERN PARSING *)
 
@@ -119,7 +110,7 @@ fun parse_pattern_fuelled :: "nat \<Rightarrow> BabPattern Parser" where
    parens (delay (\<lambda>_. parse_pattern_fuelled fuel))
    <|> with_loc ((do {
     ref \<leftarrow> (expect (KEYWORD KW_REF) \<then> return Ref) <|> return Var;
-    name \<leftarrow> parse_dotted_name;
+    name \<leftarrow> parse_name;
     if begins_with_capital name then (do {
       (if ref = Ref then fail else return ());
       payload \<leftarrow> (do {
@@ -347,7 +338,7 @@ where
   <|> with_loc (
         (expect (KEYWORD KW_BOOL) \<then> return BabTy_Bool)
     <|> (do {
-          name \<leftarrow> parse_dotted_name;
+          name \<leftarrow> parse_name;
           args \<leftarrow> parse_optional_tyargs fuel;
           return (\<lambda>loc. BabTy_Name loc name args)
         })
@@ -447,7 +438,6 @@ hack and will be removed at some point *)
   <|> (do {
         expect DOT;
         loc_and_fld \<leftarrow> located (satisfy is_nat_num_token);
-        parse_optional_tyargs fuel;
         (case loc_and_fld of
           (loc, NAT_NUM n) \<Rightarrow>
             return (\<lambda>tm. BabTm_TupleProj (merge_locations (bab_term_location tm) loc)
@@ -456,10 +446,9 @@ hack and will be removed at some point *)
       })
   <|> (do {
         expect DOT;
-        loc_and_fld \<leftarrow> located (satisfy is_name_token);
-        parse_optional_tyargs fuel;
+        loc_and_fld \<leftarrow> located parse_name;
         (case loc_and_fld of
-          (loc, NAME n) \<Rightarrow>
+          (loc, n) \<Rightarrow>
             return (\<lambda>tm. BabTm_RecordProj (merge_locations (bab_term_location tm) loc)
                                           tm
                                           n))
@@ -759,7 +748,7 @@ definition parse_show_hide_stmt :: "BabStatement Parser" where
     showOrHide \<leftarrow> 
       (expect (KEYWORD KW_SHOW) \<then> return Show)
       <|> (expect (KEYWORD KW_HIDE) \<then> return Hide);
-    name \<leftarrow> parse_dotted_name;
+    name \<leftarrow> parse_name;
     expect SEMICOLON;
     return (\<lambda>loc. BabStmt_ShowHide loc showOrHide name)
   })"
@@ -996,7 +985,7 @@ definition parse_import :: "BabImport Parser" where
   "parse_import = with_loc (do {
     expect (KEYWORD KW_IMPORT);
     qualified \<leftarrow> (expect (NAME ''qualified'') \<then> return True) <|> (return False);
-    name \<leftarrow> parse_dotted_name;
+    name \<leftarrow> parse_name;
     alias \<leftarrow> (expect (NAME ''as'') \<then> parse_name) <|> (return name);
     expect SEMICOLON;
     return (\<lambda>loc. \<lparr> Imp_Location = loc,
@@ -1009,7 +998,7 @@ definition parse_import :: "BabImport Parser" where
 definition parse_module :: "BabModule Parser" where
   "parse_module = do {
     expect (KEYWORD KW_MODULE);
-    name \<leftarrow> parse_dotted_name;
+    name \<leftarrow> parse_name;
     interface_imports \<leftarrow> many parse_import;
     expect (KEYWORD KW_INTERFACE);
     interface \<leftarrow> braces (many parse_decl);
