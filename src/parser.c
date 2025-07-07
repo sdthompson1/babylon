@@ -1363,7 +1363,7 @@ static struct Term * parse_call_or_proj_expr(struct ParserState *state, bool all
 
             advance(state);
 
-            term = parse_tyarg_suffix(state, new_term);
+            term = new_term;
 
         } else if (state->token->type == TOK_LBRACKET) {
             // Array projection

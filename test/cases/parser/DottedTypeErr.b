@@ -2,5 +2,5 @@
 
 module DottedTypeErr
 interface {
-  const x: M. = 100;
+    const x: M. = 100;
 }

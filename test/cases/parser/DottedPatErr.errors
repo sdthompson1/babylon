@@ -1,1 +1,1 @@
-src/DottedPatErr.b:6:28: Syntax error (expected variant name)
+src/DottedPatErr.b:6:23: Syntax error (couldn't parse 'Foo.')

@@ -20,7 +20,7 @@ repository.
 #include <string.h>
 
 // Maximum length of name that the lexer can handle
-#define MAX_NAME_LEN  200
+#define MAX_NAME_LEN  1000
 
 struct LexerState {
     // only one of these will be set
@@ -470,6 +470,42 @@ static void lex_string_literal(struct LexerState *state)
     free(buf);
 }
 
+static bool validate_dotted_name(const char *name)
+{
+    const char *p = name;
+    while (true) {
+        const char *q = strchr(p, '.');
+        if (q == NULL) q = strchr(p, 0);
+
+        if (p == q) {
+            // Empty component - not allowed
+            return false;
+        }
+
+        if (p[0] == '_' && p + 1 == q) {
+            // Lone underscore - not allowed, unless it is the whole of name
+            if (!(name[0] == '_' && name[1] == 0)) {
+                return false;
+            }
+        }
+
+        if (isdigit((int)p[0])) {
+            // Numeric component. Must be all digits
+            for (const char *x = p + 1; x != q; ++x) {
+                if (!isdigit((int)*x)) {
+                    return false;
+                }
+            }
+        }
+
+        if (*q == '.') {
+            p = q + 1;
+        } else {
+            return true;
+        }
+    }
+}
+
 static void lex_keyword_or_name(struct LexerState *state)
 {
     char buf[MAX_NAME_LEN + 1];
@@ -478,7 +514,7 @@ static void lex_keyword_or_name(struct LexerState *state)
 
     while (1) {
         ch = peek_next_char(state);
-        if (!isalnum(ch) && ch != '_') {
+        if (!isalnum(ch) && ch != '_' && ch != '.') {
             break;
         }
         read_next_char(state);
@@ -707,6 +743,11 @@ static void lex_keyword_or_name(struct LexerState *state)
         if (buf[1] == 0) {
             add_simple_token(state, TOK_UNDERSCORE);
         }
+    }
+
+    if (!validate_dotted_name(buf)) {
+        report_incorrect_dotted_name(state->location, buf);
+        state->error = true;
     }
 
     if (old_tail == state->tail) {

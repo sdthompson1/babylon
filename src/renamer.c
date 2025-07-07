@@ -211,15 +211,42 @@ static void add_new_local_name(struct RenamerState *state,
 }
 
 
-// Tries to resolve an unqualified name as either a local, global from the
-// current module, or imported global. Could return multiple results, if there
+// Results of name resolution - list of resolved names
+struct ResolveResult {
+    // resolved_name is either a fully resolved global name (e.g. "pkg-name/ModName.ExportedName")
+    // or a local variable name without dots (e.g. "x")
+    char *resolved_name;
+
+    // suffix is a string like "a" or "b.c"; it is present when record fields are being
+    // projected from a valid object. suffix can also be NULL.
+    char *suffix;
+
+    struct ResolveResult *next;
+};
+
+static void free_resolve_result(struct ResolveResult *rr)
+{
+    while (rr) {
+        if (rr->resolved_name) free(rr->resolved_name);
+        if (rr->suffix) free(rr->suffix);
+        struct ResolveResult *next = rr->next;
+        free(rr);
+        rr = next;
+    }
+}
+
+
+// Tries to resolve an unqualified name as either a local, a global from the
+// current module, or an imported global. Could return multiple results, if there
 // is ambiguity.
-static struct NameList * resolve_unqualified_name(struct RenamerState *state,
-                                                  const char *unqualified_name)
+// This is not usually called directly; resolve_name is usually more convenient.
+static struct ResolveResult * resolve_unqualified_name(struct RenamerState *state,
+                                                       const char *unqualified_name)
 {
     if (strcmp(unqualified_name, "return") == 0) {
-        struct NameList *list = alloc(sizeof(struct NameList));
-        list->name = copy_string(unqualified_name);
+        struct ResolveResult *list = alloc(sizeof(struct ResolveResult));
+        list->resolved_name = copy_string(unqualified_name);
+        list->suffix = NULL;
         list->next = NULL;
         return list;
     }
@@ -228,17 +255,18 @@ static struct NameList * resolve_unqualified_name(struct RenamerState *state,
 
     if (local && local->scope_number != 0) {
         // local variable, currently in scope
-        struct NameList *list = alloc(sizeof(struct NameList));
+        struct ResolveResult *list = alloc(sizeof(struct ResolveResult));
         if (local->version_number != 0) {
             char buf[30];
             sprintf(buf,
                     "@%s%" PRIu64,
                     state->match_compiler_counter ? "copy" : "",
                     local->version_number);
-            list->name = copy_string_2(unqualified_name, buf);
+            list->resolved_name = copy_string_2(unqualified_name, buf);
         } else {
-            list->name = copy_string(unqualified_name);
+            list->resolved_name = copy_string(unqualified_name);
         }
+        list->suffix = NULL;
         list->next = NULL;
         return list;
 
@@ -246,13 +274,14 @@ static struct NameList * resolve_unqualified_name(struct RenamerState *state,
 
         // let's see if it is a global name (from this or another module)
 
-        struct NameList *list = NULL;
+        struct ResolveResult *list = NULL;
 
         // check the current module
         if (hash_table_contains_key(state->interface_names, unqualified_name)
         || hash_table_contains_key(state->implementation_names, unqualified_name)) {
-            struct NameList *new_node = alloc(sizeof(struct NameList));
-            new_node->name = copy_string_3(state->module->name, ".", unqualified_name);
+            struct ResolveResult *new_node = alloc(sizeof(struct ResolveResult));
+            new_node->resolved_name = copy_string_3(state->module->name, ".", unqualified_name);
+            new_node->suffix = NULL;
             new_node->next = list;
             list = new_node;
         }
@@ -260,8 +289,9 @@ static struct NameList * resolve_unqualified_name(struct RenamerState *state,
         // check imports from other modules
         struct NameList *lookup = hash_table_lookup(state->imported_names, unqualified_name);
         while (lookup) {
-            struct NameList *new_node = alloc(sizeof(struct NameList));
-            new_node->name = copy_string(lookup->name);
+            struct ResolveResult *new_node = alloc(sizeof(struct ResolveResult));
+            new_node->resolved_name = copy_string(lookup->name);
+            new_node->suffix = NULL;
             new_node->next = list;
             list = new_node;
             lookup = lookup->next;
@@ -271,11 +301,13 @@ static struct NameList * resolve_unqualified_name(struct RenamerState *state,
     }
 }
 
-
-// Resolves a qualified name "A.B" to a global name "pkg-name/ModName.B",
+// Resolves a qualified name e.g. "A.B" to a global name "pkg-name/ModName.B",
 // either from the current or an imported module.
-static struct NameList * resolve_qualified_name(struct RenamerState *state,
-                                                const char *A, const char *B)
+// The "A" part may itself contain dots (i.e. a dotted module name) but the
+// "B" part should not contain any dots.
+// This is not usually called directly; resolve_name is usually more convenient.
+static struct ResolveResult * resolve_qualified_name(struct RenamerState *state,
+                                                     const char *A, const char *B)
 {
     if (state->module && strcmp(state->module_name_without_package, A) == 0) {
 
@@ -285,8 +317,9 @@ static struct NameList * resolve_qualified_name(struct RenamerState *state,
 
         if (hash_table_contains_key(state->interface_names, B) ||
         hash_table_contains_key(state->implementation_names, B)) {
-            struct NameList *new_node = alloc(sizeof(struct NameList));
-            new_node->name = copy_string_3(state->module->name, ".", B);
+            struct ResolveResult *new_node = alloc(sizeof(struct ResolveResult));
+            new_node->resolved_name = copy_string_3(state->module->name, ".", B);
+            new_node->suffix = NULL;
             new_node->next = NULL;
             return new_node;
         } else {
@@ -297,7 +330,19 @@ static struct NameList * resolve_qualified_name(struct RenamerState *state,
         char *AB = copy_string_3(A, ".", B);
         struct NameList *list = hash_table_lookup(state->imported_names, AB);
         free(AB);
-        return copy_name_list(list);  // list should either be NULL or have one item.
+
+        // list should be either NULL or have one item
+        if (list == NULL) {
+            return NULL;
+        } else if (list->next == NULL) {
+            struct ResolveResult *result = alloc(sizeof(struct ResolveResult));
+            result->resolved_name = copy_string(list->name);
+            result->suffix = NULL;
+            result->next = NULL;
+            return result;
+        } else {
+            fatal_error("found multiple variables with the same fully-qualified name");
+        }
 
     } else {
 
@@ -306,58 +351,108 @@ static struct NameList * resolve_qualified_name(struct RenamerState *state,
     }
 }
 
-
-static bool split_on_dot(const char *name, const char **A, const char **B)
+// Helper function to copy a character range [p, q).
+static char * copy_char_range(const char *p, const char *q)
 {
-    const char *dot = strchr(name, '.');
-    if (dot) {
-        size_t len = dot - name;
-
-        char *new_a = malloc(len + 1);
-        memcpy(new_a, name, len);
-        new_a[len] = 0;
-        *A = new_a;
-
-        *B = copy_string(dot + 1);
-
-        return true;
-
-    } else {
-        return false;
-    }
+    char *result = alloc(q - p + 1);
+    memcpy(result, p, q - p);
+    result[q - p] = 0;
+    return result;
 }
 
+// Helper function to append resolved name(s) to a list
+static void add_resolve_result(struct ResolveResult **list,
+                               struct ResolveResult ***tail_ptr,
+                               struct ResolveResult *new_items,
+                               const char *suffix)
+{
+    if (suffix) {
+        for (struct ResolveResult *p = new_items; p; p = p->next) {
+            p->suffix = copy_string(suffix);
+        }
+    }
+    if (new_items) {
+        **tail_ptr = new_items;
+        *tail_ptr = &new_items->next;
+        while (**tail_ptr) {
+            *tail_ptr = &(**tail_ptr)->next;
+        }
+    }
+}
 
 // Resolves a name, calling either resolve_qualified_name or
 // resolve_unqualified_name as appropriate. (Also adds "^" character
 // if requested.)
-static struct NameList * resolve_name(struct RenamerState *state,
-                                      bool requires_hat,
-                                      const char *name)
+static struct ResolveResult * resolve_name(struct RenamerState *state,
+                                           bool requires_hat,
+                                           const char *name,
+                                           bool allow_suffix)
 {
-    // Qualified names
-    const char *A;
-    const char *B;
-    if (split_on_dot(name, &A, &B)) {
-        if (requires_hat) add_hat(&B);
-        struct NameList *result = resolve_qualified_name(state, A, B);
-        free((char*)A);
-        free((char*)B);
-        return result;
+    struct ResolveResult *result = NULL;
+    struct ResolveResult **tail_ptr = &result;
+
+    // Find the first dot if there is one
+    const char *dot = strchr(name, '.');
+
+    // Try it as an unqualified name (possibly with a suffix)
+    if (allow_suffix || dot == NULL) {
+        // Split into base name and suffix
+        const char *base_name = dot ? copy_char_range(name, dot) : copy_string(name);
+        const char *suffix = dot ? copy_string(dot + 1) : NULL;
+
+        // Add hat if required
+        if (requires_hat) add_hat(&base_name);
+
+        // Try to resolve as an unqualified name
+        struct ResolveResult *resolved = resolve_unqualified_name(state, base_name);
+        free((char*)base_name);
+
+        // Add the results to our list
+        add_resolve_result(&result, &tail_ptr, resolved, suffix);
+        free((char*)suffix);
+
+        // If there was a single result which is a local name (i.e. contains no
+        // dots) then we can stop here as local names shadow all others
+        if (result && !result->next && !strchr(result->resolved_name, '.')) {
+            return result;
+        }
     }
 
-    // Unqualified names
-    const char *name_copy = copy_string(name);
-    if (requires_hat) add_hat(&name_copy);
-    struct NameList *result = resolve_unqualified_name(state, name_copy);
-    free((char*)name_copy);
+    // Try all possible qualified name + suffix combinations
+    while (dot) {
+        // Find next dot if there is one
+        const char *next_dot = strchr(dot + 1, '.');
+
+        if (allow_suffix || next_dot == NULL) {
+            // Find "A", "B" and "suffix" parts of the name
+            const char *A = copy_char_range(name, dot);
+            const char *B = next_dot ? copy_char_range(dot + 1, next_dot) : copy_string(dot + 1);
+            const char *suffix = next_dot ? copy_string(next_dot + 1) : NULL;
+
+            // Add the hat if required
+            if (requires_hat) add_hat(&B);
+
+            // Try to resolve A.B as a qualified name
+            struct ResolveResult *resolved = resolve_qualified_name(state, A, B);
+            free((char*)A);
+            free((char*)B);
+
+            // Add the new resolve results to our list
+            add_resolve_result(&result, &tail_ptr, resolved, suffix);
+            free((char*)suffix);
+        }
+
+        // Move on
+        dot = next_dot;
+    }
+
     return result;
 }
 
 void handle_resolution_failure(struct RenamerState *state,
                                const char *name,
                                struct Location location,
-                               struct NameList *list)
+                               struct ResolveResult *list)
 {
     if (state->match_compiler_counter) {
         // "not in scope" errors are ignored in this mode
@@ -366,39 +461,37 @@ void handle_resolution_failure(struct RenamerState *state,
     }
 
     if (list == NULL) {
-        // The name didn't resolve to anything. This is a "Not in
-        // scope" or another similar error.
+        // The name didn't resolve to anything. This is a "Not in scope"
+        // or another similar error.
 
-        const char *A;
-        const char *B;
-        if (split_on_dot(name, &A, &B)) {
+        const char *final_dot = strrchr(name, '.');
+        if (final_dot) {
+            const char *A = copy_char_range(name, final_dot);
 
             if (hash_table_contains_key(state->module_aliases, A)
             || strcmp(A, state->module_name_without_package) == 0) {
-                // "A" is a valid module-name, so we can't say that "A
-                // is not in scope". But the module doesn't export
-                // "B", so saying "A.B not in scope" is valid.
+                // "A" is a valid module-name, so the error is that
+                // "A.B" is not in scope
                 report_not_in_scope(location, name);
 
             } else {
-                struct NameList *list2 = resolve_name(state, false, A);
+                struct ResolveResult *list2 = resolve_name(state, false, A, true);
                 if (list2) {
-                    // "A" is not a module, but is a valid name
-                    // (perhaps it is a type, or constant). Report
-                    // that "A" is being incorrectly used as if it
-                    // were a module.
+                    // "A" is not a module, but it is a valid name
+                    // (perhaps a constant). Report that "A" is being
+                    // incorrectly used as if it was a module.
                     report_incorrect_use_as_module(location, A);
-                    free_name_list(list2);
+                    free_resolve_result(list2);
 
                 } else {
                     // "A" doesn't refer to anything, so we want to
-                    // report "A not in scope" (rather than "A.B not
-                    // in scope").
+                    // report "A not in scope", rather than "A.B not
+                    // in scope".
                     report_not_in_scope(location, A);
                 }
             }
+
             free((char*)A);
-            free((char*)B);
 
         } else {
             // "name" is an undotted (unqualified) name, so just
@@ -407,8 +500,19 @@ void handle_resolution_failure(struct RenamerState *state,
         }
 
     } else {
-        // The name could refer to multiple things so report an ambiguity error
-        report_ambiguity(location, name, list);
+        // The name could refer to multiple things, so report an ambiguity error.
+        struct NameList *names = NULL;
+        struct NameList **tail = &names;
+        while (list) {
+            struct NameList *node = alloc(sizeof(struct NameList));
+            node->name = copy_string(list->resolved_name);
+            node->next = NULL;
+            *tail = node;
+            tail = &node->next;
+            list = list->next;
+        }
+        report_ambiguity(location, name, names);
+        free_name_list(names);
     }
 
     state->error = true;
@@ -424,16 +528,16 @@ static void * rename_var_type(void *context, struct Type *type)
 {
     struct RenamerState *state = context;
 
-    struct NameList *list = resolve_name(state, true, type->var_data.name);
+    struct ResolveResult *list = resolve_name(state, true, type->var_data.name, false);
     if (list && !list->next) {
         free((char*)type->var_data.name);
-        type->var_data.name = list->name;
-        list->name = NULL;
+        type->var_data.name = list->resolved_name;
+        list->resolved_name = NULL;
     } else {
         handle_resolution_failure(state, type->var_data.name, type->location, list);
     }
 
-    free_name_list(list);
+    free_resolve_result(list);
     return NULL;
 }
 
@@ -467,6 +571,58 @@ static void rename_type(struct RenamerState *state, struct Type *type)
 
 // Term renaming.
 
+static void apply_field_proj_suffixes(struct Term *term, const char *suffixes)
+{
+    if (suffixes == NULL) {
+        return;
+    }
+
+    // Save the original term data
+    struct Term original = *term;
+
+    // First, count how many field names we have
+    int field_count = 1;
+    const char *p = suffixes;
+    while ((p = strchr(p, '.')) != NULL) {
+        field_count++;
+        p++;
+    }
+
+    // Create an array to hold the field names
+    const char **field_names = alloc(field_count * sizeof(const char *));
+
+    // Split the suffixes string on dots
+    p = suffixes;
+    for (int i = 0; i < field_count; i++) {
+        const char *next_dot = strchr(p, '.');
+        if (next_dot == NULL) {
+            // Last field name
+            field_names[i] = copy_string(p);
+        } else {
+            // Copy the field name from p to next_dot
+            field_names[i] = copy_char_range(p, next_dot);
+            p = next_dot + 1;
+        }
+    }
+
+    // Build the nested structure from the inside out
+    struct Term *current_term = term;
+    for (int i = field_count - 1; i >= 0; i--) {
+        current_term->tag = TM_FIELD_PROJ;
+        current_term->field_proj.lhs = alloc(sizeof(struct Term));
+        current_term->field_proj.field_name = field_names[i];
+        current_term->location = original.location;
+        current_term->type = NULL;
+
+        current_term = current_term->field_proj.lhs;
+    }
+
+    // The innermost "lhs" is the original term
+    *current_term = original;
+
+    free(field_names);
+}
+
 static void* rename_var_term(void *context, struct Term *term, void *type_result)
 {
     struct RenamerState *state = context;
@@ -483,128 +639,18 @@ static void* rename_var_term(void *context, struct Term *term, void *type_result
         }
 
     } else {
-        struct NameList *list = resolve_name(state, false, term->var.name);
+        struct ResolveResult *list = resolve_name(state, false, term->var.name, true);
         if (list && !list->next) {
             free((void*)term->var.name);
-            term->var.name = list->name;
-            list->name = NULL;
+            term->var.name = list->resolved_name;
+            list->resolved_name = NULL;
+            apply_field_proj_suffixes(term, list->suffix);
         } else {
             handle_resolution_failure(state, term->var.name, term->location, list);
         }
-        free_name_list(list);
+        free_resolve_result(list);
     }
 
-    return NULL;
-}
-
-// Appends ".B" to all names in unqual_list, concatenates the two
-// lists, returns the result. The original lists are both handed over.
-// It's assumed that qual_list is not empty.
-static struct NameList * combine_qual_unqual_lists(struct NameList *qual_list,
-                                                   struct NameList *unqual_list,
-                                                   const char *B)
-{
-    struct NameList *ptr = qual_list;
-    while (ptr->next) ptr = ptr->next;
-    ptr->next = unqual_list;
-    ptr = unqual_list;
-
-    while (ptr) {
-        char *new_name = copy_string_3(ptr->name, ".", B);
-        free((char*)ptr->name);
-        ptr->name = new_name;
-        ptr = ptr->next;
-    }
-
-    return qual_list;
-}
-                                         
-static void* nr_rename_field_proj(struct TermTransform *tr, void *context, struct Term *term, void *type_result)
-{
-    struct RenamerState *state = context;
-
-    if (state->match_compiler_counter == NULL
-    && term->field_proj.lhs->tag == TM_VAR) {
-
-        // Term is of the form "A.B" where A and B are names
-        // (and we are not in match-compiler mode).
-
-        // This could be either a qualified name "A.B", or a
-        // projection of field "B" from the unqualified name "A". We
-        // will try both possibilities.
-
-        const char * A = term->field_proj.lhs->var.name;
-        const char * B = term->field_proj.field_name;
-        struct NameList *qual_list = resolve_qualified_name(state, A, B);
-        struct NameList *unqual_list = resolve_unqualified_name(state, A);
-
-        if (unqual_list && !unqual_list->next && strchr(unqual_list->name, '.') == NULL) {
-            // "A" resolves to a local name (and then "B" is a field
-            // name of a record).
-
-            // This shadows all other interpretations including "A"
-            // being a global, or "A.B" being a qualified reference to
-            // a global.
-
-        } else if (qual_list) {
-            // "A.B" can be interpreted as a qualified reference to a
-            // global.
-
-            // Consider also whether A could be an unqualified
-            // reference to a global (with B a field name).
-
-            // If this ends up with more than one possible
-            // interpretation, then we have an ambiguity error.
-            // Otherwise the (unique) correct interpretation is that
-            // "A.B" is a qualified name of a global.
-
-            struct NameList *combined_list = combine_qual_unqual_lists(qual_list, unqual_list, B);
-            qual_list = unqual_list = NULL;
-
-            if (combined_list->next) {
-                // Ambiguity error.
-                char *AB = copy_string_3(A, ".", B);
-                handle_resolution_failure(state, AB, term->location, combined_list);
-                free(AB);
-
-            } else {
-                // Change the term into a TM_VAR (with a qualified name).
-
-                free_term(term->field_proj.lhs);
-                free((char*)term->field_proj.field_name);
-
-                term->tag = TM_VAR;
-                term->var.name = combined_list->name;
-                combined_list->name = NULL;
-                term->var.postcond_new = false;  // "new" not applicable to imported names
-            }
-
-            free_name_list(combined_list);
-            return NULL;
-
-        } else if (unqual_list && !unqual_list->next) {
-            // We have a unique interpretation where "A" is an
-            // unqualified global, and B is a field-name.
-
-        } else {
-            // Either there are multiple interpretations where "A" is
-            // an unqualified global, or there are no possible
-            // interpretations of either "A" or "A.B".
-            char *AB = copy_string_3(A, ".", B);
-            handle_resolution_failure(state, AB, term->location, unqual_list);
-            free(AB);
-            free_name_list(qual_list);
-            free_name_list(unqual_list);
-            return NULL;
-        }
-
-        free_name_list(qual_list);
-        free_name_list(unqual_list);
-    }
-
-    // If we get here, we want to continue renaming the LHS term in
-    // its own right.
-    transform_term(tr, context, term->field_proj.lhs);
     return NULL;
 }
 
@@ -723,16 +769,16 @@ static void rename_pattern(struct RenamerState *state,
             rename_pattern(state, bound_vars, pattern->variant.payload);
         }
 
-        struct NameList *list = resolve_name(state, false, pattern->variant.variant_name);
+        struct ResolveResult *list = resolve_name(state, false, pattern->variant.variant_name, false);
         if (list && !list->next) {
             free((void*)pattern->variant.variant_name);
-            pattern->variant.variant_name = list->name;
-            list->name = NULL;
+            pattern->variant.variant_name = list->resolved_name;
+            list->resolved_name = NULL;
         } else {
             handle_resolution_failure(state, pattern->variant.variant_name, pattern->location, list);
         }
 
-        free_name_list(list);
+        free_resolve_result(list);
         break;
 
     case PAT_WILDCARD:
@@ -770,7 +816,6 @@ static void rename_term(struct RenamerState *state, struct Term *term)
     struct TermTransform tr;
     memset(&tr, 0, sizeof(tr));
     tr.transform_var = rename_var_term;
-    tr.nr_transform_field_proj = nr_rename_field_proj;
     tr.nr_transform_let = nr_rename_let;
     tr.nr_transform_quantifier = nr_rename_quantifier;
     tr.nr_transform_match = nr_rename_match;
@@ -933,15 +978,15 @@ static void rename_statement(struct RenamerState *state, struct Statement *stmt)
 
         case ST_SHOW_HIDE:
             {
-                struct NameList *list = resolve_name(state, false, stmt->show_hide.name);
+                struct ResolveResult *list = resolve_name(state, false, stmt->show_hide.name, false);
                 if (list && !list->next) {
                     free((void*)stmt->show_hide.name);
-                    stmt->show_hide.name = list->name;
-                    list->name = NULL;
+                    stmt->show_hide.name = list->resolved_name;
+                    list->resolved_name = NULL;
                 } else {
                     handle_resolution_failure(state, stmt->show_hide.name, stmt->location, list);
                 }
-                free_name_list(list);
+                free_resolve_result(list);
             }
             break;
         }
@@ -1135,6 +1180,15 @@ static void resolve_imports(struct PackageLoader *package_loader,
 static void insert_import(struct RenamerState *state, const char *name, const char *maps_to)
 {
     struct NameList *existing = hash_table_lookup(state->imported_names, name);
+
+    // If this mapping already exists then skip adding it
+    for (struct NameList *search = existing; search; search = search->next) {
+        if (strcmp(search->name, maps_to) == 0) {
+            return;
+        }
+    }
+
+    // Add the new mapping
     struct NameList *node = alloc(sizeof(struct NameList));
     node->name = copy_string(maps_to);
     node->next = existing;

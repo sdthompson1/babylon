@@ -1,0 +1,8 @@
+src/Main.b:10:16: Name 'x' is ambiguous: could refer to 'test-binary:Foo.Bar.Mod1.x' or 'test-binary:Foo.Bar.Mod2.x'
+src/Main.b:15:16: Not in scope: 'Foo.Bar.Mod1.y'
+src/Main.b:16:16: Not in scope: 'Foo.Bad.Mod1'
+src/Main.b:18:10: Name 'IntAlias' is ambiguous: could refer to 'test-binary:Foo.Bar.Mod1.IntAlias' or 'test-binary:Foo.Bar.Mod2.IntAlias'
+src/Main.b:22:10: Not in scope: 'Foo.Bar.Mod1.OtherType'
+src/Main.b:23:10: Not in scope: 'Foo.Bad.Mod1'
+src/Main.b:26:17: Not in scope: 'Alias.One.y'
+src/Main.b:29:11: Not in scope: 'Alias.One.OtherType'

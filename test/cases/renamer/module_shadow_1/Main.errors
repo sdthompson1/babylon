@@ -1,2 +1,2 @@
-src/Main.b:13:15: Name 'F.x' is ambiguous: could refer to 'test-binary:Foo.x' or 'test-binary:Main.F.x'
-src/Main.b:17:15: Name 'F.z' is ambiguous: could refer to 'test-binary:Foo.z' or 'test-binary:Main.F.z'
+src/Main.b:13:15: Name 'F.x' is ambiguous: could refer to 'test-binary:Main.F' or 'test-binary:Foo.x'
+src/Main.b:17:15: Name 'F.z' is ambiguous: could refer to 'test-binary:Main.F' or 'test-binary:Foo.z'
