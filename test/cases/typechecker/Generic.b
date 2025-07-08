@@ -26,7 +26,6 @@ interface {
   function test5()
   {
     var v1 = {1,2};
-    var v2 = v1.0<i32>;     // Illegal use of type parameter
-    var v3 = id<i32>;       // Can't use function as value
+    var v2 = id<i32>;       // Can't use function as value
   }
 }

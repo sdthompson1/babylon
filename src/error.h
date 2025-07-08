@@ -32,7 +32,6 @@ void report_mkdir_failed(const char *filename);
 void report_lexical_error(struct Location location);
 void report_unclosed_block_comment(struct Location location);
 void report_int_literal_too_big(struct Location location);   // Note: this is also a parser error
-void report_incorrect_dotted_name(struct Location location, const char *name);
 
 // Parser errors
 void report_syntax_error(struct Location location, const char *detail);

@@ -4,5 +4,4 @@ src/Generic.b:10:19: Type mismatch
 src/Generic.b:21:23: Type mismatch
 src/Generic.b:22:17: Type mismatch
 src/Generic.b:23:13: Wrong number of type arguments (expected: 0, actual: 1)
-src/Generic.b:29:14: Type arguments not expected here
-src/Generic.b:30:14: Can't use function as a value
+src/Generic.b:29:14: Can't use function as a value

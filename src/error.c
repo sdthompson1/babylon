@@ -403,12 +403,6 @@ void report_int_literal_too_big(struct Location location)
     print_error("Integer literal too big\n");
 }
 
-void report_incorrect_dotted_name(struct Location location, const char *name)
-{
-    print_location(location);
-    print_error("Syntax error (couldn't parse '%s')\n", name);
-}
-
 void report_incomplete_definition(struct Location location)
 {
     print_location(location);

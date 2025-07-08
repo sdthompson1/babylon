@@ -124,6 +124,32 @@ static const struct Token * expect(struct ParserState *state, enum TokenType typ
     }
 }
 
+// Returns a newly allocated name, or NULL if current token is not TOK_NAME.
+// If location is non-NULL it is extended to include the qname's location.
+static const char * expect_qname(struct ParserState *state, struct Location *location)
+{
+    if (state->token->type == TOK_NAME) {
+        const char *name = NULL;
+        name = copy_string(state->token->data);
+        if (location) set_location_end(location, &state->token->location);
+        advance(state);
+
+        while (state->token->type == TOK_DOT && state->token->next->type == TOK_NAME) {
+            advance(state);  // skip over the dot
+            if (location) set_location_end(location, &state->token->location);
+            const char *new_name = copy_string_3(name, ".", state->token->data);
+            free((char*)name);
+            name = new_name;
+            advance(state);  // skip over the name
+        }
+
+        return name;
+    } else {
+        report_error(state, state->token->location, "expected name");
+        return NULL;
+    }
+}
+
 
 // -----------------------------------------------------------------------------
 
@@ -303,7 +329,6 @@ static struct Type * parse_type_impl(struct ParserState *state, bool report_erro
 {
     struct Location loc = state->token->location;
     enum TokenType tag = state->token->type;
-    const char *data = state->token->data;
 
     struct Type *result = NULL;
 
@@ -324,23 +349,7 @@ static struct Type * parse_type_impl(struct ParserState *state, bool report_erro
 
     case TOK_NAME:
         {
-            const char *name = NULL;
-
-            advance(state);
-            if (state->token->type == TOK_DOT) {
-                advance(state);
-                if (state->token->type == TOK_NAME) {
-                    name = copy_string_3(data, ".", state->token->data);
-                    advance(state);
-                } else {
-                    if (report_errors) {
-                        expect(state, TOK_NAME, "type name");  // report error
-                    }
-                    break;
-                }
-            } else {
-                name = copy_string(data);
-            }
+            const char *name = expect_qname(state, &loc);
 
             struct TypeList *tyargs = NULL;
             bool success = true;
@@ -661,29 +670,20 @@ static struct Pattern * parse_pattern_impl(struct ParserState *state)
 
     case TOK_NAME:
         {
-            const char *name = copy_string(state->token->data);
             struct Location name_loc = state->token->location;
-            advance(state);
+            const char *name = expect_qname(state, &name_loc);
 
-            if (isupper(name[0])) {
+            const char *dot = strrchr(name, '.');
+            bool ctor = (dot == NULL) ? isupper(name[0]) : isupper(dot[1]);
+            bool var = (dot == NULL && !ctor);
+
+            if (ctor) {
                 // variant pattern
 
                 if (ref) {
                     report_error(state, name_loc, "expected variable name");
                     free((char*)name);
                     return NULL;
-                }
-
-                if (state->token->type == TOK_DOT) {
-                    advance(state);
-                    const struct Token *new_tok = expect(state, TOK_NAME, "variant name");
-                    if (new_tok == NULL) {
-                        free((char*)name);
-                        return NULL;
-                    }
-                    const char *new_name = copy_string_3(name, ".", new_tok->data);
-                    free((char*)name);
-                    name = new_name;
                 }
 
                 struct Pattern *payload = NULL;
@@ -696,12 +696,17 @@ static struct Pattern * parse_pattern_impl(struct ParserState *state)
                 p->variant.payload = payload;
                 return p;
 
-            } else {
+            } else if (var) {
                 // variable pattern
                 struct Pattern *p = make_pattern(loc, PAT_VAR);
                 p->var.name = name;
                 p->var.ref = ref;
                 return p;
+
+            } else {
+                report_error(state, name_loc, "expected variable or constructor name");
+                free((char*)name);
+                return NULL;
             }
         }
         break;
@@ -1202,9 +1207,9 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
 
     case TOK_NAME:
         {
-            const char *data = state->token->data;
-            advance(state);
-            struct Term *term = make_var_term(loc, data);
+            const char *name = expect_qname(state, &loc);
+            struct Term *term = make_var_term(loc, name);
+            free((char*)name);
             term->var.postcond_new = state->postcondition && !state->old;
             return parse_tyarg_suffix(state, term);
         }
@@ -1945,24 +1950,13 @@ static struct Statement * parse_show_hide_stmt(struct ParserState *state)
     struct Location loc = state->token->location;
     advance(state);
 
-    const struct Token *tok_name = expect(state, TOK_NAME, "name");
-    if (!tok_name) return NULL;
-
-    // allow dotted names
-    const struct Token *tok_name_2 = NULL;
-    if (state->token->type == TOK_DOT) {
-        advance(state);
-        tok_name_2 = expect(state, TOK_NAME, "name");
-    }
+    const char *name = expect_qname(state, &loc);
+    if (name == NULL) return NULL;
 
     expect(state, TOK_SEMICOLON, "';'");
 
     struct Statement *new_stmt = make_statement(loc, ST_SHOW_HIDE);
-    if (tok_name_2) {
-        new_stmt->show_hide.name = copy_string_3(tok_name->data, ".", tok_name_2->data);
-    } else {
-        new_stmt->show_hide.name = copy_string(tok_name->data);
-    }
+    new_stmt->show_hide.name = name;
     new_stmt->show_hide.show = show;
 
     return new_stmt;
@@ -2567,34 +2561,6 @@ static struct DeclGroup * parse_decls(struct ParserState *state)
 // Import Parsing
 //
 
-// returns new string, or NULL on parse error
-const char * parse_module_name(struct ParserState *state)
-{
-    char *result = NULL;
-    while (true) {
-        const struct Token *name_tok = expect(state, TOK_NAME, "module name");
-        if (name_tok == NULL) {
-            // error
-            free(result);
-            return NULL;
-        }
-        if (result) {
-            char *new_result = copy_string_3(result, ".", name_tok->data);
-            free(result);
-            result = new_result;
-        } else {
-            result = copy_string(name_tok->data);
-        }
-
-        if (state->token->type != TOK_DOT) {
-            return result;
-        }
-
-        // skip the dot
-        advance(state);
-    }
-}
-
 static struct Import * parse_imports(struct ParserState *state)
 {
     struct Import *list = NULL;
@@ -2613,7 +2579,7 @@ static struct Import * parse_imports(struct ParserState *state)
             advance(state);
         }
 
-        const char *name = parse_module_name(state);
+        const char *name = expect_qname(state, &loc);
         if (name == NULL) {
             break;
         }
@@ -2622,9 +2588,10 @@ static struct Import * parse_imports(struct ParserState *state)
         const char * alias_name = NULL;
         if (state->token->type == TOK_NAME && strcmp(state->token->data, "as") == 0) {
             advance(state);
-            const struct Token *alias_tok = expect(state, TOK_NAME, "module alias name");
-            if (alias_tok) {
-                alias_name = copy_string(alias_tok->data);
+            alias_name = expect_qname(state, &loc);
+            if (alias_name == NULL) {
+                free((char*)name);
+                break;
             }
         } else {
             alias_name = copy_string(name);
@@ -2672,7 +2639,7 @@ struct Module * parse_module(const struct Token *first_token, bool interface_onl
     expect(&state, TOK_KW_MODULE, "'module'");
 
     // module-name
-    result->name = parse_module_name(&state);
+    result->name = expect_qname(&state, NULL);
 
     // interface imports (zero or more)
     result->interface_imports = parse_imports(&state);

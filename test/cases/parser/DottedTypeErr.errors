@@ -1,1 +1,1 @@
-src/DottedTypeErr.b:5:14: Syntax error (couldn't parse 'M.')
+src/DottedTypeErr.b:5:15: Syntax error (expected ';')
