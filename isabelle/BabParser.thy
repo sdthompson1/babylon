@@ -90,6 +90,17 @@ definition parse_name :: "string Parser" where
     | _ \<Rightarrow> undefined
   }"
 
+fun dot_join :: "string list \<Rightarrow> string" where
+  "dot_join [] = ''''"
+| "dot_join [x] = x"
+| "dot_join (x # xs) = x @ ''.'' @ dot_join xs"
+
+definition parse_qname :: "string Parser" where
+  "parse_qname = do {
+    names \<leftarrow> sep_by_1 parse_name (expect DOT);
+    return (dot_join names)
+   }"
+
 definition parse_nat_num :: "nat Parser" where
   "parse_nat_num = do {
     t \<leftarrow> satisfy is_nat_num_token;
@@ -100,9 +111,46 @@ definition parse_nat_num :: "nat Parser" where
 
 (* PATTERN PARSING *)
 
+datatype PatternType = PT_Ctor | PT_Var | PT_Invalid
+
+(* Returns last dotted component of the input string. Also sets flag to True
+   if the string contains any dot character. *)
+function get_last_component :: "string \<times> bool \<Rightarrow> string \<times> bool" where
+  "get_last_component (x, flag) =
+    (case dropWhile (\<lambda>c. c \<noteq> CHR ''.'') x of
+      [] \<Rightarrow> (x, flag)
+    | y \<Rightarrow> get_last_component (tl y, True))"
+  by pat_completeness auto
+termination
+proof (relation "measure (length \<circ> fst)")
+  show "wf (measure (length \<circ> fst))" by auto
+next
+  fix x flag h t
+  have "dropWhile (\<lambda>c. c \<noteq> CHR ''.'') x = h # t \<Longrightarrow> length t < length x"
+    by (metis dual_order.trans impossible_Cons length_dropWhile_le
+        linorder_le_less_linear)
+  thus "dropWhile (\<lambda>c. c \<noteq> CHR ''.'') x = h # t \<Longrightarrow> 
+          ((tl (h # t), True), (x, flag)) \<in> measure (length \<circ> fst)"
+    by auto
+qed 
+
 fun begins_with_capital :: "string \<Rightarrow> bool" where
   "begins_with_capital [] = False"
 | "begins_with_capital (c # cs) = (CHR ''A'' \<le> c \<and> c \<le> CHR ''Z'')"
+
+(* A name beginning with a capital letter (after any final dot), e.g. "Foo" or "Modname.Foo",
+   is considered a constructor pattern.
+   An unqualified name, not beginning with a capital letter, e.g. "x", is considered
+   a variable pattern.
+   Anything else, e.g. "a.b", is not valid as a pattern.
+*)
+fun classify_pattern :: "string \<Rightarrow> PatternType" where
+  "classify_pattern p =
+    (case get_last_component (p, False) of
+      (lastComp, dotPresent) \<Rightarrow>
+        (if begins_with_capital lastComp then PT_Ctor
+         else if \<not>dotPresent then PT_Var
+              else PT_Invalid))"
 
 fun parse_pattern_fuelled :: "nat \<Rightarrow> BabPattern Parser" where
   "parse_pattern_fuelled 0 = undefined"  (* out of fuel *)
@@ -110,18 +158,19 @@ fun parse_pattern_fuelled :: "nat \<Rightarrow> BabPattern Parser" where
    parens (delay (\<lambda>_. parse_pattern_fuelled fuel))
    <|> with_loc ((do {
     ref \<leftarrow> (expect (KEYWORD KW_REF) \<then> return Ref) <|> return Var;
-    name \<leftarrow> parse_name;
-    if begins_with_capital name then (do {
-      (if ref = Ref then fail else return ());
-      payload \<leftarrow> (do {
-        look_ahead (expect LBRACE <|> expect LPAREN);
-        pat \<leftarrow> parse_pattern_fuelled fuel;
-        return (Some pat)
-      }) <|> (return None);
-      return (\<lambda>loc. BabPat_Variant loc name payload)
-    }) 
-    else if (List.member name (CHR ''.'')) then fail
-    else (return (\<lambda>loc. BabPat_Var loc ref name))
+    name \<leftarrow> parse_qname;
+    (case classify_pattern name of
+      PT_Ctor \<Rightarrow> do {
+        (if ref = Ref then fail else return ());
+        payload \<leftarrow> (do {
+          look_ahead (expect LBRACE <|> expect LPAREN);
+          pat \<leftarrow> parse_pattern_fuelled fuel;
+          return (Some pat)
+        }) <|> (return None);
+        return (\<lambda>loc. BabPat_Variant loc name payload)
+      } 
+    | PT_Var \<Rightarrow> (return (\<lambda>loc. BabPat_Var loc ref name))
+    | PT_Invalid \<Rightarrow> fail)
   })
   <|> (do {
     expect UNDERSCORE;
@@ -338,7 +387,7 @@ where
   <|> with_loc (
         (expect (KEYWORD KW_BOOL) \<then> return BabTy_Bool)
     <|> (do {
-          name \<leftarrow> parse_name;
+          name \<leftarrow> parse_qname;
           args \<leftarrow> parse_optional_tyargs fuel;
           return (\<lambda>loc. BabTy_Name loc name args)
         })
@@ -470,9 +519,9 @@ hack and will be removed at some point *)
     <|> (expect (KEYWORD KW_FALSE) \<then> return (\<lambda>loc. BabTm_Literal loc (BabLit_Bool False)))
     <|> (expect (KEYWORD KW_TRUE) \<then> return (\<lambda>loc. BabTm_Literal loc (BabLit_Bool True)))
     <|> (do {
-          name \<leftarrow> parse_name;
+          name \<leftarrow> parse_qname;
           args \<leftarrow> parse_optional_tyargs fuel;
-          return (\<lambda>loc. BabTm_Name loc name args) 
+          return (\<lambda>loc. BabTm_Name loc name args)
         })
     <|> (do {
           expect (KEYWORD KW_IF);
@@ -745,10 +794,10 @@ definition parse_assume_stmt :: "BabStatement Parser" where
 definition parse_show_hide_stmt :: "BabStatement Parser" where
   "parse_show_hide_stmt = with_loc (do {
     ghost_prefix;
-    showOrHide \<leftarrow> 
+    showOrHide \<leftarrow>
       (expect (KEYWORD KW_SHOW) \<then> return Show)
       <|> (expect (KEYWORD KW_HIDE) \<then> return Hide);
-    name \<leftarrow> parse_name;
+    name \<leftarrow> parse_qname;
     expect SEMICOLON;
     return (\<lambda>loc. BabStmt_ShowHide loc showOrHide name)
   })"
@@ -985,8 +1034,8 @@ definition parse_import :: "BabImport Parser" where
   "parse_import = with_loc (do {
     expect (KEYWORD KW_IMPORT);
     qualified \<leftarrow> (expect (NAME ''qualified'') \<then> return True) <|> (return False);
-    name \<leftarrow> parse_name;
-    alias \<leftarrow> (expect (NAME ''as'') \<then> parse_name) <|> (return name);
+    name \<leftarrow> parse_qname;
+    alias \<leftarrow> (expect (NAME ''as'') \<then> parse_qname) <|> (return name);
     expect SEMICOLON;
     return (\<lambda>loc. \<lparr> Imp_Location = loc,
                     Imp_ModuleName = name,
@@ -998,7 +1047,7 @@ definition parse_import :: "BabImport Parser" where
 definition parse_module :: "BabModule Parser" where
   "parse_module = do {
     expect (KEYWORD KW_MODULE);
-    name \<leftarrow> parse_name;
+    name \<leftarrow> parse_qname;
     interface_imports \<leftarrow> many parse_import;
     expect (KEYWORD KW_INTERFACE);
     interface \<leftarrow> braces (many parse_decl);
