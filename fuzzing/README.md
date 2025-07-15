@@ -16,14 +16,13 @@ We now, effectively, have two Babylon compilers:
 2. A new implementation being done in Isabelle (currently only
    partially implemented)
 
-This allows us to test the two implementations against each other, by
-running them on lots of different inputs, and ensuring that the two
-implementations give the same result when presented with the same
-input. If they do not, a bug in one or other of the compilers has been
-found.
+This gives an obvious testing opportunity: we can run both of the
+compilers on lots of different inputs, and confirm that they both
+"agree" on the result in each case. If not, then a bug in one or other
+of the compilers has been found.
 
 To develop this idea further, we can define the "result" of a
-compilation run to be one of the following status codes:
+compilation to be one of the following status codes:
 
 | Status Code | Meaning |
 | --- | --- |
