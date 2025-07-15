@@ -2618,7 +2618,8 @@ function f(): i32
 
 the reference to `Foo.x` is not ambiguous -- it refers to the local
 variable `Foo` (created on the line above), and not the module `Foo`.
-This is because the `Foo` variable is in an "inner" scope and
-therefore shadows the corresponding module name from the "outer"
-scope. If the name `Foo.x` from module `Foo` was wanted, then it would
-be necessary to rename the local variable, to avoid the shadowing.
+This is because the `Foo` variable is in an "inner" scope, but the
+`Foo` module is in an "outer" scope, and therefore the former shadows
+the latter. If the name `Foo.x` from module `Foo` was wanted, then it
+would be necessary to rename the local variable, to avoid the
+shadowing.
