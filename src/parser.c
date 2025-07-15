@@ -325,6 +325,37 @@ static struct NameTypeList *parse_name_type_list(struct ParserState *state,
     return list;
 }
 
+// Make a type from a single token. Only works for bool, math-int, math-real and finite-int types.
+static struct Type * make_type_from_token(enum TokenType token_type, struct Location loc)
+{
+    switch (token_type) {
+    case TOK_KW_BOOL:
+        return make_type(loc, TY_BOOL);
+    case TOK_KW_U8:
+        return make_int_type(loc, false, 8);
+    case TOK_KW_U16:
+        return make_int_type(loc, false, 16);
+    case TOK_KW_U32:
+        return make_int_type(loc, false, 32);
+    case TOK_KW_U64:
+        return make_int_type(loc, false, 64);
+    case TOK_KW_I8:
+        return make_int_type(loc, true, 8);
+    case TOK_KW_I16:
+        return make_int_type(loc, true, 16);
+    case TOK_KW_I32:
+        return make_int_type(loc, true, 32);
+    case TOK_KW_I64:
+        return make_int_type(loc, true, 64);
+    case TOK_KW_INT:
+        return make_type(loc, TY_MATH_INT);
+    case TOK_KW_REAL:
+        return make_type(loc, TY_MATH_REAL);
+    default:
+        fatal_error("invalid token type passed to make_type_from_token");
+    }
+}
+
 static struct Type * parse_type_impl(struct ParserState *state, bool report_errors)
 {
     struct Location loc = state->token->location;
@@ -378,58 +409,18 @@ static struct Type * parse_type_impl(struct ParserState *state, bool report_erro
         break;
 
     case TOK_KW_BOOL:
-        advance(state);
-        result = make_type(loc, TY_BOOL);
-        break;
-
     case TOK_KW_U8:
-        advance(state);
-        result = make_int_type(loc, false, 8);
-        break;
-
     case TOK_KW_U16:
-        advance(state);
-        result = make_int_type(loc, false, 16);
-        break;
-
     case TOK_KW_U32:
-        advance(state);
-        result = make_int_type(loc, false, 32);
-        break;
-
     case TOK_KW_U64:
-        advance(state);
-        result = make_int_type(loc, false, 64);
-        break;
-
     case TOK_KW_I8:
-        advance(state);
-        result = make_int_type(loc, true, 8);
-        break;
-
     case TOK_KW_I16:
-        advance(state);
-        result = make_int_type(loc, true, 16);
-        break;
-
     case TOK_KW_I32:
-        advance(state);
-        result = make_int_type(loc, true, 32);
-        break;
-
     case TOK_KW_I64:
-        advance(state);
-        result = make_int_type(loc, true, 64);
-        break;
-
     case TOK_KW_INT:
-        advance(state);
-        result = make_type(loc, TY_MATH_INT);
-        break;
-
     case TOK_KW_REAL:
         advance(state);
-        result = make_type(loc, TY_MATH_REAL);
+        result = make_type_from_token(tag, loc);
         break;
 
     case TOK_LBRACE:
@@ -1164,7 +1155,8 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
     case TOK_KW_INT:
     case TOK_KW_REAL:
         {
-            struct Type *type = parse_type(state, true);  // will succeed
+            struct Type *type = make_type_from_token(tag, loc);
+            advance(state);
             struct Term *operand = parse_paren_term(state);
 
             struct Term *result = make_term(loc, TM_CAST);
