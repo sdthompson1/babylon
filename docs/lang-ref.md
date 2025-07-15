@@ -1026,7 +1026,7 @@ of this (over `T(E)`) is that the `cast<T>` syntax works even if `T`
 is a generic type variable, or typedef name, whereas `T(E)` only works
 if `T` is one of the keywords `i8`, `u16`, `int`, and so on.
 
-In all cases the cast must be from one numeric type to another. Casts
+In all cases, the cast must be from one numeric type to another. Casts
 of any other type(s) are not supported.
 
 Casts to or from either `int` or `real` are supported only in
@@ -2466,13 +2466,19 @@ to using their fully qualified names. For example, if `M` exports a
 function `foo`, then it is no longer possibly to refer to that
 function simply as `foo`; one has to write `M.foo` instead.
 
-The third and final form of the import statement is `import qualified
+The third form of the import statement is `import qualified
 <module-name> as <name>;`. This is similar to `import qualified`
 except that an alternative name is used to refer to the module. For
 example, if we write `import qualified MyModule as M;`, and if
 MyModule exports a function named `foo`, then we now have to refer to
 that function as `M.foo`. The names `foo` or `MyModule.foo` cannot be
 used in this case.
+
+It is also possible to use `as` without `qualified`. For example, one
+could write `import MyModule as M;`. This would import all the names
+from `MyModule` as unqualified names, but also allow them to be
+explicitly qualified as `M.some_name` (instead of the usual
+`MyModule.some_name`), if desired.
 
 Here is a complete (fairly minimal) example of a module. It exports a
 single function named "hello" which prints "Hello World!" when called.
@@ -2493,3 +2499,126 @@ function hello()
     Con.println("Hello World!");
 }
 ```
+
+## Dotted Module Names
+
+It is possible to include dots in a module name. For example, you
+could have a module named `Foo.Bar`. An imported item from this module
+might be referred to as `some_name` (unqualified) or
+`Foo.Bar.some_name` (qualified).
+
+As explained in the [Babylon Package System](package.md) document,
+dots in module names correspond to subdirectories on disk. For
+example, the `Foo.Bar` module would be located in a file `Foo/Bar.b`
+on disk.
+
+
+# Additional Syntax Rules
+
+This section gives some further details about the syntax rules of the
+language, which did not fit anywhere else.
+
+## Restrictions on short-cut function syntax
+
+Recall that a "short cut" function call syntax, in which a single
+tuple or record argument can be passed to a function without using
+parentheses, as in `f{1,2,3}` for example, is available. 
+
+Due to parsing limitations, that syntax *cannot* be used *immediately*
+after one of the following keywords:
+ - `match`
+ - `assert`
+ - `while`
+ - `if` (when used as a statement)
+For example, `if f{1} { return; }` is not a valid statement. The
+alternative form `if f({1}) { return; }` could be used instead. The
+formulation `if (f{1}) { return; }` would also be acceptable (in this
+case, the function call is not *immediately* after the `if` keyword --
+due to the intervening `(` character -- which is why it is allowed).
+
+## Comma-separated lists
+
+All comma-separated lists may contain a final trailing comma. For
+example, `f(1,2,)` is a valid function call expression. Similarly,
+`{x: i32, y: i32,}` is a valid record type.
+
+This is sometimes useful when formatting long type declarations over
+multiple lines, for example:
+
+```
+type MyRecord = {
+    a: i32,
+    b: i32,
+    c: i32,
+};
+```
+
+## Empty statements
+
+An empty statement (i.e. a lone `;`) is allowed anywhere that a
+statement would be permitted. Such a statement does nothing at runtime
+(it is just skipped over).
+
+## Parenthesized patterns
+
+When writing patterns (for `match` expressions or statements), it is
+permissible to enclose a pattern in parentheses. This does not change
+the meaning of the pattern. For example, `match x { case (1) => ... }`
+is functionally the same as `match x { case 1 => ... }`.
+
+## Parsing of qualified ("dotted") names
+
+Sometimes when using qualified names, ambiguity may result because of
+an object in scope with the same name as the module.
+
+For example, in the following:
+
+```
+import qualified Foo;  // assume Foo exports a constant named 'x'
+
+const Foo = {x = 1};
+
+const ABC = Foo.x;   // error
+```
+
+the final expression `Foo.x` is ambiguous, because it could refer to
+either the `x` object exported from the `Foo` module, or the `x` field
+of the `Foo` record defined in this module.
+
+If the `x` field of the `Foo` record was intended, one workaround
+could be to add parentheses, as in: `(Foo).x`. (A parenthesized name
+like `(Foo)` cannot form part of a qualified name, so `(Foo).x` cannot
+be interpreted as referring to some object `x` exported from a module
+`Foo`; instead it is interpreted as accessing a field `x` from some
+object `Foo` in the current module.)
+
+If the `x` name from the `Foo` module was intended, then the best
+solution would be to give a new name to the `Foo` module using the
+`as` syntax. For example, `import Foo as FooModule;` could be used.
+Then, `x` could be referred to as `FooModule.x`.
+
+Of course, a better solution might be to avoid the name clash in the
+first place, i.e. do not create a global constant named `Foo` if you
+already have a module named `Foo` in the program!
+
+Note that different rules apply to *local* variable names (i.e.
+variables defined within a function body, or function argument names).
+A local variable will always *shadow* a module of the same name. For
+example, in this code:
+
+```
+import qualified Foo;  // assume Foo exports a constant named 'x'
+
+function f(): i32
+{
+    var Foo = {x = 100, y = 200};
+    return Foo.x;   // ok
+}
+```
+
+the reference to `Foo.x` is not ambiguous -- it refers to the local
+variable `Foo` (created on the line above), and not the module `Foo`.
+This is because the `Foo` variable is in an "inner" scope and
+therefore shadows the corresponding module name from the "outer"
+scope. If the name `Foo.x` from module `Foo` was wanted, then it would
+be necessary to rename the local variable, to avoid the shadowing.
