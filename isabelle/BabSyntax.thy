@@ -304,6 +304,12 @@ record BabModule =
   Mod_ImplementationImports :: "BabImport list"
   Mod_Implementation :: "BabDeclaration list"
 
+record BabPackage =
+  Pkg_Name :: string
+  Pkg_Dependencies :: "string list"
+  Pkg_ExportedModules :: "BabModule list"
+  Pkg_OtherModules :: "BabModule list"
+
 
 
 (* Helper functions *)
@@ -365,6 +371,19 @@ fun array_dim_terms :: "BabDimension \<Rightarrow> BabTerm list" where
   "array_dim_terms (BabDim_Fixed tm) = [tm]"
 | "array_dim_terms _ = []"
 
+fun get_decl_name :: "BabDeclaration \<Rightarrow> string"
+  where
+"get_decl_name (BabDecl_Const dc) = DC_Name dc"
+| "get_decl_name (BabDecl_Function df) = DF_Name df"
+| "get_decl_name (BabDecl_Datatype dd) = DD_Name dd"
+| "get_decl_name (BabDecl_Typedef dt) = DT_Name dt"
+
+fun is_type_decl :: "BabDeclaration \<Rightarrow> bool"
+  where
+"is_type_decl (BabDecl_Const _) = False"
+| "is_type_decl (BabDecl_Function _) = False"
+| "is_type_decl (BabDecl_Datatype _) = True"
+| "is_type_decl (BabDecl_Typedef _) = True"
 
 
 (* Size functions *)
