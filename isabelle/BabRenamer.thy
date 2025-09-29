@@ -114,7 +114,7 @@ fun add_decl_to_env :: "BabDeclaration \<Rightarrow> GlobalName \<Rightarrow> bo
 
 (* Import processing function *)
 fun process_import :: "BabImport \<Rightarrow> string \<Rightarrow> BabPackage \<Rightarrow> BabPackage list \<Rightarrow> RenameEnv \<Rightarrow>
-                      RenameError list * RenameEnv"
+                      RenameError list * BabImport * RenameEnv"
   where
 "process_import imp currentPkgName currentPkg allPkgs env =
   (let modName = Imp_ModuleName imp;
@@ -124,34 +124,39 @@ fun process_import :: "BabImport \<Rightarrow> string \<Rightarrow> BabPackage \
    in
    case find_module_in_package modName currentPkg of
      Some foundMod \<Rightarrow>
-       let declResults = map (\<lambda>decl.
+       let qualifiedModName = currentPkgName @ '':'' @ modName;
+           updatedImp = imp \<lparr> Imp_ModuleName := qualifiedModName \<rparr>;
+           declResults = map (\<lambda>decl.
                            let declName = get_decl_name decl;
                                gn = make_global_name_for_decl currentPkgName modName declName qualified aliasName
                            in (decl, gn)) (Mod_Interface foundMod);
            newEnv = fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn False acc) declResults env
-       in ([], newEnv)
+       in ([], updatedImp, newEnv)
      | None \<Rightarrow>
          (case find_module_in_dependencies modName (Pkg_Dependencies currentPkg) allPkgs of
            Some (foundPkg, foundMod) \<Rightarrow>
              let foundPkgName = Pkg_Name foundPkg;
+                 qualifiedModName = foundPkgName @ '':'' @ modName;
+                 updatedImp = imp \<lparr> Imp_ModuleName := qualifiedModName \<rparr>;
                  declResults = map (\<lambda>decl.
                                let declName = get_decl_name decl;
                                    gn = make_global_name_for_decl foundPkgName modName declName qualified aliasName
                                in (decl, gn)) (Mod_Interface foundMod);
                  newEnv = fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn False acc) declResults env
-             in ([], newEnv)
-           | None \<Rightarrow> ([RenameError_ModuleNotFound impLoc modName], env)))"
+             in ([], updatedImp, newEnv)
+           | None \<Rightarrow> ([RenameError_ModuleNotFound impLoc modName], imp, env)))"
 
 (* Helper function to process a list of imports *)
 fun process_import_list :: "BabImport list \<Rightarrow> string \<Rightarrow> BabPackage \<Rightarrow> BabPackage list \<Rightarrow>
-                            RenameError list * RenameEnv"
+                            RenameError list * BabImport list * RenameEnv"
   where
 "process_import_list imports pkgName currentPkg allPkgs =
   (let importResults = map (\<lambda>imp. process_import imp pkgName currentPkg allPkgs empty_renamer_env) imports;
-       importErrs = concat (map fst importResults);
-       importEnvs = map snd importResults;
+       importErrs = concat (map (\<lambda>(errs, _, _). errs) importResults);
+       updatedImports = map (\<lambda>(_, imp, _). imp) importResults;
+       importEnvs = map (\<lambda>(_, _, env). env) importResults;
        mergedEnv = fold merge_renamer_envs importEnvs empty_renamer_env
-   in (importErrs, mergedEnv))"
+   in (importErrs, updatedImports, mergedEnv))"
 
 (* Create a RenameEnv containing the current module's declarations only *)
 fun add_current_module_decls :: "string \<Rightarrow> BabModule \<Rightarrow> RenameEnv"
@@ -164,17 +169,17 @@ fun add_current_module_decls :: "string \<Rightarrow> BabModule \<Rightarrow> Re
                        in (decl, gn)) (Mod_Interface currentMod)
    in fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn True acc) declResults empty_renamer_env)"
 
-(* Create a RenameEnv for a module (just containing local names and interface imports initially) *)
-fun create_renamer_env :: "string \<Rightarrow> BabModule \<Rightarrow> BabPackage list \<Rightarrow>
-                           RenameError list * RenameEnv"
+(* Create a RenameEnv for a module and update interface imports with qualified names *)
+fun setup_renamer_env :: "string \<Rightarrow> BabModule \<Rightarrow> BabPackage list \<Rightarrow>
+                          RenameError list * RenameEnv * BabImport list"
   where
-"create_renamer_env pkgName currentMod allPkgs =
+"setup_renamer_env pkgName currentMod allPkgs =
   (let currentPkg = case find (\<lambda>pkg. Pkg_Name pkg = pkgName) allPkgs of
                       Some pkg \<Rightarrow> pkg;
        envWithCurrentDecls = add_current_module_decls pkgName currentMod;
-       (interfaceImportErrs, interfaceImportEnv) = process_import_list (Mod_InterfaceImports currentMod) pkgName currentPkg allPkgs;
+       (interfaceImportErrs, updatedInterfaceImports, interfaceImportEnv) = process_import_list (Mod_InterfaceImports currentMod) pkgName currentPkg allPkgs;
        finalEnv = merge_renamer_envs envWithCurrentDecls interfaceImportEnv
-   in (interfaceImportErrs, finalEnv))"
+   in (interfaceImportErrs, finalEnv, updatedInterfaceImports))"
 
 (* Helper function to find GlobalNames matching a name *)
 fun find_global_names :: "string \<Rightarrow> GlobalName list \<Rightarrow> GlobalName list"
@@ -618,19 +623,23 @@ fun rename_module :: "string \<Rightarrow> BabModule \<Rightarrow> BabPackage li
        aliasErrs = check_duplicate_aliases allImports;
        currentPkg = case find (\<lambda>pkg. Pkg_Name pkg = pkgName) allPkgs of
                       Some pkg \<Rightarrow> pkg;
-       (interfaceEnvErrs, interfaceEnv) = create_renamer_env pkgName module allPkgs;
+       (interfaceEnvErrs, interfaceEnv, updatedInterfaceImports) = setup_renamer_env pkgName module allPkgs;
        interfaceResults = map (rename_declaration interfaceEnv) (Mod_Interface module);
        interfaceErrs = concat (map fst interfaceResults);
        newInterface = map snd interfaceResults;
 
-       (implImportErrs, implImportEnv) = process_import_list (Mod_ImplementationImports module) pkgName currentPkg allPkgs;
+       (implImportErrs, updatedImplImports, implImportEnv) = process_import_list (Mod_ImplementationImports module) pkgName currentPkg allPkgs;
        implEnv = merge_renamer_envs interfaceEnv implImportEnv;
        implResults = map (rename_declaration implEnv) (Mod_Implementation module);
        implErrs = concat (map fst implResults);
        newImplementation = map snd implResults;
 
-       newMod = module \<lparr> Mod_Interface := newInterface,
-                        Mod_Implementation := newImplementation \<rparr>
+       qualifiedModName = pkgName @ '':'' @ Mod_Name module;
+       newMod = module \<lparr> Mod_Name := qualifiedModName,
+                        Mod_Interface := newInterface,
+                        Mod_Implementation := newImplementation,
+                        Mod_InterfaceImports := updatedInterfaceImports,
+                        Mod_ImplementationImports := updatedImplImports \<rparr>
    in (aliasErrs @ interfaceEnvErrs @ interfaceErrs @ implImportErrs @ implErrs, newMod))"
 
 end
