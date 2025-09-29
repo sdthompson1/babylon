@@ -1,5 +1,5 @@
 theory CodeExport
-  imports BabParser BabLexer "HOL-Library.Code_Binary_Nat"
+  imports BabParser BabLexer BabLoader "HOL-Library.Code_Binary_Nat"
 
 begin
 
@@ -20,6 +20,6 @@ fun run_compiler :: "string \<Rightarrow> CompileResult"
       | PR_Error _ \<Rightarrow> CR_ParseError)
   | LR_Error _ \<Rightarrow> CR_LexError)"
 
-export_code run_compiler CR_Success CR_LexError CR_ParseError in Haskell
+export_code run_compiler CR_Success CR_LexError CR_ParseError load_packages in Haskell
 
 end
