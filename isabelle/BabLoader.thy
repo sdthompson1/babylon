@@ -14,9 +14,12 @@ datatype LoaderError =
   LoaderError_RootModuleNotFound string string  (* package name, module name *)
   | LoaderError_BadDependency string string  (* package name, missing dependency name *)
   | LoaderError_BadExportedModule string string  (* package name, missing exported module name *)
-  | LoaderError_LexError string string Location  (* package name, module name, location *)
-  | LoaderError_ParseError string string Location  (* package name, module name, location *)
-  | LoaderError_AmbiguousImport string string "string list"  (* importing package, imported module, list of packages containing the module *)
+  | LoaderError_WrongModuleName string string  (* modname in RawPackage list, modname in parsed module *)
+  | LoaderError_LexError Location
+  | LoaderError_ParseError Location
+  | LoaderError_PostParseError Location PostParseError
+  | LoaderError_ImportNotFound Location string   (* loc, name of the module that wasn't found *)
+  | LoaderError_AmbiguousImport Location string "string list"  (* loc, imported module, list of packages containing the module *)
 
 (* Algorithm state for the main loading loop *)
 record LoaderState =
@@ -24,16 +27,6 @@ record LoaderState =
   LS_Errors :: "LoaderError list"
   LS_ParsedModules :: "(string \<times> bool \<times> BabModule) list"  (* (package name, is exported, module) *)
   LS_RemainingModules :: "(string \<times> string) list"  (* (package name, module name) pairs *)
-
-(* Helper function to create a dummy BabModule for failed parsing *)
-fun create_dummy_module :: "string \<Rightarrow> BabModule" where
-  "create_dummy_module modName = \<lparr>
-    Mod_Name = modName,
-    Mod_InterfaceImports = [],
-    Mod_Interface = [],
-    Mod_ImplementationImports = [],
-    Mod_Implementation = []
-  \<rparr>"
 
 (* Helper function to find a module in RawPackage list *)
 fun find_module_in_raw_packages :: "string \<Rightarrow> string \<Rightarrow> RawPackage list \<Rightarrow> string option" where
@@ -106,18 +99,24 @@ fun validate_exported_modules :: "RawPackage list \<Rightarrow> LoaderError list
 
 (* Helper function to convert raw text to BabModule *)
 fun parse_module_text :: "string \<Rightarrow> string \<Rightarrow> string \<Rightarrow>
-                          LoaderError list \<times> BabModule" where
+                          (LoaderError list, BabModule) sum" where
   "parse_module_text pkgName modName text =
-    (case lex (pkgName @ '':'' @ modName) text of
-      LR_Error lexLoc \<Rightarrow>
-        ([LoaderError_LexError pkgName modName lexLoc],
-         create_dummy_module modName)
+    (case lex (pkgName @ '':'' @ modName @ ''.b'') text of
+      LR_Error lexLoc \<Rightarrow> Inl [LoaderError_LexError lexLoc]
       | LR_Success tokens \<Rightarrow>
         (case run_parser parse_module (pkgName @ '':'' @ modName @ ''.b'') tokens of
-          PR_Success module _ _ \<Rightarrow> ([], module)
-          | PR_Error parseLoc \<Rightarrow>
-            ([LoaderError_ParseError pkgName modName parseLoc],
-             create_dummy_module modName)))"
+          PR_Success module _ _ \<Rightarrow>
+            (if Mod_Name module \<noteq> modName then
+              Inl [LoaderError_WrongModuleName modName (Mod_Name module)]
+            else
+              case post_parse_module module of
+                [] \<Rightarrow>
+                  let fullModName = pkgName @ '':'' @ modName;
+                      renamedModule = module \<lparr> Mod_Name := fullModName \<rparr>
+                  in Inr renamedModule
+                | postParseErrors \<Rightarrow>
+                  Inl (map (\<lambda>ppe. LoaderError_PostParseError (PPE_Location ppe) ppe) postParseErrors))
+          | PR_Error parseLoc \<Rightarrow> Inl [LoaderError_ParseError parseLoc]))"
 
 (* Initialize the loader state from RawPackage list and root module *)
 fun initialize_loader_state :: "RawPackage list \<Rightarrow> string \<Rightarrow> string \<Rightarrow> LoaderState" where
@@ -134,11 +133,11 @@ fun initialize_loader_state :: "RawPackage list \<Rightarrow> string \<Rightarro
 (* If the imported module is found in the current package, then use that; otherwise,
    search dependency packages -- the imported module must be provided by exactly one
    of the dependencies in that case. *)
-fun find_module_for_import :: "string \<Rightarrow> string \<Rightarrow> RawPackage list \<Rightarrow>
-                               LoaderError option \<times> (string \<times> string) option" where
-  "find_module_for_import currentPkgName importModName rawPkgs =
+fun find_module_for_import :: "string \<Rightarrow> string \<Rightarrow> Location \<Rightarrow> RawPackage list \<Rightarrow>
+                               (LoaderError, string \<times> string) sum" where
+  "find_module_for_import currentPkgName importModName loc rawPkgs =
     (case find_module_in_raw_packages currentPkgName importModName rawPkgs of
-      Some _ \<Rightarrow> (None, Some (currentPkgName, importModName))
+      Some _ \<Rightarrow> Inr (currentPkgName, importModName)
       | None \<Rightarrow>
         (let deps = get_package_dependencies currentPkgName rawPkgs;
              findInDep = (\<lambda>depPkg.
@@ -147,27 +146,51 @@ fun find_module_for_import :: "string \<Rightarrow> string \<Rightarrow> RawPack
                  | None \<Rightarrow> None);
              matchingDeps = map_filter findInDep deps
          in case matchingDeps of
-              [] \<Rightarrow> (None, None)
-              | [depPkg] \<Rightarrow> (None, Some (depPkg, importModName))
-              | multiple \<Rightarrow> (Some (LoaderError_AmbiguousImport currentPkgName importModName multiple), None)
+              [] \<Rightarrow> Inl (LoaderError_ImportNotFound loc importModName)
+              | [depPkg] \<Rightarrow> Inr (depPkg, importModName)
+              | multiple \<Rightarrow> Inl (LoaderError_AmbiguousImport loc importModName multiple)
          ))"
+
+(* Helper function to process imports and update them with package prefixes *)
+fun process_imports :: "string \<Rightarrow> RawPackage list \<Rightarrow> BabImport list \<Rightarrow>
+                        LoaderError list \<times> BabImport list \<times> (string \<times> string) list" where
+  "process_imports pkgName rawPkgs imports =
+    (let processImport = (\<lambda>imp.
+           case find_module_for_import pkgName (Imp_ModuleName imp) (Imp_Location imp) rawPkgs of
+             Inl err \<Rightarrow> (Some err, imp, None)
+             | Inr (foundPkg, foundMod) \<Rightarrow>
+                 let fullModName = foundPkg @ '':'' @ foundMod;
+                     updatedImp = imp \<lparr> Imp_ModuleName := fullModName \<rparr>
+                 in (None, updatedImp, Some (foundPkg, foundMod)));
+         results = map processImport imports;
+         errors = map_filter (\<lambda>(err, _, _). err) results;
+         updatedImports = map (\<lambda>(_, imp, _). imp) results;
+         validPkgMods = map_filter (\<lambda>(_, _, pkgMod). pkgMod) results
+     in (errors, updatedImports, validPkgMods))"
 
 (* Helper function to process a module that was found *)
 fun process_found_module :: "RawPackage list \<Rightarrow> string \<Rightarrow> string \<Rightarrow> string \<Rightarrow> LoaderState \<Rightarrow> LoaderState" where
   "process_found_module rawPkgs pkgName modName moduleText state =
-    (let isExported = is_module_exported pkgName modName rawPkgs;
-         (parseErrors, parsedModule) = parse_module_text pkgName modName moduleText;
-         newParsedModules = (pkgName, isExported, parsedModule) # LS_ParsedModules state;
-         imports = extract_module_imports parsedModule;
-         importResults = map (\<lambda>imp. find_module_for_import pkgName imp rawPkgs) imports;
-         importErrors = map_filter fst importResults;
-         validImports = map_filter snd importResults;
-         newStack = validImports @ LS_Stack state
-     in state \<lparr>
-          LS_Stack := newStack,
-          LS_Errors := importErrors @ parseErrors @ LS_Errors state,
-          LS_ParsedModules := newParsedModules
-        \<rparr>)"
+    (let isExported = is_module_exported pkgName modName rawPkgs
+     in case parse_module_text pkgName modName moduleText of
+          Inl parseErrors \<Rightarrow>
+            state \<lparr> LS_Errors := parseErrors @ LS_Errors state \<rparr>
+          | Inr parsedModule \<Rightarrow>
+            (let (interfaceErrors, updatedInterfaceImports, interfaceValidImports) =
+                   process_imports pkgName rawPkgs (Mod_InterfaceImports parsedModule);
+                 (implErrors, updatedImplementationImports, implValidImports) =
+                   process_imports pkgName rawPkgs (Mod_ImplementationImports parsedModule);
+                 finalModule = parsedModule \<lparr> Mod_InterfaceImports := updatedInterfaceImports,
+                                                Mod_ImplementationImports := updatedImplementationImports \<rparr>;
+                 newParsedModules = (pkgName, isExported, finalModule) # LS_ParsedModules state;
+                 allValidImports = interfaceValidImports @ implValidImports;
+                 newStack = allValidImports @ LS_Stack state;
+                 allErrors = interfaceErrors @ implErrors
+             in state \<lparr>
+                  LS_Stack := newStack,
+                  LS_Errors := allErrors @ LS_Errors state,
+                  LS_ParsedModules := newParsedModules
+                \<rparr>))"
 
 (* Helper function for processing a module that needs to be loaded *)
 (* Note: All modules reaching this function are guaranteed to exist in rawPkgs.
@@ -211,7 +234,6 @@ proof -
     by simp
   finally show ?thesis .
 qed
-
 
 (* Helper function to run the loader until completion *)
 function run_loader_steps :: "RawPackage list \<Rightarrow> LoaderState \<Rightarrow> LoaderState" where
@@ -285,16 +307,19 @@ definition run_complete_loading :: "RawPackage list \<Rightarrow> string \<Right
 
 (* Main loader function *)
 fun load_packages :: "RawPackage list \<Rightarrow> string \<Rightarrow> string \<Rightarrow>
-                      LoaderError list \<times> BabPackage list" where
+                      (LoaderError list, BabPackage list) sum" where
   "load_packages rawPkgs rootPkgName rootModName =
     (let depErrors = validate_dependencies rawPkgs;
          exportErrors = validate_exported_modules rawPkgs;
          validationErrors = depErrors @ exportErrors
      in case find_module_in_raw_packages rootPkgName rootModName rawPkgs of
-          None \<Rightarrow> (validationErrors @ [LoaderError_RootModuleNotFound rootPkgName rootModName], [])
+          None \<Rightarrow> Inl (validationErrors @ [LoaderError_RootModuleNotFound rootPkgName rootModName])
           | Some _ \<Rightarrow>
             (let finalState = run_complete_loading rawPkgs rootPkgName rootModName;
-                 packages = create_packages_from_loader_state finalState rawPkgs
-             in (validationErrors @ LS_Errors finalState, packages)))"
+                 allErrors = validationErrors @ LS_Errors finalState
+             in if allErrors = [] then
+                  Inr (create_packages_from_loader_state finalState rawPkgs)
+                else
+                  Inl allErrors))"
 
 end
