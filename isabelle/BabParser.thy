@@ -934,13 +934,12 @@ definition parse_function_decl :: "BabDeclaration Parser" where
       ((expect (KEYWORD KW_GHOST) \<then> return GhostMarker)
        <|> (expect (KEYWORD KW_EXTERN) \<then> return Extern)
        <|> (expect (KEYWORD KW_IMPURE) \<then> return Impure));
-    let markerSet = set markers;
     expect (KEYWORD KW_FUNCTION);
     name \<leftarrow> parse_name;
     tyvars \<leftarrow> (angles (comma_list parse_name)) <|> (return []);
     args \<leftarrow> parens (comma_list parse_fun_arg);
     retType \<leftarrow> optional (expect COLON \<then> parse_type);
-    externName \<leftarrow> (if Extern \<in> markerSet then
+    externName \<leftarrow> (if List.member markers Extern then
       (optional (do {
         expect EQUAL;
         t \<leftarrow> satisfy is_string_token;
@@ -956,11 +955,11 @@ definition parse_function_decl :: "BabDeclaration Parser" where
                                      DF_ReturnType = retType,
                                      DF_Body = body,
                                      DF_Attributes = attrs,
-                                     DF_Ghost = (if GhostMarker \<in> markerSet 
+                                     DF_Ghost = (if List.member markers GhostMarker
                                                   then Ghost
                                                   else NotGhost),
-                                     DF_Extern = (Extern \<in> markerSet),
-                                     DF_Impure = (Impure \<in> markerSet) \<rparr>)
+                                     DF_Extern = (List.member markers Extern),
+                                     DF_Impure = (List.member markers Impure) \<rparr>)
   })"
 
 definition parse_data_ctor :: "DataCtor Parser" where

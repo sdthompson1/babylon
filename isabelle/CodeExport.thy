@@ -1,7 +1,16 @@
 theory CodeExport
-  imports FrontEnd "HOL-Library.Code_Binary_Nat"
+  imports
+    FrontEnd
+    "HOL-Library.Code_Binary_Nat"
+    "HOL-Library.RBT_Set"
 
 begin
+
+(* Break circular dependency between Set and RBT_Set *)
+(* Map both to the same Haskell module name so they're in one file *)
+code_identifier
+  code_module Set \<rightharpoonup> (Haskell) Set_Impl
+  | code_module RBT_Set \<rightharpoonup> (Haskell) Set_Impl
 
 (* Code Export *)
 

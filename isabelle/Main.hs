@@ -48,6 +48,7 @@ processFile contents = do
     CR_Success -> BS.hPut stdout (BS.singleton 0)
     CR_LexError -> BS.hPut stdout (BS.singleton 1)
     CR_ParseError -> BS.hPut stdout (BS.singleton 2)
+    CR_RenameError -> BS.hPut stdout (BS.singleton 3)
   hFlush stdout
 
 mainLoop :: IO ()
