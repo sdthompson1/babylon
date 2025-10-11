@@ -304,12 +304,6 @@ record BabModule =
   Mod_ImplementationImports :: "BabImport list"
   Mod_Implementation :: "BabDeclaration list"
 
-record BabPackage =
-  Pkg_Name :: string
-  Pkg_Dependencies :: "string list"
-  Pkg_ExportedModules :: "BabModule list"
-  Pkg_OtherModules :: "BabModule list"
-
 
 
 (* Helper functions *)

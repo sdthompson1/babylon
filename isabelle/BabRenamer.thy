@@ -589,7 +589,7 @@ fun rename_declaration :: "RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
      in (nameErrs @ defErrs, BabDecl_Typedef newDt))"
 
 (* Main function for renaming a module. *)
-fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> RenameError list * BabModule"
+fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (RenameError list, BabModule) sum"
   where
 "rename_module module allMods =
   (let allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
@@ -605,41 +605,43 @@ fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> Renam
        implErrs = concat (map fst implResults);
        newImplementation = map snd implResults;
 
+       allErrors = aliasErrs @ interfaceEnvErrs @ interfaceErrs @ implImportErrs @ implErrs;
        newMod = module \<lparr> Mod_Interface := newInterface,
                          Mod_Implementation := newImplementation \<rparr>
 
-   in (aliasErrs @ interfaceEnvErrs @ interfaceErrs @ implImportErrs @ implErrs, newMod))"
+   in if allErrors = [] then Inr newMod else Inl allErrors)"
 
 
 (* Some basic properties of rename_module: *)
 
 lemma rename_module_preserves_name:
-  "Mod_Name (snd (rename_module module allMods)) = Mod_Name module"
-  unfolding rename_module.simps
-  by (simp add: Let_def)
+  assumes "rename_module module allMods = Inr newMod"
+  shows "Mod_Name newMod = Mod_Name module"
+  using assms rename_module.simps
+  by (auto simp: Let_def split: if_splits)
 
 lemma rename_module_preserves_interface_imports:
-  "Mod_InterfaceImports (snd (rename_module module allMods)) =
-   Mod_InterfaceImports module"
-  unfolding rename_module.simps
-  by (simp add: Let_def)
+  assumes "rename_module module allMods = Inr newMod"
+  shows "Mod_InterfaceImports newMod = Mod_InterfaceImports module"
+  using assms rename_module.simps
+  by (auto simp: Let_def split: if_splits)
 
 lemma rename_module_preserves_implementation_imports:
-  "Mod_ImplementationImports (snd (rename_module module allMods)) =
-   Mod_ImplementationImports module"
-  unfolding rename_module.simps
-  by (simp add: Let_def)
+  assumes "rename_module module allMods = Inr newMod"
+  shows "Mod_ImplementationImports newMod = Mod_ImplementationImports module"
+  using assms rename_module.simps
+  by (auto simp: Let_def split: if_splits)
 
 lemma rename_module_preserves_interface_length:
-  "length (Mod_Interface (snd (rename_module module allMods))) =
-   length (Mod_Interface module)"
-  unfolding rename_module.simps
-  by (simp add: Let_def)
+  assumes "rename_module module allMods = Inr newMod"
+  shows "length (Mod_Interface newMod) = length (Mod_Interface module)"
+  using assms rename_module.simps
+  by (auto simp: Let_def split: if_splits)
 
 lemma rename_module_preserves_implementation_length:
-  "length (Mod_Implementation (snd (rename_module module allMods))) =
-   length (Mod_Implementation module)"
-  unfolding rename_module.simps
-  by (simp add: Let_def)
+  assumes "rename_module module allMods = Inr newMod"
+  shows "length (Mod_Implementation newMod) = length (Mod_Implementation module)"
+  using assms rename_module.simps
+  by (auto simp: Let_def split: if_splits)
 
 end
