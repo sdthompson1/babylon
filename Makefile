@@ -79,7 +79,7 @@
 
 # Compiler settings
 CC := gcc
-CFLAGS := -std=c11 -pedantic -Wall -Wextra -Wno-unused-parameter -Werror -MMD -MP
+CFLAGS := -std=c11 -pedantic -Wall -Wextra -Wno-unused-parameter -Wno-strict-prototypes -Werror -MMD -MP
 DEBUG_CFLAGS := -g
 RELEASE_CFLAGS := -O3
 COVERAGE_CFLAGS := --coverage
