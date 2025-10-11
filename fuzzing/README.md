@@ -92,7 +92,7 @@ Now, you can start fuzzing with the following command. Run this from
 the repository root:
 
 ```
-afl-fuzz -x fuzzing/dictionary -i fuzzing/seeds/ -o afl-output/ -- ./build/bab fuzz -r fuzzing/dummy-package --main-file @@ --oracle isabelle/export/Babylon.CodeExport/code/export1/Main --max-status 2
+afl-fuzz -x fuzzing/dictionary -i fuzzing/seeds/ -o afl-output/ -- ./build/bab fuzz -r fuzzing/dummy-package --main-file @@ --oracle isabelle/export/Babylon.CodeExport/code/export1/Main --max-status 3
 ```
 
 This will create an `afl-output` folder. Any crashes found will be
@@ -122,8 +122,8 @@ Some notes:
    argument, and passes the corresponding result code back to `bab`
    via its exit status.
 
- - `--max-status 2` says that the maximum exit status value that can
-   be returned from the oracle is 2. As the Isabelle compiler is
+ - `--max-status 3` says that the maximum exit status value that can
+   be returned from the oracle is 3. As the Isabelle compiler is
    extended in future, we will be able to use higher `--max-status`
    values.
 
