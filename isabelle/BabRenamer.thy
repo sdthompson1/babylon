@@ -110,7 +110,7 @@ fun check_duplicate_aliases :: "BabImport list \<Rightarrow> RenameError list"
 
 
 (*-----------------------------------------------------------------------------*)
-(* RenamerEnv helpers *)
+(* RenameEnv helpers *)
 (*-----------------------------------------------------------------------------*)
 
 (* Add local names *)
@@ -153,6 +153,18 @@ fun add_decl_to_env :: "BabDeclaration \<Rightarrow> GlobalName \<Rightarrow> Re
   else
     env \<lparr> RE_GlobalTermNames := gn # RE_GlobalTermNames env \<rparr>)"
 
+(* Add decls from the current module *)
+fun add_current_module_decls :: "BabModule \<Rightarrow> BabDeclaration list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+  where
+"add_current_module_decls currentMod decls env =
+  (let modName = Mod_Name currentMod;
+       aliasName = strip_package_prefix modName;
+       declResults = map (\<lambda>decl.
+                       let declName = get_decl_name decl;
+                           gn = make_global_name_for_decl modName declName False aliasName
+                       in (decl, gn)) decls
+   in fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn acc) declResults env)"
+
 
 (*-----------------------------------------------------------------------------*)
 (* Import processing *)
@@ -194,29 +206,6 @@ fun process_import_list :: "BabImport list \<Rightarrow> BabModule list \<Righta
        importEnvs = map snd importResults;
        mergedEnv = fold merge_renamer_envs importEnvs empty_renamer_env
    in (importErrs, mergedEnv))"
-
-(* Create a RenameEnv containing the current module's declarations only *)
-fun add_current_module_decls :: "BabModule \<Rightarrow> RenameEnv"
-  where
-"add_current_module_decls currentMod =
-  (let modName = Mod_Name currentMod;
-       aliasName = strip_package_prefix modName;
-       declResults = map (\<lambda>decl.
-                       let declName = get_decl_name decl;
-                           gn = make_global_name_for_decl modName declName False aliasName
-                       in (decl, gn)) (Mod_Interface currentMod)
-   in fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn acc) declResults empty_renamer_env)"
-
-(* Create a RenameEnv for a module, adding this module's decls plus interface imports *)
-fun setup_renamer_env :: "BabModule \<Rightarrow> BabModule list \<Rightarrow>
-                          RenameError list * RenameEnv"
-  where
-"setup_renamer_env currentMod allMods =
-  (let envWithCurrentDecls = add_current_module_decls currentMod;
-       (interfaceImportErrs, interfaceImportEnv) = 
-           process_import_list (Mod_InterfaceImports currentMod) allMods;
-       finalEnv = merge_renamer_envs envWithCurrentDecls interfaceImportEnv
-   in (interfaceImportErrs, finalEnv))"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -699,13 +688,17 @@ fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (Rena
 "rename_module module allMods =
   (let allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
        aliasErrs = check_duplicate_aliases allImports;
-       (interfaceEnvErrs, interfaceEnv) = setup_renamer_env module allMods;
+       (interfaceEnvErrs, interfaceEnv0) = 
+          process_import_list (Mod_InterfaceImports module) allMods;
+       interfaceEnv = add_current_module_decls module (Mod_Interface module) interfaceEnv0;
        interfaceResults = map (rename_declaration interfaceEnv) (Mod_Interface module);
        interfaceErrs = concat (map fst interfaceResults);
        newInterface = map snd interfaceResults;
 
-       (implImportErrs, implImportEnv) = process_import_list (Mod_ImplementationImports module) allMods;
-       implEnv = merge_renamer_envs interfaceEnv implImportEnv;
+       (implImportErrs, implImportEnv) = 
+          process_import_list (Mod_ImplementationImports module) allMods;
+       implEnv = add_current_module_decls module (Mod_Implementation module) 
+          (merge_renamer_envs interfaceEnv implImportEnv);
        implResults = map (rename_declaration implEnv) (Mod_Implementation module);
        implErrs = concat (map fst implResults);
        newImplementation = map snd implResults;
