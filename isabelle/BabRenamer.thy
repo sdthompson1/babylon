@@ -120,6 +120,13 @@ fun add_local_type_names :: "string list \<Rightarrow> RenameEnv \<Rightarrow> R
 fun add_local_term_names :: "string list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where "add_local_term_names names env = env \<lparr> RE_LocalTermNames := names @ RE_LocalTermNames env \<rparr>"
 
+(* Add global names *)
+fun add_global_type_names :: "GlobalName list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+  where "add_global_type_names gns env = env \<lparr> RE_GlobalTypeNames := gns @ RE_GlobalTypeNames env \<rparr>"
+
+fun add_global_term_names :: "GlobalName list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+  where "add_global_term_names gns env = env \<lparr> RE_GlobalTermNames := gns @ RE_GlobalTermNames env \<rparr>"
+
 (* Empty renamer env *)
 definition empty_renamer_env :: RenameEnv
   where "empty_renamer_env = \<lparr> RE_LocalTypeNames = [],
@@ -137,33 +144,39 @@ fun merge_renamer_envs :: "RenameEnv \<Rightarrow> RenameEnv \<Rightarrow> Renam
     RE_GlobalTermNames = RE_GlobalTermNames env1 @ RE_GlobalTermNames env2 \<rparr>"
 
 (* GlobalName construction function *)
-fun make_global_name_for_decl :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> string \<Rightarrow> GlobalName"
+fun make_global_name :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> string \<Rightarrow> GlobalName"
   where
-"make_global_name_for_decl fullModName declName qualified aliasName =
+"make_global_name fullModName declName qualified aliasName =
   \<lparr> GN_UnqualifiedName = (if qualified then None else Some declName),
     GN_QualifiedName = aliasName @ ''.'' @ declName,
     GN_TrueName = fullModName @ ''.'' @ declName \<rparr>"
 
 (* Add a new declaration *)
-fun add_decl_to_env :: "BabDeclaration \<Rightarrow> GlobalName \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> BabDeclaration \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where
-"add_decl_to_env decl gn env =
-  (if is_type_decl decl then
-    env \<lparr> RE_GlobalTypeNames := gn # RE_GlobalTypeNames env \<rparr>
-  else
-    env \<lparr> RE_GlobalTermNames := gn # RE_GlobalTermNames env \<rparr>)"
+"add_decl_to_env fullModName aliasName qualified decl env =
+  (let declName = get_decl_name decl;
+       gn = make_global_name fullModName declName qualified aliasName;
+       env1 = (if is_type_decl decl then
+                add_global_type_names [gn] env
+              else
+                add_global_term_names [gn] env)
+   in
+   case decl of
+     BabDecl_Datatype dd \<Rightarrow>
+       let ctors = DD_Ctors dd;
+           ctorGlobalNames = map (\<lambda>(loc, ctorName, optTy).
+                                   make_global_name fullModName ctorName qualified aliasName) ctors
+       in add_global_term_names ctorGlobalNames env1
+     | _ \<Rightarrow> env1)"
 
 (* Add decls from the current module *)
 fun add_current_module_decls :: "BabModule \<Rightarrow> BabDeclaration list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where
 "add_current_module_decls currentMod decls env =
   (let modName = Mod_Name currentMod;
-       aliasName = strip_package_prefix modName;
-       declResults = map (\<lambda>decl.
-                       let declName = get_decl_name decl;
-                           gn = make_global_name_for_decl modName declName False aliasName
-                       in (decl, gn)) decls
-   in fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn acc) declResults env)"
+       aliasName = strip_package_prefix modName
+   in fold (\<lambda>decl acc. add_decl_to_env modName aliasName False decl acc) decls env)"
 
 (* Filter impl decls to remove "repeats" of interface decls *)
 fun filtered_impl_decls :: "BabModule \<Rightarrow> BabDeclaration list" where
@@ -194,11 +207,8 @@ fun process_import :: "BabImport \<Rightarrow> BabModule list \<Rightarrow> Rena
    in
    case find_module_in_list fullModName allMods of
      Some foundMod \<Rightarrow>
-       let declResults = map (\<lambda>decl.
-                           let declName = get_decl_name decl;
-                               gn = make_global_name_for_decl fullModName declName qualified aliasName
-                           in (decl, gn)) (Mod_Interface foundMod);
-           newEnv = fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn acc) declResults env
+       let newEnv = fold (\<lambda>decl acc. add_decl_to_env fullModName aliasName qualified decl acc)
+                         (Mod_Interface foundMod) env
        in ([], newEnv)
      | None \<Rightarrow>
          ([RenameError_ModuleNotFound impLoc fullModName], env))"
@@ -608,11 +618,11 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
             (errs1 @ errs2, newStmt#newStmts)))"
 
 (* Rename a declaration. Return errors and a renamed declaration. *)
-fun rename_declaration :: "RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
+fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
                            RenameError list * BabDeclaration"
   where
-"rename_declaration env (BabDecl_Const dc) =
-    (let (nameErrs, newName) = rename_term_name env (DC_Location dc) (DC_Name dc);
+"rename_declaration fullModName env (BabDecl_Const dc) =
+    (let newName = fullModName @ ''.'' @ DC_Name dc;
          (tyErrs, newOptTy) = (case DC_Type dc of
            None \<Rightarrow> ([], None)
            | Some ty \<Rightarrow> let (errs, newTy) = rename_type env ty
@@ -622,9 +632,9 @@ fun rename_declaration :: "RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
            | Some tm \<Rightarrow> let (errs, newTm) = rename_term env tm
                         in (errs, Some newTm));
          newDc = dc \<lparr> DC_Name := newName, DC_Type := newOptTy, DC_Value := newOptTm \<rparr>
-     in (nameErrs @ tyErrs @ tmErrs, BabDecl_Const newDc))"
-| "rename_declaration env (BabDecl_Function df) =
-    (let (nameErrs, newName) = rename_term_name env (DF_Location df) (DF_Name df);
+     in (tyErrs @ tmErrs, BabDecl_Const newDc))"
+| "rename_declaration fullModName env (BabDecl_Function df) =
+    (let newName = fullModName @ ''.'' @ DF_Name df;
          tyArgNames = DF_TyArgs df;
          tmArgNames = map (\<lambda>(name, _, _). name) (DF_TmArgs df);
          newEnv = add_local_type_names tyArgNames (add_local_term_names tmArgNames env);
@@ -654,24 +664,25 @@ fun rename_declaration :: "RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
                      DF_ReturnType := newRetTy,
                      DF_Body := newBody,
                      DF_Attributes := newAttrs \<rparr>
-     in (nameErrs @ argErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
-| "rename_declaration env (BabDecl_Datatype dd) =
-    (let (nameErrs, newName) = rename_type_name env (DD_Location dd) (DD_Name dd);
+     in (argErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
+| "rename_declaration fullModName env (BabDecl_Datatype dd) =
+    (let newName = fullModName @ ''.'' @ DD_Name dd;
          tyArgNames = DD_TyArgs dd;
          newEnv = add_local_type_names tyArgNames env;
 
          ctorResults = map (\<lambda>(loc, name, optTy).
-                             case optTy of
-                               None \<Rightarrow> ([], (loc, name, None))
+                             let newCtorName = fullModName @ ''.'' @ name
+                             in case optTy of
+                               None \<Rightarrow> ([], (loc, newCtorName, None))
                                | Some ty \<Rightarrow> let (errs, newTy) = rename_type newEnv ty
-                                            in (errs, (loc, name, Some newTy))) (DD_Ctors dd);
+                                            in (errs, (loc, newCtorName, Some newTy))) (DD_Ctors dd);
          ctorErrs = concat (map fst ctorResults);
          newCtors = map snd ctorResults;
 
          newDd = dd \<lparr> DD_Name := newName, DD_Ctors := newCtors \<rparr>
-     in (nameErrs @ ctorErrs, BabDecl_Datatype newDd))"
-| "rename_declaration env (BabDecl_Typedef dt) =
-    (let (nameErrs, newName) = rename_type_name env (DT_Location dt) (DT_Name dt);
+     in (ctorErrs, BabDecl_Datatype newDd))"
+| "rename_declaration fullModName env (BabDecl_Typedef dt) =
+    (let newName = fullModName @ ''.'' @ DT_Name dt;
          tyArgNames = DT_TyArgs dt;
          newEnv = add_local_type_names tyArgNames env;
 
@@ -681,7 +692,7 @@ fun rename_declaration :: "RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
                         in (errs, Some newTy));
 
          newDt = dt \<lparr> DT_Name := newName, DT_Definition := newDef \<rparr>
-     in (nameErrs @ defErrs, BabDecl_Typedef newDt))"
+     in (defErrs, BabDecl_Typedef newDt))"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -692,20 +703,21 @@ fun rename_declaration :: "RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
 fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (RenameError list, BabModule) sum"
   where
 "rename_module module allMods =
-  (let allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
+  (let modName = Mod_Name module;
+       allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
        aliasErrs = check_duplicate_aliases allImports;
-       (interfaceEnvErrs, interfaceEnv0) = 
+       (interfaceEnvErrs, interfaceEnv0) =
           process_import_list (Mod_InterfaceImports module) allMods;
        interfaceEnv = add_current_module_decls module (Mod_Interface module) interfaceEnv0;
-       interfaceResults = map (rename_declaration interfaceEnv) (Mod_Interface module);
+       interfaceResults = map (rename_declaration modName interfaceEnv) (Mod_Interface module);
        interfaceErrs = concat (map fst interfaceResults);
        newInterface = map snd interfaceResults;
 
-       (implImportErrs, implImportEnv) = 
+       (implImportErrs, implImportEnv) =
           process_import_list (Mod_ImplementationImports module) allMods;
-       implEnv = add_current_module_decls module (filtered_impl_decls module) 
+       implEnv = add_current_module_decls module (filtered_impl_decls module)
           (merge_renamer_envs interfaceEnv implImportEnv);
-       implResults = map (rename_declaration implEnv) (Mod_Implementation module);
+       implResults = map (rename_declaration modName implEnv) (Mod_Implementation module);
        implErrs = concat (map fst implResults);
        newImplementation = map snd implResults;
 
