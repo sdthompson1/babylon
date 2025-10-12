@@ -36,10 +36,39 @@ fun frontend_errors_to_result :: "FrontEndError list \<Rightarrow> CompileResult
 fun run_compiler :: "string \<Rightarrow> CompileResult"
   where
 "run_compiler str =
-  (let rawPkg = \<lparr> RP_Name = ''main'',
+  (let testModule = ''module Test'' @ [CHR 10] @
+                    ''interface'' @ [CHR 10] @
+                    ''{'' @ [CHR 10] @
+                    ''    const I32_MIN: i32 = 0;'' @ [CHR 10] @
+                    ''    const I32_MAX: i32 = 0;'' @ [CHR 10] @
+                    ''    const U64_MAX: u64 = 0;'' @ [CHR 10] @
+                    ''    extern function print_i8 (x: i8);'' @ [CHR 10] @
+                    ''    extern function print_i16(x: i16);'' @ [CHR 10] @
+                    ''    extern function print_i32(x: i32);'' @ [CHR 10] @
+                    ''    extern function print_i64(x: i64);'' @ [CHR 10] @
+                    ''    extern function print_u8 (x: u8);'' @ [CHR 10] @
+                    ''    extern function print_u16(x: u16);'' @ [CHR 10] @
+                    ''    extern function print_u32(x: u32);'' @ [CHR 10] @
+                    ''    extern function print_u64(x: u64);'' @ [CHR 10] @
+                    ''    extern function print_bool(b: bool);'' @ [CHR 10] @
+                    ''    ghost function valid_string(s: u8[]): bool;'' @ [CHR 10] @
+                    ''    extern function print_string(s: u8[]);'' @ [CHR 10] @
+                    ''    ghost function default<T>(): T;'' @ [CHR 10] @
+                    ''    extern function alloc_array<T>(ref array: T[*], dim: u64);'' @ [CHR 10] @
+                    ''    extern function free_array<T>(ref array: T[*]);'' @ [CHR 10] @
+                    ''    extern function alloc_2d_array<T>(ref array: T[*,*], dim0: u64, dim1: u64);'' @ [CHR 10] @
+                    ''    extern function free_2d_array<T>(ref array: T[*,*]);'' @ [CHR 10] @
+                    ''    extern function alloc_3d_array<T>(ref array: T[*,*,*], dim0: u64, dim1: u64, dim2: u64);'' @ [CHR 10] @
+                    ''    extern function free_3d_array<T>(ref array: T[*,*,*]);'' @ [CHR 10] @
+                    ''    extern type AllocTest (allocated_always);'' @ [CHR 10] @
+                    ''    datatype MaybeAllocTest = MA_Nothing | MA_Just(AllocTest);    '' @ [CHR 10] @
+                    ''    extern function allocate_alloc_test(ref r: MaybeAllocTest)'' @ [CHR 10] @
+                    ''    extern function free_alloc_test(ref r: MaybeAllocTest)'' @ [CHR 10] @
+                    ''}'' @ [CHR 10];
+       rawPkg = \<lparr> RP_Name = ''main'',
                   RP_Dependencies = [],
                   RP_ExportedModules = [],
-                  RP_Modules = [(''Main'', str)] \<rparr>;
+                  RP_Modules = [(''Main'', str), (''Test'', testModule)] \<rparr>;
        result = compiler_front_end [rawPkg] ''main'' ''Main''
    in case result of
         Inr _ \<Rightarrow> CR_Success
