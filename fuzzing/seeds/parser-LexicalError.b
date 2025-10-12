@@ -1,2 +1,2 @@
-module LexicalError
+module Main
 @@@@@

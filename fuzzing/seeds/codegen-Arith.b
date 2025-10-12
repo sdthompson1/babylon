@@ -1,4 +1,4 @@
-module Arith
+module Main
 
 import Test;
 

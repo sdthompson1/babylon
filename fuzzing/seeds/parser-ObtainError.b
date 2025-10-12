@@ -1,4 +1,4 @@
-module ObtainError
+module Main
 interface {
   function f()
   {

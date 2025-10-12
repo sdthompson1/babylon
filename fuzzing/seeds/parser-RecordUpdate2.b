@@ -1,4 +1,4 @@
-module RecordUpdate2
+module Main
 interface {}
 
 function test()

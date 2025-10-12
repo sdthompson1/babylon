@@ -1,4 +1,4 @@
-module Uninterpreted
+module Main
 
 interface {}
 

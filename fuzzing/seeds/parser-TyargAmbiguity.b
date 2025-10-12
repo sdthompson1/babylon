@@ -1,4 +1,4 @@
-module TyargAmbiguity
+module Main
 import Test;
 
 interface {

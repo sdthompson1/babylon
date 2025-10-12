@@ -1,4 +1,4 @@
-module MatchRange
+module Main
 interface {}
 
 const test_i8: bool =

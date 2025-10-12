@@ -1,4 +1,4 @@
-module Impure
+module Main
 
 interface {}
 

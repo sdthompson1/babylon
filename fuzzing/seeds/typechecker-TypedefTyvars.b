@@ -1,4 +1,4 @@
-module TypedefTyvars
+module Main
 interface {}
 import Test;
 

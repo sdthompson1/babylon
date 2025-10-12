@@ -1,4 +1,4 @@
-module Arrays2
+module Main
 
 // Fixed-sized arrays
 

@@ -1,4 +1,4 @@
-module InterfaceImpl
+module Main
 interface {
   function f1(x: i32);
 

@@ -1,4 +1,4 @@
-module FixError
+module Main
 interface {
   function f()
   {

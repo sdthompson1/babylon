@@ -1,4 +1,4 @@
-module Cast
+module Main
 
 interface {}
 

@@ -1,4 +1,4 @@
-module LetInPostcond
+module Main
 
 interface {}
 

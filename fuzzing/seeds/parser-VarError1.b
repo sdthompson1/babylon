@@ -1,4 +1,4 @@
-module VarError1
+module Main
 interface {
   function f()
   {

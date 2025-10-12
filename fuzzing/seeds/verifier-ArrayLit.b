@@ -1,4 +1,4 @@
-module ArrayLit
+module Main
 
 interface {}
 

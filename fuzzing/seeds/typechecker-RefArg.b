@@ -1,4 +1,4 @@
-module RefArg
+module Main
 interface {}
 
 function f1(ref x: i32, y: ref i32, z: i32)

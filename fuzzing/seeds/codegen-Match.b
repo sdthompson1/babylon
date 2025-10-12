@@ -1,4 +1,4 @@
-module Match
+module Main
 
 // Test code generation for pattern matching
 

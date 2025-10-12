@@ -1,4 +1,4 @@
-module TypedefRecursive
+module Main
 interface {}
 
 type Bad = Bad;

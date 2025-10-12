@@ -1,4 +1,4 @@
-module BitwiseFunc
+module Main
 interface { function main(); }
 
 // Bitwise and logical operators

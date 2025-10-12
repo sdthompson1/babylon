@@ -1,4 +1,4 @@
-module IntReal
+module Main
 
 interface {}
 

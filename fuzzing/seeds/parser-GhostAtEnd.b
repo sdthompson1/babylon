@@ -1,4 +1,4 @@
-module GhostAtEnd
+module Main
 interface {}
 
 ghost

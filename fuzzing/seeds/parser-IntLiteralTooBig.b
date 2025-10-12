@@ -1,4 +1,4 @@
-module IntLiteralTooBig
+module Main
 
 interface {
     // This is the max possible u64

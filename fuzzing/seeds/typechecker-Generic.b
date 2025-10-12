@@ -1,4 +1,4 @@
-module Generic
+module Main
 interface {
   function id<a>(x: a): a;
 

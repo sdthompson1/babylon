@@ -1,4 +1,4 @@
-module Record
+module Main
 interface {}
   const a: {f1: i32, f2: bool} = {f1=1, f2=false};
   const b: {f1: i32} = {f1=false};   // Error, type mismatch

@@ -1,4 +1,4 @@
-module BigFrame
+module Main
 import Test;
 
 interface {

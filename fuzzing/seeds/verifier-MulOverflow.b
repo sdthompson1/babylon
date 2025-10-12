@@ -1,4 +1,4 @@
-module MulOverflow
+module Main
 interface {}
 
 function f()

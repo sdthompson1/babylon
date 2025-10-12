@@ -1,4 +1,4 @@
-module ShowHide
+module Main
 
 interface {}
 

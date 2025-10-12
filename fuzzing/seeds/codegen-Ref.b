@@ -1,4 +1,4 @@
-module Ref
+module Main
 
 // Tests of references, and "assign to tuple field".
 

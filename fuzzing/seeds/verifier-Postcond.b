@@ -1,4 +1,4 @@
-module Postcond
+module Main
 
 interface {}
 

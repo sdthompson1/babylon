@@ -1,4 +1,4 @@
-module AssertStar
+module Main
 
 interface {}
 

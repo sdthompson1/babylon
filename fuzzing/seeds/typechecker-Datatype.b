@@ -1,4 +1,4 @@
-module Datatype
+module Main
 interface {}
 
   datatype Color = Red | Green | Blue;

@@ -1,1 +1,1 @@
-module NoInterface
+module Main

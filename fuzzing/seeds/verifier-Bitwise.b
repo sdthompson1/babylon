@@ -1,4 +1,4 @@
-module Bitwise
+module Main
 interface {}
 
 function f()

@@ -1,4 +1,4 @@
-module HexLiteralEmpty
+module Main
 
 interface {}
 

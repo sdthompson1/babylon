@@ -1,4 +1,4 @@
-module RefArg
+module Main
 interface {}
   function f1(ref x: i32, ref y: i32)
     requires 0 < x < 1000;

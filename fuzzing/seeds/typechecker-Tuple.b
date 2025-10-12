@@ -1,4 +1,4 @@
-module Tuple
+module Main
 interface {}
   datatype D<a> = D;
 

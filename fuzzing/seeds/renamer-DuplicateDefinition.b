@@ -1,4 +1,4 @@
-module DuplicateDefinition
+module Main
 interface {
   const cx: i32 = 1;
   const cx: i32 = 1;

@@ -1,4 +1,4 @@
-module ManyArgs
+module Main
 interface { function main(); }
 
 import Test;

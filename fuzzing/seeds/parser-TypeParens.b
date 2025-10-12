@@ -1,4 +1,4 @@
-module TypeParens
+module Main
 
 interface {}
 

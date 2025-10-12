@@ -1,4 +1,4 @@
-module CommentsNest
+module Main
 
 // Check that /* */ style comments nest
 

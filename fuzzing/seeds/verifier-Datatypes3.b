@@ -1,4 +1,4 @@
-module Datatypes3
+module Main
 interface {}
   datatype D = A(i32);
 

@@ -1,4 +1,4 @@
-module ReservedNames
+module Main
 
 interface {
     function main();

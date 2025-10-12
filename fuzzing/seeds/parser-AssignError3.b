@@ -1,4 +1,4 @@
-module AssignError3
+module Main
 interface {
   function f(): i32
   {

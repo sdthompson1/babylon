@@ -1,4 +1,4 @@
-module Ref
+module Main
 interface {}
   function f1()
   {

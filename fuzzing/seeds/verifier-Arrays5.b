@@ -1,4 +1,4 @@
-module Arrays5
+module Main
 
 interface {}
 

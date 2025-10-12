@@ -1,4 +1,4 @@
-module IntLiteralTooNegative
+module Main
 
 interface {
     // This is one below the i64 min.

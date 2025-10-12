@@ -1,4 +1,4 @@
-module AbstractType3
+module Main
 
 interface {
     type Foo;

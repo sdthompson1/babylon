@@ -1,4 +1,4 @@
-module Datatype3
+module Main
 interface {}
   function f1(
                y: {f1: i8, f1: i8} )    // Error: duplicate fieldname

@@ -1,7 +1,7 @@
 // Integer literals within range of their target types. Shouldn't
 // error and shouldn't change the value.
 
-module IntLiteralsInRange
+module Main
 
 import Test;
 

@@ -1,4 +1,4 @@
-module CallAbstract
+module Main
 
 import Test;
 

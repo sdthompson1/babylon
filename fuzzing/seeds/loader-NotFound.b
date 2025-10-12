@@ -1,4 +1,4 @@
-module NotFound
+module Main
 interface {}
 
 import Sub;

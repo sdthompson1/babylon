@@ -1,4 +1,4 @@
-module TyargAmbiguity2
+module Main
 
 import Test;
 

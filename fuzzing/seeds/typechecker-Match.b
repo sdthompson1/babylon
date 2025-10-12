@@ -1,4 +1,4 @@
-module Match
+module Main
 interface {}
 
 datatype ABC = A {fld1: i32, fld2: bool} |

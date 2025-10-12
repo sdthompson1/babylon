@@ -1,4 +1,4 @@
-module GhostFunc
+module Main
 interface {
 
     // Regression test.

@@ -1,4 +1,4 @@
-module Expr
+module Main
 interface {}
 
 function f()

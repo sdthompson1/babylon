@@ -1,4 +1,4 @@
-module Proofs
+module Main
 interface {}
 
 

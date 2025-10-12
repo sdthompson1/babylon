@@ -1,4 +1,4 @@
-module Assign
+module Main
 
 interface {
     function main();

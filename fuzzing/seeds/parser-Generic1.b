@@ -1,4 +1,4 @@
-module Generic1
+module Main
 interface {
   function f<a>();
 

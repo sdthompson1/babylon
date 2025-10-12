@@ -1,4 +1,4 @@
-module Typedef
+module Main
 interface {
 
 type

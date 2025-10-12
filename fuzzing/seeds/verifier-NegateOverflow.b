@@ -1,4 +1,4 @@
-module NegateOverflow
+module Main
 interface {}
 
 function f()

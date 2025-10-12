@@ -1,6 +1,6 @@
 // mixture of fixed and variable sized array dimensions
 
-module ArrayDim3
+module Main
 
 interface {
     type foo = i32[1,,2];

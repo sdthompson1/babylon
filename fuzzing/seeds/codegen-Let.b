@@ -1,4 +1,4 @@
-module Let
+module Main
 
 // Let expressions
 

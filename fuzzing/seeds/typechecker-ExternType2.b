@@ -1,4 +1,4 @@
-module ExternType2
+module Main
 
 interface {
     extern type Foo;

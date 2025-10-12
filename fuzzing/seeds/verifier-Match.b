@@ -1,4 +1,4 @@
-module Match
+module Main
 import Test;
 interface {}
   datatype Color = Red | Green | Blue;

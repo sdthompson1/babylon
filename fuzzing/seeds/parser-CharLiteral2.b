@@ -1,4 +1,4 @@
-module CharLiteral
+module Main
 
 interface {}
 

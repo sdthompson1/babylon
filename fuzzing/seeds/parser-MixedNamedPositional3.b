@@ -1,4 +1,4 @@
-module MixedNamedPositional3
+module Main
 interface {
     function f() {
         match 1 {

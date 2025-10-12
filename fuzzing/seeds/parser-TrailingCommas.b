@@ -1,4 +1,4 @@
-module TrailingCommas
+module Main
 
 // The point of this test is that the parser succeeds (even with trailing
 // commas present in various places) but then we get various errors from the renamer

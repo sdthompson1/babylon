@@ -1,4 +1,4 @@
-module Datatypes2
+module Main
 interface {}
   datatype X<a> = X { a, a, i32 };
   datatype Y = Y1 { i32 } | Y2 { i32, i32 };

@@ -1,4 +1,4 @@
-module RefArgArrayAlias
+module Main
 interface {}
 
 function foo(ref x: i32, ref y: i32)

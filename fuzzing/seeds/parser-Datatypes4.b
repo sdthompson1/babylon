@@ -1,4 +1,4 @@
-module Datatypes4
+module Main
 interface {}
   datatype D = D { i32, i32 };
 

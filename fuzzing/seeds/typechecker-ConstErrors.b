@@ -1,4 +1,4 @@
-module ConstErrors
+module Main
 interface{}
 
 function f(): i32

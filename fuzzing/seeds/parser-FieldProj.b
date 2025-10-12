@@ -1,4 +1,4 @@
-module FieldProj
+module Main
 interface {
   const x: i32 = a.b;       // Valid
   const y: i32 = a.0;       // Valid

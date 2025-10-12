@@ -1,4 +1,4 @@
-module Literals
+module Main
 
 interface {
     function main();

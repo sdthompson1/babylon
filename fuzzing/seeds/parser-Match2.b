@@ -1,4 +1,4 @@
-module Match2
+module Main
 interface {
   const x =
     match (1) {

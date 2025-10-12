@@ -1,4 +1,4 @@
-module MatchRange2
+module Main
 
 interface {}
 

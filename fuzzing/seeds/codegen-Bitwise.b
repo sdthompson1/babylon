@@ -1,4 +1,4 @@
-module Bitwise
+module Main
 interface { function main(); }
 
 // Compile-time evaluation of bitwise and logical operators.

@@ -1,4 +1,4 @@
-module Chaining
+module Main
 
 interface {}
 

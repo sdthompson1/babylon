@@ -1,4 +1,4 @@
-module Quantifiers
+module Main
 interface {}
 
   function f1()

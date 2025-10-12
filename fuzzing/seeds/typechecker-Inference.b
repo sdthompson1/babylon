@@ -1,6 +1,6 @@
 // Some basic type inference tests.
 
-module Inference
+module Main
 interface {}
 
 datatype Maybe<a> = Nothing | Just(a);

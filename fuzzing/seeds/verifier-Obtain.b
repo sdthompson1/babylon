@@ -1,4 +1,4 @@
-module Obtain
+module Main
 interface {}
 
 

@@ -1,4 +1,4 @@
-module InterfaceMatchImpl
+module Main
 interface {
   const a: i32;
   const b: bool;

@@ -1,4 +1,4 @@
-module PrePost
+module Main
 interface {}
 
   // Postconditions:

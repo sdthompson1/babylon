@@ -1,4 +1,4 @@
-module ExternName
+module Main
 
 interface {}
 

@@ -1,4 +1,4 @@
-module Arrays
+module Main
 
 import Test;
 

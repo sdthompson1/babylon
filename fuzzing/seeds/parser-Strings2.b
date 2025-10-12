@@ -1,4 +1,4 @@
-module Strings2
+module Main
 
 interface {}
 

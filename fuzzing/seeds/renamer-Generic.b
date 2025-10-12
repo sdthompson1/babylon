@@ -1,4 +1,4 @@
-module Generic
+module Main
 interface {
   function foo<a>(x: a, y: b)
   {

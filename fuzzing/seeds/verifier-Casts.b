@@ -1,4 +1,4 @@
-module Casts
+module Main
 interface {}
 
 function f()

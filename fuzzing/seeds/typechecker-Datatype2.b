@@ -1,4 +1,4 @@
-module Datatype2
+module Main
 interface {}
 
   datatype Mono = Mono1 { x: i32, y: bool } | Mono2 { z: i32 };

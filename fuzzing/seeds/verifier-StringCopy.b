@@ -1,4 +1,4 @@
-module StringCopy
+module Main
 
 interface {
     function main();

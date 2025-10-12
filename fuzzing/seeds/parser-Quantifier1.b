@@ -1,4 +1,4 @@
-module Quantifier1
+module Main
 interface {
   function f(): i32
   {

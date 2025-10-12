@@ -1,4 +1,4 @@
-module Statements
+module Main
 interface {}
   function unexpected_return()
   {

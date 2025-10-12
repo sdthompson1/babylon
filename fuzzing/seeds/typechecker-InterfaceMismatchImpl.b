@@ -1,4 +1,4 @@
-module InterfaceMismatchImpl
+module Main
 interface {
     const a: i64;
     const b: bool;

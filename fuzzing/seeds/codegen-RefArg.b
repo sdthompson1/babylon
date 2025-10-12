@@ -1,4 +1,4 @@
-module RefArg
+module Main
 
 // Pass-by-reference arguments
 

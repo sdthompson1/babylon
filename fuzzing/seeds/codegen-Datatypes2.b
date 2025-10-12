@@ -1,4 +1,4 @@
-module Datatypes2
+module Main
 
 // More datatype tests (codegen)
 

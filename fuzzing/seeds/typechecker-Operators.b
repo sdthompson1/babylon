@@ -1,4 +1,4 @@
-module Operators
+module Main
 interface {}
   // Various operator type errors:
   

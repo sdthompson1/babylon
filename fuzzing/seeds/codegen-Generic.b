@@ -1,4 +1,4 @@
-module Generic
+module Main
 
 // Codegen for generic functions
 

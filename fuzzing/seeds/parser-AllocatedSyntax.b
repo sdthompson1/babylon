@@ -1,4 +1,4 @@
-module AllocatedSyntax
+module Main
 
 interface {}
 

@@ -1,4 +1,4 @@
-module IntLiteralsOutOfRange
+module Main
 interface {}
 
 function f()

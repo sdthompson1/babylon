@@ -1,4 +1,4 @@
-module RefArg3
+module Main
 interface {}
 
 function foo(dummy: bool, ref arr: i32[])

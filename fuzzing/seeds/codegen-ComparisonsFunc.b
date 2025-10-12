@@ -1,4 +1,4 @@
-module ComparisonsFunc
+module Main
 interface { function main(); }
 
 // Testing comparison operators, and if-then-else expressions

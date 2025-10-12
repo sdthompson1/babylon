@@ -1,4 +1,4 @@
-module Datatypes
+module Main
 interface {}
 
 import Test;

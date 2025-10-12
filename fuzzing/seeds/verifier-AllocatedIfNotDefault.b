@@ -1,4 +1,4 @@
-module AllocatedIfNotDefault
+module Main
 
 interface {}
 

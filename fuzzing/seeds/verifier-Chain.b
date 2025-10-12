@@ -1,4 +1,4 @@
-module Chain
+module Main
 interface {}
 
 function f()

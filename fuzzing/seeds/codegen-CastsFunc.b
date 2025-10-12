@@ -1,4 +1,4 @@
-module CastsFunc
+module Main
 interface { function main(); }
 
 // Testing integer casts (at runtime)

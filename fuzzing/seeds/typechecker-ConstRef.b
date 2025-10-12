@@ -1,4 +1,4 @@
-module ConstRef
+module Main
 
 interface {}
 

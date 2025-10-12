@@ -1,4 +1,4 @@
-module Statements
+module Main
 
 // Codegen for statements (e.g. ifs)
 
