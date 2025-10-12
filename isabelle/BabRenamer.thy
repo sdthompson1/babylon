@@ -1,5 +1,5 @@
 theory BabRenamer
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" Location BabSyntax
+  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" Location BabSyntax
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -164,6 +164,12 @@ fun add_current_module_decls :: "BabModule \<Rightarrow> BabDeclaration list \<R
                            gn = make_global_name_for_decl modName declName False aliasName
                        in (decl, gn)) decls
    in fold (\<lambda>(decl, gn) acc. add_decl_to_env decl gn acc) declResults env)"
+
+(* Filter impl decls to remove "repeats" of interface decls *)
+fun filtered_impl_decls :: "BabModule \<Rightarrow> BabDeclaration list" where
+  "filtered_impl_decls module =
+    (let interfaceNames = fset_of_list (map get_decl_name (Mod_Interface module))
+     in filter (\<lambda>decl. (get_decl_name decl) |\<notin>| interfaceNames) (Mod_Implementation module))"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -697,7 +703,7 @@ fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (Rena
 
        (implImportErrs, implImportEnv) = 
           process_import_list (Mod_ImplementationImports module) allMods;
-       implEnv = add_current_module_decls module (Mod_Implementation module) 
+       implEnv = add_current_module_decls module (filtered_impl_decls module) 
           (merge_renamer_envs interfaceEnv implImportEnv);
        implResults = map (rename_declaration implEnv) (Mod_Implementation module);
        implErrs = concat (map fst implResults);
