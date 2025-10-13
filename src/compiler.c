@@ -487,7 +487,7 @@ static enum CompileResult load_module_from_disk(struct LoadDetails *details,
         report_module_name_mismatch_filename(loc, module->name);
         free_module(module);
         free_token((void*)token);
-        return CR_RENAME_ERROR;
+        return CR_LEX_ERROR;
     }
 
     free_token((void*)token);
