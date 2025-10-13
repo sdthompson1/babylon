@@ -104,16 +104,17 @@ fun parse_module_text :: "string \<Rightarrow> string \<Rightarrow> string \<Rig
       | LR_Success tokens \<Rightarrow>
         (case run_parser parse_module (pkgName @ '':'' @ modName @ ''.b'') tokens of
           PR_Success module _ _ \<Rightarrow>
-            (if Mod_Name module \<noteq> modName then
-              Inl [LoaderError_WrongModuleName modName (Mod_Name module)]
-            else
-              case post_parse_module module of
-                [] \<Rightarrow>
+            (let postParseErrors = map (\<lambda>(loc, ppe). LoaderError_PostParseError loc ppe) (post_parse_module module);
+                 wrongModNameError = if Mod_Name module \<noteq> modName then
+                                       [LoaderError_WrongModuleName modName (Mod_Name module)]
+                                     else [];
+                 allErrors = postParseErrors @ wrongModNameError
+             in if allErrors = [] then
                   let fullModName = pkgName @ '':'' @ modName;
                       renamedModule = module \<lparr> Mod_Name := fullModName \<rparr>
                   in Inr renamedModule
-                | postParseErrors \<Rightarrow>
-                  Inl (map (\<lambda>(loc, ppe). LoaderError_PostParseError loc ppe) postParseErrors))
+                else
+                  Inl allErrors)
           | PR_Error parseLoc \<Rightarrow> Inl [LoaderError_ParseError parseLoc]))"
 
 (*-----------------------------------------------------------------------------*)

@@ -27,8 +27,6 @@ fun frontend_errors_to_result :: "FrontEndError list \<Rightarrow> CompileResult
   (case x of
     LoaderError_ParseError _ \<Rightarrow> CR_ParseError
     | LoaderError_PostParseError _ _ \<Rightarrow> CR_ParseError
-    | LoaderError_RootModuleNotFound _ _ \<Rightarrow> CR_RenameError
-    | LoaderError_WrongModuleName _ _ \<Rightarrow> CR_RenameError
     | _ \<Rightarrow> CR_LexError
   )"
 | "frontend_errors_to_result (FrontEndError_Renamer _ # _) = CR_RenameError"
