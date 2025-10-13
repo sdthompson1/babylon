@@ -361,6 +361,12 @@ fun bab_statement_location :: "BabStatement \<Rightarrow> Location" where
 | "bab_statement_location (BabStmt_Call loc _ _) = loc"
 | "bab_statement_location (BabStmt_ShowHide loc _ _) = loc"
 
+fun bab_declaration_location :: "BabDeclaration \<Rightarrow> Location" where
+  "bab_declaration_location (BabDecl_Const dc) = DC_Location dc"
+| "bab_declaration_location (BabDecl_Function df) = DF_Location df"
+| "bab_declaration_location (BabDecl_Datatype dd) = DD_Location dd"
+| "bab_declaration_location (BabDecl_Typedef dt) = DT_Location dt"
+
 fun array_dim_terms :: "BabDimension \<Rightarrow> BabTerm list" where
   "array_dim_terms (BabDim_Fixed tm) = [tm]"
 | "array_dim_terms _ = []"

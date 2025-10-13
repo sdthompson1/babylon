@@ -114,6 +114,37 @@ fun check_duplicate_aliases :: "BabImport list \<Rightarrow> RenameError list"
        duplicates = find_duplicates_in_sorted fst sortedPairs
    in map (\<lambda>(alias, loc). RenameError_DuplicateAlias loc alias) duplicates)"
 
+(* Function to extract defined type names from a BabDeclaration *)
+fun get_type_names_from_decl :: "BabDeclaration \<Rightarrow> (string \<times> Location) list" where
+  "get_type_names_from_decl decl =
+   (if is_type_decl decl then
+     [(get_decl_name decl, bab_declaration_location decl)]
+   else [])"
+
+(* Function to extract defined term names from a BabDeclaration *)
+fun get_term_names_from_decl :: "BabDeclaration \<Rightarrow> (string \<times> Location) list" where
+  "get_term_names_from_decl decl =
+   (if is_type_decl decl then
+     (case decl of
+        BabDecl_Datatype d \<Rightarrow> map (\<lambda>(loc, c, _). (c, loc)) (DD_Ctors d)
+      | _ \<Rightarrow> [])
+   else
+     [(get_decl_name decl, bab_declaration_location decl)])"
+
+(* Function to check for duplicate definitions in interface or implementation *)
+fun check_duplicate_decl_names :: "BabDeclaration list \<Rightarrow> RenameError list" where
+"check_duplicate_decl_names decls =
+  (let typeNameLocPairs = concat (map get_type_names_from_decl decls);
+       sortedTypePairs = sort_key fst typeNameLocPairs;
+       typeDuplicates = find_duplicates_in_sorted fst sortedTypePairs;
+       typeErrors = map (\<lambda>(name, loc). RenameError_DuplicateDefinition loc name) typeDuplicates;
+
+       termNameLocPairs = concat (map get_term_names_from_decl decls);
+       sortedTermPairs = sort_key fst termNameLocPairs;
+       termDuplicates = find_duplicates_in_sorted fst sortedTermPairs;
+       termErrors = map (\<lambda>(name, loc). RenameError_DuplicateDefinition loc name) termDuplicates
+   in typeErrors @ termErrors)"
+
 
 (*-----------------------------------------------------------------------------*)
 (* RenameEnv helpers *)
@@ -798,11 +829,13 @@ fun rename_module_implementation :: "BabModule \<Rightarrow> BabModule list \<Ri
 fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (RenameError list, BabModule) sum"
   where
 "rename_module module allMods =
-  (let allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
+  (let dupErrs = check_duplicate_decl_names (Mod_Interface module)
+          @ check_duplicate_decl_names (Mod_Implementation module);
+       allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
        aliasErrs = check_duplicate_aliases allImports;
        (interfaceErrs, newInterface, interfaceEnv) = rename_module_interface module allMods;
        (implErrs, newImplementation) = rename_module_implementation module allMods interfaceEnv;
-       allErrors = aliasErrs @ interfaceErrs @ implErrs;
+       allErrors = dupErrs @ aliasErrs @ interfaceErrs @ implErrs;
        newMod = module \<lparr> Mod_Interface := newInterface,
                          Mod_Implementation := newImplementation \<rparr>
    in if allErrors = [] then Inr newMod else Inl allErrors)"
