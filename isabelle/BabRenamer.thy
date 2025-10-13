@@ -13,6 +13,8 @@ datatype RenameError =
   | RenameError_AmbiguousType Location string "string list"  (* type name 'T' is ambiguous: could be <list> *)
   | RenameError_ModuleNotFound Location string  (* module not found: 'M' *)
   | RenameError_DuplicateAlias Location string  (* multiple imports of module 'M' *)
+  | RenameError_ReturnVarOutsidePostcond Location  (* 'return' used as variable, outside postcondition *)
+  | RenameError_ReturnVarVoidFunction Location  (* 'return' used as variable, in postcondition of void function *)
 
 
 (*-----------------------------------------------------------------------------*)
@@ -29,6 +31,8 @@ record RenameEnv =
   RE_LocalTermNames :: "string list"
   RE_GlobalTypeNames :: "GlobalName list"
   RE_GlobalTermNames :: "GlobalName list"
+  RE_InPostcondition :: bool
+  RE_CurrentFunctionReturnType :: "BabType option"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -132,7 +136,9 @@ definition empty_renamer_env :: RenameEnv
   where "empty_renamer_env = \<lparr> RE_LocalTypeNames = [],
                                RE_LocalTermNames = [],
                                RE_GlobalTypeNames = [],
-                               RE_GlobalTermNames = [] \<rparr>"
+                               RE_GlobalTermNames = [],
+                               RE_InPostcondition = False,
+                               RE_CurrentFunctionReturnType = None \<rparr>"
 
 (* Merge two renamer envs *)
 fun merge_renamer_envs :: "RenameEnv \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
@@ -141,7 +147,9 @@ fun merge_renamer_envs :: "RenameEnv \<Rightarrow> RenameEnv \<Rightarrow> Renam
   \<lparr> RE_LocalTypeNames = RE_LocalTypeNames env1 @ RE_LocalTypeNames env2,
     RE_LocalTermNames = RE_LocalTermNames env1 @ RE_LocalTermNames env2,
     RE_GlobalTypeNames = RE_GlobalTypeNames env1 @ RE_GlobalTypeNames env2,
-    RE_GlobalTermNames = RE_GlobalTermNames env1 @ RE_GlobalTermNames env2 \<rparr>"
+    RE_GlobalTermNames = RE_GlobalTermNames env1 @ RE_GlobalTermNames env2,
+    RE_InPostcondition = RE_InPostcondition env1,
+    RE_CurrentFunctionReturnType = RE_CurrentFunctionReturnType env1 \<rparr>"
 
 (* GlobalName construction function *)
 fun make_global_name :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> string \<Rightarrow> GlobalName"
@@ -408,11 +416,19 @@ and rename_dimension :: "RenameEnv \<Rightarrow> BabDimension \<Rightarrow>
     (case rename_literal env lit of
       (errs, newLit) \<Rightarrow> (errs, BabTm_Literal loc newLit))"
 | "rename_term env (BabTm_Name loc name tyargs) =
-    (let tyargResults = map (rename_type env) tyargs;
-         tyargErrs = concat (map fst tyargResults);
-         newTyargs = map snd tyargResults
-     in case rename_term_name_with_projections env loc name newTyargs of
-       (nameErrs, resultTm) \<Rightarrow> (nameErrs @ tyargErrs, resultTm))"
+    (if name = ''return'' then
+      (if \<not> RE_InPostcondition env then
+        ([RenameError_ReturnVarOutsidePostcond loc], BabTm_Name loc ''#Error'' [])
+      else if RE_CurrentFunctionReturnType env = None then
+        ([RenameError_ReturnVarVoidFunction loc], BabTm_Name loc ''#Error'' [])
+      else
+        ([], BabTm_Name loc ''return'' []))
+    else
+      (let tyargResults = map (rename_type env) tyargs;
+           tyargErrs = concat (map fst tyargResults);
+           newTyargs = map snd tyargResults
+       in case rename_term_name_with_projections env loc name newTyargs of
+         (nameErrs, resultTm) \<Rightarrow> (nameErrs @ tyargErrs, resultTm)))"
 | "rename_term env (BabTm_Cast loc ty tm) =
     (case rename_type env ty of
       (errs1, newTy) \<Rightarrow>
@@ -525,8 +541,9 @@ fun rename_attribute :: "RenameEnv \<Rightarrow> BabAttribute \<Rightarrow>
     (case rename_term env tm of
       (errs, newTm) \<Rightarrow> (errs, BabAttr_Requires loc newTm))"
 | "rename_attribute env (BabAttr_Ensures loc tm) =
-    (case rename_term env tm of
-      (errs, newTm) \<Rightarrow> (errs, BabAttr_Ensures loc newTm))"
+    (let postcondEnv = env \<lparr> RE_InPostcondition := True \<rparr>
+     in case rename_term postcondEnv tm of
+       (errs, newTm) \<Rightarrow> (errs, BabAttr_Ensures loc newTm))"
 | "rename_attribute env (BabAttr_Invariant loc tm) =
     (case rename_term env tm of
       (errs, newTm) \<Rightarrow> (errs, BabAttr_Invariant loc newTm))"
@@ -664,12 +681,14 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
            | Some ty \<Rightarrow> let (errs, newTy) = rename_type newEnv ty
                         in (errs, Some newTy));
 
+         newEnvWithRetTy = newEnv \<lparr> RE_CurrentFunctionReturnType := newRetTy \<rparr>;
+
          (bodyErrs, newBody) = (case DF_Body df of
            None \<Rightarrow> ([], None)
-           | Some stmts \<Rightarrow> let (errs, newStmts) = rename_statements newEnv stmts
+           | Some stmts \<Rightarrow> let (errs, newStmts) = rename_statements newEnvWithRetTy stmts
                            in (errs, Some newStmts));
 
-         attrResults = map (rename_attribute newEnv) (DF_Attributes df);
+         attrResults = map (rename_attribute newEnvWithRetTy) (DF_Attributes df);
          attrErrs = concat (map fst attrResults);
          newAttrs = map snd attrResults;
 
