@@ -1,5 +1,5 @@
 theory BabRenamer
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" Location BabSyntax
+  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" Location BabSyntax
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -13,6 +13,7 @@ datatype RenameError =
   | RenameError_AmbiguousType Location string "string list"  (* type name 'T' is ambiguous: could be <list> *)
   | RenameError_ModuleNotFound Location string  (* module not found: 'M' *)
   | RenameError_DuplicateAlias Location string  (* multiple imports of module 'M' *)
+  | RenameError_DuplicateDefinition Location string  (* variable 'x' is already defined in this scope *)
   | RenameError_ReturnVarOutsidePostcond Location  (* 'return' used as variable, outside postcondition *)
   | RenameError_ReturnVarVoidFunction Location  (* 'return' used as variable, in postcondition of void function *)
 
@@ -21,16 +22,17 @@ datatype RenameError =
 (* Renamer internal data structures *)
 (*-----------------------------------------------------------------------------*)
 
-record GlobalName = 
+record GlobalName =
   GN_UnqualifiedName :: "string option"  (* e.g. "foo" *)
   GN_QualifiedName :: string   (* e.g. "Foo.foo" or "F.foo" *)
   GN_TrueName :: string   (* e.g. "mypackage:Foo.foo" *)
 
 record RenameEnv =
-  RE_LocalTypeNames :: "string list"
-  RE_LocalTermNames :: "string list"
-  RE_GlobalTypeNames :: "GlobalName list"
-  RE_GlobalTermNames :: "GlobalName list"
+  RE_LocalTypeNames :: "string fset"
+  RE_LocalTermNames :: "string fset"
+  RE_CurrentScopeTermNames :: "string fset"
+  RE_GlobalTypeNames :: "(string, string list) fmap"
+  RE_GlobalTermNames :: "(string, string list) fmap"
   RE_InPostcondition :: bool
   RE_CurrentFunctionReturnType :: "BabType option"
 
@@ -92,16 +94,16 @@ fun strip_package_prefix :: "string \<Rightarrow> string" where
 (* Helpers for finding duplicate names *)
 (*-----------------------------------------------------------------------------*)
 
-(* Helper function to find duplicates in a sorted list *)
-fun find_duplicates_in_sorted :: "('a * 'b) list \<Rightarrow> ('a * 'b) list"
+(* Helper function to find duplicates in a sorted list using a key function *)
+fun find_duplicates_in_sorted :: "('a \<Rightarrow> 'k) \<Rightarrow> 'a list \<Rightarrow> 'a list"
   where
-"find_duplicates_in_sorted [] = []"
-| "find_duplicates_in_sorted [x] = []"
-| "find_duplicates_in_sorted ((a1, b1) # (a2, b2) # rest) =
-    (if a1 = a2 then
-      (a2, b2) # find_duplicates_in_sorted ((a2, b2) # rest)
+"find_duplicates_in_sorted keyFn [] = []"
+| "find_duplicates_in_sorted keyFn [x] = []"
+| "find_duplicates_in_sorted keyFn (x1 # x2 # rest) =
+    (if keyFn x1 = keyFn x2 then
+      x2 # find_duplicates_in_sorted keyFn (x2 # rest)
     else
-      find_duplicates_in_sorted ((a2, b2) # rest))"
+      find_duplicates_in_sorted keyFn (x2 # rest))"
 
 (* Function to check for duplicate alias names in imports *)
 fun check_duplicate_aliases :: "BabImport list \<Rightarrow> RenameError list"
@@ -109,7 +111,7 @@ fun check_duplicate_aliases :: "BabImport list \<Rightarrow> RenameError list"
 "check_duplicate_aliases imports =
   (let aliasLocPairs = map (\<lambda>imp. (Imp_AliasName imp, Imp_Location imp)) imports;
        sortedPairs = sort_key fst aliasLocPairs;
-       duplicates = find_duplicates_in_sorted sortedPairs
+       duplicates = find_duplicates_in_sorted fst sortedPairs
    in map (\<lambda>(alias, loc). RenameError_DuplicateAlias loc alias) duplicates)"
 
 
@@ -118,38 +120,77 @@ fun check_duplicate_aliases :: "BabImport list \<Rightarrow> RenameError list"
 (*-----------------------------------------------------------------------------*)
 
 (* Add local names *)
-fun add_local_type_names :: "string list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
-  where "add_local_type_names names env = env \<lparr> RE_LocalTypeNames := names @ RE_LocalTypeNames env \<rparr>"
+fun add_local_type_names :: "Location \<Rightarrow> string list \<Rightarrow> RenameEnv \<Rightarrow> RenameError list * RenameEnv"
+  where "add_local_type_names loc names env =
+    (let sorted = sort names;
+         internalDups = find_duplicates_in_sorted id sorted;
+         internalDupErrs = map (\<lambda>name. RenameError_DuplicateDefinition loc name) internalDups;
+         newNames = fset_of_list names;
+         newEnv = env \<lparr> RE_LocalTypeNames := newNames |\<union>| RE_LocalTypeNames env \<rparr>
+     in (internalDupErrs, newEnv))"
 
-fun add_local_term_names :: "string list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
-  where "add_local_term_names names env = env \<lparr> RE_LocalTermNames := names @ RE_LocalTermNames env \<rparr>"
+(* Helper function to check for duplicates in a list and generate errors *)
+fun check_duplicate_names :: "Location \<Rightarrow> string list \<Rightarrow> string fset \<Rightarrow> RenameError list"
+  where "check_duplicate_names loc names currentScope =
+    (let duplicates = filter (\<lambda>name. name |\<in>| currentScope) names
+     in map (\<lambda>name. RenameError_DuplicateDefinition loc name) duplicates)"
+
+fun add_local_term_names :: "Location \<Rightarrow> string list \<Rightarrow> RenameEnv \<Rightarrow> RenameError list * RenameEnv"
+  where "add_local_term_names loc names env =
+    (let sorted = sort names;
+         internalDups = find_duplicates_in_sorted id sorted;
+         internalDupErrs = map (\<lambda>name. RenameError_DuplicateDefinition loc name) internalDups;
+         scopeDupErrs = check_duplicate_names loc names (RE_CurrentScopeTermNames env);
+         allErrs = internalDupErrs @ scopeDupErrs;
+         newNames = fset_of_list names;
+         newEnv = env \<lparr> RE_LocalTermNames := newNames |\<union>| RE_LocalTermNames env,
+                         RE_CurrentScopeTermNames := newNames |\<union>| RE_CurrentScopeTermNames env \<rparr>
+     in (allErrs, newEnv))"
+
+(* Open a new term scope - clears the current scope names *)
+fun open_term_scope :: "RenameEnv \<Rightarrow> RenameEnv"
+  where "open_term_scope env = env \<lparr> RE_CurrentScopeTermNames := {||} \<rparr>"
+
+(* Helper to add a mapping to an fmap, prepending to existing list if key exists.
+   Only adds trueName if it's not already in the list (prevents spurious ambiguity errors). *)
+fun add_to_name_fmap :: "string \<Rightarrow> string \<Rightarrow> (string, string list) fmap \<Rightarrow> (string, string list) fmap"
+  where "add_to_name_fmap key trueName fm =
+    (case fmlookup fm key of
+      None \<Rightarrow> fmupd key [trueName] fm
+      | Some existingList \<Rightarrow>
+          if List.member existingList trueName then
+            fm
+          else
+            fmupd key (trueName # existingList) fm)"
+
+(* Helper to insert a GlobalName into an fmap *)
+fun insert_global_name_into_fmap :: "GlobalName \<Rightarrow> (string, string list) fmap \<Rightarrow> (string, string list) fmap"
+  where "insert_global_name_into_fmap gn fm =
+    (let trueName = GN_TrueName gn;
+         fm1 = (case GN_UnqualifiedName gn of
+                  None \<Rightarrow> fm
+                  | Some unqual \<Rightarrow> add_to_name_fmap unqual trueName fm);
+         fm2 = add_to_name_fmap (GN_QualifiedName gn) trueName fm1
+     in fm2)"
 
 (* Add global names *)
 fun add_global_type_names :: "GlobalName list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
-  where "add_global_type_names gns env = env \<lparr> RE_GlobalTypeNames := gns @ RE_GlobalTypeNames env \<rparr>"
+  where "add_global_type_names gns env =
+    env \<lparr> RE_GlobalTypeNames := fold insert_global_name_into_fmap gns (RE_GlobalTypeNames env) \<rparr>"
 
 fun add_global_term_names :: "GlobalName list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
-  where "add_global_term_names gns env = env \<lparr> RE_GlobalTermNames := gns @ RE_GlobalTermNames env \<rparr>"
+  where "add_global_term_names gns env =
+    env \<lparr> RE_GlobalTermNames := fold insert_global_name_into_fmap gns (RE_GlobalTermNames env) \<rparr>"
 
 (* Empty renamer env *)
 definition empty_renamer_env :: RenameEnv
-  where "empty_renamer_env = \<lparr> RE_LocalTypeNames = [],
-                               RE_LocalTermNames = [],
-                               RE_GlobalTypeNames = [],
-                               RE_GlobalTermNames = [],
+  where "empty_renamer_env = \<lparr> RE_LocalTypeNames = {||},
+                               RE_LocalTermNames = {||},
+                               RE_CurrentScopeTermNames = {||},
+                               RE_GlobalTypeNames = fmempty,
+                               RE_GlobalTermNames = fmempty,
                                RE_InPostcondition = False,
                                RE_CurrentFunctionReturnType = None \<rparr>"
-
-(* Merge two renamer envs *)
-fun merge_renamer_envs :: "RenameEnv \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
-  where
-"merge_renamer_envs env1 env2 =
-  \<lparr> RE_LocalTypeNames = RE_LocalTypeNames env1 @ RE_LocalTypeNames env2,
-    RE_LocalTermNames = RE_LocalTermNames env1 @ RE_LocalTermNames env2,
-    RE_GlobalTypeNames = RE_GlobalTypeNames env1 @ RE_GlobalTypeNames env2,
-    RE_GlobalTermNames = RE_GlobalTermNames env1 @ RE_GlobalTermNames env2,
-    RE_InPostcondition = RE_InPostcondition env1,
-    RE_CurrentFunctionReturnType = RE_CurrentFunctionReturnType env1 \<rparr>"
 
 (* GlobalName construction function *)
 fun make_global_name :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> string \<Rightarrow> GlobalName"
@@ -159,16 +200,13 @@ fun make_global_name :: "string \<Rightarrow> string \<Rightarrow> bool \<Righta
     GN_QualifiedName = aliasName @ ''.'' @ declName,
     GN_TrueName = fullModName @ ''.'' @ declName \<rparr>"
 
-(* Add a new declaration.
-   If skip_decl_name is true, the decl name itself is not added, but constructors still are. *)
-fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> bool \<Rightarrow> BabDeclaration \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+(* Add a new declaration to the environment *)
+fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> BabDeclaration \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where
-"add_decl_to_env fullModName aliasName qualified skip_decl_name decl env =
+"add_decl_to_env fullModName aliasName qualified decl env =
   (let declName = get_decl_name decl;
        gn = make_global_name fullModName declName qualified aliasName;
-       env1 = (if skip_decl_name then
-                env
-              else if is_type_decl decl then
+       env1 = (if is_type_decl decl then
                 add_global_type_names [gn] env
               else
                 add_global_term_names [gn] env)
@@ -181,28 +219,13 @@ fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightar
        in add_global_term_names ctorGlobalNames env1
      | _ \<Rightarrow> env1)"
 
-(* Add interface decls from the current module *)
-fun add_current_module_interface_decls :: "BabModule \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+(* Add declarations from the current module *)
+fun add_current_module_decls :: "BabModule \<Rightarrow> BabDeclaration list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where
-"add_current_module_interface_decls currentMod env =
+"add_current_module_decls currentMod decls env =
   (let modName = Mod_Name currentMod;
-       aliasName = strip_package_prefix modName;
-       decls = Mod_Interface currentMod
-   in fold (\<lambda>decl acc. add_decl_to_env modName aliasName False False decl acc) decls env)"
-
-(* Add implementation decls from the current module.
-   Skips adding the decl name itself if it already appears in the interface,
-   but still adds constructors for datatypes. *)
-fun add_current_module_impl_decls :: "BabModule \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
-  where
-"add_current_module_impl_decls currentMod env =
-  (let modName = Mod_Name currentMod;
-       aliasName = strip_package_prefix modName;
-       interfaceNames = fset_of_list (map get_decl_name (Mod_Interface currentMod));
-       decls = Mod_Implementation currentMod
-   in fold (\<lambda>decl acc.
-              let skip = (get_decl_name decl) |\<in>| interfaceNames
-              in add_decl_to_env modName aliasName False skip decl acc) decls env)"
+       aliasName = strip_package_prefix modName
+   in fold (\<lambda>decl acc. add_decl_to_env modName aliasName False decl acc) decls env)"
 
 
 
@@ -228,48 +251,42 @@ fun process_import :: "BabImport \<Rightarrow> BabModule list \<Rightarrow> Rena
    in
    case find_module_in_list fullModName allMods of
      Some foundMod \<Rightarrow>
-       let newEnv = fold (\<lambda>decl acc. add_decl_to_env fullModName aliasName qualified False decl acc)
+       let newEnv = fold (\<lambda>decl acc. add_decl_to_env fullModName aliasName qualified decl acc)
                          (Mod_Interface foundMod) env
        in ([], newEnv)
      | None \<Rightarrow>
          ([RenameError_ModuleNotFound impLoc fullModName], env))"
 
-(* Helper function to process a list of imports *)
-fun process_import_list :: "BabImport list \<Rightarrow> BabModule list \<Rightarrow> RenameError list *  RenameEnv"
+(* Helper function to process a list of imports, building up an environment incrementally *)
+fun process_import_list :: "BabImport list \<Rightarrow> BabModule list \<Rightarrow> RenameEnv \<Rightarrow> RenameError list * RenameEnv"
   where
-"process_import_list imports allMods =
-  (let importResults = map (\<lambda>imp. process_import imp allMods empty_renamer_env) imports;
-       importErrs = concat (map fst importResults);
-       importEnvs = map snd importResults;
-       mergedEnv = fold merge_renamer_envs importEnvs empty_renamer_env
-   in (importErrs, mergedEnv))"
+"process_import_list imports allMods initialEnv =
+  fold (\<lambda>imp (accErrs, accEnv).
+          let (errs, newEnv) = process_import imp allMods accEnv
+          in (errs @ accErrs, newEnv))
+       imports
+       ([], initialEnv)"
 
 
 (*-----------------------------------------------------------------------------*)
 (* Name resolution *)
 (*-----------------------------------------------------------------------------*)
 
-(* Helper function to find GlobalNames matching a name *)
-fun find_global_names :: "string \<Rightarrow> GlobalName list \<Rightarrow> GlobalName list"
-  where
-"find_global_names name globalNames =
-  filter (\<lambda>g. (GN_UnqualifiedName g = Some name) \<or> (GN_QualifiedName g = name)) globalNames"
-
 (* Functions to look up a particular name and return its renamed version.
    May also return errors (currently it will only return upto 1 error). *)
-fun rename_name_generic :: "string list \<Rightarrow> GlobalName list \<Rightarrow>
+fun rename_name_generic :: "string fset \<Rightarrow> (string, string list) fmap \<Rightarrow>
                            (Location \<Rightarrow> string \<Rightarrow> RenameError) \<Rightarrow>
                            (Location \<Rightarrow> string \<Rightarrow> string list \<Rightarrow> RenameError) \<Rightarrow>
                            Location \<Rightarrow> string \<Rightarrow> (RenameError list * string)"
   where
-"rename_name_generic localNames globalNames notFoundError ambiguousError loc name =
-  (if find (\<lambda>x. x = name) localNames \<noteq> None then
+"rename_name_generic localNames globalNamesMap notFoundError ambiguousError loc name =
+  (if name |\<in>| localNames then
     ([], name)
   else
-    (case find_global_names name globalNames of
-      [] \<Rightarrow> ([notFoundError loc name], ''#Error'')
-      | [g] \<Rightarrow> ([], GN_TrueName g)
-      | multiple \<Rightarrow> ([ambiguousError loc name (map GN_TrueName multiple)], ''#Error'')))"
+    (case fmlookup globalNamesMap name of
+      None \<Rightarrow> ([notFoundError loc name], ''#Error'')
+      | Some [trueName] \<Rightarrow> ([], trueName)
+      | Some multiple \<Rightarrow> ([ambiguousError loc name multiple], ''#Error'')))"
 
 fun rename_type_name :: "RenameEnv \<Rightarrow> Location \<Rightarrow> string \<Rightarrow>
                          (RenameError list * string)"
@@ -458,15 +475,19 @@ and rename_dimension :: "RenameEnv \<Rightarrow> BabDimension \<Rightarrow>
 | "rename_term env (BabTm_Let loc var tm1 tm2) =
     (case rename_term env tm1 of
       (errs1, newTm1) \<Rightarrow>
-        (case rename_term (add_local_term_names [var] env) tm2 of
-          (errs2, newTm2) \<Rightarrow>
-            (errs1 @ errs2, BabTm_Let loc var newTm1 newTm2)))"
+        (let newScopeEnv = open_term_scope env;
+             (varErrs, env2) = add_local_term_names loc [var] newScopeEnv
+         in case rename_term env2 tm2 of
+           (errs2, newTm2) \<Rightarrow>
+             (errs1 @ varErrs @ errs2, BabTm_Let loc var newTm1 newTm2)))"
 | "rename_term env (BabTm_Quantifier loc quant var ty tm) =
     (case rename_type env ty of
       (errs1, newTy) \<Rightarrow>
-        (case rename_term (add_local_term_names [var] env) tm of
-          (errs2, newTm) \<Rightarrow>
-            (errs1 @ errs2, BabTm_Quantifier loc quant var newTy newTm)))"
+        (let newScopeEnv = open_term_scope env;
+             (varErrs, env2) = add_local_term_names loc [var] newScopeEnv
+         in case rename_term env2 tm of
+           (errs2, newTm) \<Rightarrow>
+             (errs1 @ varErrs @ errs2, BabTm_Quantifier loc quant var newTy newTm)))"
 | "rename_term env (BabTm_Call loc fn args) =
     (case rename_term env fn of
       (errs1, newFn) \<Rightarrow>
@@ -514,9 +535,11 @@ and rename_dimension :: "RenameEnv \<Rightarrow> BabDimension \<Rightarrow>
         (let results = map (\<lambda>(pat, caseTm).
                               case rename_pattern env pat of
                                 (patErrs, newPat, boundVars) \<Rightarrow>
-                                  case rename_term (add_local_term_names boundVars env) caseTm of
+                                  let newScopeEnv = open_term_scope env;
+                                      (varErrs, env2) = add_local_term_names loc boundVars newScopeEnv
+                                  in case rename_term env2 caseTm of
                                     (tmErrs, newCaseTm) \<Rightarrow>
-                                      (patErrs @ tmErrs, (newPat, newCaseTm))) cases;
+                                      (patErrs @ varErrs @ tmErrs, (newPat, newCaseTm))) cases;
              allErrs = concat (map fst results);
              newCases = map snd results
          in (errs1 @ allErrs, BabTm_Match loc newTm newCases)))"
@@ -573,9 +596,10 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
 | "rename_statement env (BabStmt_Obtain loc var ty tm) =
     (case rename_type env ty of
       (errs1, newTy) \<Rightarrow>
-        (case rename_term (add_local_term_names [var] env) tm of
+        (let (varErrs, env2) = add_local_term_names loc [var] env
+         in case rename_term env2 tm of
           (errs2, newTm) \<Rightarrow>
-            (errs1 @ errs2, BabStmt_Obtain loc var newTy newTm, [var])))"
+            (errs1 @ varErrs @ errs2, BabStmt_Obtain loc var newTy newTm, [var])))"
 | "rename_statement env (BabStmt_Use loc tm) =
     (case rename_term env tm of
       (errs, newTm) \<Rightarrow> (errs, BabStmt_Use loc newTm, []))"
@@ -602,7 +626,8 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
            None \<Rightarrow> ([], None)
            | Some tm \<Rightarrow> let (errs, newTm) = rename_term env tm
                         in (errs, Some newTm));
-         (stmtErrs, newStmts) = rename_statements env stmts
+         newScopeEnv = open_term_scope env;
+         (stmtErrs, newStmts) = rename_statements newScopeEnv stmts
      in (tmErrs @ stmtErrs, BabStmt_Assert loc newOptTm newStmts, []))"
 | "rename_statement env (BabStmt_Assume loc tm) =
     (case rename_term env tm of
@@ -610,8 +635,10 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
 | "rename_statement env (BabStmt_If loc ghost cond thenStmts elseStmts) =
     (case rename_term env cond of
       (errs1, newCond) \<Rightarrow>
-        (let (thenErrs, newThenStmts) = rename_statements env thenStmts;
-             (elseErrs, newElseStmts) = rename_statements env elseStmts
+        (let thenScopeEnv = open_term_scope env;
+             (thenErrs, newThenStmts) = rename_statements thenScopeEnv thenStmts;
+             elseScopeEnv = open_term_scope env;
+             (elseErrs, newElseStmts) = rename_statements elseScopeEnv elseStmts
          in (errs1 @ thenErrs @ elseErrs, BabStmt_If loc ghost newCond newThenStmts newElseStmts, [])))"
 | "rename_statement env (BabStmt_While loc ghost cond attrs bodyStmts) =
     (case rename_term env cond of
@@ -619,7 +646,8 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
         (let attrResults = map (rename_attribute env) attrs;
              attrErrs = concat (map fst attrResults);
              newAttrs = map snd attrResults;
-             (bodyErrs, newBodyStmts) = rename_statements env bodyStmts
+             bodyScopeEnv = open_term_scope env;
+             (bodyErrs, newBodyStmts) = rename_statements bodyScopeEnv bodyStmts
          in (errs1 @ attrErrs @ bodyErrs, BabStmt_While loc ghost newCond newAttrs newBodyStmts, [])))"
 | "rename_statement env (BabStmt_Call loc ghost tm) =
     (case rename_term env tm of
@@ -630,9 +658,10 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
         (let results = map (\<lambda>(pat, caseStmts).
                               case rename_pattern env pat of
                                 (patErrs, newPat, boundVars) \<Rightarrow>
-                                  let newEnv = add_local_term_names boundVars env;
-                                      (stmtErrs, newCaseStmts) = rename_statements newEnv caseStmts
-                                  in (patErrs @ stmtErrs, (newPat, newCaseStmts))) cases;
+                                  let newScopeEnv = open_term_scope env;
+                                      (varErrs, env2) = add_local_term_names loc boundVars newScopeEnv;
+                                      (stmtErrs, newCaseStmts) = rename_statements env2 caseStmts
+                                  in (patErrs @ varErrs @ stmtErrs, (newPat, newCaseStmts))) cases;
              allErrs = concat (map fst results);
              newCases = map snd results
          in (errs1 @ allErrs, BabStmt_Match loc ghost newTm newCases, [])))"
@@ -644,9 +673,10 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
 | "rename_statements env (stmt#stmts) =
     (case rename_statement env stmt of
       (errs1, newStmt, boundVars) \<Rightarrow>
-        (case rename_statements (add_local_term_names boundVars env) stmts of
+        (let (varErrs, env2) = add_local_term_names (bab_statement_location newStmt) boundVars env
+         in case rename_statements env2 stmts of
           (errs2, newStmts) \<Rightarrow>
-            (errs1 @ errs2, newStmt#newStmts)))"
+            (errs1 @ varErrs @ errs2, newStmt#newStmts)))"
 
 (* Rename a declaration. Return errors and a renamed declaration. *)
 fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDeclaration \<Rightarrow>
@@ -666,9 +696,11 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
      in (tyErrs @ tmErrs, BabDecl_Const newDc))"
 | "rename_declaration fullModName env (BabDecl_Function df) =
     (let newName = fullModName @ ''.'' @ DF_Name df;
+         loc = DF_Location df;
          tyArgNames = DF_TyArgs df;
          tmArgNames = map (\<lambda>(name, _, _). name) (DF_TmArgs df);
-         newEnv = add_local_type_names tyArgNames (add_local_term_names tmArgNames env);
+         (tmArgErrs, env1) = add_local_term_names loc tmArgNames env;
+         (tyArgErrs, newEnv) = add_local_type_names loc tyArgNames env1;
 
          argResults = map (\<lambda>(name, varRef, ty).
                             let (errs, newTy) = rename_type newEnv ty
@@ -697,11 +729,12 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
                      DF_ReturnType := newRetTy,
                      DF_Body := newBody,
                      DF_Attributes := newAttrs \<rparr>
-     in (argErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
+     in (tmArgErrs @ tyArgErrs @ argErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
 | "rename_declaration fullModName env (BabDecl_Datatype dd) =
     (let newName = fullModName @ ''.'' @ DD_Name dd;
+         loc = DD_Location dd;
          tyArgNames = DD_TyArgs dd;
-         newEnv = add_local_type_names tyArgNames env;
+         (tyArgErrs, newEnv) = add_local_type_names loc tyArgNames env;
 
          ctorResults = map (\<lambda>(loc, name, optTy).
                              let newCtorName = fullModName @ ''.'' @ name
@@ -713,11 +746,12 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
          newCtors = map snd ctorResults;
 
          newDd = dd \<lparr> DD_Name := newName, DD_Ctors := newCtors \<rparr>
-     in (ctorErrs, BabDecl_Datatype newDd))"
+     in (tyArgErrs @ ctorErrs, BabDecl_Datatype newDd))"
 | "rename_declaration fullModName env (BabDecl_Typedef dt) =
     (let newName = fullModName @ ''.'' @ DT_Name dt;
+         loc = DT_Location dt;
          tyArgNames = DT_TyArgs dt;
-         newEnv = add_local_type_names tyArgNames env;
+         (tyArgErrs, newEnv) = add_local_type_names loc tyArgNames env;
 
          (defErrs, newDef) = (case DT_Definition dt of
            None \<Rightarrow> ([], None)
@@ -725,7 +759,7 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
                         in (errs, Some newTy));
 
          newDt = dt \<lparr> DT_Name := newName, DT_Definition := newDef \<rparr>
-     in (defErrs, BabDecl_Typedef newDt))"
+     in (tyArgErrs @ defErrs, BabDecl_Typedef newDt))"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -739,8 +773,8 @@ fun rename_module_interface :: "BabModule \<Rightarrow> BabModule list \<Rightar
   where
 "rename_module_interface module allMods =
   (let modName = Mod_Name module;
-       (importErrs, importEnv) = process_import_list (Mod_InterfaceImports module) allMods;
-       interfaceEnv = add_current_module_interface_decls module importEnv;
+       (importErrs, importEnv) = process_import_list (Mod_InterfaceImports module) allMods empty_renamer_env;
+       interfaceEnv = add_current_module_decls module (Mod_Interface module) importEnv;
        declResults = map (rename_declaration modName interfaceEnv) (Mod_Interface module);
        declErrs = concat (map fst declResults);
        newInterface = map snd declResults
@@ -753,8 +787,8 @@ fun rename_module_implementation :: "BabModule \<Rightarrow> BabModule list \<Ri
   where
 "rename_module_implementation module allMods interfaceEnv =
   (let modName = Mod_Name module;
-       (importErrs, importEnv) = process_import_list (Mod_ImplementationImports module) allMods;
-       implEnv = add_current_module_impl_decls module (merge_renamer_envs interfaceEnv importEnv);
+       (importErrs, importEnv) = process_import_list (Mod_ImplementationImports module) allMods interfaceEnv;
+       implEnv = add_current_module_decls module (Mod_Implementation module) importEnv;
        declResults = map (rename_declaration modName implEnv) (Mod_Implementation module);
        declErrs = concat (map fst declResults);
        newImplementation = map snd declResults
@@ -781,31 +815,119 @@ fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (Rena
 lemma rename_module_preserves_name:
   assumes "rename_module module allMods = Inr newMod"
   shows "Mod_Name newMod = Mod_Name module"
-  using assms rename_module.simps
-  by (auto simp: Let_def split: if_splits)
+  using assms
+proof -
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+    using prod_cases3 by blast
+  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+    using old.prod.exhaust by blast
+  show ?thesis proof (cases "rename_module module allMods")
+    case (Inl a)
+    then show ?thesis using assms by auto
+  next
+    case (Inr b)
+    have "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
+      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+    thus ?thesis by auto
+  qed
+qed
 
 lemma rename_module_preserves_interface_imports:
   assumes "rename_module module allMods = Inr newMod"
   shows "Mod_InterfaceImports newMod = Mod_InterfaceImports module"
-  using assms rename_module.simps
-  by (auto simp: Let_def split: if_splits)
+  using assms
+proof -
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+    using prod_cases3 by blast
+  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+    using old.prod.exhaust by blast
+  show ?thesis proof (cases "rename_module module allMods")
+    case (Inl a)
+    then show ?thesis using assms by auto
+  next
+    case (Inr b)
+    have "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
+      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+    thus ?thesis by auto
+  qed
+qed
 
 lemma rename_module_preserves_implementation_imports:
   assumes "rename_module module allMods = Inr newMod"
   shows "Mod_ImplementationImports newMod = Mod_ImplementationImports module"
-  using assms rename_module.simps
-  by (auto simp: Let_def split: if_splits)
+  using assms
+proof -
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+    using prod_cases3 by blast
+  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+    using old.prod.exhaust by blast
+  show ?thesis proof (cases "rename_module module allMods")
+    case (Inl a)
+    then show ?thesis using assms by auto
+  next
+    case (Inr b)
+    have "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
+      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+    thus ?thesis by auto
+  qed
+qed
 
 lemma rename_module_preserves_interface_length:
   assumes "rename_module module allMods = Inr newMod"
   shows "length (Mod_Interface newMod) = length (Mod_Interface module)"
-  using assms rename_module.simps
-  by (auto simp: Let_def split: if_splits)
+  using assms
+proof -
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+    using prod_cases3 by blast
+  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+    using old.prod.exhaust by blast
+  show ?thesis proof (cases "rename_module module allMods")
+    case (Inl a)
+    then show ?thesis using assms by auto
+  next
+    case (Inr b)
+    have 3: "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
+      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+    obtain importErrs env0 where
+      4: "(importErrs, env0) = process_import_list (Mod_InterfaceImports module) allMods empty_renamer_env"
+      by (metis prod.exhaust)
+    define interfaceEnv where
+      "interfaceEnv = add_current_module_decls module (Mod_Interface module) env0"
+    have 5: "decls1 = map snd (map (rename_declaration (Mod_Name module) interfaceEnv) (Mod_Interface module))"
+      by (metis (no_types, lifting) "1" "4" interfaceEnv_def prod.case
+          rename_module_interface.simps snd_eqD swap_simp)
+    thus ?thesis
+      by (simp add: "3")
+  qed
+qed
 
 lemma rename_module_preserves_implementation_length:
   assumes "rename_module module allMods = Inr newMod"
   shows "length (Mod_Implementation newMod) = length (Mod_Implementation module)"
-  using assms rename_module.simps
-  by (auto simp: Let_def split: if_splits)
+  using assms
+proof -
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+    using prod_cases3 by blast
+  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+    using old.prod.exhaust by blast
+  show ?thesis proof (cases "rename_module module allMods")
+    case (Inl a)
+    then show ?thesis using assms by auto
+  next
+    case (Inr b)
+    have 3: "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
+      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+    obtain importErrs env1a where
+      4: "(importErrs, env1a) = process_import_list (Mod_ImplementationImports module) allMods env1"
+      by (metis prod.exhaust)
+    define implEnv where
+      "implEnv = add_current_module_decls module (Mod_Implementation module) env1a"
+    have 5: "decls2 = map snd (map (rename_declaration (Mod_Name module) implEnv) (Mod_Implementation module))"
+      by (metis (no_types, lifting) "2" "4" implEnv_def prod.case
+          rename_module_implementation.simps snd_eqD)
+    thus ?thesis
+      by (simp add: "3")
+  qed
+qed
 
 end
