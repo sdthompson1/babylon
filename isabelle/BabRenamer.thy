@@ -151,13 +151,16 @@ fun make_global_name :: "string \<Rightarrow> string \<Rightarrow> bool \<Righta
     GN_QualifiedName = aliasName @ ''.'' @ declName,
     GN_TrueName = fullModName @ ''.'' @ declName \<rparr>"
 
-(* Add a new declaration *)
-fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> BabDeclaration \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+(* Add a new declaration.
+   If skip_decl_name is true, the decl name itself is not added, but constructors still are. *)
+fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> bool \<Rightarrow> BabDeclaration \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where
-"add_decl_to_env fullModName aliasName qualified decl env =
+"add_decl_to_env fullModName aliasName qualified skip_decl_name decl env =
   (let declName = get_decl_name decl;
        gn = make_global_name fullModName declName qualified aliasName;
-       env1 = (if is_type_decl decl then
+       env1 = (if skip_decl_name then
+                env
+              else if is_type_decl decl then
                 add_global_type_names [gn] env
               else
                 add_global_term_names [gn] env)
@@ -170,19 +173,29 @@ fun add_decl_to_env :: "string \<Rightarrow> string \<Rightarrow> bool \<Rightar
        in add_global_term_names ctorGlobalNames env1
      | _ \<Rightarrow> env1)"
 
-(* Add decls from the current module *)
-fun add_current_module_decls :: "BabModule \<Rightarrow> BabDeclaration list \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+(* Add interface decls from the current module *)
+fun add_current_module_interface_decls :: "BabModule \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
   where
-"add_current_module_decls currentMod decls env =
+"add_current_module_interface_decls currentMod env =
   (let modName = Mod_Name currentMod;
-       aliasName = strip_package_prefix modName
-   in fold (\<lambda>decl acc. add_decl_to_env modName aliasName False decl acc) decls env)"
+       aliasName = strip_package_prefix modName;
+       decls = Mod_Interface currentMod
+   in fold (\<lambda>decl acc. add_decl_to_env modName aliasName False False decl acc) decls env)"
 
-(* Filter impl decls to remove "repeats" of interface decls *)
-fun filtered_impl_decls :: "BabModule \<Rightarrow> BabDeclaration list" where
-  "filtered_impl_decls module =
-    (let interfaceNames = fset_of_list (map get_decl_name (Mod_Interface module))
-     in filter (\<lambda>decl. (get_decl_name decl) |\<notin>| interfaceNames) (Mod_Implementation module))"
+(* Add implementation decls from the current module.
+   Skips adding the decl name itself if it already appears in the interface,
+   but still adds constructors for datatypes. *)
+fun add_current_module_impl_decls :: "BabModule \<Rightarrow> RenameEnv \<Rightarrow> RenameEnv"
+  where
+"add_current_module_impl_decls currentMod env =
+  (let modName = Mod_Name currentMod;
+       aliasName = strip_package_prefix modName;
+       interfaceNames = fset_of_list (map get_decl_name (Mod_Interface currentMod));
+       decls = Mod_Implementation currentMod
+   in fold (\<lambda>decl acc.
+              let skip = (get_decl_name decl) |\<in>| interfaceNames
+              in add_decl_to_env modName aliasName False skip decl acc) decls env)"
+
 
 
 (*-----------------------------------------------------------------------------*)
@@ -207,7 +220,7 @@ fun process_import :: "BabImport \<Rightarrow> BabModule list \<Rightarrow> Rena
    in
    case find_module_in_list fullModName allMods of
      Some foundMod \<Rightarrow>
-       let newEnv = fold (\<lambda>decl acc. add_decl_to_env fullModName aliasName qualified decl acc)
+       let newEnv = fold (\<lambda>decl acc. add_decl_to_env fullModName aliasName qualified False decl acc)
                          (Mod_Interface foundMod) env
        in ([], newEnv)
      | None \<Rightarrow>
@@ -607,7 +620,8 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
              newCases = map snd results
          in (errs1 @ allErrs, BabStmt_Match loc ghost newTm newCases, [])))"
 | "rename_statement env (BabStmt_ShowHide loc showHide name) =
-    ([], BabStmt_ShowHide loc showHide name, [])"
+    (case rename_term_name env loc name of
+      (errs, newName) \<Rightarrow> (errs, BabStmt_ShowHide loc showHide newName, []))"
 
 | "rename_statements env [] = ([], [])"
 | "rename_statements env (stmt#stmts) =
@@ -699,32 +713,45 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
 (* Main entry point *)
 (*-----------------------------------------------------------------------------*)
 
+(* Rename interface declarations of a module.
+   Returns: (errors, renamed interface decls, interface env for use by implementation) *)
+fun rename_module_interface :: "BabModule \<Rightarrow> BabModule list \<Rightarrow>
+                                 RenameError list * BabDeclaration list * RenameEnv"
+  where
+"rename_module_interface module allMods =
+  (let modName = Mod_Name module;
+       (importErrs, importEnv) = process_import_list (Mod_InterfaceImports module) allMods;
+       interfaceEnv = add_current_module_interface_decls module importEnv;
+       declResults = map (rename_declaration modName interfaceEnv) (Mod_Interface module);
+       declErrs = concat (map fst declResults);
+       newInterface = map snd declResults
+   in (importErrs @ declErrs, newInterface, interfaceEnv))"
+
+(* Rename implementation declarations of a module.
+   Returns: (errors, renamed implementation decls) *)
+fun rename_module_implementation :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> RenameEnv \<Rightarrow>
+                                      RenameError list * BabDeclaration list"
+  where
+"rename_module_implementation module allMods interfaceEnv =
+  (let modName = Mod_Name module;
+       (importErrs, importEnv) = process_import_list (Mod_ImplementationImports module) allMods;
+       implEnv = add_current_module_impl_decls module (merge_renamer_envs interfaceEnv importEnv);
+       declResults = map (rename_declaration modName implEnv) (Mod_Implementation module);
+       declErrs = concat (map fst declResults);
+       newImplementation = map snd declResults
+   in (importErrs @ declErrs, newImplementation))"
+
 (* Main function for renaming a module. *)
 fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (RenameError list, BabModule) sum"
   where
 "rename_module module allMods =
-  (let modName = Mod_Name module;
-       allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
+  (let allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
        aliasErrs = check_duplicate_aliases allImports;
-       (interfaceEnvErrs, interfaceEnv0) =
-          process_import_list (Mod_InterfaceImports module) allMods;
-       interfaceEnv = add_current_module_decls module (Mod_Interface module) interfaceEnv0;
-       interfaceResults = map (rename_declaration modName interfaceEnv) (Mod_Interface module);
-       interfaceErrs = concat (map fst interfaceResults);
-       newInterface = map snd interfaceResults;
-
-       (implImportErrs, implImportEnv) =
-          process_import_list (Mod_ImplementationImports module) allMods;
-       implEnv = add_current_module_decls module (filtered_impl_decls module)
-          (merge_renamer_envs interfaceEnv implImportEnv);
-       implResults = map (rename_declaration modName implEnv) (Mod_Implementation module);
-       implErrs = concat (map fst implResults);
-       newImplementation = map snd implResults;
-
-       allErrors = aliasErrs @ interfaceEnvErrs @ interfaceErrs @ implImportErrs @ implErrs;
+       (interfaceErrs, newInterface, interfaceEnv) = rename_module_interface module allMods;
+       (implErrs, newImplementation) = rename_module_implementation module allMods interfaceEnv;
+       allErrors = aliasErrs @ interfaceErrs @ implErrs;
        newMod = module \<lparr> Mod_Interface := newInterface,
                          Mod_Implementation := newImplementation \<rparr>
-
    in if allErrors = [] then Inr newMod else Inl allErrors)"
 
 
