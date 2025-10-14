@@ -105,14 +105,19 @@ fun find_duplicates_in_sorted :: "('a \<Rightarrow> 'k) \<Rightarrow> 'a list \<
     else
       find_duplicates_in_sorted keyFn (x2 # rest))"
 
-(* Function to check for duplicate alias names in imports *)
-fun check_duplicate_aliases :: "BabImport list \<Rightarrow> RenameError list"
+(* Function to check for duplicate alias names in imports, and also check for clashes
+   between alias names and the current module name *)
+fun check_duplicate_aliases :: "string \<Rightarrow> BabImport list \<Rightarrow> RenameError list"
   where
-"check_duplicate_aliases imports =
+"check_duplicate_aliases currentModName imports =
   (let aliasLocPairs = map (\<lambda>imp. (Imp_AliasName imp, Imp_Location imp)) imports;
        sortedPairs = sort_key fst aliasLocPairs;
-       duplicates = find_duplicates_in_sorted fst sortedPairs
-   in map (\<lambda>(alias, loc). RenameError_DuplicateAlias loc alias) duplicates)"
+       duplicates = find_duplicates_in_sorted fst sortedPairs;
+       duplicateErrs = map (\<lambda>(alias, loc). RenameError_DuplicateAlias loc alias) duplicates;
+       currentModNameStripped = strip_package_prefix currentModName;
+       clashErrs = map (\<lambda>imp. RenameError_DuplicateAlias (Imp_Location imp) (Imp_AliasName imp))
+                       (filter (\<lambda>imp. Imp_AliasName imp = currentModNameStripped) imports)
+   in duplicateErrs @ clashErrs)"
 
 (* Function to extract defined type names from a BabDeclaration *)
 fun get_type_names_from_decl :: "BabDeclaration \<Rightarrow> (string \<times> Location) list" where
@@ -832,7 +837,7 @@ fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (Rena
   (let dupErrs = check_duplicate_decl_names (Mod_Interface module)
           @ check_duplicate_decl_names (Mod_Implementation module);
        allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
-       aliasErrs = check_duplicate_aliases allImports;
+       aliasErrs = check_duplicate_aliases (Mod_Name module) allImports;
        (interfaceErrs, newInterface, interfaceEnv) = rename_module_interface module allMods;
        (implErrs, newImplementation) = rename_module_implementation module allMods interfaceEnv;
        allErrors = dupErrs @ aliasErrs @ interfaceErrs @ implErrs;
