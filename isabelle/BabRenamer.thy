@@ -735,20 +735,19 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
          loc = DF_Location df;
          tyArgNames = DF_TyArgs df;
          tmArgNames = map (\<lambda>(name, _, _). name) (DF_TmArgs df);
-         (tmArgErrs, env1) = add_local_term_names loc tmArgNames env;
-         (tyArgErrs, newEnv) = add_local_type_names loc tyArgNames env1;
 
+         (tyArgNameErrs, env1) = add_local_type_names loc tyArgNames env;
          argResults = map (\<lambda>(name, varRef, ty).
-                            let (errs, newTy) = rename_type newEnv ty
+                            let (errs, newTy) = rename_type env1 ty
                             in (errs, (name, varRef, newTy))) (DF_TmArgs df);
-         argErrs = concat (map fst argResults);
+         tmArgErrs = concat (map fst argResults);
          newTmArgs = map snd argResults;
-
          (retTyErrs, newRetTy) = (case DF_ReturnType df of
            None \<Rightarrow> ([], None)
-           | Some ty \<Rightarrow> let (errs, newTy) = rename_type newEnv ty
+           | Some ty \<Rightarrow> let (errs, newTy) = rename_type env1 ty
                         in (errs, Some newTy));
 
+         (tmArgNameErrs, newEnv) = add_local_term_names loc tmArgNames env1;
          newEnvWithRetTy = newEnv \<lparr> RE_CurrentFunctionReturnType := newRetTy \<rparr>;
 
          (bodyErrs, newBody) = (case DF_Body df of
@@ -765,7 +764,7 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
                      DF_ReturnType := newRetTy,
                      DF_Body := newBody,
                      DF_Attributes := newAttrs \<rparr>
-     in (tmArgErrs @ tyArgErrs @ argErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
+     in (tyArgNameErrs @ tmArgNameErrs @ tmArgErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
 | "rename_declaration fullModName env (BabDecl_Datatype dd) =
     (let newName = fullModName @ ''.'' @ DD_Name dd;
          loc = DD_Location dd;
