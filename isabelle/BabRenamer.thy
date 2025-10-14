@@ -269,14 +269,14 @@ fun add_current_module_decls :: "BabModule \<Rightarrow> BabDeclaration list \<R
 (* Import processing *)
 (*-----------------------------------------------------------------------------*)
 
-(* Module lookup function *)
-fun find_module_in_list :: "string \<Rightarrow> BabModule list \<Rightarrow> BabModule option" where
-  "find_module_in_list modName allMods = find (\<lambda>m. Mod_Name m = modName) allMods"
+(* Convert a list of modules to an fmap keyed by module name *)
+fun modules_to_fmap :: "BabModule list \<Rightarrow> (string, BabModule) fmap" where
+  "modules_to_fmap mods = fold (\<lambda>m acc. fmupd (Mod_Name m) m acc) mods fmempty"
 
 (* Import processing function *)
 (* Note: Imp_ModuleName was resolved by the loader to a full module name (pkg-name:ModName),
    but the alias name doesn't have the package prefix (e.g. ModName) *)
-fun process_import :: "BabImport \<Rightarrow> BabModule list \<Rightarrow> RenameEnv
+fun process_import :: "BabImport \<Rightarrow> (string, BabModule) fmap \<Rightarrow> RenameEnv
                         \<Rightarrow> RenameError list * RenameEnv"
   where
 "process_import imp allMods env =
@@ -285,7 +285,7 @@ fun process_import :: "BabImport \<Rightarrow> BabModule list \<Rightarrow> Rena
        qualified = Imp_Qualified imp;
        impLoc = Imp_Location imp
    in
-   case find_module_in_list fullModName allMods of
+   case fmlookup allMods fullModName of
      Some foundMod \<Rightarrow>
        let newEnv = fold (\<lambda>decl acc. add_decl_to_env fullModName aliasName qualified decl acc)
                          (Mod_Interface foundMod) env
@@ -294,7 +294,7 @@ fun process_import :: "BabImport \<Rightarrow> BabModule list \<Rightarrow> Rena
          ([RenameError_ModuleNotFound impLoc fullModName], env))"
 
 (* Helper function to process a list of imports, building up an environment incrementally *)
-fun process_import_list :: "BabImport list \<Rightarrow> BabModule list \<Rightarrow> RenameEnv \<Rightarrow> RenameError list * RenameEnv"
+fun process_import_list :: "BabImport list \<Rightarrow> (string, BabModule) fmap \<Rightarrow> RenameEnv \<Rightarrow> RenameError list * RenameEnv"
   where
 "process_import_list imports allMods initialEnv =
   fold (\<lambda>imp (accErrs, accEnv).
@@ -804,7 +804,7 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
 
 (* Rename interface declarations of a module.
    Returns: (errors, renamed interface decls, interface env for use by implementation) *)
-fun rename_module_interface :: "BabModule \<Rightarrow> BabModule list \<Rightarrow>
+fun rename_module_interface :: "BabModule \<Rightarrow> (string, BabModule) fmap \<Rightarrow>
                                  RenameError list * BabDeclaration list * RenameEnv"
   where
 "rename_module_interface module allMods =
@@ -818,7 +818,7 @@ fun rename_module_interface :: "BabModule \<Rightarrow> BabModule list \<Rightar
 
 (* Rename implementation declarations of a module.
    Returns: (errors, renamed implementation decls) *)
-fun rename_module_implementation :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> RenameEnv \<Rightarrow>
+fun rename_module_implementation :: "BabModule \<Rightarrow> (string, BabModule) fmap \<Rightarrow> RenameEnv \<Rightarrow>
                                       RenameError list * BabDeclaration list"
   where
 "rename_module_implementation module allMods interfaceEnv =
@@ -834,12 +834,13 @@ fun rename_module_implementation :: "BabModule \<Rightarrow> BabModule list \<Ri
 fun rename_module :: "BabModule \<Rightarrow> BabModule list \<Rightarrow> (RenameError list, BabModule) sum"
   where
 "rename_module module allMods =
-  (let dupErrs = check_duplicate_decl_names (Mod_Interface module)
+  (let allModsFmap = modules_to_fmap allMods;
+       dupErrs = check_duplicate_decl_names (Mod_Interface module)
           @ check_duplicate_decl_names (Mod_Implementation module);
        allImports = Mod_InterfaceImports module @ Mod_ImplementationImports module;
        aliasErrs = check_duplicate_aliases (Mod_Name module) allImports;
-       (interfaceErrs, newInterface, interfaceEnv) = rename_module_interface module allMods;
-       (implErrs, newImplementation) = rename_module_implementation module allMods interfaceEnv;
+       (interfaceErrs, newInterface, interfaceEnv) = rename_module_interface module allModsFmap;
+       (implErrs, newImplementation) = rename_module_implementation module allModsFmap interfaceEnv;
        allErrors = dupErrs @ aliasErrs @ interfaceErrs @ implErrs;
        newMod = module \<lparr> Mod_Interface := newInterface,
                          Mod_Implementation := newImplementation \<rparr>
@@ -855,9 +856,10 @@ lemma rename_module_preserves_name:
   shows "Mod_Name newMod = Mod_Name module"
   using assms
 proof -
-  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+  define allModsFmap where "allModsFmap = modules_to_fmap allMods"
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allModsFmap = (errs1, decls1, env1)"
     using prod_cases3 by blast
-  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+  obtain errs2 decls2 where 2: "rename_module_implementation module allModsFmap env1 = (errs2, decls2)"
     using old.prod.exhaust by blast
   show ?thesis proof (cases "rename_module module allMods")
     case (Inl a)
@@ -865,7 +867,7 @@ proof -
   next
     case (Inr b)
     have "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
-      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+      using 1 2 assms Inr allModsFmap_def by (auto simp: Let_def split: if_splits)
     thus ?thesis by auto
   qed
 qed
@@ -875,9 +877,10 @@ lemma rename_module_preserves_interface_imports:
   shows "Mod_InterfaceImports newMod = Mod_InterfaceImports module"
   using assms
 proof -
-  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+  define allModsFmap where "allModsFmap = modules_to_fmap allMods"
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allModsFmap = (errs1, decls1, env1)"
     using prod_cases3 by blast
-  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+  obtain errs2 decls2 where 2: "rename_module_implementation module allModsFmap env1 = (errs2, decls2)"
     using old.prod.exhaust by blast
   show ?thesis proof (cases "rename_module module allMods")
     case (Inl a)
@@ -885,7 +888,7 @@ proof -
   next
     case (Inr b)
     have "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
-      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+      using 1 2 assms Inr allModsFmap_def by (auto simp: Let_def split: if_splits)
     thus ?thesis by auto
   qed
 qed
@@ -895,9 +898,10 @@ lemma rename_module_preserves_implementation_imports:
   shows "Mod_ImplementationImports newMod = Mod_ImplementationImports module"
   using assms
 proof -
-  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+  define allModsFmap where "allModsFmap = modules_to_fmap allMods"
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allModsFmap = (errs1, decls1, env1)"
     using prod_cases3 by blast
-  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+  obtain errs2 decls2 where 2: "rename_module_implementation module allModsFmap env1 = (errs2, decls2)"
     using old.prod.exhaust by blast
   show ?thesis proof (cases "rename_module module allMods")
     case (Inl a)
@@ -905,7 +909,7 @@ proof -
   next
     case (Inr b)
     have "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
-      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+      using 1 2 assms Inr allModsFmap_def by (auto simp: Let_def split: if_splits)
     thus ?thesis by auto
   qed
 qed
@@ -915,9 +919,10 @@ lemma rename_module_preserves_interface_length:
   shows "length (Mod_Interface newMod) = length (Mod_Interface module)"
   using assms
 proof -
-  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+  define allModsFmap where "allModsFmap = modules_to_fmap allMods"
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allModsFmap = (errs1, decls1, env1)"
     using prod_cases3 by blast
-  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+  obtain errs2 decls2 where 2: "rename_module_implementation module allModsFmap env1 = (errs2, decls2)"
     using old.prod.exhaust by blast
   show ?thesis proof (cases "rename_module module allMods")
     case (Inl a)
@@ -925,9 +930,9 @@ proof -
   next
     case (Inr b)
     have 3: "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
-      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+      using 1 2 assms Inr allModsFmap_def by (auto simp: Let_def split: if_splits)
     obtain importErrs env0 where
-      4: "(importErrs, env0) = process_import_list (Mod_InterfaceImports module) allMods empty_renamer_env"
+      4: "(importErrs, env0) = process_import_list (Mod_InterfaceImports module) allModsFmap empty_renamer_env"
       by (metis prod.exhaust)
     define interfaceEnv where
       "interfaceEnv = add_current_module_decls module (Mod_Interface module) env0"
@@ -944,9 +949,10 @@ lemma rename_module_preserves_implementation_length:
   shows "length (Mod_Implementation newMod) = length (Mod_Implementation module)"
   using assms
 proof -
-  obtain errs1 decls1 env1 where 1: "rename_module_interface module allMods = (errs1, decls1, env1)"
+  define allModsFmap where "allModsFmap = modules_to_fmap allMods"
+  obtain errs1 decls1 env1 where 1: "rename_module_interface module allModsFmap = (errs1, decls1, env1)"
     using prod_cases3 by blast
-  obtain errs2 decls2 where 2: "rename_module_implementation module allMods env1 = (errs2, decls2)"
+  obtain errs2 decls2 where 2: "rename_module_implementation module allModsFmap env1 = (errs2, decls2)"
     using old.prod.exhaust by blast
   show ?thesis proof (cases "rename_module module allMods")
     case (Inl a)
@@ -954,9 +960,9 @@ proof -
   next
     case (Inr b)
     have 3: "newMod = module \<lparr> Mod_Interface := decls1, Mod_Implementation := decls2 \<rparr>"
-      using 1 2 assms Inr by (auto simp: Let_def split: if_splits)
+      using 1 2 assms Inr allModsFmap_def by (auto simp: Let_def split: if_splits)
     obtain importErrs env1a where
-      4: "(importErrs, env1a) = process_import_list (Mod_ImplementationImports module) allMods env1"
+      4: "(importErrs, env1a) = process_import_list (Mod_ImplementationImports module) allModsFmap env1"
       by (metis prod.exhaust)
     define implEnv where
       "implEnv = add_current_module_decls module (Mod_Implementation module) env1a"
