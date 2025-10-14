@@ -1,5 +1,5 @@
 theory BabLexer
-  imports Main Location BabSyntax BasicParser
+  imports Main Location BabToken BasicParser
 begin
 
 (* Character constants *)

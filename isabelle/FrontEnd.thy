@@ -1,3 +1,11 @@
+(* FrontEnd implements the unverified stages of the compiler, including: 
+   lexer, parser, import resolution ("loader"), and renamer.
+  
+   The input to the FrontEnd is a list of RawPackages (essentially unparsed Babylon
+   code strings), and the output is a list of parsed and renamed BabModules, ready to
+   be interpreted by BabInterpreter (TODO) or compiled into C code (TODO).
+*)
+
 theory FrontEnd
   imports Main BabLoader BabRenamer
 begin

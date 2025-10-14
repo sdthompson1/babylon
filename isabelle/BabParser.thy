@@ -1,5 +1,5 @@
 theory BabParser
-  imports Main "HOL-Library.Char_ord" Location BabSyntax BasicParser
+  imports Main "HOL-Library.Char_ord" Location BabSyntax BabToken BasicParser
 begin
 
 (* Specializing BasicParser for our parser *)
