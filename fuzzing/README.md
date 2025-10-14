@@ -130,12 +130,12 @@ Some notes:
 
 # Future directions
 
-At the moment, the lexer and parser have been fuzz tested reasonably
-thoroughly, meaning that the C and Isabelle implementations of these
-stages should give fairly consistent results. The logical next step is
-to implement further compiler stages on the Isabelle side (up to and
-including typechecking) and carry out further fuzz testing to ensure
-that these are consistent with the C implementation.
+At the moment, the lexer, parser and renamer have been fuzz tested
+reasonably thoroughly, meaning that the C and Isabelle implementations
+of these stages should give fairly consistent results. The logical
+next step is to implement further compiler stages on the Isabelle side
+(up to and including typechecking) and carry out further fuzz testing
+to ensure that these are consistent with the C implementation.
 
 After that, the plan would be to fill out the rest of the Isabelle
 implementation, including compiler and verifier stages (similar to
