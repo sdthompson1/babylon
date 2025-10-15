@@ -465,8 +465,6 @@ where
     return (foldl (\<lambda>tm f. f tm) tm suffixes)
   }"
 
-(* TODO: Accepting <Tyargs> after field-proj or tuple-proj is a temporary
-hack and will be removed at some point *)
 | "parse_call_or_proj_suffix 0 _ = undefined"
 | "parse_call_or_proj_suffix (Suc fuel) restrict =
     (do {
@@ -557,7 +555,7 @@ hack and will be removed at some point *)
     <|> (do {
           quant \<leftarrow> (expect (KEYWORD KW_FORALL) <|> expect (KEYWORD KW_EXISTS));
           name_ty \<leftarrow> parens (delay (\<lambda>_. parse_name_type_pair fuel));
-          tm \<leftarrow> parse_term_min fuel 0 Unrestricted;
+          tm \<leftarrow> parse_term_min fuel 0 restrict;
           let q = (if quant = KEYWORD KW_FORALL then Quant_Forall else Quant_Exists);
           return (\<lambda>loc. BabTm_Quantifier loc q (fst name_ty) (snd name_ty) tm)
         })

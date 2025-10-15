@@ -1,9 +1,10 @@
 theory Testing
-  imports Main BabSyntax BabLexer BabParser
+  imports Main BabSyntax BabLexer BabParser BabLoader BabRenamer
 begin
 
-(* testing *)
+(* Scratch space for testing *)
 
+(*
 definition test_parser :: "'a Parser \<Rightarrow> string \<Rightarrow> 'a ParseResult"
   where
 "test_parser p text =
@@ -29,3 +30,16 @@ interface {}
   const c = match 1 { case (2) => 3 };
 
 ''"
+*)
+
+
+definition loadResult :: "(LoaderError list, BabModule list) sum" where
+"loadResult = load_packages [\<lparr> RP_Name = ''main'', RP_Dependencies = [], RP_ExportedModules = [],
+RP_Modules = [(''Main'',
+''module Main interface {}'' @ [CHR 10] @
+''function f() {'' @ [CHR 10] @
+''assert forall (x: i32) true { }'' @ [CHR 10] @
+''}''
+)]\<rparr>] ''main'' ''Main''"
+
+value loadResult
