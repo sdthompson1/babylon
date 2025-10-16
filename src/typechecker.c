@@ -737,11 +737,15 @@ static bool unify_types(struct TypecheckContext *tc_context,
                 } else {
                     // If T[n] is expected, then T[*] and T[] are both acceptable.
                     // T[m] is also acceptable, so long as m == n.
-                    if (actual_type->array_data.sizes != NULL
-                    && !array_size_terms_equal(expected_type->array_data.sizes,
-                                               actual_type->array_data.sizes,
-                                               expected_type->array_data.ndim)) {
-                        ok = false;
+                    if (actual_type->array_data.sizes != NULL) {
+                        int dim1 = expected_type->array_data.ndim;
+                        int dim2 = actual_type->array_data.ndim;
+                        if (dim1 != dim2
+                            || !array_size_terms_equal(expected_type->array_data.sizes,
+                                                       actual_type->array_data.sizes,
+                                                       dim1)) {
+                            ok = false;
+                        }
                     }
                 }
             }
