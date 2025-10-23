@@ -184,6 +184,59 @@ fun process_one_arg :: "((string \<times> VarOrRef \<times> BabType)
     BIR_Success (state \<lparr> BS_RefVars := fmupd name (addr, path) (BS_RefVars state) \<rparr>)"
 | "process_one_arg ((name, Ref, _), refErr, _) _ = convert_error refErr"
 
+(* Evaluate a single binary operation on two values *)
+fun eval_binop :: "BabBinop \<Rightarrow> BabValue \<Rightarrow> BabValue \<Rightarrow> BabValue BabInterpResult" where
+  "eval_binop op v1 v2 = (case (op, v1, v2) of
+      (BabBinop_Add, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (i1 + i2))
+    | (BabBinop_Subtract, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (i1 - i2))
+    | (BabBinop_Multiply, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (i1 * i2))
+    | (BabBinop_Divide, BV_Int i1, BV_Int i2) \<Rightarrow>
+        if i2 = 0 then BIR_RuntimeError else BIR_Success (BV_Int (tdiv i1 i2))
+    | (BabBinop_Modulo, BV_Int i1, BV_Int i2) \<Rightarrow>
+        if i2 = 0 then BIR_RuntimeError else BIR_Success (BV_Int (tmod i1 i2))
+
+    | (BabBinop_BitAnd, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (and i1 i2))
+    | (BabBinop_BitOr, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (or i1 i2))
+    | (BabBinop_BitXor, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (xor i1 i2))
+    | (BabBinop_ShiftLeft, BV_Int i1, BV_Int i2) \<Rightarrow>
+        if i2 < 0 then BIR_RuntimeError else BIR_Success (BV_Int (push_bit (nat i2) i1))
+    | (BabBinop_ShiftRight, BV_Int i1, BV_Int i2) \<Rightarrow>
+        if i2 < 0 then BIR_RuntimeError else BIR_Success (BV_Int (drop_bit (nat i2) i1))
+
+    | (BabBinop_Equal, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 = i2))
+    | (BabBinop_Equal, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 = b2))
+    | (BabBinop_NotEqual, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 \<noteq> i2))
+    | (BabBinop_NotEqual, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<noteq> b2))
+    | (BabBinop_Less, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 < i2))
+    | (BabBinop_LessEqual, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 \<le> i2))
+    | (BabBinop_Greater, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 > i2))
+    | (BabBinop_GreaterEqual, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 \<ge> i2))
+
+    | (BabBinop_And, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<and> b2))
+    | (BabBinop_Or, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<or> b2))
+    | (BabBinop_Implies, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<longrightarrow> b2))
+    | (BabBinop_ImpliedBy, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b2 \<longrightarrow> b1))
+    | (BabBinop_Iff, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 = b2))
+
+    | _ \<Rightarrow> BIR_TypeError)"
+
+(* Perform a swap operation: exchange values at two lvalue locations *)
+fun exec_swap :: "BabState \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> BabExecResult" where
+  "exec_swap state (addr1, path1) (addr2, path2) =
+    (case get_value_at_path (BS_Store state ! addr1) path1 of
+      BIR_Success val1 \<Rightarrow>
+        (case get_value_at_path (BS_Store state ! addr2) path2 of
+          BIR_Success val2 \<Rightarrow>
+            (case update_value_at_path (BS_Store state ! addr1) path1 val2 of
+              BIR_Success new_val1 \<Rightarrow>
+                (case update_value_at_path (BS_Store state ! addr2) path2 val1 of
+                  BIR_Success new_val2 \<Rightarrow>
+                    BER_Continue (state \<lparr> BS_Store := (BS_Store state)[addr1 := new_val1, addr2 := new_val2] \<rparr>)
+                | err \<Rightarrow> convert_exec_error err)
+            | err \<Rightarrow> convert_exec_error err)
+        | err \<Rightarrow> convert_exec_error err)
+    | err \<Rightarrow> convert_exec_error err)"
+
 (* Main mutually recursive interpreter functions *)
 function interp_bab_term :: "nat \<Rightarrow> BabState \<Rightarrow> BabTerm \<Rightarrow> BabValue BabInterpResult"
   and interp_bab_term_list :: "nat \<Rightarrow> BabState \<Rightarrow> BabTerm list \<Rightarrow> (BabValue list) BabInterpResult"
@@ -370,62 +423,9 @@ where
 | "interp_bab_binop (Suc fuel) state v1 ((op, tm2) # rest) =
     (case interp_bab_term fuel state tm2 of
       BIR_Success v2 \<Rightarrow>
-        (case (op, v1, v2) of
-          (BabBinop_Add, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Int (i1 + i2)) rest
-        | (BabBinop_Subtract, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Int (i1 - i2)) rest
-        | (BabBinop_Multiply, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Int (i1 * i2)) rest
-        | (BabBinop_Divide, BV_Int i1, BV_Int i2) \<Rightarrow>
-            if i2 = 0 then BIR_RuntimeError
-            else interp_bab_binop fuel state (BV_Int (tdiv i1 i2)) rest
-        | (BabBinop_Modulo, BV_Int i1, BV_Int i2) \<Rightarrow>
-            if i2 = 0 then BIR_RuntimeError
-            else interp_bab_binop fuel state (BV_Int (tmod i1 i2)) rest
-
-        | (BabBinop_BitAnd, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Int (and i1 i2)) rest
-        | (BabBinop_BitOr, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Int (or i1 i2)) rest
-        | (BabBinop_BitXor, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Int (xor i1 i2)) rest
-        | (BabBinop_ShiftLeft, BV_Int i1, BV_Int i2) \<Rightarrow>
-            if i2 < 0 then BIR_RuntimeError
-            else interp_bab_binop fuel state (BV_Int (push_bit (nat i2) i1)) rest
-        | (BabBinop_ShiftRight, BV_Int i1, BV_Int i2) \<Rightarrow>
-            if i2 < 0 then BIR_RuntimeError
-            else interp_bab_binop fuel state (BV_Int (drop_bit (nat i2) i1)) rest
-
-        | (BabBinop_Equal, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (i1 = i2)) rest
-        | (BabBinop_Equal, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b1 = b2)) rest
-        | (BabBinop_NotEqual, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (i1 \<noteq> i2)) rest
-        | (BabBinop_NotEqual, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b1 \<noteq> b2)) rest
-        | (BabBinop_Less, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (i1 < i2)) rest
-        | (BabBinop_LessEqual, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (i1 \<le> i2)) rest
-        | (BabBinop_Greater, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (i1 > i2)) rest
-        | (BabBinop_GreaterEqual, BV_Int i1, BV_Int i2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (i1 \<ge> i2)) rest
-
-        | (BabBinop_And, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b1 \<and> b2)) rest
-        | (BabBinop_Or, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b1 \<or> b2)) rest
-        | (BabBinop_Implies, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b1 \<longrightarrow> b2)) rest
-        | (BabBinop_ImpliedBy, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b2 \<longrightarrow> b1)) rest
-        | (BabBinop_Iff, BV_Bool b1, BV_Bool b2) \<Rightarrow>
-            interp_bab_binop fuel state (BV_Bool (b1 = b2)) rest
-
-        | _ \<Rightarrow> BIR_TypeError)
+        (case eval_binop op v1 v2 of
+          BIR_Success result \<Rightarrow> interp_bab_binop fuel state result rest
+        | err \<Rightarrow> err)
     | err \<Rightarrow> err)"
 
   (* Variable declaration statement *)
@@ -479,25 +479,11 @@ where
 | "interp_bab_statement (Suc _) state (BabStmt_Swap _ Ghost _ _) = BER_Continue state"
 | "interp_bab_statement (Suc fuel) state (BabStmt_Swap _ NotGhost lhs1 lhs2) =
     (case eval_lvalue fuel state lhs1 of
-      BIR_Success (addr1, path1) \<Rightarrow>
+      BIR_Success lv1 \<Rightarrow>
         (case eval_lvalue fuel state lhs2 of
-          BIR_Success (addr2, path2) \<Rightarrow>
-            (case get_value_at_path (BS_Store state ! addr1) path1 of
-              BIR_Success val1 \<Rightarrow>
-                (case get_value_at_path (BS_Store state ! addr2) path2 of
-                  BIR_Success val2 \<Rightarrow>
-                    (case update_value_at_path (BS_Store state ! addr1) path1 val2 of
-                      BIR_Success new_val1 \<Rightarrow>
-                        (case update_value_at_path (BS_Store state ! addr2) path2 val1 of
-                          BIR_Success new_val2 \<Rightarrow>
-                            BER_Continue (state \<lparr> BS_Store := 
-                                (BS_Store state)[addr1 := new_val1, addr2 := new_val2] \<rparr>)
-                          | err \<Rightarrow> convert_exec_error err)
-                      | err \<Rightarrow> convert_exec_error err)
-                  | err \<Rightarrow> convert_exec_error err)
-              | err \<Rightarrow> convert_exec_error err)
-          | err \<Rightarrow> convert_exec_error err)
-      | err \<Rightarrow> convert_exec_error err)"
+          BIR_Success lv2 \<Rightarrow> exec_swap state lv1 lv2
+        | err \<Rightarrow> convert_exec_error err)
+    | err \<Rightarrow> convert_exec_error err)"
 
   (* Return statement *)
 | "interp_bab_statement (Suc _) _ (BabStmt_Return _ Ghost _) = BER_TypeError"
@@ -636,13 +622,12 @@ where
       let dimTerms = map (\<lambda>d. case d of BabDim_Fixed tm \<Rightarrow> tm) dims in
       case interp_bab_term_list fuel state dimTerms of
         BIR_Success dimVals \<Rightarrow>
-          (let dimInts = map (\<lambda>v. case v of BV_Int i \<Rightarrow> i | _ \<Rightarrow> -1) dimVals in
-            if list_ex (\<lambda>i. i < 0) dimInts then
-              BIR_RuntimeError
-            else
-              case make_default_value fuel state ty of
+          (case interpret_index_vals dimVals of
+            BIR_Success dimInts \<Rightarrow>
+              (case make_default_value fuel state ty of
                 BIR_Success defaultVal \<Rightarrow> BIR_Success (make_default_array defaultVal dimInts)
               | err \<Rightarrow> convert_error err)
+          | err \<Rightarrow> convert_error err)
       | err \<Rightarrow> convert_error err)"
 
 | "make_default_value_list 0 _ _ = BIR_InsufficientFuel"
