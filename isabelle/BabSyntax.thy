@@ -1,5 +1,5 @@
 theory BabSyntax
-  imports Main Location
+  imports Main Location "HOL-Library.Finite_Map"
 begin
 
 (* Abstract syntax for the Babylon language *)
@@ -343,5 +343,26 @@ next
     then show ?thesis using Cons by auto
   qed
 qed
+
+
+(* Type substitution *)
+
+fun substitute_bab_type :: "(string, BabType) fmap \<Rightarrow> BabType \<Rightarrow> BabType" where
+  "substitute_bab_type subst (BabTy_Name loc name []) =
+    (case fmlookup subst name of
+      Some ty \<Rightarrow> ty
+    | None \<Rightarrow> BabTy_Name loc name [])"
+| "substitute_bab_type subst (BabTy_Name loc name tyargs) =
+    BabTy_Name loc name (map (substitute_bab_type subst) tyargs)"
+| "substitute_bab_type subst (BabTy_Bool loc) = BabTy_Bool loc"
+| "substitute_bab_type subst (BabTy_FiniteInt loc sign bits) = BabTy_FiniteInt loc sign bits"
+| "substitute_bab_type subst (BabTy_MathInt loc) = BabTy_MathInt loc"
+| "substitute_bab_type subst (BabTy_MathReal loc) = BabTy_MathReal loc"
+| "substitute_bab_type subst (BabTy_Tuple loc types) =
+    BabTy_Tuple loc (map (substitute_bab_type subst) types)"
+| "substitute_bab_type subst (BabTy_Record loc flds) =
+    BabTy_Record loc (map (\<lambda>(name, ty). (name, substitute_bab_type subst ty)) flds)"
+| "substitute_bab_type subst (BabTy_Array loc ty dims) =
+    BabTy_Array loc (substitute_bab_type subst ty) dims"
 
 end
