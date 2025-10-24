@@ -258,6 +258,16 @@ fun is_type_decl :: "BabDeclaration \<Rightarrow> bool"
 
 (* Size functions *)
 
+fun bab_pattern_size :: "BabPattern \<Rightarrow> nat" where
+  "bab_pattern_size (BabPat_Var _ _ _) = 1"
+| "bab_pattern_size (BabPat_Bool _ _) = 1"
+| "bab_pattern_size (BabPat_Int _ _) = 1"
+| "bab_pattern_size (BabPat_Tuple _ pats) = 1 + sum_list (map bab_pattern_size pats)"
+| "bab_pattern_size (BabPat_Record _ flds) = 1 + sum_list (map (bab_pattern_size \<circ> snd) flds)"
+| "bab_pattern_size (BabPat_Variant _ _ (Some pat)) = 1 + bab_pattern_size pat"
+| "bab_pattern_size (BabPat_Variant _ _ None) = 1"
+| "bab_pattern_size (BabPat_Wildcard _) = 1"
+
 fun bab_literal_size :: "BabLiteral \<Rightarrow> nat"
   and bab_dimension_size :: "BabDimension \<Rightarrow> nat"
   and bab_type_size :: "BabType \<Rightarrow> nat"
@@ -300,6 +310,13 @@ where
 | "bab_term_size (BabTm_Allocated _ tm) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_Old _ tm) = 1 + bab_term_size tm"
 
+lemma bab_pattern_smaller_than_list:
+  "p \<in> set pats \<Longrightarrow> bab_pattern_size p < Suc (sum_list (map bab_pattern_size pats))"
+  by (induction pats, auto)
+
+lemma bab_pattern_smaller_than_fieldlist:
+  "(name, p) \<in> set field_pats \<Longrightarrow> bab_pattern_size p < Suc (sum_list (map (bab_pattern_size \<circ> snd) field_pats))"
+  by (induction field_pats, auto)
 
 lemma bab_type_smaller_than_list:
   "ty \<in> set types \<Longrightarrow> bab_type_size ty < Suc (sum_list (map bab_type_size types))"

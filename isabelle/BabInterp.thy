@@ -2,6 +2,7 @@ theory BabInterp
   imports BabSyntax "HOL.Bit_Operations"
 begin
 
+(* Evaluated values *)
 datatype BabValue =
   BV_Bool bool
   | BV_Int int
@@ -11,59 +12,53 @@ datatype BabValue =
   | BV_Array "int list" "(int list, BabValue) fmap"  (* size list, map array index \<rightarrow> value *)
   | BV_Abstract nat  (* extern or abstract type, with arbitrary "token" *)
 
-
 (* LValue paths for assignments, swaps and references *)
 datatype LValuePath =
   LVPath_TupleProj nat
   | LVPath_RecordProj string
   | LVPath_ArrayProj "int list"
+  | LVPath_VariantProj string
 
-record BabState =
+(* Interpreter state *)
+record 'world BabState =
   BS_Functions :: "(string, DeclFun) fmap"
+  BS_ExternFunctions :: "(string, 'world \<Rightarrow> BabType list \<Rightarrow> BabValue list \<Rightarrow> 'world \<times> BabValue list \<times> BabValue option) fmap"
   BS_Constants :: "(string, BabValue) fmap"  (* global constants *)
   BS_Typedefs :: "(string, DeclTypedef) fmap"
   BS_Datatypes :: "(string, DeclDatatype) fmap"
+  BS_World :: 'world
   BS_Store :: "BabValue list"  (* address \<rightarrow> value *)
   BS_Locals :: "(string, nat) fmap"  (* variable name \<rightarrow> address *)
   BS_RefVars :: "(string, nat \<times> LValuePath list) fmap"  (* ref name \<rightarrow> (address, path) *)
   BS_LocalTypes :: "(string, BabType) fmap"  (* local tyvar name \<rightarrow> type *)
 
+(* Result of interpreting a term *)
 datatype 'a BabInterpResult =
   BIR_Success 'a
   | BIR_TypeError
   | BIR_RuntimeError
   | BIR_InsufficientFuel
 
-datatype BabExecResult =
-  BER_Continue BabState
-  | BER_Return BabState "BabValue option"
+(* Result of executing a statement *)
+datatype 'w BabExecResult =
+  BER_Continue "'w BabState"
+  | BER_Return "'w BabState" "BabValue option"
   | BER_TypeError
   | BER_RuntimeError
   | BER_InsufficientFuel
 
-
+(* Helper functions to convert errors *)
 fun convert_error :: "'a BabInterpResult \<Rightarrow> 'b BabInterpResult" where
   "convert_error (BIR_Success _) = undefined"
 | "convert_error BIR_TypeError = BIR_TypeError"
 | "convert_error BIR_RuntimeError = BIR_RuntimeError"
 | "convert_error BIR_InsufficientFuel = BIR_InsufficientFuel"
 
-fun convert_exec_error :: "'a BabInterpResult \<Rightarrow> BabExecResult" where
+fun convert_exec_error :: "'a BabInterpResult \<Rightarrow> 'w BabExecResult" where
   "convert_exec_error (BIR_Success _) = undefined"
 | "convert_exec_error BIR_TypeError = BER_TypeError"
 | "convert_exec_error BIR_RuntimeError = BER_RuntimeError"
 | "convert_exec_error BIR_InsufficientFuel = BER_InsufficientFuel"
-
-fun make_array :: "BabValue list \<Rightarrow> BabValue" where
-  "make_array vals = BV_Array [int (length vals)] (fmap_of_list (zip (map (\<lambda>i.[int i]) [0..<length vals]) vals))"
-
-(* Update record fields: replace existing fields with updates, keep others *)
-(* Returns None if any update field doesn't exist in base *)
-fun update_record_fields :: "(string \<times> BabValue) list \<Rightarrow> (string \<times> BabValue) list \<Rightarrow> (string \<times> BabValue) list option" where
-  "update_record_fields baseFields [] = Some baseFields"
-| "update_record_fields baseFields ((name, val) # updates) =
-    (if map_of baseFields name = None then None
-     else update_record_fields (AList.update name val baseFields) updates)"
 
 (* Truncated division - rounds towards zero, like C/Java/JavaScript *)
 fun tdiv :: "int \<Rightarrow> int \<Rightarrow> int" where
@@ -72,6 +67,10 @@ fun tdiv :: "int \<Rightarrow> int \<Rightarrow> int" where
 (* Truncated modulo - remainder has sign of dividend, like C/Java/JavaScript *)
 fun tmod :: "int \<Rightarrow> int \<Rightarrow> int" where
   "tmod i1 i2 = sgn i1 * (abs i1 mod abs i2)"
+
+(* Make a one-dimensional BV_Array of values *)
+fun make_array :: "BabValue list \<Rightarrow> BabValue" where
+  "make_array vals = BV_Array [int (length vals)] (fmap_of_list (zip (map (\<lambda>i.[int i]) [0..<length vals]) vals))"
 
 (* Generate all indices for a multi-dimensional array given sizes in each dimension *)
 (* For example, [2, 3] generates [[0,0], [0,1], [0,2], [1,0], [1,1], [1,2]] *)
@@ -86,18 +85,29 @@ fun make_default_array :: "BabValue \<Rightarrow> int list \<Rightarrow> BabValu
     (let indices = generate_array_indices dimSizes in
      BV_Array dimSizes (fmap_of_list (zip indices (replicate (length indices) defaultVal))))"
 
-(* Restore scope after exiting a block:
-   - old_state: the state before entering the scope
-   - new_state: the state after executing the inner scope
-   Returns: new_state with locals/refs restored and store truncated *)
-fun restore_scope :: "BabState \<Rightarrow> BabState \<Rightarrow> BabState" where
-  "restore_scope old_state new_state =
-    new_state \<lparr> BS_Locals := BS_Locals old_state,
-                BS_RefVars := BS_RefVars old_state,
-                BS_Store := take (length (BS_Store old_state)) (BS_Store new_state) \<rparr>"
+(* Convert array size to BabValue: for 1-d arrays return BV_Int, for 2-d+ return BV_Tuple *)
+fun array_size_to_value :: "int list \<Rightarrow> BabValue" where
+  "array_size_to_value ns = (if length ns = 1 then BV_Int (hd ns) else BV_Tuple (map BV_Int ns))"
+
+(* Convert a list of BV_Int values to a list of ints, or return a type error *)
+fun interpret_index_vals :: "BabValue list \<Rightarrow> (int list) BabInterpResult" where
+  "interpret_index_vals [] = BIR_Success []"
+| "interpret_index_vals (BV_Int i # rest) =
+    (case interpret_index_vals rest of
+      BIR_Success results \<Rightarrow> BIR_Success (i # results)
+    | err \<Rightarrow> err)"
+| "interpret_index_vals (nonInteger # rest) = BIR_TypeError"
+
+(* Update record fields: replace existing fields with updates, keep others *)
+(* Returns None if any update field doesn't exist in base *)
+fun update_record_fields :: "(string \<times> BabValue) list \<Rightarrow> (string \<times> BabValue) list \<Rightarrow> (string \<times> BabValue) list option" where
+  "update_record_fields baseFields [] = Some baseFields"
+| "update_record_fields baseFields ((name, val) # updates) =
+    (if map_of baseFields name = None then None
+     else update_record_fields (AList.update name val baseFields) updates)"
 
 (* Allocate a new address in the store and store the given value *)
-fun alloc_store :: "BabState \<Rightarrow> BabValue \<Rightarrow> (BabState \<times> nat)" where
+fun alloc_store :: "'w BabState \<Rightarrow> BabValue \<Rightarrow> ('w BabState \<times> nat)" where
   "alloc_store state val =
     (let addr = length (BS_Store state);
          new_store = BS_Store state @ [val]
@@ -117,11 +127,11 @@ fun get_value_at_path :: "BabValue \<Rightarrow> LValuePath list \<Rightarrow> B
     (case fmlookup fmap indices of
       Some val \<Rightarrow> get_value_at_path val rest
     | None \<Rightarrow> BIR_RuntimeError)"
+| "get_value_at_path (BV_Variant ctor_name (Some val)) (LVPath_VariantProj expected_ctor # rest) =
+    (if ctor_name = expected_ctor then get_value_at_path val rest
+     else BIR_RuntimeError)"
+| "get_value_at_path (BV_Variant _ None) (LVPath_VariantProj _ # rest) = BIR_RuntimeError"
 | "get_value_at_path _ _ = BIR_TypeError"
-
-(* Convert array size to BabValue: for 1-d arrays return BV_Int, for 2-d+ return BV_Tuple *)
-fun array_size_to_value :: "int list \<Rightarrow> BabValue" where
-  "array_size_to_value ns = (if length ns = 1 then BV_Int (hd ns) else BV_Tuple (map BV_Int ns))"
 
 (* Update value at a path within a value *)
 fun update_value_at_path :: "BabValue \<Rightarrow> LValuePath list \<Rightarrow> BabValue \<Rightarrow> BabValue BabInterpResult" where
@@ -146,33 +156,41 @@ fun update_value_at_path :: "BabValue \<Rightarrow> LValuePath list \<Rightarrow
           BIR_Success updated_val \<Rightarrow> BIR_Success (BV_Array dims (fmupd indices updated_val fmap))
         | err \<Rightarrow> err)
     | None \<Rightarrow> BIR_RuntimeError)"
+| "update_value_at_path (BV_Variant ctor_name (Some old_val)) (LVPath_VariantProj expected_ctor # rest) new_val =
+    (if ctor_name = expected_ctor then
+      (case update_value_at_path old_val rest new_val of
+        BIR_Success updated_val \<Rightarrow> BIR_Success (BV_Variant ctor_name (Some updated_val))
+      | err \<Rightarrow> err)
+     else BIR_RuntimeError)"
+| "update_value_at_path (BV_Variant _ None) (LVPath_VariantProj _ # rest) _ = BIR_RuntimeError"
 | "update_value_at_path _ _ _ = BIR_TypeError"
 
-(* Check if a term is a pure function (has no ref parameters) *)
-fun is_pure_fun_term :: "BabState \<Rightarrow> BabTerm \<Rightarrow> bool" where
+(* Restore scope after exiting a block:
+   - old_state: the state before entering the scope
+   - new_state: the state after executing the inner scope
+   Returns: new_state with locals/refs restored and store truncated *)
+fun restore_scope :: "'w BabState \<Rightarrow> 'w BabState \<Rightarrow> 'w BabState" where
+  "restore_scope old_state new_state =
+    new_state \<lparr> BS_Locals := BS_Locals old_state,
+                BS_RefVars := BS_RefVars old_state,
+                BS_Store := take (length (BS_Store old_state)) (BS_Store new_state) \<rparr>"
+
+(* Check if a term is a pure function (has no ref parameters, and not marked "impure") *)
+fun is_pure_fun_term :: "'w BabState \<Rightarrow> BabTerm \<Rightarrow> bool" where
   "is_pure_fun_term state (BabTm_Name _ fnName _) =
     (case fmlookup (BS_Functions state) fnName of
-      Some funDecl \<Rightarrow> \<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (DF_TmArgs funDecl)
+      Some funDecl \<Rightarrow> (\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (DF_TmArgs funDecl)) \<and> (\<not> DF_Impure funDecl)
     | None \<Rightarrow> False)"
 | "is_pure_fun_term _ _ = False"
 
-(* Convert a list of BV_Int values to a list of ints, or return a type error *)
-fun interpret_index_vals :: "BabValue list \<Rightarrow> (int list) BabInterpResult" where
-  "interpret_index_vals [] = BIR_Success []"
-| "interpret_index_vals (BV_Int i # rest) =
-    (case interpret_index_vals rest of
-      BIR_Success results \<Rightarrow> BIR_Success (i # results)
-    | err \<Rightarrow> err)"
-| "interpret_index_vals (nonInteger # rest) = BIR_TypeError"
-
-(* Helper function to process a single argument and update the state *)
-(* Takes: ((parameter info, (lvalue result, rvalue result)), current state result) *)
+(* Helper function to process a single function argument and update the state *)
+(* Takes: (parameter info, lvalue result, rvalue result) and current state result *)
 (* Returns: updated state, or error *)
 fun process_one_arg :: "((string \<times> VarOrRef \<times> BabType)
                         \<times> (nat \<times> LValuePath list) BabInterpResult
                         \<times> BabValue BabInterpResult)
-                \<Rightarrow> BabState BabInterpResult
-                \<Rightarrow> BabState BabInterpResult" where
+                \<Rightarrow> 'w BabState BabInterpResult
+                \<Rightarrow> 'w BabState BabInterpResult" where
   "process_one_arg _ BIR_TypeError = BIR_TypeError"
 | "process_one_arg _ BIR_RuntimeError = BIR_RuntimeError"
 | "process_one_arg _ BIR_InsufficientFuel = BIR_InsufficientFuel"
@@ -183,6 +201,41 @@ fun process_one_arg :: "((string \<times> VarOrRef \<times> BabType)
 | "process_one_arg ((name, Ref, _), BIR_Success (addr, path), _) (BIR_Success state) =
     BIR_Success (state \<lparr> BS_RefVars := fmupd name (addr, path) (BS_RefVars state) \<rparr>)"
 | "process_one_arg ((name, Ref, _), refErr, _) _ = convert_error refErr"
+
+(* Apply extern function ref updates back to the store *)
+(* Takes list of ref lvalues and corresponding new values, returns updated state *)
+fun apply_ref_updates :: "'w BabState \<Rightarrow> (nat \<times> LValuePath list) list \<Rightarrow> BabValue list 
+                            \<Rightarrow> 'w BabState BabInterpResult" where
+  "apply_ref_updates state [] [] = BIR_Success state"
+| "apply_ref_updates state ((addr, path) # rest_lvals) (newVal # rest_vals) =
+    (case update_value_at_path (BS_Store state ! addr) path newVal of
+      BIR_Success updated_val \<Rightarrow>
+        (let state' = state \<lparr> BS_Store := (BS_Store state)[addr := updated_val] \<rparr>
+         in apply_ref_updates state' rest_lvals rest_vals)
+    | err \<Rightarrow> convert_error err)"
+| "apply_ref_updates _ _ _ = BIR_TypeError"  (* mismatched list lengths *)
+
+(* Call an extern function and convert result to BabExecResult *)
+(* Precondition: all valResults and refResults are BIR_Success (ensured by fold process_one_arg) *)
+fun call_extern_function :: "'w BabState \<Rightarrow> string \<Rightarrow> BabType list \<Rightarrow> (string \<times> VarOrRef \<times> BabType) list
+                             \<Rightarrow> (nat \<times> LValuePath list) BabInterpResult list
+                             \<Rightarrow> BabValue BabInterpResult list \<Rightarrow> 'w BabExecResult" where
+  "call_extern_function state fnName tyArgs params refResults valResults =
+    (case fmlookup (BS_ExternFunctions state) fnName of
+      Some externFn \<Rightarrow>
+        (let argVals = map (\<lambda>r. case r of BIR_Success v \<Rightarrow> v) valResults;
+             (newWorld, refUpdates, retVal) = externFn (BS_World state) tyArgs argVals;
+             refLvals = map (\<lambda>(_, r). case r of BIR_Success lv \<Rightarrow> lv)
+                            (filter (\<lambda>((_, vr, _), _). vr = Ref) (zip params refResults));
+             state' = state \<lparr> BS_World := newWorld \<rparr>
+         in
+           case apply_ref_updates state' refLvals refUpdates of
+             BIR_Success finalState \<Rightarrow>
+               (case retVal of
+                 Some val \<Rightarrow> BER_Return finalState (Some val)
+               | None \<Rightarrow> BER_Continue finalState)
+           | err \<Rightarrow> convert_exec_error err)
+    | None \<Rightarrow> BER_TypeError)"
 
 (* Evaluate a single binary operation on two values *)
 fun eval_binop :: "BabBinop \<Rightarrow> BabValue \<Rightarrow> BabValue \<Rightarrow> BabValue BabInterpResult" where
@@ -221,7 +274,7 @@ fun eval_binop :: "BabBinop \<Rightarrow> BabValue \<Rightarrow> BabValue \<Righ
     | _ \<Rightarrow> BIR_TypeError)"
 
 (* Perform a swap operation: exchange values at two lvalue locations *)
-fun exec_swap :: "BabState \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> BabExecResult" where
+fun exec_swap :: "'w BabState \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> 'w BabExecResult" where
   "exec_swap state (addr1, path1) (addr2, path2) =
     (case get_value_at_path (BS_Store state ! addr1) path1 of
       BIR_Success val1 \<Rightarrow>
@@ -237,17 +290,128 @@ fun exec_swap :: "BabState \<Rightarrow> (nat \<times> LValuePath list) \<Righta
         | err \<Rightarrow> convert_exec_error err)
     | err \<Rightarrow> convert_exec_error err)"
 
+(* Helper: Prepend a path element to all Ref bindings *)
+fun prepend_path_to_bindings :: "LValuePath \<Rightarrow> (string \<times> (BabValue + LValuePath list)) list \<Rightarrow> (string \<times> (BabValue + LValuePath list)) list" where
+  "prepend_path_to_bindings path_elem bindings =
+    map (\<lambda>(name, binding).
+      case binding of
+        Inl val \<Rightarrow> (name, Inl val)
+      | Inr path \<Rightarrow> (name, Inr (path_elem # path)))
+    bindings"
+
+(* Pattern matching: returns bindings as (name, Inl value) for Var or (name, Inr path) for Ref *)
+function match_pattern :: "BabPattern \<Rightarrow> BabValue \<Rightarrow> (string \<times> (BabValue + LValuePath list)) list option" where
+  "match_pattern pat value = (case (pat, value) of
+      (BabPat_Wildcard _, _) \<Rightarrow> Some []
+    | (BabPat_Var _ Var name, v) \<Rightarrow> Some [(name, Inl v)]
+    | (BabPat_Var _ Ref name, _) \<Rightarrow> Some [(name, Inr [])]
+    | (BabPat_Bool _ expected_b, BV_Bool actual_b) \<Rightarrow>
+        if expected_b = actual_b then Some [] else None
+    | (BabPat_Int _ expected_i, BV_Int actual_i) \<Rightarrow>
+        if expected_i = actual_i then Some [] else None
+    | (BabPat_Tuple _ pats, BV_Tuple vals) \<Rightarrow>
+        if length pats = length vals then
+          (let pairs = zip pats vals;
+               results = map (\<lambda>(p, v). match_pattern p v) pairs in
+           if list_ex (\<lambda>r. r = None) results then None
+           else
+             let bindings_list = map the results;
+                 adjusted_bindings = concat (map (\<lambda>(i, bs). prepend_path_to_bindings (LVPath_TupleProj i) bs)
+                                             (zip [0..<length bindings_list] bindings_list))
+             in Some adjusted_bindings)
+        else None
+    | (BabPat_Record _ field_pats, BV_Record flds) \<Rightarrow>
+        (let field_names = map fst field_pats in
+         if list_all (\<lambda>fname. map_of flds fname \<noteq> None) field_names then
+           (let results = map (\<lambda>(fname, p). match_pattern p (the (map_of flds fname))) field_pats in
+            if list_ex (\<lambda>r. r = None) results then None
+            else
+              let bindings_list = map the results;
+                  adjusted_bindings = concat (map (\<lambda>((fname, _), bs). prepend_path_to_bindings (LVPath_RecordProj fname) bs)
+                                              (zip field_pats bindings_list))
+              in Some adjusted_bindings)
+         else None)
+    | (BabPat_Variant _ ctor_pat maybe_pat, BV_Variant ctor_val maybe_val) \<Rightarrow>
+        if ctor_pat = ctor_val then
+          (case (maybe_pat, maybe_val) of
+            (None, None) \<Rightarrow> Some []
+          | (Some p, Some v) \<Rightarrow>
+              (case match_pattern p v of
+                None \<Rightarrow> None
+              | Some bindings \<Rightarrow> Some (prepend_path_to_bindings (LVPath_VariantProj ctor_pat) bindings))
+          | _ \<Rightarrow> None)
+        else None
+    | _ \<Rightarrow> None)"
+  by pat_completeness auto
+
+termination match_pattern
+proof (relation "measure (\<lambda>(pat, _). bab_pattern_size pat)")
+  show "wf (measure (\<lambda>(pat, _). bab_pattern_size pat))" by auto
+next
+  fix pat val orig_pat orig_val loc pats vals pairs pair sub_pat sub_val
+  assume "(orig_pat, orig_val) = (pat, val)"
+     and "orig_pat = BabPat_Tuple loc pats"
+     and "orig_val = BV_Tuple vals"
+     and "length pats = length vals"
+     and "pairs = zip pats vals"
+     and "pair \<in> set pairs"
+     and "(sub_pat, sub_val) = pair"
+  then have "sub_pat \<in> set pats"
+    by (auto simp add: in_set_zip)
+  then show "((sub_pat, sub_val), pat, val) \<in> measure (\<lambda>(pat, _). bab_pattern_size pat)"
+    using `(orig_pat, orig_val) = (pat, val)` `orig_pat = BabPat_Tuple loc pats`
+    by (auto simp add: bab_pattern_smaller_than_list)
+next
+  fix pat val orig_pat orig_val loc field_pats flds field_names pair fname sub_pat
+  assume "(orig_pat, orig_val) = (pat, val)"
+     and "orig_pat = BabPat_Record loc field_pats"
+     and "orig_val = BV_Record flds"
+     and "field_names = map fst field_pats"
+     and "list_all (\<lambda>fname. map_of flds fname \<noteq> None) field_names"
+     and "pair \<in> set field_pats"
+     and "(fname, sub_pat) = pair"
+  then show "((sub_pat, the (map_of flds fname)), pat, val) \<in> measure (\<lambda>(pat, _). bab_pattern_size pat)"
+    using \<open>(orig_pat, orig_val) = (pat, val)\<close> \<open>orig_pat = BabPat_Record loc field_pats\<close>
+    by (auto simp add: bab_pattern_smaller_than_fieldlist)
+next
+  fix pat val orig_pat orig_val loc ctor_pat maybe_pat ctor_val maybe_val pair1 pair2 sub_pat sub_val
+  assume "(orig_pat, orig_val) = (pat, val)"
+     and "orig_pat = BabPat_Variant loc ctor_pat maybe_pat"
+     and "orig_val = BV_Variant ctor_val maybe_val"
+     and "ctor_pat = ctor_val"
+     and "(pair1, pair2) = (maybe_pat, maybe_val)"
+     and "pair1 = Some sub_pat"
+     and "pair2 = Some sub_val"
+  then show "((sub_pat, sub_val), pat, val) \<in> measure (\<lambda>(pat, _). bab_pattern_size pat)"
+    by auto
+qed
+
+(* Apply pattern bindings to state: allocate Var bindings, add Ref bindings *)
+fun apply_pattern_bindings :: "'w BabState \<Rightarrow> (nat \<times> LValuePath list) option \<Rightarrow> (string \<times> (BabValue + LValuePath list)) list \<Rightarrow> 'w BabState BabInterpResult" where
+  "apply_pattern_bindings state lvalue_info [] = BIR_Success state"
+| "apply_pattern_bindings state lvalue_info ((name, Inl value) # rest) =
+    (let (state', addr) = alloc_store state value;
+         state'' = state' \<lparr> BS_Locals := fmupd name addr (BS_Locals state') \<rparr>
+     in apply_pattern_bindings state'' lvalue_info rest)"
+| "apply_pattern_bindings state (Some (addr, base_path)) ((name, Inr rel_path) # rest) =
+    (let full_path = base_path @ rel_path;
+         state' = state \<lparr> BS_RefVars := fmupd name (addr, full_path) (BS_RefVars state) \<rparr>
+     in apply_pattern_bindings state' (Some (addr, base_path)) rest)"
+| "apply_pattern_bindings state None ((name, Inr rel_path) # rest) = BIR_TypeError"
+
 (* Main mutually recursive interpreter functions *)
-function interp_bab_term :: "nat \<Rightarrow> BabState \<Rightarrow> BabTerm \<Rightarrow> BabValue BabInterpResult"
-  and interp_bab_term_list :: "nat \<Rightarrow> BabState \<Rightarrow> BabTerm list \<Rightarrow> (BabValue list) BabInterpResult"
-  and interp_bab_binop :: "nat \<Rightarrow> BabState \<Rightarrow> BabValue \<Rightarrow> (BabBinop \<times> BabTerm) list \<Rightarrow> BabValue BabInterpResult"
-  and interp_bab_statement :: "nat \<Rightarrow> BabState \<Rightarrow> BabStatement \<Rightarrow> BabExecResult"
-  and interp_bab_statement_list :: "nat \<Rightarrow> BabState \<Rightarrow> BabStatement list \<Rightarrow> BabExecResult"
-  and interp_bab_initializer :: "nat \<Rightarrow> BabState \<Rightarrow> BabType option \<Rightarrow> BabTerm option \<Rightarrow> BabValue BabInterpResult"
-  and make_default_value :: "nat \<Rightarrow> BabState \<Rightarrow> BabType \<Rightarrow> BabValue BabInterpResult"
-  and make_default_value_list :: "nat \<Rightarrow> BabState \<Rightarrow> BabType list \<Rightarrow> (BabValue list) BabInterpResult"
-  and eval_lvalue :: "nat \<Rightarrow> BabState \<Rightarrow> BabTerm \<Rightarrow> ((nat \<times> LValuePath list) BabInterpResult)"
-  and exec_function_call :: "nat \<Rightarrow> BabState \<Rightarrow> BabTerm \<Rightarrow> (BabState \<times> BabValue option) BabInterpResult"
+function interp_bab_term :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm \<Rightarrow> BabValue BabInterpResult"
+  and interp_bab_term_list :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm list \<Rightarrow> (BabValue list) BabInterpResult"
+  and interp_bab_binop :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabValue \<Rightarrow> (BabBinop \<times> BabTerm) list \<Rightarrow> BabValue BabInterpResult"
+  and interp_bab_statement :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabStatement \<Rightarrow> 'w BabExecResult"
+  and interp_bab_statement_list :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabStatement list \<Rightarrow> 'w BabExecResult"
+  and interp_bab_initializer :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabType option \<Rightarrow> BabTerm option \<Rightarrow> BabValue BabInterpResult"
+  and make_default_value :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabType \<Rightarrow> BabValue BabInterpResult"
+  and make_default_value_list :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabType list \<Rightarrow> (BabValue list) BabInterpResult"
+  and eval_lvalue :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm \<Rightarrow> ((nat \<times> LValuePath list) BabInterpResult)"
+  and exec_function_call :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm \<Rightarrow> ('w BabState \<times> BabValue option) BabInterpResult"
+  and try_match_term_arms :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabValue \<Rightarrow> (nat \<times> LValuePath list) option \<Rightarrow> (BabPattern \<times> BabTerm) list \<Rightarrow> BabValue BabInterpResult"
+  and try_match_stmt_arms :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabValue \<Rightarrow> (nat \<times> LValuePath list) option \<Rightarrow> (BabPattern \<times> BabStatement list) list \<Rightarrow> 'w BabExecResult"
 where
 
   (* Literals *)
@@ -390,8 +554,14 @@ where
     | BIR_Success _ \<Rightarrow> BIR_TypeError
     | err \<Rightarrow> err)"
 
-  (* Match - not implemented yet *)
-| "interp_bab_term (Suc _) _ (BabTm_Match _ _ _) = BIR_RuntimeError"
+  (* Match *)
+| "interp_bab_term (Suc fuel) state (BabTm_Match _ scrutTm arms) =
+    (case (interp_bab_term fuel state scrutTm, eval_lvalue fuel state scrutTm) of
+      (BIR_Success scrutVal, BIR_Success lv) \<Rightarrow>
+        try_match_term_arms fuel state scrutVal (Some lv) arms
+    | (BIR_Success scrutVal, _) \<Rightarrow>
+        try_match_term_arms fuel state scrutVal None arms
+    | (err, _) \<Rightarrow> err)"
 
   (* Sizeof *)
 | "interp_bab_term (Suc fuel) state (BabTm_Sizeof _ tm) =
@@ -536,8 +706,15 @@ where
       BIR_Success (newState, _) \<Rightarrow> BER_Continue newState
     | err \<Rightarrow> convert_exec_error err)"
 
-  (* Match statement - not implemented yet *)
-| "interp_bab_statement (Suc _) _ (BabStmt_Match _ _ _ _) = BER_RuntimeError"
+  (* Match statement *)
+| "interp_bab_statement (Suc _) state (BabStmt_Match _ Ghost _ _) = BER_Continue state"
+| "interp_bab_statement (Suc fuel) state (BabStmt_Match _ NotGhost scrutTm arms) =
+    (case (interp_bab_term fuel state scrutTm, eval_lvalue fuel state scrutTm) of
+      (BIR_Success scrutVal, BIR_Success lv) \<Rightarrow>
+        try_match_stmt_arms fuel state scrutVal (Some lv) arms
+    | (BIR_Success scrutVal, _) \<Rightarrow>
+        try_match_stmt_arms fuel state scrutVal None arms
+    | (err, _) \<Rightarrow> convert_exec_error err)"
 
   (* ShowHide statement - ignored in executable code *)
 | "interp_bab_statement (Suc _) state (BabStmt_ShowHide _ _ _) = BER_Continue state"
@@ -678,8 +855,7 @@ where
       BabTm_Call _ (BabTm_Name _ fnName tyArgs) argTms \<Rightarrow>
         (case fmlookup (BS_Functions state) fnName of
           Some funDecl \<Rightarrow>
-            (if DF_Body funDecl = None then BIR_RuntimeError
-             else if DF_Ghost funDecl = Ghost then BIR_TypeError
+            (if DF_Ghost funDecl = Ghost then BIR_TypeError
              else
                let params = DF_TmArgs funDecl;
                    tyParams = DF_TyArgs funDecl
@@ -696,33 +872,67 @@ where
                  in
                    case fold process_one_arg argTriples (BIR_Success clearedState) of
                      BIR_Success newState \<Rightarrow>
-                       (case DF_Body funDecl of
-                         Some stmts \<Rightarrow>
-                           (case interp_bab_statement_list fuel newState stmts of
-                             BER_Return finalState retVal \<Rightarrow>
-                               BIR_Success (restore_scope state finalState, retVal)
-                           | BER_Continue finalState \<Rightarrow>
-                               BIR_Success (restore_scope state finalState, None)
-                           | BER_TypeError \<Rightarrow> BIR_TypeError
-                           | BER_RuntimeError \<Rightarrow> BIR_RuntimeError
-                           | BER_InsufficientFuel \<Rightarrow> BIR_InsufficientFuel)
-                       | None \<Rightarrow> BIR_RuntimeError)
+                       (let execResult =
+                         (if DF_Extern funDecl then
+                           call_extern_function state fnName tyArgs params refResults valResults
+                         else
+                           (case DF_Body funDecl of
+                             Some stmts \<Rightarrow> interp_bab_statement_list fuel newState stmts
+                           | None \<Rightarrow> BER_RuntimeError))
+                       in
+                         case execResult of
+                           BER_Return finalState retVal \<Rightarrow>
+                             BIR_Success (restore_scope state finalState, retVal)
+                         | BER_Continue finalState \<Rightarrow>
+                             BIR_Success (restore_scope state finalState, None)
+                         | BER_TypeError \<Rightarrow> BIR_TypeError
+                         | BER_RuntimeError \<Rightarrow> BIR_RuntimeError
+                         | BER_InsufficientFuel \<Rightarrow> BIR_InsufficientFuel)
                    | err \<Rightarrow> convert_error err)
         | None \<Rightarrow> BIR_TypeError)
     | _ \<Rightarrow> BIR_TypeError)"
+
+  (* Try matching term arms *)
+| "try_match_term_arms 0 _ _ _ _ = BIR_InsufficientFuel"
+| "try_match_term_arms (Suc _) _ _ _ [] = BIR_RuntimeError"
+| "try_match_term_arms (Suc fuel) state scrutVal lvalue_info ((pat, result_tm) # rest) =
+    (case match_pattern pat scrutVal of
+      None \<Rightarrow> try_match_term_arms fuel state scrutVal lvalue_info rest
+    | Some bindings \<Rightarrow>
+        (case apply_pattern_bindings state lvalue_info bindings of
+          BIR_Success extended_state \<Rightarrow> interp_bab_term fuel extended_state result_tm
+        | err \<Rightarrow> convert_error err))"
+
+  (* Try matching statement arms *)
+| "try_match_stmt_arms 0 _ _ _ _ = BER_InsufficientFuel"
+| "try_match_stmt_arms (Suc _) state _ _ [] = BER_RuntimeError"
+| "try_match_stmt_arms (Suc fuel) state scrutVal lvalue_info ((pat, stmts) # rest) =
+    (case match_pattern pat scrutVal of
+      None \<Rightarrow> try_match_stmt_arms fuel state scrutVal lvalue_info rest
+    | Some bindings \<Rightarrow>
+        (case apply_pattern_bindings state lvalue_info bindings of
+          BIR_Success extended_state \<Rightarrow>
+            (case interp_bab_statement_list fuel extended_state stmts of
+              BER_Continue state' \<Rightarrow> BER_Continue (restore_scope state state')
+            | BER_Return state' retVal \<Rightarrow> BER_Return (restore_scope state state') retVal
+            | err \<Rightarrow> err)
+        | err \<Rightarrow> convert_exec_error err))"
 
   by pat_completeness auto
 
 termination by (relation "measure (\<lambda>x. case x of
         Inl (Inl (Inl (fuel, _, _))) \<Rightarrow> fuel
-      | Inl (Inl (Inr (fuel, _, _))) \<Rightarrow> fuel
-      | Inl (Inr (Inl (fuel, _, _, _))) \<Rightarrow> fuel
+      | Inl (Inl (Inr (Inl (fuel, _, _)))) \<Rightarrow> fuel
+      | Inl (Inl (Inr (Inr (fuel, _, _, _)))) \<Rightarrow> fuel
+      | Inl (Inr (Inl (fuel, _, _))) \<Rightarrow> fuel
       | Inl (Inr (Inr (Inl (fuel, _, _)))) \<Rightarrow> fuel
-      | Inl (Inr (Inr (Inr (fuel, _, _)))) \<Rightarrow> fuel
-      | Inr (Inl (Inl (fuel, _, _, _))) \<Rightarrow> fuel
-      | Inr (Inl (Inr (fuel, _, _))) \<Rightarrow> fuel
+      | Inl (Inr (Inr (Inr (fuel, _, _, _)))) \<Rightarrow> fuel
+      | Inr (Inl (Inl (fuel, _, _))) \<Rightarrow> fuel
+      | Inr (Inl (Inr (Inl (fuel, _, _)))) \<Rightarrow> fuel
+      | Inr (Inl (Inr (Inr (fuel, _, _)))) \<Rightarrow> fuel
       | Inr (Inr (Inl (fuel, _, _))) \<Rightarrow> fuel
-      | Inr (Inr (Inr (Inl (fuel, _, _)))) \<Rightarrow> fuel
-      | Inr (Inr (Inr (Inr (fuel, _, _)))) \<Rightarrow> fuel)", auto)
+      | Inr (Inr (Inr (Inl (fuel, _, _, _, _)))) \<Rightarrow> fuel
+      | Inr (Inr (Inr (Inr (fuel, _, _, _, _)))) \<Rightarrow> fuel
+      )", auto)
 
 end
