@@ -5,7 +5,8 @@ begin
 (* Evaluated values *)
 datatype BabValue =
   BV_Bool bool
-  | BV_Int int
+  | BV_FiniteInt Signedness IntBits int
+  | BV_MathInt int
   | BV_Tuple "BabValue list"
   | BV_Record "(string \<times> BabValue) list"
   | BV_Variant string "BabValue option"   (* constructor name, optional payload *)
@@ -68,6 +69,57 @@ fun tdiv :: "int \<Rightarrow> int \<Rightarrow> int" where
 fun tmod :: "int \<Rightarrow> int \<Rightarrow> int" where
   "tmod i1 i2 = sgn i1 * (abs i1 mod abs i2)"
 
+(* Get the range of a finite integer type *)
+fun int_range :: "Signedness \<Rightarrow> IntBits \<Rightarrow> (int \<times> int)" where
+  "int_range Signed IntBits_8 = (-128, 127)"
+| "int_range Signed IntBits_16 = (-32768, 32767)"
+| "int_range Signed IntBits_32 = (-2147483648, 2147483647)"
+| "int_range Signed IntBits_64 = (-9223372036854775808, 9223372036854775807)"
+| "int_range Unsigned IntBits_8 = (0, 255)"
+| "int_range Unsigned IntBits_16 = (0, 65535)"
+| "int_range Unsigned IntBits_32 = (0, 4294967295)"
+| "int_range Unsigned IntBits_64 = (0, 18446744073709551615)"
+
+(* Check if an integer fits in a finite integer type *)
+fun int_fits :: "Signedness \<Rightarrow> IntBits \<Rightarrow> int \<Rightarrow> bool" where
+  "int_fits sign bits i = (let (min_val, max_val) = int_range sign bits in min_val \<le> i \<and> i \<le> max_val)"
+
+(* Bitwise complement for finite integers *)
+fun int_complement :: "Signedness \<Rightarrow> IntBits \<Rightarrow> int \<Rightarrow> int" where
+  "int_complement sign bits i =
+    (let (min_val, max_val) = int_range sign bits in
+     case sign of
+       Signed \<Rightarrow> -i - 1
+     | Unsigned \<Rightarrow> max_val - i)"
+
+(* Try to find the first type (i32, u32, i64, u64) that fits the literal *)
+fun infer_literal_type :: "int \<Rightarrow> (Signedness \<times> IntBits) option" where
+  "infer_literal_type i =
+    (if int_fits Signed IntBits_32 i then Some (Signed, IntBits_32)
+     else if int_fits Unsigned IntBits_32 i then Some (Unsigned, IntBits_32)
+     else if int_fits Signed IntBits_64 i then Some (Signed, IntBits_64)
+     else if int_fits Unsigned IntBits_64 i then Some (Unsigned, IntBits_64)
+     else None)"
+
+(* Generic binary operation on finite integers with overflow checking *)
+(* Requires both values to be BV_FiniteInt with same signedness and bit width *)
+fun eval_finite_int_binop :: "(int \<Rightarrow> int \<Rightarrow> int) \<Rightarrow> BabValue \<Rightarrow> BabValue \<Rightarrow> BabValue BabInterpResult" where
+  "eval_finite_int_binop op (BV_FiniteInt s1 b1 i1) (BV_FiniteInt s2 b2 i2) =
+    (if s1 = s2 \<and> b1 = b2 then
+      let result = op i1 i2 in
+      if int_fits s1 b1 result then BIR_Success (BV_FiniteInt s1 b1 result)
+      else BIR_RuntimeError
+     else BIR_TypeError)"
+| "eval_finite_int_binop _ _ _ = BIR_TypeError"
+
+(* Generic binary comparison on finite integers *)
+(* Requires both values to be BV_FiniteInt with same signedness and bit width *)
+fun eval_finite_int_comparison :: "(int \<Rightarrow> int \<Rightarrow> bool) \<Rightarrow> BabValue \<Rightarrow> BabValue \<Rightarrow> BabValue BabInterpResult" where
+  "eval_finite_int_comparison cmp (BV_FiniteInt s1 b1 i1) (BV_FiniteInt s2 b2 i2) =
+    (if s1 = s2 \<and> b1 = b2 then BIR_Success (BV_Bool (cmp i1 i2))
+     else BIR_TypeError)"
+| "eval_finite_int_comparison _ _ _ = BIR_TypeError"
+
 (* Make a one-dimensional BV_Array of values *)
 fun make_array :: "BabValue list \<Rightarrow> BabValue" where
   "make_array vals = BV_Array [int (length vals)] (fmap_of_list (zip (map (\<lambda>i.[int i]) [0..<length vals]) vals))"
@@ -85,18 +137,20 @@ fun make_default_array :: "BabValue \<Rightarrow> int list \<Rightarrow> BabValu
     (let indices = generate_array_indices dimSizes in
      BV_Array dimSizes (fmap_of_list (zip indices (replicate (length indices) defaultVal))))"
 
-(* Convert array size to BabValue: for 1-d arrays return BV_Int, for 2-d+ return BV_Tuple *)
+(* Convert array size to BabValue: for 1-d arrays return BV_FiniteInt u64, for 2-d+ return BV_Tuple *)
 fun array_size_to_value :: "int list \<Rightarrow> BabValue" where
-  "array_size_to_value ns = (if length ns = 1 then BV_Int (hd ns) else BV_Tuple (map BV_Int ns))"
+  "array_size_to_value ns = (if length ns = 1
+    then BV_FiniteInt Unsigned IntBits_64 (hd ns)
+    else BV_Tuple (map (BV_FiniteInt Unsigned IntBits_64) ns))"
 
-(* Convert a list of BV_Int values to a list of ints, or return a type error *)
+(* Convert a list of BV_FiniteInt u64 values to a list of ints, or return a type error *)
 fun interpret_index_vals :: "BabValue list \<Rightarrow> (int list) BabInterpResult" where
   "interpret_index_vals [] = BIR_Success []"
-| "interpret_index_vals (BV_Int i # rest) =
+| "interpret_index_vals (BV_FiniteInt Unsigned IntBits_64 i # rest) =
     (case interpret_index_vals rest of
       BIR_Success results \<Rightarrow> BIR_Success (i # results)
     | err \<Rightarrow> err)"
-| "interpret_index_vals (nonInteger # rest) = BIR_TypeError"
+| "interpret_index_vals (_ # rest) = BIR_TypeError"
 
 (* Update record fields: replace existing fields with updates, keep others *)
 (* Returns None if any update field doesn't exist in base *)
@@ -237,41 +291,62 @@ fun call_extern_function :: "'w BabState \<Rightarrow> string \<Rightarrow> BabT
            | err \<Rightarrow> convert_exec_error err)
     | None \<Rightarrow> BER_TypeError)"
 
+(* Helper to check if second operand is zero for division/modulo *)
+fun is_zero :: "BabValue \<Rightarrow> bool" where
+  "is_zero (BV_FiniteInt _ _ i) = (i = 0)"
+| "is_zero _ = False"
+
+(* Helper to check if shift amount is negative *)
+fun is_negative :: "BabValue \<Rightarrow> bool" where
+  "is_negative (BV_FiniteInt _ _ i) = (i < 0)"
+| "is_negative _ = False"
+
 (* Evaluate a single binary operation on two values *)
 fun eval_binop :: "BabBinop \<Rightarrow> BabValue \<Rightarrow> BabValue \<Rightarrow> BabValue BabInterpResult" where
-  "eval_binop op v1 v2 = (case (op, v1, v2) of
-      (BabBinop_Add, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (i1 + i2))
-    | (BabBinop_Subtract, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (i1 - i2))
-    | (BabBinop_Multiply, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (i1 * i2))
-    | (BabBinop_Divide, BV_Int i1, BV_Int i2) \<Rightarrow>
-        if i2 = 0 then BIR_RuntimeError else BIR_Success (BV_Int (tdiv i1 i2))
-    | (BabBinop_Modulo, BV_Int i1, BV_Int i2) \<Rightarrow>
-        if i2 = 0 then BIR_RuntimeError else BIR_Success (BV_Int (tmod i1 i2))
+  "eval_binop op v1 v2 = (case op of
+      BabBinop_Add \<Rightarrow> eval_finite_int_binop (\<lambda>x y. x + y) v1 v2
+    | BabBinop_Subtract \<Rightarrow> eval_finite_int_binop (\<lambda>x y. x - y) v1 v2
+    | BabBinop_Multiply \<Rightarrow> eval_finite_int_binop (\<lambda>x y. x * y) v1 v2
+    | BabBinop_Divide \<Rightarrow>
+        if is_zero v2 then BIR_RuntimeError else eval_finite_int_binop tdiv v1 v2
+    | BabBinop_Modulo \<Rightarrow>
+        if is_zero v2 then BIR_RuntimeError else eval_finite_int_binop tmod v1 v2
 
-    | (BabBinop_BitAnd, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (and i1 i2))
-    | (BabBinop_BitOr, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (or i1 i2))
-    | (BabBinop_BitXor, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Int (xor i1 i2))
-    | (BabBinop_ShiftLeft, BV_Int i1, BV_Int i2) \<Rightarrow>
-        if i2 < 0 then BIR_RuntimeError else BIR_Success (BV_Int (push_bit (nat i2) i1))
-    | (BabBinop_ShiftRight, BV_Int i1, BV_Int i2) \<Rightarrow>
-        if i2 < 0 then BIR_RuntimeError else BIR_Success (BV_Int (drop_bit (nat i2) i1))
+    | BabBinop_BitAnd \<Rightarrow> eval_finite_int_binop (\<lambda>x y. and x y) v1 v2
+    | BabBinop_BitOr \<Rightarrow> eval_finite_int_binop (\<lambda>x y. or x y) v1 v2
+    | BabBinop_BitXor \<Rightarrow> eval_finite_int_binop (\<lambda>x y. xor x y) v1 v2
+    | BabBinop_ShiftLeft \<Rightarrow>
+        if is_negative v2 then BIR_RuntimeError
+        else eval_finite_int_binop (\<lambda>x y. push_bit (nat y) x) v1 v2
+    | BabBinop_ShiftRight \<Rightarrow>
+        if is_negative v2 then BIR_RuntimeError
+        else eval_finite_int_binop (\<lambda>x y. drop_bit (nat y) x) v1 v2
 
-    | (BabBinop_Equal, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 = i2))
-    | (BabBinop_Equal, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 = b2))
-    | (BabBinop_NotEqual, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 \<noteq> i2))
-    | (BabBinop_NotEqual, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<noteq> b2))
-    | (BabBinop_Less, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 < i2))
-    | (BabBinop_LessEqual, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 \<le> i2))
-    | (BabBinop_Greater, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 > i2))
-    | (BabBinop_GreaterEqual, BV_Int i1, BV_Int i2) \<Rightarrow> BIR_Success (BV_Bool (i1 \<ge> i2))
+    | BabBinop_Equal \<Rightarrow>
+        (case (v1, v2) of
+          (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 = b2))
+        | (BV_FiniteInt _ _ _, BV_FiniteInt _ _ _) \<Rightarrow> eval_finite_int_comparison (\<lambda>x y. x = y) v1 v2
+        | _ \<Rightarrow> BIR_TypeError)
+    | BabBinop_NotEqual \<Rightarrow>
+        (case (v1, v2) of
+          (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<noteq> b2))
+        | (BV_FiniteInt _ _ _, BV_FiniteInt _ _ _) \<Rightarrow> eval_finite_int_comparison (\<lambda>x y. x \<noteq> y) v1 v2
+        | _ \<Rightarrow> BIR_TypeError)
+    | BabBinop_Less \<Rightarrow> eval_finite_int_comparison (\<lambda>x y. x < y) v1 v2
+    | BabBinop_LessEqual \<Rightarrow> eval_finite_int_comparison (\<lambda>x y. x \<le> y) v1 v2
+    | BabBinop_Greater \<Rightarrow> eval_finite_int_comparison (\<lambda>x y. x > y) v1 v2
+    | BabBinop_GreaterEqual \<Rightarrow> eval_finite_int_comparison (\<lambda>x y. x \<ge> y) v1 v2
 
-    | (BabBinop_And, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<and> b2))
-    | (BabBinop_Or, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<or> b2))
-    | (BabBinop_Implies, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<longrightarrow> b2))
-    | (BabBinop_ImpliedBy, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b2 \<longrightarrow> b1))
-    | (BabBinop_Iff, BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 = b2))
-
-    | _ \<Rightarrow> BIR_TypeError)"
+    | BabBinop_And \<Rightarrow>
+        (case (v1, v2) of (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<and> b2)) | _ \<Rightarrow> BIR_TypeError)
+    | BabBinop_Or \<Rightarrow>
+        (case (v1, v2) of (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<or> b2)) | _ \<Rightarrow> BIR_TypeError)
+    | BabBinop_Implies \<Rightarrow>
+        (case (v1, v2) of (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 \<longrightarrow> b2)) | _ \<Rightarrow> BIR_TypeError)
+    | BabBinop_ImpliedBy \<Rightarrow>
+        (case (v1, v2) of (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b2 \<longrightarrow> b1)) | _ \<Rightarrow> BIR_TypeError)
+    | BabBinop_Iff \<Rightarrow>
+        (case (v1, v2) of (BV_Bool b1, BV_Bool b2) \<Rightarrow> BIR_Success (BV_Bool (b1 = b2)) | _ \<Rightarrow> BIR_TypeError))"
 
 (* Perform a swap operation: exchange values at two lvalue locations *)
 fun exec_swap :: "'w BabState \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> 'w BabExecResult" where
@@ -307,7 +382,7 @@ function match_pattern :: "BabPattern \<Rightarrow> BabValue \<Rightarrow> (stri
     | (BabPat_Var _ Ref name, _) \<Rightarrow> Some [(name, Inr [])]
     | (BabPat_Bool _ expected_b, BV_Bool actual_b) \<Rightarrow>
         if expected_b = actual_b then Some [] else None
-    | (BabPat_Int _ expected_i, BV_Int actual_i) \<Rightarrow>
+    | (BabPat_Int _ expected_i, BV_FiniteInt _ _ actual_i) \<Rightarrow>
         if expected_i = actual_i then Some [] else None
     | (BabPat_Tuple _ pats, BV_Tuple vals) \<Rightarrow>
         if length pats = length vals then
@@ -417,9 +492,15 @@ where
   (* Literals *)
   "interp_bab_term 0 _ _ = BIR_InsufficientFuel"
 | "interp_bab_term (Suc _) _ (BabTm_Literal _ (BabLit_Bool b)) = BIR_Success (BV_Bool b)"
-| "interp_bab_term (Suc _) _ (BabTm_Literal _ (BabLit_Int i)) = BIR_Success (BV_Int i)"
+| "interp_bab_term (Suc _) _ (BabTm_Literal _ (BabLit_Int i)) =
+    (case infer_literal_type i of
+      Some (sign, bits) \<Rightarrow> BIR_Success (BV_FiniteInt sign bits i)
+    | None \<Rightarrow> BIR_TypeError)"
 | "interp_bab_term (Suc _) _ (BabTm_Literal _ (BabLit_String s)) =
-    BIR_Success (make_array (map (\<lambda>c. BV_Int (of_char c)) s))"
+    (let char_codes = map of_char s in
+     if list_all (\<lambda>c. 0 \<le> c \<and> c \<le> 255) char_codes
+     then BIR_Success (make_array (map (BV_FiniteInt Unsigned IntBits_8) char_codes))
+     else BIR_TypeError)"
 | "interp_bab_term (Suc fuel) state (BabTm_Literal _ (BabLit_Array tms)) =
     (case interp_bab_term_list fuel state tms of
       BIR_Success vals \<Rightarrow> BIR_Success (make_array vals)
@@ -438,7 +519,17 @@ where
         | None \<Rightarrow> BIR_TypeError)))"
 
   (* Cast *)
-| "interp_bab_term (Suc fuel) state (BabTm_Cast _ _ tm) = interp_bab_term fuel state tm"
+| "interp_bab_term (Suc fuel) state (BabTm_Cast _ targetType tm) =
+    (case interp_bab_term fuel state tm of
+      BIR_Success (BV_FiniteInt src_sign src_bits i) \<Rightarrow>
+        (case targetType of
+          BabTy_FiniteInt _ tgt_sign tgt_bits \<Rightarrow>
+            if int_fits tgt_sign tgt_bits i
+            then BIR_Success (BV_FiniteInt tgt_sign tgt_bits i)
+            else BIR_RuntimeError
+        | _ \<Rightarrow> BIR_TypeError)
+    | BIR_Success _ \<Rightarrow> BIR_TypeError
+    | err \<Rightarrow> err)"
 
   (* If-then-else *)
 | "interp_bab_term (Suc fuel) state (BabTm_If _ cond thenTm elseTm) =
@@ -451,12 +542,16 @@ where
   (* Unary operators *)
 | "interp_bab_term (Suc fuel) state (BabTm_Unop _ BabUnop_Negate tm) =
     (case interp_bab_term fuel state tm of
-      BIR_Success (BV_Int i) \<Rightarrow> BIR_Success (BV_Int (-i))
+      BIR_Success (BV_FiniteInt sign bits i) \<Rightarrow>
+        (let result = -i in
+         if int_fits sign bits result then BIR_Success (BV_FiniteInt sign bits result)
+         else BIR_RuntimeError)
     | BIR_Success _ \<Rightarrow> BIR_TypeError
     | err \<Rightarrow> err)"
 | "interp_bab_term (Suc fuel) state (BabTm_Unop _ BabUnop_Complement tm) =
     (case interp_bab_term fuel state tm of
-      BIR_Success (BV_Int i) \<Rightarrow> BIR_Success (BV_Int (-i - 1))
+      BIR_Success (BV_FiniteInt sign bits i) \<Rightarrow>
+        BIR_Success (BV_FiniteInt sign bits (int_complement sign bits i))
     | BIR_Success _ \<Rightarrow> BIR_TypeError
     | err \<Rightarrow> err)"
 | "interp_bab_term (Suc fuel) state (BabTm_Unop _ BabUnop_Not tm) =
@@ -546,10 +641,12 @@ where
       BIR_Success (BV_Array _ fmap) \<Rightarrow>
         (case interp_bab_term_list fuel state indices of
           BIR_Success indexVals \<Rightarrow>
-            (let indices = map (\<lambda>v. case v of BV_Int i \<Rightarrow> i | _ \<Rightarrow> -1) indexVals in
-              (case fmlookup fmap indices of
-                 Some val \<Rightarrow> BIR_Success val
-               | None \<Rightarrow> BIR_RuntimeError))
+            (case interpret_index_vals indexVals of
+              BIR_Success index_ints \<Rightarrow>
+                (case fmlookup fmap index_ints of
+                   Some val \<Rightarrow> BIR_Success val
+                 | None \<Rightarrow> BIR_RuntimeError)
+            | err \<Rightarrow> convert_error err)
         | err \<Rightarrow> convert_error err)
     | BIR_Success _ \<Rightarrow> BIR_TypeError
     | err \<Rightarrow> err)"
@@ -775,7 +872,7 @@ where
 
   (* Default values of other types *)
 | "make_default_value (Suc _) _ (BabTy_Bool _) = BIR_Success (BV_Bool False)"
-| "make_default_value (Suc _) _ (BabTy_FiniteInt _ _ _) = BIR_Success (BV_Int 0)"
+| "make_default_value (Suc _) _ (BabTy_FiniteInt _ sign bits) = BIR_Success (BV_FiniteInt sign bits 0)"
 | "make_default_value (Suc _) _ (BabTy_MathInt _) = BIR_TypeError"  (* math ints not allowed at runtime *)
 | "make_default_value (Suc _) _ (BabTy_MathReal _) = BIR_TypeError" (* reals not allowed at runtime *)
 
