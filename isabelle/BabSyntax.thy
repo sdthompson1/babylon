@@ -57,10 +57,11 @@ datatype BabLiteral =
   | BabLit_Array "BabTerm list"
 
 (* array dimension *)
-and BabDimension = 
-  BabDim_Unknown 
-  | BabDim_Allocatable 
-  | BabDim_Fixed BabTerm
+and BabDimension =
+  BabDim_Unknown
+  | BabDim_Allocatable
+  | BabDim_Fixed BabTerm      (* pre-elaboration: unevaluated expression *)
+  | BabDim_FixedInt int       (* post-elaboration: evaluated to concrete size *)
 
 and BabType =
     BabTy_Name Location string "BabType list"

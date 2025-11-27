@@ -6,6 +6,11 @@ begin
 datatype Location = Location string int int int int
 
 
+(* Dummy location *)
+definition no_loc :: Location where
+  "no_loc = Location '''' 0 0 0 0"
+
+
 (* True if a location is "empty" (zero-width) *)
 fun is_location_empty :: "Location \<Rightarrow> bool" where
   "is_location_empty (Location _ line1 col1 line2 col2) = (line1 = line2 \<and> col1 = col2)"
