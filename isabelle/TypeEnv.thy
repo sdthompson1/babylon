@@ -68,10 +68,11 @@ fun is_resolved_dimension :: "BabDimension \<Rightarrow> bool" where
   "is_resolved_dimension (BabDim_Fixed _) = False"
 | "is_resolved_dimension _ = True"
 
-(* Check if a type is a runtime-compatible type (no MathInt/MathReal) *)
+(* Check if a type is a runtime-compatible type (no MathInt/MathReal/Meta) *)
 fun is_runtime_type :: "BabType \<Rightarrow> bool" where
   "is_runtime_type (BabTy_MathInt _) = False"
 | "is_runtime_type (BabTy_MathReal _) = False"
+| "is_runtime_type (BabTy_Meta _) = False"  (* metavariables must be resolved *)
 | "is_runtime_type (BabTy_Tuple _ tys) = list_all is_runtime_type tys"
 | "is_runtime_type (BabTy_Record _ flds) = list_all (is_runtime_type \<circ> snd) flds"
 | "is_runtime_type (BabTy_Array _ ty _) = is_runtime_type ty"
@@ -79,7 +80,9 @@ fun is_runtime_type :: "BabType \<Rightarrow> bool" where
 
 
 (* Check structural equality of types *)
-(* This only works on fully resolved types, i.e. typedefs are not followed *)
+(* This only works on fully resolved types, i.e. typedefs are not followed. *)
+(* Also, types inside BabDimension terms are not followed - so this should be used only
+   on types where BabDim_Fixed has been elaborated to BabDim_FixedInt. *)
 function types_equal :: "BabType \<Rightarrow> BabType \<Rightarrow> bool" where
   "types_equal ty1 ty2 =
     (case (ty1, ty2) of
@@ -87,6 +90,7 @@ function types_equal :: "BabType \<Rightarrow> BabType \<Rightarrow> bool" where
     | (BabTy_FiniteInt _ s1 b1, BabTy_FiniteInt _ s2 b2) \<Rightarrow> (s1 = s2 \<and> b1 = b2)
     | (BabTy_MathInt _, BabTy_MathInt _) \<Rightarrow> True
     | (BabTy_MathReal _, BabTy_MathReal _) \<Rightarrow> True
+    | (BabTy_Meta n1, BabTy_Meta n2) \<Rightarrow> (n1 = n2)
     | (BabTy_Tuple _ tys1, BabTy_Tuple _ tys2) \<Rightarrow>
         (length tys1 = length tys2 \<and>
          list_all (\<lambda>(t1, t2). types_equal t1 t2) (zip tys1 tys2))
@@ -97,7 +101,7 @@ function types_equal :: "BabType \<Rightarrow> BabType \<Rightarrow> bool" where
     | (BabTy_Array _ elem1 dims1, BabTy_Array _ elem2 dims2) \<Rightarrow>
         (dims1 = dims2 \<and> types_equal elem1 elem2)
     | (BabTy_Name _ n1 tyargs1, BabTy_Name _ n2 tyargs2) \<Rightarrow>
-        (n1 = n2 \<and> 
+        (n1 = n2 \<and>
          length tyargs1 = length tyargs2 \<and>
          list_all (\<lambda>(ta1, ta2). types_equal ta1 ta2) (zip tyargs1 tyargs2))
     | _ \<Rightarrow> False)"
@@ -188,13 +192,19 @@ qed
 lemma types_equal_Tuple:
   "types_equal (BabTy_Tuple loc1 tys1) (BabTy_Tuple loc2 tys2) =
    (length tys1 = length tys2 \<and> list_all (\<lambda>(t1, t2). types_equal t1 t2) (zip tys1 tys2))"
-  by (smt (verit, best) BabType.simps(70) old.prod.case types_equal.simps)
-
+  by (smt (verit, best) BabType.simps(87) old.prod.case types_equal.simps)
+  
 lemma types_equal_Name:
   "types_equal (BabTy_Name loc1 n1 tyargs1) (BabTy_Name loc2 n2 tyargs2) =
    (n1 = n2 \<and> length tyargs1 = length tyargs2 \<and>
     list_all (\<lambda>(ta1, ta2). types_equal ta1 ta2) (zip tyargs1 tyargs2))"
-  by (smt (verit) BabType.simps(65) old.prod.case types_equal.simps)
+  by (smt (verit, best) BabType.simps(82) old.prod.case types_equal.simps)
+
+lemma types_equal_Record:
+  "types_equal (BabTy_Record loc1 flds1) (BabTy_Record loc2 flds2) =
+   (length flds1 = length flds2 \<and>
+    list_all (\<lambda>(f1, f2). fst f1 = fst f2 \<and> types_equal (snd f1) (snd f2)) (zip flds1 flds2))"
+  by (smt (verit, best) BabType.simps(88) old.prod.case types_equal.simps)
 
 
 (* Proving that types_equal is an equivalence relation: *)
@@ -251,6 +261,9 @@ proof (induction ty rule: measure_induct_rule[where f=bab_type_size])
       by (simp add: list_all_iff)
     then show ?thesis
       using BabTy_Name zip_same_list_all types_equal_Name by fastforce
+  next
+    case (BabTy_Meta n)
+    then show ?thesis by simp
   qed
 qed
 
@@ -297,8 +310,20 @@ proof (induction ty1 ty2 rule: types_equal.induct)
       case record2: (BabTy_Record loc2 flds2)
       show ?thesis
         using record1 record2 list_all_zip_symmetric
-        by (smt (verit, best) "1.IH"(3) BabType.simps(71) case_prodD case_prodI
-            types_equal.simps)
+      proof -
+        obtain pp :: "(char list \<times> BabType \<Rightarrow> char list \<times> BabType \<Rightarrow> bool) \<Rightarrow> (char list \<times> BabType) list \<Rightarrow> (char list \<times> BabType) list \<Rightarrow> char list \<times> BabType" and ppa :: "(char list \<times> BabType \<Rightarrow> char list \<times> BabType \<Rightarrow> bool) \<Rightarrow> (char list \<times> BabType) list \<Rightarrow> (char list \<times> BabType) list \<Rightarrow> char list \<times> BabType" where
+          f1: "\<forall>x0 x1 x2. (\<exists>v3 v4. (v3, v4) \<in> set (zip x2 x1) \<and> x0 v3 v4 \<noteq> x0 v4 v3) = ((pp x0 x1 x2, ppa x0 x1 x2) \<in> set (zip x2 x1) \<and> x0 (pp x0 x1 x2) (ppa x0 x1 x2) \<noteq> x0 (ppa x0 x1 x2) (pp x0 x1 x2))"
+          by moura
+        have "\<forall>ps psa p. ((\<exists>pa pb. (pa::char list \<times> BabType, pb) \<in> set (zip ps psa) \<and> p pa pb \<noteq> p pb pa) \<or> length ps \<noteq> length psa) \<or> list_all (\<lambda>(x, y). p x y) (zip ps psa) = list_all (\<lambda>(x, y). p x y) (zip psa ps)"
+          by (metis (no_types) list_all_zip_symmetric)
+        then have f2: "\<forall>ps psa p. (pp p psa ps, ppa p psa ps) \<in> set (zip ps psa) \<and> p (pp p psa ps) (ppa p psa ps) \<noteq> p (ppa p psa ps) (pp p psa ps) \<or> length ps \<noteq> length psa \<or> list_all (\<lambda>(x, y). p x y) (zip ps psa) = list_all (\<lambda>(x, y). p x y) (zip psa ps)"
+          using f1 by simp
+        have "(pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1, ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1) \<in> set (zip flds1 flds2) \<and> (fst (pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1) = fst (ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1) \<and> types_equal (snd (pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1)) (snd (ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1))) \<noteq> (fst (ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1) = fst (pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1) \<and> types_equal (snd (ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1)) (snd (pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1))) \<longrightarrow> (BabTy_Record loc1 flds1, BabTy_Record loc2 flds2) \<noteq> (ty1, ty2) \<or> types_equal (snd (pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1)) (snd (ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1)) = types_equal (snd (ppa (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1)) (snd (pp (\<lambda>p pa. fst p = fst pa \<and> types_equal (snd p) (snd pa)) flds2 flds1))"
+          using "1.IH"(3) by blast
+        then show ?thesis
+          using f2 by (smt (z3) BabType.simps(88) case_prodD case_prodI record1 record2 types_equal.simps)
+      qed
+        
     qed auto
   next
     case array1: (BabTy_Array loc1 elem1 dims1)
@@ -317,6 +342,9 @@ proof (induction ty1 ty2 rule: types_equal.induct)
         using name1 name2 types_equal_Name list_all_zip_symmetric
         by (metis (full_types) "1.IH"(1))
     qed auto
+  next
+    case (BabTy_Meta n1)
+    then show ?thesis by (cases ty2; auto)
   qed
 qed
 
@@ -331,7 +359,7 @@ lemma list_all_zip3_trans:
   by (induction xs ys zs rule: list_induct3) auto
 
 (* types_equal is transitive *)
-lemma types_equal_transitive:
+lemma types_equal_transitive [trans]:
   "types_equal ty1 ty2 \<Longrightarrow> types_equal ty2 ty3 \<Longrightarrow> types_equal ty1 ty3"
 proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
   case (1 ty1 ty2)
@@ -390,6 +418,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       next
         case (BabTy_Array x81 x82 x83)
         then show ?thesis using "1.prems" tuple2 by simp
+      next
+        case (BabTy_Meta x)
+        thus ?thesis using "1.prems" tuple2 by simp
       qed
     next
       case (BabTy_Name x11 x12 x13)
@@ -411,6 +442,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       then show ?thesis using "1.prems" tuple1 by simp
     next
       case (BabTy_Array x81 x82 x83)
+      then show ?thesis using "1.prems" tuple1 by simp
+    next
+      case (BabTy_Meta x)
       then show ?thesis using "1.prems" tuple1 by simp
     qed
   next
@@ -457,6 +491,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       next
         case (BabTy_Array x81 x82 x83)
         then show ?thesis using "1.prems" record2 by simp
+      next
+        case (BabTy_Meta x)
+        then show ?thesis using "1.prems" record2 by simp
       qed
     next
       case (BabTy_Name x11 x12 x13)
@@ -478,6 +515,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       then show ?thesis using "1.prems" record1 by simp
     next
       case (BabTy_Array x81 x82 x83)
+      then show ?thesis using "1.prems" record1 by simp
+    next
+      case (BabTy_Meta x)
       then show ?thesis using "1.prems" record1 by simp
     qed
   next
@@ -511,6 +551,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       next
         case (BabTy_Record x71 x72)
         then show ?thesis using "1.prems" array2 by simp
+      next
+        case (BabTy_Meta x)
+        then show ?thesis using "1.prems" array2 by simp
       qed
     next
       case (BabTy_Name x11 x12 x13)
@@ -532,6 +575,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       then show ?thesis using "1.prems" array1 by simp
     next
       case (BabTy_Record x71 x72)
+      then show ?thesis using "1.prems" array1 by simp
+    next
+      case (BabTy_Meta x)
       then show ?thesis using "1.prems" array1 by simp
     qed
   next
@@ -578,6 +624,9 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
       next
         case (BabTy_Array x81 x82 x83)
         then show ?thesis using "1.prems" name2 by simp
+      next
+        case (BabTy_Meta x)
+        then show ?thesis using "1.prems" name2 by simp
       qed
     next
       case (BabTy_Bool x2)
@@ -600,7 +649,135 @@ proof (induction ty1 ty2 arbitrary: ty3 rule: types_equal.induct)
     next
       case (BabTy_Array x81 x82 x83)
       then show ?thesis using "1.prems" name1 by simp
+    next
+      case (BabTy_Meta x)
+      then show ?thesis using "1.prems" name1 by simp
     qed
+  next
+    case (BabTy_Meta n1)
+    then show ?thesis using "1.prems" by (cases ty2; cases ty3; auto)
+  qed
+qed
+
+
+(* types_equal implies equal sizes *)
+lemma types_equal_same_size:
+  "types_equal ty1 ty2 \<Longrightarrow> bab_type_size ty1 = bab_type_size ty2"
+proof (induction ty1 ty2 rule: types_equal.induct)
+  case (1 ty1 ty2)
+  then show ?case
+  proof (cases ty1)
+    case (BabTy_Bool loc1)
+    then show ?thesis using "1.prems" by (cases ty2; simp)
+  next
+    case (BabTy_FiniteInt loc1 s1 b1)
+    then show ?thesis using "1.prems" by (cases ty2; simp)
+  next
+    case (BabTy_MathInt loc1)
+    then show ?thesis using "1.prems" by (cases ty2; simp)
+  next
+    case (BabTy_MathReal loc1)
+    then show ?thesis using "1.prems" by (cases ty2; simp)
+  next
+    case (BabTy_Meta n1)
+    then show ?thesis using "1.prems" by (cases ty2; simp)
+  next
+    case (BabTy_Tuple loc1 tys1)
+    then show ?thesis using "1.prems"
+    proof (cases ty2)
+      case (BabTy_Tuple loc2 tys2)
+      from "1.prems" \<open>ty1 = BabTy_Tuple loc1 tys1\<close> BabTy_Tuple
+      have len_eq: "length tys1 = length tys2"
+        and all_eq: "list_all (\<lambda>(t1, t2). types_equal t1 t2) (zip tys1 tys2)"
+        by (simp_all add: types_equal_Tuple del: types_equal.simps)
+      have "sum_list (map bab_type_size tys1) = sum_list (map bab_type_size tys2)"
+      proof -
+        have "\<forall>i < length tys1. bab_type_size (tys1 ! i) = bab_type_size (tys2 ! i)"
+        proof (intro allI impI)
+          fix i assume "i < length tys1"
+          hence "(tys1 ! i, tys2 ! i) \<in> set (zip tys1 tys2)"
+            using len_eq in_set_zip by fastforce
+          hence "types_equal (tys1 ! i) (tys2 ! i)"
+            using all_eq by (meson Ball_set_list_all case_prodD)
+          thus "bab_type_size (tys1 ! i) = bab_type_size (tys2 ! i)"
+            using "1.IH"(2) \<open>ty1 = BabTy_Tuple loc1 tys1\<close> BabTy_Tuple
+                  \<open>(tys1 ! i, tys2 ! i) \<in> set (zip tys1 tys2)\<close> by blast
+        qed
+        thus ?thesis using len_eq
+          by (metis map_equality_iff)
+      qed
+      then show ?thesis using \<open>ty1 = BabTy_Tuple loc1 tys1\<close> BabTy_Tuple by simp
+    qed (use "1.prems" BabTy_Tuple in simp_all)
+  next
+    case (BabTy_Record loc1 flds1)
+    then show ?thesis using "1.prems"
+    proof (cases ty2)
+      case (BabTy_Record loc2 flds2)
+      from "1.prems" \<open>ty1 = BabTy_Record loc1 flds1\<close> BabTy_Record
+      have len_eq: "length flds1 = length flds2"
+        and all_eq: "list_all (\<lambda>(f1, f2). fst f1 = fst f2 \<and> types_equal (snd f1) (snd f2)) (zip flds1 flds2)"
+        by (simp_all add: types_equal_Record del: types_equal.simps)
+      have "sum_list (map (bab_type_size \<circ> snd) flds1) = sum_list (map (bab_type_size \<circ> snd) flds2)"
+      proof -
+        have "\<forall>i < length flds1. bab_type_size (snd (flds1 ! i)) = bab_type_size (snd (flds2 ! i))"
+        proof (intro allI impI)
+          fix i assume "i < length flds1"
+          hence "(flds1 ! i, flds2 ! i) \<in> set (zip flds1 flds2)"
+            using len_eq
+            using in_set_zip by fastforce 
+          hence "types_equal (snd (flds1 ! i)) (snd (flds2 ! i))"
+            using all_eq
+            by (metis (mono_tags, lifting) case_prodD list.pred_set)
+          thus "bab_type_size (snd (flds1 ! i)) = bab_type_size (snd (flds2 ! i))"
+            using "1.IH"(3) \<open>ty1 = BabTy_Record loc1 flds1\<close> BabTy_Record
+                  \<open>(flds1 ! i, flds2 ! i) \<in> set (zip flds1 flds2)\<close> by blast
+        qed
+        thus ?thesis using len_eq
+          by (smt (verit, ccfv_threshold) comp_apply map_equality_iff)
+      qed
+      then show ?thesis using \<open>ty1 = BabTy_Record loc1 flds1\<close> BabTy_Record by simp
+    qed (use "1.prems" BabTy_Record in simp_all)
+  next
+    case (BabTy_Array loc1 elem1 dims1)
+    then show ?thesis using "1.prems"
+    proof (cases ty2)
+      case (BabTy_Array loc2 elem2 dims2)
+      from "1.prems" \<open>ty1 = BabTy_Array loc1 elem1 dims1\<close> BabTy_Array
+      have dims_eq: "dims1 = dims2" and elem_eq: "types_equal elem1 elem2"
+        by simp_all
+      from "1.IH"(4) \<open>ty1 = BabTy_Array loc1 elem1 dims1\<close> BabTy_Array elem_eq
+      have "bab_type_size elem1 = bab_type_size elem2" by blast
+      then show ?thesis using \<open>ty1 = BabTy_Array loc1 elem1 dims1\<close> BabTy_Array dims_eq by simp
+    qed (use "1.prems" BabTy_Array in simp_all)
+  next
+    case (BabTy_Name loc1 name1 args1)
+    then show ?thesis using "1.prems"
+    proof (cases ty2)
+      case (BabTy_Name loc2 name2 args2)
+      from "1.prems" \<open>ty1 = BabTy_Name loc1 name1 args1\<close> BabTy_Name
+      have name_eq: "name1 = name2" and len_eq: "length args1 = length args2"
+        and all_eq: "list_all (\<lambda>(t1, t2). types_equal t1 t2) (zip args1 args2)"
+        by (simp_all add: types_equal_Name del: types_equal.simps)
+      have "sum_list (map bab_type_size args1) = sum_list (map bab_type_size args2)"
+      proof -
+        have "\<forall>i < length args1. bab_type_size (args1 ! i) = bab_type_size (args2 ! i)"
+        proof (intro allI impI)
+          fix i assume "i < length args1"
+          hence "(args1 ! i, args2 ! i) \<in> set (zip args1 args2)"
+            using len_eq
+            by (metis length_zip min_less_iff_conj nth_mem nth_zip)
+          hence "types_equal (args1 ! i) (args2 ! i)"
+            using all_eq
+            by (meson Ball_set_list_all case_prodD)
+          thus "bab_type_size (args1 ! i) = bab_type_size (args2 ! i)"
+            using "1.IH"(1) \<open>ty1 = BabTy_Name loc1 name1 args1\<close> BabTy_Name
+                  \<open>(args1 ! i, args2 ! i) \<in> set (zip args1 args2)\<close> by blast
+        qed
+        thus ?thesis using len_eq
+          by (metis map_equality_iff)
+      qed
+      then show ?thesis using \<open>ty1 = BabTy_Name loc1 name1 args1\<close> BabTy_Name by simp
+    qed (use "1.prems" BabTy_Name in simp_all)
   qed
 qed
 

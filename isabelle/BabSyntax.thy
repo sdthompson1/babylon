@@ -72,6 +72,7 @@ and BabType =
   | BabTy_Tuple Location "BabType list"
   | BabTy_Record Location "(string * BabType) list"
   | BabTy_Array Location BabType "BabDimension list"
+  | BabTy_Meta nat  (* Metavariable for type inference/unification *)
 
 and BabTerm =
   BabTm_Literal Location BabLiteral
@@ -188,6 +189,7 @@ fun bab_type_location :: "BabType \<Rightarrow> Location" where
 | "bab_type_location (BabTy_Tuple loc _) = loc"
 | "bab_type_location (BabTy_Record loc _) = loc"
 | "bab_type_location (BabTy_Array loc _ _) = loc"
+| "bab_type_location (BabTy_Meta _) = no_loc"  (* metavars have no source location *)
 
 fun bab_term_location :: "BabTerm \<Rightarrow> Location" where
   "bab_term_location (BabTm_Literal loc _) = loc"
@@ -286,6 +288,7 @@ where
 | "bab_type_size (BabTy_Tuple _ types) = 1 + sum_list (map bab_type_size types)"
 | "bab_type_size (BabTy_Record _ flds) = 1 + sum_list (map (bab_type_size \<circ> snd) flds)"
 | "bab_type_size (BabTy_Array _ ty dims) = 1 + bab_type_size ty + sum_list (map bab_dimension_size dims)"
+| "bab_type_size (BabTy_Meta _) = 1"
 | "bab_term_size (BabTm_Literal _ lit) = 1 + bab_literal_size lit"
 | "bab_term_size (BabTm_Name _ _ types) = 1 + sum_list (map bab_type_size types)"
 | "bab_term_size (BabTm_Cast _ ty tm) = 1 + bab_type_size ty + bab_term_size tm"
@@ -310,6 +313,13 @@ where
 | "bab_term_size (BabTm_Sizeof _ tm) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_Allocated _ tm) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_Old _ tm) = 1 + bab_term_size tm"
+
+(* Combined size for lists *)
+definition list_type_size :: "BabType list \<Rightarrow> nat" where
+  "list_type_size tys = sum_list (map bab_type_size tys)"
+
+lemma bab_type_size_pos: "0 < bab_type_size ty"
+  by (cases ty) auto
 
 lemma bab_pattern_smaller_than_list:
   "p \<in> set pats \<Longrightarrow> bab_pattern_size p < Suc (sum_list (map bab_pattern_size pats))"
@@ -352,8 +362,8 @@ next
     have "array_dim_terms dim = [tm]" using assms(2)
       by (metis array_dim_terms.elims distinct.simps(2) distinct_singleton set_ConsD)
     hence "bab_dimension_size dim1 = 1 + bab_term_size tm"
-      by (metis BabDimension.distinct(3,5) BabDimension.inject True array_dim_terms.elims
-          bab_dimension_size.elims list.distinct(1) list.inject)
+      by (metis True array_dim_terms.elims bab_dimension_size.simps(1) list.inject
+          not_Cons_self2)
     thus ?thesis
       by simp
   next
@@ -382,5 +392,6 @@ fun substitute_bab_type :: "(string, BabType) fmap \<Rightarrow> BabType \<Right
     BabTy_Record loc (map (\<lambda>(name, ty). (name, substitute_bab_type subst ty)) flds)"
 | "substitute_bab_type subst (BabTy_Array loc ty dims) =
     BabTy_Array loc (substitute_bab_type subst ty) dims"
+| "substitute_bab_type subst (BabTy_Meta n) = BabTy_Meta n"  (* metavars not affected by name subst *)
 
 end
