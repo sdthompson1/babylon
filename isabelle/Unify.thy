@@ -1,5 +1,5 @@
 theory Unify
-  imports TypeEnv
+  imports TypesEqual
 begin
 
 (* Unification for BabTypes.
@@ -252,6 +252,10 @@ next
   then show ?case
     by (simp add: occurs_def)
 qed
+
+(* The range of a singleton subst is just the given type. *)
+lemma fmran'_singleton_subst: "fmran' (singleton_subst n ty) = {ty}"
+  by (auto simp: singleton_subst_def fmran'_def split: if_splits)
 
 (* Applying the same substitution to equal types preserves equality *)
 lemma types_equal_apply_subst:
