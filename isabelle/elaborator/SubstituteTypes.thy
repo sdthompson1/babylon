@@ -1,5 +1,5 @@
 theory SubstituteTypes
-  imports BabTypecheck Unify
+  imports "../type_system/BabTypecheck" "Unify"
 begin
 
 (* Substitute type metavariables (BabTy_Meta) in a term. *)

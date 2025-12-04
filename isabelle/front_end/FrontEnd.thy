@@ -7,7 +7,7 @@
 *)
 
 theory FrontEnd
-  imports Main BabLoader BabRenamer
+  imports Main "../loader/BabLoader" "../renamer/BabRenamer"
 begin
 
 (* Combined error type for the front end *)

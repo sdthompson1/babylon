@@ -1,5 +1,5 @@
 theory ElabType
-  imports IntRange BabKindcheck SubstituteTypes
+  imports "../base/IntRange" "../type_system/BabKindcheck" "SubstituteTypes"
 begin
 
 (* This file defines type elaboration: checking and transforming user-provided types

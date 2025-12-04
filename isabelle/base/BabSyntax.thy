@@ -259,6 +259,21 @@ fun is_type_decl :: "BabDeclaration \<Rightarrow> bool"
 | "is_type_decl (BabDecl_Typedef _) = True"
 
 
+(* Ground types *)
+
+(* A type is ground if it contains no metavariables *)
+fun is_ground :: "BabType \<Rightarrow> bool" where
+  "is_ground (BabTy_Meta _) = False"
+| "is_ground (BabTy_Name _ _ tyargs) = list_all is_ground tyargs"
+| "is_ground (BabTy_Bool _) = True"
+| "is_ground (BabTy_FiniteInt _ _ _) = True"
+| "is_ground (BabTy_MathInt _) = True"
+| "is_ground (BabTy_MathReal _) = True"
+| "is_ground (BabTy_Tuple _ types) = list_all is_ground types"
+| "is_ground (BabTy_Record _ flds) = list_all (is_ground \<circ> snd) flds"
+| "is_ground (BabTy_Array _ ty _) = is_ground ty"
+
+
 (* Size functions *)
 
 fun bab_pattern_size :: "BabPattern \<Rightarrow> nat" where

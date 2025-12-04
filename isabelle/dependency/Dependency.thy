@@ -1,5 +1,5 @@
 theory Dependency
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "HOL-Library.Multiset" KosarajuMain
+  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "HOL-Library.Multiset" "KosarajuMain"
 begin
 
 (*-----------------------------------------------------------------------------*)

@@ -1,5 +1,5 @@
 theory BabInterp
-  imports BabSyntax IntRange "HOL.Bit_Operations"
+  imports "../base/BabSyntax" "../base/IntRange" "HOL.Bit_Operations"
 begin
 
 (* Evaluated values *)

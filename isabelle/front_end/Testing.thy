@@ -1,5 +1,5 @@
 theory Testing
-  imports Main BabSyntax BabLexer BabParser BabLoader BabRenamer
+  imports Main "../base/BabSyntax" "../loader/BabLexer" "../loader/BabParser" "../loader/BabLoader" "../renamer/BabRenamer"
 begin
 
 (* Scratch space for testing *)

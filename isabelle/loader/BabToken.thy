@@ -1,7 +1,7 @@
 (* Lexical syntax of the language (tokens, keywords etc.) *)
 
 theory BabToken
-  imports Main Location
+  imports Main "../base/Location"
 begin
 
 (* Keywords *)

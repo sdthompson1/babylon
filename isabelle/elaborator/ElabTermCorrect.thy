@@ -1,5 +1,5 @@
 theory ElabTermCorrect
-  imports ElabTerm ElabTypeCorrect BabTypecheck Unify3
+  imports "ElabTerm" "ElabTypeCorrect" "../type_system/BabTypecheck" "Unify3"
 begin
 
 theorem elab_term_correct:

@@ -1,5 +1,5 @@
 theory TypeEnv
-  imports BabSyntax TypesEqual Unify
+  imports "../base/BabSyntax" "TypesEqual"
 begin
 
 record BabTyEnv =

@@ -1,5 +1,5 @@
 theory TypesEqual
-  imports BabSyntax
+  imports "../base/BabSyntax"
 begin
 
 (* Check structural equality of types *)

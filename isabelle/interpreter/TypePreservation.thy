@@ -1,5 +1,5 @@
 theory TypePreservation
-  imports BabInterp BabTypecheck
+  imports "BabInterp" "../type_system/BabTypecheck"
 begin
 
 (*-----------------------------------------------------------------------------*)

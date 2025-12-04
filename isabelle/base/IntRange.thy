@@ -1,5 +1,5 @@
-theory IntRange 
-  imports BabSyntax
+theory IntRange
+  imports "BabSyntax"
 begin
 
 (* Get the range of a finite integer type *)

@@ -1,5 +1,5 @@
 theory Unify
-  imports TypesEqual
+  imports "../type_system/TypesEqual"
 begin
 
 (* Unification for BabTypes.
@@ -450,75 +450,6 @@ proof -
   thus ?thesis using assms by auto
 qed
 
-
-(* ========================================================================== *)
-(* Substitution equality (up to types_equal)                                  *)
-(* ========================================================================== *)
-
-(* Two substitutions are equal if they produce types_equal results on all types *)
-definition subst_equal :: "MetaSubst \<Rightarrow> MetaSubst \<Rightarrow> bool" where
-  "subst_equal \<sigma>1 \<sigma>2 \<equiv> \<forall>ty. types_equal (apply_subst \<sigma>1 ty) (apply_subst \<sigma>2 ty)"
-
-lemma subst_equal_refl: "subst_equal \<sigma> \<sigma>"
-  by (simp add: subst_equal_def types_equal_reflexive del: types_equal.simps)
-
-lemma subst_equal_sym: "subst_equal \<sigma>1 \<sigma>2 \<Longrightarrow> subst_equal \<sigma>2 \<sigma>1"
-  by (simp add: subst_equal_def types_equal_symmetric del: types_equal.simps)
-
-lemma subst_equal_trans: "subst_equal \<sigma>1 \<sigma>2 \<Longrightarrow> subst_equal \<sigma>2 \<sigma>3 \<Longrightarrow> subst_equal \<sigma>1 \<sigma>3"
-  by (meson subst_equal_def types_equal_transitive)
-
-
-(* ========================================================================== *)
-(* Ground types (types without metavariables)                                 *)
-(* ========================================================================== *)
-
-(* A type is ground if it contains no metavariables *)
-fun is_ground :: "BabType \<Rightarrow> bool" where
-  "is_ground (BabTy_Meta _) = False"
-| "is_ground (BabTy_Name _ _ tyargs) = list_all is_ground tyargs"
-| "is_ground (BabTy_Bool _) = True"
-| "is_ground (BabTy_FiniteInt _ _ _) = True"
-| "is_ground (BabTy_MathInt _) = True"
-| "is_ground (BabTy_MathReal _) = True"
-| "is_ground (BabTy_Tuple _ types) = list_all is_ground types"
-| "is_ground (BabTy_Record _ flds) = list_all (is_ground \<circ> snd) flds"
-| "is_ground (BabTy_Array _ ty _) = is_ground ty"
-
-lemma is_ground_iff_no_metavars:
-  "is_ground ty \<longleftrightarrow> type_metavars ty = {}"
-proof (induction ty rule: is_ground.induct)
-  case (1 n)
-  then show ?case by simp
-next
-  case (2 loc name tyargs)
-  then show ?case
-    by (auto simp: list_all_iff)
-next
-  case (3 loc)
-  then show ?case by simp
-next
-  case (4 loc sign bits)
-  then show ?case by simp
-next
-  case (5 loc)
-  then show ?case by simp
-next
-  case (6 loc)
-  then show ?case by simp
-next
-  case (7 loc types)
-  then show ?case
-    by (auto simp: list_all_iff)
-next
-  case (8 loc flds)
-  then show ?case
-    by (auto simp: list_all_iff)
-next
-  case (9 loc ty dims)
-  then show ?case by simp
-qed
-
 (* Substitution on ground types is identity. *)
 lemma apply_subst_ground:
   "is_ground ty \<Longrightarrow> apply_subst subst ty = ty"
@@ -553,6 +484,24 @@ next
   case (9 loc ty dims)
   then show ?case by simp
 qed
+
+
+(* ========================================================================== *)
+(* Substitution equality (up to types_equal)                                  *)
+(* ========================================================================== *)
+
+(* Two substitutions are equal if they produce types_equal results on all types *)
+definition subst_equal :: "MetaSubst \<Rightarrow> MetaSubst \<Rightarrow> bool" where
+  "subst_equal \<sigma>1 \<sigma>2 \<equiv> \<forall>ty. types_equal (apply_subst \<sigma>1 ty) (apply_subst \<sigma>2 ty)"
+
+lemma subst_equal_refl: "subst_equal \<sigma> \<sigma>"
+  by (simp add: subst_equal_def types_equal_reflexive del: types_equal.simps)
+
+lemma subst_equal_sym: "subst_equal \<sigma>1 \<sigma>2 \<Longrightarrow> subst_equal \<sigma>2 \<sigma>1"
+  by (simp add: subst_equal_def types_equal_symmetric del: types_equal.simps)
+
+lemma subst_equal_trans: "subst_equal \<sigma>1 \<sigma>2 \<Longrightarrow> subst_equal \<sigma>2 \<sigma>3 \<Longrightarrow> subst_equal \<sigma>1 \<sigma>3"
+  by (meson subst_equal_def types_equal_transitive)
 
 
 (* ========================================================================== *)

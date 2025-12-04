@@ -1,5 +1,5 @@
 theory Unify3
-  imports Unify2 SubstituteTypes
+  imports "Unify2" "SubstituteTypes"
 begin
 
 (* This file proves that unification preserves runtime types and well-kindedness:

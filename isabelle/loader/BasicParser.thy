@@ -1,5 +1,5 @@
 theory BasicParser
-  imports Main Location "HOL-Library.Monad_Syntax"
+  imports Main "../base/Location" "HOL-Library.Monad_Syntax"
 begin
 
 (* Basic parser state contains:

@@ -1,5 +1,5 @@
 theory BabRenamer
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" Location BabSyntax
+  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "../base/Location" "../base/BabSyntax"
 begin
 
 (*-----------------------------------------------------------------------------*)

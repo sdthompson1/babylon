@@ -1,5 +1,5 @@
 theory BabKindcheck
-  imports TypeEnv IntRange
+  imports "TypeEnv" "../base/IntRange"
 begin
 
 (* This file defines well-kindedness for types. We only have one kind, *, because
