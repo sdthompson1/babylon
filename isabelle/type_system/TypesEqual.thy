@@ -705,4 +705,205 @@ proof (induction ty1 ty2 rule: types_equal.induct)
 qed
 
 
+(* substitute_bab_type preserves types_equal when substitutions map to types_equal types *)
+
+(* Two substitutions are "types_equal-compatible" if they have the same domain
+   and map each variable to types_equal types *)
+definition substs_types_equal :: "(string, BabType) fmap \<Rightarrow> (string, BabType) fmap \<Rightarrow> bool" where
+  "substs_types_equal subst1 subst2 \<equiv>
+    fmdom subst1 = fmdom subst2 \<and>
+    (\<forall>v \<in> fset (fmdom subst1).
+      (case (fmlookup subst1 v, fmlookup subst2 v) of
+        (Some ty1, Some ty2) \<Rightarrow> types_equal ty1 ty2
+      | _ \<Rightarrow> False))"
+
+lemma substs_types_equal_lookup:
+  assumes "substs_types_equal subst1 subst2"
+      and "fmlookup subst1 v = Some ty1"
+  shows "\<exists>ty2. fmlookup subst2 v = Some ty2 \<and> types_equal ty1 ty2"
+proof -
+  from assms(2) have "v |\<in>| fmdom subst1"
+    by (simp add: fmdomI)
+  with assms(1) have "v |\<in>| fmdom subst2"
+    unfolding substs_types_equal_def by simp
+  then obtain ty2 where "fmlookup subst2 v = Some ty2"
+    by (meson fmdomE)
+  moreover from assms \<open>v |\<in>| fmdom subst1\<close> this have "types_equal ty1 ty2"
+    unfolding substs_types_equal_def by fastforce
+  ultimately show ?thesis by auto
+qed
+
+lemma substs_types_equal_lookup_none:
+  assumes "substs_types_equal subst1 subst2"
+      and "fmlookup subst1 v = None"
+  shows "fmlookup subst2 v = None"
+  using assms unfolding substs_types_equal_def
+  by (metis fmdom_notD fmdom_notI)
+
+lemma substitute_bab_type_preserves_types_equal:
+  assumes "substs_types_equal subst1 subst2"
+  shows "types_equal (substitute_bab_type subst1 ty) (substitute_bab_type subst2 ty)"
+proof (induction ty rule: measure_induct_rule[where f=bab_type_size])
+  case (less ty)
+  show ?case
+  proof (cases ty)
+    case (BabTy_Bool loc)
+    then show ?thesis by simp
+  next
+    case (BabTy_FiniteInt loc s b)
+    then show ?thesis by simp
+  next
+    case (BabTy_MathInt loc)
+    then show ?thesis by simp
+  next
+    case (BabTy_MathReal loc)
+    then show ?thesis by simp
+  next
+    case (BabTy_Meta n)
+    then show ?thesis by simp
+  next
+    case (BabTy_Tuple loc tys)
+    have "\<forall>t \<in> set tys. types_equal (substitute_bab_type subst1 t) (substitute_bab_type subst2 t)"
+    proof
+      fix t assume "t \<in> set tys"
+      hence "bab_type_size t < bab_type_size ty"
+        using BabTy_Tuple bab_type_smaller_than_list by fastforce
+      thus "types_equal (substitute_bab_type subst1 t) (substitute_bab_type subst2 t)"
+        using less.IH by blast
+    qed
+    hence "list_all (\<lambda>(t1, t2). types_equal t1 t2)
+             (zip (map (substitute_bab_type subst1) tys) (map (substitute_bab_type subst2) tys))"
+      by (simp add: list_all_length)
+    then show ?thesis using BabTy_Tuple types_equal_Tuple by fastforce
+  next
+    case (BabTy_Record loc flds)
+    have flds_eq: "\<forall>f \<in> set flds. types_equal (substitute_bab_type subst1 (snd f))
+                                               (substitute_bab_type subst2 (snd f))"
+    proof
+      fix f assume "f \<in> set flds"
+      hence "bab_type_size (snd f) < bab_type_size ty"
+        using BabTy_Record bab_type_smaller_than_fieldlist[of "fst f" "snd f" flds] by simp
+      thus "types_equal (substitute_bab_type subst1 (snd f)) (substitute_bab_type subst2 (snd f))"
+        using less.IH by blast
+    qed
+    let ?flds1 = "map (\<lambda>(name, ty). (name, substitute_bab_type subst1 ty)) flds"
+    let ?flds2 = "map (\<lambda>(name, ty). (name, substitute_bab_type subst2 ty)) flds"
+    have len_eq: "length ?flds1 = length ?flds2" by simp
+    have "list_all (\<lambda>(f1, f2). fst f1 = fst f2 \<and> types_equal (snd f1) (snd f2)) (zip ?flds1 ?flds2)"
+    proof (unfold list_all_length, intro allI impI)
+      fix i assume "i < length (zip ?flds1 ?flds2)"
+      hence i_bound: "i < length flds" by simp
+      obtain name fty where fld_i: "flds ! i = (name, fty)"
+        by (cases "flds ! i") auto
+      have "?flds1 ! i = (name, substitute_bab_type subst1 fty)"
+        using i_bound fld_i by simp
+      moreover have "?flds2 ! i = (name, substitute_bab_type subst2 fty)"
+        using i_bound fld_i by simp
+      moreover have "types_equal (substitute_bab_type subst1 fty) (substitute_bab_type subst2 fty)"
+        using flds_eq i_bound fld_i by (metis nth_mem snd_conv)
+      ultimately show "case zip ?flds1 ?flds2 ! i of (f1, f2) \<Rightarrow> fst f1 = fst f2 \<and> types_equal (snd f1) (snd f2)"
+        using i_bound by fastforce
+    qed
+    then show ?thesis using BabTy_Record types_equal_Record len_eq by simp
+  next
+    case (BabTy_Array loc elem dims)
+    have "bab_type_size elem < bab_type_size ty"
+      using BabTy_Array by simp
+    hence "types_equal (substitute_bab_type subst1 elem) (substitute_bab_type subst2 elem)"
+      using less.IH by blast
+    then show ?thesis using BabTy_Array by simp
+  next
+    case (BabTy_Name loc name tyargs)
+    show ?thesis
+    proof (cases tyargs)
+      case Nil
+      (* This is the variable substitution case *)
+      show ?thesis
+      proof (cases "fmlookup subst1 name")
+        case None
+        hence "fmlookup subst2 name = None"
+          using assms substs_types_equal_lookup_none by blast
+        with None Nil BabTy_Name show ?thesis by simp
+      next
+        case (Some ty1)
+        then obtain ty2 where "fmlookup subst2 name = Some ty2" and "types_equal ty1 ty2"
+          using assms substs_types_equal_lookup by blast
+        with Some Nil BabTy_Name show ?thesis by simp
+      qed
+    next
+      case (Cons a list)
+      (* Non-empty tyargs: recurse on type arguments *)
+      have tyargs_eq: "tyargs = a # list" using Cons by simp
+      have "\<forall>t \<in> set tyargs. types_equal (substitute_bab_type subst1 t) (substitute_bab_type subst2 t)"
+      proof
+        fix t assume "t \<in> set tyargs"
+        hence "bab_type_size t < bab_type_size ty"
+          using BabTy_Name bab_type_smaller_than_list by fastforce
+        thus "types_equal (substitute_bab_type subst1 t) (substitute_bab_type subst2 t)"
+          using less.IH by blast
+      qed
+      hence "list_all (\<lambda>(t1, t2). types_equal t1 t2)
+               (zip (map (substitute_bab_type subst1) tyargs) (map (substitute_bab_type subst2) tyargs))"
+        by (simp add: list_all_length)
+      with Cons BabTy_Name show ?thesis
+        using types_equal_Name
+        by (metis length_map substitute_bab_type.simps(2))
+    qed
+  qed
+qed
+
+(* Helper lemma for fmap_of_list lookup *)
+lemma fmap_of_list_zip_nth:
+  assumes "i < length ks" "length ks = length vs" "distinct ks"
+  shows "fmlookup (fmap_of_list (zip ks vs)) (ks ! i) = Some (vs ! i)"
+  using assms by (simp add: fmap_of_list.rep_eq map_of_zip_nth)
+
+(* Convenience lemma: if we build substitutions from the same variable list
+   and types_equal type argument lists, the substitutions are types_equal-compatible *)
+lemma zip_substs_types_equal:
+  assumes "length tyVars = length tyargs1"
+      and "length tyVars = length tyargs2"
+      and "list_all (\<lambda>(t1, t2). types_equal t1 t2) (zip tyargs1 tyargs2)"
+      and "distinct tyVars"
+  shows "substs_types_equal (fmap_of_list (zip tyVars tyargs1))
+                            (fmap_of_list (zip tyVars tyargs2))"
+proof -
+  let ?subst1 = "fmap_of_list (zip tyVars tyargs1)"
+  let ?subst2 = "fmap_of_list (zip tyVars tyargs2)"
+
+  have dom_eq: "fmdom ?subst1 = fmdom ?subst2"
+    using assms(1,2) by simp
+
+  have "\<forall>v \<in> fset (fmdom ?subst1).
+          (case (fmlookup ?subst1 v, fmlookup ?subst2 v) of
+            (Some ty1, Some ty2) \<Rightarrow> types_equal ty1 ty2
+          | _ \<Rightarrow> False)"
+  proof
+    fix v assume v_in: "v \<in> fset (fmdom ?subst1)"
+    hence v_in_tyVars: "v \<in> set tyVars"
+      using assms(1) fmdom_fmap_of_list
+      by (simp add: fset_of_list.rep_eq)
+    then obtain i where i_bound: "i < length tyVars" and v_eq: "tyVars ! i = v"
+      by (metis in_set_conv_nth)
+    have "fmlookup ?subst1 v = Some (tyargs1 ! i)"
+      using assms(1,4) i_bound v_eq fmap_of_list_zip_nth by metis
+    moreover have "fmlookup ?subst2 v = Some (tyargs2 ! i)"
+      using assms(2,4) i_bound v_eq fmap_of_list_zip_nth by metis
+    moreover have "types_equal (tyargs1 ! i) (tyargs2 ! i)"
+    proof -
+      from assms(1,2) i_bound have "i < length tyargs1" "i < length tyargs2" by simp_all
+      hence "(tyargs1 ! i, tyargs2 ! i) \<in> set (zip tyargs1 tyargs2)"
+        using in_set_conv_nth by fastforce
+      with assms(3) show ?thesis
+        by (metis case_prodD in_set_conv_nth list_all_length)
+    qed
+    ultimately show "(case (fmlookup ?subst1 v, fmlookup ?subst2 v) of
+                       (Some ty1, Some ty2) \<Rightarrow> types_equal ty1 ty2 | _ \<Rightarrow> False)"
+      by simp
+  qed
+
+  with dom_eq show ?thesis
+    unfolding substs_types_equal_def by simp
+qed
+
 end

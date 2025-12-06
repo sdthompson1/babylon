@@ -1,6 +1,10 @@
 theory BabInterp
-  imports "../base/BabSyntax" "../base/IntRange" "HOL.Bit_Operations"
+  imports "../base/BabSyntax" "../base/IntRange" "HOL.Bit_Operations" "HOL-Library.List_Lexorder"
 begin
+
+(* ========================================================================== *)
+(* Types used in the interpreter *)
+(* ========================================================================== *)
 
 (* Evaluated values *)
 datatype BabValue =
@@ -25,12 +29,12 @@ record 'world BabState =
   BS_Functions :: "(string, DeclFun) fmap"
   BS_ExternFunctions :: "(string, 'world \<Rightarrow> BabType list \<Rightarrow> BabValue list \<Rightarrow> 'world \<times> BabValue list \<times> BabValue option) fmap"
   BS_Constants :: "(string, BabValue) fmap"  (* global constants *)
-  BS_Datatypes :: "(string, DeclDatatype) fmap"
+  BS_NullaryCtors :: "string fset"  (* names of nullary data constructors *)
+  BS_UnaryCtors :: "string fset"  (* names of unary data constructors *)
   BS_World :: 'world
   BS_Store :: "BabValue list"  (* address \<rightarrow> value *)
   BS_Locals :: "(string, nat) fmap"  (* variable name \<rightarrow> address *)
   BS_RefVars :: "(string, nat \<times> LValuePath list) fmap"  (* ref name \<rightarrow> (address, path) *)
-  BS_LocalTypes :: "(string, BabType) fmap"  (* local tyvar name \<rightarrow> type *)
 
 (* Result of interpreting a term *)
 datatype 'a BabInterpResult =
@@ -47,9 +51,43 @@ datatype 'w BabExecResult =
   | BER_RuntimeError
   | BER_InsufficientFuel
 
-(* Helper functions to convert errors *)
+
+(* ========================================================================== *)
+(* Size lemmas for BabValue *)
+(* ========================================================================== *)
+
+(* We use the auto-generated size function for BabValue.
+   For arrays, size (BV_Array dims vals) includes the sizes of all values in the fmap. *)
+
+(* Values in an fmap are smaller than the array containing them *)
+lemma size_fmap_lookup:
+  assumes "fmlookup vals idx = Some v"
+  shows "size v < size (BV_Array dims vals)"
+proof -
+  from assms have mem: "(idx, v) |\<in>| fset_of_fmap vals"
+    by transfer auto
+  hence mem': "(idx, v) \<in> fset (fset_of_fmap vals)"
+    by simp
+  let ?f = "\<lambda>x. Suc (case x of (a, x) \<Rightarrow> size x)"
+  have "?f (idx, v) \<le> (\<Sum>x\<in>fset (fset_of_fmap vals). ?f x)"
+    by (rule member_le_sum[OF mem']) auto
+  hence "Suc (size v) \<le> (\<Sum>x\<in>fset (fset_of_fmap vals). Suc (case x of (a, x) \<Rightarrow> size x))"
+    by simp
+  thus ?thesis
+    by simp
+qed
+
+
+(* ========================================================================== *)
+(* General helper functions *)
+(* ========================================================================== *)
+
+(* Helper functions to convert errors.
+   Note: convert_error is only intended to be called on error results, but we define
+   the BIR_Success case to return BIR_Success undefined to make the function total
+   and preserve the success/failure distinction for reasoning. *)
 fun convert_error :: "'a BabInterpResult \<Rightarrow> 'b BabInterpResult" where
-  "convert_error (BIR_Success _) = undefined"
+  "convert_error (BIR_Success _) = BIR_Success undefined"
 | "convert_error BIR_TypeError = BIR_TypeError"
 | "convert_error BIR_RuntimeError = BIR_RuntimeError"
 | "convert_error BIR_InsufficientFuel = BIR_InsufficientFuel"
@@ -462,80 +500,16 @@ fun apply_pattern_bindings :: "'w BabState \<Rightarrow> (nat \<times> LValuePat
      in apply_pattern_bindings state' (Some (addr, base_path)) rest)"
 | "apply_pattern_bindings state None ((name, Inr rel_path) # rest) = BIR_TypeError"
 
-(* Create a default value of a given type *)
-fun make_default_value :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabType \<Rightarrow> BabValue BabInterpResult"
-  and make_default_value_list :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabType list \<Rightarrow> (BabValue list) BabInterpResult"
-where
-  "make_default_value 0 _ _ = BIR_InsufficientFuel"
 
-  (* Default value of BabTy_Name - could be local type or datatype (typedefs are resolved by elaborator) *)
-| "make_default_value (Suc fuel) state (BabTy_Name _ name tyArgs) =
-    (case fmlookup (BS_LocalTypes state) name of
-      Some localType \<Rightarrow>
-        (if tyArgs = [] then make_default_value fuel state localType
-         else BIR_TypeError)
-    | None \<Rightarrow>
-      (case fmlookup (BS_Datatypes state) name of
-        Some datatype \<Rightarrow>
-          (case DD_Ctors datatype of
-            [] \<Rightarrow> BIR_TypeError
-          | (_, ctorName, maybePayloadType) # _ \<Rightarrow>
-              (case maybePayloadType of
-                None \<Rightarrow> BIR_Success (BV_Variant ctorName None)
-              | Some payloadType \<Rightarrow>
-                  (let subst = fmap_of_list (zip (DD_TyArgs datatype) tyArgs);
-                       substitutedPayloadType = substitute_bab_type subst payloadType
-                   in case make_default_value fuel state substitutedPayloadType of
-                     BIR_Success payloadVal \<Rightarrow> BIR_Success (BV_Variant ctorName (Some payloadVal))
-                   | err \<Rightarrow> convert_error err)))
-      | None \<Rightarrow> BIR_TypeError))"
+(* ========================================================================== *)
+(* The main interpreter definition *)
+(* ========================================================================== *)
 
-  (* Default values of other types *)
-| "make_default_value (Suc _) _ (BabTy_Bool _) = BIR_Success (BV_Bool False)"
-| "make_default_value (Suc _) _ (BabTy_FiniteInt _ sign bits) = BIR_Success (BV_FiniteInt sign bits 0)"
-| "make_default_value (Suc _) _ (BabTy_MathInt _) = BIR_TypeError"  (* math ints not allowed at runtime *)
-| "make_default_value (Suc _) _ (BabTy_MathReal _) = BIR_TypeError" (* reals not allowed at runtime *)
-
-| "make_default_value (Suc fuel) state (BabTy_Tuple _ types) =
-    (case make_default_value_list fuel state types of
-      BIR_Success vals \<Rightarrow> BIR_Success (BV_Tuple vals)
-    | err \<Rightarrow> convert_error err)"
-
-| "make_default_value (Suc fuel) state (BabTy_Record _ fieldTypes) =
-    (case make_default_value_list fuel state (map snd fieldTypes) of
-      BIR_Success vals \<Rightarrow> BIR_Success (BV_Record (zip (map fst fieldTypes) vals))
-    | err \<Rightarrow> convert_error err)"
-
-  (* Default array: must be "complete" type. If allocatable, initial size is zero. *)
-| "make_default_value (Suc fuel) state (BabTy_Array _ ty dims) =
-    (if list_all (\<lambda>d. d = BabDim_Allocatable) dims then
-      BIR_Success (BV_Array (replicate (length dims) 0) fmempty)
-    else if list_all (\<lambda>d. case d of BabDim_FixedInt _ \<Rightarrow> True | _ \<Rightarrow> False) dims then
-      let dimInts = map (\<lambda>d. case d of BabDim_FixedInt n \<Rightarrow> n) dims in
-      (case make_default_value fuel state ty of
-        BIR_Success defaultVal \<Rightarrow> BIR_Success (make_default_array defaultVal dimInts)
-      | err \<Rightarrow> convert_error err)
-    else
-      BIR_TypeError)"
-
-| "make_default_value_list 0 _ _ = BIR_InsufficientFuel"
-| "make_default_value_list (Suc _) _ [] = BIR_Success []"
-| "make_default_value_list (Suc fuel) state (ty # tys) =
-    (case make_default_value fuel state ty of
-      BIR_Success val \<Rightarrow>
-        (case make_default_value_list fuel state tys of
-          BIR_Success vals \<Rightarrow> BIR_Success (val # vals)
-        | err \<Rightarrow> err)
-    | err \<Rightarrow> convert_error err)"
-
-
-(* Main mutually recursive interpreter functions *)
 function interp_bab_term :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm \<Rightarrow> BabValue BabInterpResult"
   and interp_bab_term_list :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm list \<Rightarrow> (BabValue list) BabInterpResult"
   and interp_bab_binop :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabValue \<Rightarrow> (BabBinop \<times> BabTerm) list \<Rightarrow> BabValue BabInterpResult"
   and interp_bab_statement :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabStatement \<Rightarrow> 'w BabExecResult"
   and interp_bab_statement_list :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabStatement list \<Rightarrow> 'w BabExecResult"
-  and interp_bab_initializer :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabType option \<Rightarrow> BabTerm option \<Rightarrow> BabValue BabInterpResult"
   and eval_lvalue :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm \<Rightarrow> ((nat \<times> LValuePath list) BabInterpResult)"
   and exec_function_call :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabTerm \<Rightarrow> ('w BabState \<times> BabValue option) BabInterpResult"
   and try_match_term_arms :: "nat \<Rightarrow> 'w BabState \<Rightarrow> BabValue \<Rightarrow> (nat \<times> LValuePath list) option \<Rightarrow> (BabPattern \<times> BabTerm) list \<Rightarrow> BabValue BabInterpResult"
@@ -559,7 +533,7 @@ where
       BIR_Success vals \<Rightarrow> BIR_Success (make_array vals)
     | err \<Rightarrow> convert_error err)"
 
-  (* Variable lookup *)
+  (* Variable or nullary constructor lookup *)
 | "interp_bab_term (Suc _) state (BabTm_Name _ name _) =
     (case fmlookup (BS_Locals state) name of
       Some addr \<Rightarrow> BIR_Success (BS_Store state ! addr)
@@ -569,7 +543,10 @@ where
       | None \<Rightarrow>
         (case fmlookup (BS_Constants state) name of
           Some val \<Rightarrow> BIR_Success val
-        | None \<Rightarrow> BIR_TypeError)))"
+        | None \<Rightarrow>
+          (if name |\<in>| BS_NullaryCtors state
+           then BIR_Success (BV_Variant name None)
+           else BIR_TypeError))))"
 
   (* Cast *)
 | "interp_bab_term (Suc fuel) state (BabTm_Cast _ targetType tm) =
@@ -635,10 +612,10 @@ where
   (* Note: Function calls in a term context are not allowed to have ref parameters (this is
      a type error). This means that the new BabState returned from exec_function_call can
      be dropped. *)
-| "interp_bab_term (Suc fuel) state (BabTm_Call _ fnTm argTms) =
+| "interp_bab_term (Suc fuel) state (BabTm_Call loc fnTm argTms) =
     (if is_pure_fun_term state fnTm
      then
-       case exec_function_call fuel state (BabTm_Call undefined fnTm argTms) of
+       case exec_function_call fuel state (BabTm_Call loc fnTm argTms) of
          BIR_Success (_, Some retVal) \<Rightarrow> BIR_Success retVal
        | BIR_Success (_, None) \<Rightarrow> BIR_TypeError
        | err \<Rightarrow> convert_error err
@@ -751,8 +728,8 @@ where
   (* Variable declaration statement *)
 | "interp_bab_statement 0 _ _ = BER_InsufficientFuel"
 | "interp_bab_statement (Suc _) state (BabStmt_VarDecl _ Ghost _ _ _ _) = BER_Continue state"
-| "interp_bab_statement (Suc fuel) state (BabStmt_VarDecl _ NotGhost name Var maybeType maybeTerm) =
-    (case interp_bab_initializer fuel state maybeType maybeTerm of
+| "interp_bab_statement (Suc fuel) state (BabStmt_VarDecl _ NotGhost name Var _ (Some tm)) =
+    (case interp_bab_term fuel state tm of
       BIR_Success value \<Rightarrow>
         (let (state', addr) = alloc_store state value
          in BER_Continue (state' \<lparr> BS_Locals := fmupd name addr (BS_Locals state') \<rparr>))
@@ -762,8 +739,8 @@ where
       BIR_Success (addr, path) \<Rightarrow>
         BER_Continue (state \<lparr> BS_RefVars := fmupd name (addr, path) (BS_RefVars state) \<rparr>)
     | err \<Rightarrow> convert_exec_error err)"
-| "interp_bab_statement (Suc _) _ (BabStmt_VarDecl _ NotGhost _ Ref _ None) =
-    BER_TypeError"  (* ref must be initialized *)
+| "interp_bab_statement (Suc _) _ (BabStmt_VarDecl _ NotGhost _ _ _ None) =
+    BER_TypeError"  (* initializer is required *)
 
   (* Fix, obtain, use not allowed in executable code *)
 | "interp_bab_statement (Suc _) _ (BabStmt_Fix _ _ _) = BER_TypeError"
@@ -878,17 +855,6 @@ where
     | BER_Return state1 retVal \<Rightarrow> BER_Return state1 retVal
     | err \<Rightarrow> err)"
 
-  (* Initializers (e.g. in var decl statement). Note at least one of type, term must be present. *)
-| "interp_bab_initializer 0 _ _ _ = BIR_InsufficientFuel"
-| "interp_bab_initializer (Suc fuel) state maybeType maybeTerm =
-    (case (maybeType, maybeTerm) of
-      (_, Some tm) \<Rightarrow>
-        interp_bab_term fuel state tm
-    | (Some ty, _) \<Rightarrow>
-        make_default_value fuel state ty
-    | _ \<Rightarrow>
-        BIR_RuntimeError)"
-
   (* Decompose an lvalue into (address, path) *)
 | "eval_lvalue 0 _ _ = BIR_InsufficientFuel"
 | "eval_lvalue (Suc fuel) state tm =
@@ -939,8 +905,7 @@ where
                      valResults = map (interp_bab_term fuel state) argTms;
                      argTriples = zip params (zip refResults valResults);
                      clearedState = state \<lparr> BS_Locals := fmempty,
-                                            BS_RefVars := fmempty,
-                                            BS_LocalTypes := fmap_of_list (zip tyParams tyArgs) \<rparr>
+                                            BS_RefVars := fmempty \<rparr>
                  in
                    case fold process_one_arg argTriples (BIR_Success clearedState) of
                      BIR_Success newState \<Rightarrow>
@@ -996,8 +961,7 @@ termination by (relation "measure (\<lambda>x. case x of
         Inl (Inl (Inl (fuel, _, _))) \<Rightarrow> fuel
       | Inl (Inl (Inr (fuel, _, _))) \<Rightarrow> fuel
       | Inl (Inr (Inl (fuel, _, _, _))) \<Rightarrow> fuel
-      | Inl (Inr (Inr (Inl (fuel, _, _)))) \<Rightarrow> fuel
-      | Inl (Inr (Inr (Inr (fuel, _, _)))) \<Rightarrow> fuel
+      | Inl (Inr (Inr (fuel, _, _))) \<Rightarrow> fuel
       | Inr (Inl (Inl (fuel, _, _))) \<Rightarrow> fuel
       | Inr (Inl (Inr (fuel, _, _))) \<Rightarrow> fuel
       | Inr (Inr (Inl (fuel, _, _))) \<Rightarrow> fuel

@@ -68,6 +68,7 @@ lemma is_finite_integer_type_apply_subst:
   "is_finite_integer_type ty \<Longrightarrow> is_finite_integer_type (apply_subst subst ty)"
   by (cases ty) auto
 
+(* See also: compose_subst_preserves_well_kinded in Unify3.thy *)
 lemma is_well_kinded_apply_subst:
   assumes "is_well_kinded env ty"
       and "\<forall>ty' \<in> fmran' subst. is_well_kinded env ty'"
@@ -88,9 +89,9 @@ using assms proof (induction ty rule: measure_induct_rule[where f=bab_type_size]
       with True BabTy_Name show ?thesis by simp
     next
       case False
-      with "less.prems"(1) BabTy_Name obtain dt where
-        dt_lookup: "fmlookup (TE_Datatypes env) name = Some dt" and
-        len_eq: "length tyargs = length (DD_TyArgs dt)" and
+      with "less.prems"(1) BabTy_Name obtain tyVars where
+        dt_lookup: "fmlookup (TE_Datatypes env) name = Some tyVars" and
+        len_eq: "length tyargs = length tyVars" and
         args_wk: "list_all (is_well_kinded env) tyargs"
         by (auto split: option.splits)
       have "\<forall>arg \<in> set tyargs. is_well_kinded env (apply_subst subst arg)"
@@ -159,6 +160,7 @@ using assms proof (induction ty rule: measure_induct_rule[where f=bab_type_size]
   qed
 qed
 
+(* See also: compose_subst_preserves_runtime in Unify3.thy *)
 lemma is_runtime_type_apply_subst:
   assumes "is_runtime_type ty"
       and "\<forall>ty' \<in> fmran' subst. is_runtime_type ty'"
@@ -301,54 +303,137 @@ next
     using branches_eq types_equal_apply_subst_both by blast
   then show ?case using ih_cond ih_then ih_else ty_eq cond_bool by simp
 next
-  case ("7_1" env mode v vb)
+  (* Case 7: BabTm_Allocated *)
+  case (7 env mode loc tm)
+  from "7.prems"(1) have mode_ghost: "mode = Ghost"
+    by (auto split: if_splits)
+  from "7.prems"(1) mode_ghost obtain inner_ty where
+    inner_typed: "bab_term_type env mode tm = Some inner_ty" and
+    ty_eq: "ty = BabTy_Bool loc"
+    by (auto split: if_splits option.splits)
+  from 7(1)[OF mode_ghost inner_typed "7.prems"(2) "7.prems"(3) "7.prems"(4)]
+  have ih: "bab_term_type env mode (apply_subst_to_term subst tm) = Some (apply_subst subst inner_ty)" .
+  show ?case using ih mode_ghost ty_eq by simp
+next
+  (* Case 8: BabTm_Call *)
+  case (8 env mode loc callTm argTms)
+  (* The typing assumption tells us callTm must be a BabTm_Name *)
+  from "8.prems"(1) obtain fnLoc fnName tyArgs where
+    callTm_eq: "callTm = BabTm_Name fnLoc fnName tyArgs"
+    by (cases callTm) (auto split: option.splits)
+  from "8.prems"(1) callTm_eq obtain funDecl where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funDecl"
+    by (auto split: option.splits)
+  from "8.prems"(1) callTm_eq fn_lookup have
+    not_impure: "\<not> DF_Impure funDecl" and
+    no_refs: "\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (DF_TmArgs funDecl)" and
+    tyargs_len: "length tyArgs = length (DF_TyArgs funDecl)" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_rt: "mode = NotGhost \<longrightarrow> list_all is_runtime_type tyArgs" and
+    args_len: "length argTms = length (DF_TmArgs funDecl)"
+    by (auto split: option.splits if_splits)
+  from "8.prems"(1) callTm_eq fn_lookup not_impure no_refs tyargs_len tyargs_wk tyargs_rt args_len
+  obtain retTy where
+    ret_some: "DF_ReturnType funDecl = Some retTy" and
+    args_typecheck: "list_all2 (\<lambda>actual expected.
+        case actual of None \<Rightarrow> False
+        | Some actualTy \<Rightarrow> types_equal actualTy expected)
+        (map (bab_term_type env mode) argTms)
+        (map (\<lambda>(_, _, ty). substitute_bab_type (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) ty)
+             (DF_TmArgs funDecl))" and
+    ty_eq: "ty = substitute_bab_type (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) retTy"
+    by (auto split: option.splits if_splits simp: Let_def)
+
+  (* After substitution, the callTm becomes BabTm_Name fnLoc fnName (map (apply_subst subst) tyArgs) *)
+  have subst_callTm: "apply_subst_to_term subst callTm = BabTm_Name fnLoc fnName (map (apply_subst subst) tyArgs)"
+    using callTm_eq by simp
+
+  (* The substituted type args are still well-kinded *)
+  have subst_tyargs_wk: "list_all (is_well_kinded env) (map (apply_subst subst) tyArgs)"
+    using tyargs_wk "8.prems"(3) is_well_kinded_apply_subst by (simp add: list_all_iff)
+
+  (* The substituted type args are still runtime types in NotGhost mode *)
+  have subst_tyargs_rt: "mode = NotGhost \<longrightarrow> list_all is_runtime_type (map (apply_subst subst) tyArgs)"
+    using tyargs_rt "8.prems"(4) is_runtime_type_apply_subst by (simp add: list_all_iff)
+
+  (* Length of substituted type args is preserved *)
+  have subst_tyargs_len: "length (map (apply_subst subst) tyArgs) = length (DF_TyArgs funDecl)"
+    using tyargs_len by simp
+
+  (* Length of substituted arg terms is preserved *)
+  have subst_args_len: "length (map (apply_subst_to_term subst) argTms) = length (DF_TmArgs funDecl)"
+    using args_len by simp
+
+  (* For each argument, by IH, the substituted term has the substituted type *)
+  (* We need to show the substituted args typecheck against the substituted expected types *)
+
+  (* The key insight: substitute_bab_type (fmap_of_list (zip tyVars (map (apply_subst subst) tyArgs))) ty
+     = apply_subst subst (substitute_bab_type (fmap_of_list (zip tyVars tyArgs)) ty)
+     This requires a lemma about composing substitutions. For now, we use sorry. *)
+
+  show ?case sorry
+next
+  case ("9_1" env mode v vb)
   then show ?case sorry
 next
-  case ("7_2" env mode v vb)
+  case ("9_2" env mode v vb)
   then show ?case sorry
 next
-  case ("7_3" env mode v va vb)
+  case ("9_3" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_4" env mode v va vb)
+  case ("9_4" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_5" env mode v va vb vc)
+  case ("9_5" env mode v va vb vc)
   then show ?case sorry
 next
-  case ("7_6" env mode v va vb)
+  case ("9_6" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_7" env mode v va)
+  case ("9_7" env mode v va)
   then show ?case sorry
 next
-  case ("7_8" env mode v va)
+  case ("9_8" env mode v va)
   then show ?case sorry
 next
-  case ("7_9" env mode v va vb)
+  case ("9_9" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_10" env mode v va vb)
+  case ("9_10" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_11" env mode v va vb)
+  case ("9_11" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_12" env mode v va vb)
+  case ("9_12" env mode v va vb)
   then show ?case sorry
 next
-  case ("7_13" env mode v va vb)
+  case ("9_13" env mode v va)
   then show ?case sorry
 next
-  case ("7_14" env mode v va)
-  then show ?case sorry
-next
-  case ("7_15" env mode v va)
-  then show ?case sorry
-next
-  case ("7_16" env mode v va)
+  case ("9_14" env mode v va)
   then show ?case sorry
 qed
+
+
+(* Key lemma: substitute_bab_type commutes with apply_subst (metavariable substitution).
+   This says that applying a metavariable substitution after a type variable substitution
+   is the same as first applying the metavariable substitution to the type arguments,
+   then doing the type variable substitution.
+
+   substitute_bab_type (fmap_of_list (zip tyVars (map (apply_subst metaSubst) tyArgs))) ty
+   = apply_subst metaSubst (substitute_bab_type (fmap_of_list (zip tyVars tyArgs)) ty)
+
+   This requires that ty is ground (contains no metavariables), because:
+   - substitute_bab_type does not touch BabTy_Meta nodes
+   - apply_subst does substitute BabTy_Meta nodes
+   So if ty contains metavariables, the RHS would substitute them but the LHS would not. *)
+lemma substitute_bab_type_apply_subst_commute:
+  assumes "is_ground ty"
+  shows "substitute_bab_type (fmap_of_list (zip tyVars (map (apply_subst metaSubst) tyArgs))) ty
+         = apply_subst metaSubst (substitute_bab_type (fmap_of_list (zip tyVars tyArgs)) ty)"
+  using assms sorry
 
 
 end

@@ -25,6 +25,15 @@ datatype TypeError =
   | TyErr_UnknownTypeName Location string
   | TyErr_WrongTypeArity Location string nat nat   (* name, expected, actual *)
   | TyErr_InvalidArrayDimension Location
+  (* Function call errors *)
+  | TyErr_UnknownFunction Location string
+  | TyErr_CalleeNotFunction Location
+  | TyErr_ImpureFunctionInTermContext Location string
+  | TyErr_RefArgInTermContext Location string
+  | TyErr_GhostFunctionInNonGhost Location string
+  | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
+  | TyErr_FunctionNoReturnType Location string
+  | TyErr_ArgTypeMismatch Location nat BabType BabType  (* loc, arg index, expected, actual *)
 
 type_synonym Typedefs = "(string, DeclTypedef) fmap"
 
@@ -70,9 +79,9 @@ and elab_type_list :: "nat \<Rightarrow> Typedefs \<Rightarrow> BabTyEnv \<Right
         \<comment> \<open>Check if it's a datatype\<close>
         | None \<Rightarrow>
             (case fmlookup (TE_Datatypes env) name of
-              Some dt \<Rightarrow>
-                (if length elabTyArgs \<noteq> length (DD_TyArgs dt) then
-                  Inl [TyErr_WrongTypeArity loc name (length (DD_TyArgs dt)) (length tyArgs)]
+              Some tyVars \<Rightarrow>
+                (if length elabTyArgs \<noteq> length tyVars then
+                  Inl [TyErr_WrongTypeArity loc name (length tyVars) (length tyArgs)]
                 else
                   let resultTy = BabTy_Name loc name elabTyArgs
                   in if ghost = NotGhost \<and> \<not> is_runtime_type resultTy then

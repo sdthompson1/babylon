@@ -2,13 +2,7 @@ theory BabTypecheck
   imports TypeEnvWellFormed
 begin
 
-(* This file defines type-correctness for an "elaborated" Babylon program, i.e. one in
-   which all typedefs have been expanded out, any necessary type inference has been
-   performed, implicit casts have been inserted, etc. *)
-
-
-(* Now for typechecking of terms. This either returns None if the term is ill-typed,
-   or Some (with the term's type) if it is well-typed. *)
+(* This defines type-correctness for fully elaborated terms. *)
 
 fun bab_term_type :: "BabTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> BabType option"
   where
@@ -34,7 +28,7 @@ fun bab_term_type :: "BabTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<
         \<comment> \<open>Not a term variable: check if it's a nullary data constructor\<close>
         (case fmlookup (TE_DataCtors env) name of
           Some (dtName, numTyArgs, payload) \<Rightarrow>
-            \<comment> \<open>Must be nullary (no payload), have correct number of type args,
+            \<comment> \<open>Must be nullary (no payload), have correct number of well-kinded type args,
                 and type args must be runtime types if mode is NotGhost\<close>
             (if payload = None \<and> length tyArgs = numTyArgs
                 \<and> (list_all (is_well_kinded env) tyArgs)
@@ -75,6 +69,47 @@ fun bab_term_type :: "BabTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<
            bab_term_type env mode elseTm) of
       (Some (BabTy_Bool _), Some then_ty, Some else_ty) \<Rightarrow>
         (if types_equal then_ty else_ty then Some then_ty else None)
+    | _ \<Rightarrow> None)"
+
+  (* Allocated: only valid in Ghost mode, parameter can be any type, result is bool *)
+| "bab_term_type env mode (BabTm_Allocated loc tm) =
+    (if mode = Ghost then
+      (case bab_term_type env mode tm of
+        Some _ \<Rightarrow> Some (BabTy_Bool loc)
+      | None \<Rightarrow> None)
+     else None)"
+
+  (* Function call (pure functions only) *)
+| "bab_term_type env mode (BabTm_Call loc callTm argTms) =
+    (case callTm of
+      BabTm_Name _ fnName tyArgs \<Rightarrow>
+        (case fmlookup (TE_Functions env) fnName of
+          None \<Rightarrow> None
+        | Some funDecl \<Rightarrow>
+            \<comment> \<open>Must be a pure function (not impure, no ref args)\<close>
+            if DF_Impure funDecl \<or> list_ex (\<lambda>(_, vr, _). vr = Ref) (DF_TmArgs funDecl) then None
+            \<comment> \<open>In NotGhost mode, the function must not be ghost\<close>
+            else if mode = NotGhost \<and> DF_Ghost funDecl = Ghost then None
+            \<comment> \<open>Type args count must match\<close>
+            else if length tyArgs \<noteq> length (DF_TyArgs funDecl) then None
+            \<comment> \<open>Type args must be well-kinded\<close>
+            else if \<not> list_all (is_well_kinded env) tyArgs then None
+            \<comment> \<open>In NotGhost mode, type args must be runtime types\<close>
+            else if mode = NotGhost \<and> \<not> list_all is_runtime_type tyArgs then None
+            \<comment> \<open>Term args count must match\<close>
+            else if length argTms \<noteq> length (DF_TmArgs funDecl) then None
+            \<comment> \<open>Must have a return type\<close>
+            else (case DF_ReturnType funDecl of
+              None \<Rightarrow> None
+            | Some retTy \<Rightarrow>
+                let tySubst = fmap_of_list (zip (DF_TyArgs funDecl) tyArgs);
+                    expectedArgTys = map (\<lambda>(_, _, ty). substitute_bab_type tySubst ty) (DF_TmArgs funDecl);
+                    actualArgTys = map (bab_term_type env mode) argTms
+                in if list_all2 (\<lambda>actual expected.
+                      case actual of None \<Rightarrow> False
+                      | Some actualTy \<Rightarrow> types_equal actualTy expected) actualArgTys expectedArgTys
+                   then Some (substitute_bab_type tySubst retTy)
+                   else None))
     | _ \<Rightarrow> None)"
 
 (* TODO: Other cases *)
@@ -149,52 +184,91 @@ next
   thus ?case
     using result by simp
 next
-  case ("7_1" env v vb)
+  case (7 env loc tm)
+  (* BabTm_Allocated: returns None in NotGhost mode, so this case is vacuously true *)
+  from "7.prems"(1) show ?case by simp
+next
+  case (8 env loc callTm argTms)
+  (* BabTm_Call: result type is substitute_bab_type tySubst retTy *)
+  (* Extract function name and type args from callTm *)
+  from "8.prems"(1) obtain fnLoc fnName tyArgs where
+    callTm_eq: "callTm = BabTm_Name fnLoc fnName tyArgs"
+    by (cases callTm) (auto split: option.splits)
+  from "8.prems"(1) callTm_eq obtain funDecl where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funDecl"
+    by (auto split: option.splits)
+  from "8.prems"(1) callTm_eq fn_lookup have
+    fn_not_ghost: "DF_Ghost funDecl \<noteq> Ghost" and
+    tyargs_runtime: "list_all is_runtime_type tyArgs"
+    by (auto split: option.splits if_splits)
+  from fn_not_ghost have fn_is_notghost: "DF_Ghost funDecl = NotGhost"
+    by (cases "DF_Ghost funDecl") auto
+  from "8.prems"(1) callTm_eq fn_lookup obtain retTy where
+    ret_some: "DF_ReturnType funDecl = Some retTy" and
+    ty_eq: "ty = substitute_bab_type (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) retTy"
+    by (auto split: option.splits if_splits simp: Let_def)
+  (* From tyenv_well_formed, the function's return type is runtime (since fn is NotGhost) *)
+  from "8.prems"(2) fn_lookup fn_is_notghost ret_some have retTy_runtime: "is_runtime_type retTy"
+    unfolding tyenv_well_formed_def tyenv_functions_well_formed_def
+    by (auto simp: Let_def split: option.splits)
+  (* The substituted types are all runtime *)
+  have subst_runtime: "\<forall>ty' \<in> fmran' (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)). is_runtime_type ty'"
+  proof
+    fix ty' assume "ty' \<in> fmran' (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs))"
+    then obtain name where "fmlookup (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) name = Some ty'"
+      by (auto simp: fmran'I)
+    then have "(name, ty') \<in> set (zip (DF_TyArgs funDecl) tyArgs)"
+      by (metis fmap_of_list.rep_eq map_of_SomeD)
+    then have "ty' \<in> set tyArgs"
+      by (meson set_zip_rightD)
+    with tyargs_runtime show "is_runtime_type ty'"
+      by (simp add: list_all_iff)
+  qed
+  (* Apply is_runtime_type_substitute_bab_type *)
+  from retTy_runtime subst_runtime have "is_runtime_type (substitute_bab_type (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) retTy)"
+    by (rule is_runtime_type_substitute_bab_type)
+  with ty_eq show ?case by simp
+next
+  case ("9_1" env v vb)
   then show ?case sorry
 next
-  case ("7_2" env v vb)
+  case ("9_2" env v vb)
   then show ?case sorry
 next
-  case ("7_3" env v va vb)
+  case ("9_3" env v va vb)
   then show ?case sorry
 next
-  case ("7_4" env v va vb)
+  case ("9_4" env v va vb)
   then show ?case sorry
 next
-  case ("7_5" env v va vb vc)
+  case ("9_5" env v va vb vc)
   then show ?case sorry
 next
-  case ("7_6" env v va vb)
+  case ("9_6" env v va vb)
   then show ?case sorry
 next
-  case ("7_7" env v va)
+  case ("9_7" env v va)
   then show ?case sorry
 next
-  case ("7_8" env v va)
+  case ("9_8" env v va)
   then show ?case sorry
 next
-  case ("7_9" env v va vb)
+  case ("9_9" env v va vb)
   then show ?case sorry
 next
-  case ("7_10" env v va vb)
+  case ("9_10" env v va vb)
   then show ?case sorry
 next
-  case ("7_11" env v va vb)
+  case ("9_11" env v va vb)
   then show ?case sorry
 next
-  case ("7_12" env v va vb)
+  case ("9_12" env v va vb)
   then show ?case sorry
 next
-  case ("7_13" env v va vb)
+  case ("9_13" env v va vb)
   then show ?case sorry
 next
-  case ("7_14" env v va)
-  then show ?case sorry
-next
-  case ("7_15" env v va)
-  then show ?case sorry
-next
-  case ("7_16" env v va)
+  case ("9_14" env v va)
   then show ?case sorry
 qed
 
@@ -227,13 +301,13 @@ next
       and tyargs_wk: "list_all (is_well_kinded env) tyArgs"
       and ty_eq: "ty = BabTy_Name loc dtName tyArgs"
       by (auto split: option.splits if_splits prod.splits)
-    from "3.prems"(2) ctor_lookup obtain dt where
-      dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some dt"
-      and args_len: "length (DD_TyArgs dt) = numTyArgs"
+    from "3.prems"(2) ctor_lookup obtain tyVars where
+      dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some tyVars"
+      and tyVars_len: "length tyVars = numTyArgs"
       and not_tyvar: "dtName |\<notin>| TE_TypeVars env"
-      unfolding tyenv_well_formed_def tyenv_ctors_consistent_def by blast
+      using tyenv_ctors_consistent_def tyenv_well_formed_def by blast
     have "is_well_kinded env (BabTy_Name loc dtName tyArgs)"
-      using dt_lookup args_len len_eq not_tyvar tyargs_wk
+      using dt_lookup tyVars_len len_eq not_tyvar tyargs_wk
       by auto
     with ty_eq show ?thesis by simp
   next
@@ -277,53 +351,90 @@ next
   thus ?case
     using result by simp
 next
-  case ("7_1" env v vb)
+  case (7 env mode loc tm)
+  (* BabTm_Allocated: returns BabTy_Bool which is always well-kinded *)
+  from "7.prems"(1) show ?case by (auto split: if_splits option.splits)
+next
+  case (8 env mode loc callTm argTms)
+  (* BabTm_Call: result type is substitute_bab_type tySubst retTy *)
+  (* Extract function name and type args from callTm *)
+  from "8.prems"(1) obtain fnLoc fnName tyArgs where
+    callTm_eq: "callTm = BabTm_Name fnLoc fnName tyArgs"
+    by (cases callTm) (auto split: option.splits)
+  from "8.prems"(1) callTm_eq obtain funDecl where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funDecl"
+    by (auto split: option.splits)
+  from "8.prems"(1) callTm_eq fn_lookup have
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_len: "length tyArgs = length (DF_TyArgs funDecl)"
+    by (auto split: option.splits if_splits)
+  from "8.prems"(1) callTm_eq fn_lookup obtain retTy where
+    ret_some: "DF_ReturnType funDecl = Some retTy" and
+    ty_eq: "ty = substitute_bab_type (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) retTy"
+    by (auto split: option.splits if_splits simp: Let_def)
+  (* From tyenv_well_formed, the function's return type is well-kinded in extended env *)
+  let ?extEnv = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list (DF_TyArgs funDecl) \<rparr>"
+  from "8.prems"(2) fn_lookup ret_some have retTy_wk_ext: "is_well_kinded ?extEnv retTy"
+    unfolding tyenv_well_formed_def tyenv_functions_well_formed_def env_with_tyvars_def
+    by (auto simp: Let_def split: option.splits)
+  (* The extra type variables (DF_TyArgs funDecl) don't shadow datatype names in a well-formed env *)
+  from "8.prems"(2) fn_lookup have extra_disjoint: "fset_of_list (DF_TyArgs funDecl) |\<inter>| fmdom (TE_Datatypes env) = {||}"
+    unfolding tyenv_well_formed_def tyenv_functions_well_formed_def
+    by (auto simp: Let_def)
+  (* The substitution domain covers the extra type variables *)
+  have extra_subset: "fset_of_list (DF_TyArgs funDecl) |\<subseteq>| fmdom (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs))"
+    using tyargs_len by (auto simp: fset_of_list_elem set_zip_leftD)
+  (* The substitution maps to well-kinded types *)
+  have subst_wk: "subst_types_well_kinded env (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs))"
+    using tyargs_wk by (rule subst_types_well_kinded_from_zip)
+  (* Apply is_well_kinded_substitute_across_ext *)
+  from is_well_kinded_substitute_across_ext[OF retTy_wk_ext extra_disjoint extra_subset subst_wk]
+  have "is_well_kinded env (substitute_bab_type (fmap_of_list (zip (DF_TyArgs funDecl) tyArgs)) retTy)"
+    by simp
+  with ty_eq show ?case by simp
+next
+  case ("9_1" env v vb)
   then show ?case sorry
 next
-  case ("7_2" env v vb)
+  case ("9_2" env v vb)
   then show ?case sorry
 next
-  case ("7_3" env v va vb)
+  case ("9_3" env v va vb)
   then show ?case sorry
 next
-  case ("7_4" env v va vb)
+  case ("9_4" env v va vb)
   then show ?case sorry
 next
-  case ("7_5" env v va vb vc)
+  case ("9_5" env v va vb vc)
   then show ?case sorry
 next
-  case ("7_6" env v va vb)
+  case ("9_6" env v va vb)
   then show ?case sorry
 next
-  case ("7_7" env v va)
+  case ("9_7" env v va)
   then show ?case sorry
 next
-  case ("7_8" env v va)
+  case ("9_8" env v va)
   then show ?case sorry
 next
-  case ("7_9" env v va vb)
+  case ("9_9" env v va vb)
   then show ?case sorry
 next
-  case ("7_10" env v va vb)
+  case ("9_10" env v va vb)
   then show ?case sorry
 next
-  case ("7_11" env v va vb)
+  case ("9_11" env v va vb)
   then show ?case sorry
 next
-  case ("7_12" env v va vb)
+  case ("9_12" env v va vb)
   then show ?case sorry
 next
-  case ("7_13" env v va vb)
+  case ("9_13" env v va vb)
   then show ?case sorry
 next
-  case ("7_14" env v va)
-  then show ?case sorry
-next
-  case ("7_15" env v va)
-  then show ?case sorry
-next
-  case ("7_16" env v va)
+  case ("9_14" env v va)
   then show ?case sorry
 qed
+
 
 end

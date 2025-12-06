@@ -1,5 +1,5 @@
 theory Unify
-  imports "../type_system/TypesEqual"
+  imports "../type_system/TypesEqual" "../type_system/TypeProps"
 begin
 
 (* Unification for BabTypes.
@@ -104,6 +104,51 @@ qed
 (* Metavariables in a list of types are finite *)
 lemma finite_list_metavars: "finite (list_metavars tys)"
   unfolding list_metavars_def using finite_type_metavars by auto
+
+(* Ground types have no metavariables *)
+lemma is_ground_no_metavars:
+  "is_ground ty \<Longrightarrow> type_metavars ty = {}"
+proof (induction ty rule: measure_induct_rule[where f=bab_type_size])
+  case (less ty)
+  show ?case
+  proof (cases ty)
+    case (BabTy_Meta n)
+    with less.prems show ?thesis by simp
+  next
+    case (BabTy_Name loc name tyargs)
+    from less.prems BabTy_Name have "list_all is_ground tyargs" by simp
+    hence "\<forall>arg \<in> set tyargs. type_metavars arg = {}"
+      using less.IH BabTy_Name bab_type_smaller_than_list
+      by (auto simp: list_all_iff)
+    then show ?thesis using BabTy_Name by auto
+  next
+    case (BabTy_Tuple loc tys)
+    from less.prems BabTy_Tuple have "list_all is_ground tys" by simp
+    hence "\<forall>t \<in> set tys. type_metavars t = {}"
+      using less.IH BabTy_Tuple bab_type_smaller_than_list
+      by (auto simp: list_all_iff)
+    then show ?thesis using BabTy_Tuple by auto
+  next
+    case (BabTy_Record loc flds)
+    from less.prems BabTy_Record have grnd: "list_all (is_ground \<circ> snd) flds" by simp
+    have "\<forall>f \<in> set flds. type_metavars (snd f) = {}"
+    proof
+      fix f assume "f \<in> set flds"
+      hence "bab_type_size (snd f) < bab_type_size ty"
+        using BabTy_Record bab_type_smaller_than_fieldlist[of "fst f" "snd f" flds] by simp
+      moreover have "is_ground (snd f)"
+        using grnd \<open>f \<in> set flds\<close> by (simp add: list_all_iff)
+      ultimately show "type_metavars (snd f) = {}" using less.IH by blast
+    qed
+    then show ?thesis using BabTy_Record by auto
+  next
+    case (BabTy_Array loc elemTy dims)
+    from less.prems BabTy_Array have "is_ground elemTy" by simp
+    hence "type_metavars elemTy = {}"
+      using less.IH BabTy_Array by simp
+    then show ?thesis using BabTy_Array by simp
+  qed simp_all
+qed
 
 
 (* ========================================================================== *)
@@ -450,40 +495,91 @@ proof -
   thus ?thesis using assms by auto
 qed
 
-(* Substitution on ground types is identity. *)
-lemma apply_subst_ground:
-  "is_ground ty \<Longrightarrow> apply_subst subst ty = ty"
-proof (induction ty rule: is_ground.induct)
-  case (1 n)
-  then show ?case by simp
-next
-  case (2 loc name tyargs)
-  then show ?case
-    by (simp add: list_all_iff map_idI)
-next
-  case (3 loc)
-  then show ?case by simp
-next
-  case (4 loc sign bits)
-  then show ?case by simp
-next
-  case (5 loc)
-  then show ?case by simp
-next
-  case (6 loc)
-  then show ?case by simp
-next
-  case (7 loc types)
-  then show ?case
-    by (simp add: list_all_iff map_idI)
-next
-  case (8 loc flds)
-  then show ?case
-    by (auto simp: list_all_iff intro!: map_idI)
-next
-  case (9 loc ty dims)
-  then show ?case by simp
+(* Substitution is identity when domain is disjoint from type's metavariables *)
+lemma apply_subst_disjoint_id:
+  "type_metavars ty \<inter> fset (fmdom subst) = {} \<Longrightarrow> apply_subst subst ty = ty"
+proof (induction ty rule: measure_induct_rule[where f=bab_type_size])
+  case (less ty)
+  show ?case
+  proof (cases ty)
+    case (BabTy_Meta n)
+    from less.prems BabTy_Meta have "n \<notin> fset (fmdom subst)" by simp
+    then have "fmlookup subst n = None" by (simp add: fmdom_notD)
+    then show ?thesis using BabTy_Meta by simp
+  next
+    case (BabTy_Name loc name tyargs)
+    have "\<forall>arg \<in> set tyargs. apply_subst subst arg = arg"
+    proof
+      fix arg assume "arg \<in> set tyargs"
+      hence "bab_type_size arg < bab_type_size ty"
+        using BabTy_Name bab_type_smaller_than_list by fastforce
+      moreover have "type_metavars arg \<inter> fset (fmdom subst) = {}"
+        using less.prems BabTy_Name \<open>arg \<in> set tyargs\<close> by auto
+      ultimately show "apply_subst subst arg = arg" using less.IH by blast
+    qed
+    then show ?thesis using BabTy_Name by (simp add: map_idI)
+  next
+    case (BabTy_Bool loc)
+    then show ?thesis by simp
+  next
+    case (BabTy_FiniteInt loc sign bits)
+    then show ?thesis by simp
+  next
+    case (BabTy_MathInt loc)
+    then show ?thesis by simp
+  next
+    case (BabTy_MathReal loc)
+    then show ?thesis by simp
+  next
+    case (BabTy_Tuple loc tys)
+    have "\<forall>t \<in> set tys. apply_subst subst t = t"
+    proof
+      fix t assume "t \<in> set tys"
+      hence "bab_type_size t < bab_type_size ty"
+        using BabTy_Tuple bab_type_smaller_than_list by fastforce
+      moreover have "type_metavars t \<inter> fset (fmdom subst) = {}"
+        using less.prems BabTy_Tuple \<open>t \<in> set tys\<close> by auto
+      ultimately show "apply_subst subst t = t" using less.IH by blast
+    qed
+    then show ?thesis using BabTy_Tuple by (simp add: map_idI)
+  next
+    case (BabTy_Record loc flds)
+    have "\<forall>f \<in> set flds. apply_subst subst (snd f) = snd f"
+    proof
+      fix f assume "f \<in> set flds"
+      hence "bab_type_size (snd f) < bab_type_size ty"
+        using BabTy_Record bab_type_smaller_than_fieldlist
+        by (metis bab_type_size.simps(7) plus_1_eq_Suc prod.exhaust_sel) 
+      moreover have "type_metavars (snd f) \<inter> fset (fmdom subst) = {}"
+        using less.prems BabTy_Record \<open>f \<in> set flds\<close> by auto
+      ultimately show "apply_subst subst (snd f) = snd f" using less.IH by blast
+    qed
+    then show ?thesis using BabTy_Record by (auto intro!: map_idI)
+  next
+    case (BabTy_Array loc elemTy dims)
+    have "bab_type_size elemTy < bab_type_size ty"
+      using BabTy_Array by simp
+    moreover have "type_metavars elemTy \<inter> fset (fmdom subst) = {}"
+      using less.prems BabTy_Array by simp
+    ultimately have "apply_subst subst elemTy = elemTy" using less.IH by blast
+    then show ?thesis using BabTy_Array by simp
+  qed
 qed
+
+(* Substitution on ground types is identity. *)
+corollary apply_subst_ground:
+  "is_ground ty \<Longrightarrow> apply_subst subst ty = ty"
+  using is_ground_no_metavars apply_subst_disjoint_id by blast
+
+(* In particular, substitution on finite integer types is identity *)
+corollary apply_subst_finite_integer:
+  "is_finite_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
+  using finite_integer_type_is_ground apply_subst_ground by blast
+
+(* Finite integer property is preserved by substitution *)
+lemma is_finite_integer_type_apply_subst:
+  "is_finite_integer_type ty \<Longrightarrow> is_finite_integer_type (apply_subst subst ty)"
+  using apply_subst_finite_integer by simp
 
 
 (* ========================================================================== *)
@@ -570,6 +666,61 @@ lemma fmlookup_compose_subst_None1:
   "fmlookup s1 n = None \<Longrightarrow>
    fmlookup (compose_subst s2 s1) n = fmlookup s2 n"
   by (simp add: fmlookup_compose_subst)
+
+(* Empty substitution is identity for composition *)
+lemma compose_subst_empty_left [simp]:
+  "compose_subst fmempty s = s"
+  unfolding compose_subst_def
+  by (simp add: fmap.map_ident_strong)
+
+lemma compose_subst_empty_right [simp]:
+  "compose_subst s fmempty = s"
+  unfolding compose_subst_def
+  by (simp add: fmap.map_ident_strong)
+
+(* Composition of substitutions is associative *)
+lemma compose_subst_assoc:
+  "compose_subst s3 (compose_subst s2 s1) = compose_subst (compose_subst s3 s2) s1"
+proof (intro fmap_ext)
+  fix n
+  show "fmlookup (compose_subst s3 (compose_subst s2 s1)) n =
+        fmlookup (compose_subst (compose_subst s3 s2) s1) n"
+  proof (cases "fmlookup s1 n")
+    case None
+    \<comment> \<open>LHS: lookup in compose_subst s3 (compose_subst s2 s1)\<close>
+    have lhs: "fmlookup (compose_subst s3 (compose_subst s2 s1)) n =
+               (case fmlookup s2 n of
+                  Some ty \<Rightarrow> Some (apply_subst s3 ty)
+                | None \<Rightarrow> fmlookup s3 n)"
+      using None by (simp add: fmlookup_compose_subst)
+    \<comment> \<open>RHS: lookup in compose_subst (compose_subst s3 s2) s1\<close>
+    have rhs: "fmlookup (compose_subst (compose_subst s3 s2) s1) n =
+               fmlookup (compose_subst s3 s2) n"
+      using None by (simp add: fmlookup_compose_subst)
+    have rhs': "fmlookup (compose_subst s3 s2) n =
+                (case fmlookup s2 n of
+                   Some ty \<Rightarrow> Some (apply_subst s3 ty)
+                 | None \<Rightarrow> fmlookup s3 n)"
+      by (simp add: fmlookup_compose_subst)
+    show ?thesis using lhs rhs rhs' by simp
+  next
+    case (Some ty1)
+    \<comment> \<open>LHS: first lookup in compose_subst s2 s1, then apply s3\<close>
+    have step1: "fmlookup (compose_subst s2 s1) n = Some (apply_subst s2 ty1)"
+      using Some by (simp add: fmlookup_compose_subst)
+    have lhs: "fmlookup (compose_subst s3 (compose_subst s2 s1)) n =
+               Some (apply_subst s3 (apply_subst s2 ty1))"
+      using step1 by (simp add: fmlookup_compose_subst)
+    \<comment> \<open>RHS: lookup in s1, then apply compose_subst s3 s2\<close>
+    have rhs: "fmlookup (compose_subst (compose_subst s3 s2) s1) n =
+               Some (apply_subst (compose_subst s3 s2) ty1)"
+      using Some by (simp add: fmlookup_compose_subst)
+    \<comment> \<open>Now show these are equal using compose_subst_correct\<close>
+    have eq: "apply_subst s3 (apply_subst s2 ty1) = apply_subst (compose_subst s3 s2) ty1"
+      by (simp add: compose_subst_correct)
+    show ?thesis using lhs rhs eq by simp
+  qed
+qed
 
 (* "Groundness is preserved under composition": 
    Once a type becomes ground (under some substitution), it will remain ground even

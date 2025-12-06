@@ -546,4 +546,49 @@ next
 qed (simp_all)
 
 
+(* Composition of substitutions preserves well-kindedness:
+   If both substitutions map metavariables to well-kinded types,
+   then the composed substitution also maps to well-kinded types. *)
+(* See also: is_well_kinded_apply_subst in SubstituteTypes.thy *)
+lemma compose_subst_preserves_well_kinded:
+  assumes "\<forall>ty \<in> fmran' s1. is_well_kinded env ty"
+      and "\<forall>ty \<in> fmran' s2. is_well_kinded env ty"
+    shows "\<forall>ty \<in> fmran' (compose_subst s2 s1). is_well_kinded env ty"
+proof
+  fix ty assume "ty \<in> fmran' (compose_subst s2 s1)"
+  from compose_subst_range[OF this] show "is_well_kinded env ty"
+  proof
+    assume "ty \<in> fmran' s2"
+    thus ?thesis using assms(2) by blast
+  next
+    assume "\<exists>ty1 \<in> fmran' s1. ty = apply_subst s2 ty1"
+    then obtain ty1 where "ty1 \<in> fmran' s1" and "ty = apply_subst s2 ty1" by auto
+    from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_well_kinded env ty1" by blast
+    thus ?thesis using \<open>ty = apply_subst s2 ty1\<close> assms(2) is_well_kinded_apply_subst by blast
+  qed
+qed
+
+(* Composition of substitutions preserves runtime types:
+   If both substitutions map metavariables to runtime types,
+   then the composed substitution also maps to runtime types. *)
+(* See also: is_runtime_type_apply_subst in SubstituteTypes.thy *)
+lemma compose_subst_preserves_runtime:
+  assumes "\<forall>ty \<in> fmran' s1. is_runtime_type ty"
+      and "\<forall>ty \<in> fmran' s2. is_runtime_type ty"
+    shows "\<forall>ty \<in> fmran' (compose_subst s2 s1). is_runtime_type ty"
+proof
+  fix ty assume "ty \<in> fmran' (compose_subst s2 s1)"
+  from compose_subst_range[OF this] show "is_runtime_type ty"
+  proof
+    assume "ty \<in> fmran' s2"
+    thus ?thesis using assms(2) by blast
+  next
+    assume "\<exists>ty1 \<in> fmran' s1. ty = apply_subst s2 ty1"
+    then obtain ty1 where "ty1 \<in> fmran' s1" and "ty = apply_subst s2 ty1" by auto
+    from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_runtime_type ty1" by blast
+    thus ?thesis using \<open>ty = apply_subst s2 ty1\<close> assms(2) is_runtime_type_apply_subst by blast
+  qed
+qed
+
+
 end

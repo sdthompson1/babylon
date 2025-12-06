@@ -116,9 +116,32 @@ next
 qed
 
 
-(* If elab_type succeeds in NotGhost mode, the result is a runtime type.
-   elab_type explicitly checks is_runtime_type and returns TyErr_NonRuntimeTypeArg
-   if the check fails in NotGhost mode. *)
+(* If elab_type_list succeeds, the result has the same length as the input. *)
+lemma elab_type_list_length:
+  "elab_type_list fuel typedefs env ghost tys = Inr tys' \<Longrightarrow> length tys' = length tys"
+proof (induction fuel arbitrary: tys tys')
+  case 0
+  then show ?case by simp
+next
+  case (Suc fuel)
+  then show ?case
+  proof (cases tys)
+    case Nil
+    then show ?thesis using Suc.prems by simp
+  next
+    case (Cons ty tys_rest)
+    from Suc.prems Cons obtain ty' tys_rest' where
+      head_ok: "elab_type (Suc fuel) typedefs env ghost ty = Inr ty'"
+      and tail_ok: "elab_type_list fuel typedefs env ghost tys_rest = Inr tys_rest'"
+      and result: "tys' = ty' # tys_rest'"
+      by (auto split: sum.splits)
+    from Suc.IH[OF tail_ok] have "length tys_rest' = length tys_rest" .
+    then show ?thesis using Cons result by simp
+  qed
+qed
+
+
+(* If elab_type succeeds in NotGhost mode, the result is a runtime type. *)
 lemma elab_type_is_runtime:
   "elab_type fuel typedefs env NotGhost ty = Inr ty' \<Longrightarrow> is_runtime_type ty'"
   "elab_type_list fuel typedefs env NotGhost tys = Inr tys' \<Longrightarrow> list_all is_runtime_type tys'"
