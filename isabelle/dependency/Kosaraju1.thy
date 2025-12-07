@@ -1,5 +1,5 @@
 theory Kosaraju1
-  imports "../base/Graphs"
+  imports Graphs
 begin
 
 (* Kosaraju's algorithm for finding strongly connected components: Part 1. *)
