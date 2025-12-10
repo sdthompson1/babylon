@@ -1,43 +1,31 @@
 theory TypeSoundness
-  imports "ValueTyping"
+  imports StateMatchesEnv "../core/CoreTypecheck"
 begin
 
 (*-----------------------------------------------------------------------------*)
-(* Definition of soundness for interpreter results *)
+(* Definitions for type-soundness of interpreter results *)
 (*-----------------------------------------------------------------------------*)
 
-(* Type soundness means that evaluating a well-typed term will always either:
+(* Type soundness for terms means that evaluating a well-typed term will either:
     - Succeed with a value of the correct type
-    - Fail with a RuntimeError
-    - Run out of fuel
-   It will never:
-    - Succeed with a value that doesn't match the type of the term
-    - Fail with a TypeError
-*)
+    - Fail with RuntimeError
+    - Fail with InsufficientFuel
+   It will not:
+    - Succeed with a value of the wrong type
+    - Fail with TypeError *)
 
-definition is_sound_result :: "BabTyEnv \<Rightarrow> BabType \<Rightarrow> BabValue BabInterpResult \<Rightarrow> bool" where
-  "is_sound_result env ty result \<equiv>
-    (case result of
-       BIR_Success val \<Rightarrow> value_has_type env val ty
-     | BIR_TypeError \<Rightarrow> False
-     | BIR_RuntimeError \<Rightarrow> True
-     | BIR_InsufficientFuel \<Rightarrow> True)"
+fun sound_error_result :: "InterpError \<Rightarrow> bool" where
+  "sound_error_result TypeError = False"
+| "sound_error_result RuntimeError = True"
+| "sound_error_result InsufficientFuel = True"
 
-lemma is_sound_result_Success [simp]:
-  "is_sound_result env ty (BIR_Success val) = value_has_type env val ty"
-  unfolding is_sound_result_def by simp
+fun sound_term_result :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> InterpError + CoreValue \<Rightarrow> bool" where
+  "sound_term_result env ty (Inl err) = sound_error_result err"
+| "sound_term_result env ty (Inr val) = value_has_type env val ty"
 
-lemma is_sound_result_TypeError [simp]:
-  "\<not> is_sound_result env ty BIR_TypeError"
-  unfolding is_sound_result_def by simp
-
-lemma is_sound_result_RuntimeError [simp]:
-  "is_sound_result env ty BIR_RuntimeError"
-  unfolding is_sound_result_def by simp
-
-lemma is_sound_result_InsufficientFuel [simp]:
-  "is_sound_result env ty BIR_InsufficientFuel"
-  unfolding is_sound_result_def by simp
+fun sound_term_results :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> InterpError + CoreValue list \<Rightarrow> bool" where
+  "sound_term_results env types (Inl err) = sound_error_result err"
+| "sound_term_results env types (Inr vals) = list_all2 (value_has_type env) vals types"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -54,14 +42,14 @@ lemma int_complement_fits:
 lemma type_soundness_cast:
   assumes state_env: "state_matches_env state env"
     and wf_env: "tyenv_well_formed env"
-    and IH: "\<And>tm' ty'. bab_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
-                        is_sound_result env ty' (interp_bab_term fuel state tm')"
-    and typing: "bab_term_type env NotGhost (BabTm_Cast loc target_ty operand) = Some ty"
-  shows "is_sound_result env ty (interp_bab_term (Suc fuel) state (BabTm_Cast loc target_ty operand))"
+    and IH: "\<And>tm' ty'. core_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
+                        sound_term_result env ty' (interp_term fuel state tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_Cast target_ty operand) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_Cast target_ty operand))"
 proof -
   (* Extract facts from typing *)
   from typing obtain operand_ty where
-    operand_typing: "bab_term_type env NotGhost operand = Some operand_ty"
+    operand_typing: "core_term_type env NotGhost operand = Some operand_ty"
     and operand_is_int: "is_integer_type operand_ty"
     and target_is_int: "is_integer_type target_ty"
     and ty_eq: "ty = target_ty"
@@ -69,172 +57,49 @@ proof -
 
   (* Apply IH to operand *)
   from IH[OF operand_typing]
-  have operand_sound: "is_sound_result env operand_ty (interp_bab_term fuel state operand)"
+  have operand_sound: "sound_term_result env operand_ty (interp_term fuel state operand)"
     by simp
 
   (* Case split on operand result *)
   show ?thesis
-  proof (cases "interp_bab_term fuel state operand")
-    case (BIR_Success operand_val)
+  proof (cases "interp_term fuel state operand")
+    case (Inr operand_val)
     (* Operand succeeded - extract type information *)
-    from operand_sound BIR_Success
+    from operand_sound Inr
     have operand_typed: "value_has_type env operand_val operand_ty"
       by simp
 
-    (* Since operand has an integer type, value must be BV_FiniteInt or BV_MathInt *)
-    from operand_typed operand_is_int
-    consider (FiniteInt) src_sign src_bits i where "operand_val = BV_FiniteInt src_sign src_bits i"
-           | (MathInt) i where "operand_val = BV_MathInt i"
-      using value_has_integer_type_cases by blast
-    then show ?thesis
-    proof cases
-      case (FiniteInt src_sign src_bits i)
-      (* Target type must be a finite integer type (from is_integer_type + runtime type check) *)
-      from target_is_int obtain loc' tgt_sign tgt_bits where
-        target_ty_def: "target_ty = BabTy_FiniteInt loc' tgt_sign tgt_bits"
-        using BIR_Success FiniteInt is_integer_type.elims(2) operand_typing typing by fastforce
+    (* Operand must be a finite integer type *)
+    obtain src_sign src_bits i where
+      operand_val_def: "operand_val = CV_FiniteInt src_sign src_bits i"
+      using value_has_type_FiniteInt
+      by (metis is_integer_type.elims(2) is_runtime_type.simps(4) operand_is_int operand_typed
+          value_has_type_runtime)
 
-      (* Case split on whether cast succeeds *)
-      show ?thesis
-      proof (cases "int_fits tgt_sign tgt_bits i")
-        case True
-        (* Cast succeeds - value has correct type *)
-        from BIR_Success FiniteInt target_ty_def True
-        have "interp_bab_term (Suc fuel) state (BabTm_Cast loc target_ty operand) =
-              BIR_Success (BV_FiniteInt tgt_sign tgt_bits i)"
-          by auto
-        with ty_eq target_ty_def True show ?thesis by auto
-      next
-        case False
-        (* Cast fails with RuntimeError *)
-        from BIR_Success FiniteInt target_ty_def False
-        have "interp_bab_term (Suc fuel) state (BabTm_Cast loc target_ty operand) = BIR_RuntimeError"
-          by auto
-        thus ?thesis by simp
-      qed
-    next
-      case (MathInt i)
-      (* MathInt is not a runtime type, so this contradicts bab_term_type_runtime_invariant *)
-      from operand_typed MathInt obtain loc' where "operand_ty = BabTy_MathInt loc'"
-        by (cases operand_ty; auto)
-      then have "\<not> is_runtime_type operand_ty"
-        by simp
-      thus ?thesis
-        using bab_term_type_runtime_invariant operand_typing wf_env by auto
-    qed
-  next
-    case BIR_TypeError
-    (* Operand returned TypeError - contradicts soundness of operand *)
-    from operand_sound BIR_TypeError show ?thesis by simp
-  next
-    case BIR_RuntimeError
-    from BIR_RuntimeError show ?thesis by simp
-  next
-    case BIR_InsufficientFuel
-    from BIR_InsufficientFuel show ?thesis by simp
-  qed
-qed
+    (* Target type must be a finite integer type (from is_integer_type + runtime type check) *)
+    from target_is_int obtain tgt_sign tgt_bits where
+      target_ty_def: "target_ty = CoreTy_FiniteInt tgt_sign tgt_bits"
+        using Inr is_integer_type.elims(2) operand_typing typing by fastforce
 
-(* Type soundness for if-then-else *)
-lemma type_soundness_if:
-  assumes state_env: "state_matches_env state env"
-    and wf_env: "tyenv_well_formed env"
-    and IH: "\<And>tm' ty'. bab_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
-                        is_sound_result env ty' (interp_bab_term fuel state tm')"
-    and typing: "bab_term_type env NotGhost (BabTm_If loc cond thenTm elseTm) = Some ty"
-  shows "is_sound_result env ty (interp_bab_term (Suc fuel) state (BabTm_If loc cond thenTm elseTm))"
-proof -
-  (* Extract facts from typing - the typechecker only succeeds if all these hold *)
-  obtain cond_ty where cond_typing: "bab_term_type env NotGhost cond = Some cond_ty"
-    using typing by (auto split: option.splits)
-  obtain bloc where cond_is_bool: "cond_ty = BabTy_Bool bloc"
-    using typing cond_typing by (auto split: BabType.splits)
-  obtain then_ty else_ty where
-    then_typing: "bab_term_type env NotGhost thenTm = Some then_ty"
-    and else_typing: "bab_term_type env NotGhost elseTm = Some else_ty"
-    using typing cond_typing cond_is_bool by (auto split: option.splits)
-  have types_match: "types_equal then_ty else_ty"
-    using typing cond_typing cond_is_bool then_typing else_typing by (auto split: if_splits)
-  have ty_eq: "ty = then_ty"
-    using typing cond_typing cond_is_bool then_typing else_typing types_match by auto
-
-  (* Apply IH to subterms *)
-  from IH[OF cond_typing] have cond_sound:
-    "is_sound_result env cond_ty (interp_bab_term fuel state cond)" .
-  from IH[OF then_typing] have then_sound:
-    "is_sound_result env then_ty (interp_bab_term fuel state thenTm)" .
-  from IH[OF else_typing] have else_sound:
-    "is_sound_result env else_ty (interp_bab_term fuel state elseTm)" .
-
-  (* Case split on condition result *)
-  show ?thesis
-  proof (cases "interp_bab_term fuel state cond")
-    case (BIR_Success cond_val)
-    from cond_sound BIR_Success have cond_typed: "value_has_type env cond_val cond_ty"
-      by simp
-
-    (* Condition must be a bool *)
-    from cond_is_bool cond_typed obtain b where cond_val_def: "cond_val = BV_Bool b"
-      using value_has_type_Bool by blast
-
-    (* Case split on boolean value *)
+    (* Case split on whether cast succeeds *)
     show ?thesis
-    proof (cases b)
+    proof (cases "int_fits tgt_sign tgt_bits i")
       case True
-      (* Condition is true, evaluate then branch *)
-      from BIR_Success cond_val_def True
-      have interp_eq: "interp_bab_term (Suc fuel) state (BabTm_If loc cond thenTm elseTm) =
-                       interp_bab_term fuel state thenTm"
-        by auto
-      from then_sound ty_eq interp_eq show ?thesis by simp
+      (* Cast succeeds - value has correct type *)
+      have "interp_term (Suc fuel) state (CoreTm_Cast target_ty operand) =
+            Inr (CV_FiniteInt tgt_sign tgt_bits i)"
+        using Inr target_ty_def True operand_val_def by simp        
+      with ty_eq target_ty_def True show ?thesis by auto
     next
       case False
-      (* Condition is false, evaluate else branch *)
-      from BIR_Success cond_val_def False
-      have interp_eq: "interp_bab_term (Suc fuel) state (BabTm_If loc cond thenTm elseTm) =
-                       interp_bab_term fuel state elseTm"
-        by auto
-
-      (* Need to show result has type then_ty, but else branch has type else_ty *)
-      show ?thesis
-      proof (cases "interp_bab_term fuel state elseTm")
-        case (BIR_Success val)
-        from else_sound BIR_Success have val_has_else_ty: "value_has_type env val else_ty"
-          by simp
-
-        (* Use types_equal to convert from else_ty to then_ty *)
-        from types_match have else_ty_eq_then_ty: "types_equal else_ty then_ty"
-          using types_equal_symmetric by metis
-
-        (* else_ty is well-kinded because bab_term_type produces well-kinded types *)
-        from else_typing wf_env have else_ty_wk: "is_well_kinded env else_ty"
-          by (rule bab_term_type_well_kinded)
-
-        (* Apply value_has_type_types_equal *)
-        from val_has_else_ty else_ty_eq_then_ty wf_env else_ty_wk
-        have "value_has_type env val then_ty"
-          by (rule value_has_type_types_equal)
-        with ty_eq interp_eq BIR_Success show ?thesis by simp
-      next
-        case BIR_TypeError
-        from else_sound BIR_TypeError show ?thesis by simp
-      next
-        case BIR_RuntimeError
-        from interp_eq BIR_RuntimeError show ?thesis by simp
-      next
-        case BIR_InsufficientFuel
-        from interp_eq BIR_InsufficientFuel show ?thesis by simp
-      qed
+      (* Cast fails with RuntimeError *)
+      have "interp_term (Suc fuel) state (CoreTm_Cast target_ty operand) = Inl RuntimeError"
+        using Inr target_ty_def False operand_val_def by simp
+      thus ?thesis by simp
     qed
   next
-    case BIR_TypeError
-    from cond_sound BIR_TypeError show ?thesis by simp
-  next
-    case BIR_RuntimeError
-    from BIR_RuntimeError show ?thesis by simp
-  next
-    case BIR_InsufficientFuel
-    from BIR_InsufficientFuel show ?thesis by simp
+    case (Inl err)
+    then show ?thesis using operand_sound by auto
   qed
 qed
 
@@ -242,276 +107,151 @@ qed
 lemma type_soundness_unop:
   assumes state_env: "state_matches_env state env"
     and wf_env: "tyenv_well_formed env"
-    and IH: "\<And>tm' ty'. bab_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
-                        is_sound_result env ty' (interp_bab_term fuel state tm')"
-    and typing: "bab_term_type env NotGhost (BabTm_Unop loc unop operand) = Some ty"
-  shows "is_sound_result env ty (interp_bab_term (Suc fuel) state (BabTm_Unop loc unop operand))"
+    and IH: "\<And>tm' ty'. core_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
+                        sound_term_result env ty' (interp_term fuel state tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_Unop unop operand) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_Unop unop operand))"
 proof (cases unop)
-  case BabUnop_Negate
-  (* Negate: operand must be signed integer, result has same type *)
-  from BabUnop_Negate typing obtain operand_ty where
-    operand_typing: "bab_term_type env NotGhost operand = Some operand_ty"
-    and is_int: "is_integer_type operand_ty"
-    and ty_eq: "ty = operand_ty"
-    by (auto simp: signed_integer_type_is_integer_type split: option.splits if_splits)
-
-  from IH[OF operand_typing] have operand_sound:
-    "is_sound_result env operand_ty (interp_bab_term fuel state operand)" .
-
-  show ?thesis
-  proof (cases "interp_bab_term fuel state operand")
-    case (BIR_Success operand_val)
-    from operand_sound BIR_Success have operand_typed: "value_has_type env operand_val operand_ty"
-      by simp
-
-    (* Since operand has an integer type, value must be BV_FiniteInt or BV_MathInt *)
-    from operand_typed is_int
-    consider (FiniteInt) sign bits i where "operand_val = BV_FiniteInt sign bits i"
-           | (MathInt) i where "operand_val = BV_MathInt i"
-      using value_has_integer_type_cases by blast
-    then show ?thesis
-    proof cases
-      case (FiniteInt sign bits i)
-      (* Since operand_ty is an integer type and value has that type, extract type info *)
-      from operand_typed FiniteInt obtain loc' sign' bits' where operand_ty_def:
-        "operand_ty = BabTy_FiniteInt loc' sign' bits'"
-        and sign_eq: "sign = sign'" and bits_eq: "bits = bits'"
-        and fits: "int_fits sign bits i"
-        by (cases operand_ty; auto)
-
-      show ?thesis
-      proof (cases "int_fits sign bits (-i)")
-        case True
-        (* Negation succeeds *)
-        from BabUnop_Negate BIR_Success FiniteInt True
-        have "interp_bab_term (Suc fuel) state (BabTm_Unop loc unop operand) =
-              BIR_Success (BV_FiniteInt sign bits (-i))"
-          by auto
-        with ty_eq operand_ty_def sign_eq bits_eq True show ?thesis by auto
-      next
-        case False
-        (* Negation overflows - RuntimeError *)
-        from BabUnop_Negate BIR_Success FiniteInt False
-        have "interp_bab_term (Suc fuel) state (BabTm_Unop loc unop operand) = BIR_RuntimeError"
-          by auto
-        thus ?thesis by simp
-      qed
-    next
-      case (MathInt i)
-      (* MathInt is not a runtime type - contradiction *)
-      from operand_typed MathInt obtain loc' where "operand_ty = BabTy_MathInt loc'"
-        by (cases operand_ty; auto)
-      then have "\<not> is_runtime_type operand_ty"
-        by simp
-      thus ?thesis
-        using bab_term_type_runtime_invariant operand_typing wf_env by auto
-    qed
-  next
-    case BIR_TypeError
-    from operand_sound BIR_TypeError show ?thesis by simp
-  next
-    case BIR_RuntimeError
-    from BabUnop_Negate BIR_RuntimeError show ?thesis by simp
-  next
-    case BIR_InsufficientFuel
-    from BabUnop_Negate BIR_InsufficientFuel show ?thesis by simp
-  qed
-next
-  case BabUnop_Complement
-  (* Complement: operand must be finite integer, result has same type *)
-  from BabUnop_Complement typing obtain operand_ty where
-    operand_typing: "bab_term_type env NotGhost operand = Some operand_ty"
-    and is_int: "is_integer_type operand_ty"
-    and ty_eq: "ty = operand_ty"
-    by (auto simp: finite_integer_type_is_integer_type split: option.splits if_splits)
-
-  from IH[OF operand_typing] have operand_sound:
-    "is_sound_result env operand_ty (interp_bab_term fuel state operand)" .
-
-  show ?thesis
-  proof (cases "interp_bab_term fuel state operand")
-    case (BIR_Success operand_val)
-    from operand_sound BIR_Success have operand_typed: "value_has_type env operand_val operand_ty"
-      by simp
-
-    (* Since operand has an integer type, value must be BV_FiniteInt or BV_MathInt *)
-    from operand_typed is_int
-    consider (FiniteInt) sign bits i where "operand_val = BV_FiniteInt sign bits i"
-           | (MathInt) i where "operand_val = BV_MathInt i"
-      using value_has_integer_type_cases by blast
-    then show ?thesis
-    proof cases
-      case (FiniteInt sign bits i)
-      from operand_typed FiniteInt obtain loc' sign' bits' where operand_ty_def:
-        "operand_ty = BabTy_FiniteInt loc' sign' bits'"
-        and sign_eq: "sign = sign'" and bits_eq: "bits = bits'"
-        and fits: "int_fits sign bits i"
-        by (cases operand_ty; auto)
-
-      (* Complement always succeeds and fits *)
-      from BabUnop_Complement BIR_Success FiniteInt
-      have interp_eq: "interp_bab_term (Suc fuel) state (BabTm_Unop loc unop operand) =
-            BIR_Success (BV_FiniteInt sign bits (int_complement sign bits i))"
-        by auto
-
-      have comp_fits: "int_fits sign bits (int_complement sign bits i)"
-        using fits by (rule int_complement_fits)
-
-      from interp_eq ty_eq operand_ty_def sign_eq bits_eq comp_fits
-      show ?thesis by auto
-    next
-      case (MathInt i)
-      (* MathInt is not a runtime type - contradiction *)
-      from operand_typed MathInt obtain loc' where "operand_ty = BabTy_MathInt loc'"
-        by (cases operand_ty; auto)
-      then have "\<not> is_runtime_type operand_ty"
-        by simp
-      thus ?thesis
-        using bab_term_type_runtime_invariant operand_typing wf_env by auto
-    qed
-  next
-    case BIR_TypeError
-    from operand_sound BIR_TypeError show ?thesis by simp
-  next
-    case BIR_RuntimeError
-    from BabUnop_Complement BIR_RuntimeError show ?thesis by simp
-  next
-    case BIR_InsufficientFuel
-    from BabUnop_Complement BIR_InsufficientFuel show ?thesis by simp
-  qed
-next
-  case BabUnop_Not
-  (* Not: operand must be bool, result is bool *)
-  from BabUnop_Not typing obtain operand_ty bloc where
-    operand_typing: "bab_term_type env NotGhost operand = Some operand_ty"
-    and operand_is_bool: "operand_ty = BabTy_Bool bloc"
-    and ty_eq: "ty = operand_ty"
-    by (auto split: option.splits BabType.splits)
-
-  from IH[OF operand_typing] have operand_sound:
-    "is_sound_result env operand_ty (interp_bab_term fuel state operand)" .
-
-  show ?thesis
-  proof (cases "interp_bab_term fuel state operand")
-    case (BIR_Success operand_val)
-    from operand_sound BIR_Success have operand_typed: "value_has_type env operand_val operand_ty"
-      by simp
-
-    from operand_is_bool operand_typed obtain b where operand_val_def: "operand_val = BV_Bool b"
-      using value_has_type_Bool by blast
-
-    from BabUnop_Not BIR_Success operand_val_def
-    have "interp_bab_term (Suc fuel) state (BabTm_Unop loc unop operand) = BIR_Success (BV_Bool (\<not>b))"
-      by auto
-    with ty_eq operand_is_bool show ?thesis by auto
-  next
-    case BIR_TypeError
-    from operand_sound BIR_TypeError show ?thesis by simp
-  next
-    case BIR_RuntimeError
-    from BabUnop_Not BIR_RuntimeError show ?thesis by simp
-  next
-    case BIR_InsufficientFuel
-    from BabUnop_Not BIR_InsufficientFuel show ?thesis by simp
-  qed
-qed
-
-
-(* Soundness of exec_function_call - assumed for now, to be proved later
-   together with interp_bab_term soundness via mutual induction *)
-lemma exec_function_call_sound:
-  assumes state_env: "state_matches_env state env"
-    and wf_env: "tyenv_well_formed env"
-    and typing: "bab_term_type env NotGhost (BabTm_Call loc fnTm argTms) = Some ty"
-  shows "case exec_function_call fuel state (BabTm_Call loc fnTm argTms) of
-           BIR_Success (_, Some retVal) \<Rightarrow> value_has_type env retVal ty
-         | BIR_Success (_, None) \<Rightarrow> False  \<comment> \<open>Should have return value since ty exists\<close>
-         | BIR_TypeError \<Rightarrow> False
-         | BIR_RuntimeError \<Rightarrow> True
-         | BIR_InsufficientFuel \<Rightarrow> True"
-  sorry
-
-(* Type soundness for function calls *)
-lemma type_soundness_call:
-  assumes state_env: "state_matches_env state env"
-    and wf_env: "tyenv_well_formed env"
-    and IH: "\<And>tm' ty'. bab_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
-                        is_sound_result env ty' (interp_bab_term fuel state tm')"
-    and typing: "bab_term_type env NotGhost (BabTm_Call loc fnTm argTms) = Some ty"
-  shows "is_sound_result env ty (interp_bab_term (Suc fuel) state (BabTm_Call loc fnTm argTms))"
-proof -
-  (* Extract function name and type args from fnTm *)
-  from typing obtain fnLoc fnName tyArgs where
-    fnTm_eq: "fnTm = BabTm_Name fnLoc fnName tyArgs"
-    by (cases fnTm) (auto split: option.splits)
-
-  (* Get function declaration from type environment *)
-  from typing fnTm_eq obtain funDecl where
-    fn_lookup_env: "fmlookup (TE_Functions env) fnName = Some funDecl"
-    by (auto split: option.splits)
-
-  (* Function lookup in state equals function lookup in env *)
-  have fn_lookup_state: "fmlookup (BS_Functions state) fnName = Some funDecl"
-    using function_lookup_eq[OF state_env] fn_lookup_env by simp
-
-  (* Extract conditions from typing *)
-  from typing fnTm_eq fn_lookup_env have
-    not_impure: "\<not> DF_Impure funDecl" and
-    no_ref_args: "\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (DF_TmArgs funDecl)"
+  case CoreUnop_Negate
+  (* Extract facts from typing *)
+  from typing CoreUnop_Negate have
+    operand_typing: "core_term_type env NotGhost operand = Some ty"
+    and signed_numeric: "is_signed_numeric_type ty"
     by (auto split: option.splits if_splits)
 
-  (* Show is_pure_fun_term state fnTm *)
-  have is_pure: "is_pure_fun_term state fnTm"
-    using fnTm_eq fn_lookup_state no_ref_args not_impure
+  (* Apply IH to operand *)
+  from IH[OF operand_typing]
+  have operand_sound: "sound_term_result env ty (interp_term fuel state operand)"
     by simp
 
-  (* The interpreter calls exec_function_call when is_pure_fun_term holds *)
-  have interp_eq: "interp_bab_term (Suc fuel) state (BabTm_Call loc fnTm argTms) =
-    (case exec_function_call fuel state (BabTm_Call loc fnTm argTms) of
-       BIR_Success (_, Some retVal) \<Rightarrow> BIR_Success retVal
-     | BIR_Success (_, None) \<Rightarrow> BIR_TypeError
-     | err \<Rightarrow> convert_error err)"
-    using is_pure by simp
-
-  (* Use exec_function_call_sound *)
-  from exec_function_call_sound[OF state_env wf_env typing]
-  have call_sound: "case exec_function_call fuel state (BabTm_Call loc fnTm argTms) of
-           BIR_Success (_, Some retVal) \<Rightarrow> value_has_type env retVal ty
-         | BIR_Success (_, None) \<Rightarrow> False
-         | BIR_TypeError \<Rightarrow> False
-         | BIR_RuntimeError \<Rightarrow> True
-         | BIR_InsufficientFuel \<Rightarrow> True" .
-
-  (* Case split on the result of exec_function_call *)
+  (* Case split on operand result *)
   show ?thesis
-  proof (cases "exec_function_call fuel state (BabTm_Call loc fnTm argTms)")
-    case (BIR_Success result)
-    obtain newState maybeRetVal where result_eq: "result = (newState, maybeRetVal)"
-      by (cases result) auto
+  proof (cases "interp_term fuel state operand")
+    case (Inl err)
+    (* Operand failed - propagate the sound error *)
+    then show ?thesis using operand_sound by auto
+  next
+    case (Inr operand_val)
+    (* Operand succeeded - extract type information *)
+    from operand_sound Inr
+    have operand_typed: "value_has_type env operand_val ty"
+      by simp
+
+    (* Since ty is signed_numeric and runtime (from value_has_type),
+       it must be CoreTy_FiniteInt Signed bits for some bits *)
+    from value_has_type_runtime[OF operand_typed]
+    have ty_runtime: "is_runtime_type ty" .
+
+    (* is_signed_numeric_type + is_runtime_type => CoreTy_FiniteInt Signed _ *)
+    from signed_numeric ty_runtime obtain bits where
+      ty_def: "ty = CoreTy_FiniteInt Signed bits"
+      using is_runtime_type.simps(4,5) is_signed_numeric_type.elims(2) by blast
+
+    (* So the value must be CV_FiniteInt Signed bits i *)
+    from operand_typed ty_def obtain i where
+      operand_val_def: "operand_val = CV_FiniteInt Signed bits i"
+      and i_fits: "int_fits Signed bits i"
+      using value_has_type_FiniteInt by blast
+
+    (* Now evaluate the negation *)
     show ?thesis
-    proof (cases maybeRetVal)
-      case None
-      (* This case contradicts call_sound *)
-      from call_sound BIR_Success result_eq None have False by simp
-      thus ?thesis by simp
+    proof (cases "int_fits Signed bits (-i)")
+      case True
+      (* Negation succeeds *)
+      have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Negate operand) =
+                    Inr (CV_FiniteInt Signed bits (-i))"
+        using Inr operand_val_def True CoreUnop_Negate by simp
+      have result_typed: "value_has_type env (CV_FiniteInt Signed bits (-i)) ty"
+        using ty_def True by simp
+      show ?thesis using result result_typed CoreUnop_Negate by simp
     next
-      case (Some retVal)
-      from call_sound BIR_Success result_eq Some have "value_has_type env retVal ty"
-        by simp
-      with interp_eq BIR_Success result_eq Some show ?thesis
-        by simp
+      case False
+      (* Negation overflows - RuntimeError *)
+      have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Negate operand) =
+                    Inl RuntimeError"
+        using Inr operand_val_def False CoreUnop_Negate by simp
+      show ?thesis using result CoreUnop_Negate by simp
     qed
+  qed
+next
+  case CoreUnop_Complement
+  (* Extract facts from typing *)
+  from typing CoreUnop_Complement have
+    operand_typing: "core_term_type env NotGhost operand = Some ty"
+    and finite_int: "is_finite_integer_type ty"
+    by (auto split: option.splits if_splits)
+
+  (* Apply IH to operand *)
+  from IH[OF operand_typing]
+  have operand_sound: "sound_term_result env ty (interp_term fuel state operand)"
+    by simp
+
+  (* Case split on operand result *)
+  show ?thesis
+  proof (cases "interp_term fuel state operand")
+    case (Inl err)
+    then show ?thesis using operand_sound by auto
   next
-    case BIR_TypeError
-    (* This case contradicts call_sound *)
-    from call_sound BIR_TypeError have False by simp
-    thus ?thesis by simp
+    case (Inr operand_val)
+    from operand_sound Inr
+    have operand_typed: "value_has_type env operand_val ty"
+      by simp
+
+    (* is_finite_integer_type ty => ty = CoreTy_FiniteInt sign bits *)
+    from finite_int obtain sign bits where
+      ty_def: "ty = CoreTy_FiniteInt sign bits"
+      by (cases ty) auto
+
+    (* So the value must be CV_FiniteInt sign bits i *)
+    from operand_typed ty_def obtain i where
+      operand_val_def: "operand_val = CV_FiniteInt sign bits i"
+      and i_fits: "int_fits sign bits i"
+      using value_has_type_FiniteInt by blast
+
+    (* Complement always succeeds *)
+    have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Complement operand) =
+                  Inr (CV_FiniteInt sign bits (int_complement sign bits i))"
+      using Inr operand_val_def CoreUnop_Complement by simp
+    have result_typed: "value_has_type env (CV_FiniteInt sign bits (int_complement sign bits i)) ty"
+      using ty_def int_complement_fits[OF i_fits] by simp
+    show ?thesis using result result_typed CoreUnop_Complement by simp
+  qed
+next
+  case CoreUnop_Not
+  (* Extract facts from typing *)
+  from typing CoreUnop_Not have
+    operand_typing: "core_term_type env NotGhost operand = Some CoreTy_Bool"
+    and ty_eq: "ty = CoreTy_Bool"
+    by (auto split: option.splits if_splits)
+
+  (* Apply IH to operand *)
+  from IH[OF operand_typing]
+  have operand_sound: "sound_term_result env CoreTy_Bool (interp_term fuel state operand)"
+    by simp
+
+  (* Case split on operand result *)
+  show ?thesis
+  proof (cases "interp_term fuel state operand")
+    case (Inl err)
+    then show ?thesis using operand_sound ty_eq by auto
   next
-    case BIR_RuntimeError
-    from interp_eq BIR_RuntimeError show ?thesis by simp
-  next
-    case BIR_InsufficientFuel
-    from interp_eq BIR_InsufficientFuel show ?thesis by simp
+    case (Inr operand_val)
+    from operand_sound Inr
+    have operand_typed: "value_has_type env operand_val CoreTy_Bool"
+      by simp
+
+    (* Value must be CV_Bool b *)
+    from operand_typed obtain b where
+      operand_val_def: "operand_val = CV_Bool b"
+      using value_has_type_Bool by blast
+
+    (* Not always succeeds *)
+    have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Not operand) =
+                  Inr (CV_Bool (\<not>b))"
+      using Inr operand_val_def CoreUnop_Not by simp
+    have result_typed: "value_has_type env (CV_Bool (\<not>b)) ty"
+      using ty_eq by simp
+    show ?thesis using result result_typed CoreUnop_Not by simp
   qed
 qed
 
@@ -521,206 +261,256 @@ qed
 (*-----------------------------------------------------------------------------*)
 
 theorem type_soundness:
-  fixes fuel :: nat
-    and state :: "'w BabState"
-    and env :: BabTyEnv
-  assumes state_env: "state_matches_env state env"
-      and wf_env: "tyenv_well_formed env"
-  shows
-    "\<forall>tm ty.
-       bab_term_type env NotGhost tm = Some ty \<longrightarrow>
-       is_sound_result env ty (interp_bab_term fuel state tm)"
-using assms
-proof (induction fuel arbitrary: state env)
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+  shows interp_term_sound:
+    "core_term_type env NotGhost tm = Some ty \<longrightarrow>
+      sound_term_result env ty (interp_term fuel state tm)"
+  and interp_term_list_sound:
+    "map (core_term_type env NotGhost) tms = types \<and>
+    list_all (\<lambda>ty. ty \<noteq> None) types \<longrightarrow>
+      sound_term_results env (map the types) (interp_term_list fuel state tms)"
+  and interp_lvalue_sound:
+    "undefined (interp_lvalue fuel state tm)"  (* TODO: state properly *)
+  and interp_statement_sound:
+    "undefined (interp_statement fuel state stmt)"  (* TODO: state properly *)
+  and interp_function_call_sound:
+    "undefined (interp_function_call fuel state fnName argTms)"  (* TODO: state properly *)
+using assms 
+proof (induction fuel arbitrary: state env tm ty tms types fnName argTms)
   case 0
-  (* Base case: fuel = 0 means BIR_InsufficientFuel *)
-  then show ?case by auto
+  {
+    case 1
+    then show ?case by simp
+  next
+    case 2
+    then show ?case by simp
+  next
+    case 3
+    then show ?case sorry  (* requires proper definition *)
+  next
+    case 4
+    then show ?case sorry  (* requires proper definition *)
+  next
+    case 5
+    then show ?case sorry  (* requires proper definition *)
+  }
 next
   case (Suc fuel)
-  (* Inductive case: we have IH for fuel, proving for (Suc fuel) *)
-  show ?case
-  proof (intro allI impI)
-    fix tm ty
-    assume typing: "bab_term_type env NotGhost tm = Some ty"
+  {
+    (* interp_term_sound *)
+    case 1
+    show ?case proof (intro impI)
 
-    (* IH in a more convenient form *)
-    have IH: "\<And>tm' ty'. bab_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
-                        is_sound_result env ty' (interp_bab_term fuel state tm')"
-      using Suc.IH Suc.prems by blast
+      (* Given a well-typed term *)
+      assume typing: "core_term_type env NotGhost tm = Some ty"
 
-    (* Case split on the structure of tm *)
-    show "is_sound_result env ty (interp_bab_term (Suc fuel) state tm)"
-    proof (cases tm)
-      case (BabTm_Literal loc lit)
-      (* Case: term is a literal *)
-      then show ?thesis
-      proof (cases lit)
-        case (BabLit_Bool b)
-        (* Bool literal case *)
-        from BabTm_Literal BabLit_Bool typing show ?thesis
-          by (auto split: BabType.splits)
+      (* From IH, we know interp_term works properly for fuel;
+         we need to prove it for (Suc fuel) *)
+      have IH: "\<And>env' (state' :: 'w InterpState) tm' ty'. 
+                  state_matches_env state' env' \<Longrightarrow>
+                  tyenv_well_formed env' \<Longrightarrow>
+                  core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                    sound_term_result env' ty' (interp_term fuel state' tm')"
+        by (simp add: "1.prems"(1,2) Suc.IH(1))
+        
+      show "sound_term_result env ty (interp_term (Suc fuel) state tm)"
+      proof (cases tm)
+        (* Literal bool - evaluates to CV_Bool *)
+        case (CoreTm_LitBool b)
+        then show ?thesis using typing by auto
       next
-        case (BabLit_Int i)
-        (* Int literal case *)
-        from BabTm_Literal BabLit_Int typing show ?thesis
-          by (auto split: if_splits BabType.splits Signedness.splits IntBits.splits)
+        (* Literal int - evaluates to CV_FiniteInt if well-typed *)
+        case (CoreTm_LitInt i)
+        then show ?thesis using typing by auto
       next
-        case (BabLit_String s)
-        (* String literal - TODO *)
-        from BabTm_Literal BabLit_String typing show ?thesis
-          sorry
+        case (CoreTm_LitArray elemTms)
+        then show ?thesis sorry  (* TODO *)
+  
       next
-        case (BabLit_Array tms)
-        (* Array literal - TODO *)
-        from BabTm_Literal BabLit_Array typing show ?thesis
-          sorry
+        (* Variable/constant lookup *)
+        case (CoreTm_Var varName) 
+        have var_in_state: "term_var_in_state_with_type state env varName ty"
+          using state_env state_matches_env_def vars_exist_in_state_def
+          by (smt (verit, ccfv_threshold) "1.prems"(1) CoreTm_Var core_term_type.simps(4)
+              option.case_eq_if option.distinct(1) option.expand option.sel typing) 
+        show ?thesis proof (cases "fmlookup (IS_Locals state) varName")
+          case None
+          then show ?thesis proof (cases "fmlookup (IS_Refs state) varName")
+            case None2: None
+            (* Variable must be in Constants *)
+            from var_in_state None None2 obtain val where
+              const_lookup: "fmlookup (IS_Constants state) varName = Some val"
+              and val_typed: "value_has_type env val ty"
+              unfolding term_var_in_state_with_type_def
+              by (auto split: option.splits sum.splits)
+            have interp_result: "interp_term (Suc fuel) state (CoreTm_Var varName) = Inr val"
+              using CoreTm_Var None None2 const_lookup by simp
+            then show ?thesis using val_typed CoreTm_Var by simp
+          next
+            case (Some addrPath)
+            (* Variable is a ref - need to dereference *)
+            obtain addr path where addrPath_eq: "addrPath = (addr, path)"
+              by (cases addrPath) auto
+            from var_in_state None Some addrPath_eq obtain v where
+              get_val: "get_value_at_path (IS_Store state ! addr) path = Inr v"
+              and v_typed: "value_has_type env v ty"
+              unfolding term_var_in_state_with_type_def
+              by (auto split: option.splits sum.splits)
+            have interp_result: "interp_term (Suc fuel) state (CoreTm_Var varName) = Inr v"
+              using CoreTm_Var None Some addrPath_eq get_val by simp
+            then show ?thesis using v_typed CoreTm_Var by simp
+          qed
+        next
+          case (Some addr)
+          then have interp_result: "interp_term (Suc fuel) state (CoreTm_Var varName)
+                                      = Inr (IS_Store state ! addr)"
+            using CoreTm_Var by simp
+          have store_type: "addr < length (IS_Store state) \<and>
+                   value_has_type env (IS_Store state ! addr) ty"
+            using var_in_state Some term_var_in_state_with_type_def by force
+          then show ?thesis
+            using CoreTm_Var interp_result by auto
+        qed
+
+      next
+        (* Cast - use helper lemma *)
+        case (CoreTm_Cast targetTy operandTm)
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_cast typing by blast 
+
+      next
+        (* Unary operator - use helper lemma *)
+        case (CoreTm_Unop op operandTm)
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_unop typing by blast
+
+      next
+        case (CoreTm_Binop x71 x72 x73)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Let x81 x82 x83)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Quantifier x91 x92 x93 x94)
+        then show ?thesis sorry
+      next
+        case (CoreTm_FunctionCall x101 x102 x103)
+        then show ?thesis sorry
+      next
+        case (CoreTm_VariantCtor x111 x112 x113)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Record x12)
+        then show ?thesis sorry
+      next
+        case (CoreTm_RecordProj x131 x132)
+        then show ?thesis sorry
+      next
+        case (CoreTm_VariantProj x141 x142)
+        then show ?thesis sorry
+      next
+        case (CoreTm_ArrayProj x151 x152)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Match x161 x162)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Sizeof x17)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Allocated x18)
+        then show ?thesis sorry
+      next
+        case (CoreTm_Old x19)
+        then show ?thesis sorry
       qed
-    next
-      case (BabTm_Cast loc target_ty operand)
-      (* Cast case - use helper lemma *)
-      from type_soundness_cast[OF Suc.prems(1) Suc.prems(2) IH] BabTm_Cast typing
-      show ?thesis by simp
-    next
-      case (BabTm_Unop loc unop operand)
-      (* Unary operator case - use helper lemma *)
-      from type_soundness_unop[OF Suc.prems(1) Suc.prems(2) IH] BabTm_Unop typing
-      show ?thesis by simp
-    next
-      case (BabTm_Binop loc tm1 ops)
-      (* Binary operator case - TODO *)
-      from BabTm_Binop typing show ?thesis
-        sorry
-    next
-      case (BabTm_If loc cond thenTm elseTm)
-      (* If-then-else case - use helper lemma *)
-      from type_soundness_if[OF Suc.prems(1) Suc.prems(2) IH] BabTm_If typing
-      show ?thesis by simp
-    next
-      case (BabTm_Let loc name bindTm bodyTm)
-      (* Let binding case - TODO *)
-      from BabTm_Let typing show ?thesis
-        sorry
-    next
-      case (BabTm_Quantifier loc quant tyVars vars body)
-      (* Quantifier case - TODO: bab_term_type not implemented for quantifiers yet *)
-      from BabTm_Quantifier typing show ?thesis
-        sorry
-    next
-      case (BabTm_Name loc name tyArgs)
-      (* Variable/constant reference *)
-      from BabTm_Name typing have ty_lookup:
-        "fmlookup (TE_TermVars env) name = Some ty \<and> tyArgs = [] \<and> name |\<notin>| TE_GhostVars env
-         \<or> (\<exists>dtName numTyArgs. fmlookup (TE_DataCtors env) name = Some (dtName, numTyArgs, None) \<and>
-              length tyArgs = numTyArgs \<and> ty = BabTy_Name loc dtName tyArgs)"
-        by (auto split: option.splits if_splits prod.splits)
-      show ?thesis
-      proof (cases "fmlookup (TE_TermVars env) name")
-        case (Some varTy)
-        with ty_lookup have ty_eq: "ty = varTy"
-          by (smt (verit, ccfv_threshold) BabTm_Name bab_term_type.simps(3) option.distinct(1)
-              option.inject option.simps(5) typing)
-        from Suc.prems have vars_wt: "vars_have_correct_types state env"
-          unfolding state_matches_env_def by simp
-        from vars_wt Some have var_typed: "term_var_in_state_with_type state env name varTy"
-          unfolding vars_have_correct_types_def by blast
-        then have var_typed':
-          "(case fmlookup (BS_Locals state) name of
-              Some addr \<Rightarrow> addr < length (BS_Store state) \<and> value_has_type env (BS_Store state ! addr) varTy
-            | None \<Rightarrow>
-              (case fmlookup (BS_RefVars state) name of
-                Some (addr, path) \<Rightarrow> addr < length (BS_Store state) \<and>
-                                     (case get_value_at_path (BS_Store state ! addr) path of
-                                        BIR_Success v \<Rightarrow> value_has_type env v varTy
-                                      | _ \<Rightarrow> False)
-              | None \<Rightarrow>
-                (case fmlookup (BS_Constants state) name of
-                  Some v \<Rightarrow> value_has_type env v varTy
-                | None \<Rightarrow> False)))"
-          unfolding term_var_in_state_with_type by simp
-        with BabTm_Name ty_eq show ?thesis
-          by (auto split: option.splits BabInterpResult.splits simp: is_sound_result_def)
-      next
-        case None
-        (* Data constructor case - name is a nullary data constructor *)
-        from ty_lookup None obtain dtName numTyArgs where
-          ctor_lookup: "fmlookup (TE_DataCtors env) name = Some (dtName, numTyArgs, None)" and
-          len_eq: "length tyArgs = numTyArgs" and
-          ty_eq: "ty = BabTy_Name loc dtName tyArgs"
-          by auto
-        from Suc.prems(1) ctor_lookup have name_in_nullary: "name |\<in>| BS_NullaryCtors state"
-          by (rule nullary_ctor_in_state)
-        (* name is not in locals, refvars, or constants *)
-        from Suc.prems(1) None have not_local: "fmlookup (BS_Locals state) name = None"
-          and not_ref: "fmlookup (BS_RefVars state) name = None"
-          and not_const: "fmlookup (BS_Constants state) name = None"
-          by (auto intro: not_in_env_not_in_state)
-        (* So the interpreter returns BV_Variant name None *)
-        from BabTm_Name not_local not_ref not_const name_in_nullary
-        have interp_result: "interp_bab_term (Suc fuel) state (BabTm_Name loc name tyArgs) =
-                            BIR_Success (BV_Variant name None)"
-          by simp
-        (* Now show the result has the right type *)
-        from ctor_lookup have val_typed: "value_has_type env (BV_Variant name None) (BabTy_Name loc dtName tyArgs)"
-          by simp
-        with interp_result ty_eq show ?thesis
-          by (simp add: BabTm_Name)
-      qed
-    next
-      case (BabTm_Call loc fnTm argTms)
-      (* Function call - use helper lemma *)
-      from type_soundness_call[OF Suc.prems(1) Suc.prems(2) IH] BabTm_Call typing
-      show ?thesis by simp
-    next
-      case (BabTm_Tuple loc tms)
-      (* Tuple construction - TODO *)
-      from BabTm_Tuple typing show ?thesis
-        sorry
-    next
-      case (BabTm_Record loc fields)
-      (* Record construction - TODO *)
-      from BabTm_Record typing show ?thesis
-        sorry
-    next
-      case (BabTm_RecordUpdate loc baseTm updates)
-      (* Record update - TODO *)
-      from BabTm_RecordUpdate typing show ?thesis
-        sorry
-    next
-      case (BabTm_TupleProj loc tm idx)
-      (* Tuple projection - TODO *)
-      from BabTm_TupleProj typing show ?thesis
-        sorry
-    next
-      case (BabTm_RecordProj loc tm field)
-      (* Record projection - TODO *)
-      from BabTm_RecordProj typing show ?thesis
-        sorry
-    next
-      case (BabTm_ArrayProj loc arrTm indices)
-      (* Array projection - TODO *)
-      from BabTm_ArrayProj typing show ?thesis
-        sorry
-    next
-      case (BabTm_Match loc scrutTm arms)
-      (* Match expression - TODO *)
-      from BabTm_Match typing show ?thesis
-        sorry
-    next
-      case (BabTm_Sizeof loc tm)
-      (* Sizeof expression - TODO *)
-      from BabTm_Sizeof typing show ?thesis
-        sorry
-    next
-      case (BabTm_Allocated loc tm)
-      (* Allocated returns None in NotGhost mode, so typing assumption is false *)
-      from BabTm_Allocated typing show ?thesis by simp
-    next
-      case (BabTm_Old loc tm)
-      (* Old - interpreter returns TypeError, but typechecker is still TODO *)
-      from BabTm_Old show ?thesis sorry
     qed
-  qed
+  next
+    (* interp_term_list_sound *)
+    case 2
+    show ?case proof (intro impI, elim conjE)
+      assume types_eq: "map (core_term_type env NotGhost) tms = types"
+         and all_typed: "list_all (\<lambda>ty. ty \<noteq> None) types"
+      show "sound_term_results env (map the types) (interp_term_list (Suc fuel) state tms)"
+      proof (cases tms)
+        case Nil
+        then have "interp_term_list (Suc fuel) state tms = Inr []" by simp
+        moreover from Nil types_eq have "map the types = []" by simp
+        ultimately show ?thesis by simp
+      next
+        case (Cons tm tms')
+        (* Get typing for head and tail *)
+        from types_eq Cons obtain types' where
+          types_cons: "types = core_term_type env NotGhost tm # types'"
+          and types'_eq: "map (core_term_type env NotGhost) tms' = types'"
+          by auto
+        from all_typed types_cons have
+          tm_typed_opt: "core_term_type env NotGhost tm \<noteq> None"
+          and all_typed': "list_all (\<lambda>ty. ty \<noteq> None) types'"
+          by auto
+        from tm_typed_opt obtain tm_ty where
+          tm_typing: "core_term_type env NotGhost tm = Some tm_ty"
+          by auto
+
+        (* Use IH for the head term *)
+        from Suc.IH(1)[of state env tm tm_ty] "2.prems"
+        have head_sound: "sound_term_result env tm_ty (interp_term fuel state tm)"
+          using tm_typing by simp
+
+        (* Use IH for the tail list *)
+        from Suc.IH(2)[of state env tms' types'] "2.prems" types'_eq all_typed'
+        have tail_sound: "sound_term_results env (map the types') (interp_term_list fuel state tms')"
+          by simp
+
+        (* Case split on head evaluation *)
+        show ?thesis
+        proof (cases "interp_term fuel state tm")
+          case (Inl err)
+          (* Head failed - propagate error *)
+          from head_sound Inl have "sound_error_result err" by simp
+          moreover have "interp_term_list (Suc fuel) state tms = Inl err"
+            using Cons Inl by simp
+          ultimately show ?thesis by simp
+        next
+          case (Inr val)
+          (* Head succeeded *)
+          from head_sound Inr have val_typed: "value_has_type env val tm_ty" by simp
+          (* Case split on tail evaluation *)
+          show ?thesis
+          proof (cases "interp_term_list fuel state tms'")
+            case (Inl err)
+            (* Tail failed - propagate error *)
+            from tail_sound Inl have "sound_error_result err" by simp
+            moreover have "interp_term_list (Suc fuel) state tms = Inl err"
+              using Cons Inr Inl by simp
+            ultimately show ?thesis by simp
+          next
+            case (Inr vals)
+            (* Both succeeded *)
+            from tail_sound Inr
+            have vals_typed: "list_all2 (value_has_type env) vals (map the types')" by simp
+            have result: "interp_term_list (Suc fuel) state tms = Inr (val # vals)"
+              using Cons \<open>interp_term fuel state tm = Inr val\<close> Inr by simp
+            have "map the types = tm_ty # map the types'"
+              using types_cons tm_typing by simp
+            with val_typed vals_typed result show ?thesis by simp
+          qed
+        qed
+      qed
+    qed
+  next
+    case 3
+    then show ?case sorry
+  next
+    case 4
+    then show ?case sorry
+  next
+    case 5
+    then show ?case sorry
+  }
 qed
 
+  
 
 end

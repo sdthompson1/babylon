@@ -1,141 +1,91 @@
 theory ElabType
-  imports "../base/IntRange" "../type_system/BabKindcheck" "SubstituteTypes"
+  imports TypeError Typedefs "../core/CoreTyEnv" "../util/NatToString"
 begin
 
-(* This file defines type elaboration: checking and transforming user-provided types
-   to ensure they are ground (no metavariables), have all typedefs expanded, and are
-   well-kinded. Typedef expansion happens inline - when we encounter a typedef name,
-   we substitute the type arguments into the typedef body and continue elaborating. *)
+(* Input: env, typedefs, ghost mode, input type (or list) *)
+(* Output: either a list of errors, or an elaborated type (or list) *)
 
-datatype TypeError =
-  TyErr_OutOfFuel Location
-  | TyErr_IntLiteralOutOfRange Location
-  | TyErr_InvalidCast Location
-  | TyErr_NegateRequiresSigned Location
-  | TyErr_ComplementRequiresFiniteInt Location
-  | TyErr_NotRequiresBool Location
-  | TyErr_UnknownName Location string
-  | TyErr_GhostVariableInNonGhost Location string
-  | TyErr_WrongNumberOfTypeArgs Location string nat nat  (* name, expected, actual *)
-  | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
-  | TyErr_NonRuntimeTypeArg Location
-  | TyErr_TypeMismatch Location BabType BabType    (* loc, type1, type2 *)
-  | TyErr_ConditionNotBool Location BabType        (* loc, actual condition type *)
-  | TyErr_MetavariableInInput                      (* metavariable found in input type *)
-  | TyErr_UnknownTypeName Location string
-  | TyErr_WrongTypeArity Location string nat nat   (* name, expected, actual *)
-  | TyErr_InvalidArrayDimension Location
-  (* Function call errors *)
-  | TyErr_UnknownFunction Location string
-  | TyErr_CalleeNotFunction Location
-  | TyErr_ImpureFunctionInTermContext Location string
-  | TyErr_RefArgInTermContext Location string
-  | TyErr_GhostFunctionInNonGhost Location string
-  | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
-  | TyErr_FunctionNoReturnType Location string
-  | TyErr_ArgTypeMismatch Location nat BabType BabType  (* loc, arg index, expected, actual *)
-
-type_synonym Typedefs = "(string, DeclTypedef) fmap"
-
-
-(* Type elaboration: check groundness, expand typedefs, kind-check, and check runtime constraints.
-   Returns the elaborated type with all typedefs expanded. *)
-
-fun elab_type :: "nat \<Rightarrow> Typedefs \<Rightarrow> BabTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabType
-                 \<Rightarrow> TypeError list + BabType"
-and elab_type_list :: "nat \<Rightarrow> Typedefs \<Rightarrow> BabTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabType list
-                       \<Rightarrow> TypeError list + BabType list"
-  where
-  "elab_type 0 _ _ _ ty = Inl [TyErr_OutOfFuel (bab_type_location ty)]"
-
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_Meta n) =
-    Inl [TyErr_MetavariableInInput]"
-
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_Name loc name tyArgs) =
-    \<comment> \<open>First elaborate the type arguments\<close>
-    (case elab_type_list fuel typedefs env ghost tyArgs of
+fun elab_type :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot \<Rightarrow> BabType
+                  \<Rightarrow> TypeError list + CoreType"
+and elab_type_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot \<Rightarrow> BabType list
+                      \<Rightarrow> TypeError list + CoreType list"
+where
+  "elab_type env typedefs ghost (BabTy_Name loc name tyargs) =
+    (case elab_type_list env typedefs ghost tyargs of
       Inl errs \<Rightarrow> Inl errs
     | Inr elabTyArgs \<Rightarrow>
-        \<comment> \<open>Check if it's a type variable\<close>
         if name |\<in>| TE_TypeVars env then
-          (if elabTyArgs = [] then
-            Inr (BabTy_Name loc name [])
-          else
-            Inl [TyErr_WrongTypeArity loc name 0 (length tyArgs)])
-        \<comment> \<open>Check if it's a typedef - if so, expand it\<close>
+          \<comment> \<open>Type variable case\<close>
+          (if tyargs = [] then Inr (CoreTy_Name name [])
+           else Inl [TyErr_WrongTypeArity loc name 0 (length tyargs)])
         else (case fmlookup typedefs name of
-          Some td \<Rightarrow>
-            (if length elabTyArgs \<noteq> length (DT_TyArgs td) then
-              Inl [TyErr_WrongTypeArity loc name (length (DT_TyArgs td)) (length tyArgs)]
-            else (case DT_Definition td of
-              Some body \<Rightarrow>
-                \<comment> \<open>Substitute type args into typedef body and continue elaborating\<close>
-                let subst = fmap_of_list (zip (DT_TyArgs td) elabTyArgs);
-                    expandedTy = substitute_bab_type subst body
-                in elab_type fuel typedefs env ghost expandedTy
-            | None \<Rightarrow>
-                \<comment> \<open>Abstract/extern type - reject for now (TODO: support later)\<close>
-                Inl [TyErr_UnknownTypeName loc name]))
-        \<comment> \<open>Check if it's a datatype\<close>
+          Some (metavars, targetTy) \<Rightarrow>
+            \<comment> \<open>Typedef case\<close>
+            (if length elabTyArgs \<noteq> length metavars then
+              Inl [TyErr_WrongTypeArity loc name (length metavars) (length tyargs)]
+             else
+              let subst = fmap_of_list (zip metavars elabTyArgs);
+                  resultTy = apply_subst subst targetTy
+              in if ghost = NotGhost \<and> \<not> is_runtime_type resultTy then
+                   Inl [TyErr_NonRuntimeTypeArg loc]
+                 else
+                   Inr resultTy)
         | None \<Rightarrow>
             (case fmlookup (TE_Datatypes env) name of
-              Some tyVars \<Rightarrow>
-                (if length elabTyArgs \<noteq> length tyVars then
-                  Inl [TyErr_WrongTypeArity loc name (length tyVars) (length tyArgs)]
-                else
-                  let resultTy = BabTy_Name loc name elabTyArgs
-                  in if ghost = NotGhost \<and> \<not> is_runtime_type resultTy then
-                       Inl [TyErr_NonRuntimeTypeArg loc]
-                     else
-                       Inr resultTy)
-            | None \<Rightarrow> Inl [TyErr_UnknownTypeName loc name])))"
+              Some expectedArity \<Rightarrow>
+                \<comment> \<open>Datatype case\<close>
+                (if length elabTyArgs \<noteq> expectedArity then
+                  Inl [TyErr_WrongTypeArity loc name expectedArity (length tyargs)]
+                 else if ghost = NotGhost \<and> \<not> list_all is_runtime_type elabTyArgs then
+                  Inl [TyErr_NonRuntimeTypeArg loc]
+                 else
+                  Inr (CoreTy_Name name elabTyArgs))
+            | None \<Rightarrow>
+                \<comment> \<open>Unknown type name\<close>
+                Inl [TyErr_UnknownTypeName loc name])))"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_Bool loc) =
-    Inr (BabTy_Bool loc)"
+| "elab_type env typedefs ghost (BabTy_Bool loc) =
+    Inr CoreTy_Bool"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_FiniteInt loc sign bits) =
-    Inr (BabTy_FiniteInt loc sign bits)"
+| "elab_type env typedefs ghost (BabTy_FiniteInt loc sign bits) =
+    Inr (CoreTy_FiniteInt sign bits)"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_MathInt loc) =
+| "elab_type env typedefs ghost (BabTy_MathInt loc) =
     (if ghost = NotGhost then
       Inl [TyErr_NonRuntimeTypeArg loc]
     else
-      Inr (BabTy_MathInt loc))"
+      Inr CoreTy_MathInt)"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_MathReal loc) =
+| "elab_type env typedefs ghost (BabTy_MathReal loc) =
     (if ghost = NotGhost then
       Inl [TyErr_NonRuntimeTypeArg loc]
     else
-      Inr (BabTy_MathReal loc))"
+      Inr CoreTy_MathReal)"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_Tuple loc tys) =
-    (case elab_type_list fuel typedefs env ghost tys of
+| "elab_type env typedefs ghost (BabTy_Tuple loc types) =
+    (case elab_type_list env typedefs ghost types of
       Inl errs \<Rightarrow> Inl errs
-    | Inr elabTys \<Rightarrow> Inr (BabTy_Tuple loc elabTys))"
+    | Inr elabTys \<Rightarrow> Inr (CoreTy_Record (zip (tuple_field_names (length elabTys)) elabTys)))"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_Record loc flds) =
-    (case elab_type_list fuel typedefs env ghost (map snd flds) of
+  (* The Record case preserves field names *)
+| "elab_type env typedefs ghost (BabTy_Record loc flds) =
+    (case elab_type_list env typedefs ghost (map snd flds) of
       Inl errs \<Rightarrow> Inl errs
-    | Inr elabFldTys \<Rightarrow> Inr (BabTy_Record loc (zip (map fst flds) elabFldTys)))"
+    | Inr elabTys \<Rightarrow> Inr (CoreTy_Record (zip (map fst flds) elabTys)))"
 
-| "elab_type (Suc fuel) typedefs env ghost (BabTy_Array loc elemTy dims) =
-    (if \<not> array_dims_well_kinded dims then
-      Inl [TyErr_InvalidArrayDimension loc]
-    else
-      (case elab_type fuel typedefs env ghost elemTy of
-        Inl errs \<Rightarrow> Inl errs
-      | Inr elabElemTy \<Rightarrow> Inr (BabTy_Array loc elabElemTy dims)))"
+  (* Array case TODO (as we may have to evaluate constants which we can't do yet) 
+     Just elaborate to Bool for now *)
+| "elab_type env typedefs ghost (BabTy_Array loc elemTy dims) =
+    Inr CoreTy_Bool"
 
-| "elab_type_list 0 _ _ _ _ = Inl [TyErr_OutOfFuel no_loc]"
+| "elab_type_list env typedefs ghost [] = Inr []"
 
-| "elab_type_list (Suc fuel) _ _ _ [] = Inr []"
-
-| "elab_type_list (Suc fuel) typedefs env ghost (ty # tys) =
-    (case elab_type (Suc fuel) typedefs env ghost ty of
-      Inl errs \<Rightarrow> Inl errs
-    | Inr ty' \<Rightarrow>
-        (case elab_type_list fuel typedefs env ghost tys of
-          Inl errs \<Rightarrow> Inl errs
-        | Inr tys' \<Rightarrow> Inr (ty' # tys')))"
+| "elab_type_list env typedefs ghost (ty # tys) =
+    (case (elab_type env typedefs ghost ty,
+           elab_type_list env typedefs ghost tys) of
+      (Inl errs1, Inl errs2) \<Rightarrow> Inl (errs1 @ errs2)
+    | (Inl errs, Inr _) \<Rightarrow> Inl errs
+    | (Inr _, Inl errs) \<Rightarrow> Inl errs
+    | (Inr ty', Inr tys') \<Rightarrow> Inr (ty' # tys'))"
 
 end

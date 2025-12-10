@@ -1,5 +1,5 @@
 theory BabLexer
-  imports Main "../base/Location" "BabToken" "BasicParser"
+  imports Main "../bab/Location" "BabToken" "BasicParser"
 begin
 
 (* Character constants *)

@@ -1,5 +1,5 @@
 theory BabLoader
-  imports Main "HOL-Library.Char_ord" "HOL-Library.FSet" "../base/Location" "../base/BabSyntax" "BabLexer" "BabParser"
+  imports Main "HOL-Library.Char_ord" "HOL-Library.FSet" "../bab/Location" "../bab/BabSyntax" "BabLexer" "BabParser"
 begin
 
 (*-----------------------------------------------------------------------------*)

@@ -1,12 +1,8 @@
 theory BabSyntax
-  imports Main Location "HOL-Library.Finite_Map"
+  imports "../util/IntRange" "../util/Quantifier" Location "HOL-Library.Finite_Map"
 begin
 
 (* Abstract syntax for the Babylon language *)
-
-datatype Signedness = Signed | Unsigned
-datatype IntBits = IntBits_8 | IntBits_16 | IntBits_32 | IntBits_64
-datatype Quantifier = Quant_Forall | Quant_Exists
 
 datatype BabUnop =
   BabUnop_Negate
@@ -39,8 +35,6 @@ datatype BabBinop =
   | BabBinop_ImpliedBy
   | BabBinop_Iff
 
-datatype VarOrRef = Var | Ref
-
 datatype BabPattern = 
     BabPat_Var Location VarOrRef string
   | BabPat_Bool Location bool
@@ -60,8 +54,7 @@ datatype BabLiteral =
 and BabDimension =
   BabDim_Unknown
   | BabDim_Allocatable
-  | BabDim_Fixed BabTerm      (* pre-elaboration: unevaluated expression *)
-  | BabDim_FixedInt int       (* post-elaboration: evaluated to concrete size *)
+  | BabDim_Fixed BabTerm
 
 and BabType =
     BabTy_Name Location string "BabType list"
@@ -72,7 +65,6 @@ and BabType =
   | BabTy_Tuple Location "BabType list"
   | BabTy_Record Location "(string * BabType) list"
   | BabTy_Array Location BabType "BabDimension list"
-  | BabTy_Meta nat  (* Metavariable for type inference/unification *)
 
 and BabTerm =
   BabTm_Literal Location BabLiteral
@@ -100,9 +92,6 @@ datatype BabAttribute =
   | BabAttr_Ensures Location BabTerm
   | BabAttr_Invariant Location BabTerm
   | BabAttr_Decreases Location BabTerm
-
-datatype ShowOrHide = Show | Hide
-datatype GhostOrNot = Ghost | NotGhost
 
 datatype BabStatement =
   BabStmt_VarDecl Location GhostOrNot string VarOrRef "BabType option" "BabTerm option"
@@ -189,7 +178,6 @@ fun bab_type_location :: "BabType \<Rightarrow> Location" where
 | "bab_type_location (BabTy_Tuple loc _) = loc"
 | "bab_type_location (BabTy_Record loc _) = loc"
 | "bab_type_location (BabTy_Array loc _ _) = loc"
-| "bab_type_location (BabTy_Meta _) = no_loc"  (* metavars have no source location *)
 
 fun bab_term_location :: "BabTerm \<Rightarrow> Location" where
   "bab_term_location (BabTm_Literal loc _) = loc"
@@ -259,21 +247,6 @@ fun is_type_decl :: "BabDeclaration \<Rightarrow> bool"
 | "is_type_decl (BabDecl_Typedef _) = True"
 
 
-(* Ground types *)
-
-(* A type is ground if it contains no metavariables *)
-fun is_ground :: "BabType \<Rightarrow> bool" where
-  "is_ground (BabTy_Meta _) = False"
-| "is_ground (BabTy_Name _ _ tyargs) = list_all is_ground tyargs"
-| "is_ground (BabTy_Bool _) = True"
-| "is_ground (BabTy_FiniteInt _ _ _) = True"
-| "is_ground (BabTy_MathInt _) = True"
-| "is_ground (BabTy_MathReal _) = True"
-| "is_ground (BabTy_Tuple _ types) = list_all is_ground types"
-| "is_ground (BabTy_Record _ flds) = list_all (is_ground \<circ> snd) flds"
-| "is_ground (BabTy_Array _ ty _) = is_ground ty"
-
-
 (* Size functions *)
 
 fun bab_pattern_size :: "BabPattern \<Rightarrow> nat" where
@@ -303,7 +276,6 @@ where
 | "bab_type_size (BabTy_Tuple _ types) = 1 + sum_list (map bab_type_size types)"
 | "bab_type_size (BabTy_Record _ flds) = 1 + sum_list (map (bab_type_size \<circ> snd) flds)"
 | "bab_type_size (BabTy_Array _ ty dims) = 1 + bab_type_size ty + sum_list (map bab_dimension_size dims)"
-| "bab_type_size (BabTy_Meta _) = 1"
 | "bab_term_size (BabTm_Literal _ lit) = 1 + bab_literal_size lit"
 | "bab_term_size (BabTm_Name _ _ types) = 1 + sum_list (map bab_type_size types)"
 | "bab_term_size (BabTm_Cast _ ty tm) = 1 + bab_type_size ty + bab_term_size tm"
@@ -387,26 +359,5 @@ next
   qed
 qed
 
-
-(* Type substitution *)
-
-fun substitute_bab_type :: "(string, BabType) fmap \<Rightarrow> BabType \<Rightarrow> BabType" where
-  "substitute_bab_type subst (BabTy_Name loc name []) =
-    (case fmlookup subst name of
-      Some ty \<Rightarrow> ty
-    | None \<Rightarrow> BabTy_Name loc name [])"
-| "substitute_bab_type subst (BabTy_Name loc name tyargs) =
-    BabTy_Name loc name (map (substitute_bab_type subst) tyargs)"
-| "substitute_bab_type subst (BabTy_Bool loc) = BabTy_Bool loc"
-| "substitute_bab_type subst (BabTy_FiniteInt loc sign bits) = BabTy_FiniteInt loc sign bits"
-| "substitute_bab_type subst (BabTy_MathInt loc) = BabTy_MathInt loc"
-| "substitute_bab_type subst (BabTy_MathReal loc) = BabTy_MathReal loc"
-| "substitute_bab_type subst (BabTy_Tuple loc types) =
-    BabTy_Tuple loc (map (substitute_bab_type subst) types)"
-| "substitute_bab_type subst (BabTy_Record loc flds) =
-    BabTy_Record loc (map (\<lambda>(name, ty). (name, substitute_bab_type subst ty)) flds)"
-| "substitute_bab_type subst (BabTy_Array loc ty dims) =
-    BabTy_Array loc (substitute_bab_type subst ty) dims"
-| "substitute_bab_type subst (BabTy_Meta n) = BabTy_Meta n"  (* metavars not affected by name subst *)
 
 end

@@ -1,6 +1,9 @@
 theory IntRange
-  imports "BabSyntax"
+  imports Main
 begin
+
+datatype Signedness = Signed | Unsigned
+datatype IntBits = IntBits_8 | IntBits_16 | IntBits_32 | IntBits_64
 
 (* Get the range of a finite integer type *)
 fun int_range :: "Signedness \<Rightarrow> IntBits \<Rightarrow> (int \<times> int)" where
@@ -16,6 +19,10 @@ fun int_range :: "Signedness \<Rightarrow> IntBits \<Rightarrow> (int \<times> i
 (* Check if an int is within a given range *)
 fun int_in_range :: "(int \<times> int) \<Rightarrow> int \<Rightarrow> bool" where
   "int_in_range (a, b) x = (x \<ge> a \<and> x \<le> b)"
+
+(* Check if an int fits a given type *)
+fun int_fits :: "Signedness \<Rightarrow> IntBits \<Rightarrow> int \<Rightarrow> bool" where
+  "int_fits sign bits i = int_in_range (int_range sign bits) i"
 
 (* Helper to get the maximum of two bit widths *)
 fun max_bits :: "IntBits \<Rightarrow> IntBits \<Rightarrow> IntBits" where
