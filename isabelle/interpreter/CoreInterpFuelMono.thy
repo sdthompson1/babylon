@@ -10,14 +10,234 @@ lemma fold_process_one_arg_error:
   "fold process_one_arg xs (Inl err) = Inl err"
   by (induct xs) simp_all
 
+lemma process_one_arg_val_error:
+  "\<exists>e. process_one_arg ((name, vr), refResult, Inl err) acc = Inl e"
+  by (cases vr; cases refResult; cases acc) simp_all
+
+lemma process_one_arg_ref_error:
+  "\<exists>e. process_one_arg ((name, Ref), Inl err, valResult) acc = Inl e"
+  by (cases valResult; cases acc) simp_all
+
+(* If the fold succeeds and an argument is Ref, its lvalue result must be Inr *)
+lemma fold_process_one_arg_ref_ok:
+  assumes "fold process_one_arg (zip args (zip refResults valResults)) acc = Inr finalState"
+    and "length args = length refResults"
+    and "length refResults = length valResults"
+    and "(i, (name, Ref)) \<in> set (zip [0..<length args] args)"
+  shows "\<exists>lval. refResults ! i = Inr lval"
+  using assms
+proof (induction args arbitrary: refResults valResults acc i)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons arg args)
+  from Cons.prems(2,3) obtain refResult refResults' valResult' valResults'
+    where refResults_eq: "refResults = refResult # refResults'"
+      and valResults_eq: "valResults = valResult' # valResults'"
+      and len_ref': "length args = length refResults'"
+      and len_val': "length refResults' = length valResults'"
+    by (cases refResults; cases valResults) auto
+
+  obtain argName argVr where arg_eq: "arg = (argName, argVr)" by (cases arg)
+
+  let ?step = "process_one_arg ((argName, argVr), refResult, valResult') acc"
+
+  have fold_eq: "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc
+               = fold process_one_arg (zip args (zip refResults' valResults')) ?step"
+    using refResults_eq valResults_eq arg_eq by simp
+
+  from Cons.prems(4) obtain j where j_bound: "j < length (arg # args)"
+    and i_eq: "i = [0..<length (arg # args)] ! j"
+    and arg_at_j: "(arg # args) ! j = (name, Ref)"
+    by (auto simp: set_zip)
+  hence i_eq': "i = j" using j_bound
+    by (metis One_nat_def add_diff_inverse_nat diff_Suc_1 diff_Suc_Suc less_zeroE nth_upt)
+  hence i_bound: "i < Suc (length args)" and arg_at_i: "(arg # args) ! i = (name, Ref)"
+    using j_bound arg_at_j by auto
+
+  show ?case
+  proof (cases "i = 0")
+    case True
+    hence "arg = (name, Ref)" using arg_at_i by simp
+    hence argVr_eq: "argVr = Ref" and argName_eq: "argName = name" using arg_eq by auto
+    show ?thesis
+    proof (cases refResult)
+      case (Inl err)
+      hence "?step = Inl err" using argVr_eq process_one_arg_ref_error
+        by (metis Cons.prems(1) fold_process_one_arg_error old.sum.exhaust
+            process_one_arg.simps(5))
+      hence "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inl err"
+        by (simp add: fold_process_one_arg_error)
+      hence "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc = Inl err"
+        using fold_eq by simp
+      thus ?thesis using Cons.prems(1) by simp
+    next
+      case (Inr lval)
+      thus ?thesis using True refResults_eq by simp
+    qed
+  next
+    case False
+    hence i_pos: "i > 0" using i_bound by simp
+    have tail_in: "(i - 1, (name, Ref)) \<in> set (zip [0..<length args] args)"
+    proof -
+      from False i_bound have len: "i - 1 < length args" by simp
+      have "[0..<length args] ! (i - 1) = i - 1" using len by simp
+      moreover have "args ! (i - 1) = (name, Ref)" using arg_at_i False by simp
+      ultimately show ?thesis using len by (auto simp: set_zip intro!: exI[of _ "i - 1"])
+    qed
+    (* Need to show the fold on tail succeeds *)
+    have fold_tail: "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inr finalState"
+      using Cons.prems(1) fold_eq by simp
+    (* Need ?step = Inr _ for IH *)
+    have step_ok: "\<exists>st. ?step = Inr st"
+    proof (cases acc)
+      case (Inl err)
+      hence "?step = Inl err" by simp
+      hence "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inl err"
+        by (simp add: fold_process_one_arg_error)
+      thus ?thesis using fold_tail by simp
+    next
+      case (Inr st)
+      show ?thesis
+      proof (cases argVr)
+        case Var
+        show ?thesis
+        proof (cases valResult')
+          case (Inl err)
+          hence "\<exists>e. ?step = Inl e" using process_one_arg_val_error Var by simp
+          then obtain e where "?step = Inl e" by blast
+          thus ?thesis using fold_tail fold_process_one_arg_error by metis
+        next
+          case (Inr val)
+          thus ?thesis using Inr Var arg_eq
+            by (metis fold_process_one_arg_error fold_tail obj_sumE)
+        qed
+      next
+        case Ref
+        show ?thesis
+        proof (cases refResult)
+          case (Inl err)
+          hence "?step = Inl err" using Ref process_one_arg_ref_error Inr by simp
+          thus ?thesis using fold_tail fold_process_one_arg_error by metis
+        next
+          case ref_ok: (Inr lval)
+          show ?thesis
+          proof (cases valResult')
+            case (Inl err)
+            hence "\<exists>e. ?step = Inl e" using process_one_arg_val_error Ref by simp
+            then obtain e where "?step = Inl e" by blast
+            thus ?thesis using fold_tail fold_process_one_arg_error by metis
+          next
+            case (Inr val)
+            thus ?thesis using Inr Ref ref_ok arg_eq
+              by (metis fold_process_one_arg_error fold_tail obj_sumE)
+          qed
+        qed
+      qed
+    qed
+    then obtain st' where step_eq: "?step = Inr st'" by blast
+    have "refResults' ! (i - 1) = refResults ! i"
+      using i_pos refResults_eq by (simp add: nth_Cons')
+    moreover have "\<exists>lval. refResults' ! (i - 1) = Inr lval"
+      using Cons.IH[OF _ len_ref' len_val' tail_in] fold_tail step_eq by simp
+    ultimately show ?thesis by simp
+  qed
+qed
+
+(* More convenient form: if argTm is at position i where fnArg is Ref, lvalue result is Inr *)
+lemma fold_process_one_arg_ref_lvalue_ok:
+  assumes "fold process_one_arg (zip fnArgs (zip refResults valResults)) acc = Inr finalState"
+    and "length fnArgs = length argTms"
+    and "length argTms = length refResults"
+    and "length refResults = length valResults"
+    and "refResults = map f argTms"
+    and "(argTm, (name, Ref)) \<in> set (zip argTms fnArgs)"
+  shows "\<exists>lval. f argTm = Inr lval"
+proof -
+  from assms(6) obtain i where i_bound: "i < length argTms"
+    and argTm_eq: "argTms ! i = argTm"
+    and fnArg_eq: "fnArgs ! i = (name, Ref)"
+    by (auto simp: set_zip in_set_conv_nth)
+  have "(i, (name, Ref)) \<in> set (zip [0..<length fnArgs] fnArgs)"
+    using i_bound fnArg_eq assms(2) by (auto simp: set_zip intro!: exI[of _ i])
+  hence "\<exists>lval. refResults ! i = Inr lval"
+    using fold_process_one_arg_ref_ok[OF assms(1) _ _ ] assms(2,3,4) by auto
+  moreover have "refResults ! i = f argTm"
+    using assms(5) argTm_eq i_bound assms(3)
+    using nth_map by blast
+  ultimately show ?thesis by simp
+qed
+
 lemma fold_process_one_arg_all_ok:
   assumes "fold process_one_arg (zip args (zip refResults valResults)) acc = Inr finalState"
     and "length args = length refResults"
     and "length refResults = length valResults"
     and "valResult \<in> set valResults"
   shows "\<exists>val. valResult = Inr val"
-  sorry
+  using assms
+proof (induction args arbitrary: refResults valResults acc)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons arg args)
+  from Cons.prems(2,3) obtain refResult refResults' valResult' valResults'
+    where refResults_eq: "refResults = refResult # refResults'"
+      and valResults_eq: "valResults = valResult' # valResults'"
+      and len_ref': "length args = length refResults'"
+      and len_val': "length refResults' = length valResults'"
+    by (cases refResults; cases valResults) auto
 
+  obtain name vr where arg_eq: "arg = (name, vr)" by (cases arg)
+
+  let ?step = "process_one_arg ((name, vr), refResult, valResult') acc"
+
+  have fold_eq: "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc
+               = fold process_one_arg (zip args (zip refResults' valResults')) ?step"
+    using refResults_eq valResults_eq arg_eq by simp
+
+  show ?case
+  proof (cases valResult')
+    case (Inl err)
+    hence "\<exists>e. ?step = Inl e" using process_one_arg_val_error by simp
+    then obtain e where "?step = Inl e" by blast
+    hence "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inl e"
+      by (simp add: fold_process_one_arg_error)
+    hence "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc = Inl e"
+      using fold_eq by simp
+    thus ?thesis using Cons.prems(1) by simp
+  next
+    case (Inr val')
+    show ?thesis
+    proof (cases "valResult \<in> set valResults'")
+      case True
+      have fold_tail_ok: "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inr finalState"
+        using Cons.prems(1) fold_eq by simp
+      then obtain finalState' where
+        fold_ok: "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inr finalState'"
+        by blast
+      (* We need acc to be Inr for ?step to potentially be Inr *)
+      have step_ok: "\<exists>st. ?step = Inr st"
+      proof (cases acc)
+        case (Inl err)
+        hence "?step = Inl err" by simp
+        hence "fold process_one_arg (zip args (zip refResults' valResults')) ?step = Inl err"
+          by (simp add: fold_process_one_arg_error)
+        thus ?thesis using fold_ok by simp
+      next
+        case (Inr st)
+        show ?thesis using Inr \<open>valResult' = Inr val'\<close> arg_eq
+          by (metis fold_ok fold_process_one_arg_error sumE)
+      qed
+      then obtain st' where step_eq: "?step = Inr st'" by blast
+      thus ?thesis using Cons.IH[OF _ len_ref' len_val' True] fold_ok step_eq fold_tail_ok
+        by blast
+    next
+      case False
+      hence "valResult = valResult'" using Cons.prems(4) valResults_eq by simp
+      thus ?thesis using Inr by simp
+    qed
+  qed
+qed
 
 lemma process_one_arg_more_fuel:
   assumes "interp_term f state argTm \<noteq> Inl InsufficientFuel
@@ -1271,38 +1491,83 @@ next
               show "interp_term f'' state argTm = interp_term fuel state argTm" by blast
             qed
 
-            (* Similarly for lvalue results - from fold success, Ref arg lvalues succeeded *)
-            have refResults_eq: "map (interp_lvalue f'' state) argTms = ?refResults"
-            proof (rule map_eq_conv[THEN iffD2], rule ballI)
-              fix argTm assume argTm_in: "argTm \<in> set argTms"
-              show "interp_lvalue f'' state argTm = interp_lvalue fuel state argTm"
-              proof (cases "interp_lvalue fuel state argTm")
-                case (Inl err)
-                (* If lvalue returned error, check if it's InsufficientFuel *)
-                show ?thesis
-                proof (cases "err = InsufficientFuel")
-                  case True
-                  (* If InsufficientFuel, by lv_IH this is the only possible result *)
-                  thus ?thesis using Inl lv_IH argTm_in sorry
-                next
-                  case False
-                  (* If other error, lv_IH says result is equal *)
-                  have "interp_lvalue fuel state argTm \<noteq> Inl InsufficientFuel"
-                    using Inl False by simp
-                  thus ?thesis using lv_IH argTm_in f''_ge by blast
-                qed
+            (* For Ref arguments, lvalue must have succeeded (not InsufficientFuel) *)
+            have ref_lvalues_ok: "\<forall>argTm \<in> set argTms. \<forall>name.
+                (argTm, (name, Ref)) \<in> set (zip argTms ?fnArgs)
+                \<longrightarrow> (\<exists>lval. interp_lvalue fuel state argTm = Inr lval)"
+            proof (intro ballI allI impI)
+              fix argTm name
+              assume "argTm \<in> set argTms"
+                and in_zip: "(argTm, (name, Ref)) \<in> set (zip argTms ?fnArgs)"
+              show "\<exists>lval. interp_lvalue fuel state argTm = Inr lval"
+                using fold_process_one_arg_ref_lvalue_ok[OF PreCall len_eq _ len_val refl in_zip]
+                  len_ref by simp
+            qed
+
+            (* For Ref arguments, lvalue results are equal (they didn't return InsufficientFuel) *)
+            have ref_lvalues_eq: "\<forall>i < length argTms. snd (?fnArgs ! i) = Ref \<longrightarrow>
+                interp_lvalue f'' state (argTms ! i) = interp_lvalue fuel state (argTms ! i)"
+            proof (intro allI impI)
+              fix i assume i_bound: "i < length argTms" and is_ref: "snd (?fnArgs ! i) = Ref"
+              obtain argName where fnArg_eq: "?fnArgs ! i = (argName, Ref)"
+                using is_ref by (cases "?fnArgs ! i") auto
+              have argTm_in: "argTms ! i \<in> set argTms" using i_bound by simp
+              have "(argTms ! i, (argName, Ref)) \<in> set (zip argTms ?fnArgs)"
+                using i_bound fnArg_eq len_eq by (auto simp: set_zip intro!: exI[of _ i])
+              hence "\<exists>lval. interp_lvalue fuel state (argTms ! i) = Inr lval"
+                using ref_lvalues_ok argTm_in by blast
+              hence "interp_lvalue fuel state (argTms ! i) \<noteq> Inl InsufficientFuel" by auto
+              thus "interp_lvalue f'' state (argTms ! i) = interp_lvalue fuel state (argTms ! i)"
+                using lv_IH argTm_in f''_ge by blast
+            qed
+
+            (* The filtered refs (for Ref args only) are equal *)
+            let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
+                                    if vr = Ref then refResult else Inl TypeError)
+                                  (zip ?fnArgs refResults)"
+            have filtered_refs_eq: "?filter_refs (map (interp_lvalue f'' state) argTms) =
+                                    ?filter_refs ?refResults"
+            proof (rule nth_equalityI)
+              show "length (?filter_refs (map (interp_lvalue f'' state) argTms)) =
+                    length (?filter_refs ?refResults)"
+                by simp
+            next
+              fix i assume "i < length (?filter_refs (map (interp_lvalue f'' state) argTms))"
+              hence i_bound: "i < length ?fnArgs" by simp
+              hence i_bound': "i < length argTms" using len_eq by simp
+              obtain argName argVr where fnArg_eq: "?fnArgs ! i = (argName, argVr)"
+                by (cases "?fnArgs ! i")
+              show "?filter_refs (map (interp_lvalue f'' state) argTms) ! i =
+                    ?filter_refs ?refResults ! i"
+              proof (cases argVr)
+                case Var
+                thus ?thesis using i_bound fnArg_eq len_eq by simp
               next
-                case (Inr lval)
-                (* If lvalue succeeded, it's not InsufficientFuel, so IH applies *)
-                have "interp_lvalue fuel state argTm \<noteq> Inl InsufficientFuel" using Inr by simp
-                thus ?thesis using lv_IH argTm_in f''_ge by blast
+                case Ref
+                have "interp_lvalue f'' state (argTms ! i) = interp_lvalue fuel state (argTms ! i)"
+                  using ref_lvalues_eq i_bound' Ref fnArg_eq by simp
+                thus ?thesis using i_bound fnArg_eq Ref len_eq i_bound' by simp
               qed
             qed
 
             (* Now show the full expressions are equal *)
-            show ?thesis
-              using Some False Inr f'_eq Inr valResults_eq refResults_eq
-              sorry
+            have rights_vals_eq: "rights (map (interp_term f'' state) argTms) = rights ?valResults"
+              using valResults_eq by metis
+
+            have rights_refs_eq: "rights (?filter_refs (map (interp_lvalue f'' state) argTms)) =
+                                  rights (?filter_refs ?refResults)"
+              using filtered_refs_eq by simp
+
+            (* Rewrite fold_eq using valResults_eq to get the fold result in terms of f'' *)
+            have fold_eq': "fold process_one_arg (zip ?fnArgs (zip (map (interp_lvalue f'' state) argTms)
+                                                              (map (interp_term f'' state) argTms))) (Inr ?clearedState) =
+                           Inr preCallState"
+              using fold_eq PreCall valResults_eq by argo
+
+            (* Both LHS and RHS compute the same result for external functions *)
+            show ?thesis using Some False Inr f'_eq fold_eq' PreCall
+                               rights_vals_eq rights_refs_eq filtered_refs_eq
+              by (simp add: Let_def)
           qed
         qed
       qed
