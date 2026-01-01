@@ -51,7 +51,7 @@ struct Item {
     struct Sexpr *fol_axioms;   // list of FOL cmds e.g. ((assert ...) ...)
 
     const char *fol_name;
-    struct Sexpr *fol_type;     // only needed for variables that can be updated using update_local. can be NULL for anything else.
+    struct Sexpr *fol_type;     // can be NULL (e.g. for global functions, tyvars) but should be non-NULL for local variables (at least)
 
     struct Sexpr *fol_generic_vars;   // list of strings (generic params needed for pre/post conds and the definition).
     struct Sexpr *fol_dummies;  // list of strings (dummy var names used in pre/post conds).
@@ -114,7 +114,7 @@ struct VContext {
     // Information for the current function, if applicable
     struct FunArg *function_args;
     struct Sexpr *arglist_sexpr;  // e.g. ((%x Int) (%y Int)). Could be NULL
-    struct Sexpr *funapp_sexpr;   // e.g. (*f %x %y)  or just *f if no args
+    struct Sexpr *funapp_sexpr;   // e.g. (%f %x %y)  or just %f if no args
 
     // Postconditions, to be verified at a return statement
     struct Condition *postconds;

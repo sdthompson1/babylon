@@ -17,6 +17,7 @@ repository.
 #include "util.h"
 #include "verifier.h"
 #include "verifier_context.h"
+#include "verifier_dependency.h"
 #include "verifier_func.h"
 #include "verifier_run.h"
 #include "verifier_terms.h"
@@ -905,6 +906,42 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
     return make_string_sexpr_handover(name);
 }
 
+// Find free variables for verify_array_literal
+static void get_array_literal_free_vars(struct StackedHashTable *stack,
+                                        struct Sexpr *base_sexpr,
+                                        struct Sexpr **free_vars_out,
+                                        struct Sexpr **types_out,
+                                        struct Sexpr **free_vars_types_out)
+{
+    struct HashTable *var_names = new_hash_table();
+    struct HashTable *scratch = new_hash_table();
+    get_free_var_names_in_sexpr(base_sexpr, var_names, scratch);
+
+    struct HashIterator *iter = new_hash_iterator(var_names);
+    const char *var_name;
+    void *value;
+    while (hash_iterator_next(iter, &var_name, &value)) {
+        struct Item *item = stacked_hash_table_lookup(stack, var_name);
+        if (item && item->fol_type) {
+            *free_vars_out = make_pair_sexpr(
+                make_string_sexpr(var_name),
+                *free_vars_out);
+            *types_out = make_pair_sexpr(
+                copy_sexpr(item->fol_type),
+                *types_out);
+            *free_vars_types_out = make_pair_sexpr(
+                make_list2_sexpr(
+                    make_string_sexpr(var_name),
+                    copy_sexpr(item->fol_type)),
+                *free_vars_types_out);
+        }
+    }
+    free_hash_iterator(iter);
+
+    free_hash_table(scratch);
+    free_hash_table(var_names);
+}
+
 static void* verify_array_literal(void *context, struct Term *term, void *type_result, void *list_result)
 {
     struct VContext *cxt = context;
@@ -917,6 +954,19 @@ static void* verify_array_literal(void *context, struct Term *term, void *type_r
 
     char name[60];
     sprintf(name, "$ArrLit.%s.%" PRIuPTR, cxt->current_decl_name, unique_num);
+
+    // The sub_exprs might contain free variables, so we need to close over
+    // those by creating a function (if necessary).
+    struct Sexpr *free_vars = NULL;
+    struct Sexpr *arg_types = NULL;
+    struct Sexpr *free_vars_types = NULL;
+    get_array_literal_free_vars(cxt->stack, sub_exprs, &free_vars, &arg_types, &free_vars_types);
+
+    struct Sexpr *array_lit_expr = make_string_sexpr(name);
+    if (free_vars != NULL) {
+        array_lit_expr = make_pair_sexpr(array_lit_expr, free_vars);
+        free_vars = NULL;
+    }
 
     // fol_type is (Array Int ElemType)
     struct Sexpr *fol_type = verify_type(term->type);
@@ -931,16 +981,25 @@ static void* verify_array_literal(void *context, struct Term *term, void *type_r
         struct Sexpr *index_expr = make_string_sexpr(num);
 
         struct Sexpr *axiom =
-            make_list2_sexpr(
-                make_string_sexpr("assert"),
+            make_list3_sexpr(
+                make_string_sexpr("="),
                 make_list3_sexpr(
-                    make_string_sexpr("="),
-                    make_list3_sexpr(
-                        make_string_sexpr("select"),
-                        make_string_sexpr(name),
-                        index_expr),
-                    sub_exprs->left));
+                    make_string_sexpr("select"),
+                    copy_sexpr(array_lit_expr),
+                    index_expr),
+                sub_exprs->left);
+        index_expr = NULL;
         sub_exprs->left = NULL;
+
+        if (free_vars_types != NULL) {
+            axiom = make_list3_sexpr(
+                make_string_sexpr("forall"),
+                copy_sexpr(free_vars_types),
+                axiom);
+        }
+        axiom = make_list2_sexpr(
+            make_string_sexpr("assert"),
+            axiom);
 
         struct Sexpr *next = sub_exprs->right;
         sub_exprs->right = NULL;
@@ -954,19 +1013,38 @@ static void* verify_array_literal(void *context, struct Term *term, void *type_r
 
     // the result must also be a valid array
     // (e.g. elements outside the valid range must be equal to $ARBITRARY)
-    struct Sexpr * validity = validity_test_expr(term->type, name);
+    struct Sexpr * validity;
+    if (free_vars_types == NULL) {
+        validity = validity_test_expr(term->type, name);
+    } else {
+        validity = make_list3_sexpr(
+            make_string_sexpr("forall"),
+            copy_sexpr(free_vars_types),
+            make_list3_sexpr(
+                make_string_sexpr("let"),
+                make_list1_sexpr(
+                    make_list2_sexpr(
+                        make_string_sexpr("$array-lit"),
+                        copy_sexpr(array_lit_expr))),
+                validity_test_expr(term->type, "$array-lit")));
+    }
     validity = make_list2_sexpr(make_string_sexpr("assert"), validity);
     *tail = make_list1_sexpr(validity);
     tail = &(*tail)->right;
+
+    free_sexpr(free_vars_types);
+    free_vars_types = NULL;
 
     // make an Item for the array literal
     struct Item *item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
 
-    item->fol_decl = make_list3_sexpr(
-        make_string_sexpr("declare-const"),
+    item->fol_decl = make_list4_sexpr(
+        make_string_sexpr("declare-fun"),
         make_string_sexpr(name),
+        arg_types,
         copy_sexpr(fol_type));
+    arg_types = NULL;
 
     item->fol_axioms = axioms;
 
@@ -976,7 +1054,7 @@ static void* verify_array_literal(void *context, struct Term *term, void *type_r
     hash_table_insert(cxt->stack->base->table, copy_string(name), item);  // add to global env
 
     // return the result
-    return make_string_sexpr(name);
+    return array_lit_expr;
 }
 
 static struct Sexpr* verify_numeric_cast(struct VContext *cxt, struct Term *term, struct Sexpr *operand)
