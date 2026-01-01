@@ -99,7 +99,9 @@ SRCS := $(wildcard src/*.c)
 DEBUG_OBJS := $(patsubst src/%.c,build/debug/%.o,$(SRCS))
 RELEASE_OBJS := $(patsubst src/%.c,build/release/%.o,$(SRCS))
 COVERAGE_OBJS := $(patsubst src/%.c,build/coverage/%.o,$(SRCS))
-DEPS := $(patsubst src/%.c,build/deps/%.d,$(SRCS))
+DEBUG_DEPS := $(patsubst src/%.c,build/debug/%.d,$(SRCS))
+RELEASE_DEPS := $(patsubst src/%.c,build/release/%.d,$(SRCS))
+COVERAGE_DEPS := $(patsubst src/%.c,build/coverage/%.d,$(SRCS))
 
 # Phony targets
 .PHONY: all debug release cover incr-cover \
@@ -116,7 +118,7 @@ DEPS := $(patsubst src/%.c,build/deps/%.d,$(SRCS))
 all: release
 
 # Include dependency files if they exist
--include $(DEPS)
+-include $(DEBUG_DEPS) $(RELEASE_DEPS) $(COVERAGE_DEPS)
 
 
 #
@@ -130,8 +132,7 @@ $(DEBUG_EXE): $(DEBUG_OBJS)
 
 build/debug/%.o: src/%.c
 	@mkdir -p $(@D)
-	@mkdir -p build/deps
-	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/deps/%.d,$<) $(DEBUG_CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/debug/%.d,$<) $(DEBUG_CFLAGS) -c $< -o $@
 
 
 #
@@ -145,8 +146,7 @@ $(RELEASE_EXE): $(RELEASE_OBJS)
 
 build/release/%.o: src/%.c
 	@mkdir -p $(@D)
-	@mkdir -p build/deps
-	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/deps/%.d,$<) $(RELEASE_CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/release/%.d,$<) $(RELEASE_CFLAGS) -c $< -o $@
 
 
 #
@@ -171,8 +171,7 @@ $(COVERAGE_EXE): $(COVERAGE_OBJS)
 
 build/coverage/%.o: src/%.c
 	@mkdir -p $(@D)
-	@mkdir -p build/deps
-	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/deps/%.d,$<) $(COVERAGE_CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MF $(patsubst src/%.c,build/coverage/%.d,$<) $(COVERAGE_CFLAGS) -c $< -o $@
 
 
 #
