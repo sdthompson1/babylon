@@ -25,4 +25,5 @@ ghost function test3()
 {
     var arr = return_array(99);
     assert arr[0] == 99;  // Should succeed
+    assert arr[0] == 98;  // Should fail
 }
