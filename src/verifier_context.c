@@ -442,6 +442,27 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     item = NULL;
 
 
+    // Add $valid
+    item = alloc(sizeof(struct Item));
+    memset(item, 0, sizeof(struct Item));
+
+    const char *valid_fol_name = copy_string_2("$valid-", fol_name);
+
+    // (declare-fun $valid-%^name (%^name) Bool)
+    item->fol_decl = make_list4_sexpr(
+        make_string_sexpr("declare-fun"),
+        make_string_sexpr(valid_fol_name),
+        make_list1_sexpr(make_string_sexpr(fol_name)),
+        make_string_sexpr("Bool"));
+    item->fol_name = copy_string(valid_fol_name);
+
+    if (hash_table_contains_key(env, valid_fol_name)) {
+        fatal_error("adding valid_fol_name: key already exists");
+    }
+
+    hash_table_insert(env, copy_string(valid_fol_name), item);
+
+
     // Add $default
     item = alloc(sizeof(struct Item));
     memset(item, 0, sizeof(struct Item));
@@ -454,6 +475,24 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
         make_string_sexpr(default_fol_name),
         make_string_sexpr(fol_name));
     item->fol_name = copy_string(default_fol_name);
+
+    // The default value is always "valid" for its type:
+    // (assert (forall (($x FOLNAME)) ($valid-FOLNAME $x)))
+    struct Sexpr *valid_axiom =
+        make_list2_sexpr(
+            make_string_sexpr("assert"),
+            make_list3_sexpr(
+                make_string_sexpr("forall"),
+                make_list1_sexpr(
+                    make_list2_sexpr(
+                        make_string_sexpr("$x"),
+                        make_string_sexpr(fol_name))),
+                make_list2_sexpr(
+                    make_string_sexpr_handover(valid_fol_name),
+                    make_string_sexpr("$x"))));
+    valid_fol_name = NULL;
+    item->fol_axioms = make_list1_sexpr(valid_axiom);
+    valid_axiom = NULL;
 
     if (hash_table_contains_key(env, default_fol_name)) {
         fatal_error("adding default_fol_name: key already exists");
@@ -521,26 +560,6 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     allocated_fol_name = NULL;
     item = NULL;
 
-    // Add $valid
-    item = alloc(sizeof(struct Item));
-    memset(item, 0, sizeof(struct Item));
-
-    const char *valid_fol_name = copy_string_2("$valid-", fol_name);
-
-    // (declare-fun $valid-%^name (%^name) Bool)
-    item->fol_decl = make_list4_sexpr(
-        make_string_sexpr("declare-fun"),
-        make_string_sexpr(valid_fol_name),
-        make_list1_sexpr(make_string_sexpr(fol_name)),
-        make_string_sexpr("Bool"));
-    item->fol_name = copy_string(valid_fol_name);
-
-    if (hash_table_contains_key(env, valid_fol_name)) {
-        fatal_error("adding valid_fol_name: key already exists");
-    }
-
-    hash_table_insert(env, valid_fol_name, item);
-    valid_fol_name = NULL;
 
     free((char*)fol_name);
     fol_name = NULL;
