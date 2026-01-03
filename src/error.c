@@ -228,6 +228,12 @@ void report_ref_arg_not_allowed(struct Location location)
     print_error("Cannot pass ref arg here\n");
 }
 
+void report_ref_ghost_requires_ghost_arg(struct Location location)
+{
+    print_location(location);
+    print_error("'ref ghost' argument requires a ghost lvalue\n");
+}
+
 void report_no_ref_in_postcondition(struct Location location)
 {
     print_location(location);

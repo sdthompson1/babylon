@@ -1,0 +1,2 @@
+src/GhostArg.b:18:10: 'ref ghost' argument requires a ghost lvalue
+src/GhostArg.b:27:13: Can't access a ghost variable or function from executable code

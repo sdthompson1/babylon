@@ -1704,6 +1704,10 @@ static void codegen_call(struct CGContext *cxt,
     struct FunArg *formal = fun_ty->function_data.args;
     struct OpTermList *actual = term->call.args;
     for (; actual; actual = actual->next, formal = formal->next) {
+        // Skip ghost arguments
+        if (formal->ghost) {
+            continue;
+        }
         if (!first_arg) {
             print_token(cxt->pr, ",");
         } else {
@@ -2781,29 +2785,38 @@ static void print_function_header(struct CGContext *cxt,
 
     print_token(cxt->pr, "(");
 
+    // Track whether we've printed the first parameter yet
+    bool first_param = true;
+
     // Add implicit "ret" argument if return type is aggregate
     if (ret_ty && !is_scalar_type(cxt, ret_ty)) {
+        first_param = false;
         print_token(cxt->pr, "char");
         print_token(cxt->pr, "*");
         print_token(cxt->pr, "ret");
-        if (decl->function_data.tyvars || decl->function_data.args) {
-            print_token(cxt->pr, ",");
-        }
     }
 
     // Add implicit size argument for each type variable
     for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
+        if (!first_param) {
+            print_token(cxt->pr, ",");
+        }
+        first_param = false;
         print_token(cxt->pr, "uint64_t");
         mangled_name = mangle_name(tv->name);
         print_token(cxt->pr, mangled_name);
         free(mangled_name);
-        if (tv->next || decl->function_data.args) {
-            print_token(cxt->pr, ",");
-        }
     }
 
-    // Add the explicit arguments
+    // Add the explicit arguments (skipping ghost arguments)
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
+        if (arg->ghost) {
+            continue;
+        }
+        if (!first_param) {
+            print_token(cxt->pr, ",");
+        }
+        first_param = false;
         if (arg->ref) {
             print_token(cxt->pr, "char");
             print_token(cxt->pr, "*");
@@ -2813,7 +2826,6 @@ static void print_function_header(struct CGContext *cxt,
         mangled_name = mangle_name(arg->name);
         print_token(cxt->pr, mangled_name);
         free(mangled_name);
-        if (arg->next != NULL) print_token(cxt->pr, ",");
     }
 
     print_token(cxt->pr, ")");
@@ -2884,8 +2896,11 @@ static void codegen_decl_function(struct CGContext *cxt,
     print_token(cxt->pr, "{");
     new_line(cxt->pr);
 
-    // Add env entries for any ref arguments
+    // Add env entries for any ref arguments (skip ghost arguments)
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
+        if (arg->ghost) {
+            continue;
+        }
         if (arg->ref) {
             struct CodegenEntry *entry = alloc(sizeof(struct CodegenEntry));
             memset(entry, 0, sizeof(*entry));
@@ -2903,8 +2918,11 @@ static void codegen_decl_function(struct CGContext *cxt,
     new_line(cxt->pr);
     new_line(cxt->pr);
 
-    // Remove env entries for the arguments
+    // Remove env entries for the arguments (skip ghost arguments)
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
+        if (arg->ghost) {
+            continue;
+        }
         void *value = hash_table_lookup(cxt->env, arg->name);
         if (value) {
             free(value);

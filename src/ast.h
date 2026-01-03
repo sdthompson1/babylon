@@ -616,6 +616,9 @@ struct FunArg {
     // True if this is a "ref" argument; set by parser.
     bool ref;
 
+    // True if this is a "ghost" argument; set by parser.
+    bool ghost;
+
     struct FunArg *next;
 };
 

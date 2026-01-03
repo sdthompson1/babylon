@@ -107,6 +107,7 @@ void report_field_not_found(struct Location loc, const char *field_name);
 void report_mixed_positional_and_named_fields(struct Location loc);
 void report_duplicate_field_name(struct Location location, const char *name);
 void report_ref_arg_not_allowed(struct Location location);
+void report_ref_ghost_requires_ghost_arg(struct Location location);
 void report_no_ref_in_postcondition(struct Location location);
 void report_cannot_index(struct Term *term);
 void report_wrong_number_of_indexes(struct Term *term);

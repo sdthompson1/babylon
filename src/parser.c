@@ -2188,11 +2188,21 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
             expect(state, TOK_COMMA, "',' or ')'");
         }
 
-        // 'ref' is allowed either before the var name, or after the colon.
+        // 'ref' and 'ghost' are allowed either before the var name, or after the colon.
+        // They can appear in any order, but only once each.
         bool ref = false;
-        if (state->token->type == TOK_KW_REF) {
-            ref = true;
-            advance(state);
+        bool ghost = false;
+
+        while (state->token->type == TOK_KW_REF || state->token->type == TOK_KW_GHOST) {
+            if (state->token->type == TOK_KW_REF) {
+                if (ref) break; // error
+                ref = true;
+                advance(state);
+            } else if (state->token->type == TOK_KW_GHOST) {
+                if (ghost) break; // error
+                ghost = true;
+                advance(state);
+            }
         }
 
         const struct Token *name_tok = expect(state, TOK_NAME, "argument name");
@@ -2202,9 +2212,16 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
 
         expect(state, TOK_COLON, "':'");
 
-        if (!ref && state->token->type == TOK_KW_REF) {
-            ref = true;
-            advance(state);
+        while (state->token->type == TOK_KW_REF || state->token->type == TOK_KW_GHOST) {
+            if (state->token->type == TOK_KW_REF) {
+                if (ref) break; // error
+                ref = true;
+                advance(state);
+            } else if (state->token->type == TOK_KW_GHOST) {
+                if (ghost) break; // error
+                ghost = true;
+                advance(state);
+            }
         }
 
         struct Type *type = parse_type(state, true);
@@ -2213,6 +2230,7 @@ static struct FunArg * parse_fun_args_and_rparen(struct ParserState *state, stru
         funarg->name = copy_string(name_tok->data);
         funarg->type = type;
         funarg->ref = ref;
+        funarg->ghost = ghost;
         funarg->next = NULL;
         *next_ptr = funarg;
         next_ptr = &funarg->next;

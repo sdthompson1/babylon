@@ -116,6 +116,9 @@ void print_type(FILE *file, struct Type *type)
                 if (arg->ref) {
                     fprintf(file, "ref ");
                 }
+                if (arg->ghost) {
+                    fprintf(file, "ghost ");
+                }
                 print_type(file, arg->type);
                 if (arg->next) {
                     fprintf(file, ", ");
@@ -758,6 +761,9 @@ static void print_function(int indent_level, FILE *file, struct Decl *decl)
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         if (arg->ref) {
             fprintf(file, "ref ");
+        }
+        if (arg->ghost) {
+            fprintf(file, "ghost ");
         }
         fprintf(file, "%s: ", arg->name);
         print_type(file, arg->type);

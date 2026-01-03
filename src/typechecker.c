@@ -2079,10 +2079,7 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
 {
     struct TypecheckContext *tc_context = context;
 
-    // Typecheck the arguments.
-    transform_op_term_list(tr, context, term->call.args);
-
-    // Typecheck the LHS.
+    // Typecheck the LHS first, so we can determine which arguments are ghost.
     if (term->call.func->tag == TM_VAR) {
         typecheck_var_term(tc_context, term->call.func, true, false);
     } else if (term->call.func->tag == TM_TYAPP) {
@@ -2102,6 +2099,26 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
         report_call_of_non_function(term->call.func);
         tc_context->error = true;
         return NULL;
+    }
+
+    // Typecheck the arguments, setting executable=false for ghost arguments.
+    struct FunArg *formal = fun_type->function_data.args;
+    struct OpTermList *actual = term->call.args;
+    while (formal && actual) {
+        bool old_exec = tc_context->executable;
+        if (formal->ghost) {
+            tc_context->executable = false;
+        }
+        typecheck_term(tc_context, actual->rhs);
+        tc_context->executable = old_exec;
+
+        formal = formal->next;
+        actual = actual->next;
+    }
+    // Typecheck any remaining arguments (in case of argument count mismatch)
+    while (actual) {
+        typecheck_term(tc_context, actual->rhs);
+        actual = actual->next;
     }
 
     bool ok = true;
@@ -2166,7 +2183,12 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
                     ok = false;
                 } else if (!ghost && !tc_context->executable) {
                     // Trying to write to a non-ghost variable in a ghost context.
-                    report_writing_nonghost_from_ghost_code(term->location);
+                    report_writing_nonghost_from_ghost_code(actual_list->rhs->location);
+                    tc_context->error = true;
+                    ok = false;
+                } else if (!ghost && dummy_list->ghost) {
+                    // ref ghost arguments can only accept ghost lvalues
+                    report_ref_ghost_requires_ghost_arg(actual_list->rhs->location);
                     tc_context->error = true;
                     ok = false;
                 }
@@ -3666,7 +3688,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
             add_to_type_env(tc_context->type_env,   // local env
                             arg->name,
                             copy_type(arg->type),   // handover
-                            decl->ghost,
+                            decl->ghost || arg->ghost,
                             !arg->ref,      // read_only
                             false,          // constructor
                             false,          // impure
@@ -3756,6 +3778,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
             (*next_ptr)->name = NULL;
             (*next_ptr)->type = copy_type(arg->type);
             (*next_ptr)->ref = arg->ref;
+            (*next_ptr)->ghost = arg->ghost;
             next_ptr = &((*next_ptr)->next);
         }
         *next_ptr = NULL;
@@ -3945,6 +3968,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                 func_type->function_data.args->name = NULL;
                 func_type->function_data.args->type = copy_type(ctor->payload);
                 func_type->function_data.args->ref = false;
+                func_type->function_data.args->ghost = false;
                 func_type->function_data.args->next = NULL;
                 func_type->function_data.return_type = ctor_type;
                 ctor_type = func_type;
@@ -4215,7 +4239,8 @@ static bool check_interface_function(struct Module *module,
         }
 
         if (int_impl_type_mismatch(arg1->type, arg2->type)
-        || arg1->ref != arg2->ref) {
+        || arg1->ref != arg2->ref
+        || arg1->ghost != arg2->ghost) {
             report_interface_mismatch_impl(interface);
             return false;
         }

@@ -851,6 +851,7 @@ static void * copy_fun_arg_node(void *context, struct FunArg *list, void *type, 
     result->name = list->name ? copy_string(list->name) : NULL;
     result->type = type;
     result->ref = list->ref;
+    result->ghost = list->ghost;
     result->next = next;
     return result;
 }
@@ -1744,6 +1745,7 @@ struct FunArg * copy_fun_args(struct FunArg *arg)
     result->name = copy_string(arg->name);
     result->type = copy_type(arg->type);
     result->ref = arg->ref;
+    result->ghost = arg->ghost;
     result->next = copy_fun_args(arg->next);
 
     return result;
@@ -2110,6 +2112,7 @@ bool funarg_lists_equal(const struct FunArg *lhs, const struct FunArg *rhs)
 
         if (!types_equal(lhs->type, rhs->type)) return false;
         if (lhs->ref != rhs->ref) return false;
+        if (lhs->ghost != rhs->ghost) return false;
 
         lhs = lhs->next;
         rhs = rhs->next;
