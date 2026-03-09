@@ -144,6 +144,15 @@ interface {
         ensures sizeof(dest) == old(sizeof(dest));
         ensures forall (j: u64) j <= strlen(src) ==> dest[j] == src[j];
 
+    // Lemma: strcpy preserves length
+    ghost function strcpy_length_lemma(dest: u8[], src: u8[])
+        requires valid_string(src);
+        requires valid_string(dest);
+        requires strlen(src) < sizeof(dest);
+        requires forall (j: u64) j <= strlen(src) ==> dest[j] == src[j];
+        ensures strlen(dest) == strlen(src);
+    {}
+
     // Copy a string, truncating to fit in the destination if necessary.
     function strcpy_trunc(ref dest: u8[], src: u8[])
         requires valid_string(src);
@@ -168,6 +177,24 @@ interface {
             dest[j] == old(dest[j]);
         ensures forall (j: u64) j <= strlen(src) ==>
             dest[old(strlen(dest)) + j] == src[j];
+
+    // Pure version of strcat, for ghost functions
+    ghost function strcat_result(dest: u8[], src: u8[]): u8[]
+        requires valid_string(src);
+        requires valid_string(dest);
+        requires int(strlen(src)) + int(strlen(dest)) < int(sizeof(dest));
+    {
+        var new_dest = dest;
+        strcat(new_dest, src);
+        return new_dest;
+    }
+
+    // Lemma: strcat sums the input lengths
+    ghost function strcat_length_lemma(dest: u8[], src: u8[])
+        requires valid_string(src);
+        requires valid_string(dest);
+        requires int(strlen(src)) + int(strlen(dest)) < int(sizeof(dest));
+        ensures strlen(strcat_result(dest, src)) == strlen(dest) + strlen(src);
 
     // Append strings, truncating to fit the destination if necessary.
     function strcat_trunc(ref dest: u8[], src: u8[])
@@ -458,6 +485,27 @@ function strcat(ref dest: u8[], src: u8[])
             return;
         }
         idx = idx + 1;
+    }
+}
+
+ghost function strcat_length_lemma(dest: u8[], src: u8[])
+    requires valid_string(src);
+    requires valid_string(dest);
+    requires int(strlen(src)) + int(strlen(dest)) < int(sizeof(dest));
+    ensures strlen(strcat_result(dest, src)) == strlen(dest) + strlen(src);
+{
+    var new_dest = strcat_result(dest, src);
+    assert forall (j: u64) j < strlen(dest) + strlen(src) ==> new_dest[j] != 0
+    {
+        fix j: u64;
+        if j < strlen(dest) {
+            assert *;
+        } else if j < strlen(dest) + strlen(src) {
+            assert new_dest[j] == src[j - strlen(dest)];
+            assert *;
+        } else {
+            assert *;
+        }
     }
 }
 
