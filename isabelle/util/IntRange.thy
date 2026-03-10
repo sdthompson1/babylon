@@ -5,6 +5,13 @@ begin
 datatype Signedness = Signed | Unsigned
 datatype IntBits = IntBits_8 | IntBits_16 | IntBits_32 | IntBits_64
 
+(* Get the number of bits for a given IntBits *)
+fun bit_size :: "IntBits \<Rightarrow> nat" where
+  "bit_size IntBits_8 = 8"
+| "bit_size IntBits_16 = 16"
+| "bit_size IntBits_32 = 32"
+| "bit_size IntBits_64 = 64"
+
 (* Get the range of a finite integer type *)
 fun int_range :: "Signedness \<Rightarrow> IntBits \<Rightarrow> (int \<times> int)" where
   "int_range Signed IntBits_8 = (-128, 127)"

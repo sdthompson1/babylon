@@ -147,6 +147,283 @@ definition unify_call_args :: "Location \<Rightarrow> string \<Rightarrow> nat \
      | Inr finalSubst \<Rightarrow> Inr (apply_call_coercions finalSubst tms actualTys expectedTys, finalSubst))"
 
 
+(* ========================================================================== *)
+(* Binary operator helpers *)
+(* ========================================================================== *)
+
+(* Convert BabBinop to CoreBinop. Returns None for operators that need special handling. *)
+fun binop_to_core :: "BabBinop \<Rightarrow> CoreBinop option" where
+  "binop_to_core BabBinop_Add = Some CoreBinop_Add"
+| "binop_to_core BabBinop_Subtract = Some CoreBinop_Subtract"
+| "binop_to_core BabBinop_Multiply = Some CoreBinop_Multiply"
+| "binop_to_core BabBinop_Divide = Some CoreBinop_Divide"
+| "binop_to_core BabBinop_Modulo = Some CoreBinop_Modulo"
+| "binop_to_core BabBinop_BitAnd = Some CoreBinop_BitAnd"
+| "binop_to_core BabBinop_BitOr = Some CoreBinop_BitOr"
+| "binop_to_core BabBinop_BitXor = Some CoreBinop_BitXor"
+| "binop_to_core BabBinop_ShiftLeft = Some CoreBinop_ShiftLeft"
+| "binop_to_core BabBinop_ShiftRight = Some CoreBinop_ShiftRight"
+| "binop_to_core BabBinop_Equal = Some CoreBinop_Equal"
+| "binop_to_core BabBinop_NotEqual = Some CoreBinop_NotEqual"
+| "binop_to_core BabBinop_Less = Some CoreBinop_Less"
+| "binop_to_core BabBinop_LessEqual = Some CoreBinop_LessEqual"
+| "binop_to_core BabBinop_Greater = Some CoreBinop_Greater"
+| "binop_to_core BabBinop_GreaterEqual = Some CoreBinop_GreaterEqual"
+| "binop_to_core BabBinop_And = Some CoreBinop_And"
+| "binop_to_core BabBinop_Or = Some CoreBinop_Or"
+| "binop_to_core BabBinop_Implies = Some CoreBinop_Implies"
+| "binop_to_core BabBinop_ImpliedBy = None"
+| "binop_to_core BabBinop_Iff = None"
+
+(* Default type for binary operators when both operands are metavariables.
+   Logical/iff/implied-by default to Bool, everything else defaults to i32. *)
+definition default_type_for_binop :: "BabBinop \<Rightarrow> CoreType" where
+  "default_type_for_binop op =
+    (case binop_to_core op of
+      Some cop \<Rightarrow>
+        if is_logical_binop cop then CoreTy_Bool
+        else CoreTy_FiniteInt Signed IntBits_32
+    | None \<Rightarrow> CoreTy_Bool)"  \<comment> \<open>ImpliedBy and Iff default to Bool\<close>
+
+(* Check if a term is simple enough to duplicate without let-binding *)
+fun is_simple_term :: "CoreTerm \<Rightarrow> bool" where
+  "is_simple_term (CoreTm_Var _) = True"
+| "is_simple_term (CoreTm_LitBool _) = True"
+| "is_simple_term (CoreTm_LitInt _) = True"
+| "is_simple_term _ = False"
+
+(* Is this a chainable BabBinop? (comparison or implies/implied-by operators) *)
+fun is_chainable_bab_binop :: "BabBinop \<Rightarrow> bool" where
+  "is_chainable_bab_binop BabBinop_Less = True"
+| "is_chainable_bab_binop BabBinop_LessEqual = True"
+| "is_chainable_bab_binop BabBinop_Greater = True"
+| "is_chainable_bab_binop BabBinop_GreaterEqual = True"
+| "is_chainable_bab_binop BabBinop_Equal = True"
+| "is_chainable_bab_binop BabBinop_NotEqual = True"
+| "is_chainable_bab_binop BabBinop_Implies = True"
+| "is_chainable_bab_binop BabBinop_ImpliedBy = True"
+| "is_chainable_bab_binop _ = False"
+
+(* Resolve metavariables in binary operator operands.
+   If one operand is a metavariable, unify it with the other operand's type.
+   If both are metavariables, use the default type for the operator.
+   Returns the (possibly substituted) terms and their resolved types. *)
+fun resolve_binop_metas :: "BabBinop
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> (CoreTerm \<times> CoreType \<times> CoreTerm \<times> CoreType)" where
+  "resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy =
+    (case (lhsTy, rhsTy) of
+      (CoreTy_Meta n, CoreTy_Meta m) \<Rightarrow>
+        let defaultTy = default_type_for_binop babOp;
+            subst = fmupd n defaultTy (singleton_subst m defaultTy)
+        in (apply_subst_to_term subst lhsTm, defaultTy,
+            apply_subst_to_term subst rhsTm, defaultTy)
+    | (CoreTy_Meta n, _) \<Rightarrow>
+        let subst = singleton_subst n rhsTy
+        in (apply_subst_to_term subst lhsTm, rhsTy, rhsTm, rhsTy)
+    | (_, CoreTy_Meta m) \<Rightarrow>
+        let subst = singleton_subst m lhsTy
+        in (lhsTm, lhsTy, apply_subst_to_term subst rhsTm, lhsTy)
+    | _ \<Rightarrow> (lhsTm, lhsTy, rhsTm, rhsTy))"
+
+(* Elaborate a single binary operation on already-elaborated operands.
+   Handles metavariable resolution, type coercion, and type checking.
+   ImpliedBy and Iff are handled before calling this function. *)
+fun elab_single_binop :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "elab_single_binop loc ghost babOp lhsTm lhsTy rhsTm rhsTy =
+    (let (lhsTm', lhsTy', rhsTm', rhsTy') =
+           resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy
+     in
+      case binop_to_core babOp of
+        None \<Rightarrow> undefined \<comment> \<open>should not happen\<close>
+      | Some cop \<Rightarrow>
+        \<comment> \<open>Step 3: Type-check based on operator category\<close>
+        if is_arithmetic_binop cop then
+          \<comment> \<open>Arithmetic: both numeric, coerce to common type\<close>
+          if is_numeric_type lhsTy' \<and> is_numeric_type rhsTy' then
+            if lhsTy' = rhsTy' then
+              Inr (CoreTm_Binop cop lhsTm' rhsTm', lhsTy')
+            else
+              \<comment> \<open>Try implicit finite int coercion\<close>
+              (case coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' of
+                Some (newLhs, newRhs, commonTy) \<Rightarrow>
+                  Inr (CoreTm_Binop cop newLhs newRhs, commonTy)
+              | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
+          else Inl [TyErr_BinopRequiresNumeric loc babOp]
+
+        else if is_modulo_binop cop then
+          \<comment> \<open>Modulo: both integer (not real)\<close>
+          if is_integer_type lhsTy' \<and> is_integer_type rhsTy' then
+            if lhsTy' = rhsTy' then
+              Inr (CoreTm_Binop cop lhsTm' rhsTm', lhsTy')
+            else
+              (case coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' of
+                Some (newLhs, newRhs, commonTy) \<Rightarrow>
+                  Inr (CoreTm_Binop cop newLhs newRhs, commonTy)
+              | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
+          else Inl [TyErr_BinopRequiresInteger loc babOp]
+
+        else if is_bitwise_binop cop then
+          \<comment> \<open>Bitwise: both finite integer, coerce to common type\<close>
+          if is_finite_integer_type lhsTy' \<and> is_finite_integer_type rhsTy' then
+            if lhsTy' = rhsTy' then
+              Inr (CoreTm_Binop cop lhsTm' rhsTm', lhsTy')
+            else
+              (case coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' of
+                Some (newLhs, newRhs, commonTy) \<Rightarrow>
+                  Inr (CoreTm_Binop cop newLhs newRhs, commonTy)
+              | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
+          else Inl [TyErr_BinopRequiresFiniteInteger loc babOp]
+
+        else if is_shift_binop cop then
+          \<comment> \<open>Shift: both finite integer, cast RHS to LHS type\<close>
+          if is_finite_integer_type lhsTy' \<and> is_finite_integer_type rhsTy' then
+            let castRhs = (if lhsTy' = rhsTy' then rhsTm' else CoreTm_Cast lhsTy' rhsTm')
+            in Inr (CoreTm_Binop cop lhsTm' castRhs, lhsTy')
+          else Inl [TyErr_BinopRequiresFiniteInteger loc babOp]
+
+        else if is_ordering_binop cop then
+          \<comment> \<open>Ordering: both numeric, result is Bool\<close>
+          if is_numeric_type lhsTy' \<and> is_numeric_type rhsTy' then
+            if lhsTy' = rhsTy' then
+              Inr (CoreTm_Binop cop lhsTm' rhsTm', CoreTy_Bool)
+            else
+              (case coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' of
+                Some (newLhs, newRhs, _) \<Rightarrow>
+                  Inr (CoreTm_Binop cop newLhs newRhs, CoreTy_Bool)
+              | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
+          else Inl [TyErr_BinopRequiresNumeric loc babOp]
+
+        else if is_eq_neq_binop cop then
+          \<comment> \<open>Equality: ghost allows any type, non-ghost requires bool or numeric\<close>
+          if lhsTy' = rhsTy' then
+            if ghost = Ghost \<or> lhsTy' = CoreTy_Bool \<or> is_numeric_type lhsTy' then
+              Inr (CoreTm_Binop cop lhsTm' rhsTm', CoreTy_Bool)
+            else Inl [TyErr_EqualityRequiresBoolOrNumeric loc]
+          else if is_finite_integer_type lhsTy' \<and> is_finite_integer_type rhsTy' then
+            (case coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' of
+              Some (newLhs, newRhs, _) \<Rightarrow>
+                Inr (CoreTm_Binop cop newLhs newRhs, CoreTy_Bool)
+            | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
+          else Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy']
+
+        else if is_logical_binop cop then
+          \<comment> \<open>Logical: both Bool\<close>
+          if lhsTy' = CoreTy_Bool \<and> rhsTy' = CoreTy_Bool then
+            Inr (CoreTm_Binop cop lhsTm' rhsTm', CoreTy_Bool)
+          else Inl [TyErr_BinopRequiresBool loc babOp]
+
+        else undefined)"  \<comment> \<open>should be exhaustive\<close>
+
+(* Elaborate a single binary operation, handling ImpliedBy and Iff specially *)
+fun elab_binop_with_special :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "elab_binop_with_special loc ghost BabBinop_ImpliedBy lhsTm lhsTy rhsTm rhsTy =
+    \<comment> \<open>A <== B becomes B ==> A\<close>
+    elab_single_binop loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy"
+| "elab_binop_with_special loc ghost BabBinop_Iff lhsTm lhsTy rhsTm rhsTy =
+    \<comment> \<open>A <==> B becomes A == B (both must be Bool)\<close>
+    (let (lhs', lTy, rhs', rTy) = resolve_binop_metas BabBinop_Iff lhsTm lhsTy rhsTm rhsTy
+     in if lTy = CoreTy_Bool \<and> rTy = CoreTy_Bool
+        then Inr (CoreTm_Binop CoreBinop_Equal lhs' rhs', CoreTy_Bool)
+        else Inl [TyErr_BinopRequiresBool loc BabBinop_Iff])"
+| "elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy =
+    elab_single_binop loc ghost op lhsTm lhsTy rhsTm rhsTy"
+
+(* Process a chain of binary operations on already-elaborated terms.
+   Takes the list of (BabBinop, elaboratedTerm, elaboratedType) triples
+   and the accumulated LHS term/type.
+
+   For chainable operators (comparisons, implies/implied-by):
+     a < b < c becomes (a < b) && (b < c), with let-binding for complex middle terms.
+   For non-chainable operators:
+     Left-associates: a + b + c becomes (a + b) + c.
+   For implies chains:
+     Right-associates: a ==> b ==> c becomes a ==> (b ==> c).
+*)
+fun fold_binop_left :: "Location \<Rightarrow> GhostOrNot
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
+    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "fold_binop_left loc ghost accTm accTy [] = Inr (accTm, accTy)"
+| "fold_binop_left loc ghost accTm accTy ((op, rhsTm, rhsTy) # rest) =
+    (case elab_binop_with_special loc ghost op accTm accTy rhsTm rhsTy of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (resultTm, resultTy) \<Rightarrow>
+        fold_binop_left loc ghost resultTm resultTy rest)"
+
+(* Build a comparison chain: a < b < c becomes (a < b) && (b < c).
+   Uses let-binding for complex middle terms to avoid duplicate evaluation.
+   chainCounter is used to generate unique variable names. *)
+fun build_comparison_chain :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> nat
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
+    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "build_comparison_chain loc ghost chainCtr accTm accTy [] = Inr (accTm, accTy)"
+| "build_comparison_chain loc ghost chainCtr lhsTm lhsTy ((op, rhsTm, rhsTy) # rest) =
+    (case elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (cmpTm, _) \<Rightarrow>
+        (case rest of
+          [] \<Rightarrow> Inr (cmpTm, CoreTy_Bool)
+        | _ \<Rightarrow>
+          \<comment> \<open>More comparisons follow - need to reuse rhsTm as next LHS\<close>
+          if is_simple_term rhsTm then
+            \<comment> \<open>Simple term: duplicate directly\<close>
+            (case build_comparison_chain loc ghost chainCtr rhsTm rhsTy rest of
+              Inl errs \<Rightarrow> Inl errs
+            | Inr (restTm, _) \<Rightarrow>
+                Inr (CoreTm_Binop CoreBinop_And cmpTm restTm, CoreTy_Bool))
+          else
+            \<comment> \<open>Complex term: introduce let-binding\<close>
+            let varName = ''chain@@'' @ nat_to_string chainCtr;
+                varTm = CoreTm_Var varName
+            in (case build_comparison_chain loc ghost (chainCtr + 1) varTm rhsTy rest of
+              Inl errs \<Rightarrow> Inl errs
+            | Inr (restTm, _) \<Rightarrow>
+                Inr (CoreTm_Let varName rhsTm
+                      (CoreTm_Binop CoreBinop_And cmpTm restTm),
+                     CoreTy_Bool))))"
+
+(* Right-associate an implies chain: a ==> b ==> c becomes a ==> (b ==> c) *)
+fun fold_implies_right :: "Location \<Rightarrow> GhostOrNot
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
+    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "fold_implies_right loc ghost lhsTm lhsTy [] = Inr (lhsTm, lhsTy)"
+| "fold_implies_right loc ghost lhsTm lhsTy ((op, rhsTm, rhsTy) # rest) =
+    (case rest of
+      [] \<Rightarrow> elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy
+    | _ \<Rightarrow>
+        \<comment> \<open>First, build the right side recursively\<close>
+        (case fold_implies_right loc ghost rhsTm rhsTy rest of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr (rightTm, rightTy) \<Rightarrow>
+            elab_binop_with_special loc ghost op lhsTm lhsTy rightTm rightTy))"
+
+(* Process a binop chain: elaborate the operator list given already-elaborated operands.
+   Decides whether to chain (comparisons), right-associate (implies), or left-associate. *)
+fun process_binop_chain :: "Location \<Rightarrow> GhostOrNot
+    \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+    \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
+    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "process_binop_chain loc ghost lhsTm lhsTy [] = Inr (lhsTm, lhsTy)"
+| "process_binop_chain loc ghost lhsTm lhsTy ops =
+    (let firstOp = fst (hd ops) in
+     if firstOp = BabBinop_Implies \<or> firstOp = BabBinop_ImpliedBy then
+       \<comment> \<open>Implies chains right-associate\<close>
+       fold_implies_right loc ghost lhsTm lhsTy ops
+     else if is_chainable_bab_binop firstOp \<and> length ops > 1 then
+       \<comment> \<open>Comparison chains\<close>
+       build_comparison_chain loc ghost 0 lhsTm lhsTy ops
+     else
+       \<comment> \<open>Everything else left-associates\<close>
+       fold_binop_left loc ghost lhsTm lhsTy ops)"
+
+
 (* Elaborate a term. Returns elaborated (core) term and type, or error.
    The nat parameter is the "next metavariable" counter - all generated metavariables
    will be >= this value, and the returned counter is the next available one. *)
@@ -260,8 +537,22 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                 CoreTy_Bool \<Rightarrow> Inr (CoreTm_Unop CoreUnop_Not newOperand, operandTy, next_mv')
               | _ \<Rightarrow> Inl [TyErr_NotRequiresBool loc]))))"
 
-  (* Binary operator - TODO *)
-| "elab_term env typedefs ghost (BabTm_Binop loc lhs operands) next_mv = undefined"
+  (* Binary operator *)
+| "elab_term env typedefs ghost (BabTm_Binop loc lhs operands) next_mv =
+    (case elab_term env typedefs ghost lhs next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (newLhs, lhsTy, next_mv1) \<Rightarrow>
+        \<comment> \<open>Elaborate all RHS terms using elab_term_list\<close>
+        (case elab_term_list env typedefs ghost (map snd operands) next_mv1 of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr (rhsTms, rhsTys, next_mv2) \<Rightarrow>
+            \<comment> \<open>Zip the operators back together with elaborated terms and types\<close>
+            let opTriples = zip (map fst operands) (zip rhsTms rhsTys);
+                opList = map (\<lambda>(op, tm_ty). (op, fst tm_ty, snd tm_ty)) opTriples
+            in (case process_binop_chain loc ghost newLhs lhsTy opList of
+              Inl errs \<Rightarrow> Inl errs
+            | Inr (resultTm, resultTy) \<Rightarrow>
+                Inr (resultTm, resultTy, next_mv2))))"
 
   (* Let - TODO *)
 | "elab_term env typedefs ghost (BabTm_Let loc varName rhs body) next_mv = undefined"

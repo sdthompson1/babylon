@@ -33,5 +33,12 @@ datatype TypeError =
   | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
   | TyErr_FunctionNoReturnType Location string
   | TyErr_ArgTypeMismatch Location nat CoreType CoreType  (* loc, arg index, expected, actual *)
+  (* Binary operator errors *)
+  | TyErr_BinopRequiresNumeric Location BabBinop
+  | TyErr_BinopRequiresInteger Location BabBinop
+  | TyErr_BinopRequiresFiniteInteger Location BabBinop
+  | TyErr_BinopRequiresBool Location BabBinop
+  | TyErr_BinopCannotCombineTypes Location BabBinop CoreType CoreType
+  | TyErr_EqualityRequiresBoolOrNumeric Location
 
 end

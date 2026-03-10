@@ -109,8 +109,31 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
             (if operandTy = CoreTy_Bool then Some CoreTy_Bool else None))
     | None \<Rightarrow> None)"
 
-  (* TODO *)
-| "core_term_type env ghost (CoreTm_Binop op lhs rhs) = undefined"
+  (* Binary operators *)
+| "core_term_type env ghost (CoreTm_Binop op lhs rhs) =
+    (case (core_term_type env ghost lhs, core_term_type env ghost rhs) of
+      (Some lhsTy, Some rhsTy) \<Rightarrow>
+        if is_arithmetic_binop op then
+          \<comment> \<open>Arithmetic: require identical numeric types, result is same type\<close>
+          if is_numeric_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
+        else if is_modulo_binop op then
+          \<comment> \<open>Modulo: require identical integer types (not real), result is same type\<close>
+          if is_integer_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
+        else if is_bitwise_binop op \<or> is_shift_binop op then
+          \<comment> \<open>Bitwise/shift: require identical finite integer types, result is same type\<close>
+          if is_finite_integer_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
+        else if is_ordering_binop op then
+          \<comment> \<open>Ordering: require identical numeric types, result is bool\<close>
+          if is_numeric_type lhsTy \<and> lhsTy = rhsTy then Some CoreTy_Bool else None
+        else if is_eq_neq_binop op then
+          \<comment> \<open>Equality/inequality: same types; any type in Ghost, bool/numeric in NotGhost\<close>
+          if lhsTy = rhsTy \<and> (ghost = Ghost \<or> lhsTy = CoreTy_Bool \<or> is_numeric_type lhsTy)
+          then Some CoreTy_Bool else None
+        else if is_logical_binop op then
+          \<comment> \<open>Logical: require boolean operands, result is bool\<close>
+          if lhsTy = CoreTy_Bool \<and> rhsTy = CoreTy_Bool then Some CoreTy_Bool else None
+        else None
+    | _ \<Rightarrow> None)"
 | "core_term_type env ghost (CoreTm_Let var rhs body) = undefined"
 | "core_term_type env ghost (CoreTm_Quantifier quant var ty body) = undefined"
 
@@ -210,7 +233,23 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 4: CoreTm_FunctionCall - elements of tmArgs are smaller\<close>
+  \<comment> \<open>Goal 4: CoreTm_Binop - lhs is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix op lhs rhs
+  show "((env, ghost, lhs), env, ghost, CoreTm_Binop op lhs rhs)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 5: CoreTm_Binop - rhs is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix op lhs rhs
+  show "((env, ghost, rhs), env, ghost, CoreTm_Binop op lhs rhs)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 6: CoreTm_FunctionCall - elements of tmArgs are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix fnName tyArgs tmArgs x2 x xa yb
@@ -223,7 +262,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 5: CoreTm_Match - scrutinee is smaller\<close>
+  \<comment> \<open>Goal 7: CoreTm_Match - scrutinee is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut arms
@@ -231,7 +270,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 6: CoreTm_Match - first arm body is smaller\<close>
+  \<comment> \<open>Goal 8: CoreTm_Match - first arm body is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut
@@ -242,7 +281,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by (cases arms) auto
 next
-  \<comment> \<open>Goal 7: CoreTm_Match - tail arm bodies are smaller\<close>
+  \<comment> \<open>Goal 9: CoreTm_Match - tail arm bodies are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut :: CoreTerm
@@ -265,7 +304,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 8: CoreTm_Allocated - tm is smaller\<close>
+  \<comment> \<open>Goal 10: CoreTm_Allocated - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix tm
   show "((env, Ghost, tm), env, Ghost, CoreTm_Allocated tm)
@@ -313,8 +352,16 @@ next
   show ?case using CoreTm_Unop.prems(1) operand_typed operand_wk
     by (cases op) (auto split: if_splits)
 next
-  case (CoreTm_Binop x1a tm1 tm2)
-  then show ?case sorry
+  case (CoreTm_Binop op lhs rhs)
+  from CoreTm_Binop.prems(1) obtain lhsTy rhsTy where
+    lhs_typed: "core_term_type env ghost lhs = Some lhsTy" and
+    rhs_typed: "core_term_type env ghost rhs = Some rhsTy"
+    by (auto split: option.splits prod.splits)
+  have lhs_wk: "is_well_kinded env lhsTy"
+    using CoreTm_Binop.IH(1) lhs_typed CoreTm_Binop.prems(2) by blast
+  \<comment> \<open>Result is either lhsTy (arithmetic/modulo/bitwise/shift) or CoreTy_Bool (ordering/eq_neq/logical)\<close>
+  show ?case using CoreTm_Binop.prems(1) lhs_typed rhs_typed lhs_wk
+    by (auto split: if_splits)
 next
   case (CoreTm_Let x1a tm1 tm2)
   then show ?case sorry
@@ -425,8 +472,16 @@ next
   show ?case using CoreTm_Unop.prems(1) operand_typed operand_runtime
     by (cases op) (auto split: if_splits)
 next
-  case (CoreTm_Binop x1a tm1 tm2)
-  then show ?case sorry
+  case (CoreTm_Binop op lhs rhs)
+  from CoreTm_Binop.prems(1) obtain lhsTy rhsTy where
+    lhs_typed: "core_term_type env NotGhost lhs = Some lhsTy" and
+    rhs_typed: "core_term_type env NotGhost rhs = Some rhsTy"
+    by (auto split: option.splits prod.splits)
+  have lhs_rt: "is_runtime_type lhsTy"
+    using CoreTm_Binop.IH(1) lhs_typed CoreTm_Binop.prems(2) by blast
+  \<comment> \<open>Result is either lhsTy (arithmetic/modulo/bitwise/shift) or CoreTy_Bool (ordering/eq_neq/logical)\<close>
+  show ?case using CoreTm_Binop.prems(1) lhs_typed rhs_typed lhs_rt
+    by (auto split: if_splits)
 next
   case (CoreTm_Let x1a tm1 tm2)
   then show ?case sorry

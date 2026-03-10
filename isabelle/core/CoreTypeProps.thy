@@ -3,7 +3,7 @@ theory CoreTypeProps
 begin
 
 (* ========================================================================== *)
-(* Definitions *)
+(* Type Properties *)
 (* ========================================================================== *)
 
 (* Check if a type is a runtime-compatible type (no MathInt/MathReal) *)
@@ -82,7 +82,7 @@ definition occurs :: "nat \<Rightarrow> CoreType \<Rightarrow> bool" where
 
 
 (* ========================================================================== *)
-(* Properties *)
+(* Lemmas about type properties *)
 (* ========================================================================== *)
 
 (* Signed and finite integer types are integer types *)
@@ -123,5 +123,57 @@ lemma is_ground_no_metavars:
 lemma list_all_meta_is_runtime:
   "list_all is_runtime_type (map CoreTy_Meta ns)"
   by (simp add: list_all_iff)
+
+
+(* ========================================================================== *)
+(* Binary operator classification *)
+(* ========================================================================== *)
+
+(* Arithmetic: +, -, *, / - work on any numeric type *)
+fun is_arithmetic_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_arithmetic_binop CoreBinop_Add = True"
+| "is_arithmetic_binop CoreBinop_Subtract = True"
+| "is_arithmetic_binop CoreBinop_Multiply = True"
+| "is_arithmetic_binop CoreBinop_Divide = True"
+| "is_arithmetic_binop _ = False"
+
+(* Modulo: works on integer types only (not real) *)
+fun is_modulo_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_modulo_binop CoreBinop_Modulo = True"
+| "is_modulo_binop _ = False"
+
+(* Bitwise (non-shift): &, |, ^ - work on finite ints, require same type *)
+fun is_bitwise_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_bitwise_binop CoreBinop_BitAnd = True"
+| "is_bitwise_binop CoreBinop_BitOr = True"
+| "is_bitwise_binop CoreBinop_BitXor = True"
+| "is_bitwise_binop _ = False"
+
+(* Shift: <<, >> - work on finite ints, operands can have different types *)
+fun is_shift_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_shift_binop CoreBinop_ShiftLeft = True"
+| "is_shift_binop CoreBinop_ShiftRight = True"
+| "is_shift_binop _ = False"
+
+(* Ordering: <, <=, >, >= - work on numeric types, result is bool *)
+fun is_ordering_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_ordering_binop CoreBinop_Less = True"
+| "is_ordering_binop CoreBinop_LessEqual = True"
+| "is_ordering_binop CoreBinop_Greater = True"
+| "is_ordering_binop CoreBinop_GreaterEqual = True"
+| "is_ordering_binop _ = False"
+
+(* Equality/inequality: ==, != - work on any type (ghost) or bool/numeric (non-ghost) *)
+fun is_eq_neq_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_eq_neq_binop CoreBinop_Equal = True"
+| "is_eq_neq_binop CoreBinop_NotEqual = True"
+| "is_eq_neq_binop _ = False"
+
+(* Logical: &&, ||, ==> - work on booleans only *)
+fun is_logical_binop :: "CoreBinop \<Rightarrow> bool" where
+  "is_logical_binop CoreBinop_And = True"
+| "is_logical_binop CoreBinop_Or = True"
+| "is_logical_binop CoreBinop_Implies = True"
+| "is_logical_binop _ = False"
 
 end

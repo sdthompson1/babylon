@@ -27,10 +27,12 @@ fun is_zero :: "CoreValue \<Rightarrow> bool" where
   "is_zero (CV_FiniteInt _ _ i) = (i = 0)"
 | "is_zero _ = False"
 
-(* Check if a finite integer is negative *)
-fun is_negative :: "CoreValue \<Rightarrow> bool" where
-  "is_negative (CV_FiniteInt _ _ i) = (i < 0)"
-| "is_negative _ = False"
+(* Check if a shift operation is valid: shift count must be non-negative
+   and less than the bit size of the value being shifted *)
+fun is_valid_shift :: "CoreValue \<Rightarrow> CoreValue \<Rightarrow> bool" where
+  "is_valid_shift (CV_FiniteInt _ b1 _) (CV_FiniteInt _ _ i2) =
+    (i2 \<ge> 0 \<and> nat i2 < bit_size b1)"
+| "is_valid_shift _ _ = False"
 
 (* Truncated division - rounds towards zero, like C/Java/JavaScript *)
 fun tdiv :: "int \<Rightarrow> int \<Rightarrow> int" where
@@ -106,10 +108,10 @@ fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<R
 | "eval_binop CoreBinop_BitOr v1 v2 = generic_int_binop (\<lambda>x y. or x y) v1 v2"
 | "eval_binop CoreBinop_BitXor v1 v2 = generic_int_binop (\<lambda>x y. xor x y) v1 v2"
 | "eval_binop CoreBinop_ShiftLeft v1 v2 =
-    (if is_negative v2 then Inl RuntimeError  \<comment> \<open>negative shift amount\<close>
+    (if \<not> is_valid_shift v1 v2 then Inl RuntimeError
     else generic_int_binop (\<lambda>x y. push_bit (nat y) x) v1 v2)"
 | "eval_binop CoreBinop_ShiftRight v1 v2 =
-    (if is_negative v2 then Inl RuntimeError  \<comment> \<open>negative shift amount\<close>
+    (if \<not> is_valid_shift v1 v2 then Inl RuntimeError
     else generic_int_binop (\<lambda>x y. drop_bit (nat y) x) v1 v2)"
 | "eval_binop CoreBinop_Equal v1 v2 =
     \<comment> \<open>Equality is supported for bools and finite ints only, for now\<close>
