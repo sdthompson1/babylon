@@ -118,6 +118,30 @@ next
 qed (simp_all)
 
 
+(* is_well_kinded only depends on TE_TypeVars and TE_Datatypes.
+   Changing other fields of the environment (e.g. TE_TermVars, TE_GhostVars)
+   does not affect well-kindedness. *)
+lemma is_well_kinded_cong_env:
+  assumes "TE_TypeVars env' = TE_TypeVars env"
+    and "TE_Datatypes env' = TE_Datatypes env"
+  shows "is_well_kinded env' ty = is_well_kinded env ty"
+using assms proof (induction ty)
+  case (CoreTy_Name name argTypes)
+  hence IH: "\<And>x. x \<in> set argTypes \<Longrightarrow> is_well_kinded env' x = is_well_kinded env x" by simp
+  hence "list_all (is_well_kinded env') argTypes = list_all (is_well_kinded env) argTypes"
+    by (induction argTypes) auto
+  then show ?case using CoreTy_Name.prems by (auto split: option.splits)
+next
+  case (CoreTy_Record flds)
+  hence IH: "\<And>x. x \<in> snd ` set flds \<Longrightarrow> is_well_kinded env' x = is_well_kinded env x" by auto
+  hence "list_all (is_well_kinded env') (map snd flds) = list_all (is_well_kinded env) (map snd flds)"
+    by (induction flds) auto
+  then show ?case by auto
+next
+  case (CoreTy_Array elemTy dims)
+  then show ?case by auto
+qed auto
+
 (* This predicate says that all types in the range of a MetaSubst are well-kinded. *)
 definition metasubst_well_kinded :: "CoreTyEnv \<Rightarrow> MetaSubst \<Rightarrow> bool" where 
   "metasubst_well_kinded env subst =

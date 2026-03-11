@@ -535,6 +535,260 @@ proof -
   qed
 qed
 
+(* ========================================================================== *)
+(* Helper lemmas for CoreTm_Let type soundness *)
+(* ========================================================================== *)
+
+(* After alloc_store + fmupd of locals, the new state matches the extended env.
+   This is the key lemma for CoreTm_Let soundness. *)
+lemma state_matches_env_add_local:
+  assumes state_env: "state_matches_env state env"
+    and val_typed: "value_has_type env val rhsTy"
+    and state'_eq: "(state', addr) = alloc_store state val"
+    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
+    and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                               TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+  shows "state_matches_env state'' env'"
+proof -
+  (* Facts about alloc_store *)
+  from state'_eq have addr_eq: "addr = length (IS_Store state)"
+    and store'_eq: "IS_Store state' = IS_Store state @ [val]"
+    and locals'_eq: "IS_Locals state' = IS_Locals state"
+    and refs'_eq: "IS_Refs state' = IS_Refs state"
+    and consts'_eq: "IS_Constants state' = IS_Constants state"
+    and funs'_eq: "IS_Functions state' = IS_Functions state"
+    by auto
+
+  (* Facts about state'' *)
+  have store''_eq: "IS_Store state'' = IS_Store state @ [val]"
+    using state''_eq store'_eq by simp
+  have locals''_eq: "IS_Locals state'' = fmupd var addr (IS_Locals state)"
+    using state''_eq locals'_eq by simp
+  have refs''_eq: "IS_Refs state'' = IS_Refs state"
+    using state''_eq refs'_eq by simp
+  have consts''_eq: "IS_Constants state'' = IS_Constants state"
+    using state''_eq consts'_eq by simp
+  have funs''_eq: "IS_Functions state'' = IS_Functions state"
+    using state''_eq funs'_eq by simp
+
+  (* The new address points to val *)
+  have addr_valid: "addr < length (IS_Store state'')"
+    using addr_eq store''_eq by simp
+  have val_at_addr: "IS_Store state'' ! addr = val"
+    using addr_eq store''_eq by (simp add: nth_append)
+
+  (* Old addresses are still valid and point to the same values *)
+  have old_addrs: "\<And>a. a < length (IS_Store state) \<Longrightarrow>
+      a < length (IS_Store state'') \<and> IS_Store state'' ! a = IS_Store state ! a"
+    using store''_eq by (simp add: nth_append)
+
+  (* value_has_type is the same in env and env' *)
+  have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
+                    "TE_Datatypes env' = TE_Datatypes env"
+                    "TE_TypeVars env' = TE_TypeVars env"
+    using env'_eq by simp_all
+  have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
+    using value_has_type_cong_env[OF env'_fields] .
+
+  (* 1. vars_exist_in_state *)
+  have "vars_exist_in_state state'' env'"
+    unfolding vars_exist_in_state_def
+  proof (intro allI impI, elim conjE)
+    fix name ty
+    assume lookup: "fmlookup (TE_TermVars env') name = Some ty"
+      and not_ghost: "name |\<notin>| TE_GhostVars env'"
+    show "term_var_in_state_with_type state'' env' name ty"
+    proof (cases "name = var")
+      case True
+      (* The new variable - points to val at addr *)
+      then have "ty = rhsTy" using lookup env'_eq by simp
+      then show ?thesis
+        using True locals''_eq addr_valid val_at_addr vht_eq val_typed
+        unfolding term_var_in_state_with_type_def by simp
+    next
+      case False
+      (* An existing variable *)
+      then have "fmlookup (TE_TermVars env) name = Some ty"
+        using lookup env'_eq by simp
+      moreover have "name |\<notin>| TE_GhostVars env"
+        using not_ghost env'_eq False by auto
+      ultimately have old: "term_var_in_state_with_type state env name ty"
+        using state_env unfolding state_matches_env_def vars_exist_in_state_def by blast
+      (* Show the old variable is still valid in state'' *)
+      (* Locals lookup is unchanged for name \<noteq> var *)
+      have locals_name: "fmlookup (IS_Locals state'') name = fmlookup (IS_Locals state) name"
+        using False locals''_eq by simp
+      (* From the old state matching, extract what we know about name *)
+      from old show ?thesis
+      proof (cases "fmlookup (IS_Locals state) name")
+        case (Some a)
+        (* name is a local in old state, pointing to address a *)
+        then have "a < length (IS_Store state) \<and> value_has_type env (IS_Store state ! a) ty"
+          using old unfolding term_var_in_state_with_type_def by simp
+        then have "a < length (IS_Store state'')" and
+                  "IS_Store state'' ! a = IS_Store state ! a"
+          using old_addrs by auto
+        then show ?thesis using Some locals_name vht_eq old
+          unfolding term_var_in_state_with_type_def by auto
+      next
+        case None
+        show ?thesis
+        proof (cases "fmlookup (IS_Refs state) name")
+          case (Some addrPath)
+          obtain aa ba where ap_eq: "addrPath = (aa, ba)" by (cases addrPath) auto
+          (* From old, aa < length (IS_Store state) and get_value_at_path succeeds *)
+          from old None Some ap_eq have ref_info:
+            "aa < length (IS_Store state) \<and>
+             (\<exists>v. get_value_at_path (IS_Store state ! aa) ba = Inr v \<and>
+                  value_has_type env v ty)"
+            unfolding term_var_in_state_with_type_def
+            by (auto split: sum.splits)
+          then have "IS_Store state'' ! aa = IS_Store state ! aa"
+            and "aa < length (IS_Store state'')"
+            using old_addrs by auto
+          then show ?thesis using old None Some ap_eq locals_name refs''_eq consts''_eq
+            ref_info vht_eq
+            unfolding term_var_in_state_with_type_def by auto
+        next
+          case None2: None
+          (* name is a constant *)
+          then show ?thesis using old None locals_name refs''_eq consts''_eq vht_eq
+            unfolding term_var_in_state_with_type_def
+            by (smt (verit, best) case_optionE option.simps(4,5))
+        qed
+      qed
+    qed
+  qed
+
+  (* 2. no_extra_vars *)
+  moreover have "no_extra_vars state'' env'"
+    unfolding no_extra_vars_def
+  proof (intro allI impI)
+    fix name
+    assume ante: "fmlookup (TE_TermVars env') name = None \<or> name |\<in>| TE_GhostVars env'"
+    show "fmlookup (IS_Locals state'') name = None \<and>
+          fmlookup (IS_Refs state'') name = None \<and>
+          fmlookup (IS_Constants state'') name = None"
+    proof (cases "name = var")
+      case True
+      (* var is in TE_TermVars env', so the antecedent requires var \<in> TE_GhostVars env' *)
+      then have "fmlookup (TE_TermVars env') var = Some rhsTy" using env'_eq by simp
+      with ante True have "var |\<in>| TE_GhostVars env'" by simp
+      (* But TE_GhostVars env' = fminus (TE_GhostVars env) {|var|}, so var \<notin> TE_GhostVars env' *)
+      then show ?thesis using env'_eq by simp
+    next
+      case False
+      (* name \<noteq> var, so TE_TermVars env' lookup = TE_TermVars env lookup *)
+      then have tv_eq: "fmlookup (TE_TermVars env') name = fmlookup (TE_TermVars env) name"
+        using env'_eq by simp
+      (* name \<noteq> var, so name \<in> fminus S {|var|} iff name \<in> S *)
+      have gv_iff: "name |\<in>| TE_GhostVars env' \<longleftrightarrow> name |\<in>| TE_GhostVars env"
+        using False env'_eq by auto
+      from ante tv_eq gv_iff
+      have "fmlookup (TE_TermVars env) name = None \<or> name |\<in>| TE_GhostVars env"
+        by simp
+      then have "fmlookup (IS_Locals state) name = None \<and>
+                 fmlookup (IS_Refs state) name = None \<and>
+                 fmlookup (IS_Constants state) name = None"
+        using state_env unfolding state_matches_env_def no_extra_vars_def by blast
+      then show ?thesis using False locals''_eq refs''_eq consts''_eq by simp
+    qed
+  qed
+
+  (* 3. funs_exist_in_state *)
+  moreover have "funs_exist_in_state state'' env'"
+    using state_env funs''_eq env'_eq
+    unfolding state_matches_env_def funs_exist_in_state_def by simp
+
+  (* 4. no_extra_funs *)
+  moreover have "no_extra_funs state'' env'"
+    using state_env funs''_eq env'_eq
+    unfolding state_matches_env_def no_extra_funs_def by simp
+
+  ultimately show ?thesis unfolding state_matches_env_def by auto
+qed
+
+(* Type soundness for let-bindings *)
+lemma type_soundness_let:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH: "\<And>env' (state' :: 'w InterpState) tm' ty'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                sound_term_result env' ty' (interp_term fuel state' tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_Let var rhs body) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_Let var rhs body))"
+proof -
+  (* Extract facts from typing *)
+  from typing obtain rhsTy where
+    rhs_typing: "core_term_type env NotGhost rhs = Some rhsTy" and
+    rhs_ground: "is_ground rhsTy" and
+    body_typing: "core_term_type
+        (env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+               TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>)
+        NotGhost body = Some ty"
+    by (auto split: option.splits if_splits)
+
+  let ?env' = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                     TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+
+  (* Apply IH to rhs *)
+  from IH[OF state_env wf_env rhs_typing]
+  have rhs_sound: "sound_term_result env rhsTy (interp_term fuel state rhs)" .
+
+  show ?thesis
+  proof (cases "interp_term fuel state rhs")
+    case (Inl err)
+    (* RHS failed - propagate error *)
+    then have "interp_term (Suc fuel) state (CoreTm_Let var rhs body) = Inl err"
+      by simp
+    with rhs_sound Inl show ?thesis by auto
+  next
+    case (Inr rhsVal)
+    (* RHS succeeded *)
+    from rhs_sound Inr have rhs_typed: "value_has_type env rhsVal rhsTy" by simp
+
+    (* Construct the new state *)
+    obtain state' addr where alloc_eq: "(state', addr) = alloc_store state rhsVal"
+      by (cases "alloc_store state rhsVal") auto
+    let ?state'' = "state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
+
+    (* The interpreter result *)
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_Let var rhs body) =
+          interp_term fuel ?state'' body"
+      using Inr alloc_eq by (simp add: case_prod_beta split: prod.splits)
+
+    (* The new state matches the extended env *)
+    have state''_env': "state_matches_env ?state'' ?env'"
+      using state_matches_env_add_local[OF state_env rhs_typed alloc_eq refl refl] by simp
+
+    (* The extended env is well-formed *)
+    from value_has_type_runtime[OF rhs_typed] have rhs_rt: "is_runtime_type rhsTy" .
+    have rhs_wk: "is_well_kinded env rhsTy"
+      using core_term_type_well_kinded[OF rhs_typing wf_env] .
+    have wf_env': "tyenv_well_formed ?env'"
+      using tyenv_well_formed_add_var[OF wf_env rhs_wk rhs_ground rhs_rt] .
+
+    (* Apply IH to body in extended env *)
+    from IH[OF state''_env' wf_env' body_typing]
+    have body_sound: "sound_term_result ?env' ty (interp_term fuel ?state'' body)" .
+
+    (* sound_term_result env' = sound_term_result env, because value_has_type
+       only depends on datatypes, not TE_TermVars/TE_GhostVars *)
+    have env'_fields: "TE_DataCtors ?env' = TE_DataCtors env"
+                       "TE_Datatypes ?env' = TE_Datatypes env"
+                       "TE_TypeVars ?env' = TE_TypeVars env"
+      by simp_all
+    have "\<And>v t. value_has_type ?env' v t = value_has_type env v t"
+      using value_has_type_cong_env[OF env'_fields] .
+    hence "sound_term_result ?env' ty (interp_term fuel ?state'' body) =
+           sound_term_result env ty (interp_term fuel ?state'' body)"
+      by (cases "interp_term fuel ?state'' body") auto
+    with interp_eq body_sound show ?thesis by simp
+  qed
+qed
+
 (* Type soundness for unary operators *)
 lemma type_soundness_unop:
   assumes state_env: "state_matches_env state env"
@@ -823,8 +1077,10 @@ next
         then show ?thesis
           using "1.prems"(1,2) Suc.IH(1) type_soundness_binop typing by blast
       next
-        case (CoreTm_Let x81 x82 x83)
-        then show ?thesis sorry
+        (* Let-binding - use helper lemma *)
+        case (CoreTm_Let var rhsTm bodyTm)
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_let typing by blast
       next
         case (CoreTm_Quantifier x91 x92 x93 x94)
         then show ?thesis sorry

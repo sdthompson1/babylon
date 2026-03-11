@@ -554,8 +554,20 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             | Inr (resultTm, resultTy) \<Rightarrow>
                 Inr (resultTm, resultTy, next_mv2))))"
 
-  (* Let - TODO *)
-| "elab_term env typedefs ghost (BabTm_Let loc varName rhs body) next_mv = undefined"
+  (* Let *)
+| "elab_term env typedefs ghost (BabTm_Let loc varName rhs body) next_mv =
+    (case elab_term env typedefs ghost rhs next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (rhsTm, rhsTy, next_mv1) \<Rightarrow>
+        if \<not> is_ground rhsTy then Inl [TyErr_CannotInferLetType loc]
+        else let env' = env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
+                              TE_GhostVars := (if ghost = Ghost
+                                               then finsert varName (TE_GhostVars env)
+                                               else fminus (TE_GhostVars env) {|varName|}) \<rparr>
+             in (case elab_term env' typedefs ghost body next_mv1 of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
+                    Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
 
   (* Quantifier - TODO *)
 | "elab_term env typedefs ghost (BabTm_Quantifier loc quant name ty tm) next_mv = undefined"

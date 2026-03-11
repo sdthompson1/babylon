@@ -134,7 +134,16 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
           if lhsTy = CoreTy_Bool \<and> rhsTy = CoreTy_Bool then Some CoreTy_Bool else None
         else None
     | _ \<Rightarrow> None)"
-| "core_term_type env ghost (CoreTm_Let var rhs body) = undefined"
+| "core_term_type env ghost (CoreTm_Let var rhs body) =
+    (case core_term_type env ghost rhs of
+      Some rhsTy \<Rightarrow>
+        if \<not> is_ground rhsTy then None
+        else let env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                              TE_GhostVars := (if ghost = Ghost
+                                               then finsert var (TE_GhostVars env)
+                                               else fminus (TE_GhostVars env) {|var|}) \<rparr>
+             in core_term_type env' ghost body
+    | None \<Rightarrow> None)"
 | "core_term_type env ghost (CoreTm_Quantifier quant var ty body) = undefined"
 
 (* Function call:
@@ -310,14 +319,37 @@ next
   show "((env, Ghost, tm), env, Ghost, CoreTm_Allocated tm)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
+next
+  \<comment> \<open>Goal 11: CoreTm_Let - rhs is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix var rhs body
+  show "((env, ghost, rhs), env, ghost, CoreTm_Let var rhs body)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 12: CoreTm_Let - body is smaller (with extended env)\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix var rhs body x2 x
+  assume "core_term_type env ghost rhs = Some x2"
+    and "x = env \<lparr> TE_TermVars := fmupd var x2 (TE_TermVars env),
+                    TE_GhostVars := if ghost = Ghost then finsert var (TE_GhostVars env)
+                                    else fminus (TE_GhostVars env) {|var|} \<rparr>"
+  show "((x, ghost, body), env, ghost, CoreTm_Let var rhs body)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
 qed
 
 
-(* If core_term_type succeeds, the resulting type is well-kinded *)
-lemma core_term_type_well_kinded:
+(* Combined lemma: core_term_type produces well-kinded types,
+   and in NotGhost mode also runtime types.
+   These must be proved simultaneously because the CoreTm_Let case
+   needs both properties from the IH to show tyenv_well_formed for the extended env. *)
+lemma core_term_type_well_kinded_and_runtime:
   assumes "core_term_type env ghost tm = Some ty"
     and "tyenv_well_formed env"
-  shows "is_well_kinded env ty"
+  shows "is_well_kinded env ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ty)"
 using assms proof (induction tm arbitrary: env ghost ty)
   case (CoreTm_LitBool b)
   then show ?case by simp
@@ -333,13 +365,23 @@ next
     lookup: "fmlookup (TE_TermVars env) name = Some varTy" and
     ty_eq: "ty = varTy"
     by (auto split: option.splits if_splits)
-  have "tyenv_vars_well_kinded env"
+  have wk: "tyenv_vars_well_kinded env"
     using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
-  thus ?case
-    using lookup ty_eq tyenv_vars_well_kinded_def by blast
+  have var_wk: "is_well_kinded env ty"
+    using wk lookup ty_eq tyenv_vars_well_kinded_def by blast
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type ty"
+  proof
+    assume ng: "ghost = NotGhost"
+    from CoreTm_Var.prems(1) ng have not_ghost: "name |\<notin>| TE_GhostVars env"
+      by (auto split: option.splits if_splits)
+    have "tyenv_vars_runtime env"
+      using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
+    thus "is_runtime_type ty"
+      using lookup not_ghost ty_eq tyenv_vars_runtime_def by blast
+  qed
+  ultimately show ?case by blast
 next
   case (CoreTm_Cast targetTy operand)
-  (* targetTy must be an integer type, which is always well-kinded *)
   then show ?case
     by (auto simp: is_integer_type_well_kinded split: option.splits if_splits)
 next
@@ -347,9 +389,9 @@ next
   then obtain operandTy where
     operand_typed: "core_term_type env ghost operand = Some operandTy"
     by (auto split: option.splits)
-  have operand_wk: "is_well_kinded env operandTy"
+  have IH: "is_well_kinded env operandTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type operandTy)"
     using CoreTm_Unop.IH operand_typed CoreTm_Unop.prems(2) by blast
-  show ?case using CoreTm_Unop.prems(1) operand_typed operand_wk
+  show ?case using CoreTm_Unop.prems(1) operand_typed IH
     by (cases op) (auto split: if_splits)
 next
   case (CoreTm_Binop op lhs rhs)
@@ -357,14 +399,48 @@ next
     lhs_typed: "core_term_type env ghost lhs = Some lhsTy" and
     rhs_typed: "core_term_type env ghost rhs = Some rhsTy"
     by (auto split: option.splits prod.splits)
-  have lhs_wk: "is_well_kinded env lhsTy"
+  have lhs_IH: "is_well_kinded env lhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type lhsTy)"
     using CoreTm_Binop.IH(1) lhs_typed CoreTm_Binop.prems(2) by blast
   \<comment> \<open>Result is either lhsTy (arithmetic/modulo/bitwise/shift) or CoreTy_Bool (ordering/eq_neq/logical)\<close>
-  show ?case using CoreTm_Binop.prems(1) lhs_typed rhs_typed lhs_wk
+  show ?case using CoreTm_Binop.prems(1) lhs_typed rhs_typed lhs_IH
     by (auto split: if_splits)
 next
-  case (CoreTm_Let x1a tm1 tm2)
-  then show ?case sorry
+  case (CoreTm_Let var tm1 tm2)
+  from CoreTm_Let.prems(1) obtain rhsTy where
+    rhs_typed: "core_term_type env ghost tm1 = Some rhsTy" and
+    rhs_ground: "is_ground rhsTy" and
+    body_typed: "core_term_type
+      (env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+             TE_GhostVars := (if ghost = Ghost then finsert var (TE_GhostVars env)
+                              else fminus (TE_GhostVars env) {|var|}) \<rparr>)
+      ghost tm2 = Some ty"
+    by (auto simp: Let_def split: option.splits if_splits)
+  let ?env' = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                     TE_GhostVars := (if ghost = Ghost then finsert var (TE_GhostVars env)
+                                      else fminus (TE_GhostVars env) {|var|}) \<rparr>"
+  have rhs_IH: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type rhsTy)"
+    using CoreTm_Let.IH(1) rhs_typed CoreTm_Let.prems(2) by blast
+  hence rhs_wk: "is_well_kinded env rhsTy" by blast
+  have wf_env': "tyenv_well_formed ?env'"
+  proof (cases "ghost = Ghost")
+    case True
+    then show ?thesis
+      using tyenv_well_formed_add_ghost_var[OF CoreTm_Let.prems(2) rhs_wk rhs_ground] by simp
+  next
+    case False
+    hence rhs_rt: "is_runtime_type rhsTy" using rhs_IH GhostOrNot.exhaust by auto
+    show ?thesis using False
+      tyenv_well_formed_add_var[OF CoreTm_Let.prems(2) rhs_wk rhs_ground rhs_rt] by simp
+  qed
+  have body_IH: "is_well_kinded ?env' ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ty)"
+    using CoreTm_Let.IH(2) body_typed wf_env' by blast
+  \<comment> \<open>is_well_kinded only depends on TE_TypeVars and TE_Datatypes\<close>
+  have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
+                     "TE_Datatypes ?env' = TE_Datatypes env"
+    by simp_all
+  have "is_well_kinded env ty"
+    using body_IH is_well_kinded_cong_env[OF env'_fields] by simp
+  thus ?case using body_IH by blast
 next
   case (CoreTm_Quantifier x1a x2a x3a tm)
   then show ?case sorry
@@ -376,16 +452,41 @@ next
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: Let_def split: option.splits if_splits)
-  \<comment> \<open>The return type in funInfo is well-kinded (from tyenv_well_formed)\<close>
+  \<comment> \<open>Well-kinded part\<close>
   have "tyenv_fun_types_well_kinded env"
     using CoreTm_FunctionCall.prems(2) tyenv_well_formed_def by blast
   hence ret_wk: "is_well_kinded env (FI_ReturnType funInfo)"
     using fn_lookup tyenv_fun_types_well_kinded_def by blast
-  \<comment> \<open>The substitution maps to well-kinded types\<close>
   have subst_wk: "metasubst_well_kinded env (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))"
     using tyargs_wk metasubst_well_kinded_from_zip by blast
-  \<comment> \<open>Therefore the result is well-kinded\<close>
-  show ?case using ty_eq ret_wk subst_wk apply_subst_preserves_well_kinded by blast
+  have wk: "is_well_kinded env ty"
+    using ty_eq ret_wk subst_wk apply_subst_preserves_well_kinded by blast
+  \<comment> \<open>Runtime part (NotGhost only)\<close>
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type ty"
+  proof
+    assume ng: "ghost = NotGhost"
+    from CoreTm_FunctionCall.prems(1) ng fn_lookup have
+      not_ghost_fn: "FI_Ghost funInfo \<noteq> Ghost" and
+      tyargs_rt: "list_all is_runtime_type tyArgs"
+      by (auto simp: Let_def split: option.splits if_splits)
+    have "tyenv_fun_ghost_constraint env"
+      using CoreTm_FunctionCall.prems(2) tyenv_well_formed_def by blast
+    hence ret_rt: "is_runtime_type (FI_ReturnType funInfo)"
+      using fn_lookup not_ghost_fn tyenv_fun_ghost_constraint_def GhostOrNot.exhaust by blast
+    have subst_rt: "\<forall>ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)). is_runtime_type ty"
+    proof
+      fix x assume "x \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))"
+      then obtain n where "fmlookup (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) n = Some x"
+        by (auto simp: fmran'_def)
+      hence "(n, x) \<in> set (zip (FI_TyArgs funInfo) tyArgs)"
+        by (simp add: fmap_of_list_SomeD)
+      hence "x \<in> set tyArgs" by (auto dest: set_zip_rightD)
+      thus "is_runtime_type x" using tyargs_rt by (simp add: list_all_iff)
+    qed
+    show "is_runtime_type ty"
+      using ty_eq ret_rt subst_rt apply_subst_preserves_runtime by blast
+  qed
+  ultimately show ?case by blast
 next
   case (CoreTm_VariantCtor x1a x2a tm)
   then show ?case sorry
@@ -403,7 +504,6 @@ next
   then show ?case sorry
 next
   case (CoreTm_Match scrut arms)
-  \<comment> \<open>Extract facts from the successful typecheck\<close>
   from CoreTm_Match.prems(1) obtain scrutTy where
     scrut_typed: "core_term_type env ghost scrut = Some scrutTy" and
     arms_nonempty: "arms \<noteq> []"
@@ -412,11 +512,9 @@ next
     first_body_typed: "core_term_type env ghost (snd (hd arms)) = Some resultTy" and
     ty_eq: "ty = resultTy"
     by (auto simp: Let_def split: option.splits if_splits)
-  \<comment> \<open>The first arm body is in the arms list\<close>
   have "snd (hd arms) \<in> snd ` set arms"
     using arms_nonempty by (cases arms) auto
-  \<comment> \<open>By IH on the first arm body, the result type is well-kinded\<close>
-  have "is_well_kinded env resultTy"
+  have IH: "is_well_kinded env resultTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type resultTy)"
     using CoreTm_Match.IH(2) first_body_typed CoreTm_Match.prems(2)
     using arms_nonempty list.set_sel(1) snds.intros by blast
   thus ?case using ty_eq by simp
@@ -432,128 +530,18 @@ next
   then show ?case sorry
 qed
 
+(* Corollaries for convenient use at call sites *)
+lemma core_term_type_well_kinded:
+  assumes "core_term_type env ghost tm = Some ty"
+    and "tyenv_well_formed env"
+  shows "is_well_kinded env ty"
+  using core_term_type_well_kinded_and_runtime[OF assms] by blast
 
-(* If core_term_type succeeds in NotGhost mode, the resulting type is runtime *)
 lemma core_term_type_notghost_runtime:
   assumes "core_term_type env NotGhost tm = Some ty"
     and "tyenv_well_formed env"
   shows "is_runtime_type ty"
-using assms proof (induction tm arbitrary: env ty)
-  case (CoreTm_LitBool b)
-  then show ?case by simp
-next
-  case (CoreTm_LitInt i)
-  then show ?case by (auto split: option.splits)
-next
-  case (CoreTm_LitArray x)
-  (* Not yet implemented - catch-all returns undefined *)
-  then show ?case sorry
-next
-  case (CoreTm_Var name)
-  then obtain varTy where
-    lookup: "fmlookup (TE_TermVars env) name = Some varTy" and
-    not_ghost: "name |\<notin>| TE_GhostVars env" and
-    ty_eq: "ty = varTy"
-    by (auto split: option.splits if_splits)
-  have "tyenv_vars_runtime env"
-    using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
-  thus ?case
-    using lookup not_ghost ty_eq tyenv_vars_runtime_def by blast
-next
-  case (CoreTm_Cast targetTy operand)
-  then show ?case by (auto split: option.splits if_splits)
-next
-  case (CoreTm_Unop op operand)
-  then obtain operandTy where
-    operand_typed: "core_term_type env NotGhost operand = Some operandTy"
-    by (auto split: option.splits)
-  have operand_runtime: "is_runtime_type operandTy"
-    using CoreTm_Unop.IH operand_typed CoreTm_Unop.prems(2) by blast
-  show ?case using CoreTm_Unop.prems(1) operand_typed operand_runtime
-    by (cases op) (auto split: if_splits)
-next
-  case (CoreTm_Binop op lhs rhs)
-  from CoreTm_Binop.prems(1) obtain lhsTy rhsTy where
-    lhs_typed: "core_term_type env NotGhost lhs = Some lhsTy" and
-    rhs_typed: "core_term_type env NotGhost rhs = Some rhsTy"
-    by (auto split: option.splits prod.splits)
-  have lhs_rt: "is_runtime_type lhsTy"
-    using CoreTm_Binop.IH(1) lhs_typed CoreTm_Binop.prems(2) by blast
-  \<comment> \<open>Result is either lhsTy (arithmetic/modulo/bitwise/shift) or CoreTy_Bool (ordering/eq_neq/logical)\<close>
-  show ?case using CoreTm_Binop.prems(1) lhs_typed rhs_typed lhs_rt
-    by (auto split: if_splits)
-next
-  case (CoreTm_Let x1a tm1 tm2)
-  then show ?case sorry
-next
-  case (CoreTm_Quantifier x1a x2a x3a tm)
-  then show ?case sorry
-next
-  case (CoreTm_FunctionCall fnName tyArgs tmArgs)
-  from CoreTm_FunctionCall.prems(1) obtain funInfo where
-    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
-    not_ghost_fn: "FI_Ghost funInfo \<noteq> Ghost" and
-    tyargs_rt: "list_all is_runtime_type tyArgs" and
-    ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
-    by (auto simp: Let_def split: option.splits if_splits)
-  \<comment> \<open>The return type in funInfo is runtime (from tyenv_well_formed, since function is not ghost)\<close>
-  have "tyenv_fun_ghost_constraint env"
-    using CoreTm_FunctionCall.prems(2) tyenv_well_formed_def by blast
-  hence ret_rt: "is_runtime_type (FI_ReturnType funInfo)"
-    using fn_lookup not_ghost_fn tyenv_fun_ghost_constraint_def GhostOrNot.exhaust by blast
-  \<comment> \<open>The substitution maps to runtime types\<close>
-  have subst_rt: "\<forall>ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)). is_runtime_type ty"
-  proof
-    fix x assume "x \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))"
-    then obtain n where "fmlookup (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) n = Some x"
-      by (auto simp: fmran'_def)
-    hence "(n, x) \<in> set (zip (FI_TyArgs funInfo) tyArgs)"
-      by (simp add: fmap_of_list_SomeD)
-    hence "x \<in> set tyArgs" by (auto dest: set_zip_rightD)
-    thus "is_runtime_type x" using tyargs_rt by (simp add: list_all_iff)
-  qed
-  \<comment> \<open>Therefore the result is runtime\<close>
-  show ?case using ty_eq ret_rt subst_rt apply_subst_preserves_runtime by blast
-next
-  case (CoreTm_VariantCtor x1a x2a tm)
-  then show ?case sorry
-next
-  case (CoreTm_Record x)
-  then show ?case sorry
-next
-  case (CoreTm_RecordProj tm x2a)
-  then show ?case sorry
-next
-  case (CoreTm_ArrayProj tm x2a)
-  then show ?case sorry
-next
-  case (CoreTm_VariantProj tm x2a)
-  then show ?case sorry
-next
-  case (CoreTm_Match scrut arms)
-  \<comment> \<open>Extract facts from the successful typecheck\<close>
-  from CoreTm_Match.prems(1) obtain scrutTy where
-    scrut_typed: "core_term_type env NotGhost scrut = Some scrutTy" and
-    arms_nonempty: "arms \<noteq> []"
-    by (auto simp: Let_def split: option.splits if_splits)
-  from CoreTm_Match.prems(1) scrut_typed arms_nonempty obtain resultTy where
-    first_body_typed: "core_term_type env NotGhost (snd (hd arms)) = Some resultTy" and
-    ty_eq: "ty = resultTy"
-    by (auto simp: Let_def split: option.splits if_splits)
-  \<comment> \<open>By IH on the first arm body, the result type is runtime\<close>
-  have "is_runtime_type resultTy"
-    using CoreTm_Match.IH(2) first_body_typed CoreTm_Match.prems(2)
-    using arms_nonempty list.set_sel(1) snds.intros by blast
-  thus ?case using ty_eq by simp
-next
-  case (CoreTm_Sizeof tm)
-  then show ?case sorry
-next
-  case (CoreTm_Allocated tm)
-  then show ?case by simp
-next
-  case (CoreTm_Old tm)
-  then show ?case sorry
-qed
+  using core_term_type_well_kinded_and_runtime[OF assms] by blast
+
 
 end

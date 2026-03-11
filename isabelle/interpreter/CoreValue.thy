@@ -175,6 +175,57 @@ qed
 
 
 (* ========================================================================== *)
+(* value_has_type only depends on TE_DataCtors, TE_Datatypes and TE_TypeVars,
+   not on TE_TermVars or TE_GhostVars. *)
+(* ========================================================================== *)
+
+lemma value_has_type_cong_env:
+  assumes "TE_DataCtors env' = TE_DataCtors env"
+    and "TE_Datatypes env' = TE_Datatypes env"
+    and "TE_TypeVars env' = TE_TypeVars env"
+  shows "value_has_type env' val ty = value_has_type env val ty"
+using assms proof (induction val arbitrary: ty)
+  case (CV_Bool b)
+  then show ?case by simp
+next
+  case (CV_FiniteInt sign bits i)
+  then show ?case by simp
+next
+  case (CV_Record fieldValues)
+  have IH: "\<And>v t. v \<in> snd ` set fieldValues \<Longrightarrow>
+              value_has_type env' v t = value_has_type env v t"
+    using CV_Record.IH CV_Record.prems by auto
+  have nth_IH: "\<And>i t. i < length fieldValues \<Longrightarrow>
+              value_has_type env' (snd (fieldValues ! i)) t =
+              value_has_type env (snd (fieldValues ! i)) t"
+    using IH by (auto intro: nth_mem imageI)
+  show ?case
+    by (cases ty) (auto simp: list_all2_conv_all_nth split_def nth_IH)
+next
+  case (CV_Variant ctor payload)
+  have wk_eq: "\<And>tys. list_all (is_well_kinded env') tys = list_all (is_well_kinded env) tys"
+    using CV_Variant.prems list_all_iff is_well_kinded_cong_env by metis
+  then show ?case using CV_Variant.prems CV_Variant.IH
+    by (cases ty) (auto split: option.splits simp: is_well_kinded_cong_env)
+next
+  case (CV_Array sizes valuesMap)
+  have wk_eq: "\<And>t. is_well_kinded env' t = is_well_kinded env t"
+    using CV_Array.prems is_well_kinded_cong_env by blast
+  have val_eq: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow>
+                  value_has_type env' v t = value_has_type env v t"
+    using CV_Array.IH CV_Array.prems by auto
+  show ?case
+  proof (cases ty)
+    case (CoreTy_Array elemTy dims)
+    have "(\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env' val elemTy) =
+          (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy)"
+      using val_eq by (simp add: fmran'I)
+    then show ?thesis using CoreTy_Array wk_eq by auto
+  qed auto
+qed
+
+
+(* ========================================================================== *)
 (* Value types are well-kinded and runtime *)
 (* ========================================================================== *)
 

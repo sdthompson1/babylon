@@ -40,5 +40,7 @@ datatype TypeError =
   | TyErr_BinopRequiresBool Location BabBinop
   | TyErr_BinopCannotCombineTypes Location BabBinop CoreType CoreType
   | TyErr_EqualityRequiresBoolOrNumeric Location
+  (* Let-binding errors *)
+  | TyErr_CannotInferLetType Location
 
 end

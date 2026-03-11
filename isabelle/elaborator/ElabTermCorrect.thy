@@ -968,9 +968,54 @@ next
   case (6 env typedefs ghost loc lhs operands next_mv)
   then show ?case sorry
 next
-  \<comment> \<open>Case: BabTm_Let (undefined)\<close>
+  \<comment> \<open>Case: BabTm_Let\<close>
   case (7 env typedefs ghost loc varName rhs body next_mv)
-  then show ?case sorry
+  \<comment> \<open>Extract intermediate results from elaboration\<close>
+  from "7.prems"(1) obtain rhsTm rhsTy next_mv1 where
+    elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
+    by (auto split: sum.splits)
+  from "7.prems"(1) elab_rhs have rhs_ground: "is_ground rhsTy"
+    by (auto split: if_splits)
+  let ?env' = "env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
+                     TE_GhostVars := (if ghost = Ghost then finsert varName (TE_GhostVars env)
+                                      else fminus (TE_GhostVars env) {|varName|}) \<rparr>"
+  from "7.prems"(1) elab_rhs rhs_ground obtain bodyTm bodyTy next_mv2 where
+    elab_body: "elab_term ?env' typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
+    result_eq: "newTm = CoreTm_Let varName rhsTm bodyTm" "ty = bodyTy"
+    by (auto simp: Let_def split: sum.splits)
+  \<comment> \<open>IH on rhs: rhsTm has type rhsTy\<close>
+  have rhs_typing: "core_term_type env ghost rhsTm = Some rhsTy"
+    using "7.IH"(1)[OF elab_rhs "7.prems"(2,3)] .
+  \<comment> \<open>Get well-kindedness and runtime properties of rhsTy\<close>
+  have rhs_props: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type rhsTy)"
+    using core_term_type_well_kinded_and_runtime[OF rhs_typing "7.prems"(2)] .
+  hence rhs_wk: "is_well_kinded env rhsTy" by blast
+  \<comment> \<open>Show tyenv_well_formed env'\<close>
+  have wf_env': "tyenv_well_formed ?env'"
+  proof (cases "ghost = Ghost")
+    case True
+    then show ?thesis
+      using tyenv_well_formed_add_ghost_var[OF "7.prems"(2) rhs_wk rhs_ground] by simp
+  next
+    case False
+    hence rhs_rt: "is_runtime_type rhsTy" using rhs_props GhostOrNot.exhaust by blast
+    show ?thesis using False
+      tyenv_well_formed_add_var[OF "7.prems"(2) rhs_wk rhs_ground rhs_rt] by simp
+  qed
+  \<comment> \<open>Show typedefs_well_formed env' typedefs (only depends on TE_TypeVars and TE_Datatypes)\<close>
+  have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
+                     "TE_Datatypes ?env' = TE_Datatypes env" by simp_all
+  have wk_eq: "\<And>t. is_well_kinded ?env' t = is_well_kinded env t"
+    using is_well_kinded_cong_env[OF env'_fields] by simp
+  have td_wf': "typedefs_well_formed ?env' typedefs"
+    using "7.prems"(3) unfolding typedefs_well_formed_def by (simp add: wk_eq)
+  \<comment> \<open>IH on body: bodyTm has type bodyTy in env'\<close>
+  have body_typing: "core_term_type ?env' ghost bodyTm = Some bodyTy"
+    using "7.IH"(2) elab_rhs rhs_ground elab_body wf_env' td_wf' by simp
+  \<comment> \<open>Combine: core_term_type for CoreTm_Let\<close>
+  show ?case
+    using rhs_typing rhs_ground body_typing result_eq
+    by (simp add: Let_def)
 next
   \<comment> \<open>Case: BabTm_Quantifier (undefined)\<close>
   case (8 env typedefs ghost loc quant name varTy tm next_mv)

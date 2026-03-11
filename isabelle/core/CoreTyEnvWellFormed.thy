@@ -110,4 +110,134 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_fun_metavars_distinct env \<and>
      tyenv_fun_ghost_constraint env)"
 
+(* Adding a well-kinded, ground, runtime variable preserves tyenv_well_formed.
+   This is the NotGhost case; the variable is removed from TE_GhostVars. *)
+lemma tyenv_well_formed_add_var:
+  assumes wf: "tyenv_well_formed env"
+    and ty_wk: "is_well_kinded env ty"
+    and ty_ground: "is_ground ty"
+    and ty_runtime: "is_runtime_type ty"
+  shows "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
+                                 TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>)"
+proof -
+  let ?env' = "env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
+                     TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+  from wf have wk: "tyenv_vars_well_kinded env"
+    and gr: "tyenv_vars_ground env"
+    and rt: "tyenv_vars_runtime env"
+    and rest: "tyenv_tyvars_datatypes_disjoint env"
+              "tyenv_ctors_consistent env"
+              "tyenv_payloads_well_kinded env"
+              "tyenv_payloads_have_expected_metavars env"
+              "tyenv_ctor_metavars_distinct env"
+              "tyenv_ctors_by_type_consistent env"
+              "tyenv_fun_types_well_kinded env"
+              "tyenv_funs_have_expected_metavars env"
+              "tyenv_fun_metavars_distinct env"
+              "tyenv_fun_ghost_constraint env"
+    unfolding tyenv_well_formed_def by auto
+
+  \<comment> \<open>is_well_kinded only depends on TE_Datatypes and TE_TypeVars, not TE_TermVars\<close>
+  have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
+                     "TE_Datatypes ?env' = TE_Datatypes env"
+    by simp_all
+  have wk_preserved: "\<And>ty'. is_well_kinded env ty' = is_well_kinded ?env' ty'"
+    using is_well_kinded_cong_env[OF env'_fields] by simp
+
+  have "tyenv_vars_well_kinded ?env'"
+    using wk ty_wk unfolding tyenv_vars_well_kinded_def
+    by (auto simp: wk_preserved split: if_splits)
+  moreover have "tyenv_vars_ground ?env'"
+    using gr ty_ground unfolding tyenv_vars_ground_def
+    by (auto split: if_splits)
+  moreover have "tyenv_vars_runtime ?env'"
+    using rt ty_runtime unfolding tyenv_vars_runtime_def
+    by (auto split: if_splits)
+  moreover have "tyenv_tyvars_datatypes_disjoint ?env'" using rest(1)
+    unfolding tyenv_tyvars_datatypes_disjoint_def by simp
+  moreover have "tyenv_ctors_consistent ?env'" using rest(2)
+    unfolding tyenv_ctors_consistent_def by simp
+  moreover have "tyenv_payloads_well_kinded ?env'" using rest(3)
+    unfolding tyenv_payloads_well_kinded_def by (simp add: wk_preserved)
+  moreover have "tyenv_payloads_have_expected_metavars ?env'" using rest(4)
+    unfolding tyenv_payloads_have_expected_metavars_def by simp
+  moreover have "tyenv_ctor_metavars_distinct ?env'" using rest(5)
+    unfolding tyenv_ctor_metavars_distinct_def by simp
+  moreover have "tyenv_ctors_by_type_consistent ?env'" using rest(6)
+    unfolding tyenv_ctors_by_type_consistent_def by simp
+  moreover have "tyenv_fun_types_well_kinded ?env'" using rest(7)
+    unfolding tyenv_fun_types_well_kinded_def by (simp add: wk_preserved)
+  moreover have "tyenv_funs_have_expected_metavars ?env'" using rest(8)
+    unfolding tyenv_funs_have_expected_metavars_def by simp
+  moreover have "tyenv_fun_metavars_distinct ?env'" using rest(9)
+    unfolding tyenv_fun_metavars_distinct_def by simp
+  moreover have "tyenv_fun_ghost_constraint ?env'" using rest(10)
+    unfolding tyenv_fun_ghost_constraint_def by auto
+  ultimately show ?thesis unfolding tyenv_well_formed_def by auto
+qed
+
+(* Adding a well-kinded, ground ghost variable preserves tyenv_well_formed.
+   Ghost variables do not need to be runtime types. *)
+lemma tyenv_well_formed_add_ghost_var:
+  assumes wf: "tyenv_well_formed env"
+    and ty_wk: "is_well_kinded env ty"
+    and ty_ground: "is_ground ty"
+  shows "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
+                                 TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>)"
+proof -
+  let ?env' = "env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
+                     TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>"
+  from wf have wk: "tyenv_vars_well_kinded env"
+    and gr: "tyenv_vars_ground env"
+    and rt: "tyenv_vars_runtime env"
+    and rest: "tyenv_tyvars_datatypes_disjoint env"
+              "tyenv_ctors_consistent env"
+              "tyenv_payloads_well_kinded env"
+              "tyenv_payloads_have_expected_metavars env"
+              "tyenv_ctor_metavars_distinct env"
+              "tyenv_ctors_by_type_consistent env"
+              "tyenv_fun_types_well_kinded env"
+              "tyenv_funs_have_expected_metavars env"
+              "tyenv_fun_metavars_distinct env"
+              "tyenv_fun_ghost_constraint env"
+    unfolding tyenv_well_formed_def by auto
+
+  have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
+                     "TE_Datatypes ?env' = TE_Datatypes env"
+    by simp_all
+  have wk_preserved: "\<And>ty'. is_well_kinded env ty' = is_well_kinded ?env' ty'"
+    using is_well_kinded_cong_env[OF env'_fields] by simp
+
+  have "tyenv_vars_well_kinded ?env'"
+    using wk ty_wk unfolding tyenv_vars_well_kinded_def
+    by (auto simp: wk_preserved split: if_splits)
+  moreover have "tyenv_vars_ground ?env'"
+    using gr ty_ground unfolding tyenv_vars_ground_def
+    by (auto split: if_splits)
+  moreover have "tyenv_vars_runtime ?env'"
+    using rt unfolding tyenv_vars_runtime_def
+    by (auto split: if_splits)
+  moreover have "tyenv_tyvars_datatypes_disjoint ?env'" using rest(1)
+    unfolding tyenv_tyvars_datatypes_disjoint_def by simp
+  moreover have "tyenv_ctors_consistent ?env'" using rest(2)
+    unfolding tyenv_ctors_consistent_def by simp
+  moreover have "tyenv_payloads_well_kinded ?env'" using rest(3)
+    unfolding tyenv_payloads_well_kinded_def by (simp add: wk_preserved)
+  moreover have "tyenv_payloads_have_expected_metavars ?env'" using rest(4)
+    unfolding tyenv_payloads_have_expected_metavars_def by simp
+  moreover have "tyenv_ctor_metavars_distinct ?env'" using rest(5)
+    unfolding tyenv_ctor_metavars_distinct_def by simp
+  moreover have "tyenv_ctors_by_type_consistent ?env'" using rest(6)
+    unfolding tyenv_ctors_by_type_consistent_def by simp
+  moreover have "tyenv_fun_types_well_kinded ?env'" using rest(7)
+    unfolding tyenv_fun_types_well_kinded_def by (simp add: wk_preserved)
+  moreover have "tyenv_funs_have_expected_metavars ?env'" using rest(8)
+    unfolding tyenv_funs_have_expected_metavars_def by simp
+  moreover have "tyenv_fun_metavars_distinct ?env'" using rest(9)
+    unfolding tyenv_fun_metavars_distinct_def by simp
+  moreover have "tyenv_fun_ghost_constraint ?env'" using rest(10)
+    unfolding tyenv_fun_ghost_constraint_def by auto
+  ultimately show ?thesis unfolding tyenv_well_formed_def by auto
+qed
+
 end
