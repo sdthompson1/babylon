@@ -40,7 +40,11 @@ datatype TypeError =
   | TyErr_BinopRequiresBool Location BabBinop
   | TyErr_BinopCannotCombineTypes Location BabBinop CoreType CoreType
   | TyErr_EqualityRequiresBoolOrNumeric Location
-  (* Let-binding errors *)
-  | TyErr_CannotInferLetType Location
+  (* Chain errors *)
+  | TyErr_MixedOperatorsInChain Location
+  | TyErr_MixedDirectionsInChain Location
+  | TyErr_InternalError_UnexpectedChainVar Location
+  (* Type inference errors *)
+  | TyErr_CannotInferType Location
 
 end

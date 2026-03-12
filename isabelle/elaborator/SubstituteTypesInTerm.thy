@@ -205,10 +205,10 @@ next
   show ?case
   proof (cases op)
     case CoreUnop_Negate
-    with CoreTm_Unop.prems(1) operand_typed ty_eq have "is_signed_integer_type operandTy"
+    with CoreTm_Unop.prems(1) operand_typed ty_eq have "is_signed_numeric_type operandTy"
       by (auto split: option.splits if_splits)
-    hence "is_signed_integer_type (apply_subst subst operandTy)"
-      using is_signed_integer_type_apply_subst by blast
+    hence "is_signed_numeric_type (apply_subst subst operandTy)"
+      using is_signed_numeric_type_apply_subst by blast
     then show ?thesis using ih ty_eq CoreUnop_Negate by simp
   next
     case CoreUnop_Complement
@@ -289,5 +289,32 @@ next
   (* Not yet implemented in core_term_type *)
   then show ?case sorry
 qed
+
+(* Type substitution does not change term-level free variables,
+   since it only substitutes type metavariables. *)
+lemma apply_subst_to_term_free_vars:
+  "core_term_free_vars (apply_subst_to_term subst tm) = core_term_free_vars tm"
+proof (induction tm)
+  case (CoreTm_LitArray tms)
+  then show ?case by (induction tms) auto
+next
+  case (CoreTm_FunctionCall fnName tyArgs args)
+  then show ?case by (induction args) auto
+next
+  case (CoreTm_Record flds)
+  have eq: "\<And>n t. (n, t) \<in> set flds \<Longrightarrow>
+    core_term_free_vars (apply_subst_to_term subst t) = core_term_free_vars t"
+    using CoreTm_Record.IH by auto
+  show ?case by (auto simp: eq)
+next
+  case (CoreTm_ArrayProj tm idxs)
+  then show ?case by (induction idxs) auto
+next
+  case (CoreTm_Match tm cases)
+  have eq: "\<And>p t. (p, t) \<in> set cases \<Longrightarrow>
+    core_term_free_vars (apply_subst_to_term subst t) = core_term_free_vars t"
+    using CoreTm_Match.IH by auto
+  show ?case using CoreTm_Match.IH(1) by (auto simp: eq)
+qed simp_all
 
 end

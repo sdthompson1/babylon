@@ -90,6 +90,9 @@ lemma is_integer_type_apply_subst:
 lemma is_signed_integer_type_apply_subst:
   "is_signed_integer_type ty \<Longrightarrow> is_signed_integer_type (apply_subst subst ty)"
   by (cases ty) auto
+lemma is_signed_numeric_type_apply_subst:
+  "is_signed_numeric_type ty \<Longrightarrow> is_signed_numeric_type (apply_subst subst ty)"
+  by (cases ty) auto
 lemma is_finite_integer_type_apply_subst:
   "is_finite_integer_type ty \<Longrightarrow> is_finite_integer_type (apply_subst subst ty)"
   by (cases ty) auto

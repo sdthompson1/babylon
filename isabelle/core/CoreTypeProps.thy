@@ -72,6 +72,17 @@ fun type_metavars :: "CoreType \<Rightarrow> nat set" where
 | "type_metavars (CoreTy_Array elemTy dims) = type_metavars elemTy"
 | "type_metavars (CoreTy_Meta n) = {n}"
 
+(* Collect all metavariables in a type as a list (executable) *)
+fun type_metavars_list :: "CoreType \<Rightarrow> nat list" where
+  "type_metavars_list (CoreTy_Name _ args) = concat (map type_metavars_list args)"
+| "type_metavars_list CoreTy_Bool = []"
+| "type_metavars_list (CoreTy_FiniteInt _ _) = []"
+| "type_metavars_list CoreTy_MathInt = []"
+| "type_metavars_list CoreTy_MathReal = []"
+| "type_metavars_list (CoreTy_Record flds) = concat (map (type_metavars_list \<circ> snd) flds)"
+| "type_metavars_list (CoreTy_Array elemTy _) = type_metavars_list elemTy"
+| "type_metavars_list (CoreTy_Meta n) = [n]"
+
 (* Collect all metavariables in a list of types *)
 definition list_metavars :: "CoreType list \<Rightarrow> nat set" where
   "list_metavars tys = \<Union>(set (map type_metavars tys))"
@@ -113,6 +124,10 @@ lemma finite_type_metavars: "finite (type_metavars ty)"
 (* Metavariables in a list of types are finite *)
 lemma finite_list_metavars: "finite (list_metavars tys)"
   using list_metavars_def finite_type_metavars by auto
+
+(* type_metavars_list collects the same set as type_metavars *)
+lemma set_type_metavars_list: "set (type_metavars_list ty) = type_metavars ty"
+  by (induct ty) auto
 
 (* A type is ground iff it has no metavars *)
 lemma is_ground_no_metavars:
@@ -175,5 +190,12 @@ fun is_logical_binop :: "CoreBinop \<Rightarrow> bool" where
 | "is_logical_binop CoreBinop_Or = True"
 | "is_logical_binop CoreBinop_Implies = True"
 | "is_logical_binop _ = False"
+
+(* Every CoreBinop falls into exactly one category *)
+lemma binop_category_exhaustive:
+  "is_arithmetic_binop op \<or> is_modulo_binop op \<or> is_bitwise_binop op \<or>
+   is_shift_binop op \<or> is_ordering_binop op \<or> is_eq_neq_binop op \<or>
+   is_logical_binop op"
+  by (cases op) auto
 
 end
