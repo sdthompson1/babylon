@@ -1324,6 +1324,120 @@ next
   qed
 qed
 
+(* Type soundness for CoreTm_Record *)
+lemma type_soundness_record:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+    and typing: "core_term_type env NotGhost (CoreTm_Record flds) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_Record flds))"
+proof -
+  (* Extract facts from typing *)
+  from typing obtain tys where
+    those_ok: "those (map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds) = Some tys" and
+    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
+    by (auto split: option.splits)
+
+  (* Derive that each field term is typed *)
+  from those_ok have la2: "list_all2 (\<lambda>x y. x = Some y)
+      (map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds) tys"
+    by (simp add: those_eq_Some)
+  hence len_eq: "length tys = length flds" by (auto dest: list_all2_lengthD)
+
+  (* Connect with interp_term_list's precondition *)
+  define types where "types = map (core_term_type env NotGhost) (map snd flds)"
+  have types_map: "types = map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds"
+    unfolding types_def by (induction flds) auto
+  have types_eq: "map (core_term_type env NotGhost) (map snd flds) = types"
+    unfolding types_def by simp
+  have all_typed: "list_all (\<lambda>ty. ty \<noteq> None) types"
+  proof -
+    from la2 have "\<forall>i < length flds.
+        (map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds) ! i = Some (tys ! i)"
+      using len_eq by (auto simp: list_all2_conv_all_nth)
+    hence "\<forall>i < length types. types ! i \<noteq> None"
+      using types_map by auto
+    thus ?thesis by (simp add: list_all_length)
+  qed
+
+  (* The expected types from the list IH *)
+  have the_types: "map the types = tys"
+  proof (intro nth_equalityI)
+    show "length (map the types) = length tys"
+      using len_eq types_map by simp
+  next
+    fix i assume "i < length (map the types)"
+    hence i_bound: "i < length flds" using len_eq types_map by simp
+    from la2 i_bound len_eq have
+      "(map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds) ! i = Some (tys ! i)"
+      by (auto simp: list_all2_conv_all_nth)
+    thus "map the types ! i = tys ! i"
+      using types_map i_bound by auto
+  qed
+
+  (* Apply the list IH *)
+  from IH_list[OF state_env wf_env, of "map snd flds" types]
+  have list_sound: "sound_term_results env (map the types) (interp_term_list fuel state (map snd flds))"
+    using types_eq all_typed by simp
+
+  (* Case split on list evaluation *)
+  show ?thesis
+  proof (cases "interp_term_list fuel state (map snd flds)")
+    case (Inl err)
+    then have "interp_term (Suc fuel) state (CoreTm_Record flds) = Inl err"
+      by simp
+    with list_sound Inl show ?thesis by auto
+  next
+    case (Inr vals)
+    from list_sound Inr have vals_typed: "list_all2 (value_has_type env) vals (map the types)"
+      by simp
+    hence vals_typed': "list_all2 (value_has_type env) vals tys"
+      using the_types by simp
+
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_Record flds) =
+          Inr (CV_Record (zip (map fst flds) vals))"
+      using Inr by simp
+
+    (* Show the result has the correct type *)
+    have len_vals: "length vals = length flds"
+      using vals_typed' len_eq by (auto dest: list_all2_lengthD)
+
+    have names_vals: "map fst (zip (map fst flds) vals) = map fst flds"
+      using len_vals by simp
+    have names_tys: "map fst (zip (map fst flds) tys) = map fst flds"
+      using len_eq by simp
+    have vals_list: "map snd (zip (map fst flds) vals) = vals"
+      using len_vals by simp
+    have tys_list: "map snd (zip (map fst flds) tys) = tys"
+      using len_eq by simp
+    have "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+            (zip (map fst flds) vals) (zip (map fst flds) tys)"
+    proof (rule list_all2_all_nthI)
+      show "length (zip (map fst flds) vals) = length (zip (map fst flds) tys)"
+        using len_vals len_eq by simp
+    next
+      fix i assume i_bound: "i < length (zip (map fst flds) vals)"
+      hence i_flds: "i < length flds" using len_vals by simp
+      from vals_typed' i_flds len_eq have "value_has_type env (vals ! i) (tys ! i)"
+        by (auto simp: list_all2_conv_all_nth)
+      thus "(case zip (map fst flds) vals ! i of
+              (name1, fldVal) \<Rightarrow> \<lambda>(name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+             (zip (map fst flds) tys ! i)"
+        using i_flds len_vals len_eq by simp
+    qed
+    hence "value_has_type env (CV_Record (zip (map fst flds) vals))
+                              (CoreTy_Record (zip (map fst flds) tys))"
+      by simp
+
+    with interp_eq ty_eq show ?thesis by simp
+  qed
+qed
+
 (* Type soundness for CoreTm_VariantCtor *)
 lemma type_soundness_variant_ctor:
   assumes state_env: "state_matches_env state env"
@@ -1829,7 +1943,16 @@ next
           using "1.prems"(1,2) Suc.IH(1) type_soundness_variant_ctor typing by blast
       next
         case (CoreTm_Record x12)
-        then show ?thesis sorry
+        have IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+          by (simp add: Suc.IH(2) "1.prems"(1,2))
+        from CoreTm_Record show ?thesis
+          using type_soundness_record[OF "1.prems"(1,2) IH_list] typing
+          by blast
       next
         case (CoreTm_RecordProj x131 x132)
         then show ?thesis

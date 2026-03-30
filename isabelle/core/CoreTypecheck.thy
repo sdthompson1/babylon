@@ -3,6 +3,20 @@ theory CoreTypecheck
 begin
 
 (* ========================================================================== *)
+(* Auxiliary lemma for 'those' *)
+(* ========================================================================== *)
+
+lemma those_eq_Some:
+  "those xs = Some ys \<longleftrightarrow> list_all2 (\<lambda>x y. x = Some y) xs ys"
+proof (induction xs arbitrary: ys)
+  case Nil
+  then show ?case by auto
+next
+  case (Cons x xs)
+  then show ?case by (cases x) (auto simp: list_all2_Cons1)
+qed
+
+(* ========================================================================== *)
 (* Helper functions for pattern matching type-checking *)
 (* ========================================================================== *)
 
@@ -199,7 +213,11 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                     if actualPayloadTy = apply_subst tySubst payloadTy
                     then Some (CoreTy_Name dtName tyArgs)
                     else None))"
-| "core_term_type env ghost (CoreTm_Record flds) = undefined"
+
+| "core_term_type env ghost (CoreTm_Record flds) =
+    (case those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) of
+       None \<Rightarrow> None
+     | Some tys \<Rightarrow> Some (CoreTy_Record (zip (map fst flds) tys)))"
 
 | "core_term_type env ghost (CoreTm_RecordProj tm fldName) =
     (case core_term_type env ghost tm of
@@ -265,10 +283,10 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 
 termination
 proof (relation "measure (\<lambda>(env, ghost, tm). size tm)")
-  \<comment> \<open>Goal 1: well-foundedness\<close>
+  \<comment> \<open>Well-foundedness\<close>
   show "wf (measure (\<lambda>(env, ghost, tm). size tm))" by simp
 next
-  \<comment> \<open>Goal 2: CoreTm_Cast - operand is smaller\<close>
+  \<comment> \<open>CoreTm_Cast - operand is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix targetTy operand
@@ -276,7 +294,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 3: CoreTm_Unop - operand is smaller\<close>
+  \<comment> \<open>CoreTm_Unop - operand is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix op operand
@@ -284,7 +302,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 4: CoreTm_Binop - lhs is smaller\<close>
+  \<comment> \<open>CoreTm_Binop - lhs is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix op lhs rhs
@@ -292,7 +310,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 5: CoreTm_Binop - rhs is smaller\<close>
+  \<comment> \<open>CoreTm_Binop - rhs is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix op lhs rhs
@@ -300,7 +318,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 6: CoreTm_FunctionCall - elements of tmArgs are smaller\<close>
+  \<comment> \<open>CoreTm_FunctionCall - elements of tmArgs are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix fnName tyArgs tmArgs x2 x xa yb
@@ -313,7 +331,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 7: CoreTm_VariantCtor - payload is smaller\<close>
+  \<comment> \<open>CoreTm_VariantCtor - payload is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix ctorName tyArgs payload
@@ -321,7 +339,23 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 8: CoreTm_Match - scrutinee is smaller\<close>
+  \<comment> \<open>CoreTm_Record - field terms are smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix flds :: "(string \<times> CoreTerm) list"
+  fix x :: "string \<times> CoreTerm"
+  fix xa :: string
+  fix y :: CoreTerm
+  assume "x \<in> set flds" and "(xa, y) = x"
+  hence "(xa, y) \<in> set flds" by simp
+  hence "size_prod (\<lambda>_::string. 0) size (xa, y) \<le>
+         size_list (size_prod (\<lambda>_. 0) size) flds"
+    by (simp add: size_list_estimation')
+  thus "((env, ghost, y), env, ghost, CoreTm_Record flds)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>CoreTm_Match - scrutinee is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut arms
@@ -329,7 +363,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 9: CoreTm_Match - first arm body is smaller\<close>
+  \<comment> \<open>CoreTm_Match - first arm body is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut
@@ -340,7 +374,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by (cases arms) auto
 next
-  \<comment> \<open>Goal 10: CoreTm_Match - tail arm bodies are smaller\<close>
+  \<comment> \<open>CoreTm_Match - tail arm bodies are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut :: CoreTerm
@@ -363,14 +397,14 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 11: CoreTm_Allocated - tm is smaller\<close>
+  \<comment> \<open>CoreTm_Allocated - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix tm
   show "((env, Ghost, tm), env, Ghost, CoreTm_Allocated tm)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 12: CoreTm_Let - rhs is smaller\<close>
+  \<comment> \<open>CoreTm_Let - rhs is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix var rhs body
@@ -378,7 +412,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 13: CoreTm_Let - body is smaller (with extended env)\<close>
+  \<comment> \<open>CoreTm_Let - body is smaller (with extended env)\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix var rhs body x2 x
@@ -390,7 +424,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 14: CoreTm_RecordProj - tm is smaller\<close>
+  \<comment> \<open>CoreTm_RecordProj - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix tm fldName
@@ -398,7 +432,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 15: CoreTm_ArrayProj - arr is smaller\<close>
+  \<comment> \<open>CoreTm_ArrayProj - arr is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix arr idxTms
@@ -406,7 +440,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 16: CoreTm_ArrayProj - elements of idxTms are smaller\<close>
+  \<comment> \<open>CoreTm_ArrayProj - elements of idxTms are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix arr idxTms x2 x xa
@@ -419,7 +453,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 17: CoreTm_VariantProj - tm is smaller\<close>
+  \<comment> \<open>CoreTm_VariantProj - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix tm ctorName
@@ -687,7 +721,46 @@ next
     fields_eq by (simp add: Let_def)
 next
   case (CoreTm_Record flds)
-  then show ?case sorry
+  let ?env' = "env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>"
+  from CoreTm_Record.prems(1) have flds_fresh:
+    "\<forall>fld \<in> set flds. x \<notin> core_term_free_vars (snd fld)" by auto
+  from CoreTm_Record.prems(2) obtain tys where
+    those_ok: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
+    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
+    by (auto split: option.splits)
+  have "\<forall>fld \<in> set flds. core_term_type ?env' ghost (snd fld) =
+          core_term_type env ghost (snd fld)"
+  proof
+    fix fld assume fld_in: "fld \<in> set flds"
+    obtain name tm where fld_eq: "fld = (name, tm)" by (cases fld) auto
+    from fld_in fld_eq have "x \<notin> core_term_free_vars tm" using flds_fresh by auto
+    moreover from those_ok fld_in fld_eq have "core_term_type env ghost tm \<noteq> None"
+    proof -
+      from fld_in obtain i where i_bound: "i < length flds" and fld_nth: "flds ! i = fld"
+        by (metis in_set_conv_nth)
+      from those_ok have "list_all2 (\<lambda>x y. x = Some y) (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
+        by (simp add: those_eq_Some)
+      hence "length tys = length flds" by (auto dest: list_all2_lengthD)
+      with i_bound fld_nth fld_eq have "(map (\<lambda>(name, tm). core_term_type env ghost tm) flds) ! i = core_term_type env ghost tm"
+        by auto
+      moreover from \<open>list_all2 _ _ tys\<close> i_bound \<open>length tys = length flds\<close>
+        have "(map (\<lambda>(name, tm). core_term_type env ghost tm) flds) ! i = Some (tys ! i)"
+        by (auto simp: list_all2_conv_all_nth)
+      ultimately show ?thesis
+        by (metis option.distinct(1))
+    qed
+    then obtain fldTy where "core_term_type env ghost tm = Some fldTy" by auto
+    ultimately have "core_term_type ?env' ghost tm = Some fldTy"
+      using CoreTm_Record.IH[OF fld_in[unfolded fld_eq], of _ env ghost fldTy gv']
+            fld_eq CoreTm_Record.prems(3) by auto
+    then show "core_term_type ?env' ghost (snd fld) = core_term_type env ghost (snd fld)"
+      using \<open>core_term_type env ghost tm = Some fldTy\<close> fld_eq by simp
+  qed
+  hence "map (\<lambda>(name, tm). core_term_type ?env' ghost tm) flds =
+         map (\<lambda>(name, tm). core_term_type env ghost tm) flds"
+    by auto
+  then show ?case using those_ok ty_eq
+    by (metis core_term_type.simps(13) option.simps(5))
 next
   case (CoreTm_RecordProj tm fldName)
   from CoreTm_RecordProj.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
@@ -1011,8 +1084,48 @@ next
   qed
   ultimately show ?case by blast
 next
-  case (CoreTm_Record x)
-  then show ?case sorry
+  case (CoreTm_Record flds)
+  from CoreTm_Record.prems(1) obtain tys where
+    those_ok: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
+    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
+    by (auto split: option.splits)
+  have len_tys: "length tys = length flds"
+    using those_ok
+    by (metis length_map list_all2_lengthD those_eq_Some)
+  have fld_typed: "\<And>i. i < length flds \<Longrightarrow>
+      core_term_type env ghost (snd (flds ! i)) = Some (tys ! i)"
+  proof -
+    fix i assume "i < length flds"
+    from those_ok have la: "list_all2 (\<lambda>x y. x = Some y)
+        (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
+      by (simp add: those_eq_Some)
+    hence len: "length (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = length tys"
+      by (auto dest: list_all2_lengthD)
+    obtain a b where ab: "flds ! i = (a, b)" by (cases "flds ! i")
+    from la \<open>i < length flds\<close> len
+      have "(map (\<lambda>(name, tm). core_term_type env ghost tm) flds) ! i = Some (tys ! i)"
+      by (auto simp: list_all2_conv_all_nth)
+    with ab \<open>i < length flds\<close> show "core_term_type env ghost (snd (flds ! i)) = Some (tys ! i)"
+      by auto
+  qed
+  have fld_props: "\<And>i. i < length flds \<Longrightarrow>
+      is_well_kinded env (tys ! i) \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env (tys ! i))"
+  proof -
+    fix i assume i_bound: "i < length flds"
+    obtain name tm where fld_eq: "flds ! i = (name, tm)" by (cases "flds ! i") auto
+    have fld_in: "(name, tm) \<in> set flds" using i_bound fld_eq by (metis nth_mem)
+    have "core_term_type env ghost tm = Some (tys ! i)"
+      using fld_typed[OF i_bound] fld_eq by simp
+    thus "is_well_kinded env (tys ! i) \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env (tys ! i))"
+      using CoreTm_Record.IH CoreTm_Record.prems(2) fld_in by auto
+  qed
+  have wk: "is_well_kinded env ty"
+    unfolding ty_eq using fld_props len_tys
+    by (auto simp: list_all_iff set_zip in_set_conv_nth)
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
+    unfolding ty_eq using fld_props len_tys
+    by (auto simp: list_all_iff set_zip in_set_conv_nth)
+  ultimately show ?case by blast
 next
   case (CoreTm_RecordProj tm fldName)
   from CoreTm_RecordProj.prems(1) obtain flds where

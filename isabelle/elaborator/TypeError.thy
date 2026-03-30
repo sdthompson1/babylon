@@ -17,7 +17,7 @@ datatype TypeError =
   | TyErr_GhostVariableInNonGhost Location string
   | TyErr_WrongNumberOfTypeArgs Location string nat nat  (* name, expected, actual *)
   | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
-  | TyErr_NonRuntimeTypeArg Location
+  | TyErr_NonRuntimeType Location
   | TyErr_TypeMismatch Location CoreType CoreType  (* loc, type1, type2 *)
   | TyErr_ConditionNotBool Location CoreType       (* loc, actual condition type *)
   | TyErr_MetavariableInInput                      (* metavariable found in input type *)

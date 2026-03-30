@@ -27,7 +27,7 @@ where
               let subst = fmap_of_list (zip metavars elabTyArgs);
                   resultTy = apply_subst subst targetTy
               in if ghost = NotGhost \<and> \<not> is_runtime_type env resultTy then
-                   Inl [TyErr_NonRuntimeTypeArg loc]
+                   Inl [TyErr_NonRuntimeType loc]
                  else
                    Inr resultTy)
         | None \<Rightarrow>
@@ -38,7 +38,7 @@ where
                   Inl [TyErr_WrongTypeArity loc name expectedArity (length tyargs)]
                  else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) elabTyArgs
                         \<or> name |\<in>| TE_GhostDatatypes env) then
-                  Inl [TyErr_NonRuntimeTypeArg loc]
+                  Inl [TyErr_NonRuntimeType loc]
                  else
                   Inr (CoreTy_Name name elabTyArgs))
             | None \<Rightarrow>
@@ -53,13 +53,13 @@ where
 
 | "elab_type env typedefs ghost (BabTy_MathInt loc) =
     (if ghost = NotGhost then
-      Inl [TyErr_NonRuntimeTypeArg loc]
+      Inl [TyErr_NonRuntimeType loc]
     else
       Inr CoreTy_MathInt)"
 
 | "elab_type env typedefs ghost (BabTy_MathReal loc) =
     (if ghost = NotGhost then
-      Inl [TyErr_NonRuntimeTypeArg loc]
+      Inl [TyErr_NonRuntimeType loc]
     else
       Inr CoreTy_MathReal)"
 
