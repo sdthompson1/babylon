@@ -1,5 +1,5 @@
 theory MetaSubst
-  imports CoreSyntax CoreTypeProps "HOL-Library.Finite_Map"
+  imports CoreSyntax CoreTypeProps
 begin
 
 (* ========================================================================== *)
@@ -192,22 +192,24 @@ corollary apply_subst_ground:
 (* Substituting runtime types preserves runtime-ness *)
 (* See also: apply_subst_preserves_well_kinded in CoreKindcheck.thy *)
 lemma apply_subst_preserves_runtime:
-  assumes "is_runtime_type ty"
-    and "\<forall>ty' \<in> fmran' subst. is_runtime_type ty'"
-  shows "is_runtime_type (apply_subst subst ty)"
+  assumes "is_runtime_type env ty"
+    and "\<forall>ty' \<in> fmran' subst. is_runtime_type env ty'"
+  shows "is_runtime_type env (apply_subst subst ty)"
 using assms proof (induction ty)
   case (CoreTy_Name name tyArgs)
-  have "list_all is_runtime_type tyArgs"
+  have not_ghost: "name |\<notin>| TE_GhostDatatypes env"
     using CoreTy_Name.prems(1) by simp
-  hence "list_all is_runtime_type (map (apply_subst subst) tyArgs)"
+  have "list_all (is_runtime_type env) tyArgs"
+    using CoreTy_Name.prems(1) by simp
+  hence "list_all (is_runtime_type env) (map (apply_subst subst) tyArgs)"
     using CoreTy_Name.IH CoreTy_Name.prems(2)
     by (simp add: list_all_iff)
-  thus ?case by simp
+  thus ?case using not_ghost by simp
 next
   case (CoreTy_Record flds)
-  have "list_all is_runtime_type (map snd flds)"
+  have "list_all (is_runtime_type env) (map snd flds)"
     using CoreTy_Record.prems(1) by simp
-  hence "list_all is_runtime_type (map (apply_subst subst \<circ> snd) flds)"
+  hence "list_all (is_runtime_type env) (map (apply_subst subst \<circ> snd) flds)"
     using CoreTy_Record.IH CoreTy_Record.prems(2)
     by (simp add: comp_def list.pred_map list.pred_mono_strong snds.intros)
   moreover have "map (apply_subst subst \<circ> snd) flds =
@@ -224,7 +226,7 @@ next
     case (Some ty')
     hence "ty' \<in> fmran' subst"
       by (simp add: fmran'I)
-    hence "is_runtime_type ty'"
+    hence "is_runtime_type env ty'"
       using CoreTy_Meta.prems(2) by blast
     thus ?thesis using Some by simp
   qed
@@ -350,19 +352,19 @@ lemma compose_subst_preserves_ground:
 
 (* Composition of substitutions preserves "runtime-ness" *)
 lemma compose_subst_preserves_runtime:
-  assumes "\<forall>ty \<in> fmran' s1. is_runtime_type ty"
-      and "\<forall>ty \<in> fmran' s2. is_runtime_type ty"
-    shows "\<forall>ty \<in> fmran' (compose_subst s2 s1). is_runtime_type ty"
+  assumes "\<forall>ty \<in> fmran' s1. is_runtime_type env ty"
+      and "\<forall>ty \<in> fmran' s2. is_runtime_type env ty"
+    shows "\<forall>ty \<in> fmran' (compose_subst s2 s1). is_runtime_type env ty"
 proof
   fix ty assume "ty \<in> fmran' (compose_subst s2 s1)"
-  from compose_subst_range[OF this] show "is_runtime_type ty"
+  from compose_subst_range[OF this] show "is_runtime_type env ty"
   proof
     assume "ty \<in> fmran' s2"
     thus ?thesis using assms(2) by blast
   next
     assume "\<exists>ty1 \<in> fmran' s1. ty = apply_subst s2 ty1"
     then obtain ty1 where "ty1 \<in> fmran' s1" and "ty = apply_subst s2 ty1" by auto
-    from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_runtime_type ty1" by blast
+    from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_runtime_type env ty1" by blast
     thus ?thesis
       using \<open>ty \<in> fmran' s2 \<or> (\<exists>ty1\<in>fmran' s1. ty = apply_subst s2 ty1)\<close>
         apply_subst_preserves_runtime assms(1,2) by auto

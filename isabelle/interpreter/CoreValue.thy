@@ -77,7 +77,8 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
             (dty1 = dty2 \<and>
             length metavars = length argTypes \<and>
             list_all (is_well_kinded env) argTypes \<and>
-            list_all is_runtime_type argTypes \<and>
+            list_all (is_runtime_type env) argTypes \<and>
+            dty1 |\<notin>| TE_GhostDatatypes env \<and>
             value_has_type env payload
                 (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy))
         | None \<Rightarrow> False)
@@ -86,7 +87,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
     (case ty of
       CoreTy_Array elemTy dims \<Rightarrow>
         is_well_kinded env elemTy \<and>
-        is_runtime_type elemTy \<and>
+        is_runtime_type env elemTy \<and>
         (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy) \<and>
         array_dims_well_kinded dims \<and>
         fmap_matches_sizes sizes valuesMap \<and>
@@ -183,6 +184,7 @@ lemma value_has_type_cong_env:
   assumes "TE_DataCtors env' = TE_DataCtors env"
     and "TE_Datatypes env' = TE_Datatypes env"
     and "TE_TypeVars env' = TE_TypeVars env"
+    and "TE_GhostDatatypes env' = TE_GhostDatatypes env"
   shows "value_has_type env' val ty = value_has_type env val ty"
 using assms proof (induction val arbitrary: ty)
   case (CV_Bool b)
@@ -205,12 +207,18 @@ next
   case (CV_Variant ctor payload)
   have wk_eq: "\<And>tys. list_all (is_well_kinded env') tys = list_all (is_well_kinded env) tys"
     using CV_Variant.prems list_all_iff is_well_kinded_cong_env by metis
-  then show ?case using CV_Variant.prems CV_Variant.IH
-    by (cases ty) (auto split: option.splits simp: is_well_kinded_cong_env)
+  have rt_eq: "\<And>t. is_runtime_type env' t = is_runtime_type env t"
+    by (rule is_runtime_type_cong_env[OF CV_Variant.prems(4)])
+  have rt_list_eq: "\<And>tys. list_all (is_runtime_type env') tys = list_all (is_runtime_type env) tys"
+    using rt_eq by (simp add: list_all_iff)
+  then show ?case using CV_Variant.prems CV_Variant.IH wk_eq rt_eq
+    by (cases ty) (auto split: option.splits)
 next
   case (CV_Array sizes valuesMap)
   have wk_eq: "\<And>t. is_well_kinded env' t = is_well_kinded env t"
     using CV_Array.prems is_well_kinded_cong_env by blast
+  have rt_eq: "\<And>t. is_runtime_type env' t = is_runtime_type env t"
+    by (rule is_runtime_type_cong_env[OF CV_Array.prems(4)])
   have val_eq: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow>
                   value_has_type env' v t = value_has_type env v t"
     using CV_Array.IH CV_Array.prems by auto
@@ -220,7 +228,7 @@ next
     have "(\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env' val elemTy) =
           (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy)"
       using val_eq by (simp add: fmran'I)
-    then show ?thesis using CoreTy_Array wk_eq by auto
+    then show ?thesis using CoreTy_Array wk_eq rt_eq by auto
   qed auto
 qed
 
@@ -308,7 +316,7 @@ qed
 
 lemma value_has_type_runtime:
   assumes "value_has_type env val ty"
-  shows "is_runtime_type ty"
+  shows "is_runtime_type env ty"
 using assms proof (induction val arbitrary: ty)
   case (CV_Bool b)
   then show ?case by simp
@@ -322,7 +330,7 @@ next
     all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
              fieldValues fieldTypes"
     by (cases ty) auto
-  have "list_all is_runtime_type (map snd fieldTypes)"
+  have "list_all (is_runtime_type env) (map snd fieldTypes)"
     unfolding list_all_iff
   proof
     fix fldTy
@@ -345,7 +353,7 @@ next
     with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
     from i_bound' fv_idx have in_fv: "(name1, fldVal) \<in> set fieldValues"
       by (metis nth_mem)
-    then show "is_runtime_type fldTy"
+    then show "is_runtime_type env fldTy"
       using CV_Record.IH typed by fastforce
   qed
   then show ?case using ty_eq by simp
@@ -353,15 +361,16 @@ next
   case (CV_Variant ctor payload)
   then obtain dtName argTypes where
     ty_eq: "ty = CoreTy_Name dtName argTypes" and
-    args_rt: "list_all is_runtime_type argTypes"
+    dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
+    args_rt: "list_all (is_runtime_type env) argTypes"
     by (cases ty) (auto split: option.splits prod.splits)
   show ?case
-    using ty_eq args_rt by simp
+    using ty_eq dt_nonghost args_rt by simp
 next
   case (CV_Array sizes valuesMap)
   then obtain elemTy dims where
     ty_eq: "ty = CoreTy_Array elemTy dims" and
-    elem_rt: "is_runtime_type elemTy"
+    elem_rt: "is_runtime_type env elemTy"
     by (cases ty) auto
   show ?case
     using ty_eq elem_rt by simp

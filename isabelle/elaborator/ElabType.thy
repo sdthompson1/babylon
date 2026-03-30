@@ -26,7 +26,7 @@ where
              else
               let subst = fmap_of_list (zip metavars elabTyArgs);
                   resultTy = apply_subst subst targetTy
-              in if ghost = NotGhost \<and> \<not> is_runtime_type resultTy then
+              in if ghost = NotGhost \<and> \<not> is_runtime_type env resultTy then
                    Inl [TyErr_NonRuntimeTypeArg loc]
                  else
                    Inr resultTy)
@@ -36,7 +36,8 @@ where
                 \<comment> \<open>Datatype case\<close>
                 (if length elabTyArgs \<noteq> expectedArity then
                   Inl [TyErr_WrongTypeArity loc name expectedArity (length tyargs)]
-                 else if ghost = NotGhost \<and> \<not> list_all is_runtime_type elabTyArgs then
+                 else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) elabTyArgs
+                        \<or> name |\<in>| TE_GhostDatatypes env) then
                   Inl [TyErr_NonRuntimeTypeArg loc]
                  else
                   Inr (CoreTy_Name name elabTyArgs))

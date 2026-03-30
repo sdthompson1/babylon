@@ -14,14 +14,14 @@ begin
 
 theorem unify_preserves_runtime:
   "unify ty1 ty2 = Some subst \<Longrightarrow>
-   is_runtime_type ty1 \<Longrightarrow>
-   is_runtime_type ty2 \<Longrightarrow>
-   \<forall>ty \<in> fmran' subst. is_runtime_type ty"
+   is_runtime_type env ty1 \<Longrightarrow>
+   is_runtime_type env ty2 \<Longrightarrow>
+   \<forall>ty \<in> fmran' subst. is_runtime_type env ty"
   and unify_list_preserves_runtime:
   "unify_list tys1 tys2 = Some subst \<Longrightarrow>
-   list_all is_runtime_type tys1 \<Longrightarrow>
-   list_all is_runtime_type tys2 \<Longrightarrow>
-   \<forall>ty \<in> fmran' subst. is_runtime_type ty"
+   list_all (is_runtime_type env) tys1 \<Longrightarrow>
+   list_all (is_runtime_type env) tys2 \<Longrightarrow>
+   \<forall>ty \<in> fmran' subst. is_runtime_type env ty"
 proof (induction ty1 ty2 and tys1 tys2 arbitrary: subst and subst rule: unify_unify_list.induct)
   (* CoreTy_Name / ty2 *)
   case (1 name1 tyArgs1 ty2)
@@ -43,12 +43,12 @@ proof (induction ty1 ty2 and tys1 tys2 arbitrary: subst and subst rule: unify_un
     next
       case True
       with "1.prems"(1) CoreTy_Name have unify_ok: "unify_list tyArgs1 tyArgs2 = Some subst" by simp
-      from "1.prems"(2) have "list_all is_runtime_type tyArgs1" by auto
-      from "1.prems"(3) CoreTy_Name have "list_all is_runtime_type tyArgs2"
+      from "1.prems"(2) have "list_all (is_runtime_type env) tyArgs1" by auto
+      from "1.prems"(3) CoreTy_Name have "list_all (is_runtime_type env) tyArgs2"
         using is_runtime_type.simps(1) by blast 
       from "1.IH"[OF CoreTy_Name True unify_ok
-                    \<open>list_all is_runtime_type tyArgs1\<close>
-                    \<open>list_all is_runtime_type tyArgs2\<close>]
+                    \<open>list_all (is_runtime_type env) tyArgs1\<close>
+                    \<open>list_all (is_runtime_type env) tyArgs2\<close>]
       show ?thesis .
     qed
   qed auto
@@ -97,11 +97,11 @@ next
       by (auto split: if_splits)
     from "6.prems"(1) CoreTy_Record names_eq
     have unify_ok: "unify_list (map snd flds1) (map snd flds2) = Some subst" by simp
-    from "6.prems"(2) have "list_all is_runtime_type (map snd flds1)" by simp
-    from "6.prems"(3) CoreTy_Record have "list_all is_runtime_type (map snd flds2)" by simp
+    from "6.prems"(2) have "list_all (is_runtime_type env) (map snd flds1)" by simp
+    from "6.prems"(3) CoreTy_Record have "list_all (is_runtime_type env) (map snd flds2)" by simp
     from "6.IH"[OF CoreTy_Record names_eq unify_ok
-                  \<open>list_all is_runtime_type (map snd flds1)\<close>
-                  \<open>list_all is_runtime_type (map snd flds2)\<close>]
+                  \<open>list_all (is_runtime_type env) (map snd flds1)\<close>
+                  \<open>list_all (is_runtime_type env) (map snd flds2)\<close>]
     show ?thesis .
   qed auto
 next
@@ -125,11 +125,11 @@ next
     next
       case True
       with 7(2) CoreTy_Array have unify_ok: "unify elemTy1 elemTy2 = Some subst" by simp
-      from "7.prems"(2) have "is_runtime_type elemTy1" by simp
-      from "7.prems"(3) CoreTy_Array have "is_runtime_type elemTy2" by simp
+      from "7.prems"(2) have "is_runtime_type env elemTy1" by simp
+      from "7.prems"(3) CoreTy_Array have "is_runtime_type env elemTy2" by simp
       from "7.IH"[OF CoreTy_Array True unify_ok
-                    \<open>is_runtime_type elemTy1\<close>
-                    \<open>is_runtime_type elemTy2\<close>]
+                    \<open>is_runtime_type env elemTy1\<close>
+                    \<open>is_runtime_type env elemTy2\<close>]
       show ?thesis .
     qed
   qed auto
@@ -173,37 +173,37 @@ next
     unify_rest: "unify_list (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst2" and
     subst_compose: "subst = compose_subst subst2 subst1"
     by (auto split: option.splits)
-  from 12(4) have ty1_runtime: "is_runtime_type ty1" and rest1_runtime: "list_all is_runtime_type rest1"
+  from 12(4) have ty1_runtime: "is_runtime_type env ty1" and rest1_runtime: "list_all (is_runtime_type env) rest1"
     by simp_all
-  from 12(5) have ty2_runtime: "is_runtime_type ty2" and rest2_runtime: "list_all is_runtime_type rest2"
+  from 12(5) have ty2_runtime: "is_runtime_type env ty2" and rest2_runtime: "list_all (is_runtime_type env) rest2"
     by simp_all
   (* From IH on head: subst1 range is runtime *)
   from "12.IH"(1)[OF unify_head ty1_runtime ty2_runtime]
-  have subst1_runtime: "\<forall>ty \<in> fmran' subst1. is_runtime_type ty" .
+  have subst1_runtime: "\<forall>ty \<in> fmran' subst1. is_runtime_type env ty" .
   (* Show that applying subst1 to runtime types gives runtime types *)
-  have rest1_subst_runtime: "list_all is_runtime_type (map (apply_subst subst1) rest1)"
+  have rest1_subst_runtime: "list_all (is_runtime_type env) (map (apply_subst subst1) rest1)"
   proof (simp add: list_all_iff)
-    show "\<forall>x\<in>set rest1. is_runtime_type (apply_subst subst1 x)"
+    show "\<forall>x\<in>set rest1. is_runtime_type env (apply_subst subst1 x)"
     proof
       fix x assume "x \<in> set rest1"
-      hence "is_runtime_type x" using rest1_runtime by (simp add: list_all_iff)
-      thus "is_runtime_type (apply_subst subst1 x)"
+      hence "is_runtime_type env x" using rest1_runtime by (simp add: list_all_iff)
+      thus "is_runtime_type env (apply_subst subst1 x)"
         using subst1_runtime apply_subst_preserves_runtime by blast
     qed
   qed
-  have rest2_subst_runtime: "list_all is_runtime_type (map (apply_subst subst1) rest2)"
+  have rest2_subst_runtime: "list_all (is_runtime_type env) (map (apply_subst subst1) rest2)"
   proof (simp add: list_all_iff)
-    show "\<forall>x\<in>set rest2. is_runtime_type (apply_subst subst1 x)"
+    show "\<forall>x\<in>set rest2. is_runtime_type env (apply_subst subst1 x)"
     proof
       fix x assume "x \<in> set rest2"
-      hence "is_runtime_type x" using rest2_runtime by (simp add: list_all_iff)
-      thus "is_runtime_type (apply_subst subst1 x)"
+      hence "is_runtime_type env x" using rest2_runtime by (simp add: list_all_iff)
+      thus "is_runtime_type env (apply_subst subst1 x)"
         using subst1_runtime apply_subst_preserves_runtime by blast
     qed
   qed
   (* From IH on rest: subst2 range is runtime *)
   from "12.IH"(2)[OF unify_head unify_rest rest1_subst_runtime rest2_subst_runtime]
-  have subst2_runtime: "\<forall>ty \<in> fmran' subst2. is_runtime_type ty" .
+  have subst2_runtime: "\<forall>ty \<in> fmran' subst2. is_runtime_type env ty" .
   (* Now show composed substitution range is runtime *)
   from compose_subst_preserves_runtime[OF subst1_runtime subst2_runtime]
   show ?case using subst_compose by simp

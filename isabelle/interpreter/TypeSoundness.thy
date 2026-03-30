@@ -212,8 +212,8 @@ proof -
         using \<open>interp_term fuel state lhs = Inr lhsVal\<close> Inr by simp
 
       (* From typing and runtime type constraint, lhsTy must be runtime *)
-      from value_has_type_runtime[OF lhs_typed] have lhsTy_rt: "is_runtime_type lhsTy" .
-      from value_has_type_runtime[OF rhs_typed] have rhsTy_rt: "is_runtime_type rhsTy" .
+      from value_has_type_runtime[OF lhs_typed] have lhsTy_rt: "is_runtime_type env lhsTy" .
+      from value_has_type_runtime[OF rhs_typed] have rhsTy_rt: "is_runtime_type env rhsTy" .
 
       (* Simplify typing using the extracted lhsTy and rhsTy *)
       from typing lhs_typing rhs_typing have typing':
@@ -594,6 +594,7 @@ proof -
   have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
                     "TE_Datatypes env' = TE_Datatypes env"
                     "TE_TypeVars env' = TE_TypeVars env"
+                    "TE_GhostDatatypes env' = TE_GhostDatatypes env"
     using env'_eq by simp_all
   have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
     using value_has_type_cong_env[OF env'_fields] .
@@ -801,7 +802,7 @@ proof -
       using state_matches_env_add_local[OF state_env rhs_typed alloc_eq refl refl] by simp
 
     (* The extended env is well-formed *)
-    from value_has_type_runtime[OF rhs_typed] have rhs_rt: "is_runtime_type rhsTy" .
+    from value_has_type_runtime[OF rhs_typed] have rhs_rt: "is_runtime_type env rhsTy" .
     have rhs_wk: "is_well_kinded env rhsTy"
       using core_term_type_well_kinded[OF rhs_typing wf_env] .
     have wf_env': "tyenv_well_formed ?env'"
@@ -816,6 +817,7 @@ proof -
     have env'_fields: "TE_DataCtors ?env' = TE_DataCtors env"
                        "TE_Datatypes ?env' = TE_Datatypes env"
                        "TE_TypeVars ?env' = TE_TypeVars env"
+                       "TE_GhostDatatypes ?env' = TE_GhostDatatypes env"
       by simp_all
     have "\<And>v t. value_has_type ?env' v t = value_has_type env v t"
       using value_has_type_cong_env[OF env'_fields] .
@@ -863,7 +865,7 @@ proof (cases unop)
     (* Since ty is signed_numeric and runtime (from value_has_type),
        it must be CoreTy_FiniteInt Signed bits for some bits *)
     from value_has_type_runtime[OF operand_typed]
-    have ty_runtime: "is_runtime_type ty" .
+    have ty_runtime: "is_runtime_type env ty" .
 
     (* is_signed_numeric_type + is_runtime_type => CoreTy_FiniteInt Signed _ *)
     from signed_numeric ty_runtime obtain bits where
@@ -1336,13 +1338,14 @@ proof -
     ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, metavars, payloadTy)" and
     len_eq: "length tyArgs = length metavars" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
-    tyargs_rt: "list_all is_runtime_type tyArgs"
+    tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
+    dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env"
     by (auto simp: Let_def split: option.splits prod.splits if_splits)
 
   define tySubst where "tySubst = fmap_of_list (zip metavars tyArgs)"
   define payloadTyOpt where "payloadTyOpt = core_term_type env NotGhost payload"
 
-  from typing ctor_lookup len_eq tyargs_wk tyargs_rt
+  from typing ctor_lookup len_eq tyargs_wk tyargs_rt dt_nonghost
   have typing': "(case payloadTyOpt of
       None \<Rightarrow> None
     | Some actualPayloadTy \<Rightarrow>
@@ -1380,7 +1383,7 @@ proof -
 
     (* Show the result has the correct type *)
     have "value_has_type env (CV_Variant ctorName payloadVal) (CoreTy_Name dtName tyArgs)"
-      using ctor_lookup len_eq tyargs_wk tyargs_rt payload_typed payload_ty_eq tySubst_def
+      using ctor_lookup len_eq tyargs_wk tyargs_rt dt_nonghost payload_typed payload_ty_eq tySubst_def
       by simp
 
     with interp_eq ty_eq show ?thesis by simp

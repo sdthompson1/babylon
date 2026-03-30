@@ -49,13 +49,10 @@ record CoreTyEnv =
   (* Should be consistent with TE_DataCtors *)
   TE_DataCtorsByType :: "(string, string list) fmap"
 
-
-(* Like is_lvalue, but also checks that the base variable is not a constant *)
-fun is_writable_lvalue :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
-  "is_writable_lvalue env (CoreTm_Var name) = (name |\<notin>| TE_ConstNames env)"
-| "is_writable_lvalue env (CoreTm_RecordProj tm _) = is_writable_lvalue env tm"
-| "is_writable_lvalue env (CoreTm_VariantProj tm _) = is_writable_lvalue env tm"
-| "is_writable_lvalue env (CoreTm_ArrayProj tm _) = is_writable_lvalue env tm"
-| "is_writable_lvalue _ _ = False"
+  (* Ghost datatypes: datatypes whose constructors have non-runtime payload types.
+     These cannot be represented in memory (e.g. as tagged unions) because the payload
+     sizes are not known. A datatype is ghost if any of its constructor payloads
+     contains MathInt, MathReal, or another ghost datatype. *)
+  TE_GhostDatatypes :: "string fset"
 
 end

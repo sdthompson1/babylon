@@ -117,7 +117,7 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
           ultimately have result_ground: "is_ground ?resultTy"
             by (rule apply_subst_makes_ground)
           show ?thesis
-          proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type ?resultTy")
+          proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
             case True
             then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto
           next
@@ -214,7 +214,7 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
             using targetTy_wk
             by (simp add: apply_subst_preserves_well_kinded)
           show ?thesis
-          proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type ?resultTy")
+          proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
             case True
             then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto
           next
@@ -270,10 +270,10 @@ qed
 
 (* Types returned by elab_type in NotGhost mode are runtime types *)
 lemma elab_type_notghost_is_runtime:
-  "typedefs_well_formed env typedefs \<Longrightarrow>
-   elab_type env typedefs NotGhost ty = Inr ty' \<Longrightarrow> is_runtime_type ty'"
-  "typedefs_well_formed env typedefs \<Longrightarrow>
-   elab_type_list env typedefs NotGhost tys = Inr tys' \<Longrightarrow> list_all is_runtime_type tys'"
+  "typedefs_well_formed env typedefs \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
+   elab_type env typedefs NotGhost ty = Inr ty' \<Longrightarrow> is_runtime_type env ty'"
+  "typedefs_well_formed env typedefs \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
+   elab_type_list env typedefs NotGhost tys = Inr tys' \<Longrightarrow> list_all (is_runtime_type env) tys'"
 proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
        arbitrary: ty' and tys' rule: elab_type_elab_type_list.induct)
   case (1 env typedefs loc name tyargs)
@@ -283,12 +283,21 @@ proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
     then show ?thesis using "1.prems" by simp
   next
     case (Inr elabTyArgs)
-    have elabTyArgs_rt: "list_all is_runtime_type elabTyArgs"
-      by (simp add: "1.hyps" "1.prems"(1) Inr) 
+    have elabTyArgs_rt: "list_all (is_runtime_type env) elabTyArgs"
+      by (simp add: "1.hyps" "1.prems"(1,2) Inr)
     show ?thesis
     proof (cases "name |\<in>| TE_TypeVars env")
       case True
-      then show ?thesis using "1.prems" Inr by (auto split: if_splits)
+      (* Type variable: result is CoreTy_Name name [].
+         name is a type variable, so it's not in TE_Datatypes (by disjointness),
+         and TE_GhostDatatypes \<subseteq> fmdom TE_Datatypes, so name \<notin> TE_GhostDatatypes. *)
+      from "1.prems"(2) have "tyenv_tyvars_datatypes_disjoint env"
+        and "tyenv_ghost_datatypes_subset env"
+        unfolding tyenv_well_formed_def by auto
+      hence "name |\<notin>| TE_GhostDatatypes env"
+        using True unfolding tyenv_tyvars_datatypes_disjoint_def tyenv_ghost_datatypes_subset_def
+        by auto
+      then show ?thesis using "1.prems" Inr True by (auto split: if_splits)
     next
       case not_tyvar: False
       show ?thesis
@@ -307,7 +316,7 @@ proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
           let ?resultTy = "apply_subst ?subst targetTy"
           (* In NotGhost mode, we check is_runtime_type on the result *)
           show ?thesis
-          proof (cases "is_runtime_type ?resultTy")
+          proof (cases "is_runtime_type env ?resultTy")
             case False
             (* If not runtime, we return Inl, so premise is false *)
             then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto

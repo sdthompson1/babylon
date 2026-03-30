@@ -150,7 +150,7 @@ lemma apply_subst_to_term_preserves_typing:
   assumes "core_term_type env mode tm = Some ty"
       and "tyenv_well_formed env"
       and "\<forall>ty' \<in> fmran' subst. is_well_kinded env ty'"
-      and "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ty')"
+      and "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty')"
   shows "core_term_type env mode (apply_subst_to_term subst tm) = Some (apply_subst subst ty)"
 using assms proof (induction tm arbitrary: ty mode)
   case (CoreTm_LitBool b)
@@ -182,7 +182,7 @@ next
     operand_typed: "core_term_type env mode operand = Some operandTy" and
     is_int_operand: "is_integer_type operandTy" and
     is_int_target: "is_integer_type targetTy" and
-    runtime_ok: "mode = NotGhost \<longrightarrow> is_runtime_type targetTy" and
+    runtime_ok: "mode = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
   from CoreTm_Cast.IH[OF operand_typed CoreTm_Cast.prems(2) CoreTm_Cast.prems(3) CoreTm_Cast.prems(4)]
@@ -191,7 +191,7 @@ next
     using is_int_operand is_integer_type_apply_subst by blast
   moreover have "is_integer_type (apply_subst subst targetTy)"
     using is_int_target is_integer_type_apply_subst by blast
-  moreover have "mode = NotGhost \<longrightarrow> is_runtime_type (apply_subst subst targetTy)"
+  moreover have "mode = NotGhost \<longrightarrow> is_runtime_type env (apply_subst subst targetTy)"
     using runtime_ok CoreTm_Cast.prems(4) apply_subst_preserves_runtime by blast
   ultimately show ?case using ih ty_eq by simp
 next

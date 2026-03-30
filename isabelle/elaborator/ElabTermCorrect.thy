@@ -116,7 +116,7 @@ lemma determine_fun_call_type_correct:
          \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
          \<and> length newTyArgs = length (FI_TyArgs funInfo)
          \<and> list_all (is_well_kinded env) newTyArgs
-         \<and> (ghost = NotGhost \<longrightarrow> list_all is_runtime_type newTyArgs)
+         \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) newTyArgs)
          \<and> expArgTypes = map (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)))
                              (FI_TmArgs funInfo)
          \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs))
@@ -150,7 +150,7 @@ proof (cases callTm)
     have len_ok: "length ?genTyArgs = ?numTyParams" by simp
     have wk_ok: "list_all (is_well_kinded env) ?genTyArgs"
       using list_all_meta_is_well_kinded by simp
-    have runtime_ok: "list_all is_runtime_type ?genTyArgs"
+    have runtime_ok: "list_all (is_runtime_type env) ?genTyArgs"
       using list_all_meta_is_runtime by simp
     show ?thesis
       using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok
@@ -176,8 +176,8 @@ proof (cases callTm)
         using elab_tyargs True elab_type_list_length by fastforce
       have wk_ok: "list_all (is_well_kinded env) elabTyArgs"
         using elab_tyargs assms(2,3) elab_type_is_well_kinded(2) by auto
-      have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type elabTyArgs"
-        using elab_tyargs assms(3) elab_type_notghost_is_runtime(2) by (cases ghost; auto)
+      have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) elabTyArgs"
+        using elab_tyargs assms(2,3) elab_type_notghost_is_runtime(2) by (cases ghost; auto)
       show ?thesis
         using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok
         by auto
@@ -202,11 +202,11 @@ lemma unify_call_types_correct:
       and "list_all (is_well_kinded env) actualTys"
       and "list_all (is_well_kinded env) expectedTys"
       and "\<forall>ty \<in> fmran' accSubst. is_well_kinded env ty"
-      and "ghost = NotGhost \<longrightarrow> list_all is_runtime_type actualTys"
-      and "ghost = NotGhost \<longrightarrow> list_all is_runtime_type expectedTys"
-      and "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' accSubst. is_runtime_type ty)"
+      and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) actualTys"
+      and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
+      and "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' accSubst. is_runtime_type env ty)"
   shows "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ty))
+       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
        \<and> (\<exists>theta. finalSubst = compose_subst theta accSubst)
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -231,10 +231,10 @@ next
     and actualTys_wk: "list_all (is_well_kinded env) actualTys" by simp_all
   from "2.prems"(5) have expectedTy_wk: "is_well_kinded env expectedTy"
     and expectedTys_wk: "list_all (is_well_kinded env) expectedTys" by simp_all
-  from "2.prems"(7) have actualTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type actualTy"
-    and actualTys_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type actualTys" by simp_all
-  from "2.prems"(8) have expectedTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type expectedTy"
-    and expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type expectedTys" by simp_all
+  from "2.prems"(7) have actualTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env actualTy"
+    and actualTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) actualTys" by simp_all
+  from "2.prems"(8) have expectedTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy"
+    and expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys" by simp_all
 
   show ?case
   proof (cases "unify ?actualTy' ?expectedTy'")
@@ -251,23 +251,23 @@ next
       using actualTy_wk accSubst_wk apply_subst_preserves_well_kinded by blast
     have expectedTy'_wk: "is_well_kinded env ?expectedTy'"
       using expectedTy_wk accSubst_wk apply_subst_preserves_well_kinded by blast
-    have actualTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?actualTy'"
+    have actualTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?actualTy'"
       using actualTy_rt "2.prems"(9) apply_subst_preserves_runtime by blast
-    have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?expectedTy'"
+    have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
       using expectedTy_rt "2.prems"(9) apply_subst_preserves_runtime by blast
 
     have newSubst_wk: "\<forall>ty \<in> fmran' newSubst. is_well_kinded env ty"
       using Some actualTy'_wk expectedTy'_wk unify_preserves_well_kinded by blast
-    have newSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' newSubst. is_runtime_type ty)"
+    have newSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' newSubst. is_runtime_type env ty)"
       using Some actualTy'_rt expectedTy'_rt unify_preserves_runtime by blast
 
     have composed_wk: "\<forall>ty \<in> fmran' ?composedSubst. is_well_kinded env ty"
       using newSubst_wk "2.prems"(6) compose_subst_preserves_well_kinded by blast
-    have composed_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?composedSubst. is_runtime_type ty)"
+    have composed_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?composedSubst. is_runtime_type env ty)"
       using newSubst_rt "2.prems"(9) compose_subst_preserves_runtime by blast
 
     have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-            \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ty))
+            \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
             \<and> (\<exists>theta. finalSubst = compose_subst theta ?composedSubst)
             \<and> list_all2 (\<lambda>actualTy expectedTy.
                 apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -310,7 +310,7 @@ next
       by (simp_all add: Let_def split: if_splits)
 
     have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-            \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ty))
+            \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
             \<and> (\<exists>theta. finalSubst = compose_subst theta accSubst)
             \<and> list_all2 (\<lambda>actualTy expectedTy.
                 apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -373,7 +373,7 @@ lemma apply_call_coercions_correct:
            actualTys expectedTys"
       and "tyenv_well_formed env"
       and "\<forall>ty \<in> fmran' subst. is_well_kinded env ty"
-      and "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' subst. is_runtime_type ty)"
+      and "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' subst. is_runtime_type env ty)"
       and "length tms = length actualTys"
       and "length actualTys = length expectedTys"
   shows "list_all2 (\<lambda>tm expectedTy.
@@ -435,7 +435,7 @@ next
       using actual_finite finite_integer_type_is_integer_type by blast
     have expected_int: "is_integer_type ?expectedTy'"
       using expected_finite finite_integer_type_is_integer_type by blast
-    have expected_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?expectedTy'"
+    have expected_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
       using expected_finite by (cases ?expectedTy') auto
     show ?thesis using head_tm'_typed actual_int expected_int expected_rt False
       by (auto split: option.splits)
@@ -490,7 +490,7 @@ proof (cases ty1)
     have ty1_int: "is_integer_type ty1" using \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> by simp
     have ty2_int: "is_integer_type ty2" using CoreTy_FiniteInt by simp
     have commonTy_int: "is_integer_type commonTy" using commonTy_eq by simp
-    have commonTy_rt: "is_runtime_type commonTy" using commonTy_eq by simp
+    have commonTy_rt: "is_runtime_type env commonTy" using commonTy_eq by simp
 
     have newTm1_typed: "core_term_type env ghost newTm1 = Some commonTy"
     proof (cases "sign1 = commonSign \<and> bits1 = commonBits")
@@ -702,14 +702,14 @@ next
     using core_term_type_well_kinded[OF rhs_typed wf] .
   have range_wk: "\<forall>ty' \<in> fmran' unifSubst. is_well_kinded env ty'"
     using unify_preserves_well_kinded[OF Some lhs_wk rhs_wk] .
-  have range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' unifSubst. is_runtime_type ty')"
+  have range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty')"
   proof
     assume ng: "ghost = NotGhost"
-    have "is_runtime_type lhsTy"
+    have "is_runtime_type env lhsTy"
       using core_term_type_notghost_runtime lhs_typed local.wf ng by auto
-    moreover have "is_runtime_type rhsTy"
+    moreover have "is_runtime_type env rhsTy"
       using core_term_type_notghost_runtime local.wf ng rhs_typed by auto
-    ultimately show "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type ty'"
+    ultimately show "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'"
       using unify_preserves_runtime[OF Some] by auto
   qed
   \<comment> \<open>Both terms typecheck after applying unifSubst\<close>
@@ -755,23 +755,23 @@ next
           resolved)
     have default_wk: "is_well_kinded env ?defaultTy"
       by (auto simp: default_type_for_binop_def split: option.splits)
-    have default_rt: "is_runtime_type ?defaultTy"
+    have default_rt: "is_runtime_type env ?defaultTy"
       by (auto simp: default_type_for_binop_def split: option.splits)
     have fill_range_wk: "\<forall>ty' \<in> fmran' ?fillSubst. is_well_kinded env ty'"
       using const_subst_for_range default_wk by metis
-    have fill_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type ty')"
+    have fill_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty')"
       using const_subst_for_range default_rt by metis
     \<comment> \<open>Full substitution preserves typing\<close>
     have full_range_wk: "\<forall>ty' \<in> fmran' ?fullSubst. is_well_kinded env ty'"
       using compose_subst_preserves_well_kinded[OF range_wk fill_range_wk] by simp
-    have full_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type ty')"
+    have full_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty')"
     proof
       assume ng: "ghost = NotGhost"
-      from range_rt ng have "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type ty'" by simp
-      from fill_range_rt ng have "\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type ty'" by simp
-      from compose_subst_preserves_runtime[OF \<open>\<forall>ty' \<in> fmran' unifSubst. is_runtime_type ty'\<close>
-                                              \<open>\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type ty'\<close>]
-      show "\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type ty'" .
+      from range_rt ng have "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'" by simp
+      from fill_range_rt ng have "\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'" by simp
+      from compose_subst_preserves_runtime[OF \<open>\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'\<close>
+                                              \<open>\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'\<close>]
+      show "\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty'" .
     qed
     have lhs': "core_term_type env ghost (apply_subst_to_term ?fullSubst lhsTm) =
                 Some (apply_subst ?fullSubst lhsTy)"
@@ -884,7 +884,7 @@ proof -
       case False
       have "is_integer_type rhsTy'" using fin_rhs finite_integer_type_is_integer_type by simp
       moreover have "is_integer_type lhsTy'" using fin_lhs finite_integer_type_is_integer_type by simp
-      moreover have "is_runtime_type lhsTy'" using fin_lhs by (cases lhsTy') auto
+      moreover have "is_runtime_type env lhsTy'" using fin_lhs by (cases lhsTy') auto
       ultimately show ?thesis using rhs' False by auto
     qed
     with lhs' fin_lhs shift tm_eq ty_eq show ?thesis by auto
@@ -1445,7 +1445,7 @@ next
           by (simp add: env'_def gv'_def)
       next
         case NotGhost
-        have "is_runtime_type resolvedRhsTy"
+        have "is_runtime_type env resolvedRhsTy"
           using core_term_type_notghost_runtime[OF _ Cons.prems(4)] resolvedRhs_typed NotGhost by simp
         thus ?thesis using tyenv_well_formed_add_var[OF Cons.prems(4) wk ground] NotGhost
           by (simp add: env'_def gv'_def)
@@ -1638,8 +1638,8 @@ next
     \<comment> \<open>After substitution, the term has type newTargetTy\<close>
     have subst_wk: "\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_well_kinded env ty"
       by (simp add: fmran'_singleton_subst is_integer_type_well_kinded target_is_int)
-    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_runtime_type ty)"
-      by (metis "3.prems"(3) elab_target elab_type_notghost_is_runtime(1) fmempty_lookup fmran'E
+    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_runtime_type env ty)"
+      by (metis "3.prems"(2,3) elab_target elab_type_notghost_is_runtime(1) fmempty_lookup fmran'E
           fmupd_lookup option.discI option.inject singleton_subst_def)
     have "core_term_type env ghost (apply_subst_to_term (singleton_subst n newTargetTy) newOperand)
         = Some (apply_subst (singleton_subst n newTargetTy) operandTy)"
@@ -1655,8 +1655,8 @@ next
       by auto
     have operand_is_int: "is_integer_type operandTy"
       using CoreTy_FiniteInt by simp
-    have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type newTargetTy"
-      using elab_target "3.prems"(3) elab_type_notghost_is_runtime by (cases ghost) auto
+    have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env newTargetTy"
+      using elab_target "3.prems"(2,3) elab_type_notghost_is_runtime by (cases ghost) auto
     show ?thesis using result ih operand_is_int target_is_int target_rt by auto
   next
     case CoreTy_MathInt
@@ -1666,8 +1666,8 @@ next
       by auto
     have operand_is_int: "is_integer_type operandTy"
       using CoreTy_MathInt by simp
-    have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type newTargetTy"
-      using elab_target "3.prems"(3) elab_type_notghost_is_runtime by (cases ghost) auto
+    have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env newTargetTy"
+      using elab_target "3.prems"(2,3) elab_type_notghost_is_runtime by (cases ghost) auto
     show ?thesis using result ih operand_is_int target_is_int target_rt by auto
   next
     \<comment> \<open>Other cases result in error, so don't reach Inr\<close>
@@ -1759,7 +1759,7 @@ next
     \<comment> \<open>Substituted branches have the result type\<close>
     have branchSubst_wk: "\<forall>ty \<in> fmran' branchSubst. is_well_kinded env ty"
       using Some ih_then ih_else "4.prems"(2) core_term_type_well_kinded unify_preserves_well_kinded by blast
-    have branchSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' branchSubst. is_runtime_type ty)"
+    have branchSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' branchSubst. is_runtime_type env ty)"
       using Some ih_then ih_else "4.prems"(2) core_term_type_notghost_runtime unify_preserves_runtime by blast
 
     have then'_typed: "core_term_type env ghost ?newThen' = Some ?resultTy"
@@ -1854,7 +1854,7 @@ next
     \<comment> \<open>Substitution properties\<close>
     have subst_wk: "\<forall>ty \<in> fmran' ?subst. is_well_kinded env ty"
       by (simp add: fmran'_singleton_subst default_type_for_unop_is_well_kinded)
-    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?subst. is_runtime_type ty)"
+    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?subst. is_runtime_type env ty)"
       by (simp add: fmran'_singleton_subst default_type_for_unop_is_runtime)
 
     \<comment> \<open>After substitution, operand has the default type\<close>
@@ -2036,7 +2036,7 @@ next
   have rhs_typing: "core_term_type env ghost rhsTm = Some rhsTy"
     using "7.IH"(1)[OF elab_rhs "7.prems"(2,3)] .
   \<comment> \<open>Get well-kindedness and runtime properties of rhsTy\<close>
-  have rhs_props: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type rhsTy)"
+  have rhs_props: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
     using core_term_type_well_kinded_and_runtime[OF rhs_typing "7.prems"(2)] .
   hence rhs_wk: "is_well_kinded env rhsTy" by blast
   \<comment> \<open>Show tyenv_well_formed env'\<close>
@@ -2047,7 +2047,7 @@ next
       using tyenv_well_formed_add_ghost_var[OF "7.prems"(2) rhs_wk rhs_ground] by simp
   next
     case False
-    hence rhs_rt: "is_runtime_type rhsTy" using rhs_props GhostOrNot.exhaust by blast
+    hence rhs_rt: "is_runtime_type env rhsTy" using rhs_props GhostOrNot.exhaust by blast
     show ?thesis using False
       tyenv_well_formed_add_var[OF "7.prems"(2) rhs_wk rhs_ground rhs_rt] by simp
   qed
@@ -2098,7 +2098,7 @@ next
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
-    tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type tyArgs" and
+    tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
     expArgTypes_eq: "expArgTypes = map (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)))
                                        (FI_TmArgs funInfo)" and
     retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
@@ -2136,7 +2136,7 @@ next
       using "9.prems"(2) core_term_type_well_kinded by blast
   qed
   \<comment> \<open>From ih_args and core_term_type_notghost_runtime\<close>
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type actualTypes"
+  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) actualTypes"
     using ih_args "9.prems"(2) core_term_type_notghost_runtime
     by (auto simp: list_all2_conv_all_nth list_all_length)
 
@@ -2151,17 +2151,17 @@ next
 
   have "tyenv_fun_ghost_constraint env"
     using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_rt: "FI_Ghost funInfo = NotGhost \<longrightarrow> list_all is_runtime_type (FI_TmArgs funInfo)"
+  hence fi_args_rt: "FI_Ghost funInfo = NotGhost \<longrightarrow> list_all (is_runtime_type env) (FI_TmArgs funInfo)"
     using fn_lookup tyenv_fun_ghost_constraint_def
     by (metis fi_args_wk list.pred_mono_strong)
-  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type expArgTypes"
+  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expArgTypes"
   proof
     assume ng: "ghost = NotGhost"
     hence "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
-    hence fi_args_rt': "list_all is_runtime_type (FI_TmArgs funInfo)" using fi_args_rt by simp
-    have tyargs_rt': "list_all is_runtime_type tyArgs" using tyargs_rt ng by simp
+    hence fi_args_rt': "list_all (is_runtime_type env) (FI_TmArgs funInfo)" using fi_args_rt by simp
+    have tyargs_rt': "list_all (is_runtime_type env) tyArgs" using tyargs_rt ng by simp
     \<comment> \<open>Build a runtime-preserving substitution from tyArgs\<close>
-    have subst_rt: "\<forall>ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)). is_runtime_type ty"
+    have subst_rt: "\<forall>ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)). is_runtime_type env ty"
     proof
       fix ty assume "ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))"
       then obtain var where lookup: "fmlookup (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) var = Some ty"
@@ -2173,17 +2173,17 @@ next
       then obtain i where "i < length (FI_TyArgs funInfo)" "i < length tyArgs"
                      and "ty = tyArgs ! i"
         using len_tyargs by (auto simp: set_zip)
-      thus "is_runtime_type ty"
+      thus "is_runtime_type env ty"
         using tyargs_rt' by (simp add: list_all_length)
     qed
-    show "list_all is_runtime_type expArgTypes"
+    show "list_all (is_runtime_type env) expArgTypes"
       using expArgTypes_eq fi_args_rt' subst_rt
       by (simp add: list_all_iff apply_subst_preserves_runtime)
   qed
 
   \<comment> \<open>Apply unify_call_types_correct\<close>
   have unify_correct: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ty))
+       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
        \<and> (\<exists>theta. finalSubst = compose_subst theta fmempty)
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -2196,7 +2196,7 @@ next
 
   from unify_correct have
     finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty" and
-    finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ty)" and
+    finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty)" and
     types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
@@ -2221,7 +2221,7 @@ next
     by (simp add: list_all_iff apply_subst_preserves_well_kinded metasubst_well_kinded_def fmran'_def)
 
   \<comment> \<open>Show finalTyArgs are runtime if NotGhost\<close>
-  have finalTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type ?finalTyArgs"
+  have finalTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) ?finalTyArgs"
     using tyargs_rt finalSubst_rt
     by (auto simp: list_all_iff apply_subst_preserves_runtime)
 

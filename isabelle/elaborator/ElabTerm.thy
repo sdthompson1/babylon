@@ -15,7 +15,7 @@ fun default_type_for_unop :: "CoreUnop \<Rightarrow> CoreType" where
 | "default_type_for_unop CoreUnop_Complement = CoreTy_FiniteInt Signed IntBits_32"
 | "default_type_for_unop CoreUnop_Not = CoreTy_Bool"
 
-lemma default_type_for_unop_is_runtime: "is_runtime_type (default_type_for_unop op)"
+lemma default_type_for_unop_is_runtime: "is_runtime_type env (default_type_for_unop op)"
   by (cases op) simp_all
 
 lemma default_type_for_unop_is_well_kinded: "is_well_kinded env (default_type_for_unop op)"

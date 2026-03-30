@@ -17,7 +17,7 @@ definition tyenv_vars_runtime :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_vars_runtime env =
     (\<forall>name ty. fmlookup (TE_TermVars env) name = Some ty
                \<and> name |\<notin>| TE_GhostVars env
-               \<longrightarrow> is_runtime_type ty)"
+               \<longrightarrow> is_runtime_type env ty)"
 
 (* Type variable names and datatype names are disjoint *)
 definition tyenv_tyvars_datatypes_disjoint :: "CoreTyEnv \<Rightarrow> bool" where
@@ -90,8 +90,22 @@ definition tyenv_fun_ghost_constraint :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_fun_ghost_constraint env =
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<and>
     (FI_Ghost info) = NotGhost \<longrightarrow>
-      (\<forall>ty \<in> set (FI_TmArgs info). is_runtime_type ty) \<and>
-      is_runtime_type (FI_ReturnType info))"
+      (\<forall>ty \<in> set (FI_TmArgs info). is_runtime_type env ty) \<and>
+      is_runtime_type env (FI_ReturnType info))"
+
+(* For non-ghost datatypes, all constructor payload types must be runtime.
+   This ensures variant types can be represented in memory (e.g. as tagged unions). *)
+definition tyenv_nonghost_payloads_runtime :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_nonghost_payloads_runtime env =
+    (\<forall>ctorName dtName metavars payload.
+      fmlookup (TE_DataCtors env) ctorName = Some (dtName, metavars, payload) \<longrightarrow>
+      dtName |\<notin>| TE_GhostDatatypes env \<longrightarrow>
+      is_runtime_type env payload)"
+
+(* Ghost datatypes must be a subset of all datatypes *)
+definition tyenv_ghost_datatypes_subset :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_ghost_datatypes_subset env =
+    (TE_GhostDatatypes env |\<subseteq>| fmdom (TE_Datatypes env))"
 
 (* A type environment is well-formed if all the above conditions hold *)
 definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
@@ -108,7 +122,9 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_fun_types_well_kinded env \<and>
      tyenv_funs_have_expected_metavars env \<and>
      tyenv_fun_metavars_distinct env \<and>
-     tyenv_fun_ghost_constraint env)"
+     tyenv_fun_ghost_constraint env \<and>
+     tyenv_nonghost_payloads_runtime env \<and>
+     tyenv_ghost_datatypes_subset env)"
 
 (* Adding a well-kinded, ground, runtime variable preserves tyenv_well_formed.
    This is the NotGhost case; the variable is removed from TE_GhostVars. *)
@@ -116,7 +132,7 @@ lemma tyenv_well_formed_add_var:
   assumes wf: "tyenv_well_formed env"
     and ty_wk: "is_well_kinded env ty"
     and ty_ground: "is_ground ty"
-    and ty_runtime: "is_runtime_type ty"
+    and ty_runtime: "is_runtime_type env ty"
   shows "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
                                  TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>)"
 proof -
@@ -135,6 +151,8 @@ proof -
               "tyenv_funs_have_expected_metavars env"
               "tyenv_fun_metavars_distinct env"
               "tyenv_fun_ghost_constraint env"
+              "tyenv_nonghost_payloads_runtime env"
+              "tyenv_ghost_datatypes_subset env"
     unfolding tyenv_well_formed_def by auto
 
   \<comment> \<open>is_well_kinded only depends on TE_Datatypes and TE_TypeVars, not TE_TermVars\<close>
@@ -144,6 +162,11 @@ proof -
   have wk_preserved: "\<And>ty'. is_well_kinded env ty' = is_well_kinded ?env' ty'"
     using is_well_kinded_cong_env[OF env'_fields] by simp
 
+  \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes\<close>
+  have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
+  have rt_preserved: "\<And>ty'. is_runtime_type ?env' ty' = is_runtime_type env ty'"
+    using is_runtime_type_cong_env[OF gds_eq] by simp
+
   have "tyenv_vars_well_kinded ?env'"
     using wk ty_wk unfolding tyenv_vars_well_kinded_def
     by (auto simp: wk_preserved split: if_splits)
@@ -152,7 +175,7 @@ proof -
     by (auto split: if_splits)
   moreover have "tyenv_vars_runtime ?env'"
     using rt ty_runtime unfolding tyenv_vars_runtime_def
-    by (auto split: if_splits)
+    by (auto simp: rt_preserved split: if_splits)
   moreover have "tyenv_tyvars_datatypes_disjoint ?env'" using rest(1)
     unfolding tyenv_tyvars_datatypes_disjoint_def by simp
   moreover have "tyenv_ctors_consistent ?env'" using rest(2)
@@ -172,7 +195,11 @@ proof -
   moreover have "tyenv_fun_metavars_distinct ?env'" using rest(9)
     unfolding tyenv_fun_metavars_distinct_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'" using rest(10)
-    unfolding tyenv_fun_ghost_constraint_def by auto
+    unfolding tyenv_fun_ghost_constraint_def by (auto simp: rt_preserved)
+  moreover have "tyenv_nonghost_payloads_runtime ?env'" using rest(11)
+    unfolding tyenv_nonghost_payloads_runtime_def by (simp add: rt_preserved)
+  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(12)
+    unfolding tyenv_ghost_datatypes_subset_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
@@ -200,6 +227,8 @@ proof -
               "tyenv_funs_have_expected_metavars env"
               "tyenv_fun_metavars_distinct env"
               "tyenv_fun_ghost_constraint env"
+              "tyenv_nonghost_payloads_runtime env"
+              "tyenv_ghost_datatypes_subset env"
     unfolding tyenv_well_formed_def by auto
 
   have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
@@ -207,6 +236,11 @@ proof -
     by simp_all
   have wk_preserved: "\<And>ty'. is_well_kinded env ty' = is_well_kinded ?env' ty'"
     using is_well_kinded_cong_env[OF env'_fields] by simp
+
+  \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes\<close>
+  have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
+  have rt_preserved: "\<And>ty'. is_runtime_type ?env' ty' = is_runtime_type env ty'"
+    using is_runtime_type_cong_env[OF gds_eq] by simp
 
   have "tyenv_vars_well_kinded ?env'"
     using wk ty_wk unfolding tyenv_vars_well_kinded_def
@@ -216,7 +250,7 @@ proof -
     by (auto split: if_splits)
   moreover have "tyenv_vars_runtime ?env'"
     using rt unfolding tyenv_vars_runtime_def
-    by (auto split: if_splits)
+    by (auto simp: rt_preserved split: if_splits)
   moreover have "tyenv_tyvars_datatypes_disjoint ?env'" using rest(1)
     unfolding tyenv_tyvars_datatypes_disjoint_def by simp
   moreover have "tyenv_ctors_consistent ?env'" using rest(2)
@@ -236,7 +270,11 @@ proof -
   moreover have "tyenv_fun_metavars_distinct ?env'" using rest(9)
     unfolding tyenv_fun_metavars_distinct_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'" using rest(10)
-    unfolding tyenv_fun_ghost_constraint_def by auto
+    unfolding tyenv_fun_ghost_constraint_def by (auto simp: rt_preserved)
+  moreover have "tyenv_nonghost_payloads_runtime ?env'" using rest(11)
+    unfolding tyenv_nonghost_payloads_runtime_def by (simp add: rt_preserved)
+  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(12)
+    unfolding tyenv_ghost_datatypes_subset_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 

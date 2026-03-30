@@ -1,23 +1,25 @@
 theory CoreTypeProps
-  imports CoreSyntax
+  imports CoreTyEnv
 begin
 
 (* ========================================================================== *)
 (* Type Properties *)
 (* ========================================================================== *)
 
-(* Check if a type is a runtime-compatible type (no MathInt/MathReal) *)
-(* Note: Metavariables are considered runtime types, since they could be substituted
-   as {} or i32 or some other runtime type *)
-fun is_runtime_type :: "CoreType \<Rightarrow> bool" where
-  "is_runtime_type (CoreTy_Name _ tyargs) = list_all is_runtime_type tyargs"
-| "is_runtime_type CoreTy_Bool = True"
-| "is_runtime_type (CoreTy_FiniteInt _ _) = True"
-| "is_runtime_type CoreTy_MathInt = False"
-| "is_runtime_type CoreTy_MathReal = False"
-| "is_runtime_type (CoreTy_Record flds) = list_all is_runtime_type (map snd flds)"
-| "is_runtime_type (CoreTy_Array elemTy dims) = is_runtime_type elemTy"
-| "is_runtime_type (CoreTy_Meta _) = True"
+(* Check if a type is a runtime-compatible type (can be represented in memory).
+   Non-runtime types include MathInt, MathReal, and ghost datatypes (whose constructor
+   payloads contain non-runtime types and thus have unknown byte sizes).
+   Metavariables are considered runtime, since they could be substituted with runtime types. *)
+fun is_runtime_type :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "is_runtime_type env (CoreTy_Name nm tyargs) =
+     (nm |\<notin>| TE_GhostDatatypes env \<and> list_all (is_runtime_type env) tyargs)"
+| "is_runtime_type env CoreTy_Bool = True"
+| "is_runtime_type env (CoreTy_FiniteInt _ _) = True"
+| "is_runtime_type env CoreTy_MathInt = False"
+| "is_runtime_type env CoreTy_MathReal = False"
+| "is_runtime_type env (CoreTy_Record flds) = list_all (is_runtime_type env) (map snd flds)"
+| "is_runtime_type env (CoreTy_Array elemTy dims) = is_runtime_type env elemTy"
+| "is_runtime_type env (CoreTy_Meta _) = True"
 
 (* Check if a type is a numeric type *)
 fun is_numeric_type :: "CoreType \<Rightarrow> bool" where
@@ -136,8 +138,27 @@ lemma is_ground_no_metavars:
 
 (* A list of metavariables satisfies list_all is_runtime_type *)
 lemma list_all_meta_is_runtime:
-  "list_all is_runtime_type (map CoreTy_Meta ns)"
+  "list_all (is_runtime_type env) (map CoreTy_Meta ns)"
   by (simp add: list_all_iff)
+
+(* is_runtime_type only depends on TE_GhostDatatypes *)
+lemma is_runtime_type_cong_env:
+  "TE_GhostDatatypes env' = TE_GhostDatatypes env \<Longrightarrow>
+   is_runtime_type env' ty = is_runtime_type env ty"
+  by (induction ty) (auto simp: list_all_iff)
+
+
+(* ========================================================================== *)
+(* Term Properties *)
+(* ========================================================================== *)
+
+(* Like is_lvalue, but also checks that the base variable is not a constant *)
+fun is_writable_lvalue :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
+  "is_writable_lvalue env (CoreTm_Var name) = (name |\<notin>| TE_ConstNames env)"
+| "is_writable_lvalue env (CoreTm_RecordProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue env (CoreTm_VariantProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue env (CoreTm_ArrayProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue _ _ = False"
 
 
 (* ========================================================================== *)
