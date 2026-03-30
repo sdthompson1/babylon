@@ -27,6 +27,14 @@ fun sound_term_results :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> I
   "sound_term_results env types (Inl err) = sound_error_result err"
 | "sound_term_results env types (Inr vals) = list_all2 (value_has_type env) vals types"
 
+fun sound_lvalue_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> InterpError + (nat \<times> LValuePath list) \<Rightarrow> bool" where
+  "sound_lvalue_result state env ty (Inl err) = sound_error_result err"
+| "sound_lvalue_result state env ty (Inr (addr, path)) =
+    (addr < length (IS_Store state) \<and>
+     (case get_value_at_path (IS_Store state ! addr) path of
+       Inr v \<Rightarrow> value_has_type env v ty
+     | Inl err \<Rightarrow> sound_error_result err))"
+
 
 (*-----------------------------------------------------------------------------*)
 (* Helper lemmas for type soundness *)
@@ -705,6 +713,35 @@ proof -
     using state_env funs''_eq env'_eq
     unfolding state_matches_env_def no_extra_funs_def by simp
 
+  (* 5. non_consts_in_locals_or_refs *)
+  moreover have "non_consts_in_locals_or_refs state'' env'"
+    unfolding non_consts_in_locals_or_refs_def
+  proof (intro allI impI, elim conjE)
+    fix name
+    assume tv: "fmlookup (TE_TermVars env') name \<noteq> None"
+      and ng: "name |\<notin>| TE_GhostVars env'"
+      and nc: "name |\<notin>| TE_ConstNames env'"
+    show "fmlookup (IS_Locals state'') name \<noteq> None \<or>
+          fmlookup (IS_Refs state'') name \<noteq> None"
+    proof (cases "name = var")
+      case True
+      then show ?thesis using locals''_eq by simp
+    next
+      case False
+      then have "fmlookup (TE_TermVars env) name \<noteq> None"
+        using tv env'_eq by simp
+      moreover have "name |\<notin>| TE_GhostVars env"
+        using ng env'_eq False by auto
+      moreover have "name |\<notin>| TE_ConstNames env"
+        using nc env'_eq by simp
+      ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
+                       fmlookup (IS_Refs state) name \<noteq> None"
+        using state_env
+        unfolding state_matches_env_def non_consts_in_locals_or_refs_def by blast
+      then show ?thesis using False locals''_eq refs''_eq by simp
+    qed
+  qed
+
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed
 
@@ -942,6 +979,350 @@ next
 qed
 
 
+(* If two association lists are related by list_all2 with matching keys,
+   then map_of on the first succeeds whenever map_of on the second does *)
+lemma map_of_list_all2:
+  assumes "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) xs ys"
+    and "map_of ys name = Some t"
+  shows "\<exists>v. map_of xs name = Some v \<and> P v t"
+using assms proof (induction xs ys rule: list_all2_induct)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons x xs y ys)
+  obtain n1 v where x_eq: "x = (n1, v)" by (cases x) auto
+  obtain n2 t' where y_eq: "y = (n2, t')" by (cases y) auto
+  from Cons.hyps x_eq y_eq have name_eq: "n1 = n2" and rel: "P v t'" by auto
+  show ?case
+  proof (cases "name = n2")
+    case True
+    from Cons.prems y_eq True have "t = t'" by simp
+    with name_eq True x_eq rel show ?thesis by auto
+  next
+    case False
+    from Cons.prems y_eq False have "map_of ys name = Some t" by simp
+    from Cons.IH[OF this] obtain v' where "map_of xs name = Some v'" "P v' t" by auto
+    with name_eq False x_eq show ?thesis by auto
+  qed
+qed
+
+(* Type soundness for record projection *)
+lemma type_soundness_record_proj:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH: "\<And>env' (state' :: 'w InterpState) tm' ty'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                sound_term_result env' ty' (interp_term fuel state' tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_RecordProj tm fldName) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_RecordProj tm fldName))"
+proof -
+  (* Extract facts from typing *)
+  from typing obtain fieldTypes where
+    tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Record fieldTypes)" and
+    fld_lookup: "map_of fieldTypes fldName = Some ty"
+    by (auto split: option.splits CoreType.splits)
+
+  (* Apply IH to tm *)
+  from IH[OF state_env wf_env tm_typing]
+  have tm_sound: "sound_term_result env (CoreTy_Record fieldTypes) (interp_term fuel state tm)" .
+
+  show ?thesis
+  proof (cases "interp_term fuel state tm")
+    case (Inl err)
+    (* tm failed - propagate error *)
+    then have "interp_term (Suc fuel) state (CoreTm_RecordProj tm fldName) = Inl err"
+      by simp
+    with tm_sound Inl show ?thesis by auto
+  next
+    case (Inr val)
+    (* tm succeeded *)
+    from tm_sound Inr have val_typed: "value_has_type env val (CoreTy_Record fieldTypes)" by simp
+
+    (* Value must be CV_Record *)
+    from val_typed obtain fieldValues where
+      val_eq: "val = CV_Record fieldValues" and
+      fields_rel: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+                     fieldValues fieldTypes"
+      by (cases val) (auto split: CoreType.splits)
+
+    (* map_of fieldValues fldName succeeds with the right type *)
+    from map_of_list_all2[OF fields_rel fld_lookup]
+    obtain fldVal where
+      fld_val_lookup: "map_of fieldValues fldName = Some fldVal" and
+      fld_val_typed: "value_has_type env fldVal ty" by auto
+
+    (* The interpreter result *)
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_RecordProj tm fldName) = Inr fldVal"
+      using Inr val_eq fld_val_lookup by simp
+
+    show ?thesis using interp_eq fld_val_typed by simp
+  qed
+qed
+
+
+(* Type soundness for variant projection *)
+lemma type_soundness_variant_proj:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH: "\<And>env' (state' :: 'w InterpState) tm' ty'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                sound_term_result env' ty' (interp_term fuel state' tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_VariantProj tm ctorName) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_VariantProj tm ctorName))"
+proof -
+  (* Extract facts from typing *)
+  from typing obtain dtName tyArgs dtName2 metavars payloadTy where
+    tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Name dtName tyArgs)" and
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
+    dt_eq: "dtName = dtName2" and
+    len_eq: "length tyArgs = length metavars" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy"
+    by (auto split: option.splits CoreType.splits prod.splits if_splits)
+
+  (* Apply IH to tm *)
+  from IH[OF state_env wf_env tm_typing]
+  have tm_sound: "sound_term_result env (CoreTy_Name dtName tyArgs) (interp_term fuel state tm)" .
+
+  show ?thesis
+  proof (cases "interp_term fuel state tm")
+    case (Inl err)
+    (* tm failed - propagate error *)
+    then have "interp_term (Suc fuel) state (CoreTm_VariantProj tm ctorName) = Inl err"
+      by simp
+    with tm_sound Inl show ?thesis by auto
+  next
+    case (Inr val)
+    (* tm succeeded *)
+    from tm_sound Inr
+    have val_typed: "value_has_type env val (CoreTy_Name dtName tyArgs)" by simp
+
+    (* Value must be CV_Variant *)
+    from value_has_type_Name[OF val_typed] obtain actualCtor payload where
+      val_eq: "val = CV_Variant actualCtor payload" by auto
+
+    (* Extract typing facts from value_has_type for the variant *)
+    from val_typed val_eq obtain dtName3 metavars3 payloadTy3 where
+      val_ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName3, metavars3, payloadTy3)" and
+      val_dt_eq: "dtName = dtName3" and
+      val_len_eq: "length metavars3 = length tyArgs" and
+      payload_typed: "value_has_type env payload
+          (apply_subst (fmap_of_list (zip metavars3 tyArgs)) payloadTy3)"
+      by (auto split: option.splits prod.splits)
+
+    show ?thesis
+    proof (cases "actualCtor = ctorName")
+      case True
+      (* Constructor names match - projection succeeds *)
+      (* Both look up the same constructor, so metavars and payloadTy agree *)
+      from val_ctor_lookup ctor_lookup True dt_eq val_dt_eq
+      have "metavars3 = metavars" and "payloadTy3 = payloadTy"
+        by auto
+      hence "value_has_type env payload ty"
+        using payload_typed ty_eq by simp
+
+      moreover have "interp_term (Suc fuel) state (CoreTm_VariantProj tm ctorName) = Inr payload"
+        using Inr val_eq True by simp
+
+      ultimately show ?thesis by simp
+    next
+      case False
+      (* Constructor names don't match - RuntimeError *)
+      have "interp_term (Suc fuel) state (CoreTm_VariantProj tm ctorName) = Inl RuntimeError"
+        using Inr val_eq False by simp
+      then show ?thesis by simp
+    qed
+  qed
+qed
+
+
+(* If all values have type u64, interpret_index_vals succeeds *)
+lemma interpret_index_vals_u64:
+  assumes "list_all2 (value_has_type env) vals (replicate n (CoreTy_FiniteInt Unsigned IntBits_64))"
+  shows "\<exists>indices. interpret_index_vals vals = Inr indices"
+using assms proof (induction vals arbitrary: n)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons v vs)
+  from Cons.prems obtain n' where n_eq: "n = Suc n'" and
+    v_typed: "value_has_type env v (CoreTy_FiniteInt Unsigned IntBits_64)" and
+    vs_typed: "list_all2 (value_has_type env) vs (replicate n' (CoreTy_FiniteInt Unsigned IntBits_64))"
+    by (cases n) auto
+  from value_has_type_FiniteInt[OF v_typed] obtain i where
+    v_eq: "v = CV_FiniteInt Unsigned IntBits_64 i" by auto
+  from Cons.IH[OF vs_typed] obtain rest_indices where
+    rest_eq: "interpret_index_vals vs = Inr rest_indices" by auto
+  show ?case using v_eq rest_eq by simp
+qed
+
+(* Type soundness for array projection *)
+lemma type_soundness_array_proj:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH_term: "\<And>env' (state' :: 'w InterpState) tm' ty'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                sound_term_result env' ty' (interp_term fuel state' tm')"
+    and IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+    and typing: "core_term_type env NotGhost (CoreTm_ArrayProj arr idxTms) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_ArrayProj arr idxTms))"
+proof -
+  (* Extract facts from typing *)
+  from typing obtain elemTy dims where
+    arr_typing: "core_term_type env NotGhost arr = Some (CoreTy_Array elemTy dims)" and
+    len_eq: "length idxTms = length dims" and
+    idxs_typed: "list_all (\<lambda>tm. core_term_type env NotGhost tm
+                    = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms" and
+    ty_eq: "ty = elemTy"
+    by (auto split: option.splits CoreType.splits if_splits)
+
+  (* Apply IH to arr *)
+  from IH_term[OF state_env wf_env arr_typing]
+  have arr_sound: "sound_term_result env (CoreTy_Array elemTy dims) (interp_term fuel state arr)" .
+
+  (* Prepare typing info for index terms to use IH_list *)
+  let ?types = "map (core_term_type env NotGhost) idxTms"
+  from idxs_typed have types_all_some: "list_all (\<lambda>ty. ty \<noteq> None) ?types"
+    by (simp add: list_all_length)
+  from IH_list[OF state_env wf_env] types_all_some
+  have idx_sound: "sound_term_results env (map the ?types) (interp_term_list fuel state idxTms)"
+    by simp
+
+  (* The expected types are all u64 *)
+  from idxs_typed have map_the_types: "map the ?types =
+      replicate (length idxTms) (CoreTy_FiniteInt Unsigned IntBits_64)"
+    by (induction idxTms) (auto simp: list_all_iff)
+
+  show ?thesis
+  proof (cases "interp_term fuel state arr")
+    case (Inl err)
+    then have "interp_term (Suc fuel) state (CoreTm_ArrayProj arr idxTms) = Inl err"
+      by simp
+    with arr_sound Inl show ?thesis by auto
+  next
+    case (Inr arrVal)
+    from arr_sound Inr
+    have arr_val_typed: "value_has_type env arrVal (CoreTy_Array elemTy dims)" by simp
+
+    (* Value must be CV_Array *)
+    from value_has_type_Array[OF arr_val_typed] obtain sizes valuesMap where
+      arr_val_eq: "arrVal = CV_Array sizes valuesMap" and
+      elems_typed: "\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy"
+      by auto
+
+    show ?thesis
+    proof (cases "interp_term_list fuel state idxTms")
+      case (Inl err)
+      then have "interp_term (Suc fuel) state (CoreTm_ArrayProj arr idxTms) = Inl err"
+        using Inr arr_val_eq by simp
+      with idx_sound Inl show ?thesis by auto
+    next
+      case (Inr idxVals)
+      from idx_sound Inr map_the_types
+      have idxVals_typed: "list_all2 (value_has_type env) idxVals
+          (replicate (length idxTms) (CoreTy_FiniteInt Unsigned IntBits_64))"
+        by simp
+
+      (* interpret_index_vals succeeds *)
+      from interpret_index_vals_u64[OF idxVals_typed]
+      obtain indices where interp_idx_eq: "interpret_index_vals idxVals = Inr indices" by auto
+
+      show ?thesis
+      proof (cases "fmlookup valuesMap indices")
+        case None
+        (* Out of bounds - RuntimeError *)
+        then have "interp_term (Suc fuel) state (CoreTm_ArrayProj arr idxTms) = Inl RuntimeError"
+          using \<open>interp_term fuel state arr = Inr arrVal\<close> arr_val_eq Inr interp_idx_eq
+          by simp
+        then show ?thesis by simp
+      next
+        case (Some result)
+        have result_typed: "value_has_type env result elemTy"
+          using elems_typed Some by simp
+        have "interp_term (Suc fuel) state (CoreTm_ArrayProj arr idxTms) = Inr result"
+          using \<open>interp_term fuel state arr = Inr arrVal\<close> arr_val_eq Inr interp_idx_eq Some
+          by simp
+        then show ?thesis using result_typed ty_eq by simp
+      qed
+    qed
+  qed
+qed
+
+
+(* Path append: following a concatenated path is the same as following the first
+   part and then following the second part on the result *)
+lemma get_value_at_path_append:
+  "get_value_at_path root (path @ rest) =
+    (case get_value_at_path root path of
+      Inr v \<Rightarrow> get_value_at_path v rest
+    | Inl err \<Rightarrow> Inl err)"
+proof (induction path arbitrary: root)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons step path)
+  show ?case
+  proof (cases root)
+    case (CV_Record flds)
+    then show ?thesis
+    proof (cases step)
+      case (LVPath_RecordProj fldName)
+      then show ?thesis using CV_Record Cons.IH
+        by (simp split: option.splits)
+    next
+      case (LVPath_VariantProj x2)
+      then show ?thesis using CV_Record by simp
+    next
+      case (LVPath_ArrayProj x3)
+      then show ?thesis using CV_Record by simp
+    qed
+  next
+    case (CV_Variant ctor payload)
+    then show ?thesis
+    proof (cases step)
+      case (LVPath_RecordProj x1)
+      then show ?thesis using CV_Variant by simp
+    next
+      case (LVPath_VariantProj expectedCtor)
+      then show ?thesis using CV_Variant Cons.IH by simp
+    next
+      case (LVPath_ArrayProj x3)
+      then show ?thesis using CV_Variant by simp
+    qed
+  next
+    case (CV_Array sizes elementMap)
+    then show ?thesis
+    proof (cases step)
+      case (LVPath_RecordProj x1)
+      then show ?thesis using CV_Array by simp
+    next
+      case (LVPath_VariantProj x2)
+      then show ?thesis using CV_Array by simp
+    next
+      case (LVPath_ArrayProj indices)
+      then show ?thesis using CV_Array Cons.IH
+        by (simp split: option.splits)
+    qed
+  next
+    case (CV_Bool x)
+    then show ?thesis by (cases step) auto
+  next
+    case (CV_FiniteInt x1 x2 x3)
+    then show ?thesis by (cases step) auto
+  qed
+qed
+
+
 (*-----------------------------------------------------------------------------*)
 (* Main type soundness theorem *)
 (*-----------------------------------------------------------------------------*)
@@ -957,7 +1338,8 @@ theorem type_soundness:
     list_all (\<lambda>ty. ty \<noteq> None) types \<longrightarrow>
       sound_term_results env (map the types) (interp_term_list fuel state tms)"
   and interp_lvalue_sound:
-    "undefined (interp_lvalue fuel state tm)"  (* TODO: state properly *)
+    "is_writable_lvalue env tm \<and> core_term_type env NotGhost tm = Some ty \<longrightarrow>
+      sound_lvalue_result state env ty (interp_lvalue fuel state tm)"
   and interp_statement_sound:
     "undefined (interp_statement fuel state stmt)"  (* TODO: state properly *)
   and interp_function_call_sound:
@@ -973,7 +1355,7 @@ proof (induction fuel arbitrary: state env tm ty tms types fnName argTms)
     then show ?case by simp
   next
     case 3
-    then show ?case sorry  (* requires proper definition *)
+    then show ?case by simp
   next
     case 4
     then show ?case sorry  (* requires proper definition *)
@@ -1083,7 +1465,7 @@ next
           using "1.prems"(1,2) Suc.IH(1) type_soundness_let typing by blast
       next
         case (CoreTm_Quantifier x91 x92 x93 x94)
-        then show ?thesis sorry
+        then show ?thesis using typing by simp
       next
         case (CoreTm_FunctionCall x101 x102 x103)
         then show ?thesis sorry
@@ -1095,13 +1477,30 @@ next
         then show ?thesis sorry
       next
         case (CoreTm_RecordProj x131 x132)
-        then show ?thesis sorry
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_record_proj typing by blast
       next
         case (CoreTm_VariantProj x141 x142)
-        then show ?thesis sorry
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_variant_proj typing by blast
       next
         case (CoreTm_ArrayProj x151 x152)
-        then show ?thesis sorry
+        have IH_term: "\<And>env' (state' :: 'w InterpState) tm' ty'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                sound_term_result env' ty' (interp_term fuel state' tm')"
+          by (simp add: Suc.IH(1) "1.prems"(1,2))
+        have IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+          by (simp add: Suc.IH(2) "1.prems"(1,2))
+        from CoreTm_ArrayProj show ?thesis
+          using type_soundness_array_proj[OF "1.prems"(1,2) IH_term IH_list] typing
+          by blast
       next
         case (CoreTm_Match x161 x162)
         then show ?thesis sorry
@@ -1110,10 +1509,10 @@ next
         then show ?thesis sorry
       next
         case (CoreTm_Allocated x18)
-        then show ?thesis sorry
+        then show ?thesis using typing by simp
       next
         case (CoreTm_Old x19)
-        then show ?thesis sorry
+        then show ?thesis using typing by simp
       qed
     qed
   next
@@ -1190,8 +1589,356 @@ next
       qed
     qed
   next
+    (* interp_lvalue_sound *)
     case 3
-    then show ?case sorry
+    show ?case proof (intro impI, elim conjE)
+      assume writable: "is_writable_lvalue env tm"
+        and typing: "core_term_type env NotGhost tm = Some ty"
+
+      have IH_lvalue: "\<And>env' (state' :: 'w InterpState) tm' ty'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                is_writable_lvalue env' tm' \<and> core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
+                sound_lvalue_result state' env' ty' (interp_lvalue fuel state' tm')"
+        by (simp add: Suc.IH(3) "3.prems"(1,2))
+
+      have IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+        by (simp add: Suc.IH(2) "3.prems"(1,2))
+
+      show "sound_lvalue_result state env ty (interp_lvalue (Suc fuel) state tm)"
+      proof (cases tm)
+        (* Non-lvalue cases: is_writable_lvalue is False, contradiction *)
+        case (CoreTm_LitBool x) then show ?thesis using writable by simp
+      next case (CoreTm_LitInt x) then show ?thesis using writable by simp
+      next case (CoreTm_LitArray x) then show ?thesis using writable by simp
+      next case (CoreTm_Cast x1 x2) then show ?thesis using writable by simp
+      next case (CoreTm_Unop x1 x2) then show ?thesis using writable by simp
+      next case (CoreTm_Binop x1 x2 x3) then show ?thesis using writable by simp
+      next case (CoreTm_Let x1 x2 x3) then show ?thesis using writable by simp
+      next case (CoreTm_Quantifier x1 x2 x3 x4) then show ?thesis using writable by simp
+      next case (CoreTm_FunctionCall x1 x2 x3) then show ?thesis using writable by simp
+      next case (CoreTm_VariantCtor x1 x2 x3) then show ?thesis using writable by simp
+      next case (CoreTm_Record x) then show ?thesis using writable by simp
+      next case (CoreTm_Match x1 x2) then show ?thesis using writable by simp
+      next case (CoreTm_Sizeof x) then show ?thesis using writable by simp
+      next case (CoreTm_Allocated x) then show ?thesis using writable by simp
+      next case (CoreTm_Old x) then show ?thesis using writable by simp
+      next
+        (* CoreTm_Var: base case for lvalues *)
+        case (CoreTm_Var varName)
+        from typing CoreTm_Var obtain varTy where
+          var_lookup: "fmlookup (TE_TermVars env) varName = Some varTy" and
+          not_ghost: "varName |\<notin>| TE_GhostVars env" and
+          ty_eq: "ty = varTy"
+          by (auto split: option.splits if_splits)
+        from writable CoreTm_Var have not_const: "varName |\<notin>| TE_ConstNames env" by simp
+        (* Variable is in IS_Locals or IS_Refs *)
+        from "3.prems"(1) var_lookup not_ghost not_const
+        have in_locals_or_refs:
+          "fmlookup (IS_Locals state) varName \<noteq> None \<or>
+           fmlookup (IS_Refs state) varName \<noteq> None"
+          unfolding state_matches_env_def non_consts_in_locals_or_refs_def by blast
+        (* Variable has correct type in state *)
+        have var_in_state: "term_var_in_state_with_type state env varName ty"
+          using "3.prems"(1) var_lookup not_ghost ty_eq
+          unfolding state_matches_env_def vars_exist_in_state_def by blast
+        show ?thesis
+        proof (cases "fmlookup (IS_Locals state) varName")
+          case (Some addr)
+          then have interp_eq: "interp_lvalue (Suc fuel) state tm = Inr (addr, [])"
+            using CoreTm_Var by simp
+          from var_in_state Some have
+            addr_valid: "addr < length (IS_Store state)" and
+            val_typed: "value_has_type env (IS_Store state ! addr) ty"
+            unfolding term_var_in_state_with_type_def by auto
+          have "get_value_at_path (IS_Store state ! addr) [] = Inr (IS_Store state ! addr)"
+            by simp
+          then show ?thesis using interp_eq addr_valid val_typed by simp
+        next
+          case None
+          (* Must be in IS_Refs *)
+          from in_locals_or_refs None have "fmlookup (IS_Refs state) varName \<noteq> None" by simp
+          then obtain addrPath where refs_lookup: "fmlookup (IS_Refs state) varName = Some addrPath"
+            by auto
+          obtain addr path where addrPath_eq: "addrPath = (addr, path)"
+            by (cases addrPath) auto
+          then have interp_eq: "interp_lvalue (Suc fuel) state tm = Inr (addr, path)"
+            using CoreTm_Var None refs_lookup by simp
+          from var_in_state None refs_lookup addrPath_eq have
+            addr_valid: "addr < length (IS_Store state)" and
+            path_ok: "case get_value_at_path (IS_Store state ! addr) path of
+                        Inr v \<Rightarrow> value_has_type env v ty | Inl err \<Rightarrow> False"
+            unfolding term_var_in_state_with_type_def
+            by (auto split: sum.splits)
+          (* path_ok with Inl \<Rightarrow> False means the path must succeed *)
+          have "case get_value_at_path (IS_Store state ! addr) path of
+                  Inr v \<Rightarrow> value_has_type env v ty | Inl err \<Rightarrow> sound_error_result err"
+          proof (cases "get_value_at_path (IS_Store state ! addr) path")
+            case (Inl err)
+            then show ?thesis using path_ok by simp
+          next
+            case (Inr v)
+            then show ?thesis using path_ok by simp
+          qed
+          then show ?thesis using interp_eq addr_valid by simp
+        qed
+      next
+        (* CoreTm_RecordProj: extend path with record field *)
+        case (CoreTm_RecordProj innerTm fldName)
+        from typing CoreTm_RecordProj obtain fieldTypes where
+          inner_typing: "core_term_type env NotGhost innerTm = Some (CoreTy_Record fieldTypes)" and
+          fld_lookup: "map_of fieldTypes fldName = Some ty"
+          by (auto split: option.splits CoreType.splits)
+        from writable CoreTm_RecordProj have inner_writable: "is_writable_lvalue env innerTm"
+          by simp
+        from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
+        have inner_sound: "sound_lvalue_result state env (CoreTy_Record fieldTypes)
+                             (interp_lvalue fuel state innerTm)"
+          by simp
+        show ?thesis
+        proof (cases "interp_lvalue fuel state innerTm")
+          case (Inl err)
+          then have "interp_lvalue (Suc fuel) state tm = Inl err"
+            using CoreTm_RecordProj by simp
+          with inner_sound Inl show ?thesis by auto
+        next
+          case (Inr addrPath)
+          obtain addr path where ap_eq: "addrPath = (addr, path)" by (cases addrPath) auto
+          from inner_sound Inr ap_eq have
+            addr_valid: "addr < length (IS_Store state)" and
+            path_sound: "case get_value_at_path (IS_Store state ! addr) path of
+                           Inr v \<Rightarrow> value_has_type env v (CoreTy_Record fieldTypes)
+                         | Inl err \<Rightarrow> sound_error_result err"
+            by auto
+          have interp_eq: "interp_lvalue (Suc fuel) state tm =
+              Inr (addr, path @ [LVPath_RecordProj fldName])"
+            using CoreTm_RecordProj Inr ap_eq by simp
+          (* Show the extended path is sound *)
+          have "case get_value_at_path (IS_Store state ! addr)
+                       (path @ [LVPath_RecordProj fldName]) of
+                  Inr v \<Rightarrow> value_has_type env v ty
+                | Inl err \<Rightarrow> sound_error_result err"
+          proof (cases "get_value_at_path (IS_Store state ! addr) path")
+            case (Inl err)
+            (* Inner path failed — error propagates through append *)
+            then have "get_value_at_path (IS_Store state ! addr)
+                         (path @ [LVPath_RecordProj fldName]) = Inl err"
+              using get_value_at_path_append by simp
+            with path_sound Inl show ?thesis by simp
+          next
+            case (Inr v)
+            (* Inner path succeeded *)
+            from path_sound Inr have v_typed: "value_has_type env v (CoreTy_Record fieldTypes)"
+              by simp
+            from v_typed obtain fieldValues where
+              v_eq: "v = CV_Record fieldValues" and
+              fields_rel: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+                             fieldValues fieldTypes"
+              by (cases v) (auto split: CoreType.splits)
+            from map_of_list_all2[OF fields_rel fld_lookup]
+            obtain fldVal where
+              fld_val_lookup: "map_of fieldValues fldName = Some fldVal" and
+              fld_val_typed: "value_has_type env fldVal ty" by auto
+            have "get_value_at_path (IS_Store state ! addr)
+                    (path @ [LVPath_RecordProj fldName]) = Inr fldVal"
+              using get_value_at_path_append Inr v_eq fld_val_lookup by simp
+            with fld_val_typed show ?thesis by simp
+          qed
+          then show ?thesis using interp_eq addr_valid by simp
+        qed
+      next
+        (* CoreTm_VariantProj: extend path with variant projection *)
+        case (CoreTm_VariantProj innerTm ctorName)
+        from typing CoreTm_VariantProj obtain dtName tyArgs dtName2 metavars payloadTy where
+          inner_typing: "core_term_type env NotGhost innerTm = Some (CoreTy_Name dtName tyArgs)" and
+          ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
+          dt_eq: "dtName = dtName2" and
+          len_eq: "length tyArgs = length metavars" and
+          ty_eq: "ty = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy"
+          by (auto split: option.splits CoreType.splits prod.splits if_splits)
+        from writable CoreTm_VariantProj have inner_writable: "is_writable_lvalue env innerTm"
+          by simp
+        from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
+        have inner_sound: "sound_lvalue_result state env (CoreTy_Name dtName tyArgs)
+                             (interp_lvalue fuel state innerTm)"
+          by simp
+        show ?thesis
+        proof (cases "interp_lvalue fuel state innerTm")
+          case (Inl err)
+          then have "interp_lvalue (Suc fuel) state tm = Inl err"
+            using CoreTm_VariantProj by simp
+          with inner_sound Inl show ?thesis by auto
+        next
+          case (Inr addrPath)
+          obtain addr path where ap_eq: "addrPath = (addr, path)" by (cases addrPath) auto
+          from inner_sound Inr ap_eq have
+            addr_valid: "addr < length (IS_Store state)" and
+            path_sound: "case get_value_at_path (IS_Store state ! addr) path of
+                           Inr v \<Rightarrow> value_has_type env v (CoreTy_Name dtName tyArgs)
+                         | Inl err \<Rightarrow> sound_error_result err"
+            by auto
+          have interp_eq: "interp_lvalue (Suc fuel) state tm =
+              Inr (addr, path @ [LVPath_VariantProj ctorName])"
+            using CoreTm_VariantProj Inr ap_eq by simp
+          have "case get_value_at_path (IS_Store state ! addr)
+                       (path @ [LVPath_VariantProj ctorName]) of
+                  Inr v \<Rightarrow> value_has_type env v ty
+                | Inl err \<Rightarrow> sound_error_result err"
+          proof (cases "get_value_at_path (IS_Store state ! addr) path")
+            case (Inl err)
+            then have "get_value_at_path (IS_Store state ! addr)
+                         (path @ [LVPath_VariantProj ctorName]) = Inl err"
+              using get_value_at_path_append by simp
+            with path_sound Inl show ?thesis by simp
+          next
+            case (Inr v)
+            from path_sound Inr have v_typed: "value_has_type env v (CoreTy_Name dtName tyArgs)"
+              by simp
+            from value_has_type_Name[OF v_typed] obtain actualCtor payload where
+              v_eq: "v = CV_Variant actualCtor payload" by auto
+            from v_typed v_eq obtain dtName3 metavars3 payloadTy3 where
+              val_ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor =
+                                 Some (dtName3, metavars3, payloadTy3)" and
+              val_dt_eq: "dtName = dtName3" and
+              val_len_eq: "length metavars3 = length tyArgs" and
+              payload_typed: "value_has_type env payload
+                  (apply_subst (fmap_of_list (zip metavars3 tyArgs)) payloadTy3)"
+              by (auto split: option.splits prod.splits)
+            show ?thesis
+            proof (cases "actualCtor = ctorName")
+              case True
+              from val_ctor_lookup ctor_lookup True dt_eq val_dt_eq
+              have "metavars3 = metavars" and "payloadTy3 = payloadTy" by auto
+              hence payload_ty: "value_has_type env payload ty"
+                using payload_typed ty_eq by simp
+              have "get_value_at_path (IS_Store state ! addr)
+                      (path @ [LVPath_VariantProj ctorName]) =
+                    get_value_at_path payload []"
+                using get_value_at_path_append Inr v_eq True by simp
+              hence "get_value_at_path (IS_Store state ! addr)
+                      (path @ [LVPath_VariantProj ctorName]) = Inr payload"
+                by simp
+              with payload_ty show ?thesis by simp
+            next
+              case False
+              have "get_value_at_path (IS_Store state ! addr)
+                      (path @ [LVPath_VariantProj ctorName]) = Inl RuntimeError"
+                using get_value_at_path_append Inr v_eq False by simp
+              then show ?thesis by simp
+            qed
+          qed
+          then show ?thesis using interp_eq addr_valid by simp
+        qed
+      next
+        (* CoreTm_ArrayProj: extend path with array index *)
+        case (CoreTm_ArrayProj innerTm idxTms)
+        from typing CoreTm_ArrayProj obtain elemTy dims where
+          inner_typing: "core_term_type env NotGhost innerTm = Some (CoreTy_Array elemTy dims)" and
+          len_eq: "length idxTms = length dims" and
+          idxs_typed: "list_all (\<lambda>tm. core_term_type env NotGhost tm
+                          = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms" and
+          ty_eq: "ty = elemTy"
+          by (auto split: option.splits CoreType.splits if_splits)
+        from writable CoreTm_ArrayProj have inner_writable: "is_writable_lvalue env innerTm"
+          by simp
+        from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
+        have inner_sound: "sound_lvalue_result state env (CoreTy_Array elemTy dims)
+                             (interp_lvalue fuel state innerTm)"
+          by simp
+        (* Index terms *)
+        let ?types = "map (core_term_type env NotGhost) idxTms"
+        from idxs_typed have types_all_some: "list_all (\<lambda>ty. ty \<noteq> None) ?types"
+          by (simp add: list_all_length)
+        from IH_list[OF "3.prems"(1,2)] types_all_some
+        have idx_sound: "sound_term_results env (map the ?types) (interp_term_list fuel state idxTms)"
+          by simp
+        from idxs_typed have map_the_types: "map the ?types =
+            replicate (length idxTms) (CoreTy_FiniteInt Unsigned IntBits_64)"
+          by (induction idxTms) (auto simp: list_all_iff)
+        show ?thesis
+        proof (cases "interp_lvalue fuel state innerTm")
+          case (Inl err)
+          then have "interp_lvalue (Suc fuel) state tm = Inl err"
+            using CoreTm_ArrayProj by simp
+          with inner_sound Inl show ?thesis by auto
+        next
+          case (Inr addrPath)
+          obtain addr path where ap_eq: "addrPath = (addr, path)" by (cases addrPath) auto
+          from inner_sound Inr ap_eq have
+            addr_valid: "addr < length (IS_Store state)" and
+            path_sound: "case get_value_at_path (IS_Store state ! addr) path of
+                           Inr v \<Rightarrow> value_has_type env v (CoreTy_Array elemTy dims)
+                         | Inl err \<Rightarrow> sound_error_result err"
+            by auto
+          show ?thesis
+          proof (cases "interp_term_list fuel state idxTms")
+            case (Inl err)
+            then have "interp_lvalue (Suc fuel) state tm = Inl err"
+              using CoreTm_ArrayProj \<open>interp_lvalue fuel state innerTm = Inr addrPath\<close>
+                    ap_eq by simp
+            with idx_sound Inl show ?thesis by auto
+          next
+            case (Inr idxVals)
+            from idx_sound Inr map_the_types
+            have idxVals_typed: "list_all2 (value_has_type env) idxVals
+                (replicate (length idxTms) (CoreTy_FiniteInt Unsigned IntBits_64))"
+              by simp
+            from interpret_index_vals_u64[OF idxVals_typed]
+            obtain indices where interp_idx_eq: "interpret_index_vals idxVals = Inr indices" by auto
+            have interp_eq: "interp_lvalue (Suc fuel) state tm =
+                Inr (addr, path @ [LVPath_ArrayProj indices])"
+              using CoreTm_ArrayProj \<open>interp_lvalue fuel state innerTm = Inr addrPath\<close>
+                    ap_eq Inr interp_idx_eq by simp
+            have "case get_value_at_path (IS_Store state ! addr)
+                         (path @ [LVPath_ArrayProj indices]) of
+                    Inr v \<Rightarrow> value_has_type env v ty
+                  | Inl err \<Rightarrow> sound_error_result err"
+            proof (cases "get_value_at_path (IS_Store state ! addr) path")
+              case (Inl err)
+              then have "get_value_at_path (IS_Store state ! addr)
+                           (path @ [LVPath_ArrayProj indices]) = Inl err"
+                using get_value_at_path_append by simp
+              with path_sound Inl show ?thesis by simp
+            next
+              case (Inr v)
+              from path_sound Inr
+              have v_typed: "value_has_type env v (CoreTy_Array elemTy dims)" by simp
+              from value_has_type_Array[OF v_typed] obtain sizes valuesMap where
+                v_eq: "v = CV_Array sizes valuesMap" and
+                elems_typed: "\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow>
+                               value_has_type env val elemTy"
+                by auto
+              show ?thesis
+              proof (cases "fmlookup valuesMap indices")
+                case None
+                have "get_value_at_path (IS_Store state ! addr)
+                        (path @ [LVPath_ArrayProj indices]) = Inl RuntimeError"
+                  using get_value_at_path_append Inr v_eq None by simp
+                then show ?thesis by simp
+              next
+                case (Some elemVal)
+                have elem_typed: "value_has_type env elemVal elemTy"
+                  using elems_typed Some by simp
+                have "get_value_at_path (IS_Store state ! addr)
+                        (path @ [LVPath_ArrayProj indices]) =
+                      get_value_at_path elemVal []"
+                  using get_value_at_path_append Inr v_eq Some by simp
+                hence "get_value_at_path (IS_Store state ! addr)
+                        (path @ [LVPath_ArrayProj indices]) = Inr elemVal"
+                  by simp
+                with elem_typed ty_eq show ?thesis by simp
+              qed
+            qed
+            then show ?thesis using interp_eq addr_valid by simp
+          qed
+        qed
+      qed
+    qed
   next
     case 4
     then show ?case sorry

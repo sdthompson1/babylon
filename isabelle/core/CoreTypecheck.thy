@@ -144,7 +144,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                                                else fminus (TE_GhostVars env) {|var|}) \<rparr>
              in core_term_type env' ghost body
     | None \<Rightarrow> None)"
-| "core_term_type env ghost (CoreTm_Quantifier quant var ty body) = undefined"
+| "core_term_type env NotGhost (CoreTm_Quantifier _ _ _ _) = None"
+| "core_term_type env Ghost (CoreTm_Quantifier quant var ty body) = undefined"
 
 (* Function call:
    - Function must exist in environment
@@ -180,9 +181,30 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 (* TODO *)
 | "core_term_type env ghost (CoreTm_VariantCtor variantName tyArgs payload) = undefined"
 | "core_term_type env ghost (CoreTm_Record flds) = undefined"
-| "core_term_type env ghost (CoreTm_RecordProj tm fldName) = undefined"
-| "core_term_type env ghost (CoreTm_ArrayProj arr idxs) = undefined"
-| "core_term_type env ghost (CoreTm_VariantProj tm ctorName) = undefined"
+
+| "core_term_type env ghost (CoreTm_RecordProj tm fldName) =
+    (case core_term_type env ghost tm of
+      Some (CoreTy_Record fieldTypes) \<Rightarrow> map_of fieldTypes fldName
+    | _ \<Rightarrow> None)"
+| "core_term_type env ghost (CoreTm_ArrayProj arr idxTms) =
+    (case core_term_type env ghost arr of
+      Some (CoreTy_Array elemTy dims) \<Rightarrow>
+        if length idxTms = length dims
+        \<and> list_all (\<lambda>tm. core_term_type env ghost tm
+                          = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms
+        then Some elemTy
+        else None
+    | _ \<Rightarrow> None)"
+| "core_term_type env ghost (CoreTm_VariantProj tm ctorName) =
+    (case core_term_type env ghost tm of
+      Some (CoreTy_Name dtName tyArgs) \<Rightarrow>
+        (case fmlookup (TE_DataCtors env) ctorName of
+          Some (dtName2, metavars, payloadTy) \<Rightarrow>
+            if dtName = dtName2 \<and> length tyArgs = length metavars
+            then Some (apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy)
+            else None
+        | None \<Rightarrow> None)
+    | _ \<Rightarrow> None)"
 
 (* Pattern matching:
    - Scrutinee must typecheck
@@ -216,8 +238,9 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
       Some _ \<Rightarrow> Some CoreTy_Bool
     | None \<Rightarrow> None)"
 
-  (* TODO: Old *)
-| "core_term_type env ghost (CoreTm_Old tm) = undefined"
+  (* Old: only valid in Ghost mode *)
+| "core_term_type env NotGhost (CoreTm_Old _) = None"
+| "core_term_type env Ghost (CoreTm_Old tm) = undefined"
 
   by pat_completeness auto
 
@@ -337,6 +360,43 @@ next
                     TE_GhostVars := if ghost = Ghost then finsert var (TE_GhostVars env)
                                     else fminus (TE_GhostVars env) {|var|} \<rparr>"
   show "((x, ghost, body), env, ghost, CoreTm_Let var rhs body)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 13: CoreTm_RecordProj - tm is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix tm fldName
+  show "((env, ghost, tm), env, ghost, CoreTm_RecordProj tm fldName)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 14: CoreTm_ArrayProj - arr is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix arr idxTms
+  show "((env, ghost, arr), env, ghost, CoreTm_ArrayProj arr idxTms)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 15: CoreTm_ArrayProj - elements of idxTms are smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix arr idxTms x2 x xa
+  fix z :: CoreTerm
+  assume "z \<in> set idxTms"
+  hence "size z < Suc (size_list size idxTms)"
+    using size_list_estimation
+    by (metis less_not_refl not_less_eq)
+  thus "((env, ghost, z), env, ghost, CoreTm_ArrayProj arr idxTms)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 16: CoreTm_VariantProj - tm is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix tm ctorName
+  show "((env, ghost, tm), env, ghost, CoreTm_VariantProj tm ctorName)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 qed

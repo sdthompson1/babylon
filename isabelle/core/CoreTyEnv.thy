@@ -29,6 +29,9 @@ record CoreTyEnv =
   (* Ghost variables - subset of TE_TermVars keys *)
   TE_GhostVars :: "string fset"
 
+  (* Constant names - subset of TE_TermVars keys; these are not assignable *)
+  TE_ConstNames :: "string fset"
+
   (* Type variable bindings: for polymorphic contexts *)
   TE_TypeVars :: "string fset"
 
@@ -46,5 +49,13 @@ record CoreTyEnv =
   (* Should be consistent with TE_DataCtors *)
   TE_DataCtorsByType :: "(string, string list) fmap"
 
+
+(* Like is_lvalue, but also checks that the base variable is not a constant *)
+fun is_writable_lvalue :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
+  "is_writable_lvalue env (CoreTm_Var name) = (name |\<notin>| TE_ConstNames env)"
+| "is_writable_lvalue env (CoreTm_RecordProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue env (CoreTm_VariantProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue env (CoreTm_ArrayProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue _ _ = False"
 
 end

@@ -382,4 +382,15 @@ lemma value_has_type_FiniteInt:
   shows "\<exists>i. val = CV_FiniteInt sign bits i \<and> int_fits sign bits i"
   using assms by (cases val; auto)
 
+lemma value_has_type_Name:
+  assumes "value_has_type env val (CoreTy_Name dtName tyArgs)"
+  shows "\<exists>ctor payload. val = CV_Variant ctor payload"
+  using assms by (cases val; auto split: option.splits)
+
+lemma value_has_type_Array:
+  assumes "value_has_type env val (CoreTy_Array elemTy dims)"
+  shows "\<exists>sizes valuesMap. val = CV_Array sizes valuesMap \<and>
+    (\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy)"
+  using assms by (cases val; auto split: CoreType.splits)
+
 end

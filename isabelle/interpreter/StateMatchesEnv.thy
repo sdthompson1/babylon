@@ -70,12 +70,20 @@ definition no_extra_funs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
             | Some info \<Rightarrow> FI_Ghost info = Ghost) \<longrightarrow>
       fmlookup (IS_Functions state) name = None"
 
+(* Non-constant, non-ghost variables are in IS_Locals or IS_Refs *)
+definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "non_consts_in_locals_or_refs state env \<equiv>
+    \<forall>name. fmlookup (TE_TermVars env) name \<noteq> None \<and>
+           name |\<notin>| TE_GhostVars env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
+      (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
+
 (* Overall definition: state matches environment *)
 definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "state_matches_env state env \<equiv>
     vars_exist_in_state state env \<and>
     no_extra_vars state env \<and>
     funs_exist_in_state state env \<and>
-    no_extra_funs state env"
+    no_extra_funs state env \<and>
+    non_consts_in_locals_or_refs state env"
 
 end

@@ -190,7 +190,7 @@ fun get_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarrow> 
       Some val \<Rightarrow> get_value_at_path val rest
     | None \<Rightarrow> Inl TypeError)"  (* field not present in record *)
 | "get_value_at_path (CV_Variant ctorName payload) (LVPath_VariantProj expectedCtor # rest) =
-    (if ctorName = expectedCtor then Inr payload
+    (if ctorName = expectedCtor then get_value_at_path payload rest
     else Inl RuntimeError)"   (* variant projection from wrong ctor *)
 | "get_value_at_path (CV_Array _ elementMap) (LVPath_ArrayProj indices # rest) =
     (case fmlookup elementMap indices of
@@ -425,6 +425,7 @@ where
       Inr (CV_Variant actualCtorName payload) \<Rightarrow>
         (if actualCtorName = expectedCtorName then Inr payload
         else Inl RuntimeError)  \<comment> \<open>constructor name mismatch\<close>
+    | Inr _ \<Rightarrow> Inl TypeError  \<comment> \<open>not a variant value\<close>
     | Inl err \<Rightarrow> Inl err)"
 
   (* Array projection (indexing) *)
