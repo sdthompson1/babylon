@@ -1,5 +1,5 @@
 theory CoreTypecheck
-  imports CoreTyEnvWellFormed CoreFreeVars
+  imports CoreTyEnvWellFormed CoreFreeVars "../util/NatToString"
 begin
 
 (* ========================================================================== *)
@@ -15,6 +15,18 @@ next
   case (Cons x xs)
   then show ?case by (cases x) (auto simp: list_all2_Cons1)
 qed
+
+(* ========================================================================== *)
+(* Helper: sizeof result type, mirroring array_size_to_value in CoreInterp *)
+(* ========================================================================== *)
+
+definition u64_type :: CoreType where
+  "u64_type = CoreTy_FiniteInt Unsigned IntBits_64"
+
+fun sizeof_type :: "CoreDimension list \<Rightarrow> CoreType" where
+  "sizeof_type [_] = u64_type"
+| "sizeof_type dims = CoreTy_Record (zip (tuple_field_names (length dims))
+                                         (replicate (length dims) u64_type))"
 
 (* ========================================================================== *)
 (* Helper functions for pattern matching type-checking *)
@@ -266,7 +278,13 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                  if list_all (\<lambda>body. core_term_type env ghost body = Some resultTy) (tl bodies)
                  then Some resultTy
                  else None))"
-| "core_term_type env ghost (CoreTm_Sizeof tm) = undefined"
+| "core_term_type env ghost (CoreTm_Sizeof tm) =
+    (case core_term_type env ghost tm of
+      Some (CoreTy_Array _ dims) \<Rightarrow>
+        if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue tm \<and> ghost = NotGhost
+        then None
+        else Some (sizeof_type dims)
+    | _ \<Rightarrow> None)"
 
   (* Allocated: only valid in Ghost mode, parameter can be any type, result is bool *)
 | "core_term_type env NotGhost (CoreTm_Allocated _) = None"
@@ -277,7 +295,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 
   (* Old: only valid in Ghost mode *)
 | "core_term_type env NotGhost (CoreTm_Old _) = None"
-| "core_term_type env Ghost (CoreTm_Old tm) = undefined"
+| "core_term_type env Ghost (CoreTm_Old tm) = core_term_type env Ghost tm"
 
   by pat_completeness auto
 
@@ -458,6 +476,21 @@ next
   fix ghost :: GhostOrNot
   fix tm ctorName
   show "((env, ghost, tm), env, ghost, CoreTm_VariantProj tm ctorName)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>CoreTm_Sizeof - tm is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix tm :: CoreTerm
+  show "((env, ghost, tm), env, ghost, CoreTm_Sizeof tm)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>CoreTm_Old - tm is smaller\<close>
+  fix env :: CoreTyEnv
+  fix tm :: CoreTerm
+  show "((env, Ghost, tm), env, Ghost, CoreTm_Old tm)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 qed
@@ -885,7 +918,10 @@ next
     by (auto simp: Let_def list_all_iff split: option.splits if_splits)
 next
   case (CoreTm_Sizeof tm)
-  then show ?case sorry
+  from CoreTm_Sizeof.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
+  show ?case using CoreTm_Sizeof.prems(2)
+    CoreTm_Sizeof.IH[OF tm_fresh _ CoreTm_Sizeof.prems(3)]
+    by (auto split: option.splits CoreType.splits if_splits)
 next
   case (CoreTm_Allocated tm)
   from CoreTm_Allocated.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
@@ -894,7 +930,10 @@ next
     by (cases ghost) (auto split: option.splits)
 next
   case (CoreTm_Old tm)
-  then show ?case sorry
+  from CoreTm_Old.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
+  show ?case using CoreTm_Old.prems(2)
+    CoreTm_Old.IH[OF tm_fresh _ CoreTm_Old.prems(3)]
+    by (cases ghost) auto
 qed
 
 
@@ -1240,14 +1279,22 @@ next
   thus ?case using ty_eq by simp
 next
   case (CoreTm_Sizeof tm)
-  then show ?case sorry
+  from CoreTm_Sizeof.prems(1) obtain elemTy dims where
+    tm_typed: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)" and
+    ty_eq: "ty = sizeof_type dims"
+    by (auto split: option.splits CoreType.splits if_splits)
+  have "is_well_kinded env (sizeof_type dims) \<and> is_runtime_type env (sizeof_type dims)"
+    by (cases dims rule: sizeof_type.cases)
+       (auto simp: u64_type_def list_all_iff set_zip nth_Cons')
+  thus ?case using ty_eq by auto
 next
   case (CoreTm_Allocated tm)
   show ?case using CoreTm_Allocated.prems(1)
     by (cases ghost) (auto split: option.splits)
 next
   case (CoreTm_Old tm)
-  then show ?case sorry
+  show ?case using CoreTm_Old.prems(1) CoreTm_Old.IH CoreTm_Old.prems(2)
+    by (cases ghost) auto
 qed
 
 (* Corollaries for convenient use at call sites *)

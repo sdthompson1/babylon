@@ -543,9 +543,8 @@ proof -
   qed
 qed
 
-(* ========================================================================== *)
-(* Helper lemmas for CoreTm_Let type soundness *)
-(* ========================================================================== *)
+
+(* Helper lemmas for CoreTm_Let type soundness: *)
 
 (* After alloc_store + fmupd of locals, the new state matches the extended env.
    This is the key lemma for CoreTm_Let soundness. *)
@@ -1504,10 +1503,7 @@ proof -
   qed
 qed
 
-
-(*-----------------------------------------------------------------------------*)
-(* CoreTm_Match soundness helpers *)
-(*-----------------------------------------------------------------------------*)
+(* Type soundness for CoreTm_Match: *)
 
 (* If some pattern in the arm list matches the value, find_matching_arm succeeds *)
 lemma find_matching_arm_succeeds:
@@ -1655,7 +1651,7 @@ next
   qed
 qed
 
-(* Type soundness for CoreTm_Match *)
+(* Main type soundness lemma for CoreTm_Match *)
 lemma type_soundness_match:
   assumes state_env: "state_matches_env state env"
     and wf_env: "tyenv_well_formed env"
@@ -1787,6 +1783,124 @@ proof -
           interp_term fuel state armBody"
       using Inr match_eq by simp
     with arm_sound ty_eq show ?thesis by simp
+  qed
+qed
+
+
+(* Helper: sizes_match_dims implies equal length *)
+lemma sizes_match_dims_length:
+  "sizes_match_dims sizes dims \<Longrightarrow> length sizes = length dims"
+  by (induction sizes dims rule: sizes_match_dims.induct) auto
+
+(* Helper: array_size_to_value has sizeof_type *)
+lemma array_size_to_value_has_sizeof_type:
+  assumes "sizes_valid sizes"
+    and "sizes_match_dims sizes dims"
+  shows "value_has_type env (array_size_to_value sizes) (sizeof_type dims)"
+proof -
+  from assms(2) have len_eq: "length sizes = length dims" by (rule sizes_match_dims_length)
+  from assms(1) have fits: "\<forall>s \<in> set sizes. int_fits Unsigned IntBits_64 s"
+    by (auto simp: sizes_valid_def list_all_iff)
+  show ?thesis
+  proof (cases dims rule: sizeof_type.cases)
+    case (1 d)
+    then obtain n where sizes_eq: "sizes = [n]" using len_eq by (cases sizes) auto
+    from fits sizes_eq have "int_fits Unsigned IntBits_64 n" by simp
+    then show ?thesis using 1 sizes_eq by (simp add: u64_type_def)
+  next
+    case "2_1"
+    then show ?thesis using len_eq by simp
+  next
+    case ("2_2" d1 d2 ds)
+    then obtain s1 s2 ss where sizes_eq: "sizes = s1 # s2 # ss" and
+      len_ss: "length ss = length ds"
+      using len_eq by (cases sizes; cases "tl sizes") auto
+    have val_eq': "array_size_to_value (s1 # s2 # ss) =
+          CV_Record (zip (tuple_field_names (Suc (Suc (length ss))))
+                         (map (CV_FiniteInt Unsigned IntBits_64) (s1 # s2 # ss)))"
+      by simp
+    have ty_eq': "sizeof_type (d1 # d2 # ds) =
+          CoreTy_Record (zip (tuple_field_names (Suc (Suc (length ds))))
+                             (replicate (Suc (Suc (length ds))) u64_type))"
+      by simp
+    have la2: "list_all2
+        (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+        (zip (tuple_field_names (Suc (Suc (length ss))))
+             (map (CV_FiniteInt Unsigned IntBits_64) (s1 # s2 # ss)))
+        (zip (tuple_field_names (Suc (Suc (length ds))))
+             (replicate (Suc (Suc (length ds))) u64_type))"
+    proof (intro list_all2_all_nthI)
+      show "length (zip (tuple_field_names (Suc (Suc (length ss))))
+                        (map (CV_FiniteInt Unsigned IntBits_64) (s1 # s2 # ss))) =
+            length (zip (tuple_field_names (Suc (Suc (length ds))))
+                        (replicate (Suc (Suc (length ds))) u64_type))"
+        using len_ss by (simp add: tuple_field_names_def)
+    next
+      fix i assume i_bound: "i < length (zip (tuple_field_names (Suc (Suc (length ss))))
+                                             (map (CV_FiniteInt Unsigned IntBits_64) (s1 # s2 # ss)))"
+      hence i_len: "i < Suc (Suc (length ss))"
+        by (simp add: tuple_field_names_def)
+      have i_len2: "i < Suc (Suc (length ds))" using i_len len_ss by simp
+      have nth_val: "(map (CV_FiniteInt Unsigned IntBits_64) (s1 # s2 # ss)) ! i =
+                     CV_FiniteInt Unsigned IntBits_64 ((s1 # s2 # ss) ! i)"
+        using i_len by (metis length_Cons nth_map)
+      have nth_ty: "(replicate (Suc (Suc (length ds))) u64_type) ! i = u64_type"
+        using i_len2 by (meson nth_replicate) 
+      have nth_name_eq: "(tuple_field_names (Suc (Suc (length ss)))) ! i =
+                         (tuple_field_names (Suc (Suc (length ds)))) ! i"
+        using len_ss by simp
+      have sz_i: "(s1 # s2 # ss) ! i \<in> set sizes" using sizes_eq i_len by (auto simp: set_conv_nth)
+      hence "int_fits Unsigned IntBits_64 ((s1 # s2 # ss) ! i)" using fits by auto
+      then show "(case zip (tuple_field_names (Suc (Suc (length ss))))
+                           (map (CV_FiniteInt Unsigned IntBits_64) (s1 # s2 # ss)) ! i of
+                  (name1, fldVal) \<Rightarrow>
+                    \<lambda>(name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+                 (zip (tuple_field_names (Suc (Suc (length ds))))
+                      (replicate (Suc (Suc (length ds))) u64_type) ! i)"
+        using i_len i_len2 nth_val nth_ty nth_name_eq len_ss
+        by (simp add: tuple_field_names_def u64_type_def)
+    qed
+    then show ?thesis using "2_2" sizes_eq by simp
+  qed
+qed
+
+(* Type soundness for CoreTm_Sizeof *)
+lemma type_soundness_sizeof:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH: "\<And>tm' ty'. core_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
+                        sound_term_result env ty' (interp_term fuel state tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_Sizeof tm) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_Sizeof tm))"
+proof -
+  from typing obtain elemTy dims where
+    tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Array elemTy dims)" and
+    ty_eq: "ty = sizeof_type dims"
+    by (auto split: option.splits CoreType.splits if_splits)
+
+  from IH[OF tm_typing]
+  have tm_sound: "sound_term_result env (CoreTy_Array elemTy dims) (interp_term fuel state tm)" .
+
+  show ?thesis
+  proof (cases "interp_term fuel state tm")
+    case (Inl err)
+    then have "interp_term (Suc fuel) state (CoreTm_Sizeof tm) = Inl err" by simp
+    with tm_sound Inl show ?thesis by auto
+  next
+    case (Inr val)
+    from tm_sound Inr have val_typed: "value_has_type env val (CoreTy_Array elemTy dims)" by simp
+    from val_typed obtain sizes valuesMap where
+      val_eq: "val = CV_Array sizes valuesMap" and
+      fmap_ok: "fmap_matches_sizes sizes valuesMap" and
+      dims_ok: "sizes_match_dims sizes dims"
+      by (cases val) (auto split: CoreType.splits)
+    from fmap_ok have sv: "sizes_valid sizes" by (simp add: fmap_matches_sizes_def)
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_Sizeof tm) =
+          Inr (array_size_to_value sizes)"
+      using Inr val_eq by simp
+    have "value_has_type env (array_size_to_value sizes) (sizeof_type dims)"
+      using array_size_to_value_has_sizeof_type[OF sv dims_ok] .
+    with interp_eq ty_eq show ?thesis by simp
   qed
 qed
 
@@ -1985,7 +2099,8 @@ next
           using "1.prems"(1,2) Suc.IH(1) type_soundness_match typing by blast
       next
         case (CoreTm_Sizeof x17)
-        then show ?thesis sorry
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_sizeof typing by blast
       next
         case (CoreTm_Allocated x18)
         then show ?thesis using typing by simp

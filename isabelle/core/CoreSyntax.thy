@@ -79,7 +79,7 @@ datatype CoreTerm =
   | CoreTm_Match CoreTerm "(CorePattern \<times> CoreTerm) list"
   | CoreTm_Sizeof CoreTerm
   | CoreTm_Allocated CoreTerm
-  | CoreTm_Old CoreTerm
+  | CoreTm_Old CoreTerm  (* in postcondition, returns "old" value of term; elsewhere, just returns the term *)
 
 fun is_lvalue :: "CoreTerm \<Rightarrow> bool" where
   "is_lvalue (CoreTm_Var _) = True"
