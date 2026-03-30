@@ -1322,6 +1322,357 @@ next
   qed
 qed
 
+(* Type soundness for CoreTm_VariantCtor *)
+lemma type_soundness_variant_ctor:
+  assumes state_env: "state_matches_env state env"
+    and wf_env: "tyenv_well_formed env"
+    and IH: "\<And>tm' ty'. core_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
+                        sound_term_result env ty' (interp_term fuel state tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_VariantCtor ctorName tyArgs payload) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_VariantCtor ctorName tyArgs payload))"
+proof -
+  (* Extract facts from typing *)
+  from typing obtain dtName metavars payloadTy where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, metavars, payloadTy)" and
+    len_eq: "length tyArgs = length metavars" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_rt: "list_all is_runtime_type tyArgs"
+    by (auto simp: Let_def split: option.splits prod.splits if_splits)
+
+  define tySubst where "tySubst = fmap_of_list (zip metavars tyArgs)"
+  define payloadTyOpt where "payloadTyOpt = core_term_type env NotGhost payload"
+
+  from typing ctor_lookup len_eq tyargs_wk tyargs_rt
+  have typing': "(case payloadTyOpt of
+      None \<Rightarrow> None
+    | Some actualPayloadTy \<Rightarrow>
+        if actualPayloadTy = apply_subst tySubst payloadTy
+        then Some (CoreTy_Name dtName tyArgs) else None) = Some ty"
+    unfolding payloadTyOpt_def tySubst_def by (simp add: Let_def)
+
+  from typing' obtain payloadActualTy where
+    payloadTyOpt_eq: "payloadTyOpt = Some payloadActualTy" and
+    payload_ty_eq: "payloadActualTy = apply_subst tySubst payloadTy" and
+    ty_eq: "ty = CoreTy_Name dtName tyArgs"
+    by (cases payloadTyOpt) (auto split: if_splits)
+
+  have payload_typing: "core_term_type env NotGhost payload = Some payloadActualTy"
+    using payloadTyOpt_eq payloadTyOpt_def by simp
+
+  (* IH on payload *)
+  from IH[OF payload_typing]
+  have payload_sound: "sound_term_result env payloadActualTy (interp_term fuel state payload)" .
+
+  (* Case split on payload evaluation *)
+  show ?thesis
+  proof (cases "interp_term fuel state payload")
+    case (Inl err)
+    then have "interp_term (Suc fuel) state (CoreTm_VariantCtor ctorName tyArgs payload) = Inl err"
+      by simp
+    with payload_sound Inl show ?thesis by auto
+  next
+    case (Inr payloadVal)
+    from payload_sound Inr have payload_typed: "value_has_type env payloadVal payloadActualTy" by simp
+
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_VariantCtor ctorName tyArgs payload) =
+          Inr (CV_Variant ctorName payloadVal)"
+      using Inr by simp
+
+    (* Show the result has the correct type *)
+    have "value_has_type env (CV_Variant ctorName payloadVal) (CoreTy_Name dtName tyArgs)"
+      using ctor_lookup len_eq tyargs_wk tyargs_rt payload_typed payload_ty_eq tySubst_def
+      by simp
+
+    with interp_eq ty_eq show ?thesis by simp
+  qed
+qed
+
+
+(*-----------------------------------------------------------------------------*)
+(* CoreTm_Match soundness helpers *)
+(*-----------------------------------------------------------------------------*)
+
+(* If some pattern in the arm list matches the value, find_matching_arm succeeds *)
+lemma find_matching_arm_succeeds:
+  assumes "\<exists>pat rhs. (pat, rhs) \<in> set arms \<and> pattern_matches val pat"
+  shows "\<exists>rhs. find_matching_arm val arms = Inr rhs"
+  using assms
+proof (induction arms)
+  case Nil then show ?case by simp
+next
+  case (Cons arm arms)
+  obtain pat' rhs' where pr_in: "(pat', rhs') \<in> set (arm # arms)"
+    and pr_matches: "pattern_matches val pat'" using Cons.prems by auto
+  obtain p r where arm_eq: "arm = (p, r)" by (cases arm) auto
+  show ?case
+  proof (cases "pattern_matches val p")
+    case True then show ?thesis using arm_eq by simp
+  next
+    case no_match: False
+    from pr_in no_match have "(pat', rhs') \<in> set arms"
+      using arm_eq pr_matches by auto
+    hence "\<exists>pat rhs. (pat, rhs) \<in> set arms \<and> pattern_matches val pat"
+      using pr_matches by auto
+    from Cons.IH[OF this] show ?thesis
+      using no_match arm_eq by simp
+  qed
+qed
+
+(* If find_matching_arm succeeds, the result is the body of some arm in the list *)
+lemma find_matching_arm_in_set:
+  assumes "find_matching_arm val arms = Inr rhs"
+  shows "\<exists>pat. (pat, rhs) \<in> set arms"
+  using assms by (induction arms) (auto split: if_splits)
+
+(* If has_wildcard holds, some element is CorePat_Wildcard *)
+lemma has_wildcard_in_set_aux:
+  "has_wildcard pats \<Longrightarrow> CorePat_Wildcard \<in> set pats"
+  by (induction pats rule: has_wildcard.induct) auto
+
+lemma has_wildcard_in_set:
+  "has_wildcard (map fst arms) \<Longrightarrow> \<exists>arm \<in> set arms. fst arm = CorePat_Wildcard"
+  using has_wildcard_in_set_aux image_iff by fastforce
+
+(* If has_wildcard holds for the patterns, find_matching_arm succeeds *)
+lemma has_wildcard_find_matching_arm:
+  assumes "has_wildcard (map fst arms)"
+  shows "\<exists>rhs. find_matching_arm val arms = Inr rhs"
+proof -
+  from has_wildcard_in_set[OF assms]
+  obtain pat rhs where in_arms: "(pat, rhs) \<in> set arms" and pat_wild: "pat = CorePat_Wildcard"
+    by auto
+  have "pattern_matches val CorePat_Wildcard" by (cases val) simp_all
+  hence "pattern_matches val pat" using pat_wild by simp
+  thus ?thesis using find_matching_arm_succeeds in_arms by fastforce
+qed
+
+(* Main exhaustiveness lemma: if patterns are exhaustive and the value has the
+   scrutinee type, then find_matching_arm succeeds *)
+lemma find_matching_arm_exhaustive:
+  assumes val_typed: "value_has_type env val scrutTy"
+    and exhaustive: "patterns_exhaustive env scrutTy (map fst arms)"
+    and wf: "tyenv_well_formed env"
+  shows "\<exists>rhs. find_matching_arm val arms = Inr rhs"
+proof (cases "has_wildcard (map fst arms)")
+  case True
+  then show ?thesis using has_wildcard_find_matching_arm by blast
+next
+  case no_wildcard: False
+  show ?thesis
+  proof (cases scrutTy)
+    case CoreTy_Bool
+    from exhaustive no_wildcard CoreTy_Bool have
+      has_true: "list_ex (\<lambda>p. p = CorePat_Bool True) (map fst arms)" and
+      has_false: "list_ex (\<lambda>p. p = CorePat_Bool False) (map fst arms)"
+      by simp_all
+    from val_typed CoreTy_Bool obtain b where val_eq: "val = CV_Bool b"
+      using value_has_type_Bool by auto
+    show ?thesis
+    proof (cases b)
+      case True
+      from has_true obtain arm where arm_in: "arm \<in> set arms" and arm_pat: "fst arm = CorePat_Bool True"
+        by (auto simp: list_ex_iff)
+      have "pattern_matches val (fst arm)" using val_eq True arm_pat by simp
+      thus ?thesis using find_matching_arm_succeeds arm_in
+        by (metis prod.collapse)
+    next
+      case False
+      from has_false obtain arm where arm_in: "arm \<in> set arms" and arm_pat: "fst arm = CorePat_Bool False"
+        by (auto simp: list_ex_iff)
+      have "pattern_matches val (fst arm)" using val_eq False arm_pat by simp
+      thus ?thesis using find_matching_arm_succeeds arm_in
+        by (metis prod.collapse)
+    qed
+  next
+    case (CoreTy_Name dtName tyArgs)
+    from exhaustive no_wildcard CoreTy_Name obtain ctors where
+      ctors_lookup: "fmlookup (TE_DataCtorsByType env) dtName = Some ctors" and
+      all_covered: "list_all (\<lambda>ctor. list_ex (\<lambda>p. p = CorePat_Variant ctor) (map fst arms)) ctors"
+      by (auto split: option.splits)
+    (* Value must be a variant *)
+    from val_typed CoreTy_Name obtain actualCtor payload where
+      val_eq: "val = CV_Variant actualCtor payload"
+      using value_has_type_Name by blast
+    (* Extract constructor info from value typing *)
+    from val_typed val_eq CoreTy_Name obtain dtName2 metavars payloadTy where
+      ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName2, metavars, payloadTy)" and
+      dt_eq: "dtName = dtName2"
+      by (auto split: option.splits prod.splits)
+    (* By tyenv_ctors_by_type_consistent, actualCtor is in ctors *)
+    from wf have consistent: "tyenv_ctors_by_type_consistent env"
+      unfolding tyenv_well_formed_def by simp
+    from consistent ctors_lookup have
+      "\<forall>ctorName. ctorName \<in> set ctors \<longleftrightarrow>
+        (\<exists>tyArgMetavars payload. fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyArgMetavars, payload))"
+      unfolding tyenv_ctors_by_type_consistent_def by simp
+    hence ctor_in_ctors: "actualCtor \<in> set ctors"
+      using ctor_lookup dt_eq by auto
+    (* So there is a CorePat_Variant actualCtor in the pattern list *)
+    from all_covered ctor_in_ctors have
+      "list_ex (\<lambda>p. p = CorePat_Variant actualCtor) (map fst arms)"
+      by (simp add: list_all_iff)
+    then obtain arm where arm_in: "arm \<in> set arms" and arm_pat: "fst arm = CorePat_Variant actualCtor"
+      by (auto simp: list_ex_iff)
+    have "pattern_matches val (fst arm)" using val_eq arm_pat by simp
+    thus ?thesis using find_matching_arm_succeeds arm_in
+      by (metis prod.collapse)
+  next
+    (* Remaining type cases: exhaustive is False when no wildcard, contradiction *)
+    case (CoreTy_FiniteInt x1 x2)
+    then show ?thesis using exhaustive no_wildcard by simp
+  next
+    case CoreTy_MathInt
+    then show ?thesis using exhaustive no_wildcard by simp
+  next
+    case CoreTy_MathReal
+    then show ?thesis using exhaustive no_wildcard by simp
+  next
+    case (CoreTy_Record x)
+    then show ?thesis using exhaustive no_wildcard by simp
+  next
+    case (CoreTy_Array x1 x2)
+    then show ?thesis using exhaustive no_wildcard by simp
+  next
+    case (CoreTy_Meta x)
+    then show ?thesis using exhaustive no_wildcard by simp
+  qed
+qed
+
+(* Type soundness for CoreTm_Match *)
+lemma type_soundness_match:
+  assumes state_env: "state_matches_env state env"
+    and wf_env: "tyenv_well_formed env"
+    and IH: "\<And>tm' ty'. core_term_type env NotGhost tm' = Some ty' \<Longrightarrow>
+                        sound_term_result env ty' (interp_term fuel state tm')"
+    and typing: "core_term_type env NotGhost (CoreTm_Match scrut arms) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_Match scrut arms))"
+proof -
+  (* Extract facts from typing *)
+  define scrutTyOpt where "scrutTyOpt = core_term_type env NotGhost scrut"
+
+  from typing have typing': "(case scrutTyOpt of
+      None \<Rightarrow> None
+    | Some scrutTy \<Rightarrow>
+        let pats = map fst arms; bodies = map snd arms
+        in if arms = [] then None
+           else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
+           else if \<not> patterns_regular pats then None
+           else if \<not> patterns_exhaustive env scrutTy pats then None
+           else (case core_term_type env NotGhost (snd (hd arms)) of
+                   None \<Rightarrow> None
+                 | Some resultTy \<Rightarrow>
+                     if list_all (\<lambda>body. core_term_type env NotGhost body = Some resultTy) (tl bodies)
+                     then Some resultTy else None)) = Some ty"
+    unfolding scrutTyOpt_def by simp
+
+  from typing' obtain scrutTy where
+    scrutTyOpt_eq: "scrutTyOpt = Some scrutTy"
+    by (cases scrutTyOpt) auto
+
+  have scrut_typing: "core_term_type env NotGhost scrut = Some scrutTy"
+    using scrutTyOpt_eq scrutTyOpt_def by simp
+
+  from typing' scrutTyOpt_eq have typing'':
+    "(let pats = map fst arms; bodies = map snd arms
+      in if arms = [] then None
+         else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
+         else if \<not> patterns_regular pats then None
+         else if \<not> patterns_exhaustive env scrutTy pats then None
+         else (case core_term_type env NotGhost (snd (hd arms)) of
+                 None \<Rightarrow> None
+               | Some resultTy \<Rightarrow>
+                   if list_all (\<lambda>body. core_term_type env NotGhost body = Some resultTy)
+                               (tl (map snd arms))
+                   then Some resultTy else None)) = Some ty"
+    by simp
+
+  from typing'' have arms_nonempty: "arms \<noteq> []"
+    by (cases arms) (simp_all add: Let_def)
+
+  from typing'' arms_nonempty have
+    pats_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
+    pats_regular: "patterns_regular (map fst arms)" and
+    pats_exhaustive: "patterns_exhaustive env scrutTy (map fst arms)"
+    by (simp_all add: Let_def split: if_splits)
+
+  define hd_ty_opt where "hd_ty_opt = core_term_type env NotGhost (snd (hd arms))"
+
+  from typing'' arms_nonempty pats_compat pats_regular pats_exhaustive
+  have typing''': "(case hd_ty_opt of
+      None \<Rightarrow> None
+    | Some resultTy \<Rightarrow>
+        if list_all (\<lambda>body. core_term_type env NotGhost body = Some resultTy)
+                    (tl (map snd arms))
+        then Some resultTy else None) = Some ty"
+    unfolding hd_ty_opt_def Let_def by presburger
+
+  from typing''' obtain resultTy where
+    hd_ty_opt_eq: "hd_ty_opt = Some resultTy" and
+    ty_eq: "ty = resultTy"
+    by (cases hd_ty_opt) (auto split: if_splits)
+
+  have hd_typing: "core_term_type env NotGhost (snd (hd arms)) = Some resultTy"
+    using hd_ty_opt_eq hd_ty_opt_def by simp
+
+  from typing''' hd_ty_opt_eq ty_eq have
+    tl_typing: "list_all (\<lambda>body. core_term_type env NotGhost body = Some resultTy) (tl (map snd arms))"
+    by (simp split: if_splits)
+
+  (* All arm bodies have type resultTy *)
+  have all_arms_typed: "\<forall>arm \<in> set arms. core_term_type env NotGhost (snd arm) = Some resultTy"
+  proof
+    fix arm assume arm_in: "arm \<in> set arms"
+    from arms_nonempty obtain a rest where arms_eq: "arms = a # rest" by (cases arms) auto
+    show "core_term_type env NotGhost (snd arm) = Some resultTy"
+    proof (cases "arm = a")
+      case True then show ?thesis using hd_typing arms_eq by simp
+    next
+      case False
+      from arm_in False arms_eq have "arm \<in> set rest" by simp
+      hence "snd arm \<in> set (map snd rest)" by auto
+      hence "snd arm \<in> set (tl (map snd arms))" using arms_eq by simp
+      with tl_typing show ?thesis by (simp add: list_all_iff)
+    qed
+  qed
+
+  (* IH on scrutinee *)
+  from IH[OF scrut_typing]
+  have scrut_sound: "sound_term_result env scrutTy (interp_term fuel state scrut)" .
+
+  (* Case split on scrutinee evaluation *)
+  show ?thesis
+  proof (cases "interp_term fuel state scrut")
+    case (Inl err)
+    then have "interp_term (Suc fuel) state (CoreTm_Match scrut arms) = Inl err" by simp
+    with scrut_sound Inl show ?thesis by auto
+  next
+    case (Inr scrutVal)
+    from scrut_sound Inr have scrut_typed: "value_has_type env scrutVal scrutTy" by simp
+
+    (* find_matching_arm succeeds by exhaustiveness *)
+    from find_matching_arm_exhaustive[OF scrut_typed pats_exhaustive wf_env]
+    obtain armBody where match_eq: "find_matching_arm scrutVal arms = Inr armBody" by auto
+
+    (* armBody is the body of some arm in the list *)
+    from find_matching_arm_in_set[OF match_eq]
+    obtain pat where arm_in: "(pat, armBody) \<in> set arms" by auto
+
+    (* armBody typechecks to resultTy *)
+    have arm_typed: "core_term_type env NotGhost armBody = Some resultTy"
+      using all_arms_typed arm_in by force
+
+    (* IH on arm body *)
+    from IH[OF arm_typed]
+    have arm_sound: "sound_term_result env resultTy (interp_term fuel state armBody)" .
+
+    (* Compute the result *)
+    have "interp_term (Suc fuel) state (CoreTm_Match scrut arms) =
+          interp_term fuel state armBody"
+      using Inr match_eq by simp
+    with arm_sound ty_eq show ?thesis by simp
+  qed
+qed
+
 
 (*-----------------------------------------------------------------------------*)
 (* Main type soundness theorem *)
@@ -1471,7 +1822,8 @@ next
         then show ?thesis sorry
       next
         case (CoreTm_VariantCtor x111 x112 x113)
-        then show ?thesis sorry
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_variant_ctor typing by blast
       next
         case (CoreTm_Record x12)
         then show ?thesis sorry
@@ -1503,7 +1855,8 @@ next
           by blast
       next
         case (CoreTm_Match x161 x162)
-        then show ?thesis sorry
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_match typing by blast
       next
         case (CoreTm_Sizeof x17)
         then show ?thesis sorry

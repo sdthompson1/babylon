@@ -178,8 +178,26 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
              then Some (apply_subst tySubst (FI_ReturnType funInfo))
              else None)"
 
-(* TODO *)
-| "core_term_type env ghost (CoreTm_VariantCtor variantName tyArgs payload) = undefined"
+(* Variant construction:
+   - Constructor must exist in TE_DataCtors
+   - Number of type arguments must match metavars
+   - Type arguments must be well-kinded
+   - In NotGhost mode: type arguments must be runtime types
+   - Payload must typecheck to the expected payload type (after substitution) *)
+| "core_term_type env ghost (CoreTm_VariantCtor ctorName tyArgs payload) =
+    (case fmlookup (TE_DataCtors env) ctorName of
+      None \<Rightarrow> None
+    | Some (dtName, metavars, payloadTy) \<Rightarrow>
+        (if length tyArgs \<noteq> length metavars then None
+        else if \<not> list_all (is_well_kinded env) tyArgs then None
+        else if ghost = NotGhost \<and> \<not> list_all is_runtime_type tyArgs then None
+        else let tySubst = fmap_of_list (zip metavars tyArgs)
+             in case core_term_type env ghost payload of
+                  None \<Rightarrow> None
+                | Some actualPayloadTy \<Rightarrow>
+                    if actualPayloadTy = apply_subst tySubst payloadTy
+                    then Some (CoreTy_Name dtName tyArgs)
+                    else None))"
 | "core_term_type env ghost (CoreTm_Record flds) = undefined"
 
 | "core_term_type env ghost (CoreTm_RecordProj tm fldName) =
@@ -294,7 +312,15 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 7: CoreTm_Match - scrutinee is smaller\<close>
+  \<comment> \<open>Goal 7: CoreTm_VariantCtor - payload is smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix ctorName tyArgs payload
+  show "((env, ghost, payload), env, ghost, CoreTm_VariantCtor ctorName tyArgs payload)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
+  \<comment> \<open>Goal 8: CoreTm_Match - scrutinee is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut arms
@@ -302,7 +328,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 8: CoreTm_Match - first arm body is smaller\<close>
+  \<comment> \<open>Goal 9: CoreTm_Match - first arm body is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut
@@ -313,7 +339,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by (cases arms) auto
 next
-  \<comment> \<open>Goal 9: CoreTm_Match - tail arm bodies are smaller\<close>
+  \<comment> \<open>Goal 10: CoreTm_Match - tail arm bodies are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix scrut :: CoreTerm
@@ -336,14 +362,14 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 10: CoreTm_Allocated - tm is smaller\<close>
+  \<comment> \<open>Goal 11: CoreTm_Allocated - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix tm
   show "((env, Ghost, tm), env, Ghost, CoreTm_Allocated tm)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 11: CoreTm_Let - rhs is smaller\<close>
+  \<comment> \<open>Goal 12: CoreTm_Let - rhs is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix var rhs body
@@ -351,7 +377,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 12: CoreTm_Let - body is smaller (with extended env)\<close>
+  \<comment> \<open>Goal 13: CoreTm_Let - body is smaller (with extended env)\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix var rhs body x2 x
@@ -363,7 +389,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 13: CoreTm_RecordProj - tm is smaller\<close>
+  \<comment> \<open>Goal 14: CoreTm_RecordProj - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix tm fldName
@@ -371,7 +397,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 14: CoreTm_ArrayProj - arr is smaller\<close>
+  \<comment> \<open>Goal 15: CoreTm_ArrayProj - arr is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix arr idxTms
@@ -379,7 +405,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 15: CoreTm_ArrayProj - elements of idxTms are smaller\<close>
+  \<comment> \<open>Goal 16: CoreTm_ArrayProj - elements of idxTms are smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix arr idxTms x2 x xa
@@ -392,7 +418,7 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>Goal 16: CoreTm_VariantProj - tm is smaller\<close>
+  \<comment> \<open>Goal 17: CoreTm_VariantProj - tm is smaller\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
   fix tm ctorName
@@ -618,20 +644,94 @@ next
     using fn_lookup len_tyargs tyargs_wk' len_tmargs ghost_ok args_check' ty_eq fields_eq
     by (simp add: Let_def)
 next
-  case (CoreTm_VariantCtor x1a x2a tm)
-  then show ?case sorry
+  case (CoreTm_VariantCtor ctorName tyArgs tm)
+  from CoreTm_VariantCtor.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
+  let ?env' = "env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>"
+  have fields_eq: "TE_DataCtors ?env' = TE_DataCtors env"
+                   "TE_Datatypes ?env' = TE_Datatypes env"
+                   "TE_TypeVars ?env' = TE_TypeVars env"
+    by simp_all
+  have wk_eq: "\<And>t. is_well_kinded ?env' t = is_well_kinded env t"
+    using is_well_kinded_cong_env[of ?env' env] fields_eq by simp
+  from CoreTm_VariantCtor.prems(2) obtain dtName metavars payloadTy where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, metavars, payloadTy)"
+    by (auto simp: Let_def split: option.splits prod.splits if_splits)
+  from CoreTm_VariantCtor.prems(2) ctor_lookup obtain payloadActualTy where
+    len_eq: "length tyArgs = length metavars" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all is_runtime_type tyArgs" and
+    payload_typed: "core_term_type env ghost tm = Some payloadActualTy" and
+    payload_ty_eq: "payloadActualTy = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy" and
+    ty_eq: "ty = CoreTy_Name dtName tyArgs"
+    by (auto simp: Let_def split: option.splits prod.splits if_splits)
+  have payload_IH: "core_term_type ?env' ghost tm = Some payloadActualTy"
+    using CoreTm_VariantCtor.IH tm_fresh payload_typed CoreTm_VariantCtor.prems(3) by blast
+  have tyargs_wk': "list_all (is_well_kinded ?env') tyArgs"
+    using tyargs_wk wk_eq by (simp add: list_all_iff)
+  show ?case using ctor_lookup len_eq tyargs_wk' tyargs_rt payload_IH payload_ty_eq ty_eq
+    fields_eq by (simp add: Let_def)
 next
   case (CoreTm_Record flds)
   then show ?case sorry
 next
   case (CoreTm_RecordProj tm fldName)
-  then show ?case sorry
+  from CoreTm_RecordProj.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
+  from CoreTm_RecordProj.prems(2) obtain recTy where
+    tm_typed: "core_term_type env ghost tm = Some recTy"
+    by (auto split: option.splits CoreType.splits)
+  have tm_IH: "core_term_type (env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env),
+                                      TE_GhostVars := gv' \<rparr>) ghost tm = Some recTy"
+    using CoreTm_RecordProj.IH tm_fresh tm_typed CoreTm_RecordProj.prems(3) by blast
+  show ?case using CoreTm_RecordProj.prems(2) tm_typed tm_IH by simp
 next
   case (CoreTm_ArrayProj arr idxs)
-  then show ?case sorry
+  from CoreTm_ArrayProj.prems(1) have
+    arr_fresh: "x \<notin> core_term_free_vars arr" and
+    idxs_fresh: "\<forall>idx \<in> set idxs. x \<notin> core_term_free_vars idx" by auto
+  let ?env' = "env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>"
+  have wk_eq: "\<And>t. is_well_kinded ?env' t = is_well_kinded env t"
+    using is_well_kinded_cong_env[of ?env' env] by simp
+  from CoreTm_ArrayProj.prems(2) obtain arrTy where
+    arr_typed: "core_term_type env ghost arr = Some arrTy"
+    by (auto split: option.splits CoreType.splits if_splits)
+  have arr_IH: "core_term_type ?env' ghost arr = Some arrTy"
+    using CoreTm_ArrayProj.IH(1) arr_fresh arr_typed CoreTm_ArrayProj.prems(3) by blast
+  have idxs_IH: "\<And>idx idxTy. idx \<in> set idxs \<Longrightarrow>
+    core_term_type env ghost idx = Some idxTy \<Longrightarrow>
+    core_term_type ?env' ghost idx = Some idxTy"
+    using CoreTm_ArrayProj.IH(2) idxs_fresh CoreTm_ArrayProj.prems(3) by blast
+  show ?case
+  proof (cases arrTy)
+    case (CoreTy_Array elemTy dims)
+    from CoreTm_ArrayProj.prems(2) arr_typed CoreTy_Array have
+      len_eq: "length idxs = length dims" and
+      idxs_typed: "list_all (\<lambda>tm. core_term_type env ghost tm
+                     = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxs" and
+      ty_eq: "ty = elemTy"
+      by (auto split: option.splits CoreType.splits if_splits)
+    have idxs_typed': "list_all (\<lambda>tm. core_term_type ?env' ghost tm
+                        = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxs"
+      using idxs_typed idxs_IH by (simp add: list_all_iff)
+    show ?thesis using arr_IH idxs_typed' len_eq ty_eq CoreTy_Array by simp
+  next
+  qed (use CoreTm_ArrayProj.prems(2) arr_typed in \<open>auto split: CoreType.splits\<close>)
 next
   case (CoreTm_VariantProj tm ctorName)
-  then show ?case sorry
+  from CoreTm_VariantProj.prems(1) have tm_fresh: "x \<notin> core_term_free_vars tm" by simp
+  let ?env' = "env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>"
+  have fields_eq: "TE_DataCtors ?env' = TE_DataCtors env" by simp
+  from CoreTm_VariantProj.prems(2) obtain dtName tyArgs where
+    tm_typed: "core_term_type env ghost tm = Some (CoreTy_Name dtName tyArgs)"
+    by (auto split: option.splits CoreType.splits prod.splits if_splits)
+  from CoreTm_VariantProj.prems(2) tm_typed obtain dtName2 metavars payloadTy where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
+    dt_eq: "dtName = dtName2" and
+    len_eq: "length tyArgs = length metavars" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy"
+    by (auto split: option.splits prod.splits if_splits)
+  have tm_IH: "core_term_type ?env' ghost tm = Some (CoreTy_Name dtName tyArgs)"
+    using CoreTm_VariantProj.IH tm_fresh tm_typed CoreTm_VariantProj.prems(3) by blast
+  show ?case using tm_IH ctor_lookup dt_eq len_eq ty_eq fields_eq by simp
 next
   case (CoreTm_Match scrut arms)
   from CoreTm_Match.prems(1) have
@@ -855,20 +955,119 @@ next
   qed
   ultimately show ?case by blast
 next
-  case (CoreTm_VariantCtor x1a x2a tm)
-  then show ?case sorry
+  case (CoreTm_VariantCtor ctorName tyArgs payload)
+  from CoreTm_VariantCtor.prems(1) obtain dtName metavars payloadTy where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, metavars, payloadTy)" and
+    len_eq: "length tyArgs = length metavars" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    payload_typed: "core_term_type env ghost payload = Some (apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy)" and
+    ty_eq: "ty = CoreTy_Name dtName tyArgs"
+    by (auto simp: Let_def split: option.splits prod.splits if_splits)
+  \<comment> \<open>Well-kinded: CoreTy_Name dtName tyArgs requires dtName in TE_Datatypes with matching arity\<close>
+  have ctors_consistent: "tyenv_ctors_consistent env"
+    using CoreTm_VariantCtor.prems(2) tyenv_well_formed_def by blast
+  have dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some (length metavars)"
+    using ctors_consistent ctor_lookup tyenv_ctors_consistent_def by blast
+  have not_tyvar: "dtName |\<notin>| TE_TypeVars env"
+  proof
+    assume "dtName |\<in>| TE_TypeVars env"
+    hence "dtName |\<in>| TE_TypeVars env |\<inter>| fmdom (TE_Datatypes env)"
+      using dt_lookup by (simp add: fmdomI)
+    moreover have "TE_TypeVars env |\<inter>| fmdom (TE_Datatypes env) = {||}"
+      using CoreTm_VariantCtor.prems(2) tyenv_well_formed_def
+        tyenv_tyvars_datatypes_disjoint_def by blast
+    ultimately show False by simp
+  qed
+  have wk: "is_well_kinded env ty"
+    using ty_eq dt_lookup len_eq tyargs_wk not_tyvar by simp
+  \<comment> \<open>Runtime: CoreTy_Name dtName tyArgs requires list_all is_runtime_type tyArgs\<close>
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type ty"
+  proof
+    assume ng: "ghost = NotGhost"
+    from CoreTm_VariantCtor.prems(1) ng ctor_lookup len_eq have
+      tyargs_rt: "list_all is_runtime_type tyArgs"
+      by (auto simp: Let_def split: option.splits prod.splits if_splits)
+    show "is_runtime_type ty" using ty_eq tyargs_rt by simp
+  qed
+  ultimately show ?case by blast
 next
   case (CoreTm_Record x)
   then show ?case sorry
 next
-  case (CoreTm_RecordProj tm x2a)
-  then show ?case sorry
+  case (CoreTm_RecordProj tm fldName)
+  from CoreTm_RecordProj.prems(1) obtain flds where
+    tm_typed: "core_term_type env ghost tm = Some (CoreTy_Record flds)" and
+    fld_lookup: "map_of flds fldName = Some ty"
+    by (auto split: option.splits CoreType.splits)
+  have IH: "is_well_kinded env (CoreTy_Record flds) \<and>
+            (ghost = NotGhost \<longrightarrow> is_runtime_type (CoreTy_Record flds))"
+    using CoreTm_RecordProj.IH tm_typed CoreTm_RecordProj.prems(2) by blast
+  have fld_in_set: "ty \<in> snd ` set flds"
+    using fld_lookup
+    by (metis Range_iff Range_snd map_of_SomeD)
+  have wk: "is_well_kinded env ty"
+    using IH fld_in_set by (auto simp: list_all_iff)
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type ty"
+    using IH fld_in_set by (auto simp: list_all_iff)
+  ultimately show ?case by blast
 next
-  case (CoreTm_ArrayProj tm x2a)
-  then show ?case sorry
+  case (CoreTm_ArrayProj arr idxs)
+  from CoreTm_ArrayProj.prems(1) obtain elemTy dims where
+    arr_typed: "core_term_type env ghost arr = Some (CoreTy_Array elemTy dims)" and
+    ty_eq: "ty = elemTy"
+    by (auto split: option.splits CoreType.splits if_splits)
+  have IH: "is_well_kinded env (CoreTy_Array elemTy dims) \<and>
+            (ghost = NotGhost \<longrightarrow> is_runtime_type (CoreTy_Array elemTy dims))"
+    using CoreTm_ArrayProj.IH(1) arr_typed CoreTm_ArrayProj.prems(2) by blast
+  have wk: "is_well_kinded env ty"
+    using IH ty_eq by simp
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type ty"
+    using IH ty_eq by simp
+  ultimately show ?case by blast
 next
-  case (CoreTm_VariantProj tm x2a)
-  then show ?case sorry
+  case (CoreTm_VariantProj tm ctorName)
+  from CoreTm_VariantProj.prems(1) obtain dtName tyArgs where
+    tm_typed: "core_term_type env ghost tm = Some (CoreTy_Name dtName tyArgs)"
+    by (auto split: option.splits CoreType.splits prod.splits if_splits)
+  from CoreTm_VariantProj.prems(1) tm_typed obtain dtName2 metavars payloadTy where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
+    dt_eq: "dtName = dtName2" and
+    len_eq: "length tyArgs = length metavars" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy"
+    by (auto split: option.splits prod.splits if_splits)
+  \<comment> \<open>Well-kinded: apply_subst preserves well-kindedness\<close>
+  have payload_wk: "is_well_kinded env payloadTy"
+    using CoreTm_VariantProj.prems(2) ctor_lookup tyenv_well_formed_def
+      tyenv_payloads_well_kinded_def by blast
+  have tm_IH: "is_well_kinded env (CoreTy_Name dtName tyArgs) \<and>
+               (ghost = NotGhost \<longrightarrow> is_runtime_type (CoreTy_Name dtName tyArgs))"
+    using CoreTm_VariantProj.IH tm_typed CoreTm_VariantProj.prems(2) by blast
+  hence tyargs_wk: "list_all (is_well_kinded env) tyArgs"
+  proof -
+    have ctors_consistent: "tyenv_ctors_consistent env"
+      using CoreTm_VariantProj.prems(2) tyenv_well_formed_def by blast
+    have dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some (length metavars)"
+      using ctors_consistent ctor_lookup dt_eq tyenv_ctors_consistent_def by blast
+    have not_tyvar: "dtName |\<notin>| TE_TypeVars env"
+    proof
+      assume "dtName |\<in>| TE_TypeVars env"
+      hence "dtName |\<in>| TE_TypeVars env |\<inter>| fmdom (TE_Datatypes env)"
+        using dt_lookup by (simp add: fmdomI)
+      moreover have "TE_TypeVars env |\<inter>| fmdom (TE_Datatypes env) = {||}"
+        using CoreTm_VariantProj.prems(2) tyenv_well_formed_def
+          tyenv_tyvars_datatypes_disjoint_def by blast
+      ultimately show False by simp
+    qed
+    from tm_IH show ?thesis using dt_lookup not_tyvar by simp
+  qed
+  have subst_wk: "metasubst_well_kinded env (fmap_of_list (zip metavars tyArgs))"
+    using tyargs_wk metasubst_well_kinded_from_zip by blast
+  have wk: "is_well_kinded env ty"
+    using ty_eq payload_wk subst_wk apply_subst_preserves_well_kinded by blast
+  \<comment> \<open>Runtime: need tyenv_payloads_runtime (not yet in tyenv_well_formed)
+     TODO: Add tyenv_payloads_runtime to tyenv_well_formed to close this sorry\<close>
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type ty" sorry
+  ultimately show ?case by blast
 next
   case (CoreTm_Match scrut arms)
   from CoreTm_Match.prems(1) obtain scrutTy where
