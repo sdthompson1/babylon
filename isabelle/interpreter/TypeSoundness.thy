@@ -1905,6 +1905,135 @@ proof -
 qed
 
 
+lemma concat_map_singleton:
+  "concat (map (\<lambda>x. [f x]) xs) = map f xs"
+  by (induction xs) auto
+
+(* Type soundness for CoreTm_LitArray *)
+lemma type_soundness_lit_array:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env"
+    and wf_env: "tyenv_well_formed env"
+    and IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+    and typing: "core_term_type env NotGhost (CoreTm_LitArray elemTy tms) = Some ty"
+  shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_LitArray elemTy tms))"
+proof -
+  (* Extract facts from typing *)
+  from typing have
+    wk: "is_well_kinded env elemTy" and
+    rt: "is_runtime_type env elemTy" and
+    all_typed: "list_all (\<lambda>tm. core_term_type env NotGhost tm = Some elemTy) tms" and
+    len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    by (auto split: if_splits)
+
+  (* Set up list IH precondition *)
+  define types where "types = map (core_term_type env NotGhost) tms"
+  have types_eq: "map (core_term_type env NotGhost) tms = types"
+    by (simp add: types_def)
+  have all_some: "list_all (\<lambda>ty. ty \<noteq> None) types"
+    using all_typed by (auto simp: types_def list_all_iff)
+  have the_types: "map the types = replicate (length tms) elemTy"
+    using all_typed by (auto simp: types_def list_all_iff intro!: nth_equalityI)
+
+  (* Apply list IH *)
+  from IH_list[OF state_env wf_env, of tms types] types_eq all_some
+  have list_sound: "sound_term_results env (replicate (length tms) elemTy)
+                      (interp_term_list fuel state tms)"
+    using the_types by simp
+
+  (* Case split on list evaluation *)
+  show ?thesis
+  proof (cases "interp_term_list fuel state tms")
+    case (Inl err)
+    then have "interp_term (Suc fuel) state (CoreTm_LitArray elemTy tms) = Inl err" by simp
+    with list_sound Inl show ?thesis by auto
+  next
+    case (Inr vals)
+    from list_sound Inr
+    have vals_typed: "list_all2 (value_has_type env) vals (replicate (length tms) elemTy)" by simp
+    hence len_vals: "length vals = length tms" by (auto dest: list_all2_lengthD)
+    hence vals_elem_typed: "\<And>i. i < length vals \<Longrightarrow> value_has_type env (vals ! i) elemTy"
+      using vals_typed by (auto simp: list_all2_conv_all_nth)
+
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_LitArray elemTy tms) =
+          Inr (make_1d_array vals)"
+      using Inr by simp
+
+    (* Show make_1d_array vals has the right type *)
+    define n where "n = int (length vals)"
+    define fm where "fm = fmap_of_list (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals)"
+
+    have make_eq: "make_1d_array vals = CV_Array [n] fm"
+      by (simp add: n_def fm_def)
+
+    (* sizes_valid *)
+    have n_nonneg: "n \<ge> 0" by (simp add: n_def)
+    have n_fits: "n \<le> snd (int_range Unsigned IntBits_64)"
+      using len_ok len_vals by (simp add: n_def)
+    have sv: "sizes_valid [n]"
+      using n_nonneg n_fits by (simp add: sizes_valid_def)
+
+    (* fmap_matches_sizes *)
+    have fm_dom: "fmdom fm = fset_of_list (all_indices [n])"
+    proof -
+      have keys: "map (\<lambda>i. [int i]) [0..<length vals] = all_indices [n]"
+      proof -
+        have "all_indices [n] = concat (map (\<lambda>i. [[i]]) (map int [0..<nat n]))"
+          by (simp add: Let_def)
+        also have "... = map (\<lambda>i. [i]) (map int [0..<nat n])"
+          by (metis TypeSoundness.concat_map_singleton)
+        also have "... = map (\<lambda>i. [int i]) [0..<nat n]" by (simp add: comp_def)
+        also have "[0..<nat n] = [0..<length vals]" using n_nonneg by (simp add: n_def)
+        finally show ?thesis by simp
+      qed
+      have "fmdom fm = fset_of_list (map fst (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals))"
+        unfolding fm_def by simp
+      also have "... = fset_of_list (map (\<lambda>i. [int i]) [0..<length vals])"
+        by (simp add: map_fst_zip_take len_vals)
+      also have "... = fset_of_list (all_indices [n])"
+        using keys by simp
+      finally show ?thesis .
+    qed
+    have fms: "fmap_matches_sizes [n] fm"
+      by (simp add: fmap_matches_sizes_def sv fm_dom)
+
+    (* sizes_match_dims *)
+    have smd: "sizes_match_dims [n] [CoreDim_Fixed (int (length tms))]"
+      by (simp add: n_def len_vals)
+
+    (* array_dims_well_kinded *)
+    have adwk: "array_dims_well_kinded [CoreDim_Fixed (int (length tms))]"
+      using len_ok by (simp add: array_dims_well_kinded_def)
+
+    (* All values in fmap have type elemTy *)
+    have fm_vals_typed: "\<forall>idx val. fmlookup fm idx = Some val \<longrightarrow> value_has_type env val elemTy"
+    proof (intro allI impI)
+      fix idx val assume lkup: "fmlookup fm idx = Some val"
+      hence "map_of (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals) idx = Some val"
+        unfolding fm_def by (simp add: fmlookup_of_list)
+      hence "(idx, val) \<in> set (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals)"
+        by (rule map_of_SomeD)
+      hence "val \<in> set vals" by (auto simp: set_zip)
+      then obtain i where "i < length vals" and "val = vals ! i"
+        by (auto simp: in_set_conv_nth)
+      thus "value_has_type env val elemTy"
+        using vals_elem_typed by simp
+    qed
+
+    have "value_has_type env (CV_Array [n] fm) (CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))])"
+      using wk rt fm_vals_typed adwk fms smd by simp
+
+    with interp_eq make_eq ty_eq show ?thesis
+      using sound_term_result.simps(2) by auto
+  qed
+qed
+
+
 (*-----------------------------------------------------------------------------*)
 (* Main type soundness theorem *)
 (*-----------------------------------------------------------------------------*)
@@ -1974,8 +2103,17 @@ next
         case (CoreTm_LitInt i)
         then show ?thesis using typing by auto
       next
-        case (CoreTm_LitArray elemTms)
-        then show ?thesis sorry  (* TODO *)
+        case (CoreTm_LitArray elemTy elemTms)
+        have IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                map (core_term_type env' NotGhost) tms' = types' \<and>
+                list_all (\<lambda>ty. ty \<noteq> None) types' \<Longrightarrow>
+                sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
+          by (simp add: Suc.IH(2) "1.prems"(1,2))
+        from CoreTm_LitArray show ?thesis
+          using type_soundness_lit_array[OF "1.prems"(1,2) IH_list] typing
+          by blast
   
       next
         (* Variable/constant lookup *)
@@ -2206,23 +2344,6 @@ next
 
       show "sound_lvalue_result state env ty (interp_lvalue (Suc fuel) state tm)"
       proof (cases tm)
-        (* Non-lvalue cases: is_writable_lvalue is False, contradiction *)
-        case (CoreTm_LitBool x) then show ?thesis using writable by simp
-      next case (CoreTm_LitInt x) then show ?thesis using writable by simp
-      next case (CoreTm_LitArray x) then show ?thesis using writable by simp
-      next case (CoreTm_Cast x1 x2) then show ?thesis using writable by simp
-      next case (CoreTm_Unop x1 x2) then show ?thesis using writable by simp
-      next case (CoreTm_Binop x1 x2 x3) then show ?thesis using writable by simp
-      next case (CoreTm_Let x1 x2 x3) then show ?thesis using writable by simp
-      next case (CoreTm_Quantifier x1 x2 x3 x4) then show ?thesis using writable by simp
-      next case (CoreTm_FunctionCall x1 x2 x3) then show ?thesis using writable by simp
-      next case (CoreTm_VariantCtor x1 x2 x3) then show ?thesis using writable by simp
-      next case (CoreTm_Record x) then show ?thesis using writable by simp
-      next case (CoreTm_Match x1 x2) then show ?thesis using writable by simp
-      next case (CoreTm_Sizeof x) then show ?thesis using writable by simp
-      next case (CoreTm_Allocated x) then show ?thesis using writable by simp
-      next case (CoreTm_Old x) then show ?thesis using writable by simp
-      next
         (* CoreTm_Var: base case for lvalues *)
         case (CoreTm_Var varName)
         from typing CoreTm_Var obtain varTy where
@@ -2531,7 +2652,8 @@ next
             then show ?thesis using interp_eq addr_valid by simp
           qed
         qed
-      qed
+      (* Non-lvalue cases are contradictions since is_writable_lvalue returns False *)
+      qed (use writable in \<open>simp_all\<close>)
     qed
   next
     case 4

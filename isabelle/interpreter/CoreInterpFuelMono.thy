@@ -495,20 +495,20 @@ next
     by (metis Suc_le_D interp_term.simps(3))
 next
   (* interp_term (Suc fuel) LitArray *)
-  case (4 fuel state tms)
+  case (4 fuel state elemTy tms)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_term (Suc fuel) state (CoreTm_LitArray tms) \<noteq> Inl InsufficientFuel"
+    assume noFuel: "interp_term (Suc fuel) state (CoreTm_LitArray elemTy tms) \<noteq> Inl InsufficientFuel"
     hence sub_noFuel: "interp_term_list fuel state tms \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     with "4.IH" have IH: "\<forall>f'\<ge>fuel. interp_term_list f' state tms = interp_term_list fuel state tms"
       by blast
     from IH f''_ge have "interp_term_list f'' state tms = interp_term_list fuel state tms"
       by blast
-    with f'_eq show "interp_term f' state (CoreTm_LitArray tms) = interp_term (Suc fuel) state (CoreTm_LitArray tms)"
+    with f'_eq show "interp_term f' state (CoreTm_LitArray elemTy tms) = interp_term (Suc fuel) state (CoreTm_LitArray elemTy tms)"
       by simp
   qed
 next
@@ -901,7 +901,7 @@ next
       case (CoreTm_LitInt x)
       thus ?thesis using f'_eq by simp
     next
-      case (CoreTm_LitArray x)
+      case (CoreTm_LitArray x1 x2)
       thus ?thesis using f'_eq by simp
     next
       case (CoreTm_Cast x1 x2)

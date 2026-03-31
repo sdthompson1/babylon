@@ -334,7 +334,7 @@ where
     (case get_type_for_int i of
       Some (sign, bits) \<Rightarrow> Inr (CV_FiniteInt sign bits i)
     | None \<Rightarrow> Inl TypeError)"
-| "interp_term (Suc fuel) state (CoreTm_LitArray tms) = 
+| "interp_term (Suc fuel) state (CoreTm_LitArray _ tms) =
     (case interp_term_list fuel state tms of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (make_1d_array vals))"

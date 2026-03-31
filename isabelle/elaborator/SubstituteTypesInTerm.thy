@@ -7,8 +7,8 @@ begin
 fun apply_subst_to_term :: "MetaSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
   "apply_subst_to_term subst (CoreTm_LitBool b) = CoreTm_LitBool b"
 | "apply_subst_to_term subst (CoreTm_LitInt i) = CoreTm_LitInt i"
-| "apply_subst_to_term subst (CoreTm_LitArray tms) =
-    CoreTm_LitArray (map (apply_subst_to_term subst) tms)"
+| "apply_subst_to_term subst (CoreTm_LitArray elemTy tms) =
+    CoreTm_LitArray (apply_subst subst elemTy) (map (apply_subst_to_term subst) tms)"
 | "apply_subst_to_term subst (CoreTm_Var name) = CoreTm_Var name"
 | "apply_subst_to_term subst (CoreTm_Cast ty tm) =
     CoreTm_Cast (apply_subst subst ty) (apply_subst_to_term subst tm)"
@@ -57,7 +57,7 @@ lemma map_apply_subst_to_term_empty:
 lemma apply_subst_to_term_empty [simp]:
   "apply_subst_to_term fmempty tm = tm"
 proof (induction tm)
-  case (CoreTm_LitArray tms)
+  case (CoreTm_LitArray elemTy tms)
   thus ?case using map_apply_subst_to_term_empty by simp
 next
   case (CoreTm_FunctionCall fnName tyArgs args)
@@ -94,27 +94,6 @@ lemma apply_subst_to_term_compose:
   "apply_subst_to_term s2 (apply_subst_to_term s1 tm) =
    apply_subst_to_term (compose_subst s2 s1) tm"
 proof (induction tm)
-  case (CoreTm_Cast ty tm)
-  thus ?case by (simp add: compose_subst_correct[symmetric])
-next
-  case (CoreTm_Quantifier q var ty body)
-  thus ?case by (simp add: compose_subst_correct[symmetric])
-next
-  case (CoreTm_FunctionCall fnName tyArgs args)
-  have "map (apply_subst s2) (map (apply_subst s1) tyArgs) =
-        map (apply_subst (compose_subst s2 s1)) tyArgs"
-    by (simp add: compose_subst_correct[symmetric])
-  moreover have "map (apply_subst_to_term s2) (map (apply_subst_to_term s1) args) =
-                 map (apply_subst_to_term (compose_subst s2 s1)) args"
-    using CoreTm_FunctionCall by (induction args) auto
-  ultimately show ?case by simp
-next
-  case (CoreTm_VariantCtor ctorName tyArgs arg)
-  have "map (apply_subst s2) (map (apply_subst s1) tyArgs) =
-        map (apply_subst (compose_subst s2 s1)) tyArgs"
-    by (simp add: compose_subst_correct[symmetric])
-  thus ?case using CoreTm_VariantCtor by simp
-next
   case (CoreTm_Record flds)
   have "map (\<lambda>(name, tm). (name, apply_subst_to_term s2 tm))
             (map (\<lambda>(name, tm). (name, apply_subst_to_term s1 tm)) flds) =
@@ -140,7 +119,7 @@ next
     thus ?thesis by (induction cases) auto
   qed
   thus ?case using CoreTm_Match.IH by simp
-qed simp_all
+qed (simp_all add: compose_subst_correct)
 
 
 (* If a term has type ty, then apply_subst_to_term subst tm has type (apply_subst subst ty).
@@ -159,7 +138,7 @@ next
   case (CoreTm_LitInt i)
   then show ?case by (auto split: option.splits)
 next
-  case (CoreTm_LitArray tms)
+  case (CoreTm_LitArray elemTy tms)
   (* Not yet implemented in core_term_type *)
   then show ?case sorry
 next
@@ -295,7 +274,7 @@ qed
 lemma apply_subst_to_term_free_vars:
   "core_term_free_vars (apply_subst_to_term subst tm) = core_term_free_vars tm"
 proof (induction tm)
-  case (CoreTm_LitArray tms)
+  case (CoreTm_LitArray elemTy tms)
   then show ?case by (induction tms) auto
 next
   case (CoreTm_FunctionCall fnName tyArgs args)

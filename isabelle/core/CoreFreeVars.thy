@@ -6,7 +6,7 @@ begin
 fun core_term_free_vars :: "CoreTerm \<Rightarrow> string set" where
   "core_term_free_vars (CoreTm_LitBool _) = {}"
 | "core_term_free_vars (CoreTm_LitInt _) = {}"
-| "core_term_free_vars (CoreTm_LitArray tms) = \<Union>(set (map core_term_free_vars tms))"
+| "core_term_free_vars (CoreTm_LitArray _ tms) = \<Union>(set (map core_term_free_vars tms))"
 | "core_term_free_vars (CoreTm_Var name) = {name}"
 | "core_term_free_vars (CoreTm_Cast _ tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Unop _ tm) = core_term_free_vars tm"

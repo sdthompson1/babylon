@@ -63,7 +63,7 @@ datatype CoreBinop =
 datatype CoreTerm =
   CoreTm_LitBool bool
   | CoreTm_LitInt int
-  | CoreTm_LitArray "CoreTerm list"  (* one-dimensional array *)
+  | CoreTm_LitArray CoreType "CoreTerm list"  (* one-dimensional array, with element type *)
   | CoreTm_Var string
   | CoreTm_Cast CoreType CoreTerm
   | CoreTm_Unop CoreUnop CoreTerm

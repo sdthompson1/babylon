@@ -101,8 +101,14 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
       Some (sign, bits) \<Rightarrow> Some (CoreTy_FiniteInt sign bits)
     | None \<Rightarrow> None)"
 
-  (* TODO: CoreTm_LitArray *)
-| "core_term_type env ghost (CoreTm_LitArray tms) = undefined"
+  (* Array literals - fixed sized array type *)
+| "core_term_type env ghost (CoreTm_LitArray elemTy tms) =
+    (if is_well_kinded env elemTy
+       \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy)
+       \<and> list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms
+       \<and> int_in_range (int_range Unsigned IntBits_64) (int (length tms))
+     then Some (CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))])
+     else None)"
 
   (* Variables - must be found in TE_TermVars and (in NotGhost mode) cannot be a ghost var *)
 | "core_term_type env ghost (CoreTm_Var name) =
@@ -110,7 +116,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
       Some ty \<Rightarrow> if (ghost = NotGhost \<longrightarrow> name |\<notin>| TE_GhostVars env) then Some ty else None
     | None \<Rightarrow> None)"
 
-  (* Casts - only integet-to-integer for now *)
+  (* Casts - only integer-to-integer for now *)
 | "core_term_type env ghost (CoreTm_Cast targetTy operand) =
     (case core_term_type env ghost operand of
       None \<Rightarrow> None
@@ -160,6 +166,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
           if lhsTy = CoreTy_Bool \<and> rhsTy = CoreTy_Bool then Some CoreTy_Bool else None
         else None
     | _ \<Rightarrow> None)"
+
+  (* Let *)
 | "core_term_type env ghost (CoreTm_Let var rhs body) =
     (case core_term_type env ghost rhs of
       Some rhsTy \<Rightarrow>
@@ -170,8 +178,17 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                                                else fminus (TE_GhostVars env) {|var|}) \<rparr>
              in core_term_type env' ghost body
     | None \<Rightarrow> None)"
+
+  (* Quantifier - Ghost mode only *)
 | "core_term_type env NotGhost (CoreTm_Quantifier _ _ _ _) = None"
-| "core_term_type env Ghost (CoreTm_Quantifier quant var ty body) = undefined"
+| "core_term_type env Ghost (CoreTm_Quantifier quant var varTy body) =
+    (if is_well_kinded env varTy \<and> is_ground varTy
+     then let env' = env \<lparr> TE_TermVars := fmupd var varTy (TE_TermVars env),
+                           TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>
+          in (case core_term_type env' Ghost body of
+                Some CoreTy_Bool \<Rightarrow> Some CoreTy_Bool
+              | _ \<Rightarrow> None)
+     else None)"
 
 (* Function call:
    - Function must exist in environment
@@ -226,15 +243,19 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                     then Some (CoreTy_Name dtName tyArgs)
                     else None))"
 
+  (* Record construction *)
 | "core_term_type env ghost (CoreTm_Record flds) =
     (case those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) of
        None \<Rightarrow> None
      | Some tys \<Rightarrow> Some (CoreTy_Record (zip (map fst flds) tys)))"
 
+  (* Record field projection *)
 | "core_term_type env ghost (CoreTm_RecordProj tm fldName) =
     (case core_term_type env ghost tm of
       Some (CoreTy_Record fieldTypes) \<Rightarrow> map_of fieldTypes fldName
     | _ \<Rightarrow> None)"
+
+  (* Array projection (indexing) *)
 | "core_term_type env ghost (CoreTm_ArrayProj arr idxTms) =
     (case core_term_type env ghost arr of
       Some (CoreTy_Array elemTy dims) \<Rightarrow>
@@ -244,6 +265,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         then Some elemTy
         else None
     | _ \<Rightarrow> None)"
+
+  (* Variant projection (extract payload) - constructor name must match *)
 | "core_term_type env ghost (CoreTm_VariantProj tm ctorName) =
     (case core_term_type env ghost tm of
       Some (CoreTy_Name dtName tyArgs) \<Rightarrow>
@@ -278,6 +301,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                  if list_all (\<lambda>body. core_term_type env ghost body = Some resultTy) (tl bodies)
                  then Some resultTy
                  else None))"
+
+  (* Get size of an array *)
 | "core_term_type env ghost (CoreTm_Sizeof tm) =
     (case core_term_type env ghost tm of
       Some (CoreTy_Array _ dims) \<Rightarrow>
@@ -286,14 +311,14 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else Some (sizeof_type dims)
     | _ \<Rightarrow> None)"
 
-  (* Allocated: only valid in Ghost mode, parameter can be any type, result is bool *)
+  (* Allocated: Ghost only, parameter can be any type, result is bool *)
 | "core_term_type env NotGhost (CoreTm_Allocated _) = None"
 | "core_term_type env Ghost (CoreTm_Allocated tm) =
     (case core_term_type env Ghost tm of
       Some _ \<Rightarrow> Some CoreTy_Bool
     | None \<Rightarrow> None)"
 
-  (* Old: only valid in Ghost mode *)
+  (* Old: Ghost only *)
 | "core_term_type env NotGhost (CoreTm_Old _) = None"
 | "core_term_type env Ghost (CoreTm_Old tm) = core_term_type env Ghost tm"
 
@@ -303,6 +328,20 @@ termination
 proof (relation "measure (\<lambda>(env, ghost, tm). size tm)")
   \<comment> \<open>Well-foundedness\<close>
   show "wf (measure (\<lambda>(env, ghost, tm). size tm))" by simp
+next
+  \<comment> \<open>CoreTm_LitArray - elements are smaller\<close>
+  fix env :: CoreTyEnv
+  fix ghost :: GhostOrNot
+  fix elemTy :: CoreType
+  fix tms :: "CoreTerm list"
+  fix z :: CoreTerm
+  assume "z \<in> set tms"
+  hence "size z < Suc (size_list size tms)"
+    using size_list_estimation
+    by (metis less_not_refl not_less_eq)
+  thus "((env, ghost, z), env, ghost, CoreTm_LitArray elemTy tms)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
 next
   \<comment> \<open>CoreTm_Cast - operand is smaller\<close>
   fix env :: CoreTyEnv
@@ -430,6 +469,15 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
+  \<comment> \<open>CoreTm_Quantifier - body is smaller (with extended env)\<close>
+  fix env :: CoreTyEnv
+  fix quant var varTy body x
+  assume "x = env \<lparr> TE_TermVars := fmupd var varTy (TE_TermVars env),
+                     TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>"
+  show "((x, Ghost, body), env, Ghost, CoreTm_Quantifier quant var varTy body)
+        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
+    by simp
+next
   \<comment> \<open>CoreTm_Let - body is smaller (with extended env)\<close>
   fix env :: CoreTyEnv
   fix ghost :: GhostOrNot
@@ -520,8 +568,36 @@ next
   case (CoreTm_LitInt i)
   then show ?case by (auto split: option.splits)
 next
-  case (CoreTm_LitArray tms)
-  then show ?case sorry
+  case (CoreTm_LitArray elemTy tms)
+  from CoreTm_LitArray.prems(1) have tms_fresh:
+    "\<forall>tm \<in> set tms. x \<notin> core_term_free_vars tm" by auto
+  let ?env' = "env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>"
+  from CoreTm_LitArray.prems(2) have
+    wk: "is_well_kinded env elemTy" and
+    rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
+    all_typed: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms" and
+    len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))"
+    by (auto split: if_splits)
+  have wk': "is_well_kinded ?env' elemTy"
+    using wk is_well_kinded_cong_env[of ?env' env] by simp
+  have rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' elemTy"
+    using rt is_runtime_type_cong_env[of ?env' env] by simp
+  have all_typed': "list_all (\<lambda>tm. core_term_type
+      (env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>)
+      ghost tm = Some elemTy) tms"
+  proof (simp add: list_all_iff, intro ballI)
+    fix tm assume "tm \<in> set tms"
+    hence "x \<notin> core_term_free_vars tm" using tms_fresh by auto
+    moreover have "core_term_type env ghost tm = Some elemTy"
+      using all_typed \<open>tm \<in> set tms\<close> by (simp add: list_all_iff)
+    ultimately show "core_term_type
+        (env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>)
+        ghost tm = Some elemTy"
+      using CoreTm_LitArray.IH[OF \<open>tm \<in> set tms\<close>] CoreTm_LitArray.prems(3) by blast
+  qed
+  from CoreTm_LitArray.prems(2) have ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    by (auto split: if_splits)
+  show ?case using wk' rt' all_typed' len_ok ty_eq by auto
 next
   case (CoreTm_Var name)
   \<comment> \<open>x \<noteq> name because x \<notin> {name}\<close>
@@ -653,7 +729,71 @@ next
   show ?case using rhs_IH rhs_ground body_IH by (cases "ghost = Ghost") (auto simp: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
-  then show ?case sorry
+  from CoreTm_Quantifier.prems(1) have
+    body_fresh: "x \<noteq> var \<longrightarrow> x \<notin> core_term_free_vars body" by auto
+  \<comment> \<open>NotGhost case is contradictory\<close>
+  from CoreTm_Quantifier.prems(2) have ghost_eq: "ghost = Ghost"
+    by (cases ghost) (auto simp: Let_def)
+  from CoreTm_Quantifier.prems(2) ghost_eq have
+    varTy_wk: "is_well_kinded env varTy" and
+    varTy_ground: "is_ground varTy"
+    by (auto simp: Let_def split: option.splits if_splits)
+  let ?env_q = "env \<lparr> TE_TermVars := fmupd var varTy (TE_TermVars env),
+                      TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>"
+  from CoreTm_Quantifier.prems(2) ghost_eq varTy_wk varTy_ground have
+    body_typed: "core_term_type ?env_q Ghost body = Some CoreTy_Bool" and
+    ty_eq: "ty = CoreTy_Bool"
+    by (auto simp: Let_def split: option.splits CoreType.splits if_splits)
+  let ?env' = "env \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars env), TE_GhostVars := gv' \<rparr>"
+  \<comment> \<open>is_well_kinded and is_ground are preserved since env update only changes TE_TermVars/GhostVars\<close>
+  have varTy_wk': "is_well_kinded ?env' varTy"
+    using varTy_wk is_well_kinded_cong_env[of ?env' env] by simp
+  \<comment> \<open>IH on body\<close>
+  let ?gv_q' = "finsert var gv'"
+  let ?env_q' = "env \<lparr> TE_TermVars := fmupd var varTy (fmupd x ty' (TE_TermVars env)),
+                       TE_GhostVars := ?gv_q' \<rparr>"
+  have body_IH: "core_term_type ?env_q' Ghost body = Some CoreTy_Bool"
+  proof (cases "x = var")
+    case True
+    have "fmupd var varTy (fmupd x ty' (TE_TermVars env)) = fmupd var varTy (TE_TermVars env)"
+      using True by simp
+    moreover have "?gv_q' = finsert var (TE_GhostVars env)"
+    proof -
+      have "\<And>y. y |\<in>| ?gv_q' \<longleftrightarrow> y |\<in>| finsert var (TE_GhostVars env)"
+      proof -
+        fix y show "y |\<in>| ?gv_q' \<longleftrightarrow> y |\<in>| finsert var (TE_GhostVars env)"
+        proof (cases "y = var")
+          case True then show ?thesis by auto
+        next
+          case False hence "y \<noteq> x" using \<open>x = var\<close> by simp
+          then show ?thesis using CoreTm_Quantifier.prems(3) by auto
+        qed
+      qed
+      thus ?thesis by (simp add: fset_eqI)
+    qed
+    ultimately show ?thesis using body_typed by simp
+  next
+    case False
+    hence body_fresh': "x \<notin> core_term_free_vars body" using body_fresh by blast
+    have gv_cond: "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| ?gv_q' \<longleftrightarrow> y |\<in>| TE_GhostVars ?env_q)"
+    proof (intro allI impI)
+      fix y assume "y \<noteq> x"
+      show "y |\<in>| ?gv_q' \<longleftrightarrow> y |\<in>| TE_GhostVars ?env_q"
+      proof (cases "y = var")
+        case True then show ?thesis by auto
+      next
+        case False then show ?thesis using CoreTm_Quantifier.prems(3) \<open>y \<noteq> x\<close> by auto
+      qed
+    qed
+    have body_in_ext: "core_term_type
+        (?env_q \<lparr> TE_TermVars := fmupd x ty' (TE_TermVars ?env_q),
+                  TE_GhostVars := ?gv_q' \<rparr>)
+        Ghost body = Some CoreTy_Bool"
+      using CoreTm_Quantifier.IH[OF body_fresh' body_typed gv_cond] .
+    show ?thesis using body_in_ext False by (simp add: fmupd_reorder_neq)
+  qed
+  show ?case using varTy_wk' varTy_ground body_IH ty_eq ghost_eq
+    by (auto simp: Let_def)
 next
   case (CoreTm_FunctionCall fnName tyArgs tmArgs)
   from CoreTm_FunctionCall.prems(1) have
@@ -951,8 +1091,17 @@ next
   case (CoreTm_LitInt i)
   then show ?case by (auto split: option.splits)
 next
-  case (CoreTm_LitArray x)
-  then show ?case sorry
+  case (CoreTm_LitArray elemTy tms)
+  from CoreTm_LitArray.prems(1) have
+    wk: "is_well_kinded env elemTy" and
+    rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
+    len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    by (auto split: if_splits)
+  have "is_well_kinded env ty" using wk len_ok ty_eq
+    by (simp add: array_dims_well_kinded_def)
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty" using rt ty_eq by simp
+  ultimately show ?case by blast
 next
   case (CoreTm_Var name)
   then obtain varTy where
@@ -1040,8 +1189,12 @@ next
   ultimately show ?case
     by (simp add: \<open>is_well_kinded env ty\<close>)
 next
-  case (CoreTm_Quantifier x1a x2a x3a tm)
-  then show ?case sorry
+  case (CoreTm_Quantifier quant var varTy body)
+  from CoreTm_Quantifier.prems(1) have "ghost = Ghost"
+    by (cases ghost) (auto simp: Let_def split: option.splits if_splits)
+  with CoreTm_Quantifier.prems(1) have "ty = CoreTy_Bool"
+    by (auto simp: Let_def split: option.splits CoreType.splits if_splits)
+  thus ?case by simp
 next
   case (CoreTm_FunctionCall fnName tyArgs tmArgs)
   from CoreTm_FunctionCall.prems(1) obtain funInfo where
