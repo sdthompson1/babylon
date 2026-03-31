@@ -513,18 +513,22 @@ where
 | "interp_statement 0 _ _ = Inl InsufficientFuel"
 
   (* Variable declaration *)
-| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost _ _ _ _) = Inr (Continue state)"
+| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost varName _ _ _) =
+    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                           IS_Refs := fmdrop varName (IS_Refs state) \<rparr>))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
     (case interp_term fuel state initialTm of
       Inl err \<Rightarrow> Inl err
     | Inr initialVal \<Rightarrow>
         (let (state', addr) = alloc_store state initialVal
-        in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>))))"
+        in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                    IS_Refs := fmdrop varName (IS_Refs state') \<rparr>))))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case interp_lvalue fuel state lvalueTm of
       Inl err \<Rightarrow> Inl err
     | Inr addrAndPath \<Rightarrow> 
-        Inr (Continue (state \<lparr> IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> )))"
+        Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                               IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> )))"
 
   (* Assignment *)
 | "interp_statement (Suc _) state (CoreStmt_Assign Ghost _ _) = Inr (Continue state)"
