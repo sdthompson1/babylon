@@ -69,14 +69,14 @@ definition tyenv_ctors_by_type_consistent :: "CoreTyEnv \<Rightarrow> bool" wher
 definition tyenv_fun_types_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_fun_types_well_kinded env =
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
-      (\<forall>ty \<in> set (FI_TmArgs info). is_well_kinded env ty) \<and>
+      (\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded env ty) \<and>
       is_well_kinded env (FI_ReturnType info))"
 
 (* Function arg and return types have the expected metavars *)
 definition tyenv_funs_have_expected_metavars :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_funs_have_expected_metavars env =
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
-      (\<forall>ty \<in> set (FI_TmArgs info). type_metavars ty \<subseteq> set (FI_TyArgs info)) \<and>
+      (\<forall>ty \<in> fst ` set (FI_TmArgs info). type_metavars ty \<subseteq> set (FI_TyArgs info)) \<and>
       type_metavars (FI_ReturnType info) \<subseteq> set (FI_TyArgs info))"
 
 (* Function type arguments (metavars) are distinct *)
@@ -90,7 +90,7 @@ definition tyenv_fun_ghost_constraint :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_fun_ghost_constraint env =
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<and>
     (FI_Ghost info) = NotGhost \<longrightarrow>
-      (\<forall>ty \<in> set (FI_TmArgs info). is_runtime_type env ty) \<and>
+      (\<forall>ty \<in> fst ` set (FI_TmArgs info). is_runtime_type env ty) \<and>
       is_runtime_type env (FI_ReturnType info))"
 
 (* For non-ghost datatypes, all constructor payload types must be runtime.

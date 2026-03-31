@@ -117,7 +117,7 @@ lemma determine_fun_call_type_correct:
          \<and> length newTyArgs = length (FI_TyArgs funInfo)
          \<and> list_all (is_well_kinded env) newTyArgs
          \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) newTyArgs)
-         \<and> expArgTypes = map (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)))
+         \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                              (FI_TmArgs funInfo)
          \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs))
                                   (FI_ReturnType funInfo)"
@@ -142,7 +142,7 @@ proof (cases callTm)
     let ?genTyArgs = "map CoreTy_Meta [next_mv..<next_mv + ?numTyParams]"
     from assms(1) BabTm_Name fn_lookup ghost_ok True
     have results: "newTyArgs = ?genTyArgs"
-                  "expArgTypes = map (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)))
+                  "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)) ty)
                                      (FI_TmArgs funInfo)"
                   "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs))
                                          (FI_ReturnType funInfo)"
@@ -167,7 +167,7 @@ proof (cases callTm)
            (auto simp: Let_def split: if_splits)
       from assms(1) BabTm_Name fn_lookup ghost_ok False True elab_tyargs
       have results: "newTyArgs = elabTyArgs"
-                    "expArgTypes = map (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)))
+                    "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)) ty)
                                        (FI_TmArgs funInfo)"
                     "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs))
                                            (FI_ReturnType funInfo)"
@@ -999,8 +999,8 @@ proof -
     using assms(1) by auto
   \<comment> \<open>For each of these 6 ops, elab_single_binop returns CoreTy_Bool on success\<close>
   from \<open>babOp \<in> _\<close> eq show "resultTy = CoreTy_Bool"
-    by (auto simp: check_and_coerce_binop_def Let_def
-             split: prod.splits option.splits if_splits)
+    by (cases babOp; simp add: check_and_coerce_binop_def Let_def
+                      split: prod.splits option.splits if_splits)
 qed
 
 (* If check_comparison_chain_directions succeeds, all ops are comparisons *)
@@ -2099,7 +2099,7 @@ next
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
-    expArgTypes_eq: "expArgTypes = map (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)))
+    expArgTypes_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                                        (FI_TmArgs funInfo)" and
     retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                        (FI_ReturnType funInfo)"
@@ -2143,22 +2143,23 @@ next
   \<comment> \<open>expArgTypes are well-kinded and runtime (from function info)\<close>
   have "tyenv_fun_types_well_kinded env"
     using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_wk: "list_all (is_well_kinded env) (FI_TmArgs funInfo)"
-    using fn_lookup tyenv_fun_types_well_kinded_def by (simp add: list_all_iff)
+  hence fi_args_wk: "list_all (\<lambda>(ty, _). is_well_kinded env ty) (FI_TmArgs funInfo)"
+    using fn_lookup tyenv_fun_types_well_kinded_def by (fastforce simp: list_all_iff)
   have expArgTypes_wk: "list_all (is_well_kinded env) expArgTypes"
     using expArgTypes_eq fi_args_wk tyargs_wk
-    by (simp add: list_all_iff apply_subst_preserves_well_kinded metasubst_well_kinded_from_zip)
+    by (fastforce simp: list_all_iff apply_subst_preserves_well_kinded metasubst_well_kinded_from_zip
+                  split: prod.splits)
 
   have "tyenv_fun_ghost_constraint env"
     using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_rt: "FI_Ghost funInfo = NotGhost \<longrightarrow> list_all (is_runtime_type env) (FI_TmArgs funInfo)"
+  hence fi_args_rt: "FI_Ghost funInfo = NotGhost \<longrightarrow> list_all (\<lambda>(ty, _). is_runtime_type env ty) (FI_TmArgs funInfo)"
     using fn_lookup tyenv_fun_ghost_constraint_def
-    by (metis fi_args_wk list.pred_mono_strong)
+    by (fastforce simp: list_all_iff)
   have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expArgTypes"
   proof
     assume ng: "ghost = NotGhost"
     hence "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
-    hence fi_args_rt': "list_all (is_runtime_type env) (FI_TmArgs funInfo)" using fi_args_rt by simp
+    hence fi_args_rt': "list_all (\<lambda>(ty, _). is_runtime_type env ty) (FI_TmArgs funInfo)" using fi_args_rt by simp
     have tyargs_rt': "list_all (is_runtime_type env) tyArgs" using tyargs_rt ng by simp
     \<comment> \<open>Build a runtime-preserving substitution from tyArgs\<close>
     have subst_rt: "\<forall>ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)). is_runtime_type env ty"
@@ -2178,7 +2179,7 @@ next
     qed
     show "list_all (is_runtime_type env) expArgTypes"
       using expArgTypes_eq fi_args_rt' subst_rt
-      by (simp add: list_all_iff apply_subst_preserves_runtime)
+      by (fastforce simp: list_all_iff apply_subst_preserves_runtime split: prod.splits)
   qed
 
   \<comment> \<open>Apply unify_call_types_correct\<close>
@@ -2233,12 +2234,12 @@ next
   let ?coreTySubst = "fmap_of_list (zip (FI_TyArgs funInfo) ?finalTyArgs)"
 
   \<comment> \<open>Expected arg types in core_term_type\<close>
-  let ?coreExpArgTypes = "map (apply_subst ?coreTySubst) (FI_TmArgs funInfo)"
+  let ?coreExpArgTypes = "map (\<lambda>(ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
 
   \<comment> \<open>Function arg types have metavars only from FI_TyArgs\<close>
   have "tyenv_funs_have_expected_metavars env"
     using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_metavars: "\<forall>ty \<in> set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
+  hence fi_args_metavars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
     using fn_lookup tyenv_funs_have_expected_metavars_def by blast
 
   \<comment> \<open>Function type args are distinct\<close>
@@ -2248,9 +2249,18 @@ next
     using fn_lookup tyenv_fun_metavars_distinct_def by blast
 
   \<comment> \<open>Key: ?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes\<close>
+  let ?argTys = "map fst (FI_TmArgs funInfo)"
+  have fi_args_metavars': "\<forall>t \<in> set ?argTys. type_metavars t \<subseteq> set (FI_TyArgs funInfo)"
+    using fi_args_metavars by auto
+  have coreExpArgTypes_eq: "?coreExpArgTypes = map (apply_subst
+      (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst finalSubst) tyArgs)))) ?argTys"
+    by (induction "FI_TmArgs funInfo") auto
+  have expArgTypes_fst: "expArgTypes = map (apply_subst
+      (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))) ?argTys"
+    using expArgTypes_eq by (induction "FI_TmArgs funInfo") auto
   have core_exp_eq: "?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes"
-    using expArgTypes_eq len_tyargs fi_args_metavars fi_tyargs_distinct
-    by (simp add: map_apply_subst_compose_zip)
+    using len_tyargs fi_args_metavars' fi_tyargs_distinct coreExpArgTypes_eq expArgTypes_fst
+    by (metis map_apply_subst_compose_zip)
 
   \<comment> \<open>From coerce_correct, finalArgTms have these types\<close>
   have args_match: "list_all2 (\<lambda>tm expectedTy.
@@ -2283,7 +2293,8 @@ next
   show ?case
     using result_eq fn_lookup ghost_ok len_finalTyArgs finalTyArgs_wk finalTyArgs_rt
           len_finalArgTms args_match ret_eq
-    by (auto simp: Let_def)
+    sorry \<comment> \<open>TODO: need to show function is pure (all Var args, not impure);
+             requires elaborator to check FI_Impure and Var/Ref status\<close>
 
 next
   \<comment> \<open>Case: BabTm_Tuple (undefined)\<close>

@@ -35,6 +35,12 @@ fun sound_lvalue_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow>
        Inr v \<Rightarrow> value_has_type env v ty
      | Inl err \<Rightarrow> sound_error_result err))"
 
+fun sound_function_call_result :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow>
+    InterpError + ('w InterpState \<times> CoreValue) \<Rightarrow> bool" where
+  "sound_function_call_result env retTy (Inl err) = sound_error_result err"
+| "sound_function_call_result env retTy (Inr (newState, retVal)) =
+    (state_matches_env newState env \<and> value_has_type env retVal retTy)"
+
 
 (*-----------------------------------------------------------------------------*)
 (* Helper lemmas for type soundness *)
@@ -2053,10 +2059,19 @@ theorem type_soundness:
       sound_lvalue_result state env ty (interp_lvalue fuel state tm)"
   and interp_statement_sound:
     "undefined (interp_statement fuel state stmt)"  (* TODO: state properly *)
+  and interp_statement_list_sound:
+    "undefined (interp_statement_list fuel state stmts)"  (* TODO: state properly *)
   and interp_function_call_sound:
-    "undefined (interp_function_call fuel state fnName argTms)"  (* TODO: state properly *)
-using assms 
-proof (induction fuel arbitrary: state env tm ty tms types fnName argTms)
+    "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
+       list_all2 (\<lambda>tm expectedTy.
+           case core_term_type env NotGhost tm of
+             None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+         argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                     (FI_TmArgs funInfo));
+       retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)
+     \<rbrakk> \<Longrightarrow> sound_function_call_result env retTy (interp_function_call fuel state fnName argTms)"
+using assms
+proof (induction fuel arbitrary: state env tm ty tms types fnName argTms stmts funInfo tyArgs retTy)
   case 0
   {
     case 1
@@ -2069,10 +2084,13 @@ proof (induction fuel arbitrary: state env tm ty tms types fnName argTms)
     then show ?case by simp
   next
     case 4
-    then show ?case sorry  (* requires proper definition *)
+    then show ?case sorry  (* TODO: interp_statement_sound *)
   next
     case 5
-    then show ?case sorry  (* requires proper definition *)
+    then show ?case sorry  (* TODO: interp_statement_list_sound *)
+  next
+    case 6
+    then show ?case by simp
   }
 next
   case (Suc fuel)
@@ -2187,8 +2205,97 @@ next
         case (CoreTm_Quantifier x91 x92 x93 x94)
         then show ?thesis using typing by simp
       next
-        case (CoreTm_FunctionCall x101 x102 x103)
-        then show ?thesis sorry
+        case (CoreTm_FunctionCall fnName tyArgs tmArgs)
+        \<comment> \<open>Extract typing facts\<close>
+        from typing CoreTm_FunctionCall obtain funInfo where
+          fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+          len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+          tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+          all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+          not_impure: "\<not> FI_Impure funInfo" and
+          len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
+          ghost_ok: "list_all (is_runtime_type env) tyArgs" and
+          ghost_ok2: "FI_Ghost funInfo \<noteq> Ghost"
+          by (auto simp: Let_def split: option.splits if_splits)
+        let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+        let ?expectedArgTypes = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+        from typing CoreTm_FunctionCall fn_lookup len_tyargs tyargs_wk all_var not_impure
+             len_tmargs ghost_ok ghost_ok2 have
+          args_check: "list_all2 (\<lambda>tm expectedTy.
+              case core_term_type env NotGhost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+            tmArgs ?expectedArgTypes" and
+          ty_eq: "ty = apply_subst ?tySubst (FI_ReturnType funInfo)"
+          by (auto simp: Let_def split: if_splits)
+        \<comment> \<open>Use interp_function_call_sound IH\<close>
+        have IH_fc: "\<And>env' (state' :: 'w InterpState) fnName' argTms' funInfo' tyArgs' retTy'.
+                state_matches_env state' env' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                fmlookup (TE_Functions env') fnName' = Some funInfo' \<Longrightarrow>
+                list_all2 (\<lambda>tm expectedTy.
+                    case core_term_type env' NotGhost tm of
+                      None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                  argTms' (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
+                               (FI_TmArgs funInfo')) \<Longrightarrow>
+                retTy' = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) (FI_ReturnType funInfo') \<Longrightarrow>
+                sound_function_call_result env' retTy' (interp_function_call fuel state' fnName' argTms')"
+          using Suc.IH(6) by simp
+        have fc_sound: "sound_function_call_result env ty
+                          (interp_function_call fuel state fnName tmArgs)"
+          using IH_fc[OF "1.prems"(1,2) fn_lookup args_check ty_eq] by simp
+        \<comment> \<open>The interpreter checks is_pure_fun then calls interp_function_call\<close>
+        have pure: "is_pure_fun state fnName"
+        proof -
+          have "FI_Ghost funInfo = NotGhost" using ghost_ok2 by (cases "FI_Ghost funInfo") auto
+          from "1.prems"(1) fn_lookup this obtain interpFun where
+            if_lookup: "fmlookup (IS_Functions state) fnName = Some interpFun" and
+            fi_match: "fun_info_matches_interp_fun funInfo interpFun"
+            unfolding state_matches_env_def funs_exist_in_state_def
+            using case_optionE by blast
+          from fi_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
+            and vor_match: "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args interpFun)"
+            unfolding fun_info_matches_interp_fun_def by auto
+          have "\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args interpFun)"
+          proof -
+            have "\<And>i. i < length (IF_Args interpFun) \<Longrightarrow> snd (IF_Args interpFun ! i) = Var"
+            proof -
+              fix i assume i_bound: "i < length (IF_Args interpFun)"
+              from vor_match i_bound len_eq
+              have "snd (FI_TmArgs funInfo ! i) = snd (IF_Args interpFun ! i)"
+                by (auto simp: list_all2_conv_all_nth split: prod.splits)
+                   (metis prod.exhaust_sel)
+              moreover have "snd (FI_TmArgs funInfo ! i) = Var"
+              proof -
+                obtain a b where ab: "FI_TmArgs funInfo ! i = (a, b)"
+                  by (cases "FI_TmArgs funInfo ! i")
+                from all_var i_bound len_eq ab have "b = Var"
+                  by (auto simp: list_all_length)
+                thus ?thesis using ab by simp
+              qed
+              ultimately show "snd (IF_Args interpFun ! i) = Var" by simp
+            qed
+            thus ?thesis
+              by (fastforce simp: list_ex_iff in_set_conv_nth split: prod.splits)
+          qed
+          moreover from fi_match not_impure have "\<not> IF_Impure interpFun"
+            unfolding fun_info_matches_interp_fun_def by simp
+          ultimately show ?thesis using if_lookup by simp
+        qed
+        show ?thesis
+        proof (cases "interp_function_call fuel state fnName tmArgs")
+          case (Inl err)
+          from fc_sound Inl have "sound_error_result err" by simp
+          moreover have "interp_term (Suc fuel) state tm = Inl err"
+            using CoreTm_FunctionCall Inl pure by simp
+          ultimately show ?thesis by simp
+        next
+          case (Inr result)
+          obtain newState retVal where result_eq: "result = (newState, retVal)"
+            by (cases result) auto
+          from fc_sound Inr result_eq have "value_has_type env retVal ty" by simp
+          moreover have "interp_term (Suc fuel) state tm = Inr retVal"
+            using CoreTm_FunctionCall Inr result_eq pure by simp
+          ultimately show ?thesis by simp
+        qed
       next
         case (CoreTm_VariantCtor x111 x112 x113)
         then show ?thesis
@@ -2657,10 +2764,13 @@ next
     qed
   next
     case 4
-    then show ?case sorry
+    then show ?case sorry \<comment> \<open>TODO: interp_statement_sound - needs statement typechecking\<close>
   next
     case 5
-    then show ?case sorry
+    then show ?case sorry \<comment> \<open>TODO: interp_statement_list_sound - needs statement typechecking\<close>
+  next
+    case 6
+    then show ?case sorry \<comment> \<open>TODO: interp_function_call_sound - needs statement typechecking\<close>
   }
 qed
 

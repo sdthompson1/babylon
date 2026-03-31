@@ -8,8 +8,8 @@ record FunInfo =
      substituted before using those types) *)
   FI_TyArgs :: "nat list"
 
-  (* Number and type of term arguments *)
-  FI_TmArgs :: "CoreType list"
+  (* Term arguments: type and whether passed by value (Var) or reference (Ref) *)
+  FI_TmArgs :: "(CoreType \<times> VarOrRef) list"
 
   (* Return type *)
   FI_ReturnType :: CoreType
@@ -17,9 +17,8 @@ record FunInfo =
   (* Ghost flag - Ghost functions can only be used in ghost contexts *)
   FI_Ghost :: GhostOrNot
 
-  (* TODO: Impure and Ref information will be needed to elaborate call stmts properly *)
-  (* TODO: We also need to know if the return type was absent in the Bab FunDecl
-     (as opposed to present and elaborated to {}) *)
+  (* Impure flag - impure functions may modify the world state *)
+  FI_Impure :: bool
 
 
 record CoreTyEnv =

@@ -84,7 +84,7 @@ where
                 \<comment> \<open>Now just substitute the resolved type arguments into the original
                    function's argument and return types\<close>
                 let subst = fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs);
-                    newArgTypes = map (apply_subst subst) (FI_TmArgs funInfo);
+                    newArgTypes = map (\<lambda>(ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
                     newRetType = apply_subst subst (FI_ReturnType funInfo)
                 in Inr (fnName, newTyArgs, newArgTypes, newRetType, next_mv'))
     \<comment> \<open>TODO: Check datatypes as well\<close>

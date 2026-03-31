@@ -25,9 +25,11 @@ definition term_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEn
 definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<Rightarrow> bool" where
   "fun_info_matches_interp_fun funInfo interpFun =
     \<comment> \<open>Same number of arguments\<close>
-    (length (FI_TmArgs funInfo) = length (IF_Args interpFun))
-    \<comment> \<open>TODO: Var/Ref status of each argument matches\<close>
-    \<comment> \<open>TODO: Impure flag matches\<close>
+    (length (FI_TmArgs funInfo) = length (IF_Args interpFun) \<and>
+    \<comment> \<open>Var/Ref status of each argument matches\<close>
+    list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
+    \<comment> \<open>Impure flag matches\<close>
+    FI_Impure funInfo = IF_Impure interpFun)
     \<comment> \<open>TODO: for Babylon functions: the IF_Body statement list must have
         an appropriate type (corresponding to the function's return type) in an
         appropriate environment (corresponding to the function's arguments)\<close>

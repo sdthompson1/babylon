@@ -207,11 +207,14 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         \<comment> \<open>In NotGhost mode: check type args are runtime and function is not ghost\<close>
         else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) tyArgs \<or> FI_Ghost funInfo = Ghost)
              then None
+        \<comment> \<open>Term-level calls must be pure: no Ref arguments, not impure\<close>
+        else if \<not> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo) then None
+        else if FI_Impure funInfo then None
         \<comment> \<open>Check number of term arguments\<close>
         else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
         else
           let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
-              expectedArgTypes = map (apply_subst tySubst) (FI_TmArgs funInfo)
+              expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo)
           in \<comment> \<open>Check each term argument has the expected type\<close>
              if list_all2 (\<lambda>tm expectedTy.
                    case core_term_type env ghost tm of
@@ -816,11 +819,13 @@ next
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+    not_impure: "\<not> FI_Impure funInfo" and
     len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs \<and> FI_Ghost funInfo \<noteq> Ghost"
     by (auto simp: Let_def split: option.splits if_splits)
   let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-  let ?expectedArgTypes = "map (apply_subst ?tySubst) (FI_TmArgs funInfo)"
+  let ?expectedArgTypes = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
   from CoreTm_FunctionCall.prems(2) fn_lookup len_tyargs tyargs_wk len_tmargs ghost_ok have
     args_check: "list_all2 (\<lambda>tm expectedTy.
         case core_term_type env ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
@@ -856,7 +861,7 @@ next
   have ghost_ok': "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') tyArgs \<and> FI_Ghost funInfo \<noteq> Ghost"
     using ghost_ok rt_eq by (simp add: list_all_iff)
   show ?case
-    using fn_lookup len_tyargs tyargs_wk' len_tmargs ghost_ok' args_check' ty_eq fields_eq
+    using fn_lookup len_tyargs tyargs_wk' all_var not_impure len_tmargs ghost_ok' args_check' ty_eq fields_eq
     by (simp add: Let_def)
 next
   case (CoreTm_VariantCtor ctorName tyArgs tm)
