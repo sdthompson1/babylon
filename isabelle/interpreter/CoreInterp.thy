@@ -385,7 +385,8 @@ where
       Inl err \<Rightarrow> Inl err
     | Inr rhsVal \<Rightarrow>
         (let (state', addr) = alloc_store state rhsVal;
-             state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>
+             state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                IS_Refs := fmdrop varName (IS_Refs state') \<rparr>
         in interp_term fuel state'' bodyTm))"
 
   (* Function call *)
