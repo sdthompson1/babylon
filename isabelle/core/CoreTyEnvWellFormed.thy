@@ -278,4 +278,25 @@ proof -
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
+(* tyenv_well_formed does not depend on TE_ConstNames *)
+lemma tyenv_well_formed_TE_ConstNames_irrelevant:
+  assumes "tyenv_well_formed env"
+  shows "tyenv_well_formed (env \<lparr> TE_ConstNames := c \<rparr>)"
+proof -
+  let ?env' = "env \<lparr> TE_ConstNames := c \<rparr>"
+  have wk: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
+    using is_well_kinded_cong_env[of ?env' env] by simp
+  have rt: "\<And>ty. is_runtime_type ?env' ty = is_runtime_type env ty"
+    using is_runtime_type_cong_env[of ?env' env] by simp
+  from assms show ?thesis unfolding tyenv_well_formed_def
+    tyenv_vars_well_kinded_def tyenv_vars_ground_def tyenv_vars_runtime_def
+    tyenv_tyvars_datatypes_disjoint_def tyenv_ctors_consistent_def
+    tyenv_payloads_well_kinded_def tyenv_payloads_have_expected_metavars_def
+    tyenv_ctor_metavars_distinct_def tyenv_ctors_by_type_consistent_def
+    tyenv_fun_types_well_kinded_def tyenv_funs_have_expected_metavars_def
+    tyenv_fun_metavars_distinct_def tyenv_fun_ghost_constraint_def
+    tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
+    by (auto simp: wk rt)
+qed
+
 end
