@@ -1,5 +1,5 @@
 theory TypeSoundness
-  imports StateMatchesEnv "../core/CoreTypecheck"
+  imports StateMatchesEnv "../core/CoreStmtTypecheck"
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -40,6 +40,11 @@ fun sound_function_call_result :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow
   "sound_function_call_result env retTy (Inl err) = sound_error_result err"
 | "sound_function_call_result env retTy (Inr (newState, retVal)) =
     (state_matches_env newState env \<and> value_has_type env retVal retTy)"
+
+fun sound_statement_result :: "CoreTyEnv \<Rightarrow> InterpError + 'w ExecResult \<Rightarrow> bool" where
+  "sound_statement_result env' (Inl err) = sound_error_result err"
+| "sound_statement_result env' (Inr (Continue state')) = state_matches_env state' env'"
+| "sound_statement_result env' (Inr (Return _ _)) = undefined"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -2058,9 +2063,11 @@ theorem type_soundness:
     "is_writable_lvalue env tm \<and> core_term_type env NotGhost tm = Some ty \<longrightarrow>
       sound_lvalue_result state env ty (interp_lvalue fuel state tm)"
   and interp_statement_sound:
-    "undefined (interp_statement fuel state stmt)"  (* TODO: state properly *)
+    "core_statement_type env NotGhost stmt = Some env' \<longrightarrow>
+      sound_statement_result env' (interp_statement fuel state stmt)"
   and interp_statement_list_sound:
-    "undefined (interp_statement_list fuel state stmts)"  (* TODO: state properly *)
+    "core_statement_list_type env NotGhost stmts = Some env' \<longrightarrow>
+      sound_statement_result env' (interp_statement_list fuel state stmts)"
   and interp_function_call_sound:
     "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
        list_all2 (\<lambda>tm expectedTy.
@@ -2071,7 +2078,7 @@ theorem type_soundness:
        retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)
      \<rbrakk> \<Longrightarrow> sound_function_call_result env retTy (interp_function_call fuel state fnName argTms)"
 using assms
-proof (induction fuel arbitrary: state env tm ty tms types fnName argTms stmts funInfo tyArgs retTy)
+proof (induction fuel arbitrary: state env tm ty tms types fnName argTms stmt env' stmts funInfo tyArgs retTy)
   case 0
   {
     case 1
@@ -2084,10 +2091,10 @@ proof (induction fuel arbitrary: state env tm ty tms types fnName argTms stmts f
     then show ?case by simp
   next
     case 4
-    then show ?case sorry  (* TODO: interp_statement_sound *)
+    then show ?case by simp
   next
     case 5
-    then show ?case sorry  (* TODO: interp_statement_list_sound *)
+    then show ?case by simp
   next
     case 6
     then show ?case by simp
@@ -2764,10 +2771,131 @@ next
     qed
   next
     case 4
-    then show ?case sorry \<comment> \<open>TODO: interp_statement_sound - needs statement typechecking\<close>
+    show ?case proof (intro impI)
+      assume typing: "core_statement_type env NotGhost stmt = Some env'"
+      have IH_term: "\<And>env0 (state0 :: 'w InterpState) tm0 ty0.
+                state_matches_env state0 env0 \<Longrightarrow>
+                tyenv_well_formed env0 \<Longrightarrow>
+                core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
+                sound_term_result env0 ty0 (interp_term fuel state0 tm0)"
+        by (simp add: "4.prems"(1,2) Suc.IH(1))
+      show "sound_statement_result env' (interp_statement (Suc fuel) state stmt)"
+      proof (cases stmt)
+        case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
+        then show ?thesis proof (cases varOrRef)
+          case Var
+          then show ?thesis proof (cases declGhost)
+            case NotGhost
+            \<comment> \<open>NotGhost Var VarDecl: evaluates initTm, allocates store\<close>
+            with typing CoreStmt_VarDecl Var have
+              init_ty: "core_term_type env NotGhost initTm = Some varTy"
+              by (auto split: if_splits)
+            from IH_term[OF "4.prems"(1,2) init_ty]
+            have init_sound: "sound_term_result env varTy (interp_term fuel state initTm)" .
+            show ?thesis proof (cases "interp_term fuel state initTm")
+              case (Inl err)
+              with init_sound have "sound_error_result err" by simp
+              with Inl CoreStmt_VarDecl Var NotGhost show ?thesis by simp
+            next
+              case (Inr initialVal)
+              \<comment> \<open>Need to show state_matches_env after alloc and fmupd/fmdrop\<close>
+              with CoreStmt_VarDecl Var NotGhost show ?thesis sorry
+            qed
+          next
+            case Ghost
+            \<comment> \<open>Ghost Var VarDecl: interpreter drops from locals/refs\<close>
+            with typing CoreStmt_VarDecl Var show ?thesis sorry
+          qed
+        next
+          case Ref
+          \<comment> \<open>Ref VarDecl: typechecking is undefined\<close>
+          with typing CoreStmt_VarDecl show ?thesis sorry
+        qed
+      next
+        case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+        then show ?thesis proof (cases assignGhost)
+          case Ghost
+          \<comment> \<open>Ghost Assign: interpreter returns Continue state, env unchanged\<close>
+          from typing CoreStmt_Assign Ghost have "env' = env"
+            by (auto split: if_splits option.splits)
+          with Ghost CoreStmt_Assign "4.prems"(1) show ?thesis by simp
+        next
+          case NotGhost
+          \<comment> \<open>NotGhost Assign: evaluates lhs and rhs, updates store\<close>
+          with typing CoreStmt_Assign show ?thesis sorry
+        qed
+      next
+        case (CoreStmt_Fix _ _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Obtain _ _ _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Use _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Swap _ _ _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Return _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Assert _ _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Assume _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_While _ _ _ _ _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_Match _ _ _) with typing show ?thesis sorry
+      next
+        case (CoreStmt_ShowHide _ _) with typing show ?thesis sorry
+      qed
+    qed
   next
     case 5
-    then show ?case sorry \<comment> \<open>TODO: interp_statement_list_sound - needs statement typechecking\<close>
+    show ?case proof (intro impI)
+      assume typing: "core_statement_list_type env NotGhost stmts = Some env'"
+      have IH_stmt: "\<And>env0 (state0 :: 'w InterpState) stmt0 env0'.
+                state_matches_env state0 env0 \<Longrightarrow>
+                tyenv_well_formed env0 \<Longrightarrow>
+                core_statement_type env0 NotGhost stmt0 = Some env0' \<Longrightarrow>
+                sound_statement_result env0' (interp_statement fuel state0 stmt0)"
+        by (simp add: "5.prems"(1,2) Suc.IH(4))
+      have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) stmts0 env0'.
+                state_matches_env state0 env0 \<Longrightarrow>
+                tyenv_well_formed env0 \<Longrightarrow>
+                core_statement_list_type env0 NotGhost stmts0 = Some env0' \<Longrightarrow>
+                sound_statement_result env0' (interp_statement_list fuel state0 stmts0)"
+        by (simp add: "5.prems"(1,2) Suc.IH(5))
+      show "sound_statement_result env' (interp_statement_list (Suc fuel) state stmts)"
+      proof (cases stmts)
+        case Nil
+        with typing have "env' = env" by simp
+        with "5.prems"(1) show ?thesis using Nil by simp
+      next
+        case (Cons stmt0 stmts0)
+        from typing Cons obtain env_mid where
+          stmt_ty: "core_statement_type env NotGhost stmt0 = Some env_mid" and
+          rest_ty: "core_statement_list_type env_mid NotGhost stmts0 = Some env'"
+          by (auto split: option.splits)
+        from IH_stmt[OF "5.prems"(1,2) stmt_ty]
+        have stmt_sound: "sound_statement_result env_mid (interp_statement fuel state stmt0)" .
+        show ?thesis proof (cases "interp_statement fuel state stmt0")
+          case (Inl err)
+          with stmt_sound have "sound_error_result err" by simp
+          with Inl Cons show ?thesis by simp
+        next
+          case (Inr result)
+          then show ?thesis proof (cases result)
+            case (Continue state')
+            with Inr stmt_sound have sme: "state_matches_env state' env_mid" by simp
+            from core_statement_type_preserves_well_formed[OF stmt_ty "5.prems"(2)]
+            have wf_mid: "tyenv_well_formed env_mid" .
+            from IH_stmts[OF sme wf_mid rest_ty]
+            have "sound_statement_result env' (interp_statement_list fuel state' stmts0)" .
+            with Inr Continue Cons show ?thesis by simp
+          next
+            case (Return state' retVal)
+            with Inr Cons show ?thesis sorry
+          qed
+        qed
+      qed
+    qed
   next
     case 6
     then show ?case sorry \<comment> \<open>TODO: interp_function_call_sound - needs statement typechecking\<close>
