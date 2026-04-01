@@ -3,7 +3,7 @@ theory StateMatchesEnv
 begin
 
 (* This predicate asserts that "name" is defined as a term variable (local, ref or
-   constant) in the state, and its value has the given type (in the given environment) *)
+   global) in the state, and its value has the given type (in the given environment) *)
 definition term_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> bool" where
   "term_var_in_state_with_type state env name ty =
     (case fmlookup (IS_Locals state) name of
@@ -16,7 +16,7 @@ definition term_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEn
                                Inr v \<Rightarrow> value_has_type env v ty
                              | Inl err \<Rightarrow> False)
       | None \<Rightarrow>
-        (case fmlookup (IS_Constants state) name of
+        (case fmlookup (IS_Globals state) name of
           Some val \<Rightarrow> value_has_type env val ty
         | None \<Rightarrow> False)))"
 
@@ -39,7 +39,7 @@ definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<
 
 
 (* This asserts that all variables in the type env (TE_TermVars, but not ghost)
-   also exist in the state (either IS_Locals, IS_Refs or IS_Constants) 
+   also exist in the state (either IS_Locals, IS_Refs or IS_Globals) 
    with the correct type. *)
 definition vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "vars_exist_in_state state env \<equiv>
@@ -53,7 +53,7 @@ definition no_extra_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
     \<forall>name. fmlookup (TE_TermVars env) name = None \<or> name |\<in>| TE_GhostVars env \<longrightarrow>
       fmlookup (IS_Locals state) name = None \<and>
       fmlookup (IS_Refs state) name = None \<and>
-      fmlookup (IS_Constants state) name = None"
+      fmlookup (IS_Globals state) name = None"
 
 (* All NotGhost functions in the type environment also exist in the state
    with corresponding numbers of arguments and other properties *)
@@ -72,12 +72,17 @@ definition no_extra_funs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
             | Some info \<Rightarrow> FI_Ghost info = Ghost) \<longrightarrow>
       fmlookup (IS_Functions state) name = None"
 
-(* Non-constant, non-ghost variables are in IS_Locals or IS_Refs *)
+(* Non-constant, non-ghost variables are in IS_Locals or IS_Refs (not IS_Globals). *)
 definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "non_consts_in_locals_or_refs state env \<equiv>
     \<forall>name. fmlookup (TE_TermVars env) name \<noteq> None \<and>
            name |\<notin>| TE_GhostVars env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
       (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
+
+(* The interpreter's IS_ConstNames matches the type environment's TE_ConstNames *)
+definition const_names_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "const_names_match state env \<equiv>
+    IS_ConstNames state = TE_ConstNames env"
 
 (* Overall definition: state matches environment *)
 definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
@@ -86,6 +91,7 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     no_extra_vars state env \<and>
     funs_exist_in_state state env \<and>
     no_extra_funs state env \<and>
-    non_consts_in_locals_or_refs state env"
+    non_consts_in_locals_or_refs state env \<and>
+    const_names_match state env"
 
 end

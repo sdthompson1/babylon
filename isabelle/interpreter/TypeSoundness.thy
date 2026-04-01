@@ -563,9 +563,12 @@ lemma state_matches_env_add_local:
   assumes state_env: "state_matches_env state env"
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
-    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
+    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                                        IS_Refs := fmdrop var (IS_Refs state'),
+                                        IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-                               TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+                               TE_GhostVars := fminus (TE_GhostVars env) {|var|},
+                               TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
   shows "state_matches_env state'' env'"
 proof -
   (* Facts about alloc_store *)
@@ -573,8 +576,9 @@ proof -
     and store'_eq: "IS_Store state' = IS_Store state @ [val]"
     and locals'_eq: "IS_Locals state' = IS_Locals state"
     and refs'_eq: "IS_Refs state' = IS_Refs state"
-    and consts'_eq: "IS_Constants state' = IS_Constants state"
+    and consts'_eq: "IS_Globals state' = IS_Globals state"
     and funs'_eq: "IS_Functions state' = IS_Functions state"
+    and constnames'_eq: "IS_ConstNames state' = IS_ConstNames state"
     by auto
 
   (* Facts about state'' *)
@@ -582,12 +586,14 @@ proof -
     using state''_eq store'_eq by simp
   have locals''_eq: "IS_Locals state'' = fmupd var addr (IS_Locals state)"
     using state''_eq locals'_eq by simp
-  have refs''_eq: "IS_Refs state'' = IS_Refs state"
+  have refs''_eq: "IS_Refs state'' = fmdrop var (IS_Refs state)"
     using state''_eq refs'_eq by simp
-  have consts''_eq: "IS_Constants state'' = IS_Constants state"
+  have consts''_eq: "IS_Globals state'' = IS_Globals state"
     using state''_eq consts'_eq by simp
   have funs''_eq: "IS_Functions state'' = IS_Functions state"
     using state''_eq funs'_eq by simp
+  have constnames''_eq: "IS_ConstNames state'' = finsert var (IS_ConstNames state)"
+    using state''_eq constnames'_eq by simp
 
   (* The new address points to val *)
   have addr_valid: "addr < length (IS_Store state'')"
@@ -665,13 +671,19 @@ proof -
           then have "IS_Store state'' ! aa = IS_Store state ! aa"
             and "aa < length (IS_Store state'')"
             using old_addrs by auto
-          then show ?thesis using old None Some ap_eq locals_name refs''_eq consts''_eq
+          have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
+            using False refs''_eq by simp
+          then show ?thesis using old None Some ap_eq locals_name consts''_eq
             ref_info vht_eq
-            unfolding term_var_in_state_with_type_def by auto
+            unfolding term_var_in_state_with_type_def
+            using \<open>IS_Store state'' ! aa = IS_Store state ! aa\<close> \<open>aa < length (IS_Store state'')\<close>
+            by fastforce
         next
           case None2: None
-          (* name is a constant *)
-          then show ?thesis using old None locals_name refs''_eq consts''_eq vht_eq
+          (* name is a global constant *)
+          have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
+            using False refs''_eq by simp
+          then show ?thesis using old None None2 locals_name consts''_eq vht_eq
             unfolding term_var_in_state_with_type_def
             by (smt (verit, best) case_optionE option.simps(4,5))
         qed
@@ -687,7 +699,7 @@ proof -
     assume ante: "fmlookup (TE_TermVars env') name = None \<or> name |\<in>| TE_GhostVars env'"
     show "fmlookup (IS_Locals state'') name = None \<and>
           fmlookup (IS_Refs state'') name = None \<and>
-          fmlookup (IS_Constants state'') name = None"
+          fmlookup (IS_Globals state'') name = None"
     proof (cases "name = var")
       case True
       (* var is in TE_TermVars env', so the antecedent requires var \<in> TE_GhostVars env' *)
@@ -708,7 +720,7 @@ proof -
         by simp
       then have "fmlookup (IS_Locals state) name = None \<and>
                  fmlookup (IS_Refs state) name = None \<and>
-                 fmlookup (IS_Constants state) name = None"
+                 fmlookup (IS_Globals state) name = None"
         using state_env unfolding state_matches_env_def no_extra_vars_def by blast
       then show ?thesis using False locals''_eq refs''_eq consts''_eq by simp
     qed
@@ -736,7 +748,8 @@ proof -
           fmlookup (IS_Refs state'') name \<noteq> None"
     proof (cases "name = var")
       case True
-      then show ?thesis using locals''_eq by simp
+      (* var |∉| finsert var ... is False, so this case is vacuous *)
+      then show ?thesis using nc env'_eq by simp
     next
       case False
       then have "fmlookup (TE_TermVars env) name \<noteq> None"
@@ -744,7 +757,7 @@ proof -
       moreover have "name |\<notin>| TE_GhostVars env"
         using ng env'_eq False by auto
       moreover have "name |\<notin>| TE_ConstNames env"
-        using nc env'_eq by simp
+        using nc env'_eq False by auto
       ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
                        fmlookup (IS_Refs state) name \<noteq> None"
         using state_env
@@ -752,6 +765,11 @@ proof -
       then show ?thesis using False locals''_eq refs''_eq by simp
     qed
   qed
+
+  (* 6. const_names_match *)
+  moreover have "const_names_match state'' env'"
+    using state_env constnames''_eq env'_eq
+    unfolding state_matches_env_def const_names_match_def by simp
 
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed
@@ -774,12 +792,14 @@ proof -
     rhs_ground: "is_ground rhsTy" and
     body_typing: "core_term_type
         (env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-               TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>)
+               TE_GhostVars := fminus (TE_GhostVars env) {|var|},
+               TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
         NotGhost body = Some ty"
     by (auto split: option.splits if_splits)
 
   let ?env' = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-                     TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+                     TE_GhostVars := fminus (TE_GhostVars env) {|var|},
+                     TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
 
   (* Apply IH to rhs *)
   from IH[OF state_env wf_env rhs_typing]
@@ -800,7 +820,9 @@ proof -
     (* Construct the new state *)
     obtain state' addr where alloc_eq: "(state', addr) = alloc_store state rhsVal"
       by (cases "alloc_store state rhsVal") auto
-    let ?state'' = "state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
+    let ?state'' = "state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                              IS_Refs := fmdrop var (IS_Refs state'),
+                              IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
 
     (* The interpreter result *)
     have interp_eq: "interp_term (Suc fuel) state (CoreTm_Let var rhs body) =
@@ -816,7 +838,16 @@ proof -
     have rhs_wk: "is_well_kinded env rhsTy"
       using core_term_type_well_kinded[OF rhs_typing wf_env] .
     have wf_env': "tyenv_well_formed ?env'"
-      using tyenv_well_formed_add_var[OF wf_env rhs_wk rhs_ground rhs_rt] .
+    proof -
+      let ?env_mid = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                            TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+      have "tyenv_well_formed ?env_mid"
+        using tyenv_well_formed_add_var[OF wf_env rhs_wk rhs_ground rhs_rt] .
+      moreover have "?env' = ?env_mid \<lparr> TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+        by simp
+      ultimately show ?thesis
+        using tyenv_well_formed_TE_ConstNames_irrelevant by simp
+    qed
 
     (* Apply IH to body in extended env *)
     from IH[OF state''_env' wf_env' body_typing]
@@ -2059,9 +2090,9 @@ theorem type_soundness:
     "map (core_term_type env NotGhost) tms = types \<and>
     list_all (\<lambda>ty. ty \<noteq> None) types \<longrightarrow>
       sound_term_results env (map the types) (interp_term_list fuel state tms)"
-  and interp_lvalue_sound:
+  and interp_writable_lvalue_sound:
     "is_writable_lvalue env tm \<and> core_term_type env NotGhost tm = Some ty \<longrightarrow>
-      sound_lvalue_result state env ty (interp_lvalue fuel state tm)"
+      sound_lvalue_result state env ty (interp_writable_lvalue fuel state tm)"
   and interp_statement_sound:
     "core_statement_type env NotGhost stmt = Some env' \<longrightarrow>
       sound_statement_result env' (interp_statement fuel state stmt)"
@@ -2153,7 +2184,7 @@ next
             case None2: None
             (* Variable must be in Constants *)
             from var_in_state None None2 obtain val where
-              const_lookup: "fmlookup (IS_Constants state) varName = Some val"
+              const_lookup: "fmlookup (IS_Globals state) varName = Some val"
               and val_typed: "value_has_type env val ty"
               unfolding term_var_in_state_with_type_def
               by (auto split: option.splits sum.splits)
@@ -2435,7 +2466,7 @@ next
       qed
     qed
   next
-    (* interp_lvalue_sound *)
+    (* interp_writable_lvalue_sound *)
     case 3
     show ?case proof (intro impI, elim conjE)
       assume writable: "is_writable_lvalue env tm"
@@ -2445,7 +2476,7 @@ next
                 state_matches_env state' env' \<Longrightarrow>
                 tyenv_well_formed env' \<Longrightarrow>
                 is_writable_lvalue env' tm' \<and> core_term_type env' NotGhost tm' = Some ty' \<Longrightarrow>
-                sound_lvalue_result state' env' ty' (interp_lvalue fuel state' tm')"
+                sound_lvalue_result state' env' ty' (interp_writable_lvalue fuel state' tm')"
         by (simp add: Suc.IH(3) "3.prems"(1,2))
 
       have IH_list: "\<And>env' (state' :: 'w InterpState) tms' types'.
@@ -2456,7 +2487,7 @@ next
                 sound_term_results env' (map the types') (interp_term_list fuel state' tms')"
         by (simp add: Suc.IH(2) "3.prems"(1,2))
 
-      show "sound_lvalue_result state env ty (interp_lvalue (Suc fuel) state tm)"
+      show "sound_lvalue_result state env ty (interp_writable_lvalue (Suc fuel) state tm)"
       proof (cases tm)
         (* CoreTm_Var: base case for lvalues *)
         case (CoreTm_Var varName)
@@ -2476,11 +2507,13 @@ next
         have var_in_state: "term_var_in_state_with_type state env varName ty"
           using "3.prems"(1) var_lookup not_ghost ty_eq
           unfolding state_matches_env_def vars_exist_in_state_def by blast
+        from "3.prems"(1) not_const have not_const_state: "varName |\<notin>| IS_ConstNames state"
+          unfolding state_matches_env_def const_names_match_def by simp
         show ?thesis
         proof (cases "fmlookup (IS_Locals state) varName")
           case (Some addr)
-          then have interp_eq: "interp_lvalue (Suc fuel) state tm = Inr (addr, [])"
-            using CoreTm_Var by simp
+          then have interp_eq: "interp_writable_lvalue (Suc fuel) state tm = Inr (addr, [])"
+            using CoreTm_Var not_const_state by simp
           from var_in_state Some have
             addr_valid: "addr < length (IS_Store state)" and
             val_typed: "value_has_type env (IS_Store state ! addr) ty"
@@ -2496,8 +2529,8 @@ next
             by auto
           obtain addr path where addrPath_eq: "addrPath = (addr, path)"
             by (cases addrPath) auto
-          then have interp_eq: "interp_lvalue (Suc fuel) state tm = Inr (addr, path)"
-            using CoreTm_Var None refs_lookup by simp
+          then have interp_eq: "interp_writable_lvalue (Suc fuel) state tm = Inr (addr, path)"
+            using CoreTm_Var None refs_lookup not_const_state by simp
           from var_in_state None refs_lookup addrPath_eq have
             addr_valid: "addr < length (IS_Store state)" and
             path_ok: "case get_value_at_path (IS_Store state ! addr) path of
@@ -2527,12 +2560,12 @@ next
           by simp
         from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
         have inner_sound: "sound_lvalue_result state env (CoreTy_Record fieldTypes)
-                             (interp_lvalue fuel state innerTm)"
+                             (interp_writable_lvalue fuel state innerTm)"
           by simp
         show ?thesis
-        proof (cases "interp_lvalue fuel state innerTm")
+        proof (cases "interp_writable_lvalue fuel state innerTm")
           case (Inl err)
-          then have "interp_lvalue (Suc fuel) state tm = Inl err"
+          then have "interp_writable_lvalue (Suc fuel) state tm = Inl err"
             using CoreTm_RecordProj by simp
           with inner_sound Inl show ?thesis by auto
         next
@@ -2544,7 +2577,7 @@ next
                            Inr v \<Rightarrow> value_has_type env v (CoreTy_Record fieldTypes)
                          | Inl err \<Rightarrow> sound_error_result err"
             by auto
-          have interp_eq: "interp_lvalue (Suc fuel) state tm =
+          have interp_eq: "interp_writable_lvalue (Suc fuel) state tm =
               Inr (addr, path @ [LVPath_RecordProj fldName])"
             using CoreTm_RecordProj Inr ap_eq by simp
           (* Show the extended path is sound *)
@@ -2594,12 +2627,12 @@ next
           by simp
         from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
         have inner_sound: "sound_lvalue_result state env (CoreTy_Name dtName tyArgs)
-                             (interp_lvalue fuel state innerTm)"
+                             (interp_writable_lvalue fuel state innerTm)"
           by simp
         show ?thesis
-        proof (cases "interp_lvalue fuel state innerTm")
+        proof (cases "interp_writable_lvalue fuel state innerTm")
           case (Inl err)
-          then have "interp_lvalue (Suc fuel) state tm = Inl err"
+          then have "interp_writable_lvalue (Suc fuel) state tm = Inl err"
             using CoreTm_VariantProj by simp
           with inner_sound Inl show ?thesis by auto
         next
@@ -2611,7 +2644,7 @@ next
                            Inr v \<Rightarrow> value_has_type env v (CoreTy_Name dtName tyArgs)
                          | Inl err \<Rightarrow> sound_error_result err"
             by auto
-          have interp_eq: "interp_lvalue (Suc fuel) state tm =
+          have interp_eq: "interp_writable_lvalue (Suc fuel) state tm =
               Inr (addr, path @ [LVPath_VariantProj ctorName])"
             using CoreTm_VariantProj Inr ap_eq by simp
           have "case get_value_at_path (IS_Store state ! addr)
@@ -2677,7 +2710,7 @@ next
           by simp
         from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
         have inner_sound: "sound_lvalue_result state env (CoreTy_Array elemTy dims)
-                             (interp_lvalue fuel state innerTm)"
+                             (interp_writable_lvalue fuel state innerTm)"
           by simp
         (* Index terms *)
         let ?types = "map (core_term_type env NotGhost) idxTms"
@@ -2690,9 +2723,9 @@ next
             replicate (length idxTms) (CoreTy_FiniteInt Unsigned IntBits_64)"
           by (induction idxTms) (auto simp: list_all_iff)
         show ?thesis
-        proof (cases "interp_lvalue fuel state innerTm")
+        proof (cases "interp_writable_lvalue fuel state innerTm")
           case (Inl err)
-          then have "interp_lvalue (Suc fuel) state tm = Inl err"
+          then have "interp_writable_lvalue (Suc fuel) state tm = Inl err"
             using CoreTm_ArrayProj by simp
           with inner_sound Inl show ?thesis by auto
         next
@@ -2707,8 +2740,8 @@ next
           show ?thesis
           proof (cases "interp_term_list fuel state idxTms")
             case (Inl err)
-            then have "interp_lvalue (Suc fuel) state tm = Inl err"
-              using CoreTm_ArrayProj \<open>interp_lvalue fuel state innerTm = Inr addrPath\<close>
+            then have "interp_writable_lvalue (Suc fuel) state tm = Inl err"
+              using CoreTm_ArrayProj \<open>interp_writable_lvalue fuel state innerTm = Inr addrPath\<close>
                     ap_eq by simp
             with idx_sound Inl show ?thesis by auto
           next
@@ -2719,9 +2752,9 @@ next
               by simp
             from interpret_index_vals_u64[OF idxVals_typed]
             obtain indices where interp_idx_eq: "interpret_index_vals idxVals = Inr indices" by auto
-            have interp_eq: "interp_lvalue (Suc fuel) state tm =
+            have interp_eq: "interp_writable_lvalue (Suc fuel) state tm =
                 Inr (addr, path @ [LVPath_ArrayProj indices])"
-              using CoreTm_ArrayProj \<open>interp_lvalue fuel state innerTm = Inr addrPath\<close>
+              using CoreTm_ArrayProj \<open>interp_writable_lvalue fuel state innerTm = Inr addrPath\<close>
                     ap_eq Inr interp_idx_eq by simp
             have "case get_value_at_path (IS_Store state ! addr)
                          (path @ [LVPath_ArrayProj indices]) of

@@ -1433,23 +1433,30 @@ next
       define gv' where "gv' = (if ghost = Ghost then finsert vn (TE_GhostVars env)
                                else fminus (TE_GhostVars env) {|vn|})"
       define env' where "env' = env \<lparr> TE_TermVars := fmupd vn resolvedRhsTy (TE_TermVars env),
-                                       TE_GhostVars := gv' \<rparr>"
+                                       TE_GhostVars := gv',
+                                       TE_ConstNames := finsert vn (TE_ConstNames env) \<rparr>"
 
       \<comment> \<open>env' is well-formed\<close>
       have wk: "is_well_kinded env resolvedRhsTy"
         using core_term_type_well_kinded[OF resolvedRhs_typed Cons.prems(4)] .
-      have env'_wf: "tyenv_well_formed env'"
+      define env_no_cn where "env_no_cn = env \<lparr> TE_TermVars := fmupd vn resolvedRhsTy (TE_TermVars env),
+                                                  TE_GhostVars := gv' \<rparr>"
+      have wf_no_cn: "tyenv_well_formed env_no_cn"
       proof (cases ghost)
         case Ghost
         show ?thesis using tyenv_well_formed_add_ghost_var[OF Cons.prems(4) wk ground] Ghost
-          by (simp add: env'_def gv'_def)
+          by (simp add: env_no_cn_def gv'_def)
       next
         case NotGhost
         have "is_runtime_type env resolvedRhsTy"
           using core_term_type_notghost_runtime[OF _ Cons.prems(4)] resolvedRhs_typed NotGhost by simp
         thus ?thesis using tyenv_well_formed_add_var[OF Cons.prems(4) wk ground] NotGhost
-          by (simp add: env'_def gv'_def)
+          by (simp add: env_no_cn_def gv'_def)
       qed
+      have env'_eq_cn: "env' = env_no_cn \<lparr> TE_ConstNames := finsert vn (TE_ConstNames env) \<rparr>"
+        by (simp add: env'_def env_no_cn_def)
+      have env'_wf: "tyenv_well_formed env'"
+        using wf_no_cn tyenv_well_formed_TE_ConstNames_irrelevant env'_eq_cn by simp
 
       \<comment> \<open>The variable typechecks in env'\<close>
       have var_typed: "core_term_type env' ghost (CoreTm_Var vn) = Some resolvedRhsTy"
@@ -1460,7 +1467,8 @@ next
         by (auto simp: gv'_def)
       have lhs_typed': "core_term_type env' ghost lhsTm = Some lhsTy"
         using core_term_type_irrelevant_var[OF lhs_fresh Cons.prems(2) gv'_agree]
-        by (simp add: env'_def)
+              core_term_type_TE_ConstNames_irrelevant
+        by (simp add: env'_def env_no_cn_def)
 
       \<comment> \<open>cmpTm typechecks in env'\<close>
       have cmpTy_bool: "cmpTy = CoreTy_Bool"
@@ -1483,7 +1491,8 @@ next
           using rest_fresh in_rest vn_def by blast
         show "core_term_type env' ghost xtm = Some xty"
           using core_term_type_irrelevant_var[OF xtm_fresh xtm_typed gv'_agree]
-          by (simp add: env'_def)
+                core_term_type_TE_ConstNames_irrelevant
+          by (simp add: env'_def env_no_cn_def)
       qed
 
       \<comment> \<open>restTm typechecks in env' by the inductive hypothesis\<close>
@@ -2027,7 +2036,8 @@ next
     by (auto split: if_splits)
   let ?env' = "env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
                      TE_GhostVars := (if ghost = Ghost then finsert varName (TE_GhostVars env)
-                                      else fminus (TE_GhostVars env) {|varName|}) \<rparr>"
+                                      else fminus (TE_GhostVars env) {|varName|}),
+                     TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
   from "7.prems"(1) elab_rhs rhs_ground obtain bodyTm bodyTy next_mv2 where
     elab_body: "elab_term ?env' typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
     result_eq: "newTm = CoreTm_Let varName rhsTm bodyTm" "ty = bodyTy"
@@ -2040,7 +2050,10 @@ next
     using core_term_type_well_kinded_and_runtime[OF rhs_typing "7.prems"(2)] .
   hence rhs_wk: "is_well_kinded env rhsTy" by blast
   \<comment> \<open>Show tyenv_well_formed env'\<close>
-  have wf_env': "tyenv_well_formed ?env'"
+  let ?env_no_cn' = "env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
+                           TE_GhostVars := (if ghost = Ghost then finsert varName (TE_GhostVars env)
+                                            else fminus (TE_GhostVars env) {|varName|}) \<rparr>"
+  have wf_no_cn': "tyenv_well_formed ?env_no_cn'"
   proof (cases "ghost = Ghost")
     case True
     then show ?thesis
@@ -2051,13 +2064,17 @@ next
     show ?thesis using False
       tyenv_well_formed_add_var[OF "7.prems"(2) rhs_wk rhs_ground rhs_rt] by simp
   qed
+  have env'_eq_cn': "?env' = ?env_no_cn' \<lparr> TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+    by simp
+  have wf_env': "tyenv_well_formed ?env'"
+    using wf_no_cn' tyenv_well_formed_TE_ConstNames_irrelevant env'_eq_cn' by simp
   \<comment> \<open>Show typedefs_well_formed env' typedefs (only depends on TE_TypeVars and TE_Datatypes)\<close>
   have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
                      "TE_Datatypes ?env' = TE_Datatypes env" by simp_all
   have wk_eq: "\<And>t. is_well_kinded ?env' t = is_well_kinded env t"
     using is_well_kinded_cong_env[OF env'_fields] by simp
   have td_wf': "typedefs_well_formed ?env' typedefs"
-    using "7.prems"(3) unfolding typedefs_well_formed_def by (simp add: wk_eq)
+    using "7.prems"(3) unfolding typedefs_well_formed_def wk_eq by auto
   \<comment> \<open>IH on body: bodyTm has type bodyTy in env'\<close>
   have body_typing: "core_term_type ?env' ghost bodyTm = Some bodyTy"
     using "7.IH"(2) elab_rhs rhs_ground elab_body wf_env' td_wf' by simp

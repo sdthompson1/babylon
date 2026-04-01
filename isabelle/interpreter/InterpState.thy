@@ -22,6 +22,9 @@ record 'w InterpFun =
 (* Interpreter state *)
 record 'world InterpState =
 
+  (* Global constants: map to their value *)
+  IS_Globals :: "(string, CoreValue) fmap"
+
   (* Local variables: map to address in the store *)
   IS_Locals :: "(string, nat) fmap"
 
@@ -31,8 +34,10 @@ record 'world InterpState =
   (* Store: maps address to value *)
   IS_Store :: "CoreValue list"
 
-  (* Global constants: map to their value *)
-  IS_Constants :: "(string, CoreValue) fmap"
+  (* Names of read-only variables (constants).
+     The interpreter will produce a TypeError if an attempt is made to
+     assign to or swap any of these names. *)
+  IS_ConstNames :: "string fset"
 
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"

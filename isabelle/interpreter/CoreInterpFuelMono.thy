@@ -242,13 +242,13 @@ qed
 lemma process_one_arg_more_fuel:
   assumes "interp_term f state argTm \<noteq> Inl InsufficientFuel
             \<longrightarrow> (\<forall>f' \<ge> f. interp_term f' state argTm = interp_term f state argTm)"
-    and "interp_lvalue f state argTm \<noteq> Inl InsufficientFuel
-            \<longrightarrow> (\<forall>f' \<ge> f. interp_lvalue f' state argTm = interp_lvalue f state argTm)"
-    and "process_one_arg (fnArg, interp_lvalue f state argTm, interp_term f state argTm) acc
+    and "interp_writable_lvalue f state argTm \<noteq> Inl InsufficientFuel
+            \<longrightarrow> (\<forall>f' \<ge> f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm)"
+    and "process_one_arg (fnArg, interp_writable_lvalue f state argTm, interp_term f state argTm) acc
             \<noteq> Inl InsufficientFuel"
   shows "\<forall>f' \<ge> f.
-      process_one_arg (fnArg, interp_lvalue f' state argTm, interp_term f' state argTm) acc
-    = process_one_arg (fnArg, interp_lvalue f state argTm, interp_term f state argTm) acc"
+      process_one_arg (fnArg, interp_writable_lvalue f' state argTm, interp_term f' state argTm) acc
+    = process_one_arg (fnArg, interp_writable_lvalue f state argTm, interp_term f state argTm) acc"
 proof (cases acc)
   case (Inl err)
   then show ?thesis by simp
@@ -280,20 +280,20 @@ next
       qed
     next
       case Ref
-      show ?thesis proof (cases "interp_lvalue f state argTm")
+      show ?thesis proof (cases "interp_writable_lvalue f state argTm")
         case (Inl err)
         (* For Ref, the lvalue result matters. If it's Inl err, that error propagates. *)
         hence "err \<noteq> InsufficientFuel" using assms(3) State Pair Ref by simp
-        hence "\<forall>f'\<ge>f. interp_lvalue f' state argTm = interp_lvalue f state argTm"
+        hence "\<forall>f'\<ge>f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm"
           using assms(2) Inl by auto
         thus ?thesis using Inl State Pair Ref by simp
       next
         case (Inr lval)
         (* Lvalue succeeded - now we also need to check the term result *)
-        have "interp_lvalue f state argTm \<noteq> Inl InsufficientFuel" using Inr by simp
-        hence lv_eq: "\<forall>f'\<ge>f. interp_lvalue f' state argTm = interp_lvalue f state argTm"
+        have "interp_writable_lvalue f state argTm \<noteq> Inl InsufficientFuel" using Inr by simp
+        hence lv_eq: "\<forall>f'\<ge>f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm"
           using assms(2) by blast
-        hence lv_eq': "\<forall>f'\<ge>f. interp_lvalue f' state argTm = Inr lval"
+        hence lv_eq': "\<forall>f'\<ge>f. interp_writable_lvalue f' state argTm = Inr lval"
           using Inr by simp
         (* Destruct lval to match the pattern *)
         obtain addr path where lval_eq: "lval = (addr, path)" by (cases lval)
@@ -325,17 +325,17 @@ lemma fold_process_one_arg_more_fuel:
             interp_term f state argTm \<noteq> Inl InsufficientFuel
               \<longrightarrow> (\<forall>f' \<ge> f. interp_term f' state argTm = interp_term f state argTm)"
     and "\<forall>argTm \<in> set argTms.
-            interp_lvalue f state argTm \<noteq> Inl InsufficientFuel
-              \<longrightarrow> (\<forall>f' \<ge> f. interp_lvalue f' state argTm = interp_lvalue f state argTm)"
+            interp_writable_lvalue f state argTm \<noteq> Inl InsufficientFuel
+              \<longrightarrow> (\<forall>f' \<ge> f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm)"
     and "length argTms = length fnArgs"
     and "fold process_one_arg
-            (zip fnArgs (zip (map (interp_lvalue f state) argTms)
+            (zip fnArgs (zip (map (interp_writable_lvalue f state) argTms)
                              (map (interp_term f state) argTms))) acc \<noteq> Inl InsufficientFuel"
   shows "\<forall>f' \<ge> f. fold process_one_arg
-            (zip fnArgs (zip (map (interp_lvalue f' state) argTms)
+            (zip fnArgs (zip (map (interp_writable_lvalue f' state) argTms)
                              (map (interp_term f' state) argTms))) acc
        = fold process_one_arg
-            (zip fnArgs (zip (map (interp_lvalue f state) argTms)
+            (zip fnArgs (zip (map (interp_writable_lvalue f state) argTms)
                              (map (interp_term f state) argTms))) acc"
   using assms
 proof (induct argTms arbitrary: fnArgs acc)
@@ -348,13 +348,13 @@ next
     and len_tail: "length argTms = length fnArgs'"
     by (cases fnArgs) auto
   (* First step: process_one_arg for the head *)
-  let ?lv_f = "interp_lvalue f state argTm"
+  let ?lv_f = "interp_writable_lvalue f state argTm"
   let ?tm_f = "interp_term f state argTm"
   let ?step_f = "process_one_arg (fnArg, ?lv_f, ?tm_f) acc"
 
   (* The fold for fuel f doesn't return InsufficientFuel *)
   have fold_noFuel: "fold process_one_arg
-      (zip (fnArg # fnArgs') (zip (map (interp_lvalue f state) (argTm # argTms))
+      (zip (fnArg # fnArgs') (zip (map (interp_writable_lvalue f state) (argTm # argTms))
                                   (map (interp_term f state) (argTm # argTms)))) acc
       \<noteq> Inl InsufficientFuel"
     using Cons.prems(4) fnArgs_eq by simp
@@ -365,9 +365,9 @@ next
     assume "\<not> ?step_f \<noteq> Inl InsufficientFuel"
     hence step_eq: "?step_f = Inl InsufficientFuel" by simp
     have "fold process_one_arg
-        (zip (fnArg # fnArgs') (zip (map (interp_lvalue f state) (argTm # argTms))
+        (zip (fnArg # fnArgs') (zip (map (interp_writable_lvalue f state) (argTm # argTms))
                                     (map (interp_term f state) (argTm # argTms)))) acc
-        = fold process_one_arg (zip fnArgs' (zip (map (interp_lvalue f state) argTms)
+        = fold process_one_arg (zip fnArgs' (zip (map (interp_writable_lvalue f state) argTms)
                                                  (map (interp_term f state) argTms))) ?step_f"
       by simp
     also have "... = Inl InsufficientFuel"
@@ -380,13 +380,13 @@ next
                 \<longrightarrow> (\<forall>f'\<ge>f. interp_term f' state argTm = interp_term f state argTm)"
     using Cons.prems(1)
     by (metis list.set_intros(1))
-  have lv_IH: "interp_lvalue f state argTm \<noteq> Inl InsufficientFuel
-                \<longrightarrow> (\<forall>f'\<ge>f. interp_lvalue f' state argTm = interp_lvalue f state argTm)"
+  have lv_IH: "interp_writable_lvalue f state argTm \<noteq> Inl InsufficientFuel
+                \<longrightarrow> (\<forall>f'\<ge>f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm)"
     using Cons.prems(2)
     by (metis list.set_intros(1))
 
   (* Apply process_one_arg_more_fuel *)
-  have step_eq: "\<forall>f'\<ge>f. process_one_arg (fnArg, interp_lvalue f' state argTm, interp_term f' state argTm) acc
+  have step_eq: "\<forall>f'\<ge>f. process_one_arg (fnArg, interp_writable_lvalue f' state argTm, interp_term f' state argTm) acc
                        = ?step_f"
     using process_one_arg_more_fuel[OF tm_IH lv_IH step_noFuel] by blast
 
@@ -395,10 +395,10 @@ next
     case (Inl err)
     (* First step returns error, fold returns same error *)
     hence "err \<noteq> InsufficientFuel" using step_noFuel by simp
-    have step_eq': "\<forall>f'\<ge>f. process_one_arg (fnArg, interp_lvalue f' state argTm, interp_term f' state argTm) acc = Inl err"
+    have step_eq': "\<forall>f'\<ge>f. process_one_arg (fnArg, interp_writable_lvalue f' state argTm, interp_term f' state argTm) acc = Inl err"
       using step_eq Inl by simp
     (* Both folds have Inl err as accumulator after first step, so both equal Inl err *)
-    have "\<forall>f'\<ge>f. fold process_one_arg (zip fnArgs' (zip (map (interp_lvalue f' state) argTms)
+    have "\<forall>f'\<ge>f. fold process_one_arg (zip fnArgs' (zip (map (interp_writable_lvalue f' state) argTms)
                                                         (map (interp_term f' state) argTms))) (Inl err) = Inl err"
       by (simp add: fold_process_one_arg_error)
     thus ?thesis using Inl fnArgs_eq step_eq' by (simp add: fold_process_one_arg_error)
@@ -407,7 +407,7 @@ next
     (* First step succeeds with new accumulator acc' *)
     (* Need to apply IH on the tail *)
     have tail_noFuel: "fold process_one_arg
-        (zip fnArgs' (zip (map (interp_lvalue f state) argTms)
+        (zip fnArgs' (zip (map (interp_writable_lvalue f state) argTms)
                           (map (interp_term f state) argTms))) (Inr acc')
         \<noteq> Inl InsufficientFuel"
       using fold_noFuel Inr by simp
@@ -415,34 +415,34 @@ next
                         \<longrightarrow> (\<forall>f'\<ge>f. interp_term f' state argTm = interp_term f state argTm)"
       using Cons.prems(1)
       by (meson list.set_intros(2))
-    have tail_lv_IH: "\<forall>argTm\<in>set argTms. interp_lvalue f state argTm \<noteq> Inl InsufficientFuel
-                        \<longrightarrow> (\<forall>f'\<ge>f. interp_lvalue f' state argTm = interp_lvalue f state argTm)"
+    have tail_lv_IH: "\<forall>argTm\<in>set argTms. interp_writable_lvalue f state argTm \<noteq> Inl InsufficientFuel
+                        \<longrightarrow> (\<forall>f'\<ge>f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm)"
       using Cons.prems(2)
       by (meson list.set_intros(2))
     have tail_eq: "\<forall>f'\<ge>f. fold process_one_arg
-          (zip fnArgs' (zip (map (interp_lvalue f' state) argTms)
+          (zip fnArgs' (zip (map (interp_writable_lvalue f' state) argTms)
                             (map (interp_term f' state) argTms))) (Inr acc')
         = fold process_one_arg
-          (zip fnArgs' (zip (map (interp_lvalue f state) argTms)
+          (zip fnArgs' (zip (map (interp_writable_lvalue f state) argTms)
                             (map (interp_term f state) argTms))) (Inr acc')"
       using Cons.hyps[OF tail_tm_IH tail_lv_IH len_tail tail_noFuel] by blast
     show ?thesis
     proof (intro allI impI)
       fix f' assume "f' \<ge> f"
-      have "process_one_arg (fnArg, interp_lvalue f' state argTm, interp_term f' state argTm) acc = Inr acc'"
+      have "process_one_arg (fnArg, interp_writable_lvalue f' state argTm, interp_term f' state argTm) acc = Inr acc'"
         using step_eq Inr \<open>f' \<ge> f\<close> by simp
       moreover have "fold process_one_arg
-          (zip fnArgs' (zip (map (interp_lvalue f' state) argTms)
+          (zip fnArgs' (zip (map (interp_writable_lvalue f' state) argTms)
                             (map (interp_term f' state) argTms))) (Inr acc')
         = fold process_one_arg
-          (zip fnArgs' (zip (map (interp_lvalue f state) argTms)
+          (zip fnArgs' (zip (map (interp_writable_lvalue f state) argTms)
                             (map (interp_term f state) argTms))) (Inr acc')"
         using tail_eq \<open>f' \<ge> f\<close> by blast
       ultimately show "fold process_one_arg
-          (zip fnArgs (zip (map (interp_lvalue f' state) (argTm # argTms))
+          (zip fnArgs (zip (map (interp_writable_lvalue f' state) (argTm # argTms))
                                       (map (interp_term f' state) (argTm # argTms)))) acc
         = fold process_one_arg
-          (zip fnArgs (zip (map (interp_lvalue f state) (argTm # argTms))
+          (zip fnArgs (zip (map (interp_writable_lvalue f state) (argTm # argTms))
                                       (map (interp_term f state) (argTm # argTms)))) acc"
         using Inr fnArgs_eq by simp
     qed
@@ -465,9 +465,9 @@ lemma interp_fuel_mono:
     and interp_term_list_mono:
             "interp_term_list f (state :: 'w InterpState) tms \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>f'\<ge>f. interp_term_list f' state tms = interp_term_list f state tms"
-    and interp_lvalue_mono:
-            "interp_lvalue f (state :: 'w InterpState) tm \<noteq> Inl InsufficientFuel
-               \<Longrightarrow> \<forall>f'\<ge>f. interp_lvalue f' state tm = interp_lvalue f state tm"
+    and interp_writable_lvalue_mono:
+            "interp_writable_lvalue f (state :: 'w InterpState) tm \<noteq> Inl InsufficientFuel
+               \<Longrightarrow> \<forall>f'\<ge>f. interp_writable_lvalue f' state tm = interp_writable_lvalue f state tm"
     and interp_statement_mono:
             "interp_statement f (state :: 'w InterpState) stmt \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>f'\<ge>f. interp_statement f' state stmt = interp_statement f state stmt"
@@ -478,7 +478,7 @@ lemma interp_fuel_mono:
             "interp_function_call f (state :: 'w InterpState) fnName argTms \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>f'\<ge>f. interp_function_call f' state fnName argTms
                     = interp_function_call f state fnName argTms"
-proof (induction rule: interp_term_interp_term_list_interp_lvalue_interp_statement_interp_statement_list_interp_function_call.induct)
+proof (induction rule: interp_term_interp_term_list_interp_writable_lvalue_interp_statement_interp_statement_list_interp_function_call.induct)
   (* ---- Base cases: fuel = 0 ---- *)
   (* interp_term 0 *)
   case (1 uu uv)
@@ -603,7 +603,9 @@ next
       case (Inr rhsVal)
       define state' addr where "state' = fst (alloc_store state rhsVal)"
                            and "addr = snd (alloc_store state rhsVal)"
-      define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>"
+      define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                                IS_Refs := fmdrop varName (IS_Refs state'),
+                                                IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>"
       hence body_noFuel: "interp_term fuel state'' bodyTm \<noteq> Inl InsufficientFuel"
         using noFuel Inr state'_def addr_def
         by (auto simp add: case_prod_beta split: sum.splits)
@@ -837,50 +839,50 @@ next
   then show ?case
     by (metis Suc_le_D interp_term.simps(20))
 next
-  (* interp_lvalue 0 *)
+  (* interp_writable_lvalue 0 *)
   case (21 vn vo)
   then show ?case by simp
 next
-  (* interp_lvalue (Suc fuel) *)
+  (* interp_writable_lvalue (Suc fuel) *)
   case (22 fuel state tm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_lvalue (Suc fuel) state tm \<noteq> Inl InsufficientFuel"
-    show "interp_lvalue f' state tm = interp_lvalue (Suc fuel) state tm"
+    assume noFuel: "interp_writable_lvalue (Suc fuel) state tm \<noteq> Inl InsufficientFuel"
+    show "interp_writable_lvalue f' state tm = interp_writable_lvalue (Suc fuel) state tm"
     proof (cases tm)
       case (CoreTm_Var varName)
       thus ?thesis using f'_eq by simp
     next
       case (CoreTm_RecordProj tm' fldName)
-      hence sub_noFuel: "interp_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence sub_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH: "\<forall>f'\<ge>fuel. interp_lvalue f' state tm' = interp_lvalue fuel state tm'"
+      hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
         using "22.IH"(1) CoreTm_RecordProj by blast
-      from IH f''_ge have "interp_lvalue f'' state tm' = interp_lvalue fuel state tm'"
+      from IH f''_ge have "interp_writable_lvalue f'' state tm' = interp_writable_lvalue fuel state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_RecordProj by simp
     next
       case (CoreTm_VariantProj tm' ctorName)
-      hence sub_noFuel: "interp_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence sub_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH: "\<forall>f'\<ge>fuel. interp_lvalue f' state tm' = interp_lvalue fuel state tm'"
+      hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
         using "22.IH"(2) CoreTm_VariantProj by blast
-      from IH f''_ge have "interp_lvalue f'' state tm' = interp_lvalue fuel state tm'"
+      from IH f''_ge have "interp_writable_lvalue f'' state tm' = interp_writable_lvalue fuel state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_VariantProj by simp
     next
       case (CoreTm_ArrayProj tm' indexTms)
-      hence lv_noFuel: "interp_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence lv_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH_lv: "\<forall>f'\<ge>fuel. interp_lvalue f' state tm' = interp_lvalue fuel state tm'"
+      hence IH_lv: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
         using "22.IH"(3) CoreTm_ArrayProj by blast
       show ?thesis
-      proof (cases "interp_lvalue fuel state tm'")
+      proof (cases "interp_writable_lvalue fuel state tm'")
         case (Inl err)
-        hence "interp_lvalue f'' state tm' = Inl err" using IH_lv f''_ge by metis
+        hence "interp_writable_lvalue f'' state tm' = Inl err" using IH_lv f''_ge by metis
         thus ?thesis using f'_eq CoreTm_ArrayProj Inl by simp
       next
         case (Inr addrPath)
@@ -889,7 +891,7 @@ next
         hence IH_idx: "\<forall>f'\<ge>fuel. interp_term_list f' state indexTms = interp_term_list fuel state indexTms"
           using "22.IH"(4) CoreTm_ArrayProj Inr
           by (metis prod.exhaust)
-        have "interp_lvalue f'' state tm' = Inr addrPath" using IH_lv Inr f''_ge by metis
+        have "interp_writable_lvalue f'' state tm' = Inr addrPath" using IH_lv Inr f''_ge by metis
         moreover have "interp_term_list f'' state indexTms = interp_term_list fuel state indexTms"
           using IH_idx f''_ge by metis
         ultimately show ?thesis using f'_eq CoreTm_ArrayProj Inr by simp
@@ -1013,19 +1015,41 @@ next
   case (29 fuel state varName wb lvalueTm)
   then show ?case
   proof (intro allI impI)
-    fix f' assume "f' \<ge> Suc fuel"
+    fix f' assume f'_ge: "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
     assume noFuel: "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref wb lvalueTm) \<noteq> Inl InsufficientFuel"
-    hence sub_noFuel: "interp_lvalue fuel state lvalueTm \<noteq> Inl InsufficientFuel"
-      by (auto split: sum.splits)
-    hence IH: "\<forall>f'\<ge>fuel. interp_lvalue f' state lvalueTm = interp_lvalue fuel state lvalueTm"
-      using "29.IH" by blast
-    from IH f''_ge have "interp_lvalue f'' state lvalueTm = interp_lvalue fuel state lvalueTm"
-      by metis
-    with f'_eq show "interp_statement f' state (CoreStmt_VarDecl NotGhost varName Ref wb lvalueTm) =
+    show "interp_statement f' state (CoreStmt_VarDecl NotGhost varName Ref wb lvalueTm) =
           interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref wb lvalueTm)"
-      by simp
+    proof (cases "lvalue_base_name lvalueTm")
+      case None
+      (* Not a syntactic lvalue: both sides return TypeError *)
+      then show ?thesis using f'_eq by simp
+    next
+      case (Some baseName)
+      show ?thesis
+      proof (cases "baseName |\<in>| IS_ConstNames state")
+        case True
+        (* Const: both sides use interp_term *)
+        have tm_noFuel: "interp_term fuel state lvalueTm \<noteq> Inl InsufficientFuel"
+          using noFuel Some True by (auto split: sum.splits prod.splits)
+        have IH_tm: "\<forall>f'\<ge>fuel. interp_term f' state lvalueTm = interp_term fuel state lvalueTm"
+          using "29.IH" Some True tm_noFuel by blast
+        from IH_tm f''_ge
+        have "interp_term f'' state lvalueTm = interp_term fuel state lvalueTm" by metis
+        then show ?thesis using f'_eq Some True by simp
+      next
+        case False
+        (* Not const: both sides use interp_writable_lvalue *)
+        have lv_noFuel: "interp_writable_lvalue fuel state lvalueTm \<noteq> Inl InsufficientFuel"
+          using noFuel Some False by (auto split: sum.splits)
+        have IH_lv: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state lvalueTm = interp_writable_lvalue fuel state lvalueTm"
+          using "29.IH" Some False lv_noFuel by blast
+        from IH_lv f''_ge
+        have "interp_writable_lvalue f'' state lvalueTm = interp_writable_lvalue fuel state lvalueTm" by metis
+        then show ?thesis using f'_eq Some False by simp
+      qed
+    qed
   qed
 next
   (* interp_statement (Suc _) Assign Ghost *)
@@ -1041,15 +1065,15 @@ next
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
     assume noFuel: "interp_statement (Suc fuel) state (CoreStmt_Assign NotGhost lhsLvalue rhsTm) \<noteq> Inl InsufficientFuel"
-    hence lhs_noFuel: "interp_lvalue fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
+    hence lhs_noFuel: "interp_writable_lvalue fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
-    hence IH_lhs: "\<forall>f'\<ge>fuel. interp_lvalue f' state lhsLvalue = interp_lvalue fuel state lhsLvalue"
+    hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state lhsLvalue = interp_writable_lvalue fuel state lhsLvalue"
       using "31.IH"(1) by blast
     show "interp_statement f' state (CoreStmt_Assign NotGhost lhsLvalue rhsTm) =
           interp_statement (Suc fuel) state (CoreStmt_Assign NotGhost lhsLvalue rhsTm)"
-    proof (cases "interp_lvalue fuel state lhsLvalue")
+    proof (cases "interp_writable_lvalue fuel state lhsLvalue")
       case (Inl err)
-      hence "interp_lvalue f'' state lhsLvalue = Inl err" using IH_lhs f''_ge by metis
+      hence "interp_writable_lvalue f'' state lhsLvalue = Inl err" using IH_lhs f''_ge by metis
       thus ?thesis using Inl f'_eq by simp
     next
       case (Inr addrPath)
@@ -1064,7 +1088,7 @@ next
         hence IH_fc: "\<forall>f'\<ge>fuel. interp_function_call f' state fnName argTms = interp_function_call fuel state fnName argTms"
           using Inr addrPath_eq rhsTm_eq
           by (meson "31.IH"(11))
-        have "interp_lvalue f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
+        have "interp_writable_lvalue f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
         moreover have "interp_function_call f'' state fnName argTms = interp_function_call fuel state fnName argTms"
           using IH_fc f''_ge by metis
         ultimately show ?thesis using f'_eq rhsTm_eq Inr addrPath_eq by simp
@@ -1075,7 +1099,7 @@ next
         hence IH_rhs: "\<forall>f'\<ge>fuel. interp_term f' state rhsTm = interp_term fuel state rhsTm"
           using "31.IH"(3) Inr addrPath_eq notFunCall
           by (metis "31.IH"(10,12,13,14,15,16,17,18,19,2,20,4,5,6,7,8,9) CoreTerm.exhaust)
-        have "interp_lvalue f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
+        have "interp_writable_lvalue f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
         moreover have "interp_term f'' state rhsTm = interp_term fuel state rhsTm"
           using IH_rhs f''_ge by metis
         ultimately show ?thesis using f'_eq notFunCall Inr addrPath_eq by (cases rhsTm; simp)
@@ -1096,24 +1120,24 @@ next
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
     assume noFuel: "interp_statement (Suc fuel) state (CoreStmt_Swap NotGhost lhsTm rhsTm) \<noteq> Inl InsufficientFuel"
-    hence lhs_noFuel: "interp_lvalue fuel state lhsTm \<noteq> Inl InsufficientFuel"
+    hence lhs_noFuel: "interp_writable_lvalue fuel state lhsTm \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
-    hence IH_lhs: "\<forall>f'\<ge>fuel. interp_lvalue f' state lhsTm = interp_lvalue fuel state lhsTm"
+    hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state lhsTm = interp_writable_lvalue fuel state lhsTm"
       using "33.IH"(1) by blast
     show "interp_statement f' state (CoreStmt_Swap NotGhost lhsTm rhsTm) =
           interp_statement (Suc fuel) state (CoreStmt_Swap NotGhost lhsTm rhsTm)"
-    proof (cases "interp_lvalue fuel state lhsTm")
+    proof (cases "interp_writable_lvalue fuel state lhsTm")
       case (Inl err)
-      hence "interp_lvalue f'' state lhsTm = Inl err" using IH_lhs f''_ge by metis
+      hence "interp_writable_lvalue f'' state lhsTm = Inl err" using IH_lhs f''_ge by metis
       thus ?thesis using Inl f'_eq by simp
     next
       case (Inr lhsLvalue)
-      hence rhs_noFuel: "interp_lvalue fuel state rhsTm \<noteq> Inl InsufficientFuel"
+      hence rhs_noFuel: "interp_writable_lvalue fuel state rhsTm \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH_rhs: "\<forall>f'\<ge>fuel. interp_lvalue f' state rhsTm = interp_lvalue fuel state rhsTm"
+      hence IH_rhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state rhsTm = interp_writable_lvalue fuel state rhsTm"
         using "33.IH"(2) Inr by blast
-      have "interp_lvalue f'' state lhsTm = Inr lhsLvalue" using IH_lhs Inr f''_ge by metis
-      moreover have "interp_lvalue f'' state rhsTm = interp_lvalue fuel state rhsTm"
+      have "interp_writable_lvalue f'' state lhsTm = Inr lhsLvalue" using IH_lhs Inr f''_ge by metis
+      moreover have "interp_writable_lvalue f'' state rhsTm = interp_writable_lvalue fuel state rhsTm"
         using IH_rhs f''_ge by metis
       ultimately show ?thesis using f'_eq Inr by simp
     qed
@@ -1403,7 +1427,7 @@ next
       next
         case False
         (* Abbreviations for clarity *)
-        let ?refResults = "map (interp_lvalue fuel state) argTms"
+        let ?refResults = "map (interp_writable_lvalue fuel state) argTms"
         let ?valResults = "map (interp_term fuel state) argTms"
         let ?fnArgs = "IF_Args fn"
         let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty \<rparr>"
@@ -1412,7 +1436,7 @@ next
         hence len_ref: "length ?fnArgs = length ?refResults" by simp
         hence len_val: "length ?refResults = length ?valResults" by simp
 
-        have fold_noFuel: "fold process_one_arg (zip ?fnArgs (zip (map (interp_lvalue fuel state) argTms)
+        have fold_noFuel: "fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue fuel state) argTms)
                 (map (interp_term fuel state) argTms))) (Inr ?clearedState)
               \<noteq> Inl InsufficientFuel"
           using noFuel Some False by (auto simp: Let_def split: sum.splits ExecResult.splits)
@@ -1423,16 +1447,16 @@ next
                         \<longrightarrow> (\<forall>f' \<ge> fuel. interp_term f' state argTm = interp_term fuel state argTm)"
           using "49.IH"(1) Some by (meson "49.IH"(2) False)
         have lv_IH: "\<forall>argTm \<in> set argTms.
-                      interp_lvalue fuel state argTm \<noteq> Inl InsufficientFuel
-                        \<longrightarrow> (\<forall>f' \<ge> fuel. interp_lvalue f' state argTm = interp_lvalue fuel state argTm)"
+                      interp_writable_lvalue fuel state argTm \<noteq> Inl InsufficientFuel
+                        \<longrightarrow> (\<forall>f' \<ge> fuel. interp_writable_lvalue f' state argTm = interp_writable_lvalue fuel state argTm)"
           using "49.IH"(2) Some by (meson "49.IH"(1) False)
 
         (* Use fold_process_one_arg_more_fuel *)
-        have fold_all: "\<forall>f' \<ge> fuel. fold process_one_arg (zip ?fnArgs (zip (map (interp_lvalue f' state) argTms)
+        have fold_all: "\<forall>f' \<ge> fuel. fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue f' state) argTms)
                                                               (map (interp_term f' state) argTms))) (Inr ?clearedState) =
                        fold process_one_arg (zip ?fnArgs (zip ?refResults ?valResults)) (Inr ?clearedState)"
           using fold_process_one_arg_more_fuel[OF tm_IH lv_IH _ fold_noFuel] len_eq by argo
-        hence fold_eq: "fold process_one_arg (zip ?fnArgs (zip (map (interp_lvalue f'' state) argTms)
+        hence fold_eq: "fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue f'' state) argTms)
                                                               (map (interp_term f'' state) argTms))) (Inr ?clearedState) =
                        fold process_one_arg (zip ?fnArgs (zip ?refResults ?valResults)) (Inr ?clearedState)"
           using f''_ge by blast
@@ -1494,19 +1518,19 @@ next
             (* For Ref arguments, lvalue must have succeeded (not InsufficientFuel) *)
             have ref_lvalues_ok: "\<forall>argTm \<in> set argTms. \<forall>name.
                 (argTm, (name, Ref)) \<in> set (zip argTms ?fnArgs)
-                \<longrightarrow> (\<exists>lval. interp_lvalue fuel state argTm = Inr lval)"
+                \<longrightarrow> (\<exists>lval. interp_writable_lvalue fuel state argTm = Inr lval)"
             proof (intro ballI allI impI)
               fix argTm name
               assume "argTm \<in> set argTms"
                 and in_zip: "(argTm, (name, Ref)) \<in> set (zip argTms ?fnArgs)"
-              show "\<exists>lval. interp_lvalue fuel state argTm = Inr lval"
+              show "\<exists>lval. interp_writable_lvalue fuel state argTm = Inr lval"
                 using fold_process_one_arg_ref_lvalue_ok[OF PreCall len_eq _ len_val refl in_zip]
                   len_ref by simp
             qed
 
             (* For Ref arguments, lvalue results are equal (they didn't return InsufficientFuel) *)
             have ref_lvalues_eq: "\<forall>i < length argTms. snd (?fnArgs ! i) = Ref \<longrightarrow>
-                interp_lvalue f'' state (argTms ! i) = interp_lvalue fuel state (argTms ! i)"
+                interp_writable_lvalue f'' state (argTms ! i) = interp_writable_lvalue fuel state (argTms ! i)"
             proof (intro allI impI)
               fix i assume i_bound: "i < length argTms" and is_ref: "snd (?fnArgs ! i) = Ref"
               obtain argName where fnArg_eq: "?fnArgs ! i = (argName, Ref)"
@@ -1514,10 +1538,10 @@ next
               have argTm_in: "argTms ! i \<in> set argTms" using i_bound by simp
               have "(argTms ! i, (argName, Ref)) \<in> set (zip argTms ?fnArgs)"
                 using i_bound fnArg_eq len_eq by (auto simp: set_zip intro!: exI[of _ i])
-              hence "\<exists>lval. interp_lvalue fuel state (argTms ! i) = Inr lval"
+              hence "\<exists>lval. interp_writable_lvalue fuel state (argTms ! i) = Inr lval"
                 using ref_lvalues_ok argTm_in by blast
-              hence "interp_lvalue fuel state (argTms ! i) \<noteq> Inl InsufficientFuel" by auto
-              thus "interp_lvalue f'' state (argTms ! i) = interp_lvalue fuel state (argTms ! i)"
+              hence "interp_writable_lvalue fuel state (argTms ! i) \<noteq> Inl InsufficientFuel" by auto
+              thus "interp_writable_lvalue f'' state (argTms ! i) = interp_writable_lvalue fuel state (argTms ! i)"
                 using lv_IH argTm_in f''_ge by blast
             qed
 
@@ -1525,26 +1549,26 @@ next
             let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
                                     if vr = Ref then refResult else Inl TypeError)
                                   (zip ?fnArgs refResults)"
-            have filtered_refs_eq: "?filter_refs (map (interp_lvalue f'' state) argTms) =
+            have filtered_refs_eq: "?filter_refs (map (interp_writable_lvalue f'' state) argTms) =
                                     ?filter_refs ?refResults"
             proof (rule nth_equalityI)
-              show "length (?filter_refs (map (interp_lvalue f'' state) argTms)) =
+              show "length (?filter_refs (map (interp_writable_lvalue f'' state) argTms)) =
                     length (?filter_refs ?refResults)"
                 by simp
             next
-              fix i assume "i < length (?filter_refs (map (interp_lvalue f'' state) argTms))"
+              fix i assume "i < length (?filter_refs (map (interp_writable_lvalue f'' state) argTms))"
               hence i_bound: "i < length ?fnArgs" by simp
               hence i_bound': "i < length argTms" using len_eq by simp
               obtain argName argVr where fnArg_eq: "?fnArgs ! i = (argName, argVr)"
                 by (cases "?fnArgs ! i")
-              show "?filter_refs (map (interp_lvalue f'' state) argTms) ! i =
+              show "?filter_refs (map (interp_writable_lvalue f'' state) argTms) ! i =
                     ?filter_refs ?refResults ! i"
               proof (cases argVr)
                 case Var
                 thus ?thesis using i_bound fnArg_eq len_eq by simp
               next
                 case Ref
-                have "interp_lvalue f'' state (argTms ! i) = interp_lvalue fuel state (argTms ! i)"
+                have "interp_writable_lvalue f'' state (argTms ! i) = interp_writable_lvalue fuel state (argTms ! i)"
                   using ref_lvalues_eq i_bound' Ref fnArg_eq by simp
                 thus ?thesis using i_bound fnArg_eq Ref len_eq i_bound' by simp
               qed
@@ -1554,12 +1578,12 @@ next
             have rights_vals_eq: "rights (map (interp_term f'' state) argTms) = rights ?valResults"
               using valResults_eq by metis
 
-            have rights_refs_eq: "rights (?filter_refs (map (interp_lvalue f'' state) argTms)) =
+            have rights_refs_eq: "rights (?filter_refs (map (interp_writable_lvalue f'' state) argTms)) =
                                   rights (?filter_refs ?refResults)"
               using filtered_refs_eq by simp
 
             (* Rewrite fold_eq using valResults_eq to get the fold result in terms of f'' *)
-            have fold_eq': "fold process_one_arg (zip ?fnArgs (zip (map (interp_lvalue f'' state) argTms)
+            have fold_eq': "fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue f'' state) argTms)
                                                               (map (interp_term f'' state) argTms))) (Inr ?clearedState) =
                            Inr preCallState"
               using fold_eq PreCall valResults_eq by argo

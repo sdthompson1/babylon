@@ -320,7 +320,7 @@ fun apply_ref_updates :: "'w InterpState \<Rightarrow> (nat \<times> LValuePath 
 
 function interp_term :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
   and interp_term_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
-  and interp_lvalue :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
+  and interp_writable_lvalue :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
   and interp_statement :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement \<Rightarrow> InterpError + 'w ExecResult"
   and interp_statement_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement list \<Rightarrow> InterpError + 'w ExecResult"
   and interp_function_call :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> string \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)"
@@ -347,7 +347,7 @@ where
       (case fmlookup (IS_Refs state) varName of
         Some (addr, path) \<Rightarrow> get_value_at_path (IS_Store state ! addr) path
       | None \<Rightarrow>
-        (case fmlookup (IS_Constants state) varName of
+        (case fmlookup (IS_Globals state) varName of
           Some val \<Rightarrow> Inr val
         | None \<Rightarrow> Inl TypeError)))"  \<comment> \<open>name not in scope\<close>
 
@@ -386,7 +386,8 @@ where
     | Inr rhsVal \<Rightarrow>
         (let (state', addr) = alloc_store state rhsVal;
              state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                IS_Refs := fmdrop varName (IS_Refs state') \<rparr>
+                                IS_Refs := fmdrop varName (IS_Refs state'),
+                                IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>
         in interp_term fuel state'' bodyTm))"
 
   (* Function call *)
@@ -465,14 +466,17 @@ where
 | "interp_term (Suc _) _ (CoreTm_Allocated _) = Inl TypeError"
 | "interp_term (Suc _) _ (CoreTm_Old _) = Inl TypeError"
 
-  (* Evaluate an lvalue into (addr, path) *)
-  (* Note: this doesn't check for "bad paths" (e.g. incorrect field name); that happens
+  (* Evaluate a writable lvalue into (addr, path).
+     Returns TypeError if the base variable is read-only (in IS_ConstNames).
+     Note: this doesn't check for "bad paths" (e.g. incorrect field name); that happens
      later when the path is used. It does, however, check whether the base variable name
      exists and whether any array indices can be successfully evaluated. *)
-| "interp_lvalue 0 _ _ = Inl InsufficientFuel"
-| "interp_lvalue (Suc fuel) state tm =
+| "interp_writable_lvalue 0 _ _ = Inl InsufficientFuel"
+| "interp_writable_lvalue (Suc fuel) state tm =
     (case tm of
       CoreTm_Var varName \<Rightarrow>
+        if varName |\<in>| IS_ConstNames state then Inl TypeError  \<comment> \<open>read-only variable\<close>
+        else
         (case fmlookup (IS_Locals state) varName of
           Some addr \<Rightarrow> Inr (addr, [])
         | None \<Rightarrow>
@@ -480,15 +484,15 @@ where
               Some (addr, path) \<Rightarrow> Inr (addr, path)
             | None \<Rightarrow> Inl TypeError))
     | CoreTm_RecordProj tm fldName \<Rightarrow>
-        (case interp_lvalue fuel state tm of
+        (case interp_writable_lvalue fuel state tm of
           Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_RecordProj fldName])
         | Inl err \<Rightarrow> Inl err)
     | CoreTm_VariantProj tm ctorName \<Rightarrow>
-        (case interp_lvalue fuel state tm of
+        (case interp_writable_lvalue fuel state tm of
           Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_VariantProj ctorName])
         | Inl err \<Rightarrow> Inl err)
     | CoreTm_ArrayProj tm indexTms \<Rightarrow>
-        (case interp_lvalue fuel state tm of
+        (case interp_writable_lvalue fuel state tm of
           Inr (addr, path) \<Rightarrow> 
             (case interp_term_list fuel state indexTms of
               Inr indexVals \<Rightarrow>
@@ -525,17 +529,33 @@ where
         in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
                                     IS_Refs := fmdrop varName (IS_Refs state') \<rparr>))))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
-    (case interp_lvalue fuel state lvalueTm of
-      Inl err \<Rightarrow> Inl err
-    | Inr addrAndPath \<Rightarrow> 
-        Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                               IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> )))"
+    (case lvalue_base_name lvalueTm of
+      Some baseName \<Rightarrow>
+        if baseName |\<in>| IS_ConstNames state then
+          \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
+             A compiler would likely use a read-only pointer, but copying is
+             semantically equivalent since the source is immutable.\<close>
+          (case interp_term fuel state lvalueTm of
+            Inl err \<Rightarrow> Inl err
+          | Inr val \<Rightarrow>
+              (let (state', addr) = alloc_store state val
+              in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                          IS_Refs := fmdrop varName (IS_Refs state'),
+                                          IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>))))
+        else
+          \<comment> \<open>Base variable is writable: alias via writable lvalue\<close>
+          (case interp_writable_lvalue fuel state lvalueTm of
+            Inr addrAndPath \<Rightarrow>
+              Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                                     IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> ))
+          | Inl err \<Rightarrow> Inl err)
+    | None \<Rightarrow> Inl TypeError)"
 
   (* Assignment *)
 | "interp_statement (Suc _) state (CoreStmt_Assign Ghost _ _) = Inr (Continue state)"
 | "interp_statement (Suc fuel) state (CoreStmt_Assign NotGhost lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path\<close>
-    (case interp_lvalue fuel state lhsLvalue of
+    (case interp_writable_lvalue fuel state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
         \<comment> \<open>Compute new state (after any function call) and rhs value\<close>
         (case
@@ -560,10 +580,10 @@ where
   (* Swap *)
 | "interp_statement (Suc _) state (CoreStmt_Swap Ghost _ _) = Inr (Continue state)"
 | "interp_statement (Suc fuel) state (CoreStmt_Swap NotGhost lhsTm rhsTm) =
-    (case interp_lvalue fuel state lhsTm of
+    (case interp_writable_lvalue fuel state lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
-        (case interp_lvalue fuel state rhsTm of
+        (case interp_writable_lvalue fuel state rhsTm of
           Inl err \<Rightarrow> Inl err
         | Inr rhsLvalue \<Rightarrow> 
             (case perform_swap state lhsLvalue rhsLvalue of
@@ -631,7 +651,7 @@ where
       Some f \<Rightarrow>
         (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of args\<close>
         else 
-            let refResults = map (interp_lvalue fuel state) argTms;
+            let refResults = map (interp_writable_lvalue fuel state) argTms;
                 valResults = map (interp_term fuel state) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 clearedState = state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty \<rparr>

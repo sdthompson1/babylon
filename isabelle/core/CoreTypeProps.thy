@@ -147,6 +147,10 @@ lemma is_runtime_type_cong_env:
    is_runtime_type env' ty = is_runtime_type env ty"
   by (induction ty) (auto simp: list_all_iff)
 
+lemma is_runtime_type_TE_ConstNames_irrelevant [simp]:
+  "is_runtime_type (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_runtime_type env ty"
+  using is_runtime_type_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+
 
 (* ========================================================================== *)
 (* Term Properties *)

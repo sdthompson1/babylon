@@ -81,12 +81,39 @@ datatype CoreTerm =
   | CoreTm_Allocated CoreTerm
   | CoreTm_Old CoreTerm  (* in postcondition, returns "old" value of term; elsewhere, just returns the term *)
 
-fun is_lvalue :: "CoreTerm \<Rightarrow> bool" where
-  "is_lvalue (CoreTm_Var _) = True"
-| "is_lvalue (CoreTm_RecordProj tm _) = is_lvalue tm"
-| "is_lvalue (CoreTm_VariantProj tm _) = is_lvalue tm"
-| "is_lvalue (CoreTm_ArrayProj tm _) = is_lvalue tm"
-| "is_lvalue _ = False"
+(* Extract the base variable name from a syntactic lvalue *)
+fun lvalue_base_name :: "CoreTerm \<Rightarrow> string option" where
+  "lvalue_base_name (CoreTm_Var name) = Some name"
+| "lvalue_base_name (CoreTm_RecordProj tm _) = lvalue_base_name tm"
+| "lvalue_base_name (CoreTm_VariantProj tm _) = lvalue_base_name tm"
+| "lvalue_base_name (CoreTm_ArrayProj tm _) = lvalue_base_name tm"
+| "lvalue_base_name _ = None"
+
+(* A term is a syntactic lvalue if it has a base variable name *)
+definition is_lvalue :: "CoreTerm \<Rightarrow> bool" where
+  "is_lvalue tm = (lvalue_base_name tm \<noteq> None)"
+
+lemma is_lvalue_simps [simp]:
+  "is_lvalue (CoreTm_Var x) = True"
+  "is_lvalue (CoreTm_RecordProj tm f) = is_lvalue tm"
+  "is_lvalue (CoreTm_VariantProj tm c) = is_lvalue tm"
+  "is_lvalue (CoreTm_ArrayProj tm idxs) = is_lvalue tm"
+  "is_lvalue (CoreTm_LitBool b) = False"
+  "is_lvalue (CoreTm_LitInt i) = False"
+  "is_lvalue (CoreTm_LitArray ty tms) = False"
+  "is_lvalue (CoreTm_Unop uop tm) = False"
+  "is_lvalue (CoreTm_Binop bop t1 t2) = False"
+  "is_lvalue (CoreTm_Let v rhs body) = False"
+  "is_lvalue (CoreTm_FunctionCall fn tys args) = False"
+  "is_lvalue (CoreTm_VariantCtor cn tys arg) = False"
+  "is_lvalue (CoreTm_Record flds) = False"
+  "is_lvalue (CoreTm_Match scrut arms) = False"
+  "is_lvalue (CoreTm_Cast ty tm) = False"
+  "is_lvalue (CoreTm_Quantifier q v ty body) = False"
+  "is_lvalue (CoreTm_Allocated tm) = False"
+  "is_lvalue (CoreTm_Old tm) = False"
+  "is_lvalue (CoreTm_Sizeof tm) = False"
+  by (simp_all add: is_lvalue_def)
 
 datatype CoreStatement =
   CoreStmt_VarDecl GhostOrNot string VarOrRef CoreType CoreTerm

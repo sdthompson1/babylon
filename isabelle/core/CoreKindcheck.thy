@@ -142,6 +142,10 @@ next
   then show ?case by auto
 qed auto
 
+lemma is_well_kinded_TE_ConstNames_irrelevant [simp]:
+  "is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_well_kinded env ty"
+  using is_well_kinded_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+
 (* This predicate says that all types in the range of a MetaSubst are well-kinded. *)
 definition metasubst_well_kinded :: "CoreTyEnv \<Rightarrow> MetaSubst \<Rightarrow> bool" where 
   "metasubst_well_kinded env subst =

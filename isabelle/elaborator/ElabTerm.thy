@@ -631,7 +631,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
         else let env' = env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
                               TE_GhostVars := (if ghost = Ghost
                                                then finsert varName (TE_GhostVars env)
-                                               else fminus (TE_GhostVars env) {|varName|}) \<rparr>
+                                               else fminus (TE_GhostVars env) {|varName|}),
+                              TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>
              in (case elab_term env' typedefs ghost body next_mv1 of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
