@@ -604,7 +604,6 @@ next
       define state' addr where "state' = fst (alloc_store state rhsVal)"
                            and "addr = snd (alloc_store state rhsVal)"
       define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                                IS_Refs := fmdrop varName (IS_Refs state'),
                                                 IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>"
       hence body_noFuel: "interp_term fuel state'' bodyTm \<noteq> Inl InsufficientFuel"
         using noFuel Inr state'_def addr_def

@@ -388,7 +388,6 @@ where
     | Inr rhsVal \<Rightarrow>
         (let (state', addr) = alloc_store state rhsVal;
              state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                IS_Refs := fmdrop varName (IS_Refs state'),
                                 IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>
         in interp_term fuel state'' bodyTm))"
 
@@ -520,17 +519,14 @@ where
 | "interp_statement 0 _ _ = Inl InsufficientFuel"
 
   (* Variable declaration *)
-| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost varName _ _ _) =
-    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                           IS_Refs := fmdrop varName (IS_Refs state) \<rparr>))"
+| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost _ _ _ _) =
+    Inr (Continue state)"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
     (case interp_term fuel state initialTm of
       Inl err \<Rightarrow> Inl err
     | Inr initialVal \<Rightarrow>
         (let (state', addr) = alloc_store state initialVal
-        in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                    IS_Refs := fmdrop varName (IS_Refs state'),
-                                    IS_ConstNames := IS_ConstNames state' |-| {|varName|} \<rparr>))))"
+        in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>))))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
@@ -543,15 +539,12 @@ where
           | Inr val \<Rightarrow>
               (let (state', addr) = alloc_store state val
               in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                          IS_Refs := fmdrop varName (IS_Refs state'),
                                           IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>))))
         else
           \<comment> \<open>Base variable is writable: alias via writable lvalue\<close>
           (case interp_writable_lvalue fuel state lvalueTm of
             Inr addrAndPath \<Rightarrow>
-              Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                                     IS_Refs := fmupd varName addrAndPath (IS_Refs state),
-                                     IS_ConstNames := IS_ConstNames state |-| {|varName|} \<rparr> ))
+              Inr (Continue (state \<lparr> IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> ))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 

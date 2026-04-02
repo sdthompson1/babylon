@@ -20,7 +20,8 @@ where
 
   (* Variable declaration (Var) *)
   "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
-    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
+    (if fmlookup (TE_TermVars env) varName \<noteq> None then None  \<comment> \<open>no shadowing\<close>
+     else if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> is_ground varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
@@ -28,8 +29,8 @@ where
      then Some (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
                       TE_GhostVars := (if declGhost = Ghost
                                        then finsert varName (TE_GhostVars env)
-                                       else TE_GhostVars env |-| {| varName |}),
-                      TE_ConstNames := TE_ConstNames env |-| {| varName |} \<rparr>)
+                                       else TE_GhostVars env),
+                      TE_ConstNames := TE_ConstNames env \<rparr>)
      else None)"
 
   (* Variable declaration (Ref) - TODO *)
@@ -94,23 +95,18 @@ using assms proof (cases stmt)
       case NotGhost
       from rt NotGhost have "is_runtime_type env varTy" by simp
       from tyenv_well_formed_add_var[OF assms(2) wk gr this]
-      have "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
-                                     TE_GhostVars := fminus (TE_GhostVars env) {|varName|} \<rparr>)" .
-      hence "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
-                                      TE_GhostVars := fminus (TE_GhostVars env) {|varName|},
-                                      TE_ConstNames := TE_ConstNames env |-| {|varName|} \<rparr>)"
-        using tyenv_well_formed_TE_ConstNames_irrelevant by fastforce
-      with assms CoreStmt_VarDecl Var NotGhost show ?thesis
+      have wf': "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env) \<rparr>)" .
+      from assms CoreStmt_VarDecl Var NotGhost have env'_eq:
+        "env' = env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+                      TE_GhostVars := TE_GhostVars env,
+                      TE_ConstNames := TE_ConstNames env \<rparr>"
         by (auto split: if_splits)
+      with wf' show ?thesis by simp
     next
       case Ghost
       from tyenv_well_formed_add_ghost_var[OF assms(2) wk gr]
       have "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
                                      TE_GhostVars := finsert varName (TE_GhostVars env) \<rparr>)" .
-      hence "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
-                                      TE_GhostVars := finsert varName (TE_GhostVars env),
-                                      TE_ConstNames := TE_ConstNames env |-| {|varName|} \<rparr>)"
-        using tyenv_well_formed_TE_ConstNames_irrelevant by fastforce
       with assms CoreStmt_VarDecl Var Ghost show ?thesis
         by (auto split: if_splits)
     qed

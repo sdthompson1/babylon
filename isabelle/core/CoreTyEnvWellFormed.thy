@@ -19,6 +19,11 @@ definition tyenv_vars_runtime :: "CoreTyEnv \<Rightarrow> bool" where
                \<and> name |\<notin>| TE_GhostVars env
                \<longrightarrow> is_runtime_type env ty)"
 
+(* Ghost variables are a subset of term variable names *)
+definition tyenv_ghost_vars_subset :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_ghost_vars_subset env =
+    (TE_GhostVars env |\<subseteq>| fmdom (TE_TermVars env))"
+
 (* Type variable names and datatype names are disjoint *)
 definition tyenv_tyvars_datatypes_disjoint :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_tyvars_datatypes_disjoint env =
@@ -113,6 +118,7 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
     (tyenv_vars_well_kinded env \<and>
      tyenv_vars_ground env \<and>
      tyenv_vars_runtime env \<and>
+     tyenv_ghost_vars_subset env \<and>
      tyenv_tyvars_datatypes_disjoint env \<and>
      tyenv_ctors_consistent env \<and>
      tyenv_payloads_well_kinded env \<and>
@@ -126,21 +132,19 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_nonghost_payloads_runtime env \<and>
      tyenv_ghost_datatypes_subset env)"
 
-(* Adding a well-kinded, ground, runtime variable preserves tyenv_well_formed.
-   This is the NotGhost case; the variable is removed from TE_GhostVars. *)
+(* Adding a well-kinded, ground, runtime, non-ghost variable preserves tyenv_well_formed. *)
 lemma tyenv_well_formed_add_var:
   assumes wf: "tyenv_well_formed env"
     and ty_wk: "is_well_kinded env ty"
     and ty_ground: "is_ground ty"
     and ty_runtime: "is_runtime_type env ty"
-  shows "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
-                                 TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>)"
+  shows "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env) \<rparr>)"
 proof -
-  let ?env' = "env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env),
-                     TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+  let ?env' = "env \<lparr> TE_TermVars := fmupd var ty (TE_TermVars env) \<rparr>"
   from wf have wk: "tyenv_vars_well_kinded env"
     and gr: "tyenv_vars_ground env"
     and rt: "tyenv_vars_runtime env"
+    and gvs: "tyenv_ghost_vars_subset env"
     and rest: "tyenv_tyvars_datatypes_disjoint env"
               "tyenv_ctors_consistent env"
               "tyenv_payloads_well_kinded env"
@@ -176,6 +180,8 @@ proof -
   moreover have "tyenv_vars_runtime ?env'"
     using rt ty_runtime unfolding tyenv_vars_runtime_def
     by (auto simp: rt_preserved split: if_splits)
+  moreover have "tyenv_ghost_vars_subset ?env'"
+    using gvs unfolding tyenv_ghost_vars_subset_def by auto
   moreover have "tyenv_tyvars_datatypes_disjoint ?env'" using rest(1)
     unfolding tyenv_tyvars_datatypes_disjoint_def by simp
   moreover have "tyenv_ctors_consistent ?env'" using rest(2)
@@ -217,6 +223,7 @@ proof -
   from wf have wk: "tyenv_vars_well_kinded env"
     and gr: "tyenv_vars_ground env"
     and rt: "tyenv_vars_runtime env"
+    and gvs: "tyenv_ghost_vars_subset env"
     and rest: "tyenv_tyvars_datatypes_disjoint env"
               "tyenv_ctors_consistent env"
               "tyenv_payloads_well_kinded env"
@@ -251,6 +258,8 @@ proof -
   moreover have "tyenv_vars_runtime ?env'"
     using rt unfolding tyenv_vars_runtime_def
     by (auto simp: rt_preserved split: if_splits)
+  moreover have "tyenv_ghost_vars_subset ?env'"
+    using gvs unfolding tyenv_ghost_vars_subset_def by auto
   moreover have "tyenv_tyvars_datatypes_disjoint ?env'" using rest(1)
     unfolding tyenv_tyvars_datatypes_disjoint_def by simp
   moreover have "tyenv_ctors_consistent ?env'" using rest(2)
@@ -290,7 +299,7 @@ proof -
     using is_runtime_type_cong_env[of ?env' env] by simp
   from assms show ?thesis unfolding tyenv_well_formed_def
     tyenv_vars_well_kinded_def tyenv_vars_ground_def tyenv_vars_runtime_def
-    tyenv_tyvars_datatypes_disjoint_def tyenv_ctors_consistent_def
+    tyenv_ghost_vars_subset_def tyenv_tyvars_datatypes_disjoint_def tyenv_ctors_consistent_def
     tyenv_payloads_well_kinded_def tyenv_payloads_have_expected_metavars_def
     tyenv_ctor_metavars_distinct_def tyenv_ctors_by_type_consistent_def
     tyenv_fun_types_well_kinded_def tyenv_funs_have_expected_metavars_def

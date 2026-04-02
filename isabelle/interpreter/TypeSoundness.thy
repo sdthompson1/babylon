@@ -564,11 +564,10 @@ lemma state_matches_env_add_local:
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
-                                        IS_Refs := fmdrop var (IS_Refs state'),
                                         IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-                               TE_GhostVars := fminus (TE_GhostVars env) {|var|},
                                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+    and var_not_ghost: "var |\<notin>| TE_GhostVars env"
   shows "state_matches_env state'' env'"
 proof -
   (* Facts about alloc_store *)
@@ -586,7 +585,7 @@ proof -
     using state''_eq store'_eq by simp
   have locals''_eq: "IS_Locals state'' = fmupd var addr (IS_Locals state)"
     using state''_eq locals'_eq by simp
-  have refs''_eq: "IS_Refs state'' = fmdrop var (IS_Refs state)"
+  have refs''_eq: "IS_Refs state'' = IS_Refs state"
     using state''_eq refs'_eq by simp
   have consts''_eq: "IS_Globals state'' = IS_Globals state"
     using state''_eq consts'_eq by simp
@@ -705,8 +704,8 @@ proof -
       (* var is in TE_TermVars env', so the antecedent requires var \<in> TE_GhostVars env' *)
       then have "fmlookup (TE_TermVars env') var = Some rhsTy" using env'_eq by simp
       with ante True have "var |\<in>| TE_GhostVars env'" by simp
-      (* But TE_GhostVars env' = fminus (TE_GhostVars env) {|var|}, so var \<notin> TE_GhostVars env' *)
-      then show ?thesis using env'_eq by simp
+      (* But var \<notin> TE_GhostVars env, and TE_GhostVars env' = TE_GhostVars env *)
+      then show ?thesis using env'_eq var_not_ghost by simp
     next
       case False
       (* name \<noteq> var, so TE_TermVars env' lookup = TE_TermVars env lookup *)
@@ -792,13 +791,11 @@ proof -
     rhs_ground: "is_ground rhsTy" and
     body_typing: "core_term_type
         (env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-               TE_GhostVars := fminus (TE_GhostVars env) {|var|},
                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
         NotGhost body = Some ty"
     by (auto split: option.splits if_splits)
 
   let ?env' = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-                     TE_GhostVars := fminus (TE_GhostVars env) {|var|},
                      TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
 
   (* Apply IH to rhs *)
@@ -821,7 +818,6 @@ proof -
     obtain state' addr where alloc_eq: "(state', addr) = alloc_store state rhsVal"
       by (cases "alloc_store state rhsVal") auto
     let ?state'' = "state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
-                              IS_Refs := fmdrop var (IS_Refs state'),
                               IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
 
     (* The interpreter result *)
@@ -829,9 +825,18 @@ proof -
           interp_term fuel ?state'' body"
       using Inr alloc_eq by (simp add: case_prod_beta split: prod.splits)
 
+    (* var is fresh and therefore not ghost *)
+    from typing have var_fresh: "fmlookup (TE_TermVars env) var = None"
+      by (auto split: option.splits if_splits)
+    from wf_env have "TE_GhostVars env |\<subseteq>| fmdom (TE_TermVars env)"
+      unfolding tyenv_well_formed_def tyenv_ghost_vars_subset_def by simp
+    with var_fresh have var_not_ghost: "var |\<notin>| TE_GhostVars env"
+      by (metis fin_mono fmdom_notI)
+
     (* The new state matches the extended env *)
     have state''_env': "state_matches_env ?state'' ?env'"
-      using state_matches_env_add_local[OF state_env rhs_typed alloc_eq refl refl] by simp
+      using state_matches_env_add_local[OF state_env rhs_typed alloc_eq refl refl var_not_ghost]
+      by simp
 
     (* The extended env is well-formed *)
     from value_has_type_runtime[OF rhs_typed] have rhs_rt: "is_runtime_type env rhsTy" .
@@ -839,8 +844,7 @@ proof -
       using core_term_type_well_kinded[OF rhs_typing wf_env] .
     have wf_env': "tyenv_well_formed ?env'"
     proof -
-      let ?env_mid = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-                            TE_GhostVars := fminus (TE_GhostVars env) {|var|} \<rparr>"
+      let ?env_mid = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env) \<rparr>"
       have "tyenv_well_formed ?env_mid"
         using tyenv_well_formed_add_var[OF wf_env rhs_wk rhs_ground rhs_rt] .
       moreover have "?env' = ?env_mid \<lparr> TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
@@ -2831,7 +2835,7 @@ next
               with Inl CoreStmt_VarDecl Var NotGhost show ?thesis by simp
             next
               case (Inr initialVal)
-              \<comment> \<open>Need to show state_matches_env after alloc and fmupd/fmdrop\<close>
+              \<comment> \<open>Need to show state_matches_env after alloc and fmupd\<close>
               with CoreStmt_VarDecl Var NotGhost show ?thesis sorry
             qed
           next
@@ -2935,6 +2939,6 @@ next
   }
 qed
 
-  
+
 
 end
