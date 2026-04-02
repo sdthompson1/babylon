@@ -558,16 +558,19 @@ qed
 (* Helper lemmas for CoreTm_Let type soundness: *)
 
 (* After alloc_store + fmupd of locals, the new state matches the extended env.
-   This is the key lemma for CoreTm_Let soundness. *)
+   General version that works for both const (let) and non-const (var decl) cases. *)
 lemma state_matches_env_add_local:
   assumes state_env: "state_matches_env state env"
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
-                                        IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
+                                        IS_ConstNames := new_state_cn \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
-                               TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                               TE_ConstNames := new_env_cn \<rparr>"
     and var_not_ghost: "var |\<notin>| TE_GhostVars env"
+    and cn_match: "const_names_match state'' env'"
+    and cn_other: "\<And>name. name \<noteq> var \<Longrightarrow>
+                     (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
   shows "state_matches_env state'' env'"
 proof -
   (* Facts about alloc_store *)
@@ -577,7 +580,6 @@ proof -
     and refs'_eq: "IS_Refs state' = IS_Refs state"
     and consts'_eq: "IS_Globals state' = IS_Globals state"
     and funs'_eq: "IS_Functions state' = IS_Functions state"
-    and constnames'_eq: "IS_ConstNames state' = IS_ConstNames state"
     by auto
 
   (* Facts about state'' *)
@@ -591,8 +593,6 @@ proof -
     using state''_eq consts'_eq by simp
   have funs''_eq: "IS_Functions state'' = IS_Functions state"
     using state''_eq funs'_eq by simp
-  have constnames''_eq: "IS_ConstNames state'' = finsert var (IS_ConstNames state)"
-    using state''_eq constnames'_eq by simp
 
   (* The new address points to val *)
   have addr_valid: "addr < length (IS_Store state'')"
@@ -747,8 +747,8 @@ proof -
           fmlookup (IS_Refs state'') name \<noteq> None"
     proof (cases "name = var")
       case True
-      (* var |\<notin>| finsert var ... is False, so this case is vacuous *)
-      then show ?thesis using nc env'_eq by simp
+      (* var is in IS_Locals state'' *)
+      then show ?thesis using locals''_eq by simp
     next
       case False
       then have "fmlookup (TE_TermVars env) name \<noteq> None"
@@ -756,7 +756,7 @@ proof -
       moreover have "name |\<notin>| TE_GhostVars env"
         using ng env'_eq False by auto
       moreover have "name |\<notin>| TE_ConstNames env"
-        using nc env'_eq False by auto
+        using nc cn_other[OF False] by simp
       ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
                        fmlookup (IS_Refs state) name \<noteq> None"
         using state_env
@@ -767,10 +767,63 @@ proof -
 
   (* 6. const_names_match *)
   moreover have "const_names_match state'' env'"
-    using state_env constnames''_eq env'_eq
-    unfolding state_matches_env_def const_names_match_def by simp
+    using cn_match .
 
   ultimately show ?thesis unfolding state_matches_env_def by auto
+qed
+
+(* Const specialization: variable is added to ConstNames (used for let-bindings) *)
+corollary state_matches_env_add_const_local:
+  assumes state_env: "state_matches_env state env"
+    and val_typed: "value_has_type env val rhsTy"
+    and state'_eq: "(state', addr) = alloc_store state val"
+    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                                        IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
+    and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                               TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+    and var_not_ghost: "var |\<notin>| TE_GhostVars env"
+  shows "state_matches_env state'' env'"
+proof -
+  from state'_eq have "IS_ConstNames state' = IS_ConstNames state" by auto
+  hence "IS_ConstNames state'' = finsert var (TE_ConstNames env)"
+    using state_env state''_eq
+    unfolding state_matches_env_def const_names_match_def by simp
+  hence cn: "const_names_match state'' env'"
+    using env'_eq unfolding const_names_match_def by simp
+  have cn_oth: "\<And>name. name \<noteq> var \<Longrightarrow>
+      (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
+    using env'_eq by auto
+  show ?thesis
+    using state_matches_env_add_local[OF state_env val_typed state'_eq state''_eq env'_eq
+                                        var_not_ghost cn cn_oth] .
+qed
+
+(* Non-const specialization: ConstNames unchanged (used for var declarations) *)
+corollary state_matches_env_add_nonconst_local:
+  assumes state_env: "state_matches_env state env"
+    and val_typed: "value_has_type env val rhsTy"
+    and state'_eq: "(state', addr) = alloc_store state val"
+    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
+    and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+                               TE_ConstNames := TE_ConstNames env \<rparr>"
+    and var_not_ghost: "var |\<notin>| TE_GhostVars env"
+  shows "state_matches_env state'' env'"
+proof -
+  have state''_eq': "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                                         IS_ConstNames := IS_ConstNames state' \<rparr>"
+    using state''_eq by simp
+  from state'_eq have "IS_ConstNames state' = IS_ConstNames state" by auto
+  hence "IS_ConstNames state'' = TE_ConstNames env"
+    using state_env state''_eq
+    unfolding state_matches_env_def const_names_match_def by simp
+  hence cn: "const_names_match state'' env'"
+    using env'_eq unfolding const_names_match_def by simp
+  have cn_oth: "\<And>name. name \<noteq> var \<Longrightarrow>
+      (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
+    using env'_eq by simp
+  show ?thesis
+    using state_matches_env_add_local[OF state_env val_typed state'_eq state''_eq' env'_eq
+                                        var_not_ghost cn cn_oth] .
 qed
 
 (* Type soundness for let-bindings *)
@@ -835,7 +888,7 @@ proof -
 
     (* The new state matches the extended env *)
     have state''_env': "state_matches_env ?state'' ?env'"
-      using state_matches_env_add_local[OF state_env rhs_typed alloc_eq refl refl var_not_ghost]
+      using state_matches_env_add_const_local[OF state_env rhs_typed alloc_eq refl refl var_not_ghost]
       by simp
 
     (* The extended env is well-formed *)
@@ -1368,6 +1421,271 @@ next
     then show ?thesis by (cases step) auto
   qed
 qed
+
+(* Given a type and an lvalue path, compute the type of the sub-value at that path.
+   This mirrors get_value_at_path but operates on types instead of values. *)
+fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath list \<Rightarrow> CoreType option" where
+  "type_at_path env ty [] = Some ty"
+| "type_at_path env (CoreTy_Record fieldTypes) (LVPath_RecordProj field # rest) =
+    (case map_of fieldTypes field of
+      Some fieldTy \<Rightarrow> type_at_path env fieldTy rest
+    | None \<Rightarrow> None)"
+| "type_at_path env (CoreTy_Name dtName argTypes) (LVPath_VariantProj ctor # rest) =
+    (case fmlookup (TE_DataCtors env) ctor of
+      Some (dtName2, metavars, payloadTy) \<Rightarrow>
+        if dtName = dtName2 then
+          type_at_path env (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+        else None
+    | None \<Rightarrow> None)"
+| "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
+    type_at_path env elemTy rest"
+| "type_at_path _ _ (_ # _) = None"
+
+
+(* If flds and fieldTypes are related by list_all2 with name equality,
+   then map_of lookups agree and predicates transfer. *)
+lemma list_all2_map_of_transfer:
+  assumes "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) flds fieldTypes"
+    and "map_of flds k = Some v"
+  shows "\<exists>t. map_of fieldTypes k = Some t \<and> P v t"
+using assms proof (induction flds arbitrary: fieldTypes)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons entry flds)
+  obtain k1 v1 where entry_eq: "entry = (k1, v1)" by (cases entry) auto
+  from Cons.prems(1) obtain ft fieldTypes' where
+    ft_eq: "fieldTypes = ft # fieldTypes'" and
+    head_rel: "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) entry ft" and
+    tail_rel: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) flds fieldTypes'"
+    by (cases fieldTypes) auto
+  obtain k2 t2 where ft_pair: "ft = (k2, t2)" by (cases ft) auto
+  from head_rel entry_eq ft_pair have k_eq: "k1 = k2" and pred: "P v1 t2" by auto
+  show ?case
+  proof (cases "k1 = k")
+    case True
+    with entry_eq Cons.prems(2) have "v = v1" by simp
+    with True k_eq ft_eq ft_pair pred show ?thesis by simp
+  next
+    case False
+    with entry_eq Cons.prems(2) have "map_of flds k = Some v" by simp
+    from Cons.IH[OF tail_rel this] obtain t where
+      "map_of fieldTypes' k = Some t" and "P v t" by auto
+    with False k_eq ft_eq ft_pair show ?thesis by simp
+  qed
+qed
+
+(* AList.update preserves list_all2 when the replacement value satisfies the
+   same predicate as the original value at that key. *)
+lemma alist_update_preserves_list_all2:
+  assumes all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) flds fieldTypes"
+    and lookup: "map_of flds field = Some oldVal"
+    and new_pred: "\<And>t. map_of fieldTypes field = Some t \<Longrightarrow> P newVal t"
+  shows "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t)
+           (AList.update field newVal flds) fieldTypes"
+using all2 lookup new_pred proof (induction flds arbitrary: fieldTypes)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons entry flds)
+  obtain k v where entry_eq: "entry = (k, v)" by (cases entry) auto
+  from Cons.prems(1) obtain ft fieldTypes' where
+    ft_eq: "fieldTypes = ft # fieldTypes'" and
+    head_rel: "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) entry ft" and
+    tail_rel: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) flds fieldTypes'"
+    by (cases fieldTypes) auto
+  obtain kft tft where ft_pair: "ft = (kft, tft)" by (cases ft) auto
+  from head_rel entry_eq ft_pair have k_eq: "k = kft" and old_P: "P v tft" by auto
+  show ?case
+  proof (cases "k = field")
+    case True
+    then have "AList.update field newVal (entry # flds) = (field, newVal) # flds"
+      using entry_eq by simp
+    moreover from True k_eq ft_pair have "map_of fieldTypes field = Some tft"
+      using ft_eq by simp
+    hence "P newVal tft" using Cons.prems(3) by simp
+    ultimately show ?thesis using ft_eq ft_pair k_eq True tail_rel by force
+  next
+    case False
+    then have "AList.update field newVal (entry # flds) =
+               entry # AList.update field newVal flds"
+      using entry_eq by simp
+    moreover from False have lookup_tail: "map_of flds field = Some oldVal"
+      using Cons.prems(2) entry_eq by simp
+    have new_pred_tail: "\<And>t. map_of fieldTypes' field = Some t \<Longrightarrow> P newVal t"
+      using Cons.prems(3) ft_eq False k_eq entry_eq ft_pair by simp
+    from Cons.IH[OF tail_rel lookup_tail new_pred_tail] have
+      "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t)
+         (AList.update field newVal flds) fieldTypes'" .
+    ultimately show ?thesis using ft_eq head_rel by simp
+  qed
+qed
+
+
+(* update_value_at_path preserves value_has_type, provided the new value has
+   the type that type_at_path computes for the given path.
+   This is the key lemma for CoreStmt_Assign soundness. *)
+lemma update_value_at_path_preserves_type:
+  assumes typed: "value_has_type env oldVal ty"
+    and update_ok: "update_value_at_path oldVal path newVal = Inr updatedVal"
+    and path_ty: "type_at_path env ty path = Some pathTy"
+    and new_typed: "value_has_type env newVal pathTy"
+  shows "value_has_type env updatedVal ty"
+using assms proof (induction path arbitrary: oldVal ty updatedVal)
+  case Nil
+  from Nil.prems(3) have "pathTy = ty" by simp
+  with Nil.prems(2,4) show ?case by simp
+next
+  case (Cons step rest)
+  then show ?case
+  proof (cases oldVal)
+    case (CV_Record flds)
+    then show ?thesis
+    proof (cases step)
+      case (LVPath_RecordProj field)
+      (* Extract record type *)
+      from Cons.prems(1) CV_Record obtain fieldTypes where
+        ty_eq: "ty = CoreTy_Record fieldTypes" and
+        all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t) flds fieldTypes"
+        by (cases ty) auto
+      (* Extract field value and updated field value *)
+      from Cons.prems(2) CV_Record LVPath_RecordProj obtain fieldVal updatedFieldVal where
+        fld_lookup: "map_of flds field = Some fieldVal" and
+        update_rest: "update_value_at_path fieldVal rest newVal = Inr updatedFieldVal" and
+        updatedVal_eq: "updatedVal = CV_Record (AList.update field updatedFieldVal flds)"
+        by (auto split: option.splits sum.splits)
+      (* Get the field type *)
+      from list_all2_map_of_transfer[OF all2 fld_lookup] obtain fieldTy where
+        fld_ty_lookup: "map_of fieldTypes field = Some fieldTy" and
+        fld_typed: "value_has_type env fieldVal fieldTy"
+        by auto
+      (* type_at_path descends into the field *)
+      from Cons.prems(3) ty_eq LVPath_RecordProj fld_ty_lookup
+      have path_ty_rest: "type_at_path env fieldTy rest = Some pathTy" by simp
+      (* Apply IH *)
+      have "value_has_type env updatedFieldVal fieldTy"
+        using Cons.IH[OF fld_typed update_rest path_ty_rest Cons.prems(4)] .
+      (* Use alist_update_preserves_list_all2 *)
+      hence "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+               (AList.update field updatedFieldVal flds) fieldTypes"
+        using alist_update_preserves_list_all2[OF all2 fld_lookup] fld_ty_lookup by auto
+      then show ?thesis using updatedVal_eq ty_eq by simp
+    next
+      case (LVPath_VariantProj x)
+      with CV_Record Cons.prems show ?thesis by simp
+    next
+      case (LVPath_ArrayProj x)
+      with CV_Record Cons.prems show ?thesis by simp
+    qed
+  next
+    case (CV_Variant ctor payload)
+    then show ?thesis
+    proof (cases step)
+      case (LVPath_RecordProj x)
+      with CV_Variant Cons.prems show ?thesis by simp
+    next
+      case (LVPath_VariantProj expectedCtor)
+      (* Extract variant type *)
+      from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+        ty_eq: "ty = CoreTy_Name dtName argTypes" and
+        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+        len_eq: "length metavars = length argTypes" and
+        args_wk: "list_all (is_well_kinded env) argTypes" and
+        args_rt: "list_all (is_runtime_type env) argTypes" and
+        dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
+        payload_typed: "value_has_type env payload
+            (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+        by (cases ty) (auto split: option.splits prod.splits)
+      let ?payloadTy = "apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy"
+      (* Extract from update_value_at_path: ctor must match *)
+      from Cons.prems(2) CV_Variant LVPath_VariantProj obtain updatedPayload where
+        ctor_match: "ctor = expectedCtor" and
+        update_rest: "update_value_at_path payload rest newVal = Inr updatedPayload" and
+        updatedVal_eq: "updatedVal = CV_Variant ctor updatedPayload"
+        by (auto split: if_splits sum.splits)
+      (* type_at_path descends into the payload *)
+      from Cons.prems(3) ty_eq LVPath_VariantProj ctor_match ctor_lookup
+      have path_ty_rest: "type_at_path env ?payloadTy rest = Some pathTy" by simp
+      (* Apply IH *)
+      have "value_has_type env updatedPayload ?payloadTy"
+        using Cons.IH[OF payload_typed update_rest path_ty_rest Cons.prems(4)] .
+      then show ?thesis using updatedVal_eq ty_eq ctor_lookup len_eq args_wk args_rt
+          dt_nonghost by simp
+    next
+      case (LVPath_ArrayProj x)
+      with CV_Variant Cons.prems show ?thesis by simp
+    qed
+  next
+    case (CV_Array sizes elementMap)
+    then show ?thesis
+    proof (cases step)
+      case (LVPath_RecordProj x)
+      with CV_Array Cons.prems show ?thesis by simp
+    next
+      case (LVPath_VariantProj x)
+      with CV_Array Cons.prems show ?thesis by simp
+    next
+      case (LVPath_ArrayProj indices)
+      (* Extract array type *)
+      from Cons.prems(1) CV_Array obtain elemTy dims where
+        ty_eq: "ty = CoreTy_Array elemTy dims" and
+        elem_wk: "is_well_kinded env elemTy" and
+        elem_rt: "is_runtime_type env elemTy" and
+        elems_typed: "\<forall>idx val. fmlookup elementMap idx = Some val \<longrightarrow>
+                        value_has_type env val elemTy" and
+        dims_wk: "array_dims_well_kinded dims" and
+        sizes_match: "fmap_matches_sizes sizes elementMap" and
+        dims_match: "sizes_match_dims sizes dims"
+        by (cases ty) auto
+      (* Extract from update_value_at_path: index lookup succeeds *)
+      from Cons.prems(2) CV_Array LVPath_ArrayProj obtain elemVal updatedElem where
+        elem_lookup: "fmlookup elementMap indices = Some elemVal" and
+        update_rest: "update_value_at_path elemVal rest newVal = Inr updatedElem" and
+        updatedVal_eq: "updatedVal = CV_Array sizes (fmupd indices updatedElem elementMap)"
+        by (auto split: option.splits sum.splits)
+      (* The old element has type elemTy *)
+      from elems_typed elem_lookup have elem_typed: "value_has_type env elemVal elemTy" by simp
+      (* type_at_path descends into the element type *)
+      from Cons.prems(3) ty_eq LVPath_ArrayProj
+      have path_ty_rest: "type_at_path env elemTy rest = Some pathTy" by simp
+      (* Apply IH *)
+      have updated_elem_typed: "value_has_type env updatedElem elemTy"
+        using Cons.IH[OF elem_typed update_rest path_ty_rest Cons.prems(4)] .
+      (* All elements of the updated map have type elemTy *)
+      have "\<forall>idx val. fmlookup (fmupd indices updatedElem elementMap) idx = Some val \<longrightarrow>
+              value_has_type env val elemTy"
+      proof (intro allI impI)
+        fix idx val
+        assume "fmlookup (fmupd indices updatedElem elementMap) idx = Some val"
+        then show "value_has_type env val elemTy"
+        proof (cases "idx = indices")
+          case True
+          then show ?thesis
+            using \<open>fmlookup (fmupd indices updatedElem elementMap) idx = Some val\<close>
+                  updated_elem_typed by simp
+        next
+          case False
+          then show ?thesis
+            using \<open>fmlookup (fmupd indices updatedElem elementMap) idx = Some val\<close>
+                  elems_typed by simp
+        qed
+      qed
+      (* fmap_matches_sizes is preserved by fmupd at an existing key *)
+      moreover have "fmap_matches_sizes sizes (fmupd indices updatedElem elementMap)"
+        using sizes_match elem_lookup
+        unfolding fmap_matches_sizes_def by force
+      ultimately show ?thesis using updatedVal_eq ty_eq elem_wk elem_rt dims_wk dims_match
+        by simp
+    qed
+  next
+    case (CV_Bool x)
+    with Cons.prems show ?thesis by (cases step) auto
+  next
+    case (CV_FiniteInt x1 x2 x3)
+    with Cons.prems show ?thesis by (cases step) auto
+  qed
+qed
+
 
 (* Type soundness for CoreTm_Record *)
 lemma type_soundness_record:
@@ -2836,12 +3154,142 @@ next
             next
               case (Inr initialVal)
               \<comment> \<open>Need to show state_matches_env after alloc and fmupd\<close>
-              with CoreStmt_VarDecl Var NotGhost show ?thesis sorry
+              from init_sound Inr have val_typed: "value_has_type env initialVal varTy" by simp
+              (* Extract env' shape from typechecking *)
+              from typing CoreStmt_VarDecl Var NotGhost have
+                fresh: "fmlookup (TE_TermVars env) varName = None" and
+                env'_eq: "env' = env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+                                       TE_ConstNames := TE_ConstNames env \<rparr>"
+                by (auto split: if_splits)
+              (* varName is not ghost (it's fresh, and ghost vars are a subset of term vars) *)
+              from "4.prems"(2) have "TE_GhostVars env |\<subseteq>| fmdom (TE_TermVars env)"
+                unfolding tyenv_well_formed_def tyenv_ghost_vars_subset_def by simp
+              with fresh have var_not_ghost: "varName |\<notin>| TE_GhostVars env"
+                by (metis fin_mono fmdom_notI)
+              (* Decompose the interpreter result *)
+              obtain state' addr where alloc_eq: "(state', addr) = alloc_store state initialVal"
+                by (cases "alloc_store state initialVal") auto
+              let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>"
+              have interp_eq: "interp_statement (Suc fuel) state
+                  (CoreStmt_VarDecl NotGhost varName Var varTy initTm) =
+                  Inr (Continue ?state'')"
+                using Inr alloc_eq by (simp add: case_prod_beta split: prod.splits)
+              (* Apply state_matches_env_add_nonconst_local *)
+              have "state_matches_env ?state'' env'"
+                using state_matches_env_add_nonconst_local[OF "4.prems"(1) val_typed
+                    alloc_eq refl env'_eq var_not_ghost] .
+              with interp_eq CoreStmt_VarDecl Var NotGhost show ?thesis by simp
             qed
           next
             case Ghost
-            \<comment> \<open>Ghost Var VarDecl: interpreter drops from locals/refs\<close>
-            with typing CoreStmt_VarDecl Var show ?thesis sorry
+            \<comment> \<open>Ghost Var VarDecl: interpreter is a no-op\<close>
+            (* Extract facts from typechecking *)
+            from typing CoreStmt_VarDecl Var Ghost have
+              fresh: "fmlookup (TE_TermVars env) varName = None" and
+              env'_eq: "env' = env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+                                     TE_GhostVars := finsert varName (TE_GhostVars env),
+                                     TE_ConstNames := TE_ConstNames env \<rparr>"
+              by (auto split: if_splits)
+            (* The interpreter returns state unchanged *)
+            have interp_eq: "interp_statement (Suc fuel) state
+                (CoreStmt_VarDecl Ghost varName Var varTy initTm) = Inr (Continue state)"
+              by simp
+            (* From state_matches_env state env, extract components *)
+            from "4.prems"(1) have
+              old_vars: "vars_exist_in_state state env" and
+              old_no_extra: "no_extra_vars state env" and
+              old_funs: "funs_exist_in_state state env" and
+              old_no_extra_funs: "no_extra_funs state env" and
+              old_non_consts: "non_consts_in_locals_or_refs state env" and
+              old_const_names: "const_names_match state env"
+              by (simp_all add: state_matches_env_def)
+            (* varName is not in the interpreter state *)
+            from old_no_extra fresh have var_absent:
+              "fmlookup (IS_Locals state) varName = None"
+              "fmlookup (IS_Refs state) varName = None"
+              "fmlookup (IS_Globals state) varName = None"
+              by (simp_all add: no_extra_vars_def)
+            (* value_has_type is the same in env and env' *)
+            have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
+                              "TE_Datatypes env' = TE_Datatypes env"
+                              "TE_TypeVars env' = TE_TypeVars env"
+                              "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+              using env'_eq by simp_all
+            have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
+              using value_has_type_cong_env[OF env'_fields] .
+            (* 1. vars_exist_in_state: ghost vars are excluded, others unchanged *)
+            have "vars_exist_in_state state env'"
+              unfolding vars_exist_in_state_def
+            proof (intro allI impI, elim conjE)
+              fix name ty
+              assume lk: "fmlookup (TE_TermVars env') name = Some ty"
+                and ng: "name |\<notin>| TE_GhostVars env'"
+              from lk ng have lk_old: "fmlookup (TE_TermVars env) name = Some ty"
+                and ng_old: "name |\<notin>| TE_GhostVars env"
+                using env'_eq by (auto split: if_splits)
+              from old_vars lk_old ng_old
+              have "term_var_in_state_with_type state env name ty"
+                unfolding vars_exist_in_state_def by blast
+              thus "term_var_in_state_with_type state env' name ty"
+                unfolding term_var_in_state_with_type_def
+                using vht_eq by (auto split: option.splits sum.splits)
+            qed
+            (* 2. no_extra_vars: varName is ghost so allowed; others from old *)
+            moreover have "no_extra_vars state env'"
+              unfolding no_extra_vars_def
+            proof (intro allI impI, elim disjE)
+              fix name
+              assume "fmlookup (TE_TermVars env') name = None"
+              hence "fmlookup (TE_TermVars env) name = None"
+                using env'_eq by (auto split: if_splits)
+              with old_no_extra show "fmlookup (IS_Locals state) name = None \<and>
+                  fmlookup (IS_Refs state) name = None \<and>
+                  fmlookup (IS_Globals state) name = None"
+                by (simp add: no_extra_vars_def)
+            next
+              fix name
+              assume ghost_in_env': "name |\<in>| TE_GhostVars env'"
+              show "fmlookup (IS_Locals state) name = None \<and>
+                  fmlookup (IS_Refs state) name = None \<and>
+                  fmlookup (IS_Globals state) name = None"
+              proof (cases "name = varName")
+                case True
+                with var_absent show ?thesis by simp
+              next
+                case False
+                with ghost_in_env' env'_eq have "name |\<in>| TE_GhostVars env" by simp
+                with old_no_extra show ?thesis by (simp add: no_extra_vars_def)
+              qed
+            qed
+            (* 3. funs_exist_in_state: unchanged *)
+            moreover have "funs_exist_in_state state env'"
+              using old_funs env'_eq unfolding funs_exist_in_state_def
+              by (simp add: fun_info_matches_interp_fun_def)
+            (* 4. no_extra_funs: unchanged *)
+            moreover have "no_extra_funs state env'"
+              using old_no_extra_funs env'_eq unfolding no_extra_funs_def by simp
+            (* 5. non_consts_in_locals_or_refs: ghost vars are excluded *)
+            moreover have "non_consts_in_locals_or_refs state env'"
+              unfolding non_consts_in_locals_or_refs_def
+            proof (intro allI impI, elim conjE)
+              fix name
+              assume "fmlookup (TE_TermVars env') name \<noteq> None"
+                and "name |\<notin>| TE_GhostVars env'"
+                and "name |\<notin>| TE_ConstNames env'"
+              hence "fmlookup (TE_TermVars env) name \<noteq> None"
+                and "name |\<notin>| TE_GhostVars env"
+                and "name |\<notin>| TE_ConstNames env"
+                using env'_eq by (auto split: if_splits)
+              with old_non_consts show "fmlookup (IS_Locals state) name \<noteq> None \<or>
+                  fmlookup (IS_Refs state) name \<noteq> None"
+                by (simp add: non_consts_in_locals_or_refs_def)
+            qed
+            (* 6. const_names_match: TE_ConstNames unchanged *)
+            moreover have "const_names_match state env'"
+              using old_const_names env'_eq by (simp add: const_names_match_def)
+            ultimately have "state_matches_env state env'"
+              by (simp add: state_matches_env_def)
+            with CoreStmt_VarDecl Var Ghost show ?thesis by simp
           qed
         next
           case Ref
