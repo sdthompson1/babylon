@@ -748,7 +748,7 @@ proof -
           fmlookup (IS_Refs state'') name \<noteq> None"
     proof (cases "name = var")
       case True
-      (* var |∉| finsert var ... is False, so this case is vacuous *)
+      (* var |\<notin>| finsert var ... is False, so this case is vacuous *)
       then show ?thesis using nc env'_eq by simp
     next
       case False
