@@ -243,6 +243,7 @@ fun restore_scope :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> 
   "restore_scope old_state new_state =
     new_state \<lparr> IS_Locals := IS_Locals old_state,
                 IS_Refs := IS_Refs old_state,
+                IS_ConstNames := IS_ConstNames old_state,
                 IS_Store := take (length (IS_Store old_state)) (IS_Store new_state) \<rparr>"
 
 (* Exchange values at two lvalue locations *)
@@ -293,7 +294,8 @@ fun process_one_arg :: "((string \<times> VarOrRef)
   "process_one_arg _ (Inl err) = Inl err"
 | "process_one_arg ((name, Var), _, Inr val) (Inr state) =
     (let (state', addr) = alloc_store state val
-    in Inr (state' \<lparr> IS_Locals := fmupd name addr (IS_Locals state') \<rparr>))"
+    in Inr (state' \<lparr> IS_Locals := fmupd name addr (IS_Locals state'),
+                      IS_ConstNames := finsert name (IS_ConstNames state') \<rparr>))"
 | "process_one_arg ((name, Var), _, Inl err) _ = Inl err"
 | "process_one_arg ((name, Ref), Inr (addr, path), Inr _) (Inr state) =
     Inr (state \<lparr> IS_Refs := fmupd name (addr, path) (IS_Refs state) \<rparr>)"
@@ -527,7 +529,8 @@ where
     | Inr initialVal \<Rightarrow>
         (let (state', addr) = alloc_store state initialVal
         in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                    IS_Refs := fmdrop varName (IS_Refs state') \<rparr>))))"
+                                    IS_Refs := fmdrop varName (IS_Refs state'),
+                                    IS_ConstNames := IS_ConstNames state' |-| {|varName|} \<rparr>))))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
@@ -547,7 +550,8 @@ where
           (case interp_writable_lvalue fuel state lvalueTm of
             Inr addrAndPath \<Rightarrow>
               Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                                     IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> ))
+                                     IS_Refs := fmupd varName addrAndPath (IS_Refs state),
+                                     IS_ConstNames := IS_ConstNames state |-| {|varName|} \<rparr> ))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 
