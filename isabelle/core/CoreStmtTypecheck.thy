@@ -74,7 +74,7 @@ where
 
 
 (* ========================================================================== *)
-(* Well-formedness preservation                                               *)
+(* Well-formedness and return type preservation                               *)
 (* ========================================================================== *)
 
 (* core_statement_type preserves tyenv_well_formed *)
@@ -139,6 +139,62 @@ next
   case (CoreStmt_ShowHide _ _) with assms show ?thesis sorry
 qed
 
+(* core_statement_type preserves TE_ReturnType *)
+lemma core_statement_type_preserves_return_type:
+  assumes "core_statement_type env ghost stmt = Some env'"
+  shows "TE_ReturnType env' = TE_ReturnType env"
+using assms proof (cases stmt)
+  case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
+  show ?thesis proof (cases varOrRef)
+    case Var
+    with assms CoreStmt_VarDecl show ?thesis by (auto split: if_splits)
+  next
+    case Ref
+    with assms CoreStmt_VarDecl show ?thesis sorry
+  qed
+next
+  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+  with assms show ?thesis by (auto split: if_splits option.splits)
+next
+  case (CoreStmt_Fix _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Obtain _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Use _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Swap _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Return _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Assert _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Assume _) with assms show ?thesis sorry
+next
+  case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_ShowHide _ _) with assms show ?thesis sorry
+qed
+
+(* core_statement_list_type preserves TE_ReturnType *)
+lemma core_statement_list_type_preserves_return_type:
+  assumes "core_statement_list_type env ghost stmts = Some env'"
+  shows "TE_ReturnType env' = TE_ReturnType env"
+using assms proof (induction stmts arbitrary: env)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons stmt stmts)
+  from Cons.prems obtain env_mid where
+    mid: "core_statement_type env ghost stmt = Some env_mid" and
+    rest: "core_statement_list_type env_mid ghost stmts = Some env'"
+    by (auto split: option.splits)
+  from core_statement_type_preserves_return_type[OF mid]
+  have "TE_ReturnType env_mid = TE_ReturnType env" .
+  with Cons.IH[OF rest] show ?case by simp
+qed
+
 (* core_statement_list_type preserves tyenv_well_formed *)
 lemma core_statement_list_type_preserves_well_formed:
   assumes "core_statement_list_type env ghost stmts = Some env'"
@@ -156,6 +212,74 @@ next
   from core_statement_type_preserves_well_formed[OF mid Cons.prems(2)]
   have "tyenv_well_formed env_mid" .
   from Cons.IH[OF rest this] show ?case .
+qed
+
+
+(* ========================================================================== *)
+(* Monotonicity: typechecking produces a superset environment                 *)
+(* ========================================================================== *)
+
+lemma core_statement_type_monotone:
+  assumes "core_statement_type env ghost stmt = Some env'"
+  shows "tyenv_subset env env'"
+using assms proof (cases stmt)
+  case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
+  show ?thesis proof (cases varOrRef)
+    case Var
+    from assms CoreStmt_VarDecl Var have env'_eq:
+      "env' = env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+                    TE_GhostVars := (if declGhost = Ghost
+                                     then finsert varName (TE_GhostVars env)
+                                     else TE_GhostVars env),
+                    TE_ConstNames := TE_ConstNames env \<rparr>"
+      by (auto split: if_splits)
+    show ?thesis unfolding env'_eq tyenv_subset_def
+      using CoreStmt_VarDecl Var assms fmupd_lookup fset_eq_fsubset fsubset_finsertI by force
+  next
+    case Ref
+    with assms CoreStmt_VarDecl show ?thesis sorry
+  qed
+next
+  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  thus ?thesis by (simp add: tyenv_subset_refl)
+next
+  case (CoreStmt_Fix _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Obtain _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Use _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Swap _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Return _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Assert _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Assume _) with assms show ?thesis sorry
+next
+  case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
+next
+  case (CoreStmt_ShowHide _ _) with assms show ?thesis sorry
+qed
+
+lemma core_statement_list_type_monotone:
+  assumes "core_statement_list_type env ghost stmts = Some env'"
+  shows "tyenv_subset env env'"
+using assms proof (induction stmts arbitrary: env)
+  case Nil
+  then show ?case by (simp add: tyenv_subset_refl)
+next
+  case (Cons stmt stmts)
+  from Cons.prems obtain env_mid where
+    mid: "core_statement_type env ghost stmt = Some env_mid" and
+    rest: "core_statement_list_type env_mid ghost stmts = Some env'"
+    by (auto split: option.splits)
+  from core_statement_type_monotone[OF mid]
+  have "tyenv_subset env env_mid" .
+  with tyenv_subset_trans Cons.IH[OF rest] show ?case by blast
 qed
 
 end

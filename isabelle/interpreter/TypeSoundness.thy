@@ -41,10 +41,13 @@ fun sound_function_call_result :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow
 | "sound_function_call_result env retTy (Inr (newState, retVal)) =
     (state_matches_env newState env \<and> value_has_type env retVal retTy)"
 
-fun sound_statement_result :: "CoreTyEnv \<Rightarrow> InterpError + 'w ExecResult \<Rightarrow> bool" where
-  "sound_statement_result env' (Inl err) = sound_error_result err"
-| "sound_statement_result env' (Inr (Continue state')) = state_matches_env state' env'"
-| "sound_statement_result env' (Inr (Return _ _)) = undefined"
+fun sound_statement_result :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> InterpError + 'w ExecResult \<Rightarrow> bool" where
+  "sound_statement_result env env' (Inl err) = sound_error_result err"
+| "sound_statement_result env env' (Inr (Continue state')) = state_matches_env state' env'"
+| "sound_statement_result env env' (Inr (Return state' retVal)) =
+    (value_has_type env retVal (TE_ReturnType env) \<and>
+     (\<exists>env_mid. tyenv_subset env env_mid \<and> tyenv_subset env_mid env' \<and>
+                state_matches_env state' env_mid))"
 
 
 (*-----------------------------------------------------------------------------*)
@@ -1529,10 +1532,10 @@ theorem type_soundness:
       sound_lvalue_result state env ty (interp_writable_lvalue fuel state tm)"
   and interp_statement_sound:
     "core_statement_type env NotGhost stmt = Some env' \<longrightarrow>
-      sound_statement_result env' (interp_statement fuel state stmt)"
+      sound_statement_result env env' (interp_statement fuel state stmt)"
   and interp_statement_list_sound:
     "core_statement_list_type env NotGhost stmts = Some env' \<longrightarrow>
-      sound_statement_result env' (interp_statement_list fuel state stmts)"
+      sound_statement_result env env' (interp_statement_list fuel state stmts)"
   and interp_function_call_sound:
     "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
        list_all2 (\<lambda>tm expectedTy.
@@ -2246,7 +2249,7 @@ next
                 core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
                 sound_term_result env0 ty0 (interp_term fuel state0 tm0)"
         by (simp add: "4.prems"(1,2) Suc.IH(1))
-      show "sound_statement_result env' (interp_statement (Suc fuel) state stmt)"
+      show "sound_statement_result env env' (interp_statement (Suc fuel) state stmt)"
       proof (cases stmt)
         case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
         then show ?thesis proof (cases varOrRef)
@@ -2451,15 +2454,15 @@ next
                 state_matches_env state0 env0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 core_statement_type env0 NotGhost stmt0 = Some env0' \<Longrightarrow>
-                sound_statement_result env0' (interp_statement fuel state0 stmt0)"
+                sound_statement_result env0 env0' (interp_statement fuel state0 stmt0)"
         by (simp add: "5.prems"(1,2) Suc.IH(4))
       have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) stmts0 env0'.
                 state_matches_env state0 env0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 core_statement_list_type env0 NotGhost stmts0 = Some env0' \<Longrightarrow>
-                sound_statement_result env0' (interp_statement_list fuel state0 stmts0)"
+                sound_statement_result env0 env0' (interp_statement_list fuel state0 stmts0)"
         by (simp add: "5.prems"(1,2) Suc.IH(5))
-      show "sound_statement_result env' (interp_statement_list (Suc fuel) state stmts)"
+      show "sound_statement_result env env' (interp_statement_list (Suc fuel) state stmts)"
       proof (cases stmts)
         case Nil
         with typing have "env' = env" by simp
@@ -2471,7 +2474,7 @@ next
           rest_ty: "core_statement_list_type env_mid NotGhost stmts0 = Some env'"
           by (auto split: option.splits)
         from IH_stmt[OF "5.prems"(1,2) stmt_ty]
-        have stmt_sound: "sound_statement_result env_mid (interp_statement fuel state stmt0)" .
+        have stmt_sound: "sound_statement_result env env_mid (interp_statement fuel state stmt0)" .
         show ?thesis proof (cases "interp_statement fuel state stmt0")
           case (Inl err)
           with stmt_sound have "sound_error_result err" by simp
@@ -2484,11 +2487,73 @@ next
             from core_statement_type_preserves_well_formed[OF stmt_ty "5.prems"(2)]
             have wf_mid: "tyenv_well_formed env_mid" .
             from IH_stmts[OF sme wf_mid rest_ty]
-            have "sound_statement_result env' (interp_statement_list fuel state' stmts0)" .
-            with Inr Continue Cons show ?thesis by simp
+            have "sound_statement_result env_mid env' (interp_statement_list fuel state' stmts0)" .
+            from Inr Continue
+            have interp_stmt_eq: "interp_statement fuel state stmt0 = Inr (Continue state')"
+              by simp
+            show ?thesis proof (cases "interp_statement_list fuel state' stmts0")
+              case (Inl err)
+              from \<open>sound_statement_result env_mid env' (interp_statement_list fuel state' stmts0)\<close>
+                Inl have "sound_error_result err" by simp
+              then show ?thesis using Cons interp_stmt_eq Inl by simp
+            next
+              case (Inr result2)
+              then show ?thesis proof (cases result2)
+                case (Continue state'')
+                from \<open>sound_statement_result env_mid env' (interp_statement_list fuel state' stmts0)\<close>
+                  Inr Continue
+                have "state_matches_env state'' env'" by simp
+                then show ?thesis using Cons interp_stmt_eq Inr Continue by simp
+              next
+                case (Return state'' retVal2)
+                \<comment> \<open>The rest of the list returned. We get env_mid2 between env_mid and env'.
+                   We need env_mid2 between env and env'. Use monotonicity of the first stmt.\<close>
+                from \<open>sound_statement_result env_mid env' (interp_statement_list fuel state' stmts0)\<close>
+                  \<open>interp_statement_list fuel state' stmts0 = Inr result2\<close> Return
+                obtain env_mid2 where
+                  vht: "value_has_type env_mid retVal2 (TE_ReturnType env_mid)" and
+                  sub1: "tyenv_subset env_mid env_mid2" and
+                  sub2: "tyenv_subset env_mid2 env'" and
+                  sme2: "state_matches_env state'' env_mid2"
+                  by auto
+                from core_statement_type_monotone[OF stmt_ty]
+                have sub_env_envmid: "tyenv_subset env env_mid" .
+                from tyenv_subset_trans[OF this sub1]
+                have sub_env_mid2: "tyenv_subset env env_mid2" .
+                \<comment> \<open>Transfer value_has_type from env_mid to env\<close>
+                from sub_env_envmid
+                have "TE_DataCtors env = TE_DataCtors env_mid"
+                  "TE_Datatypes env = TE_Datatypes env_mid"
+                  "TE_TypeVars env = TE_TypeVars env_mid"
+                  "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+                  "TE_ReturnType env = TE_ReturnType env_mid"
+                  unfolding tyenv_subset_def by simp_all
+                hence vht_env: "value_has_type env retVal2 (TE_ReturnType env)"
+                  using vht value_has_type_cong_env by metis
+                from \<open>interp_statement_list fuel state' stmts0 = Inr result2\<close> Return
+                have interp_rest_eq: "interp_statement_list fuel state' stmts0 = Inr (Return state'' retVal2)"
+                  by simp
+                from vht_env sub_env_mid2 sub2 sme2
+                show ?thesis
+                  using Cons interp_stmt_eq interp_rest_eq by auto
+              qed
+            qed
           next
             case (Return state' retVal)
-            with Inr Cons show ?thesis sorry
+            \<comment> \<open>The first statement returned. We get env_mid2 between env and env_mid.
+               We need env_mid2 between env and env'. Use monotonicity of the rest.\<close>
+            with Inr stmt_sound obtain env_mid2 where
+              vht: "value_has_type env retVal (TE_ReturnType env)" and
+              sub1: "tyenv_subset env env_mid2" and
+              sub2: "tyenv_subset env_mid2 env_mid" and
+              sme2: "state_matches_env state' env_mid2"
+              by auto
+            from core_statement_list_type_monotone[OF rest_ty]
+            have "tyenv_subset env_mid env'" .
+            from tyenv_subset_trans[OF sub2 this]
+            have "tyenv_subset env_mid2 env'" .
+            with vht sub1 sme2
+            show ?thesis using Inr Return Cons by auto
           qed
         qed
       qed

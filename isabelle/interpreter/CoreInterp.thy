@@ -662,7 +662,7 @@ where
                         Inr (Return postCallState retVal) \<Rightarrow> 
                           Inr (restore_scope state postCallState, retVal)
                       | Inr (Continue _) \<Rightarrow>
-                          Inl TypeError  \<comment> \<open>Reached end of function without return statement\<close>
+                          Inl RuntimeError  \<comment> \<open>Reached end of function without return statement\<close>
                       | Inl err \<Rightarrow>
                           Inl err)
                   | Inr externFun \<Rightarrow>
