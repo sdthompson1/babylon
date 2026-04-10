@@ -48,17 +48,53 @@ where
            | None \<Rightarrow> None)
      else None)"
 
+  (* Return: the term must have the expected return type.
+     We require ghost = TE_FunctionGhost env:
+       - In a ghost function, we always typecheck in Ghost mode, so both are Ghost.
+       - In a non-ghost function, Return is only allowed in NotGhost mode
+         (not inside a Ghost block). *)
+| "core_statement_type env ghost (CoreStmt_Return tm) =
+    (if ghost = TE_FunctionGhost env
+        \<and> core_term_type env ghost tm = Some (TE_ReturnType env)
+     then Some env
+     else None)"
+
+  (* Swap: both sides must be writable lvalues of the same type *)
+| "core_statement_type env ghost (CoreStmt_Swap swapGhost lhsTm rhsTm) =
+    (if (ghost = Ghost \<longrightarrow> swapGhost = Ghost)
+        \<and> is_writable_lvalue env lhsTm
+        \<and> is_writable_lvalue env rhsTm
+     then (case core_term_type env swapGhost lhsTm of
+             Some lhsTy \<Rightarrow>
+               if core_term_type env swapGhost rhsTm = Some lhsTy
+               then Some env
+               else None
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Assert: condition must be bool; proof body typechecks in Ghost context *)
+| "core_statement_type env ghost (CoreStmt_Assert condTm proofBody) =
+    (if core_term_type env Ghost condTm = Some CoreTy_Bool
+     then (case core_statement_list_type env Ghost proofBody of
+             Some _ \<Rightarrow> Some env
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Assume: term must be bool *)
+| "core_statement_type env ghost (CoreStmt_Assume tm) =
+    (if core_term_type env Ghost tm = Some CoreTy_Bool
+     then Some env
+     else None)"
+
+  (* ShowHide: no-op *)
+| "core_statement_type env ghost (CoreStmt_ShowHide _ _) = Some env"
+
   (* TODO: remaining statement forms *)
 | "core_statement_type _ _ (CoreStmt_Fix _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Obtain _ _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Use _) = undefined"
-| "core_statement_type _ _ (CoreStmt_Swap _ _ _) = undefined"
-| "core_statement_type _ _ (CoreStmt_Return _) = undefined"
-| "core_statement_type _ _ (CoreStmt_Assert _ _) = undefined"
-| "core_statement_type _ _ (CoreStmt_Assume _) = undefined"
 | "core_statement_type _ _ (CoreStmt_While _ _ _ _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Match _ _ _) = undefined"
-| "core_statement_type _ _ (CoreStmt_ShowHide _ _) = undefined"
 
   (* Statement lists *)
 | "core_statement_list_type env _ [] = Some env"
@@ -124,19 +160,29 @@ next
 next
   case (CoreStmt_Use _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Swap _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Swap _ _ _)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  with assms show ?thesis by simp
 next
-  case (CoreStmt_Return _) with assms show ?thesis sorry
+  case (CoreStmt_Return _)
+  with assms have "env' = env" by (auto split: if_splits)
+  with assms show ?thesis by simp
 next
-  case (CoreStmt_Assert _ _) with assms show ?thesis sorry
+  case (CoreStmt_Assert _ _)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  with assms show ?thesis by simp
 next
-  case (CoreStmt_Assume _) with assms show ?thesis sorry
+  case (CoreStmt_Assume _)
+  with assms have "env' = env" by (auto split: if_splits)
+  with assms show ?thesis by simp
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
   case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_ShowHide _ _) with assms show ?thesis sorry
+  case (CoreStmt_ShowHide _ _)
+  with assms have "env' = env" by simp
+  with assms show ?thesis by simp
 qed
 
 (* core_statement_type preserves TE_ReturnType *)
@@ -162,19 +208,24 @@ next
 next
   case (CoreStmt_Use _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Swap _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Swap _ _ _)
+  with assms show ?thesis by (auto split: if_splits option.splits)
 next
-  case (CoreStmt_Return _) with assms show ?thesis sorry
+  case (CoreStmt_Return _)
+  with assms show ?thesis by (auto split: if_splits)
 next
-  case (CoreStmt_Assert _ _) with assms show ?thesis sorry
+  case (CoreStmt_Assert _ _)
+  with assms show ?thesis by (auto split: if_splits option.splits)
 next
-  case (CoreStmt_Assume _) with assms show ?thesis sorry
+  case (CoreStmt_Assume _)
+  with assms show ?thesis by (auto split: if_splits)
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
   case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_ShowHide _ _) with assms show ?thesis sorry
+  case (CoreStmt_ShowHide _ _)
+  with assms show ?thesis by simp
 qed
 
 (* core_statement_list_type preserves TE_ReturnType *)
@@ -250,19 +301,29 @@ next
 next
   case (CoreStmt_Use _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Swap _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Swap _ _ _)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  thus ?thesis by (simp add: tyenv_subset_refl)
 next
-  case (CoreStmt_Return _) with assms show ?thesis sorry
+  case (CoreStmt_Return _)
+  with assms have "env' = env" by (auto split: if_splits)
+  thus ?thesis by (simp add: tyenv_subset_refl)
 next
-  case (CoreStmt_Assert _ _) with assms show ?thesis sorry
+  case (CoreStmt_Assert _ _)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  thus ?thesis by (simp add: tyenv_subset_refl)
 next
-  case (CoreStmt_Assume _) with assms show ?thesis sorry
+  case (CoreStmt_Assume _)
+  with assms have "env' = env" by (auto split: if_splits)
+  thus ?thesis by (simp add: tyenv_subset_refl)
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
   case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_ShowHide _ _) with assms show ?thesis sorry
+  case (CoreStmt_ShowHide _ _)
+  with assms have "env' = env" by simp
+  thus ?thesis by (simp add: tyenv_subset_refl)
 qed
 
 lemma core_statement_list_type_monotone:

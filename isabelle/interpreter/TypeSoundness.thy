@@ -2433,17 +2433,63 @@ next
       next
         case (CoreStmt_Swap _ _ _) with typing show ?thesis sorry
       next
-        case (CoreStmt_Return _) with typing show ?thesis sorry
+        case (CoreStmt_Return tm)
+        \<comment> \<open>Return: evaluate the term; if successful, return the value.\<close>
+        from typing CoreStmt_Return have
+          tm_ty: "core_term_type env NotGhost tm = Some (TE_ReturnType env)" and
+          env'_eq: "env' = env"
+          by (auto split: if_splits)
+        from IH_term[OF "4.prems"(1,2) tm_ty]
+        have tm_sound: "sound_term_result env (TE_ReturnType env) (interp_term fuel state tm)" .
+        show ?thesis proof (cases "interp_term fuel state tm")
+          case (Inl err)
+          with tm_sound have "sound_error_result err" by simp
+          with Inl CoreStmt_Return show ?thesis by simp
+        next
+          case (Inr val)
+          with tm_sound have vht: "value_has_type env val (TE_ReturnType env)" by simp
+          have interp_eq: "interp_statement (Suc fuel) state (CoreStmt_Return tm)
+                          = Inr (Return state val)"
+            using Inr by simp
+          \<comment> \<open>Use env itself as env_mid (reflexivity of tyenv_subset).\<close>
+          have "sound_statement_result env env' (Inr (Return state val))"
+            unfolding env'_eq using vht "4.prems"(1)
+            by (auto intro!: exI[of _ env] tyenv_subset_refl)
+          with CoreStmt_Return interp_eq show ?thesis by simp
+        qed
       next
-        case (CoreStmt_Assert _ _) with typing show ?thesis sorry
+        case (CoreStmt_Assert condTm proofBody)
+        \<comment> \<open>Assert is a runtime no-op: Inr (Continue state), and env' = env.\<close>
+        from typing CoreStmt_Assert have env'_eq: "env' = env"
+          by (auto split: if_splits option.splits)
+        have interp_eq: "interp_statement (Suc fuel) state (CoreStmt_Assert condTm proofBody)
+                        = Inr (Continue state)"
+          by simp
+        from "4.prems"(1) env'_eq have "state_matches_env state env'" by simp
+        with CoreStmt_Assert interp_eq show ?thesis by simp
       next
-        case (CoreStmt_Assume _) with typing show ?thesis sorry
+        case (CoreStmt_Assume tm)
+        \<comment> \<open>Assume is a runtime no-op: Inr (Continue state), and env' = env.\<close>
+        from typing CoreStmt_Assume have env'_eq: "env' = env"
+          by (auto split: if_splits)
+        have interp_eq: "interp_statement (Suc fuel) state (CoreStmt_Assume tm)
+                        = Inr (Continue state)"
+          by simp
+        from "4.prems"(1) env'_eq have "state_matches_env state env'" by simp
+        with CoreStmt_Assume interp_eq show ?thesis by simp
       next
         case (CoreStmt_While _ _ _ _ _) with typing show ?thesis sorry
       next
         case (CoreStmt_Match _ _ _) with typing show ?thesis sorry
       next
-        case (CoreStmt_ShowHide _ _) with typing show ?thesis sorry
+        case (CoreStmt_ShowHide showOrHide name)
+        \<comment> \<open>ShowHide is a runtime no-op: Inr (Continue state), and env' = env.\<close>
+        from typing CoreStmt_ShowHide have env'_eq: "env' = env" by simp
+        have interp_eq: "interp_statement (Suc fuel) state (CoreStmt_ShowHide showOrHide name)
+                        = Inr (Continue state)"
+          by simp
+        from "4.prems"(1) env'_eq have "state_matches_env state env'" by simp
+        with CoreStmt_ShowHide interp_eq show ?thesis by simp
       qed
     qed
   next

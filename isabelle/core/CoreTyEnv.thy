@@ -37,6 +37,11 @@ record CoreTyEnv =
   (* Expected return type of the enclosing function *)
   TE_ReturnType :: CoreType
 
+  (* Ghost-ness of the enclosing function. If the enclosing function is Ghost,
+     then Return statements are allowed even when typechecking in Ghost mode;
+     otherwise, Return is only allowed in NotGhost mode. *)
+  TE_FunctionGhost :: GhostOrNot
+
   (* Function signatures *)
   TE_Functions :: "(string, FunInfo) fmap"
 
@@ -67,6 +72,7 @@ definition tyenv_subset :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool
     TE_GhostVars env1 |\<subseteq>| TE_GhostVars env2 \<and>
     TE_ConstNames env1 |\<subseteq>| TE_ConstNames env2 \<and>
     TE_ReturnType env1 = TE_ReturnType env2 \<and>
+    TE_FunctionGhost env1 = TE_FunctionGhost env2 \<and>
     TE_Functions env1 = TE_Functions env2 \<and>
     TE_Datatypes env1 = TE_Datatypes env2 \<and>
     TE_DataCtors env1 = TE_DataCtors env2 \<and>
