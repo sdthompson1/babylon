@@ -223,6 +223,26 @@ fun update_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarro
     | None \<Rightarrow> Inl RuntimeError)"  (* array index out of bounds *)
 | "update_value_at_path _ _ _ = Inl TypeError"  (* path didn't match the found value *)
 
+(* Given a type and an lvalue path, compute the type of the sub-value at that path.
+   This mirrors get_value_at_path but operates on types instead of values.
+   Returns None if the path is incompatible with the type. *)
+fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath list \<Rightarrow> CoreType option" where
+  "type_at_path env ty [] = Some ty"
+| "type_at_path env (CoreTy_Record fieldTypes) (LVPath_RecordProj field # rest) =
+    (case map_of fieldTypes field of
+      Some fieldTy \<Rightarrow> type_at_path env fieldTy rest
+    | None \<Rightarrow> None)"
+| "type_at_path env (CoreTy_Name dtName argTypes) (LVPath_VariantProj ctor # rest) =
+    (case fmlookup (TE_DataCtors env) ctor of
+      Some (dtName2, metavars, payloadTy) \<Rightarrow>
+        if dtName = dtName2 then
+          type_at_path env (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+        else None
+    | None \<Rightarrow> None)"
+| "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
+    type_at_path env elemTy rest"
+| "type_at_path _ _ (_ # _) = None"
+
 
 (* ========================================================================== *)
 (* Store and scope operations *)
@@ -255,13 +275,16 @@ fun perform_swap :: "'w InterpState \<Rightarrow> (nat \<times> LValuePath list)
         (case get_value_at_path (IS_Store state ! addr2) path2 of
           Inl err \<Rightarrow> Inl err
         | Inr val2 \<Rightarrow>
+            \<comment> \<open>Perform the first update and continue from the resulting store, so that
+                if addr1 = addr2 the second update sees the first update's result.\<close>
             (case update_value_at_path (IS_Store state ! addr1) path1 val2 of
               Inl err \<Rightarrow> Inl err
             | Inr new_val1 \<Rightarrow>
-                (case update_value_at_path (IS_Store state ! addr2) path2 val1 of
+                (let store1 = (IS_Store state)[addr1 := new_val1] in
+                case update_value_at_path (store1 ! addr2) path2 val1 of
                   Inl err \<Rightarrow> Inl err
                 | Inr new_val2 \<Rightarrow>
-                    Inr (state \<lparr> IS_Store := (IS_Store state)[addr1 := new_val1, addr2 := new_val2] \<rparr>)))))"
+                    Inr (state \<lparr> IS_Store := store1[addr2 := new_val2] \<rparr>)))))"
 
 
 (* ========================================================================== *)

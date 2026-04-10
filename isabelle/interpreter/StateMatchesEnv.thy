@@ -2,19 +2,32 @@ theory StateMatchesEnv
   imports CoreInterp
 begin
 
-(* This predicate asserts that "name" is defined as a term variable (local, ref or
-   global) in the state, and its value has the given type (in the given environment) *)
-definition term_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> bool" where
-  "term_var_in_state_with_type state env name ty =
+(* Store typing: a list of types, one per store slot, giving each slot's designated
+   type. Length-matched with IS_Store state. Pins down the type of each slot so that
+   we avoid the type-uniqueness problem (e.g. an empty array value has many possible
+   array types; the store typing says which one the slot was allocated with). *)
+
+(* For a local variable, the slot's designated type must be exactly the variable's
+   declared type (no drift to a different valid type).
+   For a ref, the path through the slot type must arrive at the variable's declared type.
+     - If the ref is "live" (get_value_at_path succeeds), the obtained value has type ty
+       (by get_value_at_path_type with slotTy = storeTyping ! addr).
+     - If the ref is "dangling" (get_value_at_path fails), the error is RuntimeError
+       (by get_value_at_path_error_is_runtime). RuntimeError is a sound error result.
+   This models Babylon's semantics where e.g. binding a ref into a variant ctor
+   (match x { case Just(ref r) => ... }) and then reassigning x = Nothing leaves r
+   dangling. In real Babylon programs, such accesses are prevented statically by
+   SMT-discharged proof obligations; the Core language typechecker does not (and
+   need not) enforce this. *)
+definition term_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list
+    \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "term_var_in_state_with_type state env storeTyping name ty =
     (case fmlookup (IS_Locals state) name of
-      Some addr \<Rightarrow> addr < length (IS_Store state) \<and>
-                   value_has_type env (IS_Store state ! addr) ty
+      Some addr \<Rightarrow> addr < length (IS_Store state) \<and> storeTyping ! addr = ty
     | None \<Rightarrow>
       (case fmlookup (IS_Refs state) name of
         Some (addr, path) \<Rightarrow> addr < length (IS_Store state) \<and>
-                             (case get_value_at_path (IS_Store state ! addr) path of
-                               Inr v \<Rightarrow> value_has_type env v ty
-                             | Inl err \<Rightarrow> False)
+                             type_at_path env (storeTyping ! addr) path = Some ty
       | None \<Rightarrow>
         (case fmlookup (IS_Globals state) name of
           Some val \<Rightarrow> value_has_type env val ty
@@ -39,12 +52,12 @@ definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<
 
 
 (* This asserts that all variables in the type env (TE_TermVars, but not ghost)
-   also exist in the state (either IS_Locals, IS_Refs or IS_Globals) 
+   also exist in the state (either IS_Locals, IS_Refs or IS_Globals)
    with the correct type. *)
-definition vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
-  "vars_exist_in_state state env \<equiv>
+definition vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
+  "vars_exist_in_state state env storeTyping \<equiv>
     \<forall>name ty. fmlookup (TE_TermVars env) name = Some ty \<and> name |\<notin>| TE_GhostVars env \<longrightarrow>
-      term_var_in_state_with_type state env name ty"
+      term_var_in_state_with_type state env storeTyping name ty"
 
 (* This asserts the converse: if a variable is not in TE_TermVars (or is in TE_GhostVars)
    then it is not in the state. *)
@@ -84,14 +97,23 @@ definition const_names_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
   "const_names_match state env \<equiv>
     IS_ConstNames state = TE_ConstNames env"
 
-(* Overall definition: state matches environment *)
-definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
-  "state_matches_env state env \<equiv>
-    vars_exist_in_state state env \<and>
+(* The store typing has the same length as the store, and every slot value has the
+   designated type for its address. *)
+definition store_well_typed :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
+  "store_well_typed state env storeTyping \<equiv>
+    length storeTyping = length (IS_Store state) \<and>
+    (\<forall>addr. addr < length (IS_Store state) \<longrightarrow>
+        value_has_type env (IS_Store state ! addr) (storeTyping ! addr))"
+
+(* Overall definition: state matches environment under a given store typing *)
+definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
+  "state_matches_env state env storeTyping \<equiv>
+    vars_exist_in_state state env storeTyping \<and>
     no_extra_vars state env \<and>
     funs_exist_in_state state env \<and>
     no_extra_funs state env \<and>
     non_consts_in_locals_or_refs state env \<and>
-    const_names_match state env"
+    const_names_match state env \<and>
+    store_well_typed state env storeTyping"
 
 end

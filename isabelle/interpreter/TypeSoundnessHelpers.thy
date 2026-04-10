@@ -8,10 +8,82 @@ lemma int_complement_fits:
   shows "int_fits sign bits (int_complement sign bits i)"
   using assms by (cases sign; cases bits; auto)
 
-(* After alloc_store + fmupd of locals, the new state matches the extended env.
+(* type_at_path of a concatenated path: first walk to the intermediate type,
+   then continue with the suffix from there. *)
+lemma type_at_path_append:
+  assumes "type_at_path env t p1 = Some t1"
+  shows "type_at_path env t (p1 @ p2) = type_at_path env t1 p2"
+using assms proof (induction p1 arbitrary: t)
+  case Nil then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+  proof (cases t)
+    case (CoreTy_Record fieldTypes)
+    with Cons.prems show ?thesis
+      by (cases step) (auto split: option.splits intro: Cons.IH)
+  next
+    case (CoreTy_Name dtName argTypes)
+    with Cons.prems show ?thesis
+      by (cases step) (auto split: option.splits if_splits intro: Cons.IH)
+  next
+    case (CoreTy_Array elemTy dims)
+    with Cons.prems show ?thesis
+      by (cases step) (auto intro: Cons.IH)
+  next
+    case CoreTy_Bool with Cons.prems show ?thesis by (cases step) simp_all
+  next
+    case (CoreTy_FiniteInt x y) with Cons.prems show ?thesis by (cases step) simp_all
+  next
+    case CoreTy_MathInt with Cons.prems show ?thesis by (cases step) simp_all
+  next
+    case CoreTy_MathReal with Cons.prems show ?thesis by (cases step) simp_all
+  next
+    case (CoreTy_Meta x) with Cons.prems show ?thesis by (cases step) simp_all
+  qed
+qed
+
+(* type_at_path depends on the environment only through TE_DataCtors (used in the
+   variant case). If two environments agree on TE_DataCtors, they give the same
+   type_at_path result. *)
+lemma type_at_path_cong_env:
+  assumes "TE_DataCtors env' = TE_DataCtors env"
+  shows "type_at_path env t p = type_at_path env' t p"
+proof (induction p arbitrary: t)
+  case Nil then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+  proof (cases t)
+    case (CoreTy_Record fieldTypes)
+    then show ?thesis
+      by (cases step) (simp_all add: Cons.IH split: option.splits)
+  next
+    case (CoreTy_Name dtName argTypes)
+    then show ?thesis
+      by (cases step) (simp_all add: assms Cons.IH split: option.splits if_splits)
+  next
+    case (CoreTy_Array elemTy dims)
+    then show ?thesis
+      by (cases step) (simp_all add: Cons.IH)
+  next
+    case CoreTy_Bool then show ?thesis by (cases step) simp_all
+  next
+    case (CoreTy_FiniteInt x y) then show ?thesis by (cases step) simp_all
+  next
+    case CoreTy_MathInt then show ?thesis by (cases step) simp_all
+  next
+    case CoreTy_MathReal then show ?thesis by (cases step) simp_all
+  next
+    case (CoreTy_Meta x) then show ?thesis by (cases step) simp_all
+  qed
+qed
+
+(* After alloc_store + fmupd of locals, the new state matches the extended env
+   under an extended storeTyping (with rhsTy appended).
    General version that works for both const (let) and non-const (var decl) cases. *)
 lemma state_matches_env_add_local:
-  assumes state_env: "state_matches_env state env"
+  assumes state_env: "state_matches_env state env storeTyping"
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
@@ -22,7 +94,7 @@ lemma state_matches_env_add_local:
     and cn_match: "const_names_match state'' env'"
     and cn_other: "\<And>name. name \<noteq> var \<Longrightarrow>
                      (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
-  shows "state_matches_env state'' env'"
+  shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
   (* Facts about alloc_store *)
   from state'_eq have addr_eq: "addr = length (IS_Store state)"
@@ -56,6 +128,19 @@ proof -
       a < length (IS_Store state'') \<and> IS_Store state'' ! a = IS_Store state ! a"
     using store''_eq by (simp add: nth_append)
 
+  (* Old storeTyping has the right length *)
+  from state_env have old_st_len: "length storeTyping = length (IS_Store state)"
+    unfolding state_matches_env_def store_well_typed_def by simp
+
+  (* Facts about the new storeTyping *)
+  let ?st' = "storeTyping @ [rhsTy]"
+  have st'_len: "length ?st' = length (IS_Store state'')"
+    using old_st_len store''_eq by simp
+  have st'_at_addr: "?st' ! addr = rhsTy"
+    using addr_eq old_st_len by (simp add: nth_append)
+  have st'_at_old: "\<And>a. a < length (IS_Store state) \<Longrightarrow> ?st' ! a = storeTyping ! a"
+    using old_st_len by (simp add: nth_append)
+
   (* value_has_type is the same in env and env' *)
   have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
                     "TE_Datatypes env' = TE_Datatypes env"
@@ -64,21 +149,23 @@ proof -
     using env'_eq by simp_all
   have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
     using value_has_type_cong_env[OF env'_fields] .
+  have tap_eq: "\<And>t p. type_at_path env t p = type_at_path env' t p"
+    using type_at_path_cong_env[OF env'_fields(1)] .
 
   (* 1. vars_exist_in_state *)
-  have "vars_exist_in_state state'' env'"
+  have "vars_exist_in_state state'' env' ?st'"
     unfolding vars_exist_in_state_def
   proof (intro allI impI, elim conjE)
     fix name ty
     assume lookup: "fmlookup (TE_TermVars env') name = Some ty"
       and not_ghost: "name |\<notin>| TE_GhostVars env'"
-    show "term_var_in_state_with_type state'' env' name ty"
+    show "term_var_in_state_with_type state'' env' ?st' name ty"
     proof (cases "name = var")
       case True
-      (* The new variable - points to val at addr *)
+      (* The new variable - points to val at addr, with storeTyping entry = rhsTy *)
       then have "ty = rhsTy" using lookup env'_eq by simp
       then show ?thesis
-        using True locals''_eq addr_valid val_at_addr vht_eq val_typed
+        using True locals''_eq addr_valid st'_at_addr
         unfolding term_var_in_state_with_type_def by simp
     next
       case False
@@ -87,55 +174,58 @@ proof -
         using lookup env'_eq by simp
       moreover have "name |\<notin>| TE_GhostVars env"
         using not_ghost env'_eq False by auto
-      ultimately have old: "term_var_in_state_with_type state env name ty"
+      ultimately have old: "term_var_in_state_with_type state env storeTyping name ty"
         using state_env unfolding state_matches_env_def vars_exist_in_state_def by blast
-      (* Show the old variable is still valid in state'' *)
       (* Locals lookup is unchanged for name \<noteq> var *)
       have locals_name: "fmlookup (IS_Locals state'') name = fmlookup (IS_Locals state) name"
         using False locals''_eq by simp
-      (* From the old state matching, extract what we know about name *)
       from old show ?thesis
       proof (cases "fmlookup (IS_Locals state) name")
         case (Some a)
         (* name is a local in old state, pointing to address a *)
-        then have "a < length (IS_Store state) \<and> value_has_type env (IS_Store state ! a) ty"
-          using old unfolding term_var_in_state_with_type_def by simp
-        then have "a < length (IS_Store state'')" and
-                  "IS_Store state'' ! a = IS_Store state ! a"
-          using old_addrs by auto
-        then show ?thesis using Some locals_name vht_eq old
+        from old Some have a_valid: "a < length (IS_Store state)"
+          and st_eq: "storeTyping ! a = ty"
           unfolding term_var_in_state_with_type_def by auto
+        from old_addrs[OF a_valid] have a_valid'': "a < length (IS_Store state'')" by simp
+        from st'_at_old[OF a_valid] st_eq have "?st' ! a = ty" by simp
+        then show ?thesis
+          using Some locals_name a_valid''
+          unfolding term_var_in_state_with_type_def by simp
       next
         case None
         show ?thesis
         proof (cases "fmlookup (IS_Refs state) name")
           case (Some addrPath)
           obtain aa ba where ap_eq: "addrPath = (aa, ba)" by (cases addrPath) auto
-          (* From old, aa < length (IS_Store state) and get_value_at_path succeeds *)
-          from old None Some ap_eq have ref_info:
-            "aa < length (IS_Store state) \<and>
-             (\<exists>v. get_value_at_path (IS_Store state ! aa) ba = Inr v \<and>
-                  value_has_type env v ty)"
-            unfolding term_var_in_state_with_type_def
-            by (auto split: sum.splits)
-          then have "IS_Store state'' ! aa = IS_Store state ! aa"
-            and "aa < length (IS_Store state'')"
-            using old_addrs by auto
+          from old None Some ap_eq have
+            aa_valid: "aa < length (IS_Store state)" and
+            path_ty: "type_at_path env (storeTyping ! aa) ba = Some ty"
+            unfolding term_var_in_state_with_type_def by (auto split: option.splits)
+          from old_addrs[OF aa_valid] have aa_valid'': "aa < length (IS_Store state'')" by simp
           have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
             using False refs''_eq by simp
-          then show ?thesis using old None Some ap_eq locals_name consts''_eq
-            ref_info vht_eq
+          from st'_at_old[OF aa_valid] have st_at_aa: "?st' ! aa = storeTyping ! aa" by simp
+          from path_ty tap_eq st_at_aa
+          have path_ty': "type_at_path env' (?st' ! aa) ba = Some ty" by simp
+          show ?thesis
             unfolding term_var_in_state_with_type_def
-            using \<open>IS_Store state'' ! aa = IS_Store state ! aa\<close> \<open>aa < length (IS_Store state'')\<close>
-            by fastforce
+            using locals_name refs_name None Some ap_eq aa_valid'' path_ty'
+            by simp
         next
           case None2: None
           (* name is a global constant *)
           have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
             using False refs''_eq by simp
-          then show ?thesis using old None None2 locals_name consts''_eq vht_eq
+          from old None None2 have glob: "case fmlookup (IS_Globals state) name of
+              Some val \<Rightarrow> value_has_type env val ty | None \<Rightarrow> False"
+            unfolding term_var_in_state_with_type_def by (simp split: option.splits)
+          then obtain gval where glob_lookup: "fmlookup (IS_Globals state) name = Some gval"
+            and gval_typed: "value_has_type env gval ty"
+            by (auto split: option.splits)
+          from glob_lookup gval_typed vht_eq consts''_eq
+          show ?thesis
             unfolding term_var_in_state_with_type_def
-            by (smt (verit, best) case_optionE option.simps(4,5))
+            using locals_name refs_name None None2 by simp
         qed
       qed
     qed
@@ -152,17 +242,13 @@ proof -
           fmlookup (IS_Globals state'') name = None"
     proof (cases "name = var")
       case True
-      (* var is in TE_TermVars env', so the antecedent requires var \<in> TE_GhostVars env' *)
       then have "fmlookup (TE_TermVars env') var = Some rhsTy" using env'_eq by simp
       with ante True have "var |\<in>| TE_GhostVars env'" by simp
-      (* But var \<notin> TE_GhostVars env, and TE_GhostVars env' = TE_GhostVars env *)
       then show ?thesis using env'_eq var_not_ghost by simp
     next
       case False
-      (* name \<noteq> var, so TE_TermVars env' lookup = TE_TermVars env lookup *)
       then have tv_eq: "fmlookup (TE_TermVars env') name = fmlookup (TE_TermVars env) name"
         using env'_eq by simp
-      (* name \<noteq> var, so name \<in> fminus S {|var|} iff name \<in> S *)
       have gv_iff: "name |\<in>| TE_GhostVars env' \<longleftrightarrow> name |\<in>| TE_GhostVars env"
         using False env'_eq by auto
       from ante tv_eq gv_iff
@@ -198,7 +284,6 @@ proof -
           fmlookup (IS_Refs state'') name \<noteq> None"
     proof (cases "name = var")
       case True
-      (* var is in IS_Locals state'' *)
       then show ?thesis using locals''_eq by simp
     next
       case False
@@ -220,12 +305,39 @@ proof -
   moreover have "const_names_match state'' env'"
     using cn_match .
 
+  (* 7. store_well_typed for the extended storeTyping *)
+  moreover have "store_well_typed state'' env' ?st'"
+    unfolding store_well_typed_def
+  proof (intro conjI allI impI)
+    show "length ?st' = length (IS_Store state'')" using st'_len .
+  next
+    fix a
+    assume a_lt: "a < length (IS_Store state'')"
+    show "value_has_type env' (IS_Store state'' ! a) (?st' ! a)"
+    proof (cases "a = addr")
+      case True
+      with val_at_addr st'_at_addr val_typed vht_eq show ?thesis by simp
+    next
+      case False
+      from a_lt store''_eq have a_lt_old: "a < length (IS_Store state)"
+        using False addr_eq by (auto simp add: nth_append)
+      have store_a: "IS_Store state'' ! a = IS_Store state ! a"
+        using old_addrs[OF a_lt_old] by simp
+      have st_a: "?st' ! a = storeTyping ! a"
+        using st'_at_old[OF a_lt_old] .
+      from state_env a_lt_old
+      have "value_has_type env (IS_Store state ! a) (storeTyping ! a)"
+        unfolding state_matches_env_def store_well_typed_def by simp
+      with store_a st_a vht_eq show ?thesis by simp
+    qed
+  qed
+
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed
 
 (* Const specialization: variable is added to ConstNames (used for let-bindings) *)
 corollary state_matches_env_add_const_local:
-  assumes state_env: "state_matches_env state env"
+  assumes state_env: "state_matches_env state env storeTyping"
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
@@ -233,7 +345,7 @@ corollary state_matches_env_add_const_local:
     and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
                                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
     and var_not_ghost: "var |\<notin>| TE_GhostVars env"
-  shows "state_matches_env state'' env'"
+  shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
   from state'_eq have "IS_ConstNames state' = IS_ConstNames state" by auto
   hence "IS_ConstNames state'' = finsert var (TE_ConstNames env)"
@@ -251,14 +363,14 @@ qed
 
 (* Non-const specialization: ConstNames unchanged (used for var declarations) *)
 corollary state_matches_env_add_nonconst_local:
-  assumes state_env: "state_matches_env state env"
+  assumes state_env: "state_matches_env state env storeTyping"
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
                                TE_ConstNames := TE_ConstNames env \<rparr>"
     and var_not_ghost: "var |\<notin>| TE_GhostVars env"
-  shows "state_matches_env state'' env'"
+  shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
   have state''_eq': "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
                                          IS_ConstNames := IS_ConstNames state' \<rparr>"
@@ -388,26 +500,6 @@ next
   qed
 qed
 
-(* Given a type and an lvalue path, compute the type of the sub-value at that path.
-   This mirrors get_value_at_path but operates on types instead of values. *)
-fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath list \<Rightarrow> CoreType option" where
-  "type_at_path env ty [] = Some ty"
-| "type_at_path env (CoreTy_Record fieldTypes) (LVPath_RecordProj field # rest) =
-    (case map_of fieldTypes field of
-      Some fieldTy \<Rightarrow> type_at_path env fieldTy rest
-    | None \<Rightarrow> None)"
-| "type_at_path env (CoreTy_Name dtName argTypes) (LVPath_VariantProj ctor # rest) =
-    (case fmlookup (TE_DataCtors env) ctor of
-      Some (dtName2, metavars, payloadTy) \<Rightarrow>
-        if dtName = dtName2 then
-          type_at_path env (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
-        else None
-    | None \<Rightarrow> None)"
-| "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
-    type_at_path env elemTy rest"
-| "type_at_path _ _ (_ # _) = None"
-
-
 (* If flds and fieldTypes are related by list_all2 with name equality,
    then map_of lookups agree and predicates transfer. *)
 lemma list_all2_map_of_transfer:
@@ -438,6 +530,39 @@ next
     from Cons.IH[OF tail_rel this] obtain t where
       "map_of fieldTypes' k = Some t" and "P v t" by auto
     with False k_eq ft_eq ft_pair show ?thesis by simp
+  qed
+qed
+
+(* Reverse direction of list_all2_map_of_transfer: given a key present in the
+   second list (fieldTypes), conclude it is also present in the first list (flds). *)
+lemma list_all2_map_of_transfer_rev:
+  assumes "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) flds fieldTypes"
+    and "map_of fieldTypes k = Some t"
+  shows "\<exists>v. map_of flds k = Some v \<and> P v t"
+using assms proof (induction flds arbitrary: fieldTypes)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons entry flds)
+  obtain k1 v1 where entry_eq: "entry = (k1, v1)" by (cases entry) auto
+  from Cons.prems(1) obtain ft fieldTypes' where
+    ft_eq: "fieldTypes = ft # fieldTypes'" and
+    head_rel: "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) entry ft" and
+    tail_rel: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> P v t) flds fieldTypes'"
+    by (cases fieldTypes) auto
+  obtain k2 t2 where ft_pair: "ft = (k2, t2)" by (cases ft) auto
+  from head_rel entry_eq ft_pair have k_eq: "k1 = k2" and pred: "P v1 t2" by auto
+  show ?case
+  proof (cases "k2 = k")
+    case True
+    with ft_eq ft_pair Cons.prems(2) have "t = t2" by simp
+    with True k_eq entry_eq pred show ?thesis by simp
+  next
+    case False
+    with ft_eq ft_pair Cons.prems(2) have "map_of fieldTypes' k = Some t" by simp
+    from Cons.IH[OF tail_rel this] obtain v where
+      "map_of flds k = Some v" and "P v t" by auto
+    with False k_eq entry_eq show ?thesis by simp
   qed
 qed
 
@@ -650,6 +775,449 @@ next
     case (CV_FiniteInt x1 x2 x3)
     with Cons.prems show ?thesis by (cases step) auto
   qed
+qed
+
+(* Bridging lemma: if get_value_at_path succeeds on a well-typed value, the result is
+   well-typed and its type is computable by type_at_path. *)
+lemma get_value_at_path_type:
+  assumes "value_has_type env root ty"
+    and "get_value_at_path root path = Inr v"
+  shows "\<exists>pathTy. type_at_path env ty path = Some pathTy \<and> value_has_type env v pathTy"
+using assms proof (induction path arbitrary: root ty)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+  proof (cases root)
+    case (CV_Record flds)
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj field)
+      from Cons.prems(1) CV_Record obtain fieldTypes where
+        ty_eq: "ty = CoreTy_Record fieldTypes" and
+        all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t) flds fieldTypes"
+        by (cases ty) auto
+      from Cons.prems(2) CV_Record LVPath_RecordProj obtain fieldVal where
+        fld_lookup: "map_of flds field = Some fieldVal" and
+        get_rest: "get_value_at_path fieldVal rest = Inr v"
+        by (auto split: option.splits)
+      from list_all2_map_of_transfer[OF all2 fld_lookup] obtain fieldTy where
+        fty_lookup: "map_of fieldTypes field = Some fieldTy" and
+        fld_typed: "value_has_type env fieldVal fieldTy"
+        by auto
+      from Cons.IH[OF fld_typed get_rest] obtain pathTy where
+        rest_ty: "type_at_path env fieldTy rest = Some pathTy" and
+        v_typed: "value_has_type env v pathTy"
+        by auto
+      have "type_at_path env ty (step # rest) = Some pathTy"
+        using ty_eq LVPath_RecordProj fty_lookup rest_ty by simp
+      with v_typed show ?thesis by blast
+    next
+      case (LVPath_VariantProj x)
+      with CV_Record Cons.prems show ?thesis by simp
+    next
+      case (LVPath_ArrayProj x)
+      with CV_Record Cons.prems show ?thesis by simp
+    qed
+  next
+    case (CV_Variant ctor payload)
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj x)
+      with CV_Variant Cons.prems show ?thesis by simp
+    next
+      case (LVPath_VariantProj expectedCtor)
+      from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+        ty_eq: "ty = CoreTy_Name dtName argTypes" and
+        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+        payload_typed: "value_has_type env payload
+                          (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+        by (cases ty) (auto split: option.splits)
+      from Cons.prems(2) CV_Variant LVPath_VariantProj have ctor_match: "ctor = expectedCtor"
+        and get_rest: "get_value_at_path payload rest = Inr v"
+        by (auto split: if_splits)
+      let ?subPayloadTy = "apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy"
+      from Cons.IH[OF payload_typed get_rest] obtain pathTy where
+        rest_ty: "type_at_path env ?subPayloadTy rest = Some pathTy" and
+        v_typed: "value_has_type env v pathTy"
+        by auto
+      have "type_at_path env ty (step # rest) = Some pathTy"
+        using ty_eq LVPath_VariantProj ctor_match ctor_lookup rest_ty by simp
+      with v_typed show ?thesis by blast
+    next
+      case (LVPath_ArrayProj x)
+      with CV_Variant Cons.prems show ?thesis by simp
+    qed
+  next
+    case (CV_Array sizes elementMap)
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj x)
+      with CV_Array Cons.prems show ?thesis by simp
+    next
+      case (LVPath_VariantProj x)
+      with CV_Array Cons.prems show ?thesis by simp
+    next
+      case (LVPath_ArrayProj indices)
+      from Cons.prems(1) CV_Array obtain elemTy dims where
+        ty_eq: "ty = CoreTy_Array elemTy dims" and
+        elems_typed: "\<forall>idx val. fmlookup elementMap idx = Some val \<longrightarrow>
+                        value_has_type env val elemTy"
+        by (cases ty) auto
+      from Cons.prems(2) CV_Array LVPath_ArrayProj obtain elemVal where
+        elem_lookup: "fmlookup elementMap indices = Some elemVal" and
+        get_rest: "get_value_at_path elemVal rest = Inr v"
+        by (auto split: option.splits)
+      from elems_typed elem_lookup have elem_typed: "value_has_type env elemVal elemTy" by simp
+      from Cons.IH[OF elem_typed get_rest] obtain pathTy where
+        rest_ty: "type_at_path env elemTy rest = Some pathTy" and
+        v_typed: "value_has_type env v pathTy"
+        by auto
+      have "type_at_path env ty (step # rest) = Some pathTy"
+        using ty_eq LVPath_ArrayProj rest_ty by simp
+      with v_typed show ?thesis by blast
+    qed
+  next
+    case (CV_Bool x)
+    with Cons.prems show ?thesis by (cases step) auto
+  next
+    case (CV_FiniteInt x1 x2 x3)
+    with Cons.prems show ?thesis by (cases step) auto
+  qed
+qed
+
+
+(* If a path is structurally compatible with a typed value (type_at_path succeeds),
+   then get_value_at_path can only fail with RuntimeError, never TypeError.
+   TypeError means the path step doesn't match the value's shape at all (e.g. record
+   projection on a non-record), but type_at_path succeeding rules that out. *)
+lemma get_value_at_path_error_is_runtime:
+  assumes typed: "value_has_type env val slotTy"
+    and path_ty: "type_at_path env slotTy path = Some ty"
+    and fails: "get_value_at_path val path = Inl err"
+  shows "err = RuntimeError"
+using assms proof (induction path arbitrary: val slotTy)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+  proof (cases val)
+    case (CV_Record flds)
+    from Cons.prems(1) CV_Record obtain fieldTypes where
+      slotTy_eq: "slotTy = CoreTy_Record fieldTypes" and
+      all2: "list_all2 (\<lambda>(n1,v) (n2,t). n1=n2 \<and> value_has_type env v t) flds fieldTypes"
+      by (cases slotTy) auto
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj field)
+      from Cons.prems(2) slotTy_eq LVPath_RecordProj obtain fieldTy where
+        fty_lookup: "map_of fieldTypes field = Some fieldTy" and
+        rest_ty: "type_at_path env fieldTy rest = Some ty"
+        by (auto split: option.splits)
+      \<comment> \<open>map_of fieldTypes succeeds, so map_of flds must also succeed (reverse direction).\<close>
+      from list_all2_map_of_transfer_rev[OF all2 fty_lookup]
+      obtain fieldVal where fld_lookup: "map_of flds field = Some fieldVal"
+        and fv_typed': "value_has_type env fieldVal fieldTy"
+        by auto
+      from Cons.prems(3) CV_Record LVPath_RecordProj fld_lookup
+      have "get_value_at_path fieldVal rest = Inl err" by (auto split: option.splits)
+      from Cons.IH[OF fv_typed' rest_ty this] show ?thesis .
+    next
+      case (LVPath_VariantProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
+    qed
+  next
+    case (CV_Variant ctor payload)
+    from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+      slotTy_eq: "slotTy = CoreTy_Name dtName argTypes" and
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+      payload_typed: "value_has_type env payload
+                        (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+      by (cases slotTy) (auto split: option.splits)
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_VariantProj expectedCtor)
+      show ?thesis
+      proof (cases "ctor = expectedCtor")
+        case True
+        \<comment> \<open>Ctor matches: type_at_path uses ctor_lookup, so we can extract rest_ty.\<close>
+        from Cons.prems(2) slotTy_eq LVPath_VariantProj True ctor_lookup obtain
+          rest_ty: "type_at_path env
+                      (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+                    = Some ty"
+          by (auto split: if_splits)
+        from Cons.prems(3) CV_Variant LVPath_VariantProj True
+        have "get_value_at_path payload rest = Inl err" by simp
+        from Cons.IH[OF payload_typed rest_ty this] show ?thesis .
+      next
+        case False
+        \<comment> \<open>Ctor mismatch: get_value_at_path returns RuntimeError directly.\<close>
+        from Cons.prems(3) CV_Variant LVPath_VariantProj False
+        have "err = RuntimeError" by simp
+        then show ?thesis .
+      qed
+    next
+      case (LVPath_ArrayProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
+    qed
+  next
+    case (CV_Array sizes elementMap)
+    from Cons.prems(1) CV_Array obtain elemTy dims where
+      slotTy_eq: "slotTy = CoreTy_Array elemTy dims" and
+      elems_typed: "\<forall>idx v. fmlookup elementMap idx = Some v \<longrightarrow> value_has_type env v elemTy"
+      by (cases slotTy) auto
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj x) with CV_Array Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_VariantProj x) with CV_Array Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayProj indices)
+      from Cons.prems(2) slotTy_eq LVPath_ArrayProj
+      have rest_ty: "type_at_path env elemTy rest = Some ty" by simp
+      show ?thesis
+      proof (cases "fmlookup elementMap indices")
+        case None
+        \<comment> \<open>Array index OOB: RuntimeError directly.\<close>
+        from Cons.prems(3) CV_Array LVPath_ArrayProj None
+        have "err = RuntimeError" by simp
+        then show ?thesis .
+      next
+        case (Some elemVal)
+        from elems_typed Some have "value_has_type env elemVal elemTy" by simp
+        from Cons.prems(3) CV_Array LVPath_ArrayProj Some
+        have "get_value_at_path elemVal rest = Inl err" by (auto split: option.splits)
+        from Cons.IH[OF \<open>value_has_type env elemVal elemTy\<close> rest_ty this] show ?thesis .
+      qed
+    qed
+  next
+    case (CV_Bool x) with Cons.prems show ?thesis by (cases slotTy) auto
+  next
+    case (CV_FiniteInt x1 x2 x3) with Cons.prems show ?thesis by (cases slotTy) auto
+  qed
+qed
+
+
+(* If the path is structurally compatible with a typed value (type_at_path succeeds),
+   then update_value_at_path can only fail with RuntimeError, never TypeError.
+   Dual to get_value_at_path_error_is_runtime. *)
+lemma update_value_at_path_error_is_runtime:
+  assumes typed: "value_has_type env val slotTy"
+    and path_ty: "type_at_path env slotTy path = Some ty"
+    and fails: "update_value_at_path val path newVal = Inl err"
+  shows "err = RuntimeError"
+using assms proof (induction path arbitrary: val slotTy)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+  proof (cases val)
+    case (CV_Record flds)
+    from Cons.prems(1) CV_Record obtain fieldTypes where
+      slotTy_eq: "slotTy = CoreTy_Record fieldTypes" and
+      all2: "list_all2 (\<lambda>(n1,v) (n2,t). n1=n2 \<and> value_has_type env v t) flds fieldTypes"
+      by (cases slotTy) auto
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj field)
+      from Cons.prems(2) slotTy_eq LVPath_RecordProj obtain fieldTy where
+        fty_lookup: "map_of fieldTypes field = Some fieldTy" and
+        rest_ty: "type_at_path env fieldTy rest = Some ty"
+        by (auto split: option.splits)
+      from list_all2_map_of_transfer_rev[OF all2 fty_lookup]
+      obtain fieldVal where fld_lookup: "map_of flds field = Some fieldVal"
+        and fv_typed: "value_has_type env fieldVal fieldTy"
+        by auto
+      show ?thesis
+      proof (cases "update_value_at_path fieldVal rest newVal")
+        case (Inl err2)
+        with Cons.prems(3) CV_Record LVPath_RecordProj fld_lookup
+        have err_eq: "err = err2" by simp
+        show ?thesis
+          using Cons.IH Inl err_eq fv_typed rest_ty by auto
+      next
+        case (Inr updated_val)
+        with Cons.prems(3) CV_Record LVPath_RecordProj fld_lookup show ?thesis by simp
+      qed
+    next
+      case (LVPath_VariantProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
+    qed
+  next
+    case (CV_Variant ctor payload)
+    from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+      slotTy_eq: "slotTy = CoreTy_Name dtName argTypes" and
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+      payload_typed: "value_has_type env payload
+                        (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+      by (cases slotTy) (auto split: option.splits)
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_VariantProj expectedCtor)
+      show ?thesis
+      proof (cases "ctor = expectedCtor")
+        case True
+        from Cons.prems(2) slotTy_eq LVPath_VariantProj True ctor_lookup obtain
+          rest_ty: "type_at_path env
+                      (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+                    = Some ty"
+          by (auto split: if_splits)
+        show ?thesis
+        proof (cases "update_value_at_path payload rest newVal")
+          case (Inl err2)
+          with Cons.prems(3) CV_Variant LVPath_VariantProj True
+          have err_eq: "err = err2" by simp
+          show ?thesis using Cons.IH payload_typed rest_ty Inl err_eq by simp
+        next
+          case (Inr updated_val)
+          with Cons.prems(3) CV_Variant LVPath_VariantProj True show ?thesis by simp
+        qed
+      next
+        case False
+        \<comment> \<open>Ctor mismatch: update_value_at_path returns RuntimeError directly.\<close>
+        from Cons.prems(3) CV_Variant LVPath_VariantProj False
+        have "err = RuntimeError" by simp
+        then show ?thesis .
+      qed
+    next
+      case (LVPath_ArrayProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
+    qed
+  next
+    case (CV_Array sizes elementMap)
+    from Cons.prems(1) CV_Array obtain elemTy dims where
+      slotTy_eq: "slotTy = CoreTy_Array elemTy dims" and
+      elems_typed: "\<forall>idx v. fmlookup elementMap idx = Some v \<longrightarrow> value_has_type env v elemTy"
+      by (cases slotTy) auto
+    show ?thesis proof (cases step)
+      case (LVPath_RecordProj x) with CV_Array Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_VariantProj x) with CV_Array Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayProj indices)
+      from Cons.prems(2) slotTy_eq LVPath_ArrayProj
+      have rest_ty: "type_at_path env elemTy rest = Some ty" by simp
+      show ?thesis
+      proof (cases "fmlookup elementMap indices")
+        case None
+        \<comment> \<open>Array index OOB: RuntimeError directly.\<close>
+        from Cons.prems(3) CV_Array LVPath_ArrayProj None
+        have "err = RuntimeError" by simp
+        then show ?thesis .
+      next
+        case (Some elemVal)
+        from elems_typed Some have elem_typed: "value_has_type env elemVal elemTy" by simp
+        show ?thesis
+        proof (cases "update_value_at_path elemVal rest newVal")
+          case (Inl err2)
+          with Cons.prems(3) CV_Array LVPath_ArrayProj Some have err_eq: "err = err2" by simp
+          show ?thesis using Cons.IH elem_typed rest_ty Inl err_eq by simp
+        next
+          case (Inr updated_val)
+          with Cons.prems(3) CV_Array LVPath_ArrayProj Some show ?thesis by simp
+        qed
+      qed
+    qed
+  next
+    case (CV_Bool x) with Cons.prems show ?thesis by (cases slotTy) auto
+  next
+    case (CV_FiniteInt x1 x2 x3) with Cons.prems show ?thesis by (cases slotTy) auto
+  qed
+qed
+
+
+(* state_matches_env is preserved when a single store slot is updated, provided
+   the new slot value has the designated type for that slot (storeTyping ! addr).
+   This is the key lemma for CoreStmt_Assign and CoreStmt_Swap soundness. *)
+lemma state_matches_env_update_store:
+  assumes state_env: "state_matches_env state env storeTyping"
+    and addr_valid: "addr < length (IS_Store state)"
+    and new_slot_typed: "value_has_type env newSlotVal (storeTyping ! addr)"
+    and state'_eq: "state' = state \<lparr> IS_Store := (IS_Store state)[addr := newSlotVal] \<rparr>"
+  shows "state_matches_env state' env storeTyping"
+proof -
+  from state'_eq have
+    store'_len: "length (IS_Store state') = length (IS_Store state)" and
+    locals'_eq: "IS_Locals state' = IS_Locals state" and
+    refs'_eq: "IS_Refs state' = IS_Refs state" and
+    globals'_eq: "IS_Globals state' = IS_Globals state" and
+    funs'_eq: "IS_Functions state' = IS_Functions state" and
+    cn'_eq: "IS_ConstNames state' = IS_ConstNames state"
+    by auto
+  have slot_at_addr: "IS_Store state' ! addr = newSlotVal"
+    using state'_eq addr_valid by simp
+  have slot_other: "\<And>a. a \<noteq> addr \<Longrightarrow> a < length (IS_Store state)
+      \<Longrightarrow> IS_Store state' ! a = IS_Store state ! a"
+    using state'_eq by simp
+
+  (* 1. vars_exist_in_state: the storeTyping entries haven't changed, and
+     value_has_type facts about locals/refs were about type_at_path of storeTyping,
+     which is independent of the actual store contents. *)
+  have "vars_exist_in_state state' env storeTyping"
+    unfolding vars_exist_in_state_def
+  proof (intro allI impI, elim conjE)
+    fix name ty
+    assume lk: "fmlookup (TE_TermVars env) name = Some ty"
+      and ng: "name |\<notin>| TE_GhostVars env"
+    from state_env lk ng have old: "term_var_in_state_with_type state env storeTyping name ty"
+      unfolding state_matches_env_def vars_exist_in_state_def by blast
+    show "term_var_in_state_with_type state' env storeTyping name ty"
+      using old locals'_eq refs'_eq globals'_eq store'_len
+      unfolding term_var_in_state_with_type_def
+      by (auto split: option.splits)
+  qed
+
+  (* 2. no_extra_vars: unchanged *)
+  moreover have "no_extra_vars state' env"
+    using state_env locals'_eq refs'_eq globals'_eq
+    unfolding state_matches_env_def no_extra_vars_def by simp
+
+  (* 3. funs_exist_in_state: unchanged *)
+  moreover have "funs_exist_in_state state' env"
+    using state_env funs'_eq
+    unfolding state_matches_env_def funs_exist_in_state_def by simp
+
+  (* 4. no_extra_funs: unchanged *)
+  moreover have "no_extra_funs state' env"
+    using state_env funs'_eq
+    unfolding state_matches_env_def no_extra_funs_def by simp
+
+  (* 5. non_consts_in_locals_or_refs: unchanged *)
+  moreover have "non_consts_in_locals_or_refs state' env"
+    using state_env locals'_eq refs'_eq
+    unfolding state_matches_env_def non_consts_in_locals_or_refs_def by simp
+
+  (* 6. const_names_match: unchanged *)
+  moreover have "const_names_match state' env"
+    using state_env cn'_eq
+    unfolding state_matches_env_def const_names_match_def by simp
+
+  (* 7. store_well_typed: slot at addr is newSlotVal with storeTyping ! addr; others unchanged. *)
+  moreover have "store_well_typed state' env storeTyping"
+    unfolding store_well_typed_def
+  proof (intro conjI allI impI)
+    from state_env have "length storeTyping = length (IS_Store state)"
+      unfolding state_matches_env_def store_well_typed_def by simp
+    with store'_len show "length storeTyping = length (IS_Store state')" by simp
+  next
+    fix a
+    assume a_lt: "a < length (IS_Store state')"
+    with store'_len have a_lt_old: "a < length (IS_Store state)" by simp
+    show "value_has_type env (IS_Store state' ! a) (storeTyping ! a)"
+    proof (cases "a = addr")
+      case True
+      with slot_at_addr new_slot_typed show ?thesis by simp
+    next
+      case False
+      with slot_other[OF False a_lt_old]
+      have "IS_Store state' ! a = IS_Store state ! a" by simp
+      moreover from state_env a_lt_old
+      have "value_has_type env (IS_Store state ! a) (storeTyping ! a)"
+        unfolding state_matches_env_def store_well_typed_def by simp
+      ultimately show ?thesis by simp
+    qed
+  qed
+
+  ultimately show ?thesis unfolding state_matches_env_def by auto
 qed
 
 (* If some pattern in the arm list matches the value, find_matching_arm succeeds *)
