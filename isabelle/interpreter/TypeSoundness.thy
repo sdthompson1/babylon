@@ -824,6 +824,7 @@ proof -
                        "TE_Datatypes ?env' = TE_Datatypes env"
                        "TE_TypeVars ?env' = TE_TypeVars env"
                        "TE_GhostDatatypes ?env' = TE_GhostDatatypes env"
+                       "TE_RuntimeTypeVars ?env' = TE_RuntimeTypeVars env"
       by simp_all
     have "\<And>v t. value_has_type ?env' v t = value_has_type env v t"
       using value_has_type_cong_env[OF env'_fields] .
@@ -903,7 +904,7 @@ lemma type_soundness_variant_proj:
 proof -
   (* Extract facts from typing *)
   from typing obtain dtName tyArgs dtName2 metavars payloadTy where
-    tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Name dtName tyArgs)" and
+    tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Datatype dtName tyArgs)" and
     ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
     dt_eq: "dtName = dtName2" and
     len_eq: "length tyArgs = length metavars" and
@@ -912,7 +913,7 @@ proof -
 
   (* Apply IH to tm *)
   from IH[OF state_env wf_env tm_typing]
-  have tm_sound: "sound_term_result env (CoreTy_Name dtName tyArgs) (interp_term fuel state tm)" .
+  have tm_sound: "sound_term_result env (CoreTy_Datatype dtName tyArgs) (interp_term fuel state tm)" .
 
   show ?thesis
   proof (cases "interp_term fuel state tm")
@@ -925,7 +926,7 @@ proof -
     case (Inr val)
     (* tm succeeded *)
     from tm_sound Inr
-    have val_typed: "value_has_type env val (CoreTy_Name dtName tyArgs)" by simp
+    have val_typed: "value_has_type env val (CoreTy_Datatype dtName tyArgs)" by simp
 
     (* Value must be CV_Variant *)
     from value_has_type_Name[OF val_typed] obtain actualCtor payload where
@@ -1204,13 +1205,13 @@ proof -
       None \<Rightarrow> None
     | Some actualPayloadTy \<Rightarrow>
         if actualPayloadTy = apply_subst tySubst payloadTy
-        then Some (CoreTy_Name dtName tyArgs) else None) = Some ty"
+        then Some (CoreTy_Datatype dtName tyArgs) else None) = Some ty"
     unfolding payloadTyOpt_def tySubst_def by (simp add: Let_def)
 
   from typing' obtain payloadActualTy where
     payloadTyOpt_eq: "payloadTyOpt = Some payloadActualTy" and
     payload_ty_eq: "payloadActualTy = apply_subst tySubst payloadTy" and
-    ty_eq: "ty = CoreTy_Name dtName tyArgs"
+    ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
     by (cases payloadTyOpt) (auto split: if_splits)
 
   have payload_typing: "core_term_type env NotGhost payload = Some payloadActualTy"
@@ -1236,7 +1237,7 @@ proof -
       using Inr by simp
 
     (* Show the result has the correct type *)
-    have "value_has_type env (CV_Variant ctorName payloadVal) (CoreTy_Name dtName tyArgs)"
+    have "value_has_type env (CV_Variant ctorName payloadVal) (CoreTy_Datatype dtName tyArgs)"
       using ctor_lookup len_eq tyargs_wk tyargs_rt dt_nonghost payload_typed payload_ty_eq tySubst_def
       by simp
 
@@ -2069,7 +2070,7 @@ next
         (* CoreTm_VariantProj: extend path with variant projection *)
         case (CoreTm_VariantProj innerTm ctorName)
         from typing CoreTm_VariantProj obtain dtName tyArgs dtName2 metavars payloadTy where
-          inner_typing: "core_term_type env NotGhost innerTm = Some (CoreTy_Name dtName tyArgs)" and
+          inner_typing: "core_term_type env NotGhost innerTm = Some (CoreTy_Datatype dtName tyArgs)" and
           ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
           dt_eq: "dtName = dtName2" and
           len_eq: "length tyArgs = length metavars" and
@@ -2078,7 +2079,7 @@ next
         from writable CoreTm_VariantProj have inner_writable: "is_writable_lvalue env innerTm"
           by simp
         from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing
-        have inner_sound: "sound_lvalue_result state env storeTyping (CoreTy_Name dtName tyArgs)
+        have inner_sound: "sound_lvalue_result state env storeTyping (CoreTy_Datatype dtName tyArgs)
                              (interp_writable_lvalue fuel state innerTm)"
           by simp
         show ?thesis
@@ -2093,7 +2094,7 @@ next
           from inner_sound Inr ap_eq have
             addr_valid: "addr < length (IS_Store state)" and
             inner_path_ty: "type_at_path env (storeTyping ! addr) path
-                            = Some (CoreTy_Name dtName tyArgs)"
+                            = Some (CoreTy_Datatype dtName tyArgs)"
             by auto
           have interp_eq: "interp_writable_lvalue (Suc fuel) state tm =
               Inr (addr, path @ [LVPath_VariantProj ctorName])"
@@ -2285,6 +2286,7 @@ next
                               "TE_Datatypes env' = TE_Datatypes env"
                               "TE_TypeVars env' = TE_TypeVars env"
                               "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+                              "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
               using env'_eq by simp_all
             have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
               using value_has_type_cong_env[OF env'_fields] .
@@ -2885,6 +2887,7 @@ next
                   "TE_Datatypes env = TE_Datatypes env_mid"
                   "TE_TypeVars env = TE_TypeVars env_mid"
                   "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+                  "TE_RuntimeTypeVars env = TE_RuntimeTypeVars env_mid"
                   "TE_ReturnType env = TE_ReturnType env_mid"
                   unfolding tyenv_subset_def by simp_all
                 hence vht_env: "value_has_type env retVal2 (TE_ReturnType env)"

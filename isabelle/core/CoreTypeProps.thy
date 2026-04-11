@@ -9,9 +9,10 @@ begin
 (* Check if a type is a runtime-compatible type (can be represented in memory).
    Non-runtime types include MathInt, MathReal, and ghost datatypes (whose constructor
    payloads contain non-runtime types and thus have unknown byte sizes).
-   Metavariables are considered runtime, since they could be substituted with runtime types. *)
+   A rigid type variable (CoreTy_Meta n with n \<in> TE_TypeVars env) is runtime iff
+   it appears in TE_RuntimeTypeVars env. *)
 fun is_runtime_type :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
-  "is_runtime_type env (CoreTy_Name nm tyargs) =
+  "is_runtime_type env (CoreTy_Datatype nm tyargs) =
      (nm |\<notin>| TE_GhostDatatypes env \<and> list_all (is_runtime_type env) tyargs)"
 | "is_runtime_type env CoreTy_Bool = True"
 | "is_runtime_type env (CoreTy_FiniteInt _ _) = True"
@@ -19,7 +20,7 @@ fun is_runtime_type :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" whe
 | "is_runtime_type env CoreTy_MathReal = False"
 | "is_runtime_type env (CoreTy_Record flds) = list_all (is_runtime_type env) (map snd flds)"
 | "is_runtime_type env (CoreTy_Array elemTy dims) = is_runtime_type env elemTy"
-| "is_runtime_type env (CoreTy_Meta _) = True"
+| "is_runtime_type env (CoreTy_Meta n) = (n |\<in>| TE_RuntimeTypeVars env)"
 
 (* Check if a type is a numeric type *)
 fun is_numeric_type :: "CoreType \<Rightarrow> bool" where
@@ -54,7 +55,7 @@ fun is_finite_integer_type :: "CoreType \<Rightarrow> bool" where
 
 (* Check if a type is ground (no metavars) *)
 fun is_ground :: "CoreType \<Rightarrow> bool" where
-  "is_ground (CoreTy_Name _ tyargs) = list_all is_ground tyargs"
+  "is_ground (CoreTy_Datatype _ tyargs) = list_all is_ground tyargs"
 | "is_ground CoreTy_Bool = True"
 | "is_ground (CoreTy_FiniteInt _ _) = True"
 | "is_ground CoreTy_MathInt = True"
@@ -65,7 +66,7 @@ fun is_ground :: "CoreType \<Rightarrow> bool" where
 
 (* Collect all metavariables in a type *)
 fun type_metavars :: "CoreType \<Rightarrow> nat set" where
-  "type_metavars (CoreTy_Name _ tyargs) = \<Union>(set (map type_metavars tyargs))"
+  "type_metavars (CoreTy_Datatype _ tyargs) = \<Union>(set (map type_metavars tyargs))"
 | "type_metavars CoreTy_Bool = {}"
 | "type_metavars (CoreTy_FiniteInt _ _) = {}"
 | "type_metavars CoreTy_MathInt = {}"
@@ -76,7 +77,7 @@ fun type_metavars :: "CoreType \<Rightarrow> nat set" where
 
 (* Collect all metavariables in a type as a list (executable) *)
 fun type_metavars_list :: "CoreType \<Rightarrow> nat list" where
-  "type_metavars_list (CoreTy_Name _ args) = concat (map type_metavars_list args)"
+  "type_metavars_list (CoreTy_Datatype _ args) = concat (map type_metavars_list args)"
 | "type_metavars_list CoreTy_Bool = []"
 | "type_metavars_list (CoreTy_FiniteInt _ _) = []"
 | "type_metavars_list CoreTy_MathInt = []"
@@ -136,14 +137,17 @@ lemma is_ground_no_metavars:
   "is_ground ty \<longleftrightarrow> type_metavars ty = {}"
   by (induct ty) (auto simp: list_all_iff)
 
-(* A list of metavariables satisfies list_all is_runtime_type *)
+(* A list of metavariables satisfies list_all is_runtime_type, provided the metavars
+   are all declared runtime in the env *)
 lemma list_all_meta_is_runtime:
-  "list_all (is_runtime_type env) (map CoreTy_Meta ns)"
-  by (simp add: list_all_iff)
+  assumes "\<forall>n \<in> set ns. n |\<in>| TE_RuntimeTypeVars env"
+  shows "list_all (is_runtime_type env) (map CoreTy_Meta ns)"
+  using assms by (induction ns) auto
 
-(* is_runtime_type only depends on TE_GhostDatatypes *)
+(* is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars *)
 lemma is_runtime_type_cong_env:
   "TE_GhostDatatypes env' = TE_GhostDatatypes env \<Longrightarrow>
+   TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env \<Longrightarrow>
    is_runtime_type env' ty = is_runtime_type env ty"
   by (induction ty) (auto simp: list_all_iff)
 

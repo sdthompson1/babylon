@@ -232,7 +232,7 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     (case map_of fieldTypes field of
       Some fieldTy \<Rightarrow> type_at_path env fieldTy rest
     | None \<Rightarrow> None)"
-| "type_at_path env (CoreTy_Name dtName argTypes) (LVPath_VariantProj ctor # rest) =
+| "type_at_path env (CoreTy_Datatype dtName argTypes) (LVPath_VariantProj ctor # rest) =
     (case fmlookup (TE_DataCtors env) ctor of
       Some (dtName2, metavars, payloadTy) \<Rightarrow>
         if dtName = dtName2 then

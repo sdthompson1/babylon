@@ -16,8 +16,8 @@ definition singleton_subst :: "nat \<Rightarrow> CoreType \<Rightarrow> MetaSubs
 (* Apply a metavariable substitution to a type.
    This replaces CoreTy_Meta n with subst(n) if defined, otherwise leaves it. *)
 fun apply_subst :: "MetaSubst \<Rightarrow> CoreType \<Rightarrow> CoreType" where
-  "apply_subst subst (CoreTy_Name name tyargs) =
-    CoreTy_Name name (map (apply_subst subst) tyargs)"
+  "apply_subst subst (CoreTy_Datatype name tyargs) =
+    CoreTy_Datatype name (map (apply_subst subst) tyargs)"
 | "apply_subst subst CoreTy_Bool = CoreTy_Bool"
 | "apply_subst subst (CoreTy_FiniteInt sign bits) = CoreTy_FiniteInt sign bits"
 | "apply_subst subst CoreTy_MathInt = CoreTy_MathInt"
@@ -162,9 +162,9 @@ qed
 lemma apply_subst_disjoint_id:
   "type_metavars ty \<inter> fset (fmdom subst) = {} \<Longrightarrow> apply_subst subst ty = ty"
 proof (induction ty)
-  case (CoreTy_Name name tyargs)
+  case (CoreTy_Datatype name tyargs)
   hence "\<forall>arg \<in> set tyargs. apply_subst subst arg = arg" by auto
-  thus ?case using CoreTy_Name by (simp add: map_idI)
+  thus ?case using CoreTy_Datatype by (simp add: map_idI)
 next
   case (CoreTy_Record flds)
   have disjoint: "\<And>name ty. (name, ty) \<in> set flds \<Longrightarrow> type_metavars ty \<inter> fset (fmdom subst) = {}"
@@ -196,13 +196,13 @@ lemma apply_subst_preserves_runtime:
     and "\<forall>ty' \<in> fmran' subst. is_runtime_type env ty'"
   shows "is_runtime_type env (apply_subst subst ty)"
 using assms proof (induction ty)
-  case (CoreTy_Name name tyArgs)
+  case (CoreTy_Datatype name tyArgs)
   have not_ghost: "name |\<notin>| TE_GhostDatatypes env"
-    using CoreTy_Name.prems(1) by simp
+    using CoreTy_Datatype.prems(1) by simp
   have "list_all (is_runtime_type env) tyArgs"
-    using CoreTy_Name.prems(1) by simp
+    using CoreTy_Datatype.prems(1) by simp
   hence "list_all (is_runtime_type env) (map (apply_subst subst) tyArgs)"
-    using CoreTy_Name.IH CoreTy_Name.prems(2)
+    using CoreTy_Datatype.IH CoreTy_Datatype.prems(2)
     by (simp add: list_all_iff)
   thus ?case using not_ghost by simp
 next
@@ -221,7 +221,7 @@ next
   show ?case
   proof (cases "fmlookup subst n")
     case None
-    thus ?thesis by simp
+    thus ?thesis using CoreTy_Meta.prems(1) by simp
   next
     case (Some ty')
     hence "ty' \<in> fmran' subst"

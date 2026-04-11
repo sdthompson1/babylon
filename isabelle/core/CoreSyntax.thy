@@ -12,7 +12,7 @@ datatype CoreDimension =
 
 (* Type *)
 datatype CoreType =
-  CoreTy_Name string "CoreType list"   (* Datatype or abstract/extern type *)
+  CoreTy_Datatype string "CoreType list"   (* Datatype name with type arguments *)
   | CoreTy_Bool
   | CoreTy_FiniteInt Signedness IntBits
   | CoreTy_MathInt

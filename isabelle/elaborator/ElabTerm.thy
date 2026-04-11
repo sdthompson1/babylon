@@ -1,5 +1,5 @@
 theory ElabTerm
-  imports ElabType Unify SubstituteTypesInTerm
+  imports ElabType Unify "../core/CoreTypeSubst"
 begin
 
 (* Convert BabUnop to CoreUnop *)

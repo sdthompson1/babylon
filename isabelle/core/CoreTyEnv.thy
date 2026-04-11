@@ -31,8 +31,18 @@ record CoreTyEnv =
   (* Constant names - subset of TE_TermVars keys; these are not assignable *)
   TE_ConstNames :: "string fset"
 
-  (* Type variable bindings: for polymorphic contexts *)
-  TE_TypeVars :: "string fset"
+  (* In-scope rigid type variables (as CoreTy_Meta identifiers), for polymorphic contexts.
+     These are bound by an enclosing polymorphic signature (e.g. a function's FI_TyArgs)
+     and are never unified — they are rigid binders, not unification slots. *)
+  TE_TypeVars :: "nat fset"
+
+  (* Subset of TE_TypeVars consisting of type variables known to be runtime-kinded.
+     A NotGhost function adds its type parameters to both TE_TypeVars and TE_RuntimeTypeVars
+     (its type arguments at call sites must be runtime types). A Ghost function adds its
+     type parameters only to TE_TypeVars, since ghost type arguments need not be runtime.
+     INVARIANT: TE_RuntimeTypeVars |\<subseteq>| TE_TypeVars. Only is_runtime_type should read
+     this field; everything else should consult is_runtime_type instead. *)
+  TE_RuntimeTypeVars :: "nat fset"
 
   (* Expected return type of the enclosing function *)
   TE_ReturnType :: CoreType
@@ -78,7 +88,8 @@ definition tyenv_subset :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool
     TE_DataCtors env1 = TE_DataCtors env2 \<and>
     TE_DataCtorsByType env1 = TE_DataCtorsByType env2 \<and>
     TE_GhostDatatypes env1 = TE_GhostDatatypes env2 \<and>
-    TE_TypeVars env1 = TE_TypeVars env2"
+    TE_TypeVars env1 = TE_TypeVars env2 \<and>
+    TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
 
 lemma tyenv_subset_refl: "tyenv_subset env env"
   unfolding tyenv_subset_def by simp

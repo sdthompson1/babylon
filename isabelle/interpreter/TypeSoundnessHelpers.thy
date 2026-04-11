@@ -23,7 +23,7 @@ next
     with Cons.prems show ?thesis
       by (cases step) (auto split: option.splits intro: Cons.IH)
   next
-    case (CoreTy_Name dtName argTypes)
+    case (CoreTy_Datatype dtName argTypes)
     with Cons.prems show ?thesis
       by (cases step) (auto split: option.splits if_splits intro: Cons.IH)
   next
@@ -59,7 +59,7 @@ next
     then show ?thesis
       by (cases step) (simp_all add: Cons.IH split: option.splits)
   next
-    case (CoreTy_Name dtName argTypes)
+    case (CoreTy_Datatype dtName argTypes)
     then show ?thesis
       by (cases step) (simp_all add: assms Cons.IH split: option.splits if_splits)
   next
@@ -146,6 +146,7 @@ proof -
                     "TE_Datatypes env' = TE_Datatypes env"
                     "TE_TypeVars env' = TE_TypeVars env"
                     "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+                    "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
     using env'_eq by simp_all
   have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
     using value_has_type_cong_env[OF env'_fields] .
@@ -678,7 +679,7 @@ next
       case (LVPath_VariantProj expectedCtor)
       (* Extract variant type *)
       from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
-        ty_eq: "ty = CoreTy_Name dtName argTypes" and
+        ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
         ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
         len_eq: "length metavars = length argTypes" and
         args_wk: "list_all (is_well_kinded env) argTypes" and
@@ -827,7 +828,7 @@ next
     next
       case (LVPath_VariantProj expectedCtor)
       from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
-        ty_eq: "ty = CoreTy_Name dtName argTypes" and
+        ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
         ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
         payload_typed: "value_has_type env payload
                           (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
@@ -928,7 +929,7 @@ next
   next
     case (CV_Variant ctor payload)
     from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
-      slotTy_eq: "slotTy = CoreTy_Name dtName argTypes" and
+      slotTy_eq: "slotTy = CoreTy_Datatype dtName argTypes" and
       ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
       payload_typed: "value_has_type env payload
                         (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
@@ -1045,7 +1046,7 @@ next
   next
     case (CV_Variant ctor payload)
     from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
-      slotTy_eq: "slotTy = CoreTy_Name dtName argTypes" and
+      slotTy_eq: "slotTy = CoreTy_Datatype dtName argTypes" and
       ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
       payload_typed: "value_has_type env payload
                         (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
@@ -1312,17 +1313,17 @@ next
         by (metis prod.collapse)
     qed
   next
-    case (CoreTy_Name dtName tyArgs)
-    from exhaustive no_wildcard CoreTy_Name obtain ctors where
+    case (CoreTy_Datatype dtName tyArgs)
+    from exhaustive no_wildcard CoreTy_Datatype obtain ctors where
       ctors_lookup: "fmlookup (TE_DataCtorsByType env) dtName = Some ctors" and
       all_covered: "list_all (\<lambda>ctor. list_ex (\<lambda>p. p = CorePat_Variant ctor) (map fst arms)) ctors"
       by (auto split: option.splits)
     (* Value must be a variant *)
-    from val_typed CoreTy_Name obtain actualCtor payload where
+    from val_typed CoreTy_Datatype obtain actualCtor payload where
       val_eq: "val = CV_Variant actualCtor payload"
       using value_has_type_Name by blast
     (* Extract constructor info from value typing *)
-    from val_typed val_eq CoreTy_Name obtain dtName2 metavars payloadTy where
+    from val_typed val_eq CoreTy_Datatype obtain dtName2 metavars payloadTy where
       ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName2, metavars, payloadTy)" and
       dt_eq: "dtName = dtName2"
       by (auto split: option.splits prod.splits)
