@@ -20,12 +20,12 @@ where
 
   (* Variable declaration (Var) *)
   "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
-    (if fmlookup (TE_TermVars env) varName \<noteq> None then None  \<comment> \<open>no shadowing\<close>
+    (if tyenv_lookup_var env varName \<noteq> None then None  \<comment> \<open>no shadowing\<close>
      else if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
         \<and> core_term_type env declGhost initTm = Some varTy
-     then Some (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+     then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostVars := (if declGhost = Ghost
                                        then finsert varName (TE_GhostVars env)
                                        else TE_GhostVars env),
@@ -129,9 +129,9 @@ using assms proof (cases stmt)
       case NotGhost
       from rt NotGhost have "is_runtime_type env varTy" by simp
       from tyenv_well_formed_add_var[OF assms(2) wk this]
-      have wf': "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env) \<rparr>)" .
+      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env) \<rparr>)" .
       from assms CoreStmt_VarDecl Var NotGhost have env'_eq:
-        "env' = env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+        "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostVars := TE_GhostVars env,
                       TE_ConstNames := TE_ConstNames env \<rparr>"
         by (auto split: if_splits)
@@ -139,7 +139,7 @@ using assms proof (cases stmt)
     next
       case Ghost
       from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
-      have "tyenv_well_formed (env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+      have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                      TE_GhostVars := finsert varName (TE_GhostVars env) \<rparr>)" .
       with assms CoreStmt_VarDecl Var Ghost show ?thesis
         by (auto split: if_splits)
@@ -276,7 +276,7 @@ using assms proof (cases stmt)
   show ?thesis proof (cases varOrRef)
     case Var
     from assms CoreStmt_VarDecl Var have env'_eq:
-      "env' = env \<lparr> TE_TermVars := fmupd varName varTy (TE_TermVars env),
+      "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                     TE_GhostVars := (if declGhost = Ghost
                                      then finsert varName (TE_GhostVars env)
                                      else TE_GhostVars env),

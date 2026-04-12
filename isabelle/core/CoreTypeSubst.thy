@@ -344,8 +344,8 @@ lemmas apply_subst_to_stmt_list_preserves_typing =
 
 (* Apply a substitution to every type stored in an environment.
    The substitution touches:
-     - TE_TermVars: variable types (though in a well-formed env these are ground,
-                    so in practice this is a no-op at use sites)
+     - TE_LocalVars, TE_GlobalVars: variable types (though in a well-formed env these
+                    are ground, so in practice this is a no-op at use sites)
      - TE_ReturnType
    It does NOT touch:
      - TE_TypeVars / TE_RuntimeTypeVars (these are binder sets, not types)
@@ -354,7 +354,8 @@ lemmas apply_subst_to_stmt_list_preserves_typing =
      - TE_Functions (function signatures are also outer-scope and fixed). *)
 definition apply_subst_to_env :: "MetaSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "apply_subst_to_env subst env =
-    env \<lparr> TE_TermVars := fmmap (apply_subst subst) (TE_TermVars env),
+    env \<lparr> TE_LocalVars := fmmap (apply_subst subst) (TE_LocalVars env),
+          TE_GlobalVars := fmmap (apply_subst subst) (TE_GlobalVars env),
           TE_ReturnType := apply_subst subst (TE_ReturnType env) \<rparr>"
 
 end

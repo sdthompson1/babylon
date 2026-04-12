@@ -19,19 +19,26 @@ begin
    dangling. In real Babylon programs, such accesses are prevented statically by
    SMT-discharged proof obligations; the Core language typechecker does not (and
    need not) enforce this. *)
-definition term_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list
+
+(* A local variable (in IS_Locals or IS_Refs) has the expected type via the store typing *)
+definition local_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list
     \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> bool" where
-  "term_var_in_state_with_type state env storeTyping name ty =
+  "local_var_in_state_with_type state env storeTyping name ty =
     (case fmlookup (IS_Locals state) name of
       Some addr \<Rightarrow> addr < length (IS_Store state) \<and> storeTyping ! addr = ty
     | None \<Rightarrow>
       (case fmlookup (IS_Refs state) name of
         Some (addr, path) \<Rightarrow> addr < length (IS_Store state) \<and>
                              type_at_path env (storeTyping ! addr) path = Some ty
-      | None \<Rightarrow>
-        (case fmlookup (IS_Globals state) name of
-          Some val \<Rightarrow> value_has_type env val ty
-        | None \<Rightarrow> False)))"
+      | None \<Rightarrow> False))"
+
+(* A global variable (in IS_Globals) has the expected type directly *)
+definition global_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow>
+    string \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "global_var_in_state_with_type state env name ty =
+    (case fmlookup (IS_Globals state) name of
+      Some val \<Rightarrow> value_has_type env val ty
+    | None \<Rightarrow> False)"
 
 (* This says that a given FunInfo and an InterpFun match *)
 (* TODO: This needs to be extended, as explained below *)
@@ -51,21 +58,33 @@ definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<
         quantity\<close>"
 
 
-(* This asserts that all variables in the type env (TE_TermVars, but not ghost)
-   also exist in the state (either IS_Locals, IS_Refs or IS_Globals)
-   with the correct type. *)
-definition vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
-  "vars_exist_in_state state env storeTyping \<equiv>
-    \<forall>name ty. fmlookup (TE_TermVars env) name = Some ty \<and> name |\<notin>| TE_GhostVars env \<longrightarrow>
-      term_var_in_state_with_type state env storeTyping name ty"
+(* All local variables in the type env (TE_LocalVars, but not ghost)
+   also exist in the state (either IS_Locals or IS_Refs) with the correct type. *)
+definition local_vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
+  "local_vars_exist_in_state state env storeTyping \<equiv>
+    \<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty \<and> name |\<notin>| TE_GhostVars env \<longrightarrow>
+      local_var_in_state_with_type state env storeTyping name ty"
 
-(* This asserts the converse: if a variable is not in TE_TermVars (or is in TE_GhostVars)
-   then it is not in the state. *)
-definition no_extra_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
-  "no_extra_vars state env \<equiv>
-    \<forall>name. fmlookup (TE_TermVars env) name = None \<or> name |\<in>| TE_GhostVars env \<longrightarrow>
+(* All global variables in the type env (TE_GlobalVars, but not ghost)
+   also exist in the state (IS_Globals) with the correct type. *)
+definition global_vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "global_vars_exist_in_state state env \<equiv>
+    \<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<and> name |\<notin>| TE_GhostVars env \<longrightarrow>
+      global_var_in_state_with_type state env name ty"
+
+(* Converse for locals: if a variable is not in TE_LocalVars (or is ghost)
+   then it is not in IS_Locals or IS_Refs. *)
+definition no_extra_local_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "no_extra_local_vars state env \<equiv>
+    \<forall>name. fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostVars env \<longrightarrow>
       fmlookup (IS_Locals state) name = None \<and>
-      fmlookup (IS_Refs state) name = None \<and>
+      fmlookup (IS_Refs state) name = None"
+
+(* Converse for globals: if a variable is not in TE_GlobalVars (or is ghost)
+   then it is not in IS_Globals. *)
+definition no_extra_global_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "no_extra_global_vars state env \<equiv>
+    \<forall>name. fmlookup (TE_GlobalVars env) name = None \<or> name |\<in>| TE_GhostVars env \<longrightarrow>
       fmlookup (IS_Globals state) name = None"
 
 (* All NotGhost functions in the type environment also exist in the state
@@ -85,10 +104,11 @@ definition no_extra_funs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
             | Some info \<Rightarrow> FI_Ghost info = Ghost) \<longrightarrow>
       fmlookup (IS_Functions state) name = None"
 
-(* Non-constant, non-ghost variables are in IS_Locals or IS_Refs (not IS_Globals). *)
+(* Non-constant, non-ghost local variables are in IS_Locals or IS_Refs.
+   (Globals are implicitly constant and are always in IS_Globals, not here.) *)
 definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "non_consts_in_locals_or_refs state env \<equiv>
-    \<forall>name. fmlookup (TE_TermVars env) name \<noteq> None \<and>
+    \<forall>name. fmlookup (TE_LocalVars env) name \<noteq> None \<and>
            name |\<notin>| TE_GhostVars env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
       (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
 
@@ -108,8 +128,10 @@ definition store_well_typed :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightar
 (* Overall definition: state matches environment under a given store typing *)
 definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
   "state_matches_env state env storeTyping \<equiv>
-    vars_exist_in_state state env storeTyping \<and>
-    no_extra_vars state env \<and>
+    local_vars_exist_in_state state env storeTyping \<and>
+    global_vars_exist_in_state state env \<and>
+    no_extra_local_vars state env \<and>
+    no_extra_global_vars state env \<and>
     funs_exist_in_state state env \<and>
     no_extra_funs state env \<and>
     non_consts_in_locals_or_refs state env \<and>

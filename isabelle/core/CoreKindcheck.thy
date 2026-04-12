@@ -97,7 +97,7 @@ qed (simp_all)
 
 
 (* is_well_kinded only depends on TE_TypeVars and TE_Datatypes.
-   Changing other fields of the environment (e.g. TE_TermVars, TE_GhostVars)
+   Changing other fields of the environment (e.g. TE_LocalVars, TE_GlobalVars, TE_GhostVars)
    does not affect well-kindedness. *)
 lemma is_well_kinded_cong_env:
   assumes "TE_TypeVars env' = TE_TypeVars env"

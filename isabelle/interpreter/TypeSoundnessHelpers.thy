@@ -88,7 +88,7 @@ lemma state_matches_env_add_local:
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
                                         IS_ConstNames := new_state_cn \<rparr>"
-    and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+    and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                                TE_ConstNames := new_env_cn \<rparr>"
     and var_not_ghost: "var |\<notin>| TE_GhostVars env"
     and cn_match: "const_names_match state'' env'"
@@ -153,30 +153,30 @@ proof -
   have tap_eq: "\<And>t p. type_at_path env t p = type_at_path env' t p"
     using type_at_path_cong_env[OF env'_fields(1)] .
 
-  (* 1. vars_exist_in_state *)
-  have "vars_exist_in_state state'' env' ?st'"
-    unfolding vars_exist_in_state_def
+  (* 1. local_vars_exist_in_state *)
+  have "local_vars_exist_in_state state'' env' ?st'"
+    unfolding local_vars_exist_in_state_def
   proof (intro allI impI, elim conjE)
     fix name ty
-    assume lookup: "fmlookup (TE_TermVars env') name = Some ty"
+    assume lookup: "fmlookup (TE_LocalVars env') name = Some ty"
       and not_ghost: "name |\<notin>| TE_GhostVars env'"
-    show "term_var_in_state_with_type state'' env' ?st' name ty"
+    show "local_var_in_state_with_type state'' env' ?st' name ty"
     proof (cases "name = var")
       case True
       (* The new variable - points to val at addr, with storeTyping entry = rhsTy *)
       then have "ty = rhsTy" using lookup env'_eq by simp
       then show ?thesis
         using True locals''_eq addr_valid st'_at_addr
-        unfolding term_var_in_state_with_type_def by simp
+        unfolding local_var_in_state_with_type_def by simp
     next
       case False
-      (* An existing variable *)
-      then have "fmlookup (TE_TermVars env) name = Some ty"
+      (* An existing local variable *)
+      then have "fmlookup (TE_LocalVars env) name = Some ty"
         using lookup env'_eq by simp
       moreover have "name |\<notin>| TE_GhostVars env"
         using not_ghost env'_eq False by auto
-      ultimately have old: "term_var_in_state_with_type state env storeTyping name ty"
-        using state_env unfolding state_matches_env_def vars_exist_in_state_def by blast
+      ultimately have old: "local_var_in_state_with_type state env storeTyping name ty"
+        using state_env unfolding state_matches_env_def local_vars_exist_in_state_def by blast
       (* Locals lookup is unchanged for name \<noteq> var *)
       have locals_name: "fmlookup (IS_Locals state'') name = fmlookup (IS_Locals state) name"
         using False locals''_eq by simp
@@ -186,99 +186,104 @@ proof -
         (* name is a local in old state, pointing to address a *)
         from old Some have a_valid: "a < length (IS_Store state)"
           and st_eq: "storeTyping ! a = ty"
-          unfolding term_var_in_state_with_type_def by auto
+          unfolding local_var_in_state_with_type_def by auto
         from old_addrs[OF a_valid] have a_valid'': "a < length (IS_Store state'')" by simp
         from st'_at_old[OF a_valid] st_eq have "?st' ! a = ty" by simp
         then show ?thesis
           using Some locals_name a_valid''
-          unfolding term_var_in_state_with_type_def by simp
+          unfolding local_var_in_state_with_type_def by simp
       next
         case None
+        have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
+          using False refs''_eq by simp
+        from old None obtain addrPath where
+          refs_lookup: "fmlookup (IS_Refs state) name = Some addrPath"
+          unfolding local_var_in_state_with_type_def by (auto split: option.splits)
+        obtain aa ba where ap_eq: "addrPath = (aa, ba)" by (cases addrPath) auto
+        from old None refs_lookup ap_eq have
+          aa_valid: "aa < length (IS_Store state)" and
+          path_ty: "type_at_path env (storeTyping ! aa) ba = Some ty"
+          unfolding local_var_in_state_with_type_def by auto
+        from old_addrs[OF aa_valid] have aa_valid'': "aa < length (IS_Store state'')" by simp
+        from st'_at_old[OF aa_valid] have st_at_aa: "?st' ! aa = storeTyping ! aa" by simp
+        from path_ty tap_eq st_at_aa
+        have path_ty': "type_at_path env' (?st' ! aa) ba = Some ty" by simp
         show ?thesis
-        proof (cases "fmlookup (IS_Refs state) name")
-          case (Some addrPath)
-          obtain aa ba where ap_eq: "addrPath = (aa, ba)" by (cases addrPath) auto
-          from old None Some ap_eq have
-            aa_valid: "aa < length (IS_Store state)" and
-            path_ty: "type_at_path env (storeTyping ! aa) ba = Some ty"
-            unfolding term_var_in_state_with_type_def by (auto split: option.splits)
-          from old_addrs[OF aa_valid] have aa_valid'': "aa < length (IS_Store state'')" by simp
-          have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
-            using False refs''_eq by simp
-          from st'_at_old[OF aa_valid] have st_at_aa: "?st' ! aa = storeTyping ! aa" by simp
-          from path_ty tap_eq st_at_aa
-          have path_ty': "type_at_path env' (?st' ! aa) ba = Some ty" by simp
-          show ?thesis
-            unfolding term_var_in_state_with_type_def
-            using locals_name refs_name None Some ap_eq aa_valid'' path_ty'
-            by simp
-        next
-          case None2: None
-          (* name is a global constant *)
-          have refs_name: "fmlookup (IS_Refs state'') name = fmlookup (IS_Refs state) name"
-            using False refs''_eq by simp
-          from old None None2 have glob: "case fmlookup (IS_Globals state) name of
-              Some val \<Rightarrow> value_has_type env val ty | None \<Rightarrow> False"
-            unfolding term_var_in_state_with_type_def by (simp split: option.splits)
-          then obtain gval where glob_lookup: "fmlookup (IS_Globals state) name = Some gval"
-            and gval_typed: "value_has_type env gval ty"
-            by (auto split: option.splits)
-          from glob_lookup gval_typed vht_eq consts''_eq
-          show ?thesis
-            unfolding term_var_in_state_with_type_def
-            using locals_name refs_name None None2 by simp
-        qed
+          unfolding local_var_in_state_with_type_def
+          using locals_name refs_name None refs_lookup ap_eq aa_valid'' path_ty'
+          by simp
       qed
     qed
   qed
 
-  (* 2. no_extra_vars *)
-  moreover have "no_extra_vars state'' env'"
-    unfolding no_extra_vars_def
+  (* 2. global_vars_exist_in_state: globals unchanged *)
+  moreover have "global_vars_exist_in_state state'' env'"
+    unfolding global_vars_exist_in_state_def
+  proof (intro allI impI, elim conjE)
+    fix name ty
+    assume lookup: "fmlookup (TE_GlobalVars env') name = Some ty"
+      and not_ghost: "name |\<notin>| TE_GhostVars env'"
+    have "fmlookup (TE_GlobalVars env) name = Some ty"
+      using lookup env'_eq by simp
+    moreover have "name |\<notin>| TE_GhostVars env"
+      using not_ghost env'_eq by auto
+    ultimately have "global_var_in_state_with_type state env name ty"
+      using state_env unfolding state_matches_env_def global_vars_exist_in_state_def by blast
+    then show "global_var_in_state_with_type state'' env' name ty"
+      using consts''_eq vht_eq unfolding global_var_in_state_with_type_def
+      by (auto split: option.splits)
+  qed
+
+  (* 3. no_extra_local_vars *)
+  moreover have "no_extra_local_vars state'' env'"
+    unfolding no_extra_local_vars_def
   proof (intro allI impI)
     fix name
-    assume ante: "fmlookup (TE_TermVars env') name = None \<or> name |\<in>| TE_GhostVars env'"
+    assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostVars env'"
     show "fmlookup (IS_Locals state'') name = None \<and>
-          fmlookup (IS_Refs state'') name = None \<and>
-          fmlookup (IS_Globals state'') name = None"
+          fmlookup (IS_Refs state'') name = None"
     proof (cases "name = var")
       case True
-      then have "fmlookup (TE_TermVars env') var = Some rhsTy" using env'_eq by simp
+      then have "fmlookup (TE_LocalVars env') var = Some rhsTy" using env'_eq by simp
       with ante True have "var |\<in>| TE_GhostVars env'" by simp
       then show ?thesis using env'_eq var_not_ghost by simp
     next
       case False
-      then have tv_eq: "fmlookup (TE_TermVars env') name = fmlookup (TE_TermVars env) name"
+      then have tv_eq: "fmlookup (TE_LocalVars env') name = fmlookup (TE_LocalVars env) name"
         using env'_eq by simp
       have gv_iff: "name |\<in>| TE_GhostVars env' \<longleftrightarrow> name |\<in>| TE_GhostVars env"
         using False env'_eq by auto
       from ante tv_eq gv_iff
-      have "fmlookup (TE_TermVars env) name = None \<or> name |\<in>| TE_GhostVars env"
+      have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostVars env"
         by simp
       then have "fmlookup (IS_Locals state) name = None \<and>
-                 fmlookup (IS_Refs state) name = None \<and>
-                 fmlookup (IS_Globals state) name = None"
-        using state_env unfolding state_matches_env_def no_extra_vars_def by blast
-      then show ?thesis using False locals''_eq refs''_eq consts''_eq by simp
+                 fmlookup (IS_Refs state) name = None"
+        using state_env unfolding state_matches_env_def no_extra_local_vars_def by blast
+      then show ?thesis using False locals''_eq refs''_eq by simp
     qed
   qed
 
-  (* 3. funs_exist_in_state *)
+  (* 4. no_extra_global_vars: globals unchanged *)
+  moreover have "no_extra_global_vars state'' env'"
+    using state_env consts''_eq env'_eq
+    unfolding state_matches_env_def no_extra_global_vars_def by simp
+
+  (* 5. funs_exist_in_state *)
   moreover have "funs_exist_in_state state'' env'"
     using state_env funs''_eq env'_eq
     unfolding state_matches_env_def funs_exist_in_state_def by simp
 
-  (* 4. no_extra_funs *)
+  (* 6. no_extra_funs *)
   moreover have "no_extra_funs state'' env'"
     using state_env funs''_eq env'_eq
     unfolding state_matches_env_def no_extra_funs_def by simp
 
-  (* 5. non_consts_in_locals_or_refs *)
+  (* 7. non_consts_in_locals_or_refs *)
   moreover have "non_consts_in_locals_or_refs state'' env'"
     unfolding non_consts_in_locals_or_refs_def
   proof (intro allI impI, elim conjE)
     fix name
-    assume tv: "fmlookup (TE_TermVars env') name \<noteq> None"
+    assume tv: "fmlookup (TE_LocalVars env') name \<noteq> None"
       and ng: "name |\<notin>| TE_GhostVars env'"
       and nc: "name |\<notin>| TE_ConstNames env'"
     show "fmlookup (IS_Locals state'') name \<noteq> None \<or>
@@ -288,7 +293,7 @@ proof -
       then show ?thesis using locals''_eq by simp
     next
       case False
-      then have "fmlookup (TE_TermVars env) name \<noteq> None"
+      then have "fmlookup (TE_LocalVars env) name \<noteq> None"
         using tv env'_eq by simp
       moreover have "name |\<notin>| TE_GhostVars env"
         using ng env'_eq False by auto
@@ -343,7 +348,7 @@ corollary state_matches_env_add_const_local:
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
                                         IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
-    and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+    and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
     and var_not_ghost: "var |\<notin>| TE_GhostVars env"
   shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
@@ -368,7 +373,7 @@ corollary state_matches_env_add_nonconst_local:
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
-    and env'_eq: "env' = env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
+    and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                                TE_ConstNames := TE_ConstNames env \<rparr>"
     and var_not_ghost: "var |\<notin>| TE_GhostVars env"
   shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
@@ -1150,49 +1155,59 @@ proof -
       \<Longrightarrow> IS_Store state' ! a = IS_Store state ! a"
     using state'_eq by simp
 
-  (* 1. vars_exist_in_state: the storeTyping entries haven't changed, and
-     value_has_type facts about locals/refs were about type_at_path of storeTyping,
-     which is independent of the actual store contents. *)
-  have "vars_exist_in_state state' env storeTyping"
-    unfolding vars_exist_in_state_def
+  (* 1. local_vars_exist_in_state: the storeTyping entries haven't changed, and
+     type_at_path of storeTyping is independent of the actual store contents. *)
+  have "local_vars_exist_in_state state' env storeTyping"
+    unfolding local_vars_exist_in_state_def
   proof (intro allI impI, elim conjE)
     fix name ty
-    assume lk: "fmlookup (TE_TermVars env) name = Some ty"
+    assume lk: "fmlookup (TE_LocalVars env) name = Some ty"
       and ng: "name |\<notin>| TE_GhostVars env"
-    from state_env lk ng have old: "term_var_in_state_with_type state env storeTyping name ty"
-      unfolding state_matches_env_def vars_exist_in_state_def by blast
-    show "term_var_in_state_with_type state' env storeTyping name ty"
-      using old locals'_eq refs'_eq globals'_eq store'_len
-      unfolding term_var_in_state_with_type_def
+    from state_env lk ng have old: "local_var_in_state_with_type state env storeTyping name ty"
+      unfolding state_matches_env_def local_vars_exist_in_state_def by blast
+    show "local_var_in_state_with_type state' env storeTyping name ty"
+      using old locals'_eq refs'_eq store'_len
+      unfolding local_var_in_state_with_type_def
       by (auto split: option.splits)
   qed
 
-  (* 2. no_extra_vars: unchanged *)
-  moreover have "no_extra_vars state' env"
-    using state_env locals'_eq refs'_eq globals'_eq
-    unfolding state_matches_env_def no_extra_vars_def by simp
+  (* 2. global_vars_exist_in_state: unchanged *)
+  moreover have "global_vars_exist_in_state state' env"
+    using state_env globals'_eq
+    unfolding state_matches_env_def global_vars_exist_in_state_def
+              global_var_in_state_with_type_def by simp
 
-  (* 3. funs_exist_in_state: unchanged *)
+  (* 3. no_extra_local_vars: unchanged *)
+  moreover have "no_extra_local_vars state' env"
+    using state_env locals'_eq refs'_eq
+    unfolding state_matches_env_def no_extra_local_vars_def by simp
+
+  (* 4. no_extra_global_vars: unchanged *)
+  moreover have "no_extra_global_vars state' env"
+    using state_env globals'_eq
+    unfolding state_matches_env_def no_extra_global_vars_def by simp
+
+  (* 5. funs_exist_in_state: unchanged *)
   moreover have "funs_exist_in_state state' env"
     using state_env funs'_eq
     unfolding state_matches_env_def funs_exist_in_state_def by simp
 
-  (* 4. no_extra_funs: unchanged *)
+  (* 6. no_extra_funs: unchanged *)
   moreover have "no_extra_funs state' env"
     using state_env funs'_eq
     unfolding state_matches_env_def no_extra_funs_def by simp
 
-  (* 5. non_consts_in_locals_or_refs: unchanged *)
+  (* 7. non_consts_in_locals_or_refs: unchanged *)
   moreover have "non_consts_in_locals_or_refs state' env"
     using state_env locals'_eq refs'_eq
     unfolding state_matches_env_def non_consts_in_locals_or_refs_def by simp
 
-  (* 6. const_names_match: unchanged *)
+  (* 8. const_names_match: unchanged *)
   moreover have "const_names_match state' env"
     using state_env cn'_eq
     unfolding state_matches_env_def const_names_match_def by simp
 
-  (* 7. store_well_typed: slot at addr is newSlotVal with storeTyping ! addr; others unchanged. *)
+  (* 9. store_well_typed: slot at addr is newSlotVal with storeTyping ! addr; others unchanged. *)
   moreover have "store_well_typed state' env storeTyping"
     unfolding store_well_typed_def
   proof (intro conjI allI impI)

@@ -160,9 +160,10 @@ lemma is_runtime_type_TE_ConstNames_irrelevant [simp]:
 (* Term Properties *)
 (* ========================================================================== *)
 
-(* Like is_lvalue, but also checks that the base variable is not a constant *)
+(* Like is_lvalue, but also checks that the base variable is writable.
+   A variable is writable if it is a non-const local. Globals are always read-only. *)
 fun is_writable_lvalue :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
-  "is_writable_lvalue env (CoreTm_Var name) = (name |\<notin>| TE_ConstNames env)"
+  "is_writable_lvalue env (CoreTm_Var name) = tyenv_var_writable env name"
 | "is_writable_lvalue env (CoreTm_RecordProj tm _) = is_writable_lvalue env tm"
 | "is_writable_lvalue env (CoreTm_VariantProj tm _) = is_writable_lvalue env tm"
 | "is_writable_lvalue env (CoreTm_ArrayProj tm _) = is_writable_lvalue env tm"
