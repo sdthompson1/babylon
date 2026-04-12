@@ -81,7 +81,8 @@ qed
 
 (* After alloc_store + fmupd of locals, the new state matches the extended env
    under an extended storeTyping (with rhsTy appended).
-   General version that works for both const (let) and non-const (var decl) cases. *)
+   General version that works for both const (let) and non-const (var decl) cases.
+   The variable is removed from TE_GhostLocals (since the new binding is non-ghost). *)
 lemma state_matches_env_add_local:
   assumes state_env: "state_matches_env state env storeTyping"
     and val_typed: "value_has_type env val rhsTy"
@@ -89,8 +90,8 @@ lemma state_matches_env_add_local:
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
                                         IS_ConstNames := new_state_cn \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                               TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
                                TE_ConstNames := new_env_cn \<rparr>"
-    and var_not_ghost: "var |\<notin>| TE_GhostVars env"
     and cn_match: "const_names_match state'' env'"
     and cn_other: "\<And>name. name \<noteq> var \<Longrightarrow>
                      (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
@@ -159,7 +160,7 @@ proof -
   proof (intro allI impI, elim conjE)
     fix name ty
     assume lookup: "fmlookup (TE_LocalVars env') name = Some ty"
-      and not_ghost: "name |\<notin>| TE_GhostVars env'"
+      and not_ghost: "name |\<notin>| TE_GhostLocals env'"
     show "local_var_in_state_with_type state'' env' ?st' name ty"
     proof (cases "name = var")
       case True
@@ -173,7 +174,7 @@ proof -
       (* An existing local variable *)
       then have "fmlookup (TE_LocalVars env) name = Some ty"
         using lookup env'_eq by simp
-      moreover have "name |\<notin>| TE_GhostVars env"
+      moreover have "name |\<notin>| TE_GhostLocals env"
         using not_ghost env'_eq False by auto
       ultimately have old: "local_var_in_state_with_type state env storeTyping name ty"
         using state_env unfolding state_matches_env_def local_vars_exist_in_state_def by blast
@@ -222,10 +223,10 @@ proof -
   proof (intro allI impI, elim conjE)
     fix name ty
     assume lookup: "fmlookup (TE_GlobalVars env') name = Some ty"
-      and not_ghost: "name |\<notin>| TE_GhostVars env'"
+      and not_ghost: "name |\<notin>| TE_GhostGlobals env'"
     have "fmlookup (TE_GlobalVars env) name = Some ty"
       using lookup env'_eq by simp
-    moreover have "name |\<notin>| TE_GhostVars env"
+    moreover have "name |\<notin>| TE_GhostGlobals env"
       using not_ghost env'_eq by auto
     ultimately have "global_var_in_state_with_type state env name ty"
       using state_env unfolding state_matches_env_def global_vars_exist_in_state_def by blast
@@ -239,22 +240,23 @@ proof -
     unfolding no_extra_local_vars_def
   proof (intro allI impI)
     fix name
-    assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostVars env'"
+    assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostLocals env'"
     show "fmlookup (IS_Locals state'') name = None \<and>
           fmlookup (IS_Refs state'') name = None"
     proof (cases "name = var")
       case True
       then have "fmlookup (TE_LocalVars env') var = Some rhsTy" using env'_eq by simp
-      with ante True have "var |\<in>| TE_GhostVars env'" by simp
-      then show ?thesis using env'_eq var_not_ghost by simp
+      with ante True have "var |\<in>| TE_GhostLocals env'" by simp
+      hence False using env'_eq by simp
+      then show ?thesis ..
     next
       case False
       then have tv_eq: "fmlookup (TE_LocalVars env') name = fmlookup (TE_LocalVars env) name"
         using env'_eq by simp
-      have gv_iff: "name |\<in>| TE_GhostVars env' \<longleftrightarrow> name |\<in>| TE_GhostVars env"
+      have gv_iff: "name |\<in>| TE_GhostLocals env' \<longleftrightarrow> name |\<in>| TE_GhostLocals env"
         using False env'_eq by auto
       from ante tv_eq gv_iff
-      have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostVars env"
+      have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostLocals env"
         by simp
       then have "fmlookup (IS_Locals state) name = None \<and>
                  fmlookup (IS_Refs state) name = None"
@@ -284,7 +286,7 @@ proof -
   proof (intro allI impI, elim conjE)
     fix name
     assume tv: "fmlookup (TE_LocalVars env') name \<noteq> None"
-      and ng: "name |\<notin>| TE_GhostVars env'"
+      and ng: "name |\<notin>| TE_GhostLocals env'"
       and nc: "name |\<notin>| TE_ConstNames env'"
     show "fmlookup (IS_Locals state'') name \<noteq> None \<or>
           fmlookup (IS_Refs state'') name \<noteq> None"
@@ -295,7 +297,7 @@ proof -
       case False
       then have "fmlookup (TE_LocalVars env) name \<noteq> None"
         using tv env'_eq by simp
-      moreover have "name |\<notin>| TE_GhostVars env"
+      moreover have "name |\<notin>| TE_GhostLocals env"
         using ng env'_eq False by auto
       moreover have "name |\<notin>| TE_ConstNames env"
         using nc cn_other[OF False] by simp
@@ -307,11 +309,11 @@ proof -
     qed
   qed
 
-  (* 6. const_names_match *)
+  (* 8. const_names_match *)
   moreover have "const_names_match state'' env'"
     using cn_match .
 
-  (* 7. store_well_typed for the extended storeTyping *)
+  (* 9. store_well_typed for the extended storeTyping *)
   moreover have "store_well_typed state'' env' ?st'"
     unfolding store_well_typed_def
   proof (intro conjI allI impI)
@@ -349,8 +351,8 @@ corollary state_matches_env_add_const_local:
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
                                         IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                               TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
                                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
-    and var_not_ghost: "var |\<notin>| TE_GhostVars env"
   shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
   from state'_eq have "IS_ConstNames state' = IS_ConstNames state" by auto
@@ -364,7 +366,7 @@ proof -
     using env'_eq by auto
   show ?thesis
     using state_matches_env_add_local[OF state_env val_typed state'_eq state''_eq env'_eq
-                                        var_not_ghost cn cn_oth] .
+                                        cn cn_oth] .
 qed
 
 (* Non-const specialization: ConstNames unchanged (used for var declarations) *)
@@ -374,8 +376,8 @@ corollary state_matches_env_add_nonconst_local:
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                               TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
                                TE_ConstNames := TE_ConstNames env \<rparr>"
-    and var_not_ghost: "var |\<notin>| TE_GhostVars env"
   shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
   have state''_eq': "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
@@ -392,7 +394,7 @@ proof -
     using env'_eq by simp
   show ?thesis
     using state_matches_env_add_local[OF state_env val_typed state'_eq state''_eq' env'_eq
-                                        var_not_ghost cn cn_oth] .
+                                        cn cn_oth] .
 qed
 
 
@@ -1162,7 +1164,7 @@ proof -
   proof (intro allI impI, elim conjE)
     fix name ty
     assume lk: "fmlookup (TE_LocalVars env) name = Some ty"
-      and ng: "name |\<notin>| TE_GhostVars env"
+      and ng: "name |\<notin>| TE_GhostLocals env"
     from state_env lk ng have old: "local_var_in_state_with_type state env storeTyping name ty"
       unfolding state_matches_env_def local_vars_exist_in_state_def by blast
     show "local_var_in_state_with_type state' env storeTyping name ty"

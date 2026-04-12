@@ -113,7 +113,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
   (* Variables - must be found in locals or globals, and (in NotGhost mode) cannot be ghost *)
 | "core_term_type env ghost (CoreTm_Var name) =
     (case tyenv_lookup_var env name of
-      Some ty \<Rightarrow> if (ghost = NotGhost \<longrightarrow> name |\<notin>| TE_GhostVars env) then Some ty else None
+      Some ty \<Rightarrow> if (ghost = NotGhost \<longrightarrow> \<not> tyenv_var_ghost env name) then Some ty else None
     | None \<Rightarrow> None)"
 
   (* Casts - only integer-to-integer for now *)
@@ -167,26 +167,24 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else None
     | _ \<Rightarrow> None)"
 
-  (* Let - variable must be fresh (no shadowing of locals or globals) *)
+  (* Let *)
 | "core_term_type env ghost (CoreTm_Let var rhs body) =
-    (if tyenv_lookup_var env var \<noteq> None then None
-     else case core_term_type env ghost rhs of
+    (case core_term_type env ghost rhs of
       Some rhsTy \<Rightarrow>
         let env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                         TE_GhostVars := (if ghost = Ghost
-                                          then finsert var (TE_GhostVars env)
-                                          else TE_GhostVars env),
+                         TE_GhostLocals := (if ghost = Ghost
+                                          then finsert var (TE_GhostLocals env)
+                                          else fminus (TE_GhostLocals env) {|var|}),
                          TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>
         in core_term_type env' ghost body
     | None \<Rightarrow> None)"
 
-  (* Quantifier - Ghost mode only, variable must be fresh *)
+  (* Quantifier - Ghost mode only *)
 | "core_term_type env NotGhost (CoreTm_Quantifier _ _ _ _) = None"
 | "core_term_type env Ghost (CoreTm_Quantifier quant var varTy body) =
-    (if tyenv_lookup_var env var \<noteq> None then None
-     else if is_well_kinded env varTy
+    (if is_well_kinded env varTy
      then let env' = env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>
+                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>
           in (case core_term_type env' Ghost body of
                 Some CoreTy_Bool \<Rightarrow> Some CoreTy_Bool
               | _ \<Rightarrow> None)
@@ -478,7 +476,7 @@ next
   fix env :: CoreTyEnv
   fix quant var varTy body x
   assume "x = env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                     TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>"
+                     TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
   show "((x, Ghost, body), env, Ghost, CoreTm_Quantifier quant var varTy body)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
@@ -489,8 +487,8 @@ next
   fix var rhs body x2 x
   assume "core_term_type env ghost rhs = Some x2"
     and "x = env \<lparr> TE_LocalVars := fmupd var x2 (TE_LocalVars env),
-                    TE_GhostVars := if ghost = Ghost then finsert var (TE_GhostVars env)
-                                    else TE_GhostVars env,
+                    TE_GhostLocals := if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                    else fminus (TE_GhostLocals env) {|var|},
                     TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
   show "((x, ghost, body), env, ghost, CoreTm_Let var rhs body)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
@@ -581,8 +579,8 @@ proof (induction tm arbitrary: env ghost c)
   next
     case (Some rhsTy)
     let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                       TE_GhostVars := (if ghost = Ghost then finsert var (TE_GhostVars env)
-                                        else TE_GhostVars env),
+                       TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                        else fminus (TE_GhostLocals env) {|var|}),
                        TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
     have body_eq: "\<And>env' ghost c.
             core_term_type (env' \<lparr> TE_ConstNames := c \<rparr>) ghost body =
@@ -709,9 +707,9 @@ next
     using CoreTm_Quantifier.IH .
   have env_reorder: "env \<lparr> TE_ConstNames := c,
                            TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostVars := finsert var (TE_GhostVars env) \<rparr> =
+                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr> =
                      (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>) \<lparr> TE_ConstNames := c \<rparr>"
+                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>) \<lparr> TE_ConstNames := c \<rparr>"
     by simp
   show ?case by (cases ghost) (simp_all add: body_eq env_reorder Let_def
                                         split: option.splits CoreType.splits)
@@ -750,15 +748,14 @@ qed simp_all
 lemma core_term_type_irrelevant_var:
   assumes "x \<notin> core_term_free_vars tm"
     and "core_term_type env ghost tm = Some ty"
-    and "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| gv' \<longleftrightarrow> y |\<in>| TE_GhostVars env)"
+    and "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| gv' \<longleftrightarrow> y |\<in>| TE_GhostLocals env)"
   shows "core_term_type
            (env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
-                  TE_GhostVars := gv' \<rparr>)
+                  TE_GhostLocals := gv' \<rparr>)
            ghost tm = Some ty"
-  sorry \<comment> \<open>TODO: This lemma needs a stronger assumption now that shadowing is banned.
-     Adding x to TE_LocalVars may cause a freshness check failure in a Let/Quantifier
-     inside tm where x happens to be the bound variable. The fix is to require that
-     x does not appear anywhere in tm (not just not free).\<close>
+  sorry \<comment> \<open>TODO: Now that shadowing is allowed, the original assumption (x not free in tm)
+     should be sufficient. The old issue with freshness checks in inner Let/Quantifier
+     no longer applies.\<close>
 
 
 
@@ -801,12 +798,12 @@ next
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
   proof
     assume ng: "ghost = NotGhost"
-    from CoreTm_Var.prems(1) ng have not_ghost: "name |\<notin>| TE_GhostVars env"
+    from CoreTm_Var.prems(1) ng have not_ghost: "\<not> tyenv_var_ghost env name"
       by (auto split: option.splits if_splits)
     have "tyenv_vars_runtime env"
       using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
     thus "is_runtime_type env ty"
-      using lookup not_ghost ty_eq unfolding tyenv_vars_runtime_def tyenv_lookup_var_def
+      using lookup not_ghost ty_eq unfolding tyenv_vars_runtime_def tyenv_lookup_var_def tyenv_var_ghost_def
       by (auto split: option.splits)
   qed
   ultimately show ?case by blast
@@ -840,21 +837,21 @@ next
     rhs_typed: "core_term_type env ghost tm1 = Some rhsTy" and
     body_typed: "core_term_type
       (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-             TE_GhostVars := (if ghost = Ghost then finsert var (TE_GhostVars env)
-                              else TE_GhostVars env),
+             TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                              else fminus (TE_GhostLocals env) {|var|}),
              TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
       ghost tm2 = Some ty"
     by (auto simp: Let_def split: option.splits if_splits)
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                     TE_GhostVars := (if ghost = Ghost then finsert var (TE_GhostVars env)
-                                      else TE_GhostVars env),
+                     TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                      else fminus (TE_GhostLocals env) {|var|}),
                      TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
   have rhs_IH: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
     using CoreTm_Let.IH(1) rhs_typed CoreTm_Let.prems(2) by blast
   hence rhs_wk: "is_well_kinded env rhsTy" by blast
   let ?env_no_cn = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                          TE_GhostVars := (if ghost = Ghost then finsert var (TE_GhostVars env)
-                                           else TE_GhostVars env) \<rparr>"
+                          TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                           else fminus (TE_GhostLocals env) {|var|}) \<rparr>"
   have wf_no_cn: "tyenv_well_formed ?env_no_cn"
   proof (cases "ghost = Ghost")
     case True

@@ -20,15 +20,14 @@ where
 
   (* Variable declaration (Var) *)
   "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
-    (if tyenv_lookup_var env varName \<noteq> None then None  \<comment> \<open>no shadowing\<close>
-     else if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
+    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
         \<and> core_term_type env declGhost initTm = Some varTy
      then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostVars := (if declGhost = Ghost
-                                       then finsert varName (TE_GhostVars env)
-                                       else TE_GhostVars env),
+                      TE_GhostLocals := (if declGhost = Ghost
+                                       then finsert varName (TE_GhostLocals env)
+                                       else fminus (TE_GhostLocals env) {|varName|}),
                       TE_ConstNames := TE_ConstNames env \<rparr>)
      else None)"
 
@@ -129,18 +128,24 @@ using assms proof (cases stmt)
       case NotGhost
       from rt NotGhost have "is_runtime_type env varTy" by simp
       from tyenv_well_formed_add_var[OF assms(2) wk this]
-      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env) \<rparr>)" .
+      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                          TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)" .
       from assms CoreStmt_VarDecl Var NotGhost have env'_eq:
         "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostVars := TE_GhostVars env,
+                      TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
                       TE_ConstNames := TE_ConstNames env \<rparr>"
         by (auto split: if_splits)
-      with wf' show ?thesis by simp
+      from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf']
+      have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                     TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>
+                                  \<lparr> TE_ConstNames := TE_ConstNames env \<rparr>)" .
+      hence "tyenv_well_formed env'" using env'_eq by simp
+      thus ?thesis .
     next
       case Ghost
       from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
       have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                     TE_GhostVars := finsert varName (TE_GhostVars env) \<rparr>)" .
+                                     TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
       with assms CoreStmt_VarDecl Var Ghost show ?thesis
         by (auto split: if_splits)
     qed
@@ -265,25 +270,24 @@ qed
 
 
 (* ========================================================================== *)
-(* Monotonicity: typechecking produces a superset environment                 *)
+(* Fixed fields: typechecking preserves the fixed fields of the environment   *)
 (* ========================================================================== *)
 
-lemma core_statement_type_monotone:
+lemma core_statement_type_fixed_eq:
   assumes "core_statement_type env ghost stmt = Some env'"
-  shows "tyenv_subset env env'"
+  shows "tyenv_fixed_eq env env'"
 using assms proof (cases stmt)
   case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
   show ?thesis proof (cases varOrRef)
     case Var
     from assms CoreStmt_VarDecl Var have env'_eq:
       "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                    TE_GhostVars := (if declGhost = Ghost
-                                     then finsert varName (TE_GhostVars env)
-                                     else TE_GhostVars env),
+                    TE_GhostLocals := (if declGhost = Ghost
+                                     then finsert varName (TE_GhostLocals env)
+                                     else fminus (TE_GhostLocals env) {|varName|}),
                     TE_ConstNames := TE_ConstNames env \<rparr>"
       by (auto split: if_splits)
-    show ?thesis unfolding env'_eq tyenv_subset_def
-      using CoreStmt_VarDecl Var assms fmupd_lookup fset_eq_fsubset fsubset_finsertI by force
+    show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
   next
     case Ref
     with assms CoreStmt_VarDecl show ?thesis sorry
@@ -291,7 +295,7 @@ using assms proof (cases stmt)
 next
   case (CoreStmt_Assign assignGhost lhsTm rhsTm)
   with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_subset_refl)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Fix _ _) with assms show ?thesis sorry
 next
@@ -301,19 +305,19 @@ next
 next
   case (CoreStmt_Swap _ _ _)
   with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_subset_refl)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Return _)
   with assms have "env' = env" by (auto split: if_splits)
-  thus ?thesis by (simp add: tyenv_subset_refl)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Assert _ _)
   with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_subset_refl)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Assume _)
   with assms have "env' = env" by (auto split: if_splits)
-  thus ?thesis by (simp add: tyenv_subset_refl)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
@@ -321,24 +325,24 @@ next
 next
   case (CoreStmt_ShowHide _ _)
   with assms have "env' = env" by simp
-  thus ?thesis by (simp add: tyenv_subset_refl)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 qed
 
-lemma core_statement_list_type_monotone:
+lemma core_statement_list_type_fixed_eq:
   assumes "core_statement_list_type env ghost stmts = Some env'"
-  shows "tyenv_subset env env'"
+  shows "tyenv_fixed_eq env env'"
 using assms proof (induction stmts arbitrary: env)
   case Nil
-  then show ?case by (simp add: tyenv_subset_refl)
+  then show ?case by (simp add: tyenv_fixed_eq_refl)
 next
   case (Cons stmt stmts)
   from Cons.prems obtain env_mid where
     mid: "core_statement_type env ghost stmt = Some env_mid" and
     rest: "core_statement_list_type env_mid ghost stmts = Some env'"
     by (auto split: option.splits)
-  from core_statement_type_monotone[OF mid]
-  have "tyenv_subset env env_mid" .
-  with tyenv_subset_trans Cons.IH[OF rest] show ?case by blast
+  from core_statement_type_fixed_eq[OF mid]
+  have "tyenv_fixed_eq env env_mid" .
+  with tyenv_fixed_eq_trans Cons.IH[OF rest] show ?case by blast
 qed
 
 end

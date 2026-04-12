@@ -542,8 +542,13 @@ where
 | "interp_statement 0 _ _ = Inl InsufficientFuel"
 
   (* Variable declaration *)
-| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost _ _ _ _) =
-    Inr (Continue state)"
+  (* Ghost VarDecl: does not evaluate the initializer or allocate store.
+     However, if the variable was previously a non-ghost local, it is now shadowed
+     by a ghost variable, so we remove it from IS_Locals/IS_Refs to maintain the
+     invariant that ghost variables are not present in the interpreter state. *)
+| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost varName _ _ _) =
+    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                           IS_Refs := fmdrop varName (IS_Refs state) \<rparr>))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
     (case interp_term fuel state initialTm of
       Inl err \<Rightarrow> Inl err

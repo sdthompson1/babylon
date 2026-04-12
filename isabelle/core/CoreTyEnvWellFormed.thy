@@ -12,16 +12,18 @@ definition tyenv_vars_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
 definition tyenv_vars_runtime :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_vars_runtime env =
     ((\<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty
-               \<and> name |\<notin>| TE_GhostVars env
+               \<and> name |\<notin>| TE_GhostLocals env
                \<longrightarrow> is_runtime_type env ty) \<and>
      (\<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty
-               \<and> name |\<notin>| TE_GhostVars env
+               \<and> name |\<notin>| TE_GhostGlobals env
                \<longrightarrow> is_runtime_type env ty))"
 
-(* Ghost variables are a subset of local and global variable names *)
+(* Ghost locals are a subset of local variable names;
+   ghost globals are a subset of global variable names *)
 definition tyenv_ghost_vars_subset :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_ghost_vars_subset env =
-    (TE_GhostVars env |\<subseteq>| fmdom (TE_LocalVars env) |\<union>| fmdom (TE_GlobalVars env))"
+    (TE_GhostLocals env |\<subseteq>| fmdom (TE_LocalVars env) \<and>
+     TE_GhostGlobals env |\<subseteq>| fmdom (TE_GlobalVars env))"
 
 (* The return type is well-kinded *)
 definition tyenv_return_type_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
@@ -119,14 +121,16 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_nonghost_payloads_runtime env \<and>
      tyenv_ghost_datatypes_subset env)"
 
-(* Adding a well-kinded, ground, runtime, non-ghost local variable preserves tyenv_well_formed. *)
+(* Adding a well-kinded, runtime, non-ghost local variable preserves tyenv_well_formed. *)
 lemma tyenv_well_formed_add_var:
   assumes wf: "tyenv_well_formed env"
     and ty_wk: "is_well_kinded env ty"
     and ty_runtime: "is_runtime_type env ty"
-  shows "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd var ty (TE_LocalVars env) \<rparr>)"
+  shows "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd var ty (TE_LocalVars env),
+                                 TE_GhostLocals := fminus (TE_GhostLocals env) {|var|} \<rparr>)"
 proof -
-  let ?env' = "env \<lparr> TE_LocalVars := fmupd var ty (TE_LocalVars env) \<rparr>"
+  let ?env' = "env \<lparr> TE_LocalVars := fmupd var ty (TE_LocalVars env),
+                     TE_GhostLocals := fminus (TE_GhostLocals env) {|var|} \<rparr>"
   from wf have wk: "tyenv_vars_well_kinded env"
     and rt: "tyenv_vars_runtime env"
     and gvs: "tyenv_ghost_vars_subset env"
@@ -212,10 +216,10 @@ lemma tyenv_well_formed_add_ghost_var:
   assumes wf: "tyenv_well_formed env"
     and ty_wk: "is_well_kinded env ty"
   shows "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd var ty (TE_LocalVars env),
-                                 TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>)"
+                                 TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)"
 proof -
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var ty (TE_LocalVars env),
-                     TE_GhostVars := finsert var (TE_GhostVars env) \<rparr>"
+                     TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
   from wf have wk: "tyenv_vars_well_kinded env"
     and rt: "tyenv_vars_runtime env"
     and gvs: "tyenv_ghost_vars_subset env"

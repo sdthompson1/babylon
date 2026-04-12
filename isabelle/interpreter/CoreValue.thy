@@ -177,7 +177,7 @@ qed
 
 (* ========================================================================== *)
 (* value_has_type only depends on TE_DataCtors, TE_Datatypes and TE_TypeVars,
-   not on TE_LocalVars, TE_GlobalVars or TE_GhostVars. *)
+   not on TE_LocalVars, TE_GlobalVars or TE_GhostLocals/TE_GhostGlobals. *)
 (* ========================================================================== *)
 
 lemma value_has_type_cong_env:

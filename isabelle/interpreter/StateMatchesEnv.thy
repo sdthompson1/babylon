@@ -62,29 +62,29 @@ definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<
    also exist in the state (either IS_Locals or IS_Refs) with the correct type. *)
 definition local_vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
   "local_vars_exist_in_state state env storeTyping \<equiv>
-    \<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty \<and> name |\<notin>| TE_GhostVars env \<longrightarrow>
+    \<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty \<and> name |\<notin>| TE_GhostLocals env \<longrightarrow>
       local_var_in_state_with_type state env storeTyping name ty"
 
 (* All global variables in the type env (TE_GlobalVars, but not ghost)
    also exist in the state (IS_Globals) with the correct type. *)
 definition global_vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "global_vars_exist_in_state state env \<equiv>
-    \<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<and> name |\<notin>| TE_GhostVars env \<longrightarrow>
+    \<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<and> name |\<notin>| TE_GhostGlobals env \<longrightarrow>
       global_var_in_state_with_type state env name ty"
 
-(* Converse for locals: if a variable is not in TE_LocalVars (or is ghost)
+(* Converse for locals: if a variable is not in TE_LocalVars (or is ghost local)
    then it is not in IS_Locals or IS_Refs. *)
 definition no_extra_local_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "no_extra_local_vars state env \<equiv>
-    \<forall>name. fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostVars env \<longrightarrow>
+    \<forall>name. fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostLocals env \<longrightarrow>
       fmlookup (IS_Locals state) name = None \<and>
       fmlookup (IS_Refs state) name = None"
 
-(* Converse for globals: if a variable is not in TE_GlobalVars (or is ghost)
+(* Converse for globals: if a variable is not in TE_GlobalVars (or is ghost global)
    then it is not in IS_Globals. *)
 definition no_extra_global_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "no_extra_global_vars state env \<equiv>
-    \<forall>name. fmlookup (TE_GlobalVars env) name = None \<or> name |\<in>| TE_GhostVars env \<longrightarrow>
+    \<forall>name. fmlookup (TE_GlobalVars env) name = None \<or> name |\<in>| TE_GhostGlobals env \<longrightarrow>
       fmlookup (IS_Globals state) name = None"
 
 (* All NotGhost functions in the type environment also exist in the state
@@ -109,7 +109,7 @@ definition no_extra_funs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
 definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "non_consts_in_locals_or_refs state env \<equiv>
     \<forall>name. fmlookup (TE_LocalVars env) name \<noteq> None \<and>
-           name |\<notin>| TE_GhostVars env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
+           name |\<notin>| TE_GhostLocals env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
       (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
 
 (* The interpreter's IS_ConstNames matches the type environment's TE_ConstNames *)
