@@ -753,9 +753,387 @@ lemma core_term_type_irrelevant_var:
            (env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                   TE_GhostLocals := gv' \<rparr>)
            ghost tm = Some ty"
-  sorry \<comment> \<open>TODO: Now that shadowing is allowed, the original assumption (x not free in tm)
-     should be sufficient. The old issue with freshness checks in inner Let/Quantifier
-     no longer applies.\<close>
+using assms proof (induction tm arbitrary: env ghost ty gv')
+  case (CoreTm_Var name)
+  hence "name \<noteq> x" by simp
+  (* tyenv_lookup_var is unchanged at name *)
+  hence lookup_eq: "tyenv_lookup_var (env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                                            TE_GhostLocals := gv' \<rparr>) name =
+                    tyenv_lookup_var env name"
+    unfolding tyenv_lookup_var_def by (simp split: option.splits)
+  (* tyenv_var_ghost is unchanged at name *)
+  from \<open>name \<noteq> x\<close> CoreTm_Var.prems(3)
+  have ghost_eq: "tyenv_var_ghost (env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                                         TE_GhostLocals := gv' \<rparr>) name =
+                  tyenv_var_ghost env name"
+    unfolding tyenv_var_ghost_def by (simp split: option.splits)
+  from CoreTm_Var.prems(2) show ?case
+    by (simp add: lookup_eq ghost_eq split: option.splits if_splits)
+next
+  case (CoreTm_Let var rhs body)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  from CoreTm_Let.prems(1) have x_not_free_rhs: "x \<notin> core_term_free_vars rhs" by simp
+  from CoreTm_Let.prems(2) obtain rhsTy where
+    rhs_ty: "core_term_type env ghost rhs = Some rhsTy" and
+    body_ty: "core_term_type
+      (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+             TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                 else fminus (TE_GhostLocals env) {|var|}),
+             TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
+      ghost body = Some ty"
+    by (auto simp: Let_def split: option.splits)
+  (* Apply IH to rhs *)
+  from CoreTm_Let.IH(1)[OF x_not_free_rhs rhs_ty CoreTm_Let.prems(3)]
+  have rhs_ty': "core_term_type ?env_x ghost rhs = Some rhsTy" .
+  show ?case
+  proof (cases "var = x")
+    case True
+    (* var = x: the inner Let binds x, so the outer fmupd is overwritten *)
+    let ?inner_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                           TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                               else fminus (TE_GhostLocals env) {|var|}),
+                           TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+    let ?inner_env_x = "?env_x \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env_x),
+                                  TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env_x)
+                                                      else fminus (TE_GhostLocals ?env_x) {|var|}),
+                                  TE_ConstNames := finsert var (TE_ConstNames ?env_x) \<rparr>"
+    (* The two inner environments are the same because fmupd var overwrites fmupd x (since var = x),
+       and the GhostLocals updates (finsert/fminus at var) make gv' and TE_GhostLocals env agree *)
+    have gv_eq_insert: "finsert x gv' = finsert x (TE_GhostLocals env)"
+      using CoreTm_Let.prems(3) by (auto simp: fset_eqI)
+    have gv_eq_minus: "fminus gv' {|x|} = fminus (TE_GhostLocals env) {|x|}"
+      using CoreTm_Let.prems(3) by (auto simp: fset_eqI)
+    from True have "?inner_env_x = ?inner_env"
+      using gv_eq_insert gv_eq_minus by simp
+    with body_ty have "core_term_type ?inner_env_x ghost body = Some ty" by simp
+    with rhs_ty' show ?thesis by (simp add: Let_def)
+  next
+    case False
+    (* var \<noteq> x: the fmupds commute, apply IH to body *)
+    from CoreTm_Let.prems(1) False
+    have x_not_free_body: "x \<notin> core_term_free_vars body" by auto
+    (* Construct the ghost vars assumption for the body's env *)
+    let ?body_gv = "if ghost = Ghost then finsert var gv'
+                    else fminus gv' {|var|}"
+    let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                          TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                              else fminus (TE_GhostLocals env) {|var|}),
+                          TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+    have gv_body: "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| ?body_gv \<longleftrightarrow> y |\<in>| TE_GhostLocals ?body_env)"
+      using CoreTm_Let.prems(3) False by auto
+    from CoreTm_Let.IH(2)[OF x_not_free_body body_ty gv_body]
+    have body_ty': "core_term_type
+        (?body_env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars ?body_env),
+                     TE_GhostLocals := ?body_gv \<rparr>)
+        ghost body = Some ty" .
+    (* Now show the two inner environments are equal *)
+    (* The two inner environments are equal: the fmupds on TE_LocalVars commute
+       (since var \<noteq> x), and the ghost/const fields are straightforward. *)
+    from False have fmupd_comm_fact:
+        "fmupd x ty' (fmupd var rhsTy (TE_LocalVars env)) =
+         fmupd var rhsTy (fmupd x ty' (TE_LocalVars env))"
+      by (simp add: fmupd_reorder_neq)
+    from False have env_eq: "(?body_env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars ?body_env),
+                                          TE_GhostLocals := ?body_gv \<rparr>) =
+        (?env_x \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env_x),
+                  TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env_x)
+                                      else fminus (TE_GhostLocals ?env_x) {|var|}),
+                  TE_ConstNames := finsert var (TE_ConstNames ?env_x) \<rparr>)"
+      using fmupd_comm_fact by simp
+    from body_ty' env_eq have "core_term_type
+        (?env_x \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env_x),
+                  TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env_x)
+                                      else fminus (TE_GhostLocals ?env_x) {|var|}),
+                  TE_ConstNames := finsert var (TE_ConstNames ?env_x) \<rparr>)
+        ghost body = Some ty" by simp
+    with rhs_ty' show ?thesis by (simp add: Let_def)
+  qed
+next
+  case (CoreTm_Quantifier quant var varTy body)
+  show ?case
+  proof (cases ghost)
+    case NotGhost
+    with CoreTm_Quantifier.prems(2) show ?thesis by simp
+  next
+    case Ghost
+    let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                         TE_GhostLocals := gv' \<rparr>"
+    from Ghost CoreTm_Quantifier.prems(2) have wk: "is_well_kinded env varTy"
+      by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
+    have wk': "is_well_kinded ?env_x varTy"
+      using wk is_well_kinded_cong_env[of ?env_x env] by simp
+    from Ghost CoreTm_Quantifier.prems(2) obtain bodyTy where
+      body_ty: "core_term_type
+        (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+        Ghost body = Some bodyTy"
+      and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
+      by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
+    show ?thesis
+    proof (cases "var = x")
+      case True
+      let ?inner = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+                         TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+      let ?inner_x = "?env_x \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env_x),
+                                TE_GhostLocals := finsert var (TE_GhostLocals ?env_x) \<rparr>"
+      have "finsert x gv' = finsert x (TE_GhostLocals env)"
+        using CoreTm_Quantifier.prems(3) by (auto simp: fset_eqI)
+      from True this have "?inner_x = ?inner" by simp
+      with body_ty body_bool ty_eq wk' Ghost show ?thesis by (simp add: Let_def)
+    next
+      case False
+      from CoreTm_Quantifier.prems(1) False
+      have x_not_free_body: "x \<notin> core_term_free_vars body" by auto
+      let ?body_gv = "finsert var gv'"
+      let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+                            TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+      have gv_body: "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| ?body_gv \<longleftrightarrow> y |\<in>| TE_GhostLocals ?body_env)"
+        using CoreTm_Quantifier.prems(3) False by auto
+      from CoreTm_Quantifier.IH[OF x_not_free_body body_ty gv_body]
+      have body_ty': "core_term_type
+          (?body_env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars ?body_env),
+                       TE_GhostLocals := ?body_gv \<rparr>)
+          Ghost body = Some bodyTy" .
+      from False have "fmupd x ty' (fmupd var varTy (TE_LocalVars env)) =
+                       fmupd var varTy (fmupd x ty' (TE_LocalVars env))"
+        by (simp add: fmupd_reorder_neq)
+      hence "(?body_env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars ?body_env),
+                          TE_GhostLocals := ?body_gv \<rparr>) =
+          (?env_x \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env_x),
+                    TE_GhostLocals := finsert var (TE_GhostLocals ?env_x) \<rparr>)"
+        by simp
+      with body_ty' body_bool ty_eq wk' Ghost show ?thesis by (simp add: Let_def)
+    qed
+  qed
+next
+  \<comment> \<open>All other cases: no variable binding, straightforward from IH\<close>
+  case (CoreTm_LitBool b) then show ?case by simp
+next
+  case (CoreTm_LitInt i) then show ?case by (auto split: option.splits)
+next
+  case (CoreTm_LitArray elemTy tms)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  have wk_eq: "is_well_kinded ?env_x elemTy = is_well_kinded env elemTy"
+    using is_well_kinded_cong_env[of ?env_x env] by simp
+  have rt_eq: "is_runtime_type ?env_x elemTy = is_runtime_type env elemTy"
+    using is_runtime_type_cong_env[of ?env_x env] by simp
+  from CoreTm_LitArray.prems have
+    "\<forall>tm \<in> set tms. x \<notin> core_term_free_vars tm" by auto
+  with CoreTm_LitArray.IH CoreTm_LitArray.prems(3)
+  have "\<forall>tm \<in> set tms. \<forall>ty. core_term_type env ghost tm = Some ty \<longrightarrow>
+      core_term_type ?env_x ghost tm = Some ty" by blast
+  then show ?case using CoreTm_LitArray.prems(2) wk_eq rt_eq
+    by (auto simp: list_all_iff split: if_splits)
+next
+  case (CoreTm_Cast targetTy tm)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  have rt_eq: "\<And>t. is_runtime_type ?env_x t = is_runtime_type env t"
+    using is_runtime_type_cong_env[of ?env_x env] by simp
+  from CoreTm_Cast show ?case by (auto simp: rt_eq split: option.splits if_splits)
+next
+  case (CoreTm_Unop op tm)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  from CoreTm_Unop.prems(2) obtain operandTy where
+    op_ty: "core_term_type env ghost tm = Some operandTy"
+    by (auto split: option.splits)
+  from CoreTm_Unop.IH[OF _ op_ty CoreTm_Unop.prems(3)] CoreTm_Unop.prems(1)
+  have op_ty': "core_term_type ?env_x ghost tm = Some operandTy" by simp
+  from CoreTm_Unop.prems(2) show ?case using op_ty op_ty'
+    by (auto split: option.splits)
+next
+  case (CoreTm_Binop op lhs rhs)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  from CoreTm_Binop.prems(1) have "x \<notin> core_term_free_vars lhs" "x \<notin> core_term_free_vars rhs" by auto
+  from CoreTm_Binop.prems(2) obtain lhsTy rhsTy where
+    lhs_ty: "core_term_type env ghost lhs = Some lhsTy" and
+    rhs_ty: "core_term_type env ghost rhs = Some rhsTy"
+    by (auto split: option.splits prod.splits)
+  from CoreTm_Binop.IH(1)[OF \<open>x \<notin> core_term_free_vars lhs\<close> lhs_ty CoreTm_Binop.prems(3)]
+  have lhs_ty': "core_term_type ?env_x ghost lhs = Some lhsTy" .
+  from CoreTm_Binop.IH(2)[OF \<open>x \<notin> core_term_free_vars rhs\<close> rhs_ty CoreTm_Binop.prems(3)]
+  have rhs_ty': "core_term_type ?env_x ghost rhs = Some rhsTy" .
+  from CoreTm_Binop.prems(2) show ?case using lhs_ty lhs_ty' rhs_ty rhs_ty'
+    by (auto split: option.splits if_splits)
+next
+  case (CoreTm_FunctionCall fnName tyArgs tmArgs)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  have wk_eq: "\<And>t. is_well_kinded ?env_x t = is_well_kinded env t"
+    using is_well_kinded_cong_env[of ?env_x env] by simp
+  have rt_eq: "\<And>t. is_runtime_type ?env_x t = is_runtime_type env t"
+    using is_runtime_type_cong_env[of ?env_x env] by simp
+  from CoreTm_FunctionCall.prems(1)
+  have "\<forall>tm \<in> set tmArgs. x \<notin> core_term_free_vars tm" by auto
+  with CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems(3)
+  have IH: "\<forall>tm \<in> set tmArgs. \<forall>ty. core_term_type env ghost tm = Some ty \<longrightarrow>
+      core_term_type ?env_x ghost tm = Some ty" by blast
+  from CoreTm_FunctionCall.prems(2) obtain funInfo where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+    len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
+    not_impure: "\<not> FI_Impure funInfo" and
+    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+    la2: "list_all2 (\<lambda>tm expectedTy.
+        case core_term_type env ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+        tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                    (FI_TmArgs funInfo))" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    by (auto simp: Let_def split: option.splits if_splits)
+  have la2': "list_all2 (\<lambda>tm expectedTy.
+      case core_term_type ?env_x ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+      tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                  (FI_TmArgs funInfo))"
+    using la2 IH by (auto simp: list.rel_mono_strong split: option.splits)
+  have fn_lookup': "fmlookup (TE_Functions ?env_x) fnName = Some funInfo"
+    using fn_lookup by simp
+  have tyargs_wk': "list_all (is_well_kinded ?env_x) tyArgs"
+    using tyargs_wk by (simp add: list_all_iff wk_eq)
+  from CoreTm_FunctionCall.prems(2) show ?case
+    using fn_lookup' len_tyargs tyargs_wk' len_tmargs not_impure all_var la2' ty_eq
+          wk_eq rt_eq by (auto simp: Let_def list_all_iff split: option.splits if_splits)
+next
+  case (CoreTm_VariantCtor ctorName tyArgs payload)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  have wk_eq: "\<And>t. is_well_kinded ?env_x t = is_well_kinded env t"
+    using is_well_kinded_cong_env[of ?env_x env] by simp
+  have rt_eq: "\<And>t. is_runtime_type ?env_x t = is_runtime_type env t"
+    using is_runtime_type_cong_env[of ?env_x env] by simp
+  then show ?case using CoreTm_VariantCtor.prems CoreTm_VariantCtor.IH
+    by (auto simp: wk_eq rt_eq list_all_iff split: option.splits if_splits)
+next
+  case (CoreTm_Record flds)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  from CoreTm_Record.prems(2) obtain tys where
+    those_eq: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
+    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
+    by (auto split: option.splits)
+  from those_eq have la2: "list_all2 (\<lambda>x y. x = Some y)
+      (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
+    using those_eq_Some by blast
+  hence len_eq: "length flds = length tys" by (auto dest: list_all2_lengthD)
+  (* Each field typing is preserved *)
+  have "\<And>i. i < length flds \<Longrightarrow> core_term_type ?env_x ghost (snd (flds ! i)) =
+        core_term_type env ghost (snd (flds ! i))"
+  proof -
+    fix i assume "i < length flds"
+    obtain nm tm where p_eq: "flds ! i = (nm, tm)" by (cases "flds ! i") auto
+    from \<open>i < length flds\<close> have "flds ! i \<in> set flds" by simp
+    with CoreTm_Record.prems(1) p_eq have nf: "x \<notin> core_term_free_vars tm"
+      by (auto simp: image_iff)
+    from la2 \<open>i < length flds\<close> len_eq
+    have "core_term_type env ghost tm = Some (tys ! i)"
+      by (auto dest: list_all2_nthD simp: p_eq)
+    from p_eq have "tm \<in> Basic_BNFs.snds (flds ! i)" by simp
+    from CoreTm_Record.IH[OF \<open>flds ! i \<in> set flds\<close> this nf
+        \<open>core_term_type env ghost tm = Some (tys ! i)\<close> CoreTm_Record.prems(3)]
+    have "core_term_type ?env_x ghost tm = Some (tys ! i)" .
+    with \<open>core_term_type env ghost tm = Some (tys ! i)\<close>
+    show "core_term_type ?env_x ghost (snd (flds ! i)) = core_term_type env ghost (snd (flds ! i))"
+      by (simp add: p_eq)
+  qed
+  hence map_eq: "map (\<lambda>(name, tm). core_term_type ?env_x ghost tm) flds =
+                 map (\<lambda>(name, tm). core_term_type env ghost tm) flds"
+    by (metis (mono_tags, lifting) map_equality_iff split_beta)
+  show ?case by (simp add: map_eq those_eq ty_eq)
+next
+  case (CoreTm_RecordProj tm fldName) then show ?case
+    by (auto split: option.splits CoreType.splits)
+next
+  case (CoreTm_VariantProj tm ctorName) then show ?case
+    by (auto split: option.splits CoreType.splits)
+next
+  case (CoreTm_ArrayProj arr idxs)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  from CoreTm_ArrayProj.prems(1) have "x \<notin> core_term_free_vars arr"
+    and idx_free: "\<forall>tm \<in> set idxs. x \<notin> core_term_free_vars tm" by auto
+  from CoreTm_ArrayProj.prems(2) obtain elemTy dims where
+    arr_ty: "core_term_type env ghost arr = Some (CoreTy_Array elemTy dims)"
+    by (auto split: option.splits CoreType.splits if_splits)
+  from CoreTm_ArrayProj.IH(1)[OF \<open>x \<notin> core_term_free_vars arr\<close> arr_ty CoreTm_ArrayProj.prems(3)]
+  have arr_ty': "core_term_type ?env_x ghost arr = Some (CoreTy_Array elemTy dims)" .
+  have idx_transfer: "\<And>tm. tm \<in> set idxs \<Longrightarrow>
+      core_term_type env ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64) \<Longrightarrow>
+      core_term_type ?env_x ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
+  proof -
+    fix tm assume "tm \<in> set idxs" and ty: "core_term_type env ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
+    from idx_free \<open>tm \<in> set idxs\<close> have "x \<notin> core_term_free_vars tm" by auto
+    from CoreTm_ArrayProj.IH(2)[OF \<open>tm \<in> set idxs\<close> this ty CoreTm_ArrayProj.prems(3)]
+    show "core_term_type ?env_x ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)" .
+  qed
+  from CoreTm_ArrayProj.prems(2) show ?case using arr_ty arr_ty' idx_transfer
+    by (auto simp: list_all_iff split: option.splits CoreType.splits if_splits)
+next
+  case (CoreTm_Match scrut arms)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  from CoreTm_Match.prems(1) have scrut_free: "x \<notin> core_term_free_vars scrut"
+    and bodies_free: "\<forall>body \<in> snd ` set arms. x \<notin> core_term_free_vars body" by auto
+  (* pattern_compatible and patterns_exhaustive only depend on TE_DataCtors etc. *)
+  have pc_eq: "\<And>p t. pattern_compatible ?env_x p t = pattern_compatible env p t"
+    by (case_tac p) (simp_all split: option.splits)
+  have pe_eq: "\<And>t ps. patterns_exhaustive ?env_x t ps = patterns_exhaustive env t ps"
+    by (simp split: CoreType.splits option.splits)
+  (* Scrutinee typing preserved *)
+  from CoreTm_Match.prems(2) obtain scrutTy where
+    scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
+    by (auto split: option.splits)
+  from CoreTm_Match.IH(1)[OF scrut_free scrut_ty CoreTm_Match.prems(3)]
+  have scrut_ty': "core_term_type ?env_x ghost scrut = Some scrutTy" .
+  (* Head arm body typing preserved *)
+  (* All arm body typings preserved *)
+  have body_transfer: "\<And>arm body resultTy. arm \<in> set arms \<Longrightarrow> body = snd arm \<Longrightarrow>
+      core_term_type env ghost body = Some resultTy \<Longrightarrow>
+      core_term_type ?env_x ghost body = Some resultTy"
+  proof -
+    fix arm body resultTy
+    assume "arm \<in> set arms" and "body = snd arm"
+      and body_ty: "core_term_type env ghost body = Some resultTy"
+    have "body \<in> Basic_BNFs.snds arm"
+      using \<open>body = snd arm\<close> by (cases arm) simp
+    from bodies_free \<open>arm \<in> set arms\<close> \<open>body = snd arm\<close>
+    have "x \<notin> core_term_free_vars body" by auto
+    from CoreTm_Match.IH(2)[OF \<open>arm \<in> set arms\<close> \<open>body \<in> Basic_BNFs.snds arm\<close>
+        this body_ty CoreTm_Match.prems(3)]
+    show "core_term_type ?env_x ghost body = Some resultTy" .
+  qed
+  have hd_transfer: "arms \<noteq> [] \<Longrightarrow> core_term_type env ghost (snd (hd arms)) = Some resultTy \<Longrightarrow>
+      core_term_type ?env_x ghost (snd (hd arms)) = Some resultTy" for resultTy
+    using body_transfer[of "hd arms" "snd (hd arms)"] by (cases arms) auto
+  have tl_transfer: "\<And>body resultTy. body \<in> set (tl (map snd arms)) \<Longrightarrow>
+      core_term_type env ghost body = Some resultTy \<Longrightarrow>
+      core_term_type ?env_x ghost body = Some resultTy"
+  proof -
+    fix body resultTy
+    assume "body \<in> set (tl (map snd arms))"
+      and body_ty: "core_term_type env ghost body = Some resultTy"
+    from \<open>body \<in> set (tl (map snd arms))\<close> obtain arm where
+      "arm \<in> set arms" and "body = snd arm" by (cases arms) auto
+    from body_transfer[OF this body_ty]
+    show "core_term_type ?env_x ghost body = Some resultTy" .
+  qed
+  from CoreTm_Match.prems(2) show ?case
+    using scrut_ty scrut_ty' pc_eq pe_eq hd_transfer tl_transfer
+    by (auto simp: list_all_iff Let_def split: option.splits if_splits)
+next
+  case (CoreTm_Sizeof tm) then show ?case by (auto split: option.splits)
+next
+  case (CoreTm_Allocated tm)
+  then show ?case
+    by (cases ghost) (auto split: option.splits)
+next
+  case (CoreTm_Old tm)
+  then show ?case
+    by (cases ghost) auto
+qed
 
 
 
