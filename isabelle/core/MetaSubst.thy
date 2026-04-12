@@ -96,6 +96,9 @@ lemma is_signed_numeric_type_apply_subst:
 lemma is_finite_integer_type_apply_subst:
   "is_finite_integer_type ty \<Longrightarrow> is_finite_integer_type (apply_subst subst ty)"
   by (cases ty) auto
+lemma is_numeric_type_apply_subst:
+  "is_numeric_type ty \<Longrightarrow> is_numeric_type (apply_subst subst ty)"
+  by (cases ty) auto
 
 (* Metavars after applying a substitution come from:
    - metavars in ty that are not in dom(subst), OR
@@ -189,28 +192,36 @@ corollary apply_subst_ground:
   "is_ground ty \<Longrightarrow> apply_subst subst ty = ty"
   using is_ground_no_metavars apply_subst_disjoint_id by blast
 
-(* Substituting runtime types preserves runtime-ness *)
+(* Substituting runtime types preserves runtime-ness.
+   The source env (where ty lives) and target env (where the result lives) may differ:
+   the substitution must map every runtime type variable in src that is not also in tgt
+   to a type runtime in tgt, and any runtime type variables left over must still be in tgt.
+   TE_GhostDatatypes must be the same across src and tgt. *)
 (* See also: apply_subst_preserves_well_kinded in CoreKindcheck.thy *)
 lemma apply_subst_preserves_runtime:
-  assumes "is_runtime_type env ty"
-    and "\<forall>ty' \<in> fmran' subst. is_runtime_type env ty'"
-  shows "is_runtime_type env (apply_subst subst ty)"
+  assumes "is_runtime_type src ty"
+    and "TE_GhostDatatypes tgt = TE_GhostDatatypes src"
+    and "\<And>n. n |\<in>| TE_RuntimeTypeVars src \<Longrightarrow>
+             (case fmlookup subst n of
+                Some ty' \<Rightarrow> is_runtime_type tgt ty'
+              | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars tgt)"
+  shows "is_runtime_type tgt (apply_subst subst ty)"
 using assms proof (induction ty)
   case (CoreTy_Datatype name tyArgs)
-  have not_ghost: "name |\<notin>| TE_GhostDatatypes env"
+  have not_ghost: "name |\<notin>| TE_GhostDatatypes tgt"
+    using CoreTy_Datatype.prems(1,2) by simp
+  have "list_all (is_runtime_type src) tyArgs"
     using CoreTy_Datatype.prems(1) by simp
-  have "list_all (is_runtime_type env) tyArgs"
-    using CoreTy_Datatype.prems(1) by simp
-  hence "list_all (is_runtime_type env) (map (apply_subst subst) tyArgs)"
-    using CoreTy_Datatype.IH CoreTy_Datatype.prems(2)
+  hence "list_all (is_runtime_type tgt) (map (apply_subst subst) tyArgs)"
+    using CoreTy_Datatype.IH CoreTy_Datatype.prems(2,3)
     by (simp add: list_all_iff)
   thus ?case using not_ghost by simp
 next
   case (CoreTy_Record flds)
-  have "list_all (is_runtime_type env) (map snd flds)"
+  have "list_all (is_runtime_type src) (map snd flds)"
     using CoreTy_Record.prems(1) by simp
-  hence "list_all (is_runtime_type env) (map (apply_subst subst \<circ> snd) flds)"
-    using CoreTy_Record.IH CoreTy_Record.prems(2)
+  hence "list_all (is_runtime_type tgt) (map (apply_subst subst \<circ> snd) flds)"
+    using CoreTy_Record.IH CoreTy_Record.prems(2,3)
     by (simp add: comp_def list.pred_map list.pred_mono_strong snds.intros)
   moreover have "map (apply_subst subst \<circ> snd) flds =
                  map (snd \<circ> (\<lambda>(name, ty). (name, apply_subst subst ty))) flds"
@@ -218,19 +229,137 @@ next
   ultimately show ?case by simp
 next
   case (CoreTy_Meta n)
+  from CoreTy_Meta.prems(1) have n_in_src: "n |\<in>| TE_RuntimeTypeVars src" by simp
   show ?case
   proof (cases "fmlookup subst n")
     case None
-    thus ?thesis using CoreTy_Meta.prems(1) by simp
+    from CoreTy_Meta.prems(3)[OF n_in_src] None have "n |\<in>| TE_RuntimeTypeVars tgt" by simp
+    thus ?thesis using None by simp
   next
     case (Some ty')
-    hence "ty' \<in> fmran' subst"
-      by (simp add: fmran'I)
-    hence "is_runtime_type env ty'"
-      using CoreTy_Meta.prems(2) by blast
+    from CoreTy_Meta.prems(3)[OF n_in_src] Some have "is_runtime_type tgt ty'" by simp
     thus ?thesis using Some by simp
   qed
 qed simp_all
+
+(* Specialization lemma:
+   When substituting a type runtime-valid in "env with TypeVars/RuntimeTypeVars set to the
+   type parameters" by a fully-populated zip substitution mapping each type parameter to a
+   runtime type in env, the result is runtime-valid in env. *)
+lemma apply_subst_specializes_runtime:
+  assumes src_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list tyvars,
+                                           TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>) ty"
+    and tys_rt: "list_all (is_runtime_type env) tys"
+    and len_eq: "length tyvars = length tys"
+  shows "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tys)) ty)"
+proof (rule apply_subst_preserves_runtime[OF src_rt])
+  show "TE_GhostDatatypes env =
+          TE_GhostDatatypes (env \<lparr> TE_TypeVars := fset_of_list tyvars,
+                                    TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>)" by simp
+next
+  fix n assume "n |\<in>| TE_RuntimeTypeVars (env \<lparr> TE_TypeVars := fset_of_list tyvars,
+                                                  TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>)"
+  hence "n \<in> set tyvars" by (simp add: fset_of_list.rep_eq)
+  then obtain i where i_bound: "i < length tyvars" and nth_eq: "tyvars ! i = n"
+    by (metis in_set_conv_nth)
+  with len_eq have i_bound_tys: "i < length tys" by simp
+  show "case fmlookup (fmap_of_list (zip tyvars tys)) n of
+          Some ty' \<Rightarrow> is_runtime_type env ty'
+        | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
+  proof (cases "fmlookup (fmap_of_list (zip tyvars tys)) n")
+    case None
+    hence "n \<notin> fst ` set (zip tyvars tys)"
+      by (simp add: fmap_of_list.rep_eq map_of_eq_None_iff)
+    with i_bound i_bound_tys nth_eq len_eq have False
+      by (metis in_set_conv_nth list.set_map map_fst_zip)
+    thus ?thesis ..
+  next
+    case (Some ty')
+    hence "ty' \<in> set tys"
+      using fmap_of_list_SomeD by (metis in_set_zipE)
+    with tys_rt have "is_runtime_type env ty'" by (simp add: list_all_iff)
+    with Some show ?thesis by simp
+  qed
+qed
+
+
+(* Helper: map_of on zipped lists with mapped second component *)
+lemma map_of_zip_map:
+  assumes "length vars = length tys"
+  shows "map_of (zip vars (map f tys)) = map_option f \<circ> map_of (zip vars tys)"
+proof
+  fix n
+  show "map_of (zip vars (map f tys)) n = (map_option f \<circ> map_of (zip vars tys)) n"
+    using assms by (induction vars tys rule: list_induct2) auto
+qed
+
+lemma fmlookup_zip_map:
+  assumes "length vars = length tys"
+      and "fmlookup (fmap_of_list (zip vars tys)) n = Some ty"
+  shows "fmlookup (fmap_of_list (zip vars (map f tys))) n = Some (f ty)"
+  using assms map_of_zip_map[OF assms(1), of f]
+  by (simp add: fmlookup_of_list)
+
+(* Applying a substitution built from (vars -> map (apply_subst s) tys) is the same
+   as first applying the (vars -> tys) substitution, then applying s. Requires that
+   all metavariables of ty are in vars and that vars is distinct. *)
+lemma apply_subst_compose_zip:
+  assumes "length vars = length tys"
+      and "type_metavars ty \<subseteq> set vars"
+      and "distinct vars"
+  shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
+       = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
+  using assms
+proof (induction ty)
+  case (CoreTy_Meta n)
+  from CoreTy_Meta.prems(2) have "n \<in> set vars" by simp
+  then obtain i where i_bound: "i < length vars" and vars_i: "vars ! i = n"
+    by (metis in_set_conv_nth)
+  with CoreTy_Meta.prems(1) have i_bound_tys: "i < length tys" by simp
+  have lookup_eq: "fmlookup (fmap_of_list (zip vars tys)) n = Some (tys ! i)"
+    using i_bound i_bound_tys vars_i CoreTy_Meta.prems(1,3)
+    by (metis fmap_of_list.rep_eq map_of_zip_nth)
+  hence "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n
+       = Some (apply_subst s (tys ! i))"
+    by (simp add: CoreTy_Meta.prems(1) fmlookup_zip_map)
+  thus ?case using lookup_eq by simp
+next
+  case (CoreTy_Datatype name tyargs)
+  have "\<forall>ty \<in> set tyargs. type_metavars ty \<subseteq> set vars"
+    using CoreTy_Datatype.prems(2) by auto
+  thus ?case
+    using CoreTy_Datatype.IH CoreTy_Datatype.prems(1,3) by (induction tyargs) auto
+next
+  case (CoreTy_Record flds)
+  have flds_mvs: "\<forall>(name, ty) \<in> set flds. type_metavars ty \<subseteq> set vars"
+    using CoreTy_Record.prems(2) by fastforce
+  have "\<forall>(name, ty) \<in> set flds.
+          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
+        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
+    using CoreTy_Record.IH CoreTy_Record.prems(1,3) flds_mvs by fastforce
+  hence "map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty)) flds
+       = map (\<lambda>(name, ty). (name, apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
+    by (induction flds) auto
+  also have "... = map ((\<lambda>(name, ty). (name, apply_subst s ty)) \<circ>
+                        (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
+    by (simp add: case_prod_unfold comp_def)
+  also have "... = map (\<lambda>(name, ty). (name, apply_subst s ty))
+                       (map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars tys)) ty)) flds)"
+    by simp
+  finally show ?case by simp
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by simp
+qed simp_all
+
+(* Corollary for mapping over a list of types *)
+lemma map_apply_subst_compose_zip:
+  assumes "length vars = length tys"
+      and "\<forall>t \<in> set ts. type_metavars t \<subseteq> set vars"
+      and "distinct vars"
+  shows "map (apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys)))) ts
+       = map (apply_subst s) (map (apply_subst (fmap_of_list (zip vars tys))) ts)"
+  using assms by (induction ts) (auto simp: apply_subst_compose_zip)
 
 
 (* ========================================================================== *)
@@ -367,7 +496,8 @@ proof
     from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_runtime_type env ty1" by blast
     thus ?thesis
       using \<open>ty \<in> fmran' s2 \<or> (\<exists>ty1\<in>fmran' s1. ty = apply_subst s2 ty1)\<close>
-        apply_subst_preserves_runtime assms(1,2) by auto
+        apply_subst_preserves_runtime assms(1,2)
+      by (metis fmran'I option.case_eq_if option.collapse)
   qed
 qed
 

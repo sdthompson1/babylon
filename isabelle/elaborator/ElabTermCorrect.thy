@@ -2,96 +2,6 @@ theory ElabTermCorrect
   imports ElabTerm ElabTypeCorrect "../core/CoreTypecheck" Unify3
 begin
 
-(* Helper: map_of on zipped lists with mapped second component *)
-lemma map_of_zip_map:
-  assumes "length vars = length tys"
-  shows "map_of (zip vars (map f tys)) = map_option f \<circ> map_of (zip vars tys)"
-proof
-  fix n
-  show "map_of (zip vars (map f tys)) n = (map_option f \<circ> map_of (zip vars tys)) n"
-    using assms by (induction vars tys rule: list_induct2) auto
-qed
-
-lemma fmlookup_zip_map:
-  assumes "length vars = length tys"
-      and "fmlookup (fmap_of_list (zip vars tys)) n = Some ty"
-  shows "fmlookup (fmap_of_list (zip vars (map f tys))) n = Some (f ty)"
-  using assms map_of_zip_map[OF assms(1), of f]
-  by (simp add: fmlookup_of_list)
-
-lemma fmlookup_zip_map_None:
-  assumes "length vars = length tys"
-      and "fmlookup (fmap_of_list (zip vars tys)) n = None"
-  shows "fmlookup (fmap_of_list (zip vars (map f tys))) n = None"
-  using assms map_of_zip_map[OF assms(1), of f]
-  by (simp add: fmlookup_of_list)
-
-(* Helper: applying a substitution built from zip with already-substituted types
-   is equivalent to composing substitutions.
-   Requires that all metavariables in t are in vars (otherwise the s substitution
-   would affect t but not the LHS), and that vars is distinct (for map_of to work correctly). *)
-lemma apply_subst_compose_zip:
-  assumes "length vars = length tys"
-      and "type_metavars t \<subseteq> set vars"
-      and "distinct vars"
-  shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) t
-       = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t)"
-  using assms
-proof (induction t)
-  case (CoreTy_Meta n)
-  \<comment> \<open>From assumption, n \<in> set vars\<close>
-  from CoreTy_Meta.prems(2) have "n \<in> set vars" by simp
-  \<comment> \<open>So there exists a unique i with vars ! i = n\<close>
-  then obtain i where i_bound: "i < length vars" and vars_i: "vars ! i = n"
-    by (metis in_set_conv_nth)
-  with CoreTy_Meta.prems(1) have i_bound_tys: "i < length tys" by simp
-  \<comment> \<open>The lookup succeeds - use distinctness for map_of_zip_nth\<close>
-  have lookup_eq: "fmlookup (fmap_of_list (zip vars tys)) n = Some (tys ! i)"
-    using i_bound i_bound_tys vars_i CoreTy_Meta.prems(1,3)
-    by (metis fmap_of_list.rep_eq map_of_zip_nth)
-  hence "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n
-       = Some (apply_subst s (tys ! i))"
-    by (simp add: CoreTy_Meta.prems(1) fmlookup_zip_map)
-  thus ?case using lookup_eq by simp
-next
-  case (CoreTy_Name name tyargs)
-  \<comment> \<open>Metavars of CoreTy_Name are union of metavars of tyargs\<close>
-  have "\<forall>ty \<in> set tyargs. type_metavars ty \<subseteq> set vars"
-    using CoreTy_Name.prems(2) by auto
-  thus ?case
-    using CoreTy_Name.IH CoreTy_Name.prems(1,3) by (induction tyargs) auto
-next
-  case (CoreTy_Record flds)
-  \<comment> \<open>Metavars of CoreTy_Record are union of metavars of field types\<close>
-  have flds_mvs: "\<forall>(name, ty) \<in> set flds. type_metavars ty \<subseteq> set vars"
-    using CoreTy_Record.prems(2) by fastforce
-  have "\<forall>(name, ty) \<in> set flds.
-          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
-        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
-    using CoreTy_Record.IH CoreTy_Record.prems(1,3) flds_mvs by fastforce
-  hence "map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty)) flds
-       = map (\<lambda>(name, ty). (name, apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
-    by (induction flds) auto
-  also have "... = map ((\<lambda>(name, ty). (name, apply_subst s ty)) \<circ> (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
-    by (simp add: case_prod_unfold comp_def)
-  also have "... = map (\<lambda>(name, ty). (name, apply_subst s ty)) (map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars tys)) ty)) flds)"
-    by simp
-  finally show ?case by simp
-next
-  case (CoreTy_Array elemTy dims)
-  thus ?case by simp
-qed simp_all
-
-(* Corollary for mapping over a list of types *)
-lemma map_apply_subst_compose_zip:
-  assumes "length vars = length tys"
-      and "\<forall>t \<in> set ts. type_metavars t \<subseteq> set vars"
-      and "distinct vars"
-  shows "map (apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys)))) ts
-       = map (apply_subst s) (map (apply_subst (fmap_of_list (zip vars tys))) ts)"
-  using assms by (induction ts) (auto simp: apply_subst_compose_zip)
-
-
 (* Length of elab_term_list output matches input *)
 lemma elab_term_list_length:
   "elab_term_list env typedefs ghost tms next_mv = Inr (tms', tys', next_mv')
@@ -2260,10 +2170,10 @@ next
     using fn_lookup tyenv_funs_have_expected_metavars_def by blast
 
   \<comment> \<open>Function type args are distinct\<close>
-  have "tyenv_fun_metavars_distinct env"
+  have "tyenv_fun_tyvars_distinct env"
     using "9.prems"(2) tyenv_well_formed_def by blast
   hence fi_tyargs_distinct: "distinct (FI_TyArgs funInfo)"
-    using fn_lookup tyenv_fun_metavars_distinct_def by blast
+    using fn_lookup tyenv_fun_tyvars_distinct_def by blast
 
   \<comment> \<open>Key: ?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes\<close>
   let ?argTys = "map fst (FI_TmArgs funInfo)"

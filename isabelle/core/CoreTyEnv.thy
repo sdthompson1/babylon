@@ -3,9 +3,7 @@ theory CoreTyEnv
 begin
 
 record FunInfo =
-  (* Number of type arguments, and corresponding metavariables *)
-  (* (The metavariables are present in FI_TmArgs and FI_ReturnType and must be
-     substituted before using those types) *)
+  (* Type arguments: type variable numbers *)
   FI_TyArgs :: "nat list"
 
   (* Term arguments: type and whether passed by value (Var) or reference (Ref) *)
@@ -31,25 +29,16 @@ record CoreTyEnv =
   (* Constant names - subset of TE_TermVars keys; these are not assignable *)
   TE_ConstNames :: "string fset"
 
-  (* In-scope rigid type variables (as CoreTy_Meta identifiers), for polymorphic contexts.
-     These are bound by an enclosing polymorphic signature (e.g. a function's FI_TyArgs)
-     and are never unified — they are rigid binders, not unification slots. *)
+  (* In-scope type variables (for polymorphic functions) *)
   TE_TypeVars :: "nat fset"
 
-  (* Subset of TE_TypeVars consisting of type variables known to be runtime-kinded.
-     A NotGhost function adds its type parameters to both TE_TypeVars and TE_RuntimeTypeVars
-     (its type arguments at call sites must be runtime types). A Ghost function adds its
-     type parameters only to TE_TypeVars, since ghost type arguments need not be runtime.
-     INVARIANT: TE_RuntimeTypeVars |\<subseteq>| TE_TypeVars. Only is_runtime_type should read
-     this field; everything else should consult is_runtime_type instead. *)
+  (* Type variables that are known to be bound to runtime types - subset of TE_TypeVars *)
   TE_RuntimeTypeVars :: "nat fset"
 
   (* Expected return type of the enclosing function *)
   TE_ReturnType :: CoreType
 
-  (* Ghost-ness of the enclosing function. If the enclosing function is Ghost,
-     then Return statements are allowed even when typechecking in Ghost mode;
-     otherwise, Return is only allowed in NotGhost mode. *)
+  (* Ghost-ness of the enclosing function. *)
   TE_FunctionGhost :: GhostOrNot
 
   (* Function signatures *)

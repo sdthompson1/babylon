@@ -145,29 +145,36 @@ proof (intro allI impI)
     using assms by (simp add: list_all_iff)
 qed
 
-(* Substitution of well-kinded types preserves well-kindedness. *)
+(* Substitution of well-kinded types preserves well-kindedness.
+   The source env (where ty lives) and target env (where the result lives) may differ:
+   the substitution must map every type variable in src that is not also in tgt to a
+   type well-kinded in tgt, and any type variables left over must still be in tgt. *)
 (* See also: apply_subst_preserves_runtime in MetaSubst.thy. *)
 lemma apply_subst_preserves_well_kinded:
-  assumes "is_well_kinded env ty"
-    and "metasubst_well_kinded env subst"
-  shows "is_well_kinded env (apply_subst subst ty)"
+  assumes "is_well_kinded src ty"
+    and "TE_Datatypes tgt = TE_Datatypes src"
+    and "\<And>n. n |\<in>| TE_TypeVars src \<Longrightarrow>
+             (case fmlookup subst n of
+                Some ty' \<Rightarrow> is_well_kinded tgt ty'
+              | None \<Rightarrow> n |\<in>| TE_TypeVars tgt)"
+  shows "is_well_kinded tgt (apply_subst subst ty)"
 using assms proof (induction ty)
   case (CoreTy_Datatype name tyargs)
   then obtain numTyVars where
-    dt_lookup: "fmlookup (TE_Datatypes env) name = Some numTyVars" and
+    dt_lookup: "fmlookup (TE_Datatypes src) name = Some numTyVars" and
     len_eq: "length tyargs = numTyVars" and
-    args_wk: "list_all (is_well_kinded env) tyargs"
+    args_wk: "list_all (is_well_kinded src) tyargs"
     by (auto split: option.splits)
-  have "list_all (is_well_kinded env) (map (apply_subst subst) tyargs)"
-    using CoreTy_Datatype.IH args_wk CoreTy_Datatype.prems(2)
+  have "list_all (is_well_kinded tgt) (map (apply_subst subst) tyargs)"
+    using CoreTy_Datatype.IH args_wk CoreTy_Datatype.prems(2,3)
     by (simp add: list_all_iff)
-  thus ?case using dt_lookup len_eq by simp
+  thus ?case using dt_lookup len_eq CoreTy_Datatype.prems(2) by simp
 next
   case (CoreTy_Record flds)
-  have "list_all (is_well_kinded env) (map snd flds)"
+  have "list_all (is_well_kinded src) (map snd flds)"
     using CoreTy_Record.prems(1) by simp
-  hence "list_all (is_well_kinded env) (map (apply_subst subst \<circ> snd) flds)"
-    using CoreTy_Record.IH CoreTy_Record.prems(2)
+  hence "list_all (is_well_kinded tgt) (map (apply_subst subst \<circ> snd) flds)"
+    using CoreTy_Record.IH CoreTy_Record.prems(2,3)
     by (simp add: comp_def list.pred_map list.pred_mono_strong snds.intros)
   moreover have "map (apply_subst subst \<circ> snd) flds =
                  map (snd \<circ> (\<lambda>(name, ty). (name, apply_subst subst ty))) flds"
@@ -175,19 +182,54 @@ next
   ultimately show ?case by simp
 next
   case (CoreTy_Meta n)
+  from CoreTy_Meta.prems(1) have n_in_src: "n |\<in>| TE_TypeVars src" by simp
   show ?case
   proof (cases "fmlookup subst n")
     case None
-    (* substitution doesn't touch n, so the result is still CoreTy_Meta n,
-       which is well-kinded because n |\<in>| TE_TypeVars env by the input assumption *)
-    thus ?thesis using CoreTy_Meta.prems(1) by simp
+    from CoreTy_Meta.prems(3)[OF n_in_src] None have "n |\<in>| TE_TypeVars tgt" by simp
+    thus ?thesis using None by simp
   next
     case (Some ty)
-    hence "is_well_kinded env ty"
-      using CoreTy_Meta.prems(2) metasubst_well_kinded_def by blast
+    from CoreTy_Meta.prems(3)[OF n_in_src] Some have "is_well_kinded tgt ty" by simp
     thus ?thesis using Some by simp
   qed
 qed (simp_all)
+
+(* Specialization lemma: when substituting a type well-kinded in "env with TypeVars set to
+   the list of type parameters" by a fully-populated zip substitution mapping each type
+   parameter to a type well-kinded in env, the result is well-kinded in env. This is the
+   "call-site specialization" pattern for polymorphic functions and datatypes. *)
+lemma apply_subst_specializes_well_kinded:
+  assumes src_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) ty"
+    and tys_wk: "list_all (is_well_kinded env) tys"
+    and len_eq: "length tyvars = length tys"
+  shows "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tys)) ty)"
+proof (rule apply_subst_preserves_well_kinded[OF src_wk])
+  show "TE_Datatypes env = TE_Datatypes (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>)" by simp
+next
+  fix n assume "n |\<in>| TE_TypeVars (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>)"
+  hence "n \<in> set tyvars" by (simp add: fset_of_list.rep_eq)
+  then obtain i where i_bound: "i < length tyvars" and nth_eq: "tyvars ! i = n"
+    by (metis in_set_conv_nth)
+  with len_eq have i_bound_tys: "i < length tys" by simp
+  show "case fmlookup (fmap_of_list (zip tyvars tys)) n of
+          Some ty' \<Rightarrow> is_well_kinded env ty'
+        | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+  proof (cases "fmlookup (fmap_of_list (zip tyvars tys)) n")
+    case None
+    hence "n \<notin> fst ` set (zip tyvars tys)"
+      by (simp add: fmap_of_list.rep_eq map_of_eq_None_iff)
+    with i_bound i_bound_tys nth_eq len_eq have False
+      by (metis in_set_conv_nth list.set_map map_fst_zip)
+    thus ?thesis ..
+  next
+    case (Some ty')
+    hence "ty' \<in> set tys"
+      using fmap_of_list_SomeD by (metis in_set_zipE)
+    with tys_wk have "is_well_kinded env ty'" by (simp add: list_all_iff)
+    with Some show ?thesis by simp
+  qed
+qed
 
 (* Composition of substitutions preserves well-kindedness *)
 (* See also: compose_subst_preserves_runtime in MetaSubst.thy *)
@@ -203,11 +245,19 @@ proof
     thus ?thesis using assms(2) by blast
   next
     assume "\<exists>ty1 \<in> fmran' s1. ty = apply_subst s2 ty1"
-    then obtain ty1 where "ty1 \<in> fmran' s1" and "ty = apply_subst s2 ty1" by auto
-    from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_well_kinded env ty1" by blast
-    thus ?thesis
-      by (simp add: \<open>ty = apply_subst s2 ty1\<close> apply_subst_preserves_well_kinded assms(2) fmran'I
-          metasubst_well_kinded_def)
+    then obtain ty1 where ty1_in: "ty1 \<in> fmran' s1" and ty_eq: "ty = apply_subst s2 ty1" by auto
+    from ty1_in assms(1) have ty1_wk: "is_well_kinded env ty1" by blast
+    have "is_well_kinded env (apply_subst s2 ty1)"
+    proof (rule apply_subst_preserves_well_kinded[OF ty1_wk])
+      show "TE_Datatypes env = TE_Datatypes env" by simp
+    next
+      fix n assume n_in: "n |\<in>| TE_TypeVars env"
+      show "case fmlookup s2 n of
+              Some ty' \<Rightarrow> is_well_kinded env ty'
+            | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+        using n_in assms(2) by (auto simp: fmran'I split: option.splits)
+    qed
+    thus ?thesis using ty_eq by simp
   qed
 qed
 

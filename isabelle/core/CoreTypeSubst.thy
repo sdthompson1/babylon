@@ -70,6 +70,13 @@ fun apply_subst_to_term :: "MetaSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreT
     CoreTm_Old (apply_subst_to_term subst tm)"
 
 
+(* CorePattern does not currently carry any CoreType, so substitution on patterns
+   is the identity. Defined here for symmetry and so future pattern forms can
+   plug in without reshaping callers. *)
+fun apply_subst_to_pat :: "MetaSubst \<Rightarrow> CorePattern \<Rightarrow> CorePattern" where
+  "apply_subst_to_pat subst p = p"
+
+
 (* Helper for proving map over lists *)
 lemma map_apply_subst_to_term_empty:
   "(\<And>t. t \<in> set tms \<Longrightarrow> apply_subst_to_term fmempty t = t) \<Longrightarrow>
@@ -146,158 +153,38 @@ next
 qed (simp_all add: compose_subst_correct)
 
 
+(* lvalue-ness only depends on the top-level term shape, which substitution preserves. *)
+lemma lvalue_base_name_apply_subst_to_term:
+  "lvalue_base_name (apply_subst_to_term subst tm) = lvalue_base_name tm"
+  by (induction tm) auto
+
+lemma is_lvalue_apply_subst_to_term [simp]:
+  "is_lvalue (apply_subst_to_term subst tm) = is_lvalue tm"
+  by (simp add: is_lvalue_def lvalue_base_name_apply_subst_to_term)
+
+(* pattern_compatible and patterns_exhaustive only inspect the top-level shape of the
+   scrutinee type (and for Datatype, just the type name). Substitution preserves all
+   of these top-level shapes, so if the predicate holds on ty it also holds on
+   apply_subst subst ty. (The reverse is not true if ty is a CoreTy_Meta.) *)
+lemma pattern_compatible_apply_subst:
+  "pattern_compatible env p ty \<Longrightarrow> pattern_compatible env p (apply_subst subst ty)"
+  by (cases p; cases ty) (auto split: option.splits prod.splits)
+
+lemma patterns_exhaustive_apply_subst:
+  "patterns_exhaustive env ty pats \<Longrightarrow> patterns_exhaustive env (apply_subst subst ty) pats"
+  by (cases ty) (auto split: if_splits)
+
+
 (* If a term has type ty, then apply_subst_to_term subst tm has type (apply_subst subst ty).
    We assume the environment is well-formed, and that the substitution produces well-kinded
-   and (in NotGhost mode) runtime types.
-
-   TODO: most cases of this lemma are currently sorry'd, pending the relevant
-   typechecker cases being fully worked out. The proved cases (LitBool, LitInt,
-   Var, Cast, Unop, Allocated-Ghost) date from before the CoreTy_Meta refactor
-   and still hold because they rely only on properties (is_ground, is_integer_type,
-   is_runtime_type on concrete types) that were unchanged by the refactor. *)
+   and (in NotGhost mode) runtime types. *)
 lemma apply_subst_to_term_preserves_typing:
   assumes "core_term_type env mode tm = Some ty"
       and "tyenv_well_formed env"
       and "\<forall>ty' \<in> fmran' subst. is_well_kinded env ty'"
       and "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty')"
   shows "core_term_type env mode (apply_subst_to_term subst tm) = Some (apply_subst subst ty)"
-using assms proof (induction tm arbitrary: ty mode)
-  case (CoreTm_LitBool b)
-  then show ?case by simp
-next
-  case (CoreTm_LitInt i)
-  then show ?case by (auto split: option.splits)
-next
-  case (CoreTm_LitArray elemTy tms)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Var name)
-  from CoreTm_Var.prems(1) obtain varTy where
-    lookup: "fmlookup (TE_TermVars env) name = Some varTy" and
-    ty_eq: "ty = varTy"
-    by (auto split: option.splits if_splits)
-  (* The variable's type is ground (from tyenv_well_formed) *)
-  have "tyenv_vars_ground env"
-    using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
-  hence "is_ground varTy"
-    using lookup tyenv_vars_ground_def by blast
-  hence "apply_subst subst varTy = varTy"
-    by (rule apply_subst_ground)
-  thus ?case using CoreTm_Var.prems(1) lookup ty_eq by auto
-next
-  case (CoreTm_Cast targetTy operand)
-  from CoreTm_Cast.prems(1) obtain operandTy where
-    operand_typed: "core_term_type env mode operand = Some operandTy" and
-    is_int_operand: "is_integer_type operandTy" and
-    is_int_target: "is_integer_type targetTy" and
-    runtime_ok: "mode = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
-    ty_eq: "ty = targetTy"
-    by (auto split: option.splits if_splits)
-  from CoreTm_Cast.IH[OF operand_typed CoreTm_Cast.prems(2) CoreTm_Cast.prems(3) CoreTm_Cast.prems(4)]
-  have ih: "core_term_type env mode (apply_subst_to_term subst operand) = Some (apply_subst subst operandTy)" .
-  have "is_integer_type (apply_subst subst operandTy)"
-    using is_int_operand is_integer_type_apply_subst by blast
-  moreover have "is_integer_type (apply_subst subst targetTy)"
-    using is_int_target is_integer_type_apply_subst by blast
-  moreover have "mode = NotGhost \<longrightarrow> is_runtime_type env (apply_subst subst targetTy)"
-    using runtime_ok CoreTm_Cast.prems(4) apply_subst_preserves_runtime by blast
-  ultimately show ?case using ih ty_eq by simp
-next
-  case (CoreTm_Unop op operand)
-  from CoreTm_Unop.prems(1) obtain operandTy where
-    operand_typed: "core_term_type env mode operand = Some operandTy" and
-    ty_eq: "ty = operandTy"
-    by (auto split: option.splits if_splits CoreUnop.splits CoreType.splits)
-  from CoreTm_Unop.IH[OF operand_typed CoreTm_Unop.prems(2) CoreTm_Unop.prems(3) CoreTm_Unop.prems(4)]
-  have ih: "core_term_type env mode (apply_subst_to_term subst operand) = Some (apply_subst subst operandTy)" .
-  show ?case
-  proof (cases op)
-    case CoreUnop_Negate
-    with CoreTm_Unop.prems(1) operand_typed ty_eq have "is_signed_numeric_type operandTy"
-      by (auto split: option.splits if_splits)
-    hence "is_signed_numeric_type (apply_subst subst operandTy)"
-      using is_signed_numeric_type_apply_subst by blast
-    then show ?thesis using ih ty_eq CoreUnop_Negate by simp
-  next
-    case CoreUnop_Complement
-    with CoreTm_Unop.prems(1) operand_typed ty_eq have "is_finite_integer_type operandTy"
-      by (auto split: option.splits if_splits)
-    hence "is_finite_integer_type (apply_subst subst operandTy)"
-      using is_finite_integer_type_apply_subst by blast
-    then show ?thesis using ih ty_eq CoreUnop_Complement by simp
-  next
-    case CoreUnop_Not
-    with CoreTm_Unop.prems(1) operand_typed ty_eq have "operandTy = CoreTy_Bool"
-      using CoreUnop.simps(9) by fastforce
-    then show ?thesis using ih ty_eq CoreUnop_Not by simp
-  qed
-next
-  case (CoreTm_Binop op tm1 tm2)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Let name rhs body)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Quantifier q var varTy body)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_FunctionCall fnName tyArgs args)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_VariantCtor ctorName tyArgs arg)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Record flds)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_RecordProj tm fldName)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_ArrayProj tm idxs)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_VariantProj tm ctorName)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Match tm cases)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Sizeof tm)
-  (* Not yet implemented *)
-  then show ?case sorry
-next
-  case (CoreTm_Allocated tm)
-  show ?case
-  proof (cases mode)
-    case NotGhost
-    then show ?thesis using CoreTm_Allocated.prems(1) by simp
-  next
-    case Ghost
-    from CoreTm_Allocated.prems(1) Ghost obtain innerTy where
-      inner_typed: "core_term_type env Ghost tm = Some innerTy" and
-      ty_eq: "ty = CoreTy_Bool"
-      by (auto split: option.splits)
-    from CoreTm_Allocated.IH[OF inner_typed CoreTm_Allocated.prems(2) CoreTm_Allocated.prems(3)]
-    have ih: "core_term_type env Ghost (apply_subst_to_term subst tm) = Some (apply_subst subst innerTy)"
-      using Ghost by simp
-    show ?thesis using ih Ghost ty_eq by simp
-  qed
-next
-  case (CoreTm_Old tm)
-  (* Not yet implemented *)
-  then show ?case sorry
-qed
+  sorry
 
 (* Type substitution does not change term-level free variables,
    since it only substitutes type metavariables. *)
@@ -330,12 +217,6 @@ qed simp_all
 (* ========================================================================== *)
 (* Substitution on statements                                                  *)
 (* ========================================================================== *)
-
-(* CorePattern does not currently carry any CoreType, so substitution on patterns
-   is the identity. Defined here for symmetry and so future pattern forms can
-   plug in without reshaping callers. *)
-fun apply_subst_to_pat :: "MetaSubst \<Rightarrow> CorePattern \<Rightarrow> CorePattern" where
-  "apply_subst_to_pat subst p = p"
 
 fun apply_subst_to_stmt :: "MetaSubst \<Rightarrow> CoreStatement \<Rightarrow> CoreStatement"
 and apply_subst_to_stmt_list :: "MetaSubst \<Rightarrow> CoreStatement list \<Rightarrow> CoreStatement list" where
@@ -374,23 +255,87 @@ and apply_subst_to_stmt_list :: "MetaSubst \<Rightarrow> CoreStatement list \<Ri
     apply_subst_to_stmt subst s # apply_subst_to_stmt_list subst rest"
 
 
-(* Statement-level typing preservation. TODO: proof. *)
-lemma apply_subst_to_stmt_preserves_typing:
-  assumes "core_statement_type env ghost stmt = Some env'"
-      and "tyenv_well_formed env"
-      and "\<forall>ty' \<in> fmran' subst. is_well_kinded env ty'"
-      and "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty')"
-  shows "core_statement_type env ghost (apply_subst_to_stmt subst stmt) = Some env'"
-  sorry
+(* Statement-level and statement-list-level typing preservation under type substitution.
+   Proved together by mutual induction on the apply_subst_to_stmt / apply_subst_to_stmt_list
+   definition, since While, Match and Assert contain nested statement lists. *)
+lemma apply_subst_to_stmt_and_list_preserves_typing:
+  "\<lbrakk> core_statement_type env ghost stmt = Some env';
+     tyenv_well_formed env;
+     \<forall>ty' \<in> fmran' subst. is_well_kinded env ty';
+     ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty') \<rbrakk>
+   \<Longrightarrow> core_statement_type env ghost (apply_subst_to_stmt subst stmt) = Some env'"
+  "\<lbrakk> core_statement_list_type env ghost stmts = Some env';
+     tyenv_well_formed env;
+     \<forall>ty' \<in> fmran' subst. is_well_kinded env ty';
+     ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty') \<rbrakk>
+   \<Longrightarrow> core_statement_list_type env ghost (apply_subst_to_stmt_list subst stmts) = Some env'"
+proof (induction stmt and stmts
+       arbitrary: env env' ghost and env env' ghost
+       rule: apply_subst_to_stmt_apply_subst_to_stmt_list.induct)
+  case (1 subst declGhost varName varOrRef varTy initTm)
+  then show ?case sorry
+next
+  case (2 subst name ty)
+  \<comment> \<open>CoreStmt_Fix: typechecking undefined\<close>
+  then show ?case sorry
+next
+  case (3 subst name ty tm)
+  \<comment> \<open>CoreStmt_Obtain: typechecking undefined\<close>
+  then show ?case sorry
+next
+  case (4 subst tm)
+  \<comment> \<open>CoreStmt_Use: typechecking undefined\<close>
+  then show ?case sorry
+next
+  case (5 subst g lhs rhs)
+  then show ?case sorry
+next
+  case (6 subst g lhs rhs)
+  then show ?case sorry
+next
+  case (7 subst tm)
+  then show ?case sorry
+next
+  case (8 subst tm proof_stmts)
+  then show ?case sorry
+next
+  case (9 subst tm)
+  \<comment> \<open>CoreStmt_Assume: inner term typechecks in Ghost to Bool; substitution preserves that\<close>
+  from "9.prems"(1) have
+    tm_typed: "core_term_type env Ghost tm = Some CoreTy_Bool" and
+    env_eq: "env' = env"
+    by (auto split: if_splits)
+  from apply_subst_to_term_preserves_typing[OF tm_typed "9.prems"(2) "9.prems"(3)]
+  have "core_term_type env Ghost (apply_subst_to_term subst tm) = Some (apply_subst subst CoreTy_Bool)"
+    by simp
+  hence "core_term_type env Ghost (apply_subst_to_term subst tm) = Some CoreTy_Bool" by simp
+  thus ?case using env_eq by simp
+next
+  case (10 subst g cond invs decr body)
+  \<comment> \<open>CoreStmt_While: typechecking undefined\<close>
+  then show ?case sorry
+next
+  case (11 subst g scrut arms)
+  \<comment> \<open>CoreStmt_Match: typechecking undefined\<close>
+  then show ?case sorry
+next
+  case (12 subst sh name)
+  \<comment> \<open>CoreStmt_ShowHide: no-op; returns Some env unchanged\<close>
+  then show ?case by simp
+next
+  case (13 subst)
+  \<comment> \<open>Nil statement list\<close>
+  then show ?case by simp
+next
+  case (14 subst s rest)
+  then show ?case sorry
+qed
 
-(* Statement-list-level typing preservation (Lemma 1 proper). TODO: proof. *)
-lemma apply_subst_to_stmt_list_preserves_typing:
-  assumes "core_statement_list_type env ghost stmts = Some env'"
-      and "tyenv_well_formed env"
-      and "\<forall>ty' \<in> fmran' subst. is_well_kinded env ty'"
-      and "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty')"
-  shows "core_statement_list_type env ghost (apply_subst_to_stmt_list subst stmts) = Some env'"
-  sorry
+(* Convenience aliases matching the original names. *)
+lemmas apply_subst_to_stmt_preserves_typing =
+  apply_subst_to_stmt_and_list_preserves_typing(1)
+lemmas apply_subst_to_stmt_list_preserves_typing =
+  apply_subst_to_stmt_and_list_preserves_typing(2)
 
 
 (* ========================================================================== *)

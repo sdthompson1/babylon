@@ -749,7 +749,6 @@ proof -
   (* Extract facts from typing *)
   from typing obtain rhsTy where
     rhs_typing: "core_term_type env NotGhost rhs = Some rhsTy" and
-    rhs_ground: "is_ground rhsTy" and
     body_typing: "core_term_type
         (env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env),
                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
@@ -807,7 +806,7 @@ proof -
     proof -
       let ?env_mid = "env \<lparr> TE_TermVars := fmupd var rhsTy (TE_TermVars env) \<rparr>"
       have "tyenv_well_formed ?env_mid"
-        using tyenv_well_formed_add_var[OF wf_env rhs_wk rhs_ground rhs_rt] .
+        using tyenv_well_formed_add_var[OF wf_env rhs_wk rhs_rt] .
       moreover have "?env' = ?env_mid \<lparr> TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
         by simp
       ultimately show ?thesis
@@ -1570,6 +1569,7 @@ theorem type_soundness:
       sound_statement_result env env' storeTyping (interp_statement_list fuel state stmts)"
   and interp_function_call_sound:
     "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
+       FI_Ghost funInfo = NotGhost;
        list_all2 (\<lambda>tm expectedTy.
            case core_term_type env NotGhost tm of
              None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
@@ -1764,6 +1764,7 @@ next
                 state_matches_env state' env' storeTyping' \<Longrightarrow>
                 tyenv_well_formed env' \<Longrightarrow>
                 fmlookup (TE_Functions env') fnName' = Some funInfo' \<Longrightarrow>
+                FI_Ghost funInfo' = NotGhost \<Longrightarrow>
                 list_all2 (\<lambda>tm expectedTy.
                     case core_term_type env' NotGhost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
@@ -1772,9 +1773,11 @@ next
                 retTy' = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) (FI_ReturnType funInfo') \<Longrightarrow>
                 sound_function_call_result env' storeTyping' retTy' (interp_function_call fuel state' fnName' argTms')"
           using Suc.IH(6) by simp
+        have fn_not_ghost: "FI_Ghost funInfo = NotGhost"
+          using ghost_ok2 by (cases "FI_Ghost funInfo") auto
         have fc_sound: "sound_function_call_result env storeTyping ty
                           (interp_function_call fuel state fnName tmArgs)"
-          using IH_fc[OF "1.prems"(1,2) fn_lookup args_check ty_eq] by simp
+          using IH_fc[OF "1.prems"(1,2) fn_lookup fn_not_ghost args_check ty_eq] by simp
         \<comment> \<open>The interpreter checks is_pure_fun then calls interp_function_call\<close>
         have pure: "is_pure_fun state fnName"
         proof -
@@ -2194,6 +2197,7 @@ next
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 fmlookup (TE_Functions env0) fnName0 = Some funInfo0 \<Longrightarrow>
+                FI_Ghost funInfo0 = NotGhost \<Longrightarrow>
                 list_all2 (\<lambda>tm expectedTy.
                     case core_term_type env0 NotGhost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
@@ -2442,7 +2446,9 @@ next
                 fn_ty_eq: "lhsTy = apply_subst ?tySubst (FI_ReturnType funInfo)"
                 by (auto simp: Let_def split: if_splits)
               \<comment> \<open>Apply IH_fc to get sound_function_call_result.\<close>
-              from IH_fc[OF "4.prems"(1,2) fn_lookup args_check fn_ty_eq]
+              have fn_not_ghost: "FI_Ghost funInfo = NotGhost"
+                using not_ghost_fn by (cases "FI_Ghost funInfo") auto
+              from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost args_check fn_ty_eq]
               have fc_sound: "sound_function_call_result env storeTyping lhsTy
                   (interp_function_call fuel state fnName argTms)" .
               show ?thesis
@@ -2923,7 +2929,62 @@ next
     qed
   next
     case 6
-    then show ?case sorry \<comment> \<open>TODO: interp_function_call_sound - needs statement typechecking\<close>
+
+    show ?case
+    proof -
+
+      \<comment> \<open>The state's function table has an InterpFun for fnName that matches the
+          env's FunInfo. This follows from state_matches_env via funs_exist_in_state,
+          and from the function being non-ghost. \<close>
+      have fes: "funs_exist_in_state state env"
+        unfolding state_matches_env_def
+        using "6.prems"(5) state_matches_env_def by auto
+      obtain f where
+        if_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
+        fi_match: "fun_info_matches_interp_fun funInfo f"
+        unfolding funs_exist_in_state_def
+        by (metis "6.prems"(1,2) case_optionE fes funs_exist_in_state_def)
+
+      \<comment> \<open>Basic shape of the InterpFun matches the FunInfo. From fun_info_matches_interp_fun.\<close>
+      from fi_match have len_args: "length (IF_Args f) = length (FI_TmArgs funInfo)"
+        unfolding fun_info_matches_interp_fun_def by simp
+      from fi_match have var_ref_match:
+        "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
+        unfolding fun_info_matches_interp_fun_def by simp
+
+      show "sound_function_call_result env storeTyping retTy
+              (interp_function_call (Suc fuel) state fnName argTms)"
+      proof (cases "IF_Body f")
+        case (Inl bodyStmts)
+        \<comment> \<open>Core-body case.\<close>
+
+        (* The body statement-list is well-typed, in some environment where:
+
+          - FE_TermVars contains all global constants that were defined when the function
+            was defined, as well as the formal arguments. 
+          - TE_GhostVars is set appropriately. All term args are considered non-ghost;
+            any globals inherit their ghost-ness from the parent environment.
+          - TE_ConstNames is set appropriately.
+          - TE_TypeVars must be the function's own type variable set. All are runtime.
+          - TE_ReturnType must be the function's return type.
+          - TE_FunctionGhost is NotGhost.
+          - TE_Functions, TE_Datatypes, TE_DataCtors, etc, should inherit from our
+            environment, or be a subset (as some types that exist now might not have
+            existed when the function was defined).
+
+        *)
+            
+
+        show ?thesis
+          sorry
+
+      next
+        case (Inr externFun)
+        \<comment> \<open>Extern-function case. Deferred for now.\<close>
+        show ?thesis
+          sorry
+      qed
+    qed
   }
 qed
 
