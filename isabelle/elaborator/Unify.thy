@@ -7,81 +7,102 @@ begin
 (* ========================================================================== *)
 
 (* Unifies two CoreTypes, returning a most general unifier if one exists, or None if
-   unification fails (incompatible types or occurs check). *)
+   unification fails (incompatible types or occurs check).
+   The is_flex predicate determines which metavariables are flexible (unifiable).
+   Rigid metavariables (where is_flex returns False) behave like opaque type constants
+   and only unify with themselves. *)
 
-function (domintros) unify :: "CoreType \<Rightarrow> CoreType \<Rightarrow> MetaSubst option"
-and unify_list :: "CoreType list \<Rightarrow> CoreType list \<Rightarrow> MetaSubst option" where
-  "unify (CoreTy_Name name1 tyArgs1) ty2 =
+function (domintros) unify :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> MetaSubst option"
+and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> MetaSubst option" where
+  "unify is_flex (CoreTy_Datatype name1 tyArgs1) ty2 =
     (case ty2 of
       CoreTy_Meta n \<Rightarrow>
-        if occurs n (CoreTy_Name name1 tyArgs1) then None
-        else Some (singleton_subst n (CoreTy_Name name1 tyArgs1))
-    | CoreTy_Name name2 tyArgs2 \<Rightarrow>
-        if name1 = name2 then unify_list tyArgs1 tyArgs2 else None
+        if is_flex n then
+          (if occurs n (CoreTy_Datatype name1 tyArgs1) then None
+           else Some (singleton_subst n (CoreTy_Datatype name1 tyArgs1)))
+        else None
+    | CoreTy_Datatype name2 tyArgs2 \<Rightarrow>
+        if name1 = name2 then unify_list is_flex tyArgs1 tyArgs2 else None
     | _ \<Rightarrow> None)"
 
-| "unify CoreTy_Bool ty2 =
+| "unify is_flex CoreTy_Bool ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow> Some (singleton_subst n CoreTy_Bool)
+      CoreTy_Meta n \<Rightarrow>
+        if is_flex n then Some (singleton_subst n CoreTy_Bool) else None
     | CoreTy_Bool \<Rightarrow> Some fmempty
     | _ \<Rightarrow> None)"
 
-| "unify (CoreTy_FiniteInt sign bits) ty2 =
+| "unify is_flex (CoreTy_FiniteInt sign bits) ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow> Some (singleton_subst n (CoreTy_FiniteInt sign bits))
+      CoreTy_Meta n \<Rightarrow>
+        if is_flex n then Some (singleton_subst n (CoreTy_FiniteInt sign bits)) else None
     | CoreTy_FiniteInt sign' bits' \<Rightarrow>
         if sign = sign' \<and> bits = bits' then Some fmempty else None
     | _ \<Rightarrow> None)"
 
-| "unify CoreTy_MathInt ty2 =
+| "unify is_flex CoreTy_MathInt ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow> Some (singleton_subst n CoreTy_MathInt)
+      CoreTy_Meta n \<Rightarrow>
+        if is_flex n then Some (singleton_subst n CoreTy_MathInt) else None
     | CoreTy_MathInt \<Rightarrow> Some fmempty
     | _ \<Rightarrow> None)"
 
-| "unify CoreTy_MathReal ty2 =
+| "unify is_flex CoreTy_MathReal ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow> Some (singleton_subst n CoreTy_MathReal)
+      CoreTy_Meta n \<Rightarrow>
+        if is_flex n then Some (singleton_subst n CoreTy_MathReal) else None
     | CoreTy_MathReal \<Rightarrow> Some fmempty
     | _ \<Rightarrow> None)"
 
-| "unify (CoreTy_Record flds1) ty2 =
+| "unify is_flex (CoreTy_Record flds1) ty2 =
     (case ty2 of
       CoreTy_Meta n \<Rightarrow>
-        if occurs n (CoreTy_Record flds1) then None
-        else Some (singleton_subst n (CoreTy_Record flds1))
+        if is_flex n then
+          (if occurs n (CoreTy_Record flds1) then None
+           else Some (singleton_subst n (CoreTy_Record flds1)))
+        else None
     | CoreTy_Record flds2 \<Rightarrow>
         if map fst flds1 = map fst flds2
-        then unify_list (map snd flds1) (map snd flds2)
+        then unify_list is_flex (map snd flds1) (map snd flds2)
         else None
     | _ \<Rightarrow> None)"
 
-| "unify (CoreTy_Array elemTy1 dims1) ty2 =
+| "unify is_flex (CoreTy_Array elemTy1 dims1) ty2 =
     (case ty2 of
       CoreTy_Meta n \<Rightarrow>
-        if occurs n (CoreTy_Array elemTy1 dims1) then None
-        else Some (singleton_subst n (CoreTy_Array elemTy1 dims1))
+        if is_flex n then
+          (if occurs n (CoreTy_Array elemTy1 dims1) then None
+           else Some (singleton_subst n (CoreTy_Array elemTy1 dims1)))
+        else None
     | CoreTy_Array elemTy2 dims2 \<Rightarrow>
-        if dims1 = dims2 then unify elemTy1 elemTy2 else None
+        if dims1 = dims2 then unify is_flex elemTy1 elemTy2 else None
     | _ \<Rightarrow> None)"
 
-| "unify (CoreTy_Meta n) ty2 =
-    (if occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n then None
-     else if ty2 = CoreTy_Meta n then Some fmempty
-     else Some (singleton_subst n ty2))"
+| "unify is_flex (CoreTy_Meta n) ty2 =
+    (if is_flex n then
+       (if occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n then None
+        else if ty2 = CoreTy_Meta n then Some fmempty
+        else Some (singleton_subst n ty2))
+     else \<comment> \<open>Rigid metavar: only matches itself, or can be bound by a flexible var on the right\<close>
+       (case ty2 of
+         CoreTy_Meta m \<Rightarrow>
+           if m = n then Some fmempty
+           else if is_flex m then Some (singleton_subst m (CoreTy_Meta n))
+           else None
+       | _ \<Rightarrow> None))"
 
-| "unify_list [] [] = Some fmempty"
+| "unify_list _ [] [] = Some fmempty"
 
-| "unify_list [] (ty # tys) = None"
+| "unify_list _ [] (ty # tys) = None"
 
-| "unify_list (ty # tys) [] = None"
+| "unify_list _ (ty # tys) [] = None"
 
-| "unify_list (ty1 # tys1) (ty2 # tys2) =
-    (case unify ty1 ty2 of
+| "unify_list is_flex (ty1 # tys1) (ty2 # tys2) =
+    (case unify is_flex ty1 ty2 of
       None \<Rightarrow> None
     | Some subst1 \<Rightarrow>
-        (case unify_list (map (apply_subst subst1) tys1)
-                         (map (apply_subst subst1) tys2) of
+        (case unify_list is_flex (map (apply_subst subst1) tys1)
+                                (map (apply_subst subst1) tys2) of
           None \<Rightarrow> None
         | Some subst2 \<Rightarrow> Some (compose_subst subst2 subst1)))"
 
@@ -94,7 +115,7 @@ by pat_completeness auto
 
 (* Custom size function for CoreType that returns at least 1 for every type *)
 fun core_type_size :: "CoreType \<Rightarrow> nat" where
-  "core_type_size (CoreTy_Name _ tyargs) = 1 + sum_list (map core_type_size tyargs)"
+  "core_type_size (CoreTy_Datatype _ tyargs) = 1 + sum_list (map core_type_size tyargs)"
 | "core_type_size CoreTy_Bool = 1"
 | "core_type_size (CoreTy_FiniteInt _ _) = 1"
 | "core_type_size CoreTy_MathInt = 1"
@@ -116,7 +137,7 @@ lemma list_type_size_cons:
   by (simp add: list_type_size_def)
 
 lemma type_args_size_smaller:
-  "list_type_size args < core_type_size (CoreTy_Name name args)"
+  "list_type_size args < core_type_size (CoreTy_Datatype name args)"
   by (simp add: list_type_size_def)
 
 lemma record_size_smaller:
@@ -132,16 +153,18 @@ lemma list_metavars_cons:
   by (simp add: list_metavars_def)
 
 (* The termination relation: lexicographic on (card of metavars, size, tag)
-   where tag is 0 for Inl (unify) and 1 for Inr (unify_list). *)
-definition unify_rel :: "((CoreType \<times> CoreType) + (CoreType list \<times> CoreType list)) rel" where
+   where tag is 0 for Inl (unify) and 1 for Inr (unify_list).
+   The is_flex predicate is passed unchanged to every recursive call so it
+   does not affect termination — we project it out. *)
+definition unify_rel :: "(((nat \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((nat \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) rel" where
   "unify_rel = inv_image (less_than <*lex*> less_than <*lex*> less_than)
     (\<lambda>x. case x of
-      Inl (ty1, ty2) \<Rightarrow> (card (type_metavars ty1 \<union> type_metavars ty2),
-                         core_type_size ty1 + core_type_size ty2,
-                         0::nat)
-    | Inr (tys1, tys2) \<Rightarrow> (card (list_metavars tys1 \<union> list_metavars tys2),
-                           list_type_size tys1 + list_type_size tys2,
-                           1::nat))"
+      Inl (_, ty1, ty2) \<Rightarrow> (card (type_metavars ty1 \<union> type_metavars ty2),
+                            core_type_size ty1 + core_type_size ty2,
+                            0::nat)
+    | Inr (_, tys1, tys2) \<Rightarrow> (card (list_metavars tys1 \<union> list_metavars tys2),
+                              list_type_size tys1 + list_type_size tys2,
+                              1::nat))"
 
 lemma wf_unify_rel: "wf unify_rel"
   unfolding unify_rel_def by auto
@@ -150,13 +173,13 @@ lemma wf_unify_rel: "wf unify_rel"
 
 (* Calling unify_list args1 args2 from unify (Name n1 args1) (Name n2 args2) is smaller *)
 lemma unify_rel_name_to_list:
-  "(Inr (args1, args2), Inl (CoreTy_Name n1 args1, CoreTy_Name n2 args2)) \<in> unify_rel"
+  "(Inr (f, args1, args2), Inl (f, CoreTy_Datatype n1 args1, CoreTy_Datatype n2 args2)) \<in> unify_rel"
 proof -
   have "list_type_size args1 + list_type_size args2 <
-        core_type_size (CoreTy_Name n1 args1) + core_type_size (CoreTy_Name n2 args2)"
+        core_type_size (CoreTy_Datatype n1 args1) + core_type_size (CoreTy_Datatype n2 args2)"
     by (meson add_less_mono type_args_size_smaller)
   moreover have "list_metavars args1 \<union> list_metavars args2 =
-                 type_metavars (CoreTy_Name n1 args1) \<union> type_metavars (CoreTy_Name n2 args2)"
+                 type_metavars (CoreTy_Datatype n1 args1) \<union> type_metavars (CoreTy_Datatype n2 args2)"
     by (auto simp: list_metavars_def)
   ultimately show ?thesis
     unfolding unify_rel_def by auto
@@ -164,7 +187,7 @@ qed
 
 (* Calling unify_list (map snd flds1) (map snd flds2) from unify (Record flds1) (Record flds2) is smaller *)
 lemma unify_rel_record_to_list:
-  "(Inr (map snd flds1, map snd flds2), Inl (CoreTy_Record flds1, CoreTy_Record flds2)) \<in> unify_rel"
+  "(Inr (f, map snd flds1, map snd flds2), Inl (f, CoreTy_Record flds1, CoreTy_Record flds2)) \<in> unify_rel"
 proof -
   have "list_type_size (map snd flds1) + list_type_size (map snd flds2) <
         core_type_size (CoreTy_Record flds1) + core_type_size (CoreTy_Record flds2)"
@@ -178,7 +201,7 @@ qed
 
 (* Calling unify elem1 elem2 from unify (Array elem1 dims1) (Array elem2 dims2) is smaller *)
 lemma unify_rel_array_to_elem:
-  "(Inl (elem1, elem2), Inl (CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2)) \<in> unify_rel"
+  "(Inl (f, elem1, elem2), Inl (f, CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2)) \<in> unify_rel"
 proof -
   have "core_type_size elem1 + core_type_size elem2 <
         core_type_size (CoreTy_Array elem1 dims1) + core_type_size (CoreTy_Array elem2 dims2)"
@@ -192,7 +215,7 @@ qed
 
 (* Calling unify head1 head2 from unify_list (head1 # rest1) (head2 # rest2) is smaller *)
 lemma unify_rel_list_to_head:
-  "(Inl (head1, head2), Inr (head1 # rest1, head2 # rest2)) \<in> unify_rel"
+  "(Inl (f, head1, head2), Inr (f, head1 # rest1, head2 # rest2)) \<in> unify_rel"
 proof -
   have mv_subset: "type_metavars head1 \<union> type_metavars head2 \<subseteq>
         list_metavars (head1 # rest1) \<union> list_metavars (head2 # rest2)"
@@ -407,8 +430,8 @@ qed
 (* The recursive unify_list call after unifying heads is smaller *)
 lemma unify_rel_list_recursive:
   assumes "subst_props (type_metavars ty1 \<union> type_metavars ty2) subst"
-  shows "(Inr (map (apply_subst subst) rest1, map (apply_subst subst) rest2),
-          Inr (ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
+  shows "(Inr (f, map (apply_subst subst) rest1, map (apply_subst subst) rest2),
+          Inr (f, ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
 proof (cases "subst = fmempty")
   case True
   (* With empty subst, size decreases since we remove heads *)
@@ -498,15 +521,15 @@ qed
 
 (* The main inductive property: termination and props *)
 definition unify_terminates_with_props ::
-    "((CoreType \<times> CoreType) + (CoreType list \<times> CoreType list)) \<Rightarrow> bool" where
+    "(((nat \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((nat \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) \<Rightarrow> bool" where
   "unify_terminates_with_props x \<equiv>
     unify_unify_list_dom x \<and>
     (case x of
-      Inl (ty1, ty2) \<Rightarrow>
-        (\<forall>subst. unify ty1 ty2 = Some subst \<longrightarrow>
+      Inl (is_flex, ty1, ty2) \<Rightarrow>
+        (\<forall>subst. unify is_flex ty1 ty2 = Some subst \<longrightarrow>
                  subst_props (unify_input_mvs ty1 ty2) subst)
-    | Inr (tys1, tys2) \<Rightarrow>
-        (\<forall>subst. unify_list tys1 tys2 = Some subst \<longrightarrow>
+    | Inr (is_flex, tys1, tys2) \<Rightarrow>
+        (\<forall>subst. unify_list is_flex tys1 tys2 = Some subst \<longrightarrow>
                  subst_props (unify_list_input_mvs tys1 tys2) subst))"
 
 (* The main theorem: all inputs terminate with props. *)
@@ -517,8 +540,8 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
   (* IH: for all y with (y, x) \<in> unify_rel, unify_terminates_with_props y *)
   show ?case
   proof (cases x)
-    case (Inl pair)
-    obtain ty1 ty2 where pair_eq: "pair = (ty1, ty2)" by (cases pair)
+    case (Inl triple)
+    obtain is_flex ty1 ty2 where pair_eq: "triple = (is_flex, ty1, ty2)" by (cases triple) auto
 
     (* Need to show domain holds and props hold for unify ty1 ty2 *)
     show ?thesis
@@ -529,249 +552,364 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_Meta
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Meta m))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "n = m")
           case True
-          have result: "unify (CoreTy_Meta n) (CoreTy_Meta m) = Some fmempty"
+          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = Some fmempty"
             using dom True by (simp add: unify.psimps occurs_def)
           show ?thesis
             using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result True
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify (CoreTy_Meta n) (CoreTy_Meta m) = Some (singleton_subst n (CoreTy_Meta m))"
-            using dom False by (simp add: unify.psimps occurs_def)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Meta m)) (singleton_subst n (CoreTy_Meta m))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex n")
+            case True
+            \<comment> \<open>n is flexible: bind n to CoreTy_Meta m\<close>
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = Some (singleton_subst n (CoreTy_Meta m))"
+              using dom False True by (simp add: unify.psimps occurs_def)
+            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Meta m)) (singleton_subst n (CoreTy_Meta m))"
+              using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case flex_n_false: False
+            show ?thesis
+            proof (cases "is_flex m")
+              case True
+              \<comment> \<open>n is rigid, m is flexible: bind m to CoreTy_Meta n\<close>
+              have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Meta n))"
+                using dom \<open>n \<noteq> m\<close> flex_n_false True by (simp add: unify.psimps occurs_def)
+              have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Meta n))"
+                using \<open>n \<noteq> m\<close> by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+              show ?thesis
+                using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result props
+                by (auto simp: unify_terminates_with_props_def)
+            next
+              case False
+              \<comment> \<open>Both rigid and different: unification fails\<close>
+              have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = None"
+                using dom \<open>n \<noteq> m\<close> flex_n_false False by (simp add: unify.psimps occurs_def)
+              show ?thesis
+                using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result
+                by (auto simp: unify_terminates_with_props_def)
+            qed
+          qed
         qed
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Datatype name2 args2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
-        proof (cases "occurs n (CoreTy_Name name2 args2)")
+        proof (cases "occurs n (CoreTy_Datatype name2 args2)")
           case True
-          have result: "unify (CoreTy_Meta n) (CoreTy_Name name2 args2) = None"
+          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Datatype name2 args2) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Name dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Datatype dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify (CoreTy_Meta n) (CoreTy_Name name2 args2) = Some (singleton_subst n (CoreTy_Name name2 args2))"
-            using dom False by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Name name2 args2)) (singleton_subst n (CoreTy_Name name2 args2))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Name dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex n")
+            case True
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Datatype name2 args2) = Some (singleton_subst n (CoreTy_Datatype name2 args2))"
+              using dom False True by (simp add: unify.psimps)
+            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Datatype name2 args2)) (singleton_subst n (CoreTy_Datatype name2 args2))"
+              using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Datatype dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case False
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Datatype name2 args2) = None"
+              using dom \<open>\<not> occurs n (CoreTy_Datatype name2 args2)\<close> False by (simp add: unify.psimps)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Datatype dom result
+              by (auto simp: unify_terminates_with_props_def)
+          qed
         qed
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Bool))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_Meta n) CoreTy_Bool = Some (singleton_subst n CoreTy_Bool)"
-          using dom by (simp add: unify.psimps occurs_def)
-        have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_Bool) (singleton_subst n CoreTy_Bool)"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Bool dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex n")
+          case True
+          have result: "unify is_flex (CoreTy_Meta n) CoreTy_Bool = Some (singleton_subst n CoreTy_Bool)"
+            using dom True by (simp add: unify.psimps occurs_def)
+          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_Bool) (singleton_subst n CoreTy_Bool)"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Bool dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex (CoreTy_Meta n) CoreTy_Bool = None"
+            using dom False by (simp add: unify.psimps occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Bool dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_FiniteInt sign2 bits2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2) = Some (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
-          using dom by (simp add: unify.psimps occurs_def)
-        have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2)) (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_FiniteInt dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex n")
+          case True
+          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2) = Some (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
+            using dom True by (simp add: unify.psimps occurs_def)
+          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2)) (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_FiniteInt dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2) = None"
+            using dom False by (simp add: unify.psimps occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_FiniteInt dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_MathInt))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_Meta n) CoreTy_MathInt = Some (singleton_subst n CoreTy_MathInt)"
-          using dom by (simp add: unify.psimps occurs_def)
-        have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_MathInt) (singleton_subst n CoreTy_MathInt)"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathInt dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex n")
+          case True
+          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathInt = Some (singleton_subst n CoreTy_MathInt)"
+            using dom True by (simp add: unify.psimps occurs_def)
+          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_MathInt) (singleton_subst n CoreTy_MathInt)"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathInt dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathInt = None"
+            using dom False by (simp add: unify.psimps occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathInt dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_MathReal))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_Meta n) CoreTy_MathReal = Some (singleton_subst n CoreTy_MathReal)"
-          using dom by (simp add: unify.psimps occurs_def)
-        have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_MathReal) (singleton_subst n CoreTy_MathReal)"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathReal dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex n")
+          case True
+          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathReal = Some (singleton_subst n CoreTy_MathReal)"
+            using dom True by (simp add: unify.psimps occurs_def)
+          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_MathReal) (singleton_subst n CoreTy_MathReal)"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathReal dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathReal = None"
+            using dom False by (simp add: unify.psimps occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathReal dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Record flds2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "occurs n (CoreTy_Record flds2)")
           case True
-          have result: "unify (CoreTy_Meta n) (CoreTy_Record flds2) = None"
+          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Record flds2) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result
             by (auto simp: unify_terminates_with_props_def)
         next
-          case False
-          have result: "unify (CoreTy_Meta n) (CoreTy_Record flds2) = Some (singleton_subst n (CoreTy_Record flds2))"
-            using dom False by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Record flds2)) (singleton_subst n (CoreTy_Record flds2))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+          case occ_false: False
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex n")
+            case True
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Record flds2) = Some (singleton_subst n (CoreTy_Record flds2))"
+              using dom occ_false True by (simp add: unify.psimps)
+            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Record flds2)) (singleton_subst n (CoreTy_Record flds2))"
+              using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case False
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Record flds2) = None"
+              using dom occ_false False by (simp add: unify.psimps)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result
+              by (auto simp: unify_terminates_with_props_def)
+          qed
         qed
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Meta n, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Array elem2 dims2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "occurs n (CoreTy_Array elem2 dims2)")
           case True
-          have result: "unify (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = None"
+          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result
             by (auto simp: unify_terminates_with_props_def)
         next
-          case False
-          have result: "unify (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = Some (singleton_subst n (CoreTy_Array elem2 dims2))"
-            using dom False by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Array elem2 dims2)) (singleton_subst n (CoreTy_Array elem2 dims2))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+          case occ_false: False
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex n")
+            case True
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = Some (singleton_subst n (CoreTy_Array elem2 dims2))"
+              using dom occ_false True by (simp add: unify.psimps)
+            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Array elem2 dims2)) (singleton_subst n (CoreTy_Array elem2 dims2))"
+              using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case False
+            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = None"
+              using dom occ_false False by (simp add: unify.psimps)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result
+              by (auto simp: unify_terminates_with_props_def)
+          qed
         qed
       qed
     next
-      case CoreTy_Name1: (CoreTy_Name name1 args1)
+      case CoreTy_Datatype1: (CoreTy_Datatype name1 args1)
       show ?thesis
-        using Inl pair_eq CoreTy_Name1
+        using Inl pair_eq CoreTy_Datatype1
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Meta m))"
           using unify_unify_list.domintros(1) by auto
         show ?thesis
-        proof (cases "occurs m (CoreTy_Name name1 args1)")
+        proof (cases "occurs m (CoreTy_Datatype name1 args1)")
           case True
-          have result: "unify (CoreTy_Name name1 args1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Meta m) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Name name1 args1\<close> CoreTy_Meta dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Meta dom result
             by (auto simp: unify_terminates_with_props_def)
         next
-          case False
-          have result: "unify (CoreTy_Name name1 args1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Name name1 args1))"
-            using dom False by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_Name name1 args1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Name name1 args1))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+          case occ_false: False
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Name name1 args1\<close> CoreTy_Meta dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex m")
+            case True
+            have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Datatype name1 args1))"
+              using dom occ_false True by (simp add: unify.psimps)
+            have props: "subst_props (unify_input_mvs (CoreTy_Datatype name1 args1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Datatype name1 args1))"
+              using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Meta dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case False
+            have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Meta m) = None"
+              using dom occ_false False by (simp add: unify.psimps)
+            show ?thesis
+              using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Meta dom result
+              by (auto simp: unify_terminates_with_props_def)
+          qed
         qed
       next
-        case (CoreTy_Name name2 args2)
+        case (CoreTy_Datatype name2 args2)
         show ?thesis
         proof (cases "name1 = name2")
           case False
-          have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_Name name2 args2))"
+          have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Datatype name2 args2))"
             using False unify_unify_list.domintros(1) by force
-          have result: "unify (CoreTy_Name name1 args1) (CoreTy_Name name2 args2) = None"
+          have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Datatype name2 args2) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq CoreTy_Name1 CoreTy_Name dom result
+            using Inl pair_eq CoreTy_Datatype1 CoreTy_Datatype dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case True
           (* Recursive call to unify_list args1 args2 *)
-          have in_rel: "(Inr (args1, args2), Inl (CoreTy_Name name1 args1, CoreTy_Name name2 args2)) \<in> unify_rel"
+          have in_rel: "(Inr (is_flex, args1, args2), Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Datatype name2 args2)) \<in> unify_rel"
             using True by (simp add: unify_rel_name_to_list)
-          have ih: "unify_terminates_with_props (Inr (args1, args2))"
-            by (simp add: "1" CoreTy_Name CoreTy_Name1 Inl in_rel pair_eq)
-          hence list_dom: "unify_unify_list_dom (Inr (args1, args2))"
-            and list_props: "\<And>subst. unify_list args1 args2 = Some subst \<Longrightarrow>
+          have ih: "unify_terminates_with_props (Inr (is_flex,args1, args2))"
+            by (simp add: "1" CoreTy_Datatype CoreTy_Datatype1 Inl in_rel pair_eq)
+          hence list_dom: "unify_unify_list_dom (Inr (is_flex,args1, args2))"
+            and list_props: "\<And>subst. unify_list is_flex args1 args2 = Some subst \<Longrightarrow>
                                       subst_props (unify_list_input_mvs args1 args2) subst"
             by (auto simp: unify_terminates_with_props_def)
-          have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_Name name2 args2))"
+          have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Datatype name2 args2))"
             using list_dom True by (auto intro: unify_unify_list.domintros)
-          have result_eq: "unify (CoreTy_Name name1 args1) (CoreTy_Name name2 args2) = unify_list args1 args2"
+          have result_eq: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Datatype name2 args2) = unify_list is_flex args1 args2"
             using dom True by (simp add: unify.psimps)
-          have mvs_eq: "unify_list_input_mvs args1 args2 = unify_input_mvs (CoreTy_Name name1 args1) (CoreTy_Name name2 args2)"
+          have mvs_eq: "unify_list_input_mvs args1 args2 = unify_input_mvs (CoreTy_Datatype name1 args1) (CoreTy_Datatype name2 args2)"
             by (auto simp: unify_list_input_mvs_def unify_input_mvs_def list_metavars_def)
           show ?thesis
-            using Inl pair_eq CoreTy_Name1 CoreTy_Name dom result_eq list_props mvs_eq
+            using Inl pair_eq CoreTy_Datatype1 CoreTy_Datatype dom result_eq list_props mvs_eq
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Bool))"
           using unify_unify_list.domintros(1) by auto
-        have result: "unify (CoreTy_Name name1 args1) CoreTy_Bool = None"
+        have result: "unify is_flex (CoreTy_Datatype name1 args1) CoreTy_Bool = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Name1 CoreTy_Bool dom result
+          using Inl pair_eq CoreTy_Datatype1 CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_FiniteInt sign2 bits2))"
           using unify_unify_list.domintros(1) by auto
-        have result: "unify (CoreTy_Name name1 args1) (CoreTy_FiniteInt sign2 bits2) = None"
+        have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_FiniteInt sign2 bits2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Name1 CoreTy_FiniteInt dom result
+          using Inl pair_eq CoreTy_Datatype1 CoreTy_FiniteInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_MathInt))"
           using unify_unify_list.domintros(1) by auto
-        have result: "unify (CoreTy_Name name1 args1) CoreTy_MathInt = None"
+        have result: "unify is_flex (CoreTy_Datatype name1 args1) CoreTy_MathInt = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Name1 CoreTy_MathInt dom result
+          using Inl pair_eq CoreTy_Datatype1 CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_MathReal))"
           using unify_unify_list.domintros(1) by auto
-        have result: "unify (CoreTy_Name name1 args1) CoreTy_MathReal = None"
+        have result: "unify is_flex (CoreTy_Datatype name1 args1) CoreTy_MathReal = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Name1 CoreTy_MathReal dom result
+          using Inl pair_eq CoreTy_Datatype1 CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Record flds2))"
           using unify_unify_list.domintros(1) by auto
-        have result: "unify (CoreTy_Name name1 args1) (CoreTy_Record flds2) = None"
+        have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Record flds2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Name1 CoreTy_Record dom result
+          using Inl pair_eq CoreTy_Datatype1 CoreTy_Record dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Name name1 args1, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Array elem2 dims2))"
           using unify_unify_list.domintros(1) by auto
-        have result: "unify (CoreTy_Name name1 args1) (CoreTy_Array elem2 dims2) = None"
+        have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Array elem2 dims2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Name1 CoreTy_Array dom result
+          using Inl pair_eq CoreTy_Datatype1 CoreTy_Array dom result
           by (auto simp: unify_terminates_with_props_def)
       qed
     next
@@ -780,74 +918,85 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_Bool
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Meta m))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool (CoreTy_Meta m) = Some (singleton_subst m CoreTy_Bool)"
-          using dom by (simp add: unify.psimps)
-        have props: "subst_props (unify_input_mvs CoreTy_Bool (CoreTy_Meta m)) (singleton_subst m CoreTy_Bool)"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Meta dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex m")
+          case True
+          have result: "unify is_flex CoreTy_Bool (CoreTy_Meta m) = Some (singleton_subst m CoreTy_Bool)"
+            using dom True by (simp add: unify.psimps)
+          have props: "subst_props (unify_input_mvs CoreTy_Bool (CoreTy_Meta m)) (singleton_subst m CoreTy_Bool)"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Meta dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex CoreTy_Bool (CoreTy_Meta m) = None"
+            using dom False by (simp add: unify.psimps)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Meta dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Bool))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool CoreTy_Bool = Some fmempty"
+        have result: "unify is_flex CoreTy_Bool CoreTy_Bool = Some fmempty"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Datatype name2 args2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool (CoreTy_Name name2 args2) = None"
+        have result: "unify is_flex CoreTy_Bool (CoreTy_Datatype name2 args2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Name dom result
+          using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Datatype dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_FiniteInt sign2 bits2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool (CoreTy_FiniteInt sign2 bits2) = None"
+        have result: "unify is_flex CoreTy_Bool (CoreTy_FiniteInt sign2 bits2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_FiniteInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_MathInt))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool CoreTy_MathInt = None"
+        have result: "unify is_flex CoreTy_Bool CoreTy_MathInt = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_MathReal))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool CoreTy_MathReal = None"
+        have result: "unify is_flex CoreTy_Bool CoreTy_MathReal = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Record flds2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool (CoreTy_Record flds2) = None"
+        have result: "unify is_flex CoreTy_Bool (CoreTy_Record flds2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Record dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Bool, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Array elem2 dims2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_Bool (CoreTy_Array elem2 dims2) = None"
+        have result: "unify is_flex CoreTy_Bool (CoreTy_Array elem2 dims2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Array dom result
@@ -859,85 +1008,96 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_FiniteInt1
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Meta m))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
-          using dom by (simp add: unify.psimps)
-        have props: "subst_props (unify_input_mvs (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Meta dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex m")
+          case True
+          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
+            using dom True by (simp add: unify.psimps)
+          have props: "subst_props (unify_input_mvs (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Meta dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m) = None"
+            using dom False by (simp add: unify.psimps)
+          show ?thesis
+            using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Meta dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_FiniteInt sign2 bits2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "sign1 = sign2 \<and> bits1 = bits2")
           case True
-          have result: "unify (CoreTy_FiniteInt sign1 bits1) (CoreTy_FiniteInt sign2 bits2) = Some fmempty"
+          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_FiniteInt sign2 bits2) = Some fmempty"
             using dom True by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq CoreTy_FiniteInt1 CoreTy_FiniteInt dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify (CoreTy_FiniteInt sign1 bits1) (CoreTy_FiniteInt sign2 bits2) = None"
+          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_FiniteInt sign2 bits2) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq CoreTy_FiniteInt1 CoreTy_FiniteInt dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Datatype name2 args2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) (CoreTy_Name name2 args2) = None"
+        have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Datatype name2 args2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Name dom result
+          using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Datatype dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Bool))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) CoreTy_Bool = None"
+        have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) CoreTy_Bool = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_MathInt))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) CoreTy_MathInt = None"
+        have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) CoreTy_MathInt = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_FiniteInt1 CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_MathReal))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) CoreTy_MathReal = None"
+        have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) CoreTy_MathReal = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_FiniteInt1 CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Record flds2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) (CoreTy_Record flds2) = None"
+        have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Record flds2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Record dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_FiniteInt sign1 bits1, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Array elem2 dims2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify (CoreTy_FiniteInt sign1 bits1) (CoreTy_Array elem2 dims2) = None"
+        have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Array elem2 dims2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Array dom result
@@ -949,74 +1109,85 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_MathInt
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Meta m))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt (CoreTy_Meta m) = Some (singleton_subst m CoreTy_MathInt)"
-          using dom by (simp add: unify.psimps)
-        have props: "subst_props (unify_input_mvs CoreTy_MathInt (CoreTy_Meta m)) (singleton_subst m CoreTy_MathInt)"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Meta dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex m")
+          case True
+          have result: "unify is_flex CoreTy_MathInt (CoreTy_Meta m) = Some (singleton_subst m CoreTy_MathInt)"
+            using dom True by (simp add: unify.psimps)
+          have props: "subst_props (unify_input_mvs CoreTy_MathInt (CoreTy_Meta m)) (singleton_subst m CoreTy_MathInt)"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Meta dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex CoreTy_MathInt (CoreTy_Meta m) = None"
+            using dom False by (simp add: unify.psimps)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Meta dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_MathInt))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt CoreTy_MathInt = Some fmempty"
+        have result: "unify is_flex CoreTy_MathInt CoreTy_MathInt = Some fmempty"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Datatype name2 args2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt (CoreTy_Name name2 args2) = None"
+        have result: "unify is_flex CoreTy_MathInt (CoreTy_Datatype name2 args2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Name dom result
+          using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Datatype dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Bool))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt CoreTy_Bool = None"
+        have result: "unify is_flex CoreTy_MathInt CoreTy_Bool = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_FiniteInt sign2 bits2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt (CoreTy_FiniteInt sign2 bits2) = None"
+        have result: "unify is_flex CoreTy_MathInt (CoreTy_FiniteInt sign2 bits2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_FiniteInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_MathReal))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt CoreTy_MathReal = None"
+        have result: "unify is_flex CoreTy_MathInt CoreTy_MathReal = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Record flds2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt (CoreTy_Record flds2) = None"
+        have result: "unify is_flex CoreTy_MathInt (CoreTy_Record flds2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Record dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathInt, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Array elem2 dims2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathInt (CoreTy_Array elem2 dims2) = None"
+        have result: "unify is_flex CoreTy_MathInt (CoreTy_Array elem2 dims2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Array dom result
@@ -1028,74 +1199,85 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_MathReal
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Meta m))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal (CoreTy_Meta m) = Some (singleton_subst m CoreTy_MathReal)"
-          using dom by (simp add: unify.psimps)
-        have props: "subst_props (unify_input_mvs CoreTy_MathReal (CoreTy_Meta m)) (singleton_subst m CoreTy_MathReal)"
-          by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Meta dom result props
-          by (auto simp: unify_terminates_with_props_def)
+        proof (cases "is_flex m")
+          case True
+          have result: "unify is_flex CoreTy_MathReal (CoreTy_Meta m) = Some (singleton_subst m CoreTy_MathReal)"
+            using dom True by (simp add: unify.psimps)
+          have props: "subst_props (unify_input_mvs CoreTy_MathReal (CoreTy_Meta m)) (singleton_subst m CoreTy_MathReal)"
+            by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Meta dom result props
+            by (auto simp: unify_terminates_with_props_def)
+        next
+          case False
+          have result: "unify is_flex CoreTy_MathReal (CoreTy_Meta m) = None"
+            using dom False by (simp add: unify.psimps)
+          show ?thesis
+            using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Meta dom result
+            by (auto simp: unify_terminates_with_props_def)
+        qed
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_MathReal))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal CoreTy_MathReal = Some fmempty"
+        have result: "unify is_flex CoreTy_MathReal CoreTy_MathReal = Some fmempty"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Datatype name2 args2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal (CoreTy_Name name2 args2) = None"
+        have result: "unify is_flex CoreTy_MathReal (CoreTy_Datatype name2 args2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Name dom result
+          using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Datatype dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Bool))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal CoreTy_Bool = None"
+        have result: "unify is_flex CoreTy_MathReal CoreTy_Bool = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_FiniteInt sign2 bits2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal (CoreTy_FiniteInt sign2 bits2) = None"
+        have result: "unify is_flex CoreTy_MathReal (CoreTy_FiniteInt sign2 bits2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_FiniteInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_MathInt))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal CoreTy_MathInt = None"
+        have result: "unify is_flex CoreTy_MathReal CoreTy_MathInt = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Record flds2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal (CoreTy_Record flds2) = None"
+        have result: "unify is_flex CoreTy_MathReal (CoreTy_Record flds2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Record dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_MathReal, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Array elem2 dims2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify CoreTy_MathReal (CoreTy_Array elem2 dims2) = None"
+        have result: "unify is_flex CoreTy_MathReal (CoreTy_Array elem2 dims2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Array dom result
@@ -1107,25 +1289,36 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_Record1
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Meta m))"
           using unify_unify_list.domintros(6) by auto
         show ?thesis
         proof (cases "occurs m (CoreTy_Record flds1)")
           case True
-          have result: "unify (CoreTy_Record flds1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Meta m) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result
             by (auto simp: unify_terminates_with_props_def)
         next
-          case False
-          have result: "unify (CoreTy_Record flds1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Record flds1))"
-            using dom False by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_Record flds1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Record flds1))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+          case occ_false: False
           show ?thesis
-            using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex m")
+            case True
+            have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Record flds1))"
+              using dom occ_false True by (simp add: unify.psimps)
+            have props: "subst_props (unify_input_mvs (CoreTy_Record flds1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Record flds1))"
+              using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+            show ?thesis
+              using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case False
+            have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Meta m) = None"
+              using dom occ_false False by (simp add: unify.psimps)
+            show ?thesis
+              using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result
+              by (auto simp: unify_terminates_with_props_def)
+          qed
         qed
       next
         case (CoreTy_Record flds2)
@@ -1133,9 +1326,9 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         proof (cases "map fst flds1 = map fst flds2")
           case False
           (* Field names don't match - unification fails immediately *)
-          have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_Record flds2))"
+          have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Record flds2))"
             using False unify_unify_list.domintros(6) by force
-          have result: "unify (CoreTy_Record flds1) (CoreTy_Record flds2) = None"
+          have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Record flds2) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq CoreTy_Record1 CoreTy_Record dom result
@@ -1143,18 +1336,18 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         next
           case True
           (* Field names match - recursive call to unify_list on field types *)
-          have in_rel: "(Inr (map snd flds1, map snd flds2), Inl (CoreTy_Record flds1, CoreTy_Record flds2)) \<in> unify_rel"
+          have in_rel: "(Inr (is_flex, map snd flds1, map snd flds2), Inl (is_flex, CoreTy_Record flds1, CoreTy_Record flds2)) \<in> unify_rel"
             by (simp add: unify_rel_record_to_list)
-          have ih: "unify_terminates_with_props (Inr (map snd flds1, map snd flds2))"
+          have ih: "unify_terminates_with_props (Inr (is_flex,map snd flds1, map snd flds2))"
             by (simp add: "1" CoreTy_Record CoreTy_Record1 Inl in_rel pair_eq)
-          hence list_dom: "unify_unify_list_dom (Inr (map snd flds1, map snd flds2))"
+          hence list_dom: "unify_unify_list_dom (Inr (is_flex,map snd flds1, map snd flds2))"
             by (simp add: unify_terminates_with_props_def)
-          have list_props: "\<And>subst. unify_list (map snd flds1) (map snd flds2) = Some subst \<Longrightarrow>
+          have list_props: "\<And>subst. unify_list is_flex (map snd flds1) (map snd flds2) = Some subst \<Longrightarrow>
                                       subst_props (unify_list_input_mvs (map snd flds1) (map snd flds2)) subst"
             using ih unify_terminates_with_props_def by auto
-          have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_Record flds2))"
+          have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Record flds2))"
             using list_dom True by (auto intro: unify_unify_list.domintros)
-          have result_eq: "unify (CoreTy_Record flds1) (CoreTy_Record flds2) = unify_list (map snd flds1) (map snd flds2)"
+          have result_eq: "unify is_flex (CoreTy_Record flds1) (CoreTy_Record flds2) = unify_list is_flex (map snd flds1) (map snd flds2)"
             using dom True by (simp add: unify.psimps)
           have mvs_eq: "unify_list_input_mvs (map snd flds1) (map snd flds2) = unify_input_mvs (CoreTy_Record flds1) (CoreTy_Record flds2)"
             by (auto simp: unify_list_input_mvs_def unify_input_mvs_def list_metavars_def comp_def)
@@ -1163,55 +1356,55 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Datatype name2 args2))"
           using unify_unify_list.domintros(6) by auto
-        have result: "unify (CoreTy_Record flds1) (CoreTy_Name name2 args2) = None"
+        have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Datatype name2 args2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Record1 CoreTy_Name dom result
+          using Inl pair_eq CoreTy_Record1 CoreTy_Datatype dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Bool))"
           using unify_unify_list.domintros(6) by auto
-        have result: "unify (CoreTy_Record flds1) CoreTy_Bool = None"
+        have result: "unify is_flex (CoreTy_Record flds1) CoreTy_Bool = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Record1 CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_FiniteInt sign2 bits2))"
           using unify_unify_list.domintros(6) by auto
-        have result: "unify (CoreTy_Record flds1) (CoreTy_FiniteInt sign2 bits2) = None"
+        have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_FiniteInt sign2 bits2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Record1 CoreTy_FiniteInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_MathInt))"
           using unify_unify_list.domintros(6) by auto
-        have result: "unify (CoreTy_Record flds1) CoreTy_MathInt = None"
+        have result: "unify is_flex (CoreTy_Record flds1) CoreTy_MathInt = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Record1 CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_MathReal))"
           using unify_unify_list.domintros(6) by auto
-        have result: "unify (CoreTy_Record flds1) CoreTy_MathReal = None"
+        have result: "unify is_flex (CoreTy_Record flds1) CoreTy_MathReal = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Record1 CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Record flds1, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Array elem2 dims2))"
           using unify_unify_list.domintros(6) by auto
-        have result: "unify (CoreTy_Record flds1) (CoreTy_Array elem2 dims2) = None"
+        have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Array elem2 dims2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Record1 CoreTy_Array dom result
@@ -1223,34 +1416,45 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         using Inl pair_eq CoreTy_Array1
       proof (cases ty2)
         case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_Meta m))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Meta m))"
           using unify_unify_list.domintros(7) by auto
         show ?thesis
         proof (cases "occurs m (CoreTy_Array elem1 dims1)")
           case True
-          have result: "unify (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result
             by (auto simp: unify_terminates_with_props_def)
         next
-          case False
-          have result: "unify (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Array elem1 dims1))"
-            using dom False by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_Array elem1 dims1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Array elem1 dims1))"
-            using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+          case occ_false: False
           show ?thesis
-            using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result props
-            by (auto simp: unify_terminates_with_props_def)
+          proof (cases "is_flex m")
+            case True
+            have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Array elem1 dims1))"
+              using dom occ_false True by (simp add: unify.psimps)
+            have props: "subst_props (unify_input_mvs (CoreTy_Array elem1 dims1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Array elem1 dims1))"
+              using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
+            show ?thesis
+              using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result props
+              by (auto simp: unify_terminates_with_props_def)
+          next
+            case False
+            have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = None"
+              using dom occ_false False by (simp add: unify.psimps)
+            show ?thesis
+              using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result
+              by (auto simp: unify_terminates_with_props_def)
+          qed
         qed
       next
         case (CoreTy_Array elem2 dims2)
         show ?thesis
         proof (cases "dims1 = dims2")
           case False
-          have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2))"
+          have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2))"
             using False unify_unify_list.domintros(7) by force
-          have result: "unify (CoreTy_Array elem1 dims1) (CoreTy_Array elem2 dims2) = None"
+          have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Array elem2 dims2) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
             using Inl pair_eq CoreTy_Array1 CoreTy_Array dom result
@@ -1258,17 +1462,17 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         next
           case True
           (* Recursive call to unify elem1 elem2 *)
-          have in_rel: "(Inl (elem1, elem2), Inl (CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2)) \<in> unify_rel"
+          have in_rel: "(Inl (is_flex, elem1, elem2), Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2)) \<in> unify_rel"
             by (simp add: unify_rel_array_to_elem)
-          have ih: "unify_terminates_with_props (Inl (elem1, elem2))"
+          have ih: "unify_terminates_with_props (Inl (is_flex, elem1, elem2))"
             by (simp add: "1" CoreTy_Array CoreTy_Array1 Inl in_rel pair_eq)
-          hence elem_dom: "unify_unify_list_dom (Inl (elem1, elem2))"
-            and elem_props: "\<And>subst. unify elem1 elem2 = Some subst \<Longrightarrow>
+          hence elem_dom: "unify_unify_list_dom (Inl (is_flex, elem1, elem2))"
+            and elem_props: "\<And>subst. unify is_flex elem1 elem2 = Some subst \<Longrightarrow>
                                       subst_props (unify_input_mvs elem1 elem2) subst"
             by (auto simp: unify_terminates_with_props_def)
-          have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2))"
+          have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Array elem2 dims2))"
             using elem_dom True by (auto intro: unify_unify_list.domintros)
-          have result_eq: "unify (CoreTy_Array elem1 dims1) (CoreTy_Array elem2 dims2) = unify elem1 elem2"
+          have result_eq: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Array elem2 dims2) = unify is_flex elem1 elem2"
             using dom True by (simp add: unify.psimps)
           have mvs_eq: "unify_input_mvs elem1 elem2 = unify_input_mvs (CoreTy_Array elem1 dims1) (CoreTy_Array elem2 dims2)"
             by (auto simp: unify_input_mvs_def)
@@ -1277,55 +1481,55 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
-        case (CoreTy_Name name2 args2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_Name name2 args2))"
+        case (CoreTy_Datatype name2 args2)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Datatype name2 args2))"
           using unify_unify_list.domintros(7) by auto
-        have result: "unify (CoreTy_Array elem1 dims1) (CoreTy_Name name2 args2) = None"
+        have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Datatype name2 args2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
-          using Inl pair_eq CoreTy_Array1 CoreTy_Name dom result
+          using Inl pair_eq CoreTy_Array1 CoreTy_Datatype dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Bool))"
           using unify_unify_list.domintros(7) by auto
-        have result: "unify (CoreTy_Array elem1 dims1) CoreTy_Bool = None"
+        have result: "unify is_flex (CoreTy_Array elem1 dims1) CoreTy_Bool = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Array1 CoreTy_Bool dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_FiniteInt sign2 bits2))"
           using unify_unify_list.domintros(7) by auto
-        have result: "unify (CoreTy_Array elem1 dims1) (CoreTy_FiniteInt sign2 bits2) = None"
+        have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_FiniteInt sign2 bits2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Array1 CoreTy_FiniteInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_MathInt))"
           using unify_unify_list.domintros(7) by auto
-        have result: "unify (CoreTy_Array elem1 dims1) CoreTy_MathInt = None"
+        have result: "unify is_flex (CoreTy_Array elem1 dims1) CoreTy_MathInt = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Array1 CoreTy_MathInt dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_MathReal))"
           using unify_unify_list.domintros(7) by auto
-        have result: "unify (CoreTy_Array elem1 dims1) CoreTy_MathReal = None"
+        have result: "unify is_flex (CoreTy_Array elem1 dims1) CoreTy_MathReal = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Array1 CoreTy_MathReal dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (CoreTy_Array elem1 dims1, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Record flds2))"
           using unify_unify_list.domintros(7) by auto
-        have result: "unify (CoreTy_Array elem1 dims1) (CoreTy_Record flds2) = None"
+        have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Record flds2) = None"
           using dom by (simp add: unify.psimps)
         show ?thesis
           using Inl pair_eq CoreTy_Array1 CoreTy_Record dom result
@@ -1333,26 +1537,26 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       qed
     qed
   next
-    case (Inr pair)
-    obtain tys1 tys2 where pair_eq: "pair = (tys1, tys2)" by (cases pair)
+    case (Inr triple)
+    obtain is_flex tys1 tys2 where pair_eq: "triple = (is_flex, tys1, tys2)" by (cases triple) auto
     show ?thesis
     proof (cases tys1)
       case Nil
       show ?thesis
       proof (cases tys2)
         case Nil
-        have dom: "unify_unify_list_dom (Inr ([], []))"
+        have dom: "unify_unify_list_dom (Inr (is_flex,[], []))"
           by (rule unify_unify_list.domintros)
-        have result: "unify_list [] [] = Some fmempty"
+        have result: "unify_list is_flex [] [] = Some fmempty"
           by (simp add: dom unify_list.psimps(1))
         show ?thesis
           using Inr pair_eq \<open>tys1 = []\<close> Nil dom result
           by (auto simp: unify_terminates_with_props_def)
       next
         case (Cons ty2 rest2)
-        have dom: "unify_unify_list_dom (Inr ([], ty2 # rest2))"
+        have dom: "unify_unify_list_dom (Inr (is_flex,[], ty2 # rest2))"
           by (rule unify_unify_list.domintros)
-        have result: "unify_list [] (ty2 # rest2) = None"
+        have result: "unify_list is_flex [] (ty2 # rest2) = None"
           by (simp add: dom unify_list.psimps(2))
         show ?thesis
           using Inr pair_eq \<open>tys1 = []\<close> Cons dom result
@@ -1363,9 +1567,9 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
       proof (cases tys2)
         case Nil
-        have dom: "unify_unify_list_dom (Inr (ty1 # rest1, []))"
+        have dom: "unify_unify_list_dom (Inr (is_flex,ty1 # rest1, []))"
           by (rule unify_unify_list.domintros)
-        have result: "unify_list (ty1 # rest1) [] = None"
+        have result: "unify_list is_flex (ty1 # rest1) [] = None"
           by (simp add: dom unify_list.psimps(3))
         show ?thesis
           using Inr pair_eq Cons Nil dom result
@@ -1376,22 +1580,22 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
         (* First unify ty1 ty2, then recursively unify the tails with substitution applied *)
 
         (* IH for unify ty1 ty2 *)
-        have head_in_rel: "(Inl (ty1, ty2), Inr (ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
+        have head_in_rel: "(Inl (is_flex, ty1, ty2), Inr (is_flex, ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
           by (simp add: unify_rel_list_to_head)
-        have head_ih: "unify_terminates_with_props (Inl (ty1, ty2))"
-          by (simp add: "1" Cons2 Inr head_in_rel local.Cons pair_eq) 
-        hence head_dom: "unify_unify_list_dom (Inl (ty1, ty2))"
-          and head_props: "\<And>subst. unify ty1 ty2 = Some subst \<Longrightarrow>
+        have head_ih: "unify_terminates_with_props (Inl (is_flex, ty1, ty2))"
+          by (simp add: "1" Cons2 Inr head_in_rel local.Cons pair_eq)
+        hence head_dom: "unify_unify_list_dom (Inl (is_flex, ty1, ty2))"
+          and head_props: "\<And>subst. unify is_flex ty1 ty2 = Some subst \<Longrightarrow>
                                     subst_props (unify_input_mvs ty1 ty2) subst"
           by (auto simp: unify_terminates_with_props_def)
 
         show ?thesis
-        proof (cases "unify ty1 ty2")
+        proof (cases "unify is_flex ty1 ty2")
           case None
-          have dom: "unify_unify_list_dom (Inr (ty1 # rest1, ty2 # rest2))"
+          have dom: "unify_unify_list_dom (Inr (is_flex,ty1 # rest1, ty2 # rest2))"
             using head_dom
             using None unify_unify_list.domintros(12) by force
-          have result: "unify_list (ty1 # rest1) (ty2 # rest2) = None"
+          have result: "unify_list is_flex (ty1 # rest1) (ty2 # rest2) = None"
             using dom head_dom None
             by (simp add: unify_list.psimps(4))
           show ?thesis
@@ -1403,24 +1607,24 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
             using head_props by auto
 
           (* IH for unify_list on tails with subst applied *)
-          have tail_in_rel: "(Inr (map (apply_subst subst1) rest1, map (apply_subst subst1) rest2),
-                              Inr (ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
+          have tail_in_rel: "(Inr (is_flex, map (apply_subst subst1) rest1, map (apply_subst subst1) rest2),
+                              Inr (is_flex, ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
             using subst1_props
             by (metis unify_input_mvs_def unify_rel_list_recursive)
-          have tail_ih: "unify_terminates_with_props (Inr (map (apply_subst subst1) rest1, map (apply_subst subst1) rest2))"
+          have tail_ih: "unify_terminates_with_props (Inr (is_flex,map (apply_subst subst1) rest1, map (apply_subst subst1) rest2))"
             by (simp add: "1" Cons2 Inr local.Cons pair_eq tail_in_rel)
-          hence tail_dom: "unify_unify_list_dom (Inr (map (apply_subst subst1) rest1, map (apply_subst subst1) rest2))"
-            and tail_props: "\<And>subst. unify_list (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst \<Longrightarrow>
+          hence tail_dom: "unify_unify_list_dom (Inr (is_flex,map (apply_subst subst1) rest1, map (apply_subst subst1) rest2))"
+            and tail_props: "\<And>subst. unify_list is_flex (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst \<Longrightarrow>
                                       subst_props (unify_list_input_mvs (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2)) subst"
             by (auto simp: unify_terminates_with_props_def)
 
-          have dom: "unify_unify_list_dom (Inr (ty1 # rest1, ty2 # rest2))"
+          have dom: "unify_unify_list_dom (Inr (is_flex,ty1 # rest1, ty2 # rest2))"
             using head_dom tail_dom Some by (auto intro: unify_unify_list.domintros)
 
           show ?thesis
-          proof (cases "unify_list (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2)")
+          proof (cases "unify_list is_flex (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2)")
             case None
-            have result: "unify_list (ty1 # rest1) (ty2 # rest2) = None"
+            have result: "unify_list is_flex (ty1 # rest1) (ty2 # rest2) = None"
               using dom head_dom Some None
               by (simp add: unify_list.psimps(4))
             show ?thesis
@@ -1428,8 +1632,8 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
               by (auto simp: unify_terminates_with_props_def)
           next
             case (Some subst2)
-            have result: "unify_list (ty1 # rest1) (ty2 # rest2) = Some (compose_subst subst2 subst1)"
-              using dom head_dom \<open>unify ty1 ty2 = Some subst1\<close> Some
+            have result: "unify_list is_flex (ty1 # rest1) (ty2 # rest2) = Some (compose_subst subst2 subst1)"
+              using dom head_dom \<open>unify is_flex ty1 ty2 = Some subst1\<close> Some
               by (simp add: unify_list.psimps(4))
 
             (* Need to show subst_props for composed substitution *)

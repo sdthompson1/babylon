@@ -14,13 +14,9 @@ where
     (case elab_type_list env typedefs ghost tyargs of
       Inl errs \<Rightarrow> Inl errs
     | Inr elabTyArgs \<Rightarrow>
-        if name |\<in>| TE_TypeVars env then
-          \<comment> \<open>Type variable case\<close>
-          (if tyargs = [] then Inr (CoreTy_Name name [])
-           else Inl [TyErr_WrongTypeArity loc name 0 (length tyargs)])
-        else (case fmlookup typedefs name of
+        (case fmlookup typedefs name of
           Some (metavars, targetTy) \<Rightarrow>
-            \<comment> \<open>Typedef case\<close>
+            \<comment> \<open>Typedef case (also handles type variables, which map to CoreTy_Meta)\<close>
             (if length elabTyArgs \<noteq> length metavars then
               Inl [TyErr_WrongTypeArity loc name (length metavars) (length tyargs)]
              else
@@ -40,7 +36,7 @@ where
                         \<or> name |\<in>| TE_GhostDatatypes env) then
                   Inl [TyErr_NonRuntimeType loc]
                  else
-                  Inr (CoreTy_Name name elabTyArgs))
+                  Inr (CoreTy_Datatype name elabTyArgs))
             | None \<Rightarrow>
                 \<comment> \<open>Unknown type name\<close>
                 Inl [TyErr_UnknownTypeName loc name])))"

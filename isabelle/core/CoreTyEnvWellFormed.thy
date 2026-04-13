@@ -325,4 +325,84 @@ proof -
     by (force simp: wk rt scope_wk scope_rt)
 qed
 
+(* Growing TE_TypeVars and TE_RuntimeTypeVars preserves tyenv_well_formed.
+   The predicates using inner envs that override TE_TypeVars / TE_RuntimeTypeVars
+   (payloads, fun types, ghost-constraints, non-ghost payloads) are unaffected
+   because the override drops the extension. The remaining kind/runtime
+   conjuncts follow from monotonicity of is_well_kinded and is_runtime_type. *)
+lemma tyenv_well_formed_extend_tyvars:
+  assumes "tyenv_well_formed env"
+  shows "tyenv_well_formed
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)"
+proof -
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  \<comment> \<open>Inner overrides drop the outer extension: is_well_kinded ignores
+     TE_RuntimeTypeVars, so once the inner override pins TE_TypeVars to a new
+     value, the ?env' expression agrees with env on kind-checking.\<close>
+  have scope_wk: "\<And>tvs t. is_well_kinded
+                             (env \<lparr> TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT,
+                                    TE_TypeVars := tvs \<rparr>) t =
+                           is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
+    by (rule is_well_kinded_cong_env) simp_all
+  have scope_rt: "\<And>tvs rtvs t. is_runtime_type
+                                  (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                                         TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT,
+                                         TE_TypeVars := tvs,
+                                         TE_RuntimeTypeVars := rtvs \<rparr>) t =
+                                is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
+    by (rule is_runtime_type_cong_env) simp_all
+
+  from assms have vars_wk: "tyenv_vars_well_kinded env"
+    and vars_rt: "tyenv_vars_runtime env"
+    and ghost_subset: "tyenv_ghost_vars_subset env"
+    and ret_wk: "tyenv_return_type_well_kinded env"
+    and ctors_cons: "tyenv_ctors_consistent env"
+    and payloads_wk: "tyenv_payloads_well_kinded env"
+    and ctor_tyvars_distinct: "tyenv_ctor_tyvars_distinct env"
+    and ctors_by_type: "tyenv_ctors_by_type_consistent env"
+    and fun_types_wk: "tyenv_fun_types_well_kinded env"
+    and fun_tyvars_distinct: "tyenv_fun_tyvars_distinct env"
+    and fun_ghost: "tyenv_fun_ghost_constraint env"
+    and nonghost_payloads: "tyenv_nonghost_payloads_runtime env"
+    and ghost_dt_subset: "tyenv_ghost_datatypes_subset env"
+    unfolding tyenv_well_formed_def by auto
+
+  have "tyenv_vars_well_kinded ?env'"
+    using vars_wk is_well_kinded_extend_tyvars
+    unfolding tyenv_vars_well_kinded_def by auto
+  moreover have "tyenv_vars_runtime ?env'"
+    using vars_rt is_runtime_type_extend_runtime_tyvars
+    unfolding tyenv_vars_runtime_def by auto
+  moreover have "tyenv_ghost_vars_subset ?env'"
+    using ghost_subset unfolding tyenv_ghost_vars_subset_def by simp
+  moreover have "tyenv_return_type_well_kinded ?env'"
+    using ret_wk is_well_kinded_extend_tyvars
+    unfolding tyenv_return_type_well_kinded_def by simp
+  moreover have "tyenv_ctors_consistent ?env'"
+    using ctors_cons unfolding tyenv_ctors_consistent_def by simp
+  moreover have "tyenv_payloads_well_kinded ?env'"
+    using payloads_wk unfolding tyenv_payloads_well_kinded_def
+    by (simp add: scope_wk)
+  moreover have "tyenv_ctor_tyvars_distinct ?env'"
+    using ctor_tyvars_distinct unfolding tyenv_ctor_tyvars_distinct_def by simp
+  moreover have "tyenv_ctors_by_type_consistent ?env'"
+    using ctors_by_type unfolding tyenv_ctors_by_type_consistent_def by simp
+  moreover have "tyenv_fun_types_well_kinded ?env'"
+    using fun_types_wk unfolding tyenv_fun_types_well_kinded_def
+    by (simp add: scope_wk)
+  moreover have "tyenv_fun_tyvars_distinct ?env'"
+    using fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_ghost_constraint ?env'"
+    using fun_ghost unfolding tyenv_fun_ghost_constraint_def Let_def
+    by (simp add: scope_rt)
+  moreover have "tyenv_nonghost_payloads_runtime ?env'"
+    using nonghost_payloads unfolding tyenv_nonghost_payloads_runtime_def
+    by (simp add: scope_rt)
+  moreover have "tyenv_ghost_datatypes_subset ?env'"
+    using ghost_dt_subset unfolding tyenv_ghost_datatypes_subset_def by simp
+  ultimately show ?thesis unfolding tyenv_well_formed_def by auto
+qed
+
 end

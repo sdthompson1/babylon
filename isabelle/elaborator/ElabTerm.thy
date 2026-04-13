@@ -8,7 +8,7 @@ fun unop_to_core :: "BabUnop \<Rightarrow> CoreUnop" where
 | "unop_to_core BabUnop_Complement = CoreUnop_Complement"
 | "unop_to_core BabUnop_Not = CoreUnop_Not"
 
-(* Default type for unary operators when the operand type is ambiguous (a metavariable).
+(* Default type for unary operators when the operand type is ambiguous (a unifiable variable).
    Negate and Complement default to i32, Not defaults to Bool. *)
 fun default_type_for_unop :: "CoreUnop \<Rightarrow> CoreType" where
   "default_type_for_unop CoreUnop_Negate = CoreTy_FiniteInt Signed IntBits_32"
@@ -99,26 +99,27 @@ where
    2. If unification fails but both are finite integer types, that's OK (coercion will be inserted later)
    3. If both fail, return an error
    Returns the final substitution. *)
-fun unify_call_types :: "Location \<Rightarrow> string \<Rightarrow> nat \<Rightarrow> CoreType list \<Rightarrow> CoreType list
+fun unify_call_types :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat
+                        \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                         \<Rightarrow> MetaSubst \<Rightarrow> TypeError list + MetaSubst" where
-  "unify_call_types loc fnName argIdx [] [] accSubst = Inr accSubst"
-| "unify_call_types loc fnName argIdx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
+  "unify_call_types is_flex loc fnName argIdx [] [] accSubst = Inr accSubst"
+| "unify_call_types is_flex loc fnName argIdx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
     \<comment> \<open>Apply accumulated substitution to both types before unifying\<close>
     (let actualTy' = apply_subst accSubst actualTy;
          expectedTy' = apply_subst accSubst expectedTy
-     in case unify actualTy' expectedTy' of
+     in case unify is_flex actualTy' expectedTy' of
        Some newSubst \<Rightarrow>
          \<comment> \<open>Unification succeeded - compose substitutions and continue\<close>
          let composedSubst = compose_subst newSubst accSubst
-         in unify_call_types loc fnName (argIdx + 1) actualTys expectedTys composedSubst
+         in unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys composedSubst
      | None \<Rightarrow>
          \<comment> \<open>Unification failed - check if implicit integer coercion is possible\<close>
          (if is_finite_integer_type actualTy' \<and> is_finite_integer_type expectedTy' then
             \<comment> \<open>Both are finite integers - coercion will be inserted later\<close>
-            unify_call_types loc fnName (argIdx + 1) actualTys expectedTys accSubst
+            unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys accSubst
           else
             Inl [TyErr_ArgTypeMismatch loc argIdx expectedTy' actualTy']))"
-| "unify_call_types _ _ _ _ _ _ = undefined"
+| "unify_call_types _ _ _ _ _ _ _ = undefined"
 
 (* Phase 2 of function call argument typechecking:
    Apply substitution to terms and insert coercions where needed.
@@ -138,11 +139,12 @@ fun apply_call_coercions :: "MetaSubst \<Rightarrow> CoreTerm list \<Rightarrow>
 | "apply_call_coercions _ _ _ _ = undefined"
 
 (* Combine unify_call_types and apply_call_coercions into a single function *)
-definition unify_call_args :: "Location \<Rightarrow> string \<Rightarrow> nat \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
+definition unify_call_args :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat
+                              \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
                               \<Rightarrow> CoreType list \<Rightarrow> MetaSubst
                               \<Rightarrow> TypeError list + (CoreTerm list \<times> MetaSubst)" where
-  "unify_call_args loc fnName argIdx tms actualTys expectedTys accSubst =
-    (case unify_call_types loc fnName argIdx actualTys expectedTys accSubst of
+  "unify_call_args is_flex loc fnName argIdx tms actualTys expectedTys accSubst =
+    (case unify_call_types is_flex loc fnName argIdx actualTys expectedTys accSubst of
        Inl errs \<Rightarrow> Inl errs
      | Inr finalSubst \<Rightarrow> Inr (apply_call_coercions finalSubst tms actualTys expectedTys, finalSubst))"
 
@@ -264,10 +266,11 @@ fun check_implies_chain :: "(BabBinop \<times> 'a \<times> 'b) list \<Rightarrow
 fun is_comparison_bab_binop :: "BabBinop \<Rightarrow> bool" where
   "is_comparison_bab_binop op = (comparison_direction op \<noteq> None)"
 
-(* Build a substitution that maps every metavariable in a type to a given default type. *)
-definition const_subst_for :: "CoreType \<Rightarrow> CoreType \<Rightarrow> MetaSubst" where
-  "const_subst_for ty defaultTy =
-     fmap_of_list (map (\<lambda>n. (n, defaultTy)) (type_metavars_list ty))"
+(* Build a substitution that maps every flexible metavariable in a type to a
+   given default type. Rigid type-variable metas are skipped. *)
+definition const_subst_for :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> MetaSubst" where
+  "const_subst_for is_flex ty defaultTy =
+     fmap_of_list (map (\<lambda>n. (n, defaultTy)) (filter is_flex (type_metavars_list ty)))"
 
 (* Resolve metavariables in binary operator operands using unification.
    1. Try to unify the two operand types.
@@ -276,19 +279,19 @@ definition const_subst_for :: "CoreType \<Rightarrow> CoreType \<Rightarrow> Met
       default type for the operator.
    4. If unification fails, pass through unchanged (downstream checks will
       report the appropriate type error). *)
-fun resolve_binop_metas :: "BabBinop
+fun resolve_binop_metas :: "(nat \<Rightarrow> bool) \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (CoreTerm \<times> CoreType \<times> CoreTerm \<times> CoreType)" where
-  "resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy =
-    (case unify lhsTy rhsTy of
+  "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy =
+    (case unify is_flex lhsTy rhsTy of
        Some unifSubst \<Rightarrow>
          let unifiedTy = apply_subst unifSubst lhsTy
-         in if is_ground unifiedTy then
+         in if list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list unifiedTy) then
               (apply_subst_to_term unifSubst lhsTm, unifiedTy,
                apply_subst_to_term unifSubst rhsTm, unifiedTy)
             else
               let defaultTy = default_type_for_binop babOp;
-                  fillSubst = const_subst_for unifiedTy defaultTy;
+                  fillSubst = const_subst_for is_flex unifiedTy defaultTy;
                   fullSubst = compose_subst fillSubst unifSubst
               in (apply_subst_to_term fullSubst lhsTm,
                   apply_subst fillSubst unifiedTy,
@@ -299,12 +302,12 @@ fun resolve_binop_metas :: "BabBinop
 (* Elaborate a single binary operation on already-elaborated operands.
    Handles metavariable resolution, type coercion, and type checking.
    ImpliedBy and Iff are handled before calling this function. *)
-fun elab_single_binop :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
+fun elab_single_binop :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
-  "elab_single_binop loc ghost babOp lhsTm lhsTy rhsTm rhsTy =
+  "elab_single_binop is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy =
     (let (lhsTm', lhsTy', rhsTm', rhsTy') =
-           resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy
+           resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy
      in
       case binop_to_core babOp of
         None \<Rightarrow> undefined \<comment> \<open>should not happen\<close>
@@ -355,36 +358,36 @@ fun elab_single_binop :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBin
         else undefined)"  \<comment> \<open>should be exhaustive\<close>
 
 (* Elaborate a single binary operation, handling ImpliedBy and Iff specially *)
-fun elab_binop_with_special :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
+fun elab_binop_with_special :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
-  "elab_binop_with_special loc ghost BabBinop_ImpliedBy lhsTm lhsTy rhsTm rhsTy =
+  "elab_binop_with_special is_flex loc ghost BabBinop_ImpliedBy lhsTm lhsTy rhsTm rhsTy =
     \<comment> \<open>A <== B becomes B ==> A\<close>
-    elab_single_binop loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy"
-| "elab_binop_with_special loc ghost BabBinop_Iff lhsTm lhsTy rhsTm rhsTy =
+    elab_single_binop is_flex loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy"
+| "elab_binop_with_special is_flex loc ghost BabBinop_Iff lhsTm lhsTy rhsTm rhsTy =
     \<comment> \<open>A <==> B becomes A == B (both must be Bool)\<close>
-    (let (lhs', lTy, rhs', rTy) = resolve_binop_metas BabBinop_Iff lhsTm lhsTy rhsTm rhsTy
+    (let (lhs', lTy, rhs', rTy) = resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy
      in if lTy = CoreTy_Bool \<and> rTy = CoreTy_Bool
         then Inr (CoreTm_Binop CoreBinop_Equal lhs' rhs', CoreTy_Bool)
         else Inl [TyErr_BinopRequiresBool loc BabBinop_Iff])"
-| "elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy =
-    elab_single_binop loc ghost op lhsTm lhsTy rhsTm rhsTy"
+| "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy =
+    elab_single_binop is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy"
 
 (* Process a chain of left-associative binary operations on already-elaborated terms.
    Takes the list of (BabBinop, elaboratedTerm, elaboratedType) triples
    and the accumulated LHS term/type.
    Left-associates: a + b + c becomes (a + b) + c.
 *)
-fun fold_binop_left :: "Location \<Rightarrow> GhostOrNot
+fun fold_binop_left :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
-  "fold_binop_left loc ghost accTm accTy [] = Inr (accTm, accTy)"
-| "fold_binop_left loc ghost accTm accTy ((op, rhsTm, rhsTy) # rest) =
-    (case elab_binop_with_special loc ghost op accTm accTy rhsTm rhsTy of
+  "fold_binop_left is_flex loc ghost accTm accTy [] = Inr (accTm, accTy)"
+| "fold_binop_left is_flex loc ghost accTm accTy ((op, rhsTm, rhsTy) # rest) =
+    (case elab_binop_with_special is_flex loc ghost op accTm accTy rhsTm rhsTy of
       Inl errs \<Rightarrow> Inl errs
     | Inr (resultTm, resultTy) \<Rightarrow>
-        fold_binop_left loc ghost resultTm resultTy rest)"
+        fold_binop_left is_flex loc ghost resultTm resultTy rest)"
 
 (* Check whether a term has any free variable starting with "chain@@"
    other than a single allowed name. Returns True if an unexpected chain variable is found.
@@ -397,12 +400,12 @@ definition has_unexpected_chain_var :: "CoreTerm \<Rightarrow> string \<Rightarr
 (* Build a comparison chain: a < b < c becomes (a < b) && (b < c).
    Uses let-binding for complex middle terms to avoid duplicate evaluation.
    chainCounter is used to generate unique variable names. *)
-fun build_comparison_chain :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> nat
+fun build_comparison_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> nat
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + CoreTerm" where
-  "build_comparison_chain loc ghost chainCtr accTm accTy [] = Inl []"
-| "build_comparison_chain loc ghost chainCtr lhsTm lhsTy ((op, rhsTm, rhsTy) # rest) =
+  "build_comparison_chain is_flex loc ghost chainCtr accTm accTy [] = Inl []"
+| "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy ((op, rhsTm, rhsTy) # rest) =
     (let lhsAllowed = (if chainCtr = 0 then '''' else ''chain@@'' @ nat_to_string (chainCtr - 1))
      in if has_unexpected_chain_var lhsTm lhsAllowed
             \<or> has_unexpected_chain_var rhsTm '''' then
@@ -411,7 +414,7 @@ fun build_comparison_chain :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> n
      case rest of
       [] \<Rightarrow>
         \<comment> \<open>Last comparison: just elaborate normally, discard type\<close>
-        (case elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy of
+        (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy of
           Inl errs \<Rightarrow> Inl errs
         | Inr (cmpTm, _) \<Rightarrow> Inr cmpTm)
     | _ \<Rightarrow>
@@ -419,48 +422,48 @@ fun build_comparison_chain :: "Location \<Rightarrow> GhostOrNot \<Rightarrow> n
            Resolve metas first so the RHS type is ground (needed for let-binding
            and to pass a concrete type to the next comparison).\<close>
         let (_, _, resolvedRhs, resolvedRhsTy) =
-              resolve_binop_metas op lhsTm lhsTy rhsTm rhsTy
+              resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy
         in if is_simple_term resolvedRhs then
           \<comment> \<open>Simple term: duplicate directly, using resolvedRhs in both comparisons\<close>
-          (case elab_binop_with_special loc ghost op lhsTm lhsTy resolvedRhs resolvedRhsTy of
+          (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy resolvedRhs resolvedRhsTy of
             Inl errs \<Rightarrow> Inl errs
           | Inr (cmpTm, _) \<Rightarrow>
-              (case build_comparison_chain loc ghost chainCtr resolvedRhs resolvedRhsTy rest of
+              (case build_comparison_chain is_flex loc ghost chainCtr resolvedRhs resolvedRhsTy rest of
                 Inl errs \<Rightarrow> Inl errs
               | Inr restTm \<Rightarrow>
                   Inr (CoreTm_Binop CoreBinop_And cmpTm restTm)))
-        else if \<not> is_ground resolvedRhsTy then
+        else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy) then
           \<comment> \<open>This check is now effectively dead code since resolve_binop_metas
-             produces ground types, but keeping it simplifies the correctness proof.\<close>
+             produces resolved types, but keeping it simplifies the correctness proof.\<close>
           Inl [TyErr_CannotInferType loc]
         else
           \<comment> \<open>Complex term: introduce let-binding, use variable in both comparisons\<close>
           let varName = ''chain@@'' @ nat_to_string chainCtr;
               varTm = CoreTm_Var varName
-          in (case elab_binop_with_special loc ghost op lhsTm lhsTy varTm resolvedRhsTy of
+          in (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy varTm resolvedRhsTy of
             Inl errs \<Rightarrow> Inl errs
           | Inr (cmpTm, _) \<Rightarrow>
-              (case build_comparison_chain loc ghost (chainCtr + 1) varTm resolvedRhsTy rest of
+              (case build_comparison_chain is_flex loc ghost (chainCtr + 1) varTm resolvedRhsTy rest of
                 Inl errs \<Rightarrow> Inl errs
               | Inr restTm \<Rightarrow>
                   Inr (CoreTm_Let varName resolvedRhs
                         (CoreTm_Binop CoreBinop_And cmpTm restTm)))))"
 
 (* Right-associate an implies chain: a ==> b ==> c becomes a ==> (b ==> c) *)
-fun fold_implies_right :: "Location \<Rightarrow> GhostOrNot
+fun fold_implies_right :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
-  "fold_implies_right loc ghost lhsTm lhsTy [] = Inr (lhsTm, lhsTy)"
-| "fold_implies_right loc ghost lhsTm lhsTy ((op, rhsTm, rhsTy) # rest) =
+  "fold_implies_right is_flex loc ghost lhsTm lhsTy [] = Inr (lhsTm, lhsTy)"
+| "fold_implies_right is_flex loc ghost lhsTm lhsTy ((op, rhsTm, rhsTy) # rest) =
     (case rest of
-      [] \<Rightarrow> elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy
+      [] \<Rightarrow> elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy
     | _ \<Rightarrow>
         \<comment> \<open>First, build the right side recursively\<close>
-        (case fold_implies_right loc ghost rhsTm rhsTy rest of
+        (case fold_implies_right is_flex loc ghost rhsTm rhsTy rest of
           Inl errs \<Rightarrow> Inl errs
         | Inr (rightTm, rightTy) \<Rightarrow>
-            elab_binop_with_special loc ghost op lhsTm lhsTy rightTm rightTy))"
+            elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rightTm rightTy))"
 
 (* Process a binop chain: elaborate the operator list given already-elaborated operands.
    Decides whether to chain (comparisons), right-associate (implies), or left-associate.
@@ -468,28 +471,28 @@ fun fold_implies_right :: "Location \<Rightarrow> GhostOrNot
    - Implies chains: all operators must be ==> or <==
    - Comparison chains: all operators must be comparisons with compatible directions
      (e.g. a < b <= c is ok, a < b > c is not) *)
-fun process_binop_chain :: "Location \<Rightarrow> GhostOrNot
+fun process_binop_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
-  "process_binop_chain loc ghost lhsTm lhsTy [] = Inr (lhsTm, lhsTy)"
-| "process_binop_chain loc ghost lhsTm lhsTy ops =
+  "process_binop_chain is_flex loc ghost lhsTm lhsTy [] = Inr (lhsTm, lhsTy)"
+| "process_binop_chain is_flex loc ghost lhsTm lhsTy ops =
     (let firstOp = fst (hd ops) in
      if firstOp = BabBinop_Implies \<or> firstOp = BabBinop_ImpliedBy then
        \<comment> \<open>Implies chains: validate all ops, then right-associate\<close>
        if check_implies_chain ops
-       then fold_implies_right loc ghost lhsTm lhsTy ops
+       then fold_implies_right is_flex loc ghost lhsTm lhsTy ops
        else Inl [TyErr_MixedOperatorsInChain loc]
      else if is_comparison_bab_binop firstOp \<and> length ops > 1 then
        \<comment> \<open>Comparison chains: validate directions, then chain\<close>
        if check_comparison_chain_directions ops ChainNeutral
-       then (case build_comparison_chain loc ghost 0 lhsTm lhsTy ops of
+       then (case build_comparison_chain is_flex loc ghost 0 lhsTm lhsTy ops of
                Inl errs \<Rightarrow> Inl errs
              | Inr resultTm \<Rightarrow> Inr (resultTm, CoreTy_Bool))
        else Inl [TyErr_MixedDirectionsInChain loc]
      else
        \<comment> \<open>Everything else left-associates\<close>
-       fold_binop_left loc ghost lhsTm lhsTy ops)"
+       fold_binop_left is_flex loc ghost lhsTm lhsTy ops)"
 
 
 (* Elaborate a term. Returns elaborated (core) term and type, or error.
@@ -558,7 +561,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             (case finalCondTy of
               CoreTy_Bool \<Rightarrow>
                 \<comment> \<open>Try to unify branch types\<close>
-                (case unify thenTy elseTy of
+                (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) thenTy elseTy of
                   Some branchSubst \<Rightarrow>
                     let resultTy = apply_subst branchSubst thenTy;
                         newThen' = apply_subst_to_term branchSubst newThen;
@@ -617,7 +620,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             \<comment> \<open>Zip the operators back together with elaborated terms and types\<close>
             let opTriples = zip (map fst operands) (zip rhsTms rhsTys);
                 opList = map (\<lambda>(op, tm_ty). (op, fst tm_ty, snd tm_ty)) opTriples
-            in (case process_binop_chain loc ghost newLhs lhsTy opList of
+            in (case process_binop_chain (\<lambda>n. n |\<notin>| TE_TypeVars env) loc ghost newLhs lhsTy opList of
               Inl errs \<Rightarrow> Inl errs
             | Inr (resultTm, resultTy) \<Rightarrow>
                 Inr (resultTm, resultTy, next_mv2))))"
@@ -627,11 +630,12 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
     (case elab_term env typedefs ghost rhs next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (rhsTm, rhsTy, next_mv1) \<Rightarrow>
-        if \<not> is_ground rhsTy then Inl [TyErr_CannotInferType loc]
-        else let env' = env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
-                              TE_GhostVars := (if ghost = Ghost
-                                               then finsert varName (TE_GhostVars env)
-                                               else fminus (TE_GhostVars env) {|varName|}),
+        if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_metavars_list rhsTy)
+        then Inl [TyErr_CannotInferType loc]
+        else let env' = env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
+                              TE_GhostLocals := (if ghost = Ghost
+                                               then finsert varName (TE_GhostLocals env)
+                                               else fminus (TE_GhostLocals env) {|varName|}),
                               TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>
              in (case elab_term env' typedefs ghost body next_mv1 of
                   Inl errs \<Rightarrow> Inl errs
@@ -655,7 +659,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             Inl errs \<Rightarrow> Inl errs
           | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
               \<comment> \<open>Unify actual types with expected types, accumulating substitutions\<close>
-              (case unify_call_args loc fnName 0 elabArgTms actualTypes expArgTypes fmempty of
+              (case unify_call_args (\<lambda>n. n |\<notin>| TE_TypeVars env) loc fnName 0 elabArgTms actualTypes expArgTypes fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (finalArgTms, finalSubst) \<Rightarrow>
                   \<comment> \<open>Apply final substitution to the type args and return type\<close>

@@ -2,6 +2,322 @@ theory ElabTermCorrect
   imports ElabTerm ElabTypeCorrect "../core/CoreTypecheck" Unify3
 begin
 
+(* Extend a type environment with a half-open range of fresh rigid type variables.
+   When not in ghost context, these are also added to TE_RuntimeTypeVars, since they
+   will only ever be instantiated with runtime types. In ghost context we only add
+   them to TE_TypeVars, leaving their runtime status unconstrained. *)
+definition extend_env_with_tyvars :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> CoreTyEnv" where
+  "extend_env_with_tyvars env ghost lo hi =
+     env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list [lo..<hi],
+           TE_RuntimeTypeVars := (if ghost = NotGhost
+                                   then TE_RuntimeTypeVars env |\<union>| fset_of_list [lo..<hi]
+                                   else TE_RuntimeTypeVars env) \<rparr>"
+
+(* Identity: when the interval is empty, the env is unchanged. *)
+lemma extend_env_with_tyvars_empty [simp]:
+  assumes "lo \<ge> hi"
+  shows "extend_env_with_tyvars env ghost lo hi = env"
+  using assms unfolding extend_env_with_tyvars_def by simp
+
+(* Splitting a contiguous interval of fresh type variables. *)
+lemma fset_of_list_upt_split:
+  assumes "lo \<le> mid" and "mid \<le> hi"
+  shows "fset_of_list [lo..<mid] |\<union>| fset_of_list [mid..<hi] = fset_of_list [lo..<hi]"
+proof -
+  have "[lo..<hi] = [lo..<mid] @ [mid..<hi]"
+    using assms
+    using le_Suc_ex upt_add_eq_append by blast
+  thus ?thesis by simp
+qed
+
+(* Helper: extend_env_with_tyvars with a wider interval can be viewed as extending
+   the narrower version further. Used to lift well-kindedness / runtime facts. *)
+lemma extend_env_with_tyvars_widen_eq:
+  assumes "lo' \<le> lo" and "hi \<le> hi'"
+  shows "\<exists>extraTV extraRT. extend_env_with_tyvars env ghost lo' hi' =
+           (extend_env_with_tyvars env ghost lo hi)
+             \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
+               TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
+proof -
+  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
+  have contained: "fset_of_list [lo..<hi] |\<subseteq>| fset_of_list [lo'..<hi']"
+    using assms by (auto simp: fset_of_list_elem)
+  have union_eq: "fset_of_list [lo..<hi] |\<union>| ?diff = fset_of_list [lo'..<hi']"
+    using contained by auto
+  show ?thesis
+  proof (cases "ghost = NotGhost")
+    case True
+    have "extend_env_with_tyvars env ghost lo' hi' =
+            (extend_env_with_tyvars env ghost lo hi)
+              \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| ?diff,
+                TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| ?diff \<rparr>"
+      unfolding extend_env_with_tyvars_def using True union_eq by (simp add: funion_assoc)
+    thus ?thesis by blast
+  next
+    case False
+    have "extend_env_with_tyvars env ghost lo' hi' =
+            (extend_env_with_tyvars env ghost lo hi)
+              \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| ?diff,
+                TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| {||} \<rparr>"
+      unfolding extend_env_with_tyvars_def using False union_eq by (simp add: funion_assoc)
+    thus ?thesis by blast
+  qed
+qed
+
+(* is_well_kinded is preserved when widening the type-variable interval *)
+lemma is_well_kinded_extend_env_with_tyvars_mono:
+  assumes "is_well_kinded (extend_env_with_tyvars env ghost lo hi) ty"
+    and "lo' \<le> lo" and "hi \<le> hi'"
+  shows "is_well_kinded (extend_env_with_tyvars env ghost lo' hi') ty"
+proof -
+  obtain extraTV extraRT where env_eq:
+    "extend_env_with_tyvars env ghost lo' hi' =
+       (extend_env_with_tyvars env ghost lo hi)
+         \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
+           TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
+    using extend_env_with_tyvars_widen_eq[OF assms(2,3)] by blast
+  show ?thesis
+    using assms(1) is_well_kinded_extend_tyvars by (simp add: env_eq)
+qed
+
+(* is_runtime_type is preserved when widening the type-variable interval *)
+lemma is_runtime_type_extend_env_with_tyvars_mono:
+  assumes "is_runtime_type (extend_env_with_tyvars env ghost lo hi) ty"
+    and "lo' \<le> lo" and "hi \<le> hi'"
+  shows "is_runtime_type (extend_env_with_tyvars env ghost lo' hi') ty"
+proof -
+  obtain extraTV extraRT where env_eq:
+    "extend_env_with_tyvars env ghost lo' hi' =
+       (extend_env_with_tyvars env ghost lo hi)
+         \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
+           TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
+    using extend_env_with_tyvars_widen_eq[OF assms(2,3)] by blast
+  show ?thesis
+    using assms(1) is_runtime_type_extend_runtime_tyvars by (simp add: env_eq)
+qed
+
+(* Weakening: extending the interval further preserves core_term_type.
+   Both endpoints may move outward (lo' \<le> lo, hi' \<ge> hi). *)
+lemma core_term_type_extend_env_with_tyvars_mono:
+  assumes "core_term_type (extend_env_with_tyvars env ghost lo hi) ghost tm = Some ty"
+    and "lo' \<le> lo" and "hi \<le> hi'"
+  shows "core_term_type (extend_env_with_tyvars env ghost lo' hi') ghost tm = Some ty"
+proof -
+  let ?env_src = "extend_env_with_tyvars env ghost lo hi"
+  let ?env_tgt = "extend_env_with_tyvars env ghost lo' hi'"
+  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
+  \<comment> \<open>[lo..<hi] is contained in [lo'..<hi'] when endpoints move outward\<close>
+  have contained: "fset_of_list [lo..<hi] |\<subseteq>| fset_of_list [lo'..<hi']"
+    using assms(2,3) by (auto simp: fset_of_list_elem)
+  \<comment> \<open>Union of a subset with the difference is the whole\<close>
+  have union_eq: "fset_of_list [lo..<hi] |\<union>| ?diff = fset_of_list [lo'..<hi']"
+    using contained by auto
+  \<comment> \<open>Target env = source env with extra type vars added\<close>
+  have env_eq: "?env_tgt = ?env_src \<lparr> TE_TypeVars := TE_TypeVars ?env_src |\<union>| ?diff,
+                                      TE_RuntimeTypeVars := TE_RuntimeTypeVars ?env_src |\<union>|
+                                                            (if ghost = NotGhost then ?diff else {||}) \<rparr>"
+    unfolding extend_env_with_tyvars_def
+    using union_eq by (cases "ghost = NotGhost") (auto simp: funion_assoc)
+  show ?thesis
+    using assms(1) core_term_type_irrelevant_tyvar
+    by (simp add: env_eq)
+qed
+
+(* Well-formedness is preserved under extend_env_with_tyvars. *)
+lemma tyenv_well_formed_extend_env_with_tyvars:
+  assumes "tyenv_well_formed env"
+  shows "tyenv_well_formed (extend_env_with_tyvars env ghost lo hi)"
+proof (cases "ghost = NotGhost")
+  case True
+  thus ?thesis
+    using assms tyenv_well_formed_extend_tyvars[where extraTV="fset_of_list [lo..<hi]"
+                                                    and extraRT="fset_of_list [lo..<hi]"]
+    unfolding extend_env_with_tyvars_def by simp
+next
+  case False
+  \<comment> \<open>Extending only TE_TypeVars is a special case: use extraRT = fempty\<close>
+  have "tyenv_well_formed (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list [lo..<hi],
+                                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| {||} \<rparr>)"
+    using assms tyenv_well_formed_extend_tyvars[where extraTV="fset_of_list [lo..<hi]"
+                                                    and extraRT="{||}"] by blast
+  thus ?thesis using False unfolding extend_env_with_tyvars_def by simp
+qed
+
+(* Monotonicity of next_mv: elab_term / elab_term_list only advance the counter. *)
+lemma elab_term_next_mv_monotone:
+  "elab_term env typedefs ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
+and elab_term_list_next_mv_monotone:
+  "elab_term_list env typedefs ghost tms next_mv = Inr (tms', tys', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
+proof (induction env typedefs ghost tm next_mv and env typedefs ghost tms next_mv
+       arbitrary: tm' ty' next_mv' and tms' tys' next_mv'
+       rule: elab_term_elab_term_list.induct)
+  case (1 env typedefs ghost loc lit next_mv)
+  \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; String/Array are undefined (TODO)\<close>
+  show ?case
+  proof (cases lit)
+    case (BabLit_Bool b)
+    with "1.prems" show ?thesis by auto
+  next
+    case (BabLit_Int i)
+    with "1.prems" show ?thesis by (auto split: option.splits)
+  next
+    case (BabLit_String s)
+    with "1.prems" show ?thesis sorry
+  next
+    case (BabLit_Array xs)
+    with "1.prems" show ?thesis sorry
+  qed
+next
+  case (2 env typedefs ghost loc name tyArgs next_mv)
+  \<comment> \<open>BabTm_Name: undefined (TODO)\<close>
+  from "2.prems" show ?case sorry
+next
+  case (3 env typedefs ghost loc targetTy operand next_mv)
+  from "3.prems" show ?case
+    by (auto simp: Let_def split: sum.splits if_splits CoreType.splits dest!: "3.IH")
+next
+  case (4 env typedefs ghost loc condTm thenTm elseTm next_mv)
+  \<comment> \<open>BabTm_If: threads through cond, then, else\<close>
+  from "4.prems" obtain newCond condTy next_mv1 where
+    elab_cond: "elab_term env typedefs ghost condTm next_mv = Inr (newCond, condTy, next_mv1)"
+    by (auto split: sum.splits)
+  from "4.prems" elab_cond obtain newThen thenTy next_mv2 where
+    elab_then: "elab_term env typedefs ghost thenTm next_mv1 = Inr (newThen, thenTy, next_mv2)"
+    by (auto split: sum.splits)
+  from "4.prems" elab_cond elab_then obtain newElse elseTy next_mv3 where
+    elab_else: "elab_term env typedefs ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
+    by (auto split: sum.splits)
+  have m1: "next_mv \<le> next_mv1"
+    using "4.IH"(1) elab_cond by simp
+  have m2: "next_mv1 \<le> next_mv2"
+    using "4.IH"(2) elab_cond elab_then by simp
+  have m3: "next_mv2 \<le> next_mv3"
+    using "4.IH"(3) elab_cond elab_then elab_else by simp
+  from "4.prems" elab_cond elab_then elab_else have "next_mv' = next_mv3"
+    by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
+  with m1 m2 m3 show ?case by simp
+next
+  case (5 env typedefs ghost loc op operand next_mv)
+  \<comment> \<open>BabTm_Unop: forwards operand's next_mv\<close>
+  from "5.prems" show ?case
+    by (auto simp: Let_def split: sum.splits CoreType.splits BabUnop.splits if_splits dest!: "5.IH")
+next
+  case (6 env typedefs ghost loc lhs operands next_mv)
+  \<comment> \<open>BabTm_Binop: threads through lhs, rhs list\<close>
+  from "6.prems" obtain newLhs lhsTy next_mv1 where
+    elab_lhs: "elab_term env typedefs ghost lhs next_mv = Inr (newLhs, lhsTy, next_mv1)"
+    by (auto split: sum.splits)
+  from "6.prems" elab_lhs obtain rhsTms rhsTys next_mv2 where
+    elab_rhs: "elab_term_list env typedefs ghost (map snd operands) next_mv1 = Inr (rhsTms, rhsTys, next_mv2)"
+    by (auto split: sum.splits)
+  have m1: "next_mv \<le> next_mv1"
+    using "6.IH"(1) elab_lhs by simp
+  have m2: "next_mv1 \<le> next_mv2"
+    using "6.IH"(2) elab_lhs elab_rhs by simp
+  from "6.prems" elab_lhs elab_rhs have "next_mv' = next_mv2"
+    by (auto simp: Let_def split: sum.splits)
+  with m1 m2 show ?case by simp
+next
+  case (7 env typedefs ghost loc varName rhs body next_mv)
+  \<comment> \<open>BabTm_Let: threads through rhs and body\<close>
+  from "7.prems" obtain rhsTm rhsTy next_mv1 where
+    elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
+    by (auto split: sum.splits)
+  from "7.prems" elab_rhs have rhs_resolved:
+    "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_metavars_list rhsTy)"
+    by (auto split: if_splits)
+  let ?env_body = "env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
+                          TE_GhostLocals := (if ghost = Ghost then finsert varName (TE_GhostLocals env)
+                                               else fminus (TE_GhostLocals env) {|varName|}),
+                          TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+  from "7.prems" elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
+    elab_body: "elab_term ?env_body typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)"
+    by (auto simp: Let_def split: sum.splits)
+  have m1: "next_mv \<le> next_mv1"
+    using "7.IH"(1) elab_rhs by simp
+  have m2: "next_mv1 \<le> next_mv2"
+    using "7.IH"(2) elab_rhs rhs_resolved elab_body by (simp add: Let_def)
+  from "7.prems" elab_rhs rhs_resolved elab_body have "next_mv' = next_mv2"
+    by (auto simp: Let_def split: sum.splits)
+  with m1 m2 show ?case by simp
+next
+  case (8 env typedefs ghost loc quant name varTy tm next_mv)
+  \<comment> \<open>BabTm_Quantifier: undefined (TODO)\<close>
+  from "8.prems" show ?case sorry
+next
+  case (9 env typedefs ghost loc callee args next_mv)
+  \<comment> \<open>BabTm_Call: threads through determine_fun_call_type, elab_term_list\<close>
+  from "9.prems" obtain fnName tyArgs expArgTypes retType next_mv1 where
+    det_call: "determine_fun_call_type env typedefs ghost callee next_mv
+               = Inr (fnName, tyArgs, expArgTypes, retType, next_mv1)"
+    by (auto split: sum.splits)
+  \<comment> \<open>determine_fun_call_type is monotone: either generates fresh metas (next_mv1 = next_mv + n)
+     or keeps next_mv unchanged.\<close>
+  have det_mono: "next_mv \<le> next_mv1"
+  proof (cases callee)
+    case (BabTm_Name fnLoc fnName' tyArgs')
+    from det_call BabTm_Name show ?thesis
+      by (auto simp: Let_def split: option.splits if_splits sum.splits)
+  qed (use det_call in simp_all)
+  from "9.prems" det_call have len_args: "length args = length expArgTypes"
+    by (auto split: if_splits)
+  from "9.prems" det_call len_args obtain elabArgTms actualTypes next_mv2 where
+    elab_args: "elab_term_list env typedefs ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
+    by (auto split: sum.splits)
+  have m2: "next_mv1 \<le> next_mv2"
+    using "9.IH" det_call len_args elab_args by simp
+  from "9.prems" det_call len_args elab_args have "next_mv' = next_mv2"
+    by (auto simp: Let_def split: sum.splits)
+  with det_mono m2 show ?case by simp
+next
+  case "10"  \<comment> \<open>BabTm_Tuple: undefined\<close>
+  from "10.prems" show ?case sorry
+next
+  case "11"  \<comment> \<open>BabTm_Record: undefined\<close>
+  from "11.prems" show ?case sorry
+next
+  case "12"  \<comment> \<open>BabTm_RecordUpdate: undefined\<close>
+  from "12.prems" show ?case sorry
+next
+  case "13"  \<comment> \<open>BabTm_TupleProj: undefined\<close>
+  from "13.prems" show ?case sorry
+next
+  case "14"  \<comment> \<open>BabTm_RecordProj: undefined\<close>
+  from "14.prems" show ?case sorry
+next
+  case "15"  \<comment> \<open>BabTm_ArrayProj: undefined\<close>
+  from "15.prems" show ?case sorry
+next
+  case "16"  \<comment> \<open>BabTm_Match: undefined\<close>
+  from "16.prems" show ?case sorry
+next
+  case "17"  \<comment> \<open>BabTm_Sizeof: undefined\<close>
+  from "17.prems" show ?case sorry
+next
+  case "18"  \<comment> \<open>BabTm_Allocated: undefined\<close>
+  from "18.prems" show ?case sorry
+next
+  case "19"  \<comment> \<open>BabTm_Old: undefined\<close>
+  from "19.prems" show ?case sorry
+next
+  case "20" \<comment> \<open>elab_term_list: Nil\<close>
+  from "20.prems" show ?case by simp
+next
+  case (21 env typedefs ghost tm tms next_mv)
+  \<comment> \<open>elab_term_list: Cons\<close>
+  from "21.prems" obtain tm'' ty'' next_mv1 tms'' tys'' next_mv2 where
+    elab_head: "elab_term env typedefs ghost tm next_mv = Inr (tm'', ty'', next_mv1)" and
+    elab_tail: "elab_term_list env typedefs ghost tms next_mv1 = Inr (tms'', tys'', next_mv2)"
+    by (auto split: sum.splits)
+  have m1: "next_mv \<le> next_mv1"
+    using "21.IH"(1) elab_head by simp
+  have m2: "next_mv1 \<le> next_mv2"
+    using "21.IH"(3) elab_head elab_tail by simp
+  from "21.prems" elab_head elab_tail have "next_mv' = next_mv2"
+    by (auto split: sum.splits)
+  with m1 m2 show ?case by simp
+qed
+
 (* Length of elab_term_list output matches input *)
 lemma elab_term_list_length:
   "elab_term_list env typedefs ghost tms next_mv = Inr (tms', tys', next_mv')
@@ -15,22 +331,26 @@ next
 qed
 
 (* Correctness of determine_fun_call_type:
-   If it succeeds, the returned information is consistent with the function declaration. *)
+   If it succeeds, the returned information is consistent with the function declaration.
+   The returned type arguments are well-kinded in the extended env (since the
+   meta-generation branch adds fresh metas in [next_mv..<next_mv']). *)
 lemma determine_fun_call_type_correct:
   assumes "determine_fun_call_type env typedefs ghost callTm next_mv
            = Inr (fnName, newTyArgs, expArgTypes, retType, next_mv')"
       and "tyenv_well_formed env"
       and "typedefs_well_formed env typedefs"
-  shows "\<exists>funInfo.
+  shows "next_mv \<le> next_mv'
+       \<and> (\<exists>funInfo.
            fmlookup (TE_Functions env) fnName = Some funInfo
          \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
          \<and> length newTyArgs = length (FI_TyArgs funInfo)
-         \<and> list_all (is_well_kinded env) newTyArgs
-         \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) newTyArgs)
+         \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
+         \<and> (ghost = NotGhost \<longrightarrow>
+              list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
          \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                              (FI_TmArgs funInfo)
          \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs))
-                                  (FI_ReturnType funInfo)"
+                                  (FI_ReturnType funInfo))"
 proof (cases callTm)
   case (BabTm_Name fnLoc fnName' tyArgs)
   from assms(1) BabTm_Name obtain funInfo where
@@ -52,18 +372,27 @@ proof (cases callTm)
     let ?genTyArgs = "map CoreTy_Meta [next_mv..<next_mv + ?numTyParams]"
     from assms(1) BabTm_Name fn_lookup ghost_ok True
     have results: "newTyArgs = ?genTyArgs"
+                  "next_mv' = next_mv + ?numTyParams"
                   "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)) ty)
                                      (FI_TmArgs funInfo)"
                   "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs))
                                          (FI_ReturnType funInfo)"
       by (auto simp: Let_def)
     have len_ok: "length ?genTyArgs = ?numTyParams" by simp
-    have wk_ok: "list_all (is_well_kinded env) ?genTyArgs"
-      using list_all_meta_is_well_kinded by simp
-    have runtime_ok: "list_all (is_runtime_type env) ?genTyArgs"
-      using list_all_meta_is_runtime by simp
+    have mono: "next_mv \<le> next_mv'" using results by simp
+    let ?env_ext = "extend_env_with_tyvars env ghost next_mv next_mv'"
+    \<comment> \<open>The fresh metas are all in TE_TypeVars of the extended env\<close>
+    have all_in_tv: "\<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_TypeVars ?env_ext"
+      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
+    have wk_ok: "list_all (is_well_kinded ?env_ext) ?genTyArgs"
+      using list_all_meta_is_well_kinded[OF all_in_tv] .
+    have all_in_rtv: "ghost = NotGhost \<Longrightarrow>
+                       \<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_RuntimeTypeVars ?env_ext"
+      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
+    have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
+      using all_in_rtv list_all_meta_is_runtime by blast
     show ?thesis
-      using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok
+      using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok mono
       by auto
   next
     case False
@@ -77,6 +406,7 @@ proof (cases callTm)
            (auto simp: Let_def split: if_splits)
       from assms(1) BabTm_Name fn_lookup ghost_ok False True elab_tyargs
       have results: "newTyArgs = elabTyArgs"
+                    "next_mv' = next_mv"
                     "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)) ty)
                                        (FI_TmArgs funInfo)"
                     "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs))
@@ -84,12 +414,16 @@ proof (cases callTm)
         by (auto simp: Let_def)
       have len_ok: "length elabTyArgs = ?numTyParams"
         using elab_tyargs True elab_type_list_length by fastforce
+      have mono: "next_mv \<le> next_mv'" using results by simp
+      \<comment> \<open>Interval is empty so the extended env equals env\<close>
+      have env_eq: "extend_env_with_tyvars env ghost next_mv next_mv' = env"
+        using results by simp
       have wk_ok: "list_all (is_well_kinded env) elabTyArgs"
         using elab_tyargs assms(2,3) elab_type_is_well_kinded(2) by auto
       have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) elabTyArgs"
         using elab_tyargs assms(2,3) elab_type_notghost_is_runtime(2) by (cases ghost; auto)
       show ?thesis
-        using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok
+        using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok mono env_eq
         by auto
     next
       case False2: False
@@ -106,7 +440,7 @@ qed (use assms(1) in simp_all)
    finalSubst extends accSubst (via composition with some theta),
    and for each pair of types, either they unify or both are finite integers. *)
 lemma unify_call_types_correct:
-  assumes "unify_call_types loc fnName argIdx actualTys expectedTys accSubst = Inr finalSubst"
+  assumes "unify_call_types is_flex loc fnName argIdx actualTys expectedTys accSubst = Inr finalSubst"
       and "tyenv_well_formed env"
       and "length actualTys = length expectedTys"
       and "list_all (is_well_kinded env) actualTys"
@@ -124,15 +458,15 @@ lemma unify_call_types_correct:
               \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
          actualTys expectedTys"
   using assms
-proof (induction loc fnName argIdx actualTys expectedTys accSubst
+proof (induction is_flex loc fnName argIdx actualTys expectedTys accSubst
        arbitrary: finalSubst
        rule: unify_call_types.induct)
-  case (1 loc fnName argIdx accSubst)
+  case (1 is_flex loc fnName argIdx accSubst)
   from "1.prems"(1) have "finalSubst = accSubst" by simp
   moreover have "accSubst = compose_subst fmempty accSubst" by simp
   ultimately show ?case using "1.prems"(6,9) by blast
 next
-  case (2 loc fnName argIdx actualTy actualTys expectedTy expectedTys accSubst)
+  case (2 is_flex loc fnName argIdx actualTy actualTys expectedTy expectedTys accSubst)
   let ?actualTy' = "apply_subst accSubst actualTy"
   let ?expectedTy' = "apply_subst accSubst expectedTy"
 
@@ -147,24 +481,53 @@ next
     and expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys" by simp_all
 
   show ?case
-  proof (cases "unify ?actualTy' ?expectedTy'")
+  proof (cases "unify is_flex ?actualTy' ?expectedTy'")
     case (Some newSubst)
     let ?composedSubst = "compose_subst newSubst accSubst"
 
     from "2.prems"(1) Some have
-      recurse: "unify_call_types loc fnName (argIdx + 1) actualTys expectedTys ?composedSubst = Inr finalSubst"
+      recurse: "unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys ?composedSubst = Inr finalSubst"
       by (simp add: Let_def)
 
-    have accSubst_wk: "metasubst_well_kinded env accSubst"
-      using "2.prems"(6) by (simp add: metasubst_well_kinded_def fmran'_def)
+    \<comment> \<open>Simple case: src = tgt = env, so kind/runtime preservation reduces to
+        checking that each bound meta in accSubst yields a well-kinded/runtime type.\<close>
+    have wk_case: "\<And>t. is_well_kinded env t \<Longrightarrow> is_well_kinded env (apply_subst accSubst t)"
+    proof -
+      fix t assume t_wk: "is_well_kinded env t"
+      show "is_well_kinded env (apply_subst accSubst t)"
+      proof (rule apply_subst_preserves_well_kinded[OF t_wk])
+        show "TE_Datatypes env = TE_Datatypes env" by simp
+      next
+        fix n assume n_in: "n |\<in>| TE_TypeVars env"
+        show "case fmlookup accSubst n of
+                Some ty' \<Rightarrow> is_well_kinded env ty'
+              | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+          using n_in "2.prems"(6) by (auto simp: fmran'I split: option.splits)
+      qed
+    qed
+    have rt_case: "\<And>t. ghost = NotGhost \<Longrightarrow> is_runtime_type env t \<Longrightarrow>
+                       is_runtime_type env (apply_subst accSubst t)"
+    proof -
+      fix t assume ng: "ghost = NotGhost" and t_rt: "is_runtime_type env t"
+      show "is_runtime_type env (apply_subst accSubst t)"
+      proof (rule apply_subst_preserves_runtime[OF t_rt])
+        show "TE_GhostDatatypes env = TE_GhostDatatypes env" by simp
+      next
+        fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
+        show "case fmlookup accSubst n of
+                Some ty' \<Rightarrow> is_runtime_type env ty'
+              | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
+          using n_in "2.prems"(9) ng by (auto simp: fmran'I split: option.splits)
+      qed
+    qed
     have actualTy'_wk: "is_well_kinded env ?actualTy'"
-      using actualTy_wk accSubst_wk apply_subst_preserves_well_kinded by blast
+      using actualTy_wk wk_case by blast
     have expectedTy'_wk: "is_well_kinded env ?expectedTy'"
-      using expectedTy_wk accSubst_wk apply_subst_preserves_well_kinded by blast
+      using expectedTy_wk wk_case by blast
     have actualTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?actualTy'"
-      using actualTy_rt "2.prems"(9) apply_subst_preserves_runtime by blast
+      using actualTy_rt rt_case by blast
     have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
-      using expectedTy_rt "2.prems"(9) apply_subst_preserves_runtime by blast
+      using expectedTy_rt rt_case by blast
 
     have newSubst_wk: "\<forall>ty \<in> fmran' newSubst. is_well_kinded env ty"
       using Some actualTy'_wk expectedTy'_wk unify_preserves_well_kinded by blast
@@ -216,7 +579,7 @@ next
     case None
     from "2.prems"(1) None have
       is_int: "is_finite_integer_type ?actualTy' \<and> is_finite_integer_type ?expectedTy'"
-      and recurse: "unify_call_types loc fnName (argIdx + 1) actualTys expectedTys accSubst = Inr finalSubst"
+      and recurse: "unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys accSubst = Inr finalSubst"
       by (simp_all add: Let_def split: if_splits)
 
     have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
@@ -235,18 +598,18 @@ next
     from ih obtain theta where finalSubst_eq: "finalSubst = compose_subst theta accSubst"
       by blast
 
-    \<comment> \<open>Finite integer types are ground, so applying any substitution gives same result\<close>
-    have actualTy'_ground: "is_ground ?actualTy'"
-      using is_int finite_integer_type_is_integer_type integer_type_is_ground by blast
-    have expectedTy'_ground: "is_ground ?expectedTy'"
-      using is_int finite_integer_type_is_integer_type integer_type_is_ground by blast
+    \<comment> \<open>Finite integer types have no metavariables, so applying any substitution is identity\<close>
+    have actualTy'_no_mvs: "type_metavars ?actualTy' = {}"
+      using is_int finite_integer_type_is_integer_type integer_type_no_metavars by blast
+    have expectedTy'_no_mvs: "type_metavars ?expectedTy' = {}"
+      using is_int finite_integer_type_is_integer_type integer_type_no_metavars by blast
 
     \<comment> \<open>apply_subst finalSubst actualTy = apply_subst theta (apply_subst accSubst actualTy)
-       = apply_subst theta ?actualTy'. Since ?actualTy' is ground, this equals ?actualTy'.\<close>
+       = apply_subst theta ?actualTy'. Since ?actualTy' has no metavars, this equals ?actualTy'.\<close>
     have "apply_subst finalSubst actualTy = apply_subst theta ?actualTy'"
       using finalSubst_eq by (simp add: compose_subst_correct)
     also have "... = ?actualTy'"
-      using actualTy'_ground apply_subst_ground by simp
+      using actualTy'_no_mvs apply_subst_disjoint_id by simp
     finally have actual_eq: "apply_subst finalSubst actualTy = ?actualTy'" .
     hence actual_finite: "is_finite_integer_type (apply_subst finalSubst actualTy)"
       using is_int by simp
@@ -254,7 +617,7 @@ next
     have "apply_subst finalSubst expectedTy = apply_subst theta ?expectedTy'"
       using finalSubst_eq by (simp add: compose_subst_correct)
     also have "... = ?expectedTy'"
-      using expectedTy'_ground apply_subst_ground by simp
+      using expectedTy'_no_mvs apply_subst_disjoint_id by simp
     finally have expected_eq: "apply_subst finalSubst expectedTy = ?expectedTy'" .
     hence expected_finite: "is_finite_integer_type (apply_subst finalSubst expectedTy)"
       using is_int by simp
@@ -437,7 +800,7 @@ proof (cases ty1)
     case other: CoreTy_MathReal
     with assms(1) \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> show ?thesis by simp
   next
-    case other: (CoreTy_Name x1 x2)
+    case other: (CoreTy_Datatype x1 x2)
     with assms(1) \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> show ?thesis by simp
   next
     case other: (CoreTy_Record x)
@@ -459,7 +822,7 @@ next
   case other: CoreTy_MathReal
   with assms(1) show ?thesis by simp
 next
-  case other: (CoreTy_Name x1 x2)
+  case other: (CoreTy_Datatype x1 x2)
   with assms(1) show ?thesis by simp
 next
   case other: (CoreTy_Record x)
@@ -526,17 +889,17 @@ qed
 
 (* Helper: extract components from a successful build_comparison_chain in the let-binding case *)
 lemma build_comparison_chain_let_elim:
-  assumes "(case elab_binop_with_special loc ghost op lhsTm lhsTy varTm rhsTy of
+  assumes "(case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy varTm rhsTy of
               Inl errs \<Rightarrow> Inl errs
             | Inr (cmpTm, _) \<Rightarrow>
-                (case build_comparison_chain loc ghost ctr' varTm rhsTy rest of
+                (case build_comparison_chain is_flex loc ghost ctr' varTm rhsTy rest of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr restTm \<Rightarrow>
                     Inr (CoreTm_Let varName rhs
                           (CoreTm_Binop CoreBinop_And cmpTm restTm)))) = Inr resultTm"
   obtains cmpTm cmpTy restTm where
-    "elab_binop_with_special loc ghost op lhsTm lhsTy varTm rhsTy = Inr (cmpTm, cmpTy)"
-    "build_comparison_chain loc ghost ctr' varTm rhsTy rest = Inr restTm"
+    "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy varTm rhsTy = Inr (cmpTm, cmpTy)"
+    "build_comparison_chain is_flex loc ghost ctr' varTm rhsTy rest = Inr restTm"
     "resultTm = CoreTm_Let varName rhs (CoreTm_Binop CoreBinop_And cmpTm restTm)"
   using assms by (auto split: sum.splits prod.splits)
 
@@ -552,7 +915,7 @@ qed
 
 (* The range of const_subst_for contains only the default type *)
 lemma const_subst_for_range:
-  "\<forall>ty' \<in> fmran' (const_subst_for ty defaultTy). ty' = defaultTy"
+  "\<forall>ty' \<in> fmran' (const_subst_for is_flex ty defaultTy). ty' = defaultTy"
   unfolding const_subst_for_def by (rule fmran'_fmap_of_list_const)
 
 (* Helper: lookup in a constant-valued fmap_of_list *)
@@ -560,41 +923,24 @@ lemma fmlookup_fmap_of_list_const:
   "n \<in> set ns \<Longrightarrow> fmlookup (fmap_of_list (map (\<lambda>n. (n, v)) ns)) n = Some v"
   by (induct ns) (auto simp: fmlookup_of_list)
 
-(* const_subst_for maps every metavariable in the type *)
+(* const_subst_for maps every flexible metavariable in the type *)
 lemma const_subst_for_domain:
-  "n \<in> type_metavars ty \<Longrightarrow> fmlookup (const_subst_for ty defaultTy) n = Some defaultTy"
+  "n \<in> type_metavars ty \<Longrightarrow> is_flex n \<Longrightarrow>
+   fmlookup (const_subst_for is_flex ty defaultTy) n = Some defaultTy"
   unfolding const_subst_for_def
-  using fmlookup_fmap_of_list_const[of n "type_metavars_list ty" defaultTy]
+  using fmlookup_fmap_of_list_const[of n "filter is_flex (type_metavars_list ty)" defaultTy]
   by (simp add: set_type_metavars_list)
-
-(* The domain of const_subst_for covers all metavars in the type *)
-lemma const_subst_for_covers:
-  "type_metavars ty \<subseteq> fset (fmdom (const_subst_for ty defaultTy))"
-proof
-  fix n assume "n \<in> type_metavars ty"
-  hence "fmlookup (const_subst_for ty defaultTy) n = Some defaultTy"
-    by (rule const_subst_for_domain)
-  thus "n \<in> fset (fmdom (const_subst_for ty defaultTy))"
-    by (simp add: fmlookup_dom_iff)
-qed
-
-(* const_subst_for makes a type ground if the default type is ground *)
-lemma const_subst_for_makes_ground:
-  "is_ground defaultTy \<Longrightarrow> is_ground (apply_subst (const_subst_for ty defaultTy) ty)"
-  using apply_subst_makes_ground[OF const_subst_for_covers]
-        const_subst_for_range[of ty defaultTy]
-  by fastforce
 
 (* Correctness of resolve_binop_metas: if the input terms typecheck at their types,
    the resolved terms typecheck at the resolved types. *)
 lemma resolve_binop_metas_correct:
-  assumes resolved: "resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
+  assumes resolved: "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
     and lhs_typed: "core_term_type env ghost lhsTm = Some lhsTy"
     and rhs_typed: "core_term_type env ghost rhsTm = Some rhsTy"
     and wf: "tyenv_well_formed env"
   shows "core_term_type env ghost lhsTm' = Some lhsTy'
        \<and> core_term_type env ghost rhsTm' = Some rhsTy'"
-proof (cases "unify lhsTy rhsTy")
+proof (cases "unify is_flex lhsTy rhsTy")
   case None
   \<comment> \<open>Unification failed: pass through unchanged\<close>
   from resolved None have "lhsTm' = lhsTm" "lhsTy' = lhsTy" "rhsTm' = rhsTm" "rhsTy' = rhsTy"
@@ -605,104 +951,132 @@ next
   let ?unifiedTy = "apply_subst unifSubst lhsTy"
   have sound: "apply_subst unifSubst lhsTy = apply_subst unifSubst rhsTy"
     using unify_sound[OF Some] .
+
   \<comment> \<open>Substitution range is well-kinded and runtime\<close>
   have lhs_wk: "is_well_kinded env lhsTy"
     using core_term_type_well_kinded[OF lhs_typed wf] .
   have rhs_wk: "is_well_kinded env rhsTy"
     using core_term_type_well_kinded[OF rhs_typed wf] .
-  have range_wk: "\<forall>ty' \<in> fmran' unifSubst. is_well_kinded env ty'"
+  have unif_range_wk: "\<forall>ty' \<in> fmran' unifSubst. is_well_kinded env ty'"
     using unify_preserves_well_kinded[OF Some lhs_wk rhs_wk] .
-  have range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty')"
+  have unif_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty')"
   proof
     assume ng: "ghost = NotGhost"
     have "is_runtime_type env lhsTy"
-      using core_term_type_notghost_runtime lhs_typed local.wf ng by auto
+      using core_term_type_notghost_runtime lhs_typed wf ng by auto
     moreover have "is_runtime_type env rhsTy"
-      using core_term_type_notghost_runtime local.wf ng rhs_typed by auto
+      using core_term_type_notghost_runtime wf ng rhs_typed by auto
     ultimately show "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'"
       using unify_preserves_runtime[OF Some] by auto
   qed
+
+  \<comment> \<open>Helper: applying unifSubst preserves well-kindedness / runtime (src = tgt = env)\<close>
+  have unif_apply_wk: "\<And>t. is_well_kinded env t \<Longrightarrow> is_well_kinded env (apply_subst unifSubst t)"
+  proof -
+    fix t assume t_wk: "is_well_kinded env t"
+    show "is_well_kinded env (apply_subst unifSubst t)"
+    proof (rule apply_subst_preserves_well_kinded[OF t_wk])
+      show "TE_Datatypes env = TE_Datatypes env" by simp
+    next
+      fix n assume n_in: "n |\<in>| TE_TypeVars env"
+      show "case fmlookup unifSubst n of
+              Some ty' \<Rightarrow> is_well_kinded env ty'
+            | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+        using n_in unif_range_wk by (auto simp: fmran'I split: option.splits)
+    qed
+  qed
+  have unif_apply_rt: "\<And>t. ghost = NotGhost \<Longrightarrow> is_runtime_type env t \<Longrightarrow>
+                           is_runtime_type env (apply_subst unifSubst t)"
+  proof -
+    fix t assume ng: "ghost = NotGhost" and t_rt: "is_runtime_type env t"
+    show "is_runtime_type env (apply_subst unifSubst t)"
+    proof (rule apply_subst_preserves_runtime[OF t_rt])
+      show "TE_GhostDatatypes env = TE_GhostDatatypes env" by simp
+    next
+      fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
+      show "case fmlookup unifSubst n of
+              Some ty' \<Rightarrow> is_runtime_type env ty'
+            | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
+        using n_in unif_range_rt ng by (auto simp: fmran'I split: option.splits)
+    qed
+  qed
+
   \<comment> \<open>Both terms typecheck after applying unifSubst\<close>
   have lhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst lhsTm) = Some ?unifiedTy"
-    using apply_subst_to_term_preserves_typing[OF lhs_typed wf range_wk range_rt] by simp
+    using apply_subst_to_term_preserves_typing[OF lhs_typed wf unif_range_wk unif_range_rt] by simp
   have rhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst rhsTm) = Some ?unifiedTy"
-    using apply_subst_to_term_preserves_typing[OF rhs_typed wf range_wk range_rt] sound by simp
+    using apply_subst_to_term_preserves_typing[OF rhs_typed wf unif_range_wk unif_range_rt] sound by simp
+
   show ?thesis
-  proof (cases "is_ground ?unifiedTy")
+  proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list ?unifiedTy)")
     case True
-    \<comment> \<open>Ground: directly use unified type\<close>
-    have "lhsTm' = apply_subst_to_term unifSubst lhsTm"
-      by (smt (verit, best) Some True old.prod.inject option.simps(5) resolve_binop_metas.simps
-          resolved) 
-    moreover have "lhsTy' = ?unifiedTy"
-      by (smt (verit, del_insts) Pair_inject Some True option.simps(5) resolve_binop_metas.simps
-          resolved) 
-    moreover have "rhsTm' = apply_subst_to_term unifSubst rhsTm"
-      by (smt (verit, del_insts) Some True old.prod.inject option.simps(5) resolve_binop_metas.simps
-          resolved) 
-    moreover have "rhsTy' = ?unifiedTy"
-      by (smt (verit) Some True old.prod.inject option.simps(5) resolve_binop_metas.simps
-          resolved) 
-    ultimately show ?thesis using lhs_unif rhs_unif by simp
+    \<comment> \<open>Resolved: directly use unified type\<close>
+    from resolved Some True have
+      eqs: "lhsTm' = apply_subst_to_term unifSubst lhsTm"
+           "lhsTy' = ?unifiedTy"
+           "rhsTm' = apply_subst_to_term unifSubst rhsTm"
+           "rhsTy' = ?unifiedTy"
+      by (auto simp: Let_def)
+    show ?thesis using lhs_unif rhs_unif eqs by simp
   next
-    case not_ground: False
-    \<comment> \<open>Not ground: fill remaining metas with default type\<close>
+    case not_resolved: False
+    \<comment> \<open>Not resolved: fill remaining flexible metas with default type\<close>
     let ?defaultTy = "default_type_for_binop babOp"
-    let ?fillSubst = "const_subst_for ?unifiedTy ?defaultTy"
+    let ?fillSubst = "const_subst_for is_flex ?unifiedTy ?defaultTy"
     let ?fullSubst = "compose_subst ?fillSubst unifSubst"
-    have eq1: "lhsTm' = apply_subst_to_term ?fullSubst lhsTm"
-      by (smt (verit, ccfv_SIG) Some not_ground old.prod.inject option.simps(5)
-          resolve_binop_metas.simps resolved) 
-    have eq2: "lhsTy' = apply_subst ?fillSubst ?unifiedTy"
-      by (smt (verit) Some not_ground old.prod.inject option.simps(5) resolve_binop_metas.simps
-          resolved) 
-    have eq3: "rhsTm' = apply_subst_to_term ?fullSubst rhsTm"
-      by (smt (verit) Some not_ground old.prod.inject option.simps(5) resolve_binop_metas.simps
-          resolved) 
-    have eq4: "rhsTy' = apply_subst ?fillSubst ?unifiedTy" 
-    \<comment> \<open>The fill substitution range is well-kinded and runtime\<close>
-      by (smt (verit) Some eq2 old.prod.inject option.simps(5) resolve_binop_metas.simps
-          resolved)
+    from resolved Some not_resolved have
+      eqs: "lhsTm' = apply_subst_to_term ?fullSubst lhsTm"
+           "lhsTy' = apply_subst ?fillSubst ?unifiedTy"
+           "rhsTm' = apply_subst_to_term ?fullSubst rhsTm"
+           "rhsTy' = apply_subst ?fillSubst ?unifiedTy"
+      by (auto simp: Let_def)
+
+    \<comment> \<open>The default type is well-kinded and runtime\<close>
     have default_wk: "is_well_kinded env ?defaultTy"
       by (auto simp: default_type_for_binop_def split: option.splits)
     have default_rt: "is_runtime_type env ?defaultTy"
       by (auto simp: default_type_for_binop_def split: option.splits)
+
+    \<comment> \<open>The fill substitution range is well-kinded and runtime\<close>
     have fill_range_wk: "\<forall>ty' \<in> fmran' ?fillSubst. is_well_kinded env ty'"
-      using const_subst_for_range default_wk by metis
-    have fill_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty')"
-      using const_subst_for_range default_rt by metis
-    \<comment> \<open>Full substitution preserves typing\<close>
+      using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_wk by metis
+    have fill_range_rt: "\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'"
+      using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_rt by metis
+
+    \<comment> \<open>Full substitution range is well-kinded and runtime\<close>
     have full_range_wk: "\<forall>ty' \<in> fmran' ?fullSubst. is_well_kinded env ty'"
-      using compose_subst_preserves_well_kinded[OF range_wk fill_range_wk] by simp
+      using compose_subst_preserves_well_kinded fill_range_wk unif_range_wk by blast
     have full_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty')"
     proof
       assume ng: "ghost = NotGhost"
-      from range_rt ng have "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'" by simp
-      from fill_range_rt ng have "\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'" by simp
-      from compose_subst_preserves_runtime[OF \<open>\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'\<close>
-                                              \<open>\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'\<close>]
-      show "\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty'" .
+      from unif_range_rt ng have "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'" by simp
+      from compose_subst_preserves_runtime[OF fill_range_rt this]
+      show "\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty'"
+        using Some compose_subst_preserves_runtime core_term_type_well_kinded_and_runtime fill_range_rt
+          lhs_typed local.wf ng rhs_typed unify_preserves_runtime by presburger
     qed
-    have lhs': "core_term_type env ghost (apply_subst_to_term ?fullSubst lhsTm) =
-                Some (apply_subst ?fullSubst lhsTy)"
+
+    \<comment> \<open>Applying fullSubst preserves typing\<close>
+    have lhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst lhsTm) =
+                    Some (apply_subst ?fullSubst lhsTy)"
       using apply_subst_to_term_preserves_typing[OF lhs_typed wf full_range_wk full_range_rt] by simp
-    have "apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy"
-      using compose_subst_correct by simp
-    have rhs': "core_term_type env ghost (apply_subst_to_term ?fullSubst rhsTm) =
-                Some (apply_subst ?fullSubst rhsTy)"
+    have rhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst rhsTm) =
+                    Some (apply_subst ?fullSubst rhsTy)"
       using apply_subst_to_term_preserves_typing[OF rhs_typed wf full_range_wk full_range_rt] by simp
-    have "apply_subst ?fullSubst rhsTy = apply_subst ?fillSubst ?unifiedTy"
-      using compose_subst_correct sound by simp
-    show ?thesis using lhs' rhs' eq1 eq2 eq3 eq4
-      \<open>apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy\<close>
-      \<open>apply_subst ?fullSubst rhsTy = apply_subst ?fillSubst ?unifiedTy\<close>
-      by simp
+
+    \<comment> \<open>apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy via compose_subst_correct\<close>
+    have lhs_eq: "apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy"
+      by (simp add: compose_subst_correct)
+    have rhs_eq: "apply_subst ?fullSubst rhsTy = apply_subst ?fillSubst ?unifiedTy"
+      using sound by (simp add: compose_subst_correct)
+
+    show ?thesis using lhs_full rhs_full lhs_eq rhs_eq eqs by simp
   qed
 qed
 
 (* Correctness of elab_single_binop: if elaboration succeeds, the result typechecks. *)
 lemma elab_single_binop_correct:
-  assumes "elab_single_binop loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
+  assumes "elab_single_binop is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "core_term_type env ghost rhsTm = Some rhsTy"
     and "tyenv_well_formed env"
@@ -710,8 +1084,8 @@ lemma elab_single_binop_correct:
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof -
   obtain lhsTm' lhsTy' rhsTm' rhsTy' where
-    resolved: "resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
-    by (cases "resolve_binop_metas babOp lhsTm lhsTy rhsTm rhsTy") auto
+    resolved: "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
+    by (cases "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy") auto
   have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
     and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
     using resolve_binop_metas_correct[OF resolved assms(2,3,4)] by auto
@@ -851,7 +1225,7 @@ qed
 
 (* Correctness of elab_binop_with_special *)
 lemma elab_binop_with_special_correct:
-  assumes "elab_binop_with_special loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
+  assumes "elab_binop_with_special is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "core_term_type env ghost rhsTm = Some rhsTy"
     and "tyenv_well_formed env"
@@ -863,7 +1237,7 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
     assume "babOp = BabBinop_ImpliedBy"
     \<comment> \<open>ImpliedBy: swaps operands and calls elab_single_binop with Implies\<close>
     with assms(1) have
-      "elab_single_binop loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy = Inr (resultTm, resultTy)"
+      "elab_single_binop is_flex loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy = Inr (resultTm, resultTy)"
       by simp
     thus ?thesis using elab_single_binop_correct[OF _ assms(3,2,4)]
       using binop_to_core.simps(19) by blast
@@ -871,8 +1245,8 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
     assume iff: "babOp = BabBinop_Iff"
     \<comment> \<open>Iff: resolves metas then checks both Bool\<close>
     obtain lhsTm' lhsTy' rhsTm' rhsTy' where
-      resolved: "resolve_binop_metas BabBinop_Iff lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
-      by (cases "resolve_binop_metas BabBinop_Iff lhsTm lhsTy rhsTm rhsTy") auto
+      resolved: "resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
+      by (cases "resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy") auto
     have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
       and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
       using resolve_binop_metas_correct[OF resolved assms(2,3,4)] by auto
@@ -885,8 +1259,8 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
 next
   case False
   \<comment> \<open>All other cases: elab_binop_with_special delegates to elab_single_binop\<close>
-  hence eq: "elab_binop_with_special loc ghost babOp lhsTm lhsTy rhsTm rhsTy
-       = elab_single_binop loc ghost babOp lhsTm lhsTy rhsTm rhsTy"
+  hence eq: "elab_binop_with_special is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy
+       = elab_single_binop is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy"
     by (cases babOp) simp_all
   from False obtain cop where "binop_to_core babOp = Some cop"
     by (cases babOp) auto
@@ -896,7 +1270,7 @@ qed
 (* For comparison operators (those with a comparison_direction), elab_binop_with_special
    always returns CoreTy_Bool as the result type when it succeeds. *)
 lemma elab_binop_with_special_comparison_bool:
-  assumes "elab_binop_with_special loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
+  assumes "elab_binop_with_special is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
     and "comparison_direction babOp \<noteq> None"
   shows "resultTy = CoreTy_Bool"
 proof -
@@ -905,7 +1279,7 @@ proof -
     BabBinop_GreaterEqual, BabBinop_Equal, BabBinop_NotEqual}"
     by (cases babOp) auto
   \<comment> \<open>None of these are ImpliedBy or Iff, so elab_binop_with_special calls elab_single_binop\<close>
-  hence eq: "elab_single_binop loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
+  hence eq: "elab_single_binop is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
     using assms(1) by auto
   \<comment> \<open>For each of these 6 ops, elab_single_binop returns CoreTy_Bool on success\<close>
   from \<open>babOp \<in> _\<close> eq show "resultTy = CoreTy_Bool"
@@ -922,7 +1296,7 @@ lemma check_comparison_chain_directions_all_comparison:
 
 (* Correctness of fold_binop_left *)
 lemma fold_binop_left_correct:
-  assumes "fold_binop_left loc ghost accTm accTy ops = Inr (resultTm, resultTy)"
+  assumes "fold_binop_left is_flex loc ghost accTm accTy ops = Inr (resultTm, resultTy)"
     and "core_term_type env ghost accTm = Some accTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
@@ -935,8 +1309,8 @@ next
   obtain op rhsTm rhsTy where triple_eq: "triple = (op, rhsTm, rhsTy)"
     by (cases triple) auto
   from Cons.prems(1) triple_eq obtain midTm midTy where
-    step: "elab_binop_with_special loc ghost op accTm accTy rhsTm rhsTy = Inr (midTm, midTy)" and
-    rest: "fold_binop_left loc ghost midTm midTy rest = Inr (resultTm, resultTy)"
+    step: "elab_binop_with_special is_flex loc ghost op accTm accTy rhsTm rhsTy = Inr (midTm, midTy)" and
+    rest: "fold_binop_left is_flex loc ghost midTm midTy rest = Inr (resultTm, resultTy)"
     by (auto split: sum.splits)
   have mid_typed: "core_term_type env ghost midTm = Some midTy"
     using elab_binop_with_special_correct[OF step Cons.prems(2) _ Cons.prems(4)]
@@ -946,7 +1320,7 @@ qed
 
 (* Correctness of fold_implies_right *)
 lemma fold_implies_right_correct:
-  assumes "fold_implies_right loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
+  assumes "fold_implies_right is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
@@ -965,15 +1339,15 @@ next
     case Nil
     \<comment> \<open>Single element: just call elab_binop_with_special\<close>
     from Cons.prems(1) triple_eq Nil have
-      "elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
+      "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
       by simp
     thus ?thesis using elab_binop_with_special_correct Cons.prems(2) rhs_typed Cons.prems(4) by blast
   next
     case (Cons triple2 rest2)
     \<comment> \<open>Multiple elements: recurse on right side, then combine\<close>
     from Cons.prems(1) triple_eq \<open>rest = triple2 # rest2\<close> obtain rightTm rightTy where
-      recurse: "fold_implies_right loc ghost rhsTm rhsTy rest = Inr (rightTm, rightTy)" and
-      combine: "elab_binop_with_special loc ghost op lhsTm lhsTy rightTm rightTy = Inr (resultTm, resultTy)"
+      recurse: "fold_implies_right is_flex loc ghost rhsTm rhsTy rest = Inr (rightTm, rightTy)" and
+      combine: "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rightTm rightTy = Inr (resultTm, resultTy)"
       by (auto split: sum.splits)
     have rest_all: "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) rest"
       using Cons.prems(3) triple_eq by simp
@@ -1005,7 +1379,7 @@ lemma not_has_unexpected_chain_var:
    This follows from the has_unexpected_chain_var runtime checks.
    We prove a combined statement to avoid issues with multi-conclusion induction. *)
 lemma build_comparison_chain_inputs_fresh_combined:
-  assumes "build_comparison_chain loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
+  assumes "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
   shows "(\<forall>n \<ge> chainCtr. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars lhsTm)
        \<and> (\<forall>opx \<in> set ops. \<forall>n. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars (fst (snd opx)))"
   using assms
@@ -1027,7 +1401,7 @@ next
   proof (rule notI)
     assume "has_unexpected_chain_var lhsTm ?lhsAllowed
             \<or> has_unexpected_chain_var rhsTm ''''"
-    hence "build_comparison_chain loc ghost chainCtr lhsTm lhsTy (triple # rest)
+    hence "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest)
            = Inl [TyErr_InternalError_UnexpectedChainVar loc]"
       using triple_eq by (simp add: Let_def)
     with Cons.prems show False by simp
@@ -1075,32 +1449,33 @@ next
     case (Cons triple2 rest2)
     \<comment> \<open>rest is non-empty, so there is a recursive call that returns Inr\<close>
     obtain resolvedLhs resolvedLhsTy resolvedRhs resolvedRhsTy where
-      resolved: "resolve_binop_metas op lhsTm lhsTy rhsTm rhsTy =
+      resolved: "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy =
                  (resolvedLhs, resolvedLhsTy, resolvedRhs, resolvedRhsTy)"
-      by (cases "resolve_binop_metas op lhsTm lhsTy rhsTm rhsTy") auto
+      by (cases "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy") auto
     \<comment> \<open>Simplify the function with checks eliminated\<close>
     from checks_passed triple_eq
     have bcc_simplified:
-      "build_comparison_chain loc ghost chainCtr lhsTm lhsTy (triple # rest) =
+      "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest) =
        (case rest of
-         [] \<Rightarrow> (case elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy of
+         [] \<Rightarrow> (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy of
                   Inl errs \<Rightarrow> Inl errs | Inr (cmpTm, _) \<Rightarrow> Inr cmpTm)
        | _ \<Rightarrow>
-         let (_, _, resolvedRhs', resolvedRhsTy') = resolve_binop_metas op lhsTm lhsTy rhsTm rhsTy
+         let (_, _, resolvedRhs', resolvedRhsTy') = resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy
          in if is_simple_term resolvedRhs' then
-              (case elab_binop_with_special loc ghost op lhsTm lhsTy resolvedRhs' resolvedRhsTy' of
+              (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy resolvedRhs' resolvedRhsTy' of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (cmpTm, _) \<Rightarrow>
-                  (case build_comparison_chain loc ghost chainCtr resolvedRhs' resolvedRhsTy' rest of
+                  (case build_comparison_chain is_flex loc ghost chainCtr resolvedRhs' resolvedRhsTy' rest of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr restTm \<Rightarrow> Inr (CoreTm_Binop CoreBinop_And cmpTm restTm)))
-            else if \<not> is_ground resolvedRhsTy' then Inl [TyErr_CannotInferType loc]
+            else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy')
+                 then Inl [TyErr_CannotInferType loc]
             else let varName = ''chain@@'' @ nat_to_string chainCtr;
                      varTm = CoreTm_Var varName
-                 in (case elab_binop_with_special loc ghost op lhsTm lhsTy varTm resolvedRhsTy' of
+                 in (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy varTm resolvedRhsTy' of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr (cmpTm, _) \<Rightarrow>
-                        (case build_comparison_chain loc ghost (chainCtr + 1) varTm resolvedRhsTy' rest of
+                        (case build_comparison_chain is_flex loc ghost (chainCtr + 1) varTm resolvedRhsTy' rest of
                           Inl errs \<Rightarrow> Inl errs
                         | Inr restTm \<Rightarrow>
                             Inr (CoreTm_Let varName resolvedRhs'
@@ -1113,7 +1488,7 @@ next
       \<comment> \<open>Simple term: recursive call with same chainCtr\<close>
       from Cons.prems bcc_simplified Cons resolved True
       obtain restTm where
-        recurse: "build_comparison_chain loc ghost chainCtr resolvedRhs resolvedRhsTy rest = Inr restTm"
+        recurse: "build_comparison_chain is_flex loc ghost chainCtr resolvedRhs resolvedRhsTy rest = Inr restTm"
         by (auto simp: Let_def split: sum.splits prod.splits list.splits)
       from Cons.IH[OF recurse] show ?thesis by (simp add: prod.case_eq_if)
     next
@@ -1125,12 +1500,13 @@ next
       \<comment> \<open>Derive a simplified equation for the complex case\<close>
       from bcc_simplified Cons resolved not_simple
       have bcc_complex:
-        "build_comparison_chain loc ghost chainCtr lhsTm lhsTy (triple # rest) =
-         (if \<not> is_ground resolvedRhsTy then Inl [TyErr_CannotInferType loc]
-          else (case elab_binop_with_special loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy of
+        "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest) =
+         (if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy)
+          then Inl [TyErr_CannotInferType loc]
+          else (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr (cmpTm, _) \<Rightarrow>
-                    (case build_comparison_chain loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest of
+                    (case build_comparison_chain is_flex loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr restTm \<Rightarrow>
                         Inr (CoreTm_Let varName resolvedRhs
@@ -1139,18 +1515,18 @@ next
         by (simp add: Let_def split: list.splits prod.splits)
 
       show ?thesis
-      proof (cases "is_ground resolvedRhsTy")
-        case not_ground: False
-        \<comment> \<open>Not ground: returns Inl, contradicting Inr\<close>
-        from Cons.prems bcc_complex not_ground
+      proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy)")
+        case False
+        \<comment> \<open>Not resolved: returns Inl, contradicting Inr\<close>
+        from Cons.prems bcc_complex False
         have False by simp
         thus ?thesis ..
       next
-        case ground: True
+        case True
         \<comment> \<open>Complex term: recursive call with chainCtr + 1\<close>
-        from Cons.prems bcc_complex ground
+        from Cons.prems bcc_complex True
         obtain restTm where
-          recurse: "build_comparison_chain loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest = Inr restTm"
+          recurse: "build_comparison_chain is_flex loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest = Inr restTm"
           by (auto split: sum.splits prod.splits)
         from Cons.IH[OF recurse] show ?thesis by (simp add: prod.case_eq_if)
       qed
@@ -1164,7 +1540,7 @@ qed
 
 (* Split the combined lemma into the two conclusions used elsewhere *)
 lemma build_comparison_chain_inputs_fresh:
-  assumes "build_comparison_chain loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
+  assumes "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
   shows "\<And>n. n \<ge> chainCtr \<Longrightarrow> ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars lhsTm"
     and "\<And>op tm ty n. (op, tm, ty) \<in> set ops \<Longrightarrow>
            ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars tm"
@@ -1181,7 +1557,7 @@ qed
 
 (* Correctness of build_comparison_chain. *)
 lemma build_comparison_chain_correct:
-  assumes "build_comparison_chain loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
+  assumes "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
@@ -1205,9 +1581,9 @@ next
 
   \<comment> \<open>Get resolved operands\<close>
   obtain resolvedLhs resolvedLhsTy resolvedRhs resolvedRhsTy where
-    resolved: "resolve_binop_metas op lhsTm lhsTy rhsTm rhsTy =
+    resolved: "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy =
                (resolvedLhs, resolvedLhsTy, resolvedRhs, resolvedRhsTy)"
-    by (cases "resolve_binop_metas op lhsTm lhsTy rhsTm rhsTy") auto
+    by (cases "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy") auto
 
   have resolvedRhs_typed: "core_term_type env ghost resolvedRhs = Some resolvedRhsTy"
     using resolve_binop_metas_correct[OF resolved Cons.prems(2) rhs_typed Cons.prems(4)] by simp
@@ -1224,7 +1600,7 @@ next
   proof (rule notI)
     assume "has_unexpected_chain_var lhsTm ?lhsAllowed
             \<or> has_unexpected_chain_var rhsTm ''''"
-    hence "build_comparison_chain loc ghost chainCtr lhsTm lhsTy (triple # rest)
+    hence "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest)
            = Inl [TyErr_InternalError_UnexpectedChainVar loc]"
       using triple_eq by (simp add: Let_def)
     with Cons.prems(1) show False by simp
@@ -1236,7 +1612,7 @@ next
     \<comment> \<open>Last comparison: just elaborate normally\<close>
     from Cons.prems(1) triple_eq Nil checks_passed
     obtain cmpTm cmpTy where
-      elab: "elab_binop_with_special loc ghost op lhsTm lhsTy rhsTm rhsTy = Inr (cmpTm, cmpTy)"
+      elab: "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy = Inr (cmpTm, cmpTy)"
       and result: "resultTm = cmpTm"
       by (auto simp: Let_def split: sum.splits prod.splits)
     have "core_term_type env ghost cmpTm = Some cmpTy"
@@ -1258,9 +1634,9 @@ next
       \<comment> \<open>Simple term: duplicate directly\<close>
       from Cons.prems(1) triple_eq rest_cons resolved True checks_passed
       obtain cmpTm cmpTy restTm where
-        elab: "elab_binop_with_special loc ghost op lhsTm lhsTy resolvedRhs resolvedRhsTy
+        elab: "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy resolvedRhs resolvedRhsTy
                = Inr (cmpTm, cmpTy)" and
-        recurse: "build_comparison_chain loc ghost chainCtr resolvedRhs resolvedRhsTy rest
+        recurse: "build_comparison_chain is_flex loc ghost chainCtr resolvedRhs resolvedRhsTy rest
                   = Inr restTm" and
         result: "resultTm = CoreTm_Binop CoreBinop_And cmpTm restTm"
         by (auto simp: Let_def split: sum.splits prod.splits)
@@ -1278,28 +1654,28 @@ next
       let ?varName = "''chain@@'' @ nat_to_string chainCtr"
       let ?varTm = "CoreTm_Var ?varName"
 
-      \<comment> \<open>The is_ground check must pass (otherwise we'd get Inl).\<close>
+      \<comment> \<open>The resolved check must pass (otherwise we'd get Inl).\<close>
       from Cons.prems(1) triple_eq rest_cons resolved not_simple checks_passed
-      have ground: "is_ground resolvedRhsTy"
+      have ground: "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy)"
         by (auto simp: Let_def split: if_splits sum.splits prod.splits)
 
       \<comment> \<open>Extract the elab and recursive call results via the helper lemma.\<close>
       from Cons.prems(1) triple_eq rest_cons resolved not_simple ground
       obtain cmpTm cmpTy restTm where
-        elab: "elab_binop_with_special loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy
+        elab: "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy
                = Inr (cmpTm, cmpTy)" and
-        recurse: "build_comparison_chain loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest
+        recurse: "build_comparison_chain is_flex loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest
                   = Inr restTm" and
         result: "resultTm = CoreTm_Let ?varName resolvedRhs
                               (CoreTm_Binop CoreBinop_And cmpTm restTm)"
       proof -
-        have "build_comparison_chain loc ghost chainCtr lhsTm lhsTy (Cons triple rest)
+        have "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (Cons triple rest)
           = (let varName = ''chain@@'' @ nat_to_string chainCtr;
               varTm = CoreTm_Var varName
-          in (case elab_binop_with_special loc ghost op lhsTm lhsTy varTm resolvedRhsTy of
+          in (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy varTm resolvedRhsTy of
             Inl errs \<Rightarrow> Inl errs
           | Inr (cmpTm, _) \<Rightarrow>
-              (case build_comparison_chain loc ghost (chainCtr + 1) varTm resolvedRhsTy rest of
+              (case build_comparison_chain is_flex loc ghost (chainCtr + 1) varTm resolvedRhsTy rest of
                 Inl errs \<Rightarrow> Inl errs
               | Inr restTm \<Rightarrow>
                   Inr (CoreTm_Let varName resolvedRhs
@@ -1309,10 +1685,10 @@ next
                          if_False if_True if_not_P[OF not_simple]
                          not_True_eq_False not_False_eq_True ground)
 
-        hence "(case elab_binop_with_special loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy of
+        hence "(case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (cmpTm, _) \<Rightarrow>
-                  (case build_comparison_chain loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest of
+                  (case build_comparison_chain is_flex loc ghost (chainCtr + 1) ?varTm resolvedRhsTy rest of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr restTm \<Rightarrow>
                       Inr (CoreTm_Let ?varName resolvedRhs
@@ -1340,27 +1716,27 @@ next
               triple_eq by (meson list.set_intros(2))
 
       \<comment> \<open>Build the extended environment\<close>
-      define gv' where "gv' = (if ghost = Ghost then finsert vn (TE_GhostVars env)
-                               else fminus (TE_GhostVars env) {|vn|})"
-      define env' where "env' = env \<lparr> TE_TermVars := fmupd vn resolvedRhsTy (TE_TermVars env),
-                                       TE_GhostVars := gv',
+      define gv' where "gv' = (if ghost = Ghost then finsert vn (TE_GhostLocals env)
+                               else fminus (TE_GhostLocals env) {|vn|})"
+      define env' where "env' = env \<lparr> TE_LocalVars := fmupd vn resolvedRhsTy (TE_LocalVars env),
+                                       TE_GhostLocals := gv',
                                        TE_ConstNames := finsert vn (TE_ConstNames env) \<rparr>"
 
       \<comment> \<open>env' is well-formed\<close>
       have wk: "is_well_kinded env resolvedRhsTy"
         using core_term_type_well_kinded[OF resolvedRhs_typed Cons.prems(4)] .
-      define env_no_cn where "env_no_cn = env \<lparr> TE_TermVars := fmupd vn resolvedRhsTy (TE_TermVars env),
-                                                  TE_GhostVars := gv' \<rparr>"
+      define env_no_cn where "env_no_cn = env \<lparr> TE_LocalVars := fmupd vn resolvedRhsTy (TE_LocalVars env),
+                                                  TE_GhostLocals := gv' \<rparr>"
       have wf_no_cn: "tyenv_well_formed env_no_cn"
       proof (cases ghost)
         case Ghost
-        show ?thesis using tyenv_well_formed_add_ghost_var[OF Cons.prems(4) wk ground] Ghost
+        show ?thesis using tyenv_well_formed_add_ghost_var[OF Cons.prems(4) wk] Ghost
           by (simp add: env_no_cn_def gv'_def)
       next
         case NotGhost
-        have "is_runtime_type env resolvedRhsTy"
+        have rt: "is_runtime_type env resolvedRhsTy"
           using core_term_type_notghost_runtime[OF _ Cons.prems(4)] resolvedRhs_typed NotGhost by simp
-        thus ?thesis using tyenv_well_formed_add_var[OF Cons.prems(4) wk ground] NotGhost
+        thus ?thesis using tyenv_well_formed_add_var[OF Cons.prems(4) wk rt] NotGhost
           by (simp add: env_no_cn_def gv'_def)
       qed
       have env'_eq_cn: "env' = env_no_cn \<lparr> TE_ConstNames := finsert vn (TE_ConstNames env) \<rparr>"
@@ -1370,10 +1746,11 @@ next
 
       \<comment> \<open>The variable typechecks in env'\<close>
       have var_typed: "core_term_type env' ghost (CoreTm_Var vn) = Some resolvedRhsTy"
-        by (cases ghost) (simp_all add: env'_def gv'_def)
+        by (cases ghost)
+           (simp_all add: env'_def gv'_def tyenv_lookup_var_def tyenv_var_ghost_def)
 
       \<comment> \<open>lhsTm typechecks in env' by weakening (vn not free in lhsTm)\<close>
-      have gv'_agree: "\<forall>y. y \<noteq> vn \<longrightarrow> (y |\<in>| gv' \<longleftrightarrow> y |\<in>| TE_GhostVars env)"
+      have gv'_agree: "\<forall>y. y \<noteq> vn \<longrightarrow> (y |\<in>| gv' \<longleftrightarrow> y |\<in>| TE_GhostLocals env)"
         by (auto simp: gv'_def)
       have lhs_typed': "core_term_type env' ghost lhsTm = Some lhsTy"
         using core_term_type_irrelevant_var[OF lhs_fresh Cons.prems(2) gv'_agree]
@@ -1383,7 +1760,7 @@ next
       \<comment> \<open>cmpTm typechecks in env'\<close>
       have cmpTy_bool: "cmpTy = CoreTy_Bool"
         using elab_binop_with_special_comparison_bool[OF elab op_cmp] .
-      have elab_vn: "elab_binop_with_special loc ghost op lhsTm lhsTy (CoreTm_Var vn) resolvedRhsTy
+      have elab_vn: "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy (CoreTm_Var vn) resolvedRhsTy
                      = Inr (cmpTm, cmpTy)"
         using elab using vn_eq by auto
       have cmp_typed: "core_term_type env' ghost cmpTm = Some CoreTy_Bool"
@@ -1406,7 +1783,7 @@ next
       qed
 
       \<comment> \<open>restTm typechecks in env' by the inductive hypothesis\<close>
-      have recurse_vn: "build_comparison_chain loc ghost (chainCtr + 1)
+      have recurse_vn: "build_comparison_chain is_flex loc ghost (chainCtr + 1)
                           (CoreTm_Var vn) resolvedRhsTy rest = Inr restTm"
         using recurse using vn_eq by auto
       have rest_typed: "core_term_type env' ghost restTm = Some CoreTy_Bool"
@@ -1432,7 +1809,7 @@ qed
 
 (* Correctness of process_binop_chain *)
 lemma process_binop_chain_correct:
-  assumes "process_binop_chain loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
+  assumes "process_binop_chain is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
@@ -1447,7 +1824,7 @@ next
   proof (cases "?firstOp = BabBinop_Implies \<or> ?firstOp = BabBinop_ImpliedBy")
     case True
     \<comment> \<open>Implies chain: right-associates (check_implies_chain must pass, else we'd get Inl)\<close>
-    with assms(1) Cons have "fold_implies_right loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
+    with assms(1) Cons have "fold_implies_right is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
       by (auto simp: Let_def split: if_splits)
     thus ?thesis using fold_implies_right_correct assms(2,3,4) by blast
   next
@@ -1461,7 +1838,7 @@ next
         by (auto simp: Let_def split: sum.splits if_splits)
       from assms(1) Cons not_implies True
       obtain chainTm where
-        chain_ok: "build_comparison_chain loc ghost 0 lhsTm lhsTy ops = Inr chainTm"
+        chain_ok: "build_comparison_chain is_flex loc ghost 0 lhsTm lhsTy ops = Inr chainTm"
         and result: "resultTm = chainTm" and rty: "resultTy = CoreTy_Bool"
         by (auto simp: Let_def split: sum.splits if_splits)
       have "core_term_type env ghost chainTm = Some CoreTy_Bool"
@@ -1471,7 +1848,7 @@ next
       case False
       \<comment> \<open>Left-associate\<close>
       with assms(1) Cons not_implies have
-        "fold_binop_left loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
+        "fold_binop_left is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
         by (auto simp: Let_def split: if_splits)
       thus ?thesis using fold_binop_left_correct assms(2,3,4) by blast
     qed
@@ -1484,17 +1861,25 @@ qed
 (* ========================================================================== *)
 
 (* Correctness theorem for elab_term and elab_term_list.
-   If elaboration succeeds, the resulting term(s) have the claimed type(s). *)
+   If elaboration succeeds, the resulting term(s) are well-typed in env extended
+   with the fresh metavariables introduced during elaboration (the interval
+   [next_mv ..< next_mv']).
+
+   The freshness precondition (fourth assumption) says that next_mv is strictly
+   greater than every type variable already in env. This ensures that the fresh
+   metas the elaborator generates don't collide with existing ones. *)
 theorem elab_term_correct:
   "elab_term env typedefs ghost tm next_mv = Inr (newTm, ty, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
    typedefs_well_formed env typedefs \<Longrightarrow>
-   core_term_type env ghost newTm = Some ty"
+   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
+   core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newTm = Some ty"
 and elab_term_list_correct:
   "elab_term_list env typedefs ghost tms next_mv = Inr (newTms, tys, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
    typedefs_well_formed env typedefs \<Longrightarrow>
-   list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) newTms tys"
+   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
+   list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty) newTms tys"
 proof (induction env typedefs ghost tm next_mv and env typedefs ghost tms next_mv
        arbitrary: newTm ty next_mv' and newTms tys next_mv'
        rule: elab_term_elab_term_list.induct)
@@ -1531,20 +1916,37 @@ next
 next
   \<comment> \<open>Case: BabTm_Cast\<close>
   case (3 env typedefs ghost loc targetTy operand next_mv)
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract intermediate results\<close>
   from "3.prems"(1) obtain newTargetTy where
     elab_target: "elab_type env typedefs ghost targetTy = Inr newTargetTy"
     by (auto split: sum.splits)
-  from "3.prems"(1) elab_target obtain newOperand operandTy next_mv' where
-    elab_operand: "elab_term env typedefs ghost operand next_mv = Inr (newOperand, operandTy, next_mv')"
+  from "3.prems"(1) elab_target obtain newOperand operandTy next_mv'' where
+    elab_operand: "elab_term env typedefs ghost operand next_mv = Inr (newOperand, operandTy, next_mv'')"
     by (auto split: sum.splits)
+  \<comment> \<open>Cast forwards the operand's next_mv, so next_mv' = next_mv''\<close>
+  from "3.prems"(1) elab_target elab_operand have next_mv_eq: "next_mv' = next_mv''"
+    by (auto split: if_splits CoreType.splits)
   from "3.prems"(1) elab_target elab_operand have
     target_is_int: "is_integer_type newTargetTy"
     by (auto split: if_splits)
 
-  \<comment> \<open>IH: operand has its type\<close>
-  have ih: "core_term_type env ghost newOperand = Some operandTy"
-    using "3.IH" elab_target elab_operand "3.prems"(2,3) by simp
+  \<comment> \<open>IH: operand has its type in the extended env\<close>
+  have ih: "core_term_type ?env' ghost newOperand = Some operandTy"
+    by (simp add: "3.IH" "3.prems"(2,3,4) elab_operand elab_target next_mv_eq)
+
+  \<comment> \<open>Target type is well-kinded / runtime in the original env and so also in ?env'\<close>
+  have target_wk_env: "is_well_kinded env newTargetTy"
+    using elab_target "3.prems"(2,3) elab_type_is_well_kinded by simp
+  have target_rt_env: "ghost = NotGhost \<longrightarrow> is_runtime_type env newTargetTy"
+    using elab_target "3.prems"(2,3) elab_type_notghost_is_runtime by (cases ghost) auto
+  have target_wk: "is_well_kinded ?env' newTargetTy"
+    using target_wk_env is_well_kinded_extend_tyvars
+    unfolding extend_env_with_tyvars_def
+    by (simp add: is_integer_type_well_kinded target_is_int)
+  have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' newTargetTy"
+    using target_rt_env is_runtime_type_extend_runtime_tyvars
+    unfolding extend_env_with_tyvars_def by auto
 
   show ?case
   proof (cases operandTy)
@@ -1555,14 +1957,15 @@ next
               "ty = newTargetTy"
       by auto
     \<comment> \<open>After substitution, the term has type newTargetTy\<close>
-    have subst_wk: "\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_well_kinded env ty"
-      by (simp add: fmran'_singleton_subst is_integer_type_well_kinded target_is_int)
-    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_runtime_type env ty)"
-      by (metis "3.prems"(2,3) elab_target elab_type_notghost_is_runtime(1) fmempty_lookup fmran'E
-          fmupd_lookup option.discI option.inject singleton_subst_def)
-    have "core_term_type env ghost (apply_subst_to_term (singleton_subst n newTargetTy) newOperand)
+    have subst_wk: "\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_well_kinded ?env' ty"
+      using target_wk by (simp add: fmran'_singleton_subst)
+    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_runtime_type ?env' ty)"
+      using target_rt by (simp add: fmran'_singleton_subst)
+    have wf: "tyenv_well_formed ?env'"
+      using "3.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+    have "core_term_type ?env' ghost (apply_subst_to_term (singleton_subst n newTargetTy) newOperand)
         = Some (apply_subst (singleton_subst n newTargetTy) operandTy)"
-      using ih "3.prems"(2) subst_wk subst_rt apply_subst_to_term_preserves_typing by blast
+      using ih wf subst_wk subst_rt apply_subst_to_term_preserves_typing by blast
     also have "apply_subst (singleton_subst n newTargetTy) operandTy = newTargetTy"
       using CoreTy_Meta apply_subst_singleton by blast
     finally show ?thesis using result by simp
@@ -1574,8 +1977,6 @@ next
       by auto
     have operand_is_int: "is_integer_type operandTy"
       using CoreTy_FiniteInt by simp
-    have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env newTargetTy"
-      using elab_target "3.prems"(2,3) elab_type_notghost_is_runtime by (cases ghost) auto
     show ?thesis using result ih operand_is_int target_is_int target_rt by auto
   next
     case CoreTy_MathInt
@@ -1585,15 +1986,13 @@ next
       by auto
     have operand_is_int: "is_integer_type operandTy"
       using CoreTy_MathInt by simp
-    have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env newTargetTy"
-      using elab_target "3.prems"(2,3) elab_type_notghost_is_runtime by (cases ghost) auto
     show ?thesis using result ih operand_is_int target_is_int target_rt by auto
   next
     \<comment> \<open>Other cases result in error, so don't reach Inr\<close>
     case CoreTy_Bool
     with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
   next
-    case (CoreTy_Name x1 x2)
+    case (CoreTy_Datatype x1 x2)
     with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
   next
     case CoreTy_MathReal
@@ -1609,6 +2008,7 @@ next
 next
   \<comment> \<open>Case: BabTm_If - elaborates to CoreTm_Match with True/False patterns\<close>
   case (4 env typedefs ghost loc condTm thenTm elseTm next_mv)
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
 
   \<comment> \<open>Extract intermediate elaboration results\<close>
   from "4.prems"(1) obtain newCond condTy next_mv1 where
@@ -1621,6 +2021,10 @@ next
     elab_else: "elab_term env typedefs ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
     by (auto split: sum.splits)
 
+  \<comment> \<open>If forwards elseTm's next_mv so outer next_mv' = next_mv3\<close>
+  from "4.prems"(1) elab_cond elab_then elab_else have next_mv_eq: "next_mv' = next_mv3"
+    by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
+
   \<comment> \<open>Get the final condition after possible metavariable specialization\<close>
   define finalCond where
     "finalCond = (case condTy of CoreTy_Meta n \<Rightarrow> apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond | _ \<Rightarrow> newCond)"
@@ -1630,16 +2034,44 @@ next
     "condTy = CoreTy_Bool \<or> (\<exists>n. condTy = CoreTy_Meta n)"
     by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
 
-  \<comment> \<open>IH: elaborated subterms have their claimed types\<close>
-  have ih_cond: "core_term_type env ghost newCond = Some condTy"
-    using "4.IH"(1) elab_cond "4.prems"(2,3) by simp
-  have ih_then: "core_term_type env ghost newThen = Some thenTy"
-    using "4.IH"(2) elab_cond elab_then "4.prems"(2,3) by simp
-  have ih_else: "core_term_type env ghost newElse = Some elseTy"
-    using "4.IH"(3) elab_cond elab_then elab_else "4.prems"(2,3) by simp
+  \<comment> \<open>Monotonicity: next_mv \<le> next_mv1 \<le> next_mv2 \<le> next_mv3\<close>
+  have mono_12: "next_mv \<le> next_mv1"
+    using elab_term_next_mv_monotone[OF elab_cond] .
+  have mono_23: "next_mv1 \<le> next_mv2"
+    using elab_term_next_mv_monotone[OF elab_then] .
+  have mono_34: "next_mv2 \<le> next_mv3"
+    using elab_term_next_mv_monotone[OF elab_else] .
 
-  \<comment> \<open>Final condition has type Bool\<close>
-  have ih_finalCond: "core_term_type env ghost finalCond = Some CoreTy_Bool"
+  \<comment> \<open>Freshness preconditions for each sub-call\<close>
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
+    using "4.prems"(4) mono_12 by fastforce
+  have fresh_2: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv2"
+    using "4.prems"(4) mono_12 mono_23 by fastforce
+
+  \<comment> \<open>IH: elaborated subterms have their claimed types in their respective sub-envs\<close>
+  have ih_cond_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost newCond = Some condTy"
+    using "4.IH"(1) elab_cond "4.prems"(2,3,4) by simp
+  have ih_then_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost newThen = Some thenTy"
+    using "4.IH"(2) elab_cond elab_then "4.prems"(2,3) fresh_1 by simp
+  have ih_else_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv2 next_mv3) ghost newElse = Some elseTy"
+    using "4.IH"(3) elab_cond elab_then elab_else "4.prems"(2,3) fresh_2 by simp
+
+  \<comment> \<open>Lift all IHs into the outer extended env\<close>
+  have ih_cond: "core_term_type ?env' ghost newCond = Some condTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF ih_cond_sub, where lo'=next_mv and hi'=next_mv']
+          mono_12 mono_23 mono_34 next_mv_eq by simp
+  have ih_then: "core_term_type ?env' ghost newThen = Some thenTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF ih_then_sub, where lo'=next_mv and hi'=next_mv']
+          mono_12 mono_23 mono_34 next_mv_eq by simp
+  have ih_else: "core_term_type ?env' ghost newElse = Some elseTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF ih_else_sub, where lo'=next_mv and hi'=next_mv']
+          mono_12 mono_23 mono_34 next_mv_eq by simp
+
+  have wf': "tyenv_well_formed ?env'"
+    using "4.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+
+  \<comment> \<open>Final condition has type Bool in ?env'\<close>
+  have ih_finalCond: "core_term_type ?env' ghost finalCond = Some CoreTy_Bool"
     using condTy_bool_or_meta
   proof
     assume "condTy = CoreTy_Bool"
@@ -1649,9 +2081,9 @@ next
     then obtain n where condTy_meta: "condTy = CoreTy_Meta n" by blast
     hence "finalCond = apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond"
       by (simp add: finalCond_def)
-    moreover have "core_term_type env ghost (apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond)
+    moreover have "core_term_type ?env' ghost (apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond)
                  = Some (apply_subst (singleton_subst n CoreTy_Bool) condTy)"
-      using ih_cond "4.prems"(2) apply_subst_to_term_preserves_typing
+      using ih_cond wf' apply_subst_to_term_preserves_typing
       by (simp add: fmran'_singleton_subst)
     moreover have "apply_subst (singleton_subst n CoreTy_Bool) condTy = CoreTy_Bool"
       using condTy_meta apply_subst_singleton by auto
@@ -1660,7 +2092,7 @@ next
 
   \<comment> \<open>Now handle the two cases: unification succeeds or integer coercion\<close>
   show ?case
-  proof (cases "unify thenTy elseTy")
+  proof (cases "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) thenTy elseTy")
     case (Some branchSubst)
     \<comment> \<open>Unification succeeded\<close>
     let ?resultTy = "apply_subst branchSubst thenTy"
@@ -1676,27 +2108,27 @@ next
     from unify_sound[OF Some] have unified: "apply_subst branchSubst thenTy = apply_subst branchSubst elseTy" .
 
     \<comment> \<open>Substituted branches have the result type\<close>
-    have branchSubst_wk: "\<forall>ty \<in> fmran' branchSubst. is_well_kinded env ty"
-      using Some ih_then ih_else "4.prems"(2) core_term_type_well_kinded unify_preserves_well_kinded by blast
-    have branchSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' branchSubst. is_runtime_type env ty)"
-      using Some ih_then ih_else "4.prems"(2) core_term_type_notghost_runtime unify_preserves_runtime by blast
+    have branchSubst_wk: "\<forall>ty \<in> fmran' branchSubst. is_well_kinded ?env' ty"
+      using Some ih_then ih_else wf' core_term_type_well_kinded unify_preserves_well_kinded by blast
+    have branchSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' branchSubst. is_runtime_type ?env' ty)"
+      using Some ih_then ih_else wf' core_term_type_notghost_runtime unify_preserves_runtime by blast
 
-    have then'_typed: "core_term_type env ghost ?newThen' = Some ?resultTy"
-      using ih_then "4.prems"(2) branchSubst_wk branchSubst_rt apply_subst_to_term_preserves_typing by blast
-    have else'_typed: "core_term_type env ghost ?newElse' = Some ?resultTy"
-      using ih_else "4.prems"(2) branchSubst_wk branchSubst_rt apply_subst_to_term_preserves_typing unified by fastforce
+    have then'_typed: "core_term_type ?env' ghost ?newThen' = Some ?resultTy"
+      using ih_then wf' branchSubst_wk branchSubst_rt apply_subst_to_term_preserves_typing by blast
+    have else'_typed: "core_term_type ?env' ghost ?newElse' = Some ?resultTy"
+      using ih_else wf' branchSubst_wk branchSubst_rt apply_subst_to_term_preserves_typing unified by fastforce
 
     \<comment> \<open>The match typechecks\<close>
-    have "core_term_type env ghost (CoreTm_Match finalCond ?matchArms) = Some ?resultTy"
+    have "core_term_type ?env' ghost (CoreTm_Match finalCond ?matchArms) = Some ?resultTy"
     proof -
       have "?matchArms \<noteq> []" by simp
-      have pats_compat: "list_all (\<lambda>p. pattern_compatible env p CoreTy_Bool) (map fst ?matchArms)"
+      have pats_compat: "list_all (\<lambda>p. pattern_compatible ?env' p CoreTy_Bool) (map fst ?matchArms)"
         by simp
       have pats_regular: "patterns_regular (map fst ?matchArms)"
         by (simp add: patterns_regular_def)
-      have pats_exhaustive: "patterns_exhaustive env CoreTy_Bool (map fst ?matchArms)"
+      have pats_exhaustive: "patterns_exhaustive ?env' CoreTy_Bool (map fst ?matchArms)"
         by simp
-      have bodies_typed: "list_all (\<lambda>body. core_term_type env ghost body = Some ?resultTy) (map snd ?matchArms)"
+      have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some ?resultTy) (map snd ?matchArms)"
         using then'_typed else'_typed by simp
       show ?thesis
         using ih_finalCond \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
@@ -1719,24 +2151,24 @@ next
       by (auto simp: finalCond_def Let_def split: CoreType.splits)
 
     \<comment> \<open>From coerce_to_common_int_type_correct: coerced terms have common type\<close>
-    have coerced_typed: "core_term_type env ghost coercedThen = Some commonTy
-                       \<and> core_term_type env ghost coercedElse = Some commonTy"
-      using coerce_to_common_int_type_correct[OF coerce ih_then ih_else "4.prems"(2)] .
-    hence coerced_then_typed: "core_term_type env ghost coercedThen = Some commonTy"
-      and coerced_else_typed: "core_term_type env ghost coercedElse = Some commonTy"
+    have coerced_typed: "core_term_type ?env' ghost coercedThen = Some commonTy
+                       \<and> core_term_type ?env' ghost coercedElse = Some commonTy"
+      using coerce_to_common_int_type_correct[OF coerce ih_then ih_else wf'] .
+    hence coerced_then_typed: "core_term_type ?env' ghost coercedThen = Some commonTy"
+      and coerced_else_typed: "core_term_type ?env' ghost coercedElse = Some commonTy"
       by simp_all
 
     \<comment> \<open>The match typechecks\<close>
-    have "core_term_type env ghost (CoreTm_Match finalCond ?matchArms) = Some commonTy"
+    have "core_term_type ?env' ghost (CoreTm_Match finalCond ?matchArms) = Some commonTy"
     proof -
       have "?matchArms \<noteq> []" by simp
-      have pats_compat: "list_all (\<lambda>p. pattern_compatible env p CoreTy_Bool) (map fst ?matchArms)"
+      have pats_compat: "list_all (\<lambda>p. pattern_compatible ?env' p CoreTy_Bool) (map fst ?matchArms)"
         by simp
       have pats_regular: "patterns_regular (map fst ?matchArms)"
         by (simp add: patterns_regular_def)
-      have pats_exhaustive: "patterns_exhaustive env CoreTy_Bool (map fst ?matchArms)"
+      have pats_exhaustive: "patterns_exhaustive ?env' CoreTy_Bool (map fst ?matchArms)"
         by simp
-      have bodies_typed: "list_all (\<lambda>body. core_term_type env ghost body = Some commonTy) (map snd ?matchArms)"
+      have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some commonTy) (map snd ?matchArms)"
         using coerced_then_typed coerced_else_typed by simp
       show ?thesis
         using ih_finalCond \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
@@ -1748,14 +2180,21 @@ next
 next
   \<comment> \<open>Case: BabTm_Unop\<close>
   case (5 env typedefs ghost loc op operand next_mv)
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract intermediate results\<close>
-  from "5.prems"(1) obtain newOperand operandTy next_mv' where
-    elab_operand: "elab_term env typedefs ghost operand next_mv = Inr (newOperand, operandTy, next_mv')"
+  from "5.prems"(1) obtain newOperand operandTy next_mv'' where
+    elab_operand: "elab_term env typedefs ghost operand next_mv = Inr (newOperand, operandTy, next_mv'')"
     by (auto split: sum.splits)
+  \<comment> \<open>Unop forwards the operand's next_mv\<close>
+  from "5.prems"(1) elab_operand have next_mv_eq: "next_mv' = next_mv''"
+    by (auto simp: Let_def split: CoreType.splits BabUnop.splits if_splits)
 
-  \<comment> \<open>IH: operand has its type\<close>
-  have ih: "core_term_type env ghost newOperand = Some operandTy"
-    using "5.IH" elab_operand "5.prems"(2,3) by simp
+  have wf': "tyenv_well_formed ?env'"
+    using "5.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+
+  \<comment> \<open>IH: operand has its type in the extended env\<close>
+  have ih: "core_term_type ?env' ghost newOperand = Some operandTy"
+    using "5.IH"[OF elab_operand "5.prems"(2,3,4)] next_mv_eq by simp
 
   show ?case
   proof (cases operandTy)
@@ -1771,15 +2210,15 @@ next
       by (auto simp: Let_def)
 
     \<comment> \<open>Substitution properties\<close>
-    have subst_wk: "\<forall>ty \<in> fmran' ?subst. is_well_kinded env ty"
+    have subst_wk: "\<forall>ty \<in> fmran' ?subst. is_well_kinded ?env' ty"
       by (simp add: fmran'_singleton_subst default_type_for_unop_is_well_kinded)
-    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?subst. is_runtime_type env ty)"
+    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?subst. is_runtime_type ?env' ty)"
       by (simp add: fmran'_singleton_subst default_type_for_unop_is_runtime)
 
     \<comment> \<open>After substitution, operand has the default type\<close>
-    have "core_term_type env ghost ?newOperand2 = Some (apply_subst ?subst operandTy)"
-      using ih "5.prems"(2) subst_wk subst_rt apply_subst_to_term_preserves_typing by blast
-    hence operand2_typed: "core_term_type env ghost ?newOperand2 = Some ?defaultTy"
+    have "core_term_type ?env' ghost ?newOperand2 = Some (apply_subst ?subst operandTy)"
+      using ih wf' subst_wk subst_rt apply_subst_to_term_preserves_typing by blast
+    hence operand2_typed: "core_term_type ?env' ghost ?newOperand2 = Some ?defaultTy"
       using CoreTy_Meta apply_subst_singleton by simp
 
     \<comment> \<open>The default type satisfies the operator's requirement\<close>
@@ -1856,7 +2295,7 @@ next
     qed
   next
     \<comment> \<open>Other operand types result in error\<close>
-    case (CoreTy_Name x1 x2)
+    case (CoreTy_Datatype x1 x2)
     with "5.prems"(1) elab_operand show ?thesis by (cases op) auto
   next
     case CoreTy_MathReal
@@ -1887,6 +2326,8 @@ next
 next
   \<comment> \<open>Case: BabTm_Binop\<close>
   case (6 env typedefs ghost loc lhs operands next_mv)
+  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract elaboration of LHS\<close>
   from "6.prems"(1) obtain newLhs lhsTy next_mv1 where
     elab_lhs: "elab_term env typedefs ghost lhs next_mv = Inr (newLhs, lhsTy, next_mv1)"
@@ -1901,23 +2342,46 @@ next
   let ?opList = "map (\<lambda>(op, tm_ty). (op, fst tm_ty, snd tm_ty)) ?opTriples"
   \<comment> \<open>Extract process_binop_chain success\<close>
   from "6.prems"(1) elab_lhs elab_rhs_list obtain resultTm resultTy where
-    process_result: "process_binop_chain loc ghost newLhs lhsTy ?opList = Inr (resultTm, resultTy)"
+    process_result: "process_binop_chain ?is_flex loc ghost newLhs lhsTy ?opList = Inr (resultTm, resultTy)"
     and result_eq: "newTm = resultTm" "ty = resultTy"
     by (auto simp: Let_def split: sum.splits)
-  \<comment> \<open>IH on LHS: newLhs has type lhsTy\<close>
-  have lhs_typing: "core_term_type env ghost newLhs = Some lhsTy"
-    using "6.IH"(1)[OF elab_lhs "6.prems"(2,3)] .
-  \<comment> \<open>IH on RHS list: each rhsTm has its corresponding type\<close>
-  have rhs_typing: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) rhsTms rhsTys"
-    by (simp add: "6.IH"(2) "6.prems"(2,3) elab_lhs elab_rhs_list)
+  \<comment> \<open>Binop forwards elab_term_list's next_mv\<close>
+  from "6.prems"(1) elab_lhs elab_rhs_list process_result have next_mv_eq: "next_mv' = next_mv2"
+    by (auto simp: Let_def split: sum.splits)
+  have mono_1: "next_mv \<le> next_mv1"
+    using elab_term_next_mv_monotone[OF elab_lhs] .
+  have mono_2: "next_mv1 \<le> next_mv2"
+    using elab_term_list_next_mv_monotone[OF elab_rhs_list] .
+  have wf': "tyenv_well_formed ?env'"
+    using "6.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+  \<comment> \<open>IH on LHS: newLhs has type lhsTy in the extended env\<close>
+  have lhs_typing_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost newLhs = Some lhsTy"
+    using "6.IH"(1)[OF elab_lhs "6.prems"(2,3,4)] .
+  have lhs_typing: "core_term_type ?env' ghost newLhs = Some lhsTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF lhs_typing_sub, where lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by simp
+  \<comment> \<open>Freshness carries forward through the lhs sub-call\<close>
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
+    using "6.prems"(4) mono_1 by fastforce
+  \<comment> \<open>IH on RHS list: each rhsTm has its corresponding type in the extended env\<close>
+  have rhs_typing_sub: "list_all2 (\<lambda>tm ty. core_term_type
+                                      (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
+                                    rhsTms rhsTys"
+    using "6.IH"(2) "6.prems"(2,3) elab_lhs elab_rhs_list fresh_1 by simp
+  have rhs_typing: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) rhsTms rhsTys"
+  proof -
+    have "\<And>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty \<Longrightarrow>
+                  core_term_type ?env' ghost tm = Some ty"
+      using core_term_type_extend_env_with_tyvars_mono mono_1 mono_2 next_mv_eq by blast
+    thus ?thesis using rhs_typing_sub by (auto elim!: list_all2_mono)
+  qed
   \<comment> \<open>Convert list_all2 on rhsTms/rhsTys to list_all on opList\<close>
   have rhs_len: "length rhsTms = length rhsTys"
     using rhs_typing by (auto dest: list_all2_lengthD)
-  have ops_typed: "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ?opList"
+  have ops_typed: "list_all (\<lambda>(op, tm, ty). core_term_type ?env' ghost tm = Some ty) ?opList"
   proof (unfold list_all_iff, intro ballI, clarify)
     fix op tm tyR
     assume in_set: "(op, tm, tyR) \<in> set ?opList"
-    \<comment> \<open>Element of opList comes from zipping operators with (rhsTm, rhsTy) pairs\<close>
     from in_set obtain tmTy where
       tmTy_in: "(op, tmTy) \<in> set (zip (map fst operands) (zip rhsTms rhsTys))" and
       tmTy_eq: "tm = fst tmTy" "tyR = snd tmTy"
@@ -1927,70 +2391,175 @@ next
     then obtain i where i_bound: "i < length rhsTms" and "i < length rhsTys"
       and tm_eq: "tm = rhsTms ! i" and ty_eq: "tyR = rhsTys ! i"
       using tmTy_eq rhs_len by (auto simp: set_zip in_set_conv_nth)
-    thus "core_term_type env ghost tm = Some tyR"
+    thus "core_term_type ?env' ghost tm = Some tyR"
       using rhs_typing by (auto dest: list_all2_nthD)
   qed
   \<comment> \<open>Apply process_binop_chain_correct\<close>
-  have "core_term_type env ghost resultTm = Some resultTy"
-    using process_binop_chain_correct[OF process_result lhs_typing ops_typed "6.prems"(2)] .
+  have "core_term_type ?env' ghost resultTm = Some resultTy"
+    using process_binop_chain_correct[OF process_result lhs_typing ops_typed wf'] .
   thus ?case using result_eq by simp
 
 next
   \<comment> \<open>Case: BabTm_Let\<close>
   case (7 env typedefs ghost loc varName rhs body next_mv)
-  \<comment> \<open>Extract intermediate results from elaboration\<close>
+  let ?env_ext = "extend_env_with_tyvars env ghost next_mv next_mv'"
+
+  \<comment> \<open>Extract rhs elaboration and the resolved-type check\<close>
   from "7.prems"(1) obtain rhsTm rhsTy next_mv1 where
     elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
     by (auto split: sum.splits)
-  from "7.prems"(1) elab_rhs have rhs_ground: "is_ground rhsTy"
+  from "7.prems"(1) elab_rhs have rhs_resolved:
+    "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_metavars_list rhsTy)"
     by (auto split: if_splits)
-  let ?env' = "env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
-                     TE_GhostVars := (if ghost = Ghost then finsert varName (TE_GhostVars env)
-                                      else fminus (TE_GhostVars env) {|varName|}),
-                     TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
-  from "7.prems"(1) elab_rhs rhs_ground obtain bodyTm bodyTy next_mv2 where
-    elab_body: "elab_term ?env' typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
+
+  \<comment> \<open>Build the let-body env (as used in both elab_term and core_term_type)\<close>
+  let ?body_env = "env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
+                         TE_GhostLocals := (if ghost = Ghost
+                                             then finsert varName (TE_GhostLocals env)
+                                             else fminus (TE_GhostLocals env) {|varName|}),
+                         TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+
+  from "7.prems"(1) elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
+    elab_body: "elab_term ?body_env typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
     result_eq: "newTm = CoreTm_Let varName rhsTm bodyTm" "ty = bodyTy"
     by (auto simp: Let_def split: sum.splits)
-  \<comment> \<open>IH on rhs: rhsTm has type rhsTy\<close>
-  have rhs_typing: "core_term_type env ghost rhsTm = Some rhsTy"
-    using "7.IH"(1)[OF elab_rhs "7.prems"(2,3)] .
-  \<comment> \<open>Get well-kindedness and runtime properties of rhsTy\<close>
-  have rhs_props: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-    using core_term_type_well_kinded_and_runtime[OF rhs_typing "7.prems"(2)] .
-  hence rhs_wk: "is_well_kinded env rhsTy" by blast
-  \<comment> \<open>Show tyenv_well_formed env'\<close>
-  let ?env_no_cn' = "env \<lparr> TE_TermVars := fmupd varName rhsTy (TE_TermVars env),
-                           TE_GhostVars := (if ghost = Ghost then finsert varName (TE_GhostVars env)
-                                            else fminus (TE_GhostVars env) {|varName|}) \<rparr>"
-  have wf_no_cn': "tyenv_well_formed ?env_no_cn'"
+
+  \<comment> \<open>Let forwards body's next_mv\<close>
+  from "7.prems"(1) elab_rhs rhs_resolved elab_body have next_mv_eq: "next_mv' = next_mv2"
+    by (auto simp: Let_def split: sum.splits)
+
+  \<comment> \<open>Monotonicity\<close>
+  have mono_1: "next_mv \<le> next_mv1"
+    using elab_term_next_mv_monotone[OF elab_rhs] .
+  have mono_2: "next_mv1 \<le> next_mv2"
+    using elab_term_next_mv_monotone[OF elab_body] .
+
+  \<comment> \<open>IH on rhs: rhsTm has type rhsTy in extend_env_with_tyvars env ghost next_mv next_mv1\<close>
+  have rhs_typing_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost rhsTm = Some rhsTy"
+    using "7.IH"(1)[OF elab_rhs "7.prems"(2,3,4)] .
+  \<comment> \<open>Lift to ?env_ext\<close>
+  have rhs_typing: "core_term_type ?env_ext ghost rhsTm = Some rhsTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF rhs_typing_sub, where lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by simp
+
+  \<comment> \<open>Well-kindedness of rhsTy in env: follows directly from rhs_resolved via is_well_kinded_transfer.\<close>
+  have rhs_wk_env: "is_well_kinded env rhsTy"
+  proof -
+    have wf_sub: "tyenv_well_formed (extend_env_with_tyvars env ghost next_mv next_mv1)"
+      using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+    have rhs_wk_sub: "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1) rhsTy"
+      using core_term_type_well_kinded[OF "7.IH"(1)[OF elab_rhs "7.prems"(2,3,4)] wf_sub] .
+    have mvs_in_env: "type_metavars rhsTy \<subseteq> fset (TE_TypeVars env)"
+      using rhs_resolved
+      by (auto simp: set_type_metavars_list[symmetric] list_all_iff fset_of_list_elem)
+    show ?thesis
+      using is_well_kinded_transfer[OF rhs_wk_sub mvs_in_env]
+      by (simp add: extend_env_with_tyvars_def)
+  qed
+
+  \<comment> \<open>In non-ghost context, rhsTy is also runtime in env.
+     rhs_resolved pins rhsTy's metas into env.TE_TypeVars, and freshness (prems(4))
+     says those are all strictly below next_mv, so they're disjoint from the fresh
+     range [next_mv..<next_mv1]. Hence any meta in rhsTy that's runtime in the
+     sub-extended env is also runtime in the original env.\<close>
+  have rhs_rt_env: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
+  proof
+    assume ng: "ghost = NotGhost"
+    have wf_sub: "tyenv_well_formed (extend_env_with_tyvars env ghost next_mv next_mv1)"
+      using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+    have rhs_rt_sub: "is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1) rhsTy"
+      using core_term_type_notghost_runtime ng rhs_typing_sub wf_sub by auto
+    \<comment> \<open>Every meta in rhsTy is in env.TE_TypeVars (from rhs_resolved)\<close>
+    have metas_in_env_tv: "\<forall>n \<in> type_metavars rhsTy. n |\<in>| TE_TypeVars env"
+      using rhs_resolved by (auto simp: set_type_metavars_list[symmetric] list_all_iff)
+    \<comment> \<open>And every such meta is < next_mv (by freshness)\<close>
+    have metas_lt: "\<forall>n \<in> type_metavars rhsTy. n < next_mv"
+      using metas_in_env_tv "7.prems"(4) by blast
+    \<comment> \<open>In the sub-extended env, TE_RuntimeTypeVars = env.TE_RuntimeTypeVars \<union> [next_mv..<next_mv1].
+       Combined with metas_lt, any meta in rhsTy that's runtime in the sub-extended env
+       is also in env.TE_RuntimeTypeVars.\<close>
+    have metas_in_env_rtv: "type_metavars rhsTy \<subseteq> fset (TE_RuntimeTypeVars env)"
+    proof
+      fix n assume n_in: "n \<in> type_metavars rhsTy"
+      \<comment> \<open>From rhs_rt_sub we know n is in the sub-extended env's RT set\<close>
+      have rhs_mvs_rt: "type_metavars rhsTy \<subseteq>
+                          fset (TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1))"
+        using is_runtime_type_metavars_subset[OF rhs_rt_sub] .
+      from rhs_mvs_rt n_in
+      have "n |\<in>| TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1)"
+        by (auto simp: fset_of_list_elem)
+      hence n_in_ext_rtv: "n |\<in>| TE_RuntimeTypeVars env |\<union>| fset_of_list [next_mv..<next_mv1]"
+        using ng unfolding extend_env_with_tyvars_def by simp
+      from metas_lt n_in have "n < next_mv" by blast
+      hence "n \<notin> set [next_mv..<next_mv1]" by simp
+      hence "n |\<notin>| fset_of_list [next_mv..<next_mv1]" by (simp add: fset_of_list_elem)
+      with n_in_ext_rtv have "n |\<in>| TE_RuntimeTypeVars env" by blast
+      thus "n \<in> fset (TE_RuntimeTypeVars env)" by (simp add: fset_of_list_elem)
+    qed
+    show "is_runtime_type env rhsTy"
+      using is_runtime_type_transfer[OF rhs_rt_sub metas_in_env_rtv]
+      unfolding extend_env_with_tyvars_def by simp
+  qed
+
+  have wf_body_env: "tyenv_well_formed ?body_env"
   proof (cases "ghost = Ghost")
     case True
-    then show ?thesis
-      using tyenv_well_formed_add_ghost_var[OF "7.prems"(2) rhs_wk rhs_ground] by simp
+    thus ?thesis
+      using "7.prems"(2) rhs_wk_env tyenv_well_formed_add_ghost_var
+      by (simp add: tyenv_well_formed_TE_ConstNames_irrelevant)
   next
     case False
-    hence rhs_rt: "is_runtime_type env rhsTy" using rhs_props GhostOrNot.exhaust by blast
-    show ?thesis using False
-      tyenv_well_formed_add_var[OF "7.prems"(2) rhs_wk rhs_ground rhs_rt] by simp
+    hence ng: "ghost = NotGhost" by (cases ghost) simp_all
+    with rhs_rt_env have rhs_rt: "is_runtime_type env rhsTy" by simp
+    have wf_no_cn: "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
+                                              TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)"
+      using tyenv_well_formed_add_var[OF "7.prems"(2) rhs_wk_env rhs_rt] .
+    have env_rewrite: "?body_env =
+      (env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
+              TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)
+      \<lparr> TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+      using ng by simp
+    show ?thesis
+      using wf_no_cn tyenv_well_formed_TE_ConstNames_irrelevant env_rewrite by simp
   qed
-  have env'_eq_cn': "?env' = ?env_no_cn' \<lparr> TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
-    by simp
-  have wf_env': "tyenv_well_formed ?env'"
-    using wf_no_cn' tyenv_well_formed_TE_ConstNames_irrelevant env'_eq_cn' by simp
-  \<comment> \<open>Show typedefs_well_formed env' typedefs (only depends on TE_TypeVars and TE_Datatypes)\<close>
-  have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
-                     "TE_Datatypes ?env' = TE_Datatypes env" by simp_all
-  have wk_eq: "\<And>t. is_well_kinded ?env' t = is_well_kinded env t"
-    using is_well_kinded_cong_env[OF env'_fields] by simp
-  have td_wf': "typedefs_well_formed ?env' typedefs"
-    using "7.prems"(3) unfolding typedefs_well_formed_def wk_eq by auto
-  \<comment> \<open>IH on body: bodyTm has type bodyTy in env'\<close>
-  have body_typing: "core_term_type ?env' ghost bodyTm = Some bodyTy"
-    using "7.IH"(2) elab_rhs rhs_ground elab_body wf_env' td_wf' by simp
-  \<comment> \<open>Combine: core_term_type for CoreTm_Let\<close>
+
+  have td_wf_body: "typedefs_well_formed ?body_env typedefs"
+  proof -
+    have wk_eq: "\<And>t. is_well_kinded ?body_env t = is_well_kinded env t"
+      using is_well_kinded_cong_env[of ?body_env env] by simp
+    show ?thesis
+      using "7.prems"(3) unfolding typedefs_well_formed_def wk_eq by auto
+  qed
+
+  \<comment> \<open>Freshness carries through to next_mv1; ?body_env has same TE_TypeVars as env\<close>
+  have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> n < next_mv1"
+    using "7.prems"(4) mono_1 by fastforce
+
+  \<comment> \<open>IH on body: bodyTm has type bodyTy in extend_env_with_tyvars ?body_env ghost next_mv1 next_mv2\<close>
+  have body_typing_sub: "core_term_type (extend_env_with_tyvars ?body_env ghost next_mv1 next_mv2) ghost bodyTm = Some bodyTy"
+    using "7.IH"(2) elab_body elab_rhs rhs_resolved td_wf_body wf_body_env fresh_body by simp
+
+  \<comment> \<open>Show extend_env_with_tyvars ?body_env ghost next_mv1 next_mv2 equals the Let-extended ?env_ext\<close>
+  let ?core_body_env = "?env_ext \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars ?env_ext),
+                                    TE_GhostLocals := (if ghost = Ghost
+                                                        then finsert varName (TE_GhostLocals ?env_ext)
+                                                        else fminus (TE_GhostLocals ?env_ext) {|varName|}),
+                                    TE_ConstNames := finsert varName (TE_ConstNames ?env_ext) \<rparr>"
+
+  have env_widen_body: "core_term_type (extend_env_with_tyvars ?body_env ghost next_mv next_mv') ghost bodyTm = Some bodyTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF body_typing_sub,
+              where lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by simp
+
+  have env_eq: "extend_env_with_tyvars ?body_env ghost next_mv next_mv' = ?core_body_env"
+    unfolding extend_env_with_tyvars_def by simp
+
+  have body_typing: "core_term_type ?core_body_env ghost bodyTm = Some bodyTy"
+    using env_widen_body env_eq by simp
+
+  \<comment> \<open>Final: core_term_type of CoreTm_Let unfolds to the check on rhs and body in ?core_body_env\<close>
   show ?case
-    using rhs_typing rhs_ground body_typing result_eq
+    using result_eq rhs_typing body_typing
     by (simp add: Let_def)
 next
   \<comment> \<open>Case: BabTm_Quantifier (undefined)\<close>
@@ -2000,6 +2569,8 @@ next
 next
   \<comment> \<open>Case: BabTm_Call\<close>
   case (9 env typedefs ghost loc callee args next_mv)
+  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract intermediate results from elaboration\<close>
   from "9.prems"(1) obtain fnName tyArgs expArgTypes retType next_mv1 where
     det_call: "determine_fun_call_type env typedefs ghost callee next_mv
@@ -2011,8 +2582,11 @@ next
     elab_args: "elab_term_list env typedefs ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
     by (auto split: sum.splits)
   from "9.prems"(1) det_call len_args elab_args obtain finalArgTms finalSubst where
-    unify_args: "unify_call_args loc fnName 0 elabArgTms actualTypes expArgTypes fmempty
+    unify_args: "unify_call_args ?is_flex loc fnName 0 elabArgTms actualTypes expArgTypes fmempty
                  = Inr (finalArgTms, finalSubst)"
+    by (auto simp: Let_def split: sum.splits)
+  \<comment> \<open>BabTm_Call forwards elab_term_list's next_mv, so next_mv' = next_mv2\<close>
+  from "9.prems"(1) det_call len_args elab_args unify_args have next_mv_eq: "next_mv' = next_mv2"
     by (auto simp: Let_def split: sum.splits)
   from "9.prems"(1) det_call len_args elab_args unify_args have
     result_eq: "newTm = CoreTm_FunctionCall fnName (map (apply_subst finalSubst) tyArgs) finalArgTms"
@@ -2020,25 +2594,58 @@ next
     by (auto simp: Let_def)
 
   \<comment> \<open>Get function info from determine_fun_call_type_correct\<close>
-  from determine_fun_call_type_correct[OF det_call "9.prems"(2,3)] obtain funInfo where
+  have det_correct: "next_mv \<le> next_mv1
+       \<and> (\<exists>funInfo.
+           fmlookup (TE_Functions env) fnName = Some funInfo
+         \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
+         \<and> length tyArgs = length (FI_TyArgs funInfo)
+         \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs
+         \<and> (ghost = NotGhost \<longrightarrow>
+              list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs)
+         \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                             (FI_TmArgs funInfo)
+         \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                  (FI_ReturnType funInfo))"
+    using determine_fun_call_type_correct[OF det_call "9.prems"(2,3)] .
+  from det_correct have mono_1: "next_mv \<le> next_mv1" by blast
+  from det_correct obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
-    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
-    tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
+    tyargs_wk_ext: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
+    tyargs_rt_ext: "ghost = NotGhost \<longrightarrow>
+                    list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
     expArgTypes_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                                        (FI_TmArgs funInfo)" and
     retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                        (FI_ReturnType funInfo)"
     by blast
 
-  \<comment> \<open>From IH on elab_term_list: elaborated args have their types\<close>
-  have ih_args: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) elabArgTms actualTypes"
-    by (simp add: "9.IH" "9.prems"(2,3) det_call elab_args len_args)
+  \<comment> \<open>Freshness carries through det_call\<close>
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
+    using "9.prems"(4) mono_1 by fastforce
+  \<comment> \<open>From IH on elab_term_list: elaborated args have their types in a sub-extended env\<close>
+  have ih_args_sub: "list_all2 (\<lambda>tm ty. core_term_type
+                                  (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
+                               elabArgTms actualTypes"
+    using "9.IH" "9.prems"(2,3) det_call elab_args len_args fresh_1 by simp
+  have mono_2: "next_mv1 \<le> next_mv2"
+    using elab_term_list_next_mv_monotone[OF elab_args] .
+  \<comment> \<open>Lift ih_args_sub to the outer extended env\<close>
+  have ih_args: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty)
+                           elabArgTms actualTypes"
+  proof -
+    have "\<And>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty \<Longrightarrow>
+                  core_term_type ?env' ghost tm = Some ty"
+      using core_term_type_extend_env_with_tyvars_mono[where lo=next_mv1 and hi=next_mv2
+                                                        and lo'=next_mv and hi'=next_mv']
+            mono_1 mono_2 next_mv_eq by simp
+    thus ?thesis using ih_args_sub by (auto elim!: list_all2_mono)
+  qed
 
   \<comment> \<open>Extract unify_call_types result from unify_call_args\<close>
   obtain unifySubst where
-    unify_types: "unify_call_types loc fnName 0 actualTypes expArgTypes fmempty = Inr unifySubst" and
+    unify_types: "unify_call_types ?is_flex loc fnName 0 actualTypes expArgTypes fmempty = Inr unifySubst" and
     finalArgTms_eq: "finalArgTms = apply_call_coercions unifySubst elabArgTms actualTypes expArgTypes" and
     finalSubst_eq: "finalSubst = unifySubst"
   proof -
@@ -2052,79 +2659,104 @@ next
   have len_actualTypes: "length actualTypes = length expArgTypes"
     using len_args elab_args by (simp add: elab_term_list_length)
 
-  \<comment> \<open>Need well-kindedness and runtime properties for actualTypes and expArgTypes\<close>
-  \<comment> \<open>From ih_args and core_term_type_well_kinded\<close>
-  have actualTypes_wk: "list_all (is_well_kinded env) actualTypes"
+  have wf': "tyenv_well_formed ?env'"
+    using "9.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+
+  \<comment> \<open>Need well-kindedness and runtime properties for actualTypes and expArgTypes in ?env'\<close>
+  \<comment> \<open>From ih_args (in ?env') and core_term_type_well_kinded\<close>
+  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
   proof (simp add: list_all_length, intro allI impI)
     fix i assume "i < length actualTypes"
-    with ih_args have "core_term_type env ghost (elabArgTms ! i) = Some (actualTypes ! i)"
+    with ih_args have "core_term_type ?env' ghost (elabArgTms ! i) = Some (actualTypes ! i)"
       by (simp add: list_all2_conv_all_nth)
-    thus "is_well_kinded env (actualTypes ! i)"
-      using "9.prems"(2) core_term_type_well_kinded by blast
+    thus "is_well_kinded ?env' (actualTypes ! i)"
+      using wf' core_term_type_well_kinded by blast
   qed
   \<comment> \<open>From ih_args and core_term_type_notghost_runtime\<close>
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) actualTypes"
-    using ih_args "9.prems"(2) core_term_type_notghost_runtime
+  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
+    using ih_args wf' core_term_type_notghost_runtime
     by (auto simp: list_all2_conv_all_nth list_all_length)
 
-  \<comment> \<open>expArgTypes are well-kinded and runtime (from function info)\<close>
-  have "tyenv_fun_types_well_kinded env"
-    using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_wk: "list_all (\<lambda>(ty, _). is_well_kinded env ty) (FI_TmArgs funInfo)"
-    using fn_lookup tyenv_fun_types_well_kinded_def by (fastforce simp: list_all_iff)
-  have expArgTypes_wk: "list_all (is_well_kinded env) expArgTypes"
-    using expArgTypes_eq fi_args_wk tyargs_wk
-    by (fastforce simp: list_all_iff apply_subst_preserves_well_kinded metasubst_well_kinded_from_zip
-                  split: prod.splits)
+  \<comment> \<open>Lift tyargs_wk_ext / tyargs_rt_ext from the sub-env to the outer extended env\<close>
+  have tyargs_wk: "list_all (is_well_kinded ?env') tyArgs"
+    using tyargs_wk_ext is_well_kinded_extend_env_with_tyvars_mono[where lo=next_mv and hi=next_mv1
+                                                                        and lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by (fastforce simp: list_all_iff)
+  have tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') tyArgs"
+    using tyargs_rt_ext is_runtime_type_extend_env_with_tyvars_mono[where lo=next_mv and hi=next_mv1
+                                                                         and lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by (fastforce simp: list_all_iff)
 
-  have "tyenv_fun_ghost_constraint env"
-    using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_rt: "FI_Ghost funInfo = NotGhost \<longrightarrow> list_all (\<lambda>(ty, _). is_runtime_type env ty) (FI_TmArgs funInfo)"
-    using fn_lookup tyenv_fun_ghost_constraint_def
-    by (fastforce simp: list_all_iff)
-  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expArgTypes"
-  proof
-    assume ng: "ghost = NotGhost"
-    hence "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
-    hence fi_args_rt': "list_all (\<lambda>(ty, _). is_runtime_type env ty) (FI_TmArgs funInfo)" using fi_args_rt by simp
-    have tyargs_rt': "list_all (is_runtime_type env) tyArgs" using tyargs_rt ng by simp
-    \<comment> \<open>Build a runtime-preserving substitution from tyArgs\<close>
-    have subst_rt: "\<forall>ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)). is_runtime_type env ty"
-    proof
-      fix ty assume "ty \<in> fmran' (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))"
-      then obtain var where lookup: "fmlookup (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) var = Some ty"
-        by (auto simp: fmran'_def)
-      hence "map_of (zip (FI_TyArgs funInfo) tyArgs) var = Some ty"
-        by (simp add: fmlookup_of_list)
-      hence "(var, ty) \<in> set (zip (FI_TyArgs funInfo) tyArgs)"
-        by (simp add: map_of_SomeD)
-      then obtain i where "i < length (FI_TyArgs funInfo)" "i < length tyArgs"
-                     and "ty = tyArgs ! i"
-        using len_tyargs by (auto simp: set_zip)
-      thus "is_runtime_type env ty"
-        using tyargs_rt' by (simp add: list_all_length)
+  \<comment> \<open>fi_args_wk in ?env': tyenv_fun_types_well_kinded reads only TE_Functions,
+     TE_Datatypes, and the inner-overridden TE_TypeVars, so it transfers from env
+     to ?env' directly.\<close>
+  have fn_lookup': "fmlookup (TE_Functions ?env') fnName = Some funInfo"
+    using fn_lookup by (simp add: extend_env_with_tyvars_def)
+  have "tyenv_fun_types_well_kinded ?env'"
+    using wf' tyenv_well_formed_def by blast
+  hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+            is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+    using fn_lookup' tyenv_fun_types_well_kinded_def by blast
+
+  have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
+  proof -
+    have "list_all (\<lambda>(ty, _). is_well_kinded ?env' (apply_subst
+            (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
+    proof (unfold list_all_iff, intro ballI, clarify)
+      fix t v assume tv_in: "(t, v) \<in> set (FI_TmArgs funInfo)"
+      hence t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" by (auto simp: rev_image_eqI)
+      from t_in fi_args_wk_inner
+      have t_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
+      show "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) t)"
+        using apply_subst_specializes_well_kinded[OF t_wk tyargs_wk len_tyargs[symmetric]] .
     qed
-    show "list_all (is_runtime_type env) expArgTypes"
-      using expArgTypes_eq fi_args_rt' subst_rt
-      by (fastforce simp: list_all_iff apply_subst_preserves_runtime split: prod.splits)
+    thus ?thesis using expArgTypes_eq by (auto simp: list_all_iff)
   qed
 
-  \<comment> \<open>Apply unify_call_types_correct\<close>
-  have unify_correct: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
+  have "tyenv_fun_ghost_constraint ?env'"
+    using wf' tyenv_well_formed_def by blast
+  hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
+          \<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+            is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
+                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+    using fn_lookup' tyenv_fun_ghost_constraint_def by (simp add: Let_def)
+
+  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
+  proof
+    assume ng: "ghost = NotGhost"
+    hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
+    have tyargs_rt': "list_all (is_runtime_type ?env') tyArgs" using tyargs_rt ng by simp
+    have "list_all (\<lambda>(ty, _). is_runtime_type ?env' (apply_subst
+            (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
+    proof (unfold list_all_iff, intro ballI, clarify)
+      fix t v assume tv_in: "(t, v) \<in> set (FI_TmArgs funInfo)"
+      hence t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" by (auto simp: rev_image_eqI)
+      from t_in fi_args_rt_inner[OF fg_ng]
+      have t_rt: "is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
+                                             TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
+      show "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) t)"
+        using apply_subst_specializes_runtime[OF t_rt tyargs_rt' len_tyargs[symmetric]] .
+    qed
+    thus "list_all (is_runtime_type ?env') expArgTypes"
+      using expArgTypes_eq by (auto simp: list_all_iff)
+  qed
+
+  \<comment> \<open>Apply unify_call_types_correct in the extended env ?env'\<close>
+  have unify_correct: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty)
+       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
        \<and> (\<exists>theta. finalSubst = compose_subst theta fmempty)
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
               \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
          actualTypes expArgTypes"
-    using unify_call_types_correct[OF unify_types "9.prems"(2) len_actualTypes
+    using unify_call_types_correct[OF unify_types wf' len_actualTypes
             actualTypes_wk expArgTypes_wk _ actualTypes_rt expArgTypes_rt]
           finalSubst_eq by fastforce
 
   from unify_correct have
-    finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty" and
-    finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty)" and
+    finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty" and
+    finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)" and
     types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
@@ -2132,26 +2764,58 @@ next
          actualTypes expArgTypes"
     by blast+
 
-  \<comment> \<open>Apply apply_call_coercions_correct\<close>
+  \<comment> \<open>Apply apply_call_coercions_correct in ?env'\<close>
   have coerce_correct: "list_all2 (\<lambda>tm expectedTy.
-           core_term_type env ghost tm = Some (apply_subst finalSubst expectedTy))
+           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
          finalArgTms expArgTypes"
-    using apply_call_coercions_correct[OF ih_args types_unified "9.prems"(2)
+    using apply_call_coercions_correct[OF ih_args types_unified wf'
             finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes]
           finalArgTms_eq finalSubst_eq by simp
 
   \<comment> \<open>The final type args in the output term\<close>
   let ?finalTyArgs = "map (apply_subst finalSubst) tyArgs"
 
-  \<comment> \<open>Show finalTyArgs are well-kinded\<close>
-  have finalTyArgs_wk: "list_all (is_well_kinded env) ?finalTyArgs"
-    using tyargs_wk finalSubst_wk
-    by (simp add: list_all_iff apply_subst_preserves_well_kinded metasubst_well_kinded_def fmran'_def)
+  \<comment> \<open>Show finalTyArgs are well-kinded in ?env'. Use apply_subst_preserves_well_kinded
+     with src = tgt = ?env' and the per-meta discharge via finalSubst_wk.\<close>
+  have finalTyArgs_wk: "list_all (is_well_kinded ?env') ?finalTyArgs"
+  proof (unfold list_all_iff, intro ballI, simp only: set_map)
+    fix ty assume "ty \<in> apply_subst finalSubst ` set tyArgs"
+    then obtain ty0 where ty0_in: "ty0 \<in> set tyArgs" and ty_eq: "ty = apply_subst finalSubst ty0" by auto
+    from ty0_in tyargs_wk have ty0_wk: "is_well_kinded ?env' ty0" by (simp add: list_all_iff)
+    have "is_well_kinded ?env' (apply_subst finalSubst ty0)"
+    proof (rule apply_subst_preserves_well_kinded[OF ty0_wk])
+      show "TE_Datatypes ?env' = TE_Datatypes ?env'" by simp
+    next
+      fix n assume n_in: "n |\<in>| TE_TypeVars ?env'"
+      show "case fmlookup finalSubst n of
+              Some ty' \<Rightarrow> is_well_kinded ?env' ty'
+            | None \<Rightarrow> n |\<in>| TE_TypeVars ?env'"
+        using n_in finalSubst_wk by (auto simp: fmran'I split: option.splits)
+    qed
+    thus "is_well_kinded ?env' ty" using ty_eq by simp
+  qed
 
-  \<comment> \<open>Show finalTyArgs are runtime if NotGhost\<close>
-  have finalTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) ?finalTyArgs"
-    using tyargs_rt finalSubst_rt
-    by (auto simp: list_all_iff apply_subst_preserves_runtime)
+  have finalTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') ?finalTyArgs"
+  proof
+    assume ng: "ghost = NotGhost"
+    show "list_all (is_runtime_type ?env') ?finalTyArgs"
+    proof (unfold list_all_iff, intro ballI, simp only: set_map)
+      fix ty assume "ty \<in> apply_subst finalSubst ` set tyArgs"
+      then obtain ty0 where ty0_in: "ty0 \<in> set tyArgs" and ty_eq: "ty = apply_subst finalSubst ty0" by auto
+      from ty0_in tyargs_rt ng have ty0_rt: "is_runtime_type ?env' ty0" by (simp add: list_all_iff)
+      have "is_runtime_type ?env' (apply_subst finalSubst ty0)"
+      proof (rule apply_subst_preserves_runtime[OF ty0_rt])
+        show "TE_GhostDatatypes ?env' = TE_GhostDatatypes ?env'" by simp
+      next
+        fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars ?env'"
+        show "case fmlookup finalSubst n of
+                Some ty' \<Rightarrow> is_runtime_type ?env' ty'
+              | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars ?env'"
+          using n_in finalSubst_rt ng by (auto simp: fmran'I split: option.splits)
+      qed
+      thus "is_runtime_type ?env' ty" using ty_eq by simp
+    qed
+  qed
 
   \<comment> \<open>Length of finalTyArgs matches\<close>
   have len_finalTyArgs: "length ?finalTyArgs = length (FI_TyArgs funInfo)"
@@ -2163,11 +2827,19 @@ next
   \<comment> \<open>Expected arg types in core_term_type\<close>
   let ?coreExpArgTypes = "map (\<lambda>(ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
 
-  \<comment> \<open>Function arg types have metavars only from FI_TyArgs\<close>
-  have "tyenv_funs_have_expected_metavars env"
-    using "9.prems"(2) tyenv_well_formed_def by blast
-  hence fi_args_metavars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
-    using fn_lookup tyenv_funs_have_expected_metavars_def by blast
+  \<comment> \<open>Function arg types have metavars only from FI_TyArgs.
+     Derived from tyenv_fun_types_well_kinded (each arg type is well-kinded in
+     env with TE_TypeVars := FI_TyArgs), via is_well_kinded_type_metavars_subset.\<close>
+  have fi_args_metavars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
+  proof
+    fix ty assume ty_in: "ty \<in> fst ` set (FI_TmArgs funInfo)"
+    from ty_in fi_args_wk_inner
+    have ty_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+      by blast
+    have "type_metavars ty \<subseteq> fset (TE_TypeVars (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
+      using is_well_kinded_type_metavars_subset[OF ty_wk] .
+    thus "type_metavars ty \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
+  qed
 
   \<comment> \<open>Function type args are distinct\<close>
   have "tyenv_fun_tyvars_distinct env"
@@ -2189,15 +2861,15 @@ next
     using len_tyargs fi_args_metavars' fi_tyargs_distinct coreExpArgTypes_eq expArgTypes_fst
     by (metis map_apply_subst_compose_zip)
 
-  \<comment> \<open>From coerce_correct, finalArgTms have these types\<close>
+  \<comment> \<open>From coerce_correct, finalArgTms have these types (in ?env')\<close>
   have args_match: "list_all2 (\<lambda>tm expectedTy.
-           case core_term_type env ghost tm of
+           case core_term_type ?env' ghost tm of
              None \<Rightarrow> False
            | Some actualTy \<Rightarrow> actualTy = expectedTy)
          finalArgTms ?coreExpArgTypes"
   proof -
     have "list_all2 (\<lambda>tm expectedTy.
-             core_term_type env ghost tm = Some expectedTy)
+             core_term_type ?env' ghost tm = Some expectedTy)
            finalArgTms (map (apply_subst finalSubst) expArgTypes)"
       using coerce_correct by (simp add: list_all2_conv_all_nth)
     thus ?thesis
@@ -2208,10 +2880,19 @@ next
   have len_finalArgTms: "length finalArgTms = length (FI_TmArgs funInfo)"
     using coerce_correct expArgTypes_eq by (simp add: list_all2_lengthD)
 
-  \<comment> \<open>Return type - need metavars assumption from tyenv_funs_have_expected_metavars\<close>
+  \<comment> \<open>Return type metavars are in FI_TyArgs, derived from tyenv_fun_types_well_kinded\<close>
   have fi_ret_metavars: "type_metavars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
-    using \<open>tyenv_funs_have_expected_metavars env\<close> fn_lookup
-    by (simp add: tyenv_funs_have_expected_metavars_def)
+  proof -
+    have "tyenv_fun_types_well_kinded ?env'"
+      using wf' tyenv_well_formed_def by blast
+    hence ret_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                                  (FI_ReturnType funInfo)"
+      using fn_lookup' tyenv_fun_types_well_kinded_def by blast
+    have "type_metavars (FI_ReturnType funInfo) \<subseteq>
+          fset (TE_TypeVars (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
+      using is_well_kinded_type_metavars_subset[OF ret_wk] .
+    thus ?thesis by (simp add: fset_of_list.rep_eq)
+  qed
   have ret_eq: "ty = apply_subst ?coreTySubst (FI_ReturnType funInfo)"
     using result_eq retType_eq len_tyargs fi_ret_metavars fi_tyargs_distinct
     by (simp add: apply_subst_compose_zip)
@@ -2271,17 +2952,42 @@ next
 next
   \<comment> \<open>Case: elab_term_list cons\<close>
   case (21 env typedefs ghost tm tms next_mv)
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   from "21.prems"(1) obtain tm' ty' next_mv1 tms' tys' next_mv'' where
     elab_head: "elab_term env typedefs ghost tm next_mv = Inr (tm', ty', next_mv1)" and
     elab_tail: "elab_term_list env typedefs ghost tms next_mv1 = Inr (tms', tys', next_mv'')" and
     results: "newTms = tm' # tms'" "tys = ty' # tys'"
     by (auto split: sum.splits)
-  \<comment> \<open>Apply IH for head\<close>
-  have ih_head: "core_term_type env ghost tm' = Some ty'"
-    using "21.IH"(1) elab_head "21.prems"(2,3) by simp
-  \<comment> \<open>Apply IH for tail\<close>
-  have ih_tail: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) tms' tys'"
-    using "21.IH"(3) elab_head elab_tail "21.prems"(2,3) by simp
+  \<comment> \<open>Cons forwards elab_term_list's next_mv, so next_mv' = next_mv''\<close>
+  from "21.prems"(1) elab_head elab_tail results have next_mv_eq: "next_mv' = next_mv''"
+    by (auto split: sum.splits)
+  have mono_1: "next_mv \<le> next_mv1"
+    using elab_term_next_mv_monotone[OF elab_head] .
+  have mono_2: "next_mv1 \<le> next_mv''"
+    using elab_term_list_next_mv_monotone[OF elab_tail] .
+  \<comment> \<open>Freshness carries through the head sub-call\<close>
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
+    using "21.prems"(4) mono_1 by fastforce
+  \<comment> \<open>IH for head, lifted to ?env'\<close>
+  have ih_head_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost tm' = Some ty'"
+    using "21.IH"(1) elab_head "21.prems"(2,3,4) by simp
+  have ih_head: "core_term_type ?env' ghost tm' = Some ty'"
+    using core_term_type_extend_env_with_tyvars_mono[OF ih_head_sub, where lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by simp
+  \<comment> \<open>IH for tail, lifted to ?env'\<close>
+  have ih_tail_sub: "list_all2 (\<lambda>tm ty. core_term_type
+                                  (extend_env_with_tyvars env ghost next_mv1 next_mv'') ghost tm = Some ty)
+                               tms' tys'"
+    using "21.IH"(3) elab_head elab_tail "21.prems"(2,3) fresh_1 by simp
+  have ih_tail: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) tms' tys'"
+  proof -
+    have "\<And>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv'') ghost tm = Some ty \<Longrightarrow>
+                  core_term_type ?env' ghost tm = Some ty"
+      using core_term_type_extend_env_with_tyvars_mono[where lo=next_mv1 and hi=next_mv''
+                                                        and lo'=next_mv and hi'=next_mv']
+            mono_1 mono_2 next_mv_eq by simp
+    thus ?thesis using ih_tail_sub by (auto elim!: list_all2_mono)
+  qed
   show ?case using ih_head ih_tail results by simp
 qed
 

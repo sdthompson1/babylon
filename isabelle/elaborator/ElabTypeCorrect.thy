@@ -3,8 +3,10 @@ theory ElabTypeCorrect
 begin
 
 (* Correctness properties for elab_type:
-   - If elab_type succeeds, the result is ground, well-kinded, and a runtime type
-     (in NotGhost mode).
+   - If elab_type succeeds, the result:
+      - is well-kinded
+      - its type variables are a subset of TE_TypeVars env
+      - in NotGhost mode, it is a runtime type
    - The result of elab_type_list has the same length as the input.
 *)
 
@@ -65,12 +67,14 @@ next
   finally show ?case .
 qed
 
-(* Types returned by elab_type are ground *)
-lemma elab_type_is_ground:
+(* Metavars in types returned by elab_type are a subset of TE_TypeVars env *)
+lemma elab_type_metavars_subset:
   "typedefs_well_formed env typedefs \<Longrightarrow>
-   elab_type env typedefs ghost ty = Inr ty' \<Longrightarrow> is_ground ty'"
+   elab_type env typedefs ghost ty = Inr ty' \<Longrightarrow>
+   type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
   "typedefs_well_formed env typedefs \<Longrightarrow>
-   elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow> list_all is_ground tys'"
+   elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow>
+   \<forall>t \<in> set tys'. type_metavars t \<subseteq> fset (TE_TypeVars env)"
 proof (induction env typedefs ghost ty and env typedefs ghost tys
        arbitrary: ty' and tys' rule: elab_type_elab_type_list.induct)
   case (1 env typedefs ghost loc name tyargs)
@@ -81,55 +85,54 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
   next
     case (Inr elabTyArgs)
     from "1.IH"(1)[OF "1.prems"(1) Inr]
-    have elabTyArgs_ground: "list_all is_ground elabTyArgs" .
+    have elabTyArgs_mvs: "\<forall>t \<in> set elabTyArgs. type_metavars t \<subseteq> fset (TE_TypeVars env)" .
     show ?thesis
-    proof (cases "name |\<in>| TE_TypeVars env")
-      case True
-      then show ?thesis using "1.prems" Inr by (auto split: if_splits)
-    next
-      case not_tyvar: False
+    proof (cases "fmlookup typedefs name")
+      case (Some typedef_entry)
+      then obtain metavars targetTy where
+        typedef_lookup: "fmlookup typedefs name = Some (metavars, targetTy)"
+        by (cases typedef_entry) auto
+      from "1.prems"(1) typedef_lookup
+      have distinct_metavars: "distinct metavars"
+        and targetTy_wk: "is_well_kinded env targetTy"
+        and metavars_subset: "type_metavars targetTy \<subseteq> set metavars"
+        by (auto simp: typedefs_well_formed_def)
       show ?thesis
-      proof (cases "fmlookup typedefs name")
-        case (Some typedef_entry)
-        then obtain metavars targetTy where
-          typedef_lookup: "fmlookup typedefs name = Some (metavars, targetTy)"
-          by (cases typedef_entry) auto
-        from "1.prems"(1) typedef_lookup
-        have distinct_metavars: "distinct metavars"
-          and metavars_subset: "type_metavars targetTy \<subseteq> set metavars"
-          by (auto simp: typedefs_well_formed_def)
-        show ?thesis
-        proof (cases "length elabTyArgs = length metavars")
-          case False
-          then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup by auto
-        next
-          case len_eq: True
-          let ?subst = "fmap_of_list (zip metavars elabTyArgs)"
-          let ?resultTy = "apply_subst ?subst targetTy"
-          have dom_eq: "fset (fmdom ?subst) = set metavars"
-            using fmdom_fmap_of_list_zip len_eq by metis
-          have ran_eq: "fmran' ?subst = set elabTyArgs"
-            using fmran'_fmap_of_list_zip len_eq distinct_metavars by metis
-          have "type_metavars targetTy \<subseteq> fset (fmdom ?subst)"
-            using metavars_subset dom_eq by auto
-          moreover have "\<forall>ty' \<in> fmran' ?subst. is_ground ty'"
-            using elabTyArgs_ground ran_eq by (simp add: list_all_iff)
-          ultimately have result_ground: "is_ground ?resultTy"
-            by (rule apply_subst_makes_ground)
-          show ?thesis
-          proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
-            case True
-            then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto
-          next
-            case False
-            then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq result_ground by auto
-          qed
-        qed
+      proof (cases "length elabTyArgs = length metavars")
+        case False
+        then show ?thesis using "1.prems" Inr typedef_lookup by auto
       next
-        case None
-        then show ?thesis using "1.prems" Inr not_tyvar elabTyArgs_ground
-          by (auto simp: list_all_iff split: option.splits if_splits)
+        case len_eq: True
+        let ?subst = "fmap_of_list (zip metavars elabTyArgs)"
+        let ?resultTy = "apply_subst ?subst targetTy"
+        have dom_eq: "fset (fmdom ?subst) = set metavars"
+          using fmdom_fmap_of_list_zip len_eq by metis
+        have ran_eq: "fmran' ?subst = set elabTyArgs"
+          using fmran'_fmap_of_list_zip len_eq distinct_metavars by metis
+        (* The metavars in the result are bounded by: (metavars in targetTy \ dom subst) \<union> range_mvs subst
+           Since metavars in targetTy \<subseteq> set metavars = dom subst, the first part is empty.
+           The range_mvs are metavars from elabTyArgs, which are \<subseteq> TE_TypeVars by IH. *)
+        have "type_metavars ?resultTy \<subseteq>
+              (type_metavars targetTy - fset (fmdom ?subst)) \<union> subst_range_mvs ?subst"
+          by (rule apply_subst_metavars_result)
+        also have "... \<subseteq> subst_range_mvs ?subst"
+          using metavars_subset dom_eq by auto
+        also have "... \<subseteq> fset (TE_TypeVars env)"
+          using elabTyArgs_mvs ran_eq by (auto simp: subst_range_mvs_def fmran'_def)
+        finally have result_mvs: "type_metavars ?resultTy \<subseteq> fset (TE_TypeVars env)" .
+        show ?thesis
+        proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
+          case True
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
+        next
+          case False
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq result_mvs by auto
+        qed
       qed
+    next
+      case None
+      then show ?thesis using "1.prems" Inr elabTyArgs_mvs
+        by (force simp: list_all_iff split: option.splits if_splits)
     qed
   qed
 next
@@ -147,11 +150,11 @@ next
 next
   case (6 env typedefs ghost loc types)
   then show ?case
-    by (auto simp: list_all_iff split: sum.splits dest!: set_zip_rightD)
+    by (force split: sum.splits dest!: set_zip_rightD)
 next
   case (7 env typedefs ghost loc flds)
   then show ?case
-    by (auto simp: list_all_iff split: sum.splits dest!: set_zip_rightD)
+    by (force split: sum.splits dest!: set_zip_rightD)
 next
   case (8 env typedefs ghost loc elemTy dims)
   then show ?case by simp
@@ -160,7 +163,7 @@ next
   then show ?case by simp
 next
   case (10 env typedefs ghost ty tys)
-  then show ?case by (auto simp: list_all_iff split: sum.splits)
+  then show ?case by (force split: sum.splits)
 qed
 
 
@@ -182,57 +185,50 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
     from "1.IH"(1)[OF "1.prems"(1,2) Inr]
     have elabTyArgs_wk: "list_all (is_well_kinded env) elabTyArgs" .
     show ?thesis
-    proof (cases "name |\<in>| TE_TypeVars env")
-      case True
-      then show ?thesis using "1.prems" Inr by (auto split: if_splits)
-    next
-      case not_tyvar: False
+    proof (cases "fmlookup typedefs name")
+      case (Some typedef_entry)
+      then obtain metavars targetTy where
+        typedef_lookup: "fmlookup typedefs name = Some (metavars, targetTy)"
+        by (cases typedef_entry) auto
+      from "1.prems"(1) typedef_lookup
+      have distinct_metavars: "distinct metavars"
+        and targetTy_wk: "is_well_kinded env targetTy"
+        by (auto simp: typedefs_well_formed_def)
       show ?thesis
-      proof (cases "fmlookup typedefs name")
-        case (Some typedef_entry)
-        then obtain metavars targetTy where
-          typedef_lookup: "fmlookup typedefs name = Some (metavars, targetTy)"
-          by (cases typedef_entry) auto
-        from "1.prems"(1) typedef_lookup
-        have distinct_metavars: "distinct metavars"
-          and targetTy_wk: "is_well_kinded env targetTy"
-          by (auto simp: typedefs_well_formed_def)
-        show ?thesis
-        proof (cases "length elabTyArgs = length metavars")
-          case False
-          then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup by auto
-        next
-          case len_eq: True
-          let ?subst = "fmap_of_list (zip metavars elabTyArgs)"
-          let ?resultTy = "apply_subst ?subst targetTy"
-          have ran_eq: "fmran' ?subst = set elabTyArgs"
-            using fmran'_fmap_of_list_zip len_eq distinct_metavars by metis
-          have "metasubst_well_kinded env ?subst"
-            using elabTyArgs_wk ran_eq
-            by (simp add: metasubst_well_kinded_from_zip)
-          hence result_wk: "is_well_kinded env ?resultTy"
-            using targetTy_wk
-            by (simp add: apply_subst_preserves_well_kinded)
-          show ?thesis
-          proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
-            case True
-            then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto
-          next
-            case False
-            then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq result_wk by auto
-          qed
-        qed
+      proof (cases "length elabTyArgs = length metavars")
+        case False
+        then show ?thesis using "1.prems" Inr typedef_lookup by auto
       next
-        case None
+        case len_eq: True
+        let ?subst = "fmap_of_list (zip metavars elabTyArgs)"
+        let ?resultTy = "apply_subst ?subst targetTy"
+        have ran_eq: "fmran' ?subst = set elabTyArgs"
+          using fmran'_fmap_of_list_zip[OF len_eq[symmetric] distinct_metavars] .
+        have subst_wk: "\<And>n ty. fmlookup ?subst n = Some ty \<Longrightarrow> is_well_kinded env ty"
+          using elabTyArgs_wk ran_eq by (auto simp: list_all_iff dest: fmran'I)
+        have result_wk: "is_well_kinded env ?resultTy"
+          using targetTy_wk
+          by (rule apply_subst_preserves_well_kinded[where src=env and tgt=env])
+             (auto simp: subst_wk split: option.splits)
         show ?thesis
-        proof (cases "fmlookup (TE_Datatypes env) name")
-          case (Some expectedArity)
-          then show ?thesis using "1.prems" Inr not_tyvar None elabTyArgs_wk
-            by (auto simp: list_all_iff split: if_splits)
+        proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
+          case True
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
         next
-          case dtNone: None
-          then show ?thesis using "1.prems" Inr not_tyvar None by simp
+          case False
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq result_wk by auto
         qed
+      qed
+    next
+      case None
+      show ?thesis
+      proof (cases "fmlookup (TE_Datatypes env) name")
+        case (Some expectedArity)
+        then show ?thesis using "1.prems" Inr None elabTyArgs_wk
+          by (auto simp: list_all_iff split: if_splits)
+      next
+        case dtNone: None
+        then show ?thesis using "1.prems" Inr None by simp
       qed
     qed
   qed
@@ -286,57 +282,41 @@ proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
     have elabTyArgs_rt: "list_all (is_runtime_type env) elabTyArgs"
       by (simp add: "1.hyps" "1.prems"(1,2) Inr)
     show ?thesis
-    proof (cases "name |\<in>| TE_TypeVars env")
-      case True
-      (* Type variable: result is CoreTy_Name name [].
-         name is a type variable, so it's not in TE_Datatypes (by disjointness),
-         and TE_GhostDatatypes \<subseteq> fmdom TE_Datatypes, so name \<notin> TE_GhostDatatypes. *)
-      from "1.prems"(2) have "tyenv_tyvars_datatypes_disjoint env"
-        and "tyenv_ghost_datatypes_subset env"
-        unfolding tyenv_well_formed_def by auto
-      hence "name |\<notin>| TE_GhostDatatypes env"
-        using True unfolding tyenv_tyvars_datatypes_disjoint_def tyenv_ghost_datatypes_subset_def
-        by auto
-      then show ?thesis using "1.prems" Inr True by (auto split: if_splits)
-    next
-      case not_tyvar: False
+    proof (cases "fmlookup typedefs name")
+      case (Some typedef_entry)
+      then obtain metavars targetTy where
+        typedef_lookup: "fmlookup typedefs name = Some (metavars, targetTy)"
+        by (cases typedef_entry) auto
       show ?thesis
-      proof (cases "fmlookup typedefs name")
-        case (Some typedef_entry)
-        then obtain metavars targetTy where
-          typedef_lookup: "fmlookup typedefs name = Some (metavars, targetTy)"
-          by (cases typedef_entry) auto
-        show ?thesis
-        proof (cases "length elabTyArgs = length metavars")
-          case False
-          then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup by auto
-        next
-          case len_eq: True
-          let ?subst = "fmap_of_list (zip metavars elabTyArgs)"
-          let ?resultTy = "apply_subst ?subst targetTy"
-          (* In NotGhost mode, we check is_runtime_type on the result *)
-          show ?thesis
-          proof (cases "is_runtime_type env ?resultTy")
-            case False
-            (* If not runtime, we return Inl, so premise is false *)
-            then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto
-          next
-            case True
-            (* If runtime, we return Inr resultTy, and is_runtime_type holds *)
-            then show ?thesis using "1.prems" Inr not_tyvar typedef_lookup len_eq by auto
-          qed
-        qed
+      proof (cases "length elabTyArgs = length metavars")
+        case False
+        then show ?thesis using "1.prems" Inr typedef_lookup by auto
       next
-        case None
+        case len_eq: True
+        let ?subst = "fmap_of_list (zip metavars elabTyArgs)"
+        let ?resultTy = "apply_subst ?subst targetTy"
+        (* In NotGhost mode, we check is_runtime_type on the result *)
         show ?thesis
-        proof (cases "fmlookup (TE_Datatypes env) name")
-          case (Some expectedArity)
-          then show ?thesis using "1.prems" Inr not_tyvar None elabTyArgs_rt
-            by (auto simp: list_all_iff split: if_splits)
+        proof (cases "is_runtime_type env ?resultTy")
+          case False
+          (* If not runtime, we return Inl, so premise is false *)
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
         next
-          case dtNone: None
-          then show ?thesis using "1.prems" Inr not_tyvar None by simp
+          case True
+          (* If runtime, we return Inr resultTy, and is_runtime_type holds *)
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
         qed
+      qed
+    next
+      case None
+      show ?thesis
+      proof (cases "fmlookup (TE_Datatypes env) name")
+        case (Some expectedArity)
+        then show ?thesis using "1.prems" Inr None elabTyArgs_rt
+          by (auto simp: list_all_iff split: if_splits)
+      next
+        case dtNone: None
+        then show ?thesis using "1.prems" Inr None by simp
       qed
     qed
   qed

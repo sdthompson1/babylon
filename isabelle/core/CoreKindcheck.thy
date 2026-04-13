@@ -59,12 +59,55 @@ lemma list_all_meta_is_well_kinded:
   shows "list_all (is_well_kinded env) (map CoreTy_Meta nums)"
   using assms by (induction nums) auto
 
+(* If ty is well-kinded in an env, then every metavariable in ty is in the env's
+   TE_TypeVars. *)
+lemma is_well_kinded_type_metavars_subset:
+  assumes "is_well_kinded env ty"
+  shows "type_metavars ty \<subseteq> fset (TE_TypeVars env)"
+using assms proof (induction ty)
+  case (CoreTy_Datatype name argTypes)
+  from CoreTy_Datatype.prems obtain numTyVars where
+    "fmlookup (TE_Datatypes env) name = Some numTyVars"
+    "length argTypes = numTyVars"
+    and args_wk: "list_all (is_well_kinded env) argTypes"
+    by (auto split: option.splits)
+  show ?case
+  proof
+    fix x assume "x \<in> type_metavars (CoreTy_Datatype name argTypes)"
+    then obtain arg where arg_in: "arg \<in> set argTypes" and x_in: "x \<in> type_metavars arg" by auto
+    from arg_in args_wk have "is_well_kinded env arg" by (simp add: list_all_iff)
+    with CoreTy_Datatype.IH arg_in x_in show "x \<in> fset (TE_TypeVars env)" by blast
+  qed
+next
+  case (CoreTy_Record flds)
+  from CoreTy_Record.prems have flds_wk: "\<forall>(nm, ty) \<in> set flds. is_well_kinded env ty"
+    by (auto simp: list_all_iff)
+  show ?case
+  proof
+    fix x assume "x \<in> type_metavars (CoreTy_Record flds)"
+    then obtain nm ty where nm_ty_in: "(nm, ty) \<in> set flds" and x_in: "x \<in> type_metavars ty"
+      by auto
+    from nm_ty_in flds_wk have ty_wk: "is_well_kinded env ty" by blast
+    from CoreTy_Record.IH[OF nm_ty_in] ty_wk x_in
+    show "x \<in> fset (TE_TypeVars env)"
+      by (simp add: subsetD)
+  qed
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by auto
+next
+  case (CoreTy_Meta n)
+  thus ?case by force
+qed simp_all
 
 (* Adding type variables to the environment preserves well-kindedness. Type variables
-   are nat-keyed and datatypes are string-keyed, so no shadowing is possible. *)
+   are nat-keyed and datatypes are string-keyed, so no shadowing is possible. The
+   TE_RuntimeTypeVars field may also be extended at the same time; is_well_kinded
+   doesn't depend on it, but the combined form is convenient for callers. *)
 lemma is_well_kinded_extend_tyvars:
   assumes "is_well_kinded env ty"
-  shows "is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extra \<rparr>) ty"
+  shows "is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                                TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) ty"
 using assms proof (induction ty)
   case (CoreTy_Datatype name argTypes)
   then obtain numTyVars where
@@ -72,18 +115,21 @@ using assms proof (induction ty)
     len_eq: "length argTypes = numTyVars" and
     args_wk: "list_all (is_well_kinded env) argTypes"
     by (auto split: option.splits)
-  have args_wk_ext: "list_all (is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extra \<rparr>)) argTypes"
+  have args_wk_ext: "list_all (is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                                                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)) argTypes"
     using CoreTy_Datatype.IH args_wk by (simp add: list_all_iff)
   thus ?case using dt_lookup len_eq by simp
 next
   case (CoreTy_Record flds)
   have "\<And>a b. (a, b) \<in> set flds \<Longrightarrow>
-              is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extra \<rparr>) b"
+              is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) b"
   proof -
     fix a b assume mem: "(a, b) \<in> set flds"
     from mem CoreTy_Record.prems have "is_well_kinded env b"
       by (auto simp: list_all_iff)
-    with CoreTy_Record.IH[OF mem] show "is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extra \<rparr>) b"
+    with CoreTy_Record.IH[OF mem] show "is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                                                              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) b"
       by (simp add: snds.intros)
   qed
   thus ?case by (auto simp: list_all_iff)
@@ -123,6 +169,50 @@ qed auto
 lemma is_well_kinded_TE_ConstNames_irrelevant [simp]:
   "is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_well_kinded env ty"
   using is_well_kinded_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+
+(* If ty is well-kinded in one env, and every metavariable of ty is in scope in a
+   second env (with the same TE_Datatypes), then ty is well-kinded in the second env. *)
+lemma is_well_kinded_transfer:
+  assumes wk: "is_well_kinded env1 ty"
+    and mvs_in_env2: "type_metavars ty \<subseteq> fset (TE_TypeVars env2)"
+    and dt_eq: "TE_Datatypes env2 = TE_Datatypes env1"
+  shows "is_well_kinded env2 ty"
+  using wk mvs_in_env2 dt_eq
+proof (induction ty)
+  case (CoreTy_Datatype name argTypes)
+  from CoreTy_Datatype.prems(1) obtain numTyVars where
+    dt_lookup: "fmlookup (TE_Datatypes env1) name = Some numTyVars" and
+    len_eq: "length argTypes = numTyVars" and
+    args_wk: "list_all (is_well_kinded env1) argTypes"
+    by (auto split: option.splits)
+  from CoreTy_Datatype.prems(2) have
+    args_mvs: "\<And>arg. arg \<in> set argTypes \<Longrightarrow> type_metavars arg \<subseteq> fset (TE_TypeVars env2)"
+    by auto
+  have args_wk': "list_all (is_well_kinded env2) argTypes"
+    using CoreTy_Datatype.IH args_wk args_mvs CoreTy_Datatype.prems(3)
+    by (induction argTypes) (auto simp: list_all_iff)
+  show ?case using dt_lookup len_eq args_wk' CoreTy_Datatype.prems(3) by simp
+next
+  case (CoreTy_Record flds)
+  from CoreTy_Record.prems(1) have flds_wk: "list_all (is_well_kinded env1) (map snd flds)"
+    by simp
+  have "\<And>nm ty. (nm, ty) \<in> set flds \<Longrightarrow> is_well_kinded env2 ty"
+  proof -
+    fix nm ty assume mem: "(nm, ty) \<in> set flds"
+    from mem flds_wk have ty_wk: "is_well_kinded env1 ty" by (auto simp: list_all_iff)
+    have ty_mvs: "type_metavars ty \<subseteq> fset (TE_TypeVars env2)"
+      using mem CoreTy_Record.prems(2) by force
+    show "is_well_kinded env2 ty"
+      using CoreTy_Record.IH dt_eq mem ty_mvs ty_wk by auto
+  qed
+  thus ?case by (auto simp: list_all_iff)
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by auto
+next
+  case (CoreTy_Meta n)
+  thus ?case by (auto simp: fset_of_list_elem)
+qed simp_all
 
 (* This predicate says that all types in the range of a MetaSubst are well-kinded. *)
 definition metasubst_well_kinded :: "CoreTyEnv \<Rightarrow> MetaSubst \<Rightarrow> bool" where 

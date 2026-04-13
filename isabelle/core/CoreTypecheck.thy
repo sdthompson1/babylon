@@ -1136,6 +1136,362 @@ next
 qed
 
 
+(* Weakening: extending TE_TypeVars and TE_RuntimeTypeVars does not change what
+   core_term_type accepts. The kind and runtime checks embedded in core_term_type
+   are monotone under growing these sets, and lookups into TE_LocalVars /
+   TE_Functions / TE_Datatypes / TE_DataCtors are unaffected by them. *)
+lemma core_term_type_irrelevant_tyvar:
+  assumes "core_term_type env ghost tm = Some ty"
+  shows "core_term_type
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
+           ghost tm = Some ty"
+using assms proof (induction tm arbitrary: env ghost ty)
+  case (CoreTm_Var name)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  have lookup_eq: "tyenv_lookup_var ?env' name = tyenv_lookup_var env name"
+    unfolding tyenv_lookup_var_def by (simp split: option.splits)
+  have ghost_eq: "tyenv_var_ghost ?env' name = tyenv_var_ghost env name"
+    unfolding tyenv_var_ghost_def by (simp split: option.splits)
+  from CoreTm_Var show ?case
+    by (simp add: lookup_eq ghost_eq split: option.splits if_splits)
+next
+  case (CoreTm_LitArray elemTy tms)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_LitArray.prems have
+    elemTy_wk: "is_well_kinded env elemTy" and
+    elemTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
+    all_tms: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms" and
+    len_range: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    by (auto split: if_splits)
+  have elemTy_wk': "is_well_kinded ?env' elemTy"
+    using elemTy_wk is_well_kinded_extend_tyvars by fastforce
+  have elemTy_rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' elemTy"
+    using elemTy_rt is_runtime_type_extend_runtime_tyvars by fastforce
+  have all_tms': "list_all (\<lambda>tm. core_term_type ?env' ghost tm = Some elemTy) tms"
+    using all_tms CoreTm_LitArray.IH by (induction tms) auto
+  show ?case using elemTy_wk' elemTy_rt' all_tms' len_range ty_eq by simp
+next
+  case (CoreTm_Cast targetTy tm)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Cast.prems obtain operandTy where
+    operand_ty: "core_term_type env ghost tm = Some operandTy" and
+    operand_int: "is_integer_type operandTy" and
+    target_int: "is_integer_type targetTy" and
+    targetTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
+    ty_eq: "ty = targetTy"
+    by (auto split: option.splits if_splits)
+  have operand_ty': "core_term_type ?env' ghost tm = Some operandTy"
+    using CoreTm_Cast.IH operand_ty by blast
+  have targetTy_rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' targetTy"
+    using targetTy_rt is_runtime_type_extend_runtime_tyvars by fastforce
+  show ?case using operand_ty' operand_int target_int targetTy_rt' ty_eq by simp
+next
+  case (CoreTm_Let var rhs body)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Let.prems obtain rhsTy where
+    rhs_ty: "core_term_type env ghost rhs = Some rhsTy" and
+    body_ty: "core_term_type
+        (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+               TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                   else fminus (TE_GhostLocals env) {|var|}),
+               TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
+        ghost body = Some ty"
+    by (auto simp: Let_def split: option.splits)
+  have rhs_ty': "core_term_type ?env' ghost rhs = Some rhsTy"
+    using CoreTm_Let.IH(1) rhs_ty by blast
+  let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                         TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                             else fminus (TE_GhostLocals env) {|var|}),
+                         TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+  have body_env_shape: "?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
+                                    TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr> =
+                        ?env' \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env'),
+                                TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env')
+                                                    else fminus (TE_GhostLocals ?env') {|var|}),
+                                TE_ConstNames := finsert var (TE_ConstNames ?env') \<rparr>"
+    by simp
+  have body_ty': "core_term_type
+       (?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
+                    TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr>)
+       ghost body = Some ty"
+    using CoreTm_Let.IH(2)[OF body_ty] .
+  show ?case using rhs_ty' body_ty' body_env_shape
+    by (metis core_term_type.simps(8) option.simps(5))
+next
+  case (CoreTm_Quantifier quant var varTy body)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  show ?case
+  proof (cases ghost)
+    case NotGhost
+    with CoreTm_Quantifier.prems show ?thesis by simp
+  next
+    case Ghost
+    from Ghost CoreTm_Quantifier.prems have wk: "is_well_kinded env varTy"
+      by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
+    have wk': "is_well_kinded ?env' varTy"
+      using wk is_well_kinded_extend_tyvars by fastforce
+    from Ghost CoreTm_Quantifier.prems obtain bodyTy where
+      body_ty: "core_term_type
+        (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+        Ghost body = Some bodyTy"
+      and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
+      by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
+    let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+    have body_env_shape: "?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
+                                       TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr> =
+                          ?env' \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env'),
+                                  TE_GhostLocals := finsert var (TE_GhostLocals ?env') \<rparr>"
+      by simp
+    have body_ty': "core_term_type
+         (?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
+                      TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr>)
+         Ghost body = Some bodyTy"
+      using CoreTm_Quantifier.IH[OF body_ty] .
+    from Ghost wk' body_ty' body_env_shape body_bool ty_eq show ?thesis
+      by (metis CoreType.simps(63) core_term_type.simps(10) option.simps(5))
+  qed
+next
+  case (CoreTm_FunctionCall fnName tyArgs args)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  have wk_mono: "\<And>t. is_well_kinded env t \<Longrightarrow> is_well_kinded ?env' t"
+    using is_well_kinded_extend_tyvars by fastforce
+  have rt_mono: "\<And>t. is_runtime_type env t \<Longrightarrow> is_runtime_type ?env' t"
+    using is_runtime_type_extend_runtime_tyvars by fastforce
+  have la_wk: "list_all (is_well_kinded env) tyArgs \<Longrightarrow> list_all (is_well_kinded ?env') tyArgs"
+    using wk_mono by (auto simp: list_all_iff)
+  have la_rt: "list_all (is_runtime_type env) tyArgs \<Longrightarrow> list_all (is_runtime_type ?env') tyArgs"
+    using rt_mono by (auto simp: list_all_iff)
+  have IH: "\<And>tm ty. tm \<in> set args \<Longrightarrow> core_term_type env ghost tm = Some ty \<Longrightarrow>
+                     core_term_type ?env' ghost tm = Some ty"
+    using CoreTm_FunctionCall.IH by blast
+  have la2_mono: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
+          (\<exists>y. core_term_type env ghost tm = Some y) \<and>
+          (\<forall>x2. core_term_type env ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) args ys \<Longrightarrow>
+        list_all2 (\<lambda>tm expectedTy.
+          (\<exists>y. core_term_type ?env' ghost tm = Some y) \<and>
+          (\<forall>x2. core_term_type ?env' ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) args ys"
+    using IH by (fastforce simp: list_all2_iff in_set_zip)
+  show ?case using CoreTm_FunctionCall.prems la_wk la_rt la2_mono
+    by (auto split: option.splits if_splits simp: Let_def)
+next
+  case (CoreTm_VariantCtor ctorName tyArgs arg)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  have wk_mono: "\<And>t. is_well_kinded env t \<Longrightarrow> is_well_kinded ?env' t"
+    using is_well_kinded_extend_tyvars by fastforce
+  have rt_mono: "\<And>t. is_runtime_type env t \<Longrightarrow> is_runtime_type ?env' t"
+    using is_runtime_type_extend_runtime_tyvars by fastforce
+  have la_wk: "list_all (is_well_kinded env) tyArgs \<Longrightarrow> list_all (is_well_kinded ?env') tyArgs"
+    using wk_mono by (auto simp: list_all_iff)
+  have la_rt: "list_all (is_runtime_type env) tyArgs \<Longrightarrow> list_all (is_runtime_type ?env') tyArgs"
+    using rt_mono by (auto simp: list_all_iff)
+  show ?case using CoreTm_VariantCtor la_wk la_rt
+    by (auto split: option.splits if_splits)
+next
+  case (CoreTm_Record flds)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Record.prems obtain tys where
+    those_eq: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
+    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
+    by (auto split: option.splits)
+  have IH: "\<And>nm tm ty'. (nm, tm) \<in> set flds \<Longrightarrow> core_term_type env ghost tm = Some ty' \<Longrightarrow>
+                         core_term_type ?env' ghost tm = Some ty'"
+    using CoreTm_Record.IH by (auto simp: image_iff)
+  \<comment> \<open>those succeeding means every field typed to Some in env\<close>
+  from those_eq have la2: "list_all2 (\<lambda>x y. x = Some y)
+                                      (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
+    using those_eq_Some by blast
+  have all_some: "\<And>nm tm. (nm, tm) \<in> set flds \<Longrightarrow>
+                          \<exists>ty'. core_term_type env ghost tm = Some ty'"
+  proof -
+    fix nm tm assume mem: "(nm, tm) \<in> set flds"
+    then obtain i where i_lt: "i < length flds" and fld_i: "flds ! i = (nm, tm)"
+      by (auto simp: in_set_conv_nth)
+    from la2 i_lt have "map (\<lambda>(name, tm). core_term_type env ghost tm) flds ! i = Some (tys ! i)"
+      by (auto simp: list_all2_conv_all_nth)
+    thus "\<exists>ty'. core_term_type env ghost tm = Some ty'"
+      using i_lt fld_i by simp
+  qed
+  have map_eq: "map (\<lambda>(name, y). core_term_type ?env' ghost y) flds =
+                map (\<lambda>(name, y). core_term_type env ghost y) flds"
+  proof (rule map_cong, simp)
+    fix p assume p_in: "p \<in> set flds"
+    obtain nm tm where p_eq: "p = (nm, tm)" by (cases p)
+    from p_in p_eq all_some obtain ty' where
+      tm_ty: "core_term_type env ghost tm = Some ty'" by blast
+    from IH[OF _ tm_ty] p_in p_eq have
+      tm_ty': "core_term_type ?env' ghost tm = Some ty'" by blast
+    show "(case p of (name, y) \<Rightarrow> core_term_type ?env' ghost y) =
+          (case p of (name, y) \<Rightarrow> core_term_type env ghost y)"
+      using p_eq tm_ty tm_ty' by simp
+  qed
+  from CoreTm_Record.prems show ?case by (simp add: map_eq)
+next
+  case (CoreTm_Match scrut arms)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Match.prems obtain scrutTy where
+    scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
+    by (auto split: option.splits)
+  have scrut_ty': "core_term_type ?env' ghost scrut = Some scrutTy"
+    using CoreTm_Match.IH(1) scrut_ty by blast
+  \<comment> \<open>arms nonempty and pattern checks pass in env\<close>
+  from CoreTm_Match.prems scrut_ty have arms_nonempty: "arms \<noteq> []"
+    by (auto split: option.splits if_splits)
+  let ?pats = "map fst arms"
+  from CoreTm_Match.prems scrut_ty arms_nonempty have
+    pat_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) ?pats" and
+    pat_reg: "patterns_regular ?pats" and
+    pat_exh: "patterns_exhaustive env scrutTy ?pats"
+    by (auto split: option.splits if_splits simp: Let_def)
+  \<comment> \<open>These pattern checks don't depend on TE_TypeVars / TE_RuntimeTypeVars\<close>
+  have pc_eq: "\<And>p t. pattern_compatible ?env' p t = pattern_compatible env p t"
+    by (rule pattern_compatible.induct[where P="\<lambda>e p t. pattern_compatible ?env' p t = pattern_compatible env p t"])
+       auto
+  have pat_compat': "list_all (\<lambda>p. pattern_compatible ?env' p scrutTy) ?pats"
+    using pat_compat by (simp add: list_all_iff pc_eq)
+  have pat_exh': "patterns_exhaustive ?env' scrutTy ?pats"
+    using pat_exh by (auto split: CoreType.splits option.splits if_splits)
+  \<comment> \<open>First body and rest\<close>
+  have match_unfold: "core_term_type env ghost (CoreTm_Match scrut arms) =
+    (let pats = map fst arms; bodies = map snd arms in
+      if arms = [] then None
+      else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
+      else if \<not> patterns_regular pats then None
+      else if \<not> patterns_exhaustive env scrutTy pats then None
+      else (case core_term_type env ghost (snd (hd arms)) of
+              None \<Rightarrow> None
+            | Some resultTy \<Rightarrow>
+                if list_all (\<lambda>body. core_term_type env ghost body = Some resultTy) (tl bodies)
+                then Some resultTy
+                else None))"
+    using scrut_ty by simp
+  from CoreTm_Match.prems match_unfold arms_nonempty pat_compat pat_reg pat_exh
+  obtain firstBodyTy where
+    first_ty: "core_term_type env ghost (snd (hd arms)) = Some firstBodyTy" and
+    ty_eq: "ty = firstBodyTy" and
+    rest_ty: "list_all (\<lambda>body. core_term_type env ghost body = Some firstBodyTy)
+                       (tl (map snd arms))"
+    by (auto simp: Let_def split: option.splits if_splits)
+  have hd_in: "snd (hd arms) \<in> snd ` set arms"
+    using arms_nonempty by (cases arms) auto
+  have bodies_IH: "\<And>body ty'. body \<in> snd ` set arms \<Longrightarrow>
+                              core_term_type env ghost body = Some ty' \<Longrightarrow>
+                              core_term_type ?env' ghost body = Some ty'"
+    using CoreTm_Match.IH(2) by fastforce
+  have first_ty': "core_term_type ?env' ghost (snd (hd arms)) = Some firstBodyTy"
+    using bodies_IH[OF hd_in first_ty] .
+  have tl_in: "\<And>body. body \<in> set (tl (map snd arms)) \<Longrightarrow> body \<in> snd ` set arms"
+    by (cases arms) auto
+  have rest_ty': "list_all (\<lambda>body. core_term_type ?env' ghost body = Some firstBodyTy)
+                           (tl (map snd arms))"
+    using rest_ty bodies_IH tl_in by (induction "tl (map snd arms)") (auto simp: list_all_iff)
+  show ?case
+    using scrut_ty' arms_nonempty pat_compat' pat_reg pat_exh' first_ty' rest_ty' ty_eq
+    by (simp add: Let_def)
+next
+  case (CoreTm_ArrayProj tm idxTms)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_ArrayProj.prems obtain elemTy dims where
+    tm_ty: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)" and
+    len_eq: "length idxTms = length dims" and
+    idxs_ty: "list_all (\<lambda>tm. core_term_type env ghost tm =
+                              Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms" and
+    ty_eq: "ty = elemTy"
+    by (auto split: option.splits CoreType.splits if_splits)
+  have tm_ty': "core_term_type ?env' ghost tm = Some (CoreTy_Array elemTy dims)"
+    using CoreTm_ArrayProj.IH(1) tm_ty by blast
+  have idx_IH: "\<And>idx ty'. idx \<in> set idxTms \<Longrightarrow> core_term_type env ghost idx = Some ty' \<Longrightarrow>
+                          core_term_type ?env' ghost idx = Some ty'"
+    using CoreTm_ArrayProj.IH(2) by blast
+  have idxs_ty': "list_all (\<lambda>tm. core_term_type ?env' ghost tm =
+                                  Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms"
+    using idxs_ty idx_IH by (induction idxTms) (auto simp: list_all_iff)
+  show ?case using tm_ty' len_eq idxs_ty' ty_eq by simp
+next
+  case (CoreTm_Allocated tm)
+  then show ?case
+    by (cases ghost) (auto split: option.splits)
+next
+  case (CoreTm_Old tm)
+  then show ?case
+    by (cases ghost) auto
+next
+  case (CoreTm_LitBool b) then show ?case by simp
+next
+  case (CoreTm_LitInt i) then show ?case by (simp split: option.splits)
+next
+  case (CoreTm_Unop op operand)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Unop.prems obtain operandTy where
+    op_ty: "core_term_type env ghost operand = Some operandTy"
+    by (auto split: option.splits)
+  have op_ty': "core_term_type ?env' ghost operand = Some operandTy"
+    using CoreTm_Unop.IH op_ty by blast
+  show ?case using CoreTm_Unop.prems op_ty op_ty'
+    by (auto split: option.splits CoreUnop.splits if_splits)
+next
+  case (CoreTm_Binop op lhs rhs)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Binop.prems obtain lhsTy rhsTy where
+    lhs_ty: "core_term_type env ghost lhs = Some lhsTy" and
+    rhs_ty: "core_term_type env ghost rhs = Some rhsTy"
+    by (auto split: option.splits)
+  have lhs_ty': "core_term_type ?env' ghost lhs = Some lhsTy"
+    using CoreTm_Binop.IH(1) lhs_ty by blast
+  have rhs_ty': "core_term_type ?env' ghost rhs = Some rhsTy"
+    using CoreTm_Binop.IH(2) rhs_ty by blast
+  show ?case using CoreTm_Binop.prems lhs_ty lhs_ty' rhs_ty rhs_ty'
+    by (auto split: option.splits if_splits)
+next
+  case (CoreTm_RecordProj tm fldName)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_RecordProj.prems obtain fieldTypes where
+    tm_ty: "core_term_type env ghost tm = Some (CoreTy_Record fieldTypes)" and
+    ty_eq: "map_of fieldTypes fldName = Some ty"
+    by (auto split: option.splits CoreType.splits)
+  have tm_ty': "core_term_type ?env' ghost tm = Some (CoreTy_Record fieldTypes)"
+    using CoreTm_RecordProj.IH tm_ty by blast
+  show ?case using tm_ty' ty_eq by simp
+next
+  case (CoreTm_VariantProj tm ctorName)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_VariantProj.prems obtain tmTy where
+    tm_ty: "core_term_type env ghost tm = Some tmTy"
+    by (auto split: option.splits)
+  have tm_ty': "core_term_type ?env' ghost tm = Some tmTy"
+    using CoreTm_VariantProj.IH tm_ty by blast
+  show ?case using CoreTm_VariantProj.prems tm_ty tm_ty'
+    by (auto split: option.splits CoreType.splits)
+next
+  case (CoreTm_Sizeof tm)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Sizeof.prems obtain elemTy dims where
+    tm_ty: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)"
+    by (auto split: option.splits CoreType.splits if_splits)
+  have tm_ty': "core_term_type ?env' ghost tm = Some (CoreTy_Array elemTy dims)"
+    using CoreTm_Sizeof.IH tm_ty by blast
+  show ?case using CoreTm_Sizeof.prems tm_ty tm_ty'
+    by (auto split: option.splits CoreType.splits if_splits)
+qed
+
 
 (* core_term_type produces well-kinded types, and in NotGhost mode also runtime types.
    These must be proved simultaneously because the CoreTm_Let case

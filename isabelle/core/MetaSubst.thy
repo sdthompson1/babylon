@@ -142,25 +142,6 @@ proof -
   thus ?thesis using assms by auto
 qed
 
-(* Another corollary: If all metavars in ty are in dom(subst), and all types in range(subst)
-   are ground, then applying subst to ty results in a ground type *)
-corollary apply_subst_makes_ground:
-  assumes "type_metavars ty \<subseteq> fset (fmdom subst)"
-      and "\<forall>ty' \<in> fmran' subst. is_ground ty'"
-  shows "is_ground (apply_subst subst ty)"
-proof -
-  have "type_metavars (apply_subst subst ty) \<subseteq>
-        (type_metavars ty - fset (fmdom subst)) \<union> subst_range_mvs subst"
-    by (rule apply_subst_metavars_result)
-  also have "... \<subseteq> subst_range_mvs subst"
-    using assms(1) by auto
-  also have "... = {}"
-    using assms(2) is_ground_no_metavars
-    by (auto simp: subst_range_mvs_def)
-  finally show ?thesis
-    using is_ground_no_metavars by blast
-qed
-
 (* Substitution is identity when domain is disjoint from type's metavariables *)
 lemma apply_subst_disjoint_id:
   "type_metavars ty \<inter> fset (fmdom subst) = {} \<Longrightarrow> apply_subst subst ty = ty"
@@ -186,11 +167,6 @@ next
   case (CoreTy_Meta n)
   thus ?case by (simp add: fmdom_notD)
 qed (simp_all)
-
-(* Substitution on ground types is identity *)
-corollary apply_subst_ground:
-  "is_ground ty \<Longrightarrow> apply_subst subst ty = ty"
-  using is_ground_no_metavars apply_subst_disjoint_id by blast
 
 (* Substituting runtime types preserves runtime-ness.
    The source env (where ty lives) and target env (where the result lives) may differ:
@@ -470,14 +446,6 @@ proof (intro fmap_ext)
     show ?thesis using lhs rhs eq by simp
   qed
 qed
-
-(* Once a type becomes ground (under some substitution), it will remain ground even
-   after composing further substitutions *)
-lemma compose_subst_preserves_ground:
-  assumes "(apply_subst \<theta> ty1) = ty2"
-      and "is_ground ty2"
-    shows "(apply_subst (compose_subst \<eta> \<theta>) ty1) = ty2"
-  by (simp add: apply_subst_ground assms(1,2) compose_subst_correct)
 
 (* Composition of substitutions preserves "runtime-ness" *)
 lemma compose_subst_preserves_runtime:

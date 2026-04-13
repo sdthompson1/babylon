@@ -13,40 +13,37 @@ begin
 (* ========================================================================== *)
 
 theorem unify_preserves_runtime:
-  "unify ty1 ty2 = Some subst \<Longrightarrow>
+  "unify is_flex ty1 ty2 = Some subst \<Longrightarrow>
    is_runtime_type env ty1 \<Longrightarrow>
    is_runtime_type env ty2 \<Longrightarrow>
    \<forall>ty \<in> fmran' subst. is_runtime_type env ty"
   and unify_list_preserves_runtime:
-  "unify_list tys1 tys2 = Some subst \<Longrightarrow>
+  "unify_list is_flex tys1 tys2 = Some subst \<Longrightarrow>
    list_all (is_runtime_type env) tys1 \<Longrightarrow>
    list_all (is_runtime_type env) tys2 \<Longrightarrow>
    \<forall>ty \<in> fmran' subst. is_runtime_type env ty"
-proof (induction ty1 ty2 and tys1 tys2 arbitrary: subst and subst rule: unify_unify_list.induct)
-  (* CoreTy_Name / ty2 *)
-  case (1 name1 tyArgs1 ty2)
+proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subst rule: unify_unify_list.induct)
+  (* CoreTy_Datatype / ty2 *)
+  case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    hence "\<not> occurs n (CoreTy_Name name1 tyArgs1)"
-      using "1.prems"(1) by auto
-    hence "subst = singleton_subst n (CoreTy_Name name1 tyArgs1)"
-      using "1.prems"(1) CoreTy_Meta by force
-    thus ?thesis using "1.prems"(1)
-      by (metis "1.prems"(2) apply_subst.simps(8) apply_subst_singleton apply_subst_singleton_other
-          fmlookup_ran'_iff is_runtime_type.simps(8) option.simps(5))
+    then have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
+      using "1.prems"(1) by (auto split: if_splits)
+    have ty1_rt: "is_runtime_type env (CoreTy_Datatype name1 tyArgs1)" using "1.prems"(2) by simp
+    show ?thesis using subst_eq ty1_rt by (auto simp: fmran'_singleton_subst)
   next
-    case (CoreTy_Name name2 tyArgs2)
+    case (CoreTy_Datatype name2 tyArgs2)
     show ?thesis
     proof (cases "name1 = name2")
-      case False then show ?thesis using "1.prems"(1) CoreTy_Name by auto
+      case False then show ?thesis using "1.prems"(1) CoreTy_Datatype by auto
     next
       case True
-      with "1.prems"(1) CoreTy_Name have unify_ok: "unify_list tyArgs1 tyArgs2 = Some subst" by simp
+      with "1.prems"(1) CoreTy_Datatype have unify_ok: "unify_list is_flex tyArgs1 tyArgs2 = Some subst" by simp
       from "1.prems"(2) have "list_all (is_runtime_type env) tyArgs1" by auto
-      from "1.prems"(3) CoreTy_Name have "list_all (is_runtime_type env) tyArgs2"
-        using is_runtime_type.simps(1) by blast 
-      from "1.IH"[OF CoreTy_Name True unify_ok
+      from "1.prems"(3) CoreTy_Datatype have "list_all (is_runtime_type env) tyArgs2"
+        using is_runtime_type.simps(1) by blast
+      from "1.IH"[OF CoreTy_Datatype True unify_ok
                     \<open>list_all (is_runtime_type env) tyArgs1\<close>
                     \<open>list_all (is_runtime_type env) tyArgs2\<close>]
       show ?thesis .
@@ -54,49 +51,46 @@ proof (induction ty1 ty2 and tys1 tys2 arbitrary: subst and subst rule: unify_un
   qed auto
 next
   (* CoreTy_Bool / ty2 *)
-  case (2 ty2)
+  case (2 is_flex ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have "subst = singleton_subst n CoreTy_Bool" using 2(1) by simp
+    then have "subst = singleton_subst n CoreTy_Bool" using 2(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
 next
   (* CoreTy_FiniteInt / ty2 *)
-  case (3 sign bits ty2)
+  case (3 is_flex sign bits ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have "subst = singleton_subst n (CoreTy_FiniteInt sign bits)" using 3(1) by simp
+    then have "subst = singleton_subst n (CoreTy_FiniteInt sign bits)" using 3(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def split: if_splits)
 next
   (* CoreTy_MathInt / ty2 - MathInt is not runtime, so premise is false *)
-  case (4 ty2)
+  case (4 is_flex ty2)
   then show ?case by simp
 next
   (* CoreTy_MathReal / ty2 - MathReal is not runtime, so premise is false *)
-  case (5 ty2)
+  case (5 is_flex ty2)
   then show ?case by simp
 next
   (* CoreTy_Record / ty2 *)
-  case (6 flds1 ty2)
+  case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    hence "\<not> occurs n (CoreTy_Record flds1)"
-      using "6.prems"(1) by auto
-    hence "subst = singleton_subst n (CoreTy_Record flds1)"
-      using "6.prems"(1) CoreTy_Meta by force
-    thus ?thesis using "6.prems"(1)
-      by (metis "6.prems"(2) apply_subst.simps(8) apply_subst_singleton apply_subst_singleton_other
-          fmlookup_ran'_iff is_runtime_type.simps(8) option.simps(5))
+    then have subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
+      using "6.prems"(1) by (auto split: if_splits)
+    have ty1_rt: "is_runtime_type env (CoreTy_Record flds1)" using "6.prems"(2) by simp
+    show ?thesis using subst_eq ty1_rt by (auto simp: fmran'_singleton_subst)
   next
     case (CoreTy_Record flds2)
     from "6.prems"(1) CoreTy_Record have names_eq: "map fst flds1 = map fst flds2"
       by (auto split: if_splits)
     from "6.prems"(1) CoreTy_Record names_eq
-    have unify_ok: "unify_list (map snd flds1) (map snd flds2) = Some subst" by simp
+    have unify_ok: "unify_list is_flex (map snd flds1) (map snd flds2) = Some subst" by simp
     from "6.prems"(2) have "list_all (is_runtime_type env) (map snd flds1)" by simp
     from "6.prems"(3) CoreTy_Record have "list_all (is_runtime_type env) (map snd flds2)" by simp
     from "6.IH"[OF CoreTy_Record names_eq unify_ok
@@ -106,17 +100,14 @@ next
   qed auto
 next
   (* CoreTy_Array / ty2 *)
-  case (7 elemTy1 dims1 ty2)
+  case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    hence "\<not> occurs n (CoreTy_Array elemTy1 dims1)"
-      using "7.prems"(1) by auto
-    hence "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
-      using "7.prems"(1) CoreTy_Meta by force
-    thus ?thesis using "7.prems"(1)
-      by (metis "7.prems"(2) apply_subst.simps(8) apply_subst_singleton apply_subst_singleton_other
-          fmlookup_ran'_iff is_runtime_type.simps(8) option.simps(5))
+    then have subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
+      using "7.prems"(1) by (auto split: if_splits)
+    have ty1_rt: "is_runtime_type env (CoreTy_Array elemTy1 dims1)" using "7.prems"(2) by simp
+    show ?thesis using subst_eq ty1_rt by (auto simp: fmran'_singleton_subst)
   next
     case (CoreTy_Array elemTy2 dims2)
     show ?thesis
@@ -124,7 +115,7 @@ next
       case False then show ?thesis using 7(2) CoreTy_Array by simp
     next
       case True
-      with 7(2) CoreTy_Array have unify_ok: "unify elemTy1 elemTy2 = Some subst" by simp
+      with 7(2) CoreTy_Array have unify_ok: "unify is_flex elemTy1 elemTy2 = Some subst" by simp
       from "7.prems"(2) have "is_runtime_type env elemTy1" by simp
       from "7.prems"(3) CoreTy_Array have "is_runtime_type env elemTy2" by simp
       from "7.IH"[OF CoreTy_Array True unify_ok
@@ -135,42 +126,92 @@ next
   qed auto
 next
   (* CoreTy_Meta / ty2 *)
-  case (8 n ty2)
+  case (8 is_flex n ty2)
   show ?case
-  proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
-    case True then show ?thesis using 8(1) by simp
-  next
-    case False
+  proof (cases "is_flex n")
+    case True
     show ?thesis
-    proof (cases "ty2 = CoreTy_Meta n")
-      case True
-      then have "subst = fmempty" using 8(1) by simp
-      then show ?thesis by (simp add: fmran'_def)
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+      case True then show ?thesis using 8(1) \<open>is_flex n\<close> by simp
     next
-      case neq: False
-      with False have "subst = singleton_subst n ty2" using 8(1) by simp
-      then show ?thesis using "8.prems"(3)
-        by (auto simp: fmran'_singleton_subst)
+      case False
+      show ?thesis
+      proof (cases "ty2 = CoreTy_Meta n")
+        case True
+        then have "subst = fmempty" using 8(1) \<open>is_flex n\<close> by simp
+        then show ?thesis by (simp add: fmran'_def)
+      next
+        case neq: False
+        with False have "subst = singleton_subst n ty2" using 8(1) \<open>is_flex n\<close> by simp
+        then show ?thesis using "8.prems"(3)
+          by (auto simp: fmran'_singleton_subst)
+      qed
+    qed
+  next
+    case flex_n_false: False
+    show ?thesis
+    proof (cases ty2)
+      case (CoreTy_Meta m)
+      show ?thesis
+      proof (cases "m = n")
+        case True
+        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Meta by simp
+        then show ?thesis by (simp add: fmran'_def)
+      next
+        case neq: False
+        show ?thesis
+        proof (cases "is_flex m")
+          case True
+          from 8(1) flex_n_false CoreTy_Meta neq True
+          have "subst = singleton_subst m (CoreTy_Meta n)" by simp
+          then show ?thesis using "8.prems"(2)
+            by (auto simp: fmran'_singleton_subst)
+        next
+          case False
+          then show ?thesis using 8(1) flex_n_false CoreTy_Meta neq by simp
+        qed
+      qed
+    next
+      case (CoreTy_Datatype name args)
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case CoreTy_Bool
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_FiniteInt sign bits)
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case CoreTy_MathInt
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case CoreTy_MathReal
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Record flds)
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Array elem dims)
+      then show ?thesis using 8(1) flex_n_false by simp
     qed
   qed
 next
   (* unify_list [] [] *)
-  case 9
+  case (9 is_flex)
   then show ?case by (simp add: fmran'_def)
 next
   (* unify_list [] (ty # tys) *)
-  case (10 ty tys)
+  case (10 is_flex ty tys)
   then show ?case by simp
 next
   (* unify_list (ty # tys) [] *)
-  case (11 ty tys)
+  case (11 is_flex ty tys)
   then show ?case by simp
 next
   (* unify_list (ty1 # tys1) (ty2 # tys2) *)
-  case (12 ty1 rest1 ty2 rest2)
+  case (12 is_flex ty1 rest1 ty2 rest2)
   from 12(3) obtain subst1 subst2 where
-    unify_head: "unify ty1 ty2 = Some subst1" and
-    unify_rest: "unify_list (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst2" and
+    unify_head: "unify is_flex ty1 ty2 = Some subst1" and
+    unify_rest: "unify_list is_flex (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst2" and
     subst_compose: "subst = compose_subst subst2 subst1"
     by (auto split: option.splits)
   from 12(4) have ty1_runtime: "is_runtime_type env ty1" and rest1_runtime: "list_all (is_runtime_type env) rest1"
@@ -188,7 +229,8 @@ next
       fix x assume "x \<in> set rest1"
       hence "is_runtime_type env x" using rest1_runtime by (simp add: list_all_iff)
       thus "is_runtime_type env (apply_subst subst1 x)"
-        using subst1_runtime apply_subst_preserves_runtime by blast
+        by (rule apply_subst_preserves_runtime[where src=env and tgt=env])
+           (auto simp: subst1_runtime fmran'I split: option.splits)
     qed
   qed
   have rest2_subst_runtime: "list_all (is_runtime_type env) (map (apply_subst subst1) rest2)"
@@ -198,7 +240,8 @@ next
       fix x assume "x \<in> set rest2"
       hence "is_runtime_type env x" using rest2_runtime by (simp add: list_all_iff)
       thus "is_runtime_type env (apply_subst subst1 x)"
-        using subst1_runtime apply_subst_preserves_runtime by blast
+        by (rule apply_subst_preserves_runtime[where src=env and tgt=env])
+           (auto simp: subst1_runtime fmran'I split: option.splits)
     qed
   qed
   (* From IH on rest: subst2 range is runtime *)
@@ -215,95 +258,80 @@ qed
 (* ========================================================================== *)
 
 theorem unify_preserves_well_kinded:
-  "unify ty1 ty2 = Some subst \<Longrightarrow>
+  "unify is_flex ty1 ty2 = Some subst \<Longrightarrow>
    is_well_kinded env ty1 \<Longrightarrow>
    is_well_kinded env ty2 \<Longrightarrow>
    \<forall>ty \<in> fmran' subst. is_well_kinded env ty"
   and unify_list_preserves_well_kinded:
-  "unify_list tys1 tys2 = Some subst \<Longrightarrow>
+  "unify_list is_flex tys1 tys2 = Some subst \<Longrightarrow>
    list_all (is_well_kinded env) tys1 \<Longrightarrow>
    list_all (is_well_kinded env) tys2 \<Longrightarrow>
    \<forall>ty \<in> fmran' subst. is_well_kinded env ty"
-proof (induction ty1 ty2 and tys1 tys2 arbitrary: subst and subst rule: unify_unify_list.induct)
-  (* CoreTy_Name / ty2 *)
-  case (1 name1 tyArgs1 ty2)
+proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subst rule: unify_unify_list.induct)
+  (* CoreTy_Datatype / ty2 *)
+  case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have subst_eq: "subst = singleton_subst n (CoreTy_Name name1 tyArgs1)"
+    then have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
       using 1(2) by (auto split: if_splits)
-    have ty1_wk: "is_well_kinded env (CoreTy_Name name1 tyArgs1)" using "1.prems"(2) by simp
+    have ty1_wk: "is_well_kinded env (CoreTy_Datatype name1 tyArgs1)" using "1.prems"(2) by simp
     show ?thesis using subst_eq ty1_wk by (auto simp: fmran'_singleton_subst)
   next
-    case (CoreTy_Name name2 tyArgs2)
+    case (CoreTy_Datatype name2 tyArgs2)
     show ?thesis
     proof (cases "name1 = name2")
-      case False then show ?thesis using "1.prems"(1) CoreTy_Name by auto
+      case False then show ?thesis using "1.prems"(1) CoreTy_Datatype by auto
     next
       case True
-      with "1.prems"(1) CoreTy_Name have unify_ok: "unify_list tyArgs1 tyArgs2 = Some subst" by simp
-      (* Extract well-kindedness of args from premises *)
+      with "1.prems"(1) CoreTy_Datatype have unify_ok: "unify_list is_flex tyArgs1 tyArgs2 = Some subst" by simp
       have args1_wk: "list_all (is_well_kinded env) tyArgs1"
-      proof (cases "name1 |\<in>| TE_TypeVars env")
-        case True
-        with "1.prems"(2) have "tyArgs1 = []" by simp
-        thus ?thesis by simp
-      next
-        case False
-        with "1.prems"(2) show ?thesis by (auto split: option.splits)
-      qed
+        using "1.prems"(2) by (auto split: option.splits)
       have args2_wk: "list_all (is_well_kinded env) tyArgs2"
-      proof (cases "name2 |\<in>| TE_TypeVars env")
-        case True
-        with "1.prems"(3) CoreTy_Name have "tyArgs2 = []" by simp
-        thus ?thesis by simp
-      next
-        case False
-        with "1.prems"(3) CoreTy_Name show ?thesis by (auto split: option.splits)
-      qed
-      from "1.IH"[OF CoreTy_Name True unify_ok args1_wk args2_wk]
+        using "1.prems"(3) CoreTy_Datatype by (auto split: option.splits)
+      from "1.IH"[OF CoreTy_Datatype True unify_ok args1_wk args2_wk]
       show ?thesis .
     qed
   qed auto
 next
   (* CoreTy_Bool / ty2 *)
-  case (2 ty2)
+  case (2 is_flex ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have "subst = singleton_subst n CoreTy_Bool" using 2(1) by simp
+    then have "subst = singleton_subst n CoreTy_Bool" using 2(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
 next
   (* CoreTy_FiniteInt / ty2 *)
-  case (3 sign bits ty2)
+  case (3 is_flex sign bits ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have "subst = singleton_subst n (CoreTy_FiniteInt sign bits)" using 3(1) by simp
+    then have "subst = singleton_subst n (CoreTy_FiniteInt sign bits)" using 3(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def split: if_splits)
 next
   (* CoreTy_MathInt / ty2 *)
-  case (4 ty2)
+  case (4 is_flex ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have "subst = singleton_subst n CoreTy_MathInt" using 4(1) by simp
+    then have "subst = singleton_subst n CoreTy_MathInt" using 4(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
 next
   (* CoreTy_MathReal / ty2 *)
-  case (5 ty2)
+  case (5 is_flex ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
-    then have "subst = singleton_subst n CoreTy_MathReal" using 5(1) by simp
+    then have "subst = singleton_subst n CoreTy_MathReal" using 5(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
 next
   (* CoreTy_Record / ty2 *)
-  case (6 flds1 ty2)
+  case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
@@ -316,7 +344,7 @@ next
     from "6.prems"(1) CoreTy_Record have names_eq: "map fst flds1 = map fst flds2"
       by (auto split: if_splits)
     from "6.prems"(1) CoreTy_Record names_eq
-    have unify_ok: "unify_list (map snd flds1) (map snd flds2) = Some subst" by simp
+    have unify_ok: "unify_list is_flex (map snd flds1) (map snd flds2) = Some subst" by simp
     from "6.prems"(2) have flds1_wk: "list_all (is_well_kinded env) (map snd flds1)" by simp
     from "6.prems"(3) CoreTy_Record have flds2_wk: "list_all (is_well_kinded env) (map snd flds2)" by simp
     from "6.IH"[OF CoreTy_Record names_eq unify_ok flds1_wk flds2_wk]
@@ -324,7 +352,7 @@ next
   qed auto
 next
   (* CoreTy_Array / ty2 *)
-  case (7 elemTy1 dims1 ty2)
+  case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
     case (CoreTy_Meta n)
@@ -339,7 +367,7 @@ next
       case False then show ?thesis using 7(2) CoreTy_Array by simp
     next
       case True
-      with 7(2) CoreTy_Array have unify_ok: "unify elemTy1 elemTy2 = Some subst" by simp
+      with 7(2) CoreTy_Array have unify_ok: "unify is_flex elemTy1 elemTy2 = Some subst" by simp
       from "7.prems"(2) have elem1_wk: "is_well_kinded env elemTy1" by simp
       from "7.prems"(3) CoreTy_Array have elem2_wk: "is_well_kinded env elemTy2" by simp
       from "7.IH"[OF CoreTy_Array True unify_ok elem1_wk elem2_wk]
@@ -348,42 +376,92 @@ next
   qed auto
 next
   (* CoreTy_Meta / ty2 *)
-  case (8 n ty2)
+  case (8 is_flex n ty2)
   show ?case
-  proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
-    case True then show ?thesis using 8(1) by simp
-  next
-    case False
+  proof (cases "is_flex n")
+    case True
     show ?thesis
-    proof (cases "ty2 = CoreTy_Meta n")
-      case True
-      then have "subst = fmempty" using 8(1) by simp
-      then show ?thesis by (simp add: fmran'_def)
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+      case True then show ?thesis using 8(1) \<open>is_flex n\<close> by simp
     next
-      case neq: False
-      with False have subst_eq: "subst = singleton_subst n ty2" using 8(1) by simp
-      have ty2_wk: "is_well_kinded env ty2" using "8.prems"(3) by simp
-      show ?thesis using subst_eq ty2_wk by (auto simp: fmran'_singleton_subst)
+      case False
+      show ?thesis
+      proof (cases "ty2 = CoreTy_Meta n")
+        case True
+        then have "subst = fmempty" using 8(1) \<open>is_flex n\<close> by simp
+        then show ?thesis by (simp add: fmran'_def)
+      next
+        case neq: False
+        with False have subst_eq: "subst = singleton_subst n ty2" using 8(1) \<open>is_flex n\<close> by simp
+        have ty2_wk: "is_well_kinded env ty2" using "8.prems"(3) by simp
+        show ?thesis using subst_eq ty2_wk by (auto simp: fmran'_singleton_subst)
+      qed
+    qed
+  next
+    case flex_n_false: False
+    show ?thesis
+    proof (cases ty2)
+      case (CoreTy_Meta m)
+      show ?thesis
+      proof (cases "m = n")
+        case True
+        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Meta by simp
+        then show ?thesis by (simp add: fmran'_def)
+      next
+        case neq: False
+        show ?thesis
+        proof (cases "is_flex m")
+          case True
+          from 8(1) flex_n_false CoreTy_Meta neq True
+          have "subst = singleton_subst m (CoreTy_Meta n)" by simp
+          then show ?thesis using "8.prems"(2)
+            by (auto simp: fmran'_singleton_subst)
+        next
+          case False
+          then show ?thesis using 8(1) flex_n_false CoreTy_Meta neq by simp
+        qed
+      qed
+    next
+      case (CoreTy_Datatype name args)
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case CoreTy_Bool
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_FiniteInt sign bits)
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case CoreTy_MathInt
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case CoreTy_MathReal
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Record flds)
+      then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Array elem dims)
+      then show ?thesis using 8(1) flex_n_false by simp
     qed
   qed
 next
   (* unify_list [] [] *)
-  case 9
+  case (9 is_flex)
   then show ?case by (simp add: fmran'_def)
 next
   (* unify_list [] (ty # tys) *)
-  case (10 ty tys)
+  case (10 is_flex ty tys)
   then show ?case by simp
 next
   (* unify_list (ty # tys) [] *)
-  case (11 ty tys)
+  case (11 is_flex ty tys)
   then show ?case by simp
 next
   (* unify_list (ty1 # tys1) (ty2 # tys2) *)
-  case (12 ty1 rest1 ty2 rest2)
+  case (12 is_flex ty1 rest1 ty2 rest2)
   from 12(3) obtain subst1 subst2 where
-    unify_head: "unify ty1 ty2 = Some subst1" and
-    unify_rest: "unify_list (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst2" and
+    unify_head: "unify is_flex ty1 ty2 = Some subst1" and
+    unify_rest: "unify_list is_flex (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) = Some subst2" and
     subst_compose: "subst = compose_subst subst2 subst1"
     by (auto split: option.splits)
   from 12(4) have ty1_wk: "is_well_kinded env ty1" and rest1_wk: "list_all (is_well_kinded env) rest1"
@@ -401,8 +479,8 @@ next
       fix x assume "x \<in> set rest1"
       hence "is_well_kinded env x" using rest1_wk by (simp add: list_all_iff)
       thus "is_well_kinded env (apply_subst subst1 x)"
-        by (simp add: apply_subst_preserves_well_kinded fmran'I metasubst_well_kinded_def
-            subst1_wk)
+        by (rule apply_subst_preserves_well_kinded[where src=env and tgt=env])
+           (auto simp: subst1_wk fmran'I split: option.splits)
     qed
   qed
   have rest2_subst_wk: "list_all (is_well_kinded env) (map (apply_subst subst1) rest2)"
@@ -412,8 +490,8 @@ next
       fix x assume "x \<in> set rest2"
       hence "is_well_kinded env x" using rest2_wk by (simp add: list_all_iff)
       thus "is_well_kinded env (apply_subst subst1 x)"
-        by (simp add: apply_subst_preserves_well_kinded fmran'I metasubst_well_kinded_def
-            subst1_wk)
+        by (rule apply_subst_preserves_well_kinded[where src=env and tgt=env])
+           (auto simp: subst1_wk fmran'I split: option.splits)
     qed
   qed
   (* From IH on rest: subst2 range is well-kinded *)

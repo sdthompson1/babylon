@@ -53,17 +53,6 @@ fun is_finite_integer_type :: "CoreType \<Rightarrow> bool" where
   "is_finite_integer_type (CoreTy_FiniteInt _ _) = True"
 | "is_finite_integer_type _ = False"
 
-(* Check if a type is ground (no metavars) *)
-fun is_ground :: "CoreType \<Rightarrow> bool" where
-  "is_ground (CoreTy_Datatype _ tyargs) = list_all is_ground tyargs"
-| "is_ground CoreTy_Bool = True"
-| "is_ground (CoreTy_FiniteInt _ _) = True"
-| "is_ground CoreTy_MathInt = True"
-| "is_ground CoreTy_MathReal = True"
-| "is_ground (CoreTy_Record flds) = list_all is_ground (map snd flds)"
-| "is_ground (CoreTy_Array elemTy dims) = is_ground elemTy"
-| "is_ground (CoreTy_Meta _) = False"
-
 (* Collect all metavariables in a type *)
 fun type_metavars :: "CoreType \<Rightarrow> nat set" where
   "type_metavars (CoreTy_Datatype _ tyargs) = \<Union>(set (map type_metavars tyargs))"
@@ -115,9 +104,9 @@ lemma is_integer_type_cases:
         | (MathInt) "ty = CoreTy_MathInt"
   using assms by (cases ty) auto
 
-(* Integer types are ground *)
-lemma integer_type_is_ground:
-  "is_integer_type ty \<Longrightarrow> is_ground ty"
+(* Integer types have no metavariables *)
+lemma integer_type_no_metavars:
+  "is_integer_type ty \<Longrightarrow> type_metavars ty = {}"
   by (cases ty) auto
 
 (* Metavariables in a type are finite *)
@@ -131,11 +120,6 @@ lemma finite_list_metavars: "finite (list_metavars tys)"
 (* type_metavars_list collects the same set as type_metavars *)
 lemma set_type_metavars_list: "set (type_metavars_list ty) = type_metavars ty"
   by (induct ty) auto
-
-(* A type is ground iff it has no metavars *)
-lemma is_ground_no_metavars:
-  "is_ground ty \<longleftrightarrow> type_metavars ty = {}"
-  by (induct ty) (auto simp: list_all_iff)
 
 (* A list of metavariables satisfies list_all is_runtime_type, provided the metavars
    are all declared runtime in the env *)
@@ -154,6 +138,96 @@ lemma is_runtime_type_cong_env:
 lemma is_runtime_type_TE_ConstNames_irrelevant [simp]:
   "is_runtime_type (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_runtime_type env ty"
   using is_runtime_type_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+
+(* If ty is runtime in an env, then every metavariable in ty is in the env's
+   TE_RuntimeTypeVars. *)
+lemma is_runtime_type_metavars_subset:
+  assumes "is_runtime_type env ty"
+  shows "type_metavars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
+using assms proof (induction ty)
+  case (CoreTy_Datatype name argTypes)
+  from CoreTy_Datatype.prems have
+    args_rt: "list_all (is_runtime_type env) argTypes" by simp
+  show ?case
+  proof
+    fix x assume "x \<in> type_metavars (CoreTy_Datatype name argTypes)"
+    then obtain arg where arg_in: "arg \<in> set argTypes" and x_in: "x \<in> type_metavars arg" by auto
+    from arg_in args_rt have "is_runtime_type env arg" by (simp add: list_all_iff)
+    with CoreTy_Datatype.IH arg_in x_in show "x \<in> fset (TE_RuntimeTypeVars env)" by blast
+  qed
+next
+  case (CoreTy_Record flds)
+  from CoreTy_Record.prems have flds_rt: "\<forall>(nm, ty) \<in> set flds. is_runtime_type env ty"
+    by (auto simp: list_all_iff)
+  show ?case
+  proof
+    fix x assume "x \<in> type_metavars (CoreTy_Record flds)"
+    then obtain nm ty where nm_ty_in: "(nm, ty) \<in> set flds" and x_in: "x \<in> type_metavars ty"
+      by auto
+    from nm_ty_in flds_rt have ty_rt: "is_runtime_type env ty" by blast
+    from CoreTy_Record.IH[OF nm_ty_in] ty_rt x_in
+    show "x \<in> fset (TE_RuntimeTypeVars env)" by (simp add: subsetD)
+  qed
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by auto
+next
+  case (CoreTy_Meta n)
+  thus ?case by force
+qed simp_all
+
+(* Growing TE_RuntimeTypeVars preserves is_runtime_type. The TE_TypeVars field may
+   also be extended at the same time; is_runtime_type doesn't depend on it, but the
+   combined form is convenient for callers. *)
+lemma is_runtime_type_extend_runtime_tyvars:
+  assumes "is_runtime_type env ty"
+  shows "is_runtime_type
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) ty"
+  using assms by (induction ty) (auto simp: list_all_iff)
+
+(* If ty is runtime in one env, and every metavariable of ty is a runtime tyvar in a
+   second env (with the same TE_GhostDatatypes), then ty is runtime in the second env. *)
+lemma is_runtime_type_transfer:
+  assumes rt: "is_runtime_type env1 ty"
+    and mvs_in_env2: "type_metavars ty \<subseteq> fset (TE_RuntimeTypeVars env2)"
+    and gd_eq: "TE_GhostDatatypes env2 = TE_GhostDatatypes env1"
+  shows "is_runtime_type env2 ty"
+  using rt mvs_in_env2 gd_eq
+proof (induction ty)
+  case (CoreTy_Datatype name argTypes)
+  from CoreTy_Datatype.prems(1) have
+    dt_nonghost: "name |\<notin>| TE_GhostDatatypes env1" and
+    args_rt: "list_all (is_runtime_type env1) argTypes"
+    by auto
+  from CoreTy_Datatype.prems(2) have
+    args_mvs: "\<And>arg. arg \<in> set argTypes \<Longrightarrow> type_metavars arg \<subseteq> fset (TE_RuntimeTypeVars env2)"
+    by auto
+  have args_rt': "list_all (is_runtime_type env2) argTypes"
+    using CoreTy_Datatype.IH args_rt args_mvs CoreTy_Datatype.prems(3)
+    by (induction argTypes) (auto simp: list_all_iff)
+  show ?case using dt_nonghost args_rt' CoreTy_Datatype.prems(3) by simp
+next
+  case (CoreTy_Record flds)
+  from CoreTy_Record.prems(1) have flds_rt: "list_all (is_runtime_type env1) (map snd flds)"
+    by simp
+  have "\<And>nm ty. (nm, ty) \<in> set flds \<Longrightarrow> is_runtime_type env2 ty"
+  proof -
+    fix nm ty assume mem: "(nm, ty) \<in> set flds"
+    from mem flds_rt have ty_rt: "is_runtime_type env1 ty" by (auto simp: list_all_iff)
+    have ty_mvs: "type_metavars ty \<subseteq> fset (TE_RuntimeTypeVars env2)"
+      using mem CoreTy_Record.prems(2) by force
+    show "is_runtime_type env2 ty"
+      using CoreTy_Record.IH gd_eq mem ty_mvs ty_rt by auto
+  qed
+  thus ?case by (auto simp: list_all_iff)
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by auto
+next
+  case (CoreTy_Meta n)
+  thus ?case by (auto simp: fset_of_list_elem)
+qed simp_all
 
 
 (* ========================================================================== *)
