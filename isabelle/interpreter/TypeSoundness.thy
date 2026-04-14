@@ -1857,7 +1857,7 @@ next
           have "FI_Ghost funInfo = NotGhost" using ghost_ok2 by (cases "FI_Ghost funInfo") auto
           from "1.prems"(1) fn_lookup this obtain interpFun where
             if_lookup: "fmlookup (IS_Functions state) fnName = Some interpFun" and
-            fi_match: "fun_info_matches_interp_fun funInfo interpFun"
+            fi_match: "fun_info_matches_interp_fun env funInfo interpFun"
             unfolding state_matches_env_def funs_exist_in_state_def
             using case_optionE by blast
           from fi_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
@@ -2435,8 +2435,32 @@ next
                 unfolding state_matches_env_def no_extra_global_vars_def by simp
             next
               show "funs_exist_in_state ?state' env'"
-                using old_sme env'_eq
-                unfolding state_matches_env_def funs_exist_in_state_def by simp
+                unfolding funs_exist_in_state_def
+              proof (intro allI impI, elim conjE)
+                fix name info
+                assume lk: "fmlookup (TE_Functions env') name = Some info"
+                  and ng: "FI_Ghost info = NotGhost"
+                from old_sme have old_fes: "funs_exist_in_state state env"
+                  unfolding state_matches_env_def by simp
+                have funs_eq: "TE_Functions env' = TE_Functions env" using env'_eq by simp
+                from lk funs_eq have lk': "fmlookup (TE_Functions env) name = Some info" by simp
+                from old_fes lk' ng obtain interpFun where
+                  if_lk: "fmlookup (IS_Functions state) name = Some interpFun" and
+                  matches: "fun_info_matches_interp_fun env info interpFun"
+                  unfolding funs_exist_in_state_def by (auto split: option.splits)
+                have if_lk': "fmlookup (IS_Functions ?state') name = Some interpFun"
+                  using if_lk by simp
+                have fcong: "fun_info_matches_interp_fun env' info interpFun =
+                              fun_info_matches_interp_fun env info interpFun"
+                  by (rule fun_info_matches_interp_fun_cong_env)
+                     (use env'_eq in simp_all)
+                have "fun_info_matches_interp_fun env' info interpFun"
+                  using matches fcong by simp
+                with if_lk' show "case fmlookup (IS_Functions ?state') name of
+                                    None \<Rightarrow> False
+                                  | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env' info interpFun"
+                  by simp
+              qed
             next
               show "no_extra_funs ?state' env'"
                 using old_sme env'_eq
@@ -3039,7 +3063,7 @@ next
         using "6.prems"(5) state_matches_env_def by auto
       obtain f where
         if_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
-        fi_match: "fun_info_matches_interp_fun funInfo f"
+        fi_match: "fun_info_matches_interp_fun env funInfo f"
         unfolding funs_exist_in_state_def
         by (metis "6.prems"(1,2) case_optionE fes funs_exist_in_state_def)
 
@@ -3057,44 +3081,47 @@ next
         case (Inl bodyStmts)
         \<comment> \<open>Core-body case.\<close>
 
-        (* Because the original function definition passed typechecking, we should already
-           know that the body statement-list is well-typed, in some environment where:
+        (* The body-welltyped premise is now available from fi_match. The clause in
+           fun_info_matches_interp_fun (StateMatchesEnv.thy) says that for an Inl body,
+           core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts
+             = Some env'
+           for some env'. Extracting it here:
 
-          - TE_LocalVars contains the formal parameters and their types (as declared
-              in the original function declaration)
-          - TE_GlobalVars is the same as the existing env
-          - TE_GhostLocals is empty (we are only interested in calls to non-ghost functions,
-              since the interpreter skips over ghost-calls; therefore, all function args
-              are non-ghost.)
-          - TE_GhostGlobals is the same as the existing env
-          - TE_ConstNames is set appropriately; "ref" parameters are non-const and "var"
-              parameters are const.
-          - TE_TypeVars is the set of type variables used by the function (from the
-              original function declaration)
-          - TE_RuntimeTypeVars - is equal to TE_TypeVars since this is a non-ghost call
-          - TE_ReturnType - is the declared return type of the function.
-          - TE_FunctionGhost - is NotGhost
+             obtain bodyEnv' where
+               body_typed: "core_statement_list_type (body_env_for env funInfo)
+                              NotGhost bodyStmts = Some bodyEnv'"
+               using fi_match Inl
+               unfolding fun_info_matches_interp_fun_def
+               by (auto split: sum.splits)
 
-          - TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType, TE_GhostDatatypes 
-              - this is slightly tricky because the original function might have been
-                typechecked in a subset of the current environment (e.g. some functions,
-                datatypes, etc., that are defined now, might not have been defined when
-                the function was originally created).
-              - so we only know that these are some subset of the current env.
-              - but we can use some sort of "weakening" lemma to extend that to the current
-                env.
+           body_env_for installs the formal parameters as locals (with the types
+           from FI_TmArgs), pins TE_TypeVars / TE_RuntimeTypeVars to FI_TyArgs, sets
+           TE_ReturnType to FI_ReturnType, marks Var params const and Ref params
+           non-const, and inherits the global-ish fields (TE_GlobalVars, TE_Functions,
+           TE_Datatypes, etc.) from the current env. So no weakening lemma is needed
+           on those fields.
 
-          (There should, ideally, be some condition in state_matches_env that guarantees 
-          this, but I don't think that exists yet. For now, we can just state the 
-          "function body is well-typed" condition that we need, and sorry it.)
+           We do still need a *type substitution* lemma: bodyStmts typecheck in
+           body_env_for env funInfo where TE_TypeVars = FI_TyArgs (the callee's own
+           type vars, fresh metas as far as the caller is concerned). To use this at
+           the call site we have to apply a simultaneous substitution mapping
+           FI_TyArgs to the concrete type arguments tyArgs, propagated through
+           TE_LocalVars and TE_ReturnType, and show the body still typechecks in the
+           substituted env. This was begun in CoreTypeSubst.thy and is the bulk of
+           the remaining work for this case.
 
-          We also need a substitution lemma, that says that if we swap TE_TypeVars 
-          (and TE_RuntimeTypeVars) to the type vars of the current function (not 
-          the function being called), and we make appropriate type variable substitutions
-          in TE_LocalVars and TE_ReturnType, then the statement list remains well typed
-          in that new environment. This was begun in CoreTypeSubst.thy but I don't think
-          we got very far.
+           Other pieces still needed:
+           - fold process_one_arg soundness (binding actual args into the callee
+             state, including allocating storeTyping entries)
+           - constructing state_matches_env for the cleared callee state + the
+             substituted body env
+           - applying the IH (interp_statement_list_sound) to the body
+           - restore_scope after the call returns
 
+           The loader-level proof obligation that establishes the body-welltyped
+           clause for every function in IS_Functions is deferred (it's essentially
+           "the typechecker emitted a certification for each function body, in the
+           final type env"). Not needed at this proof site.
         *)
             
 

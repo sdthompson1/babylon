@@ -1,6 +1,34 @@
 theory StateMatchesEnv
-  imports CoreInterp
+  imports CoreInterp "../core/CoreStmtTypecheck"
 begin
+
+(* Build the type environment in which a function body should typecheck.
+   Inherits TE_GlobalVars, TE_GhostGlobals, TE_Functions, TE_Datatypes, TE_DataCtors,
+   TE_DataCtorsByType, TE_GhostDatatypes from the surrounding env. The locals,
+   ghost-locals, const-names, type-vars, return type, and function-ghost flag are
+   all replaced by ones derived from the FunInfo:
+   - TE_LocalVars: formal parameter names mapped to their declared types
+   - TE_GhostLocals: empty (ghost functions are not handled here; this helper is
+     only used for non-ghost functions)
+   - TE_ConstNames: the names of Var (by-value) parameters; Ref parameters are
+     non-const because they may be assigned to via the reference
+   - TE_TypeVars / TE_RuntimeTypeVars: the function's own type variables (both
+     equal because we are only interested in non-ghost calls)
+   - TE_ReturnType: the function's declared return type
+   - TE_FunctionGhost: NotGhost *)
+definition body_env_for :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv" where
+  "body_env_for env funInfo =
+    env \<lparr>
+      TE_LocalVars := fmap_of_list (map (\<lambda>(name, ty, _). (name, ty)) (FI_TmArgs funInfo)),
+      TE_GhostLocals := {||},
+      TE_ConstNames := fset_of_list
+        (map (\<lambda>(name, _, _). name)
+             (filter (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo))),
+      TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
+      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo),
+      TE_ReturnType := FI_ReturnType funInfo,
+      TE_FunctionGhost := NotGhost
+    \<rparr>"
 
 (* Store typing: a list of types, one per store slot, giving each slot's designated
    type. Length-matched with IS_Store state. Pins down the type of each slot so that
@@ -40,23 +68,34 @@ definition global_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTy
       Some val \<Rightarrow> value_has_type env val ty
     | None \<Rightarrow> False)"
 
-(* This says that a given FunInfo and an InterpFun match *)
-(* TODO: This needs to be extended, as explained below *)
-definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<Rightarrow> bool" where
-  "fun_info_matches_interp_fun funInfo interpFun =
+(* Contract for an external function: when called with arguments of the expected
+   types, it returns values of the expected types. Currently a stub: discharging
+   this contract is the responsibility of whoever provides the ExternFunc, and
+   the soundness proof for extern calls is deferred. *)
+definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
+  "extern_fun_contract env funInfo externFun = True"
+
+(* This says that a given FunInfo and an InterpFun match, in a given type environment.
+   The env is needed because the body-typechecks clause (for Babylon functions)
+   references the surrounding env's globals, datatypes, and other functions.
+   Hard-wires NotGhost: this predicate is only meaningful for non-ghost functions
+   (see funs_exist_in_state), since the interpreter skips ghost calls. *)
+definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w InterpFun \<Rightarrow> bool" where
+  "fun_info_matches_interp_fun env funInfo interpFun =
     \<comment> \<open>Same number of arguments\<close>
     (length (FI_TmArgs funInfo) = length (IF_Args interpFun) \<and>
     \<comment> \<open>Parameter name and Var/Ref status of each argument matches\<close>
     list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
     \<comment> \<open>Impure flag matches\<close>
-    FI_Impure funInfo = IF_Impure interpFun)
-    \<comment> \<open>TODO: for Babylon functions: the IF_Body statement list must have
-        an appropriate type (corresponding to the function's return type) in an
-        appropriate environment (corresponding to the function's arguments)\<close>
-    \<comment> \<open>TODO: for external functions, the ExternFunc, when called with appropriate
-        CoreValues for the arguments, returns CoreValue(s) of the expected type and
-        quantity\<close>"
+    FI_Impure funInfo = IF_Impure interpFun \<and>
+    \<comment> \<open>Body certification: for Babylon functions, the body statement list
+        typechecks in body_env_for env funInfo; for external functions, the
+        extern contract holds.\<close>
+    (case IF_Body interpFun of
+       Inl bodyStmts \<Rightarrow>
+         (\<exists>env'. core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts = Some env')
+     | Inr externFun \<Rightarrow> extern_fun_contract env funInfo externFun))"
 
 
 (* All local variables in the type env (TE_LocalVars, but not ghost)
@@ -94,7 +133,7 @@ definition funs_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
   "funs_exist_in_state state env \<equiv>
     \<forall>name info. fmlookup (TE_Functions env) name = Some info \<and> FI_Ghost info = NotGhost \<longrightarrow>
       (case fmlookup (IS_Functions state) name of
-        Some interpFun \<Rightarrow> fun_info_matches_interp_fun info interpFun
+        Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun
       | None \<Rightarrow> False)"
 
 (* There are no extra functions in the interp state *)
@@ -138,5 +177,36 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     non_consts_in_locals_or_refs state env \<and>
     const_names_match state env \<and>
     store_well_typed state env storeTyping"
+
+(* body_env_for only depends on the "global" fields of env (TE_GlobalVars,
+   TE_GhostGlobals, TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType,
+   TE_GhostDatatypes); the "local" fields it sets are all overwritten from
+   funInfo. So if two envs agree on the global fields, body_env_for produces
+   the same env. *)
+lemma body_env_for_cong:
+  assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
+      and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
+      and "TE_Functions env1 = TE_Functions env2"
+      and "TE_Datatypes env1 = TE_Datatypes env2"
+      and "TE_DataCtors env1 = TE_DataCtors env2"
+      and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
+      and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+  shows "body_env_for env1 funInfo = body_env_for env2 funInfo"
+  using assms unfolding body_env_for_def by simp
+
+(* fun_info_matches_interp_fun congruence: same global fields imply same result. *)
+lemma fun_info_matches_interp_fun_cong_env:
+  assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
+      and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
+      and "TE_Functions env1 = TE_Functions env2"
+      and "TE_Datatypes env1 = TE_Datatypes env2"
+      and "TE_DataCtors env1 = TE_DataCtors env2"
+      and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
+      and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+  shows "fun_info_matches_interp_fun env1 funInfo interpFun =
+         fun_info_matches_interp_fun env2 funInfo interpFun"
+  unfolding fun_info_matches_interp_fun_def
+  using body_env_for_cong[OF assms, of funInfo]
+  by (simp add: extern_fun_contract_def split: sum.splits)
 
 end

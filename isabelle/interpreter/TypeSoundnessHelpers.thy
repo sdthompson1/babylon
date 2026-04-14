@@ -272,8 +272,19 @@ proof -
 
   (* 5. funs_exist_in_state *)
   moreover have "funs_exist_in_state state'' env'"
-    using state_env funs''_eq env'_eq
-    unfolding state_matches_env_def funs_exist_in_state_def by simp
+  proof -
+    from state_env have old_fes: "funs_exist_in_state state env"
+      unfolding state_matches_env_def by simp
+    have fcong: "\<And>info ifn. fun_info_matches_interp_fun env' info ifn =
+                              fun_info_matches_interp_fun env info ifn"
+      by (rule fun_info_matches_interp_fun_cong_env)
+         (use env'_eq in simp_all)
+    have funs_eq: "TE_Functions env' = TE_Functions env" using env'_eq by simp
+    show ?thesis
+      unfolding funs_exist_in_state_def
+      using old_fes funs''_eq funs_eq fcong
+      by (metis funs_exist_in_state_def option.case_eq_if)
+  qed
 
   (* 6. no_extra_funs *)
   moreover have "no_extra_funs state'' env'"
