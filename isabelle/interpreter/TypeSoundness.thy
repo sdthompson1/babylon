@@ -1861,7 +1861,8 @@ next
             unfolding state_matches_env_def funs_exist_in_state_def
             using case_optionE by blast
           from fi_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
-            and vor_match: "list_all2 (\<lambda>(_, _, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args interpFun)"
+            and vor_match: "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+                                      (FI_TmArgs funInfo) (IF_Args interpFun)"
             unfolding fun_info_matches_interp_fun_def by auto
           have "\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args interpFun)"
           proof -
@@ -3046,7 +3047,8 @@ next
       from fi_match have len_args: "length (IF_Args f) = length (FI_TmArgs funInfo)"
         unfolding fun_info_matches_interp_fun_def by simp
       from fi_match have var_ref_match:
-        "list_all2 (\<lambda>(_, _, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
+        "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+                   (FI_TmArgs funInfo) (IF_Args f)"
         unfolding fun_info_matches_interp_fun_def by simp
 
       show "sound_function_call_result env storeTyping retTy

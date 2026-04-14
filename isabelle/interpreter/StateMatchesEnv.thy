@@ -46,8 +46,9 @@ definition fun_info_matches_interp_fun :: "FunInfo \<Rightarrow> 'w InterpFun \<
   "fun_info_matches_interp_fun funInfo interpFun =
     \<comment> \<open>Same number of arguments\<close>
     (length (FI_TmArgs funInfo) = length (IF_Args interpFun) \<and>
-    \<comment> \<open>Var/Ref status of each argument matches\<close>
-    list_all2 (\<lambda>(_, _, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
+    \<comment> \<open>Parameter name and Var/Ref status of each argument matches\<close>
+    list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+              (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
     \<comment> \<open>Impure flag matches\<close>
     FI_Impure funInfo = IF_Impure interpFun)
     \<comment> \<open>TODO: for Babylon functions: the IF_Body statement list must have
