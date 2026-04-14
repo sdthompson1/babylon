@@ -347,7 +347,7 @@ lemma determine_fun_call_type_correct:
          \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
          \<and> (ghost = NotGhost \<longrightarrow>
               list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
-         \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
+         \<and> expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                              (FI_TmArgs funInfo)
          \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs))
                                   (FI_ReturnType funInfo))"
@@ -373,7 +373,7 @@ proof (cases callTm)
     from assms(1) BabTm_Name fn_lookup ghost_ok True
     have results: "newTyArgs = ?genTyArgs"
                   "next_mv' = next_mv + ?numTyParams"
-                  "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)) ty)
+                  "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)) ty)
                                      (FI_TmArgs funInfo)"
                   "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs))
                                          (FI_ReturnType funInfo)"
@@ -407,7 +407,7 @@ proof (cases callTm)
       from assms(1) BabTm_Name fn_lookup ghost_ok False True elab_tyargs
       have results: "newTyArgs = elabTyArgs"
                     "next_mv' = next_mv"
-                    "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)) ty)
+                    "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)) ty)
                                        (FI_TmArgs funInfo)"
                     "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs))
                                            (FI_ReturnType funInfo)"
@@ -2602,7 +2602,7 @@ next
          \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs
          \<and> (ghost = NotGhost \<longrightarrow>
               list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs)
-         \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+         \<and> expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                              (FI_TmArgs funInfo)
          \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                   (FI_ReturnType funInfo))"
@@ -2615,7 +2615,7 @@ next
     tyargs_wk_ext: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
     tyargs_rt_ext: "ghost = NotGhost \<longrightarrow>
                     list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
-    expArgTypes_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+    expArgTypes_eq: "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                                        (FI_TmArgs funInfo)" and
     retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                        (FI_ReturnType funInfo)"
@@ -2694,17 +2694,17 @@ next
     using fn_lookup by (simp add: extend_env_with_tyvars_def)
   have "tyenv_fun_types_well_kinded ?env'"
     using wf' tyenv_well_formed_def by blast
-  hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+  hence fi_args_wk_inner: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
             is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_types_well_kinded_def by blast
 
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
   proof -
-    have "list_all (\<lambda>(ty, _). is_well_kinded ?env' (apply_subst
+    have "list_all (\<lambda>(_, ty, _). is_well_kinded ?env' (apply_subst
             (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume tv_in: "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" by (auto simp: rev_image_eqI)
+      fix n t v assume tv_in: "(n, t, v) \<in> set (FI_TmArgs funInfo)"
+      hence t_in: "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       from t_in fi_args_wk_inner
       have t_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
       show "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) t)"
@@ -2716,7 +2716,7 @@ next
   have "tyenv_fun_ghost_constraint ?env'"
     using wf' tyenv_well_formed_def by blast
   hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
-          \<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+          \<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
             is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_ghost_constraint_def by (simp add: Let_def)
@@ -2726,11 +2726,11 @@ next
     assume ng: "ghost = NotGhost"
     hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
     have tyargs_rt': "list_all (is_runtime_type ?env') tyArgs" using tyargs_rt ng by simp
-    have "list_all (\<lambda>(ty, _). is_runtime_type ?env' (apply_subst
+    have "list_all (\<lambda>(_, ty, _). is_runtime_type ?env' (apply_subst
             (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume tv_in: "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" by (auto simp: rev_image_eqI)
+      fix n t v assume tv_in: "(n, t, v) \<in> set (FI_TmArgs funInfo)"
+      hence t_in: "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       from t_in fi_args_rt_inner[OF fg_ng]
       have t_rt: "is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                              TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
@@ -2825,14 +2825,14 @@ next
   let ?coreTySubst = "fmap_of_list (zip (FI_TyArgs funInfo) ?finalTyArgs)"
 
   \<comment> \<open>Expected arg types in core_term_type\<close>
-  let ?coreExpArgTypes = "map (\<lambda>(ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
+  let ?coreExpArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
 
   \<comment> \<open>Function arg types have metavars only from FI_TyArgs.
      Derived from tyenv_fun_types_well_kinded (each arg type is well-kinded in
      env with TE_TypeVars := FI_TyArgs), via is_well_kinded_type_metavars_subset.\<close>
-  have fi_args_metavars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_metavars: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
   proof
-    fix ty assume ty_in: "ty \<in> fst ` set (FI_TmArgs funInfo)"
+    fix ty assume ty_in: "ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
     from ty_in fi_args_wk_inner
     have ty_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
       by blast
@@ -2848,7 +2848,7 @@ next
     using fn_lookup tyenv_fun_tyvars_distinct_def by blast
 
   \<comment> \<open>Key: ?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes\<close>
-  let ?argTys = "map fst (FI_TmArgs funInfo)"
+  let ?argTys = "map (fst \<circ> snd) (FI_TmArgs funInfo)"
   have fi_args_metavars': "\<forall>t \<in> set ?argTys. type_metavars t \<subseteq> set (FI_TyArgs funInfo)"
     using fi_args_metavars by auto
   have coreExpArgTypes_eq: "?coreExpArgTypes = map (apply_subst

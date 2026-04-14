@@ -68,7 +68,7 @@ definition tyenv_ctors_by_type_consistent :: "CoreTyEnv \<Rightarrow> bool" wher
 definition tyenv_fun_types_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_fun_types_well_kinded env =
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
-      (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+      (\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
           is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
       is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info))"
 
@@ -78,6 +78,14 @@ definition tyenv_fun_tyvars_distinct :: "CoreTyEnv \<Rightarrow> bool" where
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
       distinct (FI_TyArgs info))"
 
+(* Function parameter names are distinct.
+   This ensures that, when typechecking a function body, the formal parameters can be
+   installed as locals without name clashes. *)
+definition tyenv_fun_param_names_distinct :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_fun_param_names_distinct env =
+    (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
+      distinct (map fst (FI_TmArgs info)))"
+
 (* For non-ghost functions, types must be runtime types (for polymorphic functions,
    this only needs to hold when the type arguments themselves are runtime types). *)
 definition tyenv_fun_ghost_constraint :: "CoreTyEnv \<Rightarrow> bool" where
@@ -86,7 +94,7 @@ definition tyenv_fun_ghost_constraint :: "CoreTyEnv \<Rightarrow> bool" where
     (FI_Ghost info) = NotGhost \<longrightarrow>
       (let fenv = env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                          TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>
-       in (\<forall>ty \<in> fst ` set (FI_TmArgs info). is_runtime_type fenv ty) \<and>
+       in (\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info). is_runtime_type fenv ty) \<and>
           is_runtime_type fenv (FI_ReturnType info)))"
 
 (* For non-ghost datatypes, all constructor payload types must be runtime.
@@ -117,6 +125,7 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_ctors_by_type_consistent env \<and>
      tyenv_fun_types_well_kinded env \<and>
      tyenv_fun_tyvars_distinct env \<and>
+     tyenv_fun_param_names_distinct env \<and>
      tyenv_fun_ghost_constraint env \<and>
      tyenv_nonghost_payloads_runtime env \<and>
      tyenv_ghost_datatypes_subset env)"
@@ -140,6 +149,7 @@ proof -
               "tyenv_ctors_by_type_consistent env"
               "tyenv_fun_types_well_kinded env"
               "tyenv_fun_tyvars_distinct env"
+              "tyenv_fun_param_names_distinct env"
               "tyenv_fun_ghost_constraint env"
               "tyenv_nonghost_payloads_runtime env"
               "tyenv_ghost_datatypes_subset env"
@@ -191,21 +201,23 @@ proof -
   qed
   moreover have "tyenv_fun_tyvars_distinct ?env'" using rest(6)
     unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_param_names_distinct ?env'" using rest(7)
+    unfolding tyenv_fun_param_names_distinct_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'"
   proof -
     have "\<And>rtvs tvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
                         is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
       by (rule is_runtime_type_cong_env) simp_all
-    thus ?thesis using rest(7) unfolding tyenv_fun_ghost_constraint_def Let_def by simp
+    thus ?thesis using rest(8) unfolding tyenv_fun_ghost_constraint_def Let_def by simp
   qed
   moreover have "tyenv_nonghost_payloads_runtime ?env'"
   proof -
     have "\<And>tvs rtvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
                         is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
       by (rule is_runtime_type_cong_env) simp_all
-    thus ?thesis using rest(8) unfolding tyenv_nonghost_payloads_runtime_def by simp
+    thus ?thesis using rest(9) unfolding tyenv_nonghost_payloads_runtime_def by simp
   qed
-  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(9)
+  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(10)
     unfolding tyenv_ghost_datatypes_subset_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
@@ -229,6 +241,7 @@ proof -
               "tyenv_ctors_by_type_consistent env"
               "tyenv_fun_types_well_kinded env"
               "tyenv_fun_tyvars_distinct env"
+              "tyenv_fun_param_names_distinct env"
               "tyenv_fun_ghost_constraint env"
               "tyenv_nonghost_payloads_runtime env"
               "tyenv_ghost_datatypes_subset env"
@@ -279,21 +292,23 @@ proof -
   qed
   moreover have "tyenv_fun_tyvars_distinct ?env'" using rest(6)
     unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_param_names_distinct ?env'" using rest(7)
+    unfolding tyenv_fun_param_names_distinct_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'"
   proof -
     have "\<And>rtvs tvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
                         is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
       by (rule is_runtime_type_cong_env) simp_all
-    thus ?thesis using rest(7) unfolding tyenv_fun_ghost_constraint_def Let_def by simp
+    thus ?thesis using rest(8) unfolding tyenv_fun_ghost_constraint_def Let_def by simp
   qed
   moreover have "tyenv_nonghost_payloads_runtime ?env'"
   proof -
     have "\<And>tvs rtvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
                         is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
       by (rule is_runtime_type_cong_env) simp_all
-    thus ?thesis using rest(8) unfolding tyenv_nonghost_payloads_runtime_def by simp
+    thus ?thesis using rest(9) unfolding tyenv_nonghost_payloads_runtime_def by simp
   qed
-  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(9)
+  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(10)
     unfolding tyenv_ghost_datatypes_subset_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
@@ -320,7 +335,8 @@ proof -
     tyenv_payloads_well_kinded_def
     tyenv_ctor_tyvars_distinct_def tyenv_ctors_by_type_consistent_def
     tyenv_fun_types_well_kinded_def
-    tyenv_fun_tyvars_distinct_def tyenv_fun_ghost_constraint_def Let_def
+    tyenv_fun_tyvars_distinct_def tyenv_fun_param_names_distinct_def
+    tyenv_fun_ghost_constraint_def Let_def
     tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
     by (force simp: wk rt scope_wk scope_rt)
 qed
@@ -364,6 +380,7 @@ proof -
     and ctors_by_type: "tyenv_ctors_by_type_consistent env"
     and fun_types_wk: "tyenv_fun_types_well_kinded env"
     and fun_tyvars_distinct: "tyenv_fun_tyvars_distinct env"
+    and fun_param_names_distinct: "tyenv_fun_param_names_distinct env"
     and fun_ghost: "tyenv_fun_ghost_constraint env"
     and nonghost_payloads: "tyenv_nonghost_payloads_runtime env"
     and ghost_dt_subset: "tyenv_ghost_datatypes_subset env"
@@ -394,6 +411,8 @@ proof -
     by (simp add: scope_wk)
   moreover have "tyenv_fun_tyvars_distinct ?env'"
     using fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_param_names_distinct ?env'"
+    using fun_param_names_distinct unfolding tyenv_fun_param_names_distinct_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'"
     using fun_ghost unfolding tyenv_fun_ghost_constraint_def Let_def
     by (simp add: scope_rt)

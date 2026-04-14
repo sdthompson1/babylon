@@ -1568,7 +1568,7 @@ theorem type_soundness:
        list_all2 (\<lambda>tm expectedTy.
            case core_term_type env NotGhost tm of
              None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-         argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+         argTms (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo));
        retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)
      \<rbrakk> \<Longrightarrow> sound_function_call_result env storeTyping retTy (interp_function_call fuel state fnName argTms)"
@@ -1817,14 +1817,14 @@ next
           fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
           len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
           tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
-          all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+          all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
           not_impure: "\<not> FI_Impure funInfo" and
           len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
           ghost_ok: "list_all (is_runtime_type env) tyArgs" and
           ghost_ok2: "FI_Ghost funInfo \<noteq> Ghost"
           by (auto simp: Let_def split: option.splits if_splits)
         let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-        let ?expectedArgTypes = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+        let ?expectedArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
         from typing CoreTm_FunctionCall fn_lookup len_tyargs tyargs_wk all_var not_impure
              len_tmargs ghost_ok ghost_ok2 have
           args_check: "list_all2 (\<lambda>tm expectedTy.
@@ -1841,7 +1841,7 @@ next
                 list_all2 (\<lambda>tm expectedTy.
                     case core_term_type env' NotGhost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  argTms' (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
+                  argTms' (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
                                (FI_TmArgs funInfo')) \<Longrightarrow>
                 retTy' = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) (FI_ReturnType funInfo') \<Longrightarrow>
                 sound_function_call_result env' storeTyping' retTy' (interp_function_call fuel state' fnName' argTms')"
@@ -1861,25 +1861,20 @@ next
             unfolding state_matches_env_def funs_exist_in_state_def
             using case_optionE by blast
           from fi_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
-            and vor_match: "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args interpFun)"
+            and vor_match: "list_all2 (\<lambda>(_, _, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args interpFun)"
             unfolding fun_info_matches_interp_fun_def by auto
           have "\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args interpFun)"
           proof -
             have "\<And>i. i < length (IF_Args interpFun) \<Longrightarrow> snd (IF_Args interpFun ! i) = Var"
             proof -
               fix i assume i_bound: "i < length (IF_Args interpFun)"
-              from vor_match i_bound len_eq
-              have "snd (FI_TmArgs funInfo ! i) = snd (IF_Args interpFun ! i)"
-                by (auto simp: list_all2_conv_all_nth split: prod.splits)
-                   (metis prod.exhaust_sel)
-              moreover have "snd (FI_TmArgs funInfo ! i) = Var"
-              proof -
-                obtain a b where ab: "FI_TmArgs funInfo ! i = (a, b)"
-                  by (cases "FI_TmArgs funInfo ! i")
-                from all_var i_bound len_eq ab have "b = Var"
-                  by (auto simp: list_all_length)
-                thus ?thesis using ab by simp
-              qed
+              obtain n a b where nab: "FI_TmArgs funInfo ! i = (n, a, b)"
+                by (cases "FI_TmArgs funInfo ! i") auto
+              from vor_match i_bound len_eq nab
+              have "b = snd (IF_Args interpFun ! i)"
+                using list_all2_nthD by fastforce
+              moreover have "b = Var"
+                using all_var i_bound len_eq nab by (auto simp: list_all_length)
               ultimately show "snd (IF_Args interpFun ! i) = Var" by simp
             qed
             thus ?thesis
@@ -2286,7 +2281,7 @@ next
                 list_all2 (\<lambda>tm expectedTy.
                     case core_term_type env0 NotGhost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  argTms0 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty)
+                  argTms0 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty)
                                (FI_TmArgs funInfo0)) \<Longrightarrow>
                 retTy0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) (FI_ReturnType funInfo0) \<Longrightarrow>
                 sound_function_call_result env0 storeTyping0 retTy0 (interp_function_call fuel state0 fnName0 argTms0)"
@@ -2533,12 +2528,12 @@ next
                 tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
                 tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
                 not_ghost_fn: "FI_Ghost funInfo \<noteq> Ghost" and
-                all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+                all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
                 not_impure: "\<not> FI_Impure funInfo" and
                 len_tmargs: "length argTms = length (FI_TmArgs funInfo)"
                 by (auto simp: Let_def split: option.splits if_splits)
               let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-              let ?expectedArgTypes = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+              let ?expectedArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
               from rhs_ty rhsTm_eq fn_lookup len_tyargs tyargs_wk all_var not_impure
                    len_tmargs tyargs_rt not_ghost_fn have
                 args_check: "list_all2 (\<lambda>tm expectedTy.
@@ -3051,7 +3046,7 @@ next
       from fi_match have len_args: "length (IF_Args f) = length (FI_TmArgs funInfo)"
         unfolding fun_info_matches_interp_fun_def by simp
       from fi_match have var_ref_match:
-        "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
+        "list_all2 (\<lambda>(_, _, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
         unfolding fun_info_matches_interp_fun_def by simp
 
       show "sound_function_call_result env storeTyping retTy
@@ -3060,19 +3055,43 @@ next
         case (Inl bodyStmts)
         \<comment> \<open>Core-body case.\<close>
 
-        (* The body statement-list is well-typed, in some environment where:
+        (* Because the original function definition passed typechecking, we should already
+           know that the body statement-list is well-typed, in some environment where:
 
-          - FE_TermVars contains all global constants that were defined when the function
-            was defined, as well as the formal arguments. 
-          - TE_GhostLocals is set appropriately. All term args are considered non-ghost;
-            any globals inherit their ghost-ness from the parent environment.
-          - TE_ConstNames is set appropriately.
-          - TE_TypeVars must be the function's own type variable set. All are runtime.
-          - TE_ReturnType must be the function's return type.
-          - TE_FunctionGhost is NotGhost.
-          - TE_Functions, TE_Datatypes, TE_DataCtors, etc, should inherit from our
-            environment, or be a subset (as some types that exist now might not have
-            existed when the function was defined).
+          - TE_LocalVars contains the formal parameters and their types (as declared
+              in the original function declaration)
+          - TE_GlobalVars is the same as the existing env
+          - TE_GhostLocals is empty (we are only interested in calls to non-ghost functions,
+              since the interpreter skips over ghost-calls; therefore, all function args
+              are non-ghost.)
+          - TE_GhostGlobals is the same as the existing env
+          - TE_ConstNames is set appropriately; "ref" parameters are non-const and "var"
+              parameters are const.
+          - TE_TypeVars is the set of type variables used by the function (from the
+              original function declaration)
+          - TE_RuntimeTypeVars - is equal to TE_TypeVars since this is a non-ghost call
+          - TE_ReturnType - is the declared return type of the function.
+          - TE_FunctionGhost - is NotGhost
+
+          - TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType, TE_GhostDatatypes 
+              - this is slightly tricky because the original function might have been
+                typechecked in a subset of the current environment (e.g. some functions,
+                datatypes, etc., that are defined now, might not have been defined when
+                the function was originally created).
+              - so we only know that these are some subset of the current env.
+              - but we can use some sort of "weakening" lemma to extend that to the current
+                env.
+
+          (There should, ideally, be some condition in state_matches_env that guarantees 
+          this, but I don't think that exists yet. For now, we can just state the 
+          "function body is well-typed" condition that we need, and sorry it.)
+
+          We also need a substitution lemma, that says that if we swap TE_TypeVars 
+          (and TE_RuntimeTypeVars) to the type vars of the current function (not 
+          the function being called), and we make appropriate type variable substitutions
+          in TE_LocalVars and TE_ReturnType, then the statement list remains well typed
+          in that new environment. This was begun in CoreTypeSubst.thy but I don't think
+          we got very far.
 
         *)
             

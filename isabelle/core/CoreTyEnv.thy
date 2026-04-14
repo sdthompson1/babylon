@@ -6,8 +6,10 @@ record FunInfo =
   (* Type arguments: type variable numbers *)
   FI_TyArgs :: "nat list"
 
-  (* Term arguments: type and whether passed by value (Var) or reference (Ref) *)
-  FI_TmArgs :: "(CoreType \<times> VarOrRef) list"
+  (* Term arguments: parameter name, type, and whether passed by value (Var) or reference (Ref).
+     Names are required so that, when typechecking a function body, we can install the formal
+     parameters as locals in the type environment. *)
+  FI_TmArgs :: "(string \<times> CoreType \<times> VarOrRef) list"
 
   (* Return type *)
   FI_ReturnType :: CoreType
