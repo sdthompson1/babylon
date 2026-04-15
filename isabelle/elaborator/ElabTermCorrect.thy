@@ -229,7 +229,7 @@ next
   let ?env_body = "env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
                           TE_GhostLocals := (if ghost = Ghost then finsert varName (TE_GhostLocals env)
                                                else fminus (TE_GhostLocals env) {|varName|}),
-                          TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+                          TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>"
   from "7.prems" elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
     elab_body: "elab_term ?env_body typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)"
     by (auto simp: Let_def split: sum.splits)
@@ -1858,7 +1858,7 @@ next
                                else fminus (TE_GhostLocals env) {|vn|})"
       define env' where "env' = env \<lparr> TE_LocalVars := fmupd vn resolvedRhsTy (TE_LocalVars env),
                                        TE_GhostLocals := gv',
-                                       TE_ConstNames := finsert vn (TE_ConstNames env) \<rparr>"
+                                       TE_ConstLocals := finsert vn (TE_ConstLocals env) \<rparr>"
 
       \<comment> \<open>env' is well-formed\<close>
       have wk: "is_well_kinded env resolvedRhsTy"
@@ -1877,10 +1877,10 @@ next
         thus ?thesis using tyenv_well_formed_add_var[OF Cons.prems(4) wk rt] NotGhost
           by (simp add: env_no_cn_def gv'_def)
       qed
-      have env'_eq_cn: "env' = env_no_cn \<lparr> TE_ConstNames := finsert vn (TE_ConstNames env) \<rparr>"
+      have env'_eq_cn: "env' = env_no_cn \<lparr> TE_ConstLocals := finsert vn (TE_ConstLocals env) \<rparr>"
         by (simp add: env'_def env_no_cn_def)
       have env'_wf: "tyenv_well_formed env'"
-        using wf_no_cn tyenv_well_formed_TE_ConstNames_irrelevant env'_eq_cn by simp
+        using wf_no_cn tyenv_well_formed_TE_ConstLocals_irrelevant env'_eq_cn by simp
 
       \<comment> \<open>The variable typechecks in env'\<close>
       have var_typed: "core_term_type env' ghost (CoreTm_Var vn) = Some resolvedRhsTy"
@@ -1892,7 +1892,7 @@ next
         by (auto simp: gv'_def)
       have lhs_typed': "core_term_type env' ghost lhsTm = Some lhsTy"
         using core_term_type_irrelevant_var[OF lhs_fresh Cons.prems(2) gv'_agree]
-              core_term_type_TE_ConstNames_irrelevant
+              core_term_type_TE_ConstLocals_irrelevant
         by (simp add: env'_def env_no_cn_def)
 
       \<comment> \<open>env' has the same TE_TypeVars / TE_ReturnType as env (only locals,
@@ -1945,7 +1945,7 @@ next
           using rest_fresh in_rest vn_def by blast
         show "core_term_type env' ghost xtm = Some xty"
           using core_term_type_irrelevant_var[OF xtm_fresh xtm_typed gv'_agree]
-                core_term_type_TE_ConstNames_irrelevant
+                core_term_type_TE_ConstLocals_irrelevant
           by (simp add: env'_def env_no_cn_def)
       qed
 
@@ -2761,7 +2761,7 @@ next
                          TE_GhostLocals := (if ghost = Ghost
                                              then finsert varName (TE_GhostLocals env)
                                              else fminus (TE_GhostLocals env) {|varName|}),
-                         TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+                         TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>"
 
   from "7.prems"(1) elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
     elab_body: "elab_term ?body_env typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
@@ -2850,7 +2850,7 @@ next
     case True
     thus ?thesis
       using "7.prems"(2) rhs_wk_env tyenv_well_formed_add_ghost_var
-      by (simp add: tyenv_well_formed_TE_ConstNames_irrelevant)
+      by (simp add: tyenv_well_formed_TE_ConstLocals_irrelevant)
   next
     case False
     hence ng: "ghost = NotGhost" by (cases ghost) simp_all
@@ -2861,10 +2861,10 @@ next
     have env_rewrite: "?body_env =
       (env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
               TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)
-      \<lparr> TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>"
+      \<lparr> TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>"
       using ng by simp
     show ?thesis
-      using wf_no_cn tyenv_well_formed_TE_ConstNames_irrelevant env_rewrite by simp
+      using wf_no_cn tyenv_well_formed_TE_ConstLocals_irrelevant env_rewrite by simp
   qed
 
   have td_wf_body: "typedefs_well_formed ?body_env typedefs"
@@ -2888,7 +2888,7 @@ next
                                     TE_GhostLocals := (if ghost = Ghost
                                                         then finsert varName (TE_GhostLocals ?env_ext)
                                                         else fminus (TE_GhostLocals ?env_ext) {|varName|}),
-                                    TE_ConstNames := finsert varName (TE_ConstNames ?env_ext) \<rparr>"
+                                    TE_ConstLocals := finsert varName (TE_ConstLocals ?env_ext) \<rparr>"
 
   have env_widen_body: "core_term_type (extend_env_with_tyvars ?body_env ghost next_mv next_mv') ghost bodyTm = Some bodyTy"
     using core_term_type_extend_env_with_tyvars_mono[OF body_typing_sub,

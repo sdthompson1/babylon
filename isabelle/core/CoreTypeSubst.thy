@@ -418,9 +418,9 @@ lemma apply_subst_to_callee_env_TE_GhostGlobals [simp]:
      = TE_GhostGlobals calleeEnv"
   by (simp add: apply_subst_to_callee_env_def)
 
-lemma apply_subst_to_callee_env_TE_ConstNames [simp]:
-  "TE_ConstNames (apply_subst_to_callee_env subst callerEnv calleeEnv)
-     = TE_ConstNames calleeEnv"
+lemma apply_subst_to_callee_env_TE_ConstLocals [simp]:
+  "TE_ConstLocals (apply_subst_to_callee_env subst callerEnv calleeEnv)
+     = TE_ConstLocals calleeEnv"
   by (simp add: apply_subst_to_callee_env_def)
 
 lemma apply_subst_to_callee_env_TE_TypeVars [simp]:
@@ -485,7 +485,7 @@ lemma patterns_exhaustive_apply_subst_callee_env:
   by (cases ty) (auto split: if_splits)
 
 (* Substituting types in TE_LocalVars preserves the *keys*, so writability is
-   preserved (it only looks at TE_LocalVars's domain and TE_ConstNames). *)
+   preserved (it only looks at TE_LocalVars's domain and TE_ConstLocals). *)
 lemma tyenv_var_writable_apply_subst_to_callee_env [simp]:
   "tyenv_var_writable (apply_subst_to_callee_env subst callerEnv calleeEnv) name
      = tyenv_var_writable calleeEnv name"
@@ -1314,7 +1314,7 @@ next
                                 TE_GhostLocals := (if ghost = Ghost
                                                   then finsert var (TE_GhostLocals calleeEnv)
                                                   else fminus (TE_GhostLocals calleeEnv) {|var|}),
-                                TE_ConstNames := finsert var (TE_ConstNames calleeEnv) \<rparr>)
+                                TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)
                    ghost body = Some ty"
     by (auto split: option.splits simp: Let_def)
 
@@ -1322,7 +1322,7 @@ next
                               TE_GhostLocals := (if ghost = Ghost
                                                 then finsert var (TE_GhostLocals calleeEnv)
                                                 else fminus (TE_GhostLocals calleeEnv) {|var|}),
-                              TE_ConstNames := finsert var (TE_ConstNames calleeEnv) \<rparr>"
+                              TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>"
 
   \<comment> \<open>RHS IH gives the substituted rhs has the substituted rhsTy. \<close>
   from CoreTm_Let.IH(1)[OF rhs_typed CoreTm_Let.prems(2,3,4,5,6)]
@@ -1352,12 +1352,12 @@ next
       "tyenv_well_formed
          (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
                       TE_GhostLocals := fminus (TE_GhostLocals calleeEnv) {|var|} \<rparr>)" .
-    from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf',
-            of "finsert var (TE_ConstNames calleeEnv)"]
+    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
+            of "finsert var (TE_ConstLocals calleeEnv)"]
     have "tyenv_well_formed
             (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
                          TE_GhostLocals := fminus (TE_GhostLocals calleeEnv) {|var|} \<rparr>
-                       \<lparr> TE_ConstNames := finsert var (TE_ConstNames calleeEnv) \<rparr>)" .
+                       \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)" .
     with NotGhost show ?thesis by simp
   next
     case Ghost
@@ -1366,17 +1366,17 @@ next
       "tyenv_well_formed
          (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
                       TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv) \<rparr>)" .
-    from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf',
-            of "finsert var (TE_ConstNames calleeEnv)"]
+    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
+            of "finsert var (TE_ConstLocals calleeEnv)"]
     have "tyenv_well_formed
             (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
                          TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv) \<rparr>
-                       \<lparr> TE_ConstNames := finsert var (TE_ConstNames calleeEnv) \<rparr>)" .
+                       \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)" .
     with Ghost show ?thesis by simp
   qed
 
   \<comment> \<open>callee_env_subst_ok ?env_ext: same as for calleeEnv since we only changed
-      TE_LocalVars / TE_GhostLocals / TE_ConstNames, none of which appear in
+      TE_LocalVars / TE_GhostLocals / TE_ConstLocals, none of which appear in
       callee_env_subst_ok. \<close>
   have ok_ext: "callee_env_subst_ok subst callerEnv ?env_ext"
     using CoreTm_Let.prems(3)
@@ -1402,7 +1402,7 @@ next
                               then finsert var (TE_GhostLocals (apply_subst_to_callee_env subst callerEnv calleeEnv))
                               else fminus (TE_GhostLocals (apply_subst_to_callee_env subst callerEnv calleeEnv))
                                           {|var|}),
-            TE_ConstNames := finsert var (TE_ConstNames (apply_subst_to_callee_env subst callerEnv calleeEnv)) \<rparr>"
+            TE_ConstLocals := finsert var (TE_ConstLocals (apply_subst_to_callee_env subst callerEnv calleeEnv)) \<rparr>"
     unfolding apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
 
   show ?case
@@ -2502,7 +2502,7 @@ proof (induction stmt and stmts
         TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
         TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals env)
                            else fminus (TE_GhostLocals env) {|varName|}),
-        TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>"
+        TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
     by (auto split: if_splits)
 
   \<comment> \<open>Substituted varTy is well-kinded in ?be. \<close>
@@ -2550,13 +2550,13 @@ proof (induction stmt and stmts
   qed
 
   \<comment> \<open>Putting it together: the substituted result env equals the substituted version
-      of the original result env. The TE_GhostLocals and TE_ConstNames updates are
+      of the original result env. The TE_GhostLocals and TE_ConstLocals updates are
       preserved by substitution since they only depend on names. \<close>
   have result_env_eq:
     "?be \<lparr> TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
            TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals ?be)
                               else fminus (TE_GhostLocals ?be) {|varName|}),
-           TE_ConstNames := fminus (TE_ConstNames ?be) {|varName|} \<rparr>
+           TE_ConstLocals := fminus (TE_ConstLocals ?be) {|varName|} \<rparr>
        = apply_subst_to_callee_env subst callerEnv calleeEnv'"
     unfolding env'_eq apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
 
@@ -2566,7 +2566,7 @@ proof (induction stmt and stmts
 next
   case (2 env mode declGhost varName varTy initTm)
   \<comment> \<open>VarDecl Ref: declares a new local ref. The result env extends TE_LocalVars
-      with (varName, varTy), and adds varName to TE_ConstNames iff initTm is not
+      with (varName, varTy), and adds varName to TE_ConstLocals iff initTm is not
       a writable lvalue (i.e. its base is read-only). Substitution preserves
       is_lvalue, is_writable_lvalue, and the result env shape, mirroring case 1. \<close>
   from "2.prems"(1) have
@@ -2579,9 +2579,9 @@ next
         TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
         TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals env)
                            else fminus (TE_GhostLocals env) {|varName|}),
-        TE_ConstNames := (if is_writable_lvalue env initTm
-                          then fminus (TE_ConstNames env) {|varName|}
-                          else finsert varName (TE_ConstNames env)) \<rparr>"
+        TE_ConstLocals := (if is_writable_lvalue env initTm
+                          then fminus (TE_ConstLocals env) {|varName|}
+                          else finsert varName (TE_ConstLocals env)) \<rparr>"
     by (auto split: if_splits)
 
   let ?be = "apply_subst_to_callee_env subst callerEnv env"
@@ -2620,14 +2620,14 @@ next
        = Some (apply_subst subst varTy)" by simp
 
   \<comment> \<open>The substituted result env equals the substituted version of the original
-      result env. TE_GhostLocals and TE_ConstNames updates depend only on names. \<close>
+      result env. TE_GhostLocals and TE_ConstLocals updates depend only on names. \<close>
   have result_env_eq:
     "?be \<lparr> TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
            TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals ?be)
                               else fminus (TE_GhostLocals ?be) {|varName|}),
-           TE_ConstNames := (if is_writable_lvalue env initTm
-                             then fminus (TE_ConstNames ?be) {|varName|}
-                             else finsert varName (TE_ConstNames ?be)) \<rparr>
+           TE_ConstLocals := (if is_writable_lvalue env initTm
+                             then fminus (TE_ConstLocals ?be) {|varName|}
+                             else finsert varName (TE_ConstLocals ?be)) \<rparr>
        = apply_subst_to_callee_env subst callerEnv calleeEnv'"
     unfolding env'_eq apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
 

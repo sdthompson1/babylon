@@ -166,9 +166,9 @@ next
   then show ?case by auto
 qed auto
 
-lemma is_well_kinded_TE_ConstNames_irrelevant [simp]:
-  "is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_well_kinded env ty"
-  using is_well_kinded_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+lemma is_well_kinded_TE_ConstLocals_irrelevant [simp]:
+  "is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty"
+  using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
 
 (* If ty is well-kinded in one env, and every type variable of ty is in scope in a
    second env (with the same TE_Datatypes), then ty is well-kinded in the second env. *)

@@ -175,7 +175,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                          TE_GhostLocals := (if ghost = Ghost
                                           then finsert var (TE_GhostLocals env)
                                           else fminus (TE_GhostLocals env) {|var|}),
-                         TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>
+                         TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>
         in core_term_type env' ghost body
     | None \<Rightarrow> None)"
 
@@ -489,7 +489,7 @@ next
     and "x = env \<lparr> TE_LocalVars := fmupd var x2 (TE_LocalVars env),
                     TE_GhostLocals := if ghost = Ghost then finsert var (TE_GhostLocals env)
                                     else fminus (TE_GhostLocals env) {|var|},
-                    TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                    TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
   show "((x, ghost, body), env, ghost, CoreTm_Let var rhs body)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
@@ -552,24 +552,24 @@ qed
 (* Properties of core_term_type *)
 (* ========================================================================== *)
 
-(* Helper lemmas: pattern functions don't depend on TE_ConstNames *)
-lemma pattern_compatible_TE_ConstNames_irrelevant [simp]:
-  "pattern_compatible (env \<lparr> TE_ConstNames := c \<rparr>) p ty =
+(* Helper lemmas: pattern functions don't depend on TE_ConstLocals *)
+lemma pattern_compatible_TE_ConstLocals_irrelevant [simp]:
+  "pattern_compatible (env \<lparr> TE_ConstLocals := c \<rparr>) p ty =
    pattern_compatible env p ty"
   by (cases p) (auto split: option.splits)
 
-lemma patterns_exhaustive_TE_ConstNames_irrelevant [simp]:
-  "patterns_exhaustive (env \<lparr> TE_ConstNames := c \<rparr>) ty ps =
+lemma patterns_exhaustive_TE_ConstLocals_irrelevant [simp]:
+  "patterns_exhaustive (env \<lparr> TE_ConstLocals := c \<rparr>) ty ps =
    patterns_exhaustive env ty ps"
   by (auto split: option.splits CoreType.splits)
 
-(* core_term_type does not depend on TE_ConstNames *)
-lemma core_term_type_TE_ConstNames_irrelevant:
-  "core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm =
+(* core_term_type does not depend on TE_ConstLocals *)
+lemma core_term_type_TE_ConstLocals_irrelevant:
+  "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm =
    core_term_type env ghost tm"
 proof (induction tm arbitrary: env ghost c)
   case (CoreTm_Let var rhs body)
-  have rhs_eq: "core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost rhs =
+  have rhs_eq: "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost rhs =
                 core_term_type env ghost rhs"
     using CoreTm_Let.IH(1) .
   show ?case
@@ -581,23 +581,23 @@ proof (induction tm arbitrary: env ghost c)
     let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                        TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                         else fminus (TE_GhostLocals env) {|var|}),
-                       TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                       TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     have body_eq: "\<And>env' ghost c.
-            core_term_type (env' \<lparr> TE_ConstNames := c \<rparr>) ghost body =
+            core_term_type (env' \<lparr> TE_ConstLocals := c \<rparr>) ghost body =
             core_term_type env' ghost body"
       using CoreTm_Let.IH(2) .
     then show ?thesis using Some rhs_eq by (simp add: Let_def)
   qed
 next
   case (CoreTm_LitArray ty tms)
-  have wk_eq: "is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_well_kinded env ty" for c
-    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
-  have rt_eq: "is_runtime_type (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_runtime_type env ty" for c
-    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+  have wk_eq: "is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty" for c
+    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
+  have rt_eq: "is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty" for c
+    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
   have IH: "\<And>tm. tm \<in> set tms \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm = core_term_type env ghost tm"
+    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
     using CoreTm_LitArray.IH by blast
-  hence la_eq: "list_all (\<lambda>tm. core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm = Some ty) tms =
+  hence la_eq: "list_all (\<lambda>tm. core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = Some ty) tms =
                 list_all (\<lambda>tm. core_term_type env ghost tm = Some ty) tms"
     by (induction tms) auto
   show ?case using wk_eq rt_eq la_eq by simp
@@ -606,15 +606,15 @@ next
   then show ?case by (simp split: option.splits)
 next
   case (CoreTm_FunctionCall fnName tyArgs args)
-  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
-  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty"
+    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
+  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty"
+    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
   have IH: "\<And>tm. tm \<in> set args \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm = core_term_type env ghost tm"
+    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
     using CoreTm_FunctionCall.IH by blast
   have la2_eq: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
-        case core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm of
+        case core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm of
           None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys =
       list_all2 (\<lambda>tm expectedTy.
         case core_term_type env ghost tm of
@@ -622,7 +622,7 @@ next
   proof (intro iffI)
     fix ys
     assume "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm of
+        case core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm of
           None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
     then show "list_all2 (\<lambda>tm expectedTy.
         case core_term_type env ghost tm of
@@ -634,47 +634,47 @@ next
         case core_term_type env ghost tm of
           None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
     then show "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm of
+        case core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm of
           None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
       by (simp add: IH list.rel_mono_strong)
   qed
-  have la_wk: "list_all (is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>)) tyArgs =
+  have la_wk: "list_all (is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>)) tyArgs =
                list_all (is_well_kinded env) tyArgs"
     by (simp add: list_all_iff wk_eq)
-  have la_rt: "list_all (is_runtime_type (env \<lparr> TE_ConstNames := c \<rparr>)) tyArgs =
+  have la_rt: "list_all (is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>)) tyArgs =
                list_all (is_runtime_type env) tyArgs"
     by (simp add: list_all_iff rt_eq)
   show ?case by (auto simp add: la_wk la_rt la2_eq split: option.splits if_splits)
 next
   case (CoreTm_VariantCtor ctorName tyArgs arg)
-  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
-  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ConstNames := c \<rparr>) ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstNames := c \<rparr>" env] by simp
+  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty"
+    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
+  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty"
+    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
   then show ?case using CoreTm_VariantCtor
     by (auto simp: wk_eq rt_eq list_all_iff split: option.splits if_splits)
 next
   case (CoreTm_Record flds)
   have IH: "\<And>nm tm. (nm, tm) \<in> set flds \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm = core_term_type env ghost tm"
+    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
     using CoreTm_Record.IH by (auto simp: image_iff)
-  have map_eq: "map (\<lambda>(name, y). core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost y) flds =
+  have map_eq: "map (\<lambda>(name, y). core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost y) flds =
                 map (\<lambda>(name, y). core_term_type env ghost y) flds"
     by (rule map_cong, simp, auto simp: IH)
   show ?case by (simp add: map_eq)
 next
   case (CoreTm_Match scrut arms)
-  have scrut_eq: "core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost scrut =
+  have scrut_eq: "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost scrut =
                   core_term_type env ghost scrut"
     using CoreTm_Match.IH(1) by blast
   have bodies_eq: "\<And>body. body \<in> snd ` set arms \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost body = core_term_type env ghost body"
+    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost body = core_term_type env ghost body"
     using CoreTm_Match.IH(2) by fastforce
   have hd_eq: "arms \<noteq> [] \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost (snd (hd arms)) =
+    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost (snd (hd arms)) =
     core_term_type env ghost (snd (hd arms))"
     using bodies_eq by (cases arms) auto
-  have tl_eq: "\<And>ty. list_all (\<lambda>body. core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost body = Some ty)
+  have tl_eq: "\<And>ty. list_all (\<lambda>body. core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost body = Some ty)
                               (tl (map snd arms)) =
                list_all (\<lambda>body. core_term_type env ghost body = Some ty)
                               (tl (map snd arms))"
@@ -694,7 +694,7 @@ next
       case True then show ?thesis using Some scrut_eq by simp
     next
       case False
-      have "core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost (snd (hd arms)) =
+      have "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost (snd (hd arms)) =
             core_term_type env ghost (snd (hd arms))"
         using hd_eq False .
       then show ?thesis using Some False scrut_eq tl_eq by (auto split: if_splits CoreType.splits option.splits simp: Let_def)
@@ -703,24 +703,24 @@ next
 next
   case (CoreTm_Quantifier quant var varTy body)
   have body_eq: "\<And>env' ghost c.
-    core_term_type (env' \<lparr> TE_ConstNames := c \<rparr>) ghost body = core_term_type env' ghost body"
+    core_term_type (env' \<lparr> TE_ConstLocals := c \<rparr>) ghost body = core_term_type env' ghost body"
     using CoreTm_Quantifier.IH .
-  have env_reorder: "env \<lparr> TE_ConstNames := c,
+  have env_reorder: "env \<lparr> TE_ConstLocals := c,
                            TE_LocalVars := fmupd var varTy (TE_LocalVars env),
                            TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr> =
                      (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>) \<lparr> TE_ConstNames := c \<rparr>"
+                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>) \<lparr> TE_ConstLocals := c \<rparr>"
     by simp
   show ?case by (cases ghost) (simp_all add: body_eq env_reorder Let_def
                                         split: option.splits CoreType.splits)
 next
   case (CoreTm_ArrayProj tm idxTms)
-  have IH_tm: "core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm = core_term_type env ghost tm"
+  have IH_tm: "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
     using CoreTm_ArrayProj.IH(1) .
   have IH_idx: "\<And>idx. idx \<in> set idxTms \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost idx = core_term_type env ghost idx"
+    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost idx = core_term_type env ghost idx"
     using CoreTm_ArrayProj.IH(2) by blast
-  have la_eq: "\<And>ty. list_all (\<lambda>tm. core_term_type (env \<lparr> TE_ConstNames := c \<rparr>) ghost tm = Some ty) idxTms =
+  have la_eq: "\<And>ty. list_all (\<lambda>tm. core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = Some ty) idxTms =
                     list_all (\<lambda>tm. core_term_type env ghost tm = Some ty) idxTms"
     using IH_idx by (auto simp: list_all_iff)
   show ?case using IH_tm la_eq by (simp split: option.splits CoreType.splits if_splits)
@@ -780,7 +780,7 @@ next
       (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
              TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                  else fminus (TE_GhostLocals env) {|var|}),
-             TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
+             TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
       ghost body = Some ty"
     by (auto simp: Let_def split: option.splits)
   (* Apply IH to rhs *)
@@ -793,11 +793,11 @@ next
     let ?inner_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                            TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                                else fminus (TE_GhostLocals env) {|var|}),
-                           TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                           TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     let ?inner_env_x = "?env_x \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env_x),
                                   TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env_x)
                                                       else fminus (TE_GhostLocals ?env_x) {|var|}),
-                                  TE_ConstNames := finsert var (TE_ConstNames ?env_x) \<rparr>"
+                                  TE_ConstLocals := finsert var (TE_ConstLocals ?env_x) \<rparr>"
     (* The two inner environments are the same because fmupd var overwrites fmupd x (since var = x),
        and the GhostLocals updates (finsert/fminus at var) make gv' and TE_GhostLocals env agree *)
     have gv_eq_insert: "finsert x gv' = finsert x (TE_GhostLocals env)"
@@ -819,7 +819,7 @@ next
     let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                           TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                               else fminus (TE_GhostLocals env) {|var|}),
-                          TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                          TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     have gv_body: "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| ?body_gv \<longleftrightarrow> y |\<in>| TE_GhostLocals ?body_env)"
       using CoreTm_Let.prems(3) False by auto
     from CoreTm_Let.IH(2)[OF x_not_free_body body_ty gv_body]
@@ -839,13 +839,13 @@ next
         (?env_x \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env_x),
                   TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env_x)
                                       else fminus (TE_GhostLocals ?env_x) {|var|}),
-                  TE_ConstNames := finsert var (TE_ConstNames ?env_x) \<rparr>)"
+                  TE_ConstLocals := finsert var (TE_ConstLocals ?env_x) \<rparr>)"
       using fmupd_comm_fact by simp
     from body_ty' env_eq have "core_term_type
         (?env_x \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env_x),
                   TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env_x)
                                       else fminus (TE_GhostLocals ?env_x) {|var|}),
-                  TE_ConstNames := finsert var (TE_ConstNames ?env_x) \<rparr>)
+                  TE_ConstLocals := finsert var (TE_ConstLocals ?env_x) \<rparr>)
         ghost body = Some ty" by simp
     with rhs_ty' show ?thesis by (simp add: Let_def)
   qed
@@ -1200,7 +1200,7 @@ next
         (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                    else fminus (TE_GhostLocals env) {|var|}),
-               TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
+               TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
         ghost body = Some ty"
     by (auto simp: Let_def split: option.splits)
   have rhs_ty': "core_term_type ?env' ghost rhs = Some rhsTy"
@@ -1208,13 +1208,13 @@ next
   let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                          TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                              else fminus (TE_GhostLocals env) {|var|}),
-                         TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                         TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
   have body_env_shape: "?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
                                     TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr> =
                         ?env' \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?env'),
                                 TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env')
                                                     else fminus (TE_GhostLocals ?env') {|var|}),
-                                TE_ConstNames := finsert var (TE_ConstNames ?env') \<rparr>"
+                                TE_ConstLocals := finsert var (TE_ConstLocals ?env') \<rparr>"
     by simp
   have body_ty': "core_term_type
        (?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
@@ -1613,13 +1613,13 @@ next
       (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
              TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                               else fminus (TE_GhostLocals env) {|var|}),
-             TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>)
+             TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
       ghost tm2 = Some ty"
     by (auto simp: Let_def split: option.splits if_splits)
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                      TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                       else fminus (TE_GhostLocals env) {|var|}),
-                     TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+                     TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
   have rhs_IH: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
     using CoreTm_Let.IH(1) rhs_typed CoreTm_Let.prems(2) by blast
   hence rhs_wk: "is_well_kinded env rhsTy" by blast
@@ -1637,10 +1637,10 @@ next
     show ?thesis using False
       tyenv_well_formed_add_var[OF CoreTm_Let.prems(2) rhs_wk rhs_rt] by simp
   qed
-  have env'_eq_cn: "?env' = ?env_no_cn \<lparr> TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
+  have env'_eq_cn: "?env' = ?env_no_cn \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     by simp
   have wf_env': "tyenv_well_formed ?env'"
-    using wf_no_cn tyenv_well_formed_TE_ConstNames_irrelevant env'_eq_cn by simp
+    using wf_no_cn tyenv_well_formed_TE_ConstLocals_irrelevant env'_eq_cn by simp
   have body_IH: "is_well_kinded ?env' ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ?env' ty)"
     using CoreTm_Let.IH(2) body_typed wf_env' by blast
   \<comment> \<open>is_well_kinded only depends on TE_TypeVars and TE_Datatypes\<close>

@@ -162,7 +162,7 @@ next
           body_ty: "core_term_type
               (env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
                      TE_GhostLocals := TE_GhostLocals env |-| {|varName|},
-                     TE_ConstNames := finsert varName (TE_ConstNames env) \<rparr>)
+                     TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>)
               NotGhost body = Some ty"
           by (auto split: option.splits if_splits)
         have rhs_eq: "\<And>st :: 'w InterpState.

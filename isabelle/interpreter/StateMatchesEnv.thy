@@ -10,7 +10,7 @@ begin
    - TE_LocalVars: formal parameter names mapped to their declared types
    - TE_GhostLocals: empty (ghost functions are not handled here; this helper is
      only used for non-ghost functions)
-   - TE_ConstNames: the names of Var (by-value) parameters; Ref parameters are
+   - TE_ConstLocals: the names of Var (by-value) parameters; Ref parameters are
      non-const because they may be assigned to via the reference
    - TE_TypeVars / TE_RuntimeTypeVars: the function's own type variables (both
      equal because we are only interested in non-ghost calls)
@@ -21,7 +21,7 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTy
     env \<lparr>
       TE_LocalVars := fmap_of_list (map (\<lambda>(name, ty, _). (name, ty)) (FI_TmArgs funInfo)),
       TE_GhostLocals := {||},
-      TE_ConstNames := fset_of_list
+      TE_ConstLocals := fset_of_list
         (map (\<lambda>(name, _, _). name)
              (filter (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo))),
       TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
@@ -149,14 +149,14 @@ definition no_extra_funs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
 definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "non_consts_in_locals_or_refs state env \<equiv>
     \<forall>name. fmlookup (TE_LocalVars env) name \<noteq> None \<and>
-           name |\<notin>| TE_GhostLocals env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
+           name |\<notin>| TE_GhostLocals env \<and> name |\<notin>| TE_ConstLocals env \<longrightarrow>
       (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
 
-(* The interpreter's IS_ConstNames matches the type environment's TE_ConstNames,
+(* The interpreter's IS_ConstLocals matches the type environment's TE_ConstLocals,
    minus ghost names (which don't exist at runtime). *)
-definition const_names_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
-  "const_names_match state env \<equiv>
-    IS_ConstNames state = fminus (TE_ConstNames env) (TE_GhostLocals env)"
+definition const_locals_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "const_locals_match state env \<equiv>
+    IS_ConstLocals state = fminus (TE_ConstLocals env) (TE_GhostLocals env)"
 
 (* The store typing has the same length as the store, and every slot value has the
    designated type for its address. *)
@@ -176,7 +176,7 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     funs_exist_in_state state env \<and>
     no_extra_funs state env \<and>
     non_consts_in_locals_or_refs state env \<and>
-    const_names_match state env \<and>
+    const_locals_match state env \<and>
     store_well_typed state env storeTyping"
 
 (* body_env_for preserves tyenv_well_formed, given that funInfo is one of env's

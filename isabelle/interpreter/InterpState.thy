@@ -39,7 +39,7 @@ record 'world InterpState =
      assign to or swap any of these names. This is a subset of the local
      names appearing in IS_Locals \<union> IS_Refs; globals (IS_Globals) are
      implicitly read-only and do not need to be listed here. *)
-  IS_ConstNames :: "string fset"
+  IS_ConstLocals :: "string fset"
 
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"

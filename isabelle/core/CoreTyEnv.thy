@@ -28,7 +28,7 @@ record CoreTyEnv =
 
   (* Global variable bindings (always constant / read-only).
      These correspond to IS_Globals in the interpreter state.
-     Globals are implicitly constant and do not appear in TE_ConstNames. *)
+     Globals are implicitly constant and do not appear in TE_ConstLocals. *)
   TE_GlobalVars :: "(string, CoreType) fmap"
 
   (* Ghost local variables - subset of TE_LocalVars keys *)
@@ -39,7 +39,7 @@ record CoreTyEnv =
 
   (* Constant local names - subset of TE_LocalVars keys; these are not assignable.
      Globals are implicitly constant and do not need to appear here. *)
-  TE_ConstNames :: "string fset"
+  TE_ConstLocals :: "string fset"
 
   (* In-scope type variables (for polymorphic functions) *)
   TE_TypeVars :: "nat fset"
@@ -93,7 +93,7 @@ definition tyenv_lookup_var :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> Cor
    Globals are implicitly constant and never writable. *)
 definition tyenv_var_writable :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> bool" where
   "tyenv_var_writable env name =
-    (fmlookup (TE_LocalVars env) name \<noteq> None \<and> name |\<notin>| TE_ConstNames env)"
+    (fmlookup (TE_LocalVars env) name \<noteq> None \<and> name |\<notin>| TE_ConstLocals env)"
 
 (* tyenv_fixed_eq env1 env2: the "fixed" fields of env1 and env2 are identical.
    These are the fields that do not change during statement execution:
@@ -136,12 +136,12 @@ lemma tyenv_lookup_var_global:
    tyenv_lookup_var env name = fmlookup (TE_GlobalVars env) name"
   unfolding tyenv_lookup_var_def by simp
 
-lemma tyenv_lookup_var_TE_ConstNames_irrelevant [simp]:
-  "tyenv_lookup_var (env \<lparr> TE_ConstNames := c \<rparr>) name = tyenv_lookup_var env name"
+lemma tyenv_lookup_var_TE_ConstLocals_irrelevant [simp]:
+  "tyenv_lookup_var (env \<lparr> TE_ConstLocals := c \<rparr>) name = tyenv_lookup_var env name"
   unfolding tyenv_lookup_var_def by (simp split: option.splits)
 
-lemma tyenv_var_ghost_TE_ConstNames_irrelevant [simp]:
-  "tyenv_var_ghost (env \<lparr> TE_ConstNames := c \<rparr>) name = tyenv_var_ghost env name"
+lemma tyenv_var_ghost_TE_ConstLocals_irrelevant [simp]:
+  "tyenv_var_ghost (env \<lparr> TE_ConstLocals := c \<rparr>) name = tyenv_var_ghost env name"
   unfolding tyenv_var_ghost_def by (simp split: option.splits)
 
 end

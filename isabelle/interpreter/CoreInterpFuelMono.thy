@@ -605,7 +605,7 @@ next
                            and "addr = snd (alloc_store state rhsVal)"
       define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
                                                 IS_Refs := fmdrop varName (IS_Refs state'),
-                                                IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>"
+                                                IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>"
       hence body_noFuel: "interp_term fuel state'' bodyTm \<noteq> Inl InsufficientFuel"
         using noFuel Inr state'_def addr_def
         by (auto simp add: case_prod_beta split: sum.splits)
@@ -1047,7 +1047,7 @@ next
     next
       case (Some baseName)
       show ?thesis
-      proof (cases "baseName |\<in>| IS_ConstNames state
+      proof (cases "baseName |\<in>| IS_ConstLocals state
                     \<or> (fmlookup (IS_Locals state) baseName = None
                        \<and> fmlookup (IS_Refs state) baseName = None)")
         case True
@@ -1452,7 +1452,7 @@ next
         let ?valResults = "map (interp_term fuel state) argTms"
         let ?fnArgs = "IF_Args fn"
         let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                                       IS_ConstNames := {||} \<rparr>"
+                                       IS_ConstLocals := {||} \<rparr>"
 
         have len_eq: "length ?fnArgs = length argTms" using False by simp
         hence len_ref: "length ?fnArgs = length ?refResults" by simp

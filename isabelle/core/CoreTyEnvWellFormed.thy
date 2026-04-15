@@ -355,12 +355,12 @@ proof -
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
-(* tyenv_well_formed does not depend on TE_ConstNames *)
-lemma tyenv_well_formed_TE_ConstNames_irrelevant:
+(* tyenv_well_formed does not depend on TE_ConstLocals *)
+lemma tyenv_well_formed_TE_ConstLocals_irrelevant:
   assumes "tyenv_well_formed env"
-  shows "tyenv_well_formed (env \<lparr> TE_ConstNames := c \<rparr>)"
+  shows "tyenv_well_formed (env \<lparr> TE_ConstLocals := c \<rparr>)"
 proof -
-  let ?env' = "env \<lparr> TE_ConstNames := c \<rparr>"
+  let ?env' = "env \<lparr> TE_ConstLocals := c \<rparr>"
   have wk: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
     using is_well_kinded_cong_env[of ?env' env] by simp
   have rt: "\<And>ty. is_runtime_type ?env' ty = is_runtime_type env ty"

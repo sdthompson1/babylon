@@ -263,7 +263,7 @@ fun restore_scope :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> 
   "restore_scope old_state new_state =
     new_state \<lparr> IS_Locals := IS_Locals old_state,
                 IS_Refs := IS_Refs old_state,
-                IS_ConstNames := IS_ConstNames old_state,
+                IS_ConstLocals := IS_ConstLocals old_state,
                 IS_Store := take (length (IS_Store old_state)) (IS_Store new_state) \<rparr>"
 
 (* Exchange values at two lvalue locations *)
@@ -319,12 +319,12 @@ fun process_one_arg :: "((string \<times> VarOrRef)
     (let (state', addr) = alloc_store state val
     in Inr (state' \<lparr> IS_Locals := fmupd name addr (IS_Locals state'),
                       IS_Refs := fmdrop name (IS_Refs state'),
-                      IS_ConstNames := finsert name (IS_ConstNames state') \<rparr>))"
+                      IS_ConstLocals := finsert name (IS_ConstLocals state') \<rparr>))"
 | "process_one_arg ((name, Var), _, Inl err) _ = Inl err"
 | "process_one_arg ((name, Ref), Inr (addr, path), Inr _) (Inr state) =
     Inr (state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
                   IS_Refs := fmupd name (addr, path) (IS_Refs state),
-                  IS_ConstNames := fminus (IS_ConstNames state) {|name|} \<rparr>)"
+                  IS_ConstLocals := fminus (IS_ConstLocals state) {|name|} \<rparr>)"
 | "process_one_arg ((name, Ref), Inl err, _) _ = Inl err"
 | "process_one_arg ((name, Ref), _, Inl err) _ = Inl err"
 
@@ -415,7 +415,7 @@ where
         (let (state', addr) = alloc_store state rhsVal;
              state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
                                 IS_Refs := fmdrop varName (IS_Refs state'),
-                                IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>
+                                IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>
         in interp_term fuel state'' bodyTm))"
 
   (* Function call *)
@@ -495,7 +495,7 @@ where
 | "interp_term (Suc _) _ (CoreTm_Old _) = Inl TypeError"
 
   (* Evaluate a writable lvalue into (addr, path).
-     Returns TypeError if the base variable is read-only (in IS_ConstNames).
+     Returns TypeError if the base variable is read-only (in IS_ConstLocals).
      Note: this doesn't check for "bad paths" (e.g. incorrect field name); that happens
      later when the path is used. It does, however, check whether the base variable name
      exists and whether any array indices can be successfully evaluated. *)
@@ -503,7 +503,7 @@ where
 | "interp_writable_lvalue (Suc fuel) state tm =
     (case tm of
       CoreTm_Var varName \<Rightarrow>
-        if varName |\<in>| IS_ConstNames state then Inl TypeError  \<comment> \<open>read-only variable\<close>
+        if varName |\<in>| IS_ConstLocals state then Inl TypeError  \<comment> \<open>read-only variable\<close>
         else
         (case fmlookup (IS_Locals state) varName of
           Some addr \<Rightarrow> Inr (addr, [])
@@ -550,12 +550,12 @@ where
      However, if the variable was previously a non-ghost local, it is now shadowed
      by a ghost variable, so we remove it from IS_Locals/IS_Refs to maintain the
      invariant that ghost variables are not present in the interpreter state.
-     We also remove it from IS_ConstNames in case the previous binding (now
+     We also remove it from IS_ConstLocals in case the previous binding (now
      shadowed) was a const local. *)
 | "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost varName _ _ _) =
     Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
                            IS_Refs := fmdrop varName (IS_Refs state),
-                           IS_ConstNames := fminus (IS_ConstNames state) {|varName|} \<rparr>))"
+                           IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
     \<comment> \<open>Compute new state (after any function call) and the initial value.
         When the rhs is a function call (including impure ones that take Ref
@@ -563,7 +563,7 @@ where
         that the state update from the call is observed. Otherwise evaluate
         the term normally (state is unchanged).
 
-        We remove varName from IS_ConstNames in case it was previously a const
+        We remove varName from IS_ConstLocals in case it was previously a const
         local (now shadowed by this fresh non-const declaration). \<close>
     (case (case initialTm of
              CoreTm_FunctionCall fnName _ argTms \<Rightarrow>
@@ -577,17 +577,17 @@ where
           (let (state', addr) = alloc_store newState initialVal
            in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
                                        IS_Refs := fmdrop varName (IS_Refs state'),
-                                       IS_ConstNames := fminus (IS_ConstNames state') {|varName|} \<rparr>)))
+                                       IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
       | Inl err \<Rightarrow> Inl err)"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
         \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
-           - it is in IS_ConstNames (an explicit const local), or
+           - it is in IS_ConstLocals (an explicit const local), or
            - it is not in IS_Locals \<union> IS_Refs at all, in which case it must be a
              global (which is implicitly read-only).
            Locals shadow globals, so we must check IS_Locals/IS_Refs first. \<close>
-        if baseName |\<in>| IS_ConstNames state
+        if baseName |\<in>| IS_ConstLocals state
            \<or> (fmlookup (IS_Locals state) baseName = None
               \<and> fmlookup (IS_Refs state) baseName = None) then
           \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
@@ -599,16 +599,16 @@ where
               (let (state', addr) = alloc_store state val
               in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
                                           IS_Refs := fmdrop varName (IS_Refs state'),
-                                          IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>))))
+                                          IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>))))
         else
           \<comment> \<open>Base variable is writable: alias via writable lvalue. Drop varName
-             from IS_Locals and IS_ConstNames so that the new ref properly
+             from IS_Locals and IS_ConstLocals so that the new ref properly
              shadows any previous binding with the same name. \<close>
           (case interp_writable_lvalue fuel state lvalueTm of
             Inr addrAndPath \<Rightarrow>
               Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
                                       IS_Refs := fmupd varName addrAndPath (IS_Refs state),
-                                      IS_ConstNames := fminus (IS_ConstNames state) {|varName|} \<rparr>))
+                                      IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 
@@ -717,7 +717,7 @@ where
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 clearedState = state \<lparr> IS_Locals := fmempty,
                                           IS_Refs := fmempty,
-                                          IS_ConstNames := {||} \<rparr>
+                                          IS_ConstLocals := {||} \<rparr>
             in
               (case fold process_one_arg argTuples (Inr clearedState) of
                 Inl err \<Rightarrow> Inl err

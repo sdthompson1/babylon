@@ -445,7 +445,7 @@ where
                       TE_GhostLocals := (if declGhost = Ghost
                                        then finsert varName (TE_GhostLocals env)
                                        else fminus (TE_GhostLocals env) {|varName|}),
-                      TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>)
+                      TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
      else None)"
 
   (* Variable declaration (Ref).
@@ -461,9 +461,9 @@ where
                       TE_GhostLocals := (if declGhost = Ghost
                                        then finsert varName (TE_GhostLocals env)
                                        else fminus (TE_GhostLocals env) {|varName|}),
-                      TE_ConstNames := (if is_writable_lvalue env initTm
-                                        then fminus (TE_ConstNames env) {|varName|}
-                                        else finsert varName (TE_ConstNames env)) \<rparr>)
+                      TE_ConstLocals := (if is_writable_lvalue env initTm
+                                        then fminus (TE_ConstLocals env) {|varName|}
+                                        else finsert varName (TE_ConstLocals env)) \<rparr>)
      else None)"
 
   (* Assignment.
@@ -568,12 +568,12 @@ using assms proof (cases stmt)
       from assms CoreStmt_VarDecl Var NotGhost have env'_eq:
         "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
-                      TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>"
+                      TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
         by (auto split: if_splits)
-      from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf']
+      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
       have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                      TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>
-                                  \<lparr> TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>)" .
+                                  \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
       hence "tyenv_well_formed env'" using env'_eq by simp
       thus ?thesis .
     next
@@ -581,10 +581,10 @@ using assms proof (cases stmt)
       from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
       have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                           TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-      from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf']
+      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
       have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                      TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
-                                  \<lparr> TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>)" .
+                                  \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
       with assms CoreStmt_VarDecl Var Ghost show ?thesis
         by (auto split: if_splits)
     qed
@@ -603,16 +603,16 @@ using assms proof (cases stmt)
       from assms CoreStmt_VarDecl Ref NotGhost have env'_eq:
         "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
-                      TE_ConstNames := (if is_writable_lvalue env initTm
-                                        then fminus (TE_ConstNames env) {|varName|}
-                                        else finsert varName (TE_ConstNames env)) \<rparr>"
+                      TE_ConstLocals := (if is_writable_lvalue env initTm
+                                        then fminus (TE_ConstLocals env) {|varName|}
+                                        else finsert varName (TE_ConstLocals env)) \<rparr>"
         by (auto split: if_splits)
-      from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf']
+      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
       have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                      TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>
-                                  \<lparr> TE_ConstNames := (if is_writable_lvalue env initTm
-                                                      then fminus (TE_ConstNames env) {|varName|}
-                                                      else finsert varName (TE_ConstNames env)) \<rparr>)" .
+                                  \<lparr> TE_ConstLocals := (if is_writable_lvalue env initTm
+                                                      then fminus (TE_ConstLocals env) {|varName|}
+                                                      else finsert varName (TE_ConstLocals env)) \<rparr>)" .
       hence "tyenv_well_formed env'" using env'_eq by simp
       thus ?thesis .
     next
@@ -623,16 +623,16 @@ using assms proof (cases stmt)
       from assms CoreStmt_VarDecl Ref Ghost have env'_eq:
         "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := finsert varName (TE_GhostLocals env),
-                      TE_ConstNames := (if is_writable_lvalue env initTm
-                                        then fminus (TE_ConstNames env) {|varName|}
-                                        else finsert varName (TE_ConstNames env)) \<rparr>"
+                      TE_ConstLocals := (if is_writable_lvalue env initTm
+                                        then fminus (TE_ConstLocals env) {|varName|}
+                                        else finsert varName (TE_ConstLocals env)) \<rparr>"
         by (auto split: if_splits)
-      from tyenv_well_formed_TE_ConstNames_irrelevant[OF wf']
+      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
       have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                      TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
-                                  \<lparr> TE_ConstNames := (if is_writable_lvalue env initTm
-                                                      then fminus (TE_ConstNames env) {|varName|}
-                                                      else finsert varName (TE_ConstNames env)) \<rparr>)" .
+                                  \<lparr> TE_ConstLocals := (if is_writable_lvalue env initTm
+                                                      then fminus (TE_ConstLocals env) {|varName|}
+                                                      else finsert varName (TE_ConstLocals env)) \<rparr>)" .
       hence "tyenv_well_formed env'" using env'_eq by simp
       thus ?thesis .
     qed
@@ -769,7 +769,7 @@ using assms proof (cases stmt)
                     TE_GhostLocals := (if declGhost = Ghost
                                      then finsert varName (TE_GhostLocals env)
                                      else fminus (TE_GhostLocals env) {|varName|}),
-                    TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>"
+                    TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
       by (auto split: if_splits)
     show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
   next
@@ -779,9 +779,9 @@ using assms proof (cases stmt)
                     TE_GhostLocals := (if declGhost = Ghost
                                      then finsert varName (TE_GhostLocals env)
                                      else fminus (TE_GhostLocals env) {|varName|}),
-                    TE_ConstNames := (if is_writable_lvalue env initTm
-                                      then fminus (TE_ConstNames env) {|varName|}
-                                      else finsert varName (TE_ConstNames env)) \<rparr>"
+                    TE_ConstLocals := (if is_writable_lvalue env initTm
+                                      then fminus (TE_ConstLocals env) {|varName|}
+                                      else finsert varName (TE_ConstLocals env)) \<rparr>"
       by (auto split: if_splits)
     show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
   qed
