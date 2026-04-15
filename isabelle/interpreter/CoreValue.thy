@@ -66,6 +66,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
 | "value_has_type env (CV_Record fieldValues) ty =
     (case ty of
       CoreTy_Record fieldTypes \<Rightarrow>
+        distinct (map fst fieldTypes) \<and>
         list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
           fieldValues fieldTypes
     | _ \<Rightarrow> False)"
@@ -278,7 +279,8 @@ next
     from CV_Record.prems(1) CoreTy_Record
     have fv_tys: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
                     fieldValues fieldTypes"
-      by simp
+      and distinct_names: "distinct (map fst fieldTypes)"
+      by simp_all
     from fv_tys have len_eq: "length fieldValues = length fieldTypes"
       by (simp add: list_all2_lengthD)
     from CV_Record.prems(2) CoreTy_Record have wk_flds:
@@ -323,7 +325,7 @@ next
              \<lambda>(n2, t). n1 = n2 \<and> value_has_type env' v t) (fieldTypes ! i)"
         by (simp add: split_def)
     qed
-    from target CoreTy_Record show ?thesis by simp
+    from target CoreTy_Record distinct_names show ?thesis by simp
   qed (use CV_Record.prems(1) in auto)
 next
   case (CV_Variant ctor payload)
@@ -516,6 +518,7 @@ next
   case (CV_Record fieldValues)
   then obtain fieldTypes where
     ty_eq: "ty = CoreTy_Record fieldTypes" and
+    distinct_names: "distinct (map fst fieldTypes)" and
     all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
              fieldValues fieldTypes"
     by (cases ty) auto
@@ -546,7 +549,7 @@ next
     then show "is_well_kinded env fldTy"
       using CV_Record.IH assms(2) typed by fastforce
   qed
-  then show ?case using ty_eq by simp
+  then show ?case using ty_eq distinct_names by simp
 next
   case (CV_Variant ctor payload)
   then obtain dtName argTypes tyvars payloadTy where
@@ -586,6 +589,7 @@ next
   case (CV_Record fieldValues)
   then obtain fieldTypes where
     ty_eq: "ty = CoreTy_Record fieldTypes" and
+    distinct_names: "distinct (map fst fieldTypes)" and
     all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
              fieldValues fieldTypes"
     by (cases ty) auto
@@ -615,7 +619,7 @@ next
     then show "is_runtime_type env fldTy"
       using CV_Record.IH typed by fastforce
   qed
-  then show ?case using ty_eq by simp
+  then show ?case using ty_eq distinct_names by simp
 next
   case (CV_Variant ctor payload)
   then obtain dtName argTypes where

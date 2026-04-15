@@ -46,5 +46,7 @@ datatype TypeError =
   | TyErr_InternalError_UnexpectedChainVar Location
   (* Type inference errors *)
   | TyErr_CannotInferType Location
+  (* Record errors *)
+  | TyErr_DuplicateFieldName Location string
 
 end

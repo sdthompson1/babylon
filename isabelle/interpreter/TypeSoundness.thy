@@ -996,9 +996,10 @@ lemma type_soundness_record:
 proof -
   (* Extract facts from typing *)
   from typing obtain tys where
+    distinct_names: "distinct (map fst flds)" and
     those_ok: "those (map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds) = Some tys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
-    by (auto split: option.splits)
+    by (auto split: option.splits if_splits)
 
   (* Derive that each field term is typed *)
   from those_ok have la2: "list_all2 (\<lambda>x y. x = Some y)
@@ -1089,7 +1090,7 @@ proof -
     qed
     hence "value_has_type env (CV_Record (zip (map fst flds) vals))
                               (CoreTy_Record (zip (map fst flds) tys))"
-      by simp
+      using distinct_names len_eq by simp
 
     with interp_eq ty_eq show ?thesis by simp
   qed

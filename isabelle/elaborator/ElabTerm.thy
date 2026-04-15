@@ -665,11 +665,28 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                       finalRetType = apply_subst finalSubst retType
                   in Inr (CoreTm_FunctionCall fnName finalTyArgs finalArgTms, finalRetType, next_mv2))))"
 
-  (* Tuple - TODO *)
-| "elab_term env typedefs ghost (BabTm_Tuple loc tms) next_mv = undefined"
+  (* Tuple: elaborated to a record with synthetic field names "0", "1", ... *)
+| "elab_term env typedefs ghost (BabTm_Tuple loc tms) next_mv =
+    (case elab_term_list env typedefs ghost tms next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (newTms, tys, next_mv') \<Rightarrow>
+        let names = tuple_field_names (length tms) in
+        Inr (CoreTm_Record (zip names newTms),
+             CoreTy_Record (zip names tys),
+             next_mv'))"
 
-  (* Record - TODO *)
-| "elab_term env typedefs ghost (BabTm_Record loc flds) next_mv = undefined"
+  (* Record *)
+| "elab_term env typedefs ghost (BabTm_Record loc flds) next_mv =
+    (case first_duplicate_name fst flds of
+      Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
+    | None \<Rightarrow>
+        (case elab_term_list env typedefs ghost (map snd flds) next_mv of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr (newTms, tys, next_mv') \<Rightarrow>
+            let names = map fst flds in
+            Inr (CoreTm_Record (zip names newTms),
+                 CoreTy_Record (zip names tys),
+                 next_mv')))"
 
   (* Record update - TODO *)
 | "elab_term env typedefs ghost (BabTm_RecordUpdate loc tm flds) next_mv = undefined"

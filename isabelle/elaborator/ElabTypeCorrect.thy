@@ -97,7 +97,7 @@ next
 next
   case (7 env typedefs ghost loc flds)
   then show ?case
-    by (force split: sum.splits dest!: set_zip_rightD)
+    by (fastforce split: sum.splits option.splits dest!: set_zip_rightD)
 next
   case (8 env typedefs ghost loc elemTy dims)
   then show ?case by simp
@@ -107,6 +107,18 @@ next
 next
   case (10 env typedefs ghost ty tys)
   then show ?case by (force split: sum.splits)
+qed
+
+
+(* The result of elab_type_list has the same length as the input *)
+lemma elab_type_list_length:
+  "elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow> length tys' = length tys"
+proof (induction tys arbitrary: tys')
+  case Nil
+  then show ?case by simp
+next
+  case (Cons ty tys)
+  then show ?case by (auto split: sum.splits)
 qed
 
 
@@ -190,11 +202,15 @@ next
 next
   case (6 env typedefs ghost loc types)
   then show ?case
-    by (auto simp: list_all_iff split: sum.splits dest!: set_zip_rightD)
+    by (auto simp: list_all_iff distinct_tuple_field_names tuple_field_names_def[symmetric]
+             split: sum.splits dest!: set_zip_rightD)
 next
   case (7 env typedefs ghost loc flds)
   then show ?case
-    by (auto simp: list_all_iff split: sum.splits dest!: set_zip_rightD)
+    by (auto simp: list_all_iff
+             dest!: elab_type_list_length first_duplicate_name_None_implies_distinct
+                   set_zip_rightD
+             split: sum.splits option.splits)
 next
   case (8 env typedefs ghost loc elemTy dims)
   then show ?case by simp
@@ -284,7 +300,7 @@ next
 next
   case (7 env typedefs loc flds)
   then show ?case
-    by (auto simp: list_all_iff split: sum.splits dest!: set_zip_rightD)
+    by (auto simp: list_all_iff split: sum.splits option.splits dest!: set_zip_rightD)
 next
   case (8 env typedefs loc elemTy dims)
   (* Array case is currently stubbed to Bool *)
@@ -295,18 +311,6 @@ next
 next
   case (10 env typedefs ty tys)
   then show ?case by (auto simp: list_all_iff split: sum.splits)
-qed
-
-
-(* The result of elab_type_list has the same length as the input *)
-lemma elab_type_list_length:
-  "elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow> length tys' = length tys"
-proof (induction tys arbitrary: tys')
-  case Nil
-  then show ?case by simp
-next
-  case (Cons ty tys)
-  then show ?case by (auto split: sum.splits)
 qed
 
 end

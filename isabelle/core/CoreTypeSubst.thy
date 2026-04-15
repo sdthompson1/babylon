@@ -1700,10 +1700,11 @@ next
   \<comment> \<open>Record: each field typechecks; result is a Record type of the field types.
       After substitution, each field's result type is substituted. \<close>
   from CoreTm_Record.prems(1) obtain fieldTys where
+    distinct_names: "distinct (map fst flds)" and
     flds_typed: "those (map (\<lambda>(name, tm). core_term_type calleeEnv ghost tm) flds)
                    = Some fieldTys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) fieldTys)"
-    by (auto split: option.splits)
+    by (auto split: option.splits if_splits)
 
   \<comment> \<open>The IH for CoreTm_Record is per-field: for any pair (n, t) in flds and any
       type ty', if t typechecks to ty', then the substituted t typechecks to the
@@ -1766,8 +1767,11 @@ next
      = map (\<lambda>(n, t). (n, apply_subst subst t)) (zip (map fst flds) fieldTys)"
     using len_tys by (induction flds fieldTys rule: list_induct2') auto
 
+  have distinct_names_subst:
+    "distinct (map fst (map (\<lambda>(name, tm). (name, apply_subst_to_term subst tm)) flds))"
+    using distinct_names by (simp add: comp_def case_prod_beta)
   show ?case
-    using fields_subst ty_eq zip_eq by simp
+    using fields_subst ty_eq zip_eq distinct_names_subst by simp
 next
   case (CoreTm_RecordProj tm fldName)
   \<comment> \<open>RecordProj: inner term has type CoreTy_Record fieldTypes; result is

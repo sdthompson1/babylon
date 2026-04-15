@@ -43,7 +43,8 @@ fun is_well_kinded :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" wher
 | "is_well_kinded env (CoreTy_FiniteInt sign bits) = True"
 | "is_well_kinded env CoreTy_MathInt = True"
 | "is_well_kinded env CoreTy_MathReal = True"
-| "is_well_kinded env (CoreTy_Record flds) = list_all (is_well_kinded env) (map snd flds)"
+| "is_well_kinded env (CoreTy_Record flds) =
+    (distinct (map fst flds) \<and> list_all (is_well_kinded env) (map snd flds))"
 | "is_well_kinded env (CoreTy_Array elemTy dims) =
     (is_well_kinded env elemTy \<and> array_dims_well_kinded dims)"
 | "is_well_kinded env (CoreTy_Var n) = (n |\<in>| TE_TypeVars env)"
@@ -132,7 +133,7 @@ next
                                                               TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) b"
       by (simp add: snds.intros)
   qed
-  thus ?case by (auto simp: list_all_iff)
+  thus ?case using CoreTy_Record.prems by (auto simp: list_all_iff)
 next
   case (CoreTy_Array elemTy dims)
   thus ?case by auto
@@ -205,7 +206,7 @@ next
     show "is_well_kinded env2 ty"
       using CoreTy_Record.IH dt_eq mem ty_tyvars ty_wk by auto
   qed
-  thus ?case by (auto simp: list_all_iff)
+  thus ?case using CoreTy_Record.prems(1) by (auto simp: list_all_iff)
 next
   case (CoreTy_Array elemTy dims)
   thus ?case by auto
@@ -269,7 +270,10 @@ next
   moreover have "map (apply_subst subst \<circ> snd) flds =
                  map (snd \<circ> (\<lambda>(name, ty). (name, apply_subst subst ty))) flds"
     by (simp add: comp_def case_prod_beta)
-  ultimately show ?case by simp
+  moreover have "map (fst \<circ> (\<lambda>(name, ty). (name, apply_subst subst ty))) flds = map fst flds"
+    by (simp add: comp_def case_prod_beta)
+  ultimately show ?case using CoreTy_Record.prems(1)
+    by (metis apply_subst.simps(6) is_well_kinded.simps(6) list.map_comp)
 next
   case (CoreTy_Var n)
   from CoreTy_Var.prems(1) have n_in_src: "n |\<in>| TE_TypeVars src" by simp

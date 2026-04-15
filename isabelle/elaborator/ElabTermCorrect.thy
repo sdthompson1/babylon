@@ -270,11 +270,15 @@ next
     by (auto simp: Let_def split: sum.splits)
   with det_mono m2 show ?case by simp
 next
-  case "10"  \<comment> \<open>BabTm_Tuple: undefined\<close>
-  from "10.prems" show ?case sorry
+  case (10 env typedefs ghost loc tms next_mv)
+  \<comment> \<open>BabTm_Tuple: forwards elab_term_list's next_mv\<close>
+  from "10.prems" show ?case
+    by (auto simp: Let_def split: sum.splits dest!: "10.IH")
 next
-  case "11"  \<comment> \<open>BabTm_Record: undefined\<close>
-  from "11.prems" show ?case sorry
+  case (11 env typedefs ghost loc flds next_mv)
+  \<comment> \<open>BabTm_Record: forwards elab_term_list's next_mv\<close>
+  from "11.prems" show ?case
+    by (auto simp: Let_def split: sum.splits option.splits dest!: "11.IH")
 next
   case "12"  \<comment> \<open>BabTm_RecordUpdate: undefined\<close>
   from "12.prems" show ?case sorry
@@ -3305,13 +3309,165 @@ next
              requires elaborator to check FI_Impure and Var/Ref status\<close>
 
 next
-  \<comment> \<open>Case: BabTm_Tuple (undefined)\<close>
+  \<comment> \<open>Case: BabTm_Tuple\<close>
   case (10 env typedefs ghost loc tms next_mv)
-  then show ?case sorry
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  let ?names = "tuple_field_names (length tms)"
+  \<comment> \<open>Extract elaboration results\<close>
+  from "10.prems"(1) obtain newTms tys where
+    elab_list: "elab_term_list env typedefs ghost tms next_mv
+                = Inr (newTms, tys, next_mv')" and
+    newTm_eq: "newTm = CoreTm_Record (zip ?names newTms)" and
+    ty_eq: "ty = CoreTy_Record (zip ?names tys)"
+    by (auto simp: Let_def split: sum.splits)
+
+  \<comment> \<open>IH on the element list\<close>
+  have ih: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) newTms tys"
+    using "10.IH"[OF elab_list "10.prems"(2,3,4)] .
+
+  have len_eq: "length newTms = length tys"
+    using ih by (simp add: list_all2_lengthD)
+  have len_list: "length newTms = length tms"
+    using elab_term_list_length[OF elab_list] by simp
+  have len_tys: "length tys = length tms"
+    using len_eq len_list by simp
+  have len_names: "length ?names = length tms" by simp
+
+  \<comment> \<open>Each field of zip names newTms typechecks to the matching type\<close>
+  have each_field: "\<And>i. i < length tms \<Longrightarrow>
+        core_term_type ?env' ghost (snd ((zip ?names newTms) ! i)) = Some (tys ! i)"
+  proof -
+    fix i assume i_lt: "i < length tms"
+    have snd_eq: "snd ((zip ?names newTms) ! i) = newTms ! i"
+      using i_lt len_list len_names by simp
+    from ih have "core_term_type ?env' ghost (newTms ! i) = Some (tys ! i)"
+      using i_lt len_list len_tys
+      by (simp add: list_all2_conv_all_nth)
+    with snd_eq show "core_term_type ?env' ghost (snd ((zip ?names newTms) ! i)) = Some (tys ! i)"
+      by simp
+  qed
+
+  \<comment> \<open>those succeeds on the zipped list\<close>
+  have those_ok: "those (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms))
+                  = Some tys"
+  proof -
+    have len_zip: "length (zip ?names newTms) = length tms"
+      using len_list len_names by simp
+    have la2: "list_all2 (\<lambda>x y. x = Some y)
+                 (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms)) tys"
+      unfolding list_all2_conv_all_nth
+    proof (intro conjI allI impI)
+      show "length (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms))
+            = length tys"
+        using len_zip len_tys by simp
+    next
+      fix i assume i_lt: "i < length (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms))"
+      from i_lt len_zip have i_tms: "i < length tms" by simp
+      obtain n t where nt_eq: "(zip ?names newTms) ! i = (n, t)" by (cases "(zip ?names newTms) ! i")
+      from nt_eq have snd_eq: "snd ((zip ?names newTms) ! i) = t" by simp
+      from each_field[OF i_tms] snd_eq have t_ty: "core_term_type ?env' ghost t = Some (tys ! i)"
+        by simp
+      from nt_eq t_ty i_lt len_zip
+      show "map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms) ! i
+            = Some (tys ! i)"
+        by simp
+    qed
+    thus ?thesis by (simp add: those_eq_Some)
+  qed
+
+  \<comment> \<open>Distinctness: tuple_field_names is distinct, and equals map fst (zip ...) when lengths match\<close>
+  have fst_zip_eq: "map fst (zip ?names newTms) = ?names"
+    using len_list len_names by simp
+  have distinct_zipped: "distinct (map fst (zip ?names newTms))"
+    using fst_zip_eq distinct_tuple_field_names by simp
+
+  show ?case
+    using newTm_eq ty_eq those_ok distinct_zipped fst_zip_eq
+    by simp
 next
-  \<comment> \<open>Case: BabTm_Record (undefined)\<close>
+  \<comment> \<open>Case: BabTm_Record\<close>
   case (11 env typedefs ghost loc flds next_mv)
-  then show ?case sorry
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  let ?names = "map fst flds"
+  \<comment> \<open>Extract elaboration results\<close>
+  from "11.prems"(1) have no_dup: "first_duplicate_name fst flds = None"
+    by (auto split: option.splits)
+  hence distinct_names: "distinct ?names"
+    by (rule first_duplicate_name_None_implies_distinct)
+  from "11.prems"(1) no_dup obtain newTms tys where
+    elab_list: "elab_term_list env typedefs ghost (map snd flds) next_mv
+                = Inr (newTms, tys, next_mv')" and
+    newTm_eq: "newTm = CoreTm_Record (zip ?names newTms)" and
+    ty_eq: "ty = CoreTy_Record (zip ?names tys)"
+    by (auto simp: Let_def split: sum.splits)
+
+  \<comment> \<open>IH on the field term list\<close>
+  have ih: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) newTms tys"
+    using "11.IH"[OF no_dup elab_list "11.prems"(2,3,4)] .
+
+  \<comment> \<open>Fields line up with tys after zipping\<close>
+  have len_eq: "length newTms = length tys"
+    using ih by (simp add: list_all2_lengthD)
+  have len_names: "length ?names = length flds" by simp
+  have len_list: "length newTms = length flds"
+    using elab_term_list_length[OF elab_list] by simp
+  have len_tys: "length tys = length flds"
+    using len_eq len_list by simp
+
+  \<comment> \<open>Each field of zip names newTms typechecks to the matching type\<close>
+  have each_field: "\<And>i. i < length flds \<Longrightarrow>
+        core_term_type ?env' ghost (snd ((zip ?names newTms) ! i)) = Some (tys ! i)"
+  proof -
+    fix i assume i_lt: "i < length flds"
+    have snd_eq: "snd ((zip ?names newTms) ! i) = newTms ! i"
+      using i_lt len_list by (simp add: len_names)
+    from ih have "core_term_type ?env' ghost (newTms ! i) = Some (tys ! i)"
+      using i_lt len_list len_tys
+      by (simp add: list_all2_conv_all_nth)
+    with snd_eq show "core_term_type ?env' ghost (snd ((zip ?names newTms) ! i)) = Some (tys ! i)"
+      by simp
+  qed
+
+  \<comment> \<open>Hence `those` succeeds, via list_all2 + those_eq_Some\<close>
+  have those_ok: "those (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms))
+                  = Some tys"
+  proof -
+    have len_zip: "length (zip ?names newTms) = length flds"
+      using len_list len_names by simp
+    have la2: "list_all2 (\<lambda>x y. x = Some y)
+                 (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms)) tys"
+      unfolding list_all2_conv_all_nth
+    proof (intro conjI allI impI)
+      show "length (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms))
+            = length tys"
+        using len_zip len_tys by simp
+    next
+      fix i assume i_lt: "i < length (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms))"
+      from i_lt len_zip have i_flds: "i < length flds" by simp
+      obtain n t where nt_eq: "(zip ?names newTms) ! i = (n, t)" by (cases "(zip ?names newTms) ! i")
+      from nt_eq have snd_eq: "snd ((zip ?names newTms) ! i) = t" by simp
+      from each_field[OF i_flds] snd_eq have t_ty: "core_term_type ?env' ghost t = Some (tys ! i)"
+        by simp
+      from nt_eq t_ty i_lt len_zip
+      show "map (\<lambda>(name, tm). core_term_type ?env' ghost tm) (zip ?names newTms) ! i
+            = Some (tys ! i)"
+        by simp
+    qed
+    thus ?thesis by (simp add: those_eq_Some)
+  qed
+
+  \<comment> \<open>Distinctness of the zipped names\<close>
+  have distinct_zipped: "distinct (map fst (zip ?names newTms))"
+    using distinct_names len_list len_names by simp
+
+  \<comment> \<open>Zipped name list equals the original names, so the resulting record type matches\<close>
+  have fst_zip_eq: "map fst (zip ?names newTms) = ?names"
+    using len_list len_names by simp
+
+  \<comment> \<open>Put it all together\<close>
+  show ?case
+    using newTm_eq ty_eq those_ok distinct_zipped fst_zip_eq
+    by simp
 next
   \<comment> \<open>Case: BabTm_RecordUpdate (undefined)\<close>
   case (12 env typedefs ghost loc tm flds next_mv)

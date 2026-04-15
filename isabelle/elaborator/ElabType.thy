@@ -1,5 +1,5 @@
 theory ElabType
-  imports TypeError Typedefs "../core/CoreTyEnv" "../util/NatToString"
+  imports TypeError Typedefs "../core/CoreTyEnv" "../util/NatToString" "../util/DistinctCheck"
 begin
 
 (* Input: env, typedefs, ghost mode, input type (or list) *)
@@ -66,9 +66,12 @@ where
 
   (* The Record case preserves field names *)
 | "elab_type env typedefs ghost (BabTy_Record loc flds) =
-    (case elab_type_list env typedefs ghost (map snd flds) of
-      Inl errs \<Rightarrow> Inl errs
-    | Inr elabTys \<Rightarrow> Inr (CoreTy_Record (zip (map fst flds) elabTys)))"
+    (case first_duplicate_name fst flds of
+      Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
+    | None \<Rightarrow>
+        (case elab_type_list env typedefs ghost (map snd flds) of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr elabTys \<Rightarrow> Inr (CoreTy_Record (zip (map fst flds) elabTys))))"
 
   (* Array case TODO (as we may have to evaluate constants which we can't do yet) 
      Just elaborate to Bool for now *)

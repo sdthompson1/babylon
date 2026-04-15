@@ -95,4 +95,15 @@ proof (induction m arbitrary: n rule: less_induct)
 qed
 
 
+lemma length_tuple_field_names [simp]: "length (tuple_field_names n) = n"
+  by (simp add: tuple_field_names_def)
+
+lemma distinct_tuple_field_names: "distinct (tuple_field_names n)"
+proof -
+  have "inj_on nat_to_string (set [0..<n])"
+    using inj_on_def nat_to_string_injective by blast
+  thus ?thesis unfolding tuple_field_names_def
+    by (simp add: distinct_map)
+qed
+
 end

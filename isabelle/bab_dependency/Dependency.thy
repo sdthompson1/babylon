@@ -1,5 +1,6 @@
 theory Dependency
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "HOL-Library.Multiset" "KosarajuMain"
+  imports Main "HOL-Library.FSet" "HOL-Library.Finite_Map" "HOL-Library.Multiset" "KosarajuMain"
+    "../util/DistinctCheck"
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -64,71 +65,23 @@ fun map_sccs_to_items :: "(string, 'a) fmap \<Rightarrow> string list list \<Rig
 (* Checking for duplicate item names *)
 (*-----------------------------------------------------------------------------*)
 
-(* Check for adjacent duplicates in a sorted list *)
-fun check_adjacent_dups :: "string list \<Rightarrow> DependencyError option"
-  where
-"check_adjacent_dups [] = None" |
-"check_adjacent_dups [x] = None" |
-"check_adjacent_dups (x # y # rest) =
-  (if x = y then Some (DepErr_DuplicateName x)
-   else check_adjacent_dups (y # rest))"
-
-(* If check_adjacent_dups returns None on a sorted list, it's distinct *)
-lemma check_adjacent_dups_None_implies_distinct:
-  assumes "check_adjacent_dups xs = None"
-    and "sorted xs"
-  shows "distinct xs"
-  using assms
-proof (induction xs)
-  case Nil
-  then show ?case
-    by simp 
-next
-  case (Cons a xs)
-  then show ?case proof (cases xs)
-    case Nil
-    then show ?thesis by simp
-  next
-    case Cons2: (Cons b ys)
-    then have "a \<noteq> b"
-      using Cons.prems(1) by auto
-    have "check_adjacent_dups (a # b # ys) = check_adjacent_dups (b # ys)"
-      by (simp add: \<open>a \<noteq> b\<close>)
-    thus ?thesis
-      using Cons.IH Cons.prems(1,2) Cons2 \<open>a \<noteq> b\<close> by force
-  qed
-qed
-
-(* Check for duplicate names in a list (not necessarily sorted) *)
-fun check_duplicate_names :: "('a \<Rightarrow> string) \<Rightarrow> 'a list \<Rightarrow> DependencyError option"
+(* Check for duplicate names, wrapping the generic first_duplicate_name result
+   in a DependencyError. *)
+definition check_duplicate_names :: "('a \<Rightarrow> string) \<Rightarrow> 'a list \<Rightarrow> DependencyError option"
   where
 "check_duplicate_names getName items =
-  (let sorted_names = sort (map getName items)
-   in check_adjacent_dups sorted_names)"
+  (case first_duplicate_name getName items of
+     None \<Rightarrow> None
+   | Some name \<Rightarrow> Some (DepErr_DuplicateName name))"
 
 (* If check_duplicate_names returns no error, then names are distinct *)
 lemma no_duplicate_errors_means_distinct:
   assumes "check_duplicate_names getName items = None"
   shows "distinct (map getName items)"
 proof -
-  define sorted_names where "sorted_names = sort (map getName items)"
-
-  (* check_duplicate_names returns None means check_adjacent_dups returned None *)
-  have "check_adjacent_dups sorted_names = None"
-    using assms sorted_names_def by auto
-
-  (* sorted_names is sorted *)
-  have "sorted sorted_names"
-    using sorted_names_def by simp
-
-  (* Therefore sorted_names is distinct *)
-  have "distinct sorted_names"
-    using check_adjacent_dups_None_implies_distinct[OF \<open>check_adjacent_dups sorted_names = None\<close> \<open>sorted sorted_names\<close>]
-    by simp
-
-  (* distinct sorted list implies distinct original list *)
-  thus ?thesis
-    by (simp add: sorted_names_def)
+  from assms have "first_duplicate_name getName items = None"
+    unfolding check_duplicate_names_def by (auto split: option.splits)
+  thus ?thesis by (rule first_duplicate_name_None_implies_distinct)
 qed
 
 

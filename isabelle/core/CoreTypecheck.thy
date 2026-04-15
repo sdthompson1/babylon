@@ -248,7 +248,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 
   (* Record construction *)
 | "core_term_type env ghost (CoreTm_Record flds) =
-    (case those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) of
+    (if \<not> distinct (map fst flds) then None
+     else case those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) of
        None \<Rightarrow> None
      | Some tys \<Rightarrow> Some (CoreTy_Record (zip (map fst flds) tys)))"
 
@@ -1012,9 +1013,10 @@ next
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                        TE_GhostLocals := gv' \<rparr>"
   from CoreTm_Record.prems(2) obtain tys where
+    distinct_names: "distinct (map fst flds)" and
     those_eq: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
-    by (auto split: option.splits)
+    by (auto split: option.splits if_splits)
   from those_eq have la2: "list_all2 (\<lambda>x y. x = Some y)
       (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
     using those_eq_Some by blast
@@ -1042,7 +1044,7 @@ next
   hence map_eq: "map (\<lambda>(name, tm). core_term_type ?env_x ghost tm) flds =
                  map (\<lambda>(name, tm). core_term_type env ghost tm) flds"
     by (metis (mono_tags, lifting) map_equality_iff split_beta)
-  show ?case by (simp add: map_eq those_eq ty_eq)
+  show ?case by (simp add: map_eq those_eq ty_eq distinct_names)
 next
   case (CoreTm_RecordProj tm fldName) then show ?case
     by (auto split: option.splits CoreType.splits)
@@ -1304,7 +1306,7 @@ next
   from CoreTm_Record.prems obtain tys where
     those_eq: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
-    by (auto split: option.splits)
+    by (auto split: option.splits if_splits)
   have IH: "\<And>nm tm ty'. (nm, tm) \<in> set flds \<Longrightarrow> core_term_type env ghost tm = Some ty' \<Longrightarrow>
                          core_term_type ?env' ghost tm = Some ty'"
     using CoreTm_Record.IH by (auto simp: image_iff)
@@ -1336,7 +1338,7 @@ next
           (case p of (name, y) \<Rightarrow> core_term_type env ghost y)"
       using p_eq tm_ty tm_ty' by simp
   qed
-  from CoreTm_Record.prems show ?case by (simp add: map_eq)
+  from CoreTm_Record.prems show ?case by (auto simp: map_eq split: if_splits)
 next
   case (CoreTm_Match scrut arms)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1728,9 +1730,10 @@ next
 next
   case (CoreTm_Record flds)
   from CoreTm_Record.prems(1) obtain tys where
+    distinct_names: "distinct (map fst flds)" and
     those_ok: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
-    by (auto split: option.splits)
+    by (auto split: option.splits if_splits)
   have len_tys: "length tys = length flds"
     using those_ok
     by (metis length_map list_all2_lengthD those_eq_Some)
@@ -1762,7 +1765,7 @@ next
       using CoreTm_Record.IH CoreTm_Record.prems(2) fld_in by auto
   qed
   have wk: "is_well_kinded env ty"
-    unfolding ty_eq using fld_props len_tys
+    unfolding ty_eq using fld_props len_tys distinct_names
     by (auto simp: list_all_iff set_zip in_set_conv_nth)
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
     unfolding ty_eq using fld_props len_tys
@@ -1867,8 +1870,34 @@ next
     ty_eq: "ty = sizeof_type dims"
     by (auto split: option.splits CoreType.splits if_splits)
   have "is_well_kinded env (sizeof_type dims) \<and> is_runtime_type env (sizeof_type dims)"
-    by (cases dims rule: sizeof_type.cases)
-       (auto simp: u64_type_def list_all_iff set_zip nth_Cons')
+  proof (cases dims rule: sizeof_type.cases)
+    case (1 uu) thus ?thesis by (simp add: u64_type_def)
+  next
+    case "2_1" thus ?thesis by simp
+  next
+    case ("2_2" d1 d2 ds)
+    let ?n = "length (d1 # d2 # ds)"
+    have len_names: "length (tuple_field_names ?n) = ?n"
+      by (simp add: tuple_field_names_def)
+    have len_vals: "length (replicate ?n u64_type) = ?n" by simp
+    have fst_zip: "map fst (zip (tuple_field_names ?n) (replicate ?n u64_type))
+                   = tuple_field_names ?n"
+      using len_names len_vals by simp
+    have "distinct (map fst (zip (tuple_field_names ?n) (replicate ?n u64_type)))"
+      using distinct_tuple_field_names fst_zip by auto
+    have snd_vals: "\<And>p. p \<in> set (zip (tuple_field_names ?n) (replicate ?n u64_type))
+                        \<Longrightarrow> snd p = u64_type"
+      by (auto dest: set_zip_rightD)
+    moreover have "list_all (is_well_kinded env)
+                   (map snd (zip (tuple_field_names ?n) (replicate ?n u64_type)))"
+      using snd_vals by (auto simp: list_all_iff u64_type_def)
+    moreover have "list_all (is_runtime_type env)
+                   (map snd (zip (tuple_field_names ?n) (replicate ?n u64_type)))"
+      using snd_vals by (auto simp: list_all_iff u64_type_def)
+    ultimately show ?thesis using "2_2"
+      using distinct_tuple_field_names fst_zip is_runtime_type.simps(6) is_well_kinded.simps(6)
+        sizeof_type.simps(3) by metis
+  qed
   thus ?case using ty_eq by auto
 next
   case (CoreTm_Allocated tm)

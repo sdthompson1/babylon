@@ -972,6 +972,7 @@ next
       (* Extract record type *)
       from Cons.prems(1) CV_Record obtain fieldTypes where
         ty_eq: "ty = CoreTy_Record fieldTypes" and
+        distinct_names: "distinct (map fst fieldTypes)" and
         all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t) flds fieldTypes"
         by (cases ty) auto
       (* Extract field value and updated field value *)
@@ -995,7 +996,7 @@ next
       hence "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
                (AList.update field updatedFieldVal flds) fieldTypes"
         using alist_update_preserves_list_all2[OF all2 fld_lookup] fld_ty_lookup by auto
-      then show ?thesis using updatedVal_eq ty_eq by simp
+      then show ?thesis using updatedVal_eq ty_eq distinct_names by simp
     next
       case (LVPath_VariantProj x)
       with CV_Record Cons.prems show ?thesis by simp
@@ -1130,6 +1131,7 @@ next
       case (LVPath_RecordProj field)
       from Cons.prems(1) CV_Record obtain fieldTypes where
         ty_eq: "ty = CoreTy_Record fieldTypes" and
+        distinct_names: "distinct (map fst fieldTypes)" and
         all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t) flds fieldTypes"
         by (cases ty) auto
       from Cons.prems(2) CV_Record LVPath_RecordProj obtain fieldVal where
@@ -1784,7 +1786,7 @@ proof -
         using i_len i_len2 nth_val nth_ty nth_name_eq len_ss
         by (simp add: tuple_field_names_def u64_type_def)
     qed
-    then show ?thesis using "2_2" sizes_eq by simp
+    then show ?thesis using "2_2" sizes_eq distinct_tuple_field_names by simp
   qed
 qed
 
