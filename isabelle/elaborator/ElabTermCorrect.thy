@@ -174,7 +174,7 @@ next
 next
   case (3 env typedefs ghost loc targetTy operand next_mv)
   from "3.prems" show ?case
-    by (auto simp: Let_def split: sum.splits if_splits CoreType.splits dest!: "3.IH")
+    by (auto simp: Let_def split: sum.splits if_splits option.splits dest!: "3.IH")
 next
   case (4 env typedefs ghost loc condTm thenTm elseTm next_mv)
   \<comment> \<open>BabTm_If: threads through cond, then, else\<close>
@@ -194,13 +194,13 @@ next
   have m3: "next_mv2 \<le> next_mv3"
     using "4.IH"(3) elab_cond elab_then elab_else by simp
   from "4.prems" elab_cond elab_then elab_else have "next_mv' = next_mv3"
-    by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
+    by (auto simp: Let_def split: option.splits if_splits)
   with m1 m2 m3 show ?case by simp
 next
   case (5 env typedefs ghost loc op operand next_mv)
   \<comment> \<open>BabTm_Unop: forwards operand's next_mv\<close>
   from "5.prems" show ?case
-    by (auto simp: Let_def split: sum.splits CoreType.splits BabUnop.splits if_splits dest!: "5.IH")
+    by (auto simp: Let_def split: sum.splits option.splits BabUnop.splits if_splits dest!: "5.IH")
 next
   case (6 env typedefs ghost loc lhs operands next_mv)
   \<comment> \<open>BabTm_Binop: threads through lhs, rhs list\<close>
@@ -449,6 +449,7 @@ lemma unify_call_types_correct:
       and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) actualTys"
       and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
       and "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' accSubst. is_runtime_type env ty)"
+      and acc_dom_flex: "\<forall>n. n |\<in>| fmdom accSubst \<longrightarrow> is_flex n"
   shows "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
        \<and> (\<exists>theta. finalSubst = compose_subst theta accSubst)
@@ -456,14 +457,17 @@ lemma unify_call_types_correct:
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
               \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
-         actualTys expectedTys"
+         actualTys expectedTys
+       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
   using assms
 proof (induction is_flex loc fnName argIdx actualTys expectedTys accSubst
        arbitrary: finalSubst
        rule: unify_call_types.induct)
   case (1 is_flex loc fnName argIdx accSubst)
-  from "1.prems"(1) have "finalSubst = accSubst" by simp
+  from "1.prems"(1) have finalSubst_eq: "finalSubst = accSubst" by simp
   moreover have "accSubst = compose_subst fmempty accSubst" by simp
+  moreover from "1.prems"(10) finalSubst_eq have
+    "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n" by simp
   ultimately show ?case using "1.prems"(6,9) by blast
 next
   case (2 is_flex loc fnName argIdx actualTy actualTys expectedTy expectedTys accSubst)
@@ -539,6 +543,12 @@ next
     have composed_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?composedSubst. is_runtime_type env ty)"
       using newSubst_rt "2.prems"(9) compose_subst_preserves_runtime by blast
 
+    have newSubst_dom_flex: "\<forall>n. n |\<in>| fmdom newSubst \<longrightarrow> is_flex n"
+      using unify_unify_list_dom_flex(1)[OF Some] .
+    have composed_dom_flex: "\<forall>n. n |\<in>| fmdom ?composedSubst \<longrightarrow> is_flex n"
+      using newSubst_dom_flex "2.prems"(10)
+      by (auto simp: compose_subst_def)
+
     have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
             \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
             \<and> (\<exists>theta. finalSubst = compose_subst theta ?composedSubst)
@@ -546,9 +556,10 @@ next
                 apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
                 \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
                    \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
-              actualTys expectedTys"
-      using "2.IH"(2) Some len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt composed_wk expectedTys_rt
-        expectedTys_wk recurse by simp
+              actualTys expectedTys
+            \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
+      using "2.IH"(2) Some len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt composed_wk
+        expectedTys_rt expectedTys_wk recurse composed_dom_flex by simp
 
     \<comment> \<open>From unify_sound, after applying newSubst the types are equal\<close>
     from unify_sound[OF Some]
@@ -589,9 +600,10 @@ next
                 apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
                 \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
                    \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
-              actualTys expectedTys"
+              actualTys expectedTys
+            \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
       using "2.IH"(1) None is_int len_tl recurse "2.prems"(2) actualTys_wk expectedTys_wk
-                       "2.prems"(6) actualTys_rt expectedTys_rt "2.prems"(9)
+                       "2.prems"(6) actualTys_rt expectedTys_rt "2.prems"(9) "2.prems"(10)
       by simp
 
     \<comment> \<open>From IH, finalSubst = compose_subst theta accSubst for some theta\<close>
@@ -649,6 +661,10 @@ lemma apply_call_coercions_correct:
       and "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' subst. is_runtime_type env ty)"
       and "length tms = length actualTys"
       and "length actualTys = length expectedTys"
+      and locals_unaffected:
+        "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty'
+                      \<Longrightarrow> apply_subst subst ty' = ty'"
+      and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
   shows "list_all2 (\<lambda>tm expectedTy.
            core_term_type env ghost tm = Some (apply_subst subst expectedTy))
          (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
@@ -683,11 +699,14 @@ next
   have ih: "list_all2 (\<lambda>tm expectedTy.
               core_term_type env ghost tm = Some (apply_subst subst expectedTy))
             (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
-    using "2.IH" tail_typed tail_prop "2.prems"(3,4,5) len_tms len_tys by simp
+    using "2.IH" tail_typed tail_prop "2.prems"(3,4,5,8,9) len_tms len_tys
+          locals_unaffected ret_unaffected
+    by simp
 
   \<comment> \<open>For the head: apply_subst_to_term preserves typing (with substituted type)\<close>
   have head_tm'_typed: "core_term_type env ghost ?tm' = Some ?actualTy'"
-    using head_typed apply_subst_to_term_preserves_typing "2.prems"(3,4,5) by blast
+    by (simp add: "2.prems"(4,5,8,9) apply_subst_to_term_preserves_typing assms(3)
+        head_typed)
 
   \<comment> \<open>Show the head element has the expected type\<close>
   have head_result: "core_term_type env ghost
@@ -938,6 +957,9 @@ lemma resolve_binop_metas_correct:
     and lhs_typed: "core_term_type env ghost lhsTm = Some lhsTy"
     and rhs_typed: "core_term_type env ghost rhsTm = Some rhsTy"
     and wf: "tyenv_well_formed env"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost lhsTm' = Some lhsTy'
        \<and> core_term_type env ghost rhsTm' = Some rhsTy'"
 proof (cases "unify is_flex lhsTy rhsTy")
@@ -1001,11 +1023,55 @@ next
     qed
   qed
 
+  \<comment> \<open>The unifier only binds flex metavars. Combined with the caller's
+      rigidity assumptions on locals and the return type, the substitution
+      leaves them unchanged. \<close>
+  have unif_dom_flex: "\<forall>n. n |\<in>| fmdom unifSubst \<longrightarrow> is_flex n"
+    using unify_unify_list_dom_flex(1)[OF Some] .
+
+  have locals_unaffected:
+    "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty' \<Longrightarrow> apply_subst unifSubst ty' = ty'"
+  proof -
+    fix name ty' assume lk: "fmlookup (TE_LocalVars env) name = Some ty'"
+    have "type_metavars ty' \<inter> fset (fmdom unifSubst) = {}"
+    proof -
+      { fix n assume n_mv: "n \<in> type_metavars ty'" and n_dom: "n \<in> fset (fmdom unifSubst)"
+        from n_dom have "n |\<in>| fmdom unifSubst" by simp
+        with unif_dom_flex have "is_flex n" by blast
+        moreover from locals_rigid lk n_mv have "\<not> is_flex n" by blast
+        ultimately have False by simp
+      }
+      thus ?thesis by auto
+    qed
+    thus "apply_subst unifSubst ty' = ty'"
+      by (rule apply_subst_disjoint_id)
+  qed
+  have ret_unaffected: "apply_subst unifSubst (TE_ReturnType env) = TE_ReturnType env"
+  proof -
+    have "type_metavars (TE_ReturnType env) \<inter> fset (fmdom unifSubst) = {}"
+    proof -
+      { fix n assume n_mv: "n \<in> type_metavars (TE_ReturnType env)"
+                 and n_dom: "n \<in> fset (fmdom unifSubst)"
+        from n_dom have "n |\<in>| fmdom unifSubst" by simp
+        with unif_dom_flex have "is_flex n" by blast
+        moreover from ret_rigid n_mv have "\<not> is_flex n" by blast
+        ultimately have False by simp
+      }
+      thus ?thesis by auto
+    qed
+    thus ?thesis by (rule apply_subst_disjoint_id)
+  qed
+
   \<comment> \<open>Both terms typecheck after applying unifSubst\<close>
   have lhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst lhsTm) = Some ?unifiedTy"
-    using apply_subst_to_term_preserves_typing[OF lhs_typed wf unif_range_wk unif_range_rt] by simp
+    using apply_subst_to_term_preserves_typing
+            [OF lhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected]
+    by simp
   have rhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst rhsTm) = Some ?unifiedTy"
-    using apply_subst_to_term_preserves_typing[OF rhs_typed wf unif_range_wk unif_range_rt] sound by simp
+    using apply_subst_to_term_preserves_typing
+            [OF rhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected]
+          sound
+    by simp
 
   show ?thesis
   proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list ?unifiedTy)")
@@ -1056,13 +1122,63 @@ next
           lhs_typed local.wf ng rhs_typed unify_preserves_runtime by presburger
     qed
 
+    \<comment> \<open>?fullSubst's domain is contained in flex metavars: it's the union of
+        unifSubst's domain (from unify_dom_flex) and ?fillSubst's domain
+        (filtered to flex by const_subst_for's definition). \<close>
+    have fill_dom_flex: "\<forall>n. n |\<in>| fmdom ?fillSubst \<longrightarrow> is_flex n"
+      unfolding const_subst_for_def
+      by auto
+    have full_dom_flex: "\<forall>n. n |\<in>| fmdom ?fullSubst \<longrightarrow> is_flex n"
+      using unif_dom_flex fill_dom_flex
+      by (auto simp: compose_subst_def)
+
+    have locals_unaffected_full:
+      "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty' \<Longrightarrow> apply_subst ?fullSubst ty' = ty'"
+    proof -
+      fix name ty' assume lk: "fmlookup (TE_LocalVars env) name = Some ty'"
+      have "type_metavars ty' \<inter> fset (fmdom ?fullSubst) = {}"
+      proof -
+        { fix n assume n_mv: "n \<in> type_metavars ty'"
+                    and n_dom: "n \<in> fset (fmdom ?fullSubst)"
+          from n_dom have "n |\<in>| fmdom ?fullSubst" by simp
+          with full_dom_flex have "is_flex n" by blast
+          moreover from locals_rigid lk n_mv have "\<not> is_flex n" by blast
+          ultimately have False by simp
+        }
+        thus ?thesis by auto
+      qed
+      thus "apply_subst ?fullSubst ty' = ty'"
+        by (rule apply_subst_disjoint_id)
+    qed
+    have ret_unaffected_full: "apply_subst ?fullSubst (TE_ReturnType env) = TE_ReturnType env"
+    proof -
+      have "type_metavars (TE_ReturnType env) \<inter> fset (fmdom ?fullSubst) = {}"
+      proof -
+        { fix n assume n_mv: "n \<in> type_metavars (TE_ReturnType env)"
+                    and n_dom: "n \<in> fset (fmdom ?fullSubst)"
+          from n_dom have "n |\<in>| fmdom ?fullSubst" by simp
+          with full_dom_flex have "is_flex n" by blast
+          moreover from ret_rigid n_mv have "\<not> is_flex n" by blast
+          ultimately have False by simp
+        }
+        thus ?thesis by auto
+      qed
+      thus ?thesis by (rule apply_subst_disjoint_id)
+    qed
+
     \<comment> \<open>Applying fullSubst preserves typing\<close>
     have lhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst lhsTm) =
                     Some (apply_subst ?fullSubst lhsTy)"
-      using apply_subst_to_term_preserves_typing[OF lhs_typed wf full_range_wk full_range_rt] by simp
+      using apply_subst_to_term_preserves_typing
+              [OF lhs_typed wf full_range_wk full_range_rt
+                  locals_unaffected_full ret_unaffected_full]
+      by simp
     have rhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst rhsTm) =
                     Some (apply_subst ?fullSubst rhsTy)"
-      using apply_subst_to_term_preserves_typing[OF rhs_typed wf full_range_wk full_range_rt] by simp
+      using apply_subst_to_term_preserves_typing
+              [OF rhs_typed wf full_range_wk full_range_rt
+                  locals_unaffected_full ret_unaffected_full]
+      by simp
 
     \<comment> \<open>apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy via compose_subst_correct\<close>
     have lhs_eq: "apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy"
@@ -1081,6 +1197,9 @@ lemma elab_single_binop_correct:
     and "core_term_type env ghost rhsTm = Some rhsTy"
     and "tyenv_well_formed env"
     and "binop_to_core babOp = Some cop"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof -
   obtain lhsTm' lhsTy' rhsTm' rhsTy' where
@@ -1088,7 +1207,7 @@ proof -
     by (cases "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy") auto
   have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
     and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
-    using resolve_binop_metas_correct[OF resolved assms(2,3,4)] by auto
+    using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid] by auto
 
   have cop: "binop_to_core babOp = Some cop" using assms(5) .
 
@@ -1229,6 +1348,9 @@ lemma elab_binop_with_special_correct:
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "core_term_type env ghost rhsTm = Some rhsTy"
     and "tyenv_well_formed env"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
   case True
@@ -1239,7 +1361,7 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
     with assms(1) have
       "elab_single_binop is_flex loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy = Inr (resultTm, resultTy)"
       by simp
-    thus ?thesis using elab_single_binop_correct[OF _ assms(3,2,4)]
+    thus ?thesis using elab_single_binop_correct[OF _ assms(3,2,4) _ locals_rigid ret_rigid]
       using binop_to_core.simps(19) by blast
   next
     assume iff: "babOp = BabBinop_Iff"
@@ -1249,7 +1371,7 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
       by (cases "resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy") auto
     have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
       and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
-      using resolve_binop_metas_correct[OF resolved assms(2,3,4)] by auto
+      using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid] by auto
     from assms(1) iff resolved have
       "lhsTy' = CoreTy_Bool" "rhsTy' = CoreTy_Bool"
       "resultTm = CoreTm_Binop CoreBinop_Equal lhsTm' rhsTm'" "resultTy = CoreTy_Bool"
@@ -1264,7 +1386,8 @@ next
     by (cases babOp) simp_all
   from False obtain cop where "binop_to_core babOp = Some cop"
     by (cases babOp) auto
-  with assms(1) eq show ?thesis using elab_single_binop_correct assms(2,3,4) by auto
+  with assms(1) eq show ?thesis
+    using elab_single_binop_correct assms(2,3,4) locals_rigid ret_rigid by auto
 qed
 
 (* For comparison operators (those with a comparison_direction), elab_binop_with_special
@@ -1300,6 +1423,9 @@ lemma fold_binop_left_correct:
     and "core_term_type env ghost accTm = Some accTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 using assms proof (induction ops arbitrary: accTm accTy)
   case Nil
@@ -1313,9 +1439,10 @@ next
     rest: "fold_binop_left is_flex loc ghost midTm midTy rest = Inr (resultTm, resultTy)"
     by (auto split: sum.splits)
   have mid_typed: "core_term_type env ghost midTm = Some midTy"
-    using elab_binop_with_special_correct[OF step Cons.prems(2) _ Cons.prems(4)]
+    using elab_binop_with_special_correct[OF step Cons.prems(2) _ Cons.prems(4)
+                                               Cons.prems(5) Cons.prems(6)]
       Cons.prems(3) triple_eq by simp
-  show ?case using Cons.IH[OF rest mid_typed] Cons.prems(3,4) triple_eq by simp
+  show ?case using Cons.IH[OF rest mid_typed] Cons.prems(3,4,5,6) triple_eq by simp
 qed
 
 (* Correctness of fold_implies_right *)
@@ -1324,6 +1451,9 @@ lemma fold_implies_right_correct:
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 using assms proof (induction ops arbitrary: lhsTm lhsTy resultTm resultTy)
   case Nil
@@ -1341,7 +1471,9 @@ next
     from Cons.prems(1) triple_eq Nil have
       "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy = Inr (resultTm, resultTy)"
       by simp
-    thus ?thesis using elab_binop_with_special_correct Cons.prems(2) rhs_typed Cons.prems(4) by blast
+    thus ?thesis
+      using elab_binop_with_special_correct Cons.prems(2) rhs_typed Cons.prems(4)
+            Cons.prems(5) Cons.prems(6) by blast
   next
     case (Cons triple2 rest2)
     \<comment> \<open>Multiple elements: recurse on right side, then combine\<close>
@@ -1352,8 +1484,10 @@ next
     have rest_all: "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) rest"
       using Cons.prems(3) triple_eq by simp
     have right_typed: "core_term_type env ghost rightTm = Some rightTy"
-      using Cons.IH[OF recurse rhs_typed rest_all Cons.prems(4)] .
-    show ?thesis using elab_binop_with_special_correct[OF combine Cons.prems(2) right_typed Cons.prems(4)] .
+      using Cons.IH[OF recurse rhs_typed rest_all Cons.prems(4) Cons.prems(5) Cons.prems(6)] .
+    show ?thesis
+      using elab_binop_with_special_correct[OF combine Cons.prems(2) right_typed
+                          Cons.prems(4) Cons.prems(5) Cons.prems(6)] .
   qed
 qed
 
@@ -1562,6 +1696,9 @@ lemma build_comparison_chain_correct:
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
     and "check_comparison_chain_directions ops dir"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some CoreTy_Bool"
   using assms
 proof (induction ops arbitrary: chainCtr lhsTm lhsTy resultTm env dir)
@@ -1586,7 +1723,7 @@ next
     by (cases "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy") auto
 
   have resolvedRhs_typed: "core_term_type env ghost resolvedRhs = Some resolvedRhsTy"
-    using resolve_binop_metas_correct[OF resolved Cons.prems(2) rhs_typed Cons.prems(4)] by simp
+    using Cons.prems(2,4,6,7) resolve_binop_metas_correct resolved rhs_typed by blast
 
   \<comment> \<open>Propagate chain direction check to rest\<close>
   have rest_dirs: "check_comparison_chain_directions rest
@@ -1616,7 +1753,7 @@ next
       and result: "resultTm = cmpTm"
       by (auto simp: Let_def split: sum.splits prod.splits)
     have "core_term_type env ghost cmpTm = Some cmpTy"
-      using elab_binop_with_special_correct[OF elab Cons.prems(2) rhs_typed Cons.prems(4)] .
+      using Cons.prems(2,4,6,7) elab elab_binop_with_special_correct rhs_typed by auto
     moreover have "cmpTy = CoreTy_Bool"
       using elab_binop_with_special_comparison_bool[OF elab op_cmp] .
     ultimately show ?thesis using result by simp
@@ -1643,10 +1780,11 @@ next
       have cmpTy_bool: "cmpTy = CoreTy_Bool"
         using elab_binop_with_special_comparison_bool[OF elab op_cmp] .
       have cmp_typed: "core_term_type env ghost cmpTm = Some CoreTy_Bool"
-        using elab_binop_with_special_correct[OF elab Cons.prems(2) resolvedRhs_typed Cons.prems(4)]
-              cmpTy_bool by simp
+        using Cons.prems(2,4,6,7) cmpTy_bool elab elab_binop_with_special_correct resolvedRhs_typed
+        by blast
       have rest_typed: "core_term_type env ghost restTm = Some CoreTy_Bool"
-        using Cons.IH[OF recurse resolvedRhs_typed rest_all Cons.prems(4) rest_dirs] .
+        using Cons.IH[OF recurse resolvedRhs_typed rest_all Cons.prems(4) rest_dirs
+                         Cons.prems(6) Cons.prems(7)] .
       show ?thesis using cmp_typed rest_typed result by simp
     next
       case not_simple: False
@@ -1757,6 +1895,34 @@ next
               core_term_type_TE_ConstNames_irrelevant
         by (simp add: env'_def env_no_cn_def)
 
+      \<comment> \<open>env' has the same TE_TypeVars / TE_ReturnType as env (only locals,
+          ghost-locals, and const-names changed). The rigidity conditions lift:
+          old locals are still rigid (from Cons.prems(6)), and the newly added
+          local resolvedRhsTy has no flex metavars (from ground). \<close>
+      have env'_locals_rigid:
+        "\<forall>name ty' n. fmlookup (TE_LocalVars env') name = Some ty'
+                        \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+      proof (intro allI impI)
+        fix name ty' n
+        assume lk: "fmlookup (TE_LocalVars env') name = Some ty'"
+        assume n_mv: "n \<in> type_metavars ty'"
+        show "\<not> is_flex n"
+        proof (cases "name = vn")
+          case True
+          with lk have "ty' = resolvedRhsTy"
+            by (simp add: env'_def)
+          with n_mv ground show ?thesis
+            by (auto simp: set_type_metavars_list[symmetric] list_all_iff)
+        next
+          case False
+          with lk have "fmlookup (TE_LocalVars env) name = Some ty'"
+            by (simp add: env'_def)
+          with Cons.prems(6) n_mv show ?thesis by blast
+        qed
+      qed
+      have env'_ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env') \<longrightarrow> \<not> is_flex n"
+        using Cons.prems(7) by (simp add: env'_def)
+
       \<comment> \<open>cmpTm typechecks in env'\<close>
       have cmpTy_bool: "cmpTy = CoreTy_Bool"
         using elab_binop_with_special_comparison_bool[OF elab op_cmp] .
@@ -1764,7 +1930,8 @@ next
                      = Inr (cmpTm, cmpTy)"
         using elab using vn_eq by auto
       have cmp_typed: "core_term_type env' ghost cmpTm = Some CoreTy_Bool"
-        using elab_binop_with_special_correct[OF elab_vn lhs_typed' var_typed env'_wf]
+        using elab_binop_with_special_correct[OF elab_vn lhs_typed' var_typed env'_wf
+                                                  env'_locals_rigid env'_ret_rigid]
               cmpTy_bool by simp
 
       \<comment> \<open>The ops in rest typecheck in env' by weakening\<close>
@@ -1787,7 +1954,8 @@ next
                           (CoreTm_Var vn) resolvedRhsTy rest = Inr restTm"
         using recurse using vn_eq by auto
       have rest_typed: "core_term_type env' ghost restTm = Some CoreTy_Bool"
-        using Cons.IH[OF recurse_vn var_typed rest_all' env'_wf rest_dirs] .
+        using Cons.IH[OF recurse_vn var_typed rest_all' env'_wf rest_dirs
+                         env'_locals_rigid env'_ret_rigid] .
 
       \<comment> \<open>The body (And cmpTm restTm) typechecks in env'\<close>
       have body_typed: "core_term_type env' ghost (CoreTm_Binop CoreBinop_And cmpTm restTm)
@@ -1813,6 +1981,9 @@ lemma process_binop_chain_correct:
     and "core_term_type env ghost lhsTm = Some lhsTy"
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
+    and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
+                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof (cases ops)
   case Nil
@@ -1826,7 +1997,7 @@ next
     \<comment> \<open>Implies chain: right-associates (check_implies_chain must pass, else we'd get Inl)\<close>
     with assms(1) Cons have "fold_implies_right is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
       by (auto simp: Let_def split: if_splits)
-    thus ?thesis using fold_implies_right_correct assms(2,3,4) by blast
+    thus ?thesis using fold_implies_right_correct assms(2,3,4) locals_rigid ret_rigid by blast
   next
     case not_implies: False
     show ?thesis
@@ -1842,7 +2013,7 @@ next
         and result: "resultTm = chainTm" and rty: "resultTy = CoreTy_Bool"
         by (auto simp: Let_def split: sum.splits if_splits)
       have "core_term_type env ghost chainTm = Some CoreTy_Bool"
-        using build_comparison_chain_correct[OF chain_ok assms(2,3,4) dirs] .
+        using build_comparison_chain_correct[OF chain_ok assms(2,3,4) dirs locals_rigid ret_rigid] .
       thus ?thesis using result rty by simp
     next
       case False
@@ -1850,7 +2021,7 @@ next
       with assms(1) Cons not_implies have
         "fold_binop_left is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
         by (auto simp: Let_def split: if_splits)
-      thus ?thesis using fold_binop_left_correct assms(2,3,4) by blast
+      thus ?thesis using fold_binop_left_correct assms(2,3,4) locals_rigid ret_rigid by blast
     qed
   qed
 qed
@@ -1926,7 +2097,7 @@ next
     by (auto split: sum.splits)
   \<comment> \<open>Cast forwards the operand's next_mv, so next_mv' = next_mv''\<close>
   from "3.prems"(1) elab_target elab_operand have next_mv_eq: "next_mv' = next_mv''"
-    by (auto split: if_splits CoreType.splits)
+    by (auto split: if_splits option.splits)
   from "3.prems"(1) elab_target elab_operand have
     target_is_int: "is_integer_type newTargetTy"
     by (auto split: if_splits)
@@ -1948,61 +2119,101 @@ next
     using target_rt_env is_runtime_type_extend_runtime_tyvars
     unfolding extend_env_with_tyvars_def by auto
 
+  have wf': "tyenv_well_formed ?env'"
+    using "3.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+
+  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
+
   show ?case
-  proof (cases operandTy)
-    case (CoreTy_Meta n)
-    \<comment> \<open>Metavariable case: cast is eliminated via substitution\<close>
-    from "3.prems"(1) elab_target elab_operand target_is_int CoreTy_Meta have
-      result: "newTm = apply_subst_to_term (singleton_subst n newTargetTy) newOperand"
-              "ty = newTargetTy"
-      by auto
-    \<comment> \<open>After substitution, the term has type newTargetTy\<close>
-    have subst_wk: "\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_well_kinded ?env' ty"
-      using target_wk by (simp add: fmran'_singleton_subst)
-    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (singleton_subst n newTargetTy). is_runtime_type ?env' ty)"
-      using target_rt by (simp add: fmran'_singleton_subst)
-    have wf: "tyenv_well_formed ?env'"
-      using "3.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
-    have "core_term_type ?env' ghost (apply_subst_to_term (singleton_subst n newTargetTy) newOperand)
-        = Some (apply_subst (singleton_subst n newTargetTy) operandTy)"
-      using ih wf subst_wk subst_rt apply_subst_to_term_preserves_typing by blast
-    also have "apply_subst (singleton_subst n newTargetTy) operandTy = newTargetTy"
-      using CoreTy_Meta apply_subst_singleton by blast
+  proof (cases "unify ?is_flex operandTy newTargetTy")
+    case (Some subst)
+    \<comment> \<open>Unification succeeded: cast is eliminated via the unifier's substitution\<close>
+    from "3.prems"(1) elab_target elab_operand target_is_int Some have
+      result: "newTm = apply_subst_to_term subst newOperand" "ty = newTargetTy"
+      by (auto split: if_splits)
+
+    \<comment> \<open>operandTy is well-kinded in ?env'\<close>
+    have operand_wk: "is_well_kinded ?env' operandTy"
+      using core_term_type_well_kinded[OF ih wf'] .
+    have operand_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' operandTy"
+      using core_term_type_notghost_runtime ih wf' by auto
+
+    \<comment> \<open>The unifier's substitution range is well-kinded and runtime in ?env'\<close>
+    have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?env' ty'"
+      using unify_preserves_well_kinded[OF Some operand_wk target_wk] .
+    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?env' ty')"
+    proof
+      assume ng: "ghost = NotGhost"
+      show "\<forall>ty' \<in> fmran' subst. is_runtime_type ?env' ty'"
+        using unify_preserves_runtime[OF Some] operand_rt target_rt ng by blast
+    qed
+
+    \<comment> \<open>The unifier only binds flex metas (those outside TE_TypeVars env). So any
+        type whose metavars are contained in TE_TypeVars env is unaffected. \<close>
+    have unif_dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+      using unify_unify_list_dom_flex(1)[OF Some] .
+    have unif_id_on_env: "\<And>ty'. type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+                               \<Longrightarrow> apply_subst subst ty' = ty'"
+    proof -
+      fix ty' assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
+      have "type_metavars ty' \<inter> fset (fmdom subst) = {}"
+        using mvs unif_dom_flex by auto
+      thus "apply_subst subst ty' = ty'"
+        by (rule apply_subst_disjoint_id)
+    qed
+
+    \<comment> \<open>Locals in ?env' (= locals in env) are well-kinded in env, hence unaffected. \<close>
+    have locals_unaffected:
+      "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
+                    \<Longrightarrow> apply_subst subst ty' = ty'"
+    proof -
+      fix name ty' assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
+      have "TE_LocalVars ?env' = TE_LocalVars env"
+        unfolding extend_env_with_tyvars_def by simp
+      with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
+      from "3.prems"(2) have "tyenv_vars_well_kinded env"
+        unfolding tyenv_well_formed_def by simp
+      with lk_env have "is_well_kinded env ty'"
+        unfolding tyenv_vars_well_kinded_def by blast
+      from is_well_kinded_type_metavars_subset[OF this]
+      have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+      thus "apply_subst subst ty' = ty'" by (rule unif_id_on_env)
+    qed
+
+    have ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+    proof -
+      have ret_eq: "TE_ReturnType ?env' = TE_ReturnType env"
+        unfolding extend_env_with_tyvars_def by simp
+      from "3.prems"(2) have "tyenv_return_type_well_kinded env"
+        unfolding tyenv_well_formed_def by simp
+      hence "is_well_kinded env (TE_ReturnType env)"
+        unfolding tyenv_return_type_well_kinded_def .
+      from is_well_kinded_type_metavars_subset[OF this]
+      have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+      hence "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
+        by (rule unif_id_on_env)
+      thus ?thesis using ret_eq by simp
+    qed
+
+    have subst_applied:
+      "core_term_type ?env' ghost (apply_subst_to_term subst newOperand)
+         = Some (apply_subst subst operandTy)"
+      using apply_subst_to_term_preserves_typing
+              [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected] .
+    also have "apply_subst subst operandTy = apply_subst subst newTargetTy"
+      using unify_sound[OF Some] .
+    also have "apply_subst subst newTargetTy = newTargetTy"
+      using target_is_int is_integer_type_apply_subst by simp
     finally show ?thesis using result by simp
+
   next
-    case (CoreTy_FiniteInt sign bits)
-    \<comment> \<open>Finite integer case: cast is kept\<close>
-    from "3.prems"(1) elab_target elab_operand target_is_int CoreTy_FiniteInt have
+    case None
+    \<comment> \<open>Unification failed: fall through to the integer-cast branch\<close>
+    from "3.prems"(1) elab_target elab_operand target_is_int None have
       result: "newTm = CoreTm_Cast newTargetTy newOperand" "ty = newTargetTy"
-      by auto
-    have operand_is_int: "is_integer_type operandTy"
-      using CoreTy_FiniteInt by simp
+      and operand_is_int: "is_integer_type operandTy"
+      by (auto split: if_splits)
     show ?thesis using result ih operand_is_int target_is_int target_rt by auto
-  next
-    case CoreTy_MathInt
-    \<comment> \<open>MathInt case: cast is kept\<close>
-    from "3.prems"(1) elab_target elab_operand target_is_int CoreTy_MathInt have
-      result: "newTm = CoreTm_Cast newTargetTy newOperand" "ty = newTargetTy"
-      by auto
-    have operand_is_int: "is_integer_type operandTy"
-      using CoreTy_MathInt by simp
-    show ?thesis using result ih operand_is_int target_is_int target_rt by auto
-  next
-    \<comment> \<open>Other cases result in error, so don't reach Inr\<close>
-    case CoreTy_Bool
-    with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
-  next
-    case (CoreTy_Datatype x1 x2)
-    with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
-  next
-    case CoreTy_MathReal
-    with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
-  next
-    case (CoreTy_Record x)
-    with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
-  next
-    case (CoreTy_Array x1 x2)
-    with "3.prems"(1) elab_target elab_operand target_is_int show ?thesis by auto
   qed
 
 next
@@ -2021,18 +2232,19 @@ next
     elab_else: "elab_term env typedefs ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
     by (auto split: sum.splits)
 
-  \<comment> \<open>If forwards elseTm's next_mv so outer next_mv' = next_mv3\<close>
-  from "4.prems"(1) elab_cond elab_then elab_else have next_mv_eq: "next_mv' = next_mv3"
-    by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
+  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
 
-  \<comment> \<open>Get the final condition after possible metavariable specialization\<close>
+  \<comment> \<open>Elaboration only succeeds if the condition unifies with Bool. \<close>
+  from "4.prems"(1) elab_cond elab_then elab_else obtain condSubst where
+    cond_unify: "unify ?is_flex condTy CoreTy_Bool = Some condSubst"
+    by (auto simp: Let_def split: sum.splits option.splits)
+
   define finalCond where
-    "finalCond = (case condTy of CoreTy_Meta n \<Rightarrow> apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond | _ \<Rightarrow> newCond)"
+    "finalCond = apply_subst_to_term condSubst newCond"
 
-  \<comment> \<open>The condition type must be Bool or Meta for elaboration to succeed\<close>
-  from "4.prems"(1) elab_cond elab_then elab_else have condTy_bool_or_meta:
-    "condTy = CoreTy_Bool \<or> (\<exists>n. condTy = CoreTy_Meta n)"
-    by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
+  \<comment> \<open>If forwards elseTm's next_mv so outer next_mv' = next_mv3\<close>
+  from "4.prems"(1) elab_cond elab_then elab_else cond_unify have next_mv_eq: "next_mv' = next_mv3"
+    by (auto simp: Let_def split: option.splits if_splits)
 
   \<comment> \<open>Monotonicity: next_mv \<le> next_mv1 \<le> next_mv2 \<le> next_mv3\<close>
   have mono_12: "next_mv \<le> next_mv1"
@@ -2070,29 +2282,99 @@ next
   have wf': "tyenv_well_formed ?env'"
     using "4.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
 
-  \<comment> \<open>Final condition has type Bool in ?env'\<close>
-  have ih_finalCond: "core_term_type ?env' ghost finalCond = Some CoreTy_Bool"
-    using condTy_bool_or_meta
+  \<comment> \<open>A generic helper: any substitution whose domain is disjoint from
+      TE_TypeVars env leaves locals and the return type unchanged. \<close>
+  have unif_id_on_env:
+    "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+              \<Longrightarrow> type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+              \<Longrightarrow> apply_subst s ty' = ty'"
+  proof -
+    fix s :: "(nat, CoreType) fmap" and ty'
+    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
+    assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
+    have "type_metavars ty' \<inter> fset (fmdom s) = {}"
+      using mvs dom_flex by auto
+    thus "apply_subst s ty' = ty'" by (rule apply_subst_disjoint_id)
+  qed
+  have locals_unaffected_for:
+    "\<And>s name ty'. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+                 \<Longrightarrow> fmlookup (TE_LocalVars ?env') name = Some ty'
+                 \<Longrightarrow> apply_subst s ty' = ty'"
+  proof -
+    fix s :: "(nat, CoreType) fmap" and name ty'
+    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
+    assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
+    have "TE_LocalVars ?env' = TE_LocalVars env"
+      unfolding extend_env_with_tyvars_def by simp
+    with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
+    from "4.prems"(2) have "tyenv_vars_well_kinded env"
+      unfolding tyenv_well_formed_def by simp
+    with lk_env have "is_well_kinded env ty'"
+      unfolding tyenv_vars_well_kinded_def by blast
+    from is_well_kinded_type_metavars_subset[OF this]
+    have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+    thus "apply_subst s ty' = ty'"
+      using unif_id_on_env[OF dom_flex] by blast
+  qed
+  have ret_unaffected_for:
+    "\<And>s. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+         \<Longrightarrow> apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
+  proof -
+    fix s :: "(nat, CoreType) fmap"
+    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
+    have ret_eq: "TE_ReturnType ?env' = TE_ReturnType env"
+      unfolding extend_env_with_tyvars_def by simp
+    from "4.prems"(2) have "tyenv_return_type_well_kinded env"
+      unfolding tyenv_well_formed_def by simp
+    hence "is_well_kinded env (TE_ReturnType env)"
+      unfolding tyenv_return_type_well_kinded_def .
+    from is_well_kinded_type_metavars_subset[OF this]
+    have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+    hence "apply_subst s (TE_ReturnType env) = TE_ReturnType env"
+      using unif_id_on_env[OF dom_flex] by blast
+    thus "apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
+      using ret_eq by simp
+  qed
+
+  \<comment> \<open>condSubst range is well-kinded / runtime in ?env'. \<close>
+  have cond_wk: "is_well_kinded ?env' condTy"
+    using core_term_type_well_kinded[OF ih_cond wf'] .
+  have cond_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' condTy"
+    using core_term_type_notghost_runtime ih_cond wf' by auto
+  have bool_wk: "is_well_kinded ?env' CoreTy_Bool" by simp
+  have bool_rt: "is_runtime_type ?env' CoreTy_Bool" by simp
+  have condSubst_wk: "\<forall>ty' \<in> fmran' condSubst. is_well_kinded ?env' ty'"
+    using unify_preserves_well_kinded[OF cond_unify cond_wk bool_wk] .
+  have condSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' condSubst. is_runtime_type ?env' ty')"
   proof
-    assume "condTy = CoreTy_Bool"
-    thus ?thesis using ih_cond by (simp add: finalCond_def)
-  next
-    assume "\<exists>n. condTy = CoreTy_Meta n"
-    then obtain n where condTy_meta: "condTy = CoreTy_Meta n" by blast
-    hence "finalCond = apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond"
-      by (simp add: finalCond_def)
-    moreover have "core_term_type ?env' ghost (apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond)
-                 = Some (apply_subst (singleton_subst n CoreTy_Bool) condTy)"
-      using ih_cond wf' apply_subst_to_term_preserves_typing
-      by (simp add: fmran'_singleton_subst)
-    moreover have "apply_subst (singleton_subst n CoreTy_Bool) condTy = CoreTy_Bool"
-      using condTy_meta apply_subst_singleton by auto
-    ultimately show ?thesis by simp
+    assume ng: "ghost = NotGhost"
+    show "\<forall>ty' \<in> fmran' condSubst. is_runtime_type ?env' ty'"
+      using unify_preserves_runtime[OF cond_unify] cond_rt bool_rt ng by blast
+  qed
+  have condSubst_dom_flex: "\<forall>n. n |\<in>| fmdom condSubst \<longrightarrow> ?is_flex n"
+    using unify_unify_list_dom_flex(1)[OF cond_unify] .
+  have condSubst_locals: "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
+                                     \<Longrightarrow> apply_subst condSubst ty' = ty'"
+    using locals_unaffected_for[OF condSubst_dom_flex] .
+  have condSubst_ret: "apply_subst condSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+    using ret_unaffected_for[OF condSubst_dom_flex] .
+
+  \<comment> \<open>Final condition has type Bool in ?env'. \<close>
+  have finalCond_typed: "core_term_type ?env' ghost finalCond = Some CoreTy_Bool"
+  proof -
+    have "core_term_type ?env' ghost (apply_subst_to_term condSubst newCond)
+            = Some (apply_subst condSubst condTy)"
+      using apply_subst_to_term_preserves_typing
+              [OF ih_cond wf' condSubst_wk condSubst_rt condSubst_locals condSubst_ret] .
+    also have "apply_subst condSubst condTy = apply_subst condSubst CoreTy_Bool"
+      using unify_sound[OF cond_unify] .
+    also have "apply_subst condSubst CoreTy_Bool = CoreTy_Bool" by simp
+    finally show ?thesis unfolding finalCond_def .
   qed
 
   \<comment> \<open>Now handle the two cases: unification succeeds or integer coercion\<close>
   show ?case
-  proof (cases "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) thenTy elseTy")
+  proof (cases "unify ?is_flex thenTy elseTy")
     case (Some branchSubst)
     \<comment> \<open>Unification succeeded\<close>
     let ?resultTy = "apply_subst branchSubst thenTy"
@@ -2100,23 +2382,46 @@ next
     let ?newElse' = "apply_subst_to_term branchSubst newElse"
     let ?matchArms = "[(CorePat_Bool True, ?newThen'), (CorePat_Bool False, ?newElse')]"
 
-    from "4.prems"(1) elab_cond elab_then elab_else condTy_bool_or_meta Some have
+    from "4.prems"(1) elab_cond elab_then elab_else cond_unify Some have
       result_eq: "newTm = CoreTm_Match finalCond ?matchArms" "ty = ?resultTy"
-      by (auto simp: finalCond_def Let_def split: CoreType.splits)
+      by (auto simp: finalCond_def Let_def split: option.splits)
 
     \<comment> \<open>From unify_sound: applying branchSubst unifies the types\<close>
     from unify_sound[OF Some] have unified: "apply_subst branchSubst thenTy = apply_subst branchSubst elseTy" .
 
-    \<comment> \<open>Substituted branches have the result type\<close>
+    \<comment> \<open>branchSubst range is well-kinded / runtime in ?env'. \<close>
+    have then_wk: "is_well_kinded ?env' thenTy"
+      using core_term_type_well_kinded[OF ih_then wf'] .
+    have else_wk: "is_well_kinded ?env' elseTy"
+      using core_term_type_well_kinded[OF ih_else wf'] .
     have branchSubst_wk: "\<forall>ty \<in> fmran' branchSubst. is_well_kinded ?env' ty"
-      using Some ih_then ih_else wf' core_term_type_well_kinded unify_preserves_well_kinded by blast
+      using unify_preserves_well_kinded[OF Some then_wk else_wk] .
     have branchSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' branchSubst. is_runtime_type ?env' ty)"
-      using Some ih_then ih_else wf' core_term_type_notghost_runtime unify_preserves_runtime by blast
+    proof
+      assume ng: "ghost = NotGhost"
+      have "is_runtime_type ?env' thenTy"
+        using core_term_type_notghost_runtime ih_then wf' ng by auto
+      moreover have "is_runtime_type ?env' elseTy"
+        using core_term_type_notghost_runtime ih_else wf' ng by auto
+      ultimately show "\<forall>ty \<in> fmran' branchSubst. is_runtime_type ?env' ty"
+        using unify_preserves_runtime[OF Some] by blast
+    qed
+    have branchSubst_dom_flex: "\<forall>n. n |\<in>| fmdom branchSubst \<longrightarrow> ?is_flex n"
+      using unify_unify_list_dom_flex(1)[OF Some] .
+    have branchSubst_locals:
+      "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
+                    \<Longrightarrow> apply_subst branchSubst ty' = ty'"
+      using locals_unaffected_for[OF branchSubst_dom_flex] .
+    have branchSubst_ret: "apply_subst branchSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+      using ret_unaffected_for[OF branchSubst_dom_flex] .
 
     have then'_typed: "core_term_type ?env' ghost ?newThen' = Some ?resultTy"
-      using ih_then wf' branchSubst_wk branchSubst_rt apply_subst_to_term_preserves_typing by blast
+      using apply_subst_to_term_preserves_typing
+              [OF ih_then wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret] .
     have else'_typed: "core_term_type ?env' ghost ?newElse' = Some ?resultTy"
-      using ih_else wf' branchSubst_wk branchSubst_rt apply_subst_to_term_preserves_typing unified by fastforce
+      using apply_subst_to_term_preserves_typing
+              [OF ih_else wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret]
+            unified by simp
 
     \<comment> \<open>The match typechecks\<close>
     have "core_term_type ?env' ghost (CoreTm_Match finalCond ?matchArms) = Some ?resultTy"
@@ -2131,7 +2436,7 @@ next
       have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some ?resultTy) (map snd ?matchArms)"
         using then'_typed else'_typed by simp
       show ?thesis
-        using ih_finalCond \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
+        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
         by (simp add: then'_typed)
     qed
     thus ?thesis using result_eq by simp
@@ -2139,16 +2444,16 @@ next
   next
     case None
     \<comment> \<open>Unification failed - try integer coercion\<close>
-    from "4.prems"(1) elab_cond elab_then elab_else condTy_bool_or_meta None
+    from "4.prems"(1) elab_cond elab_then elab_else cond_unify None
     obtain coercedThen coercedElse commonTy where
       coerce: "coerce_to_common_int_type newThen thenTy newElse elseTy = Some (coercedThen, coercedElse, commonTy)"
-      by (auto simp: finalCond_def Let_def split: CoreType.splits option.splits)
+      by (auto simp: finalCond_def Let_def split: option.splits)
 
     let ?matchArms = "[(CorePat_Bool True, coercedThen), (CorePat_Bool False, coercedElse)]"
 
-    from "4.prems"(1) elab_cond elab_then elab_else condTy_bool_or_meta None coerce have
+    from "4.prems"(1) elab_cond elab_then elab_else cond_unify None coerce have
       result_eq: "newTm = CoreTm_Match finalCond ?matchArms" "ty = commonTy"
-      by (auto simp: finalCond_def Let_def split: CoreType.splits)
+      by (auto simp: finalCond_def Let_def split: option.splits)
 
     \<comment> \<open>From coerce_to_common_int_type_correct: coerced terms have common type\<close>
     have coerced_typed: "core_term_type ?env' ghost coercedThen = Some commonTy
@@ -2171,7 +2476,7 @@ next
       have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some commonTy) (map snd ?matchArms)"
         using coerced_then_typed coerced_else_typed by simp
       show ?thesis
-        using ih_finalCond \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
+        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
         by (simp add: coerced_then_typed)
     qed
     thus ?thesis using result_eq by simp
@@ -2187,7 +2492,7 @@ next
     by (auto split: sum.splits)
   \<comment> \<open>Unop forwards the operand's next_mv\<close>
   from "5.prems"(1) elab_operand have next_mv_eq: "next_mv' = next_mv''"
-    by (auto simp: Let_def split: CoreType.splits BabUnop.splits if_splits)
+    by (auto simp: Let_def split: option.splits BabUnop.splits if_splits)
 
   have wf': "tyenv_well_formed ?env'"
     using "5.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
@@ -2196,30 +2501,95 @@ next
   have ih: "core_term_type ?env' ghost newOperand = Some operandTy"
     using "5.IH"[OF elab_operand "5.prems"(2,3,4)] next_mv_eq by simp
 
-  show ?case
-  proof (cases operandTy)
-    case (CoreTy_Meta n)
-    \<comment> \<open>Metavariable case: use default type\<close>
-    let ?cop = "unop_to_core op"
-    let ?defaultTy = "default_type_for_unop ?cop"
-    let ?subst = "singleton_subst n ?defaultTy"
-    let ?newOperand2 = "apply_subst_to_term ?subst newOperand"
+  let ?cop = "unop_to_core op"
+  let ?defaultTy = "default_type_for_unop ?cop"
+  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
 
-    from "5.prems"(1) elab_operand CoreTy_Meta have
+  show ?case
+  proof (cases "unify ?is_flex operandTy ?defaultTy")
+    case (Some subst)
+    \<comment> \<open>Unification succeeded: operand is either already the default type or a
+        flex metavariable. The substitution resolves it to defaultTy. \<close>
+    let ?newOperand2 = "apply_subst_to_term subst newOperand"
+    from "5.prems"(1) elab_operand Some have
       result: "newTm = CoreTm_Unop ?cop ?newOperand2" "ty = ?defaultTy"
       by (auto simp: Let_def)
 
-    \<comment> \<open>Substitution properties\<close>
-    have subst_wk: "\<forall>ty \<in> fmran' ?subst. is_well_kinded ?env' ty"
-      by (simp add: fmran'_singleton_subst default_type_for_unop_is_well_kinded)
-    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?subst. is_runtime_type ?env' ty)"
-      by (simp add: fmran'_singleton_subst default_type_for_unop_is_runtime)
+    \<comment> \<open>operandTy is well-kinded / runtime in ?env'\<close>
+    have operand_wk: "is_well_kinded ?env' operandTy"
+      using core_term_type_well_kinded[OF ih wf'] .
+    have operand_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' operandTy"
+      using core_term_type_notghost_runtime ih wf' by auto
+    have default_wk: "is_well_kinded ?env' ?defaultTy"
+      by (rule default_type_for_unop_is_well_kinded)
+    have default_rt: "is_runtime_type ?env' ?defaultTy"
+      by (rule default_type_for_unop_is_runtime)
 
-    \<comment> \<open>After substitution, operand has the default type\<close>
-    have "core_term_type ?env' ghost ?newOperand2 = Some (apply_subst ?subst operandTy)"
-      using ih wf' subst_wk subst_rt apply_subst_to_term_preserves_typing by blast
-    hence operand2_typed: "core_term_type ?env' ghost ?newOperand2 = Some ?defaultTy"
-      using CoreTy_Meta apply_subst_singleton by simp
+    \<comment> \<open>subst range is well-kinded / runtime in ?env'\<close>
+    have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?env' ty'"
+      using unify_preserves_well_kinded[OF Some operand_wk default_wk] .
+    have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?env' ty')"
+    proof
+      assume ng: "ghost = NotGhost"
+      show "\<forall>ty' \<in> fmran' subst. is_runtime_type ?env' ty'"
+        using unify_preserves_runtime[OF Some] operand_rt default_rt ng by blast
+    qed
+
+    \<comment> \<open>subst has flex domain, so locals and return type are unaffected. \<close>
+    have subst_dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+      using unify_unify_list_dom_flex(1)[OF Some] .
+    have unif_id_on_env: "\<And>ty'. type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+                               \<Longrightarrow> apply_subst subst ty' = ty'"
+    proof -
+      fix ty' assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
+      have "type_metavars ty' \<inter> fset (fmdom subst) = {}"
+        using mvs subst_dom_flex by auto
+      thus "apply_subst subst ty' = ty'"
+        by (rule apply_subst_disjoint_id)
+    qed
+    have locals_unaffected:
+      "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
+                    \<Longrightarrow> apply_subst subst ty' = ty'"
+    proof -
+      fix name ty' assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
+      have "TE_LocalVars ?env' = TE_LocalVars env"
+        unfolding extend_env_with_tyvars_def by simp
+      with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
+      from "5.prems"(2) have "tyenv_vars_well_kinded env"
+        unfolding tyenv_well_formed_def by simp
+      with lk_env have "is_well_kinded env ty'"
+        unfolding tyenv_vars_well_kinded_def by blast
+      from is_well_kinded_type_metavars_subset[OF this]
+      have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+      thus "apply_subst subst ty' = ty'" by (rule unif_id_on_env)
+    qed
+    have ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+    proof -
+      have ret_eq: "TE_ReturnType ?env' = TE_ReturnType env"
+        unfolding extend_env_with_tyvars_def by simp
+      from "5.prems"(2) have "tyenv_return_type_well_kinded env"
+        unfolding tyenv_well_formed_def by simp
+      hence "is_well_kinded env (TE_ReturnType env)"
+        unfolding tyenv_return_type_well_kinded_def .
+      from is_well_kinded_type_metavars_subset[OF this]
+      have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+      hence "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
+        by (rule unif_id_on_env)
+      thus ?thesis using ret_eq by simp
+    qed
+
+    \<comment> \<open>After substitution, newOperand has type defaultTy in ?env'\<close>
+    have operand2_typed: "core_term_type ?env' ghost ?newOperand2 = Some ?defaultTy"
+    proof -
+      have "core_term_type ?env' ghost ?newOperand2 = Some (apply_subst subst operandTy)"
+        using apply_subst_to_term_preserves_typing
+                [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected] .
+      also have "apply_subst subst operandTy = apply_subst subst ?defaultTy"
+        using unify_sound[OF Some] .
+      also have "apply_subst subst ?defaultTy = ?defaultTy"
+        by (cases ?cop) simp_all
+      finally show ?thesis .
+    qed
 
     \<comment> \<open>The default type satisfies the operator's requirement\<close>
     have op_ok: "(case ?cop of
@@ -2229,98 +2599,34 @@ next
       by (cases op) simp_all
 
     show ?thesis using result operand2_typed op_ok by (cases ?cop) auto
+
   next
-    case (CoreTy_FiniteInt sign bits)
-    \<comment> \<open>Finite integer: depends on the operator\<close>
+    case None
+    \<comment> \<open>Unification failed: operand is a concrete type different from defaultTy.
+        Case-split on the operator and the operand type. \<close>
     show ?thesis
     proof (cases op)
       case BabUnop_Negate
-      show ?thesis
-      proof (cases sign)
-        case Signed
-        with "5.prems"(1) elab_operand CoreTy_FiniteInt BabUnop_Negate have
-          result: "newTm = CoreTm_Unop CoreUnop_Negate newOperand" "ty = operandTy"
-          by auto
-        have signed: "is_signed_numeric_type operandTy" using CoreTy_FiniteInt Signed by simp
-        show ?thesis using result ih signed by simp
-      next
-        case Unsigned
-        \<comment> \<open>Unsigned finite int cannot be negated - elaboration fails\<close>
-        with "5.prems"(1) elab_operand CoreTy_FiniteInt BabUnop_Negate show ?thesis by auto
-      qed
+      \<comment> \<open>Negate: must be signed numeric (not defaultTy = i32).\<close>
+      from "5.prems"(1) elab_operand None BabUnop_Negate have
+        signed: "is_signed_numeric_type operandTy"
+        and result: "newTm = CoreTm_Unop CoreUnop_Negate newOperand" "ty = operandTy"
+        by (auto simp: Let_def split: if_splits)
+      show ?thesis using result ih signed by simp
     next
       case BabUnop_Complement
-      from "5.prems"(1) elab_operand CoreTy_FiniteInt BabUnop_Complement have
-        result: "newTm = CoreTm_Unop CoreUnop_Complement newOperand" "ty = operandTy"
-        by auto
-      have finite: "is_finite_integer_type operandTy" using CoreTy_FiniteInt by simp
+      \<comment> \<open>Complement: must be a finite integer type (not defaultTy = i32).\<close>
+      from "5.prems"(1) elab_operand None BabUnop_Complement have
+        finite: "is_finite_integer_type operandTy"
+        and result: "newTm = CoreTm_Unop CoreUnop_Complement newOperand" "ty = operandTy"
+        by (auto simp: Let_def split: if_splits)
       show ?thesis using result ih finite by simp
     next
       case BabUnop_Not
-      from "5.prems"(1) elab_operand CoreTy_FiniteInt BabUnop_Not show ?thesis by auto
+      \<comment> \<open>Not: elaborator errors since unify against Bool failed. \<close>
+      from "5.prems"(1) elab_operand None BabUnop_Not show ?thesis
+        by (auto simp: Let_def)
     qed
-  next
-    case CoreTy_MathInt
-    show ?thesis
-    proof (cases op)
-      case BabUnop_Negate
-      from "5.prems"(1) elab_operand CoreTy_MathInt BabUnop_Negate have
-        result: "newTm = CoreTm_Unop CoreUnop_Negate newOperand" "ty = operandTy"
-        by auto
-      have signed: "is_signed_numeric_type operandTy" using CoreTy_MathInt by simp
-      show ?thesis using result ih signed by simp
-    next
-      case BabUnop_Complement
-      \<comment> \<open>MathInt is not finite, so complement fails\<close>
-      from "5.prems"(1) elab_operand CoreTy_MathInt BabUnop_Complement show ?thesis by auto
-    next
-      case BabUnop_Not
-      from "5.prems"(1) elab_operand CoreTy_MathInt BabUnop_Not show ?thesis by auto
-    qed
-  next
-    case CoreTy_Bool
-    show ?thesis
-    proof (cases op)
-      case BabUnop_Not
-      from "5.prems"(1) elab_operand CoreTy_Bool BabUnop_Not have
-        result: "newTm = CoreTm_Unop CoreUnop_Not newOperand" "ty = operandTy"
-        by auto
-      show ?thesis using result ih CoreTy_Bool by simp
-    next
-      case BabUnop_Negate
-      from "5.prems"(1) elab_operand CoreTy_Bool BabUnop_Negate show ?thesis by auto
-    next
-      case BabUnop_Complement
-      from "5.prems"(1) elab_operand CoreTy_Bool BabUnop_Complement show ?thesis by auto
-    qed
-  next
-    \<comment> \<open>Other operand types result in error\<close>
-    case (CoreTy_Datatype x1 x2)
-    with "5.prems"(1) elab_operand show ?thesis by (cases op) auto
-  next
-    case CoreTy_MathReal
-    show ?thesis
-    proof (cases op)
-      case BabUnop_Negate
-      from "5.prems"(1) elab_operand CoreTy_MathReal BabUnop_Negate have
-        result: "newTm = CoreTm_Unop CoreUnop_Negate newOperand" "ty = operandTy"
-        by auto
-      have signed: "is_signed_numeric_type operandTy" using CoreTy_MathReal by simp
-      show ?thesis using result ih signed by simp
-    next
-      case BabUnop_Complement
-      \<comment> \<open>MathReal is not a finite integer, so complement fails\<close>
-      from "5.prems"(1) elab_operand CoreTy_MathReal BabUnop_Complement show ?thesis by auto
-    next
-      case BabUnop_Not
-      from "5.prems"(1) elab_operand CoreTy_MathReal BabUnop_Not show ?thesis by auto
-    qed
-  next
-    case (CoreTy_Record x)
-    with "5.prems"(1) elab_operand show ?thesis by (cases op) auto
-  next
-    case (CoreTy_Array x1 x2)
-    with "5.prems"(1) elab_operand show ?thesis by (cases op) auto
   qed
 
 next
@@ -2394,9 +2700,47 @@ next
     thus "core_term_type ?env' ghost tm = Some tyR"
       using rhs_typing by (auto dest: list_all2_nthD)
   qed
+  \<comment> \<open>Locals and return type of ?env' come from env (unchanged by the
+      extension) and are well-kinded in env, so their metavars lie in
+      TE_TypeVars env. The Binop case's is_flex is (\<lambda>n. n |\<notin>| TE_TypeVars env),
+      so none of those metavars are flex. \<close>
+  have env'_locals_rigid:
+    "\<forall>name ty' n. fmlookup (TE_LocalVars ?env') name = Some ty'
+                    \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> ?is_flex n"
+  proof (intro allI impI)
+    fix name ty' n
+    assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
+    assume n_mv: "n \<in> type_metavars ty'"
+    have "TE_LocalVars ?env' = TE_LocalVars env"
+      unfolding extend_env_with_tyvars_def by simp
+    with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
+    from "6.prems"(2) have "tyenv_vars_well_kinded env"
+      unfolding tyenv_well_formed_def by simp
+    with lk_env have "is_well_kinded env ty'"
+      unfolding tyenv_vars_well_kinded_def by blast
+    from is_well_kinded_type_metavars_subset[OF this] n_mv
+    have "n \<in> fset (TE_TypeVars env)" by blast
+    thus "\<not> ?is_flex n" by simp
+  qed
+  have env'_ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType ?env') \<longrightarrow> \<not> ?is_flex n"
+  proof (intro allI impI)
+    fix n assume n_mv: "n \<in> type_metavars (TE_ReturnType ?env')"
+    have "TE_ReturnType ?env' = TE_ReturnType env"
+      unfolding extend_env_with_tyvars_def by simp
+    with n_mv have n_mv': "n \<in> type_metavars (TE_ReturnType env)" by simp
+    from "6.prems"(2) have "tyenv_return_type_well_kinded env"
+      unfolding tyenv_well_formed_def by simp
+    hence "is_well_kinded env (TE_ReturnType env)"
+      unfolding tyenv_return_type_well_kinded_def .
+    from is_well_kinded_type_metavars_subset[OF this] n_mv'
+    have "n \<in> fset (TE_TypeVars env)" by blast
+    thus "\<not> ?is_flex n" by simp
+  qed
+
   \<comment> \<open>Apply process_binop_chain_correct\<close>
   have "core_term_type ?env' ghost resultTm = Some resultTy"
-    using process_binop_chain_correct[OF process_result lhs_typing ops_typed wf'] .
+    using process_binop_chain_correct
+            [OF process_result lhs_typing ops_typed wf' env'_locals_rigid env'_ret_rigid] .
   thus ?case using result_eq by simp
 
 next
@@ -2742,6 +3086,8 @@ next
   qed
 
   \<comment> \<open>Apply unify_call_types_correct in the extended env ?env'\<close>
+  have empty_dom_flex: "\<forall>n. n |\<in>| fmdom (fmempty :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n"
+    by simp
   have unify_correct: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty)
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
        \<and> (\<exists>theta. finalSubst = compose_subst theta fmempty)
@@ -2749,9 +3095,10 @@ next
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
               \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
-         actualTypes expArgTypes"
+         actualTypes expArgTypes
+       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)"
     using unify_call_types_correct[OF unify_types wf' len_actualTypes
-            actualTypes_wk expArgTypes_wk _ actualTypes_rt expArgTypes_rt]
+            actualTypes_wk expArgTypes_wk _ actualTypes_rt expArgTypes_rt _ empty_dom_flex]
           finalSubst_eq by fastforce
 
   from unify_correct have
@@ -2761,15 +3108,68 @@ next
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
               \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
-         actualTypes expArgTypes"
+         actualTypes expArgTypes" and
+    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
     by blast+
+
+  \<comment> \<open>finalSubst's domain is flex, so locals and return type in ?env' (inherited
+      from the outer env and well-kinded there) are unaffected. \<close>
+  have finalSubst_id_on_env: "\<And>ty'. type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+                                    \<Longrightarrow> apply_subst finalSubst ty' = ty'"
+  proof -
+    fix ty' assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
+    have "type_metavars ty' \<inter> fset (fmdom finalSubst) = {}"
+    proof -
+      { fix n assume n_mv: "n \<in> type_metavars ty'"
+                  and n_dom: "n \<in> fset (fmdom finalSubst)"
+        from n_dom have "n |\<in>| fmdom finalSubst" by simp
+        with finalSubst_dom_flex have "n |\<notin>| TE_TypeVars env" by blast
+        hence "n \<notin> fset (TE_TypeVars env)" by simp
+        with mvs n_mv have False by blast
+      }
+      thus ?thesis by auto
+    qed
+    thus "apply_subst finalSubst ty' = ty'"
+      by (rule apply_subst_disjoint_id)
+  qed
+  have locals_unaffected:
+    "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
+                  \<Longrightarrow> apply_subst finalSubst ty' = ty'"
+  proof -
+    fix name ty' assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
+    have "TE_LocalVars ?env' = TE_LocalVars env"
+      unfolding extend_env_with_tyvars_def by simp
+    with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
+    from "9.prems"(2) have "tyenv_vars_well_kinded env"
+      unfolding tyenv_well_formed_def by simp
+    with lk_env have "is_well_kinded env ty'"
+      unfolding tyenv_vars_well_kinded_def by blast
+    from is_well_kinded_type_metavars_subset[OF this]
+    have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+    thus "apply_subst finalSubst ty' = ty'" by (rule finalSubst_id_on_env)
+  qed
+  have ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+  proof -
+    have ret_eq: "TE_ReturnType ?env' = TE_ReturnType env"
+      unfolding extend_env_with_tyvars_def by simp
+    from "9.prems"(2) have "tyenv_return_type_well_kinded env"
+      unfolding tyenv_well_formed_def by simp
+    hence "is_well_kinded env (TE_ReturnType env)"
+      unfolding tyenv_return_type_well_kinded_def .
+    from is_well_kinded_type_metavars_subset[OF this]
+    have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+    hence "apply_subst finalSubst (TE_ReturnType env) = TE_ReturnType env"
+      by (rule finalSubst_id_on_env)
+    thus ?thesis using ret_eq by simp
+  qed
 
   \<comment> \<open>Apply apply_call_coercions_correct in ?env'\<close>
   have coerce_correct: "list_all2 (\<lambda>tm expectedTy.
            core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
          finalArgTms expArgTypes"
     using apply_call_coercions_correct[OF ih_args types_unified wf'
-            finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes]
+            finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes
+            locals_unaffected ret_unaffected]
           finalArgTms_eq finalSubst_eq by simp
 
   \<comment> \<open>The final type args in the output term\<close>

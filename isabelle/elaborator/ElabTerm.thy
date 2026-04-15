@@ -274,7 +274,8 @@ definition const_subst_for :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \
 
 (* Resolve metavariables in binary operator operands using unification.
    1. Try to unify the two operand types.
-   2. If unification succeeds and the result is ground, use the unified type.
+   2. If unification succeeds and the result is ground (contains no unifiable metavariables), 
+      use the unified type.
    3. If unification succeeds but metavariables remain, fill them with the
       default type for the operator.
    4. If unification fails, pass through unchanged (downstream checks will
@@ -525,17 +526,16 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
           Inl errs \<Rightarrow> Inl errs
         | Inr (newOperand, operandTy, next_mv') \<Rightarrow>
             if is_integer_type newTargetTy then
-              (case operandTy of
-                CoreTy_Meta n \<Rightarrow>
-                  \<comment> \<open>We can just eliminate the cast in this case\<close>
-                  Inr (apply_subst_to_term (singleton_subst n newTargetTy) newOperand,
-                       newTargetTy, next_mv')
-              | _ \<Rightarrow>
-                if is_integer_type operandTy then
-                  \<comment> \<open>Casting one integer type to another\<close>
-                  Inr (CoreTm_Cast newTargetTy newOperand, newTargetTy, next_mv')
-                else
-                  Inl [TyErr_InvalidCast loc])
+              (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) operandTy newTargetTy of
+                Some subst \<Rightarrow>
+                  \<comment> \<open>Unification succeeded - we can eliminate the cast\<close>
+                  Inr (apply_subst_to_term subst newOperand, newTargetTy, next_mv')
+              | None \<Rightarrow>
+                  if is_integer_type operandTy then
+                    \<comment> \<open>Casting one integer type to another\<close>
+                    Inr (CoreTm_Cast newTargetTy newOperand, newTargetTy, next_mv')
+                  else
+                    Inl [TyErr_InvalidCast loc])
             else
               Inl [TyErr_InvalidCast loc]))"
 
@@ -550,16 +550,12 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
         (case elab_term env typedefs ghost elseTm next_mv2 of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newElse, elseTy, next_mv3) \<Rightarrow>
-            \<comment> \<open>Specialize condition to Bool if it's a metavariable\<close>
-            let (finalCond, finalCondTy) =
-              (case condTy of
-                CoreTy_Meta n \<Rightarrow>
-                  (apply_subst_to_term (singleton_subst n CoreTy_Bool) newCond, CoreTy_Bool)
-              | _ \<Rightarrow> (newCond, condTy))
-            in
-            \<comment> \<open>Check condition is Bool\<close>
-            (case finalCondTy of
-              CoreTy_Bool \<Rightarrow>
+            \<comment> \<open>Unify the condition type against Bool. If the condition is already
+                Bool this is a no-op; if it is a flex metavariable it gets bound. \<close>
+            (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
+              None \<Rightarrow> Inl [TyErr_ConditionNotBool loc condTy]
+            | Some condSubst \<Rightarrow>
+              let finalCond = apply_subst_to_term condSubst newCond in
                 \<comment> \<open>Try to unify branch types\<close>
                 (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) thenTy elseTy of
                   Some branchSubst \<Rightarrow>
@@ -576,22 +572,26 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                         let matchArms = [(CorePat_Bool True, coercedThen), (CorePat_Bool False, coercedElse)]
                         in Inr (CoreTm_Match finalCond matchArms, commonTy, next_mv3)
                     | None \<Rightarrow>
-                        Inl [TyErr_TypeMismatch loc thenTy elseTy]))
-            | _ \<Rightarrow> Inl [TyErr_ConditionNotBool loc finalCondTy]))))"
+                        Inl [TyErr_TypeMismatch loc thenTy elseTy]))))))"
 
   (* Unary operator *)
 | "elab_term env typedefs ghost (BabTm_Unop loc op operand) next_mv =
     (case elab_term env typedefs ghost operand next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newOperand, operandTy, next_mv') \<Rightarrow>
-        (case operandTy of
-          CoreTy_Meta n \<Rightarrow>
-            \<comment> \<open>Ambiguous operand type: use default type for this operator\<close>
-            let cop = unop_to_core op;
-                defaultTy = default_type_for_unop cop;
-                newOperand2 = apply_subst_to_term (singleton_subst n defaultTy) newOperand
-            in Inr (CoreTm_Unop cop newOperand2, defaultTy, next_mv')
-        | _ \<Rightarrow>
+        let cop = unop_to_core op;
+            defaultTy = default_type_for_unop cop
+        in
+        \<comment> \<open>Try to unify the operand type with the operator's default type. This
+            is a no-op when the operand is already the default type, and binds
+            the operand's metavariable when it is a flex meta. \<close>
+        (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) operandTy defaultTy of
+          Some subst \<Rightarrow>
+            Inr (CoreTm_Unop cop (apply_subst_to_term subst newOperand),
+                 defaultTy, next_mv')
+        | None \<Rightarrow>
+          \<comment> \<open>Unification failed - operand has a different concrete type. Check
+              whether it is acceptable for this operator. \<close>
           (case op of
             BabUnop_Negate \<Rightarrow>
               if is_signed_numeric_type operandTy then
@@ -604,9 +604,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
               else
                 Inl [TyErr_ComplementRequiresFiniteInt loc]
           | BabUnop_Not \<Rightarrow>
-              (case operandTy of
-                CoreTy_Bool \<Rightarrow> Inr (CoreTm_Unop CoreUnop_Not newOperand, operandTy, next_mv')
-              | _ \<Rightarrow> Inl [TyErr_NotRequiresBool loc]))))"
+              Inl [TyErr_NotRequiresBool loc])))"
 
   (* Binary operator *)
 | "elab_term env typedefs ghost (BabTm_Binop loc lhs operands) next_mv =

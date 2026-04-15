@@ -1,85 +1,6 @@
 theory TypeSoundness
-  imports TypeSoundnessHelpers
+  imports TypeSoundnessHelpers "../core/CoreTypeSubst"
 begin
-
-(*-----------------------------------------------------------------------------*)
-(* Definitions for type-soundness of interpreter results *)
-(*-----------------------------------------------------------------------------*)
-
-(* Type soundness for terms means that evaluating a well-typed term will either:
-    - Succeed with a value of the correct type
-    - Fail with RuntimeError
-    - Fail with InsufficientFuel
-   It will not:
-    - Succeed with a value of the wrong type
-    - Fail with TypeError *)
-
-fun sound_error_result :: "InterpError \<Rightarrow> bool" where
-  "sound_error_result TypeError = False"
-| "sound_error_result RuntimeError = True"
-| "sound_error_result InsufficientFuel = True"
-
-fun sound_term_result :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> InterpError + CoreValue \<Rightarrow> bool" where
-  "sound_term_result env ty (Inl err) = sound_error_result err"
-| "sound_term_result env ty (Inr val) = value_has_type env val ty"
-
-fun sound_term_results :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> InterpError + CoreValue list \<Rightarrow> bool" where
-  "sound_term_results env types (Inl err) = sound_error_result err"
-| "sound_term_results env types (Inr vals) = list_all2 (value_has_type env) vals types"
-
-(* A writable lvalue is sound if its address is in the store and its path
-   statically descends to the expected type through the store typing.
-   This implies: if get_value_at_path succeeds, the obtained value has type ty
-   (by get_value_at_path_type); if it fails, the error is RuntimeError
-   (by get_value_at_path_error_is_runtime). Callers that need either fact
-   should derive it from store_well_typed. *)
-fun sound_lvalue_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> CoreType
-    \<Rightarrow> InterpError + (nat \<times> LValuePath list) \<Rightarrow> bool" where
-  "sound_lvalue_result state env storeTyping ty (Inl err) = sound_error_result err"
-| "sound_lvalue_result state env storeTyping ty (Inr (addr, path)) =
-    (addr < length (IS_Store state) \<and>
-     type_at_path env (storeTyping ! addr) path = Some ty)"
-
-(* The second store typing extends the first: every address present in the
-   first typing retains the same type in the second, and the second may have
-   additional entries appended. This captures the fact that executing a single
-   statement only ever grows the store (or leaves it the same length) — while
-   a While/Match body may internally call restore_scope, that only truncates
-   slots the statement itself allocated, so the net effect still extends the
-   old store typing rather than removing any pre-existing entries. *)
-definition storeTyping_extends :: "CoreType list \<Rightarrow> CoreType list \<Rightarrow> bool" where
-  "storeTyping_extends st1 st2 \<equiv> \<exists>suffix. st2 = st1 @ suffix"
-
-lemma storeTyping_extends_refl: "storeTyping_extends st st"
-  unfolding storeTyping_extends_def by (rule exI[of _ "[]"]) simp
-
-lemma storeTyping_extends_trans:
-  "storeTyping_extends st1 st2 \<Longrightarrow> storeTyping_extends st2 st3 \<Longrightarrow> storeTyping_extends st1 st3"
-  unfolding storeTyping_extends_def by auto
-
-lemma storeTyping_extends_append: "storeTyping_extends st (st @ suffix)"
-  unfolding storeTyping_extends_def by blast
-
-fun sound_function_call_result :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> CoreType \<Rightarrow>
-    InterpError + ('w InterpState \<times> CoreValue) \<Rightarrow> bool" where
-  "sound_function_call_result env storeTyping retTy (Inl err) = sound_error_result err"
-| "sound_function_call_result env storeTyping retTy (Inr (newState, retVal)) =
-    ((\<exists>storeTyping'. state_matches_env newState env storeTyping'
-                   \<and> storeTyping_extends storeTyping storeTyping')
-     \<and> value_has_type env retVal retTy)"
-
-fun sound_statement_result :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list
-    \<Rightarrow> InterpError + 'w ExecResult \<Rightarrow> bool" where
-  "sound_statement_result env env' storeTyping (Inl err) = sound_error_result err"
-| "sound_statement_result env env' storeTyping (Inr (Continue state')) =
-    (\<exists>storeTyping'. state_matches_env state' env' storeTyping'
-                  \<and> storeTyping_extends storeTyping storeTyping')"
-| "sound_statement_result env env' storeTyping (Inr (Return state' retVal)) =
-    (value_has_type env retVal (TE_ReturnType env) \<and>
-     (\<exists>env_mid storeTyping'. tyenv_fixed_eq env env_mid \<and> tyenv_fixed_eq env_mid env' \<and>
-                state_matches_env state' env_mid storeTyping'
-              \<and> storeTyping_extends storeTyping storeTyping'))"
-
 
 (*-----------------------------------------------------------------------------*)
 (* Helper lemmas for type soundness *)
@@ -1570,7 +1491,10 @@ theorem type_soundness:
              None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
          argTms (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo));
-       retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)
+       retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo);
+       length tyArgs = length (FI_TyArgs funInfo);
+       list_all (is_well_kinded env) tyArgs;
+       list_all (is_runtime_type env) tyArgs
      \<rbrakk> \<Longrightarrow> sound_function_call_result env storeTyping retTy (interp_function_call fuel state fnName argTms)"
 using assms
 proof (induction fuel arbitrary: state env storeTyping tm ty tms types fnName argTms stmt env' stmts funInfo tyArgs retTy)
@@ -1844,13 +1768,18 @@ next
                   argTms' (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
                                (FI_TmArgs funInfo')) \<Longrightarrow>
                 retTy' = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) (FI_ReturnType funInfo') \<Longrightarrow>
+                length tyArgs' = length (FI_TyArgs funInfo') \<Longrightarrow>
+                list_all (is_well_kinded env') tyArgs' \<Longrightarrow>
+                list_all (is_runtime_type env') tyArgs' \<Longrightarrow>
                 sound_function_call_result env' storeTyping' retTy' (interp_function_call fuel state' fnName' argTms')"
           using Suc.IH(6) by simp
         have fn_not_ghost: "FI_Ghost funInfo = NotGhost"
           using ghost_ok2 by (cases "FI_Ghost funInfo") auto
         have fc_sound: "sound_function_call_result env storeTyping ty
                           (interp_function_call fuel state fnName tmArgs)"
-          using IH_fc[OF "1.prems"(1,2) fn_lookup fn_not_ghost args_check ty_eq] by simp
+          using IH_fc[OF "1.prems"(1,2) fn_lookup fn_not_ghost args_check ty_eq
+                          len_tyargs tyargs_wk ghost_ok]
+          by simp
         \<comment> \<open>The interpreter checks is_pure_fun then calls interp_function_call\<close>
         have pure: "is_pure_fun state fnName"
         proof -
@@ -2285,6 +2214,9 @@ next
                   argTms0 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty)
                                (FI_TmArgs funInfo0)) \<Longrightarrow>
                 retTy0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) (FI_ReturnType funInfo0) \<Longrightarrow>
+                length tyArgs0 = length (FI_TyArgs funInfo0) \<Longrightarrow>
+                list_all (is_well_kinded env0) tyArgs0 \<Longrightarrow>
+                list_all (is_runtime_type env0) tyArgs0 \<Longrightarrow>
                 sound_function_call_result env0 storeTyping0 retTy0 (interp_function_call fuel state0 fnName0 argTms0)"
         using Suc.IH(6) by simp
       show "sound_statement_result env env' storeTyping (interp_statement (Suc fuel) state stmt)"
@@ -2570,7 +2502,8 @@ next
               \<comment> \<open>Apply IH_fc to get sound_function_call_result.\<close>
               have fn_not_ghost: "FI_Ghost funInfo = NotGhost"
                 using not_ghost_fn by (cases "FI_Ghost funInfo") auto
-              from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost args_check fn_ty_eq]
+              from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost args_check fn_ty_eq
+                            len_tyargs tyargs_wk tyargs_rt]
               have fc_sound: "sound_function_call_result env storeTyping lhsTy
                   (interp_function_call fuel state fnName argTms)" .
               show ?thesis
@@ -3060,7 +2993,7 @@ next
           and from the function being non-ghost. \<close>
       have fes: "funs_exist_in_state state env"
         unfolding state_matches_env_def
-        using "6.prems"(5) state_matches_env_def by auto
+        using "6.prems"(8) state_matches_env_def by auto
       obtain f where
         if_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
         fi_match: "fun_info_matches_interp_fun env funInfo f"
@@ -3075,62 +3008,399 @@ next
                    (FI_TmArgs funInfo) (IF_Args f)"
         unfolding fun_info_matches_interp_fun_def by simp
 
+      \<comment> \<open>Names from the interpreter's interp_function_call definition. We name them
+          with let so that we can refer to them in helper-lemma applications below. \<close>
+      let ?refResults = "map (interp_writable_lvalue fuel state) argTms"
+      let ?valResults = "map (interp_term fuel state) argTms"
+      let ?argTuples = "zip (IF_Args f) (zip ?refResults ?valResults)"
+      let ?clearedState = "state \<lparr> IS_Locals := fmempty,
+                                    IS_Refs := fmempty,
+                                    IS_ConstNames := {||} \<rparr>"
+
+      \<comment> \<open>Length of argTms equals number of formal parameters and number of IF_Args. \<close>
+      have len_argTms: "length argTms = length (FI_TmArgs funInfo)"
+        using "6.prems"(3) by (simp add: list_all2_lengthD)
+      have len_argTms_args: "length argTms = length (IF_Args f)"
+        using len_argTms len_args by simp
+
+      \<comment> \<open>The type substitution that specializes the callee's type arguments to the
+          caller's concrete type arguments. \<close>
+      let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+
+      \<comment> \<open>The body environment as it appears at the call site, before substitution:
+          the formal parameters, callee's own type variables, callee's return type. \<close>
+      define bodyEnv0 where "bodyEnv0 = body_env_for env funInfo"
+
+      \<comment> \<open>The body environment after substituting the callee's type arguments. This is
+          the env in which we expect the body to evaluate at this call site:
+          locals have caller-instantiated types, TE_TypeVars / TE_RuntimeTypeVars
+          drop the now-bound callee type variables and pick up the caller's, and
+          TE_ReturnType becomes apply_subst ?tySubst (FI_ReturnType funInfo) = retTy. \<close>
+      define bodyEnv where "bodyEnv = apply_subst_to_callee_env ?tySubst env bodyEnv0"
+
+      \<comment> \<open>The substituted return type equals retTy by 6.prems(4). \<close>
+      have bodyEnv_TE_ReturnType: "TE_ReturnType bodyEnv = retTy"
+        unfolding bodyEnv_def bodyEnv0_def
+        using "6.prems"(4) by (simp add: body_env_for_def)
+
       show "sound_function_call_result env storeTyping retTy
               (interp_function_call (Suc fuel) state fnName argTms)"
       proof (cases "IF_Body f")
-        case (Inl bodyStmts)
+        case Inl_body: (Inl bodyStmts)
         \<comment> \<open>Core-body case.\<close>
 
-        (* The body-welltyped premise is now available from fi_match. The clause in
-           fun_info_matches_interp_fun (StateMatchesEnv.thy) says that for an Inl body,
-           core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts
-             = Some env'
-           for some env'. Extracting it here:
+        \<comment> \<open>Body-welltyped premise from fi_match. We get a witness env' for the result
+            of typechecking; we don't actually care what it is. \<close>
+        have body_typed_unsubst_ex:
+          "\<exists>env'. core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts
+                    = Some env'"
+          using fi_match Inl_body
+          unfolding fun_info_matches_interp_fun_def
+          by (auto split: sum.splits)
+        then obtain bodyEnv' where
+          body_typed_unsubst: "core_statement_list_type (body_env_for env funInfo)
+                                 NotGhost bodyStmts = Some bodyEnv'"
+          by blast
 
-             obtain bodyEnv' where
-               body_typed: "core_statement_list_type (body_env_for env funInfo)
-                              NotGhost bodyStmts = Some bodyEnv'"
-               using fi_match Inl
-               unfolding fun_info_matches_interp_fun_def
-               by (auto split: sum.splits)
+        \<comment> \<open>Establish the preconditions of core_statement_list_type_subst_callee_env. \<close>
+        have wf_bodyEnv0: "tyenv_well_formed bodyEnv0"
+          unfolding bodyEnv0_def
+          using body_env_for_well_formed[OF "6.prems"(9) "6.prems"(1) "6.prems"(2)] .
 
-           body_env_for installs the formal parameters as locals (with the types
-           from FI_TmArgs), pins TE_TypeVars / TE_RuntimeTypeVars to FI_TyArgs, sets
-           TE_ReturnType to FI_ReturnType, marks Var params const and Ref params
-           non-const, and inherits the global-ish fields (TE_GlobalVars, TE_Functions,
-           TE_Datatypes, etc.) from the current env. So no weakening lemma is needed
-           on those fields.
+        \<comment> \<open>FI_TyArgs are distinct (from tyenv_fun_tyvars_distinct). Combined with
+            len_tyargs from "6.prems"(5), this lets us compute the substitution's range. \<close>
+        have distinct_tyArgs: "distinct (FI_TyArgs funInfo)"
+          using "6.prems"(9) "6.prems"(1)
+          unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def
+          by blast
 
-           We do still need a *type substitution* lemma: bodyStmts typecheck in
-           body_env_for env funInfo where TE_TypeVars = FI_TyArgs (the callee's own
-           type vars, fresh metas as far as the caller is concerned). To use this at
-           the call site we have to apply a simultaneous substitution mapping
-           FI_TyArgs to the concrete type arguments tyArgs, propagated through
-           TE_LocalVars and TE_ReturnType, and show the body still typechecks in the
-           substituted env. This was begun in CoreTypeSubst.thy and is the bulk of
-           the remaining work for this case.
+        have subst_range_eq: "fmran' ?tySubst = set tyArgs"
+          using fmran'_fmap_of_list_zip[OF "6.prems"(5)[symmetric] distinct_tyArgs] .
 
-           Other pieces still needed:
-           - fold process_one_arg soundness (binding actual args into the callee
-             state, including allocating storeTyping entries)
-           - constructing state_matches_env for the cleared callee state + the
-             substituted body env
-           - applying the IH (interp_statement_list_sound) to the body
-           - restore_scope after the call returns
+        have subst_range_wk: "\<forall>ty' \<in> fmran' ?tySubst. is_well_kinded env ty'"
+          using subst_range_eq "6.prems"(6) by (auto simp: list_all_iff)
 
-           The loader-level proof obligation that establishes the body-welltyped
-           clause for every function in IS_Functions is deferred (it's essentially
-           "the typechecker emitted a certification for each function body, in the
-           final type env"). Not needed at this proof site.
-        *)
-            
+        have subst_range_rt: "\<forall>ty' \<in> fmran' ?tySubst. is_runtime_type env ty'"
+          using subst_range_eq "6.prems"(7) by (auto simp: list_all_iff)
+
+        \<comment> \<open>callee_env_subst_ok ?tySubst env bodyEnv0:
+            - global-field agreement: bodyEnv0 = body_env_for env funInfo inherits these
+              fields from env, so they trivially agree.
+            - tyvar conditions: bodyEnv0's TE_TypeVars are fset_of_list (FI_TyArgs funInfo),
+              and ?tySubst's domain is exactly the same set, so every tyvar in
+              bodyEnv0 maps to a value in tyArgs (which we already know is well-kinded
+              in env). \<close>
+        have ok: "callee_env_subst_ok ?tySubst env bodyEnv0"
+          unfolding callee_env_subst_ok_def
+        proof (intro conjI)
+          show "TE_GlobalVars env = TE_GlobalVars bodyEnv0"
+            and "TE_GhostGlobals env = TE_GhostGlobals bodyEnv0"
+            and "TE_Functions env = TE_Functions bodyEnv0"
+            and "TE_Datatypes env = TE_Datatypes bodyEnv0"
+            and "TE_DataCtors env = TE_DataCtors bodyEnv0"
+            and "TE_DataCtorsByType env = TE_DataCtorsByType bodyEnv0"
+            and "TE_GhostDatatypes env = TE_GhostDatatypes bodyEnv0"
+            by (simp_all add: bodyEnv0_def body_env_for_def)
+        next
+          show "\<forall>n. n |\<in>| TE_TypeVars bodyEnv0 \<longrightarrow>
+                  (case fmlookup ?tySubst n of
+                    Some ty' \<Rightarrow> is_well_kinded env ty'
+                  | None \<Rightarrow> n |\<in>| TE_TypeVars env)"
+          proof (intro allI impI)
+            fix n assume "n |\<in>| TE_TypeVars bodyEnv0"
+            hence n_in: "n \<in> set (FI_TyArgs funInfo)"
+              by (simp add: bodyEnv0_def body_env_for_def fset_of_list.rep_eq)
+            have dom_eq: "fset (fmdom ?tySubst) = set (FI_TyArgs funInfo)"
+              using fmdom_fmap_of_list_zip[OF "6.prems"(5)[symmetric]] .
+            from n_in dom_eq have "n |\<in>| fmdom ?tySubst"
+              by simp
+            then obtain ty' where lk: "fmlookup ?tySubst n = Some ty'"
+              by (metis fmlookup_dom_iff)
+            with subst_range_wk have "is_well_kinded env ty'"
+              by (auto intro: fmran'I)
+            with lk show "case fmlookup ?tySubst n of
+                            Some ty' \<Rightarrow> is_well_kinded env ty'
+                          | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+              by simp
+          qed
+        qed
+
+        \<comment> \<open>callee_env_subst_runtime_ok holds because the substitution range is runtime
+            in env (which it always is in this case, since the call is non-ghost). \<close>
+        have ok_rt: "callee_env_subst_runtime_ok ?tySubst env bodyEnv0"
+          unfolding callee_env_subst_runtime_ok_def
+        proof (intro allI impI)
+          fix n assume "n |\<in>| TE_RuntimeTypeVars bodyEnv0"
+          hence n_in: "n \<in> set (FI_TyArgs funInfo)"
+            by (simp add: bodyEnv0_def body_env_for_def fset_of_list.rep_eq)
+          have dom_eq: "fset (fmdom ?tySubst) = set (FI_TyArgs funInfo)"
+            using fmdom_fmap_of_list_zip[OF "6.prems"(5)[symmetric]] .
+          from n_in dom_eq have "n |\<in>| fmdom ?tySubst" by simp
+          then obtain ty' where lk: "fmlookup ?tySubst n = Some ty'"
+            by (meson fmlookup_dom_iff)
+          with subst_range_rt have "is_runtime_type env ty'"
+            by (auto intro: fmran'I)
+          with lk show "case fmlookup ?tySubst n of
+                          Some ty' \<Rightarrow> is_runtime_type env ty'
+                        | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
+            by simp
+        qed
+
+        \<comment> \<open>HELPER 1: discharge body_typed via core_statement_list_type_subst_callee_env.
+            The lemma substitutes both syntax and env, so the typechecked body here
+            is the substituted body. The interpreter actually runs the unsubstituted
+            body; the erasure lemma (TODO) bridges that gap. \<close>
+        define bodyEnv'' where
+          "bodyEnv'' = apply_subst_to_callee_env ?tySubst env bodyEnv'"
+        define bodyStmts' where
+          "bodyStmts' = apply_subst_to_stmt_list ?tySubst bodyStmts"
+        have body_typed:
+          "core_statement_list_type bodyEnv NotGhost bodyStmts' = Some bodyEnv''"
+          unfolding bodyEnv_def bodyEnv''_def bodyStmts'_def
+          using core_statement_list_type_subst_callee_env
+                  [OF body_typed_unsubst[unfolded bodyEnv0_def[symmetric]]
+                      wf_bodyEnv0 ok subst_range_wk]
+                subst_range_rt ok_rt by blast
+
+        \<comment> \<open>HELPER 2 (arg processing soundness). The fold over process_one_arg either
+            errors (in which case the result is a sound error) or produces a
+            preCallState matching bodyEnv under some bodyStoreTyping that extends
+            storeTyping. Rough shape:
+
+              state_matches_env state env storeTyping
+              \<Longrightarrow> length argTms = length (FI_TmArgs funInfo)
+              \<Longrightarrow> name/var-ref agreement (var_ref_match)
+              \<Longrightarrow> args list_all2 typing ("6.prems"(3))
+              \<Longrightarrow> sound_arg_processing_result env bodyEnv storeTyping
+                    (fold process_one_arg ?argTuples (Inr ?clearedState))
+
+            where sound_arg_processing_result is something like:
+              Inl err   \<longrightarrow> sound_error_result err
+              Inr state \<longrightarrow> \<exists>bodyStoreTyping.
+                  state_matches_env state bodyEnv bodyStoreTyping
+                \<and> storeTyping_extends storeTyping bodyStoreTyping
+
+            Whether to phrase it as a custom predicate or inline it is a detail
+            we'll resolve when we write the helper. \<close>
+
+        \<comment> \<open>HELPER 3: bodyEnv well-formed via apply_subst_to_callee_env_well_formed.
+            We need is_well_kinded / is_runtime_type of the substituted return type
+            in env. The unsubstituted FI_ReturnType is well-kinded and runtime in
+            env's-with-FI_TyArgs-as-TE_TypeVars (from tyenv_fun_types_well_kinded
+            and tyenv_fun_ghost_constraint), and tyArgs are well-kinded and runtime
+            in env, so apply_subst_specializes_well_kinded / _runtime conclude. \<close>
+        have fi_ret_wk_inner:
+          "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                          (FI_ReturnType funInfo)"
+          using "6.prems"(9) "6.prems"(1)
+          unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def
+          by blast
+        have fi_ret_rt_inner:
+          "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
+                                   TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                           (FI_ReturnType funInfo)"
+          using "6.prems"(9) "6.prems"(1) "6.prems"(2)
+          unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def
+          by auto
+
+        have ret_wk: "is_well_kinded env (apply_subst ?tySubst (TE_ReturnType bodyEnv0))"
+          using apply_subst_specializes_well_kinded[OF fi_ret_wk_inner "6.prems"(6)
+                                                       "6.prems"(5)[symmetric]]
+          by (simp add: bodyEnv0_def body_env_for_def)
+
+        have ret_rt: "TE_FunctionGhost bodyEnv0 = NotGhost \<Longrightarrow>
+                       is_runtime_type env (apply_subst ?tySubst (TE_ReturnType bodyEnv0))"
+          using apply_subst_specializes_runtime[OF fi_ret_rt_inner "6.prems"(7)
+                                                    "6.prems"(5)[symmetric]]
+          by (simp add: bodyEnv0_def body_env_for_def)
+
+        have wf_bodyEnv: "tyenv_well_formed bodyEnv"
+          unfolding bodyEnv_def
+          using apply_subst_to_callee_env_well_formed[OF wf_bodyEnv0 "6.prems"(9) ok ok_rt ret_wk ret_rt] .
+
+        \<comment> \<open>HELPER 2 (arg processing soundness): invoke fold_process_one_arg_sound
+            to conclude that the arg fold is a sound arg processing result. The
+            writable-lvalue precondition (Ref params elaborate to writable lvalue
+            terms) is a proof obligation that should ultimately come from the
+            elaborator's purity check; sorry'd for now. \<close>
+        have argTms_lvalues:
+          "\<forall>i < length argTms.
+             (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+              is_writable_lvalue env (argTms ! i))"
+          sorry
+        have argTms_typed:
+          "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
+             argTms (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo))"
+          using "6.prems"(3) by (auto simp: list_all2_iff split: option.splits)
+        have arg_proc_sound:
+          "sound_arg_processing_result env funInfo ?tySubst storeTyping
+             (fold process_one_arg ?argTuples (Inr ?clearedState))"
+          using fold_process_one_arg_sound[OF "6.prems"(8,9,1,2) fi_match "6.prems"(5)
+                                              refl argTms_typed argTms_lvalues] .
 
         show ?thesis
-          sorry
+        proof (cases "fold process_one_arg ?argTuples (Inr ?clearedState)")
+          case Inl_fold: (Inl err)
+          \<comment> \<open>Arg processing errored. Helper 2 gives us sound_error_result. \<close>
+          from arg_proc_sound Inl_fold have err_sound: "sound_error_result err"
+            by (simp add: sound_arg_processing_result_def)
+          have interp_eq:
+            "interp_function_call (Suc fuel) state fnName argTms = Inl err"
+            using if_lookup len_argTms_args Inl_body Inl_fold
+            by (simp add: Let_def)
+          show ?thesis using err_sound interp_eq by simp
+        next
+          case Inr_fold: (Inr preCallState)
+          \<comment> \<open>Arg processing succeeded. Helper 2 gives us a store typing for
+              the cleared+populated state that matches bodyEnv. \<close>
+          from arg_proc_sound Inr_fold have arg_proc_ok:
+            "\<exists>bodyStoreTyping.
+              state_matches_env preCallState bodyEnv bodyStoreTyping
+            \<and> storeTyping_extends storeTyping bodyStoreTyping"
+            unfolding sound_arg_processing_result_def bodyEnv_def bodyEnv0_def by simp
+          then obtain bodyStoreTyping where
+            sme_pre: "state_matches_env preCallState bodyEnv bodyStoreTyping" and
+            ext_pre: "storeTyping_extends storeTyping bodyStoreTyping"
+            by blast
+
+          \<comment> \<open>Apply the statement-list IH to the body. \<close>
+          have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 stmts0 env0'.
+                state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                tyenv_well_formed env0 \<Longrightarrow>
+                core_statement_list_type env0 NotGhost stmts0 = Some env0' \<Longrightarrow>
+                sound_statement_result env0 env0' storeTyping0
+                  (interp_statement_list fuel state0 stmts0)"
+            using Suc.IH(5) by simp
+          from IH_stmts[OF sme_pre wf_bodyEnv body_typed]
+          have body_sound_subst:
+            "sound_statement_result bodyEnv bodyEnv'' bodyStoreTyping
+               (interp_statement_list fuel preCallState bodyStmts')" .
+
+          \<comment> \<open>ERASURE (TODO): the interpreter's result on the substituted body equals
+              its result on the original body, because the syntactic substitution
+              only affects types embedded in the syntax which the interpreter
+              ignores at runtime. This is "Lemma 2" of the original soundness
+              plan; to be reintroduced from InterpTypeErasure.thy. \<close>
+          have erase_eq:
+            "interp_statement_list fuel preCallState bodyStmts'
+               = interp_statement_list fuel preCallState bodyStmts"
+            sorry
+          have body_sound: "sound_statement_result bodyEnv bodyEnv'' bodyStoreTyping
+                              (interp_statement_list fuel preCallState bodyStmts)"
+            using body_sound_subst erase_eq by simp
+
+          show ?thesis
+          proof (cases "interp_statement_list fuel preCallState bodyStmts")
+            case Inl_body_res: (Inl err)
+            \<comment> \<open>Body errored. body_sound gives sound_error_result. \<close>
+            with body_sound have err_sound: "sound_error_result err" by simp
+            have interp_eq:
+              "interp_function_call (Suc fuel) state fnName argTms = Inl err"
+              using if_lookup len_argTms_args Inl_body Inr_fold Inl_body_res
+              by (simp add: Let_def)
+            show ?thesis using err_sound interp_eq by simp
+          next
+            case Inr_body_res: (Inr res)
+            then show ?thesis proof (cases res)
+              case (Continue postState)
+              \<comment> \<open>Body fell off the end without returning. The interpreter then
+                  produces RuntimeError, which is a sound error. \<close>
+              have interp_eq:
+                "interp_function_call (Suc fuel) state fnName argTms = Inl RuntimeError"
+                using if_lookup len_argTms_args Inl_body Inr_fold Inr_body_res Continue
+                by (simp add: Let_def)
+              show ?thesis using interp_eq by simp
+            next
+              case (Return postCallState retVal)
+              \<comment> \<open>Body returned. Extract the return-case fields. \<close>
+              from body_sound Inr_body_res Return
+              have body_sound_ret:
+                "sound_statement_result bodyEnv bodyEnv'' bodyStoreTyping
+                   (Inr (Return postCallState retVal))"
+                by simp
+              from body_sound_ret obtain env_mid postStoreTyping where
+                vht_mid: "value_has_type env_mid retVal (TE_ReturnType env_mid)" and
+                fxeq1: "tyenv_fixed_eq bodyEnv env_mid" and
+                fxeq2: "tyenv_fixed_eq env_mid bodyEnv''" and
+                sme_post: "state_matches_env postCallState env_mid postStoreTyping" and
+                ext_post: "storeTyping_extends bodyStoreTyping postStoreTyping"
+              by (metis (no_types, lifting) sound_statement_result.simps(3) tyenv_fixed_eq_def
+                  value_has_type_cong_env)
+
+              \<comment> \<open>Transfer value_has_type from env_mid to bodyEnv via the fixed-eq, and
+                  observe TE_ReturnType bodyEnv = retTy. \<close>
+              have vht_retTy_bodyEnv: "value_has_type bodyEnv retVal retTy"
+              proof -
+                from fxeq1 have ret_eq: "TE_ReturnType env_mid = TE_ReturnType bodyEnv"
+                  unfolding tyenv_fixed_eq_def by simp
+                from fxeq1 have field_eq:
+                  "TE_DataCtors env_mid = TE_DataCtors bodyEnv"
+                  "TE_Datatypes env_mid = TE_Datatypes bodyEnv"
+                  "TE_TypeVars env_mid = TE_TypeVars bodyEnv"
+                  "TE_GhostDatatypes env_mid = TE_GhostDatatypes bodyEnv"
+                  "TE_RuntimeTypeVars env_mid = TE_RuntimeTypeVars bodyEnv"
+                  unfolding tyenv_fixed_eq_def by simp_all
+                from vht_mid ret_eq bodyEnv_TE_ReturnType
+                have "value_has_type env_mid retVal retTy" by simp
+                thus ?thesis using field_eq value_has_type_cong_env by metis
+              qed
+
+              \<comment> \<open>Transfer value_has_type from bodyEnv to env. The value_has_type
+                  predicate depends only on TE_DataCtors, TE_Datatypes, TE_TypeVars,
+                  TE_GhostDatatypes, TE_RuntimeTypeVars; bodyEnv inherits the first
+                  four from env (via body_env_for) and we explicitly set TE_TypeVars /
+                  TE_RuntimeTypeVars := those of env in the substituted env. \<close>
+              have vht_retTy_env: "value_has_type env retVal retTy"
+              proof -
+                have field_eq:
+                  "TE_DataCtors bodyEnv = TE_DataCtors env"
+                  "TE_Datatypes bodyEnv = TE_Datatypes env"
+                  "TE_TypeVars bodyEnv = TE_TypeVars env"
+                  "TE_GhostDatatypes bodyEnv = TE_GhostDatatypes env"
+                  "TE_RuntimeTypeVars bodyEnv = TE_RuntimeTypeVars env"
+                  by (simp_all add: bodyEnv_def bodyEnv0_def body_env_for_def
+                                    apply_subst_to_callee_env_def)
+                from vht_retTy_bodyEnv field_eq show ?thesis
+                  using value_has_type_cong_env by metis
+              qed
+
+              \<comment> \<open>HELPER 4 (restore_scope soundness). Restoring the outer scope on
+                  postCallState produces a state matching env under some store typing
+                  that extends storeTyping. Needs:
+                  - state_matches_env state env storeTyping (the original outer state)
+                  - state_matches_env postCallState env_mid postStoreTyping
+                  - storeTyping_extends storeTyping bodyStoreTyping
+                  - storeTyping_extends bodyStoreTyping postStoreTyping
+                  - postCallState's locals/refs may have grown but the underlying
+                    store entries for old addresses are preserved. \<close>
+              have restore_ok:
+                "\<exists>finalStoreTyping.
+                  state_matches_env (restore_scope state postCallState) env finalStoreTyping
+                \<and> storeTyping_extends storeTyping finalStoreTyping"
+                sorry
+              then obtain finalStoreTyping where
+                sme_final: "state_matches_env (restore_scope state postCallState)
+                              env finalStoreTyping" and
+                ext_final: "storeTyping_extends storeTyping finalStoreTyping"
+                by blast
+
+              \<comment> \<open>Plumb the final state and the return value through interp_function_call's
+                  case structure. \<close>
+              have interp_eq:
+                "interp_function_call (Suc fuel) state fnName argTms
+                   = Inr (restore_scope state postCallState, retVal)"
+                using if_lookup len_argTms_args Inl_body Inr_fold Inr_body_res Return
+                by (simp add: Let_def)
+              show ?thesis
+                using interp_eq sme_final ext_final vht_retTy_env by auto
+            qed
+          qed
+        qed
 
       next
         case (Inr externFun)
-        \<comment> \<open>Extern-function case. Deferred for now.\<close>
+        \<comment> \<open>Extern-function case. Deferred — depends on extern_fun_contract being
+            given a real definition. \<close>
         show ?thesis
           sorry
       qed

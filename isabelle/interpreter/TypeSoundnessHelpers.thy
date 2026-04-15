@@ -1,6 +1,89 @@
 theory TypeSoundnessHelpers
-  imports StateMatchesEnv "../core/CoreStmtTypecheck"
+  imports StateMatchesEnv "../core/CoreStmtTypecheck" "../core/CoreTypeSubst"
 begin
+
+(*-----------------------------------------------------------------------------*)
+(* Definitions for type-soundness of interpreter results *)
+(*-----------------------------------------------------------------------------*)
+
+(* Type soundness for terms means that evaluating a well-typed term will either:
+    - Succeed with a value of the correct type
+    - Fail with RuntimeError
+    - Fail with InsufficientFuel
+   It will not:
+    - Succeed with a value of the wrong type
+    - Fail with TypeError *)
+
+fun sound_error_result :: "InterpError \<Rightarrow> bool" where
+  "sound_error_result TypeError = False"
+| "sound_error_result RuntimeError = True"
+| "sound_error_result InsufficientFuel = True"
+
+fun sound_term_result :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> InterpError + CoreValue \<Rightarrow> bool" where
+  "sound_term_result env ty (Inl err) = sound_error_result err"
+| "sound_term_result env ty (Inr val) = value_has_type env val ty"
+
+fun sound_term_results :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> InterpError + CoreValue list \<Rightarrow> bool" where
+  "sound_term_results env types (Inl err) = sound_error_result err"
+| "sound_term_results env types (Inr vals) = list_all2 (value_has_type env) vals types"
+
+(* A writable lvalue is sound if its address is in the store and its path
+   statically descends to the expected type through the store typing.
+   This implies: if get_value_at_path succeeds, the obtained value has type ty
+   (by get_value_at_path_type); if it fails, the error is RuntimeError
+   (by get_value_at_path_error_is_runtime). Callers that need either fact
+   should derive it from store_well_typed. *)
+fun sound_lvalue_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> CoreType
+    \<Rightarrow> InterpError + (nat \<times> LValuePath list) \<Rightarrow> bool" where
+  "sound_lvalue_result state env storeTyping ty (Inl err) = sound_error_result err"
+| "sound_lvalue_result state env storeTyping ty (Inr (addr, path)) =
+    (addr < length (IS_Store state) \<and>
+     type_at_path env (storeTyping ! addr) path = Some ty)"
+
+(* The second store typing extends the first: every address present in the
+   first typing retains the same type in the second, and the second may have
+   additional entries appended. This captures the fact that executing a single
+   statement only ever grows the store (or leaves it the same length) — while
+   a While/Match body may internally call restore_scope, that only truncates
+   slots the statement itself allocated, so the net effect still extends the
+   old store typing rather than removing any pre-existing entries. *)
+definition storeTyping_extends :: "CoreType list \<Rightarrow> CoreType list \<Rightarrow> bool" where
+  "storeTyping_extends st1 st2 \<equiv> \<exists>suffix. st2 = st1 @ suffix"
+
+lemma storeTyping_extends_refl: "storeTyping_extends st st"
+  unfolding storeTyping_extends_def by (rule exI[of _ "[]"]) simp
+
+lemma storeTyping_extends_trans:
+  "storeTyping_extends st1 st2 \<Longrightarrow> storeTyping_extends st2 st3 \<Longrightarrow> storeTyping_extends st1 st3"
+  unfolding storeTyping_extends_def by auto
+
+lemma storeTyping_extends_append: "storeTyping_extends st (st @ suffix)"
+  unfolding storeTyping_extends_def by blast
+
+fun sound_function_call_result :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> CoreType \<Rightarrow>
+    InterpError + ('w InterpState \<times> CoreValue) \<Rightarrow> bool" where
+  "sound_function_call_result env storeTyping retTy (Inl err) = sound_error_result err"
+| "sound_function_call_result env storeTyping retTy (Inr (newState, retVal)) =
+    ((\<exists>storeTyping'. state_matches_env newState env storeTyping'
+                   \<and> storeTyping_extends storeTyping storeTyping')
+     \<and> value_has_type env retVal retTy)"
+
+fun sound_statement_result :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list
+    \<Rightarrow> InterpError + 'w ExecResult \<Rightarrow> bool" where
+  "sound_statement_result env env' storeTyping (Inl err) = sound_error_result err"
+| "sound_statement_result env env' storeTyping (Inr (Continue state')) =
+    (\<exists>storeTyping'. state_matches_env state' env' storeTyping'
+                  \<and> storeTyping_extends storeTyping storeTyping')"
+| "sound_statement_result env env' storeTyping (Inr (Return state' retVal)) =
+    (value_has_type env retVal (TE_ReturnType env) \<and>
+     (\<exists>env_mid storeTyping'. tyenv_fixed_eq env env_mid \<and> tyenv_fixed_eq env_mid env' \<and>
+                state_matches_env state' env_mid storeTyping'
+              \<and> storeTyping_extends storeTyping storeTyping'))"
+
+
+(*-----------------------------------------------------------------------------*)
+(* Helpers for interpreter soundness lemmas *)
+(*-----------------------------------------------------------------------------*)
 
 (* Property of int_complement *)
 lemma int_complement_fits:
@@ -352,6 +435,230 @@ proof -
   qed
 
   ultimately show ?thesis unfolding state_matches_env_def by auto
+qed
+
+(* Add a ref binding: state matches env with an additional IS_Refs entry pointing
+   to an existing store slot. The store is unchanged, so storeTyping is unchanged
+   as well. The new env has the ref's name bound in TE_LocalVars (to the type
+   reached by the path) and removed from TE_GhostLocals.
+
+   Unlike Var, a Ref binding does not make the name const — it is writable through
+   the reference. TE_ConstNames is therefore unchanged. *)
+lemma state_matches_env_add_ref:
+  assumes state_env: "state_matches_env state env storeTyping"
+    and addr_valid: "addr < length (IS_Store state)"
+    and path_ty: "type_at_path env (storeTyping ! addr) path = Some refTy"
+    and state'_eq: "state' = state \<lparr> IS_Refs := fmupd var (addr, path) (IS_Refs state) \<rparr>"
+    and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var refTy (TE_LocalVars env),
+                                TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
+                                TE_ConstNames := TE_ConstNames env \<rparr>"
+    and var_fresh: "fmlookup (TE_LocalVars env) var = None"
+    and var_not_ghost: "var |\<notin>| TE_GhostLocals env"
+  shows "state_matches_env state' env' storeTyping"
+proof -
+  have store_eq: "IS_Store state' = IS_Store state"
+    using state'_eq by simp
+  have locals_eq: "IS_Locals state' = IS_Locals state"
+    using state'_eq by simp
+  have refs_eq: "IS_Refs state' = fmupd var (addr, path) (IS_Refs state)"
+    using state'_eq by simp
+  have globals_eq: "IS_Globals state' = IS_Globals state"
+    using state'_eq by simp
+  have funs_eq: "IS_Functions state' = IS_Functions state"
+    using state'_eq by simp
+  have consts_eq: "IS_ConstNames state' = IS_ConstNames state"
+    using state'_eq by simp
+
+  have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
+                    "TE_Datatypes env' = TE_Datatypes env"
+                    "TE_TypeVars env' = TE_TypeVars env"
+                    "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+                    "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
+    using env'_eq by simp_all
+  have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
+    using value_has_type_cong_env[OF env'_fields] .
+  have tap_eq: "\<And>t p. type_at_path env t p = type_at_path env' t p"
+    using type_at_path_cong_env[OF env'_fields(1)] .
+
+  from state_env have
+    lv_src: "local_vars_exist_in_state state env storeTyping" and
+    gv_src: "global_vars_exist_in_state state env" and
+    no_lv_src: "no_extra_local_vars state env" and
+    no_gv_src: "no_extra_global_vars state env" and
+    fes_src: "funs_exist_in_state state env" and
+    no_fun_src: "no_extra_funs state env" and
+    nc_src: "non_consts_in_locals_or_refs state env" and
+    cn_src: "const_names_match state env" and
+    swt_src: "store_well_typed state env storeTyping"
+    unfolding state_matches_env_def by blast+
+
+  \<comment> \<open>1. local_vars_exist_in_state. \<close>
+  have lv_tgt: "local_vars_exist_in_state state' env' storeTyping"
+    unfolding local_vars_exist_in_state_def
+  proof (intro allI impI, elim conjE)
+    fix name ty
+    assume lookup: "fmlookup (TE_LocalVars env') name = Some ty"
+      and not_ghost: "name |\<notin>| TE_GhostLocals env'"
+    show "local_var_in_state_with_type state' env' storeTyping name ty"
+    proof (cases "name = var")
+      case True
+      from lookup env'_eq True have ty_eq: "ty = refTy" by simp
+      \<comment> \<open>var was not previously a local, so no_extra_local_vars gives us that
+          neither IS_Locals nor IS_Refs had an entry for var. In state', we added
+          (addr, path) to IS_Refs, so IS_Locals state' var = None still. \<close>
+      from var_fresh var_not_ghost no_lv_src have
+        lk_none_locals: "fmlookup (IS_Locals state) var = None" and
+        lk_none_refs: "fmlookup (IS_Refs state) var = None"
+        unfolding no_extra_local_vars_def by blast+
+      have lk_state'_locals: "fmlookup (IS_Locals state') var = None"
+        using lk_none_locals locals_eq by simp
+      have lk_state'_refs: "fmlookup (IS_Refs state') var = Some (addr, path)"
+        using refs_eq by simp
+      have addr_valid': "addr < length (IS_Store state')"
+        using addr_valid store_eq by simp
+      have path_ty': "type_at_path env' (storeTyping ! addr) path = Some refTy"
+        using path_ty tap_eq by simp
+      show ?thesis
+        using True ty_eq lk_state'_locals lk_state'_refs addr_valid' path_ty'
+        unfolding local_var_in_state_with_type_def by simp
+    next
+      case False
+      from lookup env'_eq False have "fmlookup (TE_LocalVars env) name = Some ty" by simp
+      moreover from not_ghost env'_eq False have "name |\<notin>| TE_GhostLocals env" by auto
+      ultimately have old:
+        "local_var_in_state_with_type state env storeTyping name ty"
+        using lv_src unfolding local_vars_exist_in_state_def by blast
+      from False locals_eq refs_eq have
+        lk_locals: "fmlookup (IS_Locals state') name = fmlookup (IS_Locals state) name" and
+        lk_refs: "fmlookup (IS_Refs state') name = fmlookup (IS_Refs state) name"
+        by simp_all
+      show ?thesis
+        using old lk_locals lk_refs store_eq tap_eq
+        unfolding local_var_in_state_with_type_def
+        by (auto split: option.splits)
+    qed
+  qed
+
+  \<comment> \<open>2. global_vars_exist_in_state. \<close>
+  have gv_tgt: "global_vars_exist_in_state state' env'"
+    unfolding global_vars_exist_in_state_def
+  proof (intro allI impI, elim conjE)
+    fix name ty
+    assume "fmlookup (TE_GlobalVars env') name = Some ty"
+       and "name |\<notin>| TE_GhostGlobals env'"
+    hence "fmlookup (TE_GlobalVars env) name = Some ty"
+      and "name |\<notin>| TE_GhostGlobals env"
+      by (simp_all add: env'_eq)
+    with gv_src have "global_var_in_state_with_type state env name ty"
+      unfolding global_vars_exist_in_state_def by blast
+    thus "global_var_in_state_with_type state' env' name ty"
+      using globals_eq vht_eq
+      unfolding global_var_in_state_with_type_def
+      by (auto split: option.splits)
+  qed
+
+  \<comment> \<open>3. no_extra_local_vars. \<close>
+  have no_lv_tgt: "no_extra_local_vars state' env'"
+    unfolding no_extra_local_vars_def
+  proof (intro allI impI)
+    fix name
+    assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostLocals env'"
+    show "fmlookup (IS_Locals state') name = None \<and>
+          fmlookup (IS_Refs state') name = None"
+    proof (cases "name = var")
+      case True
+      with env'_eq have "fmlookup (TE_LocalVars env') name = Some refTy" by simp
+      with ante True env'_eq have "var |\<in>| TE_GhostLocals env'" by simp
+      hence False using env'_eq by simp
+      thus ?thesis ..
+    next
+      case False
+      with env'_eq have tv_eq: "fmlookup (TE_LocalVars env') name = fmlookup (TE_LocalVars env) name"
+        by simp
+      with env'_eq False have gv_iff: "name |\<in>| TE_GhostLocals env' \<longleftrightarrow> name |\<in>| TE_GhostLocals env"
+        by auto
+      from ante tv_eq gv_iff
+      have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostLocals env" by simp
+      with no_lv_src have
+        "fmlookup (IS_Locals state) name = None \<and> fmlookup (IS_Refs state) name = None"
+        unfolding no_extra_local_vars_def by blast
+      thus ?thesis using False locals_eq refs_eq by simp
+    qed
+  qed
+
+  \<comment> \<open>4. no_extra_global_vars. \<close>
+  have no_gv_tgt: "no_extra_global_vars state' env'"
+    using no_gv_src env'_eq globals_eq
+    unfolding no_extra_global_vars_def by simp
+
+  \<comment> \<open>5. funs_exist_in_state. \<close>
+  have fes_tgt: "funs_exist_in_state state' env'"
+  proof -
+    have fi_cong: "\<And>info ifn. fun_info_matches_interp_fun env' info ifn
+                             = fun_info_matches_interp_fun env info ifn"
+      by (rule fun_info_matches_interp_fun_cong_env) (use env'_eq in simp_all)
+    show ?thesis
+      unfolding funs_exist_in_state_def
+    proof (intro allI impI, elim conjE)
+      fix name info
+      assume lookup: "fmlookup (TE_Functions env') name = Some info"
+         and nghost: "FI_Ghost info = NotGhost"
+      from lookup env'_eq have "fmlookup (TE_Functions env) name = Some info" by simp
+      with nghost fes_src have
+        "case fmlookup (IS_Functions state) name of None \<Rightarrow> False
+         | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun"
+        unfolding funs_exist_in_state_def by blast
+      thus "case fmlookup (IS_Functions state') name of None \<Rightarrow> False
+            | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env' info interpFun"
+        using funs_eq fi_cong by (auto split: option.splits)
+    qed
+  qed
+
+  \<comment> \<open>6. no_extra_funs. \<close>
+  have no_fun_tgt: "no_extra_funs state' env'"
+    using no_fun_src env'_eq funs_eq
+    unfolding no_extra_funs_def by simp
+
+  \<comment> \<open>7. non_consts_in_locals_or_refs. \<close>
+  have nc_tgt: "non_consts_in_locals_or_refs state' env'"
+    unfolding non_consts_in_locals_or_refs_def
+  proof (intro allI impI, elim conjE)
+    fix name
+    assume tv: "fmlookup (TE_LocalVars env') name \<noteq> None"
+       and ng: "name |\<notin>| TE_GhostLocals env'"
+       and nc: "name |\<notin>| TE_ConstNames env'"
+    show "fmlookup (IS_Locals state') name \<noteq> None \<or>
+          fmlookup (IS_Refs state') name \<noteq> None"
+    proof (cases "name = var")
+      case True
+      with refs_eq show ?thesis by simp
+    next
+      case False
+      with env'_eq have tv2: "fmlookup (TE_LocalVars env) name \<noteq> None"
+        using tv by simp
+      from False env'_eq ng have ng2: "name |\<notin>| TE_GhostLocals env" by auto
+      from env'_eq nc have nc2: "name |\<notin>| TE_ConstNames env" by simp
+      from tv2 ng2 nc2 nc_src have
+        "fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None"
+        unfolding non_consts_in_locals_or_refs_def by blast
+      thus ?thesis using False locals_eq refs_eq by simp
+    qed
+  qed
+
+  \<comment> \<open>8. const_names_match. \<close>
+  have cn_tgt: "const_names_match state' env'"
+    using cn_src env'_eq consts_eq
+    unfolding const_names_match_def by simp
+
+  \<comment> \<open>9. store_well_typed. \<close>
+  have swt_tgt: "store_well_typed state' env' storeTyping"
+    using swt_src store_eq vht_eq
+    unfolding store_well_typed_def by simp
+
+  show ?thesis
+    unfolding state_matches_env_def
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt
+    by blast
 qed
 
 (* Const specialization: variable is added to ConstNames (used for let-bindings) *)
@@ -1471,6 +1778,744 @@ proof -
     then show ?thesis using "2_2" sizes_eq by simp
   qed
 qed
+
+
+
+(* ========================================================================== *)
+(* HELPER 2 (arg processing soundness for function calls)                      *)
+(*                                                                             *)
+(* Used by case 6 (function call) of type_soundness. The interpreter evaluates  *)
+(* each argument's value and (for Ref params) its writable lvalue, then folds   *)
+(* process_one_arg over the results starting from a state whose locals/refs    *)
+(* have been cleared. Helper 2 says that this fold either errors soundly or    *)
+(* produces a state that matches the (substituted) body env under some store   *)
+(* typing extending the caller's.                                              *)
+(*                                                                             *)
+(* The proof is structured as:                                                 *)
+(*                                                                             *)
+(*   H2a  cleared state matches an "empty-locals" partial body env             *)
+(*                                                                             *)
+(*   H2b  single-step: given a state matching the partial body env up to the   *)
+(*        first k parameters, process_one_arg on the (k+1)-th tuple either     *)
+(*        errors soundly or produces a state matching the partial env up to    *)
+(*        k+1 parameters, with the store typing possibly extended by one slot  *)
+(*        (for Var params).                                                    *)
+(*                                                                             *)
+(*   H2c  fold: compose the single-step lemma over the full parameter list.    *)
+(*                                                                             *)
+(* partial_body_env_for env funInfo tySubst k is body_env_for env funInfo with  *)
+(* TE_LocalVars restricted to the first k FI_TmArgs (types substituted via     *)
+(* tySubst), and TE_ConstNames restricted to Var-marked names among them.      *)
+(* When k = length (FI_TmArgs funInfo), this equals                            *)
+(* apply_subst_to_callee_env tySubst env (body_env_for env funInfo).           *)
+(* ========================================================================== *)
+
+definition partial_body_env_for ::
+    "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> nat \<Rightarrow> CoreTyEnv" where
+  "partial_body_env_for env funInfo tySubst k =
+    (body_env_for env funInfo) \<lparr>
+      TE_LocalVars := fmap_of_list
+        (map (\<lambda>(name, ty, _). (name, apply_subst tySubst ty))
+             (take k (FI_TmArgs funInfo))),
+      TE_ConstNames := fset_of_list
+        (map (\<lambda>(name, _, _). name)
+             (filter (\<lambda>(_, _, vor). vor = Var) (take k (FI_TmArgs funInfo)))),
+      TE_TypeVars := TE_TypeVars env,
+      TE_RuntimeTypeVars := TE_RuntimeTypeVars env,
+      TE_ReturnType := apply_subst tySubst (FI_ReturnType funInfo)
+    \<rparr>"
+
+(* When k = 0, the partial env has no locals and no const names: a body env
+   whose locals/refs have been cleared. *)
+lemma partial_body_env_for_zero:
+  "TE_LocalVars (partial_body_env_for env funInfo tySubst 0) = fmempty"
+  "TE_ConstNames (partial_body_env_for env funInfo tySubst 0) = {||}"
+  by (simp_all add: partial_body_env_for_def)
+
+(* When k = length (FI_TmArgs funInfo), the partial env equals the fully
+   substituted body env (up to record-update ordering). This is the bridge
+   from the induction's end state to the bodyEnv used in case 6. *)
+lemma partial_body_env_for_full:
+  shows "partial_body_env_for env funInfo tySubst (length (FI_TmArgs funInfo))
+         = apply_subst_to_callee_env tySubst env (body_env_for env funInfo)"
+proof -
+  have fn_eq: "(\<lambda>x. (fst x, apply_subst tySubst (fst (snd x))))
+             = (\<lambda>(name, ty, _). (name, apply_subst tySubst ty))"
+    by (rule ext) (auto split: prod.splits)
+  have locals_eq:
+    "fmmap (apply_subst tySubst)
+           (fmap_of_list (map (\<lambda>(name, ty, _). (name, ty)) (FI_TmArgs funInfo)))
+     = fmap_of_list (map (\<lambda>(name, ty, _). (name, apply_subst tySubst ty)) (FI_TmArgs funInfo))"
+    unfolding fn_eq[symmetric]
+    by (simp add: fmmap_of_list apsnd_def map_prod_def case_prod_beta comp_def)
+  show ?thesis
+    by (simp add: partial_body_env_for_def apply_subst_to_callee_env_def
+                  body_env_for_def locals_eq)
+qed
+
+(* Shape of the sound arg-processing result: the fold either errors soundly
+   or produces a state matching the full (substituted) body env. *)
+definition sound_arg_processing_result ::
+    "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> CoreType list
+    \<Rightarrow> InterpError + 'w InterpState \<Rightarrow> bool" where
+  "sound_arg_processing_result env funInfo tySubst storeTyping result =
+    (case result of
+      Inl err \<Rightarrow> sound_error_result err
+    | Inr preCallState \<Rightarrow>
+        \<exists>bodyStoreTyping.
+          state_matches_env preCallState
+            (apply_subst_to_callee_env tySubst env (body_env_for env funInfo))
+            bodyStoreTyping
+        \<and> storeTyping_extends storeTyping bodyStoreTyping)"
+
+(* Partial variant: after k steps, the state matches the partial body env with
+   some store typing extending the original. *)
+definition sound_partial_arg_processing_result ::
+    "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> nat \<Rightarrow> CoreType list
+    \<Rightarrow> InterpError + 'w InterpState \<Rightarrow> bool" where
+  "sound_partial_arg_processing_result env funInfo tySubst k storeTyping result =
+    (case result of
+      Inl err \<Rightarrow> sound_error_result err
+    | Inr state \<Rightarrow>
+        \<exists>partialStoreTyping.
+          state_matches_env state
+            (partial_body_env_for env funInfo tySubst k)
+            partialStoreTyping
+        \<and> storeTyping_extends storeTyping partialStoreTyping)"
+
+(* -------------------------------------------------------------------------- *)
+(* H2a. The cleared state matches the k=0 partial body env under the caller's *)
+(* store typing (no new slots needed).                                        *)
+(* -------------------------------------------------------------------------- *)
+lemma cleared_state_matches_partial_env_zero:
+  assumes sme: "state_matches_env state env storeTyping"
+      and wf: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and not_ghost: "FI_Ghost funInfo = NotGhost"
+  shows "state_matches_env
+           (state \<lparr> IS_Locals := fmempty,
+                    IS_Refs := fmempty,
+                    IS_ConstNames := {||} \<rparr>)
+           (partial_body_env_for env funInfo tySubst 0)
+           storeTyping"
+proof -
+  let ?clearedState = "state \<lparr> IS_Locals := fmempty,
+                                IS_Refs := fmempty,
+                                IS_ConstNames := {||} \<rparr>"
+  let ?pEnv = "partial_body_env_for env funInfo tySubst 0"
+
+  \<comment> \<open>Field equations for ?pEnv at k=0. \<close>
+  have pEnv_locals: "TE_LocalVars ?pEnv = fmempty"
+    by (simp add: partial_body_env_for_def)
+  have pEnv_const: "TE_ConstNames ?pEnv = {||}"
+    by (simp add: partial_body_env_for_def)
+  have pEnv_ghost_locals: "TE_GhostLocals ?pEnv = {||}"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_globals: "TE_GlobalVars ?pEnv = TE_GlobalVars env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_ghost_globals: "TE_GhostGlobals ?pEnv = TE_GhostGlobals env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_funs: "TE_Functions ?pEnv = TE_Functions env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_datatypes: "TE_Datatypes ?pEnv = TE_Datatypes env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_dactors: "TE_DataCtors ?pEnv = TE_DataCtors env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_dactors_by_ty: "TE_DataCtorsByType ?pEnv = TE_DataCtorsByType env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_ghost_dt: "TE_GhostDatatypes ?pEnv = TE_GhostDatatypes env"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have pEnv_tyvars: "TE_TypeVars ?pEnv = TE_TypeVars env"
+    by (simp add: partial_body_env_for_def)
+  have pEnv_rt_tyvars: "TE_RuntimeTypeVars ?pEnv = TE_RuntimeTypeVars env"
+    by (simp add: partial_body_env_for_def)
+
+  \<comment> \<open>Extract conjuncts from the source state_matches_env. \<close>
+  from sme have
+    lv_src: "local_vars_exist_in_state state env storeTyping" and
+    gv_src: "global_vars_exist_in_state state env" and
+    no_lv_src: "no_extra_local_vars state env" and
+    no_gv_src: "no_extra_global_vars state env" and
+    fes_src: "funs_exist_in_state state env" and
+    no_fun_src: "no_extra_funs state env" and
+    nc_src: "non_consts_in_locals_or_refs state env" and
+    cn_src: "const_names_match state env" and
+    swt_src: "store_well_typed state env storeTyping"
+    unfolding state_matches_env_def by blast+
+
+  \<comment> \<open>Discharge each conjunct of state_matches_env for the cleared state and ?pEnv. \<close>
+
+  have lv_tgt: "local_vars_exist_in_state ?clearedState ?pEnv storeTyping"
+    unfolding local_vars_exist_in_state_def pEnv_locals by simp
+
+  \<comment> \<open>Need the value_has_type congruence here since global_var_in_state_with_type
+      consults value_has_type under ?pEnv. \<close>
+  have vht_cong: "\<And>v t. value_has_type ?pEnv v t = value_has_type env v t"
+    using value_has_type_cong_env
+            [OF pEnv_dactors pEnv_datatypes pEnv_tyvars pEnv_ghost_dt pEnv_rt_tyvars] .
+
+  have gv_tgt: "global_vars_exist_in_state ?clearedState ?pEnv"
+    unfolding global_vars_exist_in_state_def
+  proof (intro allI impI)
+    fix name ty
+    assume "fmlookup (TE_GlobalVars ?pEnv) name = Some ty
+             \<and> name |\<notin>| TE_GhostGlobals ?pEnv"
+    hence "fmlookup (TE_GlobalVars env) name = Some ty"
+          "name |\<notin>| TE_GhostGlobals env"
+      by (simp_all add: pEnv_globals pEnv_ghost_globals)
+    with gv_src have "global_var_in_state_with_type state env name ty"
+      unfolding global_vars_exist_in_state_def by blast
+    thus "global_var_in_state_with_type ?clearedState ?pEnv name ty"
+      unfolding global_var_in_state_with_type_def
+      by (simp add: vht_cong split: option.splits)
+  qed
+
+  have no_lv_tgt: "no_extra_local_vars ?clearedState ?pEnv"
+    unfolding no_extra_local_vars_def by simp
+
+  have no_gv_tgt: "no_extra_global_vars ?clearedState ?pEnv"
+    using no_gv_src pEnv_globals pEnv_ghost_globals
+    unfolding no_extra_global_vars_def
+    by simp
+
+  \<comment> \<open>funs_exist_in_state: TE_Functions is inherited, and fun_info_matches_interp_fun
+      only consults fields of its env that ?pEnv inherits from env. \<close>
+  have fi_cong: "\<And>info interpFun.
+          fun_info_matches_interp_fun env info interpFun
+          = fun_info_matches_interp_fun ?pEnv info interpFun"
+    using fun_info_matches_interp_fun_cong_env
+            [OF pEnv_globals[symmetric] pEnv_ghost_globals[symmetric]
+                pEnv_funs[symmetric] pEnv_datatypes[symmetric] pEnv_dactors[symmetric]
+                pEnv_dactors_by_ty[symmetric] pEnv_ghost_dt[symmetric]]
+    by auto
+  have fes_tgt: "funs_exist_in_state ?clearedState ?pEnv"
+    unfolding funs_exist_in_state_def
+  proof (intro allI impI)
+    fix name info
+    assume "fmlookup (TE_Functions ?pEnv) name = Some info \<and> FI_Ghost info = NotGhost"
+    hence lookup: "fmlookup (TE_Functions env) name = Some info"
+      and nghost: "FI_Ghost info = NotGhost"
+      by (simp_all add: pEnv_funs)
+    from fes_src lookup nghost have
+      "case fmlookup (IS_Functions state) name of None \<Rightarrow> False
+       | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun"
+      unfolding funs_exist_in_state_def by blast
+    thus "case fmlookup (IS_Functions ?clearedState) name of None \<Rightarrow> False
+          | Some interpFun \<Rightarrow> fun_info_matches_interp_fun ?pEnv info interpFun"
+      by (simp add: fi_cong split: option.splits)
+  qed
+
+  have no_fun_tgt: "no_extra_funs ?clearedState ?pEnv"
+    using no_fun_src pEnv_funs
+    unfolding no_extra_funs_def
+    by simp
+
+  have nc_tgt: "non_consts_in_locals_or_refs ?clearedState ?pEnv"
+    unfolding non_consts_in_locals_or_refs_def pEnv_locals by simp
+
+  have cn_tgt: "const_names_match ?clearedState ?pEnv"
+    unfolding const_names_match_def pEnv_const by simp
+
+  \<comment> \<open>store_well_typed: the store is unchanged; value_has_type depends on fields of
+      the env (TE_Datatypes, TE_DataCtors, ...) that ?pEnv inherits from env. \<close>
+  have swt_tgt: "store_well_typed ?clearedState ?pEnv storeTyping"
+    using swt_src vht_cong
+    unfolding store_well_typed_def by simp
+
+  show ?thesis
+    unfolding state_matches_env_def
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt
+    by blast
+qed
+
+(* -------------------------------------------------------------------------- *)
+(* H2b. One step of process_one_arg extends the partial body env by one local. *)
+(*                                                                             *)
+(* The interpretation results (lvalue + value) for argument k must be sound    *)
+(* w.r.t. the k-th parameter's expected type in the *caller's* env:            *)
+(*                                                                             *)
+(*   valResult  = interp_term fuel state argTms[k]                             *)
+(*   lvalResult = interp_writable_lvalue fuel state argTms[k]                  *)
+(*                                                                             *)
+(* where "state" is the caller's state. The expected type is                   *)
+(* apply_subst tySubst (ty of k-th FI_TmArg). By the IH of the main theorem,   *)
+(* both results are sound in the caller's env and store typing — that's the    *)
+(* form of the preconditions.                                                  *)
+(*                                                                             *)
+(* For Var params: process_one_arg allocates a new slot in the store. The      *)
+(* resulting store typing is partialStoreTyping @ [apply_subst tySubst ty].    *)
+(*                                                                             *)
+(* For Ref params: the store is unchanged; the ref entry is added to IS_Refs.  *)
+(* -------------------------------------------------------------------------- *)
+(* Field equalities for partial_body_env_for: all fields except TE_LocalVars
+   and TE_ConstNames are independent of k. *)
+lemma partial_body_env_for_fields:
+  "TE_GlobalVars (partial_body_env_for env funInfo tySubst k) = TE_GlobalVars env"
+  "TE_GhostLocals (partial_body_env_for env funInfo tySubst k) = {||}"
+  "TE_GhostGlobals (partial_body_env_for env funInfo tySubst k) = TE_GhostGlobals env"
+  "TE_Functions (partial_body_env_for env funInfo tySubst k) = TE_Functions env"
+  "TE_Datatypes (partial_body_env_for env funInfo tySubst k) = TE_Datatypes env"
+  "TE_DataCtors (partial_body_env_for env funInfo tySubst k) = TE_DataCtors env"
+  "TE_DataCtorsByType (partial_body_env_for env funInfo tySubst k) = TE_DataCtorsByType env"
+  "TE_GhostDatatypes (partial_body_env_for env funInfo tySubst k) = TE_GhostDatatypes env"
+  "TE_TypeVars (partial_body_env_for env funInfo tySubst k) = TE_TypeVars env"
+  "TE_RuntimeTypeVars (partial_body_env_for env funInfo tySubst k) = TE_RuntimeTypeVars env"
+  "TE_ReturnType (partial_body_env_for env funInfo tySubst k) = apply_subst tySubst (FI_ReturnType funInfo)"
+  "TE_FunctionGhost (partial_body_env_for env funInfo tySubst k) = NotGhost"
+  by (simp_all add: partial_body_env_for_def body_env_for_def)
+
+(* How partial_body_env_for evolves between k and Suc k: the (k+1)-th FI_TmArg is
+   added, substituting its type. For Var parameters, the name is also added to
+   TE_ConstNames. For Ref parameters, ConstNames is unchanged.
+
+   Both the locals update and the const-names update are phrased in the exact
+   form that state_matches_env_add_(const|nonconst)_local expects, so the step
+   lemma can be applied directly.
+
+   Requires k < length (FI_TmArgs funInfo). The tyenv_fun_param_names_distinct
+   assumption on env (and the function being in TE_Functions) guarantees that
+   paramName is not already in the prefix, so fmupd at k corresponds to
+   appending the k-th entry to the fmap. *)
+lemma partial_body_env_for_step:
+  assumes k_bound: "k < length (FI_TmArgs funInfo)"
+      and kth: "FI_TmArgs funInfo ! k = (paramName, paramTy, vor)"
+      and distinct: "tyenv_fun_param_names_distinct env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+  shows
+    "partial_body_env_for env funInfo tySubst (Suc k)
+     = (partial_body_env_for env funInfo tySubst k) \<lparr>
+         TE_LocalVars := fmupd paramName (apply_subst tySubst paramTy)
+           (TE_LocalVars (partial_body_env_for env funInfo tySubst k)),
+         TE_GhostLocals := fminus
+           (TE_GhostLocals (partial_body_env_for env funInfo tySubst k)) {|paramName|},
+         TE_ConstNames :=
+           (if vor = Var
+            then finsert paramName
+                   (TE_ConstNames (partial_body_env_for env funInfo tySubst k))
+            else TE_ConstNames (partial_body_env_for env funInfo tySubst k))
+       \<rparr>"
+proof -
+  let ?args = "FI_TmArgs funInfo"
+
+  \<comment> \<open>Standard: take (Suc k) xs = take k xs @ [xs ! k]. \<close>
+  have take_Suc: "take (Suc k) ?args = take k ?args @ [?args ! k]"
+    using k_bound by (simp add: take_Suc_conv_app_nth)
+
+  \<comment> \<open>Locals: fmap_of_list of the (Suc k)-prefix pairs equals fmupd of the k-th
+      entry onto the k-prefix's fmap. We use fmap_of_list_app, which reverses
+      the order of append when converting, and fmadd_fmupd/fmadd_empty. \<close>
+  let ?pairs_k = "map (\<lambda>(name, ty, _). (name, apply_subst tySubst ty)) (take k ?args)"
+  let ?pairs_Sk = "map (\<lambda>(name, ty, _). (name, apply_subst tySubst ty)) (take (Suc k) ?args)"
+  have pairs_Sk_eq:
+    "?pairs_Sk = ?pairs_k @ [(paramName, apply_subst tySubst paramTy)]"
+    using take_Suc kth by simp
+  \<comment> \<open>Need: paramName is not already a key in pairs_k. This follows from
+      param name distinctness on FI_TmArgs. \<close>
+  from distinct fn_lookup have all_distinct: "distinct (map fst ?args)"
+    unfolding tyenv_fun_param_names_distinct_def by blast
+  have paramName_fresh: "paramName \<notin> set (map fst ?pairs_k)"
+  proof -
+    have "distinct (take (Suc k) (map fst ?args))"
+      using all_distinct by (rule distinct_take)
+    moreover have "take (Suc k) (map fst ?args)
+                 = map fst (take k ?args) @ [paramName]"
+      using k_bound kth by (simp add: take_Suc_conv_app_nth take_map)
+    ultimately have "paramName \<notin> set (map fst (take k ?args))"
+      by simp
+    thus ?thesis by (auto simp: comp_def case_prod_beta)
+  qed
+
+  have fmap_pairs_step:
+    "fmap_of_list ?pairs_Sk
+       = fmupd paramName (apply_subst tySubst paramTy) (fmap_of_list ?pairs_k)"
+  proof (rule fmap_ext)
+    fix name
+    show "fmlookup (fmap_of_list ?pairs_Sk) name
+        = fmlookup (fmupd paramName (apply_subst tySubst paramTy) (fmap_of_list ?pairs_k)) name"
+    proof (cases "name = paramName")
+      case True
+      have map_of_pairs_k_none: "map_of ?pairs_k paramName = None"
+        using paramName_fresh by (auto simp add: map_of_eq_None_iff image_image)
+      have "fmlookup (fmap_of_list ?pairs_Sk) paramName
+              = map_of ?pairs_Sk paramName"
+        by (simp add: fmap_of_list.rep_eq)
+      also have "\<dots> = map_of (?pairs_k @ [(paramName, apply_subst tySubst paramTy)]) paramName"
+        using pairs_Sk_eq by simp
+      also have "\<dots> = Some (apply_subst tySubst paramTy)"
+        using map_of_pairs_k_none by (simp add: map_add_Some_iff)
+      finally have lhs: "fmlookup (fmap_of_list ?pairs_Sk) paramName
+                           = Some (apply_subst tySubst paramTy)" .
+      from True show ?thesis by (simp add: lhs)
+    next
+      case False
+      have "fmlookup (fmap_of_list ?pairs_Sk) name
+              = map_of ?pairs_Sk name"
+        by (simp add: fmap_of_list.rep_eq)
+      also have "\<dots> = map_of ?pairs_k name"
+        using pairs_Sk_eq False
+        by (simp add: map_add_def split: option.split)
+      also have "\<dots> = fmlookup (fmap_of_list ?pairs_k) name"
+        by (simp add: fmap_of_list.rep_eq)
+      finally show ?thesis using False by simp
+    qed
+  qed
+
+  \<comment> \<open>Const names: the filter of the (Suc k)-prefix for Var parameters extends
+      the k-prefix filter by either [paramName] (if vor = Var) or []. \<close>
+  let ?const_k = "map (\<lambda>(name, _, _). name)
+                   (filter (\<lambda>(_, _, vor'). vor' = Var) (take k ?args))"
+  let ?const_Sk = "map (\<lambda>(name, _, _). name)
+                    (filter (\<lambda>(_, _, vor'). vor' = Var) (take (Suc k) ?args))"
+  have filter_Sk:
+    "filter (\<lambda>(_, _, vor'). vor' = Var) (take (Suc k) ?args)
+       = filter (\<lambda>(_, _, vor'). vor' = Var) (take k ?args)
+         @ (if vor = Var then [?args ! k] else [])"
+    using take_Suc kth by simp
+  have const_Sk_eq:
+    "?const_Sk = (if vor = Var then ?const_k @ [paramName] else ?const_k)"
+    using filter_Sk kth by (cases "vor = Var") simp_all
+  have fset_const_Sk:
+    "fset_of_list ?const_Sk
+       = (if vor = Var then finsert paramName (fset_of_list ?const_k)
+          else fset_of_list ?const_k)"
+    using const_Sk_eq by (cases "vor = Var") auto
+
+  \<comment> \<open>TE_GhostLocals is {||} at both k and (Suc k), so fminus is a no-op. \<close>
+  have ghost_locals_eq:
+    "fminus (TE_GhostLocals (partial_body_env_for env funInfo tySubst k)) {|paramName|}
+       = TE_GhostLocals (partial_body_env_for env funInfo tySubst (Suc k))"
+    by (simp add: partial_body_env_for_fields(2))
+
+  show ?thesis
+    using fmap_pairs_step fset_const_Sk ghost_locals_eq
+    by (simp add: partial_body_env_for_def body_env_for_def)
+qed
+
+lemma process_one_arg_step_sound:
+  fixes env :: CoreTyEnv
+    and funInfo :: FunInfo
+    and tySubst :: "(nat, CoreType) fmap"
+    and storeTyping :: "CoreType list"
+    and k :: nat
+  assumes sme_caller: "state_matches_env state env storeTyping"  \<comment> \<open>caller state (for value/lvalue soundness)\<close>
+      and wf_env: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and not_ghost: "FI_Ghost funInfo = NotGhost"
+      and k_bound: "k < length (FI_TmArgs funInfo)"
+      and kth_arg: "FI_TmArgs funInfo ! k = (paramName, paramTy, vor)"
+      and val_sound: "sound_term_result env (apply_subst tySubst paramTy) valResult"
+      and lval_sound: "vor = Ref \<Longrightarrow>
+             sound_lvalue_result state env storeTyping
+               (apply_subst tySubst paramTy) lvalResult"
+      and partial_sound:
+            "sound_partial_arg_processing_result env funInfo tySubst k storeTyping
+               (Inr partialState)"
+  shows "sound_partial_arg_processing_result env funInfo tySubst (Suc k) storeTyping
+           (process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState))"
+proof -
+  \<comment> \<open>Extract the partial state invariants from partial_sound. \<close>
+  from partial_sound obtain partialStoreTyping where
+    sme_partial: "state_matches_env partialState
+                    (partial_body_env_for env funInfo tySubst k) partialStoreTyping"
+    and ext_partial: "storeTyping_extends storeTyping partialStoreTyping"
+    unfolding sound_partial_arg_processing_result_def by auto
+
+  show ?thesis
+  proof (cases vor)
+    case Var
+    show ?thesis
+    proof (cases valResult)
+      case (Inl err)
+      \<comment> \<open>Val computation errored. process_one_arg returns Inl err, which is sound
+          because sound_term_result env _ (Inl err) = sound_error_result err. \<close>
+      from val_sound Inl have err_sound: "sound_error_result err" by simp
+      from Var Inl have step_eq:
+        "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
+           = Inl err"
+        by simp
+      show ?thesis
+        using err_sound step_eq
+        unfolding sound_partial_arg_processing_result_def by simp
+    next
+      case (Inr val)
+      \<comment> \<open>Val succeeded with value val. Extend the partial state with a new slot
+          for val, and set IS_Locals[paramName] = new addr. The resulting state
+          matches partial_body_env_for at k+1 under storeTyping extended by
+          [apply_subst tySubst paramTy]. \<close>
+      from val_sound Inr have val_typed_env:
+        "value_has_type env val (apply_subst tySubst paramTy)" by simp
+
+      \<comment> \<open>Transfer val_typed from env to the partial env via congruence. \<close>
+      have val_typed_partial:
+        "value_has_type (partial_body_env_for env funInfo tySubst k) val
+                        (apply_subst tySubst paramTy)"
+      proof -
+        have "value_has_type (partial_body_env_for env funInfo tySubst k) v t
+              = value_has_type env v t" for v t
+          using value_has_type_cong_env
+                  [OF partial_body_env_for_fields(6) partial_body_env_for_fields(5)
+                      partial_body_env_for_fields(9) partial_body_env_for_fields(8)
+                      partial_body_env_for_fields(10)] .
+        with val_typed_env show ?thesis by simp
+      qed
+
+      \<comment> \<open>alloc_store on partialState gives a new state and addr. \<close>
+      obtain state' addr where alloc_eq:
+        "(state', addr) = alloc_store partialState val"
+        by (cases "alloc_store partialState val") auto
+
+      \<comment> \<open>The concrete state'' that process_one_arg produces for the Var branch. \<close>
+      let ?state'' = "state' \<lparr> IS_Locals := fmupd paramName addr (IS_Locals state'),
+                                IS_ConstNames := finsert paramName (IS_ConstNames state') \<rparr>"
+
+      \<comment> \<open>process_one_arg reduces to Inr ?state''. \<close>
+      have step_eq:
+        "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
+           = Inr ?state''"
+        using Var Inr alloc_eq
+        by (simp add: case_prod_beta)
+
+      \<comment> \<open>env' in the form state_matches_env_add_const_local expects. Uses
+          partial_body_env_for_step combined with the fact that the partial env's
+          GhostLocals is empty. \<close>
+      from wf_env have distinct: "tyenv_fun_param_names_distinct env"
+        unfolding tyenv_well_formed_def by simp
+      have env'_shape:
+        "partial_body_env_for env funInfo tySubst (Suc k)
+         = (partial_body_env_for env funInfo tySubst k) \<lparr>
+             TE_LocalVars := fmupd paramName (apply_subst tySubst paramTy)
+               (TE_LocalVars (partial_body_env_for env funInfo tySubst k)),
+             TE_GhostLocals := fminus
+               (TE_GhostLocals (partial_body_env_for env funInfo tySubst k)) {|paramName|},
+             TE_ConstNames := finsert paramName
+               (TE_ConstNames (partial_body_env_for env funInfo tySubst k))
+           \<rparr>"
+        using partial_body_env_for_step[OF k_bound kth_arg distinct fn_lookup] Var
+        by simp
+
+      \<comment> \<open>Apply state_matches_env_add_const_local. \<close>
+      have sme_new:
+        "state_matches_env ?state''
+           (partial_body_env_for env funInfo tySubst (Suc k))
+           (partialStoreTyping @ [apply_subst tySubst paramTy])"
+        using state_matches_env_add_const_local
+                [OF sme_partial val_typed_partial alloc_eq refl env'_shape] .
+
+      \<comment> \<open>The new storeTyping extends the outer storeTyping. \<close>
+      have ext_new: "storeTyping_extends storeTyping
+                       (partialStoreTyping @ [apply_subst tySubst paramTy])"
+      proof -
+        from ext_partial obtain suffix where
+          "partialStoreTyping = storeTyping @ suffix"
+          unfolding storeTyping_extends_def by blast
+        hence "partialStoreTyping @ [apply_subst tySubst paramTy]
+                 = storeTyping @ (suffix @ [apply_subst tySubst paramTy])"
+          by simp
+        thus ?thesis unfolding storeTyping_extends_def by blast
+      qed
+
+      show ?thesis
+        using sme_new ext_new step_eq
+        unfolding sound_partial_arg_processing_result_def by auto
+    qed
+  next
+    case Ref
+    show ?thesis
+    proof (cases lvalResult)
+      case (Inl err)
+      \<comment> \<open>Lvalue computation errored. In the Ref case process_one_arg returns Inl err. \<close>
+      from lval_sound[OF Ref] Inl have err_sound: "sound_error_result err" by simp
+      from Ref Inl have step_eq:
+        "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
+           = Inl err"
+        by simp
+      show ?thesis
+        using err_sound step_eq
+        unfolding sound_partial_arg_processing_result_def by simp
+    next
+      case (Inr lval)
+      obtain addr path where lval_eq: "lval = (addr, path)"
+        by (cases lval) auto
+      from lval_sound[OF Ref] Inr lval_eq have lval_good:
+        "addr < length (IS_Store state)"
+        "type_at_path env (storeTyping ! addr) path = Some (apply_subst tySubst paramTy)"
+        by auto
+      show ?thesis
+      proof (cases valResult)
+        case Inl_val: (Inl err)
+        \<comment> \<open>The Ref arm also propagates value errors. process_one_arg short-circuits
+            to Inl err. \<close>
+        from val_sound Inl_val have err_sound: "sound_error_result err" by simp
+        from Ref Inr lval_eq Inl_val have step_eq:
+          "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
+             = Inl err"
+          by simp
+        show ?thesis
+          using err_sound step_eq
+          unfolding sound_partial_arg_processing_result_def by simp
+      next
+        case Inr_val: (Inr val)
+        \<comment> \<open>Both lval and val succeeded. process_one_arg sets
+            IS_Refs[paramName] = (addr, path); the store is unchanged. \<close>
+        let ?pEnv_k = "partial_body_env_for env funInfo tySubst k"
+        let ?state' = "partialState \<lparr> IS_Refs := fmupd paramName (addr, path)
+                                                       (IS_Refs partialState) \<rparr>"
+
+        \<comment> \<open>process_one_arg reduces to Inr ?state'. \<close>
+        have step_eq:
+          "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
+             = Inr ?state'"
+          using Ref Inr lval_eq Inr_val by simp
+
+        \<comment> \<open>The address from lval_good is < length of the caller's store, hence
+            < length of the partial store (which only grew). \<close>
+        from ext_partial obtain suffix where
+          pst_eq: "partialStoreTyping = storeTyping @ suffix"
+          unfolding storeTyping_extends_def by blast
+        have len_st: "length storeTyping = length (IS_Store state)"
+          using sme_caller
+          unfolding state_matches_env_def store_well_typed_def by simp
+        have len_pst: "length partialStoreTyping = length (IS_Store partialState)"
+          using sme_partial
+          unfolding state_matches_env_def store_well_typed_def by simp
+        have len_ge: "length (IS_Store state) \<le> length (IS_Store partialState)"
+          using pst_eq len_st len_pst by simp
+        from lval_good(1) len_ge have addr_valid_partial:
+          "addr < length (IS_Store partialState)" by linarith
+
+        \<comment> \<open>partialStoreTyping ! addr = storeTyping ! addr (since addr is in the
+            original prefix). \<close>
+        have pst_at_addr: "partialStoreTyping ! addr = storeTyping ! addr"
+          using pst_eq lval_good(1) len_st by (simp add: nth_append)
+
+        \<comment> \<open>Transfer type_at_path from env to the partial env via congruence. \<close>
+        have path_ty_partial:
+          "type_at_path ?pEnv_k (partialStoreTyping ! addr) path
+             = Some (apply_subst tySubst paramTy)"
+        proof -
+          have "type_at_path env (storeTyping ! addr) path
+                  = Some (apply_subst tySubst paramTy)"
+            using lval_good(2) .
+          also have "storeTyping ! addr = partialStoreTyping ! addr"
+            using pst_at_addr by simp
+          also have "type_at_path env = type_at_path ?pEnv_k"
+            using type_at_path_cong_env[OF partial_body_env_for_fields(6)[symmetric]]
+            by fastforce
+          finally show ?thesis by simp
+        qed
+
+        \<comment> \<open>paramName is not yet in the partial env's locals (param names are
+            distinct, and only the first k params are bound at this stage). \<close>
+        have var_fresh: "fmlookup (TE_LocalVars ?pEnv_k) paramName = None"
+        proof -
+          from wf_env have all_distinct: "distinct (map fst (FI_TmArgs funInfo))"
+            using fn_lookup
+            unfolding tyenv_well_formed_def tyenv_fun_param_names_distinct_def by blast
+          have "distinct (take (Suc k) (map fst (FI_TmArgs funInfo)))"
+            using all_distinct by (rule distinct_take)
+          moreover have "take (Suc k) (map fst (FI_TmArgs funInfo))
+                       = map fst (take k (FI_TmArgs funInfo)) @ [paramName]"
+            using k_bound kth_arg
+            by (simp add: take_Suc_conv_app_nth take_map)
+          ultimately have not_in_prefix:
+            "paramName \<notin> set (map fst (take k (FI_TmArgs funInfo)))"
+            by simp
+          let ?pairs_k = "map (\<lambda>(name, ty, _). (name, apply_subst tySubst ty))
+                              (take k (FI_TmArgs funInfo))"
+          have "paramName \<notin> set (map fst ?pairs_k)"
+            using not_in_prefix by (auto simp: comp_def case_prod_beta)
+          hence "map_of ?pairs_k paramName = None"
+            by (auto simp: map_of_eq_None_iff image_image)
+          hence "fmlookup (fmap_of_list ?pairs_k) paramName = None"
+            by (simp add: fmap_of_list.rep_eq)
+          thus ?thesis by (simp add: partial_body_env_for_def)
+        qed
+
+        have var_not_ghost: "paramName |\<notin>| TE_GhostLocals ?pEnv_k"
+          using partial_body_env_for_fields(2) by simp
+
+        \<comment> \<open>env' in the shape expected by state_matches_env_add_ref. Uses
+            partial_body_env_for_step with vor = Ref. \<close>
+        from wf_env have distinct: "tyenv_fun_param_names_distinct env"
+          unfolding tyenv_well_formed_def by simp
+        have env'_shape:
+          "partial_body_env_for env funInfo tySubst (Suc k)
+           = ?pEnv_k \<lparr>
+               TE_LocalVars := fmupd paramName (apply_subst tySubst paramTy)
+                 (TE_LocalVars ?pEnv_k),
+               TE_GhostLocals := fminus (TE_GhostLocals ?pEnv_k) {|paramName|},
+               TE_ConstNames := TE_ConstNames ?pEnv_k
+             \<rparr>"
+          using partial_body_env_for_step[OF k_bound kth_arg distinct fn_lookup] Ref
+          by simp
+
+        have sme_new:
+          "state_matches_env ?state'
+             (partial_body_env_for env funInfo tySubst (Suc k))
+             partialStoreTyping"
+          using state_matches_env_add_ref
+                  [OF sme_partial addr_valid_partial path_ty_partial refl env'_shape
+                      var_fresh var_not_ghost] .
+
+        show ?thesis
+          using sme_new ext_partial step_eq
+          unfolding sound_partial_arg_processing_result_def by auto
+      qed
+    qed
+  qed
+qed
+
+(* Short-circuit: if the running result is already an error, process_one_arg
+   preserves it; soundness is preserved too. *)
+lemma process_one_arg_preserve_error:
+  assumes "sound_partial_arg_processing_result env funInfo tySubst k storeTyping (Inl err)"
+  shows "sound_partial_arg_processing_result env funInfo tySubst (Suc k) storeTyping
+           (process_one_arg tuple (Inl err))"
+proof -
+  from assms have "sound_error_result err"
+    unfolding sound_partial_arg_processing_result_def by simp
+  moreover have "process_one_arg tuple (Inl err) = Inl err" by simp
+  ultimately show ?thesis
+    unfolding sound_partial_arg_processing_result_def by simp
+qed
+
+(* -------------------------------------------------------------------------- *)
+(* H2c. The fold over all parameters is sound: starting from the cleared state *)
+(* and the k=0 partial env, folding produces a state matching the full        *)
+(* body env.                                                                   *)
+(*                                                                             *)
+(* This is an induction over the parameter list. The IH uses H2b at each step. *)
+(* -------------------------------------------------------------------------- *)
+lemma fold_process_one_arg_sound:
+  fixes env :: CoreTyEnv
+    and funInfo :: FunInfo
+    and tySubst :: "(nat, CoreType) fmap"
+    and storeTyping :: "CoreType list"
+    and state :: "'w InterpState"
+    and f :: "'w InterpFun"
+  assumes "state_matches_env state env storeTyping"
+      and "tyenv_well_formed env"
+      and "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and "FI_Ghost funInfo = NotGhost"
+      and "fun_info_matches_interp_fun env funInfo f"
+      and "length tyArgs = length (FI_TyArgs funInfo)"
+      and "tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+      and argTms_typed:
+            "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
+               argTms (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
+      and argTms_lvalues:
+            "\<forall>i < length argTms.
+               (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+                is_writable_lvalue env (argTms ! i))"
+  shows "sound_arg_processing_result env funInfo tySubst storeTyping
+           (fold process_one_arg
+              (zip (IF_Args f)
+                   (zip (map (interp_writable_lvalue fuel state) argTms)
+                        (map (interp_term fuel state) argTms)))
+              (Inr (state \<lparr> IS_Locals := fmempty,
+                             IS_Refs := fmempty,
+                             IS_ConstNames := {||} \<rparr>)))"
+  sorry
 
 
 end

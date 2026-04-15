@@ -6,6 +6,171 @@ begin
 
 
 (* ========================================================================== *)
+(* Only "flexible" variables are unified                                      *)
+(* ========================================================================== *)
+
+(* The unifier only ever binds metavariables for which is_flex returns True.
+   Every binding in the algorithm is gated by an `if is_flex n` check. *)
+lemma unify_unify_list_dom_flex:
+  "unify is_flex ty1 ty2 = Some subst \<Longrightarrow> \<forall>n. n |\<in>| fmdom subst \<longrightarrow> is_flex n"
+  "unify_list is_flex tys1 tys2 = Some subst \<Longrightarrow> \<forall>n. n |\<in>| fmdom subst \<longrightarrow> is_flex n"
+proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subst
+       rule: unify_unify_list.induct)
+  case (1 is_flex name1 tyArgs1 ty2)
+  \<comment> \<open>Datatype on left: only succeeds when ty2 is also a Datatype with the same name
+      (recursing into unify_list) or a flex meta n (binding n). \<close>
+  from "1.prems" show ?case
+  proof (cases ty2)
+    case (CoreTy_Meta n)
+    with "1.prems" have flex_n: "is_flex n" and
+      subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
+      by (auto split: if_splits)
+    show ?thesis using flex_n subst_eq by (simp add: singleton_subst_def)
+  next
+    case (CoreTy_Datatype name2 tyArgs2)
+    with "1.prems" have name_eq: "name1 = name2" and
+      ul_eq: "unify_list is_flex tyArgs1 tyArgs2 = Some subst"
+      by (auto split: if_splits)
+    from "1.IH"[OF CoreTy_Datatype name_eq ul_eq]
+    show ?thesis .
+  qed (use "1.prems" in auto)
+next
+  case (2 is_flex ty2)
+  \<comment> \<open>Bool on left: only succeeds when ty2 is Bool (empty subst) or a flex meta. \<close>
+  from "2.prems" show ?case
+    by (cases ty2) (auto split: if_splits simp: singleton_subst_def)
+next
+  case (3 is_flex sign bits ty2)
+  \<comment> \<open>FiniteInt on left. \<close>
+  from "3.prems" show ?case
+    by (cases ty2) (auto split: if_splits simp: singleton_subst_def)
+next
+  case (4 is_flex ty2)
+  \<comment> \<open>MathInt on left. \<close>
+  from "4.prems" show ?case
+    by (cases ty2) (auto split: if_splits simp: singleton_subst_def)
+next
+  case (5 is_flex ty2)
+  \<comment> \<open>MathReal on left. \<close>
+  from "5.prems" show ?case
+    by (cases ty2) (auto split: if_splits simp: singleton_subst_def)
+next
+  case (6 is_flex flds1 ty2)
+  \<comment> \<open>Record on left: meta-bind or recurse via unify_list on field types. \<close>
+  from "6.prems" show ?case
+  proof (cases ty2)
+    case (CoreTy_Meta n)
+    with "6.prems" have flex_n: "is_flex n" and
+      subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
+      by (auto split: if_splits)
+    show ?thesis using flex_n subst_eq by (simp add: singleton_subst_def)
+  next
+    case (CoreTy_Record flds2)
+    with "6.prems" have fst_eq: "map fst flds1 = map fst flds2" and
+      ul_eq: "unify_list is_flex (map snd flds1) (map snd flds2) = Some subst"
+      by (auto split: if_splits)
+    from "6.IH"[OF CoreTy_Record fst_eq ul_eq]
+    show ?thesis .
+  qed (use "6.prems" in auto)
+next
+  case (7 is_flex elemTy1 dims1 ty2)
+  \<comment> \<open>Array on left: meta-bind or recurse via unify on the element type. \<close>
+  from "7.prems" show ?case
+  proof (cases ty2)
+    case (CoreTy_Meta n)
+    with "7.prems" have flex_n: "is_flex n" and
+      subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
+      by (auto split: if_splits)
+    show ?thesis using flex_n subst_eq by (simp add: singleton_subst_def)
+  next
+    case (CoreTy_Array elemTy2 dims2)
+    with "7.prems" have dims_eq: "dims1 = dims2" and
+      u_eq: "unify is_flex elemTy1 elemTy2 = Some subst"
+      by (auto split: if_splits)
+    from "7.IH"[OF CoreTy_Array dims_eq u_eq]
+    show ?thesis .
+  qed (use "7.prems" in auto)
+next
+  case (8 is_flex n ty2)
+  \<comment> \<open>Meta on left. If is_flex n, we may bind n. Otherwise we may bind a flex meta
+      m on the right. Either way, every binding requires the bound variable to
+      be flex. \<close>
+  from "8.prems" show ?case
+  proof (cases "is_flex n")
+    case True
+    \<comment> \<open>n is flex: result is empty (if ty2 = Meta n), None (if occurs), or
+        singleton_subst n ty2 (otherwise). \<close>
+    show ?thesis
+    proof (cases "ty2 = CoreTy_Meta n")
+      case True
+      with \<open>is_flex n\<close> "8.prems" have "subst = fmempty" by simp
+      thus ?thesis by simp
+    next
+      case False
+      with \<open>is_flex n\<close> "8.prems" have
+        not_occurs: "\<not> occurs n ty2" and
+        subst_eq: "subst = singleton_subst n ty2"
+        by (auto split: if_splits)
+      show ?thesis using \<open>is_flex n\<close> subst_eq by (simp add: singleton_subst_def)
+    qed
+  next
+    case False
+    \<comment> \<open>n is rigid: only succeeds if ty2 is Meta m where m = n (empty subst) or
+        m is flex (binding m). \<close>
+    from \<open>\<not> is_flex n\<close> "8.prems" obtain m where
+      ty2_eq: "ty2 = CoreTy_Meta m"
+      by (cases ty2) (auto split: if_splits)
+    show ?thesis
+    proof (cases "m = n")
+      case True
+      with ty2_eq \<open>\<not> is_flex n\<close> "8.prems" have "subst = fmempty" by simp
+      thus ?thesis by simp
+    next
+      case False
+      with ty2_eq \<open>\<not> is_flex n\<close> "8.prems" have
+        flex_m: "is_flex m" and
+        subst_eq: "subst = singleton_subst m (CoreTy_Meta n)"
+        by (auto split: if_splits)
+      show ?thesis using flex_m subst_eq by (simp add: singleton_subst_def)
+    qed
+  qed
+next
+  case (9 uu)
+  \<comment> \<open>unify_list [] [] = Some fmempty: empty domain. \<close>
+  then show ?case by simp
+next
+  case (10 uv ty tys)
+  \<comment> \<open>unify_list [] (ty # tys) fails. \<close>
+  then show ?case by simp
+next
+  case (11 uw ty tys)
+  \<comment> \<open>unify_list (ty # tys) [] fails. \<close>
+  then show ?case by simp
+next
+  case (12 is_flex ty1 tys1 ty2 tys2)
+  \<comment> \<open>unify_list (ty1 # tys1) (ty2 # tys2): unify head, recurse on substituted tail,
+      compose substitutions. Both head and tail substitutions have flex domain
+      by their respective IHs; composition's domain is their union, hence flex. \<close>
+  from "12.prems" obtain subst1 subst2 where
+    head_eq: "unify is_flex ty1 ty2 = Some subst1" and
+    tail_eq: "unify_list is_flex (map (apply_subst subst1) tys1)
+                                  (map (apply_subst subst1) tys2) = Some subst2" and
+    subst_eq: "subst = compose_subst subst2 subst1"
+    by (auto split: option.splits)
+  from "12.IH"(1)[OF head_eq] have head_flex: "\<forall>n. n |\<in>| fmdom subst1 \<longrightarrow> is_flex n" .
+  from "12.IH"(2)[OF head_eq tail_eq] have tail_flex: "\<forall>n. n |\<in>| fmdom subst2 \<longrightarrow> is_flex n" .
+  have dom_union: "fmdom (compose_subst subst2 subst1) = fmdom subst2 |\<union>| fmdom subst1"
+    by (simp add: compose_subst_def)
+  show ?case
+    using subst_eq dom_union head_flex tail_flex by auto
+qed
+
+lemma unify_dom_flex:
+  "unify is_flex ty1 ty2 = Some subst \<Longrightarrow> \<forall>n. n |\<in>| fmdom subst \<longrightarrow> is_flex n"
+  by (rule unify_unify_list_dom_flex(1))
+
+
+(* ========================================================================== *)
 (* unify_list succeeds only on equal length lists                             *)
 (* ========================================================================== *)
 

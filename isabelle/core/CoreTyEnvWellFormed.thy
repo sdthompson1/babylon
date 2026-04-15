@@ -2,13 +2,21 @@ theory CoreTyEnvWellFormed
   imports CoreKindcheck
 begin
 
-(* All term variables' types (both local and global) are well-kinded *)
+(* All term variables' types are well-kinded.
+   Local variables typecheck in the current env (with the enclosing function's
+   type variables in scope). Global variables typecheck in an env with TE_TypeVars
+   and TE_RuntimeTypeVars cleared, reflecting the fact that globals exist outside
+   any function and have no enclosing type-variable scope; their types must be
+   closed (no metavars). *)
 definition tyenv_vars_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_vars_well_kinded env =
     ((\<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty \<longrightarrow> is_well_kinded env ty) \<and>
-     (\<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<longrightarrow> is_well_kinded env ty))"
+     (\<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<longrightarrow>
+        is_well_kinded (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty))"
 
-(* All nonghost term variables' types are runtime types *)
+(* All nonghost term variables' types are runtime types. Globals are checked
+   in an env with TE_TypeVars and TE_RuntimeTypeVars cleared, for the same
+   reason as tyenv_vars_well_kinded. *)
 definition tyenv_vars_runtime :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_vars_runtime env =
     ((\<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty
@@ -16,7 +24,7 @@ definition tyenv_vars_runtime :: "CoreTyEnv \<Rightarrow> bool" where
                \<longrightarrow> is_runtime_type env ty) \<and>
      (\<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty
                \<and> name |\<notin>| TE_GhostGlobals env
-               \<longrightarrow> is_runtime_type env ty))"
+               \<longrightarrow> is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty))"
 
 (* Ghost locals are a subset of local variable names;
    ghost globals are a subset of global variable names *)
@@ -112,6 +120,12 @@ definition tyenv_ghost_datatypes_subset :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_ghost_datatypes_subset env =
     (TE_GhostDatatypes env |\<subseteq>| fmdom (TE_Datatypes env))"
 
+(* TE_RuntimeTypeVars is a subset of TE_TypeVars: a type variable can only be a
+   runtime type variable if it is in scope at all. *)
+definition tyenv_runtime_tyvars_subset :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_runtime_tyvars_subset env =
+    (TE_RuntimeTypeVars env |\<subseteq>| TE_TypeVars env)"
+
 (* A type environment is well-formed if all the above conditions hold *)
 definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_well_formed env =
@@ -128,7 +142,8 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_fun_param_names_distinct env \<and>
      tyenv_fun_ghost_constraint env \<and>
      tyenv_nonghost_payloads_runtime env \<and>
-     tyenv_ghost_datatypes_subset env)"
+     tyenv_ghost_datatypes_subset env \<and>
+     tyenv_runtime_tyvars_subset env)"
 
 (* Adding a well-kinded, runtime, non-ghost local variable preserves tyenv_well_formed. *)
 lemma tyenv_well_formed_add_var:
@@ -153,6 +168,7 @@ proof -
               "tyenv_fun_ghost_constraint env"
               "tyenv_nonghost_payloads_runtime env"
               "tyenv_ghost_datatypes_subset env"
+              "tyenv_runtime_tyvars_subset env"
     unfolding tyenv_well_formed_def by auto
 
   \<comment> \<open>is_well_kinded only depends on TE_Datatypes and TE_TypeVars, not TE_LocalVars\<close>
@@ -162,18 +178,29 @@ proof -
   have wk_preserved: "\<And>ty'. is_well_kinded env ty' = is_well_kinded ?env' ty'"
     using is_well_kinded_cong_env[OF env'_fields] by simp
 
+  \<comment> \<open>The cleared-tyvars env (used for globals) also agrees in is_well_kinded. \<close>
+  have wk_cleared_preserved:
+    "\<And>ty'. is_well_kinded (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'
+         = is_well_kinded (?env' \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'"
+    by (rule is_well_kinded_cong_env) simp_all
+
   \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars\<close>
   have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
   have rtv_eq: "TE_RuntimeTypeVars ?env' = TE_RuntimeTypeVars env" by simp
   have rt_preserved: "\<And>ty'. is_runtime_type ?env' ty' = is_runtime_type env ty'"
     using is_runtime_type_cong_env[OF gds_eq rtv_eq] by simp
 
+  have rt_cleared_preserved:
+    "\<And>ty'. is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'
+         = is_runtime_type (?env' \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'"
+    by (rule is_runtime_type_cong_env) simp_all
+
   have "tyenv_vars_well_kinded ?env'"
     using wk ty_wk unfolding tyenv_vars_well_kinded_def
-    by (auto simp: wk_preserved split: if_splits)
+    by (auto simp: wk_preserved wk_cleared_preserved split: if_splits)
   moreover have "tyenv_vars_runtime ?env'"
     using rt ty_runtime unfolding tyenv_vars_runtime_def
-    by (auto simp: rt_preserved split: if_splits)
+    by (auto simp: rt_preserved rt_cleared_preserved split: if_splits)
   moreover have "tyenv_ghost_vars_subset ?env'"
     using gvs unfolding tyenv_ghost_vars_subset_def by auto
   moreover have "tyenv_return_type_well_kinded ?env'"
@@ -219,6 +246,8 @@ proof -
   qed
   moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(10)
     unfolding tyenv_ghost_datatypes_subset_def by simp
+  moreover have "tyenv_runtime_tyvars_subset ?env'" using rest(11)
+    unfolding tyenv_runtime_tyvars_subset_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
@@ -245,6 +274,7 @@ proof -
               "tyenv_fun_ghost_constraint env"
               "tyenv_nonghost_payloads_runtime env"
               "tyenv_ghost_datatypes_subset env"
+              "tyenv_runtime_tyvars_subset env"
     unfolding tyenv_well_formed_def by auto
 
   have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
@@ -253,18 +283,28 @@ proof -
   have wk_preserved: "\<And>ty'. is_well_kinded env ty' = is_well_kinded ?env' ty'"
     using is_well_kinded_cong_env[OF env'_fields] by simp
 
+  have wk_cleared_preserved:
+    "\<And>ty'. is_well_kinded (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'
+         = is_well_kinded (?env' \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'"
+    by (rule is_well_kinded_cong_env) simp_all
+
   \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars\<close>
   have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
   have rtv_eq: "TE_RuntimeTypeVars ?env' = TE_RuntimeTypeVars env" by simp
   have rt_preserved: "\<And>ty'. is_runtime_type ?env' ty' = is_runtime_type env ty'"
     using is_runtime_type_cong_env[OF gds_eq rtv_eq] by simp
 
+  have rt_cleared_preserved:
+    "\<And>ty'. is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'
+         = is_runtime_type (?env' \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty'"
+    by (rule is_runtime_type_cong_env) simp_all
+
   have "tyenv_vars_well_kinded ?env'"
     using wk ty_wk unfolding tyenv_vars_well_kinded_def
-    by (auto simp: wk_preserved split: if_splits)
+    by (auto simp: wk_preserved wk_cleared_preserved split: if_splits)
   moreover have "tyenv_vars_runtime ?env'"
     using rt unfolding tyenv_vars_runtime_def
-    by (auto simp: rt_preserved split: if_splits)
+    by (auto simp: rt_preserved rt_cleared_preserved split: if_splits)
   moreover have "tyenv_ghost_vars_subset ?env'"
     using gvs unfolding tyenv_ghost_vars_subset_def by auto
   moreover have "tyenv_return_type_well_kinded ?env'"
@@ -310,6 +350,8 @@ proof -
   qed
   moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(10)
     unfolding tyenv_ghost_datatypes_subset_def by simp
+  moreover have "tyenv_runtime_tyvars_subset ?env'" using rest(11)
+    unfolding tyenv_runtime_tyvars_subset_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
@@ -323,8 +365,12 @@ proof -
     using is_well_kinded_cong_env[of ?env' env] by simp
   have rt: "\<And>ty. is_runtime_type ?env' ty = is_runtime_type env ty"
     using is_runtime_type_cong_env[of ?env' env] by simp
-  have scope_wk: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
-                            is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
+  have scope_wk: "\<And>tvs rtvs t.
+        is_well_kinded (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
+        is_well_kinded (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
+    by (rule is_well_kinded_cong_env) simp_all
+  have scope_wk_one: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
+                                is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
     by (rule is_well_kinded_cong_env) simp_all
   have scope_rt: "\<And>tvs rtvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
                                  is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
@@ -338,7 +384,8 @@ proof -
     tyenv_fun_tyvars_distinct_def tyenv_fun_param_names_distinct_def
     tyenv_fun_ghost_constraint_def Let_def
     tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
-    by (force simp: wk rt scope_wk scope_rt)
+    tyenv_runtime_tyvars_subset_def
+    by (force simp: wk rt scope_wk scope_wk_one scope_rt)
 qed
 
 (* Growing TE_TypeVars and TE_RuntimeTypeVars preserves tyenv_well_formed.
@@ -348,6 +395,7 @@ qed
    conjuncts follow from monotonicity of is_well_kinded and is_runtime_type. *)
 lemma tyenv_well_formed_extend_tyvars:
   assumes "tyenv_well_formed env"
+      and "extraRT |\<subseteq>| extraTV"
   shows "tyenv_well_formed
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)"
@@ -384,6 +432,7 @@ proof -
     and fun_ghost: "tyenv_fun_ghost_constraint env"
     and nonghost_payloads: "tyenv_nonghost_payloads_runtime env"
     and ghost_dt_subset: "tyenv_ghost_datatypes_subset env"
+    and rt_subset: "tyenv_runtime_tyvars_subset env"
     unfolding tyenv_well_formed_def by auto
 
   have "tyenv_vars_well_kinded ?env'"
@@ -421,6 +470,9 @@ proof -
     by (simp add: scope_rt)
   moreover have "tyenv_ghost_datatypes_subset ?env'"
     using ghost_dt_subset unfolding tyenv_ghost_datatypes_subset_def by simp
+  moreover have "tyenv_runtime_tyvars_subset ?env'"
+    using rt_subset assms(2) unfolding tyenv_runtime_tyvars_subset_def
+    by simp blast
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 

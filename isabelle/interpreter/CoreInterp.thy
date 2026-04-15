@@ -679,7 +679,9 @@ where
             let refResults = map (interp_writable_lvalue fuel state) argTms;
                 valResults = map (interp_term fuel state) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
-                clearedState = state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty \<rparr>
+                clearedState = state \<lparr> IS_Locals := fmempty,
+                                          IS_Refs := fmempty,
+                                          IS_ConstNames := {||} \<rparr>
             in
               (case fold process_one_arg argTuples (Inr clearedState) of
                 Inl err \<Rightarrow> Inl err

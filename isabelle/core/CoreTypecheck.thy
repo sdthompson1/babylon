@@ -1526,19 +1526,59 @@ next
     by (auto split: option.splits if_splits)
   have wk: "tyenv_vars_well_kinded env"
     using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
+  \<comment> \<open>The variable might be local (well-kinded directly in env) or global
+      (well-kinded in env with TE_TypeVars / TE_RuntimeTypeVars cleared). In the
+      global case, we lift back to env via is_well_kinded_extend_tyvars: clearing
+      then extending by env's own type vars gives env back. \<close>
   have var_wk: "is_well_kinded env ty"
-    using wk lookup ty_eq unfolding tyenv_vars_well_kinded_def tyenv_lookup_var_def
-    by (auto split: option.splits)
+  proof (cases "fmlookup (TE_LocalVars env) name")
+    case (Some lty)
+    with lookup ty_eq have "fmlookup (TE_LocalVars env) name = Some ty"
+      unfolding tyenv_lookup_var_def by simp
+    thus ?thesis using wk unfolding tyenv_vars_well_kinded_def by blast
+  next
+    case None
+    with lookup ty_eq have gv_lookup: "fmlookup (TE_GlobalVars env) name = Some ty"
+      unfolding tyenv_lookup_var_def by (auto split: option.splits)
+    from gv_lookup wk have wk_cleared:
+      "is_well_kinded (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
+      unfolding tyenv_vars_well_kinded_def by blast
+    \<comment> \<open>Well-kinded in the cleared env means ty has no metavars, so it is well-kinded
+        in any env with the same TE_Datatypes \<close>
+    have mvs_empty: "type_metavars ty = {}"
+      using is_well_kinded_type_metavars_subset[OF wk_cleared] by simp
+    show ?thesis
+      using is_well_kinded_transfer[OF wk_cleared] mvs_empty by simp
+  qed
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
   proof
     assume ng: "ghost = NotGhost"
     from CoreTm_Var.prems(1) ng have not_ghost: "\<not> tyenv_var_ghost env name"
       by (auto split: option.splits if_splits)
-    have "tyenv_vars_runtime env"
+    have rt: "tyenv_vars_runtime env"
       using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
-    thus "is_runtime_type env ty"
-      using lookup not_ghost ty_eq unfolding tyenv_vars_runtime_def tyenv_lookup_var_def tyenv_var_ghost_def
-      by (auto split: option.splits)
+    show "is_runtime_type env ty"
+    proof (cases "fmlookup (TE_LocalVars env) name")
+      case (Some lty)
+      with lookup ty_eq have lv: "fmlookup (TE_LocalVars env) name = Some ty"
+        unfolding tyenv_lookup_var_def by simp
+      from not_ghost lv have "name |\<notin>| TE_GhostLocals env"
+        unfolding tyenv_var_ghost_def by simp
+      with lv rt show ?thesis unfolding tyenv_vars_runtime_def by blast
+    next
+      case None
+      with lookup ty_eq have gv: "fmlookup (TE_GlobalVars env) name = Some ty"
+        unfolding tyenv_lookup_var_def by (auto split: option.splits)
+      from not_ghost gv None have "name |\<notin>| TE_GhostGlobals env"
+        unfolding tyenv_var_ghost_def by (auto split: option.splits)
+      with gv rt have rt_cleared:
+        "is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
+        unfolding tyenv_vars_runtime_def by blast
+      have mvs_empty: "type_metavars ty = {}"
+        using is_runtime_type_metavars_subset[OF rt_cleared] by simp
+      show ?thesis
+        using is_runtime_type_transfer[OF rt_cleared] mvs_empty by simp
+    qed
   qed
   ultimately show ?case by blast
 next

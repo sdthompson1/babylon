@@ -1,5 +1,5 @@
 theory ElabTypeCorrect
-  imports ElabType "../core/MetaSubst" "../core/CoreTyEnvWellFormed"
+  imports ElabType "../core/MetaSubst" "../core/CoreTyEnvWellFormed" "../core/CoreTypeSubst"
 begin
 
 (* Correctness properties for elab_type:
@@ -9,63 +9,6 @@ begin
       - in NotGhost mode, it is a runtime type
    - The result of elab_type_list has the same length as the input.
 *)
-
-(* Helper lemmas about fmap_of_list and zip *)
-lemma fmdom_fmap_of_list_zip:
-  "length xs = length ys \<Longrightarrow> fset (fmdom (fmap_of_list (zip xs ys))) = set xs"
-  by (induction xs ys rule: list_induct2) auto
-
-lemma fmran'_fmupd_notin:
-  "k |\<notin>| fmdom m \<Longrightarrow> fmran' (fmupd k v m) = insert v (fmran' m)"
-proof (intro set_eqI iffI)
-  fix x
-  assume notin: "k |\<notin>| fmdom m"
-  { assume "x \<in> fmran' (fmupd k v m)"
-    then obtain a where "fmlookup (fmupd k v m) a = Some x"
-      by (auto simp: fmran'_def)
-    then have "x = v \<or> x \<in> fmran' m"
-      by (cases "k = a") (auto simp: fmran'_def)
-    thus "x \<in> insert v (fmran' m)" by auto
-  }
-  { assume "x \<in> insert v (fmran' m)"
-    then have "x = v \<or> x \<in> fmran' m" by auto
-    then show "x \<in> fmran' (fmupd k v m)"
-    proof
-      assume "x = v"
-      thus ?thesis by (auto simp: fmran'_def)
-    next
-      assume "x \<in> fmran' m"
-      then obtain a where lookup: "fmlookup m a = Some x"
-        by (auto simp: fmran'_def)
-      hence "a \<noteq> k" using notin by (auto dest: fmdomI)
-      hence "fmlookup (fmupd k v m) a = Some x" using lookup by simp
-      thus ?thesis
-        by (simp add: fmran'I)
-    qed
-  }
-qed
-
-lemma fmran'_fmap_of_list_zip:
-  "length xs = length ys \<Longrightarrow> distinct xs \<Longrightarrow> fmran' (fmap_of_list (zip xs ys)) = set ys"
-proof (induction xs ys rule: list_induct2)
-  case Nil
-  then show ?case by (simp add: fmran'_def)
-next
-  case (Cons x xs y ys)
-  from Cons.prems have x_notin: "x \<notin> set xs" and distinct_xs: "distinct xs" by simp_all
-  from x_notin have x_notin_dom: "x |\<notin>| fmdom (fmap_of_list (zip xs ys))"
-    using fmdom_fmap_of_list_zip[OF Cons.hyps] by simp
-  have "fmran' (fmap_of_list (zip (x # xs) (y # ys))) =
-        fmran' (fmupd x y (fmap_of_list (zip xs ys)))"
-    by simp
-  also have "... = insert y (fmran' (fmap_of_list (zip xs ys)))"
-    using x_notin_dom by (rule fmran'_fmupd_notin)
-  also have "... = insert y (set ys)"
-    using Cons.IH distinct_xs by simp
-  also have "... = set (y # ys)"
-    by simp
-  finally show ?case .
-qed
 
 (* Metavars in types returned by elab_type are a subset of TE_TypeVars env *)
 lemma elab_type_metavars_subset:
