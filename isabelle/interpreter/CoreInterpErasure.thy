@@ -20,7 +20,7 @@ lemma those_all_some:
    applied to it gives the same result as running the interpreter on the
    original syntax, provided the original was well-typed in NotGhost mode.
 
-   The substitution replaces CoreTy_Meta nodes in any type embedded in the
+   The substitution replaces CoreTy_Var nodes in any type embedded in the
    syntax. The interpreter is runtime-type-erased, so it only ever inspects
    types in one place: the target type of CoreTm_Cast. Well-typedness
    guarantees that target is an integer type, which is invariant under

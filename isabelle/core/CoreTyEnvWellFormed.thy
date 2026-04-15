@@ -7,7 +7,7 @@ begin
    type variables in scope). Global variables typecheck in an env with TE_TypeVars
    and TE_RuntimeTypeVars cleared, reflecting the fact that globals exist outside
    any function and have no enclosing type-variable scope; their types must be
-   closed (no metavars). *)
+   closed (no free type variables). *)
 definition tyenv_vars_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_vars_well_kinded env =
     ((\<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty \<longrightarrow> is_well_kinded env ty) \<and>
@@ -39,22 +39,22 @@ definition tyenv_return_type_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
     is_well_kinded env (TE_ReturnType env)"
 
 (* Data constructors are consistent with datatypes:
-   For each ctor in TE_DataCtors mapping to (dtName, tyArgMetavars, payload),
+   For each ctor in TE_DataCtors mapping to (dtName, tyVars, payload),
    dtName must be in TE_Datatypes with matching numTyArgs *)
 definition tyenv_ctors_consistent :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_ctors_consistent env =
-    (\<forall>ctorName dtName tyArgMetavars payload.
-      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyArgMetavars, payload) \<longrightarrow>
-      fmlookup (TE_Datatypes env) dtName = Some (length tyArgMetavars))"
+    (\<forall>ctorName dtName tyVars payload.
+      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
+      fmlookup (TE_Datatypes env) dtName = Some (length tyVars))"
 
 (* Data constructor payload types are well-kinded, in an appropriate env. *)
 (* (Note that well-kindedness depends only on TE_Datatypes and TE_TypeVars, so overriding
    only TE_TypeVars is appropriate here.) *)
 definition tyenv_payloads_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_payloads_well_kinded env =
-    (\<forall>ctorName dtName tyArgMetavars payload.
-      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyArgMetavars, payload) \<longrightarrow>
-      is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyArgMetavars \<rparr>) payload)"
+    (\<forall>ctorName dtName tyVars payload.
+      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
+      is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload)"
 
 (* Data constructor type arguments (type variables) are distinct *)
 definition tyenv_ctor_tyvars_distinct :: "CoreTyEnv \<Rightarrow> bool" where
@@ -69,8 +69,8 @@ definition tyenv_ctors_by_type_consistent :: "CoreTyEnv \<Rightarrow> bool" wher
   "tyenv_ctors_by_type_consistent env =
     (\<forall>dtName ctors. fmlookup (TE_DataCtorsByType env) dtName = Some ctors \<longrightarrow>
       (\<forall>ctorName. ctorName \<in> set ctors \<longleftrightarrow>
-        (\<exists>tyArgMetavars payload.
-          fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyArgMetavars, payload))))"
+        (\<exists>tyVars payload.
+          fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload))))"
 
 (* Function arg and return types are well-kinded in an appropriate env. *)
 definition tyenv_fun_types_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where

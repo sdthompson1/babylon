@@ -329,14 +329,14 @@ proof -
   have c6: "tyenv_payloads_well_kinded ?be"
     unfolding tyenv_payloads_well_kinded_def
   proof (intro allI impI)
-    fix ctorName dtName tyArgMetavars payload
-    assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyArgMetavars, payload)"
-    hence ctor_lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyArgMetavars, payload)"
+    fix ctorName dtName tyVars payload
+    assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
+    hence ctor_lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
       by (simp add: body_env_for_def)
     with payloads_wk
-    have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyArgMetavars \<rparr>) payload"
+    have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
       unfolding tyenv_payloads_well_kinded_def by blast
-    thus "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list tyArgMetavars \<rparr>) payload"
+    thus "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
       using wk_scope_eq by simp
   qed
 

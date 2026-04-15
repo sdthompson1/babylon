@@ -124,7 +124,7 @@ next
   next
     case CoreTy_MathReal with Cons.prems show ?thesis by (cases step) simp_all
   next
-    case (CoreTy_Meta x) with Cons.prems show ?thesis by (cases step) simp_all
+    case (CoreTy_Var x) with Cons.prems show ?thesis by (cases step) simp_all
   qed
 qed
 
@@ -160,7 +160,7 @@ next
   next
     case CoreTy_MathReal then show ?thesis by (cases step) simp_all
   next
-    case (CoreTy_Meta x) then show ?thesis by (cases step) simp_all
+    case (CoreTy_Var x) then show ?thesis by (cases step) simp_all
   qed
 qed
 
@@ -1005,17 +1005,17 @@ next
     next
       case (LVPath_VariantProj expectedCtor)
       (* Extract variant type *)
-      from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+      from Cons.prems(1) CV_Variant obtain dtName argTypes tyvars payloadTy where
         ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
-        len_eq: "length metavars = length argTypes" and
+        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
+        len_eq: "length tyvars = length argTypes" and
         args_wk: "list_all (is_well_kinded env) argTypes" and
         args_rt: "list_all (is_runtime_type env) argTypes" and
         dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
         payload_typed: "value_has_type env payload
-            (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+            (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
         by (cases ty) (auto split: option.splits prod.splits)
-      let ?payloadTy = "apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy"
+      let ?payloadTy = "apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy"
       (* Extract from update_value_at_path: ctor must match *)
       from Cons.prems(2) CV_Variant LVPath_VariantProj obtain updatedPayload where
         ctor_match: "ctor = expectedCtor" and
@@ -1154,16 +1154,16 @@ next
       with CV_Variant Cons.prems show ?thesis by simp
     next
       case (LVPath_VariantProj expectedCtor)
-      from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+      from Cons.prems(1) CV_Variant obtain dtName argTypes tyvars payloadTy where
         ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
         payload_typed: "value_has_type env payload
-                          (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+                          (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
         by (cases ty) (auto split: option.splits)
       from Cons.prems(2) CV_Variant LVPath_VariantProj have ctor_match: "ctor = expectedCtor"
         and get_rest: "get_value_at_path payload rest = Inr v"
         by (auto split: if_splits)
-      let ?subPayloadTy = "apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy"
+      let ?subPayloadTy = "apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy"
       from Cons.IH[OF payload_typed get_rest] obtain pathTy where
         rest_ty: "type_at_path env ?subPayloadTy rest = Some pathTy" and
         v_typed: "value_has_type env v pathTy"
@@ -1255,11 +1255,11 @@ next
     qed
   next
     case (CV_Variant ctor payload)
-    from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+    from Cons.prems(1) CV_Variant obtain dtName argTypes tyvars payloadTy where
       slotTy_eq: "slotTy = CoreTy_Datatype dtName argTypes" and
-      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
       payload_typed: "value_has_type env payload
-                        (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+                        (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       by (cases slotTy) (auto split: option.splits)
     show ?thesis proof (cases step)
       case (LVPath_RecordProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
@@ -1271,7 +1271,7 @@ next
         \<comment> \<open>Ctor matches: type_at_path uses ctor_lookup, so we can extract rest_ty.\<close>
         from Cons.prems(2) slotTy_eq LVPath_VariantProj True ctor_lookup obtain
           rest_ty: "type_at_path env
-                      (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+                      (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy) rest
                     = Some ty"
           by (auto split: if_splits)
         from Cons.prems(3) CV_Variant LVPath_VariantProj True
@@ -1372,11 +1372,11 @@ next
     qed
   next
     case (CV_Variant ctor payload)
-    from Cons.prems(1) CV_Variant obtain dtName argTypes metavars payloadTy where
+    from Cons.prems(1) CV_Variant obtain dtName argTypes tyvars payloadTy where
       slotTy_eq: "slotTy = CoreTy_Datatype dtName argTypes" and
-      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
       payload_typed: "value_has_type env payload
-                        (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+                        (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       by (cases slotTy) (auto split: option.splits)
     show ?thesis proof (cases step)
       case (LVPath_RecordProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
@@ -1387,7 +1387,7 @@ next
         case True
         from Cons.prems(2) slotTy_eq LVPath_VariantProj True ctor_lookup obtain
           rest_ty: "type_at_path env
-                      (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+                      (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy) rest
                     = Some ty"
           by (auto split: if_splits)
         show ?thesis
@@ -1660,8 +1660,8 @@ next
       val_eq: "val = CV_Variant actualCtor payload"
       using value_has_type_Name by blast
     (* Extract constructor info from value typing *)
-    from val_typed val_eq CoreTy_Datatype obtain dtName2 metavars payloadTy where
-      ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName2, metavars, payloadTy)" and
+    from val_typed val_eq CoreTy_Datatype obtain dtName2 tyvars payloadTy where
+      ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName2, tyvars, payloadTy)" and
       dt_eq: "dtName = dtName2"
       by (auto split: option.splits prod.splits)
     (* By tyenv_ctors_by_type_consistent, actualCtor is in ctors *)
@@ -1669,7 +1669,7 @@ next
       unfolding tyenv_well_formed_def by simp
     from consistent ctors_lookup have
       "\<forall>ctorName. ctorName \<in> set ctors \<longleftrightarrow>
-        (\<exists>tyArgMetavars payload. fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyArgMetavars, payload))"
+        (\<exists>tyVars payload. fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload))"
       unfolding tyenv_ctors_by_type_consistent_def by simp
     hence ctor_in_ctors: "actualCtor \<in> set ctors"
       using ctor_lookup dt_eq by auto
@@ -1699,7 +1699,7 @@ next
     case (CoreTy_Array x1 x2)
     then show ?thesis using exhaustive no_wildcard by simp
   next
-    case (CoreTy_Meta x)
+    case (CoreTy_Var x)
     then show ?thesis using exhaustive no_wildcard by simp
   qed
 qed

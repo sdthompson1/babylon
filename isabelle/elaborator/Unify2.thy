@@ -21,7 +21,7 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subs
       (recursing into unify_list) or a flex meta n (binding n). \<close>
   from "1.prems" show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     with "1.prems" have flex_n: "is_flex n" and
       subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
       by (auto split: if_splits)
@@ -59,7 +59,7 @@ next
   \<comment> \<open>Record on left: meta-bind or recurse via unify_list on field types. \<close>
   from "6.prems" show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     with "6.prems" have flex_n: "is_flex n" and
       subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
       by (auto split: if_splits)
@@ -77,7 +77,7 @@ next
   \<comment> \<open>Array on left: meta-bind or recurse via unify on the element type. \<close>
   from "7.prems" show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     with "7.prems" have flex_n: "is_flex n" and
       subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
       by (auto split: if_splits)
@@ -101,7 +101,7 @@ next
     \<comment> \<open>n is flex: result is empty (if ty2 = Meta n), None (if occurs), or
         singleton_subst n ty2 (otherwise). \<close>
     show ?thesis
-    proof (cases "ty2 = CoreTy_Meta n")
+    proof (cases "ty2 = CoreTy_Var n")
       case True
       with \<open>is_flex n\<close> "8.prems" have "subst = fmempty" by simp
       thus ?thesis by simp
@@ -118,7 +118,7 @@ next
     \<comment> \<open>n is rigid: only succeeds if ty2 is Meta m where m = n (empty subst) or
         m is flex (binding m). \<close>
     from \<open>\<not> is_flex n\<close> "8.prems" obtain m where
-      ty2_eq: "ty2 = CoreTy_Meta m"
+      ty2_eq: "ty2 = CoreTy_Var m"
       by (cases ty2) (auto split: if_splits)
     show ?thesis
     proof (cases "m = n")
@@ -129,7 +129,7 @@ next
       case False
       with ty2_eq \<open>\<not> is_flex n\<close> "8.prems" have
         flex_m: "is_flex m" and
-        subst_eq: "subst = singleton_subst m (CoreTy_Meta n)"
+        subst_eq: "subst = singleton_subst m (CoreTy_Var n)"
         by (auto split: if_splits)
       show ?thesis using flex_m subst_eq by (simp add: singleton_subst_def)
     qed
@@ -221,18 +221,18 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subs
   case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     (* unify returns singleton_subst n (CoreTy_Datatype name1 tyArgs1) when occurs check passes *)
-    from 1 CoreTy_Meta have no_occurs: "\<not> occurs n (CoreTy_Datatype name1 tyArgs1)"
+    from 1 CoreTy_Var have no_occurs: "\<not> occurs n (CoreTy_Datatype name1 tyArgs1)"
       by (auto split: if_splits)
-    from 1 CoreTy_Meta no_occurs have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
+    from 1 CoreTy_Var no_occurs have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
       by (simp split: if_splits)
     have "apply_subst subst (CoreTy_Datatype name1 tyArgs1) = CoreTy_Datatype name1 tyArgs1"
       using no_occurs subst_eq
       using apply_subst_singleton_no_occurs by blast
-    also have "... = apply_subst subst (CoreTy_Meta n)"
+    also have "... = apply_subst subst (CoreTy_Var n)"
       using subst_eq apply_subst_singleton by auto
-    finally show ?thesis using CoreTy_Meta by simp
+    finally show ?thesis using CoreTy_Var by simp
   next
     case (CoreTy_Datatype name2 tyArgs2)
     show ?thesis
@@ -271,16 +271,16 @@ next
   case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from 6 CoreTy_Meta have no_occurs: "\<not> occurs n (CoreTy_Record flds1)"
+    case (CoreTy_Var n)
+    from 6 CoreTy_Var have no_occurs: "\<not> occurs n (CoreTy_Record flds1)"
       by (auto split: if_splits)
-    from 6 CoreTy_Meta no_occurs have subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
+    from 6 CoreTy_Var no_occurs have subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
       by (simp split: if_splits)
     have "apply_subst subst (CoreTy_Record flds1) = CoreTy_Record flds1"
       using no_occurs subst_eq apply_subst_singleton_no_occurs by blast
-    also have "... = apply_subst subst (CoreTy_Meta n)"
+    also have "... = apply_subst subst (CoreTy_Var n)"
       using apply_subst_singleton subst_eq by auto
-    finally show ?thesis using CoreTy_Meta by simp
+    finally show ?thesis using CoreTy_Var by simp
   next
     case (CoreTy_Record flds2)
     (* Field names must match for unification to succeed *)
@@ -314,16 +314,16 @@ next
   case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from 7 CoreTy_Meta have no_occurs: "\<not> occurs n (CoreTy_Array elemTy1 dims1)"
+    case (CoreTy_Var n)
+    from 7 CoreTy_Var have no_occurs: "\<not> occurs n (CoreTy_Array elemTy1 dims1)"
       by (auto split: if_splits)
-    from 7 CoreTy_Meta no_occurs have subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
+    from 7 CoreTy_Var no_occurs have subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
       by (simp split: if_splits)
     have "apply_subst subst (CoreTy_Array elemTy1 dims1) = CoreTy_Array elemTy1 dims1"
       using apply_subst_singleton_no_occurs no_occurs subst_eq by blast
-    also have "... = apply_subst subst (CoreTy_Meta n)"
+    also have "... = apply_subst subst (CoreTy_Var n)"
       using apply_subst_singleton subst_eq by auto
-    finally show ?thesis using CoreTy_Meta by simp
+    finally show ?thesis using CoreTy_Var by simp
   next
     case (CoreTy_Array elemTy2 dims2)
     show ?thesis
@@ -338,27 +338,27 @@ next
     qed
   qed auto
 next
-  (* CoreTy_Meta / ty2 *)
+  (* CoreTy_Var / ty2 *)
   case (8 is_flex n ty2)
   then show ?case
   proof (cases "is_flex n")
     case True
     (* n is flexible: old logic applies *)
     show ?thesis
-    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n")
       case True
       then show ?thesis using 8 \<open>is_flex n\<close> by simp
     next
       case False
       show ?thesis
-      proof (cases "ty2 = CoreTy_Meta n")
+      proof (cases "ty2 = CoreTy_Var n")
         case True
         then show ?thesis using 8 \<open>is_flex n\<close> by simp
       next
         case neq: False
         with False have no_occurs: "\<not> occurs n ty2" by simp
         from 8 \<open>is_flex n\<close> False neq have subst_eq: "subst = singleton_subst n ty2" by simp
-        have "apply_subst subst (CoreTy_Meta n) = ty2"
+        have "apply_subst subst (CoreTy_Var n) = ty2"
           using apply_subst_singleton subst_eq by blast
         also have "... = apply_subst subst ty2"
           by (simp add: apply_subst_singleton_no_occurs no_occurs subst_eq)
@@ -370,27 +370,27 @@ next
     (* n is rigid: can only match itself or be bound by a flexible var on the right *)
     show ?thesis
     proof (cases ty2)
-      case (CoreTy_Meta m)
+      case (CoreTy_Var m)
       show ?thesis
       proof (cases "m = n")
         case True
-        then show ?thesis using 8 flex_n_false CoreTy_Meta by simp
+        then show ?thesis using 8 flex_n_false CoreTy_Var by simp
       next
         case neq: False
         show ?thesis
         proof (cases "is_flex m")
           case True
-          (* m is flexible, binds to CoreTy_Meta n *)
-          from 8 flex_n_false CoreTy_Meta neq True
-          have subst_eq: "subst = singleton_subst m (CoreTy_Meta n)" by simp
-          have "apply_subst subst (CoreTy_Meta n) = CoreTy_Meta n"
+          (* m is flexible, binds to CoreTy_Var n *)
+          from 8 flex_n_false CoreTy_Var neq True
+          have subst_eq: "subst = singleton_subst m (CoreTy_Var n)" by simp
+          have "apply_subst subst (CoreTy_Var n) = CoreTy_Var n"
             using subst_eq neq by (simp add: singleton_subst_def)
-          also have "... = apply_subst subst (CoreTy_Meta m)"
+          also have "... = apply_subst subst (CoreTy_Var m)"
             using apply_subst_singleton subst_eq by auto
-          finally show ?thesis using CoreTy_Meta by simp
+          finally show ?thesis using CoreTy_Var by simp
         next
           case False
-          then show ?thesis using 8 flex_n_false CoreTy_Meta neq by simp
+          then show ?thesis using 8 flex_n_false CoreTy_Var neq by simp
         qed
       qed
     next
@@ -468,20 +468,20 @@ qed
    of singleton_subst n ty gives the same result as applying subst' directly *)
 (* See below for main MGU theorem *)
 lemma unifier_factors_singleton:
-  assumes unifies: "apply_subst subst' (CoreTy_Meta n) = apply_subst subst' ty"
+  assumes unifies: "apply_subst subst' (CoreTy_Var n) = apply_subst subst' ty"
       and no_occurs: "\<not> occurs n ty"
     shows "\<forall>ty'. apply_subst subst' ty' = apply_subst subst' (apply_subst (singleton_subst n ty) ty')"
 proof (intro allI)
   fix ty'
   show "apply_subst subst' ty' = apply_subst subst' (apply_subst (singleton_subst n ty) ty')"
   proof (induction ty')
-    case (CoreTy_Meta m)
+    case (CoreTy_Var m)
     show ?case
     proof (cases "n = m")
       case True
-      then have "apply_subst (singleton_subst n ty) (CoreTy_Meta m) = ty"
+      then have "apply_subst (singleton_subst n ty) (CoreTy_Var m) = ty"
         by (simp add: singleton_subst_def)
-      moreover have "apply_subst subst' (CoreTy_Meta m) = apply_subst subst' ty"
+      moreover have "apply_subst subst' (CoreTy_Var m) = apply_subst subst' ty"
         using unifies True by simp
       ultimately show ?thesis by simp
     next
@@ -533,12 +533,12 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst subst' t
   case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
           and no_occurs: "\<not> occurs n (CoreTy_Datatype name1 tyArgs1)"
       using 1(2) by (auto split: if_splits)
-    have "apply_subst subst' (CoreTy_Datatype name1 tyArgs1) = apply_subst subst' (CoreTy_Meta n)"
-      using 1(3) CoreTy_Meta by simp
+    have "apply_subst subst' (CoreTy_Datatype name1 tyArgs1) = apply_subst subst' (CoreTy_Var n)"
+      using 1(3) CoreTy_Var by simp
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   next
@@ -561,12 +561,12 @@ next
   case (2 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n CoreTy_Bool"
       using 2(1) by (simp split: if_splits)
     have no_occurs: "\<not> occurs n CoreTy_Bool" by (simp add: occurs_def)
-    have "apply_subst subst' CoreTy_Bool = apply_subst subst' (CoreTy_Meta n)"
-      using 2(2) CoreTy_Meta by simp
+    have "apply_subst subst' CoreTy_Bool = apply_subst subst' (CoreTy_Var n)"
+      using 2(2) CoreTy_Var by simp
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   qed auto
@@ -575,12 +575,12 @@ next
   case (3 is_flex sign bits ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_FiniteInt sign bits)"
       using 3(1) by (simp split: if_splits)
     have no_occurs: "\<not> occurs n (CoreTy_FiniteInt sign bits)" by (simp add: occurs_def)
-    have "apply_subst subst' (CoreTy_FiniteInt sign bits) = apply_subst subst' (CoreTy_Meta n)"
-      using 3(2) CoreTy_Meta by blast
+    have "apply_subst subst' (CoreTy_FiniteInt sign bits) = apply_subst subst' (CoreTy_Var n)"
+      using 3(2) CoreTy_Var by blast
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   qed (auto split: if_splits)
@@ -589,12 +589,12 @@ next
   case (4 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n CoreTy_MathInt"
       using 4(1) by (simp split: if_splits)
     have no_occurs: "\<not> occurs n CoreTy_MathInt" by (simp add: occurs_def)
-    have "apply_subst subst' CoreTy_MathInt = apply_subst subst' (CoreTy_Meta n)"
-      using 4(2) CoreTy_Meta by simp
+    have "apply_subst subst' CoreTy_MathInt = apply_subst subst' (CoreTy_Var n)"
+      using 4(2) CoreTy_Var by simp
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   qed auto
@@ -603,12 +603,12 @@ next
   case (5 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n CoreTy_MathReal"
       using 5(1) by (simp split: if_splits)
     have no_occurs: "\<not> occurs n CoreTy_MathReal" by (simp add: occurs_def)
-    have "apply_subst subst' CoreTy_MathReal = apply_subst subst' (CoreTy_Meta n)"
-      using 5(2) CoreTy_Meta by simp
+    have "apply_subst subst' CoreTy_MathReal = apply_subst subst' (CoreTy_Var n)"
+      using 5(2) CoreTy_Var by simp
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   qed auto
@@ -617,12 +617,12 @@ next
   case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
           and no_occurs: "\<not> occurs n (CoreTy_Record flds1)"
       using 6(2) by (auto split: if_splits)
-    have "apply_subst subst' (CoreTy_Record flds1) = apply_subst subst' (CoreTy_Meta n)"
-      using 6(3) CoreTy_Meta by simp
+    have "apply_subst subst' (CoreTy_Record flds1) = apply_subst subst' (CoreTy_Var n)"
+      using 6(3) CoreTy_Var by simp
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   next
@@ -659,12 +659,12 @@ next
   case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
           and no_occurs: "\<not> occurs n (CoreTy_Array elemTy1 dims1)"
       using 7(2) by (auto split: if_splits)
-    have "apply_subst subst' (CoreTy_Array elemTy1 dims1) = apply_subst subst' (CoreTy_Meta n)"
-      using 7(3) CoreTy_Meta by simp
+    have "apply_subst subst' (CoreTy_Array elemTy1 dims1) = apply_subst subst' (CoreTy_Var n)"
+      using 7(3) CoreTy_Var by simp
     from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
     show ?thesis by blast
   next
@@ -680,18 +680,18 @@ next
     qed
   qed auto
 next
-  (* CoreTy_Meta / ty2 *)
+  (* CoreTy_Var / ty2 *)
   case (8 is_flex n ty2)
   show ?case
   proof (cases "is_flex n")
     case True
     show ?thesis
-    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n")
       case True then show ?thesis using 8(1) \<open>is_flex n\<close> by simp
     next
       case False
       show ?thesis
-      proof (cases "ty2 = CoreTy_Meta n")
+      proof (cases "ty2 = CoreTy_Var n")
         case True
         then have "subst = fmempty" using 8(1) \<open>is_flex n\<close> by simp
         then show ?thesis by simp
@@ -700,7 +700,7 @@ next
         with False have no_occurs: "\<not> occurs n ty2" by simp
         have subst_eq: "subst = singleton_subst n ty2"
           using 8(1) \<open>is_flex n\<close> False neq by simp
-        from 8(2) have unifies': "apply_subst subst' (CoreTy_Meta n) = apply_subst subst' ty2" by simp
+        from 8(2) have unifies': "apply_subst subst' (CoreTy_Var n) = apply_subst subst' ty2" by simp
         show ?thesis using unifier_factors_singleton[OF unifies' no_occurs] subst_eq by blast
       qed
     qed
@@ -708,28 +708,28 @@ next
     case flex_n_false: False
     show ?thesis
     proof (cases ty2)
-      case (CoreTy_Meta m)
+      case (CoreTy_Var m)
       show ?thesis
       proof (cases "m = n")
         case True
-        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Meta by simp
+        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Var by simp
         then show ?thesis by simp
       next
         case neq: False
         show ?thesis
         proof (cases "is_flex m")
           case True
-          (* m is flexible, binds to CoreTy_Meta n *)
-          from 8(1) flex_n_false CoreTy_Meta neq True
-          have subst_eq: "subst = singleton_subst m (CoreTy_Meta n)" by simp
-          from 8(2) CoreTy_Meta have unifies': "apply_subst subst' (CoreTy_Meta m) = apply_subst subst' (CoreTy_Meta n)"
+          (* m is flexible, binds to CoreTy_Var n *)
+          from 8(1) flex_n_false CoreTy_Var neq True
+          have subst_eq: "subst = singleton_subst m (CoreTy_Var n)" by simp
+          from 8(2) CoreTy_Var have unifies': "apply_subst subst' (CoreTy_Var m) = apply_subst subst' (CoreTy_Var n)"
             by simp
-          have no_occurs: "\<not> occurs m (CoreTy_Meta n)"
+          have no_occurs: "\<not> occurs m (CoreTy_Var n)"
             using neq by (simp add: occurs_def)
           show ?thesis using unifier_factors_singleton[OF unifies' no_occurs] subst_eq by blast
         next
           case False
-          then show ?thesis using 8(1) flex_n_false CoreTy_Meta neq by simp
+          then show ?thesis using 8(1) flex_n_false CoreTy_Var neq by simp
         qed
       qed
     next
@@ -847,35 +847,35 @@ qed
 (* Completeness of unification *)
 (* ========================================================================== *)
 
-(* Helper: if n occurs in ty, then apply_subst \<sigma> ty contains apply_subst \<sigma> (CoreTy_Meta n)
-   as a subterm, making the size of the former strictly larger (when ty \<noteq> CoreTy_Meta n) *)
+(* Helper: if n occurs in ty, then apply_subst \<sigma> ty contains apply_subst \<sigma> (CoreTy_Var n)
+   as a subterm, making the size of the former strictly larger (when ty \<noteq> CoreTy_Var n) *)
 lemma occurs_implies_larger_size:
   assumes "occurs n ty"
-      and "ty \<noteq> CoreTy_Meta n"
-    shows "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < core_type_size (apply_subst \<sigma> ty)"
+      and "ty \<noteq> CoreTy_Var n"
+    shows "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < core_type_size (apply_subst \<sigma> ty)"
   using assms
 proof (induction ty rule: measure_induct_rule[where f=core_type_size])
   case (less ty)
   show ?case
   proof (cases ty)
-    case (CoreTy_Meta m)
-    (* ty = CoreTy_Meta m, and n occurs in it, so n = m, but ty \<noteq> CoreTy_Meta n - contradiction *)
-    from less.prems CoreTy_Meta have "n = m" by (simp add: occurs_def)
-    hence "ty = CoreTy_Meta n" using CoreTy_Meta by simp
+    case (CoreTy_Var m)
+    (* ty = CoreTy_Var m, and n occurs in it, so n = m, but ty \<noteq> CoreTy_Var n - contradiction *)
+    from less.prems CoreTy_Var have "n = m" by (simp add: occurs_def)
+    hence "ty = CoreTy_Var n" using CoreTy_Var by simp
     with less.prems show ?thesis by simp
   next
     case (CoreTy_Datatype name tyargs)
-    from less.prems CoreTy_Datatype have "n \<in> type_metavars (CoreTy_Datatype name tyargs)"
+    from less.prems CoreTy_Datatype have "n \<in> type_tyvars (CoreTy_Datatype name tyargs)"
       by (simp add: occurs_def)
-    hence "\<exists>arg \<in> set tyargs. n \<in> type_metavars arg" by auto
-    then obtain arg where "arg \<in> set tyargs" and "n \<in> type_metavars arg" by auto
+    hence "\<exists>arg \<in> set tyargs. n \<in> type_tyvars arg" by auto
+    then obtain arg where "arg \<in> set tyargs" and "n \<in> type_tyvars arg" by auto
     hence "occurs n arg" by (simp add: occurs_def)
     show ?thesis
-    proof (cases "arg = CoreTy_Meta n")
+    proof (cases "arg = CoreTy_Var n")
       case True
       have "core_type_size (apply_subst \<sigma> arg) \<le> sum_list (map (core_type_size \<circ> apply_subst \<sigma>) tyargs)"
         using \<open>arg \<in> set tyargs\<close> by (simp add: member_le_sum_list)
-      hence "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < 1 + sum_list (map (core_type_size \<circ> apply_subst \<sigma>) tyargs)"
+      hence "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < 1 + sum_list (map (core_type_size \<circ> apply_subst \<sigma>) tyargs)"
         using True by simp
       thus ?thesis using CoreTy_Datatype by simp
     next
@@ -885,7 +885,7 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
       hence "core_type_size arg < core_type_size ty"
         using CoreTy_Datatype by simp
       from less.IH[OF this \<open>occurs n arg\<close> False]
-      have "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < core_type_size (apply_subst \<sigma> arg)" .
+      have "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < core_type_size (apply_subst \<sigma> arg)" .
       also have "core_type_size (apply_subst \<sigma> arg) \<le> sum_list (map (core_type_size \<circ> apply_subst \<sigma>) tyargs)"
         using \<open>arg \<in> set tyargs\<close> by (simp add: member_le_sum_list)
       also have "... < 1 + sum_list (map (core_type_size \<circ> apply_subst \<sigma>) tyargs)" by simp
@@ -905,21 +905,21 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
     from less.prems CoreTy_MathReal show ?thesis by (simp add: occurs_def)
   next
     case (CoreTy_Record flds)
-    from less.prems CoreTy_Record have "n \<in> type_metavars (CoreTy_Record flds)"
+    from less.prems CoreTy_Record have "n \<in> type_tyvars (CoreTy_Record flds)"
       by (simp add: occurs_def)
-    hence "\<exists>t \<in> set (map snd flds). n \<in> type_metavars t" by (auto simp: comp_def)
-    then obtain t where t_in: "t \<in> set (map snd flds)" and "n \<in> type_metavars t" by auto
+    hence "\<exists>t \<in> set (map snd flds). n \<in> type_tyvars t" by (auto simp: comp_def)
+    then obtain t where t_in: "t \<in> set (map snd flds)" and "n \<in> type_tyvars t" by auto
     hence "occurs n t" by (simp add: occurs_def)
     (* Helper: rewrite sum_list for apply_subst composition *)
     have sum_eq: "sum_list (map (core_type_size \<circ> apply_subst \<sigma>) (map snd flds)) =
                   sum_list (map (\<lambda>t. core_type_size (apply_subst \<sigma> t)) (map snd flds))"
       by (simp add: comp_def)
     show ?thesis
-    proof (cases "t = CoreTy_Meta n")
+    proof (cases "t = CoreTy_Var n")
       case True
       have "core_type_size (apply_subst \<sigma> t) \<le> sum_list (map (\<lambda>t. core_type_size (apply_subst \<sigma> t)) (map snd flds))"
         using canonically_ordered_monoid_add_class.member_le_sum_list t_in by force
-      hence "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < 1 + sum_list (map (core_type_size \<circ> apply_subst \<sigma>) (map snd flds))"
+      hence "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < 1 + sum_list (map (core_type_size \<circ> apply_subst \<sigma>) (map snd flds))"
         using True sum_eq by simp
       thus ?thesis using CoreTy_Record by (simp add: comp_def case_prod_beta)
     next
@@ -929,7 +929,7 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
       hence "core_type_size t < core_type_size ty"
         using CoreTy_Record by (simp add: comp_def)
       from less.IH[OF this \<open>occurs n t\<close> False]
-      have "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < core_type_size (apply_subst \<sigma> t)" .
+      have "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < core_type_size (apply_subst \<sigma> t)" .
       also have "core_type_size (apply_subst \<sigma> t) \<le> sum_list (map (\<lambda>t. core_type_size (apply_subst \<sigma> t)) (map snd flds))"
         using canonically_ordered_monoid_add_class.member_le_sum_list t_in by force
       also have "... = sum_list (map (core_type_size \<circ> apply_subst \<sigma>) (map snd flds))"
@@ -939,10 +939,10 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
     qed
   next
     case (CoreTy_Array elem dims)
-    from less.prems CoreTy_Array have "n \<in> type_metavars elem" by (simp add: occurs_def)
+    from less.prems CoreTy_Array have "n \<in> type_tyvars elem" by (simp add: occurs_def)
     hence "occurs n elem" by (simp add: occurs_def)
     show ?thesis
-    proof (cases "elem = CoreTy_Meta n")
+    proof (cases "elem = CoreTy_Var n")
       case True
       have "core_type_size (apply_subst \<sigma> elem) < 1 + core_type_size (apply_subst \<sigma> elem)"
         by simp
@@ -952,7 +952,7 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
       have "core_type_size elem < core_type_size ty"
         using CoreTy_Array by simp
       from less.IH[OF this \<open>occurs n elem\<close> False]
-      have "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < core_type_size (apply_subst \<sigma> elem)" .
+      have "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < core_type_size (apply_subst \<sigma> elem)" .
       also have "... < 1 + core_type_size (apply_subst \<sigma> elem)" by simp
       finally show ?thesis using CoreTy_Array by simp
     qed
@@ -960,31 +960,31 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
 qed
 
 (* The occurs check prevents infinite types: if metavariable n occurs in ty
-   (and ty is not just CoreTy_Meta n), then no substitution can make
-   CoreTy_Meta n equal to ty. *)
+   (and ty is not just CoreTy_Var n), then no substitution can make
+   CoreTy_Var n equal to ty. *)
 lemma occurs_check_no_unifier:
   assumes "occurs n ty"
-      and "ty \<noteq> CoreTy_Meta n"
-    shows "apply_subst \<sigma> (CoreTy_Meta n) \<noteq> apply_subst \<sigma> ty"
+      and "ty \<noteq> CoreTy_Var n"
+    shows "apply_subst \<sigma> (CoreTy_Var n) \<noteq> apply_subst \<sigma> ty"
 proof
-  assume "apply_subst \<sigma> (CoreTy_Meta n) = apply_subst \<sigma> ty"
-  hence "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) = core_type_size (apply_subst \<sigma> ty)"
+  assume "apply_subst \<sigma> (CoreTy_Var n) = apply_subst \<sigma> ty"
+  hence "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) = core_type_size (apply_subst \<sigma> ty)"
     by simp
   moreover from occurs_implies_larger_size[OF assms]
-  have "core_type_size (apply_subst \<sigma> (CoreTy_Meta n)) < core_type_size (apply_subst \<sigma> ty)" .
+  have "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < core_type_size (apply_subst \<sigma> ty)" .
   ultimately show False by simp
 qed
 
-(* Helper: if \<sigma> unifies a non-Meta type with CoreTy_Meta n, then n must be in fmdom \<sigma> *)
+(* Helper: if \<sigma> unifies a non-Meta type with CoreTy_Var n, then n must be in fmdom \<sigma> *)
 lemma unifier_binds_meta:
-  assumes "apply_subst \<sigma> ty1 = apply_subst \<sigma> (CoreTy_Meta n)"
-      and "\<not> (\<exists>m. ty1 = CoreTy_Meta m)"
+  assumes "apply_subst \<sigma> ty1 = apply_subst \<sigma> (CoreTy_Var n)"
+      and "\<not> (\<exists>m. ty1 = CoreTy_Var m)"
     shows "n \<in> fset (fmdom \<sigma>)"
 proof (rule ccontr)
   assume "n \<notin> fset (fmdom \<sigma>)"
   hence "fmlookup \<sigma> n = None" by (simp add: fmdom_notD)
-  hence "apply_subst \<sigma> (CoreTy_Meta n) = CoreTy_Meta n" by simp
-  with assms(1) have "apply_subst \<sigma> ty1 = CoreTy_Meta n" by simp
+  hence "apply_subst \<sigma> (CoreTy_Var n) = CoreTy_Var n" by simp
+  with assms(1) have "apply_subst \<sigma> ty1 = CoreTy_Var n" by simp
   with assms(2) show False by (cases ty1; simp)
 qed
 
@@ -1004,19 +1004,19 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: \<sigma> and \
   case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> "CoreTy_Datatype name1 tyArgs1" n] "1.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> "CoreTy_Datatype name1 tyArgs1" n] "1.prems" CoreTy_Var
     have "n \<in> fset (fmdom \<sigma>)" by auto
     with "1.prems"(2) have "is_flex n" by auto
     show ?thesis
     proof (cases "occurs n (CoreTy_Datatype name1 tyArgs1)")
       case True
-      from occurs_check_no_unifier[OF True] "1.prems"(1) CoreTy_Meta
+      from occurs_check_no_unifier[OF True] "1.prems"(1) CoreTy_Var
       show ?thesis
         by (metis CoreType.distinct(13))
     next
       case False
-      then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+      then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
     qed
   next
     case (CoreTy_Datatype name2 tyArgs2)
@@ -1034,62 +1034,62 @@ next
   case (2 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> CoreTy_Bool n] "2.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> CoreTy_Bool n] "2.prems" CoreTy_Var
     have "is_flex n" by auto
     have "\<not> occurs n CoreTy_Bool" by (simp add: occurs_def)
-    then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+    then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
   qed auto
 next
   (* CoreTy_FiniteInt / ty2 *)
   case (3 is_flex sign bits ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> "CoreTy_FiniteInt sign bits" n] "3.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> "CoreTy_FiniteInt sign bits" n] "3.prems" CoreTy_Var
     have "is_flex n" by blast
     have "\<not> occurs n (CoreTy_FiniteInt sign bits)" by (simp add: occurs_def)
-    then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+    then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
   qed auto
 next
   (* CoreTy_MathInt / ty2 *)
   case (4 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> CoreTy_MathInt n] "4.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> CoreTy_MathInt n] "4.prems" CoreTy_Var
     have "is_flex n" by auto
     have "\<not> occurs n CoreTy_MathInt" by (simp add: occurs_def)
-    then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+    then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
   qed auto
 next
   (* CoreTy_MathReal / ty2 *)
   case (5 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> CoreTy_MathReal n] "5.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> CoreTy_MathReal n] "5.prems" CoreTy_Var
     have "is_flex n" by auto
     have "\<not> occurs n CoreTy_MathReal" by (simp add: occurs_def)
-    then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+    then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
   qed auto
 next
   (* CoreTy_Record / ty2 *)
   case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> "CoreTy_Record flds1" n] "6.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> "CoreTy_Record flds1" n] "6.prems" CoreTy_Var
     have "is_flex n" by auto
     show ?thesis
     proof (cases "occurs n (CoreTy_Record flds1)")
       case True
-      from occurs_check_no_unifier[OF True] "6.prems"(1) CoreTy_Meta
+      from occurs_check_no_unifier[OF True] "6.prems"(1) CoreTy_Var
       show ?thesis
         by (metis CoreType.distinct(53))
     next
       case False
-      then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+      then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
     qed
   next
     case (CoreTy_Record flds2)
@@ -1130,18 +1130,18 @@ next
   case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
-    from unifier_binds_meta[of \<sigma> "CoreTy_Array elemTy1 dims1" n] "7.prems" CoreTy_Meta
+    case (CoreTy_Var n)
+    from unifier_binds_meta[of \<sigma> "CoreTy_Array elemTy1 dims1" n] "7.prems" CoreTy_Var
     have "is_flex n" by auto
     show ?thesis
     proof (cases "occurs n (CoreTy_Array elemTy1 dims1)")
       case True
-      from occurs_check_no_unifier[OF True] "7.prems"(1) CoreTy_Meta
+      from occurs_check_no_unifier[OF True] "7.prems"(1) CoreTy_Var
       show ?thesis
         by (metis CoreType.distinct(55))
     next
       case False
-      then show ?thesis using CoreTy_Meta \<open>is_flex n\<close> by auto
+      then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
     qed
   next
     case (CoreTy_Array elemTy2 dims2)
@@ -1151,14 +1151,14 @@ next
     with dims_eq CoreTy_Array show ?thesis by auto
   qed auto
 next
-  (* CoreTy_Meta / ty2 *)
+  (* CoreTy_Var / ty2 *)
   case (8 is_flex n ty2)
   show ?case
   proof (cases "is_flex n")
     case True
     (* n is flexible: old logic applies *)
     show ?thesis
-    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n")
       case True
       from occurs_check_no_unifier[of n ty2] True "8.prems"(1)
       show ?thesis by simp
@@ -1171,27 +1171,27 @@ next
     (* n is rigid, so n \<notin> fmdom \<sigma> *)
     from flex_n_false "8.prems"(2) have "n \<notin> fset (fmdom \<sigma>)" by auto
     hence lookup_n: "fmlookup \<sigma> n = None" by (simp add: fmdom_notD)
-    hence subst_n: "apply_subst \<sigma> (CoreTy_Meta n) = CoreTy_Meta n" by simp
-    with "8.prems"(1) have ty2_eq: "apply_subst \<sigma> ty2 = CoreTy_Meta n" by simp
+    hence subst_n: "apply_subst \<sigma> (CoreTy_Var n) = CoreTy_Var n" by simp
+    with "8.prems"(1) have ty2_eq: "apply_subst \<sigma> ty2 = CoreTy_Var n" by simp
     show ?thesis
     proof (cases ty2)
-      case (CoreTy_Meta m)
+      case (CoreTy_Var m)
       show ?thesis
       proof (cases "m = n")
         case True
-        (* ty2 = CoreTy_Meta n, unify returns fmempty *)
-        then show ?thesis using CoreTy_Meta flex_n_false by auto
+        (* ty2 = CoreTy_Var n, unify returns fmempty *)
+        then show ?thesis using CoreTy_Var flex_n_false by auto
       next
         case neq: False
-        (* m \<noteq> n, so \<sigma> maps m to CoreTy_Meta n, meaning m \<in> fmdom \<sigma>, so is_flex m *)
-        from ty2_eq CoreTy_Meta have "apply_subst \<sigma> (CoreTy_Meta m) = CoreTy_Meta n" by simp
+        (* m \<noteq> n, so \<sigma> maps m to CoreTy_Var n, meaning m \<in> fmdom \<sigma>, so is_flex m *)
+        from ty2_eq CoreTy_Var have "apply_subst \<sigma> (CoreTy_Var m) = CoreTy_Var n" by simp
         with neq have "fmlookup \<sigma> m \<noteq> None" by (auto split: option.splits)
         hence "m \<in> fset (fmdom \<sigma>)" by (meson fmdom_notD)
         with "8.prems"(2) have "is_flex m" by auto
-        then show ?thesis using CoreTy_Meta flex_n_false neq by auto
+        then show ?thesis using CoreTy_Var flex_n_false neq by auto
       qed
     next
-      (* For all non-Meta ty2: apply_subst \<sigma> ty2 preserves the constructor, so it can't equal CoreTy_Meta n *)
+      (* For all non-Meta ty2: apply_subst \<sigma> ty2 preserves the constructor, so it can't equal CoreTy_Var n *)
       case (CoreTy_Datatype name args)
       with ty2_eq show ?thesis by simp
     next

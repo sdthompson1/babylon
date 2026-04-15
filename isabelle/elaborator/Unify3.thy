@@ -27,7 +27,7 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subs
   case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
       using "1.prems"(1) by (auto split: if_splits)
     have ty1_rt: "is_runtime_type env (CoreTy_Datatype name1 tyArgs1)" using "1.prems"(2) by simp
@@ -54,7 +54,7 @@ next
   case (2 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have "subst = singleton_subst n CoreTy_Bool" using 2(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
@@ -63,7 +63,7 @@ next
   case (3 is_flex sign bits ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have "subst = singleton_subst n (CoreTy_FiniteInt sign bits)" using 3(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def split: if_splits)
@@ -80,7 +80,7 @@ next
   case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
       using "6.prems"(1) by (auto split: if_splits)
     have ty1_rt: "is_runtime_type env (CoreTy_Record flds1)" using "6.prems"(2) by simp
@@ -103,7 +103,7 @@ next
   case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
       using "7.prems"(1) by (auto split: if_splits)
     have ty1_rt: "is_runtime_type env (CoreTy_Array elemTy1 dims1)" using "7.prems"(2) by simp
@@ -125,18 +125,18 @@ next
     qed
   qed auto
 next
-  (* CoreTy_Meta / ty2 *)
+  (* CoreTy_Var / ty2 *)
   case (8 is_flex n ty2)
   show ?case
   proof (cases "is_flex n")
     case True
     show ?thesis
-    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n")
       case True then show ?thesis using 8(1) \<open>is_flex n\<close> by simp
     next
       case False
       show ?thesis
-      proof (cases "ty2 = CoreTy_Meta n")
+      proof (cases "ty2 = CoreTy_Var n")
         case True
         then have "subst = fmempty" using 8(1) \<open>is_flex n\<close> by simp
         then show ?thesis by (simp add: fmran'_def)
@@ -151,24 +151,24 @@ next
     case flex_n_false: False
     show ?thesis
     proof (cases ty2)
-      case (CoreTy_Meta m)
+      case (CoreTy_Var m)
       show ?thesis
       proof (cases "m = n")
         case True
-        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Meta by simp
+        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Var by simp
         then show ?thesis by (simp add: fmran'_def)
       next
         case neq: False
         show ?thesis
         proof (cases "is_flex m")
           case True
-          from 8(1) flex_n_false CoreTy_Meta neq True
-          have "subst = singleton_subst m (CoreTy_Meta n)" by simp
+          from 8(1) flex_n_false CoreTy_Var neq True
+          have "subst = singleton_subst m (CoreTy_Var n)" by simp
           then show ?thesis using "8.prems"(2)
             by (auto simp: fmran'_singleton_subst)
         next
           case False
-          then show ?thesis using 8(1) flex_n_false CoreTy_Meta neq by simp
+          then show ?thesis using 8(1) flex_n_false CoreTy_Var neq by simp
         qed
       qed
     next
@@ -272,7 +272,7 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subs
   case (1 is_flex name1 tyArgs1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Datatype name1 tyArgs1)"
       using 1(2) by (auto split: if_splits)
     have ty1_wk: "is_well_kinded env (CoreTy_Datatype name1 tyArgs1)" using "1.prems"(2) by simp
@@ -298,7 +298,7 @@ next
   case (2 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have "subst = singleton_subst n CoreTy_Bool" using 2(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
@@ -307,7 +307,7 @@ next
   case (3 is_flex sign bits ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have "subst = singleton_subst n (CoreTy_FiniteInt sign bits)" using 3(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def split: if_splits)
@@ -316,7 +316,7 @@ next
   case (4 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have "subst = singleton_subst n CoreTy_MathInt" using 4(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
@@ -325,7 +325,7 @@ next
   case (5 is_flex ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have "subst = singleton_subst n CoreTy_MathReal" using 5(1) by (simp split: if_splits)
     then show ?thesis by (auto simp: fmran'_singleton_subst)
   qed (auto simp: fmran'_def)
@@ -334,7 +334,7 @@ next
   case (6 is_flex flds1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Record flds1)"
       using 6(2) by (auto split: if_splits)
     have ty1_wk: "is_well_kinded env (CoreTy_Record flds1)" using "6.prems"(2) by simp
@@ -355,7 +355,7 @@ next
   case (7 is_flex elemTy1 dims1 ty2)
   then show ?case
   proof (cases ty2)
-    case (CoreTy_Meta n)
+    case (CoreTy_Var n)
     then have subst_eq: "subst = singleton_subst n (CoreTy_Array elemTy1 dims1)"
       using 7(2) by (auto split: if_splits)
     have ty1_wk: "is_well_kinded env (CoreTy_Array elemTy1 dims1)" using "7.prems"(2) by simp
@@ -375,18 +375,18 @@ next
     qed
   qed auto
 next
-  (* CoreTy_Meta / ty2 *)
+  (* CoreTy_Var / ty2 *)
   case (8 is_flex n ty2)
   show ?case
   proof (cases "is_flex n")
     case True
     show ?thesis
-    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n")
+    proof (cases "occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n")
       case True then show ?thesis using 8(1) \<open>is_flex n\<close> by simp
     next
       case False
       show ?thesis
-      proof (cases "ty2 = CoreTy_Meta n")
+      proof (cases "ty2 = CoreTy_Var n")
         case True
         then have "subst = fmempty" using 8(1) \<open>is_flex n\<close> by simp
         then show ?thesis by (simp add: fmran'_def)
@@ -401,24 +401,24 @@ next
     case flex_n_false: False
     show ?thesis
     proof (cases ty2)
-      case (CoreTy_Meta m)
+      case (CoreTy_Var m)
       show ?thesis
       proof (cases "m = n")
         case True
-        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Meta by simp
+        then have "subst = fmempty" using 8(1) flex_n_false CoreTy_Var by simp
         then show ?thesis by (simp add: fmran'_def)
       next
         case neq: False
         show ?thesis
         proof (cases "is_flex m")
           case True
-          from 8(1) flex_n_false CoreTy_Meta neq True
-          have "subst = singleton_subst m (CoreTy_Meta n)" by simp
+          from 8(1) flex_n_false CoreTy_Var neq True
+          have "subst = singleton_subst m (CoreTy_Var n)" by simp
           then show ?thesis using "8.prems"(2)
             by (auto simp: fmran'_singleton_subst)
         next
           case False
-          then show ?thesis using 8(1) flex_n_false CoreTy_Meta neq by simp
+          then show ?thesis using 8(1) flex_n_false CoreTy_Var neq by simp
         qed
       qed
     next

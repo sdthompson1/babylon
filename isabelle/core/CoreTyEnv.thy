@@ -59,8 +59,8 @@ record CoreTyEnv =
   (* Datatypes: maps datatype name to number of type arguments *)
   TE_Datatypes :: "(string, nat) fmap"
 
-  (* Data constructors: maps constructor name to (datatype name, metavars, payload type) *)
-  (* The number of metavars should be consistent with TE_Datatypes *)
+  (* Data constructors: maps constructor name to (datatype name, type variables, payload type) *)
+  (* The number of type variables should be consistent with TE_Datatypes *)
   TE_DataCtors :: "(string, string \<times> nat list \<times> CoreType) fmap"
 
   (* Reverse mapping: datatype name to list of its constructor names *)

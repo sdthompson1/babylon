@@ -234,9 +234,9 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     | None \<Rightarrow> None)"
 | "type_at_path env (CoreTy_Datatype dtName argTypes) (LVPath_VariantProj ctor # rest) =
     (case fmlookup (TE_DataCtors env) ctor of
-      Some (dtName2, metavars, payloadTy) \<Rightarrow>
+      Some (dtName2, tyvars, payloadTy) \<Rightarrow>
         if dtName = dtName2 then
-          type_at_path env (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy) rest
+          type_at_path env (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy) rest
         else None
     | None \<Rightarrow> None)"
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =

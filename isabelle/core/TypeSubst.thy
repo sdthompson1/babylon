@@ -1,21 +1,21 @@
-theory MetaSubst
+theory TypeSubst
   imports CoreSyntax CoreTypeProps
 begin
 
 (* ========================================================================== *)
-(* MetaSubst definitions *)
+(* TypeSubst definitions *)
 (* ========================================================================== *)
 
-(* A MetaSubst maps metavariable IDs (nats) to types. *)
-type_synonym MetaSubst = "(nat, CoreType) fmap"
+(* A TypeSubst maps type variable IDs (nats) to types. *)
+type_synonym TypeSubst = "(nat, CoreType) fmap"
 
 (* The singleton substitution: maps n to ty. *)
-definition singleton_subst :: "nat \<Rightarrow> CoreType \<Rightarrow> MetaSubst" where
+definition singleton_subst :: "nat \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
   "singleton_subst n ty = fmupd n ty fmempty"
 
-(* Apply a metavariable substitution to a type.
-   This replaces CoreTy_Meta n with subst(n) if defined, otherwise leaves it. *)
-fun apply_subst :: "MetaSubst \<Rightarrow> CoreType \<Rightarrow> CoreType" where
+(* Apply a type variable substitution to a type.
+   This replaces CoreTy_Var n with subst(n) if defined, otherwise leaves it. *)
+fun apply_subst :: "TypeSubst \<Rightarrow> CoreType \<Rightarrow> CoreType" where
   "apply_subst subst (CoreTy_Datatype name tyargs) =
     CoreTy_Datatype name (map (apply_subst subst) tyargs)"
 | "apply_subst subst CoreTy_Bool = CoreTy_Bool"
@@ -25,14 +25,14 @@ fun apply_subst :: "MetaSubst \<Rightarrow> CoreType \<Rightarrow> CoreType" whe
 | "apply_subst subst (CoreTy_Record flds) =
     CoreTy_Record (map (\<lambda>(name, ty). (name, apply_subst subst ty)) flds)"
 | "apply_subst subst (CoreTy_Array elemTy dims) = CoreTy_Array (apply_subst subst elemTy) dims"
-| "apply_subst subst (CoreTy_Meta n) =
+| "apply_subst subst (CoreTy_Var n) =
     (case fmlookup subst n of
       Some ty \<Rightarrow> ty
-    | None \<Rightarrow> CoreTy_Meta n)"
+    | None \<Rightarrow> CoreTy_Var n)"
 
-(* Find all metavariables appearing in the range of a substitution *)
-definition subst_range_mvs :: "MetaSubst \<Rightarrow> nat set" where
-  "subst_range_mvs subst = \<Union>(type_metavars ` fmran' subst)"
+(* Find all type variables appearing in the range of a substitution *)
+definition subst_range_tyvars :: "TypeSubst \<Rightarrow> nat set" where
+  "subst_range_tyvars subst = \<Union>(type_tyvars ` fmran' subst)"
 
 
 (* ========================================================================== *)
@@ -57,11 +57,11 @@ lemma map_apply_subst_empty [simp]:
 
 (* Effect of applying a singleton subst *)
 lemma apply_subst_singleton:
-  "apply_subst (singleton_subst n ty') (CoreTy_Meta n) = ty'"
+  "apply_subst (singleton_subst n ty') (CoreTy_Var n) = ty'"
   by (simp add: singleton_subst_def)
 
 lemma apply_subst_singleton_other:
-  "n \<noteq> m \<Longrightarrow> apply_subst (singleton_subst n ty') (CoreTy_Meta m) = CoreTy_Meta m"
+  "n \<noteq> m \<Longrightarrow> apply_subst (singleton_subst n ty') (CoreTy_Var m) = CoreTy_Var m"
   by (simp add: singleton_subst_def)
 
 (* If n doesn't occur in ty, then applying singleton_subst n ty' leaves ty unchanged *)
@@ -100,62 +100,62 @@ lemma is_numeric_type_apply_subst:
   "is_numeric_type ty \<Longrightarrow> is_numeric_type (apply_subst subst ty)"
   by (cases ty) auto
 
-(* Metavars after applying a substitution come from:
-   - metavars in ty that are not in dom(subst), OR
-   - metavars in the range of subst (for substituted vars) *)
-lemma apply_subst_metavars_result:
-  "type_metavars (apply_subst subst ty) \<subseteq>
-   (type_metavars ty - fset (fmdom subst)) \<union> subst_range_mvs subst"
+(* Type variables after applying a substitution come from:
+   - type variables in ty that are not in dom(subst), OR
+   - type variables in the range of subst (for substituted vars) *)
+lemma apply_subst_tyvars_result:
+  "type_tyvars (apply_subst subst ty) \<subseteq>
+   (type_tyvars ty - fset (fmdom subst)) \<union> subst_range_tyvars subst"
 proof (induction ty)
   case (CoreTy_Record flds)
   show ?case
   proof
-    fix x assume "x \<in> type_metavars (apply_subst subst (CoreTy_Record flds))"
+    fix x assume "x \<in> type_tyvars (apply_subst subst (CoreTy_Record flds))"
     then obtain name ty where mem: "(name, ty) \<in> set flds"
-      and x_in: "x \<in> type_metavars (apply_subst subst ty)"
+      and x_in: "x \<in> type_tyvars (apply_subst subst ty)"
       by auto
     from CoreTy_Record.IH mem
-    have "type_metavars (apply_subst subst ty) \<subseteq>
-          (type_metavars ty - fset (fmdom subst)) \<union> subst_range_mvs subst"
+    have "type_tyvars (apply_subst subst ty) \<subseteq>
+          (type_tyvars ty - fset (fmdom subst)) \<union> subst_range_tyvars subst"
       by auto
-    with x_in have "x \<in> (type_metavars ty - fset (fmdom subst)) \<union> subst_range_mvs subst"
+    with x_in have "x \<in> (type_tyvars ty - fset (fmdom subst)) \<union> subst_range_tyvars subst"
       by auto
-    moreover have "type_metavars ty \<subseteq> type_metavars (CoreTy_Record flds)"
+    moreover have "type_tyvars ty \<subseteq> type_tyvars (CoreTy_Record flds)"
       using mem by auto
-    ultimately show "x \<in> (type_metavars (CoreTy_Record flds) - fset (fmdom subst)) \<union> subst_range_mvs subst"
+    ultimately show "x \<in> (type_tyvars (CoreTy_Record flds) - fset (fmdom subst)) \<union> subst_range_tyvars subst"
       by auto
   qed
 next
-  case (CoreTy_Meta n)
-  then show ?case by (cases "fmlookup subst n"; auto simp: subst_range_mvs_def fmran'I)
+  case (CoreTy_Var n)
+  then show ?case by (cases "fmlookup subst n"; auto simp: subst_range_tyvars_def fmran'I)
 qed (auto)
 
 (* Corollary: If n is in dom(subst) and not in range(subst), it's eliminated from result *)
 corollary apply_subst_eliminates_dom:
   assumes "n \<in> fset (fmdom subst)"
-      and "n \<notin> subst_range_mvs subst"
-  shows "n \<notin> type_metavars (apply_subst subst ty)"
+      and "n \<notin> subst_range_tyvars subst"
+  shows "n \<notin> type_tyvars (apply_subst subst ty)"
 proof -
-  have "type_metavars (apply_subst subst ty) \<subseteq>
-        (type_metavars ty - fset (fmdom subst)) \<union> subst_range_mvs subst"
-    by (rule apply_subst_metavars_result)
+  have "type_tyvars (apply_subst subst ty) \<subseteq>
+        (type_tyvars ty - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    by (rule apply_subst_tyvars_result)
   thus ?thesis using assms by auto
 qed
 
-(* Substitution is identity when domain is disjoint from type's metavariables *)
+(* Substitution is identity when domain is disjoint from the type's type variables *)
 lemma apply_subst_disjoint_id:
-  "type_metavars ty \<inter> fset (fmdom subst) = {} \<Longrightarrow> apply_subst subst ty = ty"
+  "type_tyvars ty \<inter> fset (fmdom subst) = {} \<Longrightarrow> apply_subst subst ty = ty"
 proof (induction ty)
   case (CoreTy_Datatype name tyargs)
   hence "\<forall>arg \<in> set tyargs. apply_subst subst arg = arg" by auto
   thus ?case using CoreTy_Datatype by (simp add: map_idI)
 next
   case (CoreTy_Record flds)
-  have disjoint: "\<And>name ty. (name, ty) \<in> set flds \<Longrightarrow> type_metavars ty \<inter> fset (fmdom subst) = {}"
+  have disjoint: "\<And>name ty. (name, ty) \<in> set flds \<Longrightarrow> type_tyvars ty \<inter> fset (fmdom subst) = {}"
   proof -
     fix name ty assume "(name, ty) \<in> set flds"
-    hence "type_metavars ty \<subseteq> type_metavars (CoreTy_Record flds)" by auto
-    thus "type_metavars ty \<inter> fset (fmdom subst) = {}"
+    hence "type_tyvars ty \<subseteq> type_tyvars (CoreTy_Record flds)" by auto
+    thus "type_tyvars ty \<inter> fset (fmdom subst) = {}"
       using CoreTy_Record.prems by auto
   qed
   hence "\<And>name ty. (name, ty) \<in> set flds \<Longrightarrow> apply_subst subst ty = ty"
@@ -164,7 +164,7 @@ next
     by (induction flds) auto
   thus ?case by simp
 next
-  case (CoreTy_Meta n)
+  case (CoreTy_Var n)
   thus ?case by (simp add: fmdom_notD)
 qed (simp_all)
 
@@ -204,16 +204,16 @@ next
     by (simp add: comp_def case_prod_beta)
   ultimately show ?case by simp
 next
-  case (CoreTy_Meta n)
-  from CoreTy_Meta.prems(1) have n_in_src: "n |\<in>| TE_RuntimeTypeVars src" by simp
+  case (CoreTy_Var n)
+  from CoreTy_Var.prems(1) have n_in_src: "n |\<in>| TE_RuntimeTypeVars src" by simp
   show ?case
   proof (cases "fmlookup subst n")
     case None
-    from CoreTy_Meta.prems(3)[OF n_in_src] None have "n |\<in>| TE_RuntimeTypeVars tgt" by simp
+    from CoreTy_Var.prems(3)[OF n_in_src] None have "n |\<in>| TE_RuntimeTypeVars tgt" by simp
     thus ?thesis using None by simp
   next
     case (Some ty')
-    from CoreTy_Meta.prems(3)[OF n_in_src] Some have "is_runtime_type tgt ty'" by simp
+    from CoreTy_Var.prems(3)[OF n_in_src] Some have "is_runtime_type tgt ty'" by simp
     thus ?thesis using Some by simp
   qed
 qed simp_all
@@ -278,41 +278,41 @@ lemma fmlookup_zip_map:
 
 (* Applying a substitution built from (vars -> map (apply_subst s) tys) is the same
    as first applying the (vars -> tys) substitution, then applying s. Requires that
-   all metavariables of ty are in vars and that vars is distinct. *)
+   all type variables of ty are in vars and that vars is distinct. *)
 lemma apply_subst_compose_zip:
   assumes "length vars = length tys"
-      and "type_metavars ty \<subseteq> set vars"
+      and "type_tyvars ty \<subseteq> set vars"
       and "distinct vars"
   shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
   using assms
 proof (induction ty)
-  case (CoreTy_Meta n)
-  from CoreTy_Meta.prems(2) have "n \<in> set vars" by simp
+  case (CoreTy_Var n)
+  from CoreTy_Var.prems(2) have "n \<in> set vars" by simp
   then obtain i where i_bound: "i < length vars" and vars_i: "vars ! i = n"
     by (metis in_set_conv_nth)
-  with CoreTy_Meta.prems(1) have i_bound_tys: "i < length tys" by simp
+  with CoreTy_Var.prems(1) have i_bound_tys: "i < length tys" by simp
   have lookup_eq: "fmlookup (fmap_of_list (zip vars tys)) n = Some (tys ! i)"
-    using i_bound i_bound_tys vars_i CoreTy_Meta.prems(1,3)
+    using i_bound i_bound_tys vars_i CoreTy_Var.prems(1,3)
     by (metis fmap_of_list.rep_eq map_of_zip_nth)
   hence "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n
        = Some (apply_subst s (tys ! i))"
-    by (simp add: CoreTy_Meta.prems(1) fmlookup_zip_map)
+    by (simp add: CoreTy_Var.prems(1) fmlookup_zip_map)
   thus ?case using lookup_eq by simp
 next
   case (CoreTy_Datatype name tyargs)
-  have "\<forall>ty \<in> set tyargs. type_metavars ty \<subseteq> set vars"
+  have "\<forall>ty \<in> set tyargs. type_tyvars ty \<subseteq> set vars"
     using CoreTy_Datatype.prems(2) by auto
   thus ?case
     using CoreTy_Datatype.IH CoreTy_Datatype.prems(1,3) by (induction tyargs) auto
 next
   case (CoreTy_Record flds)
-  have flds_mvs: "\<forall>(name, ty) \<in> set flds. type_metavars ty \<subseteq> set vars"
+  have flds_tyvars: "\<forall>(name, ty) \<in> set flds. type_tyvars ty \<subseteq> set vars"
     using CoreTy_Record.prems(2) by fastforce
   have "\<forall>(name, ty) \<in> set flds.
           apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
         = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
-    using CoreTy_Record.IH CoreTy_Record.prems(1,3) flds_mvs by fastforce
+    using CoreTy_Record.IH CoreTy_Record.prems(1,3) flds_tyvars by fastforce
   hence "map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty)) flds
        = map (\<lambda>(name, ty). (name, apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
     by (induction flds) auto
@@ -331,7 +331,7 @@ qed simp_all
 (* Corollary for mapping over a list of types *)
 lemma map_apply_subst_compose_zip:
   assumes "length vars = length tys"
-      and "\<forall>t \<in> set ts. type_metavars t \<subseteq> set vars"
+      and "\<forall>t \<in> set ts. type_tyvars t \<subseteq> set vars"
       and "distinct vars"
   shows "map (apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys)))) ts
        = map (apply_subst s) (map (apply_subst (fmap_of_list (zip vars tys))) ts)"
@@ -343,7 +343,7 @@ lemma map_apply_subst_compose_zip:
 (* ========================================================================== *)
 
 (* Compose two substitutions *)
-definition compose_subst :: "MetaSubst \<Rightarrow> MetaSubst \<Rightarrow> MetaSubst" where
+definition compose_subst :: "TypeSubst \<Rightarrow> TypeSubst \<Rightarrow> TypeSubst" where
   "compose_subst s2 s1 = s2 ++\<^sub>f fmmap (apply_subst s2) s1"
 
 (* Composition of substitutions is correct *)

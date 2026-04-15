@@ -1543,12 +1543,12 @@ next
     from gv_lookup wk have wk_cleared:
       "is_well_kinded (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
       unfolding tyenv_vars_well_kinded_def by blast
-    \<comment> \<open>Well-kinded in the cleared env means ty has no metavars, so it is well-kinded
+    \<comment> \<open>Well-kinded in the cleared env means ty has no type variables, so it is well-kinded
         in any env with the same TE_Datatypes \<close>
-    have mvs_empty: "type_metavars ty = {}"
-      using is_well_kinded_type_metavars_subset[OF wk_cleared] by simp
+    have tyvars_empty: "type_tyvars ty = {}"
+      using is_well_kinded_type_tyvars_subset[OF wk_cleared] by simp
     show ?thesis
-      using is_well_kinded_transfer[OF wk_cleared] mvs_empty by simp
+      using is_well_kinded_transfer[OF wk_cleared] tyvars_empty by simp
   qed
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
   proof
@@ -1574,10 +1574,10 @@ next
       with gv rt have rt_cleared:
         "is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
         unfolding tyenv_vars_runtime_def by blast
-      have mvs_empty: "type_metavars ty = {}"
-        using is_runtime_type_metavars_subset[OF rt_cleared] by simp
+      have tyvars_empty: "type_tyvars ty = {}"
+        using is_runtime_type_tyvars_subset[OF rt_cleared] by simp
       show ?thesis
-        using is_runtime_type_transfer[OF rt_cleared] mvs_empty by simp
+        using is_runtime_type_transfer[OF rt_cleared] tyvars_empty by simp
     qed
   qed
   ultimately show ?case by blast

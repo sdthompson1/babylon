@@ -2,14 +2,14 @@ theory CoreTypeSubst
   imports CoreTypecheck CoreStmtTypecheck
 begin
 
-(* Substitute type metavariables (CoreTy_Meta) in terms and environments.
+(* Substitute type variables (CoreTy_Var) in terms and environments.
 
    This file contains the substitution machinery used by:
-   - The elaborator: produces terms with metavariables that get progressively
-     resolved by unification, then substituted away. apply_subst_to_term is the
-     workhorse for that, and apply_subst_to_term_preserves_typing is the lemma
-     ElabTermCorrect uses to show that the elaborator's substitutions don't
-     break typing.
+   - The elaborator: produces terms with metavariables (type variables used
+     as unifiable placeholders) that get progressively resolved by unification,
+     then substituted away. apply_subst_to_term is the workhorse for that, and
+     apply_subst_to_term_preserves_typing is the lemma ElabTermCorrect uses to
+     show that the elaborator's substitutions don't break typing.
    - The function-call soundness proof (TypeSoundness.thy case 6): substitutes
      the callee's type variables to caller-instantiated types, in the *type
      environment* used to typecheck the callee body. The body's source syntax
@@ -26,7 +26,7 @@ begin
 (* Substitution on terms                                                       *)
 (* ========================================================================== *)
 
-fun apply_subst_to_term :: "MetaSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
+fun apply_subst_to_term :: "TypeSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
   "apply_subst_to_term subst (CoreTm_LitBool b) = CoreTm_LitBool b"
 | "apply_subst_to_term subst (CoreTm_LitInt i) = CoreTm_LitInt i"
 | "apply_subst_to_term subst (CoreTm_LitArray elemTy tms) =
@@ -163,7 +163,7 @@ lemma is_writable_lvalue_apply_subst_to_term [simp]:
 (* pattern_compatible and patterns_exhaustive only inspect the top-level shape of the
    scrutinee type (and for Datatype, just the type name). Substitution preserves all
    of these top-level shapes, so if the predicate holds on ty it also holds on
-   apply_subst subst ty. (The reverse is not true if ty is a CoreTy_Meta.) *)
+   apply_subst subst ty. (The reverse is not true if ty is a CoreTy_Var.) *)
 lemma pattern_compatible_apply_subst:
   "pattern_compatible env p ty \<Longrightarrow> pattern_compatible env p (apply_subst subst ty)"
   by (cases p; cases ty) (auto split: option.splits prod.splits)
@@ -178,7 +178,7 @@ lemma patterns_exhaustive_apply_subst:
    on apply_subst_to_callee_env and core_term_type_subst_callee_env. *)
 
 (* Type substitution does not change term-level free variables,
-   since it only substitutes type metavariables. *)
+   since it only substitutes type variables. *)
 lemma apply_subst_to_term_free_vars:
   "core_term_free_vars (apply_subst_to_term subst tm) = core_term_free_vars tm"
 proof (induction tm)
@@ -206,7 +206,7 @@ qed simp_all
 
 
 (* Integer/numeric/etc. types are all closed under substitution (they only match
-   on concrete, metavar-free type constructors). *)
+   on concrete, type-variable-free type constructors). *)
 lemma is_integer_type_apply_subst:
   "is_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
   by (cases ty) auto
@@ -334,8 +334,8 @@ qed
 (* Substitution on statements                                                  *)
 (* ========================================================================== *)
 
-fun apply_subst_to_stmt :: "MetaSubst \<Rightarrow> CoreStatement \<Rightarrow> CoreStatement"
-and apply_subst_to_stmt_list :: "MetaSubst \<Rightarrow> CoreStatement list \<Rightarrow> CoreStatement list" where
+fun apply_subst_to_stmt :: "TypeSubst \<Rightarrow> CoreStatement \<Rightarrow> CoreStatement"
+and apply_subst_to_stmt_list :: "TypeSubst \<Rightarrow> CoreStatement list \<Rightarrow> CoreStatement list" where
   "apply_subst_to_stmt subst (CoreStmt_VarDecl g name vr ty tm) =
     CoreStmt_VarDecl g name vr (apply_subst subst ty) (apply_subst_to_term subst tm)"
 | "apply_subst_to_stmt subst (CoreStmt_Fix name ty) =
@@ -379,7 +379,7 @@ and apply_subst_to_stmt_list :: "MetaSubst \<Rightarrow> CoreStatement list \<Ri
    environment with the callee's own type variables (FI_TyArgs) in scope. To
    re-typecheck the body in the caller's context we must:
    - Replace the callee's type variables with the caller's (which act as the
-     binders for any unresolved metavariables in the substitution's range).
+     binders for any unresolved type variables in the substitution's range).
    - Substitute through TE_LocalVars (parameter types), so the formal
      parameters get caller-instantiated types.
    - Substitute through TE_ReturnType, so the return-type check inside Return
@@ -388,7 +388,7 @@ and apply_subst_to_stmt_list :: "MetaSubst \<Rightarrow> CoreStatement list \<Ri
    const-names, function-ghost flag) are unchanged: they were inherited from
    the caller's env via body_env_for in the first place. *)
 definition apply_subst_to_callee_env ::
-    "MetaSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
+    "TypeSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "apply_subst_to_callee_env subst callerEnv calleeEnv =
     calleeEnv \<lparr>
       TE_LocalVars := fmmap (apply_subst subst) (TE_LocalVars calleeEnv),
@@ -521,7 +521,7 @@ lemma is_writable_lvalue_apply_subst_to_callee_env [simp]:
    either to a well-kinded type in callerEnv or back to a callerEnv type variable.
    Used by core_term_type_subst_callee_env and friends. *)
 definition callee_env_subst_ok ::
-    "MetaSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+    "TypeSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "callee_env_subst_ok subst callerEnv calleeEnv \<equiv>
     \<comment> \<open>Caller and callee agree on the global-ish fields. (In our case 6 use
         these are inherited from callerEnv via body_env_for.) \<close>
@@ -543,7 +543,7 @@ definition callee_env_subst_ok ::
    in NotGhost mode. Most consumers will pass it conditionally:
    `mode = NotGhost \<Longrightarrow> callee_env_subst_runtime_ok subst callerEnv calleeEnv`. *)
 definition callee_env_subst_runtime_ok ::
-    "MetaSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+    "TypeSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "callee_env_subst_runtime_ok subst callerEnv calleeEnv \<equiv>
     \<forall>n. n |\<in>| TE_RuntimeTypeVars calleeEnv \<longrightarrow>
          (case fmlookup subst n of
@@ -778,14 +778,14 @@ proof -
   have c6: "tyenv_payloads_well_kinded ?be"
     unfolding tyenv_payloads_well_kinded_def
   proof (intro allI impI)
-    fix ctorName dtName tyArgMetavars payload
-    assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyArgMetavars, payload)"
-    hence ctor_lk: "fmlookup (TE_DataCtors calleeEnv) ctorName = Some (dtName, tyArgMetavars, payload)"
+    fix ctorName dtName tyVars payload
+    assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
+    hence ctor_lk: "fmlookup (TE_DataCtors calleeEnv) ctorName = Some (dtName, tyVars, payload)"
       by (simp add: apply_subst_to_callee_env_def)
     with callee_payloads_wk
-    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyArgMetavars \<rparr>) payload"
+    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
       unfolding tyenv_payloads_well_kinded_def by blast
-    thus "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list tyArgMetavars \<rparr>) payload"
+    thus "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
       using wk_scope_eq by simp
   qed
 
@@ -1008,10 +1008,10 @@ next
     from gv CoreTm_Var.prems(2) have wk_cleared:
       "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) lookupTy"
       unfolding tyenv_well_formed_def tyenv_vars_well_kinded_def by blast
-    have mvs_empty: "type_metavars lookupTy = {}"
-      using is_well_kinded_type_metavars_subset[OF wk_cleared] by simp
+    have tyvars_empty: "type_tyvars lookupTy = {}"
+      using is_well_kinded_type_tyvars_subset[OF wk_cleared] by simp
     have ty_closed: "apply_subst subst lookupTy = lookupTy"
-      using mvs_empty by (simp add: apply_subst_disjoint_id)
+      using tyvars_empty by (simp add: apply_subst_disjoint_id)
     from None have
       lookup_subst: "tyenv_lookup_var (apply_subst_to_callee_env subst callerEnv calleeEnv) name
                        = fmlookup (TE_GlobalVars calleeEnv) name"
@@ -1042,7 +1042,7 @@ next
   have tgt_ty_eq: "apply_subst subst targetTy = targetTy"
     using tgt_int is_integer_type_apply_subst by simp
   \<comment> \<open>The substituted targetTy, for the runtime check, stays runtime since it's
-      closed (integer types have no metavars). \<close>
+      closed (integer types have no type variables). \<close>
   have tgt_rt_subst:
     "ghost = NotGhost \<longrightarrow>
        is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv)
@@ -1436,7 +1436,7 @@ next
     using CoreTm_FunctionCall.prems(2) fn_lookup
     unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
 
-  \<comment> \<open>Each FI_TmArgs type's metavars are within FI_TyArgs (from
+  \<comment> \<open>Each FI_TmArgs type's type variables are within FI_TyArgs (from
       tyenv_fun_types_well_kinded). Same for FI_ReturnType. \<close>
   have fi_args_wk:
     "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
@@ -1447,26 +1447,26 @@ next
     "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
     using CoreTm_FunctionCall.prems(2) fn_lookup
     unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_mvs:
-    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_metavars t \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_tyvars:
+    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
   proof
     fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
     with fi_args_wk
     have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
       by blast
-    from is_well_kinded_type_metavars_subset[OF this]
-    show "type_metavars t \<subseteq> set (FI_TyArgs funInfo)"
+    from is_well_kinded_type_tyvars_subset[OF this]
+    show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
       by (simp add: fset_of_list.rep_eq)
   qed
-  have fi_ret_mvs: "type_metavars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
-    using is_well_kinded_type_metavars_subset[OF fi_ret_wk]
+  have fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
+    using is_well_kinded_type_tyvars_subset[OF fi_ret_wk]
     by (simp add: fset_of_list.rep_eq)
 
   \<comment> \<open>Substitution composition for the return type. \<close>
   have ret_compose:
     "apply_subst subst (apply_subst ?innerSubst (FI_ReturnType funInfo))
        = apply_subst ?subst_innerSubst (FI_ReturnType funInfo)"
-    using apply_subst_compose_zip[OF len_tyArgs[symmetric] fi_ret_mvs tyArgs_distinct, of subst]
+    using apply_subst_compose_zip[OF len_tyArgs[symmetric] fi_ret_tyvars tyArgs_distinct, of subst]
     by simp
 
   \<comment> \<open>Each tmArg's IH lifts to the substituted version. The expected type after
@@ -1527,15 +1527,15 @@ next
       obtain n ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (n, ti, vor)"
         by (cases "FI_TmArgs funInfo ! i") auto
       from actual_eq fi_arg_eq have actual_eq2: "actualTy = apply_subst ?innerSubst ti" by simp
-      \<comment> \<open>ti's metavars are in FI_TyArgs (from fi_args_mvs). \<close>
+      \<comment> \<open>ti's type variables are in FI_TyArgs (from fi_args_tyvars). \<close>
       have ti_in: "ti \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
         using i_bound_args fi_arg_eq
         by (force simp: image_iff in_set_conv_nth)
-      with fi_args_mvs have ti_mvs: "type_metavars ti \<subseteq> set (FI_TyArgs funInfo)" by blast
+      with fi_args_tyvars have ti_tyvars: "type_tyvars ti \<subseteq> set (FI_TyArgs funInfo)" by blast
       have actual_compose:
         "apply_subst subst actualTy = apply_subst ?subst_innerSubst ti"
         unfolding actual_eq2
-        using apply_subst_compose_zip[OF len_tyArgs[symmetric] ti_mvs tyArgs_distinct, of subst]
+        using apply_subst_compose_zip[OF len_tyArgs[symmetric] ti_tyvars tyArgs_distinct, of subst]
         by simp
       from ih_result actual_compose have ih_result':
         "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
@@ -1618,19 +1618,19 @@ next
     using CoreTm_VariantCtor.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
 
-  \<comment> \<open>payloadTy's metavars are within set tyvars. \<close>
+  \<comment> \<open>payloadTy's type variables are within set tyvars. \<close>
   have payload_wk: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
     using CoreTm_VariantCtor.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
-  have payload_mvs: "type_metavars payloadTy \<subseteq> set tyvars"
-    using is_well_kinded_type_metavars_subset[OF payload_wk]
+  have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
+    using is_well_kinded_type_tyvars_subset[OF payload_wk]
     by (simp add: fset_of_list.rep_eq)
 
   \<comment> \<open>Substitution composition for the payload. \<close>
   have payload_compose:
     "apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)
        = apply_subst (fmap_of_list (zip tyvars ?subst_tyArgs)) payloadTy"
-    using apply_subst_compose_zip[OF len_eq[symmetric] payload_mvs tyvars_distinct, of subst]
+    using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst]
     by simp
 
   have payload_subst_compose:
@@ -1810,13 +1810,13 @@ next
     using CoreTm_VariantProj.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
 
-  \<comment> \<open>payloadTy's metavars are within set tyvars (from tyenv_payloads_well_kinded
-      via is_well_kinded_type_metavars_subset). \<close>
+  \<comment> \<open>payloadTy's type variables are within set tyvars (from tyenv_payloads_well_kinded
+      via is_well_kinded_type_tyvars_subset). \<close>
   have payload_wk: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
     using CoreTm_VariantProj.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
-  have payload_mvs: "type_metavars payloadTy \<subseteq> set tyvars"
-    using is_well_kinded_type_metavars_subset[OF payload_wk]
+  have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
+    using is_well_kinded_type_tyvars_subset[OF payload_wk]
     by (simp add: fset_of_list.rep_eq)
 
   \<comment> \<open>Substitution composition: pushing the outer subst through the inner zip
@@ -1825,7 +1825,7 @@ next
     "apply_subst subst ty
        = apply_subst (fmap_of_list (zip tyvars (map (apply_subst subst) tyArgs))) payloadTy"
     unfolding ty_eq
-    using apply_subst_compose_zip[OF len_eq[symmetric] payload_mvs tyvars_distinct, of subst]
+    using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst]
     by simp
 
   show ?case
@@ -2008,7 +2008,7 @@ qed
      no precondition.
 
      Elaborator clients can typically discharge this from their freshness
-     invariant: fresh metavars in the substitution's domain don't appear in any
+     invariant: fresh type variables in the substitution's domain don't appear in any
      pre-existing local-var type or return type.
 
    This lemma is a corollary of core_term_type_subst_callee_env: under these

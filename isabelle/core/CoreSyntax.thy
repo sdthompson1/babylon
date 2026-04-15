@@ -19,7 +19,7 @@ datatype CoreType =
   | CoreTy_MathReal
   | CoreTy_Record "(string \<times> CoreType) list"
   | CoreTy_Array CoreType "CoreDimension list"
-  | CoreTy_Meta nat   (* Metavariable for unification *)
+  | CoreTy_Var nat   (* Type variable. In the elaborator these are also used as unification variables. *)
 
 (* Pattern *)
 datatype CorePattern =

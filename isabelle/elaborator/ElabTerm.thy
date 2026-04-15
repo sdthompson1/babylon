@@ -70,7 +70,7 @@ where
             case
               (if tyArgs = [] \<and> numTyParams > 0 then
                 \<comment> \<open>Generate fresh metavariables for the function's type arguments\<close>
-                Inr (map CoreTy_Meta [next_mv..<next_mv + numTyParams], next_mv + numTyParams)
+                Inr (map CoreTy_Var [next_mv..<next_mv + numTyParams], next_mv + numTyParams)
               else if numTyParams = length tyArgs then
                 \<comment> \<open>Elaborate the user's provided type arguments\<close>
                 (case elab_type_list env typedefs ghost tyArgs of
@@ -101,7 +101,7 @@ where
    Returns the final substitution. *)
 fun unify_call_types :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat
                         \<Rightarrow> CoreType list \<Rightarrow> CoreType list
-                        \<Rightarrow> MetaSubst \<Rightarrow> TypeError list + MetaSubst" where
+                        \<Rightarrow> TypeSubst \<Rightarrow> TypeError list + TypeSubst" where
   "unify_call_types is_flex loc fnName argIdx [] [] accSubst = Inr accSubst"
 | "unify_call_types is_flex loc fnName argIdx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
     \<comment> \<open>Apply accumulated substitution to both types before unifying\<close>
@@ -125,7 +125,7 @@ fun unify_call_types :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Right
    Apply substitution to terms and insert coercions where needed.
    For each term, apply the substitution. If the resulting actual type differs from
    the expected type (both must be finite integers at this point), insert a cast. *)
-fun apply_call_coercions :: "MetaSubst \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list
+fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                             \<Rightarrow> CoreTerm list" where
   "apply_call_coercions subst [] [] [] = []"
 | "apply_call_coercions subst (tm # tms) (actualTy # actualTys) (expectedTy # expectedTys) =
@@ -141,8 +141,8 @@ fun apply_call_coercions :: "MetaSubst \<Rightarrow> CoreTerm list \<Rightarrow>
 (* Combine unify_call_types and apply_call_coercions into a single function *)
 definition unify_call_args :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat
                               \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
-                              \<Rightarrow> CoreType list \<Rightarrow> MetaSubst
-                              \<Rightarrow> TypeError list + (CoreTerm list \<times> MetaSubst)" where
+                              \<Rightarrow> CoreType list \<Rightarrow> TypeSubst
+                              \<Rightarrow> TypeError list + (CoreTerm list \<times> TypeSubst)" where
   "unify_call_args is_flex loc fnName argIdx tms actualTys expectedTys accSubst =
     (case unify_call_types is_flex loc fnName argIdx actualTys expectedTys accSubst of
        Inl errs \<Rightarrow> Inl errs
@@ -268,9 +268,9 @@ fun is_comparison_bab_binop :: "BabBinop \<Rightarrow> bool" where
 
 (* Build a substitution that maps every flexible metavariable in a type to a
    given default type. Rigid type-variable metas are skipped. *)
-definition const_subst_for :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> MetaSubst" where
+definition const_subst_for :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
   "const_subst_for is_flex ty defaultTy =
-     fmap_of_list (map (\<lambda>n. (n, defaultTy)) (filter is_flex (type_metavars_list ty)))"
+     fmap_of_list (map (\<lambda>n. (n, defaultTy)) (filter is_flex (type_tyvars_list ty)))"
 
 (* Resolve metavariables in binary operator operands using unification.
    1. Try to unify the two operand types.
@@ -287,7 +287,7 @@ fun resolve_binop_metas :: "(nat \<Rightarrow> bool) \<Rightarrow> BabBinop
     (case unify is_flex lhsTy rhsTy of
        Some unifSubst \<Rightarrow>
          let unifiedTy = apply_subst unifSubst lhsTy
-         in if list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list unifiedTy) then
+         in if list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list unifiedTy) then
               (apply_subst_to_term unifSubst lhsTm, unifiedTy,
                apply_subst_to_term unifSubst rhsTm, unifiedTy)
             else
@@ -433,7 +433,7 @@ fun build_comparison_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \
                 Inl errs \<Rightarrow> Inl errs
               | Inr restTm \<Rightarrow>
                   Inr (CoreTm_Binop CoreBinop_And cmpTm restTm)))
-        else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy) then
+        else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list resolvedRhsTy) then
           \<comment> \<open>This check is now effectively dead code since resolve_binop_metas
              produces resolved types, but keeping it simplifies the correctness proof.\<close>
           Inl [TyErr_CannotInferType loc]
@@ -628,7 +628,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
     (case elab_term env typedefs ghost rhs next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (rhsTm, rhsTy, next_mv1) \<Rightarrow>
-        if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_metavars_list rhsTy)
+        if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
         then Inl [TyErr_CannotInferType loc]
         else let env' = env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
                               TE_GhostLocals := (if ghost = Ghost

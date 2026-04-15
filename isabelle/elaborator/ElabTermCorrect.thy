@@ -224,7 +224,7 @@ next
     elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
     by (auto split: sum.splits)
   from "7.prems" elab_rhs have rhs_resolved:
-    "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_metavars_list rhsTy)"
+    "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)"
     by (auto split: if_splits)
   let ?env_body = "env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
                           TE_GhostLocals := (if ghost = Ghost then finsert varName (TE_GhostLocals env)
@@ -369,7 +369,7 @@ proof (cases callTm)
   proof (cases "tyArgs = [] \<and> ?numTyParams > 0")
     case True
     \<comment> \<open>Type args were omitted - metavariables generated\<close>
-    let ?genTyArgs = "map CoreTy_Meta [next_mv..<next_mv + ?numTyParams]"
+    let ?genTyArgs = "map CoreTy_Var [next_mv..<next_mv + ?numTyParams]"
     from assms(1) BabTm_Name fn_lookup ghost_ok True
     have results: "newTyArgs = ?genTyArgs"
                   "next_mv' = next_mv + ?numTyParams"
@@ -385,12 +385,12 @@ proof (cases callTm)
     have all_in_tv: "\<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_TypeVars ?env_ext"
       using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
     have wk_ok: "list_all (is_well_kinded ?env_ext) ?genTyArgs"
-      using list_all_meta_is_well_kinded[OF all_in_tv] .
+      using list_all_tyvar_is_well_kinded[OF all_in_tv] .
     have all_in_rtv: "ghost = NotGhost \<Longrightarrow>
                        \<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_RuntimeTypeVars ?env_ext"
       using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
     have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
-      using all_in_rtv list_all_meta_is_runtime by blast
+      using all_in_rtv list_all_tyvar_is_runtime by blast
     show ?thesis
       using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok mono
       by auto
@@ -610,18 +610,18 @@ next
     from ih obtain theta where finalSubst_eq: "finalSubst = compose_subst theta accSubst"
       by blast
 
-    \<comment> \<open>Finite integer types have no metavariables, so applying any substitution is identity\<close>
-    have actualTy'_no_mvs: "type_metavars ?actualTy' = {}"
-      using is_int finite_integer_type_is_integer_type integer_type_no_metavars by blast
-    have expectedTy'_no_mvs: "type_metavars ?expectedTy' = {}"
-      using is_int finite_integer_type_is_integer_type integer_type_no_metavars by blast
+    \<comment> \<open>Finite integer types have no type variables, so applying any substitution is identity\<close>
+    have actualTy'_no_tyvars: "type_tyvars ?actualTy' = {}"
+      using is_int finite_integer_type_is_integer_type integer_type_no_tyvars by blast
+    have expectedTy'_no_tyvars: "type_tyvars ?expectedTy' = {}"
+      using is_int finite_integer_type_is_integer_type integer_type_no_tyvars by blast
 
     \<comment> \<open>apply_subst finalSubst actualTy = apply_subst theta (apply_subst accSubst actualTy)
-       = apply_subst theta ?actualTy'. Since ?actualTy' has no metavars, this equals ?actualTy'.\<close>
+       = apply_subst theta ?actualTy'. Since ?actualTy' has no type variables, this equals ?actualTy'.\<close>
     have "apply_subst finalSubst actualTy = apply_subst theta ?actualTy'"
       using finalSubst_eq by (simp add: compose_subst_correct)
     also have "... = ?actualTy'"
-      using actualTy'_no_mvs apply_subst_disjoint_id by simp
+      using actualTy'_no_tyvars apply_subst_disjoint_id by simp
     finally have actual_eq: "apply_subst finalSubst actualTy = ?actualTy'" .
     hence actual_finite: "is_finite_integer_type (apply_subst finalSubst actualTy)"
       using is_int by simp
@@ -629,7 +629,7 @@ next
     have "apply_subst finalSubst expectedTy = apply_subst theta ?expectedTy'"
       using finalSubst_eq by (simp add: compose_subst_correct)
     also have "... = ?expectedTy'"
-      using expectedTy'_no_mvs apply_subst_disjoint_id by simp
+      using expectedTy'_no_tyvars apply_subst_disjoint_id by simp
     finally have expected_eq: "apply_subst finalSubst expectedTy = ?expectedTy'" .
     hence expected_finite: "is_finite_integer_type (apply_subst finalSubst expectedTy)"
       using is_int by simp
@@ -828,7 +828,7 @@ proof (cases ty1)
     case other: (CoreTy_Array x1 x2)
     with assms(1) \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> show ?thesis by simp
   next
-    case other: (CoreTy_Meta x)
+    case other: (CoreTy_Var x)
     with assms(1) \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> show ?thesis by simp
   qed
 next
@@ -850,7 +850,7 @@ next
   case other: (CoreTy_Array x1 x2)
   with assms(1) show ?thesis by simp
 next
-  case other: (CoreTy_Meta x)
+  case other: (CoreTy_Var x)
   with assms(1) show ?thesis by simp
 qed
 
@@ -944,11 +944,11 @@ lemma fmlookup_fmap_of_list_const:
 
 (* const_subst_for maps every flexible metavariable in the type *)
 lemma const_subst_for_domain:
-  "n \<in> type_metavars ty \<Longrightarrow> is_flex n \<Longrightarrow>
+  "n \<in> type_tyvars ty \<Longrightarrow> is_flex n \<Longrightarrow>
    fmlookup (const_subst_for is_flex ty defaultTy) n = Some defaultTy"
   unfolding const_subst_for_def
-  using fmlookup_fmap_of_list_const[of n "filter is_flex (type_metavars_list ty)" defaultTy]
-  by (simp add: set_type_metavars_list)
+  using fmlookup_fmap_of_list_const[of n "filter is_flex (type_tyvars_list ty)" defaultTy]
+  by (simp add: set_type_tyvars_list)
 
 (* Correctness of resolve_binop_metas: if the input terms typecheck at their types,
    the resolved terms typecheck at the resolved types. *)
@@ -958,8 +958,8 @@ lemma resolve_binop_metas_correct:
     and rhs_typed: "core_term_type env ghost rhsTm = Some rhsTy"
     and wf: "tyenv_well_formed env"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost lhsTm' = Some lhsTy'
        \<and> core_term_type env ghost rhsTm' = Some rhsTy'"
 proof (cases "unify is_flex lhsTy rhsTy")
@@ -1033,9 +1033,9 @@ next
     "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty' \<Longrightarrow> apply_subst unifSubst ty' = ty'"
   proof -
     fix name ty' assume lk: "fmlookup (TE_LocalVars env) name = Some ty'"
-    have "type_metavars ty' \<inter> fset (fmdom unifSubst) = {}"
+    have "type_tyvars ty' \<inter> fset (fmdom unifSubst) = {}"
     proof -
-      { fix n assume n_mv: "n \<in> type_metavars ty'" and n_dom: "n \<in> fset (fmdom unifSubst)"
+      { fix n assume n_mv: "n \<in> type_tyvars ty'" and n_dom: "n \<in> fset (fmdom unifSubst)"
         from n_dom have "n |\<in>| fmdom unifSubst" by simp
         with unif_dom_flex have "is_flex n" by blast
         moreover from locals_rigid lk n_mv have "\<not> is_flex n" by blast
@@ -1048,9 +1048,9 @@ next
   qed
   have ret_unaffected: "apply_subst unifSubst (TE_ReturnType env) = TE_ReturnType env"
   proof -
-    have "type_metavars (TE_ReturnType env) \<inter> fset (fmdom unifSubst) = {}"
+    have "type_tyvars (TE_ReturnType env) \<inter> fset (fmdom unifSubst) = {}"
     proof -
-      { fix n assume n_mv: "n \<in> type_metavars (TE_ReturnType env)"
+      { fix n assume n_mv: "n \<in> type_tyvars (TE_ReturnType env)"
                  and n_dom: "n \<in> fset (fmdom unifSubst)"
         from n_dom have "n |\<in>| fmdom unifSubst" by simp
         with unif_dom_flex have "is_flex n" by blast
@@ -1074,7 +1074,7 @@ next
     by simp
 
   show ?thesis
-  proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list ?unifiedTy)")
+  proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list ?unifiedTy)")
     case True
     \<comment> \<open>Resolved: directly use unified type\<close>
     from resolved Some True have
@@ -1136,9 +1136,9 @@ next
       "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty' \<Longrightarrow> apply_subst ?fullSubst ty' = ty'"
     proof -
       fix name ty' assume lk: "fmlookup (TE_LocalVars env) name = Some ty'"
-      have "type_metavars ty' \<inter> fset (fmdom ?fullSubst) = {}"
+      have "type_tyvars ty' \<inter> fset (fmdom ?fullSubst) = {}"
       proof -
-        { fix n assume n_mv: "n \<in> type_metavars ty'"
+        { fix n assume n_mv: "n \<in> type_tyvars ty'"
                     and n_dom: "n \<in> fset (fmdom ?fullSubst)"
           from n_dom have "n |\<in>| fmdom ?fullSubst" by simp
           with full_dom_flex have "is_flex n" by blast
@@ -1152,9 +1152,9 @@ next
     qed
     have ret_unaffected_full: "apply_subst ?fullSubst (TE_ReturnType env) = TE_ReturnType env"
     proof -
-      have "type_metavars (TE_ReturnType env) \<inter> fset (fmdom ?fullSubst) = {}"
+      have "type_tyvars (TE_ReturnType env) \<inter> fset (fmdom ?fullSubst) = {}"
       proof -
-        { fix n assume n_mv: "n \<in> type_metavars (TE_ReturnType env)"
+        { fix n assume n_mv: "n \<in> type_tyvars (TE_ReturnType env)"
                     and n_dom: "n \<in> fset (fmdom ?fullSubst)"
           from n_dom have "n |\<in>| fmdom ?fullSubst" by simp
           with full_dom_flex have "is_flex n" by blast
@@ -1198,8 +1198,8 @@ lemma elab_single_binop_correct:
     and "tyenv_well_formed env"
     and "binop_to_core babOp = Some cop"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof -
   obtain lhsTm' lhsTy' rhsTm' rhsTy' where
@@ -1349,8 +1349,8 @@ lemma elab_binop_with_special_correct:
     and "core_term_type env ghost rhsTm = Some rhsTy"
     and "tyenv_well_formed env"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
   case True
@@ -1424,8 +1424,8 @@ lemma fold_binop_left_correct:
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 using assms proof (induction ops arbitrary: accTm accTy)
   case Nil
@@ -1452,8 +1452,8 @@ lemma fold_implies_right_correct:
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 using assms proof (induction ops arbitrary: lhsTm lhsTy resultTm resultTy)
   case Nil
@@ -1602,7 +1602,7 @@ next
                   (case build_comparison_chain is_flex loc ghost chainCtr resolvedRhs' resolvedRhsTy' rest of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr restTm \<Rightarrow> Inr (CoreTm_Binop CoreBinop_And cmpTm restTm)))
-            else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy')
+            else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list resolvedRhsTy')
                  then Inl [TyErr_CannotInferType loc]
             else let varName = ''chain@@'' @ nat_to_string chainCtr;
                      varTm = CoreTm_Var varName
@@ -1635,7 +1635,7 @@ next
       from bcc_simplified Cons resolved not_simple
       have bcc_complex:
         "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest) =
-         (if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy)
+         (if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list resolvedRhsTy)
           then Inl [TyErr_CannotInferType loc]
           else (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy ?varTm resolvedRhsTy of
                   Inl errs \<Rightarrow> Inl errs
@@ -1649,7 +1649,7 @@ next
         by (simp add: Let_def split: list.splits prod.splits)
 
       show ?thesis
-      proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy)")
+      proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list resolvedRhsTy)")
         case False
         \<comment> \<open>Not resolved: returns Inl, contradicting Inr\<close>
         from Cons.prems bcc_complex False
@@ -1697,8 +1697,8 @@ lemma build_comparison_chain_correct:
     and "tyenv_well_formed env"
     and "check_comparison_chain_directions ops dir"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some CoreTy_Bool"
   using assms
 proof (induction ops arbitrary: chainCtr lhsTm lhsTy resultTm env dir)
@@ -1794,7 +1794,7 @@ next
 
       \<comment> \<open>The resolved check must pass (otherwise we'd get Inl).\<close>
       from Cons.prems(1) triple_eq rest_cons resolved not_simple checks_passed
-      have ground: "list_all (\<lambda>n. \<not> is_flex n) (type_metavars_list resolvedRhsTy)"
+      have ground: "list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list resolvedRhsTy)"
         by (auto simp: Let_def split: if_splits sum.splits prod.splits)
 
       \<comment> \<open>Extract the elab and recursive call results via the helper lemma.\<close>
@@ -1901,18 +1901,18 @@ next
           local resolvedRhsTy has no flex metavars (from ground). \<close>
       have env'_locals_rigid:
         "\<forall>name ty' n. fmlookup (TE_LocalVars env') name = Some ty'
-                        \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
+                        \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
       proof (intro allI impI)
         fix name ty' n
         assume lk: "fmlookup (TE_LocalVars env') name = Some ty'"
-        assume n_mv: "n \<in> type_metavars ty'"
+        assume n_mv: "n \<in> type_tyvars ty'"
         show "\<not> is_flex n"
         proof (cases "name = vn")
           case True
           with lk have "ty' = resolvedRhsTy"
             by (simp add: env'_def)
           with n_mv ground show ?thesis
-            by (auto simp: set_type_metavars_list[symmetric] list_all_iff)
+            by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
         next
           case False
           with lk have "fmlookup (TE_LocalVars env) name = Some ty'"
@@ -1920,7 +1920,7 @@ next
           with Cons.prems(6) n_mv show ?thesis by blast
         qed
       qed
-      have env'_ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env') \<longrightarrow> \<not> is_flex n"
+      have env'_ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env') \<longrightarrow> \<not> is_flex n"
         using Cons.prems(7) by (simp add: env'_def)
 
       \<comment> \<open>cmpTm typechecks in env'\<close>
@@ -1982,8 +1982,8 @@ lemma process_binop_chain_correct:
     and "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) ops"
     and "tyenv_well_formed env"
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
-                         \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> is_flex n"
-    and ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+                         \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
+    and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof (cases ops)
   case Nil
@@ -2149,14 +2149,14 @@ next
     qed
 
     \<comment> \<open>The unifier only binds flex metas (those outside TE_TypeVars env). So any
-        type whose metavars are contained in TE_TypeVars env is unaffected. \<close>
+        type whose type variables are contained in TE_TypeVars env is unaffected. \<close>
     have unif_dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
       using unify_unify_list_dom_flex(1)[OF Some] .
-    have unif_id_on_env: "\<And>ty'. type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+    have unif_id_on_env: "\<And>ty'. type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
                                \<Longrightarrow> apply_subst subst ty' = ty'"
     proof -
-      fix ty' assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
-      have "type_metavars ty' \<inter> fset (fmdom subst) = {}"
+      fix ty' assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
+      have "type_tyvars ty' \<inter> fset (fmdom subst) = {}"
         using mvs unif_dom_flex by auto
       thus "apply_subst subst ty' = ty'"
         by (rule apply_subst_disjoint_id)
@@ -2175,8 +2175,8 @@ next
         unfolding tyenv_well_formed_def by simp
       with lk_env have "is_well_kinded env ty'"
         unfolding tyenv_vars_well_kinded_def by blast
-      from is_well_kinded_type_metavars_subset[OF this]
-      have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+      from is_well_kinded_type_tyvars_subset[OF this]
+      have "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)" .
       thus "apply_subst subst ty' = ty'" by (rule unif_id_on_env)
     qed
 
@@ -2188,8 +2188,8 @@ next
         unfolding tyenv_well_formed_def by simp
       hence "is_well_kinded env (TE_ReturnType env)"
         unfolding tyenv_return_type_well_kinded_def .
-      from is_well_kinded_type_metavars_subset[OF this]
-      have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+      from is_well_kinded_type_tyvars_subset[OF this]
+      have "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
       hence "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
         by (rule unif_id_on_env)
       thus ?thesis using ret_eq by simp
@@ -2286,13 +2286,13 @@ next
       TE_TypeVars env leaves locals and the return type unchanged. \<close>
   have unif_id_on_env:
     "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
-              \<Longrightarrow> type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+              \<Longrightarrow> type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
               \<Longrightarrow> apply_subst s ty' = ty'"
   proof -
     fix s :: "(nat, CoreType) fmap" and ty'
     assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
-    assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
-    have "type_metavars ty' \<inter> fset (fmdom s) = {}"
+    assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
+    have "type_tyvars ty' \<inter> fset (fmdom s) = {}"
       using mvs dom_flex by auto
     thus "apply_subst s ty' = ty'" by (rule apply_subst_disjoint_id)
   qed
@@ -2311,8 +2311,8 @@ next
       unfolding tyenv_well_formed_def by simp
     with lk_env have "is_well_kinded env ty'"
       unfolding tyenv_vars_well_kinded_def by blast
-    from is_well_kinded_type_metavars_subset[OF this]
-    have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+    from is_well_kinded_type_tyvars_subset[OF this]
+    have "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)" .
     thus "apply_subst s ty' = ty'"
       using unif_id_on_env[OF dom_flex] by blast
   qed
@@ -2328,8 +2328,8 @@ next
       unfolding tyenv_well_formed_def by simp
     hence "is_well_kinded env (TE_ReturnType env)"
       unfolding tyenv_return_type_well_kinded_def .
-    from is_well_kinded_type_metavars_subset[OF this]
-    have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+    from is_well_kinded_type_tyvars_subset[OF this]
+    have "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
     hence "apply_subst s (TE_ReturnType env) = TE_ReturnType env"
       using unif_id_on_env[OF dom_flex] by blast
     thus "apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
@@ -2538,11 +2538,11 @@ next
     \<comment> \<open>subst has flex domain, so locals and return type are unaffected. \<close>
     have subst_dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
       using unify_unify_list_dom_flex(1)[OF Some] .
-    have unif_id_on_env: "\<And>ty'. type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+    have unif_id_on_env: "\<And>ty'. type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
                                \<Longrightarrow> apply_subst subst ty' = ty'"
     proof -
-      fix ty' assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
-      have "type_metavars ty' \<inter> fset (fmdom subst) = {}"
+      fix ty' assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
+      have "type_tyvars ty' \<inter> fset (fmdom subst) = {}"
         using mvs subst_dom_flex by auto
       thus "apply_subst subst ty' = ty'"
         by (rule apply_subst_disjoint_id)
@@ -2559,8 +2559,8 @@ next
         unfolding tyenv_well_formed_def by simp
       with lk_env have "is_well_kinded env ty'"
         unfolding tyenv_vars_well_kinded_def by blast
-      from is_well_kinded_type_metavars_subset[OF this]
-      have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+      from is_well_kinded_type_tyvars_subset[OF this]
+      have "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)" .
       thus "apply_subst subst ty' = ty'" by (rule unif_id_on_env)
     qed
     have ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
@@ -2571,8 +2571,8 @@ next
         unfolding tyenv_well_formed_def by simp
       hence "is_well_kinded env (TE_ReturnType env)"
         unfolding tyenv_return_type_well_kinded_def .
-      from is_well_kinded_type_metavars_subset[OF this]
-      have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+      from is_well_kinded_type_tyvars_subset[OF this]
+      have "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
       hence "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
         by (rule unif_id_on_env)
       thus ?thesis using ret_eq by simp
@@ -2701,16 +2701,16 @@ next
       using rhs_typing by (auto dest: list_all2_nthD)
   qed
   \<comment> \<open>Locals and return type of ?env' come from env (unchanged by the
-      extension) and are well-kinded in env, so their metavars lie in
+      extension) and are well-kinded in env, so their type variables lie in
       TE_TypeVars env. The Binop case's is_flex is (\<lambda>n. n |\<notin>| TE_TypeVars env),
-      so none of those metavars are flex. \<close>
+      so none of those type variables are flex. \<close>
   have env'_locals_rigid:
     "\<forall>name ty' n. fmlookup (TE_LocalVars ?env') name = Some ty'
-                    \<longrightarrow> n \<in> type_metavars ty' \<longrightarrow> \<not> ?is_flex n"
+                    \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> ?is_flex n"
   proof (intro allI impI)
     fix name ty' n
     assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
-    assume n_mv: "n \<in> type_metavars ty'"
+    assume n_mv: "n \<in> type_tyvars ty'"
     have "TE_LocalVars ?env' = TE_LocalVars env"
       unfolding extend_env_with_tyvars_def by simp
     with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
@@ -2718,21 +2718,21 @@ next
       unfolding tyenv_well_formed_def by simp
     with lk_env have "is_well_kinded env ty'"
       unfolding tyenv_vars_well_kinded_def by blast
-    from is_well_kinded_type_metavars_subset[OF this] n_mv
+    from is_well_kinded_type_tyvars_subset[OF this] n_mv
     have "n \<in> fset (TE_TypeVars env)" by blast
     thus "\<not> ?is_flex n" by simp
   qed
-  have env'_ret_rigid: "\<forall>n. n \<in> type_metavars (TE_ReturnType ?env') \<longrightarrow> \<not> ?is_flex n"
+  have env'_ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType ?env') \<longrightarrow> \<not> ?is_flex n"
   proof (intro allI impI)
-    fix n assume n_mv: "n \<in> type_metavars (TE_ReturnType ?env')"
+    fix n assume n_mv: "n \<in> type_tyvars (TE_ReturnType ?env')"
     have "TE_ReturnType ?env' = TE_ReturnType env"
       unfolding extend_env_with_tyvars_def by simp
-    with n_mv have n_mv': "n \<in> type_metavars (TE_ReturnType env)" by simp
+    with n_mv have n_mv': "n \<in> type_tyvars (TE_ReturnType env)" by simp
     from "6.prems"(2) have "tyenv_return_type_well_kinded env"
       unfolding tyenv_well_formed_def by simp
     hence "is_well_kinded env (TE_ReturnType env)"
       unfolding tyenv_return_type_well_kinded_def .
-    from is_well_kinded_type_metavars_subset[OF this] n_mv'
+    from is_well_kinded_type_tyvars_subset[OF this] n_mv'
     have "n \<in> fset (TE_TypeVars env)" by blast
     thus "\<not> ?is_flex n" by simp
   qed
@@ -2753,7 +2753,7 @@ next
     elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
     by (auto split: sum.splits)
   from "7.prems"(1) elab_rhs have rhs_resolved:
-    "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_metavars_list rhsTy)"
+    "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)"
     by (auto split: if_splits)
 
   \<comment> \<open>Build the let-body env (as used in both elab_term and core_term_type)\<close>
@@ -2793,18 +2793,18 @@ next
       using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
     have rhs_wk_sub: "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1) rhsTy"
       using core_term_type_well_kinded[OF "7.IH"(1)[OF elab_rhs "7.prems"(2,3,4)] wf_sub] .
-    have mvs_in_env: "type_metavars rhsTy \<subseteq> fset (TE_TypeVars env)"
+    have tyvars_in_env: "type_tyvars rhsTy \<subseteq> fset (TE_TypeVars env)"
       using rhs_resolved
-      by (auto simp: set_type_metavars_list[symmetric] list_all_iff fset_of_list_elem)
+      by (auto simp: set_type_tyvars_list[symmetric] list_all_iff fset_of_list_elem)
     show ?thesis
-      using is_well_kinded_transfer[OF rhs_wk_sub mvs_in_env]
+      using is_well_kinded_transfer[OF rhs_wk_sub tyvars_in_env]
       by (simp add: extend_env_with_tyvars_def)
   qed
 
   \<comment> \<open>In non-ghost context, rhsTy is also runtime in env.
-     rhs_resolved pins rhsTy's metas into env.TE_TypeVars, and freshness (prems(4))
+     rhs_resolved pins rhsTy's type variables into env.TE_TypeVars, and freshness (prems(4))
      says those are all strictly below next_mv, so they're disjoint from the fresh
-     range [next_mv..<next_mv1]. Hence any meta in rhsTy that's runtime in the
+     range [next_mv..<next_mv1]. Hence any type variable in rhsTy that's runtime in the
      sub-extended env is also runtime in the original env.\<close>
   have rhs_rt_env: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
   proof
@@ -2813,35 +2813,35 @@ next
       using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
     have rhs_rt_sub: "is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1) rhsTy"
       using core_term_type_notghost_runtime ng rhs_typing_sub wf_sub by auto
-    \<comment> \<open>Every meta in rhsTy is in env.TE_TypeVars (from rhs_resolved)\<close>
-    have metas_in_env_tv: "\<forall>n \<in> type_metavars rhsTy. n |\<in>| TE_TypeVars env"
-      using rhs_resolved by (auto simp: set_type_metavars_list[symmetric] list_all_iff)
-    \<comment> \<open>And every such meta is < next_mv (by freshness)\<close>
-    have metas_lt: "\<forall>n \<in> type_metavars rhsTy. n < next_mv"
-      using metas_in_env_tv "7.prems"(4) by blast
+    \<comment> \<open>Every type variable in rhsTy is in env.TE_TypeVars (from rhs_resolved)\<close>
+    have tyvars_in_env_tv: "\<forall>n \<in> type_tyvars rhsTy. n |\<in>| TE_TypeVars env"
+      using rhs_resolved by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
+    \<comment> \<open>And every such type variable is < next_mv (by freshness)\<close>
+    have tyvars_lt: "\<forall>n \<in> type_tyvars rhsTy. n < next_mv"
+      using tyvars_in_env_tv "7.prems"(4) by blast
     \<comment> \<open>In the sub-extended env, TE_RuntimeTypeVars = env.TE_RuntimeTypeVars \<union> [next_mv..<next_mv1].
-       Combined with metas_lt, any meta in rhsTy that's runtime in the sub-extended env
+       Combined with tyvars_lt, any type variable in rhsTy that's runtime in the sub-extended env
        is also in env.TE_RuntimeTypeVars.\<close>
-    have metas_in_env_rtv: "type_metavars rhsTy \<subseteq> fset (TE_RuntimeTypeVars env)"
+    have tyvars_in_env_rtv: "type_tyvars rhsTy \<subseteq> fset (TE_RuntimeTypeVars env)"
     proof
-      fix n assume n_in: "n \<in> type_metavars rhsTy"
+      fix n assume n_in: "n \<in> type_tyvars rhsTy"
       \<comment> \<open>From rhs_rt_sub we know n is in the sub-extended env's RT set\<close>
-      have rhs_mvs_rt: "type_metavars rhsTy \<subseteq>
+      have rhs_tyvars_rt: "type_tyvars rhsTy \<subseteq>
                           fset (TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1))"
-        using is_runtime_type_metavars_subset[OF rhs_rt_sub] .
-      from rhs_mvs_rt n_in
+        using is_runtime_type_tyvars_subset[OF rhs_rt_sub] .
+      from rhs_tyvars_rt n_in
       have "n |\<in>| TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1)"
         by (auto simp: fset_of_list_elem)
       hence n_in_ext_rtv: "n |\<in>| TE_RuntimeTypeVars env |\<union>| fset_of_list [next_mv..<next_mv1]"
         using ng unfolding extend_env_with_tyvars_def by simp
-      from metas_lt n_in have "n < next_mv" by blast
+      from tyvars_lt n_in have "n < next_mv" by blast
       hence "n \<notin> set [next_mv..<next_mv1]" by simp
       hence "n |\<notin>| fset_of_list [next_mv..<next_mv1]" by (simp add: fset_of_list_elem)
       with n_in_ext_rtv have "n |\<in>| TE_RuntimeTypeVars env" by blast
       thus "n \<in> fset (TE_RuntimeTypeVars env)" by (simp add: fset_of_list_elem)
     qed
     show "is_runtime_type env rhsTy"
-      using is_runtime_type_transfer[OF rhs_rt_sub metas_in_env_rtv]
+      using is_runtime_type_transfer[OF rhs_rt_sub tyvars_in_env_rtv]
       unfolding extend_env_with_tyvars_def by simp
   qed
 
@@ -3114,13 +3114,13 @@ next
 
   \<comment> \<open>finalSubst's domain is flex, so locals and return type in ?env' (inherited
       from the outer env and well-kinded there) are unaffected. \<close>
-  have finalSubst_id_on_env: "\<And>ty'. type_metavars ty' \<subseteq> fset (TE_TypeVars env)
+  have finalSubst_id_on_env: "\<And>ty'. type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
                                     \<Longrightarrow> apply_subst finalSubst ty' = ty'"
   proof -
-    fix ty' assume mvs: "type_metavars ty' \<subseteq> fset (TE_TypeVars env)"
-    have "type_metavars ty' \<inter> fset (fmdom finalSubst) = {}"
+    fix ty' assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
+    have "type_tyvars ty' \<inter> fset (fmdom finalSubst) = {}"
     proof -
-      { fix n assume n_mv: "n \<in> type_metavars ty'"
+      { fix n assume n_mv: "n \<in> type_tyvars ty'"
                   and n_dom: "n \<in> fset (fmdom finalSubst)"
         from n_dom have "n |\<in>| fmdom finalSubst" by simp
         with finalSubst_dom_flex have "n |\<notin>| TE_TypeVars env" by blast
@@ -3144,8 +3144,8 @@ next
       unfolding tyenv_well_formed_def by simp
     with lk_env have "is_well_kinded env ty'"
       unfolding tyenv_vars_well_kinded_def by blast
-    from is_well_kinded_type_metavars_subset[OF this]
-    have "type_metavars ty' \<subseteq> fset (TE_TypeVars env)" .
+    from is_well_kinded_type_tyvars_subset[OF this]
+    have "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)" .
     thus "apply_subst finalSubst ty' = ty'" by (rule finalSubst_id_on_env)
   qed
   have ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
@@ -3156,8 +3156,8 @@ next
       unfolding tyenv_well_formed_def by simp
     hence "is_well_kinded env (TE_ReturnType env)"
       unfolding tyenv_return_type_well_kinded_def .
-    from is_well_kinded_type_metavars_subset[OF this]
-    have "type_metavars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
+    from is_well_kinded_type_tyvars_subset[OF this]
+    have "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
     hence "apply_subst finalSubst (TE_ReturnType env) = TE_ReturnType env"
       by (rule finalSubst_id_on_env)
     thus ?thesis using ret_eq by simp
@@ -3227,18 +3227,18 @@ next
   \<comment> \<open>Expected arg types in core_term_type\<close>
   let ?coreExpArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
 
-  \<comment> \<open>Function arg types have metavars only from FI_TyArgs.
+  \<comment> \<open>Function arg types have type variables only from FI_TyArgs.
      Derived from tyenv_fun_types_well_kinded (each arg type is well-kinded in
-     env with TE_TypeVars := FI_TyArgs), via is_well_kinded_type_metavars_subset.\<close>
-  have fi_args_metavars: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_metavars ty \<subseteq> set (FI_TyArgs funInfo)"
+     env with TE_TypeVars := FI_TyArgs), via is_well_kinded_type_tyvars_subset.\<close>
+  have fi_args_tyvars: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
   proof
     fix ty assume ty_in: "ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
     from ty_in fi_args_wk_inner
     have ty_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
       by blast
-    have "type_metavars ty \<subseteq> fset (TE_TypeVars (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
-      using is_well_kinded_type_metavars_subset[OF ty_wk] .
-    thus "type_metavars ty \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
+    have "type_tyvars ty \<subseteq> fset (TE_TypeVars (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
+      using is_well_kinded_type_tyvars_subset[OF ty_wk] .
+    thus "type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
   qed
 
   \<comment> \<open>Function type args are distinct\<close>
@@ -3249,8 +3249,8 @@ next
 
   \<comment> \<open>Key: ?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes\<close>
   let ?argTys = "map (fst \<circ> snd) (FI_TmArgs funInfo)"
-  have fi_args_metavars': "\<forall>t \<in> set ?argTys. type_metavars t \<subseteq> set (FI_TyArgs funInfo)"
-    using fi_args_metavars by auto
+  have fi_args_tyvars': "\<forall>t \<in> set ?argTys. type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+    using fi_args_tyvars by auto
   have coreExpArgTypes_eq: "?coreExpArgTypes = map (apply_subst
       (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst finalSubst) tyArgs)))) ?argTys"
     by (induction "FI_TmArgs funInfo") auto
@@ -3258,7 +3258,7 @@ next
       (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))) ?argTys"
     using expArgTypes_eq by (induction "FI_TmArgs funInfo") auto
   have core_exp_eq: "?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes"
-    using len_tyargs fi_args_metavars' fi_tyargs_distinct coreExpArgTypes_eq expArgTypes_fst
+    using len_tyargs fi_args_tyvars' fi_tyargs_distinct coreExpArgTypes_eq expArgTypes_fst
     by (metis map_apply_subst_compose_zip)
 
   \<comment> \<open>From coerce_correct, finalArgTms have these types (in ?env')\<close>
@@ -3280,21 +3280,21 @@ next
   have len_finalArgTms: "length finalArgTms = length (FI_TmArgs funInfo)"
     using coerce_correct expArgTypes_eq by (simp add: list_all2_lengthD)
 
-  \<comment> \<open>Return type metavars are in FI_TyArgs, derived from tyenv_fun_types_well_kinded\<close>
-  have fi_ret_metavars: "type_metavars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
+  \<comment> \<open>Return type's type variables are in FI_TyArgs, derived from tyenv_fun_types_well_kinded\<close>
+  have fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
   proof -
     have "tyenv_fun_types_well_kinded ?env'"
       using wf' tyenv_well_formed_def by blast
     hence ret_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
                                   (FI_ReturnType funInfo)"
       using fn_lookup' tyenv_fun_types_well_kinded_def by blast
-    have "type_metavars (FI_ReturnType funInfo) \<subseteq>
+    have "type_tyvars (FI_ReturnType funInfo) \<subseteq>
           fset (TE_TypeVars (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
-      using is_well_kinded_type_metavars_subset[OF ret_wk] .
+      using is_well_kinded_type_tyvars_subset[OF ret_wk] .
     thus ?thesis by (simp add: fset_of_list.rep_eq)
   qed
   have ret_eq: "ty = apply_subst ?coreTySubst (FI_ReturnType funInfo)"
-    using result_eq retType_eq len_tyargs fi_ret_metavars fi_tyargs_distinct
+    using result_eq retType_eq len_tyargs fi_ret_tyvars fi_tyargs_distinct
     by (simp add: apply_subst_compose_zip)
 
   \<comment> \<open>Put it all together\<close>

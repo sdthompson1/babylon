@@ -1,5 +1,5 @@
 theory Unify
-  imports "../core/CoreSyntax" "../core/MetaSubst" "../core/CoreTypeProps"
+  imports "../core/CoreSyntax" "../core/TypeSubst" "../core/CoreTypeProps"
 begin
 
 (* ========================================================================== *)
@@ -12,11 +12,11 @@ begin
    Rigid metavariables (where is_flex returns False) behave like opaque type constants
    and only unify with themselves. *)
 
-function (domintros) unify :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> MetaSubst option"
-and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> MetaSubst option" where
+function (domintros) unify :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option"
+and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> TypeSubst option" where
   "unify is_flex (CoreTy_Datatype name1 tyArgs1) ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then
           (if occurs n (CoreTy_Datatype name1 tyArgs1) then None
            else Some (singleton_subst n (CoreTy_Datatype name1 tyArgs1)))
@@ -27,14 +27,14 @@ and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Righta
 
 | "unify is_flex CoreTy_Bool ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then Some (singleton_subst n CoreTy_Bool) else None
     | CoreTy_Bool \<Rightarrow> Some fmempty
     | _ \<Rightarrow> None)"
 
 | "unify is_flex (CoreTy_FiniteInt sign bits) ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then Some (singleton_subst n (CoreTy_FiniteInt sign bits)) else None
     | CoreTy_FiniteInt sign' bits' \<Rightarrow>
         if sign = sign' \<and> bits = bits' then Some fmempty else None
@@ -42,21 +42,21 @@ and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Righta
 
 | "unify is_flex CoreTy_MathInt ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then Some (singleton_subst n CoreTy_MathInt) else None
     | CoreTy_MathInt \<Rightarrow> Some fmempty
     | _ \<Rightarrow> None)"
 
 | "unify is_flex CoreTy_MathReal ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then Some (singleton_subst n CoreTy_MathReal) else None
     | CoreTy_MathReal \<Rightarrow> Some fmempty
     | _ \<Rightarrow> None)"
 
 | "unify is_flex (CoreTy_Record flds1) ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then
           (if occurs n (CoreTy_Record flds1) then None
            else Some (singleton_subst n (CoreTy_Record flds1)))
@@ -69,7 +69,7 @@ and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Righta
 
 | "unify is_flex (CoreTy_Array elemTy1 dims1) ty2 =
     (case ty2 of
-      CoreTy_Meta n \<Rightarrow>
+      CoreTy_Var n \<Rightarrow>
         if is_flex n then
           (if occurs n (CoreTy_Array elemTy1 dims1) then None
            else Some (singleton_subst n (CoreTy_Array elemTy1 dims1)))
@@ -78,16 +78,16 @@ and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Righta
         if dims1 = dims2 then unify is_flex elemTy1 elemTy2 else None
     | _ \<Rightarrow> None)"
 
-| "unify is_flex (CoreTy_Meta n) ty2 =
+| "unify is_flex (CoreTy_Var n) ty2 =
     (if is_flex n then
-       (if occurs n ty2 \<and> ty2 \<noteq> CoreTy_Meta n then None
-        else if ty2 = CoreTy_Meta n then Some fmempty
+       (if occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n then None
+        else if ty2 = CoreTy_Var n then Some fmempty
         else Some (singleton_subst n ty2))
      else \<comment> \<open>Rigid metavar: only matches itself, or can be bound by a flexible var on the right\<close>
        (case ty2 of
-         CoreTy_Meta m \<Rightarrow>
+         CoreTy_Var m \<Rightarrow>
            if m = n then Some fmempty
-           else if is_flex m then Some (singleton_subst m (CoreTy_Meta n))
+           else if is_flex m then Some (singleton_subst m (CoreTy_Var n))
            else None
        | _ \<Rightarrow> None))"
 
@@ -122,7 +122,7 @@ fun core_type_size :: "CoreType \<Rightarrow> nat" where
 | "core_type_size CoreTy_MathReal = 1"
 | "core_type_size (CoreTy_Record flds) = 1 + sum_list (map (core_type_size \<circ> snd) flds)"
 | "core_type_size (CoreTy_Array elemTy _) = 1 + core_type_size elemTy"
-| "core_type_size (CoreTy_Meta _) = 1"
+| "core_type_size (CoreTy_Var _) = 1"
 
 (* Size of a list of types *)
 definition list_type_size :: "CoreType list \<Rightarrow> nat" where
@@ -148,9 +148,9 @@ lemma array_elem_size_smaller:
   "core_type_size elem < core_type_size (CoreTy_Array elem dims)"
   by simp
 
-lemma list_metavars_cons:
-  "list_metavars (ty # tys) = type_metavars ty \<union> list_metavars tys"
-  by (simp add: list_metavars_def)
+lemma list_tyvars_cons:
+  "list_tyvars (ty # tys) = type_tyvars ty \<union> list_tyvars tys"
+  by (simp add: list_tyvars_def)
 
 (* The termination relation: lexicographic on (card of metavars, size, tag)
    where tag is 0 for Inl (unify) and 1 for Inr (unify_list).
@@ -159,10 +159,10 @@ lemma list_metavars_cons:
 definition unify_rel :: "(((nat \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((nat \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) rel" where
   "unify_rel = inv_image (less_than <*lex*> less_than <*lex*> less_than)
     (\<lambda>x. case x of
-      Inl (_, ty1, ty2) \<Rightarrow> (card (type_metavars ty1 \<union> type_metavars ty2),
+      Inl (_, ty1, ty2) \<Rightarrow> (card (type_tyvars ty1 \<union> type_tyvars ty2),
                             core_type_size ty1 + core_type_size ty2,
                             0::nat)
-    | Inr (_, tys1, tys2) \<Rightarrow> (card (list_metavars tys1 \<union> list_metavars tys2),
+    | Inr (_, tys1, tys2) \<Rightarrow> (card (list_tyvars tys1 \<union> list_tyvars tys2),
                               list_type_size tys1 + list_type_size tys2,
                               1::nat))"
 
@@ -178,9 +178,9 @@ proof -
   have "list_type_size args1 + list_type_size args2 <
         core_type_size (CoreTy_Datatype n1 args1) + core_type_size (CoreTy_Datatype n2 args2)"
     by (meson add_less_mono type_args_size_smaller)
-  moreover have "list_metavars args1 \<union> list_metavars args2 =
-                 type_metavars (CoreTy_Datatype n1 args1) \<union> type_metavars (CoreTy_Datatype n2 args2)"
-    by (auto simp: list_metavars_def)
+  moreover have "list_tyvars args1 \<union> list_tyvars args2 =
+                 type_tyvars (CoreTy_Datatype n1 args1) \<union> type_tyvars (CoreTy_Datatype n2 args2)"
+    by (auto simp: list_tyvars_def)
   ultimately show ?thesis
     unfolding unify_rel_def by auto
 qed
@@ -192,9 +192,9 @@ proof -
   have "list_type_size (map snd flds1) + list_type_size (map snd flds2) <
         core_type_size (CoreTy_Record flds1) + core_type_size (CoreTy_Record flds2)"
     by (meson add_less_mono record_size_smaller)
-  moreover have "list_metavars (map snd flds1) \<union> list_metavars (map snd flds2) =
-                 type_metavars (CoreTy_Record flds1) \<union> type_metavars (CoreTy_Record flds2)"
-    by (auto simp: list_metavars_def comp_def)
+  moreover have "list_tyvars (map snd flds1) \<union> list_tyvars (map snd flds2) =
+                 type_tyvars (CoreTy_Record flds1) \<union> type_tyvars (CoreTy_Record flds2)"
+    by (auto simp: list_tyvars_def comp_def)
   ultimately show ?thesis
     unfolding unify_rel_def by auto
 qed
@@ -206,8 +206,8 @@ proof -
   have "core_type_size elem1 + core_type_size elem2 <
         core_type_size (CoreTy_Array elem1 dims1) + core_type_size (CoreTy_Array elem2 dims2)"
     by (meson add_less_mono array_elem_size_smaller)
-  moreover have "type_metavars elem1 \<union> type_metavars elem2 =
-                 type_metavars (CoreTy_Array elem1 dims1) \<union> type_metavars (CoreTy_Array elem2 dims2)"
+  moreover have "type_tyvars elem1 \<union> type_tyvars elem2 =
+                 type_tyvars (CoreTy_Array elem1 dims1) \<union> type_tyvars (CoreTy_Array elem2 dims2)"
     by auto
   ultimately show ?thesis
     unfolding unify_rel_def by auto
@@ -217,12 +217,12 @@ qed
 lemma unify_rel_list_to_head:
   "(Inl (f, head1, head2), Inr (f, head1 # rest1, head2 # rest2)) \<in> unify_rel"
 proof -
-  have mv_subset: "type_metavars head1 \<union> type_metavars head2 \<subseteq>
-        list_metavars (head1 # rest1) \<union> list_metavars (head2 # rest2)"
-    by (auto simp: list_metavars_def)
-  hence mv_card: "card (type_metavars head1 \<union> type_metavars head2) \<le>
-            card (list_metavars (head1 # rest1) \<union> list_metavars (head2 # rest2))"
-    by (simp add: card_mono finite_list_metavars)
+  have mv_subset: "type_tyvars head1 \<union> type_tyvars head2 \<subseteq>
+        list_tyvars (head1 # rest1) \<union> list_tyvars (head2 # rest2)"
+    by (auto simp: list_tyvars_def)
+  hence mv_card: "card (type_tyvars head1 \<union> type_tyvars head2) \<le>
+            card (list_tyvars (head1 # rest1) \<union> list_tyvars (head2 # rest2))"
+    by (simp add: card_mono finite_list_tyvars)
   have size_le: "core_type_size head1 + core_type_size head2 \<le>
                  list_type_size (head1 # rest1) + list_type_size (head2 # rest2)"
     by (simp add: list_type_size_cons)
@@ -232,17 +232,17 @@ proof -
 qed
 
 (* Properties that a substitution from unify/unify_list must satisfy *)
-definition subst_props :: "nat set \<Rightarrow> MetaSubst \<Rightarrow> bool" where
+definition subst_props :: "nat set \<Rightarrow> TypeSubst \<Rightarrow> bool" where
   "subst_props mvs subst \<equiv>
     fset (fmdom subst) \<subseteq> mvs \<and>
-    (\<forall>n ty. fmlookup subst n = Some ty \<longrightarrow> type_metavars ty \<subseteq> mvs) \<and>
-    fset (fmdom subst) \<inter> subst_range_mvs subst = {}"
+    (\<forall>n ty. fmlookup subst n = Some ty \<longrightarrow> type_tyvars ty \<subseteq> mvs) \<and>
+    fset (fmdom subst) \<inter> subst_range_tyvars subst = {}"
 
 definition unify_input_mvs :: "CoreType \<Rightarrow> CoreType \<Rightarrow> nat set" where
-  "unify_input_mvs ty1 ty2 = type_metavars ty1 \<union> type_metavars ty2"
+  "unify_input_mvs ty1 ty2 = type_tyvars ty1 \<union> type_tyvars ty2"
 
 definition unify_list_input_mvs :: "CoreType list \<Rightarrow> CoreType list \<Rightarrow> nat set" where
-  "unify_list_input_mvs tys1 tys2 = list_metavars tys1 \<union> list_metavars tys2"
+  "unify_list_input_mvs tys1 tys2 = list_tyvars tys1 \<union> list_tyvars tys2"
 
 (* Empty substitution trivially satisfies the properties *)
 lemma subst_props_empty [simp]: "subst_props mvs fmempty"
@@ -251,26 +251,26 @@ lemma subst_props_empty [simp]: "subst_props mvs fmempty"
 (* Singleton substitution satisfies properties when constructed correctly *)
 lemma subst_props_singleton:
   assumes "n \<in> mvs"
-      and "type_metavars ty \<subseteq> mvs"
+      and "type_tyvars ty \<subseteq> mvs"
       and "\<not> occurs n ty"
   shows "subst_props mvs (singleton_subst n ty)"
   using assms
-  by (auto simp: subst_props_def singleton_subst_def subst_range_mvs_def occurs_def fmran'_def)
+  by (auto simp: subst_props_def singleton_subst_def subst_range_tyvars_def occurs_def fmran'_def)
 
 (* If subst satisfies props for mvs, applying it to types with metavars in mvs
    results in types whose metavars are still in mvs *)
-lemma apply_subst_metavars_subset:
+lemma apply_subst_tyvars_subset:
   assumes "subst_props mvs subst"
-      and "type_metavars ty \<subseteq> mvs"
-  shows "type_metavars (apply_subst subst ty) \<subseteq> mvs"
+      and "type_tyvars ty \<subseteq> mvs"
+  shows "type_tyvars (apply_subst subst ty) \<subseteq> mvs"
 proof -
   from assms(1) have dom_sub: "fset (fmdom subst) \<subseteq> mvs"
     by (simp add: subst_props_def)
-  from assms(1) have range_sub: "subst_range_mvs subst \<subseteq> mvs"
-    by (auto simp: subst_props_def subst_range_mvs_def fmran'_def)
-  have "type_metavars (apply_subst subst ty) \<subseteq>
-        (type_metavars ty - fset (fmdom subst)) \<union> subst_range_mvs subst"
-    by (rule apply_subst_metavars_result)
+  from assms(1) have range_sub: "subst_range_tyvars subst \<subseteq> mvs"
+    by (auto simp: subst_props_def subst_range_tyvars_def fmran'_def)
+  have "type_tyvars (apply_subst subst ty) \<subseteq>
+        (type_tyvars ty - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    by (rule apply_subst_tyvars_result)
   also have "... \<subseteq> mvs"
     using assms(2) range_sub by auto
   finally show ?thesis .
@@ -281,7 +281,7 @@ lemma subst_props_compose:
   assumes props1: "subst_props mvs subst1"
       and props2: "subst_props mvs subst2"
       and dom_disj: "fset (fmdom subst2) \<inter> fset (fmdom subst1) = {}"
-      and range2_disj: "subst_range_mvs subst2 \<inter> fset (fmdom subst1) = {}"
+      and range2_disj: "subst_range_tyvars subst2 \<inter> fset (fmdom subst1) = {}"
   shows "subst_props mvs (compose_subst subst2 subst1)"
   unfolding subst_props_def
 proof (intro conjI)
@@ -297,12 +297,12 @@ proof (intro conjI)
 next
   (* For each binding in the composition, range metavars are in mvs *)
   show "\<forall>n ty. fmlookup (compose_subst subst2 subst1) n = Some ty \<longrightarrow>
-               type_metavars ty \<subseteq> mvs"
+               type_tyvars ty \<subseteq> mvs"
   proof (intro allI impI)
     fix n ty
     assume lookup: "fmlookup (compose_subst subst2 subst1) n = Some ty"
 
-    show "type_metavars ty \<subseteq> mvs"
+    show "type_tyvars ty \<subseteq> mvs"
     proof (cases "fmlookup subst1 n")
       case None
       hence "fmlookup subst2 n = Some ty"
@@ -313,71 +313,71 @@ next
       case (Some ty1)
       hence ty_eq: "ty = apply_subst subst2 ty1"
         using lookup by (simp add: fmlookup_compose_subst_Some1)
-      from Some props1 have ty1_mvs: "type_metavars ty1 \<subseteq> mvs"
+      from Some props1 have ty1_mvs: "type_tyvars ty1 \<subseteq> mvs"
         by (auto simp: subst_props_def)
       show ?thesis
-        using ty_eq ty1_mvs props2 by (simp add: apply_subst_metavars_subset)
+        using ty_eq ty1_mvs props2 by (simp add: apply_subst_tyvars_subset)
     qed
   qed
 next
   (* Domain and range of composition are disjoint *)
-  show "fset (fmdom (compose_subst subst2 subst1)) \<inter> subst_range_mvs (compose_subst subst2 subst1) = {}"
+  show "fset (fmdom (compose_subst subst2 subst1)) \<inter> subst_range_tyvars (compose_subst subst2 subst1) = {}"
   proof -
     have dom_eq: "fmdom (compose_subst subst2 subst1) = fmdom subst2 |\<union>| fmdom subst1"
       by (simp add: compose_subst_def)
     (* Range of compose_subst subst2 subst1:
        For n in dom(subst1): apply_subst subst2 (subst1 n)
        For n in dom(subst2) \ dom(subst1): subst2 n *)
-    have range_sub: "subst_range_mvs (compose_subst subst2 subst1) \<subseteq>
-                     subst_range_mvs subst2 \<union> subst_range_mvs subst1"
+    have range_sub: "subst_range_tyvars (compose_subst subst2 subst1) \<subseteq>
+                     subst_range_tyvars subst2 \<union> subst_range_tyvars subst1"
     proof
-      fix x assume "x \<in> subst_range_mvs (compose_subst subst2 subst1)"
+      fix x assume "x \<in> subst_range_tyvars (compose_subst subst2 subst1)"
       then obtain ty where ty_in: "ty \<in> fmran' (compose_subst subst2 subst1)"
-                       and x_in: "x \<in> type_metavars ty"
-        by (auto simp: subst_range_mvs_def)
+                       and x_in: "x \<in> type_tyvars ty"
+        by (auto simp: subst_range_tyvars_def)
       from ty_in obtain n where lookup: "fmlookup (compose_subst subst2 subst1) n = Some ty"
         by (auto simp: fmran'_def)
-      show "x \<in> subst_range_mvs subst2 \<union> subst_range_mvs subst1"
+      show "x \<in> subst_range_tyvars subst2 \<union> subst_range_tyvars subst1"
       proof (cases "fmlookup subst1 n")
         case None
         hence "fmlookup subst2 n = Some ty"
           using lookup by (simp add: fmlookup_compose_subst_None1)
         hence "ty \<in> fmran' subst2" by (auto simp: fmran'_def)
-        thus ?thesis using x_in by (auto simp: subst_range_mvs_def)
+        thus ?thesis using x_in by (auto simp: subst_range_tyvars_def)
       next
         case (Some ty1)
         hence ty_eq: "ty = apply_subst subst2 ty1"
           using lookup by (simp add: fmlookup_compose_subst_Some1)
         have ty1_in: "ty1 \<in> fmran' subst1" using Some by (auto simp: fmran'_def)
-        from x_in[unfolded ty_eq] have "x \<in> type_metavars (apply_subst subst2 ty1)" .
-        hence "x \<in> (type_metavars ty1 - fset (fmdom subst2)) \<union> subst_range_mvs subst2"
-          using apply_subst_metavars_result by auto
+        from x_in[unfolded ty_eq] have "x \<in> type_tyvars (apply_subst subst2 ty1)" .
+        hence "x \<in> (type_tyvars ty1 - fset (fmdom subst2)) \<union> subst_range_tyvars subst2"
+          using apply_subst_tyvars_result by auto
         thus ?thesis
         proof
-          assume "x \<in> type_metavars ty1 - fset (fmdom subst2)"
-          hence "x \<in> type_metavars ty1" by auto
-          thus ?thesis using ty1_in by (auto simp: subst_range_mvs_def)
+          assume "x \<in> type_tyvars ty1 - fset (fmdom subst2)"
+          hence "x \<in> type_tyvars ty1" by auto
+          thus ?thesis using ty1_in by (auto simp: subst_range_tyvars_def)
         next
-          assume "x \<in> subst_range_mvs subst2"
+          assume "x \<in> subst_range_tyvars subst2"
           thus ?thesis by auto
         qed
       qed
     qed
     (* Show disjointness directly *)
     have no_overlap: "\<And>n. n \<in> fset (fmdom (compose_subst subst2 subst1)) \<Longrightarrow>
-                          n \<notin> subst_range_mvs (compose_subst subst2 subst1)"
+                          n \<notin> subst_range_tyvars (compose_subst subst2 subst1)"
     proof -
       fix n
       assume n_in_dom: "n \<in> fset (fmdom (compose_subst subst2 subst1))"
       from n_in_dom have n_cases: "n \<in> fset (fmdom subst1) \<or> n \<in> fset (fmdom subst2)"
         using dom_eq by auto
-      show "n \<notin> subst_range_mvs (compose_subst subst2 subst1)"
+      show "n \<notin> subst_range_tyvars (compose_subst subst2 subst1)"
       proof (cases "n \<in> fset (fmdom subst1)")
         case True
         (* n is in dom(subst1), so n \<notin> range(subst1) and n \<notin> range(subst2) by range2_disj *)
-        have n_not_in_range1: "n \<notin> subst_range_mvs subst1"
+        have n_not_in_range1: "n \<notin> subst_range_tyvars subst1"
           using props1 True by (auto simp: subst_props_def)
-        have n_not_in_range2: "n \<notin> subst_range_mvs subst2"
+        have n_not_in_range2: "n \<notin> subst_range_tyvars subst2"
           using range2_disj True by auto
         from range_sub n_not_in_range1 n_not_in_range2
         show ?thesis by auto
@@ -385,15 +385,15 @@ next
         case False
         (* n \<in> dom(subst2) but n \<notin> dom(subst1) *)
         with n_cases have n_in_dom2: "n \<in> fset (fmdom subst2)" by auto
-        have n_not_in_range2: "n \<notin> subst_range_mvs subst2"
+        have n_not_in_range2: "n \<notin> subst_range_tyvars subst2"
           using props2 n_in_dom2 by (auto simp: subst_props_def)
         (* Show n is not in range of composition *)
         show ?thesis
         proof
-          assume n_in_range: "n \<in> subst_range_mvs (compose_subst subst2 subst1)"
+          assume n_in_range: "n \<in> subst_range_tyvars (compose_subst subst2 subst1)"
           from n_in_range obtain ty where ty_in: "ty \<in> fmran' (compose_subst subst2 subst1)"
-                                      and n_in_ty: "n \<in> type_metavars ty"
-            by (auto simp: subst_range_mvs_def)
+                                      and n_in_ty: "n \<in> type_tyvars ty"
+            by (auto simp: subst_range_tyvars_def)
           from ty_in obtain m where lookup: "fmlookup (compose_subst subst2 subst1) m = Some ty"
             by (auto simp: fmran'_def)
           show False
@@ -402,21 +402,21 @@ next
             hence "fmlookup subst2 m = Some ty"
               using lookup by (simp add: fmlookup_compose_subst_None1)
             hence "ty \<in> fmran' subst2" by (auto simp: fmran'_def)
-            hence "n \<in> subst_range_mvs subst2" using n_in_ty by (auto simp: subst_range_mvs_def)
+            hence "n \<in> subst_range_tyvars subst2" using n_in_ty by (auto simp: subst_range_tyvars_def)
             thus False using n_not_in_range2 by simp
           next
             case (Some ty1)
             hence ty_eq: "ty = apply_subst subst2 ty1"
               using lookup by (simp add: fmlookup_compose_subst_Some1)
             from n_in_ty[unfolded ty_eq]
-            have "n \<in> (type_metavars ty1 - fset (fmdom subst2)) \<union> subst_range_mvs subst2"
-              using apply_subst_metavars_result by auto
+            have "n \<in> (type_tyvars ty1 - fset (fmdom subst2)) \<union> subst_range_tyvars subst2"
+              using apply_subst_tyvars_result by auto
             thus False
             proof
-              assume "n \<in> type_metavars ty1 - fset (fmdom subst2)"
+              assume "n \<in> type_tyvars ty1 - fset (fmdom subst2)"
               thus False using n_in_dom2 by auto
             next
-              assume "n \<in> subst_range_mvs subst2"
+              assume "n \<in> subst_range_tyvars subst2"
               thus False using n_not_in_range2 by simp
             qed
           qed
@@ -429,7 +429,7 @@ qed
 
 (* The recursive unify_list call after unifying heads is smaller *)
 lemma unify_rel_list_recursive:
-  assumes "subst_props (type_metavars ty1 \<union> type_metavars ty2) subst"
+  assumes "subst_props (type_tyvars ty1 \<union> type_tyvars ty2) subst"
   shows "(Inr (f, map (apply_subst subst) rest1, map (apply_subst subst) rest2),
           Inr (f, ty1 # rest1, ty2 # rest2)) \<in> unify_rel"
 proof (cases "subst = fmempty")
@@ -439,12 +439,12 @@ proof (cases "subst = fmempty")
                  list_type_size (map (apply_subst subst) rest2)
               <  list_type_size (ty1 # rest1) + list_type_size (ty2 # rest2)"
     using True core_type_size_pos by (simp add: list_type_size_cons)
-  moreover have "list_metavars (map (apply_subst subst) rest1) \<union> list_metavars (map (apply_subst subst) rest2)
-                 \<subseteq> list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
-    using True by (auto simp: list_metavars_def)
-  hence "card (list_metavars (map (apply_subst subst) rest1) \<union> list_metavars (map (apply_subst subst) rest2))
-         \<le> card (list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2))"
-    by (simp add: card_mono finite_list_metavars)
+  moreover have "list_tyvars (map (apply_subst subst) rest1) \<union> list_tyvars (map (apply_subst subst) rest2)
+                 \<subseteq> list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
+    using True by (auto simp: list_tyvars_def)
+  hence "card (list_tyvars (map (apply_subst subst) rest1) \<union> list_tyvars (map (apply_subst subst) rest2))
+         \<le> card (list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2))"
+    by (simp add: card_mono finite_list_tyvars)
   ultimately show ?thesis
     unfolding unify_rel_def by auto
 next
@@ -452,68 +452,68 @@ next
   (* Non-empty subst: metavar count decreases *)
   from False obtain n ty where binding: "fmlookup subst n = Some ty"
     by (metis fmap_ext fmempty_lookup option.exhaust)
-  have n_in_heads: "n \<in> type_metavars ty1 \<union> type_metavars ty2"
+  have n_in_heads: "n \<in> type_tyvars ty1 \<union> type_tyvars ty2"
     using assms binding unfolding subst_props_def
     by (meson fmdomI in_mono)
   have n_in_dom: "n \<in> fset (fmdom subst)"
     using binding by (simp add: fmlookup_dom_iff)
-  have n_not_in_range: "n \<notin> subst_range_mvs subst"
+  have n_not_in_range: "n \<notin> subst_range_tyvars subst"
     using assms n_in_dom unfolding subst_props_def by auto
-  have n_not_in_result: "n \<notin> list_metavars (map (apply_subst subst) rest1) \<union>
-                              list_metavars (map (apply_subst subst) rest2)"
+  have n_not_in_result: "n \<notin> list_tyvars (map (apply_subst subst) rest1) \<union>
+                              list_tyvars (map (apply_subst subst) rest2)"
     using apply_subst_eliminates_dom[OF n_in_dom n_not_in_range]
-    by (auto simp: list_metavars_def)
-  have result_subset: "list_metavars (map (apply_subst subst) rest1) \<union>
-                       list_metavars (map (apply_subst subst) rest2)
-                       \<subseteq> list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
+    by (auto simp: list_tyvars_def)
+  have result_subset: "list_tyvars (map (apply_subst subst) rest1) \<union>
+                       list_tyvars (map (apply_subst subst) rest2)
+                       \<subseteq> list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
   proof -
-    have dom_sub: "fset (fmdom subst) \<subseteq> type_metavars ty1 \<union> type_metavars ty2"
+    have dom_sub: "fset (fmdom subst) \<subseteq> type_tyvars ty1 \<union> type_tyvars ty2"
       using assms unfolding subst_props_def by auto
-    have range_sub: "subst_range_mvs subst \<subseteq> type_metavars ty1 \<union> type_metavars ty2"
-      using assms unfolding subst_props_def subst_range_mvs_def
+    have range_sub: "subst_range_tyvars subst \<subseteq> type_tyvars ty1 \<union> type_tyvars ty2"
+      using assms unfolding subst_props_def subst_range_tyvars_def
       by fastforce
-    have "\<And>t. t \<in> set rest1 \<Longrightarrow> type_metavars (apply_subst subst t) \<subseteq>
-              list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
+    have "\<And>t. t \<in> set rest1 \<Longrightarrow> type_tyvars (apply_subst subst t) \<subseteq>
+              list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
     proof -
       fix t assume "t \<in> set rest1"
-      have "type_metavars (apply_subst subst t) \<subseteq>
-            (type_metavars t - fset (fmdom subst)) \<union> subst_range_mvs subst"
-        by (rule apply_subst_metavars_result)
-      also have "... \<subseteq> type_metavars t \<union> subst_range_mvs subst" by auto
-      also have "... \<subseteq> list_metavars rest1 \<union> (type_metavars ty1 \<union> type_metavars ty2)"
-        using \<open>t \<in> set rest1\<close> range_sub by (auto simp: list_metavars_def)
-      also have "... \<subseteq> list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
-        by (auto simp: list_metavars_def)
-      finally show "type_metavars (apply_subst subst t) \<subseteq>
-                    list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)" .
+      have "type_tyvars (apply_subst subst t) \<subseteq>
+            (type_tyvars t - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+        by (rule apply_subst_tyvars_result)
+      also have "... \<subseteq> type_tyvars t \<union> subst_range_tyvars subst" by auto
+      also have "... \<subseteq> list_tyvars rest1 \<union> (type_tyvars ty1 \<union> type_tyvars ty2)"
+        using \<open>t \<in> set rest1\<close> range_sub by (auto simp: list_tyvars_def)
+      also have "... \<subseteq> list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
+        by (auto simp: list_tyvars_def)
+      finally show "type_tyvars (apply_subst subst t) \<subseteq>
+                    list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)" .
     qed
-    moreover have "\<And>t. t \<in> set rest2 \<Longrightarrow> type_metavars (apply_subst subst t) \<subseteq>
-              list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
+    moreover have "\<And>t. t \<in> set rest2 \<Longrightarrow> type_tyvars (apply_subst subst t) \<subseteq>
+              list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
     proof -
       fix t assume "t \<in> set rest2"
-      have "type_metavars (apply_subst subst t) \<subseteq>
-            (type_metavars t - fset (fmdom subst)) \<union> subst_range_mvs subst"
-        by (rule apply_subst_metavars_result)
-      also have "... \<subseteq> type_metavars t \<union> subst_range_mvs subst" by auto
-      also have "... \<subseteq> list_metavars rest2 \<union> (type_metavars ty1 \<union> type_metavars ty2)"
-        using \<open>t \<in> set rest2\<close> range_sub by (auto simp: list_metavars_def)
-      also have "... \<subseteq> list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
-        by (auto simp: list_metavars_def)
-      finally show "type_metavars (apply_subst subst t) \<subseteq>
-                    list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)" .
+      have "type_tyvars (apply_subst subst t) \<subseteq>
+            (type_tyvars t - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+        by (rule apply_subst_tyvars_result)
+      also have "... \<subseteq> type_tyvars t \<union> subst_range_tyvars subst" by auto
+      also have "... \<subseteq> list_tyvars rest2 \<union> (type_tyvars ty1 \<union> type_tyvars ty2)"
+        using \<open>t \<in> set rest2\<close> range_sub by (auto simp: list_tyvars_def)
+      also have "... \<subseteq> list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
+        by (auto simp: list_tyvars_def)
+      finally show "type_tyvars (apply_subst subst t) \<subseteq>
+                    list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)" .
     qed
-    ultimately show ?thesis by (auto simp: list_metavars_def)
+    ultimately show ?thesis by (auto simp: list_tyvars_def)
   qed
-  have n_in_orig: "n \<in> list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
-    using n_in_heads by (auto simp: list_metavars_def)
-  have strict_subset: "list_metavars (map (apply_subst subst) rest1) \<union>
-                       list_metavars (map (apply_subst subst) rest2)
-                       \<subset> list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
+  have n_in_orig: "n \<in> list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
+    using n_in_heads by (auto simp: list_tyvars_def)
+  have strict_subset: "list_tyvars (map (apply_subst subst) rest1) \<union>
+                       list_tyvars (map (apply_subst subst) rest2)
+                       \<subset> list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
     using result_subset n_not_in_result n_in_orig by auto
-  hence "card (list_metavars (map (apply_subst subst) rest1) \<union>
-               list_metavars (map (apply_subst subst) rest2))
-         < card (list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2))"
-    using finite_list_metavars psubset_card_mono
+  hence "card (list_tyvars (map (apply_subst subst) rest1) \<union>
+               list_tyvars (map (apply_subst subst) rest2))
+         < card (list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2))"
+    using finite_list_tyvars psubset_card_mono
     by (metis finite_Un)
   thus ?thesis
     unfolding unify_rel_def by auto
@@ -546,243 +546,243 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
     (* Need to show domain holds and props hold for unify ty1 ty2 *)
     show ?thesis
     proof (cases ty1)
-      case (CoreTy_Meta n)
+      case (CoreTy_Var n)
       (* When ty1 is a metavar, result depends on ty2 *)
       show ?thesis
-        using Inl pair_eq CoreTy_Meta
+        using Inl pair_eq CoreTy_Var
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_Var m))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "n = m")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = Some fmempty"
+          have result: "unify is_flex (CoreTy_Var n) (CoreTy_Var m) = Some fmempty"
             using dom True by (simp add: unify.psimps occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result True
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Var dom result True
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
           show ?thesis
           proof (cases "is_flex n")
             case True
-            \<comment> \<open>n is flexible: bind n to CoreTy_Meta m\<close>
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = Some (singleton_subst n (CoreTy_Meta m))"
+            \<comment> \<open>n is flexible: bind n to CoreTy_Var m\<close>
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Var m) = Some (singleton_subst n (CoreTy_Var m))"
               using dom False True by (simp add: unify.psimps occurs_def)
-            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Meta m)) (singleton_subst n (CoreTy_Meta m))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Var n) (CoreTy_Var m)) (singleton_subst n (CoreTy_Var m))"
               using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result props
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Var dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case flex_n_false: False
             show ?thesis
             proof (cases "is_flex m")
               case True
-              \<comment> \<open>n is rigid, m is flexible: bind m to CoreTy_Meta n\<close>
-              have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Meta n))"
+              \<comment> \<open>n is rigid, m is flexible: bind m to CoreTy_Var n\<close>
+              have result: "unify is_flex (CoreTy_Var n) (CoreTy_Var m) = Some (singleton_subst m (CoreTy_Var n))"
                 using dom \<open>n \<noteq> m\<close> flex_n_false True by (simp add: unify.psimps occurs_def)
-              have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Meta n))"
+              have props: "subst_props (unify_input_mvs (CoreTy_Var n) (CoreTy_Var m)) (singleton_subst m (CoreTy_Var n))"
                 using \<open>n \<noteq> m\<close> by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
               show ?thesis
-                using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result props
+                using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Var dom result props
                 by (auto simp: unify_terminates_with_props_def)
             next
               case False
               \<comment> \<open>Both rigid and different: unification fails\<close>
-              have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Meta m) = None"
+              have result: "unify is_flex (CoreTy_Var n) (CoreTy_Var m) = None"
                 using dom \<open>n \<noteq> m\<close> flex_n_false False by (simp add: unify.psimps occurs_def)
               show ?thesis
-                using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Meta dom result
+                using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Var dom result
                 by (auto simp: unify_terminates_with_props_def)
             qed
           qed
         qed
       next
         case (CoreTy_Datatype name2 args2)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Datatype name2 args2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_Datatype name2 args2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "occurs n (CoreTy_Datatype name2 args2)")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Datatype name2 args2) = None"
+          have result: "unify is_flex (CoreTy_Var n) (CoreTy_Datatype name2 args2) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Datatype dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Datatype dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
           show ?thesis
           proof (cases "is_flex n")
             case True
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Datatype name2 args2) = Some (singleton_subst n (CoreTy_Datatype name2 args2))"
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Datatype name2 args2) = Some (singleton_subst n (CoreTy_Datatype name2 args2))"
               using dom False True by (simp add: unify.psimps)
-            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Datatype name2 args2)) (singleton_subst n (CoreTy_Datatype name2 args2))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Var n) (CoreTy_Datatype name2 args2)) (singleton_subst n (CoreTy_Datatype name2 args2))"
               using False by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Datatype dom result props
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Datatype dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case False
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Datatype name2 args2) = None"
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Datatype name2 args2) = None"
               using dom \<open>\<not> occurs n (CoreTy_Datatype name2 args2)\<close> False by (simp add: unify.psimps)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Datatype dom result
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Datatype dom result
               by (auto simp: unify_terminates_with_props_def)
           qed
         qed
       next
         case CoreTy_Bool
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Bool))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_Bool))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex n")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) CoreTy_Bool = Some (singleton_subst n CoreTy_Bool)"
+          have result: "unify is_flex (CoreTy_Var n) CoreTy_Bool = Some (singleton_subst n CoreTy_Bool)"
             using dom True by (simp add: unify.psimps occurs_def)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_Bool) (singleton_subst n CoreTy_Bool)"
+          have props: "subst_props (unify_input_mvs (CoreTy_Var n) CoreTy_Bool) (singleton_subst n CoreTy_Bool)"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Bool dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Bool dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex (CoreTy_Meta n) CoreTy_Bool = None"
+          have result: "unify is_flex (CoreTy_Var n) CoreTy_Bool = None"
             using dom False by (simp add: unify.psimps occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Bool dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Bool dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
         case (CoreTy_FiniteInt sign2 bits2)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_FiniteInt sign2 bits2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_FiniteInt sign2 bits2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex n")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2) = Some (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
+          have result: "unify is_flex (CoreTy_Var n) (CoreTy_FiniteInt sign2 bits2) = Some (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
             using dom True by (simp add: unify.psimps occurs_def)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2)) (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
+          have props: "subst_props (unify_input_mvs (CoreTy_Var n) (CoreTy_FiniteInt sign2 bits2)) (singleton_subst n (CoreTy_FiniteInt sign2 bits2))"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_FiniteInt dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_FiniteInt dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_FiniteInt sign2 bits2) = None"
+          have result: "unify is_flex (CoreTy_Var n) (CoreTy_FiniteInt sign2 bits2) = None"
             using dom False by (simp add: unify.psimps occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_FiniteInt dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_FiniteInt dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
         case CoreTy_MathInt
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_MathInt))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_MathInt))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex n")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathInt = Some (singleton_subst n CoreTy_MathInt)"
+          have result: "unify is_flex (CoreTy_Var n) CoreTy_MathInt = Some (singleton_subst n CoreTy_MathInt)"
             using dom True by (simp add: unify.psimps occurs_def)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_MathInt) (singleton_subst n CoreTy_MathInt)"
+          have props: "subst_props (unify_input_mvs (CoreTy_Var n) CoreTy_MathInt) (singleton_subst n CoreTy_MathInt)"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathInt dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_MathInt dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathInt = None"
+          have result: "unify is_flex (CoreTy_Var n) CoreTy_MathInt = None"
             using dom False by (simp add: unify.psimps occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathInt dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_MathInt dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
         case CoreTy_MathReal
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_MathReal))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_MathReal))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex n")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathReal = Some (singleton_subst n CoreTy_MathReal)"
+          have result: "unify is_flex (CoreTy_Var n) CoreTy_MathReal = Some (singleton_subst n CoreTy_MathReal)"
             using dom True by (simp add: unify.psimps occurs_def)
-          have props: "subst_props (unify_input_mvs (CoreTy_Meta n) CoreTy_MathReal) (singleton_subst n CoreTy_MathReal)"
+          have props: "subst_props (unify_input_mvs (CoreTy_Var n) CoreTy_MathReal) (singleton_subst n CoreTy_MathReal)"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathReal dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_MathReal dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex (CoreTy_Meta n) CoreTy_MathReal = None"
+          have result: "unify is_flex (CoreTy_Var n) CoreTy_MathReal = None"
             using dom False by (simp add: unify.psimps occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_MathReal dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_MathReal dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
         case (CoreTy_Record flds2)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Record flds2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_Record flds2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "occurs n (CoreTy_Record flds2)")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Record flds2) = None"
+          have result: "unify is_flex (CoreTy_Var n) (CoreTy_Record flds2) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Record dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case occ_false: False
           show ?thesis
           proof (cases "is_flex n")
             case True
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Record flds2) = Some (singleton_subst n (CoreTy_Record flds2))"
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Record flds2) = Some (singleton_subst n (CoreTy_Record flds2))"
               using dom occ_false True by (simp add: unify.psimps)
-            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Record flds2)) (singleton_subst n (CoreTy_Record flds2))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Var n) (CoreTy_Record flds2)) (singleton_subst n (CoreTy_Record flds2))"
               using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result props
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Record dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case False
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Record flds2) = None"
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Record flds2) = None"
               using dom occ_false False by (simp add: unify.psimps)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Record dom result
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Record dom result
               by (auto simp: unify_terminates_with_props_def)
           qed
         qed
       next
         case (CoreTy_Array elem2 dims2)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Meta n, CoreTy_Array elem2 dims2))"
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Var n, CoreTy_Array elem2 dims2))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "occurs n (CoreTy_Array elem2 dims2)")
           case True
-          have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = None"
+          have result: "unify is_flex (CoreTy_Var n) (CoreTy_Array elem2 dims2) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Array dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case occ_false: False
           show ?thesis
           proof (cases "is_flex n")
             case True
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = Some (singleton_subst n (CoreTy_Array elem2 dims2))"
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Array elem2 dims2) = Some (singleton_subst n (CoreTy_Array elem2 dims2))"
               using dom occ_false True by (simp add: unify.psimps)
-            have props: "subst_props (unify_input_mvs (CoreTy_Meta n) (CoreTy_Array elem2 dims2)) (singleton_subst n (CoreTy_Array elem2 dims2))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Var n) (CoreTy_Array elem2 dims2)) (singleton_subst n (CoreTy_Array elem2 dims2))"
               using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result props
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Array dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case False
-            have result: "unify is_flex (CoreTy_Meta n) (CoreTy_Array elem2 dims2) = None"
+            have result: "unify is_flex (CoreTy_Var n) (CoreTy_Array elem2 dims2) = None"
               using dom occ_false False by (simp add: unify.psimps)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Meta n\<close> CoreTy_Array dom result
+              using Inl pair_eq \<open>ty1 = CoreTy_Var n\<close> CoreTy_Array dom result
               by (auto simp: unify_terminates_with_props_def)
           qed
         qed
@@ -792,35 +792,35 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_Datatype1
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Datatype name1 args1, CoreTy_Var m))"
           using unify_unify_list.domintros(1) by auto
         show ?thesis
         proof (cases "occurs m (CoreTy_Datatype name1 args1)")
           case True
-          have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Var m) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Meta dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case occ_false: False
           show ?thesis
           proof (cases "is_flex m")
             case True
-            have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Datatype name1 args1))"
+            have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Var m) = Some (singleton_subst m (CoreTy_Datatype name1 args1))"
               using dom occ_false True by (simp add: unify.psimps)
-            have props: "subst_props (unify_input_mvs (CoreTy_Datatype name1 args1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Datatype name1 args1))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Datatype name1 args1) (CoreTy_Var m)) (singleton_subst m (CoreTy_Datatype name1 args1))"
               using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Meta dom result props
+              using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Var dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case False
-            have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Meta m) = None"
+            have result: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Var m) = None"
               using dom occ_false False by (simp add: unify.psimps)
             show ?thesis
-              using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Meta dom result
+              using Inl pair_eq \<open>ty1 = CoreTy_Datatype name1 args1\<close> CoreTy_Var dom result
               by (auto simp: unify_terminates_with_props_def)
           qed
         qed
@@ -852,7 +852,7 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
           have result_eq: "unify is_flex (CoreTy_Datatype name1 args1) (CoreTy_Datatype name2 args2) = unify_list is_flex args1 args2"
             using dom True by (simp add: unify.psimps)
           have mvs_eq: "unify_list_input_mvs args1 args2 = unify_input_mvs (CoreTy_Datatype name1 args1) (CoreTy_Datatype name2 args2)"
-            by (auto simp: unify_list_input_mvs_def unify_input_mvs_def list_metavars_def)
+            by (auto simp: unify_list_input_mvs_def unify_input_mvs_def list_tyvars_def)
           show ?thesis
             using Inl pair_eq CoreTy_Datatype1 CoreTy_Datatype dom result_eq list_props mvs_eq
             by (auto simp: unify_terminates_with_props_def)
@@ -917,25 +917,25 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_Bool
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Bool, CoreTy_Var m))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex m")
           case True
-          have result: "unify is_flex CoreTy_Bool (CoreTy_Meta m) = Some (singleton_subst m CoreTy_Bool)"
+          have result: "unify is_flex CoreTy_Bool (CoreTy_Var m) = Some (singleton_subst m CoreTy_Bool)"
             using dom True by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs CoreTy_Bool (CoreTy_Meta m)) (singleton_subst m CoreTy_Bool)"
+          have props: "subst_props (unify_input_mvs CoreTy_Bool (CoreTy_Var m)) (singleton_subst m CoreTy_Bool)"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Meta dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Var dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex CoreTy_Bool (CoreTy_Meta m) = None"
+          have result: "unify is_flex CoreTy_Bool (CoreTy_Var m) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Meta dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_Bool\<close> CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
@@ -1007,25 +1007,25 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_FiniteInt1
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_FiniteInt sign1 bits1, CoreTy_Var m))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex m")
           case True
-          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
+          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Var m) = Some (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
             using dom True by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
+          have props: "subst_props (unify_input_mvs (CoreTy_FiniteInt sign1 bits1) (CoreTy_Var m)) (singleton_subst m (CoreTy_FiniteInt sign1 bits1))"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Meta dom result props
+            using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Var dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_FiniteInt sign1 bits1) (CoreTy_Var m) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Meta dom result
+            using Inl pair_eq CoreTy_FiniteInt1 CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
@@ -1108,25 +1108,25 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_MathInt
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathInt, CoreTy_Var m))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex m")
           case True
-          have result: "unify is_flex CoreTy_MathInt (CoreTy_Meta m) = Some (singleton_subst m CoreTy_MathInt)"
+          have result: "unify is_flex CoreTy_MathInt (CoreTy_Var m) = Some (singleton_subst m CoreTy_MathInt)"
             using dom True by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs CoreTy_MathInt (CoreTy_Meta m)) (singleton_subst m CoreTy_MathInt)"
+          have props: "subst_props (unify_input_mvs CoreTy_MathInt (CoreTy_Var m)) (singleton_subst m CoreTy_MathInt)"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Meta dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Var dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex CoreTy_MathInt (CoreTy_Meta m) = None"
+          have result: "unify is_flex CoreTy_MathInt (CoreTy_Var m) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Meta dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_MathInt\<close> CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
@@ -1198,25 +1198,25 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_MathReal
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_MathReal, CoreTy_Var m))"
           by (rule unify_unify_list.domintros)
         show ?thesis
         proof (cases "is_flex m")
           case True
-          have result: "unify is_flex CoreTy_MathReal (CoreTy_Meta m) = Some (singleton_subst m CoreTy_MathReal)"
+          have result: "unify is_flex CoreTy_MathReal (CoreTy_Var m) = Some (singleton_subst m CoreTy_MathReal)"
             using dom True by (simp add: unify.psimps)
-          have props: "subst_props (unify_input_mvs CoreTy_MathReal (CoreTy_Meta m)) (singleton_subst m CoreTy_MathReal)"
+          have props: "subst_props (unify_input_mvs CoreTy_MathReal (CoreTy_Var m)) (singleton_subst m CoreTy_MathReal)"
             by (auto simp: unify_input_mvs_def intro: subst_props_singleton simp: occurs_def)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Meta dom result props
+            using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Var dom result props
             by (auto simp: unify_terminates_with_props_def)
         next
           case False
-          have result: "unify is_flex CoreTy_MathReal (CoreTy_Meta m) = None"
+          have result: "unify is_flex CoreTy_MathReal (CoreTy_Var m) = None"
             using dom False by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Meta dom result
+            using Inl pair_eq \<open>ty1 = CoreTy_MathReal\<close> CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         qed
       next
@@ -1288,35 +1288,35 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_Record1
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Record flds1, CoreTy_Var m))"
           using unify_unify_list.domintros(6) by auto
         show ?thesis
         proof (cases "occurs m (CoreTy_Record flds1)")
           case True
-          have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Var m) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result
+            using Inl pair_eq CoreTy_Record1 CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case occ_false: False
           show ?thesis
           proof (cases "is_flex m")
             case True
-            have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Record flds1))"
+            have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Var m) = Some (singleton_subst m (CoreTy_Record flds1))"
               using dom occ_false True by (simp add: unify.psimps)
-            have props: "subst_props (unify_input_mvs (CoreTy_Record flds1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Record flds1))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Record flds1) (CoreTy_Var m)) (singleton_subst m (CoreTy_Record flds1))"
               using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
             show ?thesis
-              using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result props
+              using Inl pair_eq CoreTy_Record1 CoreTy_Var dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case False
-            have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Meta m) = None"
+            have result: "unify is_flex (CoreTy_Record flds1) (CoreTy_Var m) = None"
               using dom occ_false False by (simp add: unify.psimps)
             show ?thesis
-              using Inl pair_eq CoreTy_Record1 CoreTy_Meta dom result
+              using Inl pair_eq CoreTy_Record1 CoreTy_Var dom result
               by (auto simp: unify_terminates_with_props_def)
           qed
         qed
@@ -1350,7 +1350,7 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
           have result_eq: "unify is_flex (CoreTy_Record flds1) (CoreTy_Record flds2) = unify_list is_flex (map snd flds1) (map snd flds2)"
             using dom True by (simp add: unify.psimps)
           have mvs_eq: "unify_list_input_mvs (map snd flds1) (map snd flds2) = unify_input_mvs (CoreTy_Record flds1) (CoreTy_Record flds2)"
-            by (auto simp: unify_list_input_mvs_def unify_input_mvs_def list_metavars_def comp_def)
+            by (auto simp: unify_list_input_mvs_def unify_input_mvs_def list_tyvars_def comp_def)
           show ?thesis
             using Inl pair_eq CoreTy_Record1 CoreTy_Record dom result_eq list_props mvs_eq
             by (auto simp: unify_terminates_with_props_def)
@@ -1415,35 +1415,35 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
       show ?thesis
         using Inl pair_eq CoreTy_Array1
       proof (cases ty2)
-        case (CoreTy_Meta m)
-        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Meta m))"
+        case (CoreTy_Var m)
+        have dom: "unify_unify_list_dom (Inl (is_flex, CoreTy_Array elem1 dims1, CoreTy_Var m))"
           using unify_unify_list.domintros(7) by auto
         show ?thesis
         proof (cases "occurs m (CoreTy_Array elem1 dims1)")
           case True
-          have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = None"
+          have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Var m) = None"
             using dom True by (simp add: unify.psimps)
           show ?thesis
-            using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result
+            using Inl pair_eq CoreTy_Array1 CoreTy_Var dom result
             by (auto simp: unify_terminates_with_props_def)
         next
           case occ_false: False
           show ?thesis
           proof (cases "is_flex m")
             case True
-            have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = Some (singleton_subst m (CoreTy_Array elem1 dims1))"
+            have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Var m) = Some (singleton_subst m (CoreTy_Array elem1 dims1))"
               using dom occ_false True by (simp add: unify.psimps)
-            have props: "subst_props (unify_input_mvs (CoreTy_Array elem1 dims1) (CoreTy_Meta m)) (singleton_subst m (CoreTy_Array elem1 dims1))"
+            have props: "subst_props (unify_input_mvs (CoreTy_Array elem1 dims1) (CoreTy_Var m)) (singleton_subst m (CoreTy_Array elem1 dims1))"
               using occ_false by (auto simp: unify_input_mvs_def intro: subst_props_singleton)
             show ?thesis
-              using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result props
+              using Inl pair_eq CoreTy_Array1 CoreTy_Var dom result props
               by (auto simp: unify_terminates_with_props_def)
           next
             case False
-            have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Meta m) = None"
+            have result: "unify is_flex (CoreTy_Array elem1 dims1) (CoreTy_Var m) = None"
               using dom occ_false False by (simp add: unify.psimps)
             show ?thesis
-              using Inl pair_eq CoreTy_Array1 CoreTy_Meta dom result
+              using Inl pair_eq CoreTy_Array1 CoreTy_Var dom result
               by (auto simp: unify_terminates_with_props_def)
           qed
         qed
@@ -1641,11 +1641,11 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
               using tail_props Some by auto
 
             (* Key definitions for the proof *)
-            define head_mvs where "head_mvs = type_metavars ty1 \<union> type_metavars ty2"
-            define full_mvs where "full_mvs = list_metavars (ty1 # rest1) \<union> list_metavars (ty2 # rest2)"
+            define head_mvs where "head_mvs = type_tyvars ty1 \<union> type_tyvars ty2"
+            define full_mvs where "full_mvs = list_tyvars (ty1 # rest1) \<union> list_tyvars (ty2 # rest2)"
 
             have head_sub: "head_mvs \<subseteq> full_mvs"
-              by (auto simp: head_mvs_def full_mvs_def list_metavars_def)
+              by (auto simp: head_mvs_def full_mvs_def list_tyvars_def)
 
             have head_props': "subst_props head_mvs subst1"
               using subst1_props by (simp add: head_mvs_def unify_input_mvs_def)
@@ -1653,105 +1653,105 @@ proof (induction x rule: wf_induct_rule[OF wf_unify_rel])
             (* After applying subst1, metavars of the result are contained in full_mvs *)
             have rec_mvs: "unify_list_input_mvs (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2) \<subseteq> full_mvs"
             proof -
-              have rest1_mvs: "list_metavars rest1 \<subseteq> full_mvs"
-                by (auto simp: full_mvs_def list_metavars_def)
-              have rest2_mvs: "list_metavars rest2 \<subseteq> full_mvs"
-                by (auto simp: full_mvs_def list_metavars_def)
-              have range1_mvs: "subst_range_mvs subst1 \<subseteq> head_mvs"
+              have rest1_mvs: "list_tyvars rest1 \<subseteq> full_mvs"
+                by (auto simp: full_mvs_def list_tyvars_def)
+              have rest2_mvs: "list_tyvars rest2 \<subseteq> full_mvs"
+                by (auto simp: full_mvs_def list_tyvars_def)
+              have range1_mvs: "subst_range_tyvars subst1 \<subseteq> head_mvs"
               proof -
-                have "\<And>ty. ty \<in> fmran' subst1 \<Longrightarrow> type_metavars ty \<subseteq> head_mvs"
+                have "\<And>ty. ty \<in> fmran' subst1 \<Longrightarrow> type_tyvars ty \<subseteq> head_mvs"
                 proof -
                   fix ty assume "ty \<in> fmran' subst1"
                   then obtain n where "fmlookup subst1 n = Some ty" by (auto simp: fmran'_def)
-                  thus "type_metavars ty \<subseteq> head_mvs"
+                  thus "type_tyvars ty \<subseteq> head_mvs"
                     using head_props' by (auto simp: subst_props_def head_mvs_def)
                 qed
-                thus ?thesis by (auto simp: subst_range_mvs_def)
+                thus ?thesis by (auto simp: subst_range_tyvars_def)
               qed
-              have applied1: "list_metavars (map (apply_subst subst1) rest1) \<subseteq> full_mvs"
+              have applied1: "list_tyvars (map (apply_subst subst1) rest1) \<subseteq> full_mvs"
               proof
-                fix x assume "x \<in> list_metavars (map (apply_subst subst1) rest1)"
-                then obtain t where t_in: "t \<in> set rest1" and x_in: "x \<in> type_metavars (apply_subst subst1 t)"
-                  by (auto simp: list_metavars_def)
-                from x_in have "x \<in> (type_metavars t - fset (fmdom subst1)) \<union> subst_range_mvs subst1"
-                  using apply_subst_metavars_result by auto
+                fix x assume "x \<in> list_tyvars (map (apply_subst subst1) rest1)"
+                then obtain t where t_in: "t \<in> set rest1" and x_in: "x \<in> type_tyvars (apply_subst subst1 t)"
+                  by (auto simp: list_tyvars_def)
+                from x_in have "x \<in> (type_tyvars t - fset (fmdom subst1)) \<union> subst_range_tyvars subst1"
+                  using apply_subst_tyvars_result by auto
                 thus "x \<in> full_mvs"
-                  using t_in rest1_mvs range1_mvs head_sub by (auto simp: list_metavars_def)
+                  using t_in rest1_mvs range1_mvs head_sub by (auto simp: list_tyvars_def)
               qed
-              moreover have applied2: "list_metavars (map (apply_subst subst1) rest2) \<subseteq> full_mvs"
+              moreover have applied2: "list_tyvars (map (apply_subst subst1) rest2) \<subseteq> full_mvs"
               proof
-                fix x assume "x \<in> list_metavars (map (apply_subst subst1) rest2)"
-                then obtain t where t_in: "t \<in> set rest2" and x_in: "x \<in> type_metavars (apply_subst subst1 t)"
-                  by (auto simp: list_metavars_def)
-                from x_in have "x \<in> (type_metavars t - fset (fmdom subst1)) \<union> subst_range_mvs subst1"
-                  using apply_subst_metavars_result by auto
+                fix x assume "x \<in> list_tyvars (map (apply_subst subst1) rest2)"
+                then obtain t where t_in: "t \<in> set rest2" and x_in: "x \<in> type_tyvars (apply_subst subst1 t)"
+                  by (auto simp: list_tyvars_def)
+                from x_in have "x \<in> (type_tyvars t - fset (fmdom subst1)) \<union> subst_range_tyvars subst1"
+                  using apply_subst_tyvars_result by auto
                 thus "x \<in> full_mvs"
-                  using t_in rest2_mvs range1_mvs head_sub by (auto simp: list_metavars_def)
+                  using t_in rest2_mvs range1_mvs head_sub by (auto simp: list_tyvars_def)
               qed
               ultimately show ?thesis by (auto simp: unify_list_input_mvs_def)
             qed
 
             (* Lift subst1 props to full mvs *)
             have props1: "subst_props full_mvs subst1"
-              using head_props' head_sub unfolding subst_props_def subst_range_mvs_def by blast
+              using head_props' head_sub unfolding subst_props_def subst_range_tyvars_def by blast
 
             (* Lift subst2 props to full mvs *)
             have rec_props: "subst_props (unify_list_input_mvs (map (apply_subst subst1) rest1) (map (apply_subst subst1) rest2)) subst2"
               using subst2_props by simp
             have props2: "subst_props full_mvs subst2"
-              using rec_props rec_mvs unfolding subst_props_def subst_range_mvs_def by blast
+              using rec_props rec_mvs unfolding subst_props_def subst_range_tyvars_def by blast
 
             (* Domain disjointness *)
             have dom_disj: "fset (fmdom subst2) \<inter> fset (fmdom subst1) = {}"
             proof -
               have dom1_sub: "fset (fmdom subst1) \<subseteq> head_mvs"
                 using head_props' by (auto simp: subst_props_def)
-              have dom2_sub: "fset (fmdom subst2) \<subseteq> list_metavars (map (apply_subst subst1) rest1) \<union>
-                                                     list_metavars (map (apply_subst subst1) rest2)"
+              have dom2_sub: "fset (fmdom subst2) \<subseteq> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                                                     list_tyvars (map (apply_subst subst1) rest2)"
                 using rec_props by (auto simp: subst_props_def unify_list_input_mvs_def)
               have "\<And>n. n \<in> fset (fmdom subst1) \<Longrightarrow>
-                        n \<notin> list_metavars (map (apply_subst subst1) rest1) \<union>
-                             list_metavars (map (apply_subst subst1) rest2)"
+                        n \<notin> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                             list_tyvars (map (apply_subst subst1) rest2)"
               proof -
                 fix n assume n_in: "n \<in> fset (fmdom subst1)"
-                have "n \<notin> subst_range_mvs subst1"
+                have "n \<notin> subst_range_tyvars subst1"
                   using head_props' n_in by (auto simp: subst_props_def)
-                thus "n \<notin> list_metavars (map (apply_subst subst1) rest1) \<union>
-                           list_metavars (map (apply_subst subst1) rest2)"
-                  using apply_subst_eliminates_dom[OF n_in] by (auto simp: list_metavars_def)
+                thus "n \<notin> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                           list_tyvars (map (apply_subst subst1) rest2)"
+                  using apply_subst_eliminates_dom[OF n_in] by (auto simp: list_tyvars_def)
               qed
               thus ?thesis using dom2_sub by auto
             qed
 
             (* Range disjointness *)
-            have range2_disj: "subst_range_mvs subst2 \<inter> fset (fmdom subst1) = {}"
+            have range2_disj: "subst_range_tyvars subst2 \<inter> fset (fmdom subst1) = {}"
             proof -
-              have range2_sub: "subst_range_mvs subst2 \<subseteq> list_metavars (map (apply_subst subst1) rest1) \<union>
-                                                         list_metavars (map (apply_subst subst1) rest2)"
+              have range2_sub: "subst_range_tyvars subst2 \<subseteq> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                                                         list_tyvars (map (apply_subst subst1) rest2)"
               proof -
-                have "\<And>ty. ty \<in> fmran' subst2 \<Longrightarrow> type_metavars ty \<subseteq>
-                      list_metavars (map (apply_subst subst1) rest1) \<union>
-                      list_metavars (map (apply_subst subst1) rest2)"
+                have "\<And>ty. ty \<in> fmran' subst2 \<Longrightarrow> type_tyvars ty \<subseteq>
+                      list_tyvars (map (apply_subst subst1) rest1) \<union>
+                      list_tyvars (map (apply_subst subst1) rest2)"
                 proof -
                   fix ty assume "ty \<in> fmran' subst2"
                   then obtain n where "fmlookup subst2 n = Some ty"
                     by (auto simp: fmran'_def)
-                  thus "type_metavars ty \<subseteq> list_metavars (map (apply_subst subst1) rest1) \<union>
-                        list_metavars (map (apply_subst subst1) rest2)"
+                  thus "type_tyvars ty \<subseteq> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                        list_tyvars (map (apply_subst subst1) rest2)"
                     using rec_props by (auto simp: subst_props_def unify_list_input_mvs_def)
                 qed
-                thus ?thesis by (auto simp: subst_range_mvs_def)
+                thus ?thesis by (auto simp: subst_range_tyvars_def)
               qed
               have "\<And>n. n \<in> fset (fmdom subst1) \<Longrightarrow>
-                        n \<notin> list_metavars (map (apply_subst subst1) rest1) \<union>
-                             list_metavars (map (apply_subst subst1) rest2)"
+                        n \<notin> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                             list_tyvars (map (apply_subst subst1) rest2)"
               proof -
                 fix n assume n_in: "n \<in> fset (fmdom subst1)"
-                have "n \<notin> subst_range_mvs subst1"
+                have "n \<notin> subst_range_tyvars subst1"
                   using head_props' n_in by (auto simp: subst_props_def)
-                thus "n \<notin> list_metavars (map (apply_subst subst1) rest1) \<union>
-                           list_metavars (map (apply_subst subst1) rest2)"
-                  using apply_subst_eliminates_dom[OF n_in] by (auto simp: list_metavars_def)
+                thus "n \<notin> list_tyvars (map (apply_subst subst1) rest1) \<union>
+                           list_tyvars (map (apply_subst subst1) rest2)"
+                  using apply_subst_eliminates_dom[OF n_in] by (auto simp: list_tyvars_def)
               qed
               thus ?thesis using range2_sub by auto
             qed

@@ -15,12 +15,12 @@ where
       Inl errs \<Rightarrow> Inl errs
     | Inr elabTyArgs \<Rightarrow>
         (case fmlookup typedefs name of
-          Some (metavars, targetTy) \<Rightarrow>
-            \<comment> \<open>Typedef case (also handles type variables, which map to CoreTy_Meta)\<close>
-            (if length elabTyArgs \<noteq> length metavars then
-              Inl [TyErr_WrongTypeArity loc name (length metavars) (length tyargs)]
+          Some (tyvars, targetTy) \<Rightarrow>
+            \<comment> \<open>Typedef case (also handles type variables, which map to CoreTy_Var)\<close>
+            (if length elabTyArgs \<noteq> length tyvars then
+              Inl [TyErr_WrongTypeArity loc name (length tyvars) (length tyargs)]
              else
-              let subst = fmap_of_list (zip metavars elabTyArgs);
+              let subst = fmap_of_list (zip tyvars elabTyArgs);
                   resultTy = apply_subst subst targetTy
               in if ghost = NotGhost \<and> \<not> is_runtime_type env resultTy then
                    Inl [TyErr_NonRuntimeType loc]

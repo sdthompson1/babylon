@@ -818,12 +818,12 @@ lemma type_soundness_variant_proj:
   shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_VariantProj tm ctorName))"
 proof -
   (* Extract facts from typing *)
-  from typing obtain dtName tyArgs dtName2 metavars payloadTy where
+  from typing obtain dtName tyArgs dtName2 tyvars payloadTy where
     tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Datatype dtName tyArgs)" and
-    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, tyvars, payloadTy)" and
     dt_eq: "dtName = dtName2" and
-    len_eq: "length tyArgs = length metavars" and
-    ty_eq: "ty = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy"
+    len_eq: "length tyArgs = length tyvars" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy"
     by (auto split: option.splits CoreType.splits prod.splits if_splits)
 
   (* Apply IH to tm *)
@@ -848,21 +848,21 @@ proof -
       val_eq: "val = CV_Variant actualCtor payload" by auto
 
     (* Extract typing facts from value_has_type for the variant *)
-    from val_typed val_eq obtain dtName3 metavars3 payloadTy3 where
-      val_ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName3, metavars3, payloadTy3)" and
+    from val_typed val_eq obtain dtName3 tyvars3 payloadTy3 where
+      val_ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName3, tyvars3, payloadTy3)" and
       val_dt_eq: "dtName = dtName3" and
-      val_len_eq: "length metavars3 = length tyArgs" and
+      val_len_eq: "length tyvars3 = length tyArgs" and
       payload_typed: "value_has_type env payload
-          (apply_subst (fmap_of_list (zip metavars3 tyArgs)) payloadTy3)"
+          (apply_subst (fmap_of_list (zip tyvars3 tyArgs)) payloadTy3)"
       by (auto split: option.splits prod.splits)
 
     show ?thesis
     proof (cases "actualCtor = ctorName")
       case True
       (* Constructor names match - projection succeeds *)
-      (* Both look up the same constructor, so metavars and payloadTy agree *)
+      (* Both look up the same constructor, so tyvars and payloadTy agree *)
       from val_ctor_lookup ctor_lookup True dt_eq val_dt_eq
-      have "metavars3 = metavars" and "payloadTy3 = payloadTy"
+      have "tyvars3 = tyvars" and "payloadTy3 = payloadTy"
         by auto
       hence "value_has_type env payload ty"
         using payload_typed ty_eq by simp
@@ -1104,15 +1104,15 @@ lemma type_soundness_variant_ctor:
   shows "sound_term_result env ty (interp_term (Suc fuel) state (CoreTm_VariantCtor ctorName tyArgs payload))"
 proof -
   (* Extract facts from typing *)
-  from typing obtain dtName metavars payloadTy where
-    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, metavars, payloadTy)" and
-    len_eq: "length tyArgs = length metavars" and
+  from typing obtain dtName tyvars payloadTy where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
+    len_eq: "length tyArgs = length tyvars" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
     tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
     dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env"
     by (auto simp: Let_def split: option.splits prod.splits if_splits)
 
-  define tySubst where "tySubst = fmap_of_list (zip metavars tyArgs)"
+  define tySubst where "tySubst = fmap_of_list (zip tyvars tyArgs)"
   define payloadTyOpt where "payloadTyOpt = core_term_type env NotGhost payload"
 
   from typing ctor_lookup len_eq tyargs_wk tyargs_rt dt_nonghost
@@ -2082,12 +2082,12 @@ next
       next
         (* CoreTm_VariantProj: extend path with variant projection *)
         case (CoreTm_VariantProj innerTm ctorName)
-        from typing CoreTm_VariantProj obtain dtName tyArgs dtName2 metavars payloadTy where
+        from typing CoreTm_VariantProj obtain dtName tyArgs dtName2 tyvars payloadTy where
           inner_typing: "core_term_type env NotGhost innerTm = Some (CoreTy_Datatype dtName tyArgs)" and
-          ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, metavars, payloadTy)" and
+          ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName2, tyvars, payloadTy)" and
           dt_eq: "dtName = dtName2" and
-          len_eq: "length tyArgs = length metavars" and
-          ty_eq: "ty = apply_subst (fmap_of_list (zip metavars tyArgs)) payloadTy"
+          len_eq: "length tyArgs = length tyvars" and
+          ty_eq: "ty = apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy"
           by (auto split: option.splits CoreType.splits prod.splits if_splits)
         from writable CoreTm_VariantProj have inner_writable: "is_writable_lvalue env innerTm"
           by simp

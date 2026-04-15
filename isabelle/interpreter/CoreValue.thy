@@ -1,5 +1,5 @@
 theory CoreValue
-  imports "../core/CoreTyEnv" "../core/CoreKindcheck" "../core/MetaSubst"
+  imports "../core/CoreTyEnv" "../core/CoreKindcheck" "../core/TypeSubst"
           "../core/CoreTyEnvWellFormed"
 begin
 
@@ -73,14 +73,14 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
     (case ty of
       CoreTy_Datatype dty1 argTypes \<Rightarrow>
         (case fmlookup (TE_DataCtors env) ctor of
-          Some (dty2, metavars, payloadTy) \<Rightarrow>
+          Some (dty2, tyvars, payloadTy) \<Rightarrow>
             (dty1 = dty2 \<and>
-            length metavars = length argTypes \<and>
+            length tyvars = length argTypes \<and>
             list_all (is_well_kinded env) argTypes \<and>
             list_all (is_runtime_type env) argTypes \<and>
             dty1 |\<notin>| TE_GhostDatatypes env \<and>
             value_has_type env payload
-                (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy))
+                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy))
         | None \<Rightarrow> False)
     | _ \<Rightarrow> False)"
 | "value_has_type env (CV_Array sizes valuesMap) ty =
@@ -331,19 +331,19 @@ next
   proof (cases ty)
     case (CoreTy_Datatype dty1 argTypes)
     from CV_Variant.prems(1) CoreTy_Datatype
-    obtain dty2 metavars payloadTy where
-      lookup: "fmlookup (TE_DataCtors env) ctor = Some (dty2, metavars, payloadTy)" and
+    obtain dty2 tyvars payloadTy where
+      lookup: "fmlookup (TE_DataCtors env) ctor = Some (dty2, tyvars, payloadTy)" and
       dty_eq: "dty1 = dty2" and
-      len_eq: "length metavars = length argTypes" and
+      len_eq: "length tyvars = length argTypes" and
       args_wk: "list_all (is_well_kinded env) argTypes" and
       args_rt: "list_all (is_runtime_type env) argTypes" and
       not_ghost: "dty1 |\<notin>| TE_GhostDatatypes env" and
       payload_vht: "value_has_type env payload
-                      (apply_subst (fmap_of_list (zip metavars argTypes)) payloadTy)"
+                      (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       by (auto split: option.splits)
-    let ?subst = "fmap_of_list (zip metavars argTypes)"
+    let ?subst = "fmap_of_list (zip tyvars argTypes)"
     \<comment> \<open>Transfer the ctor lookup and the non-ghost condition to env'. \<close>
-    have lookup': "fmlookup (TE_DataCtors env') ctor = Some (dty2, metavars, payloadTy)"
+    have lookup': "fmlookup (TE_DataCtors env') ctor = Some (dty2, tyvars, payloadTy)"
       using lookup dc by simp
     have not_ghost': "dty1 |\<notin>| TE_GhostDatatypes env'"
       using not_ghost gd by simp
@@ -355,13 +355,13 @@ next
     have args_rt': "list_all (is_runtime_type env') argTypes"
       by simp
     \<comment> \<open>Well-kindedness and runtime of the ctor's declared payload type under a
-        witness env whose TE_TypeVars are the ctor's metavars. \<close>
-    let ?payloadSrc = "env \<lparr> TE_TypeVars := fset_of_list metavars \<rparr>"
-    let ?payloadSrc' = "env' \<lparr> TE_TypeVars := fset_of_list metavars \<rparr>"
-    let ?payloadSrcRt = "env \<lparr> TE_TypeVars := fset_of_list metavars,
-                                TE_RuntimeTypeVars := fset_of_list metavars \<rparr>"
-    let ?payloadSrcRt' = "env' \<lparr> TE_TypeVars := fset_of_list metavars,
-                                  TE_RuntimeTypeVars := fset_of_list metavars \<rparr>"
+        witness env whose TE_TypeVars are the ctor's tyvars. \<close>
+    let ?payloadSrc = "env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>"
+    let ?payloadSrc' = "env' \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>"
+    let ?payloadSrcRt = "env \<lparr> TE_TypeVars := fset_of_list tyvars,
+                                TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>"
+    let ?payloadSrcRt' = "env' \<lparr> TE_TypeVars := fset_of_list tyvars,
+                                  TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>"
     from wf have payloads_wk: "tyenv_payloads_well_kinded env"
       unfolding tyenv_well_formed_def by simp
     from wf' have payloads_wk': "tyenv_payloads_well_kinded env'"
@@ -383,13 +383,13 @@ next
       using payloads_rt' lookup' not_ghost' dty_eq
       unfolding tyenv_nonghost_payloads_runtime_def by simp
 
-    \<comment> \<open>Each of the ctor's metavars is mapped by ?subst to the corresponding argType. \<close>
-    have subst_lookup: "\<And>n. n |\<in>| fset_of_list metavars \<Longrightarrow>
+    \<comment> \<open>Each of the ctor's tyvars is mapped by ?subst to the corresponding argType. \<close>
+    have subst_lookup: "\<And>n. n |\<in>| fset_of_list tyvars \<Longrightarrow>
         \<exists>ty'. fmlookup ?subst n = Some ty' \<and> ty' \<in> set argTypes"
     proof -
-      fix n assume "n |\<in>| fset_of_list metavars"
-      hence "n \<in> set metavars" by (simp add: fset_of_list.rep_eq)
-      then obtain i where i_lt: "i < length metavars" and mv_eq: "metavars ! i = n"
+      fix n assume "n |\<in>| fset_of_list tyvars"
+      hence "n \<in> set tyvars" by (simp add: fset_of_list.rep_eq)
+      then obtain i where i_lt: "i < length tyvars" and mv_eq: "tyvars ! i = n"
         by (metis in_set_conv_nth)
       from i_lt len_eq have i_lt_arg: "i < length argTypes" by simp
       let ?ty' = "argTypes ! i"
@@ -406,7 +406,7 @@ next
       show "TE_Datatypes env = TE_Datatypes ?payloadSrc" by simp
     next
       fix n assume n_in: "n |\<in>| TE_TypeVars ?payloadSrc"
-      then have "n |\<in>| fset_of_list metavars" by simp
+      then have "n |\<in>| fset_of_list tyvars" by simp
       from subst_lookup[OF this] obtain ty' where
         lk: "fmlookup ?subst n = Some ty'" and mem: "ty' \<in> set argTypes" by blast
       from mem args_wk have "is_well_kinded env ty'"
@@ -421,7 +421,7 @@ next
       show "TE_Datatypes env' = TE_Datatypes ?payloadSrc'" by simp
     next
       fix n assume n_in: "n |\<in>| TE_TypeVars ?payloadSrc'"
-      then have "n |\<in>| fset_of_list metavars" by simp
+      then have "n |\<in>| fset_of_list tyvars" by simp
       from subst_lookup[OF this] obtain ty' where
         lk: "fmlookup ?subst n = Some ty'" and mem: "ty' \<in> set argTypes" by blast
       from mem args_wk' have "is_well_kinded env' ty'"
@@ -436,7 +436,7 @@ next
       show "TE_GhostDatatypes env = TE_GhostDatatypes ?payloadSrcRt" by simp
     next
       fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars ?payloadSrcRt"
-      then have "n |\<in>| fset_of_list metavars" by simp
+      then have "n |\<in>| fset_of_list tyvars" by simp
       from subst_lookup[OF this] obtain ty' where
         lk: "fmlookup ?subst n = Some ty'" and mem: "ty' \<in> set argTypes" by blast
       from mem args_rt have "is_runtime_type env ty'"
@@ -451,7 +451,7 @@ next
       show "TE_GhostDatatypes env' = TE_GhostDatatypes ?payloadSrcRt'" by simp
     next
       fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars ?payloadSrcRt'"
-      then have "n |\<in>| fset_of_list metavars" by simp
+      then have "n |\<in>| fset_of_list tyvars" by simp
       from subst_lookup[OF this] obtain ty' where
         lk: "fmlookup ?subst n = Some ty'" and mem: "ty' \<in> set argTypes" by blast
       from mem args_rt' have "is_runtime_type env' ty'"
@@ -549,16 +549,16 @@ next
   then show ?case using ty_eq by simp
 next
   case (CV_Variant ctor payload)
-  then obtain dtName argTypes metavars payloadTy where
+  then obtain dtName argTypes tyvars payloadTy where
     ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-    lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, metavars, payloadTy)" and
-    len_eq: "length metavars = length argTypes" and
+    lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
+    len_eq: "length tyvars = length argTypes" and
     args_wk: "list_all (is_well_kinded env) argTypes"
     by (cases ty) (auto split: option.splits prod.splits)
   (* From tyenv_well_formed, we know ctors are consistent with datatypes *)
   from CV_Variant.prems(2) have "tyenv_ctors_consistent env"
     unfolding tyenv_well_formed_def by simp
-  then have dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some (length metavars)"
+  then have dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some (length tyvars)"
     using lookup unfolding tyenv_ctors_consistent_def by blast
   show ?case
     using ty_eq dt_lookup len_eq args_wk by simp
