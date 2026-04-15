@@ -2986,4 +2986,133 @@ proof -
 qed
 
 
+(*-----------------------------------------------------------------------------*)
+(* Unified function-call facts from either typecheck disjunct                  *)
+(*                                                                             *)
+(* The Assign and VarDecl(Var) cases of type soundness both need to reach the  *)
+(* function-call soundness IH (IH_fc) when the rhs is a CoreTm_FunctionCall,   *)
+(* regardless of whether the rhs typechecks via core_impure_call_type (impure  *)
+(* call) or via core_term_type (pure call). This helper normalizes both        *)
+(* branches into the shape IH_fc needs: either we have the full set of        *)
+(* function-call facts (including the Ref-position writable-lvalue witness),  *)
+(* or the rhs is not a function call and the pure core_term_type fact holds.  *)
+(*-----------------------------------------------------------------------------*)
+
+lemma fn_call_facts_from_disjunct:
+  assumes disj: "core_impure_call_type env NotGhost tm = Some ty
+                 \<or> core_term_type env NotGhost tm = Some ty"
+  shows "(\<exists>fnName tyArgs argTms funInfo.
+             tm = CoreTm_FunctionCall fnName tyArgs argTms
+             \<and> fmlookup (TE_Functions env) fnName = Some funInfo
+             \<and> length tyArgs = length (FI_TyArgs funInfo)
+             \<and> list_all (is_well_kinded env) tyArgs
+             \<and> list_all (is_runtime_type env) tyArgs
+             \<and> FI_Ghost funInfo = NotGhost
+             \<and> length argTms = length (FI_TmArgs funInfo)
+             \<and> list_all2 (\<lambda>tm expectedTy.
+                    case core_term_type env NotGhost tm of
+                      None \<Rightarrow> False
+                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                 argTms
+                 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))
+             \<and> ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                 (FI_ReturnType funInfo)
+             \<and> (\<forall>i < length argTms.
+                  snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                    \<longrightarrow> is_writable_lvalue env (argTms ! i)))
+         \<or> ((\<nexists>fnName tyArgs argTms. tm = CoreTm_FunctionCall fnName tyArgs argTms)
+            \<and> core_term_type env NotGhost tm = Some ty)"
+proof -
+  from disj show ?thesis
+  proof
+    assume impure: "core_impure_call_type env NotGhost tm = Some ty"
+    from impure obtain fnName tyArgs argTms where tm_eq:
+      "tm = CoreTm_FunctionCall fnName tyArgs argTms"
+      unfolding core_impure_call_type_def
+      by (cases tm) (auto split: option.splits if_splits)
+    from core_impure_call_type_fn_facts[OF impure tm_eq]
+    obtain funInfo where
+      fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+      len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+      tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+      tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
+      not_ghost_fn: "FI_Ghost funInfo \<noteq> Ghost" and
+      len_tmargs: "length argTms = length (FI_TmArgs funInfo)" and
+      fn_ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                  (FI_ReturnType funInfo)" and
+      args_check: "list_all2 (\<lambda>tm expectedTy.
+                   case core_term_type env NotGhost tm of
+                     None \<Rightarrow> False
+                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                 argTms
+                 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))" and
+      ref_lvalues: "\<forall>i < length argTms.
+                      snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                        \<longrightarrow> is_writable_lvalue env (argTms ! i)"
+      by blast
+    have fn_not_ghost: "FI_Ghost funInfo = NotGhost"
+      using not_ghost_fn by (cases "FI_Ghost funInfo") auto
+    from tm_eq fn_lookup len_tyargs tyargs_wk tyargs_rt fn_not_ghost
+         len_tmargs args_check fn_ty_eq ref_lvalues
+    show ?thesis by blast
+  next
+    assume pure: "core_term_type env NotGhost tm = Some ty"
+    show ?thesis
+    proof (cases "\<exists>fnName tyArgs argTms. tm = CoreTm_FunctionCall fnName tyArgs argTms")
+      case True
+      then obtain fnName tyArgs argTms where tm_eq:
+        "tm = CoreTm_FunctionCall fnName tyArgs argTms" by auto
+      from pure tm_eq obtain funInfo where
+        fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+        len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+        tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+        tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
+        not_ghost_fn: "FI_Ghost funInfo \<noteq> Ghost" and
+        all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
+        not_impure: "\<not> FI_Impure funInfo" and
+        len_tmargs: "length argTms = length (FI_TmArgs funInfo)"
+        by (auto simp: Let_def split: option.splits if_splits)
+      let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+      let ?expectedArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+      from pure tm_eq fn_lookup len_tyargs tyargs_wk all_var not_impure
+           len_tmargs tyargs_rt not_ghost_fn have
+        args_check: "list_all2 (\<lambda>tm expectedTy.
+            case core_term_type env NotGhost tm of None \<Rightarrow> False
+            | Some actualTy \<Rightarrow> actualTy = expectedTy)
+          argTms ?expectedArgTypes" and
+        fn_ty_eq: "ty = apply_subst ?tySubst (FI_ReturnType funInfo)"
+        by (auto simp: Let_def split: if_splits)
+      have fn_not_ghost: "FI_Ghost funInfo = NotGhost"
+        using not_ghost_fn by (cases "FI_Ghost funInfo") auto
+      \<comment> \<open>Pure function-call: all args are Var, so Ref obligation is vacuous. \<close>
+      have ref_lvalues: "\<forall>i < length argTms.
+                           snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                             \<longrightarrow> is_writable_lvalue env (argTms ! i)"
+      proof (intro allI impI)
+        fix i assume i_lt: "i < length argTms"
+          and is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+        with len_tmargs have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
+        obtain n ti vor where fi_arg: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+          by (cases "FI_TmArgs funInfo ! i") auto
+        from is_ref fi_arg have vor_eq: "vor = Ref" by simp
+        from all_var i_lt_fi fi_arg
+        have "(\<lambda>(_, _, vor). vor = Var) (n, ti, vor)"
+          by (metis list_all_length)
+        hence "vor = Var" by simp
+        with vor_eq have False by simp
+        thus "is_writable_lvalue env (argTms ! i)" by simp
+      qed
+      from tm_eq fn_lookup len_tyargs tyargs_wk tyargs_rt fn_not_ghost
+           len_tmargs args_check fn_ty_eq ref_lvalues
+      show ?thesis by blast
+    next
+      case False
+      thus ?thesis using pure by blast
+    qed
+  qed
+qed
+
+
 end
