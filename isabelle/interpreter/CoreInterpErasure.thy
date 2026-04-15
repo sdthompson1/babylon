@@ -608,8 +608,32 @@ next
           qed
         next
           case Ref
-          \<comment> \<open>Typechecker is undefined for VarDecl Ref — deferred. \<close>
-          show ?thesis sorry
+          show ?thesis
+          proof (cases g)
+            case Ghost
+            then show ?thesis using CoreStmt_VarDecl Ref by simp
+          next
+            case NotGhost
+            from typing CoreStmt_VarDecl Ref NotGhost
+            have init_lvalue: "is_lvalue initTm"
+              and init_ty: "core_term_type env NotGhost initTm = Some ty"
+              by (auto split: if_splits)
+            \<comment> \<open>The interpreter dispatches on lvalue_base_name (invariant under
+                substitution), then either interp_term (copy path) or
+                interp_writable_lvalue (alias path). Both erase via the IHs. \<close>
+            have base_eq: "lvalue_base_name (apply_subst_to_term subst initTm)
+                            = lvalue_base_name initTm"
+              by (rule lvalue_base_name_apply_subst_to_term)
+            have term_eq: "interp_term fuel state (apply_subst_to_term subst initTm)
+                            = interp_term fuel state initTm"
+              using IH_term[of initTm] init_ty by blast
+            have lv_eq: "interp_writable_lvalue fuel state (apply_subst_to_term subst initTm)
+                          = interp_writable_lvalue fuel state initTm"
+              using IH_lvalue[of initTm] init_ty by blast
+            show ?thesis
+              using CoreStmt_VarDecl Ref NotGhost base_eq term_eq lv_eq
+              by (simp split: option.splits sum.splits add: case_prod_beta)
+          qed
         qed
       next
         case (CoreStmt_Assign g lhs rhs)

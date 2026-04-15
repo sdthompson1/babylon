@@ -152,10 +152,11 @@ definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyE
            name |\<notin>| TE_GhostLocals env \<and> name |\<notin>| TE_ConstNames env \<longrightarrow>
       (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
 
-(* The interpreter's IS_ConstNames matches the type environment's TE_ConstNames *)
+(* The interpreter's IS_ConstNames matches the type environment's TE_ConstNames,
+   minus ghost names (which don't exist at runtime). *)
 definition const_names_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "const_names_match state env \<equiv>
-    IS_ConstNames state = TE_ConstNames env"
+    IS_ConstNames state = fminus (TE_ConstNames env) (TE_GhostLocals env)"
 
 (* The store typing has the same length as the store, and every slot value has the
    designated type for its address. *)

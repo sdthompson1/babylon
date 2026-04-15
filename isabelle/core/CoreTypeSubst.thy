@@ -2502,7 +2502,7 @@ proof (induction stmt and stmts
         TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
         TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals env)
                            else fminus (TE_GhostLocals env) {|varName|}),
-        TE_ConstNames := TE_ConstNames env \<rparr>"
+        TE_ConstNames := fminus (TE_ConstNames env) {|varName|} \<rparr>"
     by (auto split: if_splits)
 
   \<comment> \<open>Substituted varTy is well-kinded in ?be. \<close>
@@ -2556,7 +2556,7 @@ proof (induction stmt and stmts
     "?be \<lparr> TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
            TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals ?be)
                               else fminus (TE_GhostLocals ?be) {|varName|}),
-           TE_ConstNames := TE_ConstNames ?be \<rparr>
+           TE_ConstNames := fminus (TE_ConstNames ?be) {|varName|} \<rparr>
        = apply_subst_to_callee_env subst callerEnv calleeEnv'"
     unfolding env'_eq apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
 
@@ -2564,9 +2564,76 @@ proof (induction stmt and stmts
     using ghost_ok varTy_wk_subst varTy_rt_subst init_subst result_env_eq
     by simp
 next
-  case (2 uu uv uw ux uy uz)
-  \<comment> \<open>TODO: VarDecl Ref - typechecking is undefined; cannot prove until implemented \<close>
-  then show ?case sorry
+  case (2 env mode declGhost varName varTy initTm)
+  \<comment> \<open>VarDecl Ref: declares a new local ref. The result env extends TE_LocalVars
+      with (varName, varTy), and adds varName to TE_ConstNames iff initTm is not
+      a writable lvalue (i.e. its base is read-only). Substitution preserves
+      is_lvalue, is_writable_lvalue, and the result env shape, mirroring case 1. \<close>
+  from "2.prems"(1) have
+    ghost_ok: "mode = Ghost \<longrightarrow> declGhost = Ghost" and
+    varTy_wk: "is_well_kinded env varTy" and
+    varTy_rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    init_lvalue: "is_lvalue initTm" and
+    init_typed: "core_term_type env declGhost initTm = Some varTy" and
+    env'_eq: "calleeEnv' = env \<lparr>
+        TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+        TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals env)
+                           else fminus (TE_GhostLocals env) {|varName|}),
+        TE_ConstNames := (if is_writable_lvalue env initTm
+                          then fminus (TE_ConstNames env) {|varName|}
+                          else finsert varName (TE_ConstNames env)) \<rparr>"
+    by (auto split: if_splits)
+
+  let ?be = "apply_subst_to_callee_env subst callerEnv env"
+  have varTy_wk_subst: "is_well_kinded ?be (apply_subst subst varTy)"
+    using apply_subst_preserves_well_kinded_callee[OF varTy_wk "2.prems"(3)] .
+
+  have varTy_rt_subst:
+    "declGhost = NotGhost \<longrightarrow> is_runtime_type ?be (apply_subst subst varTy)"
+  proof
+    assume dg: "declGhost = NotGhost"
+    with ghost_ok have mode_ng: "mode = NotGhost" by (cases mode) auto
+    from dg varTy_rt have rt: "is_runtime_type env varTy" by simp
+    from mode_ng "2.prems"(6) have ok_rt: "callee_env_subst_runtime_ok subst callerEnv env" by simp
+    from apply_subst_preserves_runtime_callee[OF rt "2.prems"(3) ok_rt]
+    show "is_runtime_type ?be (apply_subst subst varTy)" .
+  qed
+
+  have rt_for_declGhost:
+    "declGhost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+    using ghost_ok "2.prems"(5) by (cases mode) auto
+  have rt_ok_for_declGhost:
+    "declGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
+    using ghost_ok "2.prems"(6) by (cases mode) auto
+
+  \<comment> \<open>Substitution preserves is_lvalue and is_writable_lvalue. \<close>
+  have init_lvalue_subst: "is_lvalue (apply_subst_to_term subst initTm)"
+    using init_lvalue by simp
+  have wl_eq: "is_writable_lvalue ?be (apply_subst_to_term subst initTm)
+                = is_writable_lvalue env initTm"
+    by simp
+
+  \<comment> \<open>The pure-term lemma applied to initTm. \<close>
+  from core_term_type_subst_callee_env[OF init_typed "2.prems"(2,3,4) rt_for_declGhost rt_ok_for_declGhost]
+  have init_subst:
+    "core_term_type ?be declGhost (apply_subst_to_term subst initTm)
+       = Some (apply_subst subst varTy)" by simp
+
+  \<comment> \<open>The substituted result env equals the substituted version of the original
+      result env. TE_GhostLocals and TE_ConstNames updates depend only on names. \<close>
+  have result_env_eq:
+    "?be \<lparr> TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
+           TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals ?be)
+                              else fminus (TE_GhostLocals ?be) {|varName|}),
+           TE_ConstNames := (if is_writable_lvalue env initTm
+                             then fminus (TE_ConstNames ?be) {|varName|}
+                             else finsert varName (TE_ConstNames ?be)) \<rparr>
+       = apply_subst_to_callee_env subst callerEnv calleeEnv'"
+    unfolding env'_eq apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
+
+  show ?case
+    using ghost_ok varTy_wk_subst varTy_rt_subst init_lvalue_subst init_subst result_env_eq wl_eq
+    by simp
 next
   case (3 env mode assignGhost lhsTm rhsTm)
   \<comment> \<open>Assign: lhs is a writable lvalue, rhs has the same type as lhs, result env

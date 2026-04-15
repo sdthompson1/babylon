@@ -173,6 +173,7 @@ lemma state_matches_env_add_local:
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                                        IS_Refs := fmdrop var (IS_Refs state'),
                                         IS_ConstNames := new_state_cn \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                                TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
@@ -196,7 +197,7 @@ proof -
     using state''_eq store'_eq by simp
   have locals''_eq: "IS_Locals state'' = fmupd var addr (IS_Locals state)"
     using state''_eq locals'_eq by simp
-  have refs''_eq: "IS_Refs state'' = IS_Refs state"
+  have refs''_eq: "IS_Refs state'' = fmdrop var (IS_Refs state)"
     using state''_eq refs'_eq by simp
   have consts''_eq: "IS_Globals state'' = IS_Globals state"
     using state''_eq consts'_eq by simp
@@ -450,17 +451,19 @@ lemma state_matches_env_add_ref:
   assumes state_env: "state_matches_env state env storeTyping"
     and addr_valid: "addr < length (IS_Store state)"
     and path_ty: "type_at_path env (storeTyping ! addr) path = Some refTy"
-    and state'_eq: "state' = state \<lparr> IS_Refs := fmupd var (addr, path) (IS_Refs state) \<rparr>"
+    and state'_eq: "state' = state \<lparr> IS_Locals := fmdrop var (IS_Locals state),
+                                       IS_Refs := fmupd var (addr, path) (IS_Refs state),
+                                       IS_ConstNames := fminus (IS_ConstNames state) {|var|} \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var refTy (TE_LocalVars env),
                                 TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
-                                TE_ConstNames := TE_ConstNames env \<rparr>"
+                                TE_ConstNames := fminus (TE_ConstNames env) {|var|} \<rparr>"
     and var_fresh: "fmlookup (TE_LocalVars env) var = None"
     and var_not_ghost: "var |\<notin>| TE_GhostLocals env"
   shows "state_matches_env state' env' storeTyping"
 proof -
   have store_eq: "IS_Store state' = IS_Store state"
     using state'_eq by simp
-  have locals_eq: "IS_Locals state' = IS_Locals state"
+  have locals_eq: "IS_Locals state' = fmdrop var (IS_Locals state)"
     using state'_eq by simp
   have refs_eq: "IS_Refs state' = fmupd var (addr, path) (IS_Refs state)"
     using state'_eq by simp
@@ -468,7 +471,7 @@ proof -
     using state'_eq by simp
   have funs_eq: "IS_Functions state' = IS_Functions state"
     using state'_eq by simp
-  have consts_eq: "IS_ConstNames state' = IS_ConstNames state"
+  have consts_eq: "IS_ConstNames state' = fminus (IS_ConstNames state) {|var|}"
     using state'_eq by simp
 
   have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
@@ -639,7 +642,7 @@ proof -
       with env'_eq have tv2: "fmlookup (TE_LocalVars env) name \<noteq> None"
         using tv by simp
       from False env'_eq ng have ng2: "name |\<notin>| TE_GhostLocals env" by auto
-      from env'_eq nc have nc2: "name |\<notin>| TE_ConstNames env" by simp
+      from env'_eq nc False have nc2: "name |\<notin>| TE_ConstNames env" by auto
       from tv2 ng2 nc2 nc_src have
         "fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None"
         unfolding non_consts_in_locals_or_refs_def by blast
@@ -650,7 +653,7 @@ proof -
   \<comment> \<open>8. const_names_match. \<close>
   have cn_tgt: "const_names_match state' env'"
     using cn_src env'_eq consts_eq
-    unfolding const_names_match_def by simp
+    unfolding const_names_match_def by auto
 
   \<comment> \<open>9. store_well_typed. \<close>
   have swt_tgt: "store_well_typed state' env' storeTyping"
@@ -669,18 +672,21 @@ corollary state_matches_env_add_const_local:
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
     and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                                        IS_Refs := fmdrop var (IS_Refs state'),
                                         IS_ConstNames := finsert var (IS_ConstNames state') \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                                TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
                                TE_ConstNames := finsert var (TE_ConstNames env) \<rparr>"
   shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
-  from state'_eq have "IS_ConstNames state' = IS_ConstNames state" by auto
-  hence "IS_ConstNames state'' = finsert var (TE_ConstNames env)"
-    using state_env state''_eq
-    unfolding state_matches_env_def const_names_match_def by simp
+  from state'_eq have ic_eq: "IS_ConstNames state' = IS_ConstNames state" by auto
+  have icn_eq: "IS_ConstNames state = fminus (TE_ConstNames env) (TE_GhostLocals env)"
+    using state_env unfolding state_matches_env_def const_names_match_def by simp
+  have "IS_ConstNames state''
+        = finsert var (fminus (TE_ConstNames env) (TE_GhostLocals env))"
+    using state''_eq ic_eq icn_eq by simp
   hence cn: "const_names_match state'' env'"
-    using env'_eq unfolding const_names_match_def by simp
+    using env'_eq unfolding const_names_match_def by auto
   have cn_oth: "\<And>name. name \<noteq> var \<Longrightarrow>
       (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
     using env'_eq by auto
@@ -689,31 +695,32 @@ proof -
                                         cn cn_oth] .
 qed
 
-(* Non-const specialization: ConstNames unchanged (used for var declarations) *)
+(* Non-const specialization: var is removed from ConstNames (used for VarDecl Var) *)
 corollary state_matches_env_add_nonconst_local:
   assumes state_env: "state_matches_env state env storeTyping"
     and val_typed: "value_has_type env val rhsTy"
     and state'_eq: "(state', addr) = alloc_store state val"
-    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state') \<rparr>"
+    and state''_eq: "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
+                                         IS_Refs := fmdrop var (IS_Refs state'),
+                                         IS_ConstNames := fminus (IS_ConstNames state') {|var|} \<rparr>"
     and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                                TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
-                               TE_ConstNames := TE_ConstNames env \<rparr>"
+                               TE_ConstNames := fminus (TE_ConstNames env) {|var|} \<rparr>"
   shows "state_matches_env state'' env' (storeTyping @ [rhsTy])"
 proof -
-  have state''_eq': "state'' = state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
-                                         IS_ConstNames := IS_ConstNames state' \<rparr>"
-    using state''_eq by simp
-  from state'_eq have "IS_ConstNames state' = IS_ConstNames state" by auto
-  hence "IS_ConstNames state'' = TE_ConstNames env"
-    using state_env state''_eq
-    unfolding state_matches_env_def const_names_match_def by simp
+  from state'_eq have ic_eq: "IS_ConstNames state' = IS_ConstNames state" by auto
+  have icn_eq: "IS_ConstNames state = fminus (TE_ConstNames env) (TE_GhostLocals env)"
+    using state_env unfolding state_matches_env_def const_names_match_def by simp
+  have "IS_ConstNames state''
+        = fminus (fminus (TE_ConstNames env) (TE_GhostLocals env)) {|var|}"
+    using state''_eq ic_eq icn_eq by simp
   hence cn: "const_names_match state'' env'"
-    using env'_eq unfolding const_names_match_def by simp
+    using env'_eq unfolding const_names_match_def by auto
   have cn_oth: "\<And>name. name \<noteq> var \<Longrightarrow>
       (name |\<in>| TE_ConstNames env' \<longleftrightarrow> name |\<in>| TE_ConstNames env)"
-    using env'_eq by simp
+    using env'_eq by auto
   show ?thesis
-    using state_matches_env_add_local[OF state_env val_typed state'_eq state''_eq' env'_eq
+    using state_matches_env_add_local[OF state_env val_typed state'_eq state''_eq env'_eq
                                         cn cn_oth] .
 qed
 
@@ -2094,7 +2101,9 @@ lemma partial_body_env_for_step:
            (if vor = Var
             then finsert paramName
                    (TE_ConstNames (partial_body_env_for env funInfo tySubst k))
-            else TE_ConstNames (partial_body_env_for env funInfo tySubst k))
+            else fminus
+                   (TE_ConstNames (partial_body_env_for env funInfo tySubst k))
+                   {|paramName|})
        \<rparr>"
 proof -
   let ?args = "FI_TmArgs funInfo"
@@ -2176,11 +2185,31 @@ proof -
   have const_Sk_eq:
     "?const_Sk = (if vor = Var then ?const_k @ [paramName] else ?const_k)"
     using filter_Sk kth by (cases "vor = Var") simp_all
+  \<comment> \<open>paramName is not in the k-prefix of params, hence not in ?const_k either.
+      This makes the fminus in the Ref branch a no-op. \<close>
+  have paramName_not_in_const_k: "paramName \<notin> set ?const_k"
+  proof -
+    have "distinct (take (Suc k) (map fst ?args))"
+      using all_distinct by (rule distinct_take)
+    moreover have "take (Suc k) (map fst ?args)
+                 = map fst (take k ?args) @ [paramName]"
+      using k_bound kth by (simp add: take_Suc_conv_app_nth take_map)
+    ultimately have "paramName \<notin> set (map fst (take k ?args))"
+      by simp
+    thus ?thesis by (auto simp: comp_def case_prod_beta)
+  qed
+  have paramName_not_in_const_k_fset:
+    "paramName |\<notin>| fset_of_list ?const_k"
+    using paramName_not_in_const_k by (metis fset_of_list.rep_eq)
+  have const_k_fminus:
+    "fminus (fset_of_list ?const_k) {|paramName|} = fset_of_list ?const_k"
+    using paramName_not_in_const_k_fset by auto
   have fset_const_Sk:
     "fset_of_list ?const_Sk
        = (if vor = Var then finsert paramName (fset_of_list ?const_k)
-          else fset_of_list ?const_k)"
-    using const_Sk_eq by (cases "vor = Var") auto
+          else fminus (fset_of_list ?const_k) {|paramName|})"
+    using const_Sk_eq const_k_fminus
+    by (cases "vor = Var") auto
 
   \<comment> \<open>TE_GhostLocals is {||} at both k and (Suc k), so fminus is a no-op. \<close>
   have ghost_locals_eq:
@@ -2268,6 +2297,7 @@ proof -
 
       \<comment> \<open>The concrete state'' that process_one_arg produces for the Var branch. \<close>
       let ?state'' = "state' \<lparr> IS_Locals := fmupd paramName addr (IS_Locals state'),
+                                IS_Refs := fmdrop paramName (IS_Refs state'),
                                 IS_ConstNames := finsert paramName (IS_ConstNames state') \<rparr>"
 
       \<comment> \<open>process_one_arg reduces to Inr ?state''. \<close>
@@ -2360,8 +2390,10 @@ proof -
         \<comment> \<open>Both lval and val succeeded. process_one_arg sets
             IS_Refs[paramName] = (addr, path); the store is unchanged. \<close>
         let ?pEnv_k = "partial_body_env_for env funInfo tySubst k"
-        let ?state' = "partialState \<lparr> IS_Refs := fmupd paramName (addr, path)
-                                                       (IS_Refs partialState) \<rparr>"
+        let ?state' = "partialState \<lparr> IS_Locals := fmdrop paramName (IS_Locals partialState),
+                                       IS_Refs := fmupd paramName (addr, path)
+                                                       (IS_Refs partialState),
+                                       IS_ConstNames := fminus (IS_ConstNames partialState) {|paramName|} \<rparr>"
 
         \<comment> \<open>process_one_arg reduces to Inr ?state'. \<close>
         have step_eq:
@@ -2446,7 +2478,7 @@ proof -
                TE_LocalVars := fmupd paramName (apply_subst tySubst paramTy)
                  (TE_LocalVars ?pEnv_k),
                TE_GhostLocals := fminus (TE_GhostLocals ?pEnv_k) {|paramName|},
-               TE_ConstNames := TE_ConstNames ?pEnv_k
+               TE_ConstNames := fminus (TE_ConstNames ?pEnv_k) {|paramName|}
              \<rparr>"
           using partial_body_env_for_step[OF k_bound kth_arg distinct fn_lookup] Ref
           by simp

@@ -39,6 +39,7 @@ proof -
       from arg_eq Var Inr assms
       have state'_eq:
         "state' = (fst ?alloc) \<lparr> IS_Locals := fmupd name (snd ?alloc) (IS_Locals (fst ?alloc)),
+                                  IS_Refs := fmdrop name (IS_Refs (fst ?alloc)),
                                   IS_ConstNames := finsert name (IS_ConstNames (fst ?alloc)) \<rparr>"
         by (simp add: case_prod_beta)
       have "IS_Globals (fst ?alloc) = IS_Globals state"
@@ -62,7 +63,9 @@ proof -
       next
         case (Inr v)
         from arg_eq Ref \<open>refRes = Inr addrPath\<close> addrPath_eq Inr assms
-        have "state' = state \<lparr> IS_Refs := fmupd name (addr, path) (IS_Refs state) \<rparr>"
+        have "state' = state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
+                                IS_Refs := fmupd name (addr, path) (IS_Refs state),
+                                IS_ConstNames := fminus (IS_ConstNames state) {|name|} \<rparr>"
           by simp
         then show ?thesis by simp
       qed
@@ -233,7 +236,8 @@ next
           case Ghost
           with H CoreStmt_VarDecl have
             "res = Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                                      IS_Refs := fmdrop varName (IS_Refs state) \<rparr>)"
+                                      IS_Refs := fmdrop varName (IS_Refs state),
+                                      IS_ConstNames := fminus (IS_ConstNames state) {|varName|} \<rparr>)"
             by simp
           then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
         next
@@ -258,7 +262,10 @@ next
               let ?alloc = "alloc_store newState initVal"
               from NotGhost Var H CoreStmt_VarDecl init_eq call
               have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
-                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)) \<rparr>)"
+                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
+                               IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
+                               IS_ConstNames :=
+                                 fminus (IS_ConstNames (fst ?alloc)) {|varName|} \<rparr>)"
                 by (simp add: case_prod_beta)
               have alloc_gf: "IS_Globals (fst ?alloc) = IS_Globals newState"
                              "IS_Functions (fst ?alloc) = IS_Functions newState"
@@ -273,7 +280,10 @@ next
               let ?alloc = "alloc_store state initVal"
               from NotGhost Var H CoreStmt_VarDecl False iv
               have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
-                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)) \<rparr>)"
+                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
+                               IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
+                               IS_ConstNames :=
+                                 fminus (IS_ConstNames (fst ?alloc)) {|varName|} \<rparr>)"
                 by (cases initTm; simp_all add: case_prod_beta)
               have "IS_Globals (fst ?alloc) = IS_Globals state"
                    "IS_Functions (fst ?alloc) = IS_Functions state"
@@ -288,7 +298,9 @@ next
               base: "lvalue_base_name initTm = Some baseName"
               by (cases "lvalue_base_name initTm") simp_all
             show ?thesis
-            proof (cases "baseName |\<in>| IS_ConstNames state")
+            proof (cases "baseName |\<in>| IS_ConstNames state
+                          \<or> (fmlookup (IS_Locals state) baseName = None
+                             \<and> fmlookup (IS_Refs state) baseName = None)")
               case True
               with NotGhost Ref H CoreStmt_VarDecl base
               obtain val where
@@ -299,6 +311,7 @@ next
               have res_eq: "res = Continue
                  ((fst ?alloc) \<lparr> IS_Locals :=
                                   fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
+                                 IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
                                  IS_ConstNames :=
                                   finsert varName (IS_ConstNames (fst ?alloc)) \<rparr>)"
                 by (simp add: case_prod_beta)
@@ -315,7 +328,9 @@ next
                 by (auto split: sum.splits)
               from NotGhost Ref H CoreStmt_VarDecl base False lv
               have res_eq: "res = Continue
-                 (state \<lparr> IS_Refs := fmupd varName addrPath (IS_Refs state) \<rparr>)"
+                 (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                          IS_Refs := fmupd varName addrPath (IS_Refs state),
+                          IS_ConstNames := fminus (IS_ConstNames state) {|varName|} \<rparr>)"
                 by simp
               then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
             qed

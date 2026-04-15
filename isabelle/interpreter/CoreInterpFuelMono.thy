@@ -604,6 +604,7 @@ next
       define state' addr where "state' = fst (alloc_store state rhsVal)"
                            and "addr = snd (alloc_store state rhsVal)"
       define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                                IS_Refs := fmdrop varName (IS_Refs state'),
                                                 IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>"
       hence body_noFuel: "interp_term fuel state'' bodyTm \<noteq> Inl InsufficientFuel"
         using noFuel Inr state'_def addr_def
@@ -1046,9 +1047,11 @@ next
     next
       case (Some baseName)
       show ?thesis
-      proof (cases "baseName |\<in>| IS_ConstNames state")
+      proof (cases "baseName |\<in>| IS_ConstNames state
+                    \<or> (fmlookup (IS_Locals state) baseName = None
+                       \<and> fmlookup (IS_Refs state) baseName = None)")
         case True
-        (* Const: both sides use interp_term *)
+        (* Const or global: both sides use interp_term *)
         have tm_noFuel: "interp_term fuel state lvalueTm \<noteq> Inl InsufficientFuel"
           using noFuel Some True by (auto split: sum.splits prod.splits)
         have IH_tm: "\<forall>f'\<ge>fuel. interp_term f' state lvalueTm = interp_term fuel state lvalueTm"
@@ -1065,7 +1068,7 @@ next
           using "29.IH" Some False lv_noFuel by blast
         from IH_lv f''_ge
         have "interp_writable_lvalue f'' state lvalueTm = interp_writable_lvalue fuel state lvalueTm" by metis
-        then show ?thesis using f'_eq Some False by simp
+        then show ?thesis using f'_eq Some False by (auto split: sum.splits)
       qed
     qed
   qed

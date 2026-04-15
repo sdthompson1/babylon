@@ -318,10 +318,13 @@ fun process_one_arg :: "((string \<times> VarOrRef)
 | "process_one_arg ((name, Var), _, Inr val) (Inr state) =
     (let (state', addr) = alloc_store state val
     in Inr (state' \<lparr> IS_Locals := fmupd name addr (IS_Locals state'),
+                      IS_Refs := fmdrop name (IS_Refs state'),
                       IS_ConstNames := finsert name (IS_ConstNames state') \<rparr>))"
 | "process_one_arg ((name, Var), _, Inl err) _ = Inl err"
 | "process_one_arg ((name, Ref), Inr (addr, path), Inr _) (Inr state) =
-    Inr (state \<lparr> IS_Refs := fmupd name (addr, path) (IS_Refs state) \<rparr>)"
+    Inr (state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
+                  IS_Refs := fmupd name (addr, path) (IS_Refs state),
+                  IS_ConstNames := fminus (IS_ConstNames state) {|name|} \<rparr>)"
 | "process_one_arg ((name, Ref), Inl err, _) _ = Inl err"
 | "process_one_arg ((name, Ref), _, Inl err) _ = Inl err"
 
@@ -411,6 +414,7 @@ where
     | Inr rhsVal \<Rightarrow>
         (let (state', addr) = alloc_store state rhsVal;
              state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                IS_Refs := fmdrop varName (IS_Refs state'),
                                 IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>
         in interp_term fuel state'' bodyTm))"
 
@@ -545,16 +549,22 @@ where
   (* Ghost VarDecl: does not evaluate the initializer or allocate store.
      However, if the variable was previously a non-ghost local, it is now shadowed
      by a ghost variable, so we remove it from IS_Locals/IS_Refs to maintain the
-     invariant that ghost variables are not present in the interpreter state. *)
+     invariant that ghost variables are not present in the interpreter state.
+     We also remove it from IS_ConstNames in case the previous binding (now
+     shadowed) was a const local. *)
 | "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost varName _ _ _) =
     Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                           IS_Refs := fmdrop varName (IS_Refs state) \<rparr>))"
+                           IS_Refs := fmdrop varName (IS_Refs state),
+                           IS_ConstNames := fminus (IS_ConstNames state) {|varName|} \<rparr>))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
     \<comment> \<open>Compute new state (after any function call) and the initial value.
         When the rhs is a function call (including impure ones that take Ref
         args or have observable effects), dispatch via interp_function_call so
         that the state update from the call is observed. Otherwise evaluate
-        the term normally (state is unchanged). \<close>
+        the term normally (state is unchanged).
+
+        We remove varName from IS_ConstNames in case it was previously a const
+        local (now shadowed by this fresh non-const declaration). \<close>
     (case (case initialTm of
              CoreTm_FunctionCall fnName _ argTms \<Rightarrow>
                interp_function_call fuel state fnName argTms
@@ -565,12 +575,21 @@ where
       of
         Inr (newState, initialVal) \<Rightarrow>
           (let (state', addr) = alloc_store newState initialVal
-           in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>)))
+           in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                       IS_Refs := fmdrop varName (IS_Refs state'),
+                                       IS_ConstNames := fminus (IS_ConstNames state') {|varName|} \<rparr>)))
       | Inl err \<Rightarrow> Inl err)"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
-        if baseName |\<in>| IS_ConstNames state then
+        \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
+           - it is in IS_ConstNames (an explicit const local), or
+           - it is not in IS_Locals \<union> IS_Refs at all, in which case it must be a
+             global (which is implicitly read-only).
+           Locals shadow globals, so we must check IS_Locals/IS_Refs first. \<close>
+        if baseName |\<in>| IS_ConstNames state
+           \<or> (fmlookup (IS_Locals state) baseName = None
+              \<and> fmlookup (IS_Refs state) baseName = None) then
           \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
              A compiler would likely use a read-only pointer, but copying is
              semantically equivalent since the source is immutable.\<close>
@@ -579,12 +598,17 @@ where
           | Inr val \<Rightarrow>
               (let (state', addr) = alloc_store state val
               in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                          IS_Refs := fmdrop varName (IS_Refs state'),
                                           IS_ConstNames := finsert varName (IS_ConstNames state') \<rparr>))))
         else
-          \<comment> \<open>Base variable is writable: alias via writable lvalue\<close>
+          \<comment> \<open>Base variable is writable: alias via writable lvalue. Drop varName
+             from IS_Locals and IS_ConstNames so that the new ref properly
+             shadows any previous binding with the same name. \<close>
           (case interp_writable_lvalue fuel state lvalueTm of
             Inr addrAndPath \<Rightarrow>
-              Inr (Continue (state \<lparr> IS_Refs := fmupd varName addrAndPath (IS_Refs state) \<rparr> ))
+              Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                                      IS_Refs := fmupd varName addrAndPath (IS_Refs state),
+                                      IS_ConstNames := fminus (IS_ConstNames state) {|varName|} \<rparr>))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 

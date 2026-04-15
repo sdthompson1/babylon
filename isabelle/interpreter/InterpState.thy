@@ -36,7 +36,9 @@ record 'world InterpState =
 
   (* Names of read-only variables (constants).
      The interpreter will produce a TypeError if an attempt is made to
-     assign to or swap any of these names. *)
+     assign to or swap any of these names. This is a subset of the local
+     names appearing in IS_Locals \<union> IS_Refs; globals (IS_Globals) are
+     implicitly read-only and do not need to be listed here. *)
   IS_ConstNames :: "string fset"
 
   (* Available functions (only includes non-ghost functions) *)
