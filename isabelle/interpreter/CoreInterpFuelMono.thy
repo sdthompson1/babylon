@@ -998,16 +998,35 @@ next
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var wa initialTm) \<noteq> Inl InsufficientFuel"
-    hence sub_noFuel: "interp_term fuel state initialTm \<noteq> Inl InsufficientFuel"
-      by (auto split: sum.splits prod.splits)
-    hence IH: "\<forall>f'\<ge>fuel. interp_term f' state initialTm = interp_term fuel state initialTm"
-      using "28.IH" by blast
-    from IH f''_ge have "interp_term f'' state initialTm = interp_term fuel state initialTm"
-      by metis
-    with f'_eq show "interp_statement f' state (CoreStmt_VarDecl NotGhost varName Var wa initialTm) =
+    assume noFuel: "interp_statement (Suc fuel) state
+                      (CoreStmt_VarDecl NotGhost varName Var wa initialTm) \<noteq> Inl InsufficientFuel"
+    show "interp_statement f' state (CoreStmt_VarDecl NotGhost varName Var wa initialTm) =
           interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var wa initialTm)"
-      by simp
+    proof (cases "\<exists>fnName argTypes argTms. initialTm = CoreTm_FunctionCall fnName argTypes argTms")
+      case True
+      then obtain fnName argTypes argTms where
+        initialTm_eq: "initialTm = CoreTm_FunctionCall fnName argTypes argTms" by blast
+      hence fc_noFuel: "interp_function_call fuel state fnName argTms \<noteq> Inl InsufficientFuel"
+        using noFuel initialTm_eq by (auto split: sum.splits prod.splits)
+      hence IH_fc: "\<forall>f'\<ge>fuel.
+              interp_function_call f' state fnName argTms
+                = interp_function_call fuel state fnName argTms"
+        using "28.IH"(10) initialTm_eq by blast
+      have "interp_function_call f'' state fnName argTms
+              = interp_function_call fuel state fnName argTms"
+        using IH_fc f''_ge by metis
+      with f'_eq initialTm_eq show ?thesis by simp
+    next
+      case notFunCall: False
+      hence sub_noFuel: "interp_term fuel state initialTm \<noteq> Inl InsufficientFuel"
+        using noFuel by (cases initialTm; auto split: sum.splits prod.splits)
+      hence IH: "\<forall>f'\<ge>fuel. interp_term f' state initialTm = interp_term fuel state initialTm"
+        by (meson "28.IH"(11,12,13,14,15,16,17,18,19,1,2,3,4,5,6,7,8,9) lvalue_base_name.cases
+            notFunCall)
+      from IH f''_ge have tm_eq: "interp_term f'' state initialTm = interp_term fuel state initialTm"
+        by metis
+      with f'_eq notFunCall show ?thesis by (cases initialTm; simp)
+    qed
   qed
 next
   (* interp_statement (Suc fuel) VarDecl NotGhost Ref *)

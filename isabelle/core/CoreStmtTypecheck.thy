@@ -3,6 +3,420 @@ theory CoreStmtTypecheck
 begin
 
 (* ========================================================================== *)
+(* Impure function-call typechecking                                          *)
+(*                                                                            *)
+(* A term-level function call (core_term_type CoreTm_FunctionCall) rejects    *)
+(* calls that take Ref parameters or are marked FI_Impure. But at the         *)
+(* outermost position on the rhs of an Assign or a VarDecl(Var), the source   *)
+(* language does allow such calls. This helper typechecks such a call         *)
+(* occurring at the outermost position. It returns None for any term that    *)
+(* is not a CoreTm_FunctionCall, so callers can fall back to core_term_type. *)
+(*                                                                            *)
+(* For each argument:                                                         *)
+(*   - Ref parameter: argument must be a writable lvalue of the expected      *)
+(*     (substituted) type.                                                    *)
+(*   - Var parameter: argument is typechecked via core_term_type, so nested   *)
+(*     calls stay pure.                                                       *)
+(* ========================================================================== *)
+
+definition core_impure_call_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreTerm \<Rightarrow> CoreType option" where
+  "core_impure_call_type env ghost tm =
+    (case tm of
+       CoreTm_FunctionCall fnName tyArgs tmArgs \<Rightarrow>
+         (case fmlookup (TE_Functions env) fnName of
+            None \<Rightarrow> None
+          | Some funInfo \<Rightarrow>
+              if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
+              else if \<not> list_all (is_well_kinded env) tyArgs then None
+              else if ghost = NotGhost
+                      \<and> (\<not> list_all (is_runtime_type env) tyArgs
+                         \<or> FI_Ghost funInfo = Ghost) then None
+              else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
+              else
+                let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
+                    expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+                    varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+                in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                         case vor of
+                           Var \<Rightarrow>
+                             (case core_term_type env ghost tm of
+                                None \<Rightarrow> False
+                              | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                         | Ref \<Rightarrow>
+                             is_writable_lvalue env tm
+                             \<and> core_term_type env ghost tm = Some expectedTy)
+                       (zip tmArgs varOrRefs) expectedArgTypes
+                   then Some (apply_subst tySubst (FI_ReturnType funInfo))
+                   else None)
+     | _ \<Rightarrow> None)"
+
+
+(* A convenient corollary of core_impure_call_type = Some: the function is
+   looked up, and every argument term typechecks to *some* type via
+   core_term_type. This is enough for several downstream proofs (erasure,
+   fuel-monotonicity, preservation) that only need to know the arguments are
+   well-typed rather than the full Var/Ref-respecting check. *)
+lemma core_impure_call_type_args_typed:
+  assumes "core_impure_call_type env ghost tm = Some ty"
+      and "tm = CoreTm_FunctionCall fnName tyArgs tmArgs"
+  shows "\<exists>fi. fmlookup (TE_Functions env) fnName = Some fi
+              \<and> length tmArgs = length (FI_TmArgs fi)
+              \<and> list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
+proof -
+  from assms have unfolded:
+    "(case fmlookup (TE_Functions env) fnName of
+        None \<Rightarrow> None
+      | Some fi \<Rightarrow>
+          if length tyArgs \<noteq> length (FI_TyArgs fi) then None
+          else if \<not> list_all (is_well_kinded env) tyArgs then None
+          else if ghost = NotGhost
+                  \<and> (\<not> list_all (is_runtime_type env) tyArgs
+                     \<or> FI_Ghost fi = Ghost) then None
+          else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
+          else
+            let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
+                expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+                varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+            in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                     case vor of
+                       Var \<Rightarrow>
+                         (case core_term_type env ghost tm of
+                            None \<Rightarrow> False
+                          | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                     | Ref \<Rightarrow>
+                         is_writable_lvalue env tm
+                         \<and> core_term_type env ghost tm = Some expectedTy)
+                   (zip tmArgs varOrRefs) expectedArgTypes
+               then Some (apply_subst tySubst (FI_ReturnType fi))
+               else None) = Some ty"
+    unfolding core_impure_call_type_def by simp
+  from unfolded obtain fi where
+    fi_lookup: "fmlookup (TE_Functions env) fnName = Some fi"
+    by (cases "fmlookup (TE_Functions env) fnName") auto
+  from unfolded fi_lookup have body:
+    "(if length tyArgs \<noteq> length (FI_TyArgs fi) then None
+      else if \<not> list_all (is_well_kinded env) tyArgs then None
+      else if ghost = NotGhost
+              \<and> (\<not> list_all (is_runtime_type env) tyArgs
+                 \<or> FI_Ghost fi = Ghost) then None
+      else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
+      else
+        let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
+            expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+            varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+        in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                 case vor of
+                   Var \<Rightarrow>
+                     (case core_term_type env ghost tm of
+                        None \<Rightarrow> False
+                      | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                 | Ref \<Rightarrow>
+                     is_writable_lvalue env tm
+                     \<and> core_term_type env ghost tm = Some expectedTy)
+               (zip tmArgs varOrRefs) expectedArgTypes
+           then Some (apply_subst tySubst (FI_ReturnType fi))
+           else None) = Some ty"
+    by simp
+  have len_tmArgs: "length tmArgs = length (FI_TmArgs fi)"
+    using body by (metis option.distinct(1))
+  from body len_tmArgs
+  have after_ifs:
+    "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
+          expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+          varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+      in if list_all2 (\<lambda>(tm, vor) expectedTy.
+               case vor of
+                 Var \<Rightarrow>
+                   (case core_term_type env ghost tm of
+                      None \<Rightarrow> False
+                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
+               | Ref \<Rightarrow>
+                   is_writable_lvalue env tm
+                   \<and> core_term_type env ghost tm = Some expectedTy)
+             (zip tmArgs varOrRefs) expectedArgTypes
+         then Some (apply_subst tySubst (FI_ReturnType fi))
+         else None) = Some ty"
+    by (meson option.distinct(1))
+  from after_ifs have argTms_l2:
+    "list_all2 (\<lambda>(tm, vor) expectedTy.
+                  case vor of
+                    Var \<Rightarrow>
+                      (case core_term_type env ghost tm of
+                         None \<Rightarrow> False
+                       | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                  | Ref \<Rightarrow>
+                      is_writable_lvalue env tm
+                      \<and> core_term_type env ghost tm = Some expectedTy)
+               (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))
+               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                    (FI_TmArgs fi))"
+    by (simp add: Let_def split: if_splits)
+
+  have args_typed:
+    "list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
+    unfolding list_all_length
+  proof (intro allI impI)
+    fix i assume i_lt: "i < length tmArgs"
+    with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
+    have i_lt_zip: "i < length (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))"
+      using i_lt len_tmArgs by simp
+
+    obtain n ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (n, ti, vor)"
+      by (cases "FI_TmArgs fi ! i") auto
+    have zip_nth: "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)) ! i
+                    = (tmArgs ! i, vor)"
+      using i_lt i_lt_fi fi_arg_eq by simp
+    have expected_nth:
+      "(map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+            (FI_TmArgs fi)) ! i
+          = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
+      using i_lt_fi fi_arg_eq by simp
+
+    have nth_check:
+      "(case vor of
+          Var \<Rightarrow>
+            (case core_term_type env ghost (tmArgs ! i) of
+               None \<Rightarrow> False
+             | Some actualTy \<Rightarrow> actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti)
+        | Ref \<Rightarrow>
+            is_writable_lvalue env (tmArgs ! i)
+            \<and> core_term_type env ghost (tmArgs ! i)
+                = Some (apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti))"
+      using list_all2_nthD2[OF argTms_l2, of i] i_lt_zip zip_nth expected_nth
+      by simp
+
+    show "\<exists>t. core_term_type env ghost (tmArgs ! i) = Some t"
+      using nth_check by (cases vor; auto split: option.splits)
+  qed
+  from fi_lookup len_tmArgs args_typed show ?thesis by blast
+qed
+
+
+(* A stronger corollary of core_impure_call_type = Some: produce the full set
+   of function-call facts the TypeSoundness Assign proof uses from the pure
+   core_term_type case, including a *pure-shape* list_all2 relating each
+   argument to its expected type via core_term_type. This works because in
+   core_impure_call_type, Ref arguments also require
+   `core_term_type env ghost tm = Some expectedTy` (in addition to being
+   writable lvalues), so every argument — Var or Ref — has a corresponding
+   core_term_type entry. *)
+lemma core_impure_call_type_fn_facts:
+  assumes "core_impure_call_type env ghost tm = Some ty"
+      and "tm = CoreTm_FunctionCall fnName tyArgs tmArgs"
+  shows "\<exists>funInfo.
+            fmlookup (TE_Functions env) fnName = Some funInfo
+            \<and> length tyArgs = length (FI_TyArgs funInfo)
+            \<and> list_all (is_well_kinded env) tyArgs
+            \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
+            \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
+            \<and> length tmArgs = length (FI_TmArgs funInfo)
+            \<and> ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                               (FI_ReturnType funInfo)
+            \<and> list_all2 (\<lambda>tm expectedTy.
+                  case core_term_type env ghost tm of
+                    None \<Rightarrow> False
+                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                tmArgs
+                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                     (FI_TmArgs funInfo))
+            \<and> (\<forall>i < length tmArgs.
+                 snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i))"
+proof -
+  from assms have unfolded:
+    "(case fmlookup (TE_Functions env) fnName of
+        None \<Rightarrow> None
+      | Some fi \<Rightarrow>
+          if length tyArgs \<noteq> length (FI_TyArgs fi) then None
+          else if \<not> list_all (is_well_kinded env) tyArgs then None
+          else if ghost = NotGhost
+                  \<and> (\<not> list_all (is_runtime_type env) tyArgs
+                     \<or> FI_Ghost fi = Ghost) then None
+          else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
+          else
+            let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
+                expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+                varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+            in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                     case vor of
+                       Var \<Rightarrow>
+                         (case core_term_type env ghost tm of
+                            None \<Rightarrow> False
+                          | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                     | Ref \<Rightarrow>
+                         is_writable_lvalue env tm
+                         \<and> core_term_type env ghost tm = Some expectedTy)
+                   (zip tmArgs varOrRefs) expectedArgTypes
+               then Some (apply_subst tySubst (FI_ReturnType fi))
+               else None) = Some ty"
+    unfolding core_impure_call_type_def by simp
+  from unfolded obtain fi where
+    fi_lookup: "fmlookup (TE_Functions env) fnName = Some fi"
+    by (cases "fmlookup (TE_Functions env) fnName") auto
+  from unfolded fi_lookup have body:
+    "(if length tyArgs \<noteq> length (FI_TyArgs fi) then None
+      else if \<not> list_all (is_well_kinded env) tyArgs then None
+      else if ghost = NotGhost
+              \<and> (\<not> list_all (is_runtime_type env) tyArgs
+                 \<or> FI_Ghost fi = Ghost) then None
+      else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
+      else
+        let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
+            expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+            varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+        in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                 case vor of
+                   Var \<Rightarrow>
+                     (case core_term_type env ghost tm of
+                        None \<Rightarrow> False
+                      | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                 | Ref \<Rightarrow>
+                     is_writable_lvalue env tm
+                     \<and> core_term_type env ghost tm = Some expectedTy)
+               (zip tmArgs varOrRefs) expectedArgTypes
+           then Some (apply_subst tySubst (FI_ReturnType fi))
+           else None) = Some ty"
+    by simp
+  have len_tyArgs: "length tyArgs = length (FI_TyArgs fi)"
+    using body by (metis option.distinct(1))
+  from body len_tyArgs have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
+    by (metis option.distinct(1))
+  from body len_tyArgs tyArgs_wk have not_ghost_cond:
+    "\<not> (ghost = NotGhost
+        \<and> (\<not> list_all (is_runtime_type env) tyArgs
+           \<or> FI_Ghost fi = Ghost))"
+    by (metis option.distinct(1))
+  from body len_tyArgs tyArgs_wk not_ghost_cond have len_tmArgs:
+    "length tmArgs = length (FI_TmArgs fi)"
+    by (metis option.distinct(1))
+  from body len_tyArgs tyArgs_wk not_ghost_cond len_tmArgs
+  have after_ifs:
+    "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
+          expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+          varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+      in if list_all2 (\<lambda>(tm, vor) expectedTy.
+               case vor of
+                 Var \<Rightarrow>
+                   (case core_term_type env ghost tm of
+                      None \<Rightarrow> False
+                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
+               | Ref \<Rightarrow>
+                   is_writable_lvalue env tm
+                   \<and> core_term_type env ghost tm = Some expectedTy)
+             (zip tmArgs varOrRefs) expectedArgTypes
+         then Some (apply_subst tySubst (FI_ReturnType fi))
+         else None) = Some ty"
+    by auto
+  from after_ifs have argTms_l2_impure:
+    "list_all2 (\<lambda>(tm, vor) expectedTy.
+                  case vor of
+                    Var \<Rightarrow>
+                      (case core_term_type env ghost tm of
+                         None \<Rightarrow> False
+                       | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                  | Ref \<Rightarrow>
+                      is_writable_lvalue env tm
+                      \<and> core_term_type env ghost tm = Some expectedTy)
+               (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))
+               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                    (FI_TmArgs fi))"
+    by (simp add: Let_def split: if_splits)
+  from after_ifs have fn_ty_eq:
+    "ty = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) (FI_ReturnType fi)"
+    by (simp add: Let_def split: if_splits)
+
+  \<comment> \<open>Derive the pure-shape list_all2: every argument (whether Var or Ref)
+      satisfies core_term_type ... = Some expectedTy, because the impure
+      check requires it in both branches. \<close>
+  have argTms_l2_pure:
+    "list_all2 (\<lambda>tm expectedTy.
+                  case core_term_type env ghost tm of
+                    None \<Rightarrow> False
+                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
+               tmArgs
+               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                    (FI_TmArgs fi))"
+    unfolding list_all2_conv_all_nth
+  proof (intro conjI allI impI)
+    show "length tmArgs
+            = length (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                          (FI_TmArgs fi))"
+      using len_tmArgs by simp
+  next
+    fix i assume i_lt: "i < length tmArgs"
+    with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
+    have i_lt_zip:
+      "i < length (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))"
+      using i_lt len_tmArgs by simp
+    obtain n ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (n, ti, vor)"
+      by (cases "FI_TmArgs fi ! i") auto
+    have zip_nth:
+      "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
+      using i_lt i_lt_fi fi_arg_eq by simp
+    have expected_nth:
+      "(map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+            (FI_TmArgs fi)) ! i
+          = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
+      using i_lt_fi fi_arg_eq by simp
+    have nth_check:
+      "(case vor of
+          Var \<Rightarrow>
+            (case core_term_type env ghost (tmArgs ! i) of
+               None \<Rightarrow> False
+             | Some actualTy \<Rightarrow>
+                 actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti)
+        | Ref \<Rightarrow>
+            is_writable_lvalue env (tmArgs ! i)
+            \<and> core_term_type env ghost (tmArgs ! i)
+                = Some (apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti))"
+      using list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth
+      by simp
+    show "case core_term_type env ghost (tmArgs ! i) of
+            None \<Rightarrow> False
+          | Some actualTy \<Rightarrow>
+              actualTy = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                             (FI_TmArgs fi) ! i"
+      using nth_check expected_nth by (cases vor; auto split: option.splits)
+  qed
+
+  have ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
+    using not_ghost_cond by blast
+  have ng_fn: "ghost = NotGhost \<longrightarrow> FI_Ghost fi \<noteq> Ghost"
+    using not_ghost_cond by blast
+
+  \<comment> \<open>Extract the Ref-position lvalue witness from the impure list_all2. \<close>
+  have ref_args_lvalues:
+    "\<forall>i < length tmArgs.
+       snd (snd (FI_TmArgs fi ! i)) = Ref
+         \<longrightarrow> is_writable_lvalue env (tmArgs ! i)"
+  proof (intro allI impI)
+    fix i assume i_lt: "i < length tmArgs" and ref: "snd (snd (FI_TmArgs fi ! i)) = Ref"
+    with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
+    have i_lt_zip:
+      "i < length (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))"
+      using i_lt len_tmArgs by simp
+    obtain n ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (n, ti, vor)"
+      by (cases "FI_TmArgs fi ! i") auto
+    from ref fi_arg_eq have vor_eq: "vor = Ref" by simp
+    have zip_nth:
+      "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
+      using i_lt i_lt_fi fi_arg_eq by simp
+    have expected_nth:
+      "(map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+            (FI_TmArgs fi)) ! i
+          = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
+      using i_lt_fi fi_arg_eq by simp
+    from list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth vor_eq
+    show "is_writable_lvalue env (tmArgs ! i)" by simp
+  qed
+
+  from fi_lookup len_tyArgs tyArgs_wk ng_tyArgs ng_fn len_tmArgs fn_ty_eq
+       argTms_l2_pure ref_args_lvalues
+  show ?thesis by blast
+qed
+
+
+(* ========================================================================== *)
 (* Statement typechecking                                                     *)
 (*                                                                            *)
 (* A statement transforms the type environment (e.g. VarDecl adds a new       *)
@@ -18,12 +432,15 @@ function core_statement_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow
 and core_statement_list_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement list \<Rightarrow> CoreTyEnv option"
 where
 
-  (* Variable declaration (Var) *)
+  (* Variable declaration (Var).
+     The rhs may be an impure function call at the outermost position; nested
+     calls must still be pure (handled by core_term_type). *)
   "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
     (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
-        \<and> core_term_type env declGhost initTm = Some varTy
+        \<and> (core_impure_call_type env declGhost initTm = Some varTy
+           \<or> core_term_type env declGhost initTm = Some varTy)
      then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := (if declGhost = Ghost
                                        then finsert varName (TE_GhostLocals env)
@@ -34,13 +451,16 @@ where
   (* Variable declaration (Ref) - TODO *)
 | "core_statement_type _ _ (CoreStmt_VarDecl _ _ Ref _ _) = undefined"
 
-  (* Assignment *)
+  (* Assignment.
+     The rhs may be an impure function call at the outermost position; nested
+     calls must still be pure (handled by core_term_type). *)
 | "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
      then (case core_term_type env assignGhost lhsTm of
              Some lhsTy \<Rightarrow>
-               if core_term_type env assignGhost rhsTm = Some lhsTy
+               if core_impure_call_type env assignGhost rhsTm = Some lhsTy
+                  \<or> core_term_type env assignGhost rhsTm = Some lhsTy
                then Some env
                else None
            | None \<Rightarrow> None)

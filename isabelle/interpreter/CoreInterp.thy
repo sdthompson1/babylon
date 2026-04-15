@@ -550,11 +550,23 @@ where
     Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
                            IS_Refs := fmdrop varName (IS_Refs state) \<rparr>))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
-    (case interp_term fuel state initialTm of
-      Inl err \<Rightarrow> Inl err
-    | Inr initialVal \<Rightarrow>
-        (let (state', addr) = alloc_store state initialVal
-        in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>))))"
+    \<comment> \<open>Compute new state (after any function call) and the initial value.
+        When the rhs is a function call (including impure ones that take Ref
+        args or have observable effects), dispatch via interp_function_call so
+        that the state update from the call is observed. Otherwise evaluate
+        the term normally (state is unchanged). \<close>
+    (case (case initialTm of
+             CoreTm_FunctionCall fnName _ argTms \<Rightarrow>
+               interp_function_call fuel state fnName argTms
+           | _ \<Rightarrow>
+               (case interp_term fuel state initialTm of
+                  Inr initialVal \<Rightarrow> Inr (state, initialVal)
+                | Inl err \<Rightarrow> Inl err))
+      of
+        Inr (newState, initialVal) \<Rightarrow>
+          (let (state', addr) = alloc_store newState initialVal
+           in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state') \<rparr>)))
+      | Inl err \<Rightarrow> Inl err)"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>

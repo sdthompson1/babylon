@@ -241,19 +241,46 @@ next
           show ?thesis
           proof (cases vr)
             case Var
-            with NotGhost H CoreStmt_VarDecl obtain initVal where
-              iv: "interp_term fuel state initTm = Inr initVal"
-              by (auto split: sum.splits)
-            let ?alloc = "alloc_store state initVal"
-            from NotGhost Var H CoreStmt_VarDecl iv
-            have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
-                             fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)) \<rparr>)"
-              by (simp add: case_prod_beta)
-            have "IS_Globals (fst ?alloc) = IS_Globals state"
-                 "IS_Functions (fst ?alloc) = IS_Functions state"
-              by (simp_all add: alloc_store_preserves_globals_funs)
-            with res_eq show ?thesis
-              by (simp add: exec_result_preserves_gf_Continue)
+            \<comment> \<open>Two sub-cases for initTm: function call (which may return a new
+                state via interp_function_call) vs. plain term (state unchanged). \<close>
+            show ?thesis
+            proof (cases "\<exists>fn ts ams. initTm = CoreTm_FunctionCall fn ts ams")
+              case True
+              then obtain fn ts ams where init_eq: "initTm = CoreTm_FunctionCall fn ts ams" by blast
+              from NotGhost Var H CoreStmt_VarDecl init_eq
+              obtain newState initVal where
+                call: "interp_function_call fuel state fn ams = Inr (newState, initVal)"
+                by (auto split: sum.splits prod.splits)
+              from IH_call call
+              have call_gf: "IS_Globals newState = IS_Globals state \<and>
+                             IS_Functions newState = IS_Functions state"
+                by blast
+              let ?alloc = "alloc_store newState initVal"
+              from NotGhost Var H CoreStmt_VarDecl init_eq call
+              have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
+                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)) \<rparr>)"
+                by (simp add: case_prod_beta)
+              have alloc_gf: "IS_Globals (fst ?alloc) = IS_Globals newState"
+                             "IS_Functions (fst ?alloc) = IS_Functions newState"
+                by (simp_all add: alloc_store_preserves_globals_funs)
+              from res_eq alloc_gf call_gf show ?thesis
+                by (simp add: exec_result_preserves_gf_Continue)
+            next
+              case False
+              with NotGhost Var H CoreStmt_VarDecl obtain initVal where
+                iv: "interp_term fuel state initTm = Inr initVal"
+                by (cases initTm; auto split: sum.splits)
+              let ?alloc = "alloc_store state initVal"
+              from NotGhost Var H CoreStmt_VarDecl False iv
+              have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
+                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)) \<rparr>)"
+                by (cases initTm; simp_all add: case_prod_beta)
+              have "IS_Globals (fst ?alloc) = IS_Globals state"
+                   "IS_Functions (fst ?alloc) = IS_Functions state"
+                by (simp_all add: alloc_store_preserves_globals_funs)
+              with res_eq show ?thesis
+                by (simp add: exec_result_preserves_gf_Continue)
+            qed
           next
             case Ref
             \<comment> \<open>Two branches: const-base (copy) or writable-base (alias). \<close>

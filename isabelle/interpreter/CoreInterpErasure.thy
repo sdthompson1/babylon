@@ -521,13 +521,90 @@ next
           next
             case NotGhost
             from typing CoreStmt_VarDecl Var NotGhost
-            have init_ty: "core_term_type env NotGhost initTm = Some ty"
+            have init_ty: "core_impure_call_type env NotGhost initTm = Some ty
+                           \<or> core_term_type env NotGhost initTm = Some ty"
               by (auto split: if_splits)
-            have init_eq: "interp_term fuel state (apply_subst_to_term subst initTm)
+            \<comment> \<open>Plain-term branch: erasure follows directly from IH_term. \<close>
+            have init_eq: "core_term_type env NotGhost initTm = Some ty \<Longrightarrow>
+                            interp_term fuel state (apply_subst_to_term subst initTm)
                              = interp_term fuel state initTm"
-              using IH_term[of initTm] init_ty by blast
-            show ?thesis using CoreStmt_VarDecl Var NotGhost init_eq
-              by (simp split: sum.splits prod.splits add: case_prod_beta Let_def)
+              using IH_term[of initTm] by blast
+            \<comment> \<open>Impure-call branch: the rhs is a CoreTm_FunctionCall, its arguments
+                all typecheck (so their erasure is via IH_term_list / IH_call). \<close>
+            have init_call_eq:
+              "\<And>fn tys args. initTm = CoreTm_FunctionCall fn tys args \<Longrightarrow>
+                 core_impure_call_type env NotGhost initTm = Some ty \<Longrightarrow>
+                 interp_function_call fuel state fn (map (apply_subst_to_term subst) args)
+                 = interp_function_call fuel state fn args"
+            proof -
+              fix fn tys args
+              assume tm_eq: "initTm = CoreTm_FunctionCall fn tys args"
+                and impure_ty: "core_impure_call_type env NotGhost initTm = Some ty"
+              from core_impure_call_type_args_typed[OF impure_ty tm_eq]
+              have args_typed:
+                "list_all (\<lambda>tm. \<exists>t. core_term_type env NotGhost tm = Some t) args"
+                by blast
+              show "interp_function_call fuel state fn (map (apply_subst_to_term subst) args)
+                    = interp_function_call fuel state fn args"
+                using IH_call args_typed by auto
+            qed
+
+            from init_ty show ?thesis
+            proof
+              assume impure: "core_impure_call_type env NotGhost initTm = Some ty"
+              show ?thesis
+              proof (cases initTm)
+                case (CoreTm_FunctionCall fn tys args)
+                from init_call_eq[OF CoreTm_FunctionCall impure]
+                have call_eq: "interp_function_call fuel state fn
+                                  (map (apply_subst_to_term subst) args)
+                               = interp_function_call fuel state fn args" .
+                show ?thesis
+                  using CoreStmt_VarDecl Var NotGhost CoreTm_FunctionCall call_eq
+                  by (simp split: sum.splits prod.splits add: case_prod_beta Let_def)
+              qed (use impure in \<open>simp_all add: core_impure_call_type_def\<close>)
+            next
+              assume pure: "core_term_type env NotGhost initTm = Some ty"
+              from init_eq[OF pure] have eq_fact:
+                "interp_term fuel state (apply_subst_to_term subst initTm)
+                   = interp_term fuel state initTm" .
+              \<comment> \<open>If initTm is a plain term (non-call), the interpreter falls through
+                  to interp_term in both the original and substituted statement. If
+                  it is a pure function call, the interpreter still dispatches to
+                  interp_function_call (since the new impure path checks syntactic
+                  shape, not purity), so we need IH_call there too. \<close>
+              show ?thesis
+              proof (cases initTm)
+                case (CoreTm_FunctionCall fn tys args)
+                from pure CoreTm_FunctionCall obtain fi where
+                  fi_lookup: "fmlookup (TE_Functions env) fn = Some fi" and
+                  argTms_l2:
+                    "list_all2 (\<lambda>tm expectedTy.
+                        (\<exists>y. core_term_type env NotGhost tm = Some y)
+                        \<and> (\<forall>t. core_term_type env NotGhost tm = Some t \<longrightarrow>
+                                t = expectedTy))
+                      args
+                      (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tys)) ty)
+                           (FI_TmArgs fi))"
+                  by (auto simp: Let_def split: option.splits if_splits)
+                have args_typed:
+                  "list_all (\<lambda>tm. \<exists>t. core_term_type env NotGhost tm = Some t) args"
+                  unfolding list_all_length
+                proof (intro allI impI)
+                  fix i assume i_lt: "i < length args"
+                  from argTms_l2 i_lt show "\<exists>t. core_term_type env NotGhost (args ! i) = Some t"
+                    by (auto simp: list_all2_conv_all_nth)
+                qed
+                have call_eq: "interp_function_call fuel state fn
+                                 (map (apply_subst_to_term subst) args)
+                               = interp_function_call fuel state fn args"
+                  using IH_call args_typed by auto
+                show ?thesis
+                  using CoreStmt_VarDecl Var NotGhost CoreTm_FunctionCall call_eq
+                  by (simp split: sum.splits prod.splits add: case_prod_beta Let_def)
+              qed (use CoreStmt_VarDecl Var NotGhost eq_fact in
+                   \<open>simp_all split: sum.splits prod.splits add: case_prod_beta Let_def\<close>)
+            qed
           qed
         next
           case Ref
@@ -547,27 +624,44 @@ next
             by (auto split: if_splits option.splits)
           from typing CoreStmt_Assign NotGhost obtain lhsTy where
             lhs_ty: "core_term_type env NotGhost lhs = Some lhsTy" and
-            rhs_ty: "core_term_type env NotGhost rhs = Some lhsTy"
+            rhs_ty: "core_impure_call_type env NotGhost rhs = Some lhsTy
+                     \<or> core_term_type env NotGhost rhs = Some lhsTy"
             by (auto split: if_splits option.splits)
           have lhs_eq: "interp_writable_lvalue fuel state (apply_subst_to_term subst lhs)
                          = interp_writable_lvalue fuel state lhs"
             using IH_lvalue[of lhs] lhs_ty by blast
-          \<comment> \<open>For the rhs branch, we case-split on whether rhs is a function call
-              (special interpreter path) or a plain term. Both reduce via IH. \<close>
-          have rhs_eq: "interp_term fuel state (apply_subst_to_term subst rhs)
-                         = interp_term fuel state rhs"
-            using IH_term[of rhs] rhs_ty by blast
-          \<comment> \<open>For function-call rhs, also need interp_function_call equality. \<close>
+          \<comment> \<open>If rhs is not a function call, core_impure_call_type returns None, so
+              the pure branch of rhs_ty holds and IH_term gives the erasure. \<close>
+          have rhs_non_call_eq:
+            "(\<nexists>fn tys args. rhs = CoreTm_FunctionCall fn tys args) \<Longrightarrow>
+             interp_term fuel state (apply_subst_to_term subst rhs)
+                = interp_term fuel state rhs"
+          proof -
+            assume no_call: "\<nexists>fn tys args. rhs = CoreTm_FunctionCall fn tys args"
+            hence impure_none: "core_impure_call_type env NotGhost rhs = None"
+              unfolding core_impure_call_type_def by (cases rhs) auto
+            with rhs_ty have pure: "core_term_type env NotGhost rhs = Some lhsTy" by auto
+            show "interp_term fuel state (apply_subst_to_term subst rhs)
+                    = interp_term fuel state rhs"
+              using IH_term[of rhs] pure by blast
+          qed
+
+          \<comment> \<open>When rhs is a function call, args all typecheck (via core_term_type),
+              whether the disjunction gave us core_impure_call_type or core_term_type. \<close>
           have rhs_call_eq:
             "\<And>fn tys args. rhs = CoreTm_FunctionCall fn tys args \<Longrightarrow>
                interp_function_call fuel state fn (map (apply_subst_to_term subst) args)
                = interp_function_call fuel state fn args"
           proof -
             fix fn tys args assume rhs_eq_fc: "rhs = CoreTm_FunctionCall fn tys args"
-            from rhs_ty rhs_eq_fc have
-              args_typed: "list_all (\<lambda>tm. \<exists>t. core_term_type env NotGhost tm = Some t) args"
-            proof -
-              from rhs_ty rhs_eq_fc
+            have args_typed: "list_all (\<lambda>tm. \<exists>t. core_term_type env NotGhost tm = Some t) args"
+              using rhs_ty
+            proof
+              assume impure: "core_impure_call_type env NotGhost rhs = Some lhsTy"
+              from core_impure_call_type_args_typed[OF impure rhs_eq_fc] show ?thesis by blast
+            next
+              assume pure: "core_term_type env NotGhost rhs = Some lhsTy"
+              from pure rhs_eq_fc
               obtain fi where
                 fi_lookup: "fmlookup (TE_Functions env) fn = Some fi" and
                 argTms_l2:
@@ -601,7 +695,7 @@ next
             show ?thesis
               using CoreStmt_Assign NotGhost lhs_eq call_eq CoreTm_FunctionCall
               by (simp split: sum.splits prod.splits add: Let_def)
-          qed (use CoreStmt_Assign NotGhost lhs_eq rhs_eq in
+          qed (use CoreStmt_Assign NotGhost lhs_eq rhs_non_call_eq in
                \<open>simp_all split: sum.splits prod.splits add: Let_def\<close>)
         qed
       next

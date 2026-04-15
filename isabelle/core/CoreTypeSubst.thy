@@ -892,6 +892,109 @@ qed
 
 
 (* ========================================================================== *)
+(* Shared setup for FunctionCall substitution proofs                           *)
+(* ========================================================================== *)
+
+(* The "preamble" facts that both pure-call and impure-call substitution proofs
+   need once they've looked up a function. Given a successful lookup plus the
+   ambient subst-ok hypotheses, this bundles the facts about the substituted
+   type arguments (well-kindedness, runtime-ness in NotGhost mode, length), the
+   distinctness of the function's type parameters, the containment of FI_TmArgs
+   / FI_ReturnType type variables in FI_TyArgs, and the substitution-composition
+   equation for the return type. Both callers destructure this with obtain. *)
+lemma function_call_subst_setup:
+  assumes fn_lookup: "fmlookup (TE_Functions calleeEnv) fnName = Some funInfo"
+      and len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)"
+      and tyArgs_wk: "list_all (is_well_kinded calleeEnv) tyArgs"
+      and ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type calleeEnv) tyArgs"
+      and wf: "tyenv_well_formed calleeEnv"
+      and ok: "callee_env_subst_ok subst callerEnv calleeEnv"
+      and subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded callerEnv ty'"
+      and ok_rt: "ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv calleeEnv"
+  shows "fmlookup (TE_Functions (apply_subst_to_callee_env subst callerEnv calleeEnv)) fnName
+           = Some funInfo"
+    and "list_all (is_well_kinded (apply_subst_to_callee_env subst callerEnv calleeEnv))
+                  (map (apply_subst subst) tyArgs)"
+    and "ghost = NotGhost \<longrightarrow>
+         list_all (is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv))
+                  (map (apply_subst subst) tyArgs)"
+    and "length (map (apply_subst subst) tyArgs) = length (FI_TyArgs funInfo)"
+    and "distinct (FI_TyArgs funInfo)"
+    and "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+           type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+    and "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
+    and "apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                         (FI_ReturnType funInfo))
+           = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs)))
+                         (FI_ReturnType funInfo)"
+proof -
+  show "fmlookup (TE_Functions (apply_subst_to_callee_env subst callerEnv calleeEnv)) fnName
+          = Some funInfo"
+    using fn_lookup by simp
+
+  show "list_all (is_well_kinded (apply_subst_to_callee_env subst callerEnv calleeEnv))
+                 (map (apply_subst subst) tyArgs)"
+    using tyArgs_wk
+    by (induction tyArgs)
+       (auto intro: apply_subst_preserves_well_kinded_callee[OF _ ok])
+
+  show "ghost = NotGhost \<longrightarrow>
+        list_all (is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv))
+                 (map (apply_subst subst) tyArgs)"
+  proof
+    assume ng: "ghost = NotGhost"
+    with ng_tyArgs have rt: "list_all (is_runtime_type calleeEnv) tyArgs" by simp
+    from ng ok_rt have ok_rt': "callee_env_subst_runtime_ok subst callerEnv calleeEnv" by simp
+    show "list_all (is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv))
+                   (map (apply_subst subst) tyArgs)"
+      using rt
+      by (induction tyArgs)
+         (auto intro: apply_subst_preserves_runtime_callee[OF _ ok ok_rt'])
+  qed
+
+  show "length (map (apply_subst subst) tyArgs) = length (FI_TyArgs funInfo)"
+    using len_tyArgs by simp
+
+  show tyArgs_distinct: "distinct (FI_TyArgs funInfo)"
+    using wf fn_lookup
+    unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
+
+  have fi_args_wk:
+    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+       is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+    using wf fn_lookup
+    unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
+  have fi_ret_wk:
+    "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
+    using wf fn_lookup
+    unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
+
+  show fi_args_tyvars:
+    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+  proof
+    fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    with fi_args_wk
+    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+      by blast
+    from is_well_kinded_type_tyvars_subset[OF this]
+    show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+      by (simp add: fset_of_list.rep_eq)
+  qed
+
+  show fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
+    using is_well_kinded_type_tyvars_subset[OF fi_ret_wk]
+    by (simp add: fset_of_list.rep_eq)
+
+  show "apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                        (FI_ReturnType funInfo))
+          = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs)))
+                        (FI_ReturnType funInfo)"
+    using apply_subst_compose_zip[OF len_tyArgs[symmetric] fi_ret_tyvars tyArgs_distinct, of subst]
+    by simp
+qed
+
+
+(* ========================================================================== *)
 (* Term typing under callee-env substitution                                   *)
 (* ========================================================================== *)
 
@@ -1404,70 +1507,19 @@ next
   let ?innerSubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
   let ?subst_innerSubst = "fmap_of_list (zip (FI_TyArgs funInfo) ?subst_tyArgs)"
 
-  \<comment> \<open>Function lookup unchanged. \<close>
-  have fn_lookup_subst: "fmlookup (TE_Functions ?be) fnName = Some funInfo"
-    using fn_lookup by simp
+  \<comment> \<open>Bundled setup facts from the shared helper. \<close>
+  note call_setup = function_call_subst_setup[OF fn_lookup len_tyArgs tyArgs_wk ng_tyArgs
+                                                 CoreTm_FunctionCall.prems(2,3,4,6)]
+  note fn_lookup_subst   = call_setup(1)
+  note tyArgs_wk_subst   = call_setup(2)
+  note tyArgs_rt_subst   = call_setup(3)
+  note len_tyArgs_subst  = call_setup(4)
+  note tyArgs_distinct   = call_setup(5)
+  note fi_args_tyvars    = call_setup(6)
+  note fi_ret_tyvars     = call_setup(7)
+  note ret_compose       = call_setup(8)
 
-  \<comment> \<open>Substituted tyArgs are well-kinded in ?be. \<close>
-  have tyArgs_wk_subst: "list_all (is_well_kinded ?be) ?subst_tyArgs"
-    using tyArgs_wk
-    by (induction tyArgs)
-       (auto intro: apply_subst_preserves_well_kinded_callee[OF _ CoreTm_FunctionCall.prems(3)])
-
-  have tyArgs_rt_subst:
-    "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?be) ?subst_tyArgs"
-  proof
-    assume ng: "ghost = NotGhost"
-    with ng_tyArgs have rt: "list_all (is_runtime_type calleeEnv) tyArgs" by simp
-    from ng CoreTm_FunctionCall.prems(6) have ok_rt:
-      "callee_env_subst_runtime_ok subst callerEnv calleeEnv" by simp
-    show "list_all (is_runtime_type ?be) ?subst_tyArgs"
-      using rt
-      by (induction tyArgs)
-         (auto intro: apply_subst_preserves_runtime_callee[OF _ CoreTm_FunctionCall.prems(3) ok_rt])
-  qed
-
-  have len_tyArgs_subst: "length ?subst_tyArgs = length (FI_TyArgs funInfo)"
-    using len_tyArgs by simp
   have len_tmArgs_eq: "length tmArgs = length (FI_TmArgs funInfo)" using len_tmArgs .
-
-  \<comment> \<open>FI_TyArgs are distinct (from tyenv_fun_tyvars_distinct). \<close>
-  have tyArgs_distinct: "distinct (FI_TyArgs funInfo)"
-    using CoreTm_FunctionCall.prems(2) fn_lookup
-    unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
-
-  \<comment> \<open>Each FI_TmArgs type's type variables are within FI_TyArgs (from
-      tyenv_fun_types_well_kinded). Same for FI_ReturnType. \<close>
-  have fi_args_wk:
-    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
-       is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
-    using CoreTm_FunctionCall.prems(2) fn_lookup
-    unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_ret_wk:
-    "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
-    using CoreTm_FunctionCall.prems(2) fn_lookup
-    unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars:
-    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
-  proof
-    fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
-    with fi_args_wk
-    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
-      by blast
-    from is_well_kinded_type_tyvars_subset[OF this]
-    show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
-      by (simp add: fset_of_list.rep_eq)
-  qed
-  have fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
-    using is_well_kinded_type_tyvars_subset[OF fi_ret_wk]
-    by (simp add: fset_of_list.rep_eq)
-
-  \<comment> \<open>Substitution composition for the return type. \<close>
-  have ret_compose:
-    "apply_subst subst (apply_subst ?innerSubst (FI_ReturnType funInfo))
-       = apply_subst ?subst_innerSubst (FI_ReturnType funInfo)"
-    using apply_subst_compose_zip[OF len_tyArgs[symmetric] fi_ret_tyvars tyArgs_distinct, of subst]
-    by simp
 
   \<comment> \<open>Each tmArg's IH lifts to the substituted version. The expected type after
       substitution is apply_subst subst (apply_subst ?innerSubst (FI_TmArgs[i].type)),
@@ -2072,6 +2124,328 @@ proof -
 qed
 
 
+(* Companion to function_call_subst_setup: for a single FI_TmArgs entry, the
+   "typecheck then compose" step. Given that an argument typechecks to
+   `apply_subst innerSubst ti`, the substituted argument typechecks under the
+   substituted env to `apply_subst subst_innerSubst ti`. Lives here (after
+   core_term_type_subst_callee_env) because it depends on that lemma. *)
+lemma fun_arg_subst_typecheck:
+  assumes typed: "core_term_type calleeEnv ghost tm
+                    = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
+      and ti_tyvars: "type_tyvars ti \<subseteq> set (FI_TyArgs funInfo)"
+      and tyArgs_distinct: "distinct (FI_TyArgs funInfo)"
+      and len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)"
+      and wf: "tyenv_well_formed calleeEnv"
+      and ok: "callee_env_subst_ok subst callerEnv calleeEnv"
+      and subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded callerEnv ty'"
+      and subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+      and ok_rt: "ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv calleeEnv"
+  shows "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
+                        (apply_subst_to_term subst tm)
+           = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs))) ti)"
+proof -
+  from core_term_type_subst_callee_env[OF typed wf ok subst_wk subst_rt ok_rt]
+  have "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
+                       (apply_subst_to_term subst tm)
+          = Some (apply_subst subst
+                    (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti))" .
+  moreover have
+    "apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)
+       = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs))) ti"
+    using apply_subst_compose_zip[OF len_tyArgs[symmetric] ti_tyvars tyArgs_distinct, of subst]
+    by simp
+  ultimately show ?thesis by simp
+qed
+
+
+(* ========================================================================== *)
+(* Impure call typing under callee-env substitution                            *)
+(* ========================================================================== *)
+
+(* Mirror of core_term_type_subst_callee_env for core_impure_call_type.
+   Only the CoreTm_FunctionCall case is non-trivial; every other term shape
+   makes core_impure_call_type return None, so the hypothesis is unsatisfiable.
+
+   The proof closely mirrors the FunctionCall case of core_term_type_subst_callee_env,
+   except that:
+     - argument list_all2 discriminates on Var vs Ref;
+     - for Var args we use the inner term lemma (via
+       core_term_type_subst_callee_env);
+     - for Ref args the term is a writable lvalue, which is a syntactic property
+       preserved by substitution, and the inner core_term_type check is handled
+       the same way. *)
+lemma core_impure_call_type_subst_callee_env:
+  assumes "core_impure_call_type calleeEnv ghost tm = Some ty"
+      and "tyenv_well_formed calleeEnv"
+      and "callee_env_subst_ok subst callerEnv calleeEnv"
+      and "\<forall>ty' \<in> fmran' subst. is_well_kinded callerEnv ty'"
+      and "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+      and "ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv calleeEnv"
+  shows "core_impure_call_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
+                               (apply_subst_to_term subst tm)
+           = Some (apply_subst subst ty)"
+proof -
+  \<comment> \<open>tm must be a function-call term; otherwise core_impure_call_type is None. \<close>
+  from assms(1) obtain fnName tyArgs tmArgs where
+    tm_eq: "tm = CoreTm_FunctionCall fnName tyArgs tmArgs"
+    unfolding core_impure_call_type_def
+    by (cases tm) (auto split: option.splits if_splits)
+
+  \<comment> \<open>Read all the successful-path conditions off the unfolded definition. We
+      do this in two stages: (a) the top-level if-ladder, which simp can drive
+      without inspecting the inner case on Var/Ref; (b) the list_all2 body,
+      which we extract as an opaque fact (cong-friendly simp avoids rewriting
+      the Var/Ref branches). \<close>
+  from assms(1) tm_eq have impure_unfolded:
+    "(case fmlookup (TE_Functions calleeEnv) fnName of
+        None \<Rightarrow> None
+      | Some funInfo \<Rightarrow>
+          if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
+          else if \<not> list_all (is_well_kinded calleeEnv) tyArgs then None
+          else if ghost = NotGhost
+                  \<and> (\<not> list_all (is_runtime_type calleeEnv) tyArgs
+                     \<or> FI_Ghost funInfo = Ghost) then None
+          else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
+          else
+            let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
+                expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+                varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+            in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                     case vor of
+                       Var \<Rightarrow>
+                         (case core_term_type calleeEnv ghost tm of
+                            None \<Rightarrow> False
+                          | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                     | Ref \<Rightarrow>
+                         is_writable_lvalue calleeEnv tm
+                         \<and> core_term_type calleeEnv ghost tm = Some expectedTy)
+                   (zip tmArgs varOrRefs) expectedArgTypes
+               then Some (apply_subst tySubst (FI_ReturnType funInfo))
+               else None) = Some ty"
+    unfolding core_impure_call_type_def by simp
+
+  from impure_unfolded obtain funInfo where
+    fn_lookup: "fmlookup (TE_Functions calleeEnv) fnName = Some funInfo"
+    by (cases "fmlookup (TE_Functions calleeEnv) fnName") auto
+
+  from impure_unfolded fn_lookup have body_eq:
+    "(if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
+      else if \<not> list_all (is_well_kinded calleeEnv) tyArgs then None
+      else if ghost = NotGhost
+              \<and> (\<not> list_all (is_runtime_type calleeEnv) tyArgs
+                 \<or> FI_Ghost funInfo = Ghost) then None
+      else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
+      else
+        let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
+            expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+            varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+        in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                 case vor of
+                   Var \<Rightarrow>
+                     (case core_term_type calleeEnv ghost tm of
+                        None \<Rightarrow> False
+                      | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                 | Ref \<Rightarrow>
+                     is_writable_lvalue calleeEnv tm
+                     \<and> core_term_type calleeEnv ghost tm = Some expectedTy)
+               (zip tmArgs varOrRefs) expectedArgTypes
+           then Some (apply_subst tySubst (FI_ReturnType funInfo))
+           else None) = Some ty"
+    by simp
+
+  from body_eq have len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)"
+    by (metis option.distinct(1))
+  from body_eq len_tyArgs have tyArgs_wk: "list_all (is_well_kinded calleeEnv) tyArgs"
+    by (metis option.distinct(1))
+  from body_eq len_tyArgs tyArgs_wk have not_ghost_cond:
+    "\<not> (ghost = NotGhost
+        \<and> (\<not> list_all (is_runtime_type calleeEnv) tyArgs
+           \<or> FI_Ghost funInfo = Ghost))"
+    by (metis option.distinct(1))
+  from body_eq len_tyArgs tyArgs_wk not_ghost_cond have len_tmArgs:
+    "length tmArgs = length (FI_TmArgs funInfo)"
+    by (metis option.distinct(1))
+  from body_eq len_tyArgs tyArgs_wk not_ghost_cond len_tmArgs
+  have after_ifs:
+    "(let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
+          expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+          varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+      in if list_all2 (\<lambda>(tm, vor) expectedTy.
+               case vor of
+                 Var \<Rightarrow>
+                   (case core_term_type calleeEnv ghost tm of
+                      None \<Rightarrow> False
+                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
+               | Ref \<Rightarrow>
+                   is_writable_lvalue calleeEnv tm
+                   \<and> core_term_type calleeEnv ghost tm = Some expectedTy)
+             (zip tmArgs varOrRefs) expectedArgTypes
+         then Some (apply_subst tySubst (FI_ReturnType funInfo))
+         else None) = Some ty"
+    by argo
+  from after_ifs have args_check:
+    "list_all2 (\<lambda>(tm, vor) expectedTy.
+                  case vor of
+                    Var \<Rightarrow>
+                      (case core_term_type calleeEnv ghost tm of
+                         None \<Rightarrow> False
+                       | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                  | Ref \<Rightarrow>
+                      is_writable_lvalue calleeEnv tm
+                      \<and> core_term_type calleeEnv ghost tm = Some expectedTy)
+               (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)))
+               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                    (FI_TmArgs funInfo))"
+    by (simp add: Let_def split: if_splits)
+  from after_ifs have ty_eq:
+    "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    by (simp add: Let_def split: if_splits)
+  have ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type calleeEnv) tyArgs"
+    using not_ghost_cond by blast
+  have ng_fn: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
+    using not_ghost_cond by blast
+
+  let ?be = "apply_subst_to_callee_env subst callerEnv calleeEnv"
+  let ?subst_tyArgs = "map (apply_subst subst) tyArgs"
+  let ?innerSubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+  let ?subst_innerSubst = "fmap_of_list (zip (FI_TyArgs funInfo) ?subst_tyArgs)"
+
+  note call_setup = function_call_subst_setup[OF fn_lookup len_tyArgs tyArgs_wk ng_tyArgs assms(2,3,4,6)]
+  note fn_lookup_subst   = call_setup(1)
+  note tyArgs_wk_subst   = call_setup(2)
+  note tyArgs_rt_subst   = call_setup(3)
+  note len_tyArgs_subst  = call_setup(4)
+  note tyArgs_distinct   = call_setup(5)
+  note fi_args_tyvars    = call_setup(6)
+  note fi_ret_tyvars     = call_setup(7)
+  note ret_compose       = call_setup(8)
+
+  have len_tmArgs_eq: "length tmArgs = length (FI_TmArgs funInfo)" using len_tmArgs .
+
+  \<comment> \<open>For each argument index, the argument typechecks under the substituted
+      environment, respecting its Var/Ref mode. \<close>
+  have args_check_subst:
+    "list_all2 (\<lambda>(tm, vor) expectedTy.
+                  (case vor of
+                     Var \<Rightarrow>
+                       (case core_term_type ?be ghost tm of
+                          None \<Rightarrow> False
+                        | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                   | Ref \<Rightarrow>
+                       is_writable_lvalue ?be tm
+                       \<and> core_term_type ?be ghost tm = Some expectedTy))
+              (zip (map (apply_subst_to_term subst) tmArgs)
+                   (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)))
+              (map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
+  proof (rule list_all2_all_nthI)
+    show "length (zip (map (apply_subst_to_term subst) tmArgs)
+                      (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)))
+            = length (map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
+      using len_tmArgs by simp
+  next
+    fix i
+    assume i_bound: "i < length (zip (map (apply_subst_to_term subst) tmArgs)
+                                     (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)))"
+    hence i_bound': "i < length tmArgs" using len_tmArgs by simp
+    hence i_bound_args: "i < length (FI_TmArgs funInfo)" using len_tmArgs by simp
+
+    obtain n ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+      by (cases "FI_TmArgs funInfo ! i") auto
+    have ti_in: "ti \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+      using i_bound_args fi_arg_eq
+      by (force simp: image_iff in_set_conv_nth)
+    with fi_args_tyvars have ti_tyvars: "type_tyvars ti \<subseteq> set (FI_TyArgs funInfo)" by blast
+
+    have subst_expected_nth:
+      "(map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo)) ! i
+          = apply_subst ?subst_innerSubst ti"
+      using fi_arg_eq i_bound_args by simp
+
+    have zip_nth_orig:
+      "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)) ! i
+         = (tmArgs ! i, vor)"
+      using i_bound' i_bound_args len_tmArgs fi_arg_eq by simp
+    have expected_nth:
+      "(map (\<lambda>(_, ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo)) ! i
+          = apply_subst ?innerSubst ti"
+      using fi_arg_eq i_bound_args by simp
+
+    \<comment> \<open>Pull out the i-th entry of args_check as a fully instantiated fact. \<close>
+    have nth_check:
+      "(case vor of
+          Var \<Rightarrow>
+            (case core_term_type calleeEnv ghost (tmArgs ! i) of
+               None \<Rightarrow> False
+             | Some actualTy \<Rightarrow> actualTy = apply_subst ?innerSubst ti)
+        | Ref \<Rightarrow>
+            is_writable_lvalue calleeEnv (tmArgs ! i)
+            \<and> core_term_type calleeEnv ghost (tmArgs ! i) = Some (apply_subst ?innerSubst ti))"
+      using list_all2_nthD2[OF args_check, of i] i_bound' len_tmArgs
+            zip_nth_orig expected_nth
+      by simp
+
+    have zip_nth:
+      "zip (map (apply_subst_to_term subst) tmArgs)
+           (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)) ! i
+         = (apply_subst_to_term subst (tmArgs ! i), vor)"
+      using i_bound' i_bound_args len_tmArgs fi_arg_eq by simp
+
+    have arg_check_subst_i:
+      "(case vor of
+          Var \<Rightarrow>
+            (case core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i)) of
+               None \<Rightarrow> False
+             | Some actualTy \<Rightarrow> actualTy = apply_subst ?subst_innerSubst ti)
+        | Ref \<Rightarrow>
+            is_writable_lvalue ?be (apply_subst_to_term subst (tmArgs ! i))
+            \<and> core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
+                = Some (apply_subst ?subst_innerSubst ti))"
+    proof (cases vor)
+      case Var
+      from nth_check Var have
+        typed: "core_term_type calleeEnv ghost (tmArgs ! i) = Some (apply_subst ?innerSubst ti)"
+        by (auto split: option.splits)
+      from fun_arg_subst_typecheck[OF typed ti_tyvars tyArgs_distinct len_tyArgs assms(2,3,4,5,6)]
+      have "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
+              = Some (apply_subst ?subst_innerSubst ti)" .
+      with Var show ?thesis by simp
+    next
+      case Ref
+      from nth_check Ref have
+        writable: "is_writable_lvalue calleeEnv (tmArgs ! i)" and
+        typed: "core_term_type calleeEnv ghost (tmArgs ! i) = Some (apply_subst ?innerSubst ti)"
+        by auto
+      from fun_arg_subst_typecheck[OF typed ti_tyvars tyArgs_distinct len_tyArgs assms(2,3,4,5,6)]
+      have "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
+              = Some (apply_subst ?subst_innerSubst ti)" .
+      moreover from writable
+      have "is_writable_lvalue ?be (apply_subst_to_term subst (tmArgs ! i))" by simp
+      ultimately show ?thesis using Ref by simp
+    qed
+
+    show "(\<lambda>(tm, vor) expectedTy.
+             case vor of
+               Var \<Rightarrow>
+                 (case core_term_type ?be ghost tm of
+                    None \<Rightarrow> False
+                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
+             | Ref \<Rightarrow>
+                 is_writable_lvalue ?be tm
+                 \<and> core_term_type ?be ghost tm = Some expectedTy)
+            (zip (map (apply_subst_to_term subst) tmArgs)
+                 (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)) ! i)
+            ((map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo)) ! i)"
+      using arg_check_subst_i zip_nth subst_expected_nth by simp
+  qed
+
+  show ?thesis
+    unfolding tm_eq apply_subst_to_term.simps core_impure_call_type_def
+    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_rt_subst ng_fn
+          len_tmArgs_eq args_check_subst ty_eq ret_compose
+    by (auto simp: Let_def)
+qed
+
+
 (* ========================================================================== *)
 (* Statement typing under callee-env substitution                              *)
 (* ========================================================================== *)
@@ -2122,7 +2496,8 @@ proof (induction stmt and stmts
     ghost_ok: "mode = Ghost \<longrightarrow> declGhost = Ghost" and
     varTy_wk: "is_well_kinded env varTy" and
     varTy_rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
-    init_typed: "core_term_type env declGhost initTm = Some varTy" and
+    init_typed: "core_impure_call_type env declGhost initTm = Some varTy
+                 \<or> core_term_type env declGhost initTm = Some varTy" and
     env'_eq: "calleeEnv' = env \<lparr>
         TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
         TE_GhostLocals := (if declGhost = Ghost then finsert varName (TE_GhostLocals env)
@@ -2156,11 +2531,23 @@ proof (induction stmt and stmts
     "declGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
     using ghost_ok "1.prems"(6) by (cases mode) auto
 
-  \<comment> \<open>Term lemma applied to initTm. The substituted term replaces embedded types. \<close>
-  from core_term_type_subst_callee_env[OF init_typed "1.prems"(2,3,4) rt_for_declGhost rt_ok_for_declGhost]
+  \<comment> \<open>Term lemma (or its impure-call variant) applied to initTm. The substituted
+      term replaces embedded types. Branch on which of the two alternatives held. \<close>
   have init_subst:
-    "core_term_type ?be declGhost (apply_subst_to_term subst initTm)
-       = Some (apply_subst subst varTy)" .
+    "core_impure_call_type ?be declGhost (apply_subst_to_term subst initTm)
+       = Some (apply_subst subst varTy)
+     \<or> core_term_type ?be declGhost (apply_subst_to_term subst initTm)
+       = Some (apply_subst subst varTy)"
+    using init_typed
+  proof
+    assume "core_impure_call_type env declGhost initTm = Some varTy"
+    from core_impure_call_type_subst_callee_env[OF this "1.prems"(2,3,4) rt_for_declGhost rt_ok_for_declGhost]
+    show ?thesis by simp
+  next
+    assume "core_term_type env declGhost initTm = Some varTy"
+    from core_term_type_subst_callee_env[OF this "1.prems"(2,3,4) rt_for_declGhost rt_ok_for_declGhost]
+    show ?thesis by simp
+  qed
 
   \<comment> \<open>Putting it together: the substituted result env equals the substituted version
       of the original result env. The TE_GhostLocals and TE_ConstNames updates are
@@ -2190,7 +2577,8 @@ next
     ghost_ok: "mode = Ghost \<longrightarrow> assignGhost = Ghost" and
     lhs_writable: "is_writable_lvalue env lhsTm" and
     lhs_typed: "core_term_type env assignGhost lhsTm = Some lhsTy" and
-    rhs_typed: "core_term_type env assignGhost rhsTm = Some lhsTy" and
+    rhs_typed: "core_impure_call_type env assignGhost rhsTm = Some lhsTy
+                \<or> core_term_type env assignGhost rhsTm = Some lhsTy" and
     env'_eq: "calleeEnv' = env"
     by (auto split: if_splits option.splits)
   \<comment> \<open>The runtime-substitution-range condition: for the term lemma to apply in
@@ -2208,11 +2596,23 @@ next
     "core_term_type (apply_subst_to_callee_env subst callerEnv env) assignGhost
                     (apply_subst_to_term subst lhsTm)
        = Some (apply_subst subst lhsTy)" .
-  from core_term_type_subst_callee_env[OF rhs_typed "3.prems"(2,3,4) rt_for_assignGhost rt_ok_for_assignGhost]
   have rhs_subst:
-    "core_term_type (apply_subst_to_callee_env subst callerEnv env) assignGhost
-                    (apply_subst_to_term subst rhsTm)
-       = Some (apply_subst subst lhsTy)" .
+    "core_impure_call_type (apply_subst_to_callee_env subst callerEnv env) assignGhost
+                           (apply_subst_to_term subst rhsTm)
+       = Some (apply_subst subst lhsTy)
+     \<or> core_term_type (apply_subst_to_callee_env subst callerEnv env) assignGhost
+                     (apply_subst_to_term subst rhsTm)
+       = Some (apply_subst subst lhsTy)"
+    using rhs_typed
+  proof
+    assume "core_impure_call_type env assignGhost rhsTm = Some lhsTy"
+    from core_impure_call_type_subst_callee_env[OF this "3.prems"(2,3,4) rt_for_assignGhost rt_ok_for_assignGhost]
+    show ?thesis by simp
+  next
+    assume "core_term_type env assignGhost rhsTm = Some lhsTy"
+    from core_term_type_subst_callee_env[OF this "3.prems"(2,3,4) rt_for_assignGhost rt_ok_for_assignGhost]
+    show ?thesis by simp
+  qed
   have lhs_writable_subst:
     "is_writable_lvalue (apply_subst_to_callee_env subst callerEnv env)
                         (apply_subst_to_term subst lhsTm)"
