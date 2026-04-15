@@ -1429,7 +1429,8 @@ next
         let ?refResults = "map (interp_writable_lvalue fuel state) argTms"
         let ?valResults = "map (interp_term fuel state) argTms"
         let ?fnArgs = "IF_Args fn"
-        let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty \<rparr>"
+        let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                       IS_ConstNames := {||} \<rparr>"
 
         have len_eq: "length ?fnArgs = length argTms" using False by simp
         hence len_ref: "length ?fnArgs = length ?refResults" by simp

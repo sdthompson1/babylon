@@ -1,5 +1,6 @@
 theory TypeSoundnessHelpers
-  imports StateMatchesEnv "../core/CoreStmtTypecheck" "../core/CoreTypeSubst"
+  imports StateMatchesEnv CoreInterpPreservation CoreInterpErasure
+          "../core/CoreStmtTypecheck" "../core/CoreTypeSubst"
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -77,6 +78,7 @@ fun sound_statement_result :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> C
 | "sound_statement_result env env' storeTyping (Inr (Return state' retVal)) =
     (value_has_type env retVal (TE_ReturnType env) \<and>
      (\<exists>env_mid storeTyping'. tyenv_fixed_eq env env_mid \<and> tyenv_fixed_eq env_mid env' \<and>
+                tyenv_well_formed env_mid \<and>
                 state_matches_env state' env_mid storeTyping'
               \<and> storeTyping_extends storeTyping storeTyping'))"
 
@@ -2480,11 +2482,187 @@ proof -
 qed
 
 (* -------------------------------------------------------------------------- *)
+(* H2c — step 1: a generalized induction lemma.                                 *)
+(*                                                                             *)
+(* Parameterized by a starting index k and a suffix of the formal parameter    *)
+(* list. Assumes partial soundness at k, plus per-position soundness for each  *)
+(* formal parameter in the suffix (aligned pointwise with argTms suffix).      *)
+(* Concludes partial soundness after folding through all remaining arguments.  *)
+(* -------------------------------------------------------------------------- *)
+lemma fold_process_one_arg_sound_gen:
+  fixes env :: CoreTyEnv
+    and funInfo :: FunInfo
+    and tySubst :: "(nat, CoreType) fmap"
+    and storeTyping :: "CoreType list"
+    and state :: "'w InterpState"
+  assumes sme_caller: "state_matches_env state env storeTyping"
+      and wf_env: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and not_ghost: "FI_Ghost funInfo = NotGhost"
+      and suffix_at_k:
+            "suffixFnArgs = drop k (FI_TmArgs funInfo)"
+      and var_ref_match:
+            "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+                       suffixFnArgs suffixIfArgs"
+      and len_vals: "length suffixIfArgs = length suffixValResults"
+      and len_refs: "length suffixIfArgs = length suffixRefResults"
+      and k_plus_len: "k + length suffixFnArgs = length (FI_TmArgs funInfo)"
+      and vals_sound:
+            "\<forall>i < length suffixFnArgs.
+               sound_term_result env
+                 (apply_subst tySubst (fst (snd (suffixFnArgs ! i))))
+                 (suffixValResults ! i)"
+      and lvals_sound:
+            "\<forall>i < length suffixFnArgs.
+               snd (snd (suffixFnArgs ! i)) = Ref \<longrightarrow>
+                 sound_lvalue_result state env storeTyping
+                   (apply_subst tySubst (fst (snd (suffixFnArgs ! i))))
+                   (suffixRefResults ! i)"
+      and partial_sound_k:
+            "sound_partial_arg_processing_result env funInfo tySubst k storeTyping
+               partialResult"
+  shows "sound_partial_arg_processing_result env funInfo tySubst
+           (k + length suffixFnArgs) storeTyping
+           (fold process_one_arg (zip suffixIfArgs (zip suffixRefResults suffixValResults))
+                                 partialResult)"
+using suffix_at_k var_ref_match len_vals len_refs k_plus_len vals_sound lvals_sound
+      partial_sound_k
+proof (induction suffixFnArgs arbitrary: k suffixIfArgs suffixValResults
+                                          suffixRefResults partialResult)
+  case Nil
+  \<comment> \<open>Empty suffix: fold is a no-op, partial_sound_k already gives the goal. \<close>
+  from Nil.prems(1) have empty_ifArgs: "suffixIfArgs = []"
+    using Nil.prems(2) by (cases suffixIfArgs) auto
+  from Nil.prems(3) empty_ifArgs have empty_vals: "suffixValResults = []"
+    by (cases suffixValResults) auto
+  from Nil.prems(4) empty_ifArgs have empty_refs: "suffixRefResults = []"
+    by (cases suffixRefResults) auto
+  have fold_eq: "fold process_one_arg
+                   (zip suffixIfArgs (zip suffixRefResults suffixValResults)) partialResult
+                  = partialResult"
+    using empty_ifArgs empty_vals empty_refs by simp
+  show ?case using Nil.prems(8) fold_eq by simp
+next
+  case (Cons arg restArgs)
+  \<comment> \<open>Destructure the head of each list. \<close>
+  from Cons.prems(2) obtain ifHead ifRest where
+    ifArgs_eq: "suffixIfArgs = ifHead # ifRest" and
+    ifRest_match: "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+                              restArgs ifRest"
+    by (cases suffixIfArgs) auto
+  obtain paramName paramTy vor where arg_eq: "arg = (paramName, paramTy, vor)"
+    by (cases arg) auto
+  obtain ifName ifVor where ifHead_eq: "ifHead = (ifName, ifVor)"
+    by (cases ifHead)
+  from Cons.prems(2) ifArgs_eq arg_eq ifHead_eq
+  have head_match: "paramName = ifName" "vor = ifVor" by simp_all
+  from Cons.prems(3) ifArgs_eq obtain valHead valRest where
+    vals_eq: "suffixValResults = valHead # valRest" and
+    len_vals': "length ifRest = length valRest"
+    by (cases suffixValResults) auto
+  from Cons.prems(4) ifArgs_eq obtain refHead refRest where
+    refs_eq: "suffixRefResults = refHead # refRest" and
+    len_refs': "length ifRest = length refRest"
+    by (cases suffixRefResults) auto
+
+  \<comment> \<open>The k-th formal arg is precisely the head of this suffix. \<close>
+  from Cons.prems(1) have k_bound: "k < length (FI_TmArgs funInfo)"
+    using Cons.prems(5)
+    by (metis drop_eq_Nil2 linorder_le_less_linear neq_Nil_conv)
+  from Cons.prems(1) have kth: "FI_TmArgs funInfo ! k = arg"
+    using k_bound nth_via_drop by metis
+  from kth arg_eq
+  have kth_arg: "FI_TmArgs funInfo ! k = (paramName, paramTy, vor)" by simp
+
+  \<comment> \<open>Per-position soundness for position 0 of the suffix, i.e. index k of FI_TmArgs. \<close>
+  from Cons.prems(6) have val_sound_head:
+    "sound_term_result env (apply_subst tySubst paramTy) valHead"
+    using arg_eq vals_eq by force
+  from Cons.prems(7) have lval_sound_head:
+    "vor = Ref \<Longrightarrow> sound_lvalue_result state env storeTyping
+                     (apply_subst tySubst paramTy) refHead"
+    using arg_eq refs_eq by force
+
+  \<comment> \<open>Step via H2b (Inr case) or preserve-error (Inl case). \<close>
+  let ?step = "process_one_arg ((paramName, vor), refHead, valHead) partialResult"
+  have step_sound:
+    "sound_partial_arg_processing_result env funInfo tySubst (Suc k) storeTyping ?step"
+  proof (cases partialResult)
+    case (Inl err)
+    \<comment> \<open>Error short-circuit. \<close>
+    from process_one_arg_preserve_error[of env funInfo tySubst k storeTyping err
+                                           "((paramName, vor), refHead, valHead)"]
+         Cons.prems(8) Inl
+    show ?thesis by simp
+  next
+    case (Inr partialState)
+    from process_one_arg_step_sound[OF sme_caller wf_env fn_lookup not_ghost k_bound
+                                       kth_arg val_sound_head lval_sound_head]
+         Cons.prems(8) Inr
+    show ?thesis by simp
+  qed
+
+  \<comment> \<open>Now apply the IH to the tail with k+1. \<close>
+  have rest_at_k1: "restArgs = drop (Suc k) (FI_TmArgs funInfo)"
+    using Cons.prems(1)
+    by (metis Cons_nth_drop_Suc k_bound list.inject)
+  have len_rest: "Suc k + length restArgs = length (FI_TmArgs funInfo)"
+    using Cons.prems(5) by simp
+  have vals_sound_rest: "\<forall>i < length restArgs.
+      sound_term_result env
+        (apply_subst tySubst (fst (snd (restArgs ! i))))
+        (valRest ! i)"
+  proof (intro allI impI)
+    fix i assume "i < length restArgs"
+    hence "Suc i < length (arg # restArgs)" by simp
+    from Cons.prems(6)[rule_format, OF this]
+    have "sound_term_result env
+            (apply_subst tySubst (fst (snd ((arg # restArgs) ! Suc i))))
+            (suffixValResults ! Suc i)" .
+    thus "sound_term_result env
+            (apply_subst tySubst (fst (snd (restArgs ! i))))
+            (valRest ! i)"
+      by (simp add: vals_eq)
+  qed
+  have lvals_sound_rest: "\<forall>i < length restArgs.
+      snd (snd (restArgs ! i)) = Ref \<longrightarrow>
+        sound_lvalue_result state env storeTyping
+          (apply_subst tySubst (fst (snd (restArgs ! i))))
+          (refRest ! i)"
+  proof (intro allI impI)
+    fix i
+    assume i_lt: "i < length restArgs"
+    assume is_ref: "snd (snd (restArgs ! i)) = Ref"
+    from i_lt have "Suc i < length (arg # restArgs)" by simp
+    moreover from is_ref have "snd (snd ((arg # restArgs) ! Suc i)) = Ref" by simp
+    ultimately have "sound_lvalue_result state env storeTyping
+                        (apply_subst tySubst (fst (snd ((arg # restArgs) ! Suc i))))
+                        (suffixRefResults ! Suc i)"
+      using Cons.prems(7)[rule_format] by blast
+    thus "sound_lvalue_result state env storeTyping
+            (apply_subst tySubst (fst (snd (restArgs ! i)))) (refRest ! i)"
+      by (simp add: refs_eq)
+  qed
+
+  have fold_unfold: "fold process_one_arg
+      (zip suffixIfArgs (zip suffixRefResults suffixValResults)) partialResult
+    = fold process_one_arg (zip ifRest (zip refRest valRest)) ?step"
+    using ifArgs_eq vals_eq refs_eq head_match ifHead_eq by simp
+
+  from Cons.IH[OF rest_at_k1 ifRest_match len_vals' len_refs' len_rest
+                  vals_sound_rest lvals_sound_rest step_sound]
+  have "sound_partial_arg_processing_result env funInfo tySubst
+          (Suc k + length restArgs) storeTyping
+          (fold process_one_arg (zip ifRest (zip refRest valRest)) ?step)" .
+  moreover have "k + length (arg # restArgs) = Suc k + length restArgs" by simp
+  ultimately show ?case using fold_unfold by simp
+qed
+
+
+(* -------------------------------------------------------------------------- *)
 (* H2c. The fold over all parameters is sound: starting from the cleared state *)
 (* and the k=0 partial env, folding produces a state matching the full        *)
 (* body env.                                                                   *)
-(*                                                                             *)
-(* This is an induction over the parameter list. The IH uses H2b at each step. *)
 (* -------------------------------------------------------------------------- *)
 lemma fold_process_one_arg_sound:
   fixes env :: CoreTyEnv
@@ -2493,20 +2671,23 @@ lemma fold_process_one_arg_sound:
     and storeTyping :: "CoreType list"
     and state :: "'w InterpState"
     and f :: "'w InterpFun"
-  assumes "state_matches_env state env storeTyping"
-      and "tyenv_well_formed env"
-      and "fmlookup (TE_Functions env) fnName = Some funInfo"
-      and "FI_Ghost funInfo = NotGhost"
-      and "fun_info_matches_interp_fun env funInfo f"
-      and "length tyArgs = length (FI_TyArgs funInfo)"
-      and "tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-      and argTms_typed:
-            "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
-               argTms (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
-      and argTms_lvalues:
-            "\<forall>i < length argTms.
-               (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
-                is_writable_lvalue env (argTms ! i))"
+  assumes sme_caller: "state_matches_env state env storeTyping"
+      and wf_env: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and not_ghost: "FI_Ghost funInfo = NotGhost"
+      and fi_match: "fun_info_matches_interp_fun env funInfo f"
+      and vals_sound:
+            "\<forall>i < length (FI_TmArgs funInfo).
+               sound_term_result env
+                 (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                 (map (interp_term fuel state) argTms ! i)"
+      and lvals_sound:
+            "\<forall>i < length (FI_TmArgs funInfo).
+               snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+                 sound_lvalue_result state env storeTyping
+                   (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                   (map (interp_writable_lvalue fuel state) argTms ! i)"
+      and len_argTms: "length argTms = length (FI_TmArgs funInfo)"
   shows "sound_arg_processing_result env funInfo tySubst storeTyping
            (fold process_one_arg
               (zip (IF_Args f)
@@ -2515,7 +2696,294 @@ lemma fold_process_one_arg_sound:
               (Inr (state \<lparr> IS_Locals := fmempty,
                              IS_Refs := fmempty,
                              IS_ConstNames := {||} \<rparr>)))"
-  sorry
+proof -
+  let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                IS_ConstNames := {||} \<rparr>"
+  let ?valResults = "map (interp_term fuel state) argTms"
+  let ?refResults = "map (interp_writable_lvalue fuel state) argTms"
+
+  \<comment> \<open>H2a: initial state is sound at k=0. \<close>
+  from cleared_state_matches_partial_env_zero[OF sme_caller wf_env fn_lookup not_ghost]
+  have sme_cleared: "state_matches_env ?clearedState
+                       (partial_body_env_for env funInfo tySubst 0) storeTyping" .
+  have partial_sound_zero:
+    "sound_partial_arg_processing_result env funInfo tySubst 0 storeTyping
+       (Inr ?clearedState)"
+    unfolding sound_partial_arg_processing_result_def
+    using sme_cleared storeTyping_extends_refl by auto
+
+  \<comment> \<open>fi_match gives us var_ref_match. \<close>
+  from fi_match have var_ref_match:
+    "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+               (FI_TmArgs funInfo) (IF_Args f)"
+    unfolding fun_info_matches_interp_fun_def by simp
+  from fi_match have len_ifArgs: "length (FI_TmArgs funInfo) = length (IF_Args f)"
+    unfolding fun_info_matches_interp_fun_def by simp
+
+  have len_vals: "length (IF_Args f) = length ?valResults"
+    using len_ifArgs len_argTms by simp
+  have len_refs: "length (IF_Args f) = length ?refResults"
+    using len_ifArgs len_argTms by simp
+
+  \<comment> \<open>Invoke the generalized lemma with k=0, suffixFnArgs = FI_TmArgs funInfo. \<close>
+  have k_plus_len_zero: "(0::nat) + length (FI_TmArgs funInfo) = length (FI_TmArgs funInfo)"
+    by simp
+  have suffix_at_zero: "FI_TmArgs funInfo = drop 0 (FI_TmArgs funInfo)" by simp
+  have vals_sound_zero:
+    "\<forall>i < length (FI_TmArgs funInfo).
+       sound_term_result env
+         (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+         (?valResults ! i)"
+    using vals_sound by simp
+  have lvals_sound_zero:
+    "\<forall>i < length (FI_TmArgs funInfo).
+       snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+         sound_lvalue_result state env storeTyping
+           (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+           (?refResults ! i)"
+    using lvals_sound by simp
+  from fold_process_one_arg_sound_gen[
+      OF sme_caller wf_env fn_lookup not_ghost suffix_at_zero var_ref_match
+         len_vals len_refs k_plus_len_zero vals_sound_zero lvals_sound_zero
+         partial_sound_zero]
+  have gen_result:
+    "sound_partial_arg_processing_result env funInfo tySubst
+       (0 + length (FI_TmArgs funInfo)) storeTyping
+       (fold process_one_arg
+         (zip (IF_Args f) (zip ?refResults ?valResults)) (Inr ?clearedState))" .
+
+  \<comment> \<open>Transfer from partial_sound at length FI_TmArgs to full body_env_for. \<close>
+  let ?bodyEnv = "apply_subst_to_callee_env tySubst env (body_env_for env funInfo)"
+  have pbe_full:
+    "partial_body_env_for env funInfo tySubst (length (FI_TmArgs funInfo)) = ?bodyEnv"
+    using partial_body_env_for_full by simp
+
+  show ?thesis
+    unfolding sound_arg_processing_result_def
+    using gen_result pbe_full
+    unfolding sound_partial_arg_processing_result_def
+    by (auto split: sum.splits)
+qed
+
+
+(* Helper 4: restore_scope soundness.
+   After a function call, restore_scope builds a final state by taking the
+   caller's locals/refs/const-names back from the original state and truncating
+   the store to its original length. This lemma shows that the restored state
+   matches the caller's env under the *original* storeTyping: we do not grow
+   the store typing at all for the caller. The body's store extensions are
+   discarded by the truncation.
+
+   Inputs:
+   - state_env: the caller's original state matches env under storeTyping
+   - post_env_mid: the body's post-state matches env_mid under postStoreTyping
+   - ext_post: postStoreTyping extends storeTyping (transitively, via
+     bodyStoreTyping)
+   - body_calls: interp_function_call gave us this postCallState via running
+     a body. We need this so CoreInterpPreservation can tell us the globals
+     and functions of postCallState equal those of state. Equivalently, we
+     could take a direct hypothesis "IS_Globals postCallState = IS_Globals state
+     \<and> IS_Functions postCallState = IS_Functions state". Phrasing it as a
+     hypothesis keeps the lemma usable in both the Babylon and extern cases.
+   - fixed_eq: env_mid's pinned fields agree with env (required because
+     bodyEnv = body_env_for env funInfo and then env_mid agrees with bodyEnv
+     on the pinned fields via tyenv_fixed_eq)
+*)
+lemma restore_scope_sound:
+  fixes state postCallState :: "'w InterpState"
+  assumes state_env: "state_matches_env state env storeTyping"
+      and post_env_mid: "state_matches_env postCallState env_mid postStoreTyping"
+      and ext_post: "storeTyping_extends storeTyping postStoreTyping"
+      and globals_eq: "IS_Globals postCallState = IS_Globals state"
+      and functions_eq: "IS_Functions postCallState = IS_Functions state"
+      and dt_eq: "TE_DataCtors env = TE_DataCtors env_mid"
+      and ty_eq: "TE_Datatypes env = TE_Datatypes env_mid"
+      and gd_eq: "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+      and wf: "tyenv_well_formed env"
+      and wf_mid: "tyenv_well_formed env_mid"
+  shows "state_matches_env (restore_scope state postCallState) env storeTyping"
+proof -
+  let ?rs = "restore_scope state postCallState"
+
+  \<comment> \<open>Unpack the two inputs into their nine conjuncts. \<close>
+  from state_env have
+    lv_src: "local_vars_exist_in_state state env storeTyping" and
+    gv_src: "global_vars_exist_in_state state env" and
+    no_lv_src: "no_extra_local_vars state env" and
+    no_gv_src: "no_extra_global_vars state env" and
+    fes_src: "funs_exist_in_state state env" and
+    no_fun_src: "no_extra_funs state env" and
+    nc_src: "non_consts_in_locals_or_refs state env" and
+    cn_src: "const_names_match state env" and
+    swt_src: "store_well_typed state env storeTyping"
+    unfolding state_matches_env_def by blast+
+
+  from post_env_mid have
+    swt_post: "store_well_typed postCallState env_mid postStoreTyping"
+    unfolding state_matches_env_def by blast
+
+  \<comment> \<open>Basic facts about the restored state's fields. \<close>
+  have rs_locals: "IS_Locals ?rs = IS_Locals state" by simp
+  have rs_refs: "IS_Refs ?rs = IS_Refs state" by simp
+  have rs_consts: "IS_ConstNames ?rs = IS_ConstNames state" by simp
+  have rs_globals: "IS_Globals ?rs = IS_Globals state"
+    using globals_eq by (simp add: restore_scope_preserves_globals_funs)
+  have rs_functions: "IS_Functions ?rs = IS_Functions state"
+    using functions_eq by (simp add: restore_scope_preserves_globals_funs)
+
+  \<comment> \<open>Store length: equals the old store length, hence matches storeTyping. \<close>
+  from swt_src have st_len: "length storeTyping = length (IS_Store state)"
+    unfolding store_well_typed_def by simp
+  from swt_post have post_len: "length postStoreTyping = length (IS_Store postCallState)"
+    unfolding store_well_typed_def by simp
+  from ext_post obtain suffix where
+    post_eq_suffix: "postStoreTyping = storeTyping @ suffix"
+    unfolding storeTyping_extends_def by blast
+  hence len_le: "length storeTyping \<le> length postStoreTyping" by simp
+  with post_len have "length storeTyping \<le> length (IS_Store postCallState)" by simp
+  hence rs_store_len: "length (IS_Store ?rs) = length storeTyping"
+    by (simp add: st_len)
+
+  \<comment> \<open>For each prefix address, the value in the truncated store is the same as in
+      postCallState, and postStoreTyping agrees with storeTyping there. \<close>
+  have rs_store_at: "\<And>addr. addr < length storeTyping
+      \<Longrightarrow> IS_Store ?rs ! addr = IS_Store postCallState ! addr"
+    using st_len len_le post_len by simp
+  have post_st_agree: "\<And>addr. addr < length storeTyping
+      \<Longrightarrow> postStoreTyping ! addr = storeTyping ! addr"
+    using post_eq_suffix by (simp add: nth_append)
+
+  \<comment> \<open>Field congruences between env and env_mid. \<close>
+  have env_mid_fields:
+    "TE_DataCtors env = TE_DataCtors env_mid"
+    "TE_Datatypes env = TE_Datatypes env_mid"
+    "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+    using dt_eq ty_eq gd_eq by simp_all
+
+  \<comment> \<open>Conjunct 1: local_vars_exist_in_state. Locals/refs come from the old state,
+      so this reduces to the original state's witness. The store is truncated,
+      but since local addresses are all < length storeTyping, the prefix relation
+      on storeTyping is unchanged. \<close>
+  have rs_lv: "local_vars_exist_in_state ?rs env storeTyping"
+    unfolding local_vars_exist_in_state_def
+  proof (intro allI impI, elim conjE)
+    fix name ty
+    assume lk: "fmlookup (TE_LocalVars env) name = Some ty"
+       and ng: "name |\<notin>| TE_GhostLocals env"
+    from lv_src lk ng
+    have old: "local_var_in_state_with_type state env storeTyping name ty"
+      unfolding local_vars_exist_in_state_def by blast
+    show "local_var_in_state_with_type ?rs env storeTyping name ty"
+      using old rs_locals rs_refs rs_store_len st_len
+      unfolding local_var_in_state_with_type_def
+      by (auto split: option.splits)
+  qed
+
+  \<comment> \<open>Conjunct 2: global_vars_exist_in_state. Globals are unchanged (same map),
+      so this is direct from state_env. \<close>
+  have rs_gv: "global_vars_exist_in_state ?rs env"
+    using gv_src rs_globals
+    unfolding global_vars_exist_in_state_def global_var_in_state_with_type_def
+    by simp
+
+  \<comment> \<open>Conjunct 3: no_extra_local_vars. Direct from state_env via rs_locals/rs_refs. \<close>
+  have rs_no_lv: "no_extra_local_vars ?rs env"
+    using no_lv_src rs_locals rs_refs
+    unfolding no_extra_local_vars_def by simp
+
+  \<comment> \<open>Conjunct 4: no_extra_global_vars. Direct from state_env via rs_globals. \<close>
+  have rs_no_gv: "no_extra_global_vars ?rs env"
+    using no_gv_src rs_globals
+    unfolding no_extra_global_vars_def by simp
+
+  \<comment> \<open>Conjunct 5: funs_exist_in_state. Functions are unchanged. \<close>
+  have rs_fes: "funs_exist_in_state ?rs env"
+    using fes_src rs_functions
+    unfolding funs_exist_in_state_def by simp
+
+  \<comment> \<open>Conjunct 6: no_extra_funs. \<close>
+  have rs_no_fun: "no_extra_funs ?rs env"
+    using no_fun_src rs_functions
+    unfolding no_extra_funs_def by simp
+
+  \<comment> \<open>Conjunct 7: non_consts_in_locals_or_refs. Direct. \<close>
+  have rs_nc: "non_consts_in_locals_or_refs ?rs env"
+    using nc_src rs_locals rs_refs
+    unfolding non_consts_in_locals_or_refs_def by simp
+
+  \<comment> \<open>Conjunct 8: const_names_match. Direct. \<close>
+  have rs_cn: "const_names_match ?rs env"
+    using cn_src rs_consts
+    unfolding const_names_match_def by simp
+
+  \<comment> \<open>Conjunct 9: store_well_typed. The interesting one.
+      For each prefix address, the slot has type (storeTyping ! addr) under env.
+      We know (postStoreTyping ! addr) = (storeTyping ! addr) and that the slot
+      has type (postStoreTyping ! addr) under env_mid. Transferring from env_mid
+      to env requires a congruence on value_has_type that covers the fields we
+      agree on. The TE_TypeVars / TE_RuntimeTypeVars mismatch is the open
+      question — pushing forward to see what breaks.
+  \<close>
+  have rs_swt: "store_well_typed ?rs env storeTyping"
+    unfolding store_well_typed_def
+  proof (intro conjI allI impI)
+    show "length storeTyping = length (IS_Store ?rs)" using rs_store_len by simp
+  next
+    fix addr
+    assume a_lt: "addr < length (IS_Store ?rs)"
+    with rs_store_len have a_lt_st: "addr < length storeTyping" by simp
+    from a_lt_st st_len have a_lt_state: "addr < length (IS_Store state)" by simp
+    from a_lt_st len_le post_len
+    have a_lt_post: "addr < length (IS_Store postCallState)" by simp
+    have val_eq: "IS_Store ?rs ! addr = IS_Store postCallState ! addr"
+      using rs_store_at a_lt_st by simp
+    from swt_post a_lt_post
+    have vht_mid: "value_has_type env_mid (IS_Store postCallState ! addr) (postStoreTyping ! addr)"
+      unfolding store_well_typed_def by blast
+    have ty_eq: "postStoreTyping ! addr = storeTyping ! addr"
+      using post_st_agree a_lt_st by simp
+    from vht_mid ty_eq
+    have vht_mid': "value_has_type env_mid (IS_Store postCallState ! addr) (storeTyping ! addr)"
+      by simp
+    \<comment> \<open>Derive well-kindedness / runtime of (storeTyping ! addr) in both envs.
+        In env: from the original store_well_typed on state under env, the old slot
+        value has type (storeTyping ! addr), and value_has_type_well_kinded /
+        value_has_type_runtime give us what we need.
+        In env_mid: from vht_mid' directly. \<close>
+    from swt_src a_lt_state
+    have vht_old_env: "value_has_type env (IS_Store state ! addr) (storeTyping ! addr)"
+      unfolding store_well_typed_def by blast
+    from value_has_type_well_kinded[OF vht_old_env wf]
+    have wk_env: "is_well_kinded env (storeTyping ! addr)" .
+    from value_has_type_runtime[OF vht_old_env]
+    have rt_env: "is_runtime_type env (storeTyping ! addr)" .
+    from value_has_type_well_kinded[OF vht_mid' wf_mid]
+    have wk_mid: "is_well_kinded env_mid (storeTyping ! addr)" .
+    from value_has_type_runtime[OF vht_mid']
+    have rt_mid: "is_runtime_type env_mid (storeTyping ! addr)" .
+    \<comment> \<open>Transfer env_mid to env using the new well-kinded-aware congruence. \<close>
+    have vht_env: "value_has_type env (IS_Store postCallState ! addr) (storeTyping ! addr)"
+    proof (rule value_has_type_cong_env_wk[where env=env_mid and env'=env])
+      show "TE_DataCtors env = TE_DataCtors env_mid" using env_mid_fields by simp
+      show "TE_Datatypes env = TE_Datatypes env_mid" using env_mid_fields by simp
+      show "TE_GhostDatatypes env = TE_GhostDatatypes env_mid" using env_mid_fields by simp
+      show "tyenv_well_formed env_mid" using wf_mid .
+      show "tyenv_well_formed env" using wf .
+      show "is_well_kinded env_mid (storeTyping ! addr)" using wk_mid .
+      show "is_well_kinded env (storeTyping ! addr)" using wk_env .
+      show "is_runtime_type env_mid (storeTyping ! addr)" using rt_mid .
+      show "is_runtime_type env (storeTyping ! addr)" using rt_env .
+      show "value_has_type env_mid (IS_Store postCallState ! addr) (storeTyping ! addr)"
+        using vht_mid' .
+    qed
+    show "value_has_type env (IS_Store ?rs ! addr) (storeTyping ! addr)"
+      using val_eq vht_env by simp
+  qed
+
+  from rs_lv rs_gv rs_no_lv rs_no_gv rs_fes rs_no_fun rs_nc rs_cn rs_swt
+  show ?thesis
+    unfolding state_matches_env_def by blast
+qed
 
 
 end

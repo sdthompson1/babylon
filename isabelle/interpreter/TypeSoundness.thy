@@ -2818,7 +2818,7 @@ next
             using Inr by simp
           \<comment> \<open>Use env itself as env_mid (reflexivity of tyenv_fixed_eq).\<close>
           have "sound_statement_result env env' storeTyping (Inr (Return state val))"
-            unfolding env'_eq using vht "4.prems"(1)
+            unfolding env'_eq using vht "4.prems"(1) "4.prems"(2)
             by (auto intro!: exI[of _ env] exI[of _ storeTyping] tyenv_fixed_eq_refl
                               storeTyping_extends_refl)
           with CoreStmt_Return interp_eq show ?thesis by simp
@@ -2933,6 +2933,7 @@ next
                   vht: "value_has_type env_mid retVal2 (TE_ReturnType env_mid)" and
                   sub1: "tyenv_fixed_eq env_mid env_mid2" and
                   sub2: "tyenv_fixed_eq env_mid2 env'" and
+                  wf_env_mid2: "tyenv_well_formed env_mid2" and
                   sme2: "state_matches_env state'' env_mid2 storeTyping2" and
                   ext2: "storeTyping_extends storeTyping_mid storeTyping2"
                   by auto
@@ -2956,7 +2957,7 @@ next
                 from \<open>interp_statement_list fuel state' stmts0 = Inr result2\<close> Return
                 have interp_rest_eq: "interp_statement_list fuel state' stmts0 = Inr (Return state'' retVal2)"
                   by simp
-                from vht_env sub_env_mid2 sub2 sme2 ext_full
+                from vht_env sub_env_mid2 sub2 wf_env_mid2 sme2 ext_full
                 show ?thesis
                   using Cons interp_stmt_eq interp_rest_eq by auto
               qed
@@ -2969,6 +2970,7 @@ next
               vht: "value_has_type env retVal (TE_ReturnType env)" and
               sub1: "tyenv_fixed_eq env env_mid2" and
               sub2: "tyenv_fixed_eq env_mid2 env_mid" and
+              wf_env_mid2: "tyenv_well_formed env_mid2" and
               sme2: "state_matches_env state' env_mid2 storeTyping2" and
               ext: "storeTyping_extends storeTyping storeTyping2"
               by auto
@@ -2976,7 +2978,7 @@ next
             have "tyenv_fixed_eq env_mid env'" .
             from tyenv_fixed_eq_trans[OF sub2 this]
             have "tyenv_fixed_eq env_mid2 env'" .
-            with vht sub1 sme2 ext
+            with vht sub1 wf_env_mid2 sme2 ext
             show ?thesis using Inr Return Cons by auto
           qed
         qed
@@ -3232,11 +3234,80 @@ next
           "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
              argTms (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo))"
           using "6.prems"(3) by (auto simp: list_all2_iff split: option.splits)
+
+        \<comment> \<open>Bind the term- and writable-lvalue-soundness IHs locally so they can be
+            applied per argTm. \<close>
+        have IH_term: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tm0 ty0.
+              state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+              tyenv_well_formed env0 \<Longrightarrow>
+              core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
+              sound_term_result env0 ty0 (interp_term fuel state0 tm0)"
+          using Suc.IH(1) by simp
+        have IH_lvalue: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tm0 ty0.
+              state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+              tyenv_well_formed env0 \<Longrightarrow>
+              is_writable_lvalue env0 tm0 \<Longrightarrow>
+              core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
+              sound_lvalue_result state0 env0 storeTyping0 ty0
+                (interp_writable_lvalue fuel state0 tm0)"
+          using Suc.IH(3) by simp
+
+        \<comment> \<open>Per-position soundness of interp_term on each argTm at its expected type. \<close>
+        have vals_sound:
+          "\<forall>i < length (FI_TmArgs funInfo).
+             sound_term_result env
+               (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+               (map (interp_term fuel state) argTms ! i)"
+        proof (intro allI impI)
+          fix i assume i_lt: "i < length (FI_TmArgs funInfo)"
+          with len_argTms have i_lt_tms: "i < length argTms" by simp
+          from argTms_typed i_lt_tms i_lt
+          have tm_typed: "core_term_type env NotGhost (argTms ! i)
+                            = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+            by (auto simp: list_all2_conv_all_nth split_def)
+          from IH_term[OF "6.prems"(8) "6.prems"(9) tm_typed]
+          have "sound_term_result env
+                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                  (interp_term fuel state (argTms ! i))" .
+          thus "sound_term_result env
+                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                  (map (interp_term fuel state) argTms ! i)"
+            using i_lt_tms by simp
+        qed
+
+        \<comment> \<open>Per-position soundness of interp_writable_lvalue on each Ref-parameter argTm. \<close>
+        have lvals_sound:
+          "\<forall>i < length (FI_TmArgs funInfo).
+             snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+               sound_lvalue_result state env storeTyping
+                 (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                 (map (interp_writable_lvalue fuel state) argTms ! i)"
+        proof (intro allI impI)
+          fix i
+          assume i_lt: "i < length (FI_TmArgs funInfo)"
+          assume is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+          with len_argTms i_lt have i_lt_tms: "i < length argTms" by simp
+          from argTms_lvalues i_lt_tms is_ref
+          have is_wl: "is_writable_lvalue env (argTms ! i)" by simp
+          from argTms_typed i_lt_tms i_lt
+          have tm_typed: "core_term_type env NotGhost (argTms ! i)
+                            = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+            by (auto simp: list_all2_conv_all_nth split_def)
+          from IH_lvalue[OF "6.prems"(8) "6.prems"(9) is_wl tm_typed]
+          have "sound_lvalue_result state env storeTyping
+                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                  (interp_writable_lvalue fuel state (argTms ! i))" .
+          thus "sound_lvalue_result state env storeTyping
+                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                  (map (interp_writable_lvalue fuel state) argTms ! i)"
+            using i_lt_tms by simp
+        qed
+
         have arg_proc_sound:
           "sound_arg_processing_result env funInfo ?tySubst storeTyping
              (fold process_one_arg ?argTuples (Inr ?clearedState))"
-          using fold_process_one_arg_sound[OF "6.prems"(8,9,1,2) fi_match "6.prems"(5)
-                                              refl argTms_typed argTms_lvalues] .
+          using fold_process_one_arg_sound[OF "6.prems"(8,9,1,2) fi_match
+                                              vals_sound lvals_sound len_argTms] .
 
         show ?thesis
         proof (cases "fold process_one_arg ?argTuples (Inr ?clearedState)")
@@ -3276,15 +3347,16 @@ next
             "sound_statement_result bodyEnv bodyEnv'' bodyStoreTyping
                (interp_statement_list fuel preCallState bodyStmts')" .
 
-          \<comment> \<open>ERASURE (TODO): the interpreter's result on the substituted body equals
-              its result on the original body, because the syntactic substitution
-              only affects types embedded in the syntax which the interpreter
-              ignores at runtime. This is "Lemma 2" of the original soundness
-              plan; to be reintroduced from InterpTypeErasure.thy. \<close>
+          \<comment> \<open>HELPER 5 (erasure). The interpreter's result on the substituted body
+              equals its result on the original body, because the syntactic
+              substitution only affects types embedded in the syntax which the
+              interpreter ignores at runtime. Proved in CoreInterpErasure.thy. \<close>
           have erase_eq:
             "interp_statement_list fuel preCallState bodyStmts'
                = interp_statement_list fuel preCallState bodyStmts"
-            sorry
+            using interp_erasure(5)[of bodyStmts fuel]
+                  body_typed_unsubst
+            unfolding bodyStmts'_def by blast
           have body_sound: "sound_statement_result bodyEnv bodyEnv'' bodyStoreTyping
                               (interp_statement_list fuel preCallState bodyStmts)"
             using body_sound_subst erase_eq by simp
@@ -3318,14 +3390,25 @@ next
                 "sound_statement_result bodyEnv bodyEnv'' bodyStoreTyping
                    (Inr (Return postCallState retVal))"
                 by simp
-              from body_sound_ret obtain env_mid postStoreTyping where
-                vht_mid: "value_has_type env_mid retVal (TE_ReturnType env_mid)" and
+              from body_sound_ret
+              have vht_body_ret: "value_has_type bodyEnv retVal (TE_ReturnType bodyEnv)"
+                and body_ret_exists:
+                  "\<exists>env_mid storeTyping'. tyenv_fixed_eq bodyEnv env_mid
+                    \<and> tyenv_fixed_eq env_mid bodyEnv''
+                    \<and> tyenv_well_formed env_mid
+                    \<and> state_matches_env postCallState env_mid storeTyping'
+                    \<and> storeTyping_extends bodyStoreTyping storeTyping'"
+                by simp_all
+              from body_ret_exists obtain env_mid postStoreTyping where
                 fxeq1: "tyenv_fixed_eq bodyEnv env_mid" and
                 fxeq2: "tyenv_fixed_eq env_mid bodyEnv''" and
+                wf_env_mid: "tyenv_well_formed env_mid" and
                 sme_post: "state_matches_env postCallState env_mid postStoreTyping" and
                 ext_post: "storeTyping_extends bodyStoreTyping postStoreTyping"
-              by (metis (no_types, lifting) sound_statement_result.simps(3) tyenv_fixed_eq_def
-                  value_has_type_cong_env)
+                by blast
+              from vht_body_ret fxeq1
+              have vht_mid: "value_has_type env_mid retVal (TE_ReturnType env_mid)"
+                unfolding tyenv_fixed_eq_def using value_has_type_cong_env by metis
 
               \<comment> \<open>Transfer value_has_type from env_mid to bodyEnv via the fixed-eq, and
                   observe TE_ReturnType bodyEnv = retTy. \<close>
@@ -3364,25 +3447,71 @@ next
                   using value_has_type_cong_env by metis
               qed
 
-              \<comment> \<open>HELPER 4 (restore_scope soundness). Restoring the outer scope on
-                  postCallState produces a state matching env under some store typing
-                  that extends storeTyping. Needs:
-                  - state_matches_env state env storeTyping (the original outer state)
-                  - state_matches_env postCallState env_mid postStoreTyping
-                  - storeTyping_extends storeTyping bodyStoreTyping
-                  - storeTyping_extends bodyStoreTyping postStoreTyping
-                  - postCallState's locals/refs may have grown but the underlying
-                    store entries for old addresses are preserved. \<close>
-              have restore_ok:
-                "\<exists>finalStoreTyping.
-                  state_matches_env (restore_scope state postCallState) env finalStoreTyping
-                \<and> storeTyping_extends storeTyping finalStoreTyping"
-                sorry
-              then obtain finalStoreTyping where
-                sme_final: "state_matches_env (restore_scope state postCallState)
-                              env finalStoreTyping" and
-                ext_final: "storeTyping_extends storeTyping finalStoreTyping"
-                by blast
+              \<comment> \<open>HELPER 4 (restore_scope soundness). Apply the standalone
+                  restore_scope_sound lemma with finalStoreTyping = storeTyping. \<close>
+
+              \<comment> \<open>Chain storeTyping extensions to get storeTyping \<le> postStoreTyping. \<close>
+              have ext_full: "storeTyping_extends storeTyping postStoreTyping"
+                using storeTyping_extends_trans[OF ext_pre ext_post] .
+
+              \<comment> \<open>Globals/functions preservation from state through the whole call. The
+                  clearedState step is a direct record update that only touches
+                  locals/refs/const-names. The fold step and the body step go through
+                  the interpreter-preservation corollaries. \<close>
+              let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                             IS_ConstNames := {||} \<rparr>"
+              have cleared_gf:
+                "IS_Globals ?clearedState = IS_Globals state"
+                "IS_Functions ?clearedState = IS_Functions state"
+                by simp_all
+              from fold_process_one_arg_preserves_globals_funs[OF Inr_fold]
+              have pre_gf:
+                "IS_Globals preCallState = IS_Globals ?clearedState"
+                "IS_Functions preCallState = IS_Functions ?clearedState"
+                by simp_all
+              from Inr_body_res Return
+              have body_eq: "interp_statement_list fuel preCallState bodyStmts
+                              = Inr (Return postCallState retVal)"
+                by simp
+              have post_g_pre: "IS_Globals postCallState = IS_Globals preCallState"
+                using interp_statement_list_return_preserves_globals[OF body_eq] .
+              have post_f_pre: "IS_Functions postCallState = IS_Functions preCallState"
+                using interp_statement_list_return_preserves_functions[OF body_eq] .
+              have post_globals_eq: "IS_Globals postCallState = IS_Globals state"
+                using post_g_pre pre_gf cleared_gf by simp
+              have post_functions_eq: "IS_Functions postCallState = IS_Functions state"
+                using post_f_pre pre_gf cleared_gf by simp
+
+              \<comment> \<open>Datatype-field equality between env and env_mid. bodyEnv inherits
+                  DataCtors / Datatypes / GhostDatatypes from env via body_env_for,
+                  and fxeq1 transfers them to env_mid. \<close>
+              have body_dt_eq:
+                "TE_DataCtors bodyEnv = TE_DataCtors env"
+                "TE_Datatypes bodyEnv = TE_Datatypes env"
+                "TE_GhostDatatypes bodyEnv = TE_GhostDatatypes env"
+                by (simp_all add: bodyEnv_def bodyEnv0_def body_env_for_def
+                                  apply_subst_to_callee_env_def)
+              from fxeq1 have fx_dt_eq:
+                "TE_DataCtors bodyEnv = TE_DataCtors env_mid"
+                "TE_Datatypes bodyEnv = TE_Datatypes env_mid"
+                "TE_GhostDatatypes bodyEnv = TE_GhostDatatypes env_mid"
+                unfolding tyenv_fixed_eq_def by simp_all
+              have env_env_mid_dt:
+                "TE_DataCtors env = TE_DataCtors env_mid"
+                "TE_Datatypes env = TE_Datatypes env_mid"
+                "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+                using body_dt_eq fx_dt_eq by simp_all
+
+              have sme_final: "state_matches_env (restore_scope state postCallState)
+                                env storeTyping"
+                using restore_scope_sound[OF "6.prems"(8) sme_post ext_full
+                                             post_globals_eq post_functions_eq
+                                             env_env_mid_dt(1) env_env_mid_dt(2)
+                                             env_env_mid_dt(3)
+                                             "6.prems"(9) wf_env_mid] .
+              have ext_final: "storeTyping_extends storeTyping storeTyping"
+                using storeTyping_extends_refl .
+              let ?finalStoreTyping = storeTyping
 
               \<comment> \<open>Plumb the final state and the return value through interp_function_call's
                   case structure. \<close>
