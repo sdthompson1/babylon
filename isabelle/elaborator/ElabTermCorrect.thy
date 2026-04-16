@@ -445,6 +445,181 @@ proof -
     by (simp add: Let_def)
 qed
 
+(* Helper lemma for BabTm_ArrayProj case of elab_term_correct.
+   Given that the array and index sub-terms are already well-typed in env',
+   and the elaboration of the ArrayProj succeeds, the result typechecks. *)
+lemma elab_term_correct_array_proj:
+  assumes
+    elab_eq: "elab_term env typedefs ghost (BabTm_ArrayProj loc tm idxs) next_mv
+              = Inr (newTm, ty, next_mv')"
+    and wf: "tyenv_well_formed env"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+    \<comment> \<open>Sub-elaboration results\<close>
+    and elab_arr: "elab_term env typedefs ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
+    and elab_idxs: "elab_term_list env typedefs ghost idxs next_mv1
+                    = Inr (elabIdxTms, actualTypes, next_mv2)"
+    \<comment> \<open>IH results lifted to the full extended env\<close>
+    and ih_arr: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newArr
+                 = Some arrTy"
+    and ih_idxs: "list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty)
+                  elabIdxTms actualTypes"
+  shows "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newTm = Some ty"
+proof -
+  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  let ?mk_err = "(\<lambda>idx (_::CoreType) act. [TyErr_IndexTypeMismatch loc idx act])"
+
+  \<comment> \<open>Extract array type\<close>
+  from elab_eq elab_arr obtain elemTy dims where
+    arr_ty: "arrTy = CoreTy_Array elemTy dims"
+    by (auto simp: unify_and_coerce_def split: sum.splits CoreType.splits if_splits)
+  from elab_eq elab_arr arr_ty have len_eq: "length idxs = length dims"
+    by (auto simp: unify_and_coerce_def split: sum.splits if_splits)
+
+  let ?expectedTypes = "replicate (length dims) u64_type"
+
+  from elab_eq elab_arr arr_ty len_eq elab_idxs
+  obtain coercedIdxTms finalSubst where
+    unify_result: "unify_and_coerce ?is_flex ?mk_err elabIdxTms actualTypes ?expectedTypes fmempty
+                   = Inr (coercedIdxTms, finalSubst)"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
+  from elab_eq elab_arr arr_ty len_eq elab_idxs unify_result
+  have next_mv_eq: "next_mv' = next_mv2"
+    by (auto split: sum.splits)
+  from elab_eq elab_arr arr_ty len_eq elab_idxs unify_result
+  have result_eq: "newTm = CoreTm_ArrayProj newArr coercedIdxTms" "ty = elemTy"
+    by auto
+
+  have wf': "tyenv_well_formed ?env'"
+    using wf tyenv_well_formed_extend_env_with_tyvars by blast
+
+  \<comment> \<open>Lengths\<close>
+  have len_elabIdxTms: "length elabIdxTms = length actualTypes"
+    using ih_idxs by (simp add: list_all2_lengthD)
+  have len_idxs_actual: "length elabIdxTms = length idxs"
+    using elab_idxs elab_term_list_length by fastforce
+  have len_actual_expected: "length actualTypes = length ?expectedTypes"
+    using len_elabIdxTms len_idxs_actual len_eq by simp
+
+  \<comment> \<open>Well-kindedness and runtime for actualTypes\<close>
+  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
+  proof (simp add: list_all_length, intro allI impI)
+    fix i assume "i < length actualTypes"
+    with ih_idxs have "core_term_type ?env' ghost (elabIdxTms ! i) = Some (actualTypes ! i)"
+      by (simp add: list_all2_conv_all_nth len_elabIdxTms)
+    thus "is_well_kinded ?env' (actualTypes ! i)"
+      using core_term_type_well_kinded wf' by blast
+  qed
+  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
+    using ih_idxs wf' core_term_type_notghost_runtime
+    by (auto simp: list_all2_conv_all_nth list_all_length len_elabIdxTms)
+
+  \<comment> \<open>Well-kindedness and runtime for expectedTypes (replicate of u64_type) — trivial\<close>
+  have expectedTypes_wk: "list_all (is_well_kinded ?env') ?expectedTypes"
+    by (simp add: list_all_length u64_type_def)
+  have expectedTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') ?expectedTypes"
+    by (simp add: list_all_length u64_type_def)
+
+  \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
+  obtain unifySubst where
+    unify_types: "unify_type_lists ?is_flex ?mk_err 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
+    coercedIdxTms_eq: "coercedIdxTms = apply_call_coercions unifySubst elabIdxTms actualTypes ?expectedTypes" and
+    finalSubst_eq: "finalSubst = unifySubst"
+  proof -
+    from unify_result show ?thesis
+      by (auto simp: unify_and_coerce_def split: sum.splits intro: that)
+  qed
+
+  \<comment> \<open>Apply unify_type_lists_correct\<close>
+  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?env' ty"
+    by (simp add: fmran'_def)
+  have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
+    by (simp add: fmran'_def)
+  have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+
+  have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
+       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
+       \<and> list_all2 (\<lambda>actualTy expectedTy.
+           apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
+           \<or> (is_finite_integer_type (apply_subst unifySubst actualTy)
+              \<and> is_finite_integer_type (apply_subst unifySubst expectedTy)))
+         actualTypes ?expectedTypes
+       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
+    using unify_type_lists_correct[OF unify_types
+            wf' len_actual_expected actualTypes_wk expectedTypes_wk empty_wk
+            actualTypes_rt expectedTypes_rt empty_rt empty_dom] by blast
+
+  have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
+    using unify_correct finalSubst_eq by simp
+  have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
+    using unify_correct finalSubst_eq by simp
+  have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
+    using unify_correct finalSubst_eq by simp
+  have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
+           apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
+           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
+              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+         actualTypes ?expectedTypes"
+    using unify_correct finalSubst_eq by simp
+
+  \<comment> \<open>Subst doesn't affect locals or return type\<close>
+  have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
+    unfolding extend_env_with_tyvars_def by simp
+  have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf env'_locals env'_ret]
+  have locals_unaffected: "\<And>vname vty. fmlookup (TE_LocalVars ?env') vname = Some vty
+                                       \<Longrightarrow> apply_subst finalSubst vty = vty"
+    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+    by blast+
+
+  \<comment> \<open>Apply apply_call_coercions_correct — coerced index terms have type u64_type\<close>
+  have coerced_typed: "list_all2 (\<lambda>tm expectedTy.
+           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
+         coercedIdxTms ?expectedTypes"
+    using apply_call_coercions_correct[OF ih_idxs types_unified wf'
+            finalSubst_wk finalSubst_rt len_elabIdxTms len_actual_expected
+            locals_unaffected ret_unaffected]
+          coercedIdxTms_eq finalSubst_eq by simp
+
+  \<comment> \<open>apply_subst on u64_type is identity\<close>
+  have subst_u64: "apply_subst finalSubst u64_type = u64_type"
+    by (simp add: u64_type_def)
+
+  \<comment> \<open>Each coerced index term types to u64_type\<close>
+  have idx_typed: "list_all (\<lambda>tm. core_term_type ?env' ghost tm = Some u64_type) coercedIdxTms"
+  proof (simp add: list_all_length, intro allI impI)
+    fix i assume i_lt: "i < length coercedIdxTms"
+    have len_coerced: "length coercedIdxTms = length ?expectedTypes"
+      using coerced_typed by (simp add: list_all2_lengthD)
+    with i_lt have "core_term_type ?env' ghost (coercedIdxTms ! i)
+                    = Some (apply_subst finalSubst (?expectedTypes ! i))"
+      using coerced_typed by (simp add: list_all2_conv_all_nth)
+    moreover have "?expectedTypes ! i = u64_type"
+      using i_lt len_coerced by simp
+    ultimately show "core_term_type ?env' ghost (coercedIdxTms ! i) = Some u64_type"
+      using subst_u64 by simp
+  qed
+
+  \<comment> \<open>Array sub-term types to CoreTy_Array elemTy dims\<close>
+  have ih_arr': "core_term_type ?env' ghost newArr = Some (CoreTy_Array elemTy dims)"
+    using ih_arr arr_ty by simp
+
+  \<comment> \<open>Length of coerced index terms = length of dims\<close>
+  have len_coerced_dims: "length coercedIdxTms = length dims"
+  proof -
+    have "length coercedIdxTms = length ?expectedTypes"
+      using coerced_typed by (simp add: list_all2_lengthD)
+    thus ?thesis by simp
+  qed
+
+  \<comment> \<open>Put it together via the CoreTm_ArrayProj typing rule\<close>
+  show ?thesis
+    using result_eq ih_arr' idx_typed len_coerced_dims
+    by (simp add: list_all_length u64_type_def)
+qed
+
+
 (* Helper lemma for BabTm_RecordUpdate case of elab_term_correct.
    Given that the parent and update sub-terms are already well-typed in env',
    and the elaboration of the RecordUpdate succeeds, the result typechecks. *)
@@ -2089,9 +2264,70 @@ next
   show ?case
     using newTm_eq ty_eq ih fld_lookup by simp
 next
-  \<comment> \<open>Case: BabTm_ArrayProj (undefined)\<close>
+  \<comment> \<open>Case: BabTm_ArrayProj — delegate to helper lemma\<close>
   case (15 env typedefs ghost loc tm idxs next_mv)
-  then show ?case sorry
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+
+  \<comment> \<open>Extract sub-elaboration results\<close>
+  from "15.prems"(1) obtain newArr arrTy next_mv1 where
+    elab_arr: "elab_term env typedefs ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
+    by (auto split: sum.splits)
+  from "15.prems"(1) elab_arr obtain elemTy dims where
+    arr_ty: "arrTy = CoreTy_Array elemTy dims"
+    by (auto simp: unify_and_coerce_def split: sum.splits CoreType.splits if_splits)
+  from "15.prems"(1) elab_arr arr_ty have len_eq: "length idxs = length dims"
+    by (auto simp: unify_and_coerce_def split: sum.splits if_splits)
+  hence len_neq_false: "\<not> (length idxs \<noteq> length dims)" by simp
+  from "15.prems"(1) elab_arr arr_ty len_eq
+  obtain elabIdxTms actualTypes next_mv2 where
+    elab_idxs: "elab_term_list env typedefs ghost idxs next_mv1
+                = Inr (elabIdxTms, actualTypes, next_mv2)"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
+  from "15.prems"(1) elab_arr arr_ty len_eq elab_idxs
+  have next_mv_eq: "next_mv' = next_mv2"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
+
+  \<comment> \<open>Pair decomposition facts for IH application\<close>
+  have pair1: "(newArr, arrTy, next_mv1) = (newArr, arrTy, next_mv1)" by simp
+  have pair2: "(arrTy, next_mv1) = (arrTy, next_mv1)" by simp
+
+  \<comment> \<open>Monotonicity\<close>
+  have mono_1: "next_mv \<le> next_mv1"
+    using "15.IH"(1) elab_arr elab_term_next_mv_monotone by simp
+  have mono_2: "next_mv1 \<le> next_mv2"
+    using "15.IH"(2)[OF elab_arr pair1 pair2 arr_ty len_neq_false] elab_idxs
+      elab_term_list_next_mv_monotone by simp
+
+  \<comment> \<open>IH on array term, lifted to ?env'\<close>
+  have ih_arr_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost newArr
+                    = Some arrTy"
+    using "15.IH"(1) elab_arr "15.prems"(2,3,4) by simp
+  have ih_arr: "core_term_type ?env' ghost newArr = Some arrTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF ih_arr_sub, where lo'=next_mv and hi'=next_mv']
+          mono_1 mono_2 next_mv_eq by simp
+
+  \<comment> \<open>IH on index terms, lifted to ?env'\<close>
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
+    using "15.prems"(4) mono_1 by fastforce
+  have ih_idxs_sub: "list_all2 (\<lambda>tm ty. core_term_type
+                       (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
+                     elabIdxTms actualTypes"
+    using "15.IH"(2)[OF elab_arr pair1 pair2 arr_ty len_neq_false elab_idxs]
+          "15.prems"(2,3) fresh_1 by simp
+  have ih_idxs: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty)
+                 elabIdxTms actualTypes"
+  proof -
+    have "\<And>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty \<Longrightarrow>
+                  core_term_type ?env' ghost tm = Some ty"
+      using core_term_type_extend_env_with_tyvars_mono[where lo=next_mv1 and hi=next_mv2
+                                                        and lo'=next_mv and hi'=next_mv']
+            mono_1 mono_2 next_mv_eq by simp
+    thus ?thesis using ih_idxs_sub by (auto elim!: list_all2_mono)
+  qed
+
+  show ?case
+    using elab_term_correct_array_proj[OF "15.prems"(1,2) "15.prems"(4)
+            elab_arr elab_idxs ih_arr ih_idxs] .
 next
   \<comment> \<open>Case: BabTm_Match (undefined)\<close>
   case (16 env typedefs ghost loc scrut arms next_mv)

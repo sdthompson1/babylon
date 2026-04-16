@@ -792,8 +792,26 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             | None \<Rightarrow> Inl [TyErr_FieldNotFound loc fldName tmTy])
         | _ \<Rightarrow> Inl [TyErr_NotARecordType loc tmTy]))"
 
-  (* Array projection - TODO *)
-| "elab_term env typedefs ghost (BabTm_ArrayProj loc tm idxs) next_mv = undefined"
+  (* Array projection (indexing) *)
+| "elab_term env typedefs ghost (BabTm_ArrayProj loc tm idxs) next_mv =
+    (case elab_term env typedefs ghost tm next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (newArr, arrTy, next_mv1) \<Rightarrow>
+        (case arrTy of
+          CoreTy_Array elemTy dims \<Rightarrow>
+            if length idxs \<noteq> length dims then
+              Inl [TyErr_WrongNumberOfIndices loc (length dims) (length idxs)]
+            else
+              (case elab_term_list env typedefs ghost idxs next_mv1 of
+                Inl errs \<Rightarrow> Inl errs
+              | Inr (elabIdxTms, actualTypes, next_mv2) \<Rightarrow>
+                  (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                          (\<lambda>idx _ act. [TyErr_IndexTypeMismatch loc idx act])
+                          elabIdxTms actualTypes (replicate (length dims) u64_type) fmempty of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr (coercedIdxTms, _) \<Rightarrow>
+                      Inr (CoreTm_ArrayProj newArr coercedIdxTms, elemTy, next_mv2)))
+        | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc arrTy]))"
 
   (* Match - TODO *)
 | "elab_term env typedefs ghost (BabTm_Match loc scrut arms) next_mv = undefined"

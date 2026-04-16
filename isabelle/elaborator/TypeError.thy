@@ -57,5 +57,8 @@ datatype TypeError =
   | TyErr_QuantifierBodyNotBool Location CoreType
   | TyErr_UpdateFieldNotFound Location string CoreType  (* field name, record type *)
   | TyErr_UpdateFieldTypeMismatch Location string CoreType CoreType  (* field, expected, actual *)
+  (* Array indexing errors *)
+  | TyErr_WrongNumberOfIndices Location nat nat  (* expected (= num dims), actual *)
+  | TyErr_IndexTypeMismatch Location nat CoreType  (* index position, actual type *)
 
 end

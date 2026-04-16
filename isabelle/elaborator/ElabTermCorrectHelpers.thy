@@ -324,8 +324,32 @@ next
   from "14.prems" show ?case
     by (auto split: sum.splits CoreType.splits option.splits dest!: "14.IH")
 next
-  case "15"  \<comment> \<open>BabTm_ArrayProj: undefined\<close>
-  from "15.prems" show ?case sorry
+  case (15 env typedefs ghost loc tm idxs next_mv)
+  \<comment> \<open>BabTm_ArrayProj: threads through array term and index list\<close>
+  from "15.prems"(1) obtain newArr arrTy next_mv1 where
+    elab_arr: "elab_term env typedefs ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
+    by (auto split: sum.splits)
+  have mono1: "next_mv \<le> next_mv1"
+    using "15.IH"(1) elab_arr by simp
+  from "15.prems"(1) elab_arr obtain elemTy dims where
+    arr_ty: "arrTy = CoreTy_Array elemTy dims"
+    by (auto simp: unify_and_coerce_def
+             split: sum.splits CoreType.splits if_splits)
+  from "15.prems"(1) elab_arr arr_ty have len_eq: "length idxs = length dims"
+    by (auto simp: unify_and_coerce_def split: sum.splits if_splits)
+  hence len_neq_false: "\<not> (length idxs \<noteq> length dims)" by simp
+  from "15.prems"(1) elab_arr arr_ty len_eq
+  obtain elabIdxTms actualTypes next_mv2 where
+    elab_idxs: "elab_term_list env typedefs ghost idxs next_mv1
+                = Inr (elabIdxTms, actualTypes, next_mv2)"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
+  have pair1: "(newArr, arrTy, next_mv1) = (newArr, arrTy, next_mv1)" by simp
+  have pair2: "(arrTy, next_mv1) = (arrTy, next_mv1)" by simp
+  have mono2: "next_mv1 \<le> next_mv2"
+    using "15.IH"(2)[OF elab_arr pair1 pair2 arr_ty len_neq_false] elab_idxs by simp
+  from "15.prems"(1) elab_arr arr_ty len_eq elab_idxs have "next_mv' = next_mv2"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
+  with mono1 mono2 show ?case by simp
 next
   case "16"  \<comment> \<open>BabTm_Match: undefined\<close>
   from "16.prems" show ?case sorry
