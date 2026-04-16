@@ -1,5 +1,5 @@
 theory ElabType
-  imports TypeError Typedefs "../core/CoreTyEnv" "../util/NatToString" "../util/DistinctCheck"
+  imports TypeError ElabEnv "../core/CoreTyEnv" "../util/NatToString" "../util/DistinctCheck"
 begin
 
 (* Input: env, elabEnv, ghost mode, input type (or list) *)

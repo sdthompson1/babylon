@@ -1,4 +1,4 @@
-theory Typedefs
+theory ElabEnv
   imports "../core/CoreKindcheck" "HOL-Library.Finite_Map"
 begin
 
