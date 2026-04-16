@@ -292,17 +292,17 @@ next
     using "12.IH"(1)[OF no_dup] elab_parent by simp
   from "12.prems"(1) elab_parent obtain parentFields where
     parent_rec: "parentTy = CoreTy_Record parentFields"
-    by (auto simp: Let_def unify_update_args_def build_updated_record_def
+    by (auto simp: Let_def unify_and_coerce_def build_updated_record_def
              split: sum.splits option.splits CoreType.splits if_splits prod.splits)
   from "12.prems"(1) no_dup elab_parent parent_rec have
     fields_exist: "check_update_fields_exist flds parentFields = None"
-    by (auto simp: Let_def unify_update_args_def build_updated_record_def
+    by (auto simp: Let_def unify_and_coerce_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
   from "12.prems"(1) no_dup elab_parent parent_rec fields_exist
   obtain newUpdateTms actualTypes next_mv2 where
     elab_updates: "elab_term_list env typedefs ghost (map snd flds) next_mv1
                    = Inr (newUpdateTms, actualTypes, next_mv2)"
-    by (auto simp: Let_def unify_update_args_def build_updated_record_def
+    by (auto simp: Let_def unify_and_coerce_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
   have pair1: "(parentTm, parentTy, next_mv1) = (parentTm, parentTy, next_mv1)" by simp
   have pair2: "(parentTy, next_mv1) = (parentTy, next_mv1)" by simp
@@ -310,7 +310,7 @@ next
     using "12.IH"(2)[OF no_dup elab_parent pair1 pair2 parent_rec fields_exist]
           elab_updates by simp
   from "12.prems"(1) elab_parent parent_rec elab_updates have "next_mv' = next_mv2"
-    by (auto simp: Let_def unify_update_args_def build_updated_record_def
+    by (auto simp: Let_def unify_and_coerce_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
   with mono1 mono2 show ?case by simp
 next
@@ -488,12 +488,12 @@ proof (cases callTm)
 qed (use assms(1) in simp_all)
 
 
-(* Correctness of unify_call_types (Phase 1):
+(* Correctness of unify_type_lists (Phase 1):
    If it succeeds, the substitution is well-kinded and runtime-preserving,
    finalSubst extends accSubst (via composition with some theta),
    and for each pair of types, either they unify or both are finite integers. *)
-lemma unify_call_types_correct:
-  assumes "unify_call_types is_flex loc fnName argIdx actualTys expectedTys accSubst = Inr finalSubst"
+lemma unify_type_lists_correct:
+  assumes "unify_type_lists is_flex mk_err idx actualTys expectedTys accSubst = Inr finalSubst"
       and "tyenv_well_formed env"
       and "length actualTys = length expectedTys"
       and "list_all (is_well_kinded env) actualTys"
@@ -513,17 +513,17 @@ lemma unify_call_types_correct:
          actualTys expectedTys
        \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
   using assms
-proof (induction is_flex loc fnName argIdx actualTys expectedTys accSubst
+proof (induction is_flex mk_err idx actualTys expectedTys accSubst
        arbitrary: finalSubst
-       rule: unify_call_types.induct)
-  case (1 is_flex loc fnName argIdx accSubst)
+       rule: unify_type_lists.induct)
+  case (1 is_flex mk_err idx accSubst)
   from "1.prems"(1) have finalSubst_eq: "finalSubst = accSubst" by simp
   moreover have "accSubst = compose_subst fmempty accSubst" by simp
   moreover from "1.prems"(10) finalSubst_eq have
     "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n" by simp
   ultimately show ?case using "1.prems"(6,9) by blast
 next
-  case (2 is_flex loc fnName argIdx actualTy actualTys expectedTy expectedTys accSubst)
+  case (2 is_flex mk_err idx actualTy actualTys expectedTy expectedTys accSubst)
   let ?actualTy' = "apply_subst accSubst actualTy"
   let ?expectedTy' = "apply_subst accSubst expectedTy"
 
@@ -543,7 +543,7 @@ next
     let ?composedSubst = "compose_subst newSubst accSubst"
 
     from "2.prems"(1) Some have
-      recurse: "unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys ?composedSubst = Inr finalSubst"
+      recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys ?composedSubst = Inr finalSubst"
       by (simp add: Let_def)
 
     \<comment> \<open>Simple case: src = tgt = env, so kind/runtime preservation reduces to
@@ -643,7 +643,7 @@ next
     case None
     from "2.prems"(1) None have
       is_int: "is_finite_integer_type ?actualTy' \<and> is_finite_integer_type ?expectedTy'"
-      and recurse: "unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys accSubst = Inr finalSubst"
+      and recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys accSubst = Inr finalSubst"
       by (simp_all add: Let_def split: if_splits)
 
     have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
@@ -699,7 +699,7 @@ qed
 
 
 (* Correctness of apply_call_coercions (Phase 2):
-   If input terms have the actual types, and the unify_call_types property holds
+   If input terms have the actual types, and the type unification property holds
    (types equal after substitution or both finite integers), then output terms
    have the expected types after substitution. *)
 lemma apply_call_coercions_correct:

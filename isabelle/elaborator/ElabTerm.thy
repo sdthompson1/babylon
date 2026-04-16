@@ -91,34 +91,30 @@ where
 | "determine_fun_call_type _ _ _ tm _ =
     Inl [TyErr_CalleeNotFunction (bab_term_location tm)]"
 
-(* Phase 1 of function call typechecking:
-   Unify actual argument types with expected types, accumulating substitutions.
+(* Unify actual types with expected types pairwise, accumulating substitutions.
    For each pair of types:
    1. Try unification - if it succeeds, accumulate the substitution
    2. If unification fails but both are finite integer types, that's OK (coercion will be inserted later)
-   3. If both fail, return an error
-   Returns the final substitution. *)
-fun unify_call_types :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat
+   3. If both fail, return an error via mk_err
+   The nat parameter is an index counter passed to mk_err for error reporting. *)
+fun unify_type_lists :: "(nat \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
                         \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                         \<Rightarrow> TypeSubst \<Rightarrow> TypeError list + TypeSubst" where
-  "unify_call_types is_flex loc fnName argIdx [] [] accSubst = Inr accSubst"
-| "unify_call_types is_flex loc fnName argIdx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
-    \<comment> \<open>Apply accumulated substitution to both types before unifying\<close>
+  "unify_type_lists is_flex mk_err idx [] [] accSubst = Inr accSubst"
+| "unify_type_lists is_flex mk_err idx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
     (let actualTy' = apply_subst accSubst actualTy;
          expectedTy' = apply_subst accSubst expectedTy
      in case unify is_flex actualTy' expectedTy' of
        Some newSubst \<Rightarrow>
-         \<comment> \<open>Unification succeeded - compose substitutions and continue\<close>
          let composedSubst = compose_subst newSubst accSubst
-         in unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys composedSubst
+         in unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys composedSubst
      | None \<Rightarrow>
-         \<comment> \<open>Unification failed - check if implicit integer coercion is possible\<close>
          (if is_finite_integer_type actualTy' \<and> is_finite_integer_type expectedTy' then
             \<comment> \<open>Both are finite integers - coercion will be inserted later\<close>
-            unify_call_types is_flex loc fnName (argIdx + 1) actualTys expectedTys accSubst
+            unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys accSubst
           else
-            Inl [TyErr_ArgTypeMismatch loc argIdx expectedTy' actualTy']))"
-| "unify_call_types _ _ _ _ _ _ _ = undefined"
+            Inl (mk_err idx expectedTy' actualTy')))"
+| "unify_type_lists _ _ _ _ _ _ = undefined"
 
 (* Phase 2 of function call argument typechecking:
    Apply substitution to terms and insert coercions where needed.
@@ -137,13 +133,15 @@ fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow>
      in finalTm # apply_call_coercions subst tms actualTys expectedTys)"
 | "apply_call_coercions _ _ _ _ = undefined"
 
-(* Combine unify_call_types and apply_call_coercions into a single function *)
-definition unify_call_args :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat
+(* Combine unify_type_lists and apply_call_coercions into a single function.
+   Unifies actual types with expected types (with integer coercion), then applies
+   the resulting substitution to the terms and inserts casts where needed. *)
+definition unify_and_coerce :: "(nat \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list)
                               \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
                               \<Rightarrow> CoreType list \<Rightarrow> TypeSubst
                               \<Rightarrow> TypeError list + (CoreTerm list \<times> TypeSubst)" where
-  "unify_call_args is_flex loc fnName argIdx tms actualTys expectedTys accSubst =
-    (case unify_call_types is_flex loc fnName argIdx actualTys expectedTys accSubst of
+  "unify_and_coerce is_flex mk_err tms actualTys expectedTys accSubst =
+    (case unify_type_lists is_flex mk_err 0 actualTys expectedTys accSubst of
        Inl errs \<Rightarrow> Inl errs
      | Inr finalSubst \<Rightarrow> Inr (apply_call_coercions finalSubst tms actualTys expectedTys, finalSubst))"
 
@@ -508,41 +506,6 @@ fun check_update_fields_exist :: "(string \<times> 'a) list \<Rightarrow> (strin
      then Some name
      else check_update_fields_exist rest parentFields)"
 
-(* Phase 1: Unify each update field's actual type with the expected type from the parent,
-   accumulating substitutions. Like unify_call_types but keyed by field name. *)
-fun unify_update_types :: "(nat \<Rightarrow> bool) \<Rightarrow> Location
-                          \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> (string \<times> CoreType) list
-                          \<Rightarrow> TypeSubst \<Rightarrow> TypeError list + TypeSubst" where
-  "unify_update_types is_flex loc [] _ accSubst = Inr accSubst"
-| "unify_update_types is_flex loc ((name, actualTy) # rest) parentFields accSubst =
-    (case map_of parentFields name of
-       Some expectedTy \<Rightarrow>
-         let actualTy' = apply_subst accSubst actualTy;
-             expectedTy' = apply_subst accSubst expectedTy
-         in (case unify is_flex actualTy' expectedTy' of
-               Some newSubst \<Rightarrow>
-                 unify_update_types is_flex loc rest parentFields (compose_subst newSubst accSubst)
-             | None \<Rightarrow>
-                 if is_finite_integer_type actualTy' \<and> is_finite_integer_type expectedTy' then
-                   \<comment> \<open>Cast will be inserted later\<close>
-                   unify_update_types is_flex loc rest parentFields accSubst
-                 else
-                   Inl [TyErr_UpdateFieldTypeMismatch loc name expectedTy' actualTy'])
-     | None \<Rightarrow> undefined)"  (* should not happen after check_update_fields_exist *)
-
-(* Phase 2: Apply substitution to update terms and insert coercions where needed. *)
-fun apply_update_coercions :: "TypeSubst \<Rightarrow> (string \<times> CoreTerm) list
-                              \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> (string \<times> CoreType) list
-                              \<Rightarrow> (string \<times> CoreTerm) list" where
-  "apply_update_coercions subst [] [] [] = []"
-| "apply_update_coercions subst ((name, tm) # rest) ((_, actualTy) # actualRest) ((_, expectedTy) # expectedRest) =
-    (let tm' = apply_subst_to_term subst tm;
-         actualTy' = apply_subst subst actualTy;
-         expectedTy' = apply_subst subst expectedTy;
-         finalTm = (if actualTy' = expectedTy' then tm' else CoreTm_Cast expectedTy' tm')
-     in (name, finalTm) # apply_update_coercions subst rest actualRest expectedRest)"
-| "apply_update_coercions _ _ _ _ = undefined"
-
 (* Build the final record field list for a record update.
    For each field in the parent type, use the update term if present, otherwise
    project from the parent term. *)
@@ -553,23 +516,6 @@ fun build_record_update :: "CoreTerm \<Rightarrow> (string \<times> CoreType) li
     (case map_of updates name of
        Some newTm \<Rightarrow> (name, newTm) # build_record_update parent rest updates
      | None \<Rightarrow> (name, CoreTm_RecordProj parent name) # build_record_update parent rest updates)"
-
-(* Combine unify_update_types and apply_update_coercions into a single function.
-   Input: update field names + elaborated terms + actual types, and the parent field types.
-   Output: coerced update terms (as a name-to-term map) and the final substitution. *)
-definition unify_update_args ::
-  "(nat \<Rightarrow> bool) \<Rightarrow> Location
-   \<Rightarrow> string list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
-   \<Rightarrow> (string \<times> CoreType) list
-   \<Rightarrow> TypeError list + ((string \<times> CoreTerm) list \<times> TypeSubst)" where
-  "unify_update_args is_flex loc names tms actualTys parentFields =
-    (let expectedTys = map (\<lambda>n. case map_of parentFields n of Some ty \<Rightarrow> ty) names
-     in case unify_update_types is_flex loc (zip names actualTys) parentFields fmempty of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr finalSubst \<Rightarrow>
-         Inr (apply_update_coercions finalSubst (zip names tms)
-                (zip names actualTys) (zip names expectedTys),
-              finalSubst))"
 
 (* Given the parent term, parent field types, substitution, and coerced update map,
    build the final CoreTm_Record and its type. *)
@@ -761,7 +707,9 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             Inl errs \<Rightarrow> Inl errs
           | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
               \<comment> \<open>Unify actual types with expected types, accumulating substitutions\<close>
-              (case unify_call_args (\<lambda>n. n |\<notin>| TE_TypeVars env) loc fnName 0 elabArgTms actualTypes expArgTypes fmempty of
+              (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                      (\<lambda>idx exp act. [TyErr_ArgTypeMismatch loc idx exp act])
+                      elabArgTms actualTypes expArgTypes fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (finalArgTms, finalSubst) \<Rightarrow>
                   \<comment> \<open>Apply final substitution to the type args and return type\<close>
@@ -808,11 +756,14 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                   (case elab_term_list env typedefs ghost (map snd flds) next_mv1 of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (newUpdateTms, actualTypes, next_mv2) \<Rightarrow>
-                      (case unify_update_args (\<lambda>n. n |\<notin>| TE_TypeVars env) loc
-                              (map fst flds) newUpdateTms actualTypes parentFields of
+                      let expectedTypes = map (\<lambda>(name, _). the (map_of parentFields name)) flds
+                      in (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                                  (\<lambda>idx exp act. [TyErr_UpdateFieldTypeMismatch loc (fst (flds ! idx)) exp act])
+                                  newUpdateTms actualTypes expectedTypes fmempty of
                         Inl errs \<Rightarrow> Inl errs
-                      | Inr (coercedUpdates, finalSubst) \<Rightarrow>
-                          let (resultTm, resultTy) =
+                      | Inr (coercedTms, finalSubst) \<Rightarrow>
+                          let coercedUpdates = zip (map fst flds) coercedTms;
+                              (resultTm, resultTy) =
                                 build_updated_record finalSubst parentTm parentFields coercedUpdates
                           in Inr (resultTm, resultTy, next_mv2))))
           | _ \<Rightarrow> Inl [TyErr_NotARecordType loc parentTy])))"
