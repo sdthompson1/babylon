@@ -43,12 +43,34 @@ fun coerce_to_common_int_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> 
 | "coerce_to_common_int_type _ _ _ _ = None"
 
 
-(* This helper takes a "function term" and (if successful) returns function name, 
+(* Resolve type arguments for a polymorphic entity (function or data constructor).
+   If the user omitted type arguments and there are type parameters, generate fresh metavariables.
+   If the user provided type arguments, elaborate them and check the arity.
+   Returns the elaborated type arguments and the updated next_mv counter. *)
+definition resolve_type_args ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
+   \<Rightarrow> nat list \<Rightarrow> BabType list \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreType list \<times> nat)" where
+  "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv =
+    (let numTyParams = length tyvars in
+     if tyArgs = [] \<and> numTyParams > 0 then
+       \<comment> \<open>Generate fresh metavariables for the type arguments\<close>
+       Inr (map CoreTy_Var [next_mv..<next_mv + numTyParams], next_mv + numTyParams)
+     else if numTyParams = length tyArgs then
+       \<comment> \<open>Elaborate the user's provided type arguments\<close>
+       (case elab_type_list env elabEnv ghost tyArgs of
+           Inl errs \<Rightarrow> Inl errs
+         | Inr newTyArgs \<Rightarrow> Inr (newTyArgs, next_mv))
+     else
+       Inl [TyErr_WrongNumberOfTypeArgs loc name numTyParams (length tyArgs)])"
+
+
+(* This helper takes a "function term" and (if successful) returns function name,
    elaborated type args, expected arg types, return type, and next metavariable number. *)
-fun determine_fun_call_type :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow>
+fun determine_fun_call_type :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow>
         (TypeError list + string \<times> CoreType list \<times> CoreType list \<times> CoreType \<times> nat)"
 where
-  "determine_fun_call_type env typedefs ghost (BabTm_Name fnLoc fnName tyArgs) next_mv =
+  "determine_fun_call_type env elabEnv ghost (BabTm_Name fnLoc fnName tyArgs) next_mv =
     \<comment> \<open>Look up function in environment\<close>
     (case fmlookup (TE_Functions env) fnName of
       Some funInfo \<Rightarrow>
@@ -63,24 +85,10 @@ where
         else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
           Inl [TyErr_GhostFunctionInNonGhost fnLoc fnName]
         else
-            (let numTyParams = length (FI_TyArgs funInfo) in
-            \<comment> \<open>Handle type arguments: infer if omitted, elaborate if provided\<close>
-            \<comment> \<open>This next `case` returns the new actual ty args and the new next_mv\<close>
-            case
-              (if tyArgs = [] \<and> numTyParams > 0 then
-                \<comment> \<open>Generate fresh metavariables for the function's type arguments\<close>
-                Inr (map CoreTy_Var [next_mv..<next_mv + numTyParams], next_mv + numTyParams)
-              else if numTyParams = length tyArgs then
-                \<comment> \<open>Elaborate the user's provided type arguments\<close>
-                (case elab_type_list env typedefs ghost tyArgs of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr newTyArgs \<Rightarrow> Inr (newTyArgs, next_mv))
-              else
-                Inl [TyErr_WrongTypeArity fnLoc fnName numTyParams (length tyArgs)])
-            of
+            (case resolve_type_args env elabEnv ghost fnLoc fnName (FI_TyArgs funInfo) tyArgs next_mv of
               Inl errs \<Rightarrow> Inl errs
             | Inr (newTyArgs, next_mv') \<Rightarrow>
-                \<comment> \<open>Now just substitute the resolved type arguments into the original
+                \<comment> \<open>Substitute the resolved type arguments into the original
                    function's argument and return types\<close>
                 let subst = fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs);
                     newArgTypes = map (\<lambda>(_, ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
@@ -533,13 +541,13 @@ definition build_updated_record ::
 (* Elaborate a term. Returns elaborated (core) term and type, or error.
    The nat parameter is the "next metavariable" counter - all generated metavariables
    will be >= this value, and the returned counter is the next available one. *)
-fun elab_term :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat
+fun elab_term :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat
                  \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType \<times> nat)"
-and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm list \<Rightarrow> nat
+and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm list \<Rightarrow> nat
                       \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreType list \<times> nat)" where
 
   (* Literals *)
-  "elab_term env typedefs ghost (BabTm_Literal loc lit) next_mv =
+  "elab_term env elabEnv ghost (BabTm_Literal loc lit) next_mv =
     (case lit of
       BabLit_Bool b \<Rightarrow> Inr (CoreTm_LitBool b, CoreTy_Bool, next_mv)
     | BabLit_Int i \<Rightarrow> 
@@ -549,14 +557,14 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
     | _ \<Rightarrow> undefined)"  (* TODO: Other literals *)
 
   (* Variables, data ctors - TODO *)
-| "elab_term env typedefs ghost (BabTm_Name loc name tyArgs) next_mv = undefined"
+| "elab_term env elabEnv ghost (BabTm_Name loc name tyArgs) next_mv = undefined"
 
   (* Casts *)
-| "elab_term env typedefs ghost (BabTm_Cast loc targetTy operand) next_mv = 
-    (case elab_type env typedefs ghost targetTy of
+| "elab_term env elabEnv ghost (BabTm_Cast loc targetTy operand) next_mv = 
+    (case elab_type env elabEnv ghost targetTy of
       Inl errs \<Rightarrow> Inl errs
     | Inr newTargetTy \<Rightarrow>
-        (case elab_term env typedefs ghost operand next_mv of
+        (case elab_term env elabEnv ghost operand next_mv of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newOperand, operandTy, next_mv') \<Rightarrow>
             if is_integer_type newTargetTy then
@@ -574,14 +582,14 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
               Inl [TyErr_InvalidCast loc]))"
 
   (* If/then/else - elaborates to CoreTm_Match with True and False patterns *)
-| "elab_term env typedefs ghost (BabTm_If loc condTm thenTm elseTm) next_mv =
-    (case elab_term env typedefs ghost condTm next_mv of
+| "elab_term env elabEnv ghost (BabTm_If loc condTm thenTm elseTm) next_mv =
+    (case elab_term env elabEnv ghost condTm next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newCond, condTy, next_mv1) \<Rightarrow>
-      (case elab_term env typedefs ghost thenTm next_mv1 of
+      (case elab_term env elabEnv ghost thenTm next_mv1 of
         Inl errs \<Rightarrow> Inl errs
       | Inr (newThen, thenTy, next_mv2) \<Rightarrow>
-        (case elab_term env typedefs ghost elseTm next_mv2 of
+        (case elab_term env elabEnv ghost elseTm next_mv2 of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newElse, elseTy, next_mv3) \<Rightarrow>
             \<comment> \<open>Unify the condition type against Bool. If the condition is already
@@ -609,8 +617,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                         Inl [TyErr_TypeMismatch loc thenTy elseTy]))))))"
 
   (* Unary operator *)
-| "elab_term env typedefs ghost (BabTm_Unop loc op operand) next_mv =
-    (case elab_term env typedefs ghost operand next_mv of
+| "elab_term env elabEnv ghost (BabTm_Unop loc op operand) next_mv =
+    (case elab_term env elabEnv ghost operand next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newOperand, operandTy, next_mv') \<Rightarrow>
         let cop = unop_to_core op;
@@ -641,12 +649,12 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
               Inl [TyErr_NotRequiresBool loc])))"
 
   (* Binary operator *)
-| "elab_term env typedefs ghost (BabTm_Binop loc lhs operands) next_mv =
-    (case elab_term env typedefs ghost lhs next_mv of
+| "elab_term env elabEnv ghost (BabTm_Binop loc lhs operands) next_mv =
+    (case elab_term env elabEnv ghost lhs next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newLhs, lhsTy, next_mv1) \<Rightarrow>
         \<comment> \<open>Elaborate all RHS terms using elab_term_list\<close>
-        (case elab_term_list env typedefs ghost (map snd operands) next_mv1 of
+        (case elab_term_list env elabEnv ghost (map snd operands) next_mv1 of
           Inl errs \<Rightarrow> Inl errs
         | Inr (rhsTms, rhsTys, next_mv2) \<Rightarrow>
             \<comment> \<open>Zip the operators back together with elaborated terms and types\<close>
@@ -658,8 +666,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                 Inr (resultTm, resultTy, next_mv2))))"
 
   (* Let *)
-| "elab_term env typedefs ghost (BabTm_Let loc varName rhs body) next_mv =
-    (case elab_term env typedefs ghost rhs next_mv of
+| "elab_term env elabEnv ghost (BabTm_Let loc varName rhs body) next_mv =
+    (case elab_term env elabEnv ghost rhs next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (rhsTm, rhsTy, next_mv1) \<Rightarrow>
         if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
@@ -669,20 +677,20 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                                                then finsert varName (TE_GhostLocals env)
                                                else fminus (TE_GhostLocals env) {|varName|}),
                               TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>
-             in (case elab_term env' typedefs ghost body next_mv1 of
+             in (case elab_term env' elabEnv ghost body next_mv1 of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
                     Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
 
   (* Quantifier: ghost-only, body must be Bool *)
-| "elab_term env typedefs ghost (BabTm_Quantifier loc quant name ty tm) next_mv =
+| "elab_term env elabEnv ghost (BabTm_Quantifier loc quant name ty tm) next_mv =
     (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
-     else case elab_type env typedefs ghost ty of
+     else case elab_type env elabEnv ghost ty of
        Inl errs \<Rightarrow> Inl errs
      | Inr varTy \<Rightarrow>
          let env' = env \<lparr> TE_LocalVars := fmupd name varTy (TE_LocalVars env),
                           TE_GhostLocals := finsert name (TE_GhostLocals env) \<rparr>
-         in (case elab_term env' typedefs ghost tm next_mv of
+         in (case elab_term env' elabEnv ghost tm next_mv of
                Inl errs \<Rightarrow> Inl errs
              | Inr (bodyTm, bodyTy, next_mv') \<Rightarrow>
                  (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) bodyTy CoreTy_Bool of
@@ -694,8 +702,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                               CoreTy_Bool, next_mv'))))"
 
   (* Function call *)
-| "elab_term env typedefs ghost (BabTm_Call loc callee args) next_mv =
-    (case determine_fun_call_type env typedefs ghost callee next_mv of
+| "elab_term env elabEnv ghost (BabTm_Call loc callee args) next_mv =
+    (case determine_fun_call_type env elabEnv ghost callee next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (fnName, tyArgs, expArgTypes, retType, next_mv1) \<Rightarrow>
         \<comment> \<open>Check argument count\<close>
@@ -703,7 +711,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
           Inl [TyErr_WrongNumberOfArgs loc fnName (length expArgTypes) (length args)]
         else
           \<comment> \<open>Elaborate argument terms\<close>
-          (case elab_term_list env typedefs ghost args next_mv1 of
+          (case elab_term_list env elabEnv ghost args next_mv1 of
             Inl errs \<Rightarrow> Inl errs
           | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
               \<comment> \<open>Unify actual types with expected types, accumulating substitutions\<close>
@@ -718,8 +726,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                   in Inr (CoreTm_FunctionCall fnName finalTyArgs finalArgTms, finalRetType, next_mv2))))"
 
   (* Tuple: elaborated to a record with synthetic field names "0", "1", ... *)
-| "elab_term env typedefs ghost (BabTm_Tuple loc tms) next_mv =
-    (case elab_term_list env typedefs ghost tms next_mv of
+| "elab_term env elabEnv ghost (BabTm_Tuple loc tms) next_mv =
+    (case elab_term_list env elabEnv ghost tms next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTms, tys, next_mv') \<Rightarrow>
         let names = tuple_field_names (length tms) in
@@ -728,11 +736,11 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
              next_mv'))"
 
   (* Record *)
-| "elab_term env typedefs ghost (BabTm_Record loc flds) next_mv =
+| "elab_term env elabEnv ghost (BabTm_Record loc flds) next_mv =
     (case first_duplicate_name fst flds of
       Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
     | None \<Rightarrow>
-        (case elab_term_list env typedefs ghost (map snd flds) next_mv of
+        (case elab_term_list env elabEnv ghost (map snd flds) next_mv of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newTms, tys, next_mv') \<Rightarrow>
             let names = map fst flds in
@@ -741,11 +749,11 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                  next_mv')))"
 
   (* Record update *)
-| "elab_term env typedefs ghost (BabTm_RecordUpdate loc tm flds) next_mv =
+| "elab_term env elabEnv ghost (BabTm_RecordUpdate loc tm flds) next_mv =
     (case first_duplicate_name fst flds of
       Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
     | None \<Rightarrow>
-      (case elab_term env typedefs ghost tm next_mv of
+      (case elab_term env elabEnv ghost tm next_mv of
         Inl errs \<Rightarrow> Inl errs
       | Inr (parentTm, parentTy, next_mv1) \<Rightarrow>
           (case parentTy of
@@ -753,7 +761,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
               (case check_update_fields_exist flds parentFields of
                 Some badName \<Rightarrow> Inl [TyErr_UpdateFieldNotFound loc badName parentTy]
               | None \<Rightarrow>
-                  (case elab_term_list env typedefs ghost (map snd flds) next_mv1 of
+                  (case elab_term_list env elabEnv ghost (map snd flds) next_mv1 of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (newUpdateTms, actualTypes, next_mv2) \<Rightarrow>
                       let expectedTypes = map (\<lambda>(name, _). the (map_of parentFields name)) flds
@@ -769,8 +777,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
           | _ \<Rightarrow> Inl [TyErr_NotARecordType loc parentTy])))"
 
   (* Tuple projection: tuples are records with synthetic field names "0", "1", ... *)
-| "elab_term env typedefs ghost (BabTm_TupleProj loc tm idx) next_mv =
-    (case elab_term env typedefs ghost tm next_mv of
+| "elab_term env elabEnv ghost (BabTm_TupleProj loc tm idx) next_mv =
+    (case elab_term env elabEnv ghost tm next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
         (case tmTy of
@@ -781,8 +789,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
         | _ \<Rightarrow> Inl [TyErr_NotARecordType loc tmTy]))"
 
   (* Record projection *)
-| "elab_term env typedefs ghost (BabTm_RecordProj loc tm fldName) next_mv =
-    (case elab_term env typedefs ghost tm next_mv of
+| "elab_term env elabEnv ghost (BabTm_RecordProj loc tm fldName) next_mv =
+    (case elab_term env elabEnv ghost tm next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
         (case tmTy of
@@ -793,8 +801,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
         | _ \<Rightarrow> Inl [TyErr_NotARecordType loc tmTy]))"
 
   (* Array projection (indexing) *)
-| "elab_term env typedefs ghost (BabTm_ArrayProj loc tm idxs) next_mv =
-    (case elab_term env typedefs ghost tm next_mv of
+| "elab_term env elabEnv ghost (BabTm_ArrayProj loc tm idxs) next_mv =
+    (case elab_term env elabEnv ghost tm next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newArr, arrTy, next_mv1) \<Rightarrow>
         (case arrTy of
@@ -802,7 +810,7 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
             if length idxs \<noteq> length dims then
               Inl [TyErr_WrongNumberOfIndices loc (length dims) (length idxs)]
             else
-              (case elab_term_list env typedefs ghost idxs next_mv1 of
+              (case elab_term_list env elabEnv ghost idxs next_mv1 of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (elabIdxTms, actualTypes, next_mv2) \<Rightarrow>
                   (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
@@ -814,11 +822,11 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc arrTy]))"
 
   (* Match - TODO *)
-| "elab_term env typedefs ghost (BabTm_Match loc scrut arms) next_mv = undefined"
+| "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv = undefined"
 
   (* Sizeof: operand must be an array; allocatable dims require lvalue or ghost *)
-| "elab_term env typedefs ghost (BabTm_Sizeof loc tm) next_mv =
-    (case elab_term env typedefs ghost tm next_mv of
+| "elab_term env elabEnv ghost (BabTm_Sizeof loc tm) next_mv =
+    (case elab_term env elabEnv ghost tm next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
         (case tmTy of
@@ -829,17 +837,17 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc tmTy]))"
 
   (* Allocated: ghost-only, any operand type, result is Bool *)
-| "elab_term env typedefs ghost (BabTm_Allocated loc tm) next_mv =
+| "elab_term env elabEnv ghost (BabTm_Allocated loc tm) next_mv =
     (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
-     else case elab_term env typedefs ghost tm next_mv of
+     else case elab_term env elabEnv ghost tm next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (newTm, _, next_mv') \<Rightarrow>
          Inr (CoreTm_Allocated newTm, CoreTy_Bool, next_mv'))"
 
   (* Old: ghost-only, result has same type as operand *)
-| "elab_term env typedefs ghost (BabTm_Old loc tm) next_mv =
+| "elab_term env elabEnv ghost (BabTm_Old loc tm) next_mv =
     (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
-     else case elab_term env typedefs ghost tm next_mv of
+     else case elab_term env elabEnv ghost tm next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (newTm, tmTy, next_mv') \<Rightarrow>
          Inr (CoreTm_Old newTm, tmTy, next_mv'))"
@@ -848,16 +856,16 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
 | "elab_term_list _ _ _ [] next_mv = Inr ([], [], next_mv)"
 
   (* elab_term_list - Non-empty list case *)
-| "elab_term_list env typedefs ghost (tm # tms) next_mv =
-    (case elab_term env typedefs ghost tm next_mv of
+| "elab_term_list env elabEnv ghost (tm # tms) next_mv =
+    (case elab_term env elabEnv ghost tm next_mv of
       Inl errs1 \<Rightarrow>
         \<comment> \<open>Error in first term - continue processing rest to collect all errors\<close>
-        (case elab_term_list env typedefs ghost tms next_mv of
+        (case elab_term_list env elabEnv ghost tms next_mv of
           Inl errs2 \<Rightarrow> Inl (errs1 @ errs2)
         | Inr _ \<Rightarrow> Inl errs1)
     | Inr (tm', ty', next_mv') \<Rightarrow>
         \<comment> \<open>First term successful - collect results from remaining terms\<close>
-        (case elab_term_list env typedefs ghost tms next_mv' of
+        (case elab_term_list env elabEnv ghost tms next_mv' of
           Inl errs \<Rightarrow> Inl errs
         | Inr (tms', tys', next_mv'') \<Rightarrow> Inr (tm' # tms', ty' # tys', next_mv'')))"
 

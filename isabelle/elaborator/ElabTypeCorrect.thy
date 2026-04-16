@@ -12,17 +12,17 @@ begin
 
 (* Type variables in types returned by elab_type are a subset of TE_TypeVars env *)
 lemma elab_type_tyvars_subset:
-  "typedefs_well_formed env typedefs \<Longrightarrow>
-   elab_type env typedefs ghost ty = Inr ty' \<Longrightarrow>
+  "typedefs_well_formed env (EE_Typedefs elabEnv) \<Longrightarrow>
+   elab_type env elabEnv ghost ty = Inr ty' \<Longrightarrow>
    type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
-  "typedefs_well_formed env typedefs \<Longrightarrow>
-   elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow>
+  "typedefs_well_formed env (EE_Typedefs elabEnv) \<Longrightarrow>
+   elab_type_list env elabEnv ghost tys = Inr tys' \<Longrightarrow>
    \<forall>t \<in> set tys'. type_tyvars t \<subseteq> fset (TE_TypeVars env)"
-proof (induction env typedefs ghost ty and env typedefs ghost tys
+proof (induction env elabEnv ghost ty and env elabEnv ghost tys
        arbitrary: ty' and tys' rule: elab_type_elab_type_list.induct)
-  case (1 env typedefs ghost loc name tyargs)
+  case (1 env elabEnv ghost loc name tyargs)
   show ?case
-  proof (cases "elab_type_list env typedefs ghost tyargs")
+  proof (cases "elab_type_list env elabEnv ghost tyargs")
     case (Inl errs)
     then show ?thesis using "1.prems" by simp
   next
@@ -30,10 +30,10 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
     from "1.IH"(1)[OF "1.prems"(1) Inr]
     have elabTyArgs_tyvars: "\<forall>t \<in> set elabTyArgs. type_tyvars t \<subseteq> fset (TE_TypeVars env)" .
     show ?thesis
-    proof (cases "fmlookup typedefs name")
+    proof (cases "fmlookup (EE_Typedefs elabEnv) name")
       case (Some typedef_entry)
       then obtain tyvars targetTy where
-        typedef_lookup: "fmlookup typedefs name = Some (tyvars, targetTy)"
+        typedef_lookup: "fmlookup (EE_Typedefs elabEnv) name = Some (tyvars, targetTy)"
         by (cases typedef_entry) auto
       from "1.prems"(1) typedef_lookup
       have distinct_tyvars: "distinct tyvars"
@@ -79,40 +79,40 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
     qed
   qed
 next
-  case (2 env typedefs ghost loc)
+  case (2 env elabEnv ghost loc)
   then show ?case by simp
 next
-  case (3 env typedefs ghost loc sign bits)
+  case (3 env elabEnv ghost loc sign bits)
   then show ?case by auto
 next
-  case (4 env typedefs ghost loc)
+  case (4 env elabEnv ghost loc)
   then show ?case by (simp split: if_splits)
 next
-  case (5 env typedefs ghost loc)
+  case (5 env elabEnv ghost loc)
   then show ?case by (simp split: if_splits)
 next
-  case (6 env typedefs ghost loc types)
+  case (6 env elabEnv ghost loc types)
   then show ?case
     by (force split: sum.splits dest!: set_zip_rightD)
 next
-  case (7 env typedefs ghost loc flds)
+  case (7 env elabEnv ghost loc flds)
   then show ?case
     by (fastforce split: sum.splits option.splits dest!: set_zip_rightD)
 next
-  case (8 env typedefs ghost loc elemTy dims)
+  case (8 env elabEnv ghost loc elemTy dims)
   then show ?case by simp
 next
-  case (9 env typedefs ghost)
+  case (9 env elabEnv ghost)
   then show ?case by simp
 next
-  case (10 env typedefs ghost ty tys)
+  case (10 env elabEnv ghost ty tys)
   then show ?case by (force split: sum.splits)
 qed
 
 
 (* The result of elab_type_list has the same length as the input *)
 lemma elab_type_list_length:
-  "elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow> length tys' = length tys"
+  "elab_type_list env elabEnv ghost tys = Inr tys' \<Longrightarrow> length tys' = length tys"
 proof (induction tys arbitrary: tys')
   case Nil
   then show ?case by simp
@@ -124,15 +124,15 @@ qed
 
 (* Types returned by elab_type are well-kinded *)
 lemma elab_type_is_well_kinded:
-  "typedefs_well_formed env typedefs \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
-   elab_type env typedefs ghost ty = Inr ty' \<Longrightarrow> is_well_kinded env ty'"
-  "typedefs_well_formed env typedefs \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
-   elab_type_list env typedefs ghost tys = Inr tys' \<Longrightarrow> list_all (is_well_kinded env) tys'"
-proof (induction env typedefs ghost ty and env typedefs ghost tys
+  "typedefs_well_formed env (EE_Typedefs elabEnv) \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
+   elab_type env elabEnv ghost ty = Inr ty' \<Longrightarrow> is_well_kinded env ty'"
+  "typedefs_well_formed env (EE_Typedefs elabEnv) \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
+   elab_type_list env elabEnv ghost tys = Inr tys' \<Longrightarrow> list_all (is_well_kinded env) tys'"
+proof (induction env elabEnv ghost ty and env elabEnv ghost tys
        arbitrary: ty' and tys' rule: elab_type_elab_type_list.induct)
-  case (1 env typedefs ghost loc name tyargs)
+  case (1 env elabEnv ghost loc name tyargs)
   show ?case
-  proof (cases "elab_type_list env typedefs ghost tyargs")
+  proof (cases "elab_type_list env elabEnv ghost tyargs")
     case (Inl errs)
     then show ?thesis using "1.prems" by simp
   next
@@ -140,10 +140,10 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
     from "1.IH"(1)[OF "1.prems"(1,2) Inr]
     have elabTyArgs_wk: "list_all (is_well_kinded env) elabTyArgs" .
     show ?thesis
-    proof (cases "fmlookup typedefs name")
+    proof (cases "fmlookup (EE_Typedefs elabEnv) name")
       case (Some typedef_entry)
       then obtain tyvars targetTy where
-        typedef_lookup: "fmlookup typedefs name = Some (tyvars, targetTy)"
+        typedef_lookup: "fmlookup (EE_Typedefs elabEnv) name = Some (tyvars, targetTy)"
         by (cases typedef_entry) auto
       from "1.prems"(1) typedef_lookup
       have distinct_tyvars: "distinct tyvars"
@@ -188,52 +188,52 @@ proof (induction env typedefs ghost ty and env typedefs ghost tys
     qed
   qed
 next
-  case (2 env typedefs ghost loc)
+  case (2 env elabEnv ghost loc)
   then show ?case by simp
 next
-  case (3 env typedefs ghost loc sign bits)
+  case (3 env elabEnv ghost loc sign bits)
   then show ?case by auto
 next
-  case (4 env typedefs ghost loc)
+  case (4 env elabEnv ghost loc)
   then show ?case by (simp split: if_splits)
 next
-  case (5 env typedefs ghost loc)
+  case (5 env elabEnv ghost loc)
   then show ?case by (simp split: if_splits)
 next
-  case (6 env typedefs ghost loc types)
+  case (6 env elabEnv ghost loc types)
   then show ?case
     by (auto simp: list_all_iff distinct_tuple_field_names tuple_field_names_def[symmetric]
              split: sum.splits dest!: set_zip_rightD)
 next
-  case (7 env typedefs ghost loc flds)
+  case (7 env elabEnv ghost loc flds)
   then show ?case
     by (auto simp: list_all_iff
              dest!: elab_type_list_length first_duplicate_name_None_implies_distinct
                    set_zip_rightD
              split: sum.splits option.splits)
 next
-  case (8 env typedefs ghost loc elemTy dims)
+  case (8 env elabEnv ghost loc elemTy dims)
   then show ?case by simp
 next
-  case (9 env typedefs ghost)
+  case (9 env elabEnv ghost)
   then show ?case by simp
 next
-  case (10 env typedefs ghost ty tys)
+  case (10 env elabEnv ghost ty tys)
   then show ?case by (auto simp: list_all_iff split: sum.splits)
 qed
 
 
 (* Types returned by elab_type in NotGhost mode are runtime types *)
 lemma elab_type_notghost_is_runtime:
-  "typedefs_well_formed env typedefs \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
-   elab_type env typedefs NotGhost ty = Inr ty' \<Longrightarrow> is_runtime_type env ty'"
-  "typedefs_well_formed env typedefs \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
-   elab_type_list env typedefs NotGhost tys = Inr tys' \<Longrightarrow> list_all (is_runtime_type env) tys'"
-proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
+  "typedefs_well_formed env (EE_Typedefs elabEnv) \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
+   elab_type env elabEnv NotGhost ty = Inr ty' \<Longrightarrow> is_runtime_type env ty'"
+  "typedefs_well_formed env (EE_Typedefs elabEnv) \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
+   elab_type_list env elabEnv NotGhost tys = Inr tys' \<Longrightarrow> list_all (is_runtime_type env) tys'"
+proof (induction env elabEnv NotGhost ty and env elabEnv NotGhost tys
        arbitrary: ty' and tys' rule: elab_type_elab_type_list.induct)
-  case (1 env typedefs loc name tyargs)
+  case (1 env elabEnv loc name tyargs)
   show ?case
-  proof (cases "elab_type_list env typedefs NotGhost tyargs")
+  proof (cases "elab_type_list env elabEnv NotGhost tyargs")
     case (Inl errs)
     then show ?thesis using "1.prems" by simp
   next
@@ -241,10 +241,10 @@ proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
     have elabTyArgs_rt: "list_all (is_runtime_type env) elabTyArgs"
       by (simp add: "1.hyps" "1.prems"(1,2) Inr)
     show ?thesis
-    proof (cases "fmlookup typedefs name")
+    proof (cases "fmlookup (EE_Typedefs elabEnv) name")
       case (Some typedef_entry)
       then obtain tyvars targetTy where
-        typedef_lookup: "fmlookup typedefs name = Some (tyvars, targetTy)"
+        typedef_lookup: "fmlookup (EE_Typedefs elabEnv) name = Some (tyvars, targetTy)"
         by (cases typedef_entry) auto
       show ?thesis
       proof (cases "length elabTyArgs = length tyvars")
@@ -280,36 +280,36 @@ proof (induction env typedefs NotGhost ty and env typedefs NotGhost tys
     qed
   qed
 next
-  case (2 env typedefs loc)
+  case (2 env elabEnv loc)
   then show ?case by simp
 next
-  case (3 env typedefs loc sign bits)
+  case (3 env elabEnv loc sign bits)
   then show ?case by auto
 next
-  case (4 env typedefs loc)
+  case (4 env elabEnv loc)
   (* MathInt case - in NotGhost mode, this returns Inl, so premise is false *)
   then show ?case by simp
 next
-  case (5 env typedefs loc)
+  case (5 env elabEnv loc)
   (* MathReal case - in NotGhost mode, this returns Inl, so premise is false *)
   then show ?case by simp
 next
-  case (6 env typedefs loc types)
+  case (6 env elabEnv loc types)
   then show ?case
     by (auto simp: list_all_iff split: sum.splits dest!: set_zip_rightD)
 next
-  case (7 env typedefs loc flds)
+  case (7 env elabEnv loc flds)
   then show ?case
     by (auto simp: list_all_iff split: sum.splits option.splits dest!: set_zip_rightD)
 next
-  case (8 env typedefs loc elemTy dims)
+  case (8 env elabEnv loc elemTy dims)
   (* Array case is currently stubbed to Bool *)
   then show ?case by simp
 next
-  case (9 env typedefs)
+  case (9 env elabEnv)
   then show ?case by simp
 next
-  case (10 env typedefs ty tys)
+  case (10 env elabEnv ty tys)
   then show ?case by (auto simp: list_all_iff split: sum.splits)
 qed
 

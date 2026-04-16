@@ -145,13 +145,13 @@ qed
 
 (* Monotonicity of next_mv: elab_term / elab_term_list only advance the counter. *)
 lemma elab_term_next_mv_monotone:
-  "elab_term env typedefs ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
+  "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
 and elab_term_list_next_mv_monotone:
-  "elab_term_list env typedefs ghost tms next_mv = Inr (tms', tys', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
-proof (induction env typedefs ghost tm next_mv and env typedefs ghost tms next_mv
+  "elab_term_list env elabEnv ghost tms next_mv = Inr (tms', tys', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
+proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
        arbitrary: tm' ty' next_mv' and tms' tys' next_mv'
        rule: elab_term_elab_term_list.induct)
-  case (1 env typedefs ghost loc lit next_mv)
+  case (1 env elabEnv ghost loc lit next_mv)
   \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; String/Array are undefined (TODO)\<close>
   show ?case
   proof (cases lit)
@@ -168,24 +168,24 @@ proof (induction env typedefs ghost tm next_mv and env typedefs ghost tms next_m
     with "1.prems" show ?thesis sorry
   qed
 next
-  case (2 env typedefs ghost loc name tyArgs next_mv)
+  case (2 env elabEnv ghost loc name tyArgs next_mv)
   \<comment> \<open>BabTm_Name: undefined (TODO)\<close>
   from "2.prems" show ?case sorry
 next
-  case (3 env typedefs ghost loc targetTy operand next_mv)
+  case (3 env elabEnv ghost loc targetTy operand next_mv)
   from "3.prems" show ?case
     by (auto simp: Let_def split: sum.splits if_splits option.splits dest!: "3.IH")
 next
-  case (4 env typedefs ghost loc condTm thenTm elseTm next_mv)
+  case (4 env elabEnv ghost loc condTm thenTm elseTm next_mv)
   \<comment> \<open>BabTm_If: threads through cond, then, else\<close>
   from "4.prems" obtain newCond condTy next_mv1 where
-    elab_cond: "elab_term env typedefs ghost condTm next_mv = Inr (newCond, condTy, next_mv1)"
+    elab_cond: "elab_term env elabEnv ghost condTm next_mv = Inr (newCond, condTy, next_mv1)"
     by (auto split: sum.splits)
   from "4.prems" elab_cond obtain newThen thenTy next_mv2 where
-    elab_then: "elab_term env typedefs ghost thenTm next_mv1 = Inr (newThen, thenTy, next_mv2)"
+    elab_then: "elab_term env elabEnv ghost thenTm next_mv1 = Inr (newThen, thenTy, next_mv2)"
     by (auto split: sum.splits)
   from "4.prems" elab_cond elab_then obtain newElse elseTy next_mv3 where
-    elab_else: "elab_term env typedefs ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
+    elab_else: "elab_term env elabEnv ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
     by (auto split: sum.splits)
   have m1: "next_mv \<le> next_mv1"
     using "4.IH"(1) elab_cond by simp
@@ -197,18 +197,18 @@ next
     by (auto simp: Let_def split: option.splits if_splits)
   with m1 m2 m3 show ?case by simp
 next
-  case (5 env typedefs ghost loc op operand next_mv)
+  case (5 env elabEnv ghost loc op operand next_mv)
   \<comment> \<open>BabTm_Unop: forwards operand's next_mv\<close>
   from "5.prems" show ?case
     by (auto simp: Let_def split: sum.splits option.splits BabUnop.splits if_splits dest!: "5.IH")
 next
-  case (6 env typedefs ghost loc lhs operands next_mv)
+  case (6 env elabEnv ghost loc lhs operands next_mv)
   \<comment> \<open>BabTm_Binop: threads through lhs, rhs list\<close>
   from "6.prems" obtain newLhs lhsTy next_mv1 where
-    elab_lhs: "elab_term env typedefs ghost lhs next_mv = Inr (newLhs, lhsTy, next_mv1)"
+    elab_lhs: "elab_term env elabEnv ghost lhs next_mv = Inr (newLhs, lhsTy, next_mv1)"
     by (auto split: sum.splits)
   from "6.prems" elab_lhs obtain rhsTms rhsTys next_mv2 where
-    elab_rhs: "elab_term_list env typedefs ghost (map snd operands) next_mv1 = Inr (rhsTms, rhsTys, next_mv2)"
+    elab_rhs: "elab_term_list env elabEnv ghost (map snd operands) next_mv1 = Inr (rhsTms, rhsTys, next_mv2)"
     by (auto split: sum.splits)
   have m1: "next_mv \<le> next_mv1"
     using "6.IH"(1) elab_lhs by simp
@@ -218,10 +218,10 @@ next
     by (auto simp: Let_def split: sum.splits)
   with m1 m2 show ?case by simp
 next
-  case (7 env typedefs ghost loc varName rhs body next_mv)
+  case (7 env elabEnv ghost loc varName rhs body next_mv)
   \<comment> \<open>BabTm_Let: threads through rhs and body\<close>
   from "7.prems" obtain rhsTm rhsTy next_mv1 where
-    elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
+    elab_rhs: "elab_term env elabEnv ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
     by (auto split: sum.splits)
   from "7.prems" elab_rhs have rhs_resolved:
     "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)"
@@ -231,7 +231,7 @@ next
                                                else fminus (TE_GhostLocals env) {|varName|}),
                           TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>"
   from "7.prems" elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
-    elab_body: "elab_term ?env_body typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)"
+    elab_body: "elab_term ?env_body elabEnv ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)"
     by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> next_mv1"
     using "7.IH"(1) elab_rhs by simp
@@ -241,15 +241,15 @@ next
     by (auto simp: Let_def split: sum.splits)
   with m1 m2 show ?case by simp
 next
-  case (8 env typedefs ghost loc quant name varTy tm next_mv)
+  case (8 env elabEnv ghost loc quant name varTy tm next_mv)
   \<comment> \<open>BabTm_Quantifier: forwards body's next_mv\<close>
   from "8.prems" show ?case
     using "8.IH" by (auto simp: Let_def split: sum.splits if_splits option.splits)
 next
-  case (9 env typedefs ghost loc callee args next_mv)
+  case (9 env elabEnv ghost loc callee args next_mv)
   \<comment> \<open>BabTm_Call: threads through determine_fun_call_type, elab_term_list\<close>
   from "9.prems" obtain fnName tyArgs expArgTypes retType next_mv1 where
-    det_call: "determine_fun_call_type env typedefs ghost callee next_mv
+    det_call: "determine_fun_call_type env elabEnv ghost callee next_mv
                = Inr (fnName, tyArgs, expArgTypes, retType, next_mv1)"
     by (auto split: sum.splits)
   \<comment> \<open>determine_fun_call_type is monotone: either generates fresh metas (next_mv1 = next_mv + n)
@@ -258,12 +258,12 @@ next
   proof (cases callee)
     case (BabTm_Name fnLoc fnName' tyArgs')
     from det_call BabTm_Name show ?thesis
-      by (auto simp: Let_def split: option.splits if_splits sum.splits)
+      by (auto simp: Let_def resolve_type_args_def split: option.splits if_splits sum.splits)
   qed (use det_call in simp_all)
   from "9.prems" det_call have len_args: "length args = length expArgTypes"
     by (auto split: if_splits)
   from "9.prems" det_call len_args obtain elabArgTms actualTypes next_mv2 where
-    elab_args: "elab_term_list env typedefs ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
+    elab_args: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
     by (auto split: sum.splits)
   have m2: "next_mv1 \<le> next_mv2"
     using "9.IH" det_call len_args elab_args by simp
@@ -271,22 +271,22 @@ next
     by (auto simp: Let_def split: sum.splits)
   with det_mono m2 show ?case by simp
 next
-  case (10 env typedefs ghost loc tms next_mv)
+  case (10 env elabEnv ghost loc tms next_mv)
   \<comment> \<open>BabTm_Tuple: forwards elab_term_list's next_mv\<close>
   from "10.prems" show ?case
     by (auto simp: Let_def split: sum.splits dest!: "10.IH")
 next
-  case (11 env typedefs ghost loc flds next_mv)
+  case (11 env elabEnv ghost loc flds next_mv)
   \<comment> \<open>BabTm_Record: forwards elab_term_list's next_mv\<close>
   from "11.prems" show ?case
     by (auto simp: Let_def split: sum.splits option.splits dest!: "11.IH")
 next
-  case (12 env typedefs ghost loc tm flds next_mv)
+  case (12 env elabEnv ghost loc tm flds next_mv)
   \<comment> \<open>BabTm_RecordUpdate: threads through parent and update list next_mv\<close>
   from "12.prems"(1) have no_dup: "first_duplicate_name fst flds = None"
     by (auto split: option.splits)
   from "12.prems"(1) no_dup obtain parentTm parentTy next_mv1 where
-    elab_parent: "elab_term env typedefs ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
+    elab_parent: "elab_term env elabEnv ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
     by (auto split: sum.splits option.splits)
   have mono1: "next_mv \<le> next_mv1"
     using "12.IH"(1)[OF no_dup] elab_parent by simp
@@ -300,7 +300,7 @@ next
              split: sum.splits option.splits if_splits prod.splits)
   from "12.prems"(1) no_dup elab_parent parent_rec fields_exist
   obtain newUpdateTms actualTypes next_mv2 where
-    elab_updates: "elab_term_list env typedefs ghost (map snd flds) next_mv1
+    elab_updates: "elab_term_list env elabEnv ghost (map snd flds) next_mv1
                    = Inr (newUpdateTms, actualTypes, next_mv2)"
     by (auto simp: Let_def unify_and_coerce_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
@@ -314,20 +314,20 @@ next
              split: sum.splits option.splits if_splits prod.splits)
   with mono1 mono2 show ?case by simp
 next
-  case (13 env typedefs ghost loc tm idx next_mv)
+  case (13 env elabEnv ghost loc tm idx next_mv)
   \<comment> \<open>BabTm_TupleProj: forwards sub-term's next_mv\<close>
   from "13.prems" show ?case
     by (auto simp del: nat_to_string.simps split: sum.splits CoreType.splits option.splits dest!: "13.IH")
 next
-  case (14 env typedefs ghost loc tm fldName next_mv)
+  case (14 env elabEnv ghost loc tm fldName next_mv)
   \<comment> \<open>BabTm_RecordProj: forwards sub-term's next_mv\<close>
   from "14.prems" show ?case
     by (auto split: sum.splits CoreType.splits option.splits dest!: "14.IH")
 next
-  case (15 env typedefs ghost loc tm idxs next_mv)
+  case (15 env elabEnv ghost loc tm idxs next_mv)
   \<comment> \<open>BabTm_ArrayProj: threads through array term and index list\<close>
   from "15.prems"(1) obtain newArr arrTy next_mv1 where
-    elab_arr: "elab_term env typedefs ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
+    elab_arr: "elab_term env elabEnv ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
     by (auto split: sum.splits)
   have mono1: "next_mv \<le> next_mv1"
     using "15.IH"(1) elab_arr by simp
@@ -340,7 +340,7 @@ next
   hence len_neq_false: "\<not> (length idxs \<noteq> length dims)" by simp
   from "15.prems"(1) elab_arr arr_ty len_eq
   obtain elabIdxTms actualTypes next_mv2 where
-    elab_idxs: "elab_term_list env typedefs ghost idxs next_mv1
+    elab_idxs: "elab_term_list env elabEnv ghost idxs next_mv1
                 = Inr (elabIdxTms, actualTypes, next_mv2)"
     by (auto simp: unify_and_coerce_def split: sum.splits)
   have pair1: "(newArr, arrTy, next_mv1) = (newArr, arrTy, next_mv1)" by simp
@@ -354,17 +354,17 @@ next
   case "16"  \<comment> \<open>BabTm_Match: undefined\<close>
   from "16.prems" show ?case sorry
 next
-  case (17 env typedefs ghost loc tm next_mv)
+  case (17 env elabEnv ghost loc tm next_mv)
   \<comment> \<open>BabTm_Sizeof: forwards sub-term's next_mv\<close>
   from "17.prems" show ?case
     using "17.IH" by (auto split: sum.splits CoreType.splits if_splits)
 next
-  case (18 env typedefs ghost loc tm next_mv)
+  case (18 env elabEnv ghost loc tm next_mv)
   \<comment> \<open>BabTm_Allocated: forwards sub-term's next_mv\<close>
   from "18.prems" show ?case
     using "18.IH" by (auto split: sum.splits if_splits)
 next
-  case (19 env typedefs ghost loc tm next_mv)
+  case (19 env elabEnv ghost loc tm next_mv)
   \<comment> \<open>BabTm_Old: forwards sub-term's next_mv\<close>
   from "19.prems" show ?case
     using "19.IH" by (auto split: sum.splits if_splits)
@@ -372,11 +372,11 @@ next
   case "20" \<comment> \<open>elab_term_list: Nil\<close>
   from "20.prems" show ?case by simp
 next
-  case (21 env typedefs ghost tm tms next_mv)
+  case (21 env elabEnv ghost tm tms next_mv)
   \<comment> \<open>elab_term_list: Cons\<close>
   from "21.prems" obtain tm'' ty'' next_mv1 tms'' tys'' next_mv2 where
-    elab_head: "elab_term env typedefs ghost tm next_mv = Inr (tm'', ty'', next_mv1)" and
-    elab_tail: "elab_term_list env typedefs ghost tms next_mv1 = Inr (tms'', tys'', next_mv2)"
+    elab_head: "elab_term env elabEnv ghost tm next_mv = Inr (tm'', ty'', next_mv1)" and
+    elab_tail: "elab_term_list env elabEnv ghost tms next_mv1 = Inr (tms'', tys'', next_mv2)"
     by (auto split: sum.splits)
   have m1: "next_mv \<le> next_mv1"
     using "21.IH"(1) elab_head by simp
@@ -389,7 +389,7 @@ qed
 
 (* Length of elab_term_list output matches input *)
 lemma elab_term_list_length:
-  "elab_term_list env typedefs ghost tms next_mv = Inr (tms', tys', next_mv')
+  "elab_term_list env elabEnv ghost tms next_mv = Inr (tms', tys', next_mv')
    \<Longrightarrow> length tms' = length tms \<and> length tys' = length tms"
 proof (induction tms arbitrary: tms' tys' next_mv next_mv')
   case Nil
@@ -399,15 +399,88 @@ next
   then show ?case by (auto split: sum.splits)
 qed
 
+(* Correctness of resolve_type_args:
+   If it succeeds, the returned type arguments have the right length,
+   are well-kinded in the extended env, and are runtime types in NotGhost mode. *)
+lemma resolve_type_args_correct:
+  assumes "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv
+           = Inr (newTyArgs, next_mv')"
+      and "tyenv_well_formed env"
+      and "typedefs_well_formed env (EE_Typedefs elabEnv)"
+  shows "next_mv \<le> next_mv'
+       \<and> length newTyArgs = length tyvars
+       \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
+       \<and> (ghost = NotGhost \<longrightarrow>
+            list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)"
+proof -
+  let ?numTyParams = "length tyvars"
+  show ?thesis
+  proof (cases "tyArgs = [] \<and> ?numTyParams > 0")
+    case True
+    \<comment> \<open>Type args were omitted - metavariables generated\<close>
+    let ?genTyArgs = "map CoreTy_Var [next_mv..<next_mv + ?numTyParams]"
+    from assms(1) True
+    have results: "newTyArgs = ?genTyArgs"
+                  "next_mv' = next_mv + ?numTyParams"
+      by (auto simp: resolve_type_args_def Let_def)
+    have len_ok: "length ?genTyArgs = ?numTyParams" by simp
+    have mono: "next_mv \<le> next_mv'" using results by simp
+    let ?env_ext = "extend_env_with_tyvars env ghost next_mv next_mv'"
+    have all_in_tv: "\<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_TypeVars ?env_ext"
+      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
+    have wk_ok: "list_all (is_well_kinded ?env_ext) ?genTyArgs"
+      using list_all_tyvar_is_well_kinded[OF all_in_tv] .
+    have all_in_rtv: "ghost = NotGhost \<Longrightarrow>
+                       \<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_RuntimeTypeVars ?env_ext"
+      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
+    have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
+      using all_in_rtv list_all_tyvar_is_runtime by blast
+    show ?thesis
+      using results len_ok wk_ok runtime_ok mono by auto
+  next
+    case False
+    show ?thesis
+    proof (cases "?numTyParams = length tyArgs")
+      case True
+      from assms(1) False True
+      obtain elabTyArgs where
+        elab_tyargs: "elab_type_list env elabEnv ghost tyArgs = Inr elabTyArgs"
+        by (cases "elab_type_list env elabEnv ghost tyArgs")
+           (auto simp: resolve_type_args_def Let_def split: if_splits)
+      from assms(1) False True elab_tyargs
+      have results: "newTyArgs = elabTyArgs"
+                    "next_mv' = next_mv"
+        by (auto simp: resolve_type_args_def Let_def)
+      have len_ok: "length elabTyArgs = ?numTyParams"
+        using elab_tyargs True elab_type_list_length by fastforce
+      have mono: "next_mv \<le> next_mv'" using results by simp
+      have env_eq: "extend_env_with_tyvars env ghost next_mv next_mv' = env"
+        using results by simp
+      have wk_ok: "list_all (is_well_kinded env) elabTyArgs"
+        using elab_tyargs assms(2,3) elab_type_is_well_kinded(2) by auto
+      have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) elabTyArgs"
+        using elab_tyargs assms(2,3) elab_type_notghost_is_runtime(2) by (cases ghost; auto)
+      show ?thesis
+        using results len_ok wk_ok runtime_ok mono env_eq by auto
+    next
+      case False2: False
+      from assms(1) False False2
+      have "False" by (auto simp: resolve_type_args_def Let_def split: sum.splits if_splits)
+      thus ?thesis ..
+    qed
+  qed
+qed
+
+
 (* Correctness of determine_fun_call_type:
    If it succeeds, the returned information is consistent with the function declaration.
    The returned type arguments are well-kinded in the extended env (since the
    meta-generation branch adds fresh metas in [next_mv..<next_mv']). *)
 lemma determine_fun_call_type_correct:
-  assumes "determine_fun_call_type env typedefs ghost callTm next_mv
+  assumes "determine_fun_call_type env elabEnv ghost callTm next_mv
            = Inr (fnName, newTyArgs, expArgTypes, retType, next_mv')"
       and "tyenv_well_formed env"
-      and "typedefs_well_formed env typedefs"
+      and "typedefs_well_formed env (EE_Typedefs elabEnv)"
   shows "next_mv \<le> next_mv'
        \<and> (\<exists>funInfo.
            fmlookup (TE_Functions env) fnName = Some funInfo
@@ -426,89 +499,44 @@ proof (cases callTm)
   case (BabTm_Name fnLoc fnName' tyArgs)
   from assms(1) BabTm_Name obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) fnName' = Some funInfo"
-    by (auto split: option.splits if_splits)
+    by (auto simp: resolve_type_args_def split: option.splits if_splits sum.splits)
   from assms(1) BabTm_Name fn_lookup have
     not_impure: "\<not> FI_Impure funInfo"
-    by (auto split: if_splits sum.splits)
+    by (auto simp: resolve_type_args_def split: if_splits sum.splits)
   from assms(1) BabTm_Name fn_lookup not_impure have
     all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)"
-    by (auto split: if_splits sum.splits)
+    by (auto simp: resolve_type_args_def split: if_splits sum.splits)
   from assms(1) BabTm_Name fn_lookup not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
-    by (auto split: if_splits sum.splits)
+    by (auto simp: resolve_type_args_def split: if_splits sum.splits)
   from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok have
     fnName_eq: "fnName = fnName'"
-    by (auto simp: Let_def split: if_splits sum.splits)
+    by (auto simp: resolve_type_args_def Let_def split: if_splits sum.splits)
 
-  let ?numTyParams = "length (FI_TyArgs funInfo)"
+  \<comment> \<open>Extract the resolve_type_args result\<close>
+  from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok
+  obtain newTyArgs0 next_mv0 where
+    resolve_eq: "resolve_type_args env elabEnv ghost fnLoc fnName' (FI_TyArgs funInfo) tyArgs next_mv
+                 = Inr (newTyArgs0, next_mv0)"
+    by (auto simp: resolve_type_args_def Let_def split: if_splits sum.splits)
+  from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok resolve_eq
+  have results: "newTyArgs = newTyArgs0" "next_mv' = next_mv0"
+                "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs0)) ty)
+                                   (FI_TmArgs funInfo)"
+                "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs0))
+                                       (FI_ReturnType funInfo)"
+    by (auto simp: Let_def)
+
+  \<comment> \<open>Apply resolve_type_args_correct\<close>
+  have rta: "next_mv \<le> next_mv'
+           \<and> length newTyArgs = length (FI_TyArgs funInfo)
+           \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
+           \<and> (ghost = NotGhost \<longrightarrow>
+                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)"
+    using resolve_type_args_correct[OF resolve_eq assms(2,3)] results by simp
 
   show ?thesis
-  proof (cases "tyArgs = [] \<and> ?numTyParams > 0")
-    case True
-    \<comment> \<open>Type args were omitted - metavariables generated\<close>
-    let ?genTyArgs = "map CoreTy_Var [next_mv..<next_mv + ?numTyParams]"
-    from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok True
-    have results: "newTyArgs = ?genTyArgs"
-                  "next_mv' = next_mv + ?numTyParams"
-                  "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)) ty)
-                                     (FI_TmArgs funInfo)"
-                  "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs))
-                                         (FI_ReturnType funInfo)"
-      by (auto simp: Let_def)
-    have len_ok: "length ?genTyArgs = ?numTyParams" by simp
-    have mono: "next_mv \<le> next_mv'" using results by simp
-    let ?env_ext = "extend_env_with_tyvars env ghost next_mv next_mv'"
-    \<comment> \<open>The fresh metas are all in TE_TypeVars of the extended env\<close>
-    have all_in_tv: "\<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_TypeVars ?env_ext"
-      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
-    have wk_ok: "list_all (is_well_kinded ?env_ext) ?genTyArgs"
-      using list_all_tyvar_is_well_kinded[OF all_in_tv] .
-    have all_in_rtv: "ghost = NotGhost \<Longrightarrow>
-                       \<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_RuntimeTypeVars ?env_ext"
-      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
-    have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
-      using all_in_rtv list_all_tyvar_is_runtime by blast
-    show ?thesis
-      using fn_lookup ghost_ok not_impure all_var fnName_eq results len_ok wk_ok runtime_ok mono
-      by auto
-  next
-    case False
-    show ?thesis
-    proof (cases "?numTyParams = length tyArgs")
-      case True
-      from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok False True
-      obtain elabTyArgs where
-        elab_tyargs: "elab_type_list env typedefs ghost tyArgs = Inr elabTyArgs"
-        by (cases "elab_type_list env typedefs ghost tyArgs")
-           (auto simp: Let_def split: if_splits)
-      from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok False True elab_tyargs
-      have results: "newTyArgs = elabTyArgs"
-                    "next_mv' = next_mv"
-                    "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)) ty)
-                                       (FI_TmArgs funInfo)"
-                    "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs))
-                                           (FI_ReturnType funInfo)"
-        by (auto simp: Let_def)
-      have len_ok: "length elabTyArgs = ?numTyParams"
-        using elab_tyargs True elab_type_list_length by fastforce
-      have mono: "next_mv \<le> next_mv'" using results by simp
-      \<comment> \<open>Interval is empty so the extended env equals env\<close>
-      have env_eq: "extend_env_with_tyvars env ghost next_mv next_mv' = env"
-        using results by simp
-      have wk_ok: "list_all (is_well_kinded env) elabTyArgs"
-        using elab_tyargs assms(2,3) elab_type_is_well_kinded(2) by auto
-      have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) elabTyArgs"
-        using elab_tyargs assms(2,3) elab_type_notghost_is_runtime(2) by (cases ghost; auto)
-      show ?thesis
-        using fn_lookup ghost_ok not_impure all_var fnName_eq results len_ok wk_ok runtime_ok mono env_eq
-        by auto
-    next
-      case False2: False
-      from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok False False2
-      have "False" by (auto simp: Let_def split: sum.splits if_splits)
-      thus ?thesis ..
-    qed
-  qed
+    using fn_lookup ghost_ok not_impure all_var fnName_eq results rta by auto
 qed (use assms(1) in simp_all)
 
 

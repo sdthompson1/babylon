@@ -124,15 +124,15 @@ qed
    and the elaboration of the Call succeeds, the result typechecks. *)
 lemma elab_term_correct_call:
   assumes
-    elab_eq: "elab_term env typedefs ghost (BabTm_Call loc callee args) next_mv
+    elab_eq: "elab_term env elabEnv ghost (BabTm_Call loc callee args) next_mv
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
-    and td_wf: "typedefs_well_formed env typedefs"
+    and td_wf: "elabenv_well_formed env elabEnv"
     and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
     \<comment> \<open>Sub-elaboration results\<close>
-    and det_call: "determine_fun_call_type env typedefs ghost callee next_mv
+    and det_call: "determine_fun_call_type env elabEnv ghost callee next_mv
                    = Inr (fnName, tyArgs, expArgTypes, retType, next_mv1)"
-    and elab_args: "elab_term_list env typedefs ghost args next_mv1
+    and elab_args: "elab_term_list env elabEnv ghost args next_mv1
                     = Inr (elabArgTms, actualTypes, next_mv2)"
     \<comment> \<open>IH result lifted to the full extended env\<close>
     and ih_args: "list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty)
@@ -171,7 +171,8 @@ proof -
                              (FI_TmArgs funInfo)
          \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                   (FI_ReturnType funInfo))"
-    using determine_fun_call_type_correct[OF det_call wf td_wf] .
+    using determine_fun_call_type_correct[OF det_call wf]
+          td_wf[unfolded elabenv_well_formed_def, THEN conjunct1] .
   from det_correct have mono_1: "next_mv \<le> next_mv1" by blast
   have mono_2: "next_mv1 \<le> next_mv2"
     using elab_term_list_next_mv_monotone[OF elab_args] .
@@ -450,13 +451,13 @@ qed
    and the elaboration of the ArrayProj succeeds, the result typechecks. *)
 lemma elab_term_correct_array_proj:
   assumes
-    elab_eq: "elab_term env typedefs ghost (BabTm_ArrayProj loc tm idxs) next_mv
+    elab_eq: "elab_term env elabEnv ghost (BabTm_ArrayProj loc tm idxs) next_mv
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
     and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
     \<comment> \<open>Sub-elaboration results\<close>
-    and elab_arr: "elab_term env typedefs ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
-    and elab_idxs: "elab_term_list env typedefs ghost idxs next_mv1
+    and elab_arr: "elab_term env elabEnv ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
+    and elab_idxs: "elab_term_list env elabEnv ghost idxs next_mv1
                     = Inr (elabIdxTms, actualTypes, next_mv2)"
     \<comment> \<open>IH results lifted to the full extended env\<close>
     and ih_arr: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newArr
@@ -625,13 +626,13 @@ qed
    and the elaboration of the RecordUpdate succeeds, the result typechecks. *)
 lemma elab_term_correct_record_update:
   assumes
-    elab_eq: "elab_term env typedefs ghost (BabTm_RecordUpdate loc tm flds) next_mv
+    elab_eq: "elab_term env elabEnv ghost (BabTm_RecordUpdate loc tm flds) next_mv
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
     and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
     \<comment> \<open>Sub-elaboration results\<close>
-    and elab_parent: "elab_term env typedefs ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
-    and elab_updates: "elab_term_list env typedefs ghost (map snd flds) next_mv1
+    and elab_parent: "elab_term env elabEnv ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
+    and elab_updates: "elab_term_list env elabEnv ghost (map snd flds) next_mv1
                        = Inr (newUpdateTms, actualTypes, next_mv2)"
     \<comment> \<open>IH results lifted to the full extended env\<close>
     and ih_parent: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost parentTm
@@ -943,22 +944,22 @@ qed
    greater than every type variable already in env. This ensures that the fresh
    metas the elaborator generates don't collide with existing ones. *)
 theorem elab_term_correct:
-  "elab_term env typedefs ghost tm next_mv = Inr (newTm, ty, next_mv') \<Longrightarrow>
+  "elab_term env elabEnv ghost tm next_mv = Inr (newTm, ty, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
-   typedefs_well_formed env typedefs \<Longrightarrow>
+   elabenv_well_formed env elabEnv \<Longrightarrow>
    (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
    core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newTm = Some ty"
 and elab_term_list_correct:
-  "elab_term_list env typedefs ghost tms next_mv = Inr (newTms, tys, next_mv') \<Longrightarrow>
+  "elab_term_list env elabEnv ghost tms next_mv = Inr (newTms, tys, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
-   typedefs_well_formed env typedefs \<Longrightarrow>
+   elabenv_well_formed env elabEnv \<Longrightarrow>
    (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
    list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty) newTms tys"
-proof (induction env typedefs ghost tm next_mv and env typedefs ghost tms next_mv
+proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
        arbitrary: newTm ty next_mv' and newTms tys next_mv'
        rule: elab_term_elab_term_list.induct)
   \<comment> \<open>Case: BabTm_Literal\<close>
-  case (1 env typedefs ghost loc lit next_mv)
+  case (1 env elabEnv ghost loc lit next_mv)
   show ?case
   proof (cases lit)
     case (BabLit_Bool b)
@@ -984,19 +985,19 @@ proof (induction env typedefs ghost tm next_mv and env typedefs ghost tms next_m
   qed
 next
   \<comment> \<open>Case: BabTm_Name (undefined)\<close>
-  case (2 env typedefs ghost loc name tyArgs next_mv)
+  case (2 env elabEnv ghost loc name tyArgs next_mv)
   then show ?case sorry
 
 next
   \<comment> \<open>Case: BabTm_Cast\<close>
-  case (3 env typedefs ghost loc targetTy operand next_mv)
+  case (3 env elabEnv ghost loc targetTy operand next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract intermediate results\<close>
   from "3.prems"(1) obtain newTargetTy where
-    elab_target: "elab_type env typedefs ghost targetTy = Inr newTargetTy"
+    elab_target: "elab_type env elabEnv ghost targetTy = Inr newTargetTy"
     by (auto split: sum.splits)
   from "3.prems"(1) elab_target obtain newOperand operandTy next_mv'' where
-    elab_operand: "elab_term env typedefs ghost operand next_mv = Inr (newOperand, operandTy, next_mv'')"
+    elab_operand: "elab_term env elabEnv ghost operand next_mv = Inr (newOperand, operandTy, next_mv'')"
     by (auto split: sum.splits)
   \<comment> \<open>Cast forwards the operand's next_mv, so next_mv' = next_mv''\<close>
   from "3.prems"(1) elab_target elab_operand have next_mv_eq: "next_mv' = next_mv''"
@@ -1010,10 +1011,12 @@ next
     by (simp add: "3.IH" "3.prems"(2,3,4) elab_operand elab_target next_mv_eq)
 
   \<comment> \<open>Target type is well-kinded / runtime in the original env and so also in ?env'\<close>
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using "3.prems"(3) unfolding elabenv_well_formed_def by simp
   have target_wk_env: "is_well_kinded env newTargetTy"
-    using elab_target "3.prems"(2,3) elab_type_is_well_kinded by simp
+    using elab_target "3.prems"(2) td_wf elab_type_is_well_kinded by simp
   have target_rt_env: "ghost = NotGhost \<longrightarrow> is_runtime_type env newTargetTy"
-    using elab_target "3.prems"(2,3) elab_type_notghost_is_runtime by (cases ghost) auto
+    using elab_target "3.prems"(2) td_wf elab_type_notghost_is_runtime by (cases ghost) auto
   have target_wk: "is_well_kinded ?env' newTargetTy"
     using target_wk_env is_well_kinded_extend_tyvars
     unfolding extend_env_with_tyvars_def
@@ -1087,18 +1090,18 @@ next
 
 next
   \<comment> \<open>Case: BabTm_If - elaborates to CoreTm_Match with True/False patterns\<close>
-  case (4 env typedefs ghost loc condTm thenTm elseTm next_mv)
+  case (4 env elabEnv ghost loc condTm thenTm elseTm next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
 
   \<comment> \<open>Extract intermediate elaboration results\<close>
   from "4.prems"(1) obtain newCond condTy next_mv1 where
-    elab_cond: "elab_term env typedefs ghost condTm next_mv = Inr (newCond, condTy, next_mv1)"
+    elab_cond: "elab_term env elabEnv ghost condTm next_mv = Inr (newCond, condTy, next_mv1)"
     by (auto split: sum.splits)
   from "4.prems"(1) elab_cond obtain newThen thenTy next_mv2 where
-    elab_then: "elab_term env typedefs ghost thenTm next_mv1 = Inr (newThen, thenTy, next_mv2)"
+    elab_then: "elab_term env elabEnv ghost thenTm next_mv1 = Inr (newThen, thenTy, next_mv2)"
     by (auto split: sum.splits)
   from "4.prems"(1) elab_cond elab_then obtain newElse elseTy next_mv3 where
-    elab_else: "elab_term env typedefs ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
+    elab_else: "elab_term env elabEnv ghost elseTm next_mv2 = Inr (newElse, elseTy, next_mv3)"
     by (auto split: sum.splits)
 
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
@@ -1353,11 +1356,11 @@ next
 
 next
   \<comment> \<open>Case: BabTm_Unop\<close>
-  case (5 env typedefs ghost loc op operand next_mv)
+  case (5 env elabEnv ghost loc op operand next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract intermediate results\<close>
   from "5.prems"(1) obtain newOperand operandTy next_mv'' where
-    elab_operand: "elab_term env typedefs ghost operand next_mv = Inr (newOperand, operandTy, next_mv'')"
+    elab_operand: "elab_term env elabEnv ghost operand next_mv = Inr (newOperand, operandTy, next_mv'')"
     by (auto split: sum.splits)
   \<comment> \<open>Unop forwards the operand's next_mv\<close>
   from "5.prems"(1) elab_operand have next_mv_eq: "next_mv' = next_mv''"
@@ -1470,16 +1473,16 @@ next
 
 next
   \<comment> \<open>Case: BabTm_Binop\<close>
-  case (6 env typedefs ghost loc lhs operands next_mv)
+  case (6 env elabEnv ghost loc lhs operands next_mv)
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract elaboration of LHS\<close>
   from "6.prems"(1) obtain newLhs lhsTy next_mv1 where
-    elab_lhs: "elab_term env typedefs ghost lhs next_mv = Inr (newLhs, lhsTy, next_mv1)"
+    elab_lhs: "elab_term env elabEnv ghost lhs next_mv = Inr (newLhs, lhsTy, next_mv1)"
     by (auto split: sum.splits)
   \<comment> \<open>Extract elaboration of RHS terms\<close>
   from "6.prems"(1) elab_lhs obtain rhsTms rhsTys next_mv2 where
-    elab_rhs_list: "elab_term_list env typedefs ghost (map snd operands) next_mv1
+    elab_rhs_list: "elab_term_list env elabEnv ghost (map snd operands) next_mv1
                     = Inr (rhsTms, rhsTys, next_mv2)"
     by (auto split: sum.splits)
   \<comment> \<open>Build the operator list\<close>
@@ -1584,12 +1587,12 @@ next
 
 next
   \<comment> \<open>Case: BabTm_Let\<close>
-  case (7 env typedefs ghost loc varName rhs body next_mv)
+  case (7 env elabEnv ghost loc varName rhs body next_mv)
   let ?env_ext = "extend_env_with_tyvars env ghost next_mv next_mv'"
 
   \<comment> \<open>Extract rhs elaboration and the resolved-type check\<close>
   from "7.prems"(1) obtain rhsTm rhsTy next_mv1 where
-    elab_rhs: "elab_term env typedefs ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
+    elab_rhs: "elab_term env elabEnv ghost rhs next_mv = Inr (rhsTm, rhsTy, next_mv1)"
     by (auto split: sum.splits)
   from "7.prems"(1) elab_rhs have rhs_resolved:
     "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)"
@@ -1603,7 +1606,7 @@ next
                          TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>"
 
   from "7.prems"(1) elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
-    elab_body: "elab_term ?body_env typedefs ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
+    elab_body: "elab_term ?body_env elabEnv ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
     result_eq: "newTm = CoreTm_Let varName rhsTm bodyTm" "ty = bodyTy"
     by (auto simp: Let_def split: sum.splits)
 
@@ -1706,12 +1709,17 @@ next
       using wf_no_cn tyenv_well_formed_TE_ConstLocals_irrelevant env_rewrite by simp
   qed
 
-  have td_wf_body: "typedefs_well_formed ?body_env typedefs"
+  have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
   proof -
     have wk_eq: "\<And>t. is_well_kinded ?body_env t = is_well_kinded env t"
       using is_well_kinded_cong_env[of ?body_env env] by simp
-    show ?thesis
-      using "7.prems"(3) unfolding typedefs_well_formed_def wk_eq by auto
+    have td_wf: "typedefs_well_formed ?body_env (EE_Typedefs elabEnv)"
+      using "7.prems"(3) unfolding elabenv_well_formed_def typedefs_well_formed_def wk_eq by auto
+    have dc_eq: "TE_DataCtors ?body_env = TE_DataCtors env" by simp
+    have nc_wf: "\<forall>name. name |\<in>| EE_NullaryDataCtors elabEnv \<longrightarrow>
+                   (\<exists>dtName tyvars. fmlookup (TE_DataCtors ?body_env) name = Some (dtName, tyvars, CoreTy_Record []))"
+      using "7.prems"(3) dc_eq unfolding elabenv_well_formed_def by auto
+    show ?thesis unfolding elabenv_well_formed_def using td_wf nc_wf by auto
   qed
 
   \<comment> \<open>Freshness carries through to next_mv1; ?body_env has same TE_TypeVars as env\<close>
@@ -1746,7 +1754,7 @@ next
     by (simp add: Let_def)
 next
   \<comment> \<open>Case: BabTm_Quantifier\<close>
-  case (8 env typedefs ghost loc quant name varTy tm next_mv)
+  case (8 env elabEnv ghost loc quant name varTy tm next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
 
@@ -1756,7 +1764,7 @@ next
 
   \<comment> \<open>Elaborate the type annotation\<close>
   from "8.prems"(1) ghost_eq obtain coreVarTy where
-    elab_ty: "elab_type env typedefs ghost varTy = Inr coreVarTy"
+    elab_ty: "elab_type env elabEnv ghost varTy = Inr coreVarTy"
     by (auto split: sum.splits)
 
   \<comment> \<open>Body env\<close>
@@ -1765,7 +1773,7 @@ next
 
   \<comment> \<open>Elaborate the body\<close>
   from "8.prems"(1) ghost_eq elab_ty obtain bodyTm bodyTy next_mv_body where
-    elab_body: "elab_term ?body_env typedefs ghost tm next_mv = Inr (bodyTm, bodyTy, next_mv_body)"
+    elab_body: "elab_term ?body_env elabEnv ghost tm next_mv = Inr (bodyTm, bodyTy, next_mv_body)"
     by (auto simp: Let_def split: sum.splits option.splits)
 
   \<comment> \<open>Unify body type with Bool\<close>
@@ -1784,20 +1792,27 @@ next
     by (auto simp: Let_def finalBody_def finalVarTy_def)
 
   \<comment> \<open>varTy is well-kinded in env\<close>
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using "8.prems"(3) unfolding elabenv_well_formed_def by simp
   have varTy_wk: "is_well_kinded env coreVarTy"
-    using elab_ty "8.prems"(2,3) elab_type_is_well_kinded by simp
+    using elab_ty "8.prems"(2) td_wf elab_type_is_well_kinded by simp
 
   \<comment> \<open>body_env is well-formed\<close>
   have wf_body_env: "tyenv_well_formed ?body_env"
     using tyenv_well_formed_add_ghost_var[OF "8.prems"(2) varTy_wk] .
 
-  \<comment> \<open>typedefs are well-formed w.r.t. body_env\<close>
-  have td_wf_body: "typedefs_well_formed ?body_env typedefs"
+  \<comment> \<open>elabenv is well-formed w.r.t. body_env\<close>
+  have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
   proof -
     have wk_eq: "\<And>t. is_well_kinded ?body_env t = is_well_kinded env t"
       using is_well_kinded_cong_env[of ?body_env env] by simp
-    show ?thesis
-      using "8.prems"(3) unfolding typedefs_well_formed_def wk_eq by auto
+    have td_wf: "typedefs_well_formed ?body_env (EE_Typedefs elabEnv)"
+      using "8.prems"(3) unfolding elabenv_well_formed_def typedefs_well_formed_def wk_eq by auto
+    have dc_eq: "TE_DataCtors ?body_env = TE_DataCtors env" by simp
+    have nc_wf: "\<forall>name. name |\<in>| EE_NullaryDataCtors elabEnv \<longrightarrow>
+                   (\<exists>dtName tyvars. fmlookup (TE_DataCtors ?body_env) name = Some (dtName, tyvars, CoreTy_Record []))"
+      using "8.prems"(3) dc_eq unfolding elabenv_well_formed_def by auto
+    show ?thesis unfolding elabenv_well_formed_def using td_wf nc_wf by auto
   qed
 
   \<comment> \<open>Freshness for the body call\<close>
@@ -1936,24 +1951,26 @@ next
 
 next
   \<comment> \<open>Case: BabTm_Call\<close>
-  case (9 env typedefs ghost loc callee args next_mv)
+  case (9 env elabEnv ghost loc callee args next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract sub-elaboration results needed for IH setup\<close>
   from "9.prems"(1) obtain fnName tyArgs expArgTypes retType next_mv1 where
-    det_call: "determine_fun_call_type env typedefs ghost callee next_mv
+    det_call: "determine_fun_call_type env elabEnv ghost callee next_mv
                = Inr (fnName, tyArgs, expArgTypes, retType, next_mv1)"
     by (auto split: sum.splits)
   from "9.prems"(1) det_call have len_args: "length args = length expArgTypes"
     by (auto split: if_splits)
   from "9.prems"(1) det_call len_args obtain elabArgTms actualTypes next_mv2 where
-    elab_args: "elab_term_list env typedefs ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
+    elab_args: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
     by (auto split: sum.splits)
   from "9.prems"(1) det_call len_args elab_args have next_mv_eq: "next_mv' = next_mv2"
     by (auto simp: Let_def split: sum.splits)
 
   \<comment> \<open>Monotonicity from determine_fun_call_type\<close>
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using "9.prems"(3) unfolding elabenv_well_formed_def by simp
   have mono_1: "next_mv \<le> next_mv1"
-    using determine_fun_call_type_correct[OF det_call "9.prems"(2,3)] by blast
+    using determine_fun_call_type_correct[OF det_call "9.prems"(2) td_wf] by blast
 
   \<comment> \<open>Freshness carries through det_call\<close>
   have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
@@ -1983,12 +2000,12 @@ next
 
 next
   \<comment> \<open>Case: BabTm_Tuple\<close>
-  case (10 env typedefs ghost loc tms next_mv)
+  case (10 env elabEnv ghost loc tms next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?names = "tuple_field_names (length tms)"
   \<comment> \<open>Extract elaboration results\<close>
   from "10.prems"(1) obtain newTms tys where
-    elab_list: "elab_term_list env typedefs ghost tms next_mv
+    elab_list: "elab_term_list env elabEnv ghost tms next_mv
                 = Inr (newTms, tys, next_mv')" and
     newTm_eq: "newTm = CoreTm_Record (zip ?names newTms)" and
     ty_eq: "ty = CoreTy_Record (zip ?names tys)"
@@ -2059,7 +2076,7 @@ next
     by simp
 next
   \<comment> \<open>Case: BabTm_Record\<close>
-  case (11 env typedefs ghost loc flds next_mv)
+  case (11 env elabEnv ghost loc flds next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?names = "map fst flds"
   \<comment> \<open>Extract elaboration results\<close>
@@ -2068,7 +2085,7 @@ next
   hence distinct_names: "distinct ?names"
     by (rule first_duplicate_name_None_implies_distinct)
   from "11.prems"(1) no_dup obtain newTms tys where
-    elab_list: "elab_term_list env typedefs ghost (map snd flds) next_mv
+    elab_list: "elab_term_list env elabEnv ghost (map snd flds) next_mv
                 = Inr (newTms, tys, next_mv')" and
     newTm_eq: "newTm = CoreTm_Record (zip ?names newTms)" and
     ty_eq: "ty = CoreTy_Record (zip ?names tys)"
@@ -2144,14 +2161,14 @@ next
 
 next
   \<comment> \<open>Case: BabTm_RecordUpdate — delegate to helper lemma\<close>
-  case (12 env typedefs ghost loc tm flds next_mv)
+  case (12 env elabEnv ghost loc tm flds next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
 
   \<comment> \<open>Extract sub-elaboration results needed for IH setup\<close>
   from "12.prems"(1) have no_dup: "first_duplicate_name fst flds = None"
     by (auto split: option.splits)
   from "12.prems"(1) no_dup obtain parentTm parentTy next_mv1 where
-    elab_parent: "elab_term env typedefs ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
+    elab_parent: "elab_term env elabEnv ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
     by (auto split: sum.splits)
   from "12.prems"(1) no_dup elab_parent obtain parentFields where
     parent_rec: "parentTy = CoreTy_Record parentFields"
@@ -2163,7 +2180,7 @@ next
              split: sum.splits option.splits if_splits prod.splits)
   from "12.prems"(1) no_dup elab_parent parent_rec fields_exist
   obtain newUpdateTms actualTypes next_mv2 where
-    elab_updates: "elab_term_list env typedefs ghost (map snd flds) next_mv1
+    elab_updates: "elab_term_list env elabEnv ghost (map snd flds) next_mv1
                    = Inr (newUpdateTms, actualTypes, next_mv2)"
     by (auto simp: Let_def unify_and_coerce_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
@@ -2214,11 +2231,11 @@ next
 
 next
   \<comment> \<open>Case: BabTm_TupleProj\<close>
-  case (13 env typedefs ghost loc tm idx next_mv)
+  case (13 env elabEnv ghost loc tm idx next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract elaboration results\<close>
   from "13.prems"(1) obtain newSubTm subTy next_mv_sub where
-    elab_sub: "elab_term env typedefs ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)"
+    elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)"
     by (auto split: sum.splits)
   from "13.prems"(1) elab_sub obtain fieldTypes where
     sub_ty_eq: "subTy = CoreTy_Record fieldTypes"
@@ -2240,11 +2257,11 @@ next
     using newTm_eq ty_eq ih fld_lookup by (simp del: nat_to_string.simps)
 next
   \<comment> \<open>Case: BabTm_RecordProj\<close>
-  case (14 env typedefs ghost loc tm fldName next_mv)
+  case (14 env elabEnv ghost loc tm fldName next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract elaboration results\<close>
   from "14.prems"(1) obtain newSubTm subTy next_mv_sub where
-    elab_sub: "elab_term env typedefs ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)"
+    elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)"
     by (auto split: sum.splits)
   from "14.prems"(1) elab_sub obtain fieldTypes where
     sub_ty_eq: "subTy = CoreTy_Record fieldTypes"
@@ -2265,12 +2282,12 @@ next
     using newTm_eq ty_eq ih fld_lookup by simp
 next
   \<comment> \<open>Case: BabTm_ArrayProj — delegate to helper lemma\<close>
-  case (15 env typedefs ghost loc tm idxs next_mv)
+  case (15 env elabEnv ghost loc tm idxs next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
 
   \<comment> \<open>Extract sub-elaboration results\<close>
   from "15.prems"(1) obtain newArr arrTy next_mv1 where
-    elab_arr: "elab_term env typedefs ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
+    elab_arr: "elab_term env elabEnv ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
     by (auto split: sum.splits)
   from "15.prems"(1) elab_arr obtain elemTy dims where
     arr_ty: "arrTy = CoreTy_Array elemTy dims"
@@ -2280,7 +2297,7 @@ next
   hence len_neq_false: "\<not> (length idxs \<noteq> length dims)" by simp
   from "15.prems"(1) elab_arr arr_ty len_eq
   obtain elabIdxTms actualTypes next_mv2 where
-    elab_idxs: "elab_term_list env typedefs ghost idxs next_mv1
+    elab_idxs: "elab_term_list env elabEnv ghost idxs next_mv1
                 = Inr (elabIdxTms, actualTypes, next_mv2)"
     by (auto simp: unify_and_coerce_def split: sum.splits)
   from "15.prems"(1) elab_arr arr_ty len_eq elab_idxs
@@ -2330,15 +2347,15 @@ next
             elab_arr elab_idxs ih_arr ih_idxs] .
 next
   \<comment> \<open>Case: BabTm_Match (undefined)\<close>
-  case (16 env typedefs ghost loc scrut arms next_mv)
+  case (16 env elabEnv ghost loc scrut arms next_mv)
   then show ?case sorry
 next
   \<comment> \<open>Case: BabTm_Sizeof\<close>
-  case (17 env typedefs ghost loc tm next_mv)
+  case (17 env elabEnv ghost loc tm next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   \<comment> \<open>Extract elaboration results\<close>
   from "17.prems"(1) obtain newSubTm subTy next_mv_sub where
-    elab_sub: "elab_term env typedefs ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)"
+    elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)"
     by (auto split: sum.splits)
   from "17.prems"(1) elab_sub obtain elemTy dims where
     sub_ty_eq: "subTy = CoreTy_Array elemTy dims"
@@ -2359,12 +2376,12 @@ next
     using newTm_eq ty_eq ih guard by simp
 next
   \<comment> \<open>Case: BabTm_Allocated\<close>
-  case (18 env typedefs ghost loc tm next_mv)
+  case (18 env elabEnv ghost loc tm next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   from "18.prems"(1) have ghost_eq: "ghost = Ghost"
     by (auto split: if_splits)
   from "18.prems"(1) ghost_eq obtain newSubTm subTy next_mv_sub where
-    elab_sub: "elab_term env typedefs ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
+    elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
     newTm_eq: "newTm = CoreTm_Allocated newSubTm" and
     ty_eq: "ty = CoreTy_Bool" and
     next_mv_eq: "next_mv' = next_mv_sub"
@@ -2375,12 +2392,12 @@ next
     using newTm_eq ty_eq ghost_eq ih by simp
 next
   \<comment> \<open>Case: BabTm_Old\<close>
-  case (19 env typedefs ghost loc tm next_mv)
+  case (19 env elabEnv ghost loc tm next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   from "19.prems"(1) have ghost_eq: "ghost = Ghost"
     by (auto split: if_splits)
   from "19.prems"(1) ghost_eq obtain newSubTm subTy next_mv_sub where
-    elab_sub: "elab_term env typedefs ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
+    elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
     newTm_eq: "newTm = CoreTm_Old newSubTm" and
     ty_eq: "ty = subTy" and
     next_mv_eq: "next_mv' = next_mv_sub"
@@ -2391,16 +2408,16 @@ next
     using newTm_eq ty_eq ghost_eq ih by simp
 next
   \<comment> \<open>Case: elab_term_list empty\<close>
-  case (20 env typedefs ghost next_mv)
+  case (20 env elabEnv ghost next_mv)
   from "20.prems"(1) have "newTms = []" and "tys = []" by simp_all
   thus ?case by simp
 next
   \<comment> \<open>Case: elab_term_list cons\<close>
-  case (21 env typedefs ghost tm tms next_mv)
+  case (21 env elabEnv ghost tm tms next_mv)
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   from "21.prems"(1) obtain tm' ty' next_mv1 tms' tys' next_mv'' where
-    elab_head: "elab_term env typedefs ghost tm next_mv = Inr (tm', ty', next_mv1)" and
-    elab_tail: "elab_term_list env typedefs ghost tms next_mv1 = Inr (tms', tys', next_mv'')" and
+    elab_head: "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv1)" and
+    elab_tail: "elab_term_list env elabEnv ghost tms next_mv1 = Inr (tms', tys', next_mv'')" and
     results: "newTms = tm' # tms'" "tys = ty' # tys'"
     by (auto split: sum.splits)
   \<comment> \<open>Cons forwards elab_term_list's next_mv, so next_mv' = next_mv''\<close>
