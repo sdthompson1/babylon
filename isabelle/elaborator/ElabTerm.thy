@@ -556,8 +556,31 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot 
         | None \<Rightarrow> Inl [TyErr_IntLiteralOutOfRange loc])
     | _ \<Rightarrow> undefined)"  (* TODO: Other literals *)
 
-  (* Variables, data ctors - TODO *)
-| "elab_term env elabEnv ghost (BabTm_Name loc name tyArgs) next_mv = undefined"
+  (* Variables and data constructors *)
+| "elab_term env elabEnv ghost (BabTm_Name loc name tyArgs) next_mv =
+    (case tyenv_lookup_var env name of
+      Some ty \<Rightarrow>
+        if tyArgs \<noteq> [] then Inl [TyErr_WrongNumberOfTypeArgs loc name 0 (length tyArgs)]
+        else if ghost = NotGhost \<and> tyenv_var_ghost env name
+             then Inl [TyErr_GhostVariableInNonGhost loc name]
+        else Inr (CoreTm_Var name, ty, next_mv)
+    | None \<Rightarrow>
+        (case fmlookup (TE_DataCtors env) name of
+          Some (dtName, tyvars, _) \<Rightarrow>
+            if name |\<notin>| EE_NullaryDataCtors elabEnv then
+              Inl [TyErr_DataCtorHasPayload loc name]
+            else if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
+              Inl [TyErr_GhostVariableInNonGhost loc name]
+            else
+              (case resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv of
+                Inl errs \<Rightarrow> Inl errs
+              | Inr (newTyArgs, next_mv') \<Rightarrow>
+                  if ghost = NotGhost \<and> \<not> list_all (is_runtime_type env) newTyArgs then
+                    Inl [TyErr_NonRuntimeType loc]
+                  else
+                    Inr (CoreTm_VariantCtor name newTyArgs (CoreTm_Record []),
+                         CoreTy_Datatype dtName newTyArgs, next_mv'))
+        | None \<Rightarrow> Inl [TyErr_UnknownName loc name]))"
 
   (* Casts *)
 | "elab_term env elabEnv ghost (BabTm_Cast loc targetTy operand) next_mv = 

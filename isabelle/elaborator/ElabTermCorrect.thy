@@ -984,9 +984,83 @@ proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
     then show ?thesis sorry
   qed
 next
-  \<comment> \<open>Case: BabTm_Name (undefined)\<close>
+  \<comment> \<open>Case: BabTm_Name (variable or nullary data constructor)\<close>
   case (2 env elabEnv ghost loc name tyArgs next_mv)
-  then show ?case sorry
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  show ?case
+  proof (cases "tyenv_lookup_var env name")
+    case (Some varTy)
+    \<comment> \<open>Variable case\<close>
+    from "2.prems"(1) Some have
+      ghost_ok: "ghost = NotGhost \<longrightarrow> \<not> tyenv_var_ghost env name" and
+      newTm_eq: "newTm = CoreTm_Var name" and
+      ty_eq: "ty = varTy" and
+      next_mv_eq: "next_mv' = next_mv"
+      by (auto split: if_splits)
+    show ?thesis using Some ghost_ok newTm_eq ty_eq next_mv_eq by simp
+  next
+    case None
+    \<comment> \<open>Constructor case\<close>
+    from "2.prems"(1) None obtain dtName tyvars payloadTy where
+      ctor_lookup: "fmlookup (TE_DataCtors env) name = Some (dtName, tyvars, payloadTy)"
+      by (auto simp: resolve_type_args_def Let_def
+               split: option.splits if_splits sum.splits prod.splits)
+    from "2.prems"(1) None ctor_lookup have
+      is_nullary: "name |\<in>| EE_NullaryDataCtors elabEnv"
+      by (auto simp: resolve_type_args_def Let_def
+               split: if_splits sum.splits prod.splits)
+    from "2.prems"(1) None ctor_lookup is_nullary have
+      ghost_ok: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env"
+      by (auto simp: resolve_type_args_def Let_def
+               split: if_splits sum.splits prod.splits)
+
+    \<comment> \<open>Extract resolve_type_args result\<close>
+    from "2.prems"(1) None ctor_lookup is_nullary ghost_ok
+    obtain newTyArgs next_mv1 where
+      resolve_eq: "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv
+                   = Inr (newTyArgs, next_mv1)"
+      by (auto simp: resolve_type_args_def Let_def
+               split: if_splits sum.splits prod.splits)
+    from "2.prems"(1) None ctor_lookup is_nullary ghost_ok resolve_eq have
+      runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) newTyArgs" and
+      result_eq: "newTm = CoreTm_VariantCtor name newTyArgs (CoreTm_Record [])"
+                 "ty = CoreTy_Datatype dtName newTyArgs"
+                 "next_mv' = next_mv1"
+      by (auto simp: resolve_type_args_def Let_def
+               split: if_splits sum.splits prod.splits)
+
+    \<comment> \<open>From elabenv_well_formed: payloadTy = CoreTy_Record []\<close>
+    from "2.prems"(3) is_nullary have
+      payload_eq: "payloadTy = CoreTy_Record []"
+      using ctor_lookup unfolding elabenv_well_formed_def
+      by (auto dest: fmran'I)
+
+    \<comment> \<open>From resolve_type_args_correct: type args are well-kinded and runtime in ?env'\<close>
+    have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+      using "2.prems"(3) unfolding elabenv_well_formed_def by simp
+    have rta: "next_mv \<le> next_mv'
+             \<and> length newTyArgs = length tyvars
+             \<and> list_all (is_well_kinded ?env') newTyArgs
+             \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') newTyArgs)"
+      using resolve_type_args_correct[OF resolve_eq "2.prems"(2) td_wf] result_eq by simp
+
+    \<comment> \<open>TE_DataCtors is unchanged by extend_env_with_tyvars\<close>
+    have ctor_lookup': "fmlookup (TE_DataCtors ?env') name = Some (dtName, tyvars, payloadTy)"
+      using ctor_lookup by (simp add: extend_env_with_tyvars_def)
+
+    \<comment> \<open>TE_GhostDatatypes is unchanged\<close>
+    have ghost_ok': "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?env'"
+      using ghost_ok by (simp add: extend_env_with_tyvars_def)
+
+    \<comment> \<open>Payload types match: apply_subst tySubst (CoreTy_Record []) = CoreTy_Record []\<close>
+    have payload_match: "CoreTy_Record [] = apply_subst (fmap_of_list (zip tyvars newTyArgs)) (CoreTy_Record [])"
+      by simp
+
+    \<comment> \<open>Put it together\<close>
+    show ?thesis
+      using result_eq ctor_lookup' rta ghost_ok' payload_eq payload_match
+      by simp
+  qed
 
 next
   \<comment> \<open>Case: BabTm_Cast\<close>

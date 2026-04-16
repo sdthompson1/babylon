@@ -169,8 +169,10 @@ proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
   qed
 next
   case (2 env elabEnv ghost loc name tyArgs next_mv)
-  \<comment> \<open>BabTm_Name: undefined (TODO)\<close>
-  from "2.prems" show ?case sorry
+  \<comment> \<open>BabTm_Name: variable path has next_mv unchanged; constructor path uses resolve_type_args\<close>
+  from "2.prems" show ?case
+    by (auto simp: resolve_type_args_def Let_def
+             split: option.splits if_splits sum.splits prod.splits)
 next
   case (3 env elabEnv ghost loc targetTy operand next_mv)
   from "3.prems" show ?case
