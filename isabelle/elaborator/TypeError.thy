@@ -48,5 +48,14 @@ datatype TypeError =
   | TyErr_CannotInferType Location
   (* Record errors *)
   | TyErr_DuplicateFieldName Location string
+  | TyErr_NotARecordType Location CoreType
+  | TyErr_FieldNotFound Location string CoreType  (* field name, record type *)
+  | TyErr_TupleIndexOutOfRange Location nat CoreType  (* index, tuple type *)
+  | TyErr_RequiresGhostContext Location
+  | TyErr_NotAnArrayType Location CoreType
+  | TyErr_SizeofRequiresLvalue Location
+  | TyErr_QuantifierBodyNotBool Location CoreType
+  | TyErr_UpdateFieldNotFound Location string CoreType  (* field name, record type *)
+  | TyErr_UpdateFieldTypeMismatch Location string CoreType CoreType  (* field, expected, actual *)
 
 end

@@ -496,6 +496,95 @@ fun process_binop_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Ri
        fold_binop_left is_flex loc ghost lhsTm lhsTy ops)"
 
 
+(* ========================================================================== *)
+(* Record update helpers *)
+(* ========================================================================== *)
+
+(* Check that every update field name exists in the parent record type.
+   Returns the first field name that is not found, if any. *)
+fun check_update_fields_exist :: "(string \<times> 'a) list \<Rightarrow> (string \<times> 'b) list \<Rightarrow> string option" where
+  "check_update_fields_exist [] _ = None"
+| "check_update_fields_exist ((name, _) # rest) parentFields =
+    (if map_of parentFields name = None
+     then Some name
+     else check_update_fields_exist rest parentFields)"
+
+(* Phase 1: Unify each update field's actual type with the expected type from the parent,
+   accumulating substitutions. Like unify_call_types but keyed by field name. *)
+fun unify_update_types :: "(nat \<Rightarrow> bool) \<Rightarrow> Location
+                          \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> (string \<times> CoreType) list
+                          \<Rightarrow> TypeSubst \<Rightarrow> TypeError list + TypeSubst" where
+  "unify_update_types is_flex loc [] _ accSubst = Inr accSubst"
+| "unify_update_types is_flex loc ((name, actualTy) # rest) parentFields accSubst =
+    (case map_of parentFields name of
+       Some expectedTy \<Rightarrow>
+         let actualTy' = apply_subst accSubst actualTy;
+             expectedTy' = apply_subst accSubst expectedTy
+         in (case unify is_flex actualTy' expectedTy' of
+               Some newSubst \<Rightarrow>
+                 unify_update_types is_flex loc rest parentFields (compose_subst newSubst accSubst)
+             | None \<Rightarrow>
+                 if is_finite_integer_type actualTy' \<and> is_finite_integer_type expectedTy' then
+                   \<comment> \<open>Cast will be inserted later\<close>
+                   unify_update_types is_flex loc rest parentFields accSubst
+                 else
+                   Inl [TyErr_UpdateFieldTypeMismatch loc name expectedTy' actualTy'])
+     | None \<Rightarrow> undefined)"  (* should not happen after check_update_fields_exist *)
+
+(* Phase 2: Apply substitution to update terms and insert coercions where needed. *)
+fun apply_update_coercions :: "TypeSubst \<Rightarrow> (string \<times> CoreTerm) list
+                              \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> (string \<times> CoreType) list
+                              \<Rightarrow> (string \<times> CoreTerm) list" where
+  "apply_update_coercions subst [] [] [] = []"
+| "apply_update_coercions subst ((name, tm) # rest) ((_, actualTy) # actualRest) ((_, expectedTy) # expectedRest) =
+    (let tm' = apply_subst_to_term subst tm;
+         actualTy' = apply_subst subst actualTy;
+         expectedTy' = apply_subst subst expectedTy;
+         finalTm = (if actualTy' = expectedTy' then tm' else CoreTm_Cast expectedTy' tm')
+     in (name, finalTm) # apply_update_coercions subst rest actualRest expectedRest)"
+| "apply_update_coercions _ _ _ _ = undefined"
+
+(* Build the final record field list for a record update.
+   For each field in the parent type, use the update term if present, otherwise
+   project from the parent term. *)
+fun build_record_update :: "CoreTerm \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> (string \<times> CoreTerm) list
+                           \<Rightarrow> (string \<times> CoreTerm) list" where
+  "build_record_update _ [] _ = []"
+| "build_record_update parent ((name, _) # rest) updates =
+    (case map_of updates name of
+       Some newTm \<Rightarrow> (name, newTm) # build_record_update parent rest updates
+     | None \<Rightarrow> (name, CoreTm_RecordProj parent name) # build_record_update parent rest updates)"
+
+(* Combine unify_update_types and apply_update_coercions into a single function.
+   Input: update field names + elaborated terms + actual types, and the parent field types.
+   Output: coerced update terms (as a name-to-term map) and the final substitution. *)
+definition unify_update_args ::
+  "(nat \<Rightarrow> bool) \<Rightarrow> Location
+   \<Rightarrow> string list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
+   \<Rightarrow> (string \<times> CoreType) list
+   \<Rightarrow> TypeError list + ((string \<times> CoreTerm) list \<times> TypeSubst)" where
+  "unify_update_args is_flex loc names tms actualTys parentFields =
+    (let expectedTys = map (\<lambda>n. case map_of parentFields n of Some ty \<Rightarrow> ty) names
+     in case unify_update_types is_flex loc (zip names actualTys) parentFields fmempty of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr finalSubst \<Rightarrow>
+         Inr (apply_update_coercions finalSubst (zip names tms)
+                (zip names actualTys) (zip names expectedTys),
+              finalSubst))"
+
+(* Given the parent term, parent field types, substitution, and coerced update map,
+   build the final CoreTm_Record and its type. *)
+definition build_updated_record ::
+  "TypeSubst \<Rightarrow> CoreTerm \<Rightarrow> (string \<times> CoreType) list
+   \<Rightarrow> (string \<times> CoreTerm) list
+   \<Rightarrow> CoreTerm \<times> CoreType" where
+  "build_updated_record subst parentTm parentFields coercedUpdates =
+    (let finalParentFields = map (\<lambda>(n, ty). (n, apply_subst subst ty)) parentFields;
+         finalParentTm = apply_subst_to_term subst parentTm;
+         resultFlds = build_record_update finalParentTm finalParentFields coercedUpdates
+     in (CoreTm_Record resultFlds, CoreTy_Record finalParentFields))"
+
+
 (* Elaborate a term. Returns elaborated (core) term and type, or error.
    The nat parameter is the "next metavariable" counter - all generated metavariables
    will be >= this value, and the returned counter is the next available one. *)
@@ -640,8 +729,24 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                 | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
                     Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
 
-  (* Quantifier - TODO *)
-| "elab_term env typedefs ghost (BabTm_Quantifier loc quant name ty tm) next_mv = undefined"
+  (* Quantifier: ghost-only, body must be Bool *)
+| "elab_term env typedefs ghost (BabTm_Quantifier loc quant name ty tm) next_mv =
+    (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
+     else case elab_type env typedefs ghost ty of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr varTy \<Rightarrow>
+         let env' = env \<lparr> TE_LocalVars := fmupd name varTy (TE_LocalVars env),
+                          TE_GhostLocals := finsert name (TE_GhostLocals env) \<rparr>
+         in (case elab_term env' typedefs ghost tm next_mv of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (bodyTm, bodyTy, next_mv') \<Rightarrow>
+                 (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) bodyTy CoreTy_Bool of
+                    None \<Rightarrow> Inl [TyErr_QuantifierBodyNotBool loc bodyTy]
+                  | Some bodySubst \<Rightarrow>
+                      let finalBody = apply_subst_to_term bodySubst bodyTm;
+                          finalVarTy = apply_subst bodySubst varTy
+                      in Inr (CoreTm_Quantifier quant name finalVarTy finalBody,
+                              CoreTy_Bool, next_mv'))))"
 
   (* Function call *)
 | "elab_term env typedefs ghost (BabTm_Call loc callee args) next_mv =
@@ -688,14 +793,54 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
                  CoreTy_Record (zip names tys),
                  next_mv')))"
 
-  (* Record update - TODO *)
-| "elab_term env typedefs ghost (BabTm_RecordUpdate loc tm flds) next_mv = undefined"
+  (* Record update *)
+| "elab_term env typedefs ghost (BabTm_RecordUpdate loc tm flds) next_mv =
+    (case first_duplicate_name fst flds of
+      Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
+    | None \<Rightarrow>
+      (case elab_term env typedefs ghost tm next_mv of
+        Inl errs \<Rightarrow> Inl errs
+      | Inr (parentTm, parentTy, next_mv1) \<Rightarrow>
+          (case parentTy of
+            CoreTy_Record parentFields \<Rightarrow>
+              (case check_update_fields_exist flds parentFields of
+                Some badName \<Rightarrow> Inl [TyErr_UpdateFieldNotFound loc badName parentTy]
+              | None \<Rightarrow>
+                  (case elab_term_list env typedefs ghost (map snd flds) next_mv1 of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr (newUpdateTms, actualTypes, next_mv2) \<Rightarrow>
+                      (case unify_update_args (\<lambda>n. n |\<notin>| TE_TypeVars env) loc
+                              (map fst flds) newUpdateTms actualTypes parentFields of
+                        Inl errs \<Rightarrow> Inl errs
+                      | Inr (coercedUpdates, finalSubst) \<Rightarrow>
+                          let (resultTm, resultTy) =
+                                build_updated_record finalSubst parentTm parentFields coercedUpdates
+                          in Inr (resultTm, resultTy, next_mv2))))
+          | _ \<Rightarrow> Inl [TyErr_NotARecordType loc parentTy])))"
 
-  (* Tuple projection - TODO *)
-| "elab_term env typedefs ghost (BabTm_TupleProj loc tm idx) next_mv = undefined"
+  (* Tuple projection: tuples are records with synthetic field names "0", "1", ... *)
+| "elab_term env typedefs ghost (BabTm_TupleProj loc tm idx) next_mv =
+    (case elab_term env typedefs ghost tm next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (newTm, tmTy, next_mv') \<Rightarrow>
+        (case tmTy of
+          CoreTy_Record fieldTypes \<Rightarrow>
+            (case map_of fieldTypes (nat_to_string idx) of
+              Some fldTy \<Rightarrow> Inr (CoreTm_RecordProj newTm (nat_to_string idx), fldTy, next_mv')
+            | None \<Rightarrow> Inl [TyErr_TupleIndexOutOfRange loc idx tmTy])
+        | _ \<Rightarrow> Inl [TyErr_NotARecordType loc tmTy]))"
 
-  (* Record projection - TODO *)
-| "elab_term env typedefs ghost (BabTm_RecordProj loc tm fldName) next_mv = undefined"
+  (* Record projection *)
+| "elab_term env typedefs ghost (BabTm_RecordProj loc tm fldName) next_mv =
+    (case elab_term env typedefs ghost tm next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (newTm, tmTy, next_mv') \<Rightarrow>
+        (case tmTy of
+          CoreTy_Record fieldTypes \<Rightarrow>
+            (case map_of fieldTypes fldName of
+              Some fldTy \<Rightarrow> Inr (CoreTm_RecordProj newTm fldName, fldTy, next_mv')
+            | None \<Rightarrow> Inl [TyErr_FieldNotFound loc fldName tmTy])
+        | _ \<Rightarrow> Inl [TyErr_NotARecordType loc tmTy]))"
 
   (* Array projection - TODO *)
 | "elab_term env typedefs ghost (BabTm_ArrayProj loc tm idxs) next_mv = undefined"
@@ -703,14 +848,33 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarrow> GhostOrNot
   (* Match - TODO *)
 | "elab_term env typedefs ghost (BabTm_Match loc scrut arms) next_mv = undefined"
 
-  (* Sizeof - TODO *)
-| "elab_term env typedefs ghost (BabTm_Sizeof loc tm) next_mv = undefined"
+  (* Sizeof: operand must be an array; allocatable dims require lvalue or ghost *)
+| "elab_term env typedefs ghost (BabTm_Sizeof loc tm) next_mv =
+    (case elab_term env typedefs ghost tm next_mv of
+      Inl errs \<Rightarrow> Inl errs
+    | Inr (newTm, tmTy, next_mv') \<Rightarrow>
+        (case tmTy of
+          CoreTy_Array _ dims \<Rightarrow>
+            if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue newTm \<and> ghost = NotGhost
+            then Inl [TyErr_SizeofRequiresLvalue loc]
+            else Inr (CoreTm_Sizeof newTm, sizeof_type dims, next_mv')
+        | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc tmTy]))"
 
-  (* Allocated - TODO *)
-| "elab_term env typedefs ghost (BabTm_Allocated loc tm) next_mv = undefined"
+  (* Allocated: ghost-only, any operand type, result is Bool *)
+| "elab_term env typedefs ghost (BabTm_Allocated loc tm) next_mv =
+    (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
+     else case elab_term env typedefs ghost tm next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (newTm, _, next_mv') \<Rightarrow>
+         Inr (CoreTm_Allocated newTm, CoreTy_Bool, next_mv'))"
 
-  (* Old - TODO *)
-| "elab_term env typedefs ghost (BabTm_Old loc tm) next_mv = undefined"
+  (* Old: ghost-only, result has same type as operand *)
+| "elab_term env typedefs ghost (BabTm_Old loc tm) next_mv =
+    (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
+     else case elab_term env typedefs ghost tm next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
+         Inr (CoreTm_Old newTm, tmTy, next_mv'))"
 
   (* elab_term_list - Empty list case *)
 | "elab_term_list _ _ _ [] next_mv = Inr ([], [], next_mv)"
