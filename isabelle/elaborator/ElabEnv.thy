@@ -1,5 +1,5 @@
 theory ElabEnv
-  imports "../core/CoreKindcheck" "HOL-Library.Finite_Map"
+  imports "../core/CoreKindcheck" "HOL-Library.Finite_Map" "../util/NatToString"
 begin
 
 (* This maps a typedef name to a list of type parameters (distinct tyvars)
@@ -21,20 +21,31 @@ definition typedefs_well_formed :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarro
 (* The elaborator environment extends the core type environment with
    information that only the elaborator needs:
    - Babylon-level typedefs (resolved to their underlying types before entering Core)
-   - The set of nullary data constructor names (Core doesn't track this) *)
+   - The Babylon-level arity of each data constructor (Core always has a single payload;
+     the arity tells us how to decompose/construct it) *)
 record ElabEnv =
   EE_Typedefs :: Typedefs
-  EE_NullaryDataCtors :: "string fset"
+  EE_DataCtorArity :: "(string, nat) fmap"
+
+(* The arity of a data constructor is consistent with the Core payload type:
+   * Arity 0: payload type is CoreTy_Record [] (unit)
+   * Arity 1: any payload type (single argument)
+   * Arity n >= 2: payload type is a tuple record with n fields *)
+definition data_ctor_arity_consistent :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> nat \<Rightarrow> bool" where
+  "data_ctor_arity_consistent env name arity =
+    (\<exists>dtName tyvars payloadTy.
+       fmlookup (TE_DataCtors env) name = Some (dtName, tyvars, payloadTy)
+     \<and> (arity = 0 \<longrightarrow> payloadTy = CoreTy_Record [])
+     \<and> (arity \<ge> 2 \<longrightarrow> (\<exists>fieldTys. payloadTy = CoreTy_Record (zip (tuple_field_names arity) fieldTys)
+                                 \<and> length fieldTys = arity)))"
 
 (* Well-formedness of the elaborator environment:
    - Typedefs are well-formed
-   - Every nullary data constructor name actually exists in TE_DataCtors
-     with payload type CoreTy_Record [] (the unit type) *)
+   - Every data constructor arity entry is consistent with TE_DataCtors *)
 definition elabenv_well_formed :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> bool" where
   "elabenv_well_formed env ee =
     (typedefs_well_formed env (EE_Typedefs ee)
-   \<and> (\<forall>name. name |\<in>| EE_NullaryDataCtors ee \<longrightarrow>
-        (\<exists>dtName tyvars. fmlookup (TE_DataCtors env) name
-                         = Some (dtName, tyvars, CoreTy_Record []))))"
+   \<and> (\<forall>name arity. fmlookup (EE_DataCtorArity ee) name = Some arity \<longrightarrow>
+        data_ctor_arity_consistent env name arity))"
 
 end
