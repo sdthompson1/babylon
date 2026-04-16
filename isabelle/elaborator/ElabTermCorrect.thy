@@ -486,6 +486,8 @@ proof -
        \<and> (\<exists>funInfo.
            fmlookup (TE_Functions env) fnName = Some funInfo
          \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
+         \<and> \<not> FI_Impure funInfo
+         \<and> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)
          \<and> length tyArgs = length (FI_TyArgs funInfo)
          \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs
          \<and> (ghost = NotGhost \<longrightarrow>
@@ -501,6 +503,8 @@ proof -
   from det_correct obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
+    not_impure: "\<not> FI_Impure funInfo" and
+    all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk_ext: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
     tyargs_rt_ext: "ghost = NotGhost \<longrightarrow>
@@ -757,11 +761,12 @@ proof -
     using result_eq retType_eq len_tyargs fi_ret_tyvars fi_tyargs_distinct
     by (simp add: apply_subst_compose_zip)
 
+  have fn_lookup': "fmlookup (TE_Functions ?env') fnName = Some funInfo"
+    using fn_lookup by (simp add: extend_env_with_tyvars_def)
   show ?thesis
-    using result_eq fn_lookup ghost_ok len_finalTyArgs finalTyArgs_wk finalTyArgs_rt
+    using result_eq fn_lookup' ghost_ok not_impure all_var len_finalTyArgs finalTyArgs_wk finalTyArgs_rt
           len_finalArgTms args_match ret_eq
-    sorry \<comment> \<open>TODO: need to show function is pure (all Var args, not impure);
-             requires elaborator to check FI_Impure and Var/Ref status\<close>
+    by (simp add: Let_def)
 qed
 
 (* Helper lemma for BabTm_RecordUpdate case of elab_term_correct.
@@ -802,10 +807,6 @@ proof -
   obtain coercedUpdates finalSubst where
     unify_result: "unify_update_args ?is_flex loc (map fst flds) newUpdateTms actualTypes parentFields
                    = Inr (coercedUpdates, finalSubst)"
-    by (auto simp: Let_def build_updated_record_def
-             split: sum.splits option.splits if_splits prod.splits)
-  from elab_eq no_dup elab_parent parent_rec fields_exist elab_updates unify_result
-  have next_mv_eq: "next_mv' = next_mv2"
     by (auto simp: Let_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
   from elab_eq no_dup elab_parent parent_rec fields_exist elab_updates unify_result
@@ -2165,9 +2166,8 @@ next
 next
   \<comment> \<open>Case: BabTm_Call\<close>
   case (9 env typedefs ghost loc callee args next_mv)
-  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  \<comment> \<open>Extract intermediate results from elaboration\<close>
+  \<comment> \<open>Extract sub-elaboration results needed for IH setup\<close>
   from "9.prems"(1) obtain fnName tyArgs expArgTypes retType next_mv1 where
     det_call: "determine_fun_call_type env typedefs ghost callee next_mv
                = Inr (fnName, tyArgs, expArgTypes, retType, next_mv1)"
@@ -2177,45 +2177,12 @@ next
   from "9.prems"(1) det_call len_args obtain elabArgTms actualTypes next_mv2 where
     elab_args: "elab_term_list env typedefs ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
     by (auto split: sum.splits)
-  from "9.prems"(1) det_call len_args elab_args obtain finalArgTms finalSubst where
-    unify_args: "unify_call_args ?is_flex loc fnName 0 elabArgTms actualTypes expArgTypes fmempty
-                 = Inr (finalArgTms, finalSubst)"
+  from "9.prems"(1) det_call len_args elab_args have next_mv_eq: "next_mv' = next_mv2"
     by (auto simp: Let_def split: sum.splits)
-  \<comment> \<open>BabTm_Call forwards elab_term_list's next_mv, so next_mv' = next_mv2\<close>
-  from "9.prems"(1) det_call len_args elab_args unify_args have next_mv_eq: "next_mv' = next_mv2"
-    by (auto simp: Let_def split: sum.splits)
-  from "9.prems"(1) det_call len_args elab_args unify_args have
-    result_eq: "newTm = CoreTm_FunctionCall fnName (map (apply_subst finalSubst) tyArgs) finalArgTms"
-               "ty = apply_subst finalSubst retType"
-    by (auto simp: Let_def)
 
-  \<comment> \<open>Get function info from determine_fun_call_type_correct\<close>
-  have det_correct: "next_mv \<le> next_mv1
-       \<and> (\<exists>funInfo.
-           fmlookup (TE_Functions env) fnName = Some funInfo
-         \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
-         \<and> length tyArgs = length (FI_TyArgs funInfo)
-         \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs
-         \<and> (ghost = NotGhost \<longrightarrow>
-              list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs)
-         \<and> expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                             (FI_TmArgs funInfo)
-         \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
-                                  (FI_ReturnType funInfo))"
-    using determine_fun_call_type_correct[OF det_call "9.prems"(2,3)] .
-  from det_correct have mono_1: "next_mv \<le> next_mv1" by blast
-  from det_correct obtain funInfo where
-    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
-    ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
-    len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
-    tyargs_wk_ext: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
-    tyargs_rt_ext: "ghost = NotGhost \<longrightarrow>
-                    list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) tyArgs" and
-    expArgTypes_eq: "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                                       (FI_TmArgs funInfo)" and
-    retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
-                                       (FI_ReturnType funInfo)"
-    by blast
+  \<comment> \<open>Monotonicity from determine_fun_call_type\<close>
+  have mono_1: "next_mv \<le> next_mv1"
+    using determine_fun_call_type_correct[OF det_call "9.prems"(2,3)] by blast
 
   \<comment> \<open>Freshness carries through det_call\<close>
   have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
@@ -2405,12 +2372,11 @@ next
     by simp
 
 next
-  \<comment> \<open>Case: BabTm_RecordUpdate\<close>
+  \<comment> \<open>Case: BabTm_RecordUpdate — delegate to helper lemma\<close>
   case (12 env typedefs ghost loc tm flds next_mv)
-  let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
 
-  \<comment> \<open>Extract elaboration results\<close>
+  \<comment> \<open>Extract sub-elaboration results needed for IH setup\<close>
   from "12.prems"(1) have no_dup: "first_duplicate_name fst flds = None"
     by (auto split: option.splits)
   from "12.prems"(1) no_dup obtain parentTm parentTy next_mv1 where
@@ -2431,20 +2397,9 @@ next
     by (auto simp: Let_def unify_update_args_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
   from "12.prems"(1) no_dup elab_parent parent_rec fields_exist elab_updates
-  obtain coercedUpdates finalSubst where
-    unify_result: "unify_update_args ?is_flex loc (map fst flds) newUpdateTms actualTypes parentFields
-                   = Inr (coercedUpdates, finalSubst)"
-    by (auto simp: Let_def build_updated_record_def
-             split: sum.splits option.splits if_splits prod.splits)
-  from "12.prems"(1) no_dup elab_parent parent_rec fields_exist elab_updates unify_result
   have next_mv_eq: "next_mv' = next_mv2"
-    by (auto simp: Let_def build_updated_record_def
+    by (auto simp: Let_def unify_update_args_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
-  from "12.prems"(1) no_dup elab_parent parent_rec fields_exist elab_updates unify_result
-  have result_eq:
-    "newTm = fst (build_updated_record finalSubst parentTm parentFields coercedUpdates)"
-    "ty = snd (build_updated_record finalSubst parentTm parentFields coercedUpdates)"
-    by (auto simp: Let_def split: prod.splits)
 
   \<comment> \<open>Monotonicity\<close>
   have mono_1: "next_mv \<le> next_mv1"
@@ -2452,22 +2407,20 @@ next
   have pair1: "(parentTm, parentTy, next_mv1) = (parentTm, parentTy, next_mv1)" by simp
   have pair2: "(parentTy, next_mv1) = (parentTy, next_mv1)" by simp
   have mono_2: "next_mv1 \<le> next_mv2"
-    using "12.IH"(2)[OF no_dup elab_parent pair1 pair2 parent_rec fields_exist] elab_updates 
+    using "12.IH"(2)[OF no_dup elab_parent pair1 pair2 parent_rec fields_exist] elab_updates
       elab_term_list_next_mv_monotone by simp
 
-  \<comment> \<open>IH on parent: parentTm has type parentTy in sub-extended env\<close>
+  \<comment> \<open>IH on parent, lifted to ?env'\<close>
   have ih_parent_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost parentTm
-                       = Some (CoreTy_Record parentFields)"
-    using "12.IH"(1)[OF no_dup elab_parent] parent_rec "12.prems"(2,3,4) by simp
-  have ih_parent: "core_term_type ?env' ghost parentTm = Some (CoreTy_Record parentFields)"
+                       = Some parentTy"
+    using "12.IH"(1)[OF no_dup elab_parent] "12.prems"(2,3,4) by simp
+  have ih_parent: "core_term_type ?env' ghost parentTm = Some parentTy"
     using core_term_type_extend_env_with_tyvars_mono[OF ih_parent_sub, where lo'=next_mv and hi'=next_mv']
           mono_1 mono_2 next_mv_eq by simp
 
-  \<comment> \<open>Freshness for elab_term_list\<close>
+  \<comment> \<open>IH on update terms, lifted to ?env'\<close>
   have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
     using "12.prems"(4) mono_1 by fastforce
-
-  \<comment> \<open>IH on update terms\<close>
   have ih_updates_sub: "list_all2 (\<lambda>tm ty. core_term_type
                           (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
                         newUpdateTms actualTypes"
@@ -2484,31 +2437,9 @@ next
     thus ?thesis using ih_updates_sub by (auto elim!: list_all2_mono)
   qed
 
-  have wf': "tyenv_well_formed ?env'"
-    using "12.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
-
-  \<comment> \<open>Lengths\<close>
-  have len_updates: "length newUpdateTms = length actualTypes"
-    using ih_updates by (simp add: list_all2_lengthD)
-  have len_flds: "length newUpdateTms = length flds"
-    using elab_updates elab_term_list_length by fastforce
-
-  \<comment> \<open>Well-kindedness and runtime for actualTypes in ?env'\<close>
-  have actualTypes_wk: "\<forall>(name, ty) \<in> set (zip (map fst flds) actualTypes). is_well_kinded ?env' ty"
-  proof (clarsimp)
-    fix name ty assume "(name, ty) \<in> set (zip (map fst flds) actualTypes)"
-    then obtain i where i_lt: "i < length actualTypes" and ty_eq: "ty = actualTypes ! i"
-      using len_flds by (auto simp: set_zip in_set_conv_nth)
-    from ih_updates have "core_term_type ?env' ghost (newUpdateTms ! i) = Some ty"
-      using i_lt len_updates ty_eq by (simp add: list_all2_conv_all_nth)
-    thus "is_well_kinded ?env' ty"
-      using core_term_type_well_kinded wf' by blast
-  qed
-
-  (* Use the helper lemma to complete the proof *)
   show ?case
-    using elab_term_correct_record_update "12.prems"(1,2,4) elab_parent elab_updates 
-      ih_parent ih_updates parent_rec by blast
+    using elab_term_correct_record_update[OF "12.prems"(1,2) "12.prems"(4)
+            elab_parent elab_updates ih_parent ih_updates] .
 
 next
   \<comment> \<open>Case: BabTm_TupleProj\<close>

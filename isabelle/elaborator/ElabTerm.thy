@@ -52,17 +52,16 @@ where
     \<comment> \<open>Look up function in environment\<close>
     (case fmlookup (TE_Functions env) fnName of
       Some funInfo \<Rightarrow>
-        \<comment> \<open>TODO: Check purity: only pure functions allowed in term context\<close>
-        \<comment> \<open>(Error: TyErr_ImpureFunctionInTermContext fnLoc fnName)\<close>
-        \<comment> \<open>TODO: Check ref args: not allowed in term context\<close>
-        \<comment> \<open>(Error: TyErr_RefArgInTermContext fnLoc fnName)\<close>
+        \<comment> \<open>Term-level calls must be pure: no impure functions, no Ref arguments\<close>
+        if FI_Impure funInfo then
+          Inl [TyErr_ImpureFunctionInTermContext fnLoc fnName]
+        else if \<not> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo) then
+          Inl [TyErr_RefArgInTermContext fnLoc fnName]
         \<comment> \<open>TODO: Check return type provided\<close>
         \<comment> \<open>(Error: TyErr_FunctionNoReturnType fnLoc fnName)\<close>
-
         \<comment> \<open>Check ghost constraint\<close>
-        if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
+        else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
           Inl [TyErr_GhostFunctionInNonGhost fnLoc fnName]
-
         else
             (let numTyParams = length (FI_TyArgs funInfo) in
             \<comment> \<open>Handle type arguments: infer if omitted, elaborate if provided\<close>

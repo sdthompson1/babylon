@@ -388,6 +388,8 @@ lemma determine_fun_call_type_correct:
        \<and> (\<exists>funInfo.
            fmlookup (TE_Functions env) fnName = Some funInfo
          \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
+         \<and> \<not> FI_Impure funInfo
+         \<and> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)
          \<and> length newTyArgs = length (FI_TyArgs funInfo)
          \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
          \<and> (ghost = NotGhost \<longrightarrow>
@@ -402,9 +404,15 @@ proof (cases callTm)
     fn_lookup: "fmlookup (TE_Functions env) fnName' = Some funInfo"
     by (auto split: option.splits if_splits)
   from assms(1) BabTm_Name fn_lookup have
+    not_impure: "\<not> FI_Impure funInfo"
+    by (auto split: if_splits sum.splits)
+  from assms(1) BabTm_Name fn_lookup not_impure have
+    all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)"
+    by (auto split: if_splits sum.splits)
+  from assms(1) BabTm_Name fn_lookup not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     by (auto split: if_splits sum.splits)
-  from assms(1) BabTm_Name fn_lookup ghost_ok have
+  from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok have
     fnName_eq: "fnName = fnName'"
     by (auto simp: Let_def split: if_splits sum.splits)
 
@@ -415,7 +423,7 @@ proof (cases callTm)
     case True
     \<comment> \<open>Type args were omitted - metavariables generated\<close>
     let ?genTyArgs = "map CoreTy_Var [next_mv..<next_mv + ?numTyParams]"
-    from assms(1) BabTm_Name fn_lookup ghost_ok True
+    from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok True
     have results: "newTyArgs = ?genTyArgs"
                   "next_mv' = next_mv + ?numTyParams"
                   "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) ?genTyArgs)) ty)
@@ -437,19 +445,19 @@ proof (cases callTm)
     have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
       using all_in_rtv list_all_tyvar_is_runtime by blast
     show ?thesis
-      using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok mono
+      using fn_lookup ghost_ok not_impure all_var fnName_eq results len_ok wk_ok runtime_ok mono
       by auto
   next
     case False
     show ?thesis
     proof (cases "?numTyParams = length tyArgs")
       case True
-      from assms(1) BabTm_Name fn_lookup ghost_ok False True
+      from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok False True
       obtain elabTyArgs where
         elab_tyargs: "elab_type_list env typedefs ghost tyArgs = Inr elabTyArgs"
         by (cases "elab_type_list env typedefs ghost tyArgs")
            (auto simp: Let_def split: if_splits)
-      from assms(1) BabTm_Name fn_lookup ghost_ok False True elab_tyargs
+      from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok False True elab_tyargs
       have results: "newTyArgs = elabTyArgs"
                     "next_mv' = next_mv"
                     "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) elabTyArgs)) ty)
@@ -468,11 +476,11 @@ proof (cases callTm)
       have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) elabTyArgs"
         using elab_tyargs assms(2,3) elab_type_notghost_is_runtime(2) by (cases ghost; auto)
       show ?thesis
-        using fn_lookup ghost_ok fnName_eq results len_ok wk_ok runtime_ok mono env_eq
+        using fn_lookup ghost_ok not_impure all_var fnName_eq results len_ok wk_ok runtime_ok mono env_eq
         by auto
     next
       case False2: False
-      from assms(1) BabTm_Name fn_lookup ghost_ok False False2
+      from assms(1) BabTm_Name fn_lookup not_impure all_var ghost_ok False False2
       have "False" by (auto simp: Let_def split: sum.splits if_splits)
       thus ?thesis ..
     qed
