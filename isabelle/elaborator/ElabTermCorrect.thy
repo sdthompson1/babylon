@@ -144,19 +144,20 @@ proof -
 
   \<comment> \<open>Extract shared results from the elaboration\<close>
   from elab_eq resolve_eq have len_args: "length args = length expArgTypes"
-    by (auto simp: build_call_result_def split: if_splits sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
   from elab_eq resolve_eq len_args elab_args obtain finalArgTms finalSubst where
     unify_args: "unify_and_coerce ?is_flex (\<lambda>idx exp act. [TyErr_ArgTypeMismatch loc idx exp act])
                      elabArgTms actualTypes expArgTypes fmempty
                  = Inr (finalArgTms, finalSubst)"
-    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits)
-  from elab_eq resolve_eq len_args elab_args unify_args
+    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
   obtain resultTm resultTy where
     build_eq: "build_call_result env ghost loc calleeInfo finalSubst finalArgTms
-               = Inr (resultTm, resultTy)"
-    and result_eq: "newTm = resultTm" "ty = resultTy" "next_mv' = next_mv2"
+               = (resultTm, resultTy)"
+    by (cases "build_call_result env ghost loc calleeInfo finalSubst finalArgTms") auto
+  from elab_eq resolve_eq len_args elab_args unify_args build_eq
+  have result_eq: "newTm = resultTm" "ty = resultTy" "next_mv' = next_mv2"
     by (auto simp: build_call_result_def Let_def unify_and_coerce_def
-             split: sum.splits CalleeInfo.splits if_splits)
+             split: sum.splits CalleeInfo.splits if_splits prod.splits)
 
   \<comment> \<open>Properties from resolve_callee_correct (at next_mv1)\<close>
   let ?env1 = "extend_env_with_tyvars env ghost next_mv next_mv1"
@@ -326,9 +327,6 @@ proof -
     unify_result: "unify_and_coerce ?is_flex ?mk_err elabIdxTms actualTypes ?expectedTypes fmempty
                    = Inr (coercedIdxTms, finalSubst)"
     by (auto simp: unify_and_coerce_def split: sum.splits)
-  from elab_eq elab_arr arr_ty len_eq elab_idxs unify_result
-  have next_mv_eq: "next_mv' = next_mv2"
-    by (auto split: sum.splits)
   from elab_eq elab_arr arr_ty len_eq elab_idxs unify_result
   have result_eq: "newTm = CoreTm_ArrayProj newArr coercedIdxTms" "ty = elemTy"
     by auto
@@ -864,7 +862,6 @@ next
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
     from "2.prems"(1) None ctor_lookup arity_zero ghost_ok resolve_eq have
-      runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) newTyArgs" and
       result_eq: "newTm = CoreTm_VariantCtor name newTyArgs (CoreTm_Record [])"
                  "ty = CoreTy_Datatype dtName newTyArgs"
                  "next_mv' = next_mv1"
@@ -1872,15 +1869,15 @@ next
   from "9.prems"(1) obtain calleeName expArgTypes calleeInfo next_mv1 where
     resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
                  = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
-    by (auto simp: build_call_result_def split: sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
   from "9.prems"(1) resolve_eq have len_args: "length args = length expArgTypes"
-    by (auto simp: build_call_result_def split: if_splits sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
   from "9.prems"(1) resolve_eq len_args obtain elabArgTms actualTypes next_mv2 where
     elab_args: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
-    by (auto simp: build_call_result_def split: sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
   from "9.prems"(1) resolve_eq len_args elab_args have next_mv_eq: "next_mv' = next_mv2"
     by (auto simp: build_call_result_def Let_def unify_and_coerce_def
-             split: sum.splits CalleeInfo.splits)
+             split: sum.splits CalleeInfo.splits prod.splits)
 
   \<comment> \<open>Monotonicity from resolve_callee\<close>
   have mono_1: "next_mv \<le> next_mv1"
@@ -1894,8 +1891,8 @@ next
                                   (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
                                elabArgTms actualTypes"
     using "9.IH" "9.prems"(2,3) resolve_eq elab_args len_args fresh_1
-    by (auto simp: resolve_callee_def build_call_result_def
-             split: sum.splits BabTerm.splits option.splits CalleeInfo.splits)
+    by (auto simp: resolve_callee_def build_call_result_def Let_def
+             split: sum.splits BabTerm.splits option.splits CalleeInfo.splits prod.splits)
   have mono_2: "next_mv1 \<le> next_mv2"
     using elab_term_list_next_mv_monotone[OF elab_args] .
   \<comment> \<open>Lift ih_args_sub to the outer extended env\<close>

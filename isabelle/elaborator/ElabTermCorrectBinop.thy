@@ -139,37 +139,6 @@ next
       using unify_preserves_runtime[OF Some] by auto
   qed
 
-  \<comment> \<open>Helper: applying unifSubst preserves well-kindedness / runtime (src = tgt = env)\<close>
-  have unif_apply_wk: "\<And>t. is_well_kinded env t \<Longrightarrow> is_well_kinded env (apply_subst unifSubst t)"
-  proof -
-    fix t assume t_wk: "is_well_kinded env t"
-    show "is_well_kinded env (apply_subst unifSubst t)"
-    proof (rule apply_subst_preserves_well_kinded[OF t_wk])
-      show "TE_Datatypes env = TE_Datatypes env" by simp
-    next
-      fix n assume n_in: "n |\<in>| TE_TypeVars env"
-      show "case fmlookup unifSubst n of
-              Some ty' \<Rightarrow> is_well_kinded env ty'
-            | None \<Rightarrow> n |\<in>| TE_TypeVars env"
-        using n_in unif_range_wk by (auto simp: fmran'I split: option.splits)
-    qed
-  qed
-  have unif_apply_rt: "\<And>t. ghost = NotGhost \<Longrightarrow> is_runtime_type env t \<Longrightarrow>
-                           is_runtime_type env (apply_subst unifSubst t)"
-  proof -
-    fix t assume ng: "ghost = NotGhost" and t_rt: "is_runtime_type env t"
-    show "is_runtime_type env (apply_subst unifSubst t)"
-    proof (rule apply_subst_preserves_runtime[OF t_rt])
-      show "TE_GhostDatatypes env = TE_GhostDatatypes env" by simp
-    next
-      fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
-      show "case fmlookup unifSubst n of
-              Some ty' \<Rightarrow> is_runtime_type env ty'
-            | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
-        using n_in unif_range_rt ng by (auto simp: fmran'I split: option.splits)
-    qed
-  qed
-
   \<comment> \<open>The unifier only binds flex metavars. Combined with the caller's
       rigidity assumptions on locals and the return type, the substitution
       leaves them unchanged. \<close>

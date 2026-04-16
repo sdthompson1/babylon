@@ -253,7 +253,7 @@ next
   from "9.prems" obtain calleeName expArgTypes calleeInfo next_mv1 where
     resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
                  = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
-    by (auto simp: build_call_result_def split: sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
   \<comment> \<open>resolve_callee is monotone\<close>
   have resolve_mono: "next_mv \<le> next_mv1"
   proof (cases callee)
@@ -264,15 +264,17 @@ next
                split: option.splits if_splits sum.splits)
   qed (use resolve_eq in \<open>simp_all add: resolve_callee_def\<close>)
   from "9.prems" resolve_eq have len_args: "length args = length expArgTypes"
-    by (auto simp: build_call_result_def split: if_splits sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
   from "9.prems" resolve_eq len_args obtain elabArgTms actualTypes next_mv2 where
     elab_args: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
-    by (auto simp: build_call_result_def split: sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
   have m2: "next_mv1 \<le> next_mv2"
     using "9.IH" resolve_eq len_args elab_args
-    by (auto simp: resolve_callee_def build_call_result_def split: sum.splits BabTerm.splits option.splits CalleeInfo.splits)
+    by (auto simp: resolve_callee_def build_call_result_def Let_def
+             split: sum.splits BabTerm.splits option.splits CalleeInfo.splits prod.splits)
   from "9.prems" resolve_eq len_args elab_args have "next_mv' = next_mv2"
-    by (auto simp: build_call_result_def Let_def unify_and_coerce_def split: sum.splits CalleeInfo.splits)
+    by (auto simp: build_call_result_def Let_def unify_and_coerce_def
+             split: sum.splits CalleeInfo.splits prod.splits)
   with resolve_mono m2 show ?case by simp
 next
   case (10 env elabEnv ghost loc tms next_mv)
@@ -939,7 +941,7 @@ qed (use assms(1) in \<open>simp_all add: resolve_callee_def\<close>)
    env' must be an extension of env that only adds type variables. *)
 lemma build_call_result_correct:
   assumes build_eq: "build_call_result env ghost loc calleeInfo finalSubst finalArgTms
-                     = Inr (resultTm, resultTy)"
+                     = (resultTm, resultTy)"
       and civ: "callee_info_valid env' ghost calleeInfo expArgTypes"
       and wf': "tyenv_well_formed env'"
       and wf: "tyenv_well_formed env"
@@ -1063,7 +1065,6 @@ next
 
   \<comment> \<open>Extract build_call_result outputs\<close>
   from build_eq CI_DataCtor have
-    runtime_check: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) ?finalTyArgs" and
     resultTm_eq: "resultTm = CoreTm_VariantCtor ctorName ?finalTyArgs ?payload" and
     resultTy_eq: "resultTy = CoreTy_Datatype dtName ?finalTyArgs"
     by (auto simp: build_call_result_def Let_def split: if_splits)

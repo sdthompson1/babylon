@@ -37,7 +37,6 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
         by (cases typedef_entry) auto
       from "1.prems"(1) typedef_lookup
       have distinct_tyvars: "distinct tyvars"
-        and targetTy_wk: "is_well_kinded env targetTy"
         and tyvars_subset: "type_tyvars targetTy \<subseteq> set tyvars"
         by (auto simp: typedefs_well_formed_def)
       show ?thesis

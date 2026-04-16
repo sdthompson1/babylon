@@ -138,27 +138,23 @@ definition resolve_callee ::
     | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"
 
 
-(* Build the final term and type from a resolved callee and coerced arguments.
-   For data constructors, also checks runtime type constraints on the final type args. *)
+(* Build the final term and type from a resolved callee and coerced arguments. *)
 definition build_call_result ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CalleeInfo \<Rightarrow> TypeSubst \<Rightarrow> CoreTerm list
-   \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+   \<Rightarrow> CoreTerm \<times> CoreType" where
   "build_call_result env ghost loc ci finalSubst finalArgTms =
     (case ci of
       CI_Function fnName tyArgs retType \<Rightarrow>
         let finalTyArgs = map (apply_subst finalSubst) tyArgs;
             finalRetType = apply_subst finalSubst retType
-        in Inr (CoreTm_FunctionCall fnName finalTyArgs finalArgTms, finalRetType)
+        in (CoreTm_FunctionCall fnName finalTyArgs finalArgTms, finalRetType)
     | CI_DataCtor ctorName dtName arity tyArgs \<Rightarrow>
         let finalTyArgs = map (apply_subst finalSubst) tyArgs;
             payload = (if arity = 0 then CoreTm_Record []
                        else if arity = 1 then hd finalArgTms
                        else CoreTm_Record (zip (tuple_field_names arity) finalArgTms))
-        in if ghost = NotGhost \<and> \<not> list_all (is_runtime_type env) finalTyArgs then
-             Inl [TyErr_NonRuntimeType loc]
-           else
-             Inr (CoreTm_VariantCtor ctorName finalTyArgs payload,
-                  CoreTy_Datatype dtName finalTyArgs))"
+        in (CoreTm_VariantCtor ctorName finalTyArgs payload,
+            CoreTy_Datatype dtName finalTyArgs))"
 
 (* Unify actual types with expected types pairwise, accumulating substitutions.
    For each pair of types:
@@ -636,9 +632,6 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot 
               (case resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (newTyArgs, next_mv') \<Rightarrow>
-                  if ghost = NotGhost \<and> \<not> list_all (is_runtime_type env) newTyArgs then
-                    Inl [TyErr_NonRuntimeType loc]
-                  else
                     Inr (CoreTm_VariantCtor name newTyArgs (CoreTm_Record []),
                          CoreTy_Datatype dtName newTyArgs, next_mv'))
         | None \<Rightarrow> Inl [TyErr_UnknownName loc name]))"
@@ -801,10 +794,8 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot 
                       elabArgTms actualTypes expArgTypes fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (finalArgTms, finalSubst) \<Rightarrow>
-                  (case build_call_result env ghost loc calleeInfo finalSubst finalArgTms of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr (resultTm, resultTy) \<Rightarrow>
-                      Inr (resultTm, resultTy, next_mv2)))))"
+                  let (resultTm, resultTy) = build_call_result env ghost loc calleeInfo finalSubst finalArgTms
+                  in Inr (resultTm, resultTy, next_mv2))))"
 
   (* Tuple: elaborated to a record with synthetic field names "0", "1", ... *)
 | "elab_term env elabEnv ghost (BabTm_Tuple loc tms) next_mv =
