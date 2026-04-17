@@ -1478,12 +1478,10 @@ next
         by simp
       have pats_regular: "patterns_regular (map fst ?matchArms)"
         by (simp add: patterns_regular_def)
-      have pats_exhaustive: "patterns_exhaustive ?env' CoreTy_Bool (map fst ?matchArms)"
-        by simp
       have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some ?resultTy) (map snd ?matchArms)"
         using then'_typed else'_typed by simp
       show ?thesis
-        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
+        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular bodies_typed
         by (simp add: then'_typed)
     qed
     thus ?thesis using result_eq by simp
@@ -1518,12 +1516,10 @@ next
         by simp
       have pats_regular: "patterns_regular (map fst ?matchArms)"
         by (simp add: patterns_regular_def)
-      have pats_exhaustive: "patterns_exhaustive ?env' CoreTy_Bool (map fst ?matchArms)"
-        by simp
       have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some commonTy) (map snd ?matchArms)"
         using coerced_then_typed coerced_else_typed by simp
       show ?thesis
-        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular pats_exhaustive bodies_typed
+        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat pats_regular bodies_typed
         by (simp add: coerced_then_typed)
     qed
     thus ?thesis using result_eq by simp

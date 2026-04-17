@@ -522,12 +522,34 @@ where
   (* ShowHide: no-op *)
 | "core_statement_type env ghost (CoreStmt_ShowHide _ _) = Some env"
 
+  (* Pattern match.
+     The scrutinee must typecheck. Each pattern must be compatible with the
+     scrutinee type, and the pattern list must be regular (no duplicates and
+     no patterns after a wildcard). Each arm's statement list must typecheck
+     under the same env (match arms run in their own scope, so bindings they
+     introduce are discarded on exit).
+     Note: exhaustiveness is NOT checked; a non-exhaustive match that finds no
+     matching arm at runtime is a runtime error, not a type error. In
+     particular, an empty match is allowed and always fails at runtime. *)
+| "core_statement_type env ghost (CoreStmt_Match matchGhost scrut arms) =
+    (if ghost = Ghost \<longrightarrow> matchGhost = Ghost
+     then (case core_term_type env matchGhost scrut of
+             None \<Rightarrow> None
+           | Some scrutTy \<Rightarrow>
+               let pats = map fst arms;
+                   bodies = map snd arms
+               in if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
+                  else if \<not> patterns_regular pats then None
+                  else if list_all (\<lambda>body. core_statement_list_type env matchGhost body \<noteq> None) bodies
+                       then Some env
+                       else None)
+     else None)"
+
   (* TODO: remaining statement forms *)
 | "core_statement_type _ _ (CoreStmt_Fix _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Obtain _ _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Use _) = undefined"
 | "core_statement_type _ _ (CoreStmt_While _ _ _ _ _) = undefined"
-| "core_statement_type _ _ (CoreStmt_Match _ _ _) = undefined"
 
   (* Statement lists *)
 | "core_statement_list_type env _ [] = Some env"
@@ -537,9 +559,31 @@ where
      | None \<Rightarrow> None)"
 
   by pat_completeness auto
-  termination by (relation "measure (\<lambda>x. case x of
-    Inl (_, _, stmt) \<Rightarrow> size stmt
-  | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)") auto
+  termination
+  proof (relation "measure (\<lambda>x. case x of
+      Inl (_, _, stmt) \<Rightarrow> size stmt
+    | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)"; (simp; fail)?)
+    \<comment> \<open>CoreStmt_Match arm bodies are smaller than the whole match statement. \<close>
+    fix env :: CoreTyEnv
+    fix ghost :: GhostOrNot
+    fix matchGhost :: GhostOrNot
+    fix scrut :: CoreTerm
+    fix arms :: "(CorePattern \<times> CoreStatement list) list"
+    fix x2 x xa z
+    assume xa_eq: "xa = map snd arms" and z_in: "z \<in> set xa"
+    from xa_eq z_in obtain a where "(a, z) \<in> set arms" by auto
+    hence "size_prod (\<lambda>y. 0) (size_list size) (a, z)
+             \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
+      by (simp add: size_list_estimation')
+    hence z_le: "size_list size z \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
+      by simp
+    show "(Inr (env, matchGhost, z),
+           Inl (env, ghost, CoreStmt_Match matchGhost scrut arms))
+          \<in> measure (\<lambda>y. case y of
+              Inl (_, _, stmt) \<Rightarrow> size stmt
+            | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)"
+      using z_le by simp
+  qed
 
 
 (* ========================================================================== *)
@@ -665,7 +709,9 @@ next
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Match _ _ _)
+  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
+  with assms show ?thesis by simp
 next
   case (CoreStmt_ShowHide _ _)
   with assms have "env' = env" by simp
@@ -709,7 +755,8 @@ next
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Match _ _ _)
+  with assms show ?thesis by (auto simp: Let_def split: if_splits option.splits)
 next
   case (CoreStmt_ShowHide _ _)
   with assms show ?thesis by simp
@@ -814,7 +861,9 @@ next
 next
   case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Match _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Match _ _ _)
+  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_ShowHide _ _)
   with assms have "env' = env" by simp

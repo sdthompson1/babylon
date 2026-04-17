@@ -45,12 +45,6 @@ fun pattern_compatible :: "CoreTyEnv \<Rightarrow> CorePattern \<Rightarrow> Cor
           CoreTy_Datatype tyName _ \<Rightarrow> tyName = dtName
         | _ \<Rightarrow> False))"
 
-(* Check if a list of patterns contains a wildcard *)
-fun has_wildcard :: "CorePattern list \<Rightarrow> bool" where
-  "has_wildcard [] = False"
-| "has_wildcard (CorePat_Wildcard # _) = True"
-| "has_wildcard (_ # ps) = has_wildcard ps"
-
 (* Check if there are any patterns after a wildcard (which is not allowed) *)
 fun patterns_after_wildcard :: "CorePattern list \<Rightarrow> bool" where
   "patterns_after_wildcard [] = False"
@@ -66,23 +60,6 @@ fun has_duplicate_patterns :: "CorePattern list \<Rightarrow> bool" where
 (* Regularity: no duplicates and no patterns after wildcard *)
 definition patterns_regular :: "CorePattern list \<Rightarrow> bool" where
   "patterns_regular pats = (\<not> patterns_after_wildcard pats \<and> \<not> has_duplicate_patterns pats)"
-
-(* Check exhaustiveness of patterns for a given scrutinee type *)
-fun patterns_exhaustive :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CorePattern list \<Rightarrow> bool" where
-  "patterns_exhaustive env scrutTy pats =
-    (if has_wildcard pats then True
-     else (case scrutTy of
-       CoreTy_Bool \<Rightarrow>
-         list_ex (\<lambda>p. p = CorePat_Bool True) pats \<and>
-         list_ex (\<lambda>p. p = CorePat_Bool False) pats
-     | CoreTy_FiniteInt _ _ \<Rightarrow> False  \<comment> \<open>require wildcard for integers\<close>
-     | CoreTy_MathInt \<Rightarrow> False
-     | CoreTy_Datatype dtName _ \<Rightarrow>
-         (case fmlookup (TE_DataCtorsByType env) dtName of
-           None \<Rightarrow> False
-         | Some ctors \<Rightarrow>
-             list_all (\<lambda>ctor. list_ex (\<lambda>p. p = CorePat_Variant ctor) pats) ctors)
-     | _ \<Rightarrow> False))"  \<comment> \<open>Other types: require wildcard\<close>
 
 (* ========================================================================== *)
 (* Main type-checking function *)
@@ -286,8 +263,9 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
    - Scrutinee must typecheck
    - All patterns must be compatible with scrutinee type
    - Patterns must be regular (no duplicates, wildcard last)
-   - Patterns must be exhaustive
-   - All arm bodies must have the same type *)
+   - All arm bodies must have the same type
+     (Note: exhaustiveness is NOT checked; a non-exhaustive match that fails to
+     find a matching pattern is a runtime error, not a type error.) *)
 | "core_term_type env ghost (CoreTm_Match scrut arms) =
     (case core_term_type env ghost scrut of
       None \<Rightarrow> None
@@ -297,7 +275,6 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         in if arms = [] then None  \<comment> \<open>empty match not allowed\<close>
            else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
            else if \<not> patterns_regular pats then None
-           else if \<not> patterns_exhaustive env scrutTy pats then None
            else \<comment> \<open>check all bodies have same type\<close>
              (case core_term_type env ghost (snd (hd arms)) of
                None \<Rightarrow> None
@@ -558,11 +535,6 @@ lemma pattern_compatible_TE_ConstLocals_irrelevant [simp]:
   "pattern_compatible (env \<lparr> TE_ConstLocals := c \<rparr>) p ty =
    pattern_compatible env p ty"
   by (cases p) (auto split: option.splits)
-
-lemma patterns_exhaustive_TE_ConstLocals_irrelevant [simp]:
-  "patterns_exhaustive (env \<lparr> TE_ConstLocals := c \<rparr>) ty ps =
-   patterns_exhaustive env ty ps"
-  by (auto split: option.splits CoreType.splits)
 
 (* core_term_type does not depend on TE_ConstLocals *)
 lemma core_term_type_TE_ConstLocals_irrelevant:
@@ -1079,11 +1051,9 @@ next
                        TE_GhostLocals := gv' \<rparr>"
   from CoreTm_Match.prems(1) have scrut_free: "x \<notin> core_term_free_vars scrut"
     and bodies_free: "\<forall>body \<in> snd ` set arms. x \<notin> core_term_free_vars body" by auto
-  (* pattern_compatible and patterns_exhaustive only depend on TE_DataCtors etc. *)
+  (* pattern_compatible only depends on TE_DataCtors etc. *)
   have pc_eq: "\<And>p t. pattern_compatible ?env_x p t = pattern_compatible env p t"
     by (case_tac p) (simp_all split: option.splits)
-  have pe_eq: "\<And>t ps. patterns_exhaustive ?env_x t ps = patterns_exhaustive env t ps"
-    by (simp split: CoreType.splits option.splits)
   (* Scrutinee typing preserved *)
   from CoreTm_Match.prems(2) obtain scrutTy where
     scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
@@ -1123,7 +1093,7 @@ next
     show "core_term_type ?env_x ghost body = Some resultTy" .
   qed
   from CoreTm_Match.prems(2) show ?case
-    using scrut_ty scrut_ty' pc_eq pe_eq hd_transfer tl_transfer
+    using scrut_ty scrut_ty' pc_eq hd_transfer tl_transfer
     by (auto simp: list_all_iff Let_def split: option.splits if_splits)
 next
   case (CoreTm_Sizeof tm) then show ?case by (auto split: option.splits)
@@ -1354,8 +1324,7 @@ next
   let ?pats = "map fst arms"
   from CoreTm_Match.prems scrut_ty arms_nonempty have
     pat_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) ?pats" and
-    pat_reg: "patterns_regular ?pats" and
-    pat_exh: "patterns_exhaustive env scrutTy ?pats"
+    pat_reg: "patterns_regular ?pats"
     by (auto split: option.splits if_splits simp: Let_def)
   \<comment> \<open>These pattern checks don't depend on TE_TypeVars / TE_RuntimeTypeVars\<close>
   have pc_eq: "\<And>p t. pattern_compatible ?env' p t = pattern_compatible env p t"
@@ -1363,15 +1332,12 @@ next
        auto
   have pat_compat': "list_all (\<lambda>p. pattern_compatible ?env' p scrutTy) ?pats"
     using pat_compat by (simp add: list_all_iff pc_eq)
-  have pat_exh': "patterns_exhaustive ?env' scrutTy ?pats"
-    using pat_exh by (auto split: CoreType.splits option.splits if_splits)
   \<comment> \<open>First body and rest\<close>
   have match_unfold: "core_term_type env ghost (CoreTm_Match scrut arms) =
     (let pats = map fst arms; bodies = map snd arms in
       if arms = [] then None
       else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
       else if \<not> patterns_regular pats then None
-      else if \<not> patterns_exhaustive env scrutTy pats then None
       else (case core_term_type env ghost (snd (hd arms)) of
               None \<Rightarrow> None
             | Some resultTy \<Rightarrow>
@@ -1379,7 +1345,7 @@ next
                 then Some resultTy
                 else None))"
     using scrut_ty by simp
-  from CoreTm_Match.prems match_unfold arms_nonempty pat_compat pat_reg pat_exh
+  from CoreTm_Match.prems match_unfold arms_nonempty pat_compat pat_reg
   obtain firstBodyTy where
     first_ty: "core_term_type env ghost (snd (hd arms)) = Some firstBodyTy" and
     ty_eq: "ty = firstBodyTy" and
@@ -1400,7 +1366,7 @@ next
                            (tl (map snd arms))"
     using rest_ty bodies_IH tl_in by (induction "tl (map snd arms)") (auto simp: list_all_iff)
   show ?case
-    using scrut_ty' arms_nonempty pat_compat' pat_reg pat_exh' first_ty' rest_ty' ty_eq
+    using scrut_ty' arms_nonempty pat_compat' pat_reg first_ty' rest_ty' ty_eq
     by (simp add: Let_def)
 next
   case (CoreTm_ArrayProj tm idxTms)

@@ -1181,7 +1181,6 @@ proof -
         in if arms = [] then None
            else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
            else if \<not> patterns_regular pats then None
-           else if \<not> patterns_exhaustive env scrutTy pats then None
            else (case core_term_type env NotGhost (snd (hd arms)) of
                    None \<Rightarrow> None
                  | Some resultTy \<Rightarrow>
@@ -1201,7 +1200,6 @@ proof -
       in if arms = [] then None
          else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
          else if \<not> patterns_regular pats then None
-         else if \<not> patterns_exhaustive env scrutTy pats then None
          else (case core_term_type env NotGhost (snd (hd arms)) of
                  None \<Rightarrow> None
                | Some resultTy \<Rightarrow>
@@ -1213,22 +1211,16 @@ proof -
   from typing'' have arms_nonempty: "arms \<noteq> []"
     by (cases arms) (simp_all add: Let_def)
 
-  from typing'' arms_nonempty have
-    pats_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
-    pats_regular: "patterns_regular (map fst arms)" and
-    pats_exhaustive: "patterns_exhaustive env scrutTy (map fst arms)"
-    by (simp_all add: Let_def split: if_splits)
-
   define hd_ty_opt where "hd_ty_opt = core_term_type env NotGhost (snd (hd arms))"
 
-  from typing'' arms_nonempty pats_compat pats_regular pats_exhaustive
+  from typing'' arms_nonempty
   have typing''': "(case hd_ty_opt of
       None \<Rightarrow> None
     | Some resultTy \<Rightarrow>
         if list_all (\<lambda>body. core_term_type env NotGhost body = Some resultTy)
                     (tl (map snd arms))
         then Some resultTy else None) = Some ty"
-    unfolding hd_ty_opt_def Let_def by presburger
+    unfolding hd_ty_opt_def Let_def by (simp split: if_splits)
 
   from typing''' obtain resultTy where
     hd_ty_opt_eq: "hd_ty_opt = Some resultTy" and
@@ -1271,29 +1263,39 @@ proof -
     with scrut_sound Inl show ?thesis by auto
   next
     case (Inr scrutVal)
-    from scrut_sound Inr have scrut_typed: "value_has_type env scrutVal scrutTy" by simp
+    note scrut_eval = Inr
 
-    (* find_matching_arm succeeds by exhaustiveness *)
-    from find_matching_arm_exhaustive[OF scrut_typed pats_exhaustive wf_env]
-    obtain armBody where match_eq: "find_matching_arm scrutVal arms = Inr armBody" by auto
+    (* find_matching_arm may fail (RuntimeError) or succeed. Both are sound. *)
+    show ?thesis
+    proof (cases "find_matching_arm scrutVal arms")
+      case (Inl match_err)
+      (* find_matching_arm only ever returns Inl RuntimeError (no match found) *)
+      from find_matching_arm_error[OF Inl] have "match_err = RuntimeError" .
+      then have "interp_term (Suc fuel) state (CoreTm_Match scrut arms) = Inl RuntimeError"
+        using scrut_eval Inl by simp
+      then show ?thesis by simp
+    next
+      case (Inr armBody)
+      then have match_eq: "find_matching_arm scrutVal arms = Inr armBody" .
 
-    (* armBody is the body of some arm in the list *)
-    from find_matching_arm_in_set[OF match_eq]
-    obtain pat where arm_in: "(pat, armBody) \<in> set arms" by auto
+      (* armBody is the body of some arm in the list *)
+      from find_matching_arm_in_set[OF match_eq]
+      obtain pat where arm_in: "(pat, armBody) \<in> set arms" by auto
 
-    (* armBody typechecks to resultTy *)
-    have arm_typed: "core_term_type env NotGhost armBody = Some resultTy"
-      using all_arms_typed arm_in by force
+      (* armBody typechecks to resultTy *)
+      have arm_typed: "core_term_type env NotGhost armBody = Some resultTy"
+        using all_arms_typed arm_in by force
 
-    (* IH on arm body *)
-    from IH[OF arm_typed]
-    have arm_sound: "sound_term_result env resultTy (interp_term fuel state armBody)" .
+      (* IH on arm body *)
+      from IH[OF arm_typed]
+      have arm_sound: "sound_term_result env resultTy (interp_term fuel state armBody)" .
 
-    (* Compute the result *)
-    have "interp_term (Suc fuel) state (CoreTm_Match scrut arms) =
-          interp_term fuel state armBody"
-      using Inr match_eq by simp
-    with arm_sound ty_eq show ?thesis by simp
+      (* Compute the result *)
+      have "interp_term (Suc fuel) state (CoreTm_Match scrut arms) =
+            interp_term fuel state armBody"
+        using scrut_eval match_eq by simp
+      with arm_sound ty_eq show ?thesis by simp
+    qed
   qed
 qed
 

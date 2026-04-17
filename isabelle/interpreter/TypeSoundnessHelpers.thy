@@ -1567,151 +1567,19 @@ proof -
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed
 
-(* If some pattern in the arm list matches the value, find_matching_arm succeeds *)
-lemma find_matching_arm_succeeds:
-  assumes "\<exists>pat rhs. (pat, rhs) \<in> set arms \<and> pattern_matches val pat"
-  shows "\<exists>rhs. find_matching_arm val arms = Inr rhs"
-  using assms
-proof (induction arms)
-  case Nil then show ?case by simp
-next
-  case (Cons arm arms)
-  obtain pat' rhs' where pr_in: "(pat', rhs') \<in> set (arm # arms)"
-    and pr_matches: "pattern_matches val pat'" using Cons.prems by auto
-  obtain p r where arm_eq: "arm = (p, r)" by (cases arm) auto
-  show ?case
-  proof (cases "pattern_matches val p")
-    case True then show ?thesis using arm_eq by simp
-  next
-    case no_match: False
-    from pr_in no_match have "(pat', rhs') \<in> set arms"
-      using arm_eq pr_matches by auto
-    hence "\<exists>pat rhs. (pat, rhs) \<in> set arms \<and> pattern_matches val pat"
-      using pr_matches by auto
-    from Cons.IH[OF this] show ?thesis
-      using no_match arm_eq by simp
-  qed
-qed
-
 (* If find_matching_arm succeeds, the result is the body of some arm in the list *)
 lemma find_matching_arm_in_set:
   assumes "find_matching_arm val arms = Inr rhs"
   shows "\<exists>pat. (pat, rhs) \<in> set arms"
   using assms by (induction arms) (auto split: if_splits)
 
-(* If has_wildcard holds, some element is CorePat_Wildcard *)
-lemma has_wildcard_in_set_aux:
-  "has_wildcard pats \<Longrightarrow> CorePat_Wildcard \<in> set pats"
-  by (induction pats rule: has_wildcard.induct) auto
-
-lemma has_wildcard_in_set:
-  "has_wildcard (map fst arms) \<Longrightarrow> \<exists>arm \<in> set arms. fst arm = CorePat_Wildcard"
-  using has_wildcard_in_set_aux image_iff by fastforce
-
-(* If has_wildcard holds for the patterns, find_matching_arm succeeds *)
-lemma has_wildcard_find_matching_arm:
-  assumes "has_wildcard (map fst arms)"
-  shows "\<exists>rhs. find_matching_arm val arms = Inr rhs"
-proof -
-  from has_wildcard_in_set[OF assms]
-  obtain pat rhs where in_arms: "(pat, rhs) \<in> set arms" and pat_wild: "pat = CorePat_Wildcard"
-    by auto
-  have "pattern_matches val CorePat_Wildcard" by (cases val) simp_all
-  hence "pattern_matches val pat" using pat_wild by simp
-  thus ?thesis using find_matching_arm_succeeds in_arms by fastforce
-qed
-
-(* Main exhaustiveness lemma: if patterns are exhaustive and the value has the
-   scrutinee type, then find_matching_arm succeeds *)
-lemma find_matching_arm_exhaustive:
-  assumes val_typed: "value_has_type env val scrutTy"
-    and exhaustive: "patterns_exhaustive env scrutTy (map fst arms)"
-    and wf: "tyenv_well_formed env"
-  shows "\<exists>rhs. find_matching_arm val arms = Inr rhs"
-proof (cases "has_wildcard (map fst arms)")
-  case True
-  then show ?thesis using has_wildcard_find_matching_arm by blast
-next
-  case no_wildcard: False
-  show ?thesis
-  proof (cases scrutTy)
-    case CoreTy_Bool
-    from exhaustive no_wildcard CoreTy_Bool have
-      has_true: "list_ex (\<lambda>p. p = CorePat_Bool True) (map fst arms)" and
-      has_false: "list_ex (\<lambda>p. p = CorePat_Bool False) (map fst arms)"
-      by simp_all
-    from val_typed CoreTy_Bool obtain b where val_eq: "val = CV_Bool b"
-      using value_has_type_Bool by auto
-    show ?thesis
-    proof (cases b)
-      case True
-      from has_true obtain arm where arm_in: "arm \<in> set arms" and arm_pat: "fst arm = CorePat_Bool True"
-        by (auto simp: list_ex_iff)
-      have "pattern_matches val (fst arm)" using val_eq True arm_pat by simp
-      thus ?thesis using find_matching_arm_succeeds arm_in
-        by (metis prod.collapse)
-    next
-      case False
-      from has_false obtain arm where arm_in: "arm \<in> set arms" and arm_pat: "fst arm = CorePat_Bool False"
-        by (auto simp: list_ex_iff)
-      have "pattern_matches val (fst arm)" using val_eq False arm_pat by simp
-      thus ?thesis using find_matching_arm_succeeds arm_in
-        by (metis prod.collapse)
-    qed
-  next
-    case (CoreTy_Datatype dtName tyArgs)
-    from exhaustive no_wildcard CoreTy_Datatype obtain ctors where
-      ctors_lookup: "fmlookup (TE_DataCtorsByType env) dtName = Some ctors" and
-      all_covered: "list_all (\<lambda>ctor. list_ex (\<lambda>p. p = CorePat_Variant ctor) (map fst arms)) ctors"
-      by (auto split: option.splits)
-    (* Value must be a variant *)
-    from val_typed CoreTy_Datatype obtain actualCtor payload where
-      val_eq: "val = CV_Variant actualCtor payload"
-      using value_has_type_Name by blast
-    (* Extract constructor info from value typing *)
-    from val_typed val_eq CoreTy_Datatype obtain dtName2 tyvars payloadTy where
-      ctor_lookup: "fmlookup (TE_DataCtors env) actualCtor = Some (dtName2, tyvars, payloadTy)" and
-      dt_eq: "dtName = dtName2"
-      by (auto split: option.splits prod.splits)
-    (* By tyenv_ctors_by_type_consistent, actualCtor is in ctors *)
-    from wf have consistent: "tyenv_ctors_by_type_consistent env"
-      unfolding tyenv_well_formed_def by simp
-    from consistent ctors_lookup have
-      "\<forall>ctorName. ctorName \<in> set ctors \<longleftrightarrow>
-        (\<exists>tyVars payload. fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload))"
-      unfolding tyenv_ctors_by_type_consistent_def by simp
-    hence ctor_in_ctors: "actualCtor \<in> set ctors"
-      using ctor_lookup dt_eq by auto
-    (* So there is a CorePat_Variant actualCtor in the pattern list *)
-    from all_covered ctor_in_ctors have
-      "list_ex (\<lambda>p. p = CorePat_Variant actualCtor) (map fst arms)"
-      by (simp add: list_all_iff)
-    then obtain arm where arm_in: "arm \<in> set arms" and arm_pat: "fst arm = CorePat_Variant actualCtor"
-      by (auto simp: list_ex_iff)
-    have "pattern_matches val (fst arm)" using val_eq arm_pat by simp
-    thus ?thesis using find_matching_arm_succeeds arm_in
-      by (metis prod.collapse)
-  next
-    (* Remaining type cases: exhaustive is False when no wildcard, contradiction *)
-    case (CoreTy_FiniteInt x1 x2)
-    then show ?thesis using exhaustive no_wildcard by simp
-  next
-    case CoreTy_MathInt
-    then show ?thesis using exhaustive no_wildcard by simp
-  next
-    case CoreTy_MathReal
-    then show ?thesis using exhaustive no_wildcard by simp
-  next
-    case (CoreTy_Record x)
-    then show ?thesis using exhaustive no_wildcard by simp
-  next
-    case (CoreTy_Array x1 x2)
-    then show ?thesis using exhaustive no_wildcard by simp
-  next
-    case (CoreTy_Var x)
-    then show ?thesis using exhaustive no_wildcard by simp
-  qed
-qed
+(* find_matching_arm only ever fails with RuntimeError (no matching arm found).
+   This is the key fact that makes non-exhaustive matches sound: a failed match
+   at runtime is a runtime error, not a type error. *)
+lemma find_matching_arm_error:
+  assumes "find_matching_arm val arms = Inl err"
+  shows "err = RuntimeError"
+  using assms by (induction arms) (auto split: if_splits)
 
 (* Helper: sizes_match_dims implies equal length *)
 lemma sizes_match_dims_length:

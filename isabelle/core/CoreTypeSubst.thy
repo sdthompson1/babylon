@@ -160,17 +160,13 @@ lemma is_writable_lvalue_apply_subst_to_term [simp]:
   "is_writable_lvalue env (apply_subst_to_term subst tm) = is_writable_lvalue env tm"
   by (induction tm) auto
 
-(* pattern_compatible and patterns_exhaustive only inspect the top-level shape of the
-   scrutinee type (and for Datatype, just the type name). Substitution preserves all
-   of these top-level shapes, so if the predicate holds on ty it also holds on
+(* pattern_compatible only inspects the top-level shape of the scrutinee type
+   (and for Datatype, just the type name). Substitution preserves all of these
+   top-level shapes, so if the predicate holds on ty it also holds on
    apply_subst subst ty. (The reverse is not true if ty is a CoreTy_Var.) *)
 lemma pattern_compatible_apply_subst:
   "pattern_compatible env p ty \<Longrightarrow> pattern_compatible env p (apply_subst subst ty)"
   by (cases p; cases ty) (auto split: option.splits prod.splits)
-
-lemma patterns_exhaustive_apply_subst:
-  "patterns_exhaustive env ty pats \<Longrightarrow> patterns_exhaustive env (apply_subst subst ty) pats"
-  by (cases ty) (auto split: if_splits)
 
 
 (* apply_subst_to_term_preserves_typing is now stated and proved in the
@@ -475,14 +471,6 @@ lemma pattern_compatible_apply_subst_callee_env:
      \<Longrightarrow> pattern_compatible (apply_subst_to_callee_env subst callerEnv calleeEnv) p
                             (apply_subst subst ty)"
   by (cases p; cases ty) (auto split: option.splits prod.splits)
-
-(* patterns_exhaustive only inspects the top-level type constructor, plus
-   TE_DataCtorsByType (inherited). *)
-lemma patterns_exhaustive_apply_subst_callee_env:
-  "patterns_exhaustive calleeEnv ty pats
-     \<Longrightarrow> patterns_exhaustive (apply_subst_to_callee_env subst callerEnv calleeEnv)
-                              (apply_subst subst ty) pats"
-  by (cases ty) (auto split: if_splits)
 
 (* Substituting types in TE_LocalVars preserves the *keys*, so writability is
    preserved (it only looks at TE_LocalVars's domain and TE_ConstLocals). *)
@@ -1888,8 +1876,8 @@ next
     using inner_subst ctor_lookup_subst len_eq_subst ty_subst_eq by simp
 next
   case (CoreTm_Match scrut arms)
-  \<comment> \<open>Match: scrutinee typechecks; pattern compatibility / regularity / exhaustiveness
-      hold; all arm bodies have the same type. After substitution, the scrutinee's
+  \<comment> \<open>Match: scrutinee typechecks; pattern compatibility / regularity hold;
+      all arm bodies have the same type. After substitution, the scrutinee's
       type is substituted, the patterns are unchanged (substitution doesn't touch
       them), and each arm body's IH gives the substituted body type. \<close>
   from CoreTm_Match.prems(1) obtain scrutTy where
@@ -1897,7 +1885,6 @@ next
     arms_nonempty: "arms \<noteq> []" and
     pats_compat: "list_all (\<lambda>p. pattern_compatible calleeEnv p scrutTy) (map fst arms)" and
     pats_regular: "patterns_regular (map fst arms)" and
-    pats_exhaustive: "patterns_exhaustive calleeEnv scrutTy (map fst arms)" and
     hd_typed: "core_term_type calleeEnv ghost (snd (hd arms)) = Some ty" and
     rest_typed: "list_all (\<lambda>body. core_term_type calleeEnv ghost body = Some ty)
                           (tl (map snd arms))"
@@ -1926,8 +1913,8 @@ next
   have pats_eq: "map fst ?subst_arms = map fst arms"
     by (induction arms) auto
 
-  \<comment> \<open>Pattern compatibility, regularity, and exhaustiveness all transfer to the
-      substituted env / type. \<close>
+  \<comment> \<open>Pattern compatibility and regularity both transfer to the substituted
+      env / type. \<close>
   have pats_compat_subst:
     "list_all (\<lambda>p. pattern_compatible ?be p (apply_subst subst scrutTy)) (map fst ?subst_arms)"
     using pats_compat pats_eq
@@ -1935,9 +1922,6 @@ next
        (auto intro: pattern_compatible_apply_subst_callee_env)
   have pats_regular_subst: "patterns_regular (map fst ?subst_arms)"
     using pats_regular pats_eq by metis
-  have pats_exhaustive_subst:
-    "patterns_exhaustive ?be (apply_subst subst scrutTy) (map fst ?subst_arms)"
-    using patterns_exhaustive_apply_subst_callee_env[OF pats_exhaustive] pats_eq by metis
 
   \<comment> \<open>Head body IH. \<close>
   have hd_in: "hd arms \<in> set arms" using arms_nonempty by auto
@@ -1988,7 +1972,7 @@ next
 
   show ?case
     using scrut_subst arms_nonempty_subst pats_compat_subst pats_regular_subst
-          pats_exhaustive_subst hd_subst hd_subst_arms_eq tl_subst
+          hd_subst hd_subst_arms_eq tl_subst
     by (auto simp: Let_def)
 next
   case (CoreTm_Sizeof tm)
@@ -2809,27 +2793,108 @@ next
       equals the input env, so substituting both gives the same answer. \<close>
   then show ?case by simp
 next
-  case (9 vc vd ve vf)
+  case (9 env mode matchGhost scrut arms)
+  \<comment> \<open>Match: scrutinee must typecheck, each pattern must be compatible with the
+      scrutinee type, the patterns must be regular, and each arm body must
+      typecheck as a statement list. The result env is env itself. After
+      substitution, the scrutinee gets a substituted type and each arm body is
+      substituted individually; pattern checks survive substitution. \<close>
+  from "9.prems"(1) obtain scrutTy where
+    ghost_ok: "mode = Ghost \<longrightarrow> matchGhost = Ghost" and
+    scrut_typed: "core_term_type env matchGhost scrut = Some scrutTy" and
+    pats_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
+    pats_regular: "patterns_regular (map fst arms)" and
+    bodies_typed: "list_all (\<lambda>body. core_statement_list_type env matchGhost body \<noteq> None)
+                            (map snd arms)" and
+    env'_eq: "calleeEnv' = env"
+    by (auto simp: Let_def split: if_splits option.splits)
+
+  \<comment> \<open>The runtime-substitution-range conditions for the inner term lemma, when
+      matchGhost = NotGhost. \<close>
+  have rt_for_matchGhost:
+    "matchGhost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+    using ghost_ok "9.prems"(5) by (cases mode) auto
+  have rt_ok_for_matchGhost:
+    "matchGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
+    using ghost_ok "9.prems"(6) by (cases mode) auto
+
+  let ?be = "apply_subst_to_callee_env subst callerEnv env"
+  let ?subst_arms = "map (\<lambda>(pat, body). (pat, apply_subst_to_stmt_list subst body)) arms"
+
+  \<comment> \<open>Scrutinee typing transfers under substitution. \<close>
+  from core_term_type_subst_callee_env
+         [OF scrut_typed "9.prems"(2,3,4) rt_for_matchGhost rt_ok_for_matchGhost]
+  have scrut_subst:
+    "core_term_type ?be matchGhost (apply_subst_to_term subst scrut)
+       = Some (apply_subst subst scrutTy)" .
+
+  \<comment> \<open>Patterns are unchanged under apply_subst_to_stmt. \<close>
+  have pats_eq: "map fst ?subst_arms = map fst arms"
+    by (induction arms) auto
+
+  \<comment> \<open>Pattern compatibility transfers to the substituted env / type. \<close>
+  have pats_compat_subst:
+    "list_all (\<lambda>p. pattern_compatible ?be p (apply_subst subst scrutTy)) (map fst ?subst_arms)"
+    using pats_compat pats_eq
+    by (induction arms)
+       (auto intro: pattern_compatible_apply_subst_callee_env)
+
+  have pats_regular_subst: "patterns_regular (map fst ?subst_arms)"
+    using pats_regular pats_eq by metis
+
+  \<comment> \<open>Each arm body's statement-list-typing transfers under substitution. The IH
+      for Match gives us this for any arm body z in set (map snd arms). \<close>
+  have bodies_typed_subst:
+    "list_all (\<lambda>body. core_statement_list_type ?be matchGhost body \<noteq> None)
+              (map snd ?subst_arms)"
+    unfolding list_all_iff
+  proof
+    fix body' assume body'_in: "body' \<in> set (map snd ?subst_arms)"
+    then obtain pat body where
+      arm_in: "(pat, body) \<in> set arms" and
+      body'_eq: "body' = apply_subst_to_stmt_list subst body"
+      by auto
+    from arm_in have body_in_snd: "body \<in> set (map snd arms)" by force
+    from bodies_typed body_in_snd obtain armEnv where
+      body_typed: "core_statement_list_type env matchGhost body = Some armEnv"
+      by (auto simp: list_all_iff)
+    have pats_compat_nn: "\<not> \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)"
+      using pats_compat by simp
+    have pats_regular_nn: "\<not> \<not> patterns_regular (map fst arms)"
+      using pats_regular by simp
+    from "9.IH"[OF ghost_ok scrut_typed refl refl pats_compat_nn pats_regular_nn
+                   body_in_snd body_typed "9.prems"(2,3,4)
+                   rt_for_matchGhost rt_ok_for_matchGhost]
+    have "core_statement_list_type ?be matchGhost (apply_subst_to_stmt_list subst body)
+            = Some (apply_subst_to_callee_env subst callerEnv armEnv)"
+      by simp
+    thus "core_statement_list_type ?be matchGhost body' \<noteq> None"
+      using body'_eq by simp
+  qed
+
+  \<comment> \<open>The substituted match statement typechecks, and its result env equals the
+      substituted input env. \<close>
+  show ?case
+    using ghost_ok scrut_subst pats_compat_subst pats_regular_subst bodies_typed_subst env'_eq
+    by (simp add: Let_def)
+next
+  case (10 uw ux uy uz)
   \<comment> \<open>TODO: Fix - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
-  case (10 vg vh vi vj vk)
+  case (11 va vb vc vd ve)
   \<comment> \<open>TODO: Obtain - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
-  case (11 vl vm vn)
+  case (12 vf vg vh)
   \<comment> \<open>TODO: Use - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
-  case (12 vo vp vq vr vs vt vu)
+  case (13 vi vj vk vl vm vn vo)
   \<comment> \<open>TODO: While - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
-  case (13 vv vw vx vy vz)
-  \<comment> \<open>TODO: Match - typechecking is undefined; cannot prove until implemented \<close>
-  then show ?case sorry
-next
-  case (14 env mode)
+  case (14 env vp)
   \<comment> \<open>Nil statement list typechecks to Some env in any env. The result env equals
       the input env, so substituting both gives the same answer. \<close>
   then show ?case by simp
