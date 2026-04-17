@@ -3517,9 +3517,355 @@ next
         from "4.prems"(1) env'_eq have "state_matches_env state env' storeTyping" by simp
         with CoreStmt_Assume interp_eq show ?thesis using storeTyping_extends_refl by auto
       next
-        case (CoreStmt_While _ _ _ _ _) with typing show ?thesis sorry
+        case (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+        \<comment> \<open>While: Ghost mode is a no-op at runtime. NotGhost mode evaluates the
+            condition; if True, runs the body and recurses on the loop
+            (via the statement-level fuel IH) after restore_scope; if False,
+            returns Continue state. The typechecker's result env equals the
+            input env. \<close>
+        from typing CoreStmt_While have env'_eq: "env' = env"
+          by (auto split: if_splits option.splits CoreType.splits)
+        show ?thesis
+        proof (cases whileGhost)
+          case Ghost
+          have interp_eq: "interp_statement (Suc fuel) state
+                            (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                            = Inr (Continue state)"
+            using Ghost by simp
+          from "4.prems"(1) env'_eq have "state_matches_env state env' storeTyping" by simp
+          with CoreStmt_While interp_eq show ?thesis
+            using storeTyping_extends_refl by auto
+        next
+          case NotGhost
+          note whileGhost_eq = NotGhost
+          from typing CoreStmt_While NotGhost have
+            cond_ty: "core_term_type env NotGhost condTm = Some CoreTy_Bool" and
+            body_typed: "\<exists>bodyEnv'. core_statement_list_type env NotGhost bodyStmts
+                                    = Some bodyEnv'"
+            by (auto split: if_splits option.splits CoreType.splits)
+          \<comment> \<open>Core typing result: CoreStmt_While yields env' = env. We need the
+              recursive-call premise of that exact shape. \<close>
+          have while_typed: "core_statement_type env NotGhost
+              (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Some env"
+            using typing CoreStmt_While env'_eq by simp
+          from IH_term[OF "4.prems"(1,2) cond_ty]
+          have cond_sound: "sound_term_result env CoreTy_Bool (interp_term fuel state condTm)" .
+          have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 stmts0 env0'.
+                  state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                  tyenv_well_formed env0 \<Longrightarrow>
+                  core_statement_list_type env0 NotGhost stmts0 = Some env0' \<Longrightarrow>
+                  sound_statement_result env0 env0' storeTyping0
+                    (interp_statement_list fuel state0 stmts0)"
+            using Suc.IH(5) by simp
+          have IH_stmt: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 stmt0 env0'.
+                  state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                  tyenv_well_formed env0 \<Longrightarrow>
+                  core_statement_type env0 NotGhost stmt0 = Some env0' \<Longrightarrow>
+                  sound_statement_result env0 env0' storeTyping0
+                    (interp_statement fuel state0 stmt0)"
+            using Suc.IH(4) by simp
+          show ?thesis
+          proof (cases "interp_term fuel state condTm")
+            case (Inl err)
+            with cond_sound have "sound_error_result err" by simp
+            moreover have "interp_statement (Suc fuel) state
+                (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl err"
+              using Inl NotGhost by simp
+            ultimately show ?thesis using CoreStmt_While by simp
+          next
+            case (Inr condVal)
+            note cond_eval = Inr
+            from cond_sound Inr have cond_typed: "value_has_type env condVal CoreTy_Bool" by simp
+            then obtain b where condVal_eq: "condVal = CV_Bool b"
+              by (cases condVal) (auto split: CoreType.splits)
+            show ?thesis
+            proof (cases b)
+              case False
+              have interp_eq: "interp_statement (Suc fuel) state
+                    (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                    = Inr (Continue state)"
+                using cond_eval condVal_eq False NotGhost by simp
+              from "4.prems"(1) env'_eq have "state_matches_env state env' storeTyping" by simp
+              with CoreStmt_While interp_eq show ?thesis
+                using storeTyping_extends_refl by auto
+            next
+              case True
+              from body_typed obtain bodyEnv' where
+                body_ty: "core_statement_list_type env NotGhost bodyStmts = Some bodyEnv'"
+                by blast
+              from IH_stmts[OF "4.prems"(1,2) body_ty]
+              have body_sound: "sound_statement_result env bodyEnv' storeTyping
+                  (interp_statement_list fuel state bodyStmts)" .
+              from core_statement_list_type_preserves_well_formed[OF body_ty "4.prems"(2)]
+              have wf_bodyEnv': "tyenv_well_formed bodyEnv'" .
+              from core_statement_list_type_fixed_eq[OF body_ty]
+              have fxeq_body: "tyenv_fixed_eq env bodyEnv'" .
+              show ?thesis
+              proof (cases "interp_statement_list fuel state bodyStmts")
+                case (Inl body_err)
+                with body_sound have "sound_error_result body_err" by simp
+                moreover have "interp_statement (Suc fuel) state
+                    (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl body_err"
+                  using cond_eval condVal_eq True Inl NotGhost by simp
+                ultimately show ?thesis using CoreStmt_While by simp
+              next
+                case (Inr bodyRes)
+                note body_eval = Inr
+                show ?thesis
+                proof (cases bodyRes)
+                  case (Continue state1)
+                  from body_sound body_eval Continue obtain bodyStoreTyping where
+                    sme_body: "state_matches_env state1 bodyEnv' bodyStoreTyping" and
+                    ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
+                    by auto
+                  from body_eval Continue
+                  have body_list_eq: "interp_statement_list fuel state bodyStmts
+                                      = Inr (Continue state1)" by simp
+                  from interp_statement_list_preserves_globals[OF body_list_eq]
+                  have globals_eq: "IS_Globals state1 = IS_Globals state" .
+                  from interp_statement_list_preserves_functions[OF body_list_eq]
+                  have functions_eq: "IS_Functions state1 = IS_Functions state" .
+                  from fxeq_body have dt_eq:
+                    "TE_DataCtors env = TE_DataCtors bodyEnv'"
+                    "TE_Datatypes env = TE_Datatypes bodyEnv'"
+                    "TE_GhostDatatypes env = TE_GhostDatatypes bodyEnv'"
+                    unfolding tyenv_fixed_eq_def by simp_all
+                  have sme_rs: "state_matches_env (restore_scope state state1)
+                                  env storeTyping"
+                    using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
+                                                 globals_eq functions_eq
+                                                 dt_eq(1) dt_eq(2) dt_eq(3)
+                                                 "4.prems"(2) wf_bodyEnv'] .
+                  \<comment> \<open>Recursive call: apply the fuel-level statement IH. \<close>
+                  from IH_stmt[OF sme_rs "4.prems"(2) while_typed]
+                  have rec_sound: "sound_statement_result env env storeTyping
+                      (interp_statement fuel (restore_scope state state1)
+                         (CoreStmt_While whileGhost condTm invars decr bodyStmts))"
+                    using whileGhost_eq by simp
+                  have interp_eq: "interp_statement (Suc fuel) state
+                      (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                      = interp_statement fuel (restore_scope state state1)
+                         (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                    using cond_eval condVal_eq True body_eval Continue NotGhost by simp
+                  from rec_sound interp_eq env'_eq CoreStmt_While show ?thesis by simp
+                next
+                  case (Return state1 retVal)
+                  from body_sound body_eval Return have
+                    ret_typed: "value_has_type env retVal (TE_ReturnType env)" and
+                    body_return_ex: "\<exists>env_mid storeTyping'.
+                        tyenv_fixed_eq env env_mid \<and> tyenv_fixed_eq env_mid bodyEnv' \<and>
+                        tyenv_well_formed env_mid \<and>
+                        state_matches_env state1 env_mid storeTyping' \<and>
+                        storeTyping_extends storeTyping storeTyping'"
+                    by auto
+                  from body_return_ex obtain env_mid bodyStoreTyping where
+                    fxeq1: "tyenv_fixed_eq env env_mid" and
+                    fxeq2: "tyenv_fixed_eq env_mid bodyEnv'" and
+                    wf_mid: "tyenv_well_formed env_mid" and
+                    sme_body: "state_matches_env state1 env_mid bodyStoreTyping" and
+                    ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
+                    by blast
+                  from body_eval Return
+                  have body_list_eq: "interp_statement_list fuel state bodyStmts
+                                      = Inr (Return state1 retVal)" by simp
+                  from interp_statement_list_return_preserves_globals[OF body_list_eq]
+                  have globals_eq: "IS_Globals state1 = IS_Globals state" .
+                  from interp_statement_list_return_preserves_functions[OF body_list_eq]
+                  have functions_eq: "IS_Functions state1 = IS_Functions state" .
+                  from fxeq1 have dt_eq:
+                    "TE_DataCtors env = TE_DataCtors env_mid"
+                    "TE_Datatypes env = TE_Datatypes env_mid"
+                    "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+                    unfolding tyenv_fixed_eq_def by simp_all
+                  have sme_rs: "state_matches_env (restore_scope state state1)
+                                  env storeTyping"
+                    using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
+                                                 globals_eq functions_eq
+                                                 dt_eq(1) dt_eq(2) dt_eq(3)
+                                                 "4.prems"(2) wf_mid] .
+                  have interp_eq: "interp_statement (Suc fuel) state
+                      (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                      = Inr (Return (restore_scope state state1) retVal)"
+                    using cond_eval condVal_eq True body_eval Return NotGhost by simp
+                  have "sound_statement_result env env' storeTyping
+                         (Inr (Return (restore_scope state state1) retVal))"
+                    unfolding env'_eq
+                    using ret_typed sme_rs "4.prems"(2)
+                    by (auto intro!: exI[of _ env] exI[of _ storeTyping]
+                                     tyenv_fixed_eq_refl storeTyping_extends_refl)
+                  with interp_eq CoreStmt_While show ?thesis by simp
+                qed
+              qed
+            qed
+          qed
+        qed
       next
-        case (CoreStmt_Match _ _ _) with typing show ?thesis sorry
+        case (CoreStmt_Match matchGhost scrut arms)
+        \<comment> \<open>Match: in Ghost mode (at the statement level) the interpreter is a
+            no-op. In NotGhost mode the interpreter evaluates the scrutinee,
+            picks a matching arm body, runs it, and calls restore_scope on the
+            result. The typechecker's result env equals the input env (body
+            scope is discarded). \<close>
+        from typing CoreStmt_Match have env'_eq: "env' = env"
+          by (auto simp: Let_def split: if_splits option.splits)
+        show ?thesis
+        proof (cases matchGhost)
+          case Ghost
+          \<comment> \<open>Ghost match: interpreter returns Continue state unchanged. \<close>
+          have interp_eq: "interp_statement (Suc fuel) state
+                            (CoreStmt_Match matchGhost scrut arms) = Inr (Continue state)"
+            using Ghost by simp
+          from "4.prems"(1) env'_eq have "state_matches_env state env' storeTyping" by simp
+          with CoreStmt_Match interp_eq show ?thesis
+            using storeTyping_extends_refl by auto
+        next
+          case NotGhost
+          note matchGhost_eq = NotGhost
+          from typing CoreStmt_Match NotGhost obtain scrutTy where
+            scrut_ty: "core_term_type env NotGhost scrut = Some scrutTy" and
+            bodies_typed: "list_all (\<lambda>body.
+              core_statement_list_type env NotGhost body \<noteq> None) (map snd arms)"
+            by (auto simp: Let_def split: if_splits option.splits)
+          from IH_term[OF "4.prems"(1,2) scrut_ty]
+          have scrut_sound: "sound_term_result env scrutTy (interp_term fuel state scrut)" .
+          have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 stmts0 env0'.
+                  state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                  tyenv_well_formed env0 \<Longrightarrow>
+                  core_statement_list_type env0 NotGhost stmts0 = Some env0' \<Longrightarrow>
+                  sound_statement_result env0 env0' storeTyping0
+                    (interp_statement_list fuel state0 stmts0)"
+            using Suc.IH(5) by simp
+          show ?thesis
+          proof (cases "interp_term fuel state scrut")
+            case (Inl err)
+            with scrut_sound have "sound_error_result err" by simp
+            with Inl CoreStmt_Match NotGhost show ?thesis by simp
+          next
+            case (Inr scrutVal)
+            note scrut_eval = Inr
+            show ?thesis
+            proof (cases "find_matching_arm scrutVal arms")
+              case (Inl match_err)
+              from find_matching_arm_error[OF Inl] have err_eq: "match_err = RuntimeError" .
+              have interp_err: "interp_statement (Suc fuel) state
+                  (CoreStmt_Match matchGhost scrut arms) = Inl RuntimeError"
+                using scrut_eval Inl err_eq NotGhost by simp
+              with CoreStmt_Match show ?thesis by simp
+            next
+              case (Inr armBody)
+              note match_eq = Inr
+              from find_matching_arm_in_set[OF match_eq]
+              obtain pat where arm_in: "(pat, armBody) \<in> set arms" by auto
+              from arm_in have body_in: "armBody \<in> set (map snd arms)" by force
+              from bodies_typed body_in obtain bodyEnv' where
+                body_typed: "core_statement_list_type env NotGhost armBody = Some bodyEnv'"
+                by (auto simp: list_all_iff)
+              from IH_stmts[OF "4.prems"(1,2) body_typed]
+              have body_sound: "sound_statement_result env bodyEnv' storeTyping
+                  (interp_statement_list fuel state armBody)" .
+              from core_statement_list_type_preserves_well_formed[OF body_typed "4.prems"(2)]
+              have wf_bodyEnv': "tyenv_well_formed bodyEnv'" .
+              from core_statement_list_type_fixed_eq[OF body_typed]
+              have fxeq_body: "tyenv_fixed_eq env bodyEnv'" .
+              show ?thesis
+              proof (cases "interp_statement_list fuel state armBody")
+                case (Inl body_err)
+                with body_sound have "sound_error_result body_err" by simp
+                moreover have "interp_statement (Suc fuel) state
+                      (CoreStmt_Match matchGhost scrut arms) = Inl body_err"
+                  using scrut_eval match_eq Inl NotGhost by simp
+                ultimately show ?thesis using CoreStmt_Match by simp
+              next
+                case (Inr bodyRes)
+                note body_eval = Inr
+                show ?thesis
+                proof (cases bodyRes)
+                  case (Continue state1)
+                  from body_sound body_eval Continue obtain bodyStoreTyping where
+                    sme_body: "state_matches_env state1 bodyEnv' bodyStoreTyping" and
+                    ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
+                    by auto
+                  \<comment> \<open>Globals/functions preserved through the body. \<close>
+                  from body_eval Continue
+                  have body_list_eq: "interp_statement_list fuel state armBody
+                                      = Inr (Continue state1)" by simp
+                  from interp_statement_list_preserves_globals[OF body_list_eq]
+                  have globals_eq: "IS_Globals state1 = IS_Globals state" .
+                  from interp_statement_list_preserves_functions[OF body_list_eq]
+                  have functions_eq: "IS_Functions state1 = IS_Functions state" .
+                  \<comment> \<open>Apply restore_scope_sound. \<close>
+                  from fxeq_body have dt_eq:
+                    "TE_DataCtors env = TE_DataCtors bodyEnv'"
+                    "TE_Datatypes env = TE_Datatypes bodyEnv'"
+                    "TE_GhostDatatypes env = TE_GhostDatatypes bodyEnv'"
+                    unfolding tyenv_fixed_eq_def by simp_all
+                  have sme_rs: "state_matches_env (restore_scope state state1)
+                                  env storeTyping"
+                    using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
+                                                 globals_eq functions_eq
+                                                 dt_eq(1) dt_eq(2) dt_eq(3)
+                                                 "4.prems"(2) wf_bodyEnv'] .
+                  have interp_eq: "interp_statement (Suc fuel) state
+                      (CoreStmt_Match matchGhost scrut arms)
+                      = Inr (Continue (restore_scope state state1))"
+                    using scrut_eval match_eq body_eval Continue NotGhost by simp
+                  from sme_rs interp_eq env'_eq CoreStmt_Match
+                  show ?thesis using storeTyping_extends_refl by auto
+                next
+                  case (Return state1 retVal)
+                  from body_sound body_eval Return have
+                    ret_typed: "value_has_type env retVal (TE_ReturnType env)" and
+                    body_return_ex: "\<exists>env_mid storeTyping'.
+                        tyenv_fixed_eq env env_mid \<and> tyenv_fixed_eq env_mid bodyEnv' \<and>
+                        tyenv_well_formed env_mid \<and>
+                        state_matches_env state1 env_mid storeTyping' \<and>
+                        storeTyping_extends storeTyping storeTyping'"
+                    by auto
+                  from body_return_ex obtain env_mid bodyStoreTyping where
+                    fxeq1: "tyenv_fixed_eq env env_mid" and
+                    fxeq2: "tyenv_fixed_eq env_mid bodyEnv'" and
+                    wf_mid: "tyenv_well_formed env_mid" and
+                    sme_body: "state_matches_env state1 env_mid bodyStoreTyping" and
+                    ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
+                    by blast
+                  \<comment> \<open>Globals/functions preserved through the body (Return). \<close>
+                  from body_eval Return
+                  have body_list_eq: "interp_statement_list fuel state armBody
+                                      = Inr (Return state1 retVal)" by simp
+                  from interp_statement_list_return_preserves_globals[OF body_list_eq]
+                  have globals_eq: "IS_Globals state1 = IS_Globals state" .
+                  from interp_statement_list_return_preserves_functions[OF body_list_eq]
+                  have functions_eq: "IS_Functions state1 = IS_Functions state" .
+                  \<comment> \<open>Apply restore_scope_sound with env_mid. \<close>
+                  from fxeq1 have dt_eq:
+                    "TE_DataCtors env = TE_DataCtors env_mid"
+                    "TE_Datatypes env = TE_Datatypes env_mid"
+                    "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+                    unfolding tyenv_fixed_eq_def by simp_all
+                  have sme_rs: "state_matches_env (restore_scope state state1)
+                                  env storeTyping"
+                    using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
+                                                 globals_eq functions_eq
+                                                 dt_eq(1) dt_eq(2) dt_eq(3)
+                                                 "4.prems"(2) wf_mid] .
+                  have interp_eq: "interp_statement (Suc fuel) state
+                      (CoreStmt_Match matchGhost scrut arms)
+                      = Inr (Return (restore_scope state state1) retVal)"
+                    using scrut_eval match_eq body_eval Return NotGhost by simp
+                  \<comment> \<open>Build the Return-case sound_statement_result: use env itself as
+                      env_mid (fxeq refl both sides) with storeTyping unchanged. \<close>
+                  have "sound_statement_result env env' storeTyping
+                         (Inr (Return (restore_scope state state1) retVal))"
+                    unfolding env'_eq
+                    using ret_typed sme_rs "4.prems"(2)
+                    by (auto intro!: exI[of _ env] exI[of _ storeTyping]
+                                     tyenv_fixed_eq_refl storeTyping_extends_refl)
+                  with interp_eq CoreStmt_Match show ?thesis by simp
+                qed
+              qed
+            qed
+          qed
+        qed
       next
         case (CoreStmt_ShowHide showOrHide name)
         \<comment> \<open>ShowHide is a runtime no-op: Inr (Continue state), and env' = env.\<close>

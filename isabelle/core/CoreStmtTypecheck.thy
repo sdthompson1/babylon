@@ -545,11 +545,35 @@ where
                        else None)
      else None)"
 
+  (* While loop.
+     The condition must be Bool, checked in the loop's ghost mode (since it's
+     runtime-evaluated when whileGhost = NotGhost). Invariants are specification
+     only (never evaluated at runtime) so they're checked in Ghost mode, as is
+     the decreases term. The decreases term's type must be one for which
+     is_valid_decreases_type holds (integer or lexicographic record of same).
+     The body typechecks as a statement list in whileGhost mode; its result
+     env is discarded (body scope is popped via restore_scope at runtime). *)
+| "core_statement_type env ghost (CoreStmt_While whileGhost condTm invars decrTm body) =
+    (if ghost = Ghost \<longrightarrow> whileGhost = Ghost
+     then (case core_term_type env whileGhost condTm of
+             Some CoreTy_Bool \<Rightarrow>
+               if list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars
+               then (case core_term_type env Ghost decrTm of
+                       Some decrTy \<Rightarrow>
+                         if is_valid_decreases_type decrTy
+                         then (case core_statement_list_type env whileGhost body of
+                                 Some _ \<Rightarrow> Some env
+                               | None \<Rightarrow> None)
+                         else None
+                     | None \<Rightarrow> None)
+               else None
+           | _ \<Rightarrow> None)
+     else None)"
+
   (* TODO: remaining statement forms *)
 | "core_statement_type _ _ (CoreStmt_Fix _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Obtain _ _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Use _) = undefined"
-| "core_statement_type _ _ (CoreStmt_While _ _ _ _ _) = undefined"
 
   (* Statement lists *)
 | "core_statement_list_type env _ [] = Some env"
@@ -707,7 +731,9 @@ next
   with assms have "env' = env" by (auto split: if_splits)
   with assms show ?thesis by simp
 next
-  case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_While _ _ _ _ _)
+  with assms have "env' = env" by (auto split: if_splits option.splits CoreType.splits)
+  with assms show ?thesis by simp
 next
   case (CoreStmt_Match _ _ _)
   with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
@@ -753,7 +779,8 @@ next
   case (CoreStmt_Assume _)
   with assms show ?thesis by (auto split: if_splits)
 next
-  case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_While _ _ _ _ _)
+  with assms show ?thesis by (auto split: if_splits option.splits CoreType.splits)
 next
   case (CoreStmt_Match _ _ _)
   with assms show ?thesis by (auto simp: Let_def split: if_splits option.splits)
@@ -859,7 +886,9 @@ next
   with assms have "env' = env" by (auto split: if_splits)
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
-  case (CoreStmt_While _ _ _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_While _ _ _ _ _)
+  with assms have "env' = env" by (auto split: if_splits option.splits CoreType.splits)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Match _ _ _)
   with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)

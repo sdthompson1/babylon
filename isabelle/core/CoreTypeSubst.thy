@@ -219,6 +219,19 @@ lemma is_finite_integer_type_apply_subst:
   "is_finite_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
   by (cases ty) auto
 
+(* Valid decreases-types are fully concrete (Bool, integers, or records of
+   valid decreases-types), so substitution is a no-op. *)
+lemma is_valid_decreases_type_apply_subst:
+  "is_valid_decreases_type ty \<Longrightarrow> apply_subst subst ty = ty"
+proof (induction ty rule: is_valid_decreases_type.induct)
+  case (4 flds)
+  then have "\<And>n ty. (n, ty) \<in> set flds \<Longrightarrow> apply_subst subst ty = ty"
+    by (auto simp: list_all_iff)
+  hence "map (\<lambda>(n, ty). (n, apply_subst subst ty)) flds = flds"
+    by (induction flds) auto
+  thus ?case by simp
+qed auto
+
 (* sizeof_type produces only closed types (u64 or a record of u64s), so
    substitution leaves them alone. *)
 lemma map_apply_subst_zip_replicate_u64:
@@ -2878,20 +2891,106 @@ next
     using ghost_ok scrut_subst pats_compat_subst pats_regular_subst bodies_typed_subst env'_eq
     by (simp add: Let_def)
 next
-  case (10 uw ux uy uz)
+  case (10 env mode whileGhost condTm invars decrTm body)
+  \<comment> \<open>While: cond is Bool in whileGhost mode; each invariant is Bool in Ghost
+      mode; decreases term has a valid-decreases type in Ghost mode; body
+      typechecks as a statement list in whileGhost mode. Result env = env.
+      Under substitution: cond and invariants get their types substituted
+      (but Bool is closed); decreases type is fully concrete, so unchanged;
+      body is substituted via the IH. \<close>
+  from "10.prems"(1) obtain decrTy where
+    ghost_ok: "mode = Ghost \<longrightarrow> whileGhost = Ghost" and
+    cond_typed: "core_term_type env whileGhost condTm = Some CoreTy_Bool" and
+    invars_typed: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
+    decr_typed: "core_term_type env Ghost decrTm = Some decrTy" and
+    decr_valid: "is_valid_decreases_type decrTy" and
+    body_typed_ex: "core_statement_list_type env whileGhost body \<noteq> None" and
+    env'_eq: "calleeEnv' = env"
+    by (auto split: if_splits option.splits CoreType.splits)
+
+  from body_typed_ex obtain bodyEnv where
+    body_typed: "core_statement_list_type env whileGhost body = Some bodyEnv"
+    by auto
+
+  \<comment> \<open>Runtime-substitution-range conditions for whileGhost mode (same as the
+      other implemented cases). \<close>
+  have rt_for_whileGhost:
+    "whileGhost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+    using ghost_ok "10.prems"(5) by (cases mode) auto
+  have rt_ok_for_whileGhost:
+    "whileGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
+    using ghost_ok "10.prems"(6) by (cases mode) auto
+
+  \<comment> \<open>Ghost-mode runtime conditions are vacuous. \<close>
+  have ghost_rt: "Ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+    by simp
+  have ghost_rt_ok: "Ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
+    by simp
+
+  let ?be = "apply_subst_to_callee_env subst callerEnv env"
+
+  \<comment> \<open>Condition typing transfers under substitution. \<close>
+  from core_term_type_subst_callee_env
+         [OF cond_typed "10.prems"(2,3,4) rt_for_whileGhost rt_ok_for_whileGhost]
+  have cond_subst:
+    "core_term_type ?be whileGhost (apply_subst_to_term subst condTm) = Some CoreTy_Bool"
+    by simp
+
+  \<comment> \<open>Each invariant's typing transfers under substitution, still giving Bool. \<close>
+  have invars_subst:
+    "list_all (\<lambda>inv. core_term_type ?be Ghost inv = Some CoreTy_Bool)
+              (map (apply_subst_to_term subst) invars)"
+    unfolding list_all_iff
+  proof
+    fix inv' assume "inv' \<in> set (map (apply_subst_to_term subst) invars)"
+    then obtain inv where
+      inv_in: "inv \<in> set invars" and inv'_eq: "inv' = apply_subst_to_term subst inv"
+      by auto
+    from invars_typed inv_in have
+      inv_typed: "core_term_type env Ghost inv = Some CoreTy_Bool"
+      by (simp add: list_all_iff)
+    from core_term_type_subst_callee_env
+           [OF inv_typed "10.prems"(2,3,4) ghost_rt ghost_rt_ok]
+    show "core_term_type ?be Ghost inv' = Some CoreTy_Bool"
+      using inv'_eq by simp
+  qed
+
+  \<comment> \<open>Decreases term's typing transfers under substitution. Since decrTy is a
+      valid decreases type, it's fully concrete and substitution is a no-op. \<close>
+  from core_term_type_subst_callee_env
+         [OF decr_typed "10.prems"(2,3,4) ghost_rt ghost_rt_ok]
+  have decr_subst_raw:
+    "core_term_type ?be Ghost (apply_subst_to_term subst decrTm)
+       = Some (apply_subst subst decrTy)" .
+  from is_valid_decreases_type_apply_subst[OF decr_valid]
+  have decr_ty_eq: "apply_subst subst decrTy = decrTy" .
+  have decr_subst:
+    "core_term_type ?be Ghost (apply_subst_to_term subst decrTm) = Some decrTy"
+    using decr_subst_raw decr_ty_eq by simp
+
+  \<comment> \<open>Body's statement-list-typing transfers under substitution. The IH for
+      While gives us this directly. The IH's signature includes a separate
+      `x2 = CoreTy_Bool` premise; we pass `cond_typed` then `refl`. \<close>
+  from "10.IH"[OF ghost_ok cond_typed refl invars_typed decr_typed decr_valid body_typed
+                  "10.prems"(2,3,4) rt_for_whileGhost rt_ok_for_whileGhost]
+  have body_subst:
+    "core_statement_list_type ?be whileGhost (apply_subst_to_stmt_list subst body)
+       = Some (apply_subst_to_callee_env subst callerEnv bodyEnv)" .
+
+  show ?case
+    using ghost_ok cond_subst invars_subst decr_subst decr_valid body_subst env'_eq
+    by (simp add: list_all_iff)
+next
+  case (11 uw ux uy uz)
   \<comment> \<open>TODO: Fix - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
-  case (11 va vb vc vd ve)
+  case (12 va vb vc vd ve)
   \<comment> \<open>TODO: Obtain - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
-  case (12 vf vg vh)
+  case (13 vf vg vh)
   \<comment> \<open>TODO: Use - typechecking is undefined; cannot prove until implemented \<close>
-  then show ?case sorry
-next
-  case (13 vi vj vk vl vm vn vo)
-  \<comment> \<open>TODO: While - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
   case (14 env vp)

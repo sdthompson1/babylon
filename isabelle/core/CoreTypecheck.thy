@@ -62,6 +62,23 @@ definition patterns_regular :: "CorePattern list \<Rightarrow> bool" where
   "patterns_regular pats = (\<not> patterns_after_wildcard pats \<and> \<not> has_duplicate_patterns pats)"
 
 (* ========================================================================== *)
+(* Valid decreases-term types                                                  *)
+(* A decreases term (used in while-loop decreases clauses and, eventually,    *)
+(* recursive functions) must have a type that admits a well-founded order.   *)
+(* We allow: any integer type, Bool (ordered False < True), or a record      *)
+(* whose fields are all themselves valid decreases types. Records are        *)
+(* compared lexicographically.                                                *)
+(* ========================================================================== *)
+
+fun is_valid_decreases_type :: "CoreType \<Rightarrow> bool" where
+  "is_valid_decreases_type CoreTy_Bool = True"
+| "is_valid_decreases_type (CoreTy_FiniteInt _ _) = True"
+| "is_valid_decreases_type CoreTy_MathInt = True"
+| "is_valid_decreases_type (CoreTy_Record flds) =
+     list_all (\<lambda>(_, ty). is_valid_decreases_type ty) flds"
+| "is_valid_decreases_type _ = False"
+
+(* ========================================================================== *)
 (* Main type-checking function *)
 (* ========================================================================== *)
 
