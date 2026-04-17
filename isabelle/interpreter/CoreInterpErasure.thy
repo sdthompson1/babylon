@@ -769,20 +769,137 @@ next
         show ?thesis sorry
       next
         case (CoreStmt_Obtain _ _ _)
-        \<comment> \<open>Typechecker is undefined for Obtain — deferred. \<close>
-        show ?thesis sorry
+        \<comment> \<open>Obtain only typechecks in Ghost mode, so under NotGhost the typing
+            premise is contradictory. \<close>
+        from typing CoreStmt_Obtain show ?thesis
+          by (auto simp: Let_def split: if_splits)
       next
         case (CoreStmt_Use _)
         \<comment> \<open>Typechecker is undefined for Use — deferred. \<close>
         show ?thesis sorry
       next
-        case (CoreStmt_While _ _ _ _ _)
-        \<comment> \<open>Typechecker is undefined for While — deferred. \<close>
-        show ?thesis sorry
+        case (CoreStmt_While g condTm invars decr bodyStmts)
+        show ?thesis
+        proof (cases g)
+          case Ghost
+          then show ?thesis using CoreStmt_While by simp
+        next
+          case NotGhost
+          from typing CoreStmt_While NotGhost have
+            cond_ty: "core_term_type env NotGhost condTm = Some CoreTy_Bool" and
+            body_typed: "\<exists>bodyEnv'. core_statement_list_type env NotGhost bodyStmts
+                                    = Some bodyEnv'"
+            by (auto split: if_splits option.splits CoreType.splits)
+          have while_typed: "core_statement_type env NotGhost
+              (CoreStmt_While g condTm invars decr bodyStmts) = Some env'"
+            using typing CoreStmt_While by simp
+          have cond_eq: "interp_term fuel state (apply_subst_to_term subst condTm)
+                          = interp_term fuel state condTm"
+            using IH_term[of condTm] cond_ty by blast
+          from body_typed obtain bodyEnv' where
+            body_ty: "core_statement_list_type env NotGhost bodyStmts = Some bodyEnv'" ..
+          have body_eq:
+            "\<And>st :: 'w InterpState.
+               interp_statement_list fuel st (apply_subst_to_stmt_list subst bodyStmts)
+               = interp_statement_list fuel st bodyStmts"
+            using IH_stmt_list[of bodyStmts] body_ty by blast
+          have while_eq:
+            "\<And>st :: 'w InterpState.
+               interp_statement fuel st
+                  (CoreStmt_While g
+                      (apply_subst_to_term subst condTm)
+                      (map (apply_subst_to_term subst) invars)
+                      (apply_subst_to_term subst decr)
+                      (apply_subst_to_stmt_list subst bodyStmts))
+               = interp_statement fuel st
+                  (CoreStmt_While g condTm invars decr bodyStmts)"
+            using IH_stmt[of "CoreStmt_While g condTm invars decr bodyStmts"]
+                  while_typed by auto
+          show ?thesis using CoreStmt_While NotGhost cond_eq body_eq while_eq
+            by (simp split: sum.splits CoreValue.splits ExecResult.splits bool.splits)
+        qed
       next
-        case (CoreStmt_Match _ _ _)
-        \<comment> \<open>Typechecker is undefined for Match statement — deferred. \<close>
-        show ?thesis sorry
+        case (CoreStmt_Match g scrut arms)
+        show ?thesis
+        proof (cases g)
+          case Ghost
+          then show ?thesis using CoreStmt_Match by simp
+        next
+          case NotGhost
+          from typing CoreStmt_Match NotGhost obtain scrutTy where
+            scrut_ty: "core_term_type env NotGhost scrut = Some scrutTy" and
+            bodies_typed: "list_all (\<lambda>body.
+              \<exists>e. core_statement_list_type env NotGhost body = Some e) (map snd arms)"
+            by (auto simp: Let_def split: if_splits option.splits)
+          have scrut_eq: "interp_term fuel state (apply_subst_to_term subst scrut)
+                           = interp_term fuel state scrut"
+            using IH_term[of scrut] scrut_ty by blast
+          have arm_body_eq:
+            "\<And>body (st :: 'w InterpState). body \<in> snd ` set arms \<Longrightarrow>
+               interp_statement_list fuel st (apply_subst_to_stmt_list subst body)
+               = interp_statement_list fuel st body"
+          proof -
+            fix body and st :: "'w InterpState"
+            assume body_in: "body \<in> snd ` set arms"
+            from body_in bodies_typed obtain bodyEnv' where
+              body_ty: "core_statement_list_type env NotGhost body = Some bodyEnv'"
+              by (auto simp: list_all_iff)
+            show "interp_statement_list fuel st (apply_subst_to_stmt_list subst body)
+                   = interp_statement_list fuel st body"
+              using IH_stmt_list[of body] body_ty by blast
+          qed
+          \<comment> \<open>find_matching_arm on substituted arms picks the same body (unchanged
+              pattern), just substituted. \<close>
+          have find_cong:
+            "\<And>scrutVal.
+               find_matching_arm scrutVal
+                  (map (\<lambda>(pat, body). (pat, apply_subst_to_stmt_list subst body)) arms)
+               = map_sum id (apply_subst_to_stmt_list subst) (find_matching_arm scrutVal arms)"
+          proof -
+            fix scrutVal
+            show "find_matching_arm scrutVal
+                     (map (\<lambda>(pat, body). (pat, apply_subst_to_stmt_list subst body)) arms)
+                   = map_sum id (apply_subst_to_stmt_list subst) (find_matching_arm scrutVal arms)"
+              by (induct arms) auto
+          qed
+          show ?thesis
+          proof (cases "interp_term fuel state scrut")
+            case (Inl err)
+            show ?thesis using CoreStmt_Match NotGhost scrut_eq Inl by simp
+          next
+            case (Inr scrutVal)
+            note scrut_eval = Inr
+            show ?thesis
+            proof (cases "find_matching_arm scrutVal arms")
+              case (Inl err)
+              from find_cong[of scrutVal] Inl
+              have subst_err:
+                "find_matching_arm scrutVal
+                   (map (\<lambda>(pat, body). (pat, apply_subst_to_stmt_list subst body)) arms)
+                 = Inl err" by simp
+              show ?thesis
+                using CoreStmt_Match NotGhost scrut_eq scrut_eval Inl subst_err
+                by simp
+            next
+              case (Inr armBody)
+              have arm_in: "armBody \<in> snd ` set arms"
+                using Inr by (induction arms) (auto split: if_splits)
+              from find_cong[of scrutVal] Inr
+              have subst_find:
+                "find_matching_arm scrutVal
+                   (map (\<lambda>(pat, body). (pat, apply_subst_to_stmt_list subst body)) arms)
+                 = Inr (apply_subst_to_stmt_list subst armBody)" by simp
+              from arm_body_eq[OF arm_in]
+              have arm_eq:
+                "\<And>st :: 'w InterpState.
+                   interp_statement_list fuel st (apply_subst_to_stmt_list subst armBody)
+                   = interp_statement_list fuel st armBody" .
+              show ?thesis
+                using CoreStmt_Match NotGhost scrut_eq scrut_eval Inr subst_find arm_eq
+                by (simp split: sum.splits ExecResult.splits)
+            qed
+          qed
+        qed
       qed
     qed
   next

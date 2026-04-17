@@ -2458,10 +2458,7 @@ qed
 
    Mutual induction is required because Assert (and While/Match if/when their
    typechecking is implemented) recurses into nested statement lists.
-
-   Several statement forms (Fix, Obtain, Use, While, Match, VarDecl Ref) have
-   `undefined` typechecking and are TODO. Those cases are sorry'd here; they
-   cannot be proved as long as their typechecker bodies are `undefined`. *)
+*)
 lemma core_statement_type_and_list_subst_callee_env:
   "\<lbrakk> core_statement_type calleeEnv mode stmt = Some calleeEnv';
      tyenv_well_formed calleeEnv;
@@ -2981,12 +2978,85 @@ next
     using ghost_ok cond_subst invars_subst decr_subst decr_valid body_subst env'_eq
     by (simp add: list_all_iff)
 next
-  case (11 uw ux uy uz)
-  \<comment> \<open>TODO: Fix - typechecking is undefined; cannot prove until implemented \<close>
-  then show ?case sorry
+  case (11 env mode varName varTy condTm)
+  \<comment> \<open>Obtain: declares a new ghost local variable and asserts a boolean property
+      about it. Analogous to CoreTm_Quantifier: extend env with (varName, varTy)
+      as a Ghost local, then typecheck condTm in Ghost mode. \<close>
+  from "11.prems"(1) have
+    mode_ghost: "mode = Ghost" and
+    varTy_wk: "is_well_kinded env varTy" and
+    cond_typed: "core_term_type
+                    (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                           TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                           TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
+                    Ghost condTm = Some CoreTy_Bool" and
+    env'_eq: "calleeEnv' = env \<lparr>
+        TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+        TE_GhostLocals := finsert varName (TE_GhostLocals env),
+        TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+    by (auto simp: Let_def split: if_splits)
+
+  let ?env_ext = "env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                        TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                        TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+
+  \<comment> \<open>Well-formedness of ?env_ext: use tyenv_well_formed_add_ghost_var plus
+      ConstLocals-irrelevance. \<close>
+  from tyenv_well_formed_add_ghost_var[OF "11.prems"(2) varTy_wk]
+  have wf_ghost: "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                           TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
+  from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf_ghost]
+  have wf_ext: "tyenv_well_formed ?env_ext" by simp
+
+  \<comment> \<open>callee_env_subst_ok ?env_ext: the relevant fields are unchanged. \<close>
+  have ok_ext: "callee_env_subst_ok subst callerEnv ?env_ext"
+    using "11.prems"(3)
+    unfolding callee_env_subst_ok_def by simp
+
+  \<comment> \<open>Substituted varTy is well-kinded in the substituted env. \<close>
+  let ?be = "apply_subst_to_callee_env subst callerEnv env"
+  have varTy_wk_subst:
+    "is_well_kinded ?be (apply_subst subst varTy)"
+    using apply_subst_preserves_well_kinded_callee[OF varTy_wk "11.prems"(3)] .
+
+  \<comment> \<open>Term IH on condTm (Ghost mode — runtime preconditions vacuous). \<close>
+  have cond_rt_premise:
+    "Ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+    by simp
+  have cond_rt_ok_premise:
+    "Ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv ?env_ext"
+    by simp
+  from core_term_type_subst_callee_env[OF cond_typed wf_ext ok_ext
+                                          "11.prems"(4) cond_rt_premise cond_rt_ok_premise]
+  have cond_subst:
+    "core_term_type (apply_subst_to_callee_env subst callerEnv ?env_ext) Ghost
+                    (apply_subst_to_term subst condTm)
+       = Some (apply_subst subst CoreTy_Bool)" .
+
+  \<comment> \<open>The substituted ?env_ext equals ?be extended with (varName, apply_subst subst varTy). \<close>
+  have ext_subst_eq:
+    "apply_subst_to_callee_env subst callerEnv ?env_ext
+       = ?be \<lparr>
+            TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
+            TE_GhostLocals := finsert varName (TE_GhostLocals ?be),
+            TE_ConstLocals := fminus (TE_ConstLocals ?be) {|varName|} \<rparr>"
+    unfolding apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
+
+  \<comment> \<open>And the substituted calleeEnv' equals that same extension. \<close>
+  have result_env_eq:
+    "apply_subst_to_callee_env subst callerEnv calleeEnv'
+       = ?be \<lparr>
+            TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
+            TE_GhostLocals := finsert varName (TE_GhostLocals ?be),
+            TE_ConstLocals := fminus (TE_ConstLocals ?be) {|varName|} \<rparr>"
+    unfolding env'_eq apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
+
+  show ?case
+    using mode_ghost varTy_wk_subst cond_subst ext_subst_eq result_env_eq
+    by simp
 next
-  case (12 va vb vc vd ve)
-  \<comment> \<open>TODO: Obtain - typechecking is undefined; cannot prove until implemented \<close>
+  case (12 uw ux uy uz)
+  \<comment> \<open>TODO: Fix - typechecking is undefined; cannot prove until implemented \<close>
   then show ?case sorry
 next
   case (13 vf vg vh)

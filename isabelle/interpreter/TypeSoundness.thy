@@ -3313,7 +3313,10 @@ next
       next
         case (CoreStmt_Fix _ _) with typing show ?thesis sorry
       next
-        case (CoreStmt_Obtain _ _ _) with typing show ?thesis sorry
+        case (CoreStmt_Obtain _ _ _)
+        \<comment> \<open>Obtain only typechecks in Ghost mode; the outer case is NotGhost. \<close>
+        from typing CoreStmt_Obtain show ?thesis
+          by (auto simp: Let_def split: if_splits)
       next
         case (CoreStmt_Use _) with typing show ?thesis sorry
       next

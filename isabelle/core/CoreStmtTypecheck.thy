@@ -570,9 +570,22 @@ where
            | _ \<Rightarrow> None)
      else None)"
 
+  (* Obtain: "obtain x of type T where P(x)". Only valid in Ghost mode. The
+     type T must be well-kinded. The predicate P (given as a CoreTerm) must
+     typecheck to Bool in the env extended with the new ghost variable x.
+     The resulting env keeps x in scope for subsequent statements. *)
+| "core_statement_type env ghost (CoreStmt_Obtain varName varTy condTm) =
+    (if ghost = Ghost \<and> is_well_kinded env varTy
+     then let env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                            TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                            TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>
+          in if core_term_type env' Ghost condTm = Some CoreTy_Bool
+             then Some env'
+             else None
+     else None)"
+
   (* TODO: remaining statement forms *)
 | "core_statement_type _ _ (CoreStmt_Fix _ _) = undefined"
-| "core_statement_type _ _ (CoreStmt_Obtain _ _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Use _) = undefined"
 
   (* Statement lists *)
@@ -711,7 +724,19 @@ next
 next
   case (CoreStmt_Fix _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Obtain _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Obtain varName varTy condTm)
+  from assms CoreStmt_Obtain obtain
+    wk: "is_well_kinded env varTy"
+    by (auto simp: Let_def split: if_splits)
+  from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
+  have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                      TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
+  from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
+  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                 TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
+                              \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
+  with assms CoreStmt_Obtain show ?thesis
+    by (auto simp: Let_def split: if_splits)
 next
   case (CoreStmt_Use _) with assms show ?thesis sorry
 next
@@ -763,7 +788,8 @@ next
 next
   case (CoreStmt_Fix _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Obtain _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Obtain _ _ _) with assms show ?thesis
+    by (auto simp: Let_def split: if_splits)
 next
   case (CoreStmt_Use _) with assms show ?thesis sorry
 next
@@ -866,7 +892,13 @@ next
 next
   case (CoreStmt_Fix _ _) with assms show ?thesis sorry
 next
-  case (CoreStmt_Obtain _ _ _) with assms show ?thesis sorry
+  case (CoreStmt_Obtain varName varTy condTm)
+  from assms CoreStmt_Obtain have env'_eq:
+    "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                  TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                  TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+    by (auto simp: Let_def split: if_splits)
+  show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
 next
   case (CoreStmt_Use _) with assms show ?thesis sorry
 next
