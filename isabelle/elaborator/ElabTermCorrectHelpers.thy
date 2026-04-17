@@ -152,7 +152,8 @@ proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
        arbitrary: tm' ty' next_mv' and tms' tys' next_mv'
        rule: elab_term_elab_term_list.induct)
   case (1 env elabEnv ghost loc lit next_mv)
-  \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; String/Array are undefined (TODO)\<close>
+  \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; Array allocates one meta and threads
+       through elab_term_list; String is undefined (TODO)\<close>
   show ?case
   proof (cases lit)
     case (BabLit_Bool b)
@@ -162,10 +163,21 @@ proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
     with "1.prems" show ?thesis by (auto split: option.splits)
   next
     case (BabLit_String s)
-    with "1.prems" show ?thesis sorry
+    with "1.prems" show ?thesis by (auto simp: Let_def split: if_splits)
   next
-    case (BabLit_Array xs)
-    with "1.prems" show ?thesis sorry
+    case (BabLit_Array tms)
+    from "1.prems" BabLit_Array have
+      len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))"
+      by (auto split: if_splits)
+    from "1.prems" BabLit_Array len_ok obtain elabTms actualTys next_mv1 where
+      elab_list: "elab_term_list env elabEnv ghost tms (next_mv + 1)
+                  = Inr (elabTms, actualTys, next_mv1)"
+      by (auto simp: Let_def split: sum.splits)
+    have mono: "next_mv + 1 \<le> next_mv1"
+      using "1.IH"[OF BabLit_Array _ refl elab_list] len_ok by simp
+    from "1.prems" BabLit_Array len_ok elab_list have next_mv_eq: "next_mv' = next_mv1"
+      by (auto simp: Let_def unify_and_coerce_def split: sum.splits prod.splits)
+    from mono next_mv_eq show ?thesis by simp
   qed
 next
   case (2 env elabEnv ghost loc name tyArgs next_mv)
@@ -620,16 +632,18 @@ proof -
     fn_lookup: "fmlookup (TE_Functions env) name = Some funInfo"
     by (auto simp: resolve_callee_function_def resolve_type_args_def Let_def
              split: option.splits if_splits sum.splits)
-  from assms(1) fn_lookup have not_impure: "\<not> FI_Impure funInfo"
+  from assms(1) fn_lookup have not_void: "name |\<notin>| EE_VoidFunctions elabEnv"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
-  from assms(1) fn_lookup not_impure have
+  from assms(1) fn_lookup not_void have not_impure: "\<not> FI_Impure funInfo"
+    by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
+  from assms(1) fn_lookup not_void not_impure have
     all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
-  from assms(1) fn_lookup not_impure all_var have
+  from assms(1) fn_lookup not_void not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
 
-  from assms(1) fn_lookup not_impure all_var ghost_ok
+  from assms(1) fn_lookup not_void not_impure all_var ghost_ok
   obtain newTyArgs next_mv1 where
     name_eq: "calleeName = name" and
     resolve_eq: "resolve_type_args env elabEnv ghost loc name (FI_TyArgs funInfo) tyArgs next_mv

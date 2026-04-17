@@ -5,6 +5,29 @@ begin
 (* Input: env, elabEnv, ghost mode, input type (or list) *)
 (* Output: either a list of errors, or an elaborated type (or list) *)
 
+(* Elaborate a single array dimension.
+   BabDim_Fixed must contain a literal integer within uint64 range;
+   anything else produces TyErr_InvalidArrayDimension. *)
+fun elab_dimension :: "BabDimension \<Rightarrow> Location \<Rightarrow> TypeError + CoreDimension" where
+  "elab_dimension BabDim_Unknown loc = Inr CoreDim_Unknown"
+| "elab_dimension BabDim_Allocatable loc = Inr CoreDim_Allocatable"
+| "elab_dimension (BabDim_Fixed (BabTm_Literal _ (BabLit_Int n))) loc =
+    (if int_in_range (int_range Unsigned IntBits_64) n then
+       Inr (CoreDim_Fixed n)
+     else
+       Inl (TyErr_InvalidArrayDimension loc))"
+| "elab_dimension (BabDim_Fixed _) loc = Inl (TyErr_InvalidArrayDimension loc)"
+
+fun elab_dimensions :: "BabDimension list \<Rightarrow> Location \<Rightarrow> TypeError list + CoreDimension list" where
+  "elab_dimensions [] loc = Inr []"
+| "elab_dimensions (d # ds) loc =
+    (case (elab_dimension d loc, elab_dimensions ds loc) of
+      (Inl err, Inl errs) \<Rightarrow> Inl (err # errs)
+    | (Inl err, Inr _) \<Rightarrow> Inl [err]
+    | (Inr _, Inl errs) \<Rightarrow> Inl errs
+    | (Inr d', Inr ds') \<Rightarrow> Inr (d' # ds'))"
+
+(* Main type elaboration function. *)
 fun elab_type :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabType
                   \<Rightarrow> TypeError list + CoreType"
 and elab_type_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabType list
@@ -73,10 +96,16 @@ where
           Inl errs \<Rightarrow> Inl errs
         | Inr elabTys \<Rightarrow> Inr (CoreTy_Record (zip (map fst flds) elabTys))))"
 
-  (* Array case TODO (as we may have to evaluate constants which we can't do yet) 
-     Just elaborate to Bool for now *)
 | "elab_type env elabEnv ghost (BabTy_Array loc elemTy dims) =
-    Inr CoreTy_Bool"
+    (case (elab_type env elabEnv ghost elemTy, elab_dimensions dims loc) of
+      (Inl errs1, Inl errs2) \<Rightarrow> Inl (errs1 @ errs2)
+    | (Inl errs, Inr _) \<Rightarrow> Inl errs
+    | (Inr _, Inl errs) \<Rightarrow> Inl errs
+    | (Inr elemTy', Inr dims') \<Rightarrow>
+        (if dims = [] \<or> \<not> dims_uniform dims' then
+           Inl [TyErr_InvalidArrayDimension loc]
+         else
+           Inr (CoreTy_Array elemTy' dims')))"
 
 | "elab_type_list env elabEnv ghost [] = Inr []"
 

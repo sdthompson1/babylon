@@ -99,7 +99,8 @@ next
     by (fastforce split: sum.splits option.splits dest!: set_zip_rightD)
 next
   case (8 env elabEnv ghost loc elemTy dims)
-  then show ?case by simp
+  then show ?case
+    by (auto split: sum.splits if_splits)
 next
   case (9 env elabEnv ghost)
   then show ?case by simp
@@ -118,6 +119,34 @@ proof (induction tys arbitrary: tys')
 next
   case (Cons ty tys)
   then show ?case by (auto split: sum.splits)
+qed
+
+(* The result of elab_dimensions has the same length as the input *)
+lemma elab_dimensions_length:
+  "elab_dimensions dims loc = Inr dims' \<Longrightarrow> length dims' = length dims"
+proof (induction dims arbitrary: dims')
+  case Nil
+  then show ?case by simp
+next
+  case (Cons d ds)
+  then show ?case by (auto split: sum.splits)
+qed
+
+(* A dimension produced by elab_dimension satisfies dim_in_range *)
+lemma elab_dimension_in_range:
+  "elab_dimension d loc = Inr d' \<Longrightarrow> dim_in_range d'"
+  by (induction d loc rule: elab_dimension.induct) (auto split: if_splits)
+
+(* All dimensions produced by elab_dimensions satisfy dim_in_range *)
+lemma elab_dimensions_in_range:
+  "elab_dimensions dims loc = Inr dims' \<Longrightarrow> list_all dim_in_range dims'"
+proof (induction dims arbitrary: dims')
+  case Nil
+  then show ?case by simp
+next
+  case (Cons d ds)
+  then show ?case
+    by (auto split: sum.splits dest: elab_dimension_in_range)
 qed
 
 
@@ -212,7 +241,40 @@ next
              split: sum.splits option.splits)
 next
   case (8 env elabEnv ghost loc elemTy dims)
-  then show ?case by simp
+  show ?case
+  proof (cases "elab_type env elabEnv ghost elemTy")
+    case (Inl errs)
+    then show ?thesis using "8.prems" by (auto split: sum.splits)
+  next
+    case elemTy_inr: (Inr elemTy')
+    from "8.IH"(1)[OF "8.prems"(1,2) elemTy_inr] have elemTy_wk: "is_well_kinded env elemTy'" .
+    show ?thesis
+    proof (cases "elab_dimensions dims loc")
+      case (Inl errs)
+      then show ?thesis using "8.prems" elemTy_inr by simp
+    next
+      case dims_inr: (Inr dims')
+      show ?thesis
+      proof (cases "dims = [] \<or> \<not> dims_uniform dims'")
+        case True
+        then show ?thesis using "8.prems" elemTy_inr dims_inr by simp
+      next
+        case dims_ok: False
+        from dims_inr have dims_len: "length dims' = length dims"
+          by (rule elab_dimensions_length)
+        from dims_ok dims_len have dims_nonempty: "dims' \<noteq> []" by auto
+        from dims_ok have dims_uniform': "dims_uniform dims'" by simp
+        from elab_dimensions_in_range[OF dims_inr]
+        have dims_range: "list_all dim_in_range dims'" .
+        have dims_wk: "array_dims_well_kinded dims'"
+          using dims_nonempty dims_uniform' dims_range
+          by (simp add: array_dims_well_kinded_def)
+        from "8.prems"(3) elemTy_inr dims_inr dims_ok
+        have ty'_eq: "ty' = CoreTy_Array elemTy' dims'" by simp
+        show ?thesis using ty'_eq elemTy_wk dims_wk by simp
+      qed
+    qed
+  qed
 next
   case (9 env elabEnv ghost)
   then show ?case by simp
@@ -302,8 +364,8 @@ next
     by (auto simp: list_all_iff split: sum.splits option.splits dest!: set_zip_rightD)
 next
   case (8 env elabEnv loc elemTy dims)
-  (* Array case is currently stubbed to Bool *)
-  then show ?case by simp
+  then show ?case
+    by (auto split: sum.splits if_splits)
 next
   case (9 env elabEnv)
   then show ?case by simp

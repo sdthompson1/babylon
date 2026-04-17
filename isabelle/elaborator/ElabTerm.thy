@@ -81,7 +81,9 @@ definition resolve_callee_function ::
   "resolve_callee_function env elabEnv ghost loc name tyArgs next_mv =
     (case fmlookup (TE_Functions env) name of
       Some funInfo \<Rightarrow>
-        if FI_Impure funInfo then
+        if name |\<in>| EE_VoidFunctions elabEnv then
+          Inl [TyErr_FunctionNoReturnType loc name]
+        else if FI_Impure funInfo then
           Inl [TyErr_ImpureFunctionInTermContext loc name]
         else if \<not> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo) then
           Inl [TyErr_RefArgInTermContext loc name]
@@ -607,11 +609,41 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot 
   "elab_term env elabEnv ghost (BabTm_Literal loc lit) next_mv =
     (case lit of
       BabLit_Bool b \<Rightarrow> Inr (CoreTm_LitBool b, CoreTy_Bool, next_mv)
-    | BabLit_Int i \<Rightarrow> 
+    | BabLit_Int i \<Rightarrow>
         (case get_type_for_int i of
           Some (sign, bits) \<Rightarrow> Inr (CoreTm_LitInt i, CoreTy_FiniteInt sign bits, next_mv)
         | None \<Rightarrow> Inl [TyErr_IntLiteralOutOfRange loc])
-    | _ \<Rightarrow> undefined)"  (* TODO: Other literals *)
+    | BabLit_Array tms \<Rightarrow>
+        \<comment> \<open>Allocate a fresh metavariable for the element type, then unify each
+            element's type against it (with integer coercion).\<close>
+        if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length tms)) then
+          Inl [TyErr_InvalidArrayDimension loc]
+        else
+          let elemTy = CoreTy_Var next_mv in
+          (case elab_term_list env elabEnv ghost tms (next_mv + 1) of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (elabTms, actualTys, next_mv') \<Rightarrow>
+              let expectedTys = replicate (length elabTms) elemTy in
+              (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                      (\<lambda>idx exp act. [TyErr_TypeMismatch loc exp act])
+                      elabTms actualTys expectedTys fmempty of
+                Inl errs \<Rightarrow> Inl errs
+              | Inr (coercedTms, finalSubst) \<Rightarrow>
+                  let finalElemTy = apply_subst finalSubst elemTy
+                  in Inr (CoreTm_LitArray finalElemTy coercedTms,
+                          CoreTy_Array finalElemTy
+                                       [CoreDim_Fixed (int (length coercedTms))],
+                          next_mv')))
+    | BabLit_String chars \<Rightarrow>
+        \<comment> \<open>String literal: array of u8. Each char is emitted as a cast from i32 to u8.\<close>
+        if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length chars)) then
+          Inl [TyErr_InvalidArrayDimension loc]
+        else
+          let u8_ty = CoreTy_FiniteInt Unsigned IntBits_8;
+              elemTms = map (\<lambda>c. CoreTm_Cast u8_ty (CoreTm_LitInt (int (of_char c)))) chars
+          in Inr (CoreTm_LitArray u8_ty elemTms,
+                  CoreTy_Array u8_ty [CoreDim_Fixed (int (length chars))],
+                  next_mv))"
 
   (* Variables and data constructors *)
 | "elab_term env elabEnv ghost (BabTm_Name loc name tyArgs) next_mv =
