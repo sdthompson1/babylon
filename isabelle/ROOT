@@ -1,12 +1,13 @@
 session Babylon = "HOL-Library" +
   directories
-    "base"
-    "loader"
-    "renamer"
-    "dependency"
-    "type_system"
+    "bab"
+    "bab_loader"
+    "bab_renamer"
+    "bab_dependency"
+    "core"
     "elaborator"
     "interpreter"
+    "util"
     "front_end"
   theories
     "front_end/CodeExport"
