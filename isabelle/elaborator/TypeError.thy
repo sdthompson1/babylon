@@ -60,5 +60,9 @@ datatype TypeError =
   (* Array indexing errors *)
   | TyErr_WrongNumberOfIndices Location nat nat  (* expected (= num dims), actual *)
   | TyErr_IndexTypeMismatch Location nat CoreType  (* index position, actual type *)
+  (* Pattern errors *)
+  | TyErr_DuplicateVarInPattern Location string  (* variable name bound twice in one pattern *)
+  | TyErr_RefPatternInTermContext Location string  (* `ref` binding used in a term-context match *)
+  | TyErr_EmptyMatch Location  (* match expression with zero arms *)
 
 end

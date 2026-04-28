@@ -988,9 +988,28 @@ and elab_term_list_correct:
    elabenv_well_formed env elabEnv \<Longrightarrow>
    (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
    list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty) newTms tys"
-proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
-       arbitrary: newTm ty next_mv' and newTms tys next_mv'
-       rule: elab_term_elab_term_list.induct)
+and elab_match_arms_correct:
+  \<comment> \<open>Placeholder conclusion. The real correctness statement requires the
+      MatchTree typing-preservation infrastructure (see MatchCompile.thy
+      "Typing predicates" section, currently TODO). Once that exists, this
+      should say something like: every (dp, body) row has body well-typed
+      with type bodyTy under env extended by dp's bindings, and dp is
+      compatible with apply_subst finalSubst scrutTy. For now we keep the
+      mutual induction structure in place with a True conclusion so the
+      remaining elab_term cases continue to typecheck.\<close>
+  "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv arms
+     = Inr (rows, bodyTy, finalSubst, next_mv') \<Longrightarrow>
+   tyenv_well_formed env \<Longrightarrow>
+   elabenv_well_formed env elabEnv \<Longrightarrow>
+   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
+   True"
+proof (induction env elabEnv ghost tm next_mv
+       and env elabEnv ghost tms next_mv
+       and env elabEnv ghost scrutTy expBodyTy accSubst next_mv arms
+       arbitrary: newTm ty next_mv'
+       and newTms tys next_mv'
+       and rows bodyTy finalSubst next_mv'
+       rule: elab_term_elab_term_list_elab_match_arms.induct)
   \<comment> \<open>Case: BabTm_Literal\<close>
   case (1 env elabEnv ghost loc lit next_mv)
   show ?case
@@ -2623,6 +2642,14 @@ next
     thus ?thesis using ih_tail_sub by (auto elim!: list_all2_mono)
   qed
   show ?case using ih_head ih_tail results by simp
+next
+  \<comment> \<open>Case: elab_match_arms empty — placeholder, see theorem comment\<close>
+  case (22 env elabEnv ghost scrutTy expBodyTy accSubst next_mv)
+  show ?case by simp
+next
+  \<comment> \<open>Case: elab_match_arms cons — placeholder, see theorem comment\<close>
+  case (23 env elabEnv ghost scrutTy expBodyTy accSubst next_mv pat body rest)
+  show ?case by simp
 qed
 
 

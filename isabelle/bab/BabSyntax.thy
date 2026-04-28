@@ -200,6 +200,15 @@ fun bab_term_location :: "BabTerm \<Rightarrow> Location" where
 | "bab_term_location (BabTm_Allocated loc _) = loc"
 | "bab_term_location (BabTm_Old loc _) = loc"
 
+fun bab_pattern_location :: "BabPattern \<Rightarrow> Location" where
+  "bab_pattern_location (BabPat_Var loc _ _) = loc"
+| "bab_pattern_location (BabPat_Bool loc _) = loc"
+| "bab_pattern_location (BabPat_Int loc _) = loc"
+| "bab_pattern_location (BabPat_Tuple loc _) = loc"
+| "bab_pattern_location (BabPat_Record loc _) = loc"
+| "bab_pattern_location (BabPat_Variant loc _ _) = loc"
+| "bab_pattern_location (BabPat_Wildcard loc) = loc"
+
 fun bab_attribute_location :: "BabAttribute \<Rightarrow> Location" where
   "bab_attribute_location (BabAttr_Requires loc _) = loc"
 | "bab_attribute_location (BabAttr_Ensures loc _) = loc"
@@ -307,6 +316,12 @@ definition list_type_size :: "BabType list \<Rightarrow> nat" where
 
 lemma bab_type_size_pos: "0 < bab_type_size ty"
   by (cases ty) auto
+
+lemma bab_pattern_size_pos: "0 < bab_pattern_size p"
+  apply (cases p)
+        apply auto
+  subgoal for _ _ opt by (cases opt) auto
+  done
 
 lemma bab_pattern_smaller_than_list:
   "p \<in> set pats \<Longrightarrow> bab_pattern_size p < Suc (sum_list (map bab_pattern_size pats))"

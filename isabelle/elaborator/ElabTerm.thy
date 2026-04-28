@@ -1,5 +1,5 @@
 theory ElabTerm
-  imports ElabType Unify "../core/CoreTypeSubst"
+  imports ElabType Unify ElabPattern "../core/CoreTypeSubst"
 begin
 
 (* Convert BabUnop to CoreUnop *)
@@ -603,7 +603,15 @@ definition build_updated_record ::
 fun elab_term :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat
                  \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType \<times> nat)"
 and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm list \<Rightarrow> nat
-                      \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreType list \<times> nat)" where
+                      \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreType list \<times> nat)"
+and elab_match_arms ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot
+   \<Rightarrow> CoreType                       \<comment> \<open>scrutinee type\<close>
+   \<Rightarrow> CoreType                       \<comment> \<open>expected body type (a fresh metavariable on the first call)\<close>
+   \<Rightarrow> TypeSubst \<Rightarrow> nat
+   \<Rightarrow> (BabPattern \<times> BabTerm) list
+   \<Rightarrow> TypeError list + ((DecPattern \<times> CoreTerm) list \<times> CoreType \<times> TypeSubst \<times> nat)"
+where
 
   (* Literals *)
   "elab_term env elabEnv ghost (BabTm_Literal loc lit) next_mv =
@@ -925,8 +933,29 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot 
                       Inr (CoreTm_ArrayProj newArr coercedIdxTms, elemTy, next_mv2)))
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc arrTy]))"
 
-  (* Match - TODO *)
-| "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv = undefined"
+  (* Match: elaborate the scrutinee, then each arm against the scrutinee
+     type, unifying body types pairwise. After all arms are processed we
+     apply the final substitution to the scrutinee, every DP_Var, and
+     every arm body, then hand the result off to the match compiler. *)
+| "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv =
+    (if arms = [] then Inl [TyErr_EmptyMatch loc]
+     else case elab_term env elabEnv ghost scrut next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
+         \<comment> \<open>Allocate a fresh metavariable for the body type; each arm unifies
+             its body type against it.\<close>
+         let bodyTyVar = CoreTy_Var mv1 in
+         (case elab_match_arms env elabEnv ghost scrutTy bodyTyVar fmempty (mv1 + 1) arms of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (rows, bodyTy, finalSubst, mv2) \<Rightarrow>
+              let finalScrut = apply_subst_to_term finalSubst scrutTm;
+                  finalRows = map (\<lambda>(dp, body).
+                                    (apply_subst_to_dec_pattern finalSubst dp,
+                                     apply_subst_to_term finalSubst body))
+                                  rows;
+                  finalBodyTy = apply_subst finalSubst bodyTy;
+                  resultTm = matchtree_to_term (compile_match finalScrut finalRows)
+              in Inr (resultTm, finalBodyTy, mv2)))"
 
   (* Sizeof: operand must be an array; allocatable dims require lvalue or ghost *)
 | "elab_term env elabEnv ghost (BabTm_Sizeof loc tm) next_mv =
@@ -972,6 +1001,39 @@ and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot 
         (case elab_term_list env elabEnv ghost tms next_mv' of
           Inl errs \<Rightarrow> Inl errs
         | Inr (tms', tys', next_mv'') \<Rightarrow> Inr (tm' # tms', ty' # tys', next_mv'')))"
+
+  (* elab_match_arms - empty list: return the expected body type unchanged. *)
+| "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv [] =
+     Inr ([], expBodyTy, accSubst, next_mv)"
+
+  (* elab_match_arms - process one arm: decorate the pattern, check no
+     ref/duplicate bindings, extend the env, elaborate the body, unify
+     the body type with the expected body type, then recurse on the
+     remaining arms. *)
+| "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv ((pat, body) # rest) =
+    (case decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (dp, accSubst1, next_mv1) \<Rightarrow>
+        (case check_pattern_for_term_match (bab_pattern_location pat) dp of
+           Inl errs \<Rightarrow> Inl errs
+         | Inr _ \<Rightarrow>
+            let env' = extend_env_with_pattern env ghost dp in
+            (case elab_term env' elabEnv ghost body next_mv1 of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
+                 let actualTy = apply_subst accSubst1 bodyTy;
+                     expectedTy = apply_subst accSubst1 expBodyTy
+                 in (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) actualTy expectedTy of
+                      None \<Rightarrow> Inl [TyErr_TypeMismatch (bab_term_location body)
+                                                         expectedTy actualTy]
+                    | Some s \<Rightarrow>
+                        let accSubst2 = compose_subst s accSubst1 in
+                        (case elab_match_arms env elabEnv ghost scrutTy
+                                expBodyTy accSubst2 next_mv2 rest of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr (restRows, finalBodyTy, finalSubst, next_mv3) \<Rightarrow>
+                             Inr ((dp, bodyTm) # restRows,
+                                  finalBodyTy, finalSubst, next_mv3))))))"
 
 
 end
