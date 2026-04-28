@@ -41,12 +41,12 @@ where
           Some (tyvars, targetTy) \<Rightarrow>
             \<comment> \<open>Typedef case (also handles type variables, which map to CoreTy_Var)\<close>
             (if length elabTyArgs \<noteq> length tyvars then
-              Inl [TyErr_WrongTypeArity loc name (length tyvars) (length tyargs)]
+              Inl [TyErr_WrongNumberOfTypeArgs loc name (length tyvars) (length tyargs)]
              else
               let subst = fmap_of_list (zip tyvars elabTyArgs);
                   resultTy = apply_subst subst targetTy
               in if ghost = NotGhost \<and> \<not> is_runtime_type env resultTy then
-                   Inl [TyErr_NonRuntimeType loc]
+                   Inl [TyErr_GhostTypeInNonGhost loc]
                  else
                    Inr resultTy)
         | None \<Rightarrow>
@@ -54,15 +54,15 @@ where
               Some expectedArity \<Rightarrow>
                 \<comment> \<open>Datatype case\<close>
                 (if length elabTyArgs \<noteq> expectedArity then
-                  Inl [TyErr_WrongTypeArity loc name expectedArity (length tyargs)]
+                  Inl [TyErr_WrongNumberOfTypeArgs loc name expectedArity (length tyargs)]
                  else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) elabTyArgs
                         \<or> name |\<in>| TE_GhostDatatypes env) then
-                  Inl [TyErr_NonRuntimeType loc]
+                  Inl [TyErr_GhostTypeInNonGhost loc]
                  else
                   Inr (CoreTy_Datatype name elabTyArgs))
             | None \<Rightarrow>
                 \<comment> \<open>Unknown type name\<close>
-                Inl [TyErr_UnknownTypeName loc name])))"
+                Inl [TyErr_InternalError_NameNotFound loc name])))"
 
 | "elab_type env elabEnv ghost (BabTy_Bool loc) =
     Inr CoreTy_Bool"
@@ -72,13 +72,13 @@ where
 
 | "elab_type env elabEnv ghost (BabTy_MathInt loc) =
     (if ghost = NotGhost then
-      Inl [TyErr_NonRuntimeType loc]
+      Inl [TyErr_GhostTypeInNonGhost loc]
     else
       Inr CoreTy_MathInt)"
 
 | "elab_type env elabEnv ghost (BabTy_MathReal loc) =
     (if ghost = NotGhost then
-      Inl [TyErr_NonRuntimeType loc]
+      Inl [TyErr_GhostTypeInNonGhost loc]
     else
       Inr CoreTy_MathReal)"
 

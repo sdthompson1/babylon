@@ -4,65 +4,56 @@ begin
 
 (* Possible errors returned by the elaborator *)
 
-(* TODO: Review these. Also, we probably should not be including core types here?? *)
-
 datatype TypeError =
+  (* Miscellaneous errors *)
   TyErr_OutOfFuel Location
   | TyErr_IntLiteralOutOfRange Location
   | TyErr_InvalidCast Location
-  | TyErr_NegateRequiresSigned Location
-  | TyErr_ComplementRequiresFiniteInt Location
-  | TyErr_NotRequiresBool Location
-  | TyErr_UnknownName Location string
+  (* Ghost errors *)
+  | TyErr_RequiresGhostContext Location
   | TyErr_GhostVariableInNonGhost Location string
-  | TyErr_WrongNumberOfTypeArgs Location string nat nat  (* name, expected, actual *)
-  | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
-  | TyErr_NonRuntimeType Location
+  | TyErr_GhostFunctionInNonGhost Location string
+  | TyErr_GhostTypeInNonGhost Location
+  (* Type mismatch errors *)
   | TyErr_TypeMismatch Location CoreType CoreType  (* loc, type1, type2 *)
-  | TyErr_ConditionNotBool Location CoreType       (* loc, actual condition type *)
-  | TyErr_MetavariableInInput                      (* metavariable found in input type *)
-  | TyErr_UnknownTypeName Location string
-  | TyErr_WrongTypeArity Location string nat nat   (* name, expected, actual *)
-  | TyErr_InvalidArrayDimension Location
-  (* Function call errors *)
-  | TyErr_UnknownFunction Location string
+  | TyErr_SignedTypeRequired Location CoreType
+  | TyErr_NumericTypeRequired Location CoreType
+  | TyErr_IntegerTypeRequired Location CoreType
+  | TyErr_FiniteIntegerTypeRequired Location CoreType
+  (* Kind errors (wrong number of type args) *)
+  | TyErr_WrongNumberOfTypeArgs Location string nat nat  (* name, expected, actual *)
+  (* Function/data-constructor call errors *)
   | TyErr_CalleeNotFunction Location
   | TyErr_ImpureFunctionInTermContext Location string
   | TyErr_RefArgInTermContext Location string
-  | TyErr_GhostFunctionInNonGhost Location string
   | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
   | TyErr_FunctionNoReturnType Location string
-  | TyErr_ArgTypeMismatch Location nat CoreType CoreType  (* loc, arg index, expected, actual *)
+  | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
   (* Binary operator errors *)
-  | TyErr_BinopRequiresNumeric Location BabBinop
-  | TyErr_BinopRequiresInteger Location BabBinop
-  | TyErr_BinopRequiresFiniteInteger Location BabBinop
-  | TyErr_BinopRequiresBool Location BabBinop
   | TyErr_BinopCannotCombineTypes Location BabBinop CoreType CoreType
   | TyErr_EqualityRequiresBoolOrNumeric Location
   (* Chain errors *)
   | TyErr_MixedOperatorsInChain Location
   | TyErr_MixedDirectionsInChain Location
-  | TyErr_InternalError_UnexpectedChainVar Location
   (* Type inference errors *)
   | TyErr_CannotInferType Location
-  (* Record errors *)
+  (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType
   | TyErr_FieldNotFound Location string CoreType  (* field name, record type *)
   | TyErr_TupleIndexOutOfRange Location nat CoreType  (* index, tuple type *)
-  | TyErr_RequiresGhostContext Location
-  | TyErr_NotAnArrayType Location CoreType
+  (* Sizeof errors *)
   | TyErr_SizeofRequiresLvalue Location
-  | TyErr_QuantifierBodyNotBool Location CoreType
-  | TyErr_UpdateFieldNotFound Location string CoreType  (* field name, record type *)
-  | TyErr_UpdateFieldTypeMismatch Location string CoreType CoreType  (* field, expected, actual *)
-  (* Array indexing errors *)
+  (* Array errors *)
+  | TyErr_NotAnArrayType Location CoreType
   | TyErr_WrongNumberOfIndices Location nat nat  (* expected (= num dims), actual *)
-  | TyErr_IndexTypeMismatch Location nat CoreType  (* index position, actual type *)
+  | TyErr_InvalidArrayDimension Location
   (* Pattern errors *)
   | TyErr_DuplicateVarInPattern Location string  (* variable name bound twice in one pattern *)
   | TyErr_RefPatternInTermContext Location string  (* `ref` binding used in a term-context match *)
   | TyErr_EmptyMatch Location  (* match expression with zero arms *)
+  (* Internal errors *)
+  | TyErr_InternalError_NameNotFound Location string  (* should have been caught by the renamer *)
+  | TyErr_InternalError_UnexpectedChainVar Location
 
 end

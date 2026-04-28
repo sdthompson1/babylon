@@ -146,7 +146,7 @@ proof -
   from elab_eq resolve_eq have len_args: "length args = length expArgTypes"
     by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
   from elab_eq resolve_eq len_args elab_args obtain finalArgTms finalSubst where
-    unify_args: "unify_and_coerce ?is_flex (\<lambda>idx exp act. [TyErr_ArgTypeMismatch loc idx exp act])
+    unify_args: "unify_and_coerce ?is_flex (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])
                      elabArgTms actualTypes expArgTypes fmempty
                  = Inr (finalArgTms, finalSubst)"
     by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
@@ -222,7 +222,7 @@ proof -
 
   \<comment> \<open>Extract unify_type_lists from unify_and_coerce\<close>
   obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex (\<lambda>idx exp act. [TyErr_ArgTypeMismatch loc idx exp act]) 0
+    unify_types: "unify_type_lists ?is_flex (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act]) 0
                      actualTypes expArgTypes fmempty = Inr unifySubst" and
     finalArgTms_eq: "finalArgTms = apply_call_coercions unifySubst elabArgTms actualTypes expArgTypes" and
     finalSubst_eq: "finalSubst = unifySubst"
@@ -311,7 +311,7 @@ lemma elab_term_correct_array_proj:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?mk_err = "(\<lambda>idx (_::CoreType) act. [TyErr_IndexTypeMismatch loc idx act])"
+  let ?mk_err = "(\<lambda>idx (exp::CoreType) act. [TyErr_TypeMismatch (bab_term_location (idxs ! idx)) exp act])"
 
   \<comment> \<open>Extract array type\<close>
   from elab_eq elab_arr obtain elemTy dims where
@@ -481,7 +481,7 @@ lemma elab_term_correct_array_lit:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?mk_err = "(\<lambda>(idx::nat) (exp::CoreType) (act::CoreType). [TyErr_TypeMismatch loc exp act])"
+  let ?mk_err = "(\<lambda>(idx::nat) (exp::CoreType) (act::CoreType). [TyErr_TypeMismatch (bab_term_location (tms ! idx)) exp act])"
   let ?elemTy = "CoreTy_Var next_mv"
   let ?expectedTypes = "replicate (length elabTms) ?elemTy"
 
@@ -676,7 +676,7 @@ lemma elab_term_correct_record_update:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?mk_err = "(\<lambda>idx exp act. [TyErr_UpdateFieldTypeMismatch loc (fst (flds ! idx)) exp act])"
+  let ?mk_err = "(\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (snd (flds ! idx))) exp act])"
 
   \<comment> \<open>Extract elaboration sub-results from elab_eq\<close>
   from elab_eq have no_dup: "first_duplicate_name fst flds = None"

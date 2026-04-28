@@ -346,7 +346,7 @@ proof -
     \<comment> \<open>Arithmetic: both numeric, same type or coerced to common type\<close>
     case arith
     from assms(1) resolved cop arith have
-      "check_and_coerce_binop is_numeric_type None TyErr_BinopRequiresNumeric cop
+      "check_and_coerce_binop is_numeric_type None TyErr_NumericTypeRequired cop
          lhsTm' lhsTy' rhsTm' rhsTy' loc babOp = Inr (resultTm, resultTy)"
       by (simp add: Let_def)
     from check_and_coerce_binop_correct[OF this lhs' rhs' assms(4)]
@@ -361,7 +361,7 @@ proof -
     \<comment> \<open>Modulo: both integer, same type or coerced\<close>
     case modulo
     from assms(1) resolved cop modulo have
-      "check_and_coerce_binop is_integer_type None TyErr_BinopRequiresInteger cop
+      "check_and_coerce_binop is_integer_type None TyErr_IntegerTypeRequired cop
          lhsTm' lhsTy' rhsTm' rhsTy' loc babOp = Inr (resultTm, resultTy)"
       by (simp add: Let_def)
     from check_and_coerce_binop_correct[OF this lhs' rhs' assms(4)]
@@ -376,7 +376,7 @@ proof -
     \<comment> \<open>Bitwise: both finite integer, same type or coerced\<close>
     case bitwise
     from assms(1) resolved cop bitwise have
-      "check_and_coerce_binop is_finite_integer_type None TyErr_BinopRequiresFiniteInteger cop
+      "check_and_coerce_binop is_finite_integer_type None TyErr_FiniteIntegerTypeRequired cop
          lhsTm' lhsTy' rhsTm' rhsTy' loc babOp = Inr (resultTm, resultTy)"
       by (simp add: Let_def)
     from check_and_coerce_binop_correct[OF this lhs' rhs' assms(4)]
@@ -411,7 +411,7 @@ proof -
     \<comment> \<open>Ordering: both numeric, result is Bool\<close>
     case ordering
     from assms(1) resolved cop ordering have
-      "check_and_coerce_binop is_numeric_type (Some CoreTy_Bool) TyErr_BinopRequiresNumeric cop
+      "check_and_coerce_binop is_numeric_type (Some CoreTy_Bool) TyErr_NumericTypeRequired cop
          lhsTm' lhsTy' rhsTm' rhsTy' loc babOp = Inr (resultTm, resultTy)"
       by (simp add: Let_def)
     from check_and_coerce_binop_correct[OF this lhs' rhs' assms(4)]

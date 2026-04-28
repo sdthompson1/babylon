@@ -97,7 +97,7 @@ definition resolve_callee_function ::
                   expArgTypes = map (\<lambda>(_, ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
                   retType = apply_subst subst (FI_ReturnType funInfo)
               in Inr (name, expArgTypes, CI_Function name newTyArgs retType, next_mv'))
-    | None \<Rightarrow> Inl [TyErr_UnknownFunction loc name])"
+    | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
 
 
 (* Resolve a data constructor callee. Checks ghost, resolves type args,
@@ -122,7 +122,7 @@ definition resolve_callee_data_ctor ::
                                           map (\<lambda>(_, ty). apply_subst subst ty) flds
                                       | _ \<Rightarrow> [])
               in Inr (name, expArgTypes, CI_DataCtor name dtName arity newTyArgs, next_mv'))
-    | None \<Rightarrow> Inl [TyErr_UnknownName loc name])"
+    | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
 
 
 (* Resolve the callee of a call expression.
@@ -222,10 +222,11 @@ definition unify_and_coerce :: "(nat \<Rightarrow> bool) \<Rightarrow> (nat \<Ri
    - type_pred: the predicate both operand types must satisfy
    - resultTyOverride: if None, the result type is the (common) operand type;
                         if Some ty, the result type is always ty (e.g. Bool for ordering ops)
-   - errMsg: the error constructor to use when the type predicate fails *)
+   - errMsg: the error constructor to use when the type predicate fails (applied to the
+             offending operand type) *)
 definition check_and_coerce_binop ::
   "(CoreType \<Rightarrow> bool) \<Rightarrow> CoreType option
-    \<Rightarrow> (Location \<Rightarrow> BabBinop \<Rightarrow> TypeError)
+    \<Rightarrow> (Location \<Rightarrow> CoreType \<Rightarrow> TypeError)
     \<Rightarrow> CoreBinop \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> Location \<Rightarrow> BabBinop
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
@@ -241,7 +242,7 @@ definition check_and_coerce_binop ::
              let resTy = (case resultTyOverride of None \<Rightarrow> commonTy | Some ty \<Rightarrow> ty)
              in Inr (CoreTm_Binop cop newLhs newRhs, resTy)
          | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy rhsTy])
-     else Inl [errMsg loc babOp])"
+     else Inl [errMsg loc (if type_pred lhsTy then rhsTy else lhsTy)])"
 
 (* Convert BabBinop to CoreBinop. Returns None for operators that need special handling. *)
 fun binop_to_core :: "BabBinop \<Rightarrow> CoreBinop option" where
@@ -380,26 +381,27 @@ fun elab_single_binop :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Righ
         \<comment> \<open>Type-check based on operator category\<close>
         if is_arithmetic_binop cop then
           check_and_coerce_binop is_numeric_type None
-            TyErr_BinopRequiresNumeric cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
+            TyErr_NumericTypeRequired cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
 
         else if is_modulo_binop cop then
           check_and_coerce_binop is_integer_type None
-            TyErr_BinopRequiresInteger cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
+            TyErr_IntegerTypeRequired cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
 
         else if is_bitwise_binop cop then
           check_and_coerce_binop is_finite_integer_type None
-            TyErr_BinopRequiresFiniteInteger cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
+            TyErr_FiniteIntegerTypeRequired cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
 
         else if is_shift_binop cop then
           \<comment> \<open>Shift: both finite integer, cast RHS to LHS type\<close>
           if is_finite_integer_type lhsTy' \<and> is_finite_integer_type rhsTy' then
             let castRhs = (if lhsTy' = rhsTy' then rhsTm' else CoreTm_Cast lhsTy' rhsTm')
             in Inr (CoreTm_Binop cop lhsTm' castRhs, lhsTy')
-          else Inl [TyErr_BinopRequiresFiniteInteger loc babOp]
+          else Inl [TyErr_FiniteIntegerTypeRequired loc
+                      (if is_finite_integer_type lhsTy' then rhsTy' else lhsTy')]
 
         else if is_ordering_binop cop then
           check_and_coerce_binop is_numeric_type (Some CoreTy_Bool)
-            TyErr_BinopRequiresNumeric cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
+            TyErr_NumericTypeRequired cop lhsTm' lhsTy' rhsTm' rhsTy' loc babOp
 
         else if is_eq_neq_binop cop then
           \<comment> \<open>Equality: ghost allows any type, non-ghost requires bool or numeric\<close>
@@ -418,7 +420,8 @@ fun elab_single_binop :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Righ
           \<comment> \<open>Logical: both Bool\<close>
           if lhsTy' = CoreTy_Bool \<and> rhsTy' = CoreTy_Bool then
             Inr (CoreTm_Binop cop lhsTm' rhsTm', CoreTy_Bool)
-          else Inl [TyErr_BinopRequiresBool loc babOp]
+          else Inl [TyErr_TypeMismatch loc CoreTy_Bool
+                      (if lhsTy' \<noteq> CoreTy_Bool then lhsTy' else rhsTy')]
 
         else undefined)"  \<comment> \<open>should be exhaustive\<close>
 
@@ -434,7 +437,8 @@ fun elab_binop_with_special :: "(nat \<Rightarrow> bool) \<Rightarrow> Location 
     (let (lhs', lTy, rhs', rTy) = resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy
      in if lTy = CoreTy_Bool \<and> rTy = CoreTy_Bool
         then Inr (CoreTm_Binop CoreBinop_Equal lhs' rhs', CoreTy_Bool)
-        else Inl [TyErr_BinopRequiresBool loc BabBinop_Iff])"
+        else Inl [TyErr_TypeMismatch loc CoreTy_Bool
+                    (if lTy \<noteq> CoreTy_Bool then lTy else rTy)])"
 | "elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy =
     elab_single_binop is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy"
 
@@ -633,7 +637,7 @@ where
           | Inr (elabTms, actualTys, next_mv') \<Rightarrow>
               let expectedTys = replicate (length elabTms) elemTy in
               (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                      (\<lambda>idx exp act. [TyErr_TypeMismatch loc exp act])
+                      (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (tms ! idx)) exp act])
                       elabTms actualTys expectedTys fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (coercedTms, finalSubst) \<Rightarrow>
@@ -674,7 +678,7 @@ where
               | Inr (newTyArgs, next_mv') \<Rightarrow>
                     Inr (CoreTm_VariantCtor name newTyArgs (CoreTm_Record []),
                          CoreTy_Datatype dtName newTyArgs, next_mv'))
-        | None \<Rightarrow> Inl [TyErr_UnknownName loc name]))"
+        | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name]))"
 
   (* Casts *)
 | "elab_term env elabEnv ghost (BabTm_Cast loc targetTy operand) next_mv = 
@@ -712,7 +716,7 @@ where
             \<comment> \<open>Unify the condition type against Bool. If the condition is already
                 Bool this is a no-op; if it is a flex metavariable it gets bound. \<close>
             (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
-              None \<Rightarrow> Inl [TyErr_ConditionNotBool loc condTy]
+              None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
             | Some condSubst \<Rightarrow>
               let finalCond = apply_subst_to_term condSubst newCond in
                 \<comment> \<open>Try to unify branch types\<close>
@@ -756,14 +760,14 @@ where
               if is_signed_numeric_type operandTy then
                 Inr (CoreTm_Unop CoreUnop_Negate newOperand, operandTy, next_mv')
               else
-                Inl [TyErr_NegateRequiresSigned loc]
+                Inl [TyErr_SignedTypeRequired loc operandTy]
           | BabUnop_Complement \<Rightarrow>
               if is_finite_integer_type operandTy then
                 Inr (CoreTm_Unop CoreUnop_Complement newOperand, operandTy, next_mv')
               else
-                Inl [TyErr_ComplementRequiresFiniteInt loc]
+                Inl [TyErr_FiniteIntegerTypeRequired loc operandTy]
           | BabUnop_Not \<Rightarrow>
-              Inl [TyErr_NotRequiresBool loc])))"
+              Inl [TyErr_TypeMismatch loc CoreTy_Bool operandTy])))"
 
   (* Binary operator *)
 | "elab_term env elabEnv ghost (BabTm_Binop loc lhs operands) next_mv =
@@ -811,7 +815,7 @@ where
                Inl errs \<Rightarrow> Inl errs
              | Inr (bodyTm, bodyTy, next_mv') \<Rightarrow>
                  (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) bodyTy CoreTy_Bool of
-                    None \<Rightarrow> Inl [TyErr_QuantifierBodyNotBool loc bodyTy]
+                    None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool bodyTy]
                   | Some bodySubst \<Rightarrow>
                       let finalBody = apply_subst_to_term bodySubst bodyTm;
                           finalVarTy = apply_subst bodySubst varTy
@@ -830,7 +834,7 @@ where
             Inl errs \<Rightarrow> Inl errs
           | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
               (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                      (\<lambda>idx exp act. [TyErr_ArgTypeMismatch loc idx exp act])
+                      (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])
                       elabArgTms actualTypes expArgTypes fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (finalArgTms, finalSubst) \<Rightarrow>
@@ -871,14 +875,14 @@ where
           (case parentTy of
             CoreTy_Record parentFields \<Rightarrow>
               (case check_update_fields_exist flds parentFields of
-                Some badName \<Rightarrow> Inl [TyErr_UpdateFieldNotFound loc badName parentTy]
+                Some badName \<Rightarrow> Inl [TyErr_FieldNotFound loc badName parentTy]
               | None \<Rightarrow>
                   (case elab_term_list env elabEnv ghost (map snd flds) next_mv1 of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (newUpdateTms, actualTypes, next_mv2) \<Rightarrow>
                       let expectedTypes = map (\<lambda>(name, _). the (map_of parentFields name)) flds
                       in (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                                  (\<lambda>idx exp act. [TyErr_UpdateFieldTypeMismatch loc (fst (flds ! idx)) exp act])
+                                  (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (snd (flds ! idx))) exp act])
                                   newUpdateTms actualTypes expectedTypes fmempty of
                         Inl errs \<Rightarrow> Inl errs
                       | Inr (coercedTms, finalSubst) \<Rightarrow>
@@ -926,7 +930,7 @@ where
                 Inl errs \<Rightarrow> Inl errs
               | Inr (elabIdxTms, actualTypes, next_mv2) \<Rightarrow>
                   (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                          (\<lambda>idx _ act. [TyErr_IndexTypeMismatch loc idx act])
+                          (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (idxs ! idx)) exp act])
                           elabIdxTms actualTypes (replicate (length dims) u64_type) fmempty of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (coercedIdxTms, _) \<Rightarrow>

@@ -61,13 +61,13 @@ definition resolve_pattern_ctor ::
    \<Rightarrow> TypeError list + (string \<times> nat list \<times> CoreType \<times> nat)" where
   "resolve_pattern_ctor env elabEnv ghost loc ctorName =
     (case fmlookup (TE_DataCtors env) ctorName of
-       None \<Rightarrow> Inl [TyErr_UnknownName loc ctorName]
+       None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc ctorName]
      | Some (dtName, tyvars, payloadTy) \<Rightarrow>
          if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
            Inl [TyErr_GhostVariableInNonGhost loc ctorName]
          else
            (case fmlookup (EE_DataCtorArity elabEnv) ctorName of
-              None \<Rightarrow> Inl [TyErr_UnknownName loc ctorName]
+              None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc ctorName]
             | Some arity \<Rightarrow> Inr (dtName, tyvars, payloadTy, arity)))"
 
 (* Check that the user-supplied payload (Some/None) matches the
@@ -122,7 +122,7 @@ and decorate_pattern_list ::
      | _ \<Rightarrow>
        (case try_unify_compose env int_literal_default_type scrutTy accSubst of
           Some s \<Rightarrow> Inr (DP_Int i, s, next_mv)
-        | None \<Rightarrow> Inl [TyErr_TypeMismatch loc int_literal_default_type e]))"
+        | None \<Rightarrow> Inl [TyErr_IntegerTypeRequired loc e]))"
 
   (* Tuple: desugars to a record pattern with synthetic field names.
      This builds an expected record type with fresh metavars for the field types,
@@ -309,5 +309,64 @@ definition check_pattern_for_term_match ::
         (case filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_vars dp) of
            [] \<Rightarrow> Inr ()
          | (_, name, _) # _ \<Rightarrow> Inl [TyErr_RefPatternInTermContext loc name]))"
+
+
+section \<open>Monotonicity of next_mv\<close>
+
+(* decorate_pattern and decorate_pattern_list only ever advance the next_mv counter. *)
+lemma decorate_pattern_next_mv_monotone:
+  "decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv = Inr (dp, accSubst', next_mv')
+   \<Longrightarrow> next_mv \<le> next_mv'"
+and decorate_pattern_list_next_mv_monotone:
+  "decorate_pattern_list env elabEnv ghost pats tys accSubst next_mv = Inr (dps, accSubst', next_mv')
+   \<Longrightarrow> next_mv \<le> next_mv'"
+proof (induction env elabEnv ghost pat scrutTy accSubst next_mv
+       and env elabEnv ghost pats tys accSubst next_mv
+       arbitrary: dp accSubst' next_mv'
+       and dps accSubst' next_mv'
+       rule: decorate_pattern_decorate_pattern_list.induct)
+  case (1 env elabEnv ghost loc vr name scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Var: next_mv unchanged\<close>
+  from "1.prems" show ?case by simp
+next
+  case (2 env elabEnv ghost loc scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Wildcard: next_mv unchanged\<close>
+  from "2.prems" show ?case by simp
+next
+  case (3 env elabEnv ghost loc b scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Bool: next_mv unchanged\<close>
+  from "3.prems" show ?case by (auto split: option.splits)
+next
+  case (4 env elabEnv ghost loc i scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Int: next_mv unchanged\<close>
+  from "4.prems" show ?case
+    by (auto simp: Let_def split: CoreType.splits option.splits)
+next
+  case (5 env elabEnv ghost loc pats scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Tuple: bumps next_mv by length pats, then recurses on the list\<close>
+  from "5.prems" "5.IH" show ?case
+    by (auto simp: Let_def split: option.splits sum.splits, fastforce)
+next
+  case (6 env elabEnv ghost loc userFlds scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Record: forwards decorate_pattern_list's next_mv\<close>
+  from "6.prems" "6.IH" show ?case
+    by (auto simp: Let_def split: option.splits CoreType.splits list.splits sum.splits)
+next
+  case (7 env elabEnv ghost loc ctorName optPayload scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Variant: bumps next_mv by length tyvars, then recurses on the inner pattern (if any)\<close>
+  from "7.prems" "7.IH" show ?case
+    by (auto simp: Let_def
+             split: sum.splits option.splits prod.splits,
+        fastforce+)
+next
+  case (8 env elabEnv ghost tys accSubst next_mv)
+  \<comment> \<open>decorate_pattern_list: empty list\<close>
+  from "8.prems" show ?case by simp
+next
+  case (9 env elabEnv ghost p ps tys accSubst next_mv)
+  \<comment> \<open>decorate_pattern_list: cons\<close>
+  from "9.prems" "9.IH" show ?case
+    by (auto simp: Let_def split: sum.splits prod.splits, fastforce)
+qed
 
 end

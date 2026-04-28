@@ -143,14 +143,22 @@ next
   thus ?thesis using False unfolding extend_env_with_tyvars_def by simp
 qed
 
-(* Monotonicity of next_mv: elab_term / elab_term_list only advance the counter. *)
+(* Monotonicity of next_mv: elab_term / elab_term_list / elab_match_arms only advance the counter. *)
 lemma elab_term_next_mv_monotone:
   "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
 and elab_term_list_next_mv_monotone:
   "elab_term_list env elabEnv ghost tms next_mv = Inr (tms', tys', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
-proof (induction env elabEnv ghost tm next_mv and env elabEnv ghost tms next_mv
-       arbitrary: tm' ty' next_mv' and tms' tys' next_mv'
-       rule: elab_term_elab_term_list.induct)
+and elab_match_arms_next_mv_monotone:
+  "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv arms
+     = Inr (rows, finalBodyTy, finalSubst, next_mv')
+   \<Longrightarrow> next_mv \<le> next_mv'"
+proof (induction env elabEnv ghost tm next_mv
+       and env elabEnv ghost tms next_mv
+       and env elabEnv ghost scrutTy expBodyTy accSubst next_mv arms
+       arbitrary: tm' ty' next_mv'
+       and tms' tys' next_mv'
+       and rows finalBodyTy finalSubst next_mv'
+       rule: elab_term_elab_term_list_elab_match_arms.induct)
   case (1 env elabEnv ghost loc lit next_mv)
   \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; Array allocates one meta and threads
        through elab_term_list; String is undefined (TODO)\<close>
@@ -369,8 +377,24 @@ next
     by (auto simp: unify_and_coerce_def split: sum.splits)
   with mono1 mono2 show ?case by simp
 next
-  case "16"  \<comment> \<open>BabTm_Match: undefined\<close>
-  from "16.prems" show ?case sorry
+  case (16 env elabEnv ghost loc scrut arms next_mv)
+  \<comment> \<open>BabTm_Match: threads through scrutinee then elab_match_arms\<close>
+  from "16.prems" have arms_nonempty: "arms \<noteq> []"
+    by (auto split: if_splits)
+  from "16.prems" arms_nonempty obtain scrutTm scrutTy mv1 where
+    elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
+    by (auto split: sum.splits)
+  from "16.prems" arms_nonempty elab_scrut obtain rows bodyTy finalSubst mv2 where
+    elab_arms: "elab_match_arms env elabEnv ghost scrutTy (CoreTy_Var mv1) fmempty (mv1 + 1) arms
+                = Inr (rows, bodyTy, finalSubst, mv2)"
+    by (auto simp: Let_def split: sum.splits)
+  have m1: "next_mv \<le> mv1"
+    using "16.IH"(1) arms_nonempty elab_scrut by simp
+  have m2: "mv1 + 1 \<le> mv2"
+    using "16.IH"(2)[OF arms_nonempty elab_scrut refl refl refl] elab_arms by (simp add: Let_def)
+  from "16.prems" arms_nonempty elab_scrut elab_arms have "next_mv' = mv2"
+    by (auto simp: Let_def split: sum.splits)
+  with m1 m2 show ?case by simp
 next
   case (17 env elabEnv ghost loc tm next_mv)
   \<comment> \<open>BabTm_Sizeof: forwards sub-term's next_mv\<close>
@@ -403,6 +427,43 @@ next
   from "21.prems" elab_head elab_tail have "next_mv' = next_mv2"
     by (auto split: sum.splits)
   with m1 m2 show ?case by simp
+next
+  case "22" \<comment> \<open>elab_match_arms: empty arms\<close>
+  from "22.prems" show ?case by simp
+next
+  case (23 env elabEnv ghost scrutTy expBodyTy accSubst next_mv pat body rest)
+  \<comment> \<open>elab_match_arms: cons - threads decorate_pattern, elab_term (body), recursive elab_match_arms\<close>
+  from "23.prems" obtain dp accSubst1 next_mv1 where
+    decorate_eq: "decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv
+                  = Inr (dp, accSubst1, next_mv1)"
+    by (auto split: sum.splits)
+  from "23.prems" decorate_eq obtain check_res where
+    check_eq: "check_pattern_for_term_match (bab_pattern_location pat) dp = Inr check_res"
+    by (auto split: sum.splits)
+  from "23.prems" decorate_eq check_eq obtain bodyTm bodyTy next_mv2 where
+    elab_body: "elab_term (extend_env_with_pattern env ghost dp) elabEnv ghost body next_mv1
+                = Inr (bodyTm, bodyTy, next_mv2)"
+    by (auto simp: Let_def split: sum.splits)
+  from "23.prems" decorate_eq check_eq elab_body obtain s where
+    unify_eq: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                  (apply_subst accSubst1 bodyTy) (apply_subst accSubst1 expBodyTy) = Some s"
+    by (auto simp: Let_def split: sum.splits option.splits)
+  from "23.prems" decorate_eq check_eq elab_body unify_eq
+  obtain restRows finalBodyTy' finalSubst' next_mv3 where
+    elab_rest: "elab_match_arms env elabEnv ghost scrutTy expBodyTy
+                  (compose_subst s accSubst1) next_mv2 rest
+                = Inr (restRows, finalBodyTy', finalSubst', next_mv3)"
+    by (auto simp: Let_def split: sum.splits)
+  have m1: "next_mv \<le> next_mv1"
+    using decorate_pattern_next_mv_monotone[OF decorate_eq] .
+  have m2: "next_mv1 \<le> next_mv2"
+    using "23.IH"(1)[OF decorate_eq refl refl check_eq refl elab_body] .
+  have m3: "next_mv2 \<le> next_mv3"
+    using "23.IH"(2)[OF decorate_eq refl refl check_eq refl elab_body refl refl refl refl
+                         unify_eq refl elab_rest] .
+  from "23.prems" decorate_eq check_eq elab_body unify_eq elab_rest have "next_mv' = next_mv3"
+    by (auto simp: Let_def split: sum.splits)
+  with m1 m2 m3 show ?case by simp
 qed
 
 (* Length of elab_term_list output matches input *)
