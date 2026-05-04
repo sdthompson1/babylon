@@ -1,14 +1,12 @@
 
 # The "Babylon" programming language
 
-**Babylon** is a new programming language designed to support formal
-verification within the context of a low-level, C- or Rust-like
-language.
-
+**Babylon** is a new, low-level, C- or Rust-like programming language
+with support for formal verification.
+  
 Design goals:
 
- - Support for formal verification (e.g. preconditions,
-   postconditions).
+ - Formal verification primitives (e.g. preconditions, postconditions).
  - Well-defined semantics (no "undefined behaviour" like C).
  - Keep it simple (no overly complex language features).
  - Minimal runtime system requirements (e.g. no garbage collection).
@@ -32,20 +30,20 @@ Current status:
       [vampire](https://vprover.github.io/).
 
  - The compiler is now reasonably complete, and working well; it is
-   possible to write and verify medium-sized programs using it. Having
-   said that, it is still only a prototype, so while people are
-   welcome to "try out" the language, it might be advisable to wait
-   for a later version (e.g. 1.0) before embarking upon any serious
-   projects using it.
+   possible to write and verify medium-sized programs using it.
+   However, as the "0.1" version number implies, it is currently just
+   a prototype, so while people are welcome to "try out" the language,
+   it would be advisable to wait for the 1.0 release before starting
+   any serious projects using it.
 
 Future goals include:
 
  - New language features (currently some important features are
    missing, e.g. recursion).
- - Formally verified language implementation in Isabelle (this would
-   increase confidence in the correctness of the compiler, as well as
-   demonstrating that the language itself has desirable properties
-   e.g. type safety).
+ - A formally defined semantics for the language, together with a
+   verified implementation in Isabelle (this would increase
+   confidence that the language is well-defined and the compiler
+   is correct).
  - Resource consumption limits (e.g. provide ways for users to
    prove bounds on memory allocation or number of CPU operations
    carried out by their programs).
@@ -122,6 +120,50 @@ in Babylon cannot crash -- the program does also include C code which
 is unverified). We do not verify functional correctness, i.e. that the
 rules of chess are correctly implemented -- but perhaps that could be
 a future project!*
+
+
+# Roadmap
+
+The current development plan is as follows:
+
+ 1. Finish the "typechecker" and "interpreter" sections of the
+    Isabelle implementation. This will rigorously define the semantics
+    of the language (as it currently exists).
+    
+ 2. Make an executable version of the Isabelle interpreter and run it
+    on the existing Babylon test suite. This will highlight
+    differences between the C and Isabelle implementations.
+    Investigate any differences found, and decide whether to modify
+    the C implementation to bring it into line with the Isabelle, or
+    vice versa.
+
+ 3. Write up a formal language definition document based on the
+    Isabelle elaborator, typechecker and interpreter implementations.
+    Also update the "language reference" document to be consistent
+    with the formal definition (and to be better-written in general).
+
+ 4. Add a C code generator backend to the Isabelle implementation.
+    Ideally, prove its correctness against a reference C semantics of
+    some sort.
+
+ 5. Add a verifier to the Isabelle implementation. Given a Babylon
+    program, this would generate a set of SMT problems to solve.
+    Ideally, we would prove a theorem along the lines of: if all of
+    the SMT problems are unsatisfiable, then the program cannot fail
+    with a "RuntimeError".
+
+ 6. Further testing, e.g. write a "babsmith" tool (similar to the
+    "Csmith" program) to generate random Babylon programs, and use
+    that to look for inconsistencies between the C and Isabelle
+    implementations.
+
+ 7. Add additional language features (e.g. recursion is not currently
+    supported in Babylon, but clearly it should be present in a
+    serious language).
+
+ 8. Finish everything up and release a "1.0" version.
+
+The above will probably take several years to complete.
 
 
 # Building/Installing
