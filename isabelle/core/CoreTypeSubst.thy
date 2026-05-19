@@ -3135,10 +3135,59 @@ next
     using mode_ghost varTy_wk_subst cond_subst ext_subst_eq result_env_eq
     by simp
 next
-  case (12 uw ux uy uz)
-  \<comment> \<open>TODO: Fix - typecheck rule is now defined (peels a Quant_Forall off
-      TE_ProofGoal), but the substitution-soundness proof for it is future work. \<close>
-  then show ?case sorry
+  case (12 env mode varName varTy)
+  \<comment> \<open>Fix: peels a Quant_Forall off TE_ProofGoal, introducing a ghost const
+      local. The current goal must be a Quant_Forall whose bound type is varTy;
+      substitution rewrites both varTy and the goal term uniformly, so the
+      substituted Fix peels the substituted quantifier and produces the
+      substituted result env. \<close>
+  from "12.prems"(1) obtain qn qVarTy bodyTm where
+    proof_goal: "TE_ProofGoal env
+                   = Some (CoreTm_Quantifier Quant_Forall qn qVarTy bodyTm)" and
+    mode_ghost: "mode = Ghost" and
+    qty_eq: "qVarTy = varTy" and
+    varTy_wk: "is_well_kinded env varTy" and
+    env'_eq: "calleeEnv' = env \<lparr>
+        TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+        TE_GhostLocals := finsert varName (TE_GhostLocals env),
+        TE_ConstLocals := finsert varName (TE_ConstLocals env),
+        TE_ProofGoal := Some bodyTm \<rparr>"
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
+
+  let ?be = "apply_subst_to_callee_env subst callerEnv env"
+
+  \<comment> \<open>Substituted varTy is well-kinded in the substituted env. \<close>
+  have varTy_wk_subst: "is_well_kinded ?be (apply_subst subst varTy)"
+    using apply_subst_preserves_well_kinded_callee[OF varTy_wk "12.prems"(3)] .
+
+  \<comment> \<open>Both the substituted result of the Fix clause and the substituted
+      calleeEnv' equal this single record extension. \<close>
+  have result_env_eq:
+    "apply_subst_to_callee_env subst callerEnv calleeEnv'
+       = ?be \<lparr>
+            TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
+            TE_GhostLocals := finsert varName (TE_GhostLocals ?be),
+            TE_ConstLocals := finsert varName (TE_ConstLocals ?be),
+            TE_ProofGoal := Some (apply_subst_to_term subst bodyTm) \<rparr>"
+    unfolding env'_eq apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
+
+  \<comment> \<open>Unfold the substituted Fix clause: apply_subst_to_stmt turns it into
+      CoreStmt_Fix varName (apply_subst subst varTy); the substituted env's goal
+      is the substituted quantifier (proof_goal + the TE_ProofGoal projection),
+      so the case/if evaluate to the substituted result env. \<close>
+  have lhs_eval:
+    "core_statement_type ?be mode
+        (apply_subst_to_stmt subst (CoreStmt_Fix varName varTy))
+       = Some (?be \<lparr>
+            TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?be),
+            TE_GhostLocals := finsert varName (TE_GhostLocals ?be),
+            TE_ConstLocals := finsert varName (TE_ConstLocals ?be),
+            TE_ProofGoal := Some (apply_subst_to_term subst bodyTm) \<rparr>)"
+    using mode_ghost qty_eq varTy_wk_subst
+    by (simp add: proof_goal)
+
+  show ?case
+    using lhs_eval result_env_eq by simp
 next
   case (13 vf vg vh)
   \<comment> \<open>TODO: Use - typechecking is undefined; cannot prove until implemented \<close>

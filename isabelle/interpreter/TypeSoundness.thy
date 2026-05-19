@@ -3311,7 +3311,11 @@ next
           qed
         qed
       next
-        case (CoreStmt_Fix _ _) with typing show ?thesis sorry
+        case (CoreStmt_Fix _ _)
+        \<comment> \<open>Fix only typechecks in Ghost mode; the outer case is NotGhost, so
+            typing is contradictory and the case is vacuous. \<close>
+        from typing CoreStmt_Fix show ?thesis
+          by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
       next
         case (CoreStmt_Obtain _ _ _)
         \<comment> \<open>Obtain only typechecks in Ghost mode; the outer case is NotGhost. \<close>

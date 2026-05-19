@@ -765,8 +765,10 @@ next
         then show ?thesis by simp
       next
         case (CoreStmt_Fix _ _)
-        \<comment> \<open>Typechecker is undefined for Fix — deferred. \<close>
-        show ?thesis sorry
+        \<comment> \<open>Fix only typechecks in Ghost mode, so under NotGhost the typing
+            premise is contradictory. \<close>
+        from typing CoreStmt_Fix show ?thesis
+          by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
       next
         case (CoreStmt_Obtain _ _ _)
         \<comment> \<open>Obtain only typechecks in Ghost mode, so under NotGhost the typing
