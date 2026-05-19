@@ -547,188 +547,255 @@ qed
 (* Properties of core_term_type *)
 (* ========================================================================== *)
 
-(* Helper lemmas: pattern functions don't depend on TE_ConstLocals *)
+(* pattern_compatible depends on the environment only through TE_DataCtors. *)
+lemma pattern_compatible_cong_env:
+  assumes "TE_DataCtors env1 = TE_DataCtors env2"
+  shows "pattern_compatible env1 p ty = pattern_compatible env2 p ty"
+  using assms by (cases p) (auto split: option.splits)
+
+(* pattern_compatible does not depend on TE_ConstLocals (corollary). *)
 lemma pattern_compatible_TE_ConstLocals_irrelevant [simp]:
   "pattern_compatible (env \<lparr> TE_ConstLocals := c \<rparr>) p ty =
    pattern_compatible env p ty"
-  by (cases p) (auto split: option.splits)
+  by (rule pattern_compatible_cong_env) simp
 
-(* core_term_type does not depend on TE_ConstLocals *)
+(* core_term_type depends on the environment only through the fields it actually
+   reads: the variable maps (locals/globals and their ghost sets), the function
+   and datatype/constructor tables, and the type-variable scopes (via
+   is_well_kinded / is_runtime_type). It does NOT depend on TE_ConstLocals,
+   TE_ProofGoal, TE_ReturnType, or TE_FunctionGhost. Hence any two environments
+   agreeing on the read fields assign the same type to any term. *)
+lemma core_term_type_cong_env:
+  assumes "TE_LocalVars env1 = TE_LocalVars env2"
+    and "TE_GlobalVars env1 = TE_GlobalVars env2"
+    and "TE_GhostLocals env1 = TE_GhostLocals env2"
+    and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
+    and "TE_TypeVars env1 = TE_TypeVars env2"
+    and "TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
+    and "TE_Functions env1 = TE_Functions env2"
+    and "TE_Datatypes env1 = TE_Datatypes env2"
+    and "TE_DataCtors env1 = TE_DataCtors env2"
+    and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
+    and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+  shows "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+proof -
+  \<comment> \<open>The read fields of env1 equal those of (env1 with env2's TE_ConstLocals,
+      TE_ProofGoal, TE_ReturnType, TE_FunctionGhost). We prove the cong via the
+      generalized irrelevance induction below, instantiated at the difference. \<close>
+  show ?thesis
+    using assms
+  proof (induction tm arbitrary: env1 env2 ghost)
+    case (CoreTm_Let var rhs body)
+    have rhs_eq: "core_term_type env1 ghost rhs = core_term_type env2 ghost rhs"
+      using CoreTm_Let.IH(1) CoreTm_Let.prems by blast
+    show ?case
+    proof (cases "core_term_type env2 ghost rhs")
+      case None
+      then show ?thesis using rhs_eq by (simp add: Let_def)
+    next
+      case (Some rhsTy)
+      have body_eq:
+        "core_term_type
+           (env1 \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env1),
+                   TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env1)
+                                      else fminus (TE_GhostLocals env1) {|var|}),
+                   TE_ConstLocals := finsert var (TE_ConstLocals env1) \<rparr>) ghost body
+         = core_term_type
+           (env2 \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env2),
+                   TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env2)
+                                      else fminus (TE_GhostLocals env2) {|var|}),
+                   TE_ConstLocals := finsert var (TE_ConstLocals env2) \<rparr>) ghost body"
+        by (rule CoreTm_Let.IH(2)) (simp_all add: CoreTm_Let.prems)
+      show ?thesis using Some rhs_eq body_eq CoreTm_Let.prems by (simp add: Let_def)
+    qed
+  next
+    case (CoreTm_LitArray ty tms)
+    have wk_eq: "is_well_kinded env1 ty = is_well_kinded env2 ty"
+      using is_well_kinded_cong_env CoreTm_LitArray.prems by metis
+    have rt_eq: "is_runtime_type env1 ty = is_runtime_type env2 ty"
+      using is_runtime_type_cong_env CoreTm_LitArray.prems by metis
+    have elem_eq: "\<And>tm. tm \<in> set tms \<Longrightarrow>
+        core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_LitArray.IH CoreTm_LitArray.prems by blast
+    have la_eq: "list_all (\<lambda>tm. core_term_type env1 ghost tm = Some ty) tms =
+                 list_all (\<lambda>tm. core_term_type env2 ghost tm = Some ty) tms"
+      unfolding list_all_iff using elem_eq by auto
+    show ?case using wk_eq rt_eq la_eq by simp
+  next
+    case (CoreTm_Var name)
+    then show ?case
+      by (simp add: tyenv_lookup_var_def tyenv_var_ghost_def split: option.splits)
+  next
+    case (CoreTm_FunctionCall fnName tyArgs args)
+    have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
+      using is_well_kinded_cong_env CoreTm_FunctionCall.prems by metis
+    have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
+      using is_runtime_type_cong_env CoreTm_FunctionCall.prems by metis
+    have IH: "\<And>tm. tm \<in> set args \<Longrightarrow>
+      core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems by blast
+    have la2_eq: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
+          case core_term_type env1 ghost tm of
+            None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys =
+        list_all2 (\<lambda>tm expectedTy.
+          case core_term_type env2 ghost tm of
+            None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
+      by (rule iffI; erule list.rel_mono_strong; simp add: IH)
+    have la_wk: "list_all (is_well_kinded env1) tyArgs = list_all (is_well_kinded env2) tyArgs"
+      by (simp add: list_all_iff wk_eq)
+    have la_rt: "list_all (is_runtime_type env1) tyArgs = list_all (is_runtime_type env2) tyArgs"
+      by (simp add: list_all_iff rt_eq)
+    show ?case
+      using CoreTm_FunctionCall.prems
+      by (auto simp add: la_wk la_rt la2_eq split: option.splits if_splits)
+  next
+    case (CoreTm_VariantCtor ctorName tyArgs arg)
+    have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
+      using is_well_kinded_cong_env CoreTm_VariantCtor.prems by metis
+    have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
+      using is_runtime_type_cong_env CoreTm_VariantCtor.prems by metis
+    have arg_eq: "core_term_type env1 ghost arg = core_term_type env2 ghost arg"
+      using CoreTm_VariantCtor.IH CoreTm_VariantCtor.prems by blast
+    have la_wk: "list_all (is_well_kinded env1) tyArgs = list_all (is_well_kinded env2) tyArgs"
+      by (simp add: list_all_iff wk_eq)
+    have la_rt: "list_all (is_runtime_type env1) tyArgs = list_all (is_runtime_type env2) tyArgs"
+      by (simp add: list_all_iff rt_eq)
+    show ?case
+      by (simp only: core_term_type.simps
+                     CoreTm_VariantCtor.prems arg_eq la_wk la_rt)
+  next
+    case (CoreTm_Record flds)
+    have IH: "\<And>nm tm. (nm, tm) \<in> set flds \<Longrightarrow>
+      core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_Record.IH CoreTm_Record.prems by (metis sndI snds.intros)
+    have map_eq: "map (\<lambda>(name, y). core_term_type env1 ghost y) flds =
+                  map (\<lambda>(name, y). core_term_type env2 ghost y) flds"
+      by (rule map_cong) (auto simp: IH)
+    show ?case by (simp add: map_eq)
+  next
+    case (CoreTm_Match scrut arms)
+    have scrut_eq: "core_term_type env1 ghost scrut = core_term_type env2 ghost scrut"
+      using CoreTm_Match.IH(1) CoreTm_Match.prems by blast
+    have bodies_eq: "\<And>body. body \<in> snd ` set arms \<Longrightarrow>
+      core_term_type env1 ghost body = core_term_type env2 ghost body"
+      using CoreTm_Match.IH(2) CoreTm_Match.prems 
+      by (metis (no_types, lifting) image_iff snds.intros)
+    have hd_eq: "arms \<noteq> [] \<Longrightarrow>
+      core_term_type env1 ghost (snd (hd arms)) = core_term_type env2 ghost (snd (hd arms))"
+      using bodies_eq by (cases arms) auto
+    have tl_eq: "\<And>ty. list_all (\<lambda>body. core_term_type env1 ghost body = Some ty)
+                                (tl (map snd arms)) =
+                 list_all (\<lambda>body. core_term_type env2 ghost body = Some ty)
+                                (tl (map snd arms))"
+    proof -
+      fix ty
+      have "\<And>body. body \<in> set (tl (map snd arms)) \<Longrightarrow> body \<in> snd ` set arms"
+        by (cases arms) auto
+      then show "?thesis ty" using bodies_eq by (auto simp: list_all_iff)
+    qed
+    have pc_eq: "\<And>p t. pattern_compatible env1 p t = pattern_compatible env2 p t"
+      by (rule pattern_compatible_cong_env) (rule CoreTm_Match.prems)
+    show ?case
+    proof (cases "core_term_type env2 ghost scrut")
+      case None then show ?thesis using scrut_eq by simp
+    next
+      case (Some scrutTy)
+      show ?thesis
+      proof (cases "arms = []")
+        case True then show ?thesis using Some scrut_eq by simp
+      next
+        case False
+        have "core_term_type env1 ghost (snd (hd arms)) =
+              core_term_type env2 ghost (snd (hd arms))"
+          using hd_eq False .
+        then show ?thesis using Some False scrut_eq tl_eq pc_eq
+          by (auto split: if_splits CoreType.splits option.splits simp: Let_def)
+      qed
+    qed
+  next
+    case (CoreTm_Quantifier quant var varTy body)
+    have body_eq:
+      "core_term_type
+         (env1 \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env1),
+                 TE_GhostLocals := finsert var (TE_GhostLocals env1) \<rparr>) ghost body
+       = core_term_type
+         (env2 \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env2),
+                 TE_GhostLocals := finsert var (TE_GhostLocals env2) \<rparr>) ghost body"
+      by (rule CoreTm_Quantifier.IH) (simp_all add: CoreTm_Quantifier.prems)
+    have wk_eq: "is_well_kinded env1 varTy = is_well_kinded env2 varTy"
+      using is_well_kinded_cong_env CoreTm_Quantifier.prems by metis
+    show ?case
+      using CoreTm_Quantifier.prems body_eq wk_eq
+      by (cases ghost) (simp_all add: Let_def split: option.splits CoreType.splits)
+  next
+    case (CoreTm_ArrayProj tm idxTms)
+    have IH_tm: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_ArrayProj.IH(1) CoreTm_ArrayProj.prems by blast
+    have IH_idx: "\<And>idx. idx \<in> set idxTms \<Longrightarrow>
+      core_term_type env1 ghost idx = core_term_type env2 ghost idx"
+      using CoreTm_ArrayProj.IH(2) CoreTm_ArrayProj.prems by blast
+    have la_eq: "\<And>ty. list_all (\<lambda>tm. core_term_type env1 ghost tm = Some ty) idxTms =
+                      list_all (\<lambda>tm. core_term_type env2 ghost tm = Some ty) idxTms"
+      using IH_idx by (auto simp: list_all_iff)
+    show ?case using IH_tm la_eq by (simp split: option.splits CoreType.splits if_splits)
+  next
+    case (CoreTm_Cast targetTy tm)
+    have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
+      using is_runtime_type_cong_env CoreTm_Cast.prems by metis
+    have tm_eq: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_Cast.IH CoreTm_Cast.prems by blast
+    show ?case
+      by (simp only: core_term_type.simps tm_eq rt_eq)
+  next
+    case (CoreTm_VariantProj tm ctorName)
+    have tm_eq: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_VariantProj.IH CoreTm_VariantProj.prems by blast
+    show ?case
+      by (simp only: core_term_type.simps tm_eq CoreTm_VariantProj.prems)
+  next
+    case (CoreTm_Allocated tm)
+    then show ?case
+      by (metis (full_types) GhostOrNot.exhaust core_term_type.simps(19,20))
+  next
+    case (CoreTm_Old tm)
+    then show ?case
+      by (metis (full_types) GhostOrNot.exhaust core_term_type.simps(21,22))
+  next
+    case (CoreTm_Unop op operand)
+    have "core_term_type env1 ghost operand = core_term_type env2 ghost operand"
+      using CoreTm_Unop.IH CoreTm_Unop.prems by blast
+    then show ?case by (simp split: option.splits)
+  next
+    case (CoreTm_Binop op lhs rhs)
+    have "core_term_type env1 ghost lhs = core_term_type env2 ghost lhs"
+         "core_term_type env1 ghost rhs = core_term_type env2 ghost rhs"
+      using CoreTm_Binop.IH CoreTm_Binop.prems by blast+
+    then show ?case by (simp split: option.splits prod.splits)
+  next
+    case (CoreTm_RecordProj tm fldName)
+    have "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_RecordProj.IH CoreTm_RecordProj.prems by blast
+    then show ?case by (simp split: option.splits CoreType.splits)
+  next
+    case (CoreTm_Sizeof tm)
+    have "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_Sizeof.IH CoreTm_Sizeof.prems by blast
+    then show ?case by (simp split: option.splits CoreType.splits)
+  qed simp_all
+qed
+
+(* core_term_type does not depend on TE_ConstLocals (corollary of the
+   environment congruence: a TE_ConstLocals update touches no read field). *)
 lemma core_term_type_TE_ConstLocals_irrelevant:
   "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm =
    core_term_type env ghost tm"
-proof (induction tm arbitrary: env ghost c)
-  case (CoreTm_Let var rhs body)
-  have rhs_eq: "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost rhs =
-                core_term_type env ghost rhs"
-    using CoreTm_Let.IH(1) .
-  show ?case
-  proof (cases "core_term_type env ghost rhs")
-    case None
-    then show ?thesis using rhs_eq by (simp add: Let_def)
-  next
-    case (Some rhsTy)
-    let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                       TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
-                                        else fminus (TE_GhostLocals env) {|var|}),
-                       TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
-    have body_eq: "\<And>env' ghost c.
-            core_term_type (env' \<lparr> TE_ConstLocals := c \<rparr>) ghost body =
-            core_term_type env' ghost body"
-      using CoreTm_Let.IH(2) .
-    then show ?thesis using Some rhs_eq by (simp add: Let_def)
-  qed
-next
-  case (CoreTm_LitArray ty tms)
-  have wk_eq: "is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty" for c
-    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-  have rt_eq: "is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty" for c
-    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-  have IH: "\<And>tm. tm \<in> set tms \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
-    using CoreTm_LitArray.IH by blast
-  hence la_eq: "list_all (\<lambda>tm. core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = Some ty) tms =
-                list_all (\<lambda>tm. core_term_type env ghost tm = Some ty) tms"
-    by (induction tms) auto
-  show ?case using wk_eq rt_eq la_eq by simp
-next
-  case (CoreTm_Var name)
-  then show ?case by (simp split: option.splits)
-next
-  case (CoreTm_FunctionCall fnName tyArgs args)
-  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-  have IH: "\<And>tm. tm \<in> set args \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
-    using CoreTm_FunctionCall.IH by blast
-  have la2_eq: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
-        case core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm of
-          None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys =
-      list_all2 (\<lambda>tm expectedTy.
-        case core_term_type env ghost tm of
-          None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
-  proof (intro iffI)
-    fix ys
-    assume "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm of
-          None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
-    then show "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type env ghost tm of
-          None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
-      using IH list.rel_mono_strong by force
-  next
-    fix ys
-    assume "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type env ghost tm of
-          None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
-    then show "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm of
-          None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
-      by (simp add: IH list.rel_mono_strong)
-  qed
-  have la_wk: "list_all (is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>)) tyArgs =
-               list_all (is_well_kinded env) tyArgs"
-    by (simp add: list_all_iff wk_eq)
-  have la_rt: "list_all (is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>)) tyArgs =
-               list_all (is_runtime_type env) tyArgs"
-    by (simp add: list_all_iff rt_eq)
-  show ?case by (auto simp add: la_wk la_rt la2_eq split: option.splits if_splits)
-next
-  case (CoreTm_VariantCtor ctorName tyArgs arg)
-  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-  then show ?case using CoreTm_VariantCtor
-    by (auto simp: wk_eq rt_eq list_all_iff split: option.splits if_splits)
-next
-  case (CoreTm_Record flds)
-  have IH: "\<And>nm tm. (nm, tm) \<in> set flds \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
-    using CoreTm_Record.IH by (auto simp: image_iff)
-  have map_eq: "map (\<lambda>(name, y). core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost y) flds =
-                map (\<lambda>(name, y). core_term_type env ghost y) flds"
-    by (rule map_cong, simp, auto simp: IH)
-  show ?case by (simp add: map_eq)
-next
-  case (CoreTm_Match scrut arms)
-  have scrut_eq: "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost scrut =
-                  core_term_type env ghost scrut"
-    using CoreTm_Match.IH(1) by blast
-  have bodies_eq: "\<And>body. body \<in> snd ` set arms \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost body = core_term_type env ghost body"
-    using CoreTm_Match.IH(2) by fastforce
-  have hd_eq: "arms \<noteq> [] \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost (snd (hd arms)) =
-    core_term_type env ghost (snd (hd arms))"
-    using bodies_eq by (cases arms) auto
-  have tl_eq: "\<And>ty. list_all (\<lambda>body. core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost body = Some ty)
-                              (tl (map snd arms)) =
-               list_all (\<lambda>body. core_term_type env ghost body = Some ty)
-                              (tl (map snd arms))"
-  proof -
-    fix ty
-    have "\<And>body. body \<in> set (tl (map snd arms)) \<Longrightarrow> body \<in> snd ` set arms"
-      by (cases arms) auto
-    then show "?thesis ty" using bodies_eq by (auto simp: list_all_iff)
-  qed
-  show ?case
-  proof (cases "core_term_type env ghost scrut")
-    case None then show ?thesis using scrut_eq by simp
-  next
-    case (Some scrutTy)
-    show ?thesis
-    proof (cases "arms = []")
-      case True then show ?thesis using Some scrut_eq by simp
-    next
-      case False
-      have "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost (snd (hd arms)) =
-            core_term_type env ghost (snd (hd arms))"
-        using hd_eq False .
-      then show ?thesis using Some False scrut_eq tl_eq by (auto split: if_splits CoreType.splits option.splits simp: Let_def)
-    qed
-  qed
-next
-  case (CoreTm_Quantifier quant var varTy body)
-  have body_eq: "\<And>env' ghost c.
-    core_term_type (env' \<lparr> TE_ConstLocals := c \<rparr>) ghost body = core_term_type env' ghost body"
-    using CoreTm_Quantifier.IH .
-  have env_reorder: "env \<lparr> TE_ConstLocals := c,
-                           TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr> =
-                     (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>) \<lparr> TE_ConstLocals := c \<rparr>"
-    by simp
-  show ?case by (cases ghost) (simp_all add: body_eq env_reorder Let_def
-                                        split: option.splits CoreType.splits)
-next
-  case (CoreTm_ArrayProj tm idxTms)
-  have IH_tm: "core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = core_term_type env ghost tm"
-    using CoreTm_ArrayProj.IH(1) .
-  have IH_idx: "\<And>idx. idx \<in> set idxTms \<Longrightarrow>
-    core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost idx = core_term_type env ghost idx"
-    using CoreTm_ArrayProj.IH(2) by blast
-  have la_eq: "\<And>ty. list_all (\<lambda>tm. core_term_type (env \<lparr> TE_ConstLocals := c \<rparr>) ghost tm = Some ty) idxTms =
-                    list_all (\<lambda>tm. core_term_type env ghost tm = Some ty) idxTms"
-    using IH_idx by (auto simp: list_all_iff)
-  show ?case using IH_tm la_eq by (simp split: option.splits CoreType.splits if_splits)
-next
-  case (CoreTm_Cast targetTy tm)
-  then show ?case by (simp split: option.splits if_splits)
-next
-  case (CoreTm_VariantProj tm ctorName)
-  then show ?case by (simp split: option.splits CoreType.splits)
-next
-  case (CoreTm_Allocated tm)
-  then show ?case
-    by (metis GhostOrNot.exhaust core_term_type.simps(19,20))
-next
-  case (CoreTm_Old tm)
-  then show ?case
-    by (metis GhostOrNot.exhaust core_term_type.simps(21,22))
-qed simp_all
+  by (rule core_term_type_cong_env) simp_all
+
+(* core_term_type does not depend on TE_ProofGoal (same reasoning). *)
+lemma core_term_type_TE_ProofGoal_irrelevant:
+  "core_term_type (env \<lparr> TE_ProofGoal := g \<rparr>) ghost tm =
+   core_term_type env ghost tm"
+  by (rule core_term_type_cong_env) simp_all
 
 
 (* Weakening/irrelevance: adding a variable to the environment that is not free

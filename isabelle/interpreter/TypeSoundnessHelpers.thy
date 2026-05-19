@@ -82,6 +82,30 @@ fun sound_statement_result :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> C
                 state_matches_env state' env_mid storeTyping'
               \<and> storeTyping_extends storeTyping storeTyping'))"
 
+(* sound_statement_result does not depend on TE_ProofGoal of either env: each
+   conjunct that mentions env/env' does so through value_has_type,
+   state_matches_env, tyenv_fixed_eq, or TE_ReturnType, all of which ignore
+   TE_ProofGoal. *)
+lemma sound_statement_result_TE_ProofGoal_irrelevant_left [simp]:
+  "sound_statement_result (env \<lparr> TE_ProofGoal := g \<rparr>) env' storeTyping res
+     = sound_statement_result env env' storeTyping res"
+proof (cases res)
+  case (Inl err) then show ?thesis by simp
+next
+  case (Inr execRes) then show ?thesis
+    by (cases execRes) simp_all
+qed
+
+lemma sound_statement_result_TE_ProofGoal_irrelevant_right [simp]:
+  "sound_statement_result env (env' \<lparr> TE_ProofGoal := g \<rparr>) storeTyping res
+     = sound_statement_result env env' storeTyping res"
+proof (cases res)
+  case (Inl err) then show ?thesis by simp
+next
+  case (Inr execRes) then show ?thesis
+    by (cases execRes) simp_all
+qed
+
 
 (*-----------------------------------------------------------------------------*)
 (* Helpers for interpreter soundness lemmas *)

@@ -505,10 +505,15 @@ where
            | None \<Rightarrow> None)
      else None)"
 
-  (* Assert: condition must be bool; proof body typechecks in Ghost context *)
+  (* Assert: condition must be bool; proof body typechecks in Ghost context.
+     We install condTm as TE_ProofGoal so that top-level CoreStmt_Fix statements
+     in proofBody can peel its leading Quant_Forall quantifiers. The result env
+     is the original env, so the goal (and any Fix-introduced locals) do not
+     escape the assert. *)
 | "core_statement_type env ghost (CoreStmt_Assert condTm proofBody) =
     (if core_term_type env Ghost condTm = Some CoreTy_Bool
-     then (case core_statement_list_type env Ghost proofBody of
+     then (case core_statement_list_type (env \<lparr> TE_ProofGoal := Some condTm \<rparr>)
+                  Ghost proofBody of
              Some _ \<Rightarrow> Some env
            | None \<Rightarrow> None)
      else None)"
@@ -540,7 +545,9 @@ where
                    bodies = map snd arms
                in if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
                   else if \<not> patterns_regular pats then None
-                  else if list_all (\<lambda>body. core_statement_list_type env matchGhost body \<noteq> None) bodies
+                  else if list_all (\<lambda>body. core_statement_list_type
+                                              (env \<lparr> TE_ProofGoal := None \<rparr>)
+                                              matchGhost body \<noteq> None) bodies
                        then Some env
                        else None)
      else None)"
@@ -561,7 +568,8 @@ where
                then (case core_term_type env Ghost decrTm of
                        Some decrTy \<Rightarrow>
                          if is_valid_decreases_type decrTy
-                         then (case core_statement_list_type env whileGhost body of
+                         then (case core_statement_list_type
+                                      (env \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body of
                                  Some _ \<Rightarrow> Some env
                                | None \<Rightarrow> None)
                          else None
@@ -584,8 +592,27 @@ where
              else None
      else None)"
 
+  (* Fix: "fix x : T". Only valid in Ghost mode and at the immediate top level
+     of an enclosing assert's proof body (tracked by TE_ProofGoal). The current 
+     goal must be a universally-quantified term whose bound-variable type is exactly T
+     (the quantifier's own bound name is irrelevant). The fixed variable is a ghost,
+     const local (it is a spec-only, non-assignable witness). Stripping the
+     Quant_Forall and storing the body as the new TE_ProofGoal lets a following
+     Fix peel the next quantifier. The goal body is carried unchanged (it still
+     refers to the quantifier's original bound name); this is sound because
+     TE_ProofGoal is only consumed structurally. *)
+| "core_statement_type env ghost (CoreStmt_Fix varName varTy) =
+    (case TE_ProofGoal env of
+       Some (CoreTm_Quantifier Quant_Forall _ qVarTy bodyTm) \<Rightarrow>
+         (if ghost = Ghost \<and> qVarTy = varTy \<and> is_well_kinded env varTy
+          then Some (env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
+                            TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                            TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                            TE_ProofGoal   := Some bodyTm \<rparr>)
+          else None)
+     | _ \<Rightarrow> None)"
+
   (* TODO: remaining statement forms *)
-| "core_statement_type _ _ (CoreStmt_Fix _ _) = undefined"
 | "core_statement_type _ _ (CoreStmt_Use _) = undefined"
 
   (* Statement lists *)
@@ -614,7 +641,7 @@ where
       by (simp add: size_list_estimation')
     hence z_le: "size_list size z \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
       by simp
-    show "(Inr (env, matchGhost, z),
+    show "(Inr (env \<lparr> TE_ProofGoal := None \<rparr>, matchGhost, z),
            Inl (env, ghost, CoreStmt_Match matchGhost scrut arms))
           \<in> measure (\<lambda>y. case y of
               Inl (_, _, stmt) \<Rightarrow> size stmt
@@ -722,7 +749,24 @@ next
   case (CoreStmt_Assign assignGhost lhsTm rhsTm)
   with assms show ?thesis by (auto split: if_splits option.splits)
 next
-  case (CoreStmt_Fix _ _) with assms show ?thesis sorry
+  case (CoreStmt_Fix varName varTy)
+  from assms CoreStmt_Fix obtain bodyTm where
+    wk: "is_well_kinded env varTy" and env'_eq:
+    "env' = env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
+                   TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                   TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                   TE_ProofGoal   := Some bodyTm \<rparr>"
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
+  from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
+  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                  TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
+  from tyenv_well_formed_TE_ProofGoal_irrelevant[OF
+        tyenv_well_formed_TE_ConstLocals_irrelevant[OF this]]
+  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                 TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
+                              \<lparr> TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>
+                              \<lparr> TE_ProofGoal := Some bodyTm \<rparr>)" .
+  thus ?thesis using env'_eq by simp
 next
   case (CoreStmt_Obtain varName varTy condTm)
   from assms CoreStmt_Obtain obtain
@@ -786,7 +830,8 @@ next
   case (CoreStmt_Assign assignGhost lhsTm rhsTm)
   with assms show ?thesis by (auto split: if_splits option.splits)
 next
-  case (CoreStmt_Fix _ _) with assms show ?thesis sorry
+  case (CoreStmt_Fix _ _) with assms show ?thesis
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
 next
   case (CoreStmt_Obtain _ _ _) with assms show ?thesis
     by (auto simp: Let_def split: if_splits)
@@ -890,7 +935,14 @@ next
   with assms have "env' = env" by (auto split: if_splits option.splits)
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
-  case (CoreStmt_Fix _ _) with assms show ?thesis sorry
+  case (CoreStmt_Fix varName varTy)
+  from assms CoreStmt_Fix obtain bodyTm where
+    "env' = env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
+                   TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                   TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                   TE_ProofGoal   := Some bodyTm \<rparr>"
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
+  thus ?thesis unfolding tyenv_fixed_eq_def by simp
 next
   case (CoreStmt_Obtain varName varTy condTm)
   from assms CoreStmt_Obtain have env'_eq:

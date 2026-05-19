@@ -411,7 +411,8 @@ definition apply_subst_to_callee_env ::
       TE_LocalVars := fmmap (apply_subst subst) (TE_LocalVars calleeEnv),
       TE_TypeVars := TE_TypeVars callerEnv,
       TE_RuntimeTypeVars := TE_RuntimeTypeVars callerEnv,
-      TE_ReturnType := apply_subst subst (TE_ReturnType calleeEnv)
+      TE_ReturnType := apply_subst subst (TE_ReturnType calleeEnv),
+      TE_ProofGoal := map_option (apply_subst_to_term subst) (TE_ProofGoal calleeEnv)
     \<rparr>"
 
 (* Field projections - these come up everywhere downstream. *)
@@ -483,6 +484,20 @@ lemma apply_subst_to_callee_env_TE_DataCtorsByType [simp]:
 lemma apply_subst_to_callee_env_TE_GhostDatatypes [simp]:
   "TE_GhostDatatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)
      = TE_GhostDatatypes calleeEnv"
+  by (simp add: apply_subst_to_callee_env_def)
+
+lemma apply_subst_to_callee_env_TE_ProofGoal [simp]:
+  "TE_ProofGoal (apply_subst_to_callee_env subst callerEnv calleeEnv)
+     = map_option (apply_subst_to_term subst) (TE_ProofGoal calleeEnv)"
+  by (simp add: apply_subst_to_callee_env_def)
+
+(* Setting TE_ProofGoal commutes with apply_subst_to_callee_env, with the goal
+   itself substituted. Used in the Assert/While/Match cases of the subst lemma,
+   where the recursive call runs in an env with TE_ProofGoal updated. *)
+lemma apply_subst_to_callee_env_TE_ProofGoal_update:
+  "apply_subst_to_callee_env subst callerEnv (calleeEnv \<lparr> TE_ProofGoal := g \<rparr>)
+     = (apply_subst_to_callee_env subst callerEnv calleeEnv)
+         \<lparr> TE_ProofGoal := map_option (apply_subst_to_term subst) g \<rparr>"
   by (simp add: apply_subst_to_callee_env_def)
 
 (* pattern_compatible only inspects the top-level type constructor, which
@@ -2073,7 +2088,8 @@ qed
      pre-existing local-var type or return type.
 
    This lemma is a corollary of core_term_type_subst_callee_env: under these
-   conditions, apply_subst_to_callee_env subst env env = env. *)
+   conditions, apply_subst_to_callee_env subst env env equals env up to
+   TE_ProofGoal, which core_term_type ignores. *)
 lemma apply_subst_to_term_preserves_typing:
   assumes typed: "core_term_type env mode tm = Some ty"
       and wf: "tyenv_well_formed env"
@@ -2090,8 +2106,12 @@ proof -
   have locals_id: "fmmap (apply_subst subst) (TE_LocalVars env) = TE_LocalVars env"
     by (meson fmap.map_ident_strong fmran'E locals_unaffected)
 
-  \<comment> \<open>(i) The substituted callee env equals env. \<close>
-  have env_subst_id: "apply_subst_to_callee_env subst env env = env"
+  \<comment> \<open>(i) The substituted callee env equals env up to TE_ProofGoal (the only
+      field substitution can still touch under these assumptions). Since
+      core_term_type ignores TE_ProofGoal, this is enough. \<close>
+  have env_subst_id:
+    "apply_subst_to_callee_env subst env env
+       = env \<lparr> TE_ProofGoal := map_option (apply_subst_to_term subst) (TE_ProofGoal env) \<rparr>"
     unfolding apply_subst_to_callee_env_def
     by (simp add: locals_id ret_unaffected)
 
@@ -2129,7 +2149,9 @@ proof -
   qed
 
   from core_term_type_subst_callee_env[OF typed wf ok subst_wk subst_rt ok_rt]
-  show ?thesis using env_subst_id by simp
+  show ?thesis
+    unfolding env_subst_id
+    by (simp add: core_term_type_TE_ProofGoal_irrelevant)
 qed
 
 
@@ -2752,36 +2774,53 @@ next
     by (auto split: option.splits)
 next
   case (6 env mode condTm proofBody)
-  \<comment> \<open>Assert: condition must be Bool in Ghost mode; proof body typechecks in Ghost
-      context with no constraint on the resulting env. The IH for Assert is
-      conditional on the condition typechecking; we extract it and apply it. \<close>
+  \<comment> \<open>Assert: condition must be Bool in Ghost mode; the proof body typechecks in
+      Ghost context in env extended with TE_ProofGoal := Some condTm. The result
+      env is env itself. The IH for Assert is conditional on the condition
+      typechecking; we extract it and apply it to the goal-extended env. \<close>
+  let ?genv = "env \<lparr> TE_ProofGoal := Some condTm \<rparr>"
   from "6.prems"(1) obtain proofEnv where
     cond_typed: "core_term_type env Ghost condTm = Some CoreTy_Bool" and
-    proof_typed: "core_statement_list_type env Ghost proofBody = Some proofEnv" and
+    proof_typed: "core_statement_list_type ?genv Ghost proofBody = Some proofEnv" and
     env'_eq: "calleeEnv' = env"
     by (auto split: if_splits option.splits)
 
   \<comment> \<open>Term lemma applied to the condition. The condition is checked in Ghost mode
-      so the runtime preconditions are vacuous. \<close>
+      (in the original env, before the TE_ProofGoal extension) so the runtime
+      preconditions are vacuous. \<close>
   have ghost_rt: "Ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
     by simp
-  have ghost_rt_ok: "Ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
+  have ghost_rt_ok_env: "Ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
     by simp
-  from core_term_type_subst_callee_env[OF cond_typed "6.prems"(2,3,4) ghost_rt ghost_rt_ok]
+  have ghost_rt_ok: "Ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv ?genv"
+    by simp
+  from core_term_type_subst_callee_env[OF cond_typed "6.prems"(2,3,4)
+         ghost_rt ghost_rt_ok_env]
   have cond_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv env) Ghost
                     (apply_subst_to_term subst condTm)
        = Some CoreTy_Bool"
     by simp
 
-  \<comment> \<open>The Assert IH is conditional on cond_typed. Discharge that and use it. \<close>
-  from "6.IH"[OF cond_typed proof_typed "6.prems"(2,3,4) ghost_rt ghost_rt_ok]
+  \<comment> \<open>The IH's premises (well-formedness, subst-ok) are invariant under setting
+      TE_ProofGoal, so they transfer from the original env to ?genv. \<close>
+  have genv_wf: "tyenv_well_formed ?genv"
+    using "6.prems"(2) by (rule tyenv_well_formed_TE_ProofGoal_irrelevant)
+  have genv_subst_ok: "callee_env_subst_ok subst callerEnv ?genv"
+    using "6.prems"(3) by (simp add: callee_env_subst_ok_def)
+
+  \<comment> \<open>The Assert IH is conditional on cond_typed. Discharge that and use it on the
+      goal-extended env, then push the substitution through the TE_ProofGoal
+      update via apply_subst_to_callee_env_TE_ProofGoal_update. \<close>
+  from "6.IH"[OF cond_typed proof_typed genv_wf genv_subst_ok "6.prems"(4)
+                 ghost_rt ghost_rt_ok]
   have proof_subst:
     "core_statement_list_type
-       (apply_subst_to_callee_env subst callerEnv env) Ghost
-       (apply_subst_to_stmt_list subst proofBody)
+       (apply_subst_to_callee_env subst callerEnv env
+          \<lparr> TE_ProofGoal := map_option (apply_subst_to_term subst) (Some condTm) \<rparr>)
+       Ghost (apply_subst_to_stmt_list subst proofBody)
      = Some (apply_subst_to_callee_env subst callerEnv proofEnv)"
-    by simp
+    by (simp add: apply_subst_to_callee_env_TE_ProofGoal_update)
 
   show ?case
     using cond_subst proof_subst env'_eq by simp
@@ -2817,12 +2856,15 @@ next
       typecheck as a statement list. The result env is env itself. After
       substitution, the scrutinee gets a substituted type and each arm body is
       substituted individually; pattern checks survive substitution. \<close>
+  \<comment> \<open>Arm bodies typecheck in env with TE_ProofGoal reset to None (a match arm
+      is not at the immediate top level of an assert proof). \<close>
+  let ?nenv = "env \<lparr> TE_ProofGoal := None \<rparr>"
   from "9.prems"(1) obtain scrutTy where
     ghost_ok: "mode = Ghost \<longrightarrow> matchGhost = Ghost" and
     scrut_typed: "core_term_type env matchGhost scrut = Some scrutTy" and
     pats_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
     pats_regular: "patterns_regular (map fst arms)" and
-    bodies_typed: "list_all (\<lambda>body. core_statement_list_type env matchGhost body \<noteq> None)
+    bodies_typed: "list_all (\<lambda>body. core_statement_list_type ?nenv matchGhost body \<noteq> None)
                             (map snd arms)" and
     env'_eq: "calleeEnv' = env"
     by (auto simp: Let_def split: if_splits option.splits)
@@ -2835,6 +2877,16 @@ next
   have rt_ok_for_matchGhost:
     "matchGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
     using ghost_ok "9.prems"(6) by (cases mode) auto
+
+  \<comment> \<open>The IH premises (well-formedness, subst-ok, runtime-ok) are invariant under
+      resetting TE_ProofGoal, so they transfer from env to ?nenv. \<close>
+  have nenv_wf: "tyenv_well_formed ?nenv"
+    using "9.prems"(2) by (rule tyenv_well_formed_TE_ProofGoal_irrelevant)
+  have nenv_subst_ok: "callee_env_subst_ok subst callerEnv ?nenv"
+    using "9.prems"(3) by (simp add: callee_env_subst_ok_def)
+  have nenv_rt_ok_for_matchGhost:
+    "matchGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv ?nenv"
+    using rt_ok_for_matchGhost by (simp add: callee_env_subst_runtime_ok_def)
 
   let ?be = "apply_subst_to_callee_env subst callerEnv env"
   let ?subst_arms = "map (\<lambda>(pat, body). (pat, apply_subst_to_stmt_list subst body)) arms"
@@ -2863,7 +2915,8 @@ next
   \<comment> \<open>Each arm body's statement-list-typing transfers under substitution. The IH
       for Match gives us this for any arm body z in set (map snd arms). \<close>
   have bodies_typed_subst:
-    "list_all (\<lambda>body. core_statement_list_type ?be matchGhost body \<noteq> None)
+    "list_all (\<lambda>body. core_statement_list_type (?be \<lparr> TE_ProofGoal := None \<rparr>)
+                                              matchGhost body \<noteq> None)
               (map snd ?subst_arms)"
     unfolding list_all_iff
   proof
@@ -2874,19 +2927,22 @@ next
       by auto
     from arm_in have body_in_snd: "body \<in> set (map snd arms)" by force
     from bodies_typed body_in_snd obtain armEnv where
-      body_typed: "core_statement_list_type env matchGhost body = Some armEnv"
+      body_typed: "core_statement_list_type ?nenv matchGhost body = Some armEnv"
       by (auto simp: list_all_iff)
     have pats_compat_nn: "\<not> \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)"
       using pats_compat by simp
     have pats_regular_nn: "\<not> \<not> patterns_regular (map fst arms)"
       using pats_regular by simp
+    \<comment> \<open>The IH yields the substituted typing in apply_subst_to_callee_env of ?nenv,
+        which equals ?be with TE_ProofGoal reset to None. \<close>
     from "9.IH"[OF ghost_ok scrut_typed refl refl pats_compat_nn pats_regular_nn
-                   body_in_snd body_typed "9.prems"(2,3,4)
-                   rt_for_matchGhost rt_ok_for_matchGhost]
-    have "core_statement_list_type ?be matchGhost (apply_subst_to_stmt_list subst body)
+                   body_in_snd body_typed nenv_wf nenv_subst_ok "9.prems"(4)
+                   rt_for_matchGhost nenv_rt_ok_for_matchGhost]
+    have "core_statement_list_type
+            (?be \<lparr> TE_ProofGoal := None \<rparr>) matchGhost (apply_subst_to_stmt_list subst body)
             = Some (apply_subst_to_callee_env subst callerEnv armEnv)"
-      by simp
-    thus "core_statement_list_type ?be matchGhost body' \<noteq> None"
+      by (simp add: apply_subst_to_callee_env_TE_ProofGoal_update)
+    thus "core_statement_list_type (?be \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body' \<noteq> None"
       using body'_eq by simp
   qed
 
@@ -2894,7 +2950,7 @@ next
       substituted input env. \<close>
   show ?case
     using ghost_ok scrut_subst pats_compat_subst pats_regular_subst bodies_typed_subst env'_eq
-    by (simp add: Let_def)
+    by (simp add: Let_def apply_subst_to_callee_env_TE_ProofGoal_update)
 next
   case (10 env mode whileGhost condTm invars decrTm body)
   \<comment> \<open>While: cond is Bool in whileGhost mode; each invariant is Bool in Ghost
@@ -2903,18 +2959,21 @@ next
       Under substitution: cond and invariants get their types substituted
       (but Bool is closed); decreases type is fully concrete, so unchanged;
       body is substituted via the IH. \<close>
+  \<comment> \<open>The loop body typechecks in env with TE_ProofGoal reset to None (a loop
+      body is not at the immediate top level of an assert proof). \<close>
+  let ?nenv = "env \<lparr> TE_ProofGoal := None \<rparr>"
   from "10.prems"(1) obtain decrTy where
     ghost_ok: "mode = Ghost \<longrightarrow> whileGhost = Ghost" and
     cond_typed: "core_term_type env whileGhost condTm = Some CoreTy_Bool" and
     invars_typed: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
     decr_typed: "core_term_type env Ghost decrTm = Some decrTy" and
     decr_valid: "is_valid_decreases_type decrTy" and
-    body_typed_ex: "core_statement_list_type env whileGhost body \<noteq> None" and
+    body_typed_ex: "core_statement_list_type ?nenv whileGhost body \<noteq> None" and
     env'_eq: "calleeEnv' = env"
     by (auto split: if_splits option.splits CoreType.splits)
 
   from body_typed_ex obtain bodyEnv where
-    body_typed: "core_statement_list_type env whileGhost body = Some bodyEnv"
+    body_typed: "core_statement_list_type ?nenv whileGhost body = Some bodyEnv"
     by auto
 
   \<comment> \<open>Runtime-substitution-range conditions for whileGhost mode (same as the
@@ -2925,6 +2984,16 @@ next
   have rt_ok_for_whileGhost:
     "whileGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
     using ghost_ok "10.prems"(6) by (cases mode) auto
+
+  \<comment> \<open>The IH premises (well-formedness, subst-ok, runtime-ok) are invariant under
+      resetting TE_ProofGoal, so they transfer from env to ?nenv. \<close>
+  have nenv_wf: "tyenv_well_formed ?nenv"
+    using "10.prems"(2) by (rule tyenv_well_formed_TE_ProofGoal_irrelevant)
+  have nenv_subst_ok: "callee_env_subst_ok subst callerEnv ?nenv"
+    using "10.prems"(3) by (simp add: callee_env_subst_ok_def)
+  have nenv_rt_ok_for_whileGhost:
+    "whileGhost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv ?nenv"
+    using rt_ok_for_whileGhost by (simp add: callee_env_subst_runtime_ok_def)
 
   \<comment> \<open>Ghost-mode runtime conditions are vacuous. \<close>
   have ghost_rt: "Ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
@@ -2977,14 +3046,17 @@ next
       While gives us this directly. The IH's signature includes a separate
       `x2 = CoreTy_Bool` premise; we pass `cond_typed` then `refl`. \<close>
   from "10.IH"[OF ghost_ok cond_typed refl invars_typed decr_typed decr_valid body_typed
-                  "10.prems"(2,3,4) rt_for_whileGhost rt_ok_for_whileGhost]
+                  nenv_wf nenv_subst_ok "10.prems"(4) rt_for_whileGhost
+                  nenv_rt_ok_for_whileGhost]
   have body_subst:
-    "core_statement_list_type ?be whileGhost (apply_subst_to_stmt_list subst body)
-       = Some (apply_subst_to_callee_env subst callerEnv bodyEnv)" .
+    "core_statement_list_type (?be \<lparr> TE_ProofGoal := None \<rparr>) whileGhost
+       (apply_subst_to_stmt_list subst body)
+       = Some (apply_subst_to_callee_env subst callerEnv bodyEnv)"
+    by (simp add: apply_subst_to_callee_env_TE_ProofGoal_update)
 
   show ?case
     using ghost_ok cond_subst invars_subst decr_subst decr_valid body_subst env'_eq
-    by (simp add: list_all_iff)
+    by (simp add: list_all_iff apply_subst_to_callee_env_TE_ProofGoal_update)
 next
   case (11 env mode varName varTy condTm)
   \<comment> \<open>Obtain: declares a new ghost local variable and asserts a boolean property
@@ -3064,7 +3136,8 @@ next
     by simp
 next
   case (12 uw ux uy uz)
-  \<comment> \<open>TODO: Fix - typechecking is undefined; cannot prove until implemented \<close>
+  \<comment> \<open>TODO: Fix - typecheck rule is now defined (peels a Quant_Forall off
+      TE_ProofGoal), but the substitution-soundness proof for it is future work. \<close>
   then show ?case sorry
 next
   case (13 vf vg vh)

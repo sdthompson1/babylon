@@ -27,8 +27,16 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTy
       TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_ReturnType := FI_ReturnType funInfo,
-      TE_FunctionGhost := NotGhost
+      TE_FunctionGhost := NotGhost,
+      TE_ProofGoal := None
     \<rparr>"
+
+(* body_env_for overrides TE_ProofGoal (to None) and depends on no other field
+   that a TE_ProofGoal update touches, so the input env's proof goal is
+   irrelevant. *)
+lemma body_env_for_input_TE_ProofGoal_irrelevant [simp]:
+  "body_env_for (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo = body_env_for env funInfo"
+  by (simp add: body_env_for_def)
 
 (* Store typing: a list of types, one per store slot, giving each slot's designated
    type. Length-matched with IS_Store state. Pins down the type of each slot so that
@@ -96,6 +104,15 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
        Inl bodyStmts \<Rightarrow>
          (\<exists>env'. core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts = Some env')
      | Inr externFun \<Rightarrow> extern_fun_contract env funInfo externFun))"
+
+(* fun_info_matches_interp_fun depends on env only through body_env_for env
+   funInfo (and extern_fun_contract, which is True), so the input env's proof
+   goal is irrelevant. *)
+lemma fun_info_matches_interp_fun_TE_ProofGoal_irrelevant [simp]:
+  "fun_info_matches_interp_fun (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo interpFun
+     = fun_info_matches_interp_fun env funInfo interpFun"
+  by (simp add: fun_info_matches_interp_fun_def extern_fun_contract_def
+        split: sum.splits)
 
 
 (* All local variables in the type env (TE_LocalVars, but not ghost)
@@ -178,6 +195,32 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     non_consts_in_locals_or_refs state env \<and>
     const_locals_match state env \<and>
     store_well_typed state env storeTyping"
+
+(* type_at_path reads env only through TE_DataCtors, so a TE_ProofGoal update
+   is irrelevant. *)
+lemma type_at_path_TE_ProofGoal_irrelevant [simp]:
+  "type_at_path (env \<lparr> TE_ProofGoal := g \<rparr>) ty p = type_at_path env ty p"
+proof (induction p arbitrary: ty)
+  case Nil then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+qed
+
+(* state_matches_env does not depend on TE_ProofGoal: every conjunct projects
+   only the variable/function/store fields, never the proof goal. *)
+lemma state_matches_env_TE_ProofGoal_irrelevant [simp]:
+  "state_matches_env state (env \<lparr> TE_ProofGoal := g \<rparr>) storeTyping
+     = state_matches_env state env storeTyping"
+  by (simp add: state_matches_env_def
+        local_vars_exist_in_state_def global_vars_exist_in_state_def
+        no_extra_local_vars_def no_extra_global_vars_def
+        funs_exist_in_state_def no_extra_funs_def
+        non_consts_in_locals_or_refs_def const_locals_match_def
+        store_well_typed_def
+        local_var_in_state_with_type_def global_var_in_state_with_type_def
+        split: option.splits)
 
 (* body_env_for preserves tyenv_well_formed, given that funInfo is one of env's
    non-ghost functions. The interesting parts are:

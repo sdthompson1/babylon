@@ -785,9 +785,12 @@ next
           then show ?thesis using CoreStmt_While by simp
         next
           case NotGhost
+          \<comment> \<open>The loop body typechecks in env with TE_ProofGoal reset to None;
+              the statement-list IH accepts a typing under any env. \<close>
           from typing CoreStmt_While NotGhost have
             cond_ty: "core_term_type env NotGhost condTm = Some CoreTy_Bool" and
-            body_typed: "\<exists>bodyEnv'. core_statement_list_type env NotGhost bodyStmts
+            body_typed: "\<exists>bodyEnv'. core_statement_list_type
+                                      (env \<lparr> TE_ProofGoal := None \<rparr>) NotGhost bodyStmts
                                     = Some bodyEnv'"
             by (auto split: if_splits option.splits CoreType.splits)
           have while_typed: "core_statement_type env NotGhost
@@ -797,7 +800,8 @@ next
                           = interp_term fuel state condTm"
             using IH_term[of condTm] cond_ty by blast
           from body_typed obtain bodyEnv' where
-            body_ty: "core_statement_list_type env NotGhost bodyStmts = Some bodyEnv'" ..
+            body_ty: "core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>)
+                        NotGhost bodyStmts = Some bodyEnv'" ..
           have body_eq:
             "\<And>st :: 'w InterpState.
                interp_statement_list fuel st (apply_subst_to_stmt_list subst bodyStmts)
@@ -826,10 +830,13 @@ next
           then show ?thesis using CoreStmt_Match by simp
         next
           case NotGhost
+          \<comment> \<open>Arm bodies typecheck in env with TE_ProofGoal reset to None; the
+              statement-list IH accepts a typing under any env. \<close>
           from typing CoreStmt_Match NotGhost obtain scrutTy where
             scrut_ty: "core_term_type env NotGhost scrut = Some scrutTy" and
             bodies_typed: "list_all (\<lambda>body.
-              \<exists>e. core_statement_list_type env NotGhost body = Some e) (map snd arms)"
+              \<exists>e. core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>)
+                    NotGhost body = Some e) (map snd arms)"
             by (auto simp: Let_def split: if_splits option.splits)
           have scrut_eq: "interp_term fuel state (apply_subst_to_term subst scrut)
                            = interp_term fuel state scrut"
@@ -842,7 +849,8 @@ next
             fix body and st :: "'w InterpState"
             assume body_in: "body \<in> snd ` set arms"
             from body_in bodies_typed obtain bodyEnv' where
-              body_ty: "core_statement_list_type env NotGhost body = Some bodyEnv'"
+              body_ty: "core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>)
+                          NotGhost body = Some bodyEnv'"
               by (auto simp: list_all_iff)
             show "interp_statement_list fuel st (apply_subst_to_stmt_list subst body)
                    = interp_statement_list fuel st body"
