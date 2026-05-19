@@ -2,100 +2,6 @@ theory ElabTermCorrectHelpers
   imports ElabTerm ElabTypeCorrect "../core/CoreTypecheck" Unify3
 begin
 
-(* Extend a type environment with a half-open range of fresh rigid type variables.
-   When not in ghost context, these are also added to TE_RuntimeTypeVars, since they
-   will only ever be instantiated with runtime types. In ghost context we only add
-   them to TE_TypeVars, leaving their runtime status unconstrained. *)
-definition extend_env_with_tyvars :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> CoreTyEnv" where
-  "extend_env_with_tyvars env ghost lo hi =
-     env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list [lo..<hi],
-           TE_RuntimeTypeVars := (if ghost = NotGhost
-                                   then TE_RuntimeTypeVars env |\<union>| fset_of_list [lo..<hi]
-                                   else TE_RuntimeTypeVars env) \<rparr>"
-
-(* Identity: when the interval is empty, the env is unchanged. *)
-lemma extend_env_with_tyvars_empty [simp]:
-  assumes "lo \<ge> hi"
-  shows "extend_env_with_tyvars env ghost lo hi = env"
-  using assms unfolding extend_env_with_tyvars_def by simp
-
-(* Splitting a contiguous interval of fresh type variables. *)
-lemma fset_of_list_upt_split:
-  assumes "lo \<le> mid" and "mid \<le> hi"
-  shows "fset_of_list [lo..<mid] |\<union>| fset_of_list [mid..<hi] = fset_of_list [lo..<hi]"
-proof -
-  have "[lo..<hi] = [lo..<mid] @ [mid..<hi]"
-    using assms
-    using le_Suc_ex upt_add_eq_append by blast
-  thus ?thesis by simp
-qed
-
-(* Helper: extend_env_with_tyvars with a wider interval can be viewed as extending
-   the narrower version further. Used to lift well-kindedness / runtime facts. *)
-lemma extend_env_with_tyvars_widen_eq:
-  assumes "lo' \<le> lo" and "hi \<le> hi'"
-  shows "\<exists>extraTV extraRT. extend_env_with_tyvars env ghost lo' hi' =
-           (extend_env_with_tyvars env ghost lo hi)
-             \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
-               TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
-proof -
-  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
-  have contained: "fset_of_list [lo..<hi] |\<subseteq>| fset_of_list [lo'..<hi']"
-    using assms by (auto simp: fset_of_list_elem)
-  have union_eq: "fset_of_list [lo..<hi] |\<union>| ?diff = fset_of_list [lo'..<hi']"
-    using contained by auto
-  show ?thesis
-  proof (cases "ghost = NotGhost")
-    case True
-    have "extend_env_with_tyvars env ghost lo' hi' =
-            (extend_env_with_tyvars env ghost lo hi)
-              \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| ?diff,
-                TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| ?diff \<rparr>"
-      unfolding extend_env_with_tyvars_def using True union_eq by (simp add: funion_assoc)
-    thus ?thesis by blast
-  next
-    case False
-    have "extend_env_with_tyvars env ghost lo' hi' =
-            (extend_env_with_tyvars env ghost lo hi)
-              \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| ?diff,
-                TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| {||} \<rparr>"
-      unfolding extend_env_with_tyvars_def using False union_eq by (simp add: funion_assoc)
-    thus ?thesis by blast
-  qed
-qed
-
-(* is_well_kinded is preserved when widening the type-variable interval *)
-lemma is_well_kinded_extend_env_with_tyvars_mono:
-  assumes "is_well_kinded (extend_env_with_tyvars env ghost lo hi) ty"
-    and "lo' \<le> lo" and "hi \<le> hi'"
-  shows "is_well_kinded (extend_env_with_tyvars env ghost lo' hi') ty"
-proof -
-  obtain extraTV extraRT where env_eq:
-    "extend_env_with_tyvars env ghost lo' hi' =
-       (extend_env_with_tyvars env ghost lo hi)
-         \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
-           TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
-    using extend_env_with_tyvars_widen_eq[OF assms(2,3)] by blast
-  show ?thesis
-    using assms(1) is_well_kinded_extend_tyvars by (simp add: env_eq)
-qed
-
-(* is_runtime_type is preserved when widening the type-variable interval *)
-lemma is_runtime_type_extend_env_with_tyvars_mono:
-  assumes "is_runtime_type (extend_env_with_tyvars env ghost lo hi) ty"
-    and "lo' \<le> lo" and "hi \<le> hi'"
-  shows "is_runtime_type (extend_env_with_tyvars env ghost lo' hi') ty"
-proof -
-  obtain extraTV extraRT where env_eq:
-    "extend_env_with_tyvars env ghost lo' hi' =
-       (extend_env_with_tyvars env ghost lo hi)
-         \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
-           TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
-    using extend_env_with_tyvars_widen_eq[OF assms(2,3)] by blast
-  show ?thesis
-    using assms(1) is_runtime_type_extend_runtime_tyvars by (simp add: env_eq)
-qed
-
 (* Weakening: extending the interval further preserves core_term_type.
    Both endpoints may move outward (lo' \<le> lo, hi' \<ge> hi). *)
 lemma core_term_type_extend_env_with_tyvars_mono:
@@ -123,42 +29,21 @@ proof -
     by (simp add: env_eq)
 qed
 
-(* Well-formedness is preserved under extend_env_with_tyvars. *)
-lemma tyenv_well_formed_extend_env_with_tyvars:
-  assumes "tyenv_well_formed env"
-  shows "tyenv_well_formed (extend_env_with_tyvars env ghost lo hi)"
-proof (cases "ghost = NotGhost")
-  case True
-  thus ?thesis
-    using assms tyenv_well_formed_extend_tyvars[where extraTV="fset_of_list [lo..<hi]"
-                                                    and extraRT="fset_of_list [lo..<hi]"]
-    unfolding extend_env_with_tyvars_def by simp
-next
-  case False
-  \<comment> \<open>Extending only TE_TypeVars is a special case: use extraRT = fempty\<close>
-  have "tyenv_well_formed (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list [lo..<hi],
-                                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| {||} \<rparr>)"
-    using assms tyenv_well_formed_extend_tyvars[where extraTV="fset_of_list [lo..<hi]"
-                                                    and extraRT="{||}"] by blast
-  thus ?thesis using False unfolding extend_env_with_tyvars_def by simp
-qed
-
-(* Monotonicity of next_mv: elab_term / elab_term_list / elab_match_arms only advance the counter. *)
+(* Monotonicity of next_mv: elab_term / elab_term_list / elab_term_list_with_envs only advance the counter. *)
 lemma elab_term_next_mv_monotone:
   "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
 and elab_term_list_next_mv_monotone:
   "elab_term_list env elabEnv ghost tms next_mv = Inr (tms', tys', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
-and elab_match_arms_next_mv_monotone:
-  "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv arms
-     = Inr (rows, finalBodyTy, finalSubst, next_mv')
+and elab_term_list_with_envs_next_mv_monotone:
+  "elab_term_list_with_envs jobs elabEnv ghost next_mv = Inr (tms', tys', next_mv')
    \<Longrightarrow> next_mv \<le> next_mv'"
 proof (induction env elabEnv ghost tm next_mv
        and env elabEnv ghost tms next_mv
-       and env elabEnv ghost scrutTy expBodyTy accSubst next_mv arms
+       and jobs elabEnv ghost next_mv
        arbitrary: tm' ty' next_mv'
        and tms' tys' next_mv'
-       and rows finalBodyTy finalSubst next_mv'
-       rule: elab_term_elab_term_list_elab_match_arms.induct)
+       and tms' tys' next_mv'
+       rule: elab_term_elab_term_list_elab_term_list_with_envs.induct)
   case (1 env elabEnv ghost loc lit next_mv)
   \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; Array allocates one meta and threads
        through elab_term_list; String is undefined (TODO)\<close>
@@ -378,23 +263,40 @@ next
   with mono1 mono2 show ?case by simp
 next
   case (16 env elabEnv ghost loc scrut arms next_mv)
-  \<comment> \<open>BabTm_Match: threads through scrutinee then elab_match_arms\<close>
+  \<comment> \<open>BabTm_Match: threads through scrutinee, decorate_match_arms (non-mutual),
+       elab_term_list_with_envs (mutual), unify_arm_body_types (non-mutual).\<close>
   from "16.prems" have arms_nonempty: "arms \<noteq> []"
     by (auto split: if_splits)
   from "16.prems" arms_nonempty obtain scrutTm scrutTy mv1 where
     elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "16.prems" arms_nonempty elab_scrut obtain rows bodyTy finalSubst mv2 where
-    elab_arms: "elab_match_arms env elabEnv ghost scrutTy (CoreTy_Var mv1) fmempty (mv1 + 1) arms
-                = Inr (rows, bodyTy, finalSubst, mv2)"
+  from "16.prems" arms_nonempty elab_scrut obtain decoratedArms accSubst mv2 where
+    decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy
+                    check_pattern_for_term_match fmempty (mv1 + 1) arms
+                  = Inr (decoratedArms, accSubst, mv2)"
+    by (auto simp: Let_def split: sum.splits)
+  from "16.prems" arms_nonempty elab_scrut decorate_eq obtain finalizedArms where
+    finalize_eq: "finalize_match_arms env ghost loc accSubst (map fst decoratedArms)
+                  = Inr finalizedArms"
+    by (auto simp: Let_def split: sum.splits)
+  from "16.prems" arms_nonempty elab_scrut decorate_eq finalize_eq
+  obtain bodyTms bodyTys mv3 where
+    elab_bodies: "elab_term_list_with_envs
+                    (zip (map snd finalizedArms) (map snd arms))
+                    elabEnv ghost mv2
+                  = Inr (bodyTms, bodyTys, mv3)"
     by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> mv1"
     using "16.IH"(1) arms_nonempty elab_scrut by simp
   have m2: "mv1 + 1 \<le> mv2"
-    using "16.IH"(2)[OF arms_nonempty elab_scrut refl refl refl] elab_arms by (simp add: Let_def)
-  from "16.prems" arms_nonempty elab_scrut elab_arms have "next_mv' = mv2"
-    by (auto simp: Let_def split: sum.splits)
-  with m1 m2 show ?case by simp
+    using decorate_match_arms_next_mv_monotone[OF decorate_eq] .
+  have m3: "mv2 \<le> mv3"
+    using "16.IH"(2) arms_nonempty elab_scrut decorate_eq finalize_eq elab_bodies
+    by (simp add: Let_def)
+  from "16.prems" arms_nonempty elab_scrut decorate_eq finalize_eq elab_bodies
+  have "next_mv' = mv3 + 1"
+    by (auto simp: Let_def finalize_match_term_def split: sum.splits if_splits)
+  with m1 m2 m3 show ?case by simp
 next
   case (17 env elabEnv ghost loc tm next_mv)
   \<comment> \<open>BabTm_Sizeof: forwards sub-term's next_mv\<close>
@@ -428,42 +330,23 @@ next
     by (auto split: sum.splits)
   with m1 m2 show ?case by simp
 next
-  case "22" \<comment> \<open>elab_match_arms: empty arms\<close>
+  case "22" \<comment> \<open>elab_term_list_with_envs: empty list\<close>
   from "22.prems" show ?case by simp
 next
-  case (23 env elabEnv ghost scrutTy expBodyTy accSubst next_mv pat body rest)
-  \<comment> \<open>elab_match_arms: cons - threads decorate_pattern, elab_term (body), recursive elab_match_arms\<close>
-  from "23.prems" obtain dp accSubst1 next_mv1 where
-    decorate_eq: "decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv
-                  = Inr (dp, accSubst1, next_mv1)"
+  case (23 env tm rest elabEnv ghost next_mv)
+  \<comment> \<open>elab_term_list_with_envs: cons\<close>
+  from "23.prems" obtain tm'' ty'' next_mv1 tms'' tys'' next_mv2 where
+    elab_head: "elab_term env elabEnv ghost tm next_mv = Inr (tm'', ty'', next_mv1)" and
+    elab_tail: "elab_term_list_with_envs rest elabEnv ghost next_mv1
+                = Inr (tms'', tys'', next_mv2)"
     by (auto split: sum.splits)
-  from "23.prems" decorate_eq obtain check_res where
-    check_eq: "check_pattern_for_term_match (bab_pattern_location pat) dp = Inr check_res"
-    by (auto split: sum.splits)
-  from "23.prems" decorate_eq check_eq obtain bodyTm bodyTy next_mv2 where
-    elab_body: "elab_term (extend_env_with_pattern env ghost dp) elabEnv ghost body next_mv1
-                = Inr (bodyTm, bodyTy, next_mv2)"
-    by (auto simp: Let_def split: sum.splits)
-  from "23.prems" decorate_eq check_eq elab_body obtain s where
-    unify_eq: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                  (apply_subst accSubst1 bodyTy) (apply_subst accSubst1 expBodyTy) = Some s"
-    by (auto simp: Let_def split: sum.splits option.splits)
-  from "23.prems" decorate_eq check_eq elab_body unify_eq
-  obtain restRows finalBodyTy' finalSubst' next_mv3 where
-    elab_rest: "elab_match_arms env elabEnv ghost scrutTy expBodyTy
-                  (compose_subst s accSubst1) next_mv2 rest
-                = Inr (restRows, finalBodyTy', finalSubst', next_mv3)"
-    by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> next_mv1"
-    using decorate_pattern_next_mv_monotone[OF decorate_eq] .
+    using "23.IH"(1) elab_head by simp
   have m2: "next_mv1 \<le> next_mv2"
-    using "23.IH"(1)[OF decorate_eq refl refl check_eq refl elab_body] .
-  have m3: "next_mv2 \<le> next_mv3"
-    using "23.IH"(2)[OF decorate_eq refl refl check_eq refl elab_body refl refl refl refl
-                         unify_eq refl elab_rest] .
-  from "23.prems" decorate_eq check_eq elab_body unify_eq elab_rest have "next_mv' = next_mv3"
-    by (auto simp: Let_def split: sum.splits)
-  with m1 m2 m3 show ?case by simp
+    using "23.IH"(3) elab_head elab_tail by simp
+  from "23.prems" elab_head elab_tail have "next_mv' = next_mv2"
+    by (auto split: sum.splits)
+  with m1 m2 show ?case by simp
 qed
 
 (* Length of elab_term_list output matches input *)

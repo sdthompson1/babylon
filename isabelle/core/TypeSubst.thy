@@ -369,6 +369,27 @@ lemma fmlookup_compose_subst_None1:
    fmlookup (compose_subst s2 s1) n = fmlookup s2 n"
   by (simp add: fmlookup_compose_subst)
 
+(* The domain of the composed substitution is the union of the two component domains. *)
+lemma fmdom_compose_subst:
+  "fmdom (compose_subst s2 s1) = fmdom s2 |\<union>| fmdom s1"
+proof (rule fset_eqI)
+  fix n
+  show "n |\<in>| fmdom (compose_subst s2 s1) \<longleftrightarrow> n |\<in>| fmdom s2 |\<union>| fmdom s1"
+  proof (cases "fmlookup s1 n")
+    case None
+    hence "fmlookup (compose_subst s2 s1) n = fmlookup s2 n"
+      by (rule fmlookup_compose_subst_None1)
+    thus ?thesis using None
+      by (auto simp: fmlookup_dom_iff)
+  next
+    case (Some ty1)
+    hence "fmlookup (compose_subst s2 s1) n = Some (apply_subst s2 ty1)"
+      by (rule fmlookup_compose_subst_Some1)
+    thus ?thesis using Some
+      by (auto simp: fmlookup_dom_iff)
+  qed
+qed
+
 (* The range of the composed substitution *)
 lemma compose_subst_range:
   "ty \<in> fmran' (compose_subst s2 s1) \<Longrightarrow>

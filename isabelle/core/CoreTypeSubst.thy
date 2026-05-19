@@ -188,7 +188,11 @@ next
   have eq: "\<And>n t. (n, t) \<in> set flds \<Longrightarrow>
     core_term_free_vars (apply_subst_to_term subst t) = core_term_free_vars t"
     using CoreTm_Record.IH by auto
-  show ?case by (auto simp: eq)
+  have map_eq:
+    "map (core_term_free_vars \<circ> snd \<circ> (\<lambda>(n, t). (n, apply_subst_to_term subst t))) flds
+     = map (core_term_free_vars \<circ> snd) flds"
+    using eq by (intro map_cong) auto
+  show ?case by (simp add: map_eq)
 next
   case (CoreTm_ArrayProj tm idxs)
   then show ?case by (induction idxs) auto
@@ -197,7 +201,11 @@ next
   have eq: "\<And>p t. (p, t) \<in> set cases \<Longrightarrow>
     core_term_free_vars (apply_subst_to_term subst t) = core_term_free_vars t"
     using CoreTm_Match.IH by auto
-  show ?case using CoreTm_Match.IH(1) by (auto simp: eq)
+  have map_eq:
+    "map (core_term_free_vars \<circ> snd \<circ> (\<lambda>(p, t). (p, apply_subst_to_term subst t))) cases
+     = map (core_term_free_vars \<circ> snd) cases"
+    using eq by (intro map_cong) auto
+  show ?case using CoreTm_Match.IH(1) by (simp add: map_eq)
 qed simp_all
 
 

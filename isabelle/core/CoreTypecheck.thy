@@ -736,7 +736,7 @@ qed simp_all
    modified at x (to allow for both ghost and non-ghost bindings), as long as
    all other variables' ghost status is preserved. *)
 lemma core_term_type_irrelevant_var:
-  assumes "x \<notin> core_term_free_vars tm"
+  assumes "x |\<notin>| core_term_free_vars tm"
     and "core_term_type env ghost tm = Some ty"
     and "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| gv' \<longleftrightarrow> y |\<in>| TE_GhostLocals env)"
   shows "core_term_type
@@ -763,7 +763,7 @@ next
   case (CoreTm_Let var rhs body)
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                        TE_GhostLocals := gv' \<rparr>"
-  from CoreTm_Let.prems(1) have x_not_free_rhs: "x \<notin> core_term_free_vars rhs" by simp
+  from CoreTm_Let.prems(1) have x_not_free_rhs: "x |\<notin>| core_term_free_vars rhs" by simp
   from CoreTm_Let.prems(2) obtain rhsTy where
     rhs_ty: "core_term_type env ghost rhs = Some rhsTy" and
     body_ty: "core_term_type
@@ -802,7 +802,7 @@ next
     case False
     (* var \<noteq> x: the fmupds commute, apply IH to body *)
     from CoreTm_Let.prems(1) False
-    have x_not_free_body: "x \<notin> core_term_free_vars body" by auto
+    have x_not_free_body: "x |\<notin>| core_term_free_vars body" by auto
     (* Construct the ghost vars assumption for the body's env *)
     let ?body_gv = "if ghost = Ghost then finsert var gv'
                     else fminus gv' {|var|}"
@@ -874,7 +874,7 @@ next
     next
       case False
       from CoreTm_Quantifier.prems(1) False
-      have x_not_free_body: "x \<notin> core_term_free_vars body" by auto
+      have x_not_free_body: "x |\<notin>| core_term_free_vars body" by auto
       let ?body_gv = "finsert var gv'"
       let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
                             TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
@@ -910,7 +910,8 @@ next
   have rt_eq: "is_runtime_type ?env_x elemTy = is_runtime_type env elemTy"
     using is_runtime_type_cong_env[of ?env_x env] by simp
   from CoreTm_LitArray.prems have
-    "\<forall>tm \<in> set tms. x \<notin> core_term_free_vars tm" by auto
+    "\<forall>tm \<in> set tms. x |\<notin>| core_term_free_vars tm"
+    by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff)
   with CoreTm_LitArray.IH CoreTm_LitArray.prems(3)
   have "\<forall>tm \<in> set tms. \<forall>ty. core_term_type env ghost tm = Some ty \<longrightarrow>
       core_term_type ?env_x ghost tm = Some ty" by blast
@@ -938,14 +939,14 @@ next
   case (CoreTm_Binop op lhs rhs)
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                        TE_GhostLocals := gv' \<rparr>"
-  from CoreTm_Binop.prems(1) have "x \<notin> core_term_free_vars lhs" "x \<notin> core_term_free_vars rhs" by auto
+  from CoreTm_Binop.prems(1) have "x |\<notin>| core_term_free_vars lhs" "x |\<notin>| core_term_free_vars rhs" by auto
   from CoreTm_Binop.prems(2) obtain lhsTy rhsTy where
     lhs_ty: "core_term_type env ghost lhs = Some lhsTy" and
     rhs_ty: "core_term_type env ghost rhs = Some rhsTy"
     by (auto split: option.splits prod.splits)
-  from CoreTm_Binop.IH(1)[OF \<open>x \<notin> core_term_free_vars lhs\<close> lhs_ty CoreTm_Binop.prems(3)]
+  from CoreTm_Binop.IH(1)[OF \<open>x |\<notin>| core_term_free_vars lhs\<close> lhs_ty CoreTm_Binop.prems(3)]
   have lhs_ty': "core_term_type ?env_x ghost lhs = Some lhsTy" .
-  from CoreTm_Binop.IH(2)[OF \<open>x \<notin> core_term_free_vars rhs\<close> rhs_ty CoreTm_Binop.prems(3)]
+  from CoreTm_Binop.IH(2)[OF \<open>x |\<notin>| core_term_free_vars rhs\<close> rhs_ty CoreTm_Binop.prems(3)]
   have rhs_ty': "core_term_type ?env_x ghost rhs = Some rhsTy" .
   from CoreTm_Binop.prems(2) show ?case using lhs_ty lhs_ty' rhs_ty rhs_ty'
     by (auto split: option.splits if_splits)
@@ -958,7 +959,8 @@ next
   have rt_eq: "\<And>t. is_runtime_type ?env_x t = is_runtime_type env t"
     using is_runtime_type_cong_env[of ?env_x env] by simp
   from CoreTm_FunctionCall.prems(1)
-  have "\<forall>tm \<in> set tmArgs. x \<notin> core_term_free_vars tm" by auto
+  have "\<forall>tm \<in> set tmArgs. x |\<notin>| core_term_free_vars tm"
+    by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff)
   with CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems(3)
   have IH: "\<forall>tm \<in> set tmArgs. \<forall>ty. core_term_type env ghost tm = Some ty \<longrightarrow>
       core_term_type ?env_x ghost tm = Some ty" by blast
@@ -1017,8 +1019,8 @@ next
     fix i assume "i < length flds"
     obtain nm tm where p_eq: "flds ! i = (nm, tm)" by (cases "flds ! i") auto
     from \<open>i < length flds\<close> have "flds ! i \<in> set flds" by simp
-    with CoreTm_Record.prems(1) p_eq have nf: "x \<notin> core_term_free_vars tm"
-      by (auto simp: image_iff)
+    with CoreTm_Record.prems(1) p_eq have nf: "x |\<notin>| core_term_free_vars tm"
+      by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff image_iff)
     from la2 \<open>i < length flds\<close> len_eq
     have "core_term_type env ghost tm = Some (tys ! i)"
       by (auto dest: list_all2_nthD simp: p_eq)
@@ -1044,19 +1046,20 @@ next
   case (CoreTm_ArrayProj arr idxs)
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                        TE_GhostLocals := gv' \<rparr>"
-  from CoreTm_ArrayProj.prems(1) have "x \<notin> core_term_free_vars arr"
-    and idx_free: "\<forall>tm \<in> set idxs. x \<notin> core_term_free_vars tm" by auto
+  from CoreTm_ArrayProj.prems(1) have "x |\<notin>| core_term_free_vars arr"
+    and idx_free: "\<forall>tm \<in> set idxs. x |\<notin>| core_term_free_vars tm"
+    by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff)
   from CoreTm_ArrayProj.prems(2) obtain elemTy dims where
     arr_ty: "core_term_type env ghost arr = Some (CoreTy_Array elemTy dims)"
     by (auto split: option.splits CoreType.splits if_splits)
-  from CoreTm_ArrayProj.IH(1)[OF \<open>x \<notin> core_term_free_vars arr\<close> arr_ty CoreTm_ArrayProj.prems(3)]
+  from CoreTm_ArrayProj.IH(1)[OF \<open>x |\<notin>| core_term_free_vars arr\<close> arr_ty CoreTm_ArrayProj.prems(3)]
   have arr_ty': "core_term_type ?env_x ghost arr = Some (CoreTy_Array elemTy dims)" .
   have idx_transfer: "\<And>tm. tm \<in> set idxs \<Longrightarrow>
       core_term_type env ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64) \<Longrightarrow>
       core_term_type ?env_x ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
   proof -
     fix tm assume "tm \<in> set idxs" and ty: "core_term_type env ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
-    from idx_free \<open>tm \<in> set idxs\<close> have "x \<notin> core_term_free_vars tm" by auto
+    from idx_free \<open>tm \<in> set idxs\<close> have "x |\<notin>| core_term_free_vars tm" by auto
     from CoreTm_ArrayProj.IH(2)[OF \<open>tm \<in> set idxs\<close> this ty CoreTm_ArrayProj.prems(3)]
     show "core_term_type ?env_x ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)" .
   qed
@@ -1066,8 +1069,9 @@ next
   case (CoreTm_Match scrut arms)
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                        TE_GhostLocals := gv' \<rparr>"
-  from CoreTm_Match.prems(1) have scrut_free: "x \<notin> core_term_free_vars scrut"
-    and bodies_free: "\<forall>body \<in> snd ` set arms. x \<notin> core_term_free_vars body" by auto
+  from CoreTm_Match.prems(1) have scrut_free: "x |\<notin>| core_term_free_vars scrut"
+    and bodies_free: "\<forall>body \<in> snd ` set arms. x |\<notin>| core_term_free_vars body"
+    by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff)
   (* pattern_compatible only depends on TE_DataCtors etc. *)
   have pc_eq: "\<And>p t. pattern_compatible ?env_x p t = pattern_compatible env p t"
     by (case_tac p) (simp_all split: option.splits)
@@ -1089,7 +1093,7 @@ next
     have "body \<in> Basic_BNFs.snds arm"
       using \<open>body = snd arm\<close> by (cases arm) simp
     from bodies_free \<open>arm \<in> set arms\<close> \<open>body = snd arm\<close>
-    have "x \<notin> core_term_free_vars body" by auto
+    have "x |\<notin>| core_term_free_vars body" by auto
     from CoreTm_Match.IH(2)[OF \<open>arm \<in> set arms\<close> \<open>body \<in> Basic_BNFs.snds arm\<close>
         this body_ty CoreTm_Match.prems(3)]
     show "core_term_type ?env_x ghost body = Some resultTy" .

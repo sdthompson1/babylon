@@ -464,7 +464,7 @@ fun fold_binop_left :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Righta
    let-bound chain@@ variables do not clash with any existing free variables. *)
 definition has_unexpected_chain_var :: "CoreTerm \<Rightarrow> string \<Rightarrow> bool" where
   "has_unexpected_chain_var tm allowed =
-    (\<exists>v \<in> core_term_free_vars tm. take 7 v = ''chain@@'' \<and> v \<noteq> allowed)"
+    (\<exists>v |\<in>| core_term_free_vars tm. take 7 v = ''chain@@'' \<and> v \<noteq> allowed)"
 
 (* Build a comparison chain: a < b < c becomes (a < b) && (b < c).
    Uses let-binding for complex middle terms to avoid duplicate evaluation.
@@ -601,20 +601,84 @@ definition build_updated_record ::
      in (CoreTm_Record resultFlds, CoreTy_Record finalParentFields))"
 
 
+(* Unify a list of arm-body types against an expected body type, threading
+   a substitution. Each entry pairs the body's source location (for error
+   reporting) with its actual type. Used by BabTm_Match after each arm's
+   body has been elaborated by elab_term_list_with_envs. The flex predicate
+   forbids unification from binding any tyvar already in the outer env. *)
+fun unify_arm_body_types ::
+  "CoreTyEnv \<Rightarrow> CoreType
+   \<Rightarrow> (Location \<times> CoreType) list
+   \<Rightarrow> TypeSubst
+   \<Rightarrow> TypeError list + TypeSubst"
+where
+  "unify_arm_body_types _ _ [] accSubst = Inr accSubst"
+
+| "unify_arm_body_types env expBodyTy ((loc, bodyTy) # rest) accSubst =
+    (let actualTy = apply_subst accSubst bodyTy;
+         expectedTy = apply_subst accSubst expBodyTy
+     in (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) actualTy expectedTy of
+           None \<Rightarrow> Inl [TyErr_TypeMismatch loc expectedTy actualTy]
+         | Some s \<Rightarrow>
+             unify_arm_body_types env expBodyTy rest (compose_subst s accSubst)))"
+
+
+(* Final-stage helper for term-context match elaboration. Takes the per-arm
+   results (as four parallel lists: dps, body terms, body locations, body
+   types) plus the elaborated scrutinee + body-type metavariable + the
+   running accSubst, and produces the elaborated match term.
+
+   Steps:
+   1. Unify each body type with bodyTyVar, threading accSubst \<rightarrow> finalSubst.
+   2. Apply finalSubst to scrutinee, dps, and body terms; build finalRows.
+   3. Mint a fresh scrutinee binding name (match@@<n>) and validate that it
+      doesn't clash with any free var of the substituted scrutinee or any
+      pattern variable.
+   4. Hand the result to compile_match + matchtree_to_term.
+
+   The `nextMv` argument is the next metavariable counter at entry; the
+   returned counter is `nextMv + 1` (one more, for the synthesised name's
+   numeric suffix). *)
+definition finalize_match_term ::
+  "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreType
+   \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+   \<Rightarrow> DecPattern list \<Rightarrow> CoreTerm list \<Rightarrow> Location list \<Rightarrow> CoreType list
+   \<Rightarrow> TypeSubst \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType \<times> nat)" where
+  "finalize_match_term env loc bodyTyVar scrutTm scrutTy dps bodyTms bodyLocs bodyTys
+                       accSubst nextMv =
+    (case unify_arm_body_types env bodyTyVar (zip bodyLocs bodyTys) accSubst of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr finalSubst \<Rightarrow>
+         let finalScrut = apply_subst_to_term finalSubst scrutTm;
+             finalScrutTy = apply_subst finalSubst scrutTy;
+             finalRows = map (\<lambda>(dp, body).
+                                (apply_subst_to_dec_pattern finalSubst dp,
+                                 apply_subst_to_term finalSubst body))
+                              (zip dps bodyTms);
+             finalBodyTy = apply_subst finalSubst bodyTyVar;
+             freshName = ''match@@'' @ nat_to_string nextMv
+         in if freshName |\<in>| core_term_free_vars finalScrut
+               \<or> list_ex (\<lambda>(dp, _). freshName |\<in>| dec_pattern_var_names dp) finalRows
+               \<or> list_ex (\<lambda>(_, body). freshName |\<in>| core_term_free_vars body) finalRows
+            then Inl [TyErr_InternalError_FreshnameClash loc freshName]
+            else
+              let resultTm = matchtree_to_term
+                               (compile_match finalScrut finalScrutTy freshName finalRows)
+              in Inr (resultTm, finalBodyTy, nextMv + 1))"
+
+
 (* Elaborate a term. Returns elaborated (core) term and type, or error.
    The nat parameter is the "next metavariable" counter - all generated metavariables
    will be >= this value, and the returned counter is the next available one. *)
-fun elab_term :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat
+function (sequential)
+  elab_term :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat
                  \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType \<times> nat)"
 and elab_term_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm list \<Rightarrow> nat
                       \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreType list \<times> nat)"
-and elab_match_arms ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot
-   \<Rightarrow> CoreType                       \<comment> \<open>scrutinee type\<close>
-   \<Rightarrow> CoreType                       \<comment> \<open>expected body type (a fresh metavariable on the first call)\<close>
-   \<Rightarrow> TypeSubst \<Rightarrow> nat
-   \<Rightarrow> (BabPattern \<times> BabTerm) list
-   \<Rightarrow> TypeError list + ((DecPattern \<times> CoreTerm) list \<times> CoreType \<times> TypeSubst \<times> nat)"
+and elab_term_list_with_envs ::
+  "(CoreTyEnv \<times> BabTerm) list \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreType list \<times> nat)"
 where
 
   (* Literals *)
@@ -937,10 +1001,11 @@ where
                       Inr (CoreTm_ArrayProj newArr coercedIdxTms, elemTy, next_mv2)))
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc arrTy]))"
 
-  (* Match: elaborate the scrutinee, then each arm against the scrutinee
-     type, unifying body types pairwise. After all arms are processed we
-     apply the final substitution to the scrutinee, every DP_Var, and
-     every arm body, then hand the result off to the match compiler. *)
+  (* Match: elaborate the scrutinee, decorate every arm's pattern, elaborate
+     every arm's body under the env extended with that arm's pattern variables,
+     unify all body types against a fresh body-type metavariable, then apply
+     the final substitution to the scrutinee, every DP_Var, and every arm body,
+     and hand the result off to the match compiler. *)
 | "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv =
     (if arms = [] then Inl [TyErr_EmptyMatch loc]
      else case elab_term env elabEnv ghost scrut next_mv of
@@ -949,17 +1014,28 @@ where
          \<comment> \<open>Allocate a fresh metavariable for the body type; each arm unifies
              its body type against it.\<close>
          let bodyTyVar = CoreTy_Var mv1 in
-         (case elab_match_arms env elabEnv ghost scrutTy bodyTyVar fmempty (mv1 + 1) arms of
+         (case decorate_match_arms env elabEnv ghost scrutTy
+                 check_pattern_for_term_match fmempty (mv1 + 1) arms of
             Inl errs \<Rightarrow> Inl errs
-          | Inr (rows, bodyTy, finalSubst, mv2) \<Rightarrow>
-              let finalScrut = apply_subst_to_term finalSubst scrutTm;
-                  finalRows = map (\<lambda>(dp, body).
-                                    (apply_subst_to_dec_pattern finalSubst dp,
-                                     apply_subst_to_term finalSubst body))
-                                  rows;
-                  finalBodyTy = apply_subst finalSubst bodyTy;
-                  resultTm = matchtree_to_term (compile_match finalScrut finalRows)
-              in Inr (resultTm, finalBodyTy, mv2)))"
+          | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
+              \<comment> \<open>Substitute dps with accSubst, run inference check, build per-arm envs. \<close>
+              let rawDps = map fst decoratedRows in
+              (case finalize_match_arms env ghost loc accSubst rawDps of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr finalizedArms \<Rightarrow>
+                  \<comment> \<open>Build body-elaboration jobs from the per-arm envs (from finalizedArms)
+                      and the original body terms (from arms). Constructing the body list
+                      directly from arms keeps it syntactically derived, so termination is
+                      easy to verify. \<close>
+                  let bodyJobs = zip (map snd finalizedArms) (map snd arms) in
+                  (case elab_term_list_with_envs bodyJobs elabEnv ghost mv2 of
+                     Inl errs \<Rightarrow> Inl errs
+                   | Inr (bodyTms, bodyTys, mv3) \<Rightarrow>
+                       let dps = map fst finalizedArms;
+                           bodyLocs = map (\<lambda>(_, body). bab_term_location body) arms
+                       in finalize_match_term env loc bodyTyVar scrutTm scrutTy
+                                              dps bodyTms bodyLocs bodyTys
+                                              accSubst mv3))))"
 
   (* Sizeof: operand must be an array; allocatable dims require lvalue or ghost *)
 | "elab_term env elabEnv ghost (BabTm_Sizeof loc tm) next_mv =
@@ -1006,38 +1082,72 @@ where
           Inl errs \<Rightarrow> Inl errs
         | Inr (tms', tys', next_mv'') \<Rightarrow> Inr (tm' # tms', ty' # tys', next_mv'')))"
 
-  (* elab_match_arms - empty list: return the expected body type unchanged. *)
-| "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv [] =
-     Inr ([], expBodyTy, accSubst, next_mv)"
+  (* elab_term_list_with_envs - Empty list case. *)
+| "elab_term_list_with_envs [] _ _ next_mv = Inr ([], [], next_mv)"
 
-  (* elab_match_arms - process one arm: decorate the pattern, check no
-     ref/duplicate bindings, extend the env, elaborate the body, unify
-     the body type with the expected body type, then recurse on the
-     remaining arms. *)
-| "elab_match_arms env elabEnv ghost scrutTy expBodyTy accSubst next_mv ((pat, body) # rest) =
-    (case decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr (dp, accSubst1, next_mv1) \<Rightarrow>
-        (case check_pattern_for_term_match (bab_pattern_location pat) dp of
-           Inl errs \<Rightarrow> Inl errs
-         | Inr _ \<Rightarrow>
-            let env' = extend_env_with_pattern env ghost dp in
-            (case elab_term env' elabEnv ghost body next_mv1 of
-               Inl errs \<Rightarrow> Inl errs
-             | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
-                 let actualTy = apply_subst accSubst1 bodyTy;
-                     expectedTy = apply_subst accSubst1 expBodyTy
-                 in (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) actualTy expectedTy of
-                      None \<Rightarrow> Inl [TyErr_TypeMismatch (bab_term_location body)
-                                                         expectedTy actualTy]
-                    | Some s \<Rightarrow>
-                        let accSubst2 = compose_subst s accSubst1 in
-                        (case elab_match_arms env elabEnv ghost scrutTy
-                                expBodyTy accSubst2 next_mv2 rest of
-                           Inl errs \<Rightarrow> Inl errs
-                         | Inr (restRows, finalBodyTy, finalSubst, next_mv3) \<Rightarrow>
-                             Inr ((dp, bodyTm) # restRows,
-                                  finalBodyTy, finalSubst, next_mv3))))))"
+  (* elab_term_list_with_envs - Non-empty list case. Each term is elaborated
+     under its own env (paired with it in the input list). Otherwise behaves
+     like elab_term_list, including error-collection on first-element failure. *)
+| "elab_term_list_with_envs ((env, tm) # rest) elabEnv ghost next_mv =
+    (case elab_term env elabEnv ghost tm next_mv of
+      Inl errs1 \<Rightarrow>
+        (case elab_term_list_with_envs rest elabEnv ghost next_mv of
+          Inl errs2 \<Rightarrow> Inl (errs1 @ errs2)
+        | Inr _ \<Rightarrow> Inl errs1)
+    | Inr (tm', ty', next_mv') \<Rightarrow>
+        (case elab_term_list_with_envs rest elabEnv ghost next_mv' of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr (tms', tys', next_mv'') \<Rightarrow> Inr (tm' # tms', ty' # tys', next_mv'')))"
+  by pat_completeness auto
+
+(* Helper for termination of elab_term & friends: the body-only size used as
+   the measure for elab_term_list_with_envs is bounded above by the standard
+   pair-list size used by Isabelle's automatic size definitions. *)
+lemma size_list_size_snd_le_size_prod:
+  "size_list (size \<circ> snd) xs \<le> size_list (size_prod f size) xs"
+  by (induction xs) (auto simp: comp_def)
+
+lemma size_list_size_snd_zip_map_snd_le:
+  "size_list (size \<circ> snd) (zip as (map snd bs)) \<le> size_list (size_prod f size) bs"
+proof -
+  have "size_list (size \<circ> snd) (zip as (map snd bs)) \<le> size_list size (map snd bs)"
+    by (induction as bs rule: list_induct2') (auto simp: comp_def)
+  also have "\<dots> \<le> size_list (size_prod f size) bs"
+    by (induction bs) auto
+  finally show ?thesis .
+qed
+
+termination
+proof (relation
+        "measure (case_sum (\<lambda>(_, _, _, tm, _). size tm)
+                 (case_sum (\<lambda>(_, _, _, tms, _). size_list size tms)
+                           (\<lambda>(jobs, _, _, _). size_list (size \<circ> snd) jobs)))",
+       goal_cases)
+  case (9 env elabEnv ghost loc lhs operands next_mv b x y xa ya)
+  \<comment> \<open>BabTm_Call args sub-call. \<close>
+  show ?case
+    using size_list_size_snd_le_size_prod[where xs=operands and f="\<lambda>_. 0"] by simp
+next
+  case (15 env elabEnv ghost loc flds next_mv)
+  \<comment> \<open>BabTm_Record fields sub-call. \<close>
+  show ?case
+    using size_list_size_snd_le_size_prod[where xs=flds and f="\<lambda>_. 0"] by simp
+next
+  case (17 env elabEnv ghost loc tm flds next_mv b x y xa ya x6)
+  \<comment> \<open>BabTm_RecordUpdate update-fields sub-call. \<close>
+  show ?case
+    using size_list_size_snd_le_size_prod[where xs=flds and f="\<lambda>_. 0"] by simp
+next
+  case (23 env elabEnv ghost loc scrut arms next_mv b x y xa ya xb ba xc yb xd yc xe bb xca)
+  \<comment> \<open>BabTm_Match body-elaboration sub-call: bodies (taken syntactically from arms,
+      zipped with the envs from finalize_match_arms) sum to less than the whole
+      BabTm_Match. \<close>
+  have helper:
+    "size_list (size \<circ> snd) (zip (map snd bb) (map snd arms))
+       \<le> size_list (size_prod (\<lambda>x. 0) size) arms"
+    using size_list_size_snd_zip_map_snd_le[where as="map snd bb" and bs=arms and f="\<lambda>x. 0"] .
+  from 23 helper show ?case by simp
+qed (simp_all add: comp_def)
 
 
 end

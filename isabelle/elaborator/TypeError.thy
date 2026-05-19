@@ -55,5 +55,6 @@ datatype TypeError =
   (* Internal errors *)
   | TyErr_InternalError_NameNotFound Location string  (* should have been caught by the renamer *)
   | TyErr_InternalError_UnexpectedChainVar Location
+  | TyErr_InternalError_FreshnameClash Location string  (* synthesised match@@n name collided with a free var or pattern var *)
 
 end

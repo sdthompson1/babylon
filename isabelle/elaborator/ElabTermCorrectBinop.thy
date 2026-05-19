@@ -619,7 +619,7 @@ lemma empty_not_chain_prefix: "take 7 '''' \<noteq> ''chain@@''"
    free variable (if any) is the allowed one. *)
 lemma not_has_unexpected_chain_var:
   assumes "\<not> has_unexpected_chain_var tm allowed"
-    and "v \<in> core_term_free_vars tm"
+    and "v |\<in>| core_term_free_vars tm"
     and "take 7 v = ''chain@@''"
   shows "v = allowed"
   using assms by (auto simp: has_unexpected_chain_var_def)
@@ -630,8 +630,8 @@ lemma not_has_unexpected_chain_var:
    We prove a combined statement to avoid issues with multi-conclusion induction. *)
 lemma build_comparison_chain_inputs_fresh_combined:
   assumes "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
-  shows "(\<forall>n \<ge> chainCtr. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars lhsTm)
-       \<and> (\<forall>opx \<in> set ops. \<forall>n. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars (fst (snd opx)))"
+  shows "(\<forall>n \<ge> chainCtr. ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars lhsTm)
+       \<and> (\<forall>opx \<in> set ops. \<forall>n. ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars (fst (snd opx)))"
   using assms
 proof (induction ops arbitrary: chainCtr lhsTm lhsTy resultTm)
   case Nil
@@ -661,10 +661,10 @@ next
     by auto
 
   \<comment> \<open>Part 1: chain@@n not free in lhsTm for n \<ge> chainCtr\<close>
-  have lhs_result: "\<forall>n \<ge> chainCtr. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars lhsTm"
+  have lhs_result: "\<forall>n \<ge> chainCtr. ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars lhsTm"
   proof (intro allI impI notI)
     fix n assume n_ge: "n \<ge> chainCtr"
-    assume in_fv: "''chain@@'' @ nat_to_string n \<in> core_term_free_vars lhsTm"
+    assume in_fv: "''chain@@'' @ nat_to_string n |\<in>| core_term_free_vars lhsTm"
     have eq_allowed: "''chain@@'' @ nat_to_string n = ?lhsAllowed"
       using not_has_unexpected_chain_var[OF check_lhs in_fv chain_var_prefix] .
     show False
@@ -683,16 +683,16 @@ next
   qed
 
   \<comment> \<open>Part 2a: chain@@n not free in rhsTm (the first op term)\<close>
-  have rhs_result: "\<forall>n. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars rhsTm"
+  have rhs_result: "\<forall>n. ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars rhsTm"
   proof (intro allI notI)
-    fix n assume in_fv: "''chain@@'' @ nat_to_string n \<in> core_term_free_vars rhsTm"
+    fix n assume in_fv: "''chain@@'' @ nat_to_string n |\<in>| core_term_free_vars rhsTm"
     have "''chain@@'' @ nat_to_string n = ''''"
       using not_has_unexpected_chain_var[OF check_rhs in_fv chain_var_prefix] .
     thus False by simp
   qed
 
   \<comment> \<open>Part 2b: chain@@n not free in ops in rest (from IH via recursive call)\<close>
-  have rest_result: "\<forall>opx \<in> set rest. \<forall>n. ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars (fst (snd opx))"
+  have rest_result: "\<forall>opx \<in> set rest. \<forall>n. ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars (fst (snd opx))"
   proof (cases rest)
     case Nil thus ?thesis by simp
   next
@@ -791,18 +791,18 @@ qed
 (* Split the combined lemma into the two conclusions used elsewhere *)
 lemma build_comparison_chain_inputs_fresh:
   assumes "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy ops = Inr resultTm"
-  shows "\<And>n. n \<ge> chainCtr \<Longrightarrow> ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars lhsTm"
+  shows "\<And>n. n \<ge> chainCtr \<Longrightarrow> ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars lhsTm"
     and "\<And>op tm ty n. (op, tm, ty) \<in> set ops \<Longrightarrow>
-           ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars tm"
+           ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars tm"
 proof -
   note combined = build_comparison_chain_inputs_fresh_combined[OF assms]
   { fix n assume "n \<ge> chainCtr"
-    with combined show "''chain@@'' @ nat_to_string n \<notin> core_term_free_vars lhsTm" by blast }
+    with combined show "''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars lhsTm" by blast }
   { fix op tm ty n assume "(op, tm, ty) \<in> set ops"
     hence "(op, tm, ty) \<in> set ops" .
-    with combined have "''chain@@'' @ nat_to_string n \<notin> core_term_free_vars (fst (snd (op, tm, ty)))"
+    with combined have "''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars (fst (snd (op, tm, ty)))"
       by blast
-    thus "''chain@@'' @ nat_to_string n \<notin> core_term_free_vars tm" by simp }
+    thus "''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars tm" by simp }
 qed
 
 (* Correctness of build_comparison_chain. *)
@@ -962,10 +962,10 @@ next
       note result' = result[unfolded vn_eq[symmetric]]
 
       \<comment> \<open>Derive chain@@ freshness from build_comparison_chain_inputs_fresh\<close>
-      have lhs_fresh: "vn \<notin> core_term_free_vars lhsTm"
+      have lhs_fresh: "vn |\<notin>| core_term_free_vars lhsTm"
         using build_comparison_chain_inputs_fresh(1)[OF Cons.prems(1)] vn_def by blast
       have rest_fresh: "\<And>op tm ty n. (op, tm, ty) \<in> set rest \<Longrightarrow>
-             ''chain@@'' @ nat_to_string n \<notin> core_term_free_vars tm"
+             ''chain@@'' @ nat_to_string n |\<notin>| core_term_free_vars tm"
         using build_comparison_chain_inputs_fresh(2)[OF Cons.prems(1)]
               triple_eq by (meson list.set_intros(2))
 
@@ -1057,7 +1057,7 @@ next
         fix xop xtm xty assume in_rest: "(xop, xtm, xty) \<in> set rest"
         have xtm_typed: "core_term_type env ghost xtm = Some xty"
           using rest_all in_rest by (auto simp: list_all_iff)
-        have xtm_fresh: "vn \<notin> core_term_free_vars xtm"
+        have xtm_fresh: "vn |\<notin>| core_term_free_vars xtm"
           using rest_fresh in_rest vn_def by blast
         show "core_term_type env' ghost xtm = Some xty"
           using core_term_type_irrelevant_var[OF xtm_fresh xtm_typed gv'_agree]
