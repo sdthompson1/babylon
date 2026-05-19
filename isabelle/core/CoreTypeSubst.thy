@@ -3189,9 +3189,56 @@ next
   show ?case
     using lhs_eval result_env_eq by simp
 next
-  case (13 vf vg vh)
-  \<comment> \<open>TODO: Use - typechecking is undefined; cannot prove until implemented \<close>
-  then show ?case sorry
+  case (13 env mode witnessTm)
+  \<comment> \<open>Use: peels a Quant_Exists off TE_ProofGoal, providing witnessTm. The
+      current goal must be a Quant_Exists whose bound type qVarTy is the type of
+      witnessTm; substitution rewrites qVarTy, witnessTm and the goal term
+      uniformly, so the substituted Use peels the substituted quantifier and
+      produces the substituted result env (which differs from env only in
+      TE_ProofGoal). \<close>
+  from "13.prems"(1) obtain qn qVarTy bodyTm where
+    proof_goal: "TE_ProofGoal env
+                   = Some (CoreTm_Quantifier Quant_Exists qn qVarTy bodyTm)" and
+    mode_ghost: "mode = Ghost" and
+    witness_typed: "core_term_type env mode witnessTm = Some qVarTy" and
+    env'_eq: "calleeEnv' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
+
+  let ?be = "apply_subst_to_callee_env subst callerEnv env"
+
+  \<comment> \<open>Term IH on witnessTm (Ghost mode — runtime preconditions vacuous). \<close>
+  have witness_rt_premise:
+    "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+    by (simp add: mode_ghost)
+  have witness_rt_ok_premise:
+    "mode = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv env"
+    by (simp add: mode_ghost)
+  from core_term_type_subst_callee_env[OF witness_typed "13.prems"(2)
+          "13.prems"(3) "13.prems"(4) witness_rt_premise witness_rt_ok_premise]
+  have witness_subst:
+    "core_term_type ?be mode (apply_subst_to_term subst witnessTm)
+       = Some (apply_subst subst qVarTy)" .
+
+  \<comment> \<open>The substituted result env differs from ?be only in TE_ProofGoal. \<close>
+  have result_env_eq:
+    "apply_subst_to_callee_env subst callerEnv calleeEnv'
+       = ?be \<lparr> TE_ProofGoal := Some (apply_subst_to_term subst bodyTm) \<rparr>"
+    unfolding env'_eq apply_subst_to_callee_env_def by simp
+
+  \<comment> \<open>Unfold the substituted Use clause: apply_subst_to_stmt turns it into
+      CoreStmt_Use (apply_subst_to_term subst witnessTm); the substituted env's
+      goal is the substituted quantifier (proof_goal + the TE_ProofGoal
+      projection), and the substituted witness has the substituted bound type,
+      so the case/if evaluate to the substituted result env. \<close>
+  have lhs_eval:
+    "core_statement_type ?be mode
+        (apply_subst_to_stmt subst (CoreStmt_Use witnessTm))
+       = Some (?be \<lparr> TE_ProofGoal := Some (apply_subst_to_term subst bodyTm) \<rparr>)"
+    using mode_ghost witness_subst
+    by (simp add: proof_goal)
+
+  show ?case
+    using lhs_eval result_env_eq by simp
 next
   case (14 env vp)
   \<comment> \<open>Nil statement list typechecks to Some env in any env. The result env equals

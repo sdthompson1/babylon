@@ -3322,7 +3322,11 @@ next
         from typing CoreStmt_Obtain show ?thesis
           by (auto simp: Let_def split: if_splits)
       next
-        case (CoreStmt_Use _) with typing show ?thesis sorry
+        case (CoreStmt_Use _)
+        \<comment> \<open>Use only typechecks in Ghost mode; the outer case is NotGhost, so
+            typing is contradictory and the case is vacuous. \<close>
+        from typing CoreStmt_Use show ?thesis
+          by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
       next
         case (CoreStmt_Swap swapGhost lhsTm rhsTm)
         then show ?thesis proof (cases swapGhost)

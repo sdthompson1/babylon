@@ -700,7 +700,7 @@ where
                            IS_Refs := fmdrop varName (IS_Refs state),
                            IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
 
-  (* Fix, Use - not allowed at runtime *)
+  (* Fix, Use - only appear in proofs; should never be executed *)
 | "interp_statement (Suc fuel) _ (CoreStmt_Fix _ _) = Inl TypeError"
 | "interp_statement (Suc fuel) _ (CoreStmt_Use _) = Inl TypeError"
 

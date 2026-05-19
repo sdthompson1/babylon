@@ -777,8 +777,10 @@ next
           by (auto simp: Let_def split: if_splits)
       next
         case (CoreStmt_Use _)
-        \<comment> \<open>Typechecker is undefined for Use — deferred. \<close>
-        show ?thesis sorry
+        \<comment> \<open>Use only typechecks in Ghost mode, so under NotGhost the typing
+            premise is contradictory. \<close>
+        from typing CoreStmt_Use show ?thesis
+          by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
       next
         case (CoreStmt_While g condTm invars decr bodyStmts)
         show ?thesis

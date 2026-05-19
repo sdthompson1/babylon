@@ -612,8 +612,20 @@ where
           else None)
      | _ \<Rightarrow> None)"
 
-  (* TODO: remaining statement forms *)
-| "core_statement_type _ _ (CoreStmt_Use _) = undefined"
+  (* Use: "use e". Only valid in Ghost mode and at the immediate top level of
+     an enclosing assert's proof body. Supplies a witness for an existential
+     goal: TE_ProofGoal must be a Quant_Exists whose bound-variable type equals
+     the type of e (the bound name is irrelevant). No variable is brought into
+     scope; we strip the Quant_Exists and store the body as the new TE_ProofGoal
+     so a following Fix/Use peels the next quantifier. As with Fix, the body is
+     carried unchanged (TE_ProofGoal is only consumed structurally). *)
+| "core_statement_type env ghost (CoreStmt_Use witnessTm) =
+    (case TE_ProofGoal env of
+       Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
+         (if ghost = Ghost \<and> core_term_type env ghost witnessTm = Some qVarTy
+          then Some (env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>)
+          else None)
+     | _ \<Rightarrow> None)"
 
   (* Statement lists *)
 | "core_statement_list_type env _ [] = Some env"
@@ -782,7 +794,12 @@ next
   with assms CoreStmt_Obtain show ?thesis
     by (auto simp: Let_def split: if_splits)
 next
-  case (CoreStmt_Use _) with assms show ?thesis sorry
+  case (CoreStmt_Use witnessTm)
+  from assms CoreStmt_Use obtain bodyTm where
+    env'_eq: "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
+  from tyenv_well_formed_TE_ProofGoal_irrelevant[OF assms(2)]
+  show ?thesis unfolding env'_eq .
 next
   case (CoreStmt_Swap _ _ _)
   with assms have "env' = env" by (auto split: if_splits option.splits)
@@ -836,7 +853,8 @@ next
   case (CoreStmt_Obtain _ _ _) with assms show ?thesis
     by (auto simp: Let_def split: if_splits)
 next
-  case (CoreStmt_Use _) with assms show ?thesis sorry
+  case (CoreStmt_Use _) with assms show ?thesis
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
 next
   case (CoreStmt_Swap _ _ _)
   with assms show ?thesis by (auto split: if_splits option.splits)
@@ -952,7 +970,11 @@ next
     by (auto simp: Let_def split: if_splits)
   show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
 next
-  case (CoreStmt_Use _) with assms show ?thesis sorry
+  case (CoreStmt_Use witnessTm)
+  from assms CoreStmt_Use obtain bodyTm where
+    "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
+    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
+  thus ?thesis unfolding tyenv_fixed_eq_def by simp
 next
   case (CoreStmt_Swap _ _ _)
   with assms have "env' = env" by (auto split: if_splits option.splits)
