@@ -1357,7 +1357,7 @@ next
     by (metis Suc_le_D interp_statement.simps(17))
 next
   (* interp_statement (Suc fuel) Obtain - always TypeError *)
-  case (43 fuel wy wz xa xb)
+  case (43 fuel wx wy wz)
   then show ?case
     by (metis Suc_le_D interp_statement.simps(18))
 next

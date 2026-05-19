@@ -551,7 +551,13 @@ next
       next
         case (CoreStmt_Fix _ _) with H show ?thesis by simp
       next
-        case (CoreStmt_Obtain _ _ _) with H show ?thesis by simp
+        case (CoreStmt_Obtain varName _ _)
+        with H have
+          "res = Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                                    IS_Refs := fmdrop varName (IS_Refs state),
+                                    IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>)"
+          by simp
+        then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       qed

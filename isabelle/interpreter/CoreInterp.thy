@@ -691,9 +691,17 @@ where
 | "interp_statement (Suc fuel) state (CoreStmt_Assume _) = Inr (Continue state)"
 | "interp_statement (Suc fuel) state (CoreStmt_ShowHide _ _) = Inr (Continue state)"
 
-  (* Fix, Obtain, Use - not allowed at runtime *)
+  (* Obtain: brings a new ghost variable into scope. Like a Ghost VarDecl, it
+     is a runtime no-op; we only drop any shadowed binding of varName from the
+     runtime maps so the (ghost, not-actually-bound) name cannot be read as a
+     stale runtime value. *)
+| "interp_statement (Suc fuel) state (CoreStmt_Obtain varName _ _) =
+    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                           IS_Refs := fmdrop varName (IS_Refs state),
+                           IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
+
+  (* Fix, Use - not allowed at runtime *)
 | "interp_statement (Suc fuel) _ (CoreStmt_Fix _ _) = Inl TypeError"
-| "interp_statement (Suc fuel) _ (CoreStmt_Obtain _ _ _) = Inl TypeError"
 | "interp_statement (Suc fuel) _ (CoreStmt_Use _) = Inl TypeError"
 
   (* Interpret a list of statements *)
