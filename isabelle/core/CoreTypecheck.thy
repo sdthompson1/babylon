@@ -37,29 +37,26 @@ fun pattern_compatible :: "CoreTyEnv \<Rightarrow> CorePattern \<Rightarrow> Cor
   "pattern_compatible env CorePat_Wildcard _ = True"
 | "pattern_compatible env (CorePat_Bool _) ty = (ty = CoreTy_Bool)"
 | "pattern_compatible env (CorePat_Int _) ty = is_integer_type ty"
-| "pattern_compatible env (CorePat_Variant ctorName) ty =
+| "pattern_compatible env (CorePat_Variant ctorName payloadPat) ty =
     (case fmlookup (TE_DataCtors env) ctorName of
       None \<Rightarrow> False
-    | Some (dtName, _, _) \<Rightarrow>
+    | Some (dtName, tyvars, payloadTy) \<Rightarrow>
         (case ty of
-          CoreTy_Datatype tyName _ \<Rightarrow> tyName = dtName
+          CoreTy_Datatype tyName tyArgs \<Rightarrow>
+            tyName = dtName
+            \<and> length tyArgs = length tyvars
+            \<and> pattern_compatible env payloadPat
+                (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)
         | _ \<Rightarrow> False))"
-
-(* Check if there are any patterns after a wildcard (which is not allowed) *)
-fun patterns_after_wildcard :: "CorePattern list \<Rightarrow> bool" where
-  "patterns_after_wildcard [] = False"
-| "patterns_after_wildcard [_] = False"
-| "patterns_after_wildcard (CorePat_Wildcard # _ # _) = True"
-| "patterns_after_wildcard (_ # ps) = patterns_after_wildcard ps"
-
-(* Check if a list has duplicate patterns *)
-fun has_duplicate_patterns :: "CorePattern list \<Rightarrow> bool" where
-  "has_duplicate_patterns [] = False"
-| "has_duplicate_patterns (p # ps) = (p \<in> set ps \<or> has_duplicate_patterns ps)"
-
-(* Regularity: no duplicates and no patterns after wildcard *)
-definition patterns_regular :: "CorePattern list \<Rightarrow> bool" where
-  "patterns_regular pats = (\<not> patterns_after_wildcard pats \<and> \<not> has_duplicate_patterns pats)"
+| "pattern_compatible env (CorePat_Record pflds) ty =
+    (case ty of
+      CoreTy_Record fldTys \<Rightarrow>
+        map fst pflds = map fst fldTys
+        \<and> list_all (\<lambda>(name, p). case map_of fldTys name of
+                                  None \<Rightarrow> False
+                                | Some fty \<Rightarrow> pattern_compatible env p fty)
+                   pflds
+    | _ \<Rightarrow> False)"
 
 (* ========================================================================== *)
 (* Valid decreases-term types                                                  *)
@@ -279,7 +276,6 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 (* Pattern matching:
    - Scrutinee must typecheck
    - All patterns must be compatible with scrutinee type
-   - Patterns must be regular (no duplicates, wildcard last)
    - All arm bodies must have the same type
      (Note: exhaustiveness is NOT checked; a non-exhaustive match that fails to
      find a matching pattern is a runtime error, not a type error.) *)
@@ -291,7 +287,6 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
             bodies = map snd arms
         in if arms = [] then None  \<comment> \<open>empty match not allowed\<close>
            else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-           else if \<not> patterns_regular pats then None
            else \<comment> \<open>check all bodies have same type\<close>
              (case core_term_type env ghost (snd (hd arms)) of
                None \<Rightarrow> None
@@ -551,7 +546,35 @@ qed
 lemma pattern_compatible_cong_env:
   assumes "TE_DataCtors env1 = TE_DataCtors env2"
   shows "pattern_compatible env1 p ty = pattern_compatible env2 p ty"
-  using assms by (cases p) (auto split: option.splits)
+  using assms
+proof (induction p arbitrary: ty)
+  case (CorePat_Variant ctorName payloadPat)
+  show ?case
+  proof (cases ty)
+    case (CoreTy_Datatype tyName tyArgs)
+    show ?thesis
+      using CorePat_Variant.prems CorePat_Variant.IH CoreTy_Datatype
+      by (auto split: option.splits prod.splits)
+  qed (use CorePat_Variant.prems in \<open>auto split: option.splits prod.splits\<close>)
+next
+  case (CorePat_Record pflds)
+  show ?case
+  proof (cases ty)
+    case (CoreTy_Record fldTys)
+    have iff_each:
+      "\<And>name p fty. (name, p) \<in> set pflds \<Longrightarrow>
+          pattern_compatible env1 p fty = pattern_compatible env2 p fty"
+    proof -
+      fix name p fty assume np_in: "(name, p) \<in> set pflds"
+      have p_in_snds: "p \<in> Basic_BNFs.snds (name, p)" by simp
+      show "pattern_compatible env1 p fty = pattern_compatible env2 p fty"
+        using CorePat_Record.IH[OF np_in p_in_snds CorePat_Record.prems] .
+    qed
+    show ?thesis
+      unfolding CoreTy_Record
+      by (auto simp: list_all_iff iff_each split: option.splits)
+  qed auto
+qed auto
 
 (* pattern_compatible does not depend on TE_ConstLocals (corollary). *)
 lemma pattern_compatible_TE_ConstLocals_irrelevant [simp]:
@@ -1141,7 +1164,7 @@ next
     by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff)
   (* pattern_compatible only depends on TE_DataCtors etc. *)
   have pc_eq: "\<And>p t. pattern_compatible ?env_x p t = pattern_compatible env p t"
-    by (case_tac p) (simp_all split: option.splits)
+    by (rule pattern_compatible_cong_env) simp
   (* Scrutinee typing preserved *)
   from CoreTm_Match.prems(2) obtain scrutTy where
     scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
@@ -1411,13 +1434,11 @@ next
     by (auto split: option.splits if_splits)
   let ?pats = "map fst arms"
   from CoreTm_Match.prems scrut_ty arms_nonempty have
-    pat_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) ?pats" and
-    pat_reg: "patterns_regular ?pats"
+    pat_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) ?pats"
     by (auto split: option.splits if_splits simp: Let_def)
   \<comment> \<open>These pattern checks don't depend on TE_TypeVars / TE_RuntimeTypeVars\<close>
   have pc_eq: "\<And>p t. pattern_compatible ?env' p t = pattern_compatible env p t"
-    by (rule pattern_compatible.induct[where P="\<lambda>e p t. pattern_compatible ?env' p t = pattern_compatible env p t"])
-       auto
+    by (rule pattern_compatible_cong_env) simp
   have pat_compat': "list_all (\<lambda>p. pattern_compatible ?env' p scrutTy) ?pats"
     using pat_compat by (simp add: list_all_iff pc_eq)
   \<comment> \<open>First body and rest\<close>
@@ -1425,7 +1446,6 @@ next
     (let pats = map fst arms; bodies = map snd arms in
       if arms = [] then None
       else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-      else if \<not> patterns_regular pats then None
       else (case core_term_type env ghost (snd (hd arms)) of
               None \<Rightarrow> None
             | Some resultTy \<Rightarrow>
@@ -1433,7 +1453,7 @@ next
                 then Some resultTy
                 else None))"
     using scrut_ty by simp
-  from CoreTm_Match.prems match_unfold arms_nonempty pat_compat pat_reg
+  from CoreTm_Match.prems match_unfold arms_nonempty pat_compat
   obtain firstBodyTy where
     first_ty: "core_term_type env ghost (snd (hd arms)) = Some firstBodyTy" and
     ty_eq: "ty = firstBodyTy" and
@@ -1454,7 +1474,7 @@ next
                            (tl (map snd arms))"
     using rest_ty bodies_IH tl_in by (induction "tl (map snd arms)") (auto simp: list_all_iff)
   show ?case
-    using scrut_ty' arms_nonempty pat_compat' pat_reg first_ty' rest_ty' ty_eq
+    using scrut_ty' arms_nonempty pat_compat' first_ty' rest_ty' ty_eq
     by (simp add: Let_def)
 next
   case (CoreTm_ArrayProj tm idxTms)

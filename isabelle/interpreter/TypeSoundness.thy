@@ -1180,7 +1180,6 @@ proof -
         let pats = map fst arms; bodies = map snd arms
         in if arms = [] then None
            else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-           else if \<not> patterns_regular pats then None
            else (case core_term_type env NotGhost (snd (hd arms)) of
                    None \<Rightarrow> None
                  | Some resultTy \<Rightarrow>
@@ -1199,7 +1198,6 @@ proof -
     "(let pats = map fst arms; bodies = map snd arms
       in if arms = [] then None
          else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-         else if \<not> patterns_regular pats then None
          else (case core_term_type env NotGhost (snd (hd arms)) of
                  None \<Rightarrow> None
                | Some resultTy \<Rightarrow>

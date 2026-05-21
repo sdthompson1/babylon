@@ -160,13 +160,112 @@ lemma is_writable_lvalue_apply_subst_to_term [simp]:
   "is_writable_lvalue env (apply_subst_to_term subst tm) = is_writable_lvalue env tm"
   by (induction tm) auto
 
-(* pattern_compatible only inspects the top-level shape of the scrutinee type
-   (and for Datatype, just the type name). Substitution preserves all of these
-   top-level shapes, so if the predicate holds on ty it also holds on
-   apply_subst subst ty. (The reverse is not true if ty is a CoreTy_Var.) *)
+(* If a pattern is compatible with a type, it is compatible with that type
+   after substitution. (The reverse is not true if ty is a CoreTy_Var.) *)
 lemma pattern_compatible_apply_subst:
-  "pattern_compatible env p ty \<Longrightarrow> pattern_compatible env p (apply_subst subst ty)"
-  by (cases p; cases ty) (auto split: option.splits prod.splits)
+  assumes "tyenv_well_formed env"
+      and "pattern_compatible env p ty"
+  shows "pattern_compatible env p (apply_subst subst ty)"
+  using assms
+proof (induction p ty rule: pattern_compatible.induct[case_names Wildcard Bool Int Variant Record, consumes 0])
+  case (Wildcard env uu)
+  then show ?case by simp
+next
+  case (Bool env uv ty)
+  then show ?case by (cases ty) auto
+next
+  case (Int env uw ty)
+  then show ?case by (cases ty) auto
+next
+  case (Variant env ctorName payloadPat ty)
+  from Variant.prems show ?case
+  proof (cases ty)
+    case (CoreTy_Datatype tyName tyArgs)
+    with Variant.prems obtain dtName tyvars payloadTy where
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
+      dt_eq: "tyName = dtName" and
+      len_eq: "length tyArgs = length tyvars" and
+      pc_payload: "pattern_compatible env payloadPat
+                     (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      by (auto split: option.splits prod.splits)
+    \<comment> \<open>The data-ctor's payload is well-kinded in an env whose tyvars are
+        exactly ctor's tyvars, hence its free vars are a subset. \<close>
+    have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+      using Variant.prems(1) ctor_lookup
+      unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
+    have tyvars_distinct: "distinct tyvars"
+      using Variant.prems(1) ctor_lookup
+      unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
+    have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
+      using is_well_kinded_type_tyvars_subset[OF payload_wk]
+      by (simp add: fset_of_list.rep_eq)
+    \<comment> \<open>Substitution composition: apply_subst subst commutes with the inner
+        tyvar-to-tyArgs subst, since payload free vars stay within tyvars. \<close>
+    have compose:
+      "apply_subst (fmap_of_list (zip tyvars (map (apply_subst subst) tyArgs))) payloadTy
+         = apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst] .
+    \<comment> \<open>IH on payloadPat. \<close>
+    have ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
+      using CoreTy_Datatype dt_eq by simp
+    have payload_subst:
+      "pattern_compatible env payloadPat
+         (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))"
+      using Variant.IH[OF ctor_lookup refl refl ty_eq Variant.prems(1) pc_payload] .
+    show ?thesis
+      using ctor_lookup CoreTy_Datatype dt_eq len_eq payload_subst compose by simp
+  qed (use Variant.prems in \<open>auto split: option.splits prod.splits\<close>)
+next
+  case (Record env pflds ty)
+  from Record.prems show ?case
+  proof (cases ty)
+    case (CoreTy_Record fldTys)
+    with Record.prems have
+      names_eq: "map fst pflds = map fst fldTys" and
+      flds_ok: "list_all (\<lambda>(name, p). case map_of fldTys name of
+                                        None \<Rightarrow> False
+                                      | Some fty \<Rightarrow> pattern_compatible env p fty)
+                         pflds"
+      by auto
+    \<comment> \<open>The substituted record type has the same field names, with each field's
+        type substituted. \<close>
+    let ?subst_fldTys = "map (\<lambda>(name, fty). (name, apply_subst subst fty)) fldTys"
+    have subst_ty_eq: "apply_subst subst ty = CoreTy_Record ?subst_fldTys"
+      using CoreTy_Record by simp
+    have subst_names: "map fst ?subst_fldTys = map fst fldTys"
+      by (induction fldTys) auto
+    have names_eq': "map fst pflds = map fst ?subst_fldTys"
+      using names_eq subst_names by simp
+    \<comment> \<open>For each (name, p) \<in> pflds, the IH gives subst-compatibility of p with
+        the substituted field type. \<close>
+    have flds_ok':
+      "list_all (\<lambda>(name, p). case map_of ?subst_fldTys name of
+                              None \<Rightarrow> False
+                            | Some fty \<Rightarrow> pattern_compatible env p fty)
+                pflds"
+      unfolding list_all_iff
+    proof (intro ballI, clarify)
+      fix name p assume np_in: "(name, p) \<in> set pflds"
+      with flds_ok obtain fty where
+        lookup_orig: "map_of fldTys name = Some fty" and
+        pc_fty: "pattern_compatible env p fty"
+        by (auto simp: list_all_iff split: option.splits)
+      have lookup_subst:
+        "map_of ?subst_fldTys name = Some (apply_subst subst fty)"
+        using lookup_orig by (induction fldTys) auto
+      \<comment> \<open>IH on (name, p). \<close>
+      have ih_pc:
+        "pattern_compatible env p (apply_subst subst fty)"
+        by (meson CoreTy_Record Record.IH Record.prems(1) lookup_orig np_in pc_fty)
+      show "case map_of ?subst_fldTys name of
+              None \<Rightarrow> False
+            | Some fty' \<Rightarrow> pattern_compatible env p fty'"
+        using lookup_subst ih_pc by simp
+    qed
+    show ?thesis
+      using subst_ty_eq names_eq' flds_ok' by simp
+  qed (use Record.prems in \<open>auto split: CoreType.splits\<close>)
+qed
 
 
 (* apply_subst_to_term_preserves_typing is now stated and proved in the
@@ -500,13 +599,24 @@ lemma apply_subst_to_callee_env_TE_ProofGoal_update:
          \<lparr> TE_ProofGoal := map_option (apply_subst_to_term subst) g \<rparr>"
   by (simp add: apply_subst_to_callee_env_def)
 
-(* pattern_compatible only inspects the top-level type constructor, which
-   apply_subst preserves. TE_DataCtors is also inherited from calleeEnv. *)
+(* If a pattern is compatible with a type in calleeEnv, it is compatible with
+   the substituted type in the substituted env. TE_DataCtors is inherited from
+   calleeEnv, so pattern_compatible (which only depends on the env via
+   TE_DataCtors) reduces to the no-env-substitution case. *)
 lemma pattern_compatible_apply_subst_callee_env:
-  "pattern_compatible calleeEnv p ty
-     \<Longrightarrow> pattern_compatible (apply_subst_to_callee_env subst callerEnv calleeEnv) p
+  assumes "tyenv_well_formed calleeEnv"
+      and "pattern_compatible calleeEnv p ty"
+  shows "pattern_compatible (apply_subst_to_callee_env subst callerEnv calleeEnv) p
                             (apply_subst subst ty)"
-  by (cases p; cases ty) (auto split: option.splits prod.splits)
+proof -
+  have dc_eq: "TE_DataCtors (apply_subst_to_callee_env subst callerEnv calleeEnv)
+                 = TE_DataCtors calleeEnv"
+    by simp
+  have "pattern_compatible calleeEnv p (apply_subst subst ty)"
+    using pattern_compatible_apply_subst[OF assms] .
+  thus ?thesis
+    using pattern_compatible_cong_env[OF dc_eq] by simp
+qed
 
 (* Substituting types in TE_LocalVars preserves the *keys*, so writability is
    preserved (it only looks at TE_LocalVars's domain and TE_ConstLocals). *)
@@ -1912,7 +2022,7 @@ next
     using inner_subst ctor_lookup_subst len_eq_subst ty_subst_eq by simp
 next
   case (CoreTm_Match scrut arms)
-  \<comment> \<open>Match: scrutinee typechecks; pattern compatibility / regularity hold;
+  \<comment> \<open>Match: scrutinee typechecks; pattern compatibility holds;
       all arm bodies have the same type. After substitution, the scrutinee's
       type is substituted, the patterns are unchanged (substitution doesn't touch
       them), and each arm body's IH gives the substituted body type. \<close>
@@ -1920,7 +2030,6 @@ next
     scrut_typed: "core_term_type calleeEnv ghost scrut = Some scrutTy" and
     arms_nonempty: "arms \<noteq> []" and
     pats_compat: "list_all (\<lambda>p. pattern_compatible calleeEnv p scrutTy) (map fst arms)" and
-    pats_regular: "patterns_regular (map fst arms)" and
     hd_typed: "core_term_type calleeEnv ghost (snd (hd arms)) = Some ty" and
     rest_typed: "list_all (\<lambda>body. core_term_type calleeEnv ghost body = Some ty)
                           (tl (map snd arms))"
@@ -1949,15 +2058,12 @@ next
   have pats_eq: "map fst ?subst_arms = map fst arms"
     by (induction arms) auto
 
-  \<comment> \<open>Pattern compatibility and regularity both transfer to the substituted
-      env / type. \<close>
+  \<comment> \<open>Pattern compatibility transfers to the substituted env / type. \<close>
   have pats_compat_subst:
     "list_all (\<lambda>p. pattern_compatible ?be p (apply_subst subst scrutTy)) (map fst ?subst_arms)"
-    using pats_compat pats_eq
+    using pats_compat pats_eq CoreTm_Match.prems(2)
     by (induction arms)
        (auto intro: pattern_compatible_apply_subst_callee_env)
-  have pats_regular_subst: "patterns_regular (map fst ?subst_arms)"
-    using pats_regular pats_eq by metis
 
   \<comment> \<open>Head body IH. \<close>
   have hd_in: "hd arms \<in> set arms" using arms_nonempty by auto
@@ -2007,7 +2113,7 @@ next
     using arms_nonempty by (cases arms) auto
 
   show ?case
-    using scrut_subst arms_nonempty_subst pats_compat_subst pats_regular_subst
+    using scrut_subst arms_nonempty_subst pats_compat_subst
           hd_subst hd_subst_arms_eq tl_subst
     by (auto simp: Let_def)
 next
@@ -2852,10 +2958,10 @@ next
 next
   case (9 env mode matchGhost scrut arms)
   \<comment> \<open>Match: scrutinee must typecheck, each pattern must be compatible with the
-      scrutinee type, the patterns must be regular, and each arm body must
-      typecheck as a statement list. The result env is env itself. After
-      substitution, the scrutinee gets a substituted type and each arm body is
-      substituted individually; pattern checks survive substitution. \<close>
+      scrutinee type, and each arm body must typecheck as a statement list. The
+      result env is env itself. After substitution, the scrutinee gets a
+      substituted type and each arm body is substituted individually; pattern
+      checks survive substitution. \<close>
   \<comment> \<open>Arm bodies typecheck in env with TE_ProofGoal reset to None (a match arm
       is not at the immediate top level of an assert proof). \<close>
   let ?nenv = "env \<lparr> TE_ProofGoal := None \<rparr>"
@@ -2863,7 +2969,6 @@ next
     ghost_ok: "mode = Ghost \<longrightarrow> matchGhost = Ghost" and
     scrut_typed: "core_term_type env matchGhost scrut = Some scrutTy" and
     pats_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
-    pats_regular: "patterns_regular (map fst arms)" and
     bodies_typed: "list_all (\<lambda>body. core_statement_list_type ?nenv matchGhost body \<noteq> None)
                             (map snd arms)" and
     env'_eq: "calleeEnv' = env"
@@ -2905,12 +3010,9 @@ next
   \<comment> \<open>Pattern compatibility transfers to the substituted env / type. \<close>
   have pats_compat_subst:
     "list_all (\<lambda>p. pattern_compatible ?be p (apply_subst subst scrutTy)) (map fst ?subst_arms)"
-    using pats_compat pats_eq
+    using pats_compat pats_eq "9.prems"(2)
     by (induction arms)
        (auto intro: pattern_compatible_apply_subst_callee_env)
-
-  have pats_regular_subst: "patterns_regular (map fst ?subst_arms)"
-    using pats_regular pats_eq by metis
 
   \<comment> \<open>Each arm body's statement-list-typing transfers under substitution. The IH
       for Match gives us this for any arm body z in set (map snd arms). \<close>
@@ -2931,11 +3033,9 @@ next
       by (auto simp: list_all_iff)
     have pats_compat_nn: "\<not> \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)"
       using pats_compat by simp
-    have pats_regular_nn: "\<not> \<not> patterns_regular (map fst arms)"
-      using pats_regular by simp
     \<comment> \<open>The IH yields the substituted typing in apply_subst_to_callee_env of ?nenv,
         which equals ?be with TE_ProofGoal reset to None. \<close>
-    from "9.IH"[OF ghost_ok scrut_typed refl refl pats_compat_nn pats_regular_nn
+    from "9.IH"[OF ghost_ok scrut_typed refl refl pats_compat_nn
                    body_in_snd body_typed nenv_wf nenv_subst_ok "9.prems"(4)
                    rt_for_matchGhost nenv_rt_ok_for_matchGhost]
     have "core_statement_list_type
@@ -2949,7 +3049,7 @@ next
   \<comment> \<open>The substituted match statement typechecks, and its result env equals the
       substituted input env. \<close>
   show ?case
-    using ghost_ok scrut_subst pats_compat_subst pats_regular_subst bodies_typed_subst env'_eq
+    using ghost_ok scrut_subst pats_compat_subst bodies_typed_subst env'_eq
     by (simp add: Let_def apply_subst_to_callee_env_TE_ProofGoal_update)
 next
   case (10 env mode whileGhost condTm invars decrTm body)

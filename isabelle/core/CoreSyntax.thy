@@ -25,7 +25,8 @@ datatype CoreType =
 datatype CorePattern =
   CorePat_Bool bool
   | CorePat_Int int
-  | CorePat_Variant string
+  | CorePat_Variant string CorePattern
+  | CorePat_Record "(string \<times> CorePattern) list"
   | CorePat_Wildcard
 
 (* Unary operator *)

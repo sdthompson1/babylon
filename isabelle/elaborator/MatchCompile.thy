@@ -319,7 +319,7 @@ function compile_matrix :: "'body MatchMatrix \<Rightarrow> 'body MatchTree" whe
                                (if has_payload
                                 then replace_at c (CoreTm_VariantProj s_c h) scruts
                                 else drop_at c scruts)
-                         in (CorePat_Variant h,
+                         in (CorePat_Variant h CorePat_Wildcard,
                              compile_matrix (new_scruts,
                                List.map_filter
                                  (specialise_row_variant c s_c h has_payload) rows)))
@@ -1333,7 +1333,6 @@ fun matchtree_term_well_typed ::
      (arms \<noteq> []
       \<and> (\<exists>scrutTy. core_term_type env ghost scrut = Some scrutTy
                   \<and> list_all (\<lambda>(p, _). pattern_compatible env p scrutTy) arms)
-      \<and> patterns_regular (map fst arms)
       \<and> list_all (\<lambda>(_, sub). matchtree_term_well_typed env ghost resultTy sub) arms)"
 
 
@@ -1488,7 +1487,6 @@ next
     pat_compat: "list_all (\<lambda>(p, _). pattern_compatible env p scrutTy) arms"
     by auto
   from MT_Test.prems have arms_ne: "arms \<noteq> []" by simp
-  from MT_Test.prems have pats_reg: "patterns_regular (map fst arms)" by simp
   from MT_Test.prems have arms_wt:
     "list_all (\<lambda>(_, sub). matchtree_term_well_typed env ghost resultTy sub) arms"
     by simp
@@ -1552,7 +1550,7 @@ next
     by (induction arms) auto
   show ?case
     using scrut_ty translated_ne translated_pat_compat
-          pats_reg pats_eq hd_body_ty tl_bodies_typed
+          pats_eq hd_body_ty tl_bodies_typed
     by (simp add: Let_def pats_eq_comp snd_eq_comp)
 next
   case (MT_Bind vr x bindTy rhs sub)
@@ -4018,7 +4016,7 @@ lemma compile_matrix_unfold_variant:
                       (if has_payload
                        then replace_at c (CoreTm_VariantProj s_c h) scruts
                        else drop_at c scruts)
-                in (CorePat_Variant h,
+                in (CorePat_Variant h CorePat_Wildcard,
                     compile_matrix (new_scruts,
                       List.map_filter (specialise_row_variant c s_c h has_payload) rows)))
           in MT_Test s_c (map head_arm heads @ default_arm))"
@@ -5771,110 +5769,6 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
                     (map ?head_arm ?heads @ ?default_arm)"
           by (auto simp: list_all_iff)
 
-        \<comment> \<open>Show patterns are regular (no duplicates, no patterns after wildcard).\<close>
-        have pats_regular:
-          "patterns_regular (map fst (map ?head_arm ?heads @ ?default_arm))"
-        proof -
-          have heads_distinct: "distinct ?heads"
-            using distinct_bool_heads_distinct .
-          have head_pats_eq:
-            "map fst (map ?head_arm ?heads) = map (\<lambda>h. CorePat_Bool h) ?heads"
-            by simp
-          have head_pats_distinct: "distinct (map (\<lambda>h. CorePat_Bool h) ?heads)"
-            using heads_distinct
-            by (simp add: distinct_map inj_on_def)
-          have head_pats_no_wc:
-            "\<forall>p \<in> set (map (\<lambda>h. CorePat_Bool h) ?heads). p \<noteq> CorePat_Wildcard"
-            by auto
-          \<comment> \<open>Lemma: a list with no CorePat_Wildcard followed by [] or [CorePat_Wildcard]
-               has no patterns_after_wildcard. We prove by induction on the
-               outer suffix (which is at most one CorePat_Wildcard) and inner xs.\<close>
-          have helper_no_after_wc:
-            "\<And>xs ys. (\<forall>p \<in> set xs. p \<noteq> CorePat_Wildcard)
-                  \<Longrightarrow> (length ys \<le> 1)
-                  \<Longrightarrow> \<not> patterns_after_wildcard (xs @ ys)"
-          proof -
-            fix xs ys :: "CorePattern list"
-            assume xs_no_wc: "\<forall>p \<in> set xs. p \<noteq> CorePat_Wildcard"
-                and ys_short: "length ys \<le> 1"
-            show "\<not> patterns_after_wildcard (xs @ ys)"
-              using xs_no_wc ys_short
-            proof (induction xs)
-              case Nil
-              \<comment> \<open>ys has length 0 or 1.\<close>
-              from Nil(2) consider "ys = []" | y where "ys = [y]"
-                by (cases ys) auto
-              thus ?case by cases auto
-            next
-              case (Cons p ps)
-              from Cons.prems(1) have p_no_wc: "p \<noteq> CorePat_Wildcard" by simp
-              from Cons.prems(1) have ps_no_wc: "\<forall>q \<in> set ps. q \<noteq> CorePat_Wildcard" by simp
-              from Cons.IH[OF ps_no_wc Cons.prems(2)] have IH:
-                "\<not> patterns_after_wildcard (ps @ ys)" .
-              show ?case
-              proof (cases "ps @ ys")
-                case Nil
-                thus ?thesis using p_no_wc by simp
-              next
-                case (Cons q rest)
-                show ?thesis using p_no_wc IH Cons by (cases p) auto
-              qed
-            qed
-          qed
-          have default_short: "length (map fst ?default_arm) \<le> 1"
-            by (cases ?has_default) auto
-          have not_after_wc:
-            "\<not> patterns_after_wildcard (map fst (map ?head_arm ?heads) @ map fst ?default_arm)"
-            using helper_no_after_wc[of "map (\<lambda>h. CorePat_Bool h) ?heads" "map fst ?default_arm"]
-                  head_pats_no_wc head_pats_eq default_short
-            by argo
-          \<comment> \<open>No duplicates: head pats are distinct, default's wildcard isn't a head pat.
-               Generalize ys (default arm patterns) to a generic list of length \<le> 1
-               whose only possible element is CorePat_Wildcard.\<close>
-          have wc_not_in: "CorePat_Wildcard \<notin> set (map (\<lambda>h. CorePat_Bool h) ?heads)" by auto
-          have helper_no_dup:
-            "\<And>xs ys. distinct xs \<Longrightarrow> CorePat_Wildcard \<notin> set xs
-                  \<Longrightarrow> length ys \<le> 1
-                  \<Longrightarrow> (\<forall>y \<in> set ys. y = CorePat_Wildcard)
-                  \<Longrightarrow> \<not> has_duplicate_patterns (xs @ ys)"
-          proof -
-            fix xs ys :: "CorePattern list"
-            assume xs_distinct: "distinct xs"
-               and xs_no_wc: "CorePat_Wildcard \<notin> set xs"
-               and ys_short: "length ys \<le> 1"
-               and ys_wc: "\<forall>y \<in> set ys. y = CorePat_Wildcard"
-            show "\<not> has_duplicate_patterns (xs @ ys)"
-              using xs_distinct xs_no_wc ys_short ys_wc
-            proof (induction xs)
-              case Nil
-              from Nil(3) consider "ys = []" | y where "ys = [y]" by (cases ys) auto
-              thus ?case by cases auto
-            next
-              case (Cons p ps)
-              from Cons.prems(1) have p_distinct_ps: "p \<notin> set ps" "distinct ps" by auto
-              from Cons.prems(2) have p_no_wc: "p \<noteq> CorePat_Wildcard"
-                  and ps_no_wc: "CorePat_Wildcard \<notin> set ps" by auto
-              from Cons.IH[OF \<open>distinct ps\<close> ps_no_wc Cons.prems(3) Cons.prems(4)] have IH:
-                "\<not> has_duplicate_patterns (ps @ ys)" .
-              have p_not_in_ys: "p \<notin> set ys"
-                using p_no_wc Cons.prems(4) by auto
-              show ?case
-                using p_distinct_ps p_not_in_ys IH by simp
-            qed
-          qed
-          have default_only_wc:
-            "\<forall>y \<in> set (map fst ?default_arm). y = CorePat_Wildcard"
-            by (cases ?has_default) auto
-          have not_dup:
-            "\<not> has_duplicate_patterns (map fst (map ?head_arm ?heads) @ map fst ?default_arm)"
-            using helper_no_dup[of "map (\<lambda>h. CorePat_Bool h) ?heads" "map fst ?default_arm"]
-                  head_pats_distinct wc_not_in head_pats_eq default_short default_only_wc
-            by argo
-          show ?thesis
-            unfolding patterns_regular_def
-            using not_after_wc not_dup by simp
-        qed
-
         \<comment> \<open>Show arms are non-empty: heads are non-empty (head_pat = DP_Bool b is in col_pats).\<close>
         have heads_ne: "?heads \<noteq> []"
         proof -
@@ -5893,7 +5787,7 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
 
         show ?thesis
           unfolding compile_eq Let_def
-          using s_c_ty arms_ne head_pats_compat pats_regular
+          using s_c_ty arms_ne head_pats_compat
                 head_arm_wt default_arm_wt
           by (auto simp: list_all_iff)
       next
@@ -6244,102 +6138,6 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
                     (map ?head_arm ?heads @ ?default_arm)"
           using colTy_c_int by (auto simp: list_all_iff)
 
-        have pats_regular:
-          "patterns_regular (map fst (map ?head_arm ?heads @ ?default_arm))"
-        proof -
-          have heads_distinct: "distinct ?heads"
-            using distinct_int_heads_distinct .
-          have head_pats_eq:
-            "map fst (map ?head_arm ?heads) = map (\<lambda>h. CorePat_Int h) ?heads"
-            by simp
-          have head_pats_distinct: "distinct (map (\<lambda>h. CorePat_Int h) ?heads)"
-            using heads_distinct
-            by (simp add: distinct_map inj_on_def)
-          have head_pats_no_wc:
-            "\<forall>p \<in> set (map (\<lambda>h. CorePat_Int h) ?heads). p \<noteq> CorePat_Wildcard"
-            by auto
-          have helper_no_after_wc:
-            "\<And>xs ys. (\<forall>p \<in> set xs. p \<noteq> CorePat_Wildcard)
-                  \<Longrightarrow> (length ys \<le> 1)
-                  \<Longrightarrow> \<not> patterns_after_wildcard (xs @ ys)"
-          proof -
-            fix xs ys :: "CorePattern list"
-            assume xs_no_wc: "\<forall>p \<in> set xs. p \<noteq> CorePat_Wildcard"
-                and ys_short: "length ys \<le> 1"
-            show "\<not> patterns_after_wildcard (xs @ ys)"
-              using xs_no_wc ys_short
-            proof (induction xs)
-              case Nil
-              from Nil(2) consider "ys = []" | y where "ys = [y]"
-                by (cases ys) auto
-              thus ?case by cases auto
-            next
-              case (Cons p ps)
-              from Cons.prems(1) have p_no_wc: "p \<noteq> CorePat_Wildcard" by simp
-              from Cons.prems(1) have ps_no_wc: "\<forall>q \<in> set ps. q \<noteq> CorePat_Wildcard" by simp
-              from Cons.IH[OF ps_no_wc Cons.prems(2)] have IH:
-                "\<not> patterns_after_wildcard (ps @ ys)" .
-              show ?case
-              proof (cases "ps @ ys")
-                case Nil
-                thus ?thesis using p_no_wc by simp
-              next
-                case (Cons q rest)
-                show ?thesis using p_no_wc IH Cons by (cases p) auto
-              qed
-            qed
-          qed
-          have default_short: "length (map fst ?default_arm) \<le> 1"
-            by (cases ?has_default) auto
-          have not_after_wc:
-            "\<not> patterns_after_wildcard (map fst (map ?head_arm ?heads) @ map fst ?default_arm)"
-            using helper_no_after_wc[of "map (\<lambda>h. CorePat_Int h) ?heads" "map fst ?default_arm"]
-                  head_pats_no_wc head_pats_eq default_short
-            by argo
-          have wc_not_in: "CorePat_Wildcard \<notin> set (map (\<lambda>h. CorePat_Int h) ?heads)" by auto
-          have helper_no_dup:
-            "\<And>xs ys. distinct xs \<Longrightarrow> CorePat_Wildcard \<notin> set xs
-                  \<Longrightarrow> length ys \<le> 1
-                  \<Longrightarrow> (\<forall>y \<in> set ys. y = CorePat_Wildcard)
-                  \<Longrightarrow> \<not> has_duplicate_patterns (xs @ ys)"
-          proof -
-            fix xs ys :: "CorePattern list"
-            assume xs_distinct: "distinct xs"
-               and xs_no_wc: "CorePat_Wildcard \<notin> set xs"
-               and ys_short: "length ys \<le> 1"
-               and ys_wc: "\<forall>y \<in> set ys. y = CorePat_Wildcard"
-            show "\<not> has_duplicate_patterns (xs @ ys)"
-              using xs_distinct xs_no_wc ys_short ys_wc
-            proof (induction xs)
-              case Nil
-              from Nil(3) consider "ys = []" | y where "ys = [y]" by (cases ys) auto
-              thus ?case by cases auto
-            next
-              case (Cons p ps)
-              from Cons.prems(1) have p_distinct_ps: "p \<notin> set ps" "distinct ps" by auto
-              from Cons.prems(2) have p_no_wc: "p \<noteq> CorePat_Wildcard"
-                  and ps_no_wc: "CorePat_Wildcard \<notin> set ps" by auto
-              from Cons.IH[OF \<open>distinct ps\<close> ps_no_wc Cons.prems(3) Cons.prems(4)] have IH:
-                "\<not> has_duplicate_patterns (ps @ ys)" .
-              have p_not_in_ys: "p \<notin> set ys"
-                using p_no_wc Cons.prems(4) by auto
-              show ?case
-                using p_distinct_ps p_not_in_ys IH by simp
-            qed
-          qed
-          have default_only_wc:
-            "\<forall>y \<in> set (map fst ?default_arm). y = CorePat_Wildcard"
-            by (cases ?has_default) auto
-          have not_dup:
-            "\<not> has_duplicate_patterns (map fst (map ?head_arm ?heads) @ map fst ?default_arm)"
-            using helper_no_dup[of "map (\<lambda>h. CorePat_Int h) ?heads" "map fst ?default_arm"]
-                  head_pats_distinct wc_not_in head_pats_eq default_short default_only_wc
-            by argo
-          show ?thesis
-            unfolding patterns_regular_def
-            using not_after_wc not_dup by simp
-        qed
-
         have heads_ne: "?heads \<noteq> []"
         proof -
           from head_pat_in_col head_pat_eq2 have b_in: "DP_Int b \<in> set ?col_pats" by simp
@@ -6357,7 +6155,7 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
 
         show ?thesis
           unfolding compile_eq Let_def
-          using s_c_ty arms_ne head_pats_compat pats_regular
+          using s_c_ty arms_ne head_pats_compat
                 head_arm_wt default_arm_wt
           by (auto simp: list_all_iff)
       next
@@ -6452,7 +6250,7 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
                           (if has_payload
                            then replace_at c (CoreTm_VariantProj s_c h) scruts
                            else drop_at c scruts)
-                    in (CorePat_Variant h,
+                    in (CorePat_Variant h CorePat_Wildcard,
                         compile_matrix (new_scruts,
                           List.map_filter (specialise_row_variant c s_c h has_payload) rows)))
               in MT_Test s_c (map head_arm heads @ default_arm))"
@@ -6464,7 +6262,7 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
                     (if has_payload
                      then replace_at c (CoreTm_VariantProj ?s_c h) scruts
                      else drop_at c scruts)
-              in (CorePat_Variant h,
+              in (CorePat_Variant h CorePat_Wildcard,
                   compile_matrix (new_scruts,
                     List.map_filter (specialise_row_variant c ?s_c h has_payload) rows))"
 
@@ -6993,7 +6791,8 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
         have head_ctor_info:
           "\<forall>(h, hp) \<in> set ?heads.
               \<exists>tyvars_h payloadTy_h.
-                fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)"
+                fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)
+                \<and> length tyArgs = length tyvars_h"
         proof clarify
           fix h hp
           assume h_in: "(h, hp) \<in> set ?heads"
@@ -7026,13 +6825,17 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
           obtain dtName_h tyvars_h payloadTy_h where
             lookup_eq: "fmlookup (TE_DataCtors (extend_env_with_bindlist env ghost rh_bs)) h
                           = Some (dtName_h, tyvars_h, payloadTy_h)" and
-            dtName_eq: "dtName_h = dtName"
+            dtName_eq: "dtName_h = dtName" and
+            len_eq: "length tyArgs = length tyvars_h"
             by (cases "fmlookup (TE_DataCtors (extend_env_with_bindlist env ghost rh_bs)) h")
                (auto split: option.splits)
           from lookup_eq dtName_eq TE_DataCtors_eq
-          have "fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)" by simp
-          thus "\<exists>tyvars_h payloadTy_h.
-                  fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)"
+          have lookup_in_env:
+            "fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)" by simp
+          from lookup_in_env len_eq
+          show "\<exists>tyvars_h payloadTy_h.
+                  fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)
+                  \<and> length tyArgs = length tyvars_h"
             by blast
         qed
 
@@ -7043,127 +6846,21 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
         proof -
           have head_arm_pats_compat:
             "\<forall>(h, hp) \<in> set ?heads.
-                pattern_compatible env (CorePat_Variant h) (colTys ! c)"
+                pattern_compatible env (CorePat_Variant h CorePat_Wildcard) (colTys ! c)"
           proof clarify
             fix h hp
             assume h_in: "(h, hp) \<in> set ?heads"
             from head_ctor_info h_in obtain tyvars_h payloadTy_h where
-              "fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)"
+              h_lookup: "fmlookup (TE_DataCtors env) h = Some (dtName, tyvars_h, payloadTy_h)"
+              and h_len: "length tyArgs = length tyvars_h"
               by blast
-            thus "pattern_compatible env (CorePat_Variant h) (colTys ! c)"
+            from h_lookup h_len
+            show "pattern_compatible env (CorePat_Variant h CorePat_Wildcard) (colTys ! c)"
               using colTy_c_dt by simp
           qed
           show ?thesis
             using head_arm_pats_compat
             by (auto simp: list_all_iff split_def Let_def)
-        qed
-
-        \<comment> \<open>Pattern regularity.\<close>
-        have pats_regular:
-          "patterns_regular (map fst (map ?head_arm ?heads @ ?default_arm))"
-        proof -
-          have heads_distinct: "distinct (map fst ?heads)"
-            using distinct_variant_heads_distinct .
-          have head_pats_eq:
-            "map fst (map ?head_arm ?heads) = map (\<lambda>(h, _). CorePat_Variant h) ?heads"
-            by (simp add: split_def Let_def)
-          have head_pats_distinct: "distinct (map (\<lambda>(h, _). CorePat_Variant h) ?heads)"
-          proof -
-            have map_eq: "map (\<lambda>(h, _). CorePat_Variant h) ?heads
-                          = map CorePat_Variant (map fst ?heads)"
-              by (simp add: split_def)
-            have "distinct (map CorePat_Variant (map fst ?heads))"
-              using heads_distinct by (simp add: distinct_map inj_on_def)
-            thus ?thesis using map_eq by presburger
-          qed
-          have head_pats_no_wc:
-            "\<forall>p \<in> set (map (\<lambda>(h, _). CorePat_Variant h) ?heads). p \<noteq> CorePat_Wildcard"
-            by (auto simp: split_def)
-          have helper_no_after_wc:
-            "\<And>xs ys. (\<forall>p \<in> set xs. p \<noteq> CorePat_Wildcard)
-                  \<Longrightarrow> (length ys \<le> 1)
-                  \<Longrightarrow> \<not> patterns_after_wildcard (xs @ ys)"
-          proof -
-            fix xs ys :: "CorePattern list"
-            assume xs_no_wc: "\<forall>p \<in> set xs. p \<noteq> CorePat_Wildcard"
-                and ys_short: "length ys \<le> 1"
-            show "\<not> patterns_after_wildcard (xs @ ys)"
-              using xs_no_wc ys_short
-            proof (induction xs)
-              case Nil
-              from Nil(2) consider "ys = []" | y where "ys = [y]"
-                by (cases ys) auto
-              thus ?case by cases auto
-            next
-              case (Cons p ps)
-              from Cons.prems(1) have p_no_wc: "p \<noteq> CorePat_Wildcard" by simp
-              from Cons.prems(1) have ps_no_wc: "\<forall>q \<in> set ps. q \<noteq> CorePat_Wildcard" by simp
-              from Cons.IH[OF ps_no_wc Cons.prems(2)] have IH:
-                "\<not> patterns_after_wildcard (ps @ ys)" .
-              show ?case
-              proof (cases "ps @ ys")
-                case Nil
-                thus ?thesis using p_no_wc by simp
-              next
-                case (Cons q rest)
-                show ?thesis using p_no_wc IH Cons by (cases p) auto
-              qed
-            qed
-          qed
-          have default_short: "length (map fst ?default_arm) \<le> 1"
-            by (cases ?has_default) auto
-          have not_after_wc:
-            "\<not> patterns_after_wildcard (map fst (map ?head_arm ?heads) @ map fst ?default_arm)"
-            using helper_no_after_wc[
-                    of "map (\<lambda>(h, _). CorePat_Variant h) ?heads"
-                       "map fst ?default_arm"]
-                  head_pats_no_wc head_pats_eq default_short
-            by argo
-          have wc_not_in: "CorePat_Wildcard \<notin> set (map (\<lambda>(h, _). CorePat_Variant h) ?heads)"
-            by (auto simp: split_def)
-          have helper_no_dup:
-            "\<And>xs ys. distinct xs \<Longrightarrow> CorePat_Wildcard \<notin> set xs
-                  \<Longrightarrow> length ys \<le> 1
-                  \<Longrightarrow> (\<forall>y \<in> set ys. y = CorePat_Wildcard)
-                  \<Longrightarrow> \<not> has_duplicate_patterns (xs @ ys)"
-          proof -
-            fix xs ys :: "CorePattern list"
-            assume xs_distinct: "distinct xs"
-               and xs_no_wc: "CorePat_Wildcard \<notin> set xs"
-               and ys_short: "length ys \<le> 1"
-               and ys_wc: "\<forall>y \<in> set ys. y = CorePat_Wildcard"
-            show "\<not> has_duplicate_patterns (xs @ ys)"
-              using xs_distinct xs_no_wc ys_short ys_wc
-            proof (induction xs)
-              case Nil
-              from Nil(3) consider "ys = []" | y where "ys = [y]" by (cases ys) auto
-              thus ?case by cases auto
-            next
-              case (Cons p ps)
-              from Cons.prems(1) have p_distinct_ps: "p \<notin> set ps" "distinct ps" by auto
-              from Cons.prems(2) have p_no_wc: "p \<noteq> CorePat_Wildcard"
-                  and ps_no_wc: "CorePat_Wildcard \<notin> set ps" by auto
-              from Cons.IH[OF \<open>distinct ps\<close> ps_no_wc Cons.prems(3) Cons.prems(4)] have IH:
-                "\<not> has_duplicate_patterns (ps @ ys)" .
-              have p_not_in_ys: "p \<notin> set ys"
-                using p_no_wc Cons.prems(4) by auto
-              show ?case
-                using p_distinct_ps p_not_in_ys IH by simp
-            qed
-          qed
-          have default_only_wc:
-            "\<forall>y \<in> set (map fst ?default_arm). y = CorePat_Wildcard"
-            by (cases ?has_default) auto
-          have not_dup:
-            "\<not> has_duplicate_patterns (map fst (map ?head_arm ?heads) @ map fst ?default_arm)"
-            using helper_no_dup[
-                    of "map (\<lambda>(h, _). CorePat_Variant h) ?heads"
-                       "map fst ?default_arm"]
-                  head_pats_distinct wc_not_in head_pats_eq default_short default_only_wc
-            by argo
-          show ?thesis
-            unfolding patterns_regular_def
-            using not_after_wc not_dup by simp
         qed
 
         \<comment> \<open>arms non-empty.\<close>
@@ -7202,7 +6899,7 @@ proof (induction "(scruts, rows)" arbitrary: scruts rows env ghost resultTy
 
         show ?thesis
           unfolding compile_eq Let_def
-          using s_c_ty arms_ne head_pats_compat pats_regular all_arms_wt
+          using s_c_ty arms_ne head_pats_compat all_arms_wt
           by (simp del: compile_matrix.simps)
       qed
     qed

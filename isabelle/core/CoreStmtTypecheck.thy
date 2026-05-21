@@ -544,7 +544,6 @@ where
                let pats = map fst arms;
                    bodies = map snd arms
                in if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-                  else if \<not> patterns_regular pats then None
                   else if list_all (\<lambda>body. core_statement_list_type
                                               (env \<lparr> TE_ProofGoal := None \<rparr>)
                                               matchGhost body \<noteq> None) bodies

@@ -164,12 +164,21 @@ fun array_size_to_value :: "int list \<Rightarrow> CoreValue" where
 (* Pattern match helpers *)
 (* ========================================================================== *)
 
-fun pattern_matches :: "CoreValue \<Rightarrow> CorePattern \<Rightarrow> bool" where
+fun pattern_matches :: "CoreValue \<Rightarrow> CorePattern \<Rightarrow> bool"
+and pattern_matches_fields ::
+  "(string \<times> CoreValue) list \<Rightarrow> (string \<times> CorePattern) list \<Rightarrow> bool" where
   "pattern_matches (CV_Bool b1) (CorePat_Bool b2) = (b1 = b2)"
 | "pattern_matches (CV_FiniteInt _ _ i1) (CorePat_Int i2) = (i1 = i2)"
-| "pattern_matches (CV_Variant ctor1 _) (CorePat_Variant ctor2) = (ctor1 = ctor2)"
+| "pattern_matches (CV_Variant ctor1 v) (CorePat_Variant ctor2 p) =
+    (ctor1 = ctor2 \<and> pattern_matches v p)"
+| "pattern_matches (CV_Record vflds) (CorePat_Record pflds) =
+    pattern_matches_fields vflds pflds"
 | "pattern_matches _ CorePat_Wildcard = True"
 | "pattern_matches _ _ = False"
+| "pattern_matches_fields [] [] = True"
+| "pattern_matches_fields ((vn, v) # vs) ((pn, p) # ps) =
+    (vn = pn \<and> pattern_matches v p \<and> pattern_matches_fields vs ps)"
+| "pattern_matches_fields _ _ = False"
 
 fun find_matching_arm :: "CoreValue \<Rightarrow> (CorePattern \<times> 'a) list \<Rightarrow> InterpError + 'a" where
   "find_matching_arm _ [] = Inl RuntimeError"  (* no match found *)
