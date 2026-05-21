@@ -1,5 +1,5 @@
 theory ElabPattern
-  imports MatchCompile ElabType Unify3 "../core/TypeSubst" "../core/ExtendEnvWithTyVars"
+  imports MatchCompile ElabType Unify3 "../core/TypeSubst" "../core/ExtendEnvWithTyvars"
 begin
 
 (* elabenv_well_formed is preserved under extend_env_with_tyvars: it depends on env
