@@ -1159,12 +1159,12 @@ lemma finalize_match_term_correct:
                   dps"
       and dps_bind_wk:
         "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy)
-                                 (dec_pattern_vars dp))
+                                 (dec_pattern_var_bindings dp))
                   dps"
       and dps_bind_rt:
         "ghost = NotGhost \<Longrightarrow>
          list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy)
-                                 (dec_pattern_vars dp))
+                                 (dec_pattern_var_bindings dp))
                   dps"
       \<comment> \<open>Inference-check guarantee from finalize_match_arms: every meta in any
           dp's binding type lies in TE_TypeVars envOuter (so subsequent
@@ -1173,7 +1173,7 @@ lemma finalize_match_term_correct:
       and dps_meta_safe:
         "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars envOuter) (type_tyvars_list vTy))
-                                 (dec_pattern_vars dp))
+                                 (dec_pattern_var_bindings dp))
                   dps"
       and bodies_typed:
         "list_all2
@@ -1362,7 +1362,7 @@ proof -
                       list_all (\<lambda>n. n |\<in>| TE_TypeVars envOuter) (type_tyvars_list vTy))
                               (dec_pattern_var_bindings dp))
               dps"
-    using dps_meta_safe by (simp add: dec_pattern_vars_eq_var_bindings)
+    using dps_meta_safe by simp
 
   have dps_bindings_unaffected:
     "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). apply_subst finalSubst vTy = vTy)
@@ -1507,11 +1507,11 @@ proof -
 
     \<comment> \<open>Well-formedness and substitution invariants for ?env_pat. \<close>
     have dp_bind_wk: "list_all (\<lambda>(_, _, ty). is_well_kinded envAmbient ty)
-                                 (dec_pattern_vars ?dp)"
+                                 (dec_pattern_var_bindings ?dp)"
       using dps_bind_wk dp_in by (auto simp: list_all_iff)
     have dp_bind_rt:
       "ghost = NotGhost \<Longrightarrow>
-         list_all (\<lambda>(_, _, ty). is_runtime_type envAmbient ty) (dec_pattern_vars ?dp)"
+         list_all (\<lambda>(_, _, ty). is_runtime_type envAmbient ty) (dec_pattern_var_bindings ?dp)"
       using dps_bind_rt dp_in by (auto simp: list_all_iff)
     have env_pat_wf: "tyenv_well_formed ?env_pat"
       using tyenv_well_formed_extend_env_with_pattern[OF ambient_wf dp_bind_wk dp_bind_rt] .
@@ -1538,7 +1538,7 @@ proof -
       fix name ty'
       assume lookup_pat: "fmlookup (TE_LocalVars ?env_pat) name = Some ty'"
       show "apply_subst finalSubst ty' = ty'"
-      proof (cases "map_of (map (\<lambda>(vr, n, ty). (n, ty)) (dec_pattern_vars ?dp)) name")
+      proof (cases "map_of (map (\<lambda>(vr, n, ty). (n, ty)) (dec_pattern_var_bindings ?dp)) name")
         case None
         have "fmlookup (TE_LocalVars envAmbient) name = Some ty'"
           using lookup_pat None
@@ -1552,13 +1552,13 @@ proof -
           unfolding extend_env_with_pattern_def
           by (simp add: fmlookup_TE_LocalVars_foldr_extend_env_one_var)
         from Some have name_in_pairs:
-          "(name, ty_pat) \<in> set (map (\<lambda>(vr, n, ty). (n, ty)) (dec_pattern_vars ?dp))"
+          "(name, ty_pat) \<in> set (map (\<lambda>(vr, n, ty). (n, ty)) (dec_pattern_var_bindings ?dp))"
           by (rule map_of_SomeD)
         then obtain vr where triple_in:
-          "(vr, name, ty_pat) \<in> set (dec_pattern_vars ?dp)"
+          "(vr, name, ty_pat) \<in> set (dec_pattern_var_bindings ?dp)"
           by auto
         have triple_in_b: "(vr, name, ty_pat) \<in> set (dec_pattern_var_bindings ?dp)"
-          using triple_in by (simp add: dec_pattern_vars_eq_var_bindings)
+          using triple_in by simp
         have "list_all (\<lambda>(_, _, vTy). apply_subst finalSubst vTy = vTy)
                        (dec_pattern_var_bindings ?dp)"
           using dps_bindings_unaffected dp_in by (auto simp: list_all_iff)
@@ -1638,7 +1638,7 @@ proof -
                   list_all (\<lambda>n. n |\<in>| TE_TypeVars envOuter) (type_tyvars_list vTy))
                 (dec_pattern_var_bindings ?dp)"
       using dps_meta_safe dp_in
-      by (auto simp: list_all_iff dec_pattern_vars_eq_var_bindings)
+      by (auto simp: list_all_iff)
     have T_dp_bindings_id:
       "list_all (\<lambda>(_, _, vTy). apply_subst T vTy = vTy)
                 (dec_pattern_var_bindings ?dp)"
@@ -1721,11 +1721,11 @@ proof -
         using fresh_not_in_dp by auto
 
       have dp_bind_wk_amb: "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy)
-                                       (dec_pattern_vars ?dp)"
+                                       (dec_pattern_var_bindings ?dp)"
         using dps_bind_wk dp_in by (auto simp: list_all_iff)
       have dp_bind_rt_amb:
         "ghost = NotGhost \<Longrightarrow>
-           list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_vars ?dp)"
+           list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_var_bindings ?dp)"
         using dps_bind_rt dp_in by (auto simp: list_all_iff)
       have env'_tv: "TE_TypeVars ?env' = TE_TypeVars envAmbient"
         by (simp add: extend_env_with_bind_def)
@@ -1736,12 +1736,12 @@ proof -
       have env'_gd: "TE_GhostDatatypes ?env' = TE_GhostDatatypes envAmbient"
         by (simp add: extend_env_with_bind_def)
       have dp_bind_wk_env': "list_all (\<lambda>(_, _, vTy). is_well_kinded ?env' vTy)
-                                       (dec_pattern_vars ?dp)"
+                                       (dec_pattern_var_bindings ?dp)"
         using dp_bind_wk_amb is_well_kinded_cong_env[OF env'_tv env'_dt]
         by (auto simp: list_all_iff case_prod_unfold)
       have dp_bind_rt_env':
         "ghost = NotGhost \<Longrightarrow>
-           list_all (\<lambda>(_, _, vTy). is_runtime_type ?env' vTy) (dec_pattern_vars ?dp)"
+           list_all (\<lambda>(_, _, vTy). is_runtime_type ?env' vTy) (dec_pattern_var_bindings ?dp)"
         using dp_bind_rt_amb is_runtime_type_cong_env[OF env'_gd env'_rtv]
         by (auto simp: list_all_iff case_prod_unfold)
 
@@ -1795,7 +1795,7 @@ proof -
                                                   _ dp_distinct]
               finalScrutTy_wk finalScrutTy_runtime body_at_pat_env'
         using base_fresh_disjoint base_var_typed core_term_type_well_kinded_and_runtime
-          dec_pattern_vars_eq_var_bindings dp_compat_env' dp_distinct env'_wf
+          dp_compat_env' dp_distinct env'_wf
           extend_env_with_pattern_def foldr_extend_env_one_var_eq_extend_env_with_bind_foldr
           wrap_lets_at_preserves_typing by force
 
@@ -3630,14 +3630,14 @@ next
   have not_clash:
     "\<not> list_ex (\<lambda>dp. list_ex (\<lambda>(_, _, vTy).
                      \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                            (dec_pattern_vars dp)) ?substDps"
+                            (dec_pattern_var_bindings dp)) ?substDps"
     using finalize_arms_eq
     unfolding finalize_match_arms_def Let_def
     by (simp split: if_splits)
   have substDps_meta_safe:
     "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy).
                      list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                            (dec_pattern_vars dp)) ?substDps"
+                            (dec_pattern_var_bindings dp)) ?substDps"
     using not_clash
     by (force simp: list_all_iff list_ex_iff case_prod_unfold)
   have finalizedArms_eq:
@@ -3650,7 +3650,7 @@ next
   have dps_meta_safe:
     "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy).
                       list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                             (dec_pattern_vars dp))
+                             (dec_pattern_var_bindings dp))
               ?dps"
     using substDps_meta_safe dps_eq by simp
 
@@ -3771,17 +3771,17 @@ next
   \<comment> \<open>dps_bind_wk: each dp's bindings are well-kinded under envAmbient. \<close>
   have dps_bind_wk:
     "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy)
-                             (dec_pattern_vars dp))
+                             (dec_pattern_var_bindings dp))
               ?dps"
   proof -
     have "\<forall>dp \<in> set ?dps.
-            list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_vars dp)"
+            list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_var_bindings dp)"
     proof
       fix dp assume dp_in: "dp \<in> set ?dps"
       \<comment> \<open>From dps_compat: dp is compatible with apply_subst accSubst scrutTy under envAmbient. \<close>
       have compat: "dec_pattern_compatible envAmbient dp (apply_subst accSubst scrutTy)"
         using dps_compat dp_in by (auto simp: list_all_iff)
-      show "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_vars dp)"
+      show "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_var_bindings dp)"
         using dec_pattern_compatible_vars_well_kinded[OF compat subst_scrutTy_wk_amb envAmbient_wf_full] .
     qed
     thus ?thesis by (simp add: list_all_iff)
@@ -3813,22 +3813,22 @@ next
   have dps_bind_rt:
     "ghost = NotGhost \<Longrightarrow>
      list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy)
-                             (dec_pattern_vars dp))
+                             (dec_pattern_var_bindings dp))
               ?dps"
   proof -
     assume ng: "ghost = NotGhost"
     have "\<forall>dp \<in> set ?dps.
-            list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_vars dp)"
+            list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_var_bindings dp)"
     proof
       fix dp assume dp_in: "dp \<in> set ?dps"
       have compat: "dec_pattern_compatible envAmbient dp (apply_subst accSubst scrutTy)"
         using dps_compat dp_in by (auto simp: list_all_iff)
-      show "list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_vars dp)"
+      show "list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_var_bindings dp)"
         using dec_pattern_compatible_vars_runtime[OF compat subst_scrutTy_rt_amb[OF ng]
                                                     subst_scrutTy_wk_amb envAmbient_wf_full] .
     qed
     thus "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy)
-                                  (dec_pattern_vars dp))
+                                  (dec_pattern_var_bindings dp))
                    ?dps"
       by (simp add: list_all_iff)
   qed
@@ -3839,33 +3839,33 @@ next
       (dps_meta_safe), so by is_well_kinded_transfer they're wk under env. \<close>
   have substDps_bind_wk_env:
     "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy)
-                             (dec_pattern_vars dp))
+                             (dec_pattern_var_bindings dp))
               ?substDps"
   proof -
     have envAmbient_dt: "TE_Datatypes envAmbient = TE_Datatypes env"
       unfolding envAmbient_def extend_env_with_tyvars_def by simp
     have "\<forall>dp \<in> set ?substDps.
-            list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy) (dec_pattern_vars dp)"
+            list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy) (dec_pattern_var_bindings dp)"
     proof
       fix dp assume dp_in: "dp \<in> set ?substDps"
       have dp_in_dps: "dp \<in> set ?dps" using dp_in dps_eq by simp
-      have wk_amb: "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_vars dp)"
+      have wk_amb: "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_var_bindings dp)"
         using dps_bind_wk dp_in_dps unfolding list_all_iff by blast
       have meta_safe: "list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                          (dec_pattern_vars dp)"
+                          (dec_pattern_var_bindings dp)"
         using substDps_meta_safe dp_in unfolding list_all_iff by blast
       have meta_safe_ex:
-        "\<forall>x \<in> set (dec_pattern_vars dp).
+        "\<forall>x \<in> set (dec_pattern_var_bindings dp).
             case x of (vr, name, vTy) \<Rightarrow> list_all (\<lambda>k. k |\<in>| TE_TypeVars env) (type_tyvars_list vTy)"
         using meta_safe by (simp add: list_all_iff)
       have wk_amb_ex:
-        "\<forall>x \<in> set (dec_pattern_vars dp).
+        "\<forall>x \<in> set (dec_pattern_var_bindings dp).
             case x of (vr, name, vTy) \<Rightarrow> is_well_kinded envAmbient vTy"
         using wk_amb by (simp add: list_all_iff)
-      have "\<forall>(vr, name, vTy) \<in> set (dec_pattern_vars dp). is_well_kinded env vTy"
+      have "\<forall>(vr, name, vTy) \<in> set (dec_pattern_var_bindings dp). is_well_kinded env vTy"
       proof clarify
-        fix vr name vTy assume binding_in: "(vr, name, vTy) \<in> set (dec_pattern_vars dp)"
+        fix vr name vTy assume binding_in: "(vr, name, vTy) \<in> set (dec_pattern_var_bindings dp)"
         have vTy_wk_amb: "is_well_kinded envAmbient vTy"
           using wk_amb_ex binding_in by force
         have vTy_metas: "list_all (\<lambda>k. k |\<in>| TE_TypeVars env) (type_tyvars_list vTy)"
@@ -3877,7 +3877,7 @@ next
         show "is_well_kinded env vTy"
           using is_well_kinded_transfer[OF vTy_wk_amb vTy_tyvars_sub envAmbient_dt[symmetric]] .
       qed
-      thus "list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy) (dec_pattern_vars dp)"
+      thus "list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy) (dec_pattern_var_bindings dp)"
         by (force simp: list_all_iff case_prod_unfold)
     qed
     thus ?thesis by (simp add: list_all_iff)
@@ -3891,7 +3891,7 @@ next
   have substDps_bind_rt_env:
     "ghost = NotGhost \<Longrightarrow>
      list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy)
-                             (dec_pattern_vars dp))
+                             (dec_pattern_var_bindings dp))
               ?substDps"
   proof -
     assume ng: "ghost = NotGhost"
@@ -3901,27 +3901,27 @@ next
       "TE_RuntimeTypeVars envAmbient = TE_RuntimeTypeVars env |\<union>| fset_of_list [next_mv ..< mv3 + 1]"
       unfolding envAmbient_def extend_env_with_tyvars_def using ng by simp
     have "\<forall>dp \<in> set ?substDps.
-            list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_vars dp)"
+            list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_var_bindings dp)"
     proof
       fix dp assume dp_in: "dp \<in> set ?substDps"
       have dp_in_dps: "dp \<in> set ?dps" using dp_in dps_eq by simp
-      have rt_amb: "list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_vars dp)"
+      have rt_amb: "list_all (\<lambda>(_, _, vTy). is_runtime_type envAmbient vTy) (dec_pattern_var_bindings dp)"
         using dps_bind_rt[OF ng] dp_in_dps unfolding list_all_iff by blast
       have meta_safe: "list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                          (dec_pattern_vars dp)"
+                          (dec_pattern_var_bindings dp)"
         using substDps_meta_safe dp_in unfolding list_all_iff by blast
       have rt_amb_ex:
-        "\<forall>x \<in> set (dec_pattern_vars dp).
+        "\<forall>x \<in> set (dec_pattern_var_bindings dp).
             case x of (vr, name, vTy) \<Rightarrow> is_runtime_type envAmbient vTy"
         using rt_amb by (simp add: list_all_iff)
       have meta_safe_ex:
-        "\<forall>x \<in> set (dec_pattern_vars dp).
+        "\<forall>x \<in> set (dec_pattern_var_bindings dp).
             case x of (vr, name, vTy) \<Rightarrow> list_all (\<lambda>k. k |\<in>| TE_TypeVars env) (type_tyvars_list vTy)"
         using meta_safe by (simp add: list_all_iff)
-      have "\<forall>(vr, name, vTy) \<in> set (dec_pattern_vars dp). is_runtime_type env vTy"
+      have "\<forall>(vr, name, vTy) \<in> set (dec_pattern_var_bindings dp). is_runtime_type env vTy"
       proof clarify
-        fix vr name vTy assume binding_in: "(vr, name, vTy) \<in> set (dec_pattern_vars dp)"
+        fix vr name vTy assume binding_in: "(vr, name, vTy) \<in> set (dec_pattern_var_bindings dp)"
         have vTy_rt_amb: "is_runtime_type envAmbient vTy"
           using rt_amb_ex binding_in by force
         have vTy_metas: "list_all (\<lambda>k. k |\<in>| TE_TypeVars env) (type_tyvars_list vTy)"
@@ -3954,10 +3954,10 @@ next
           using is_runtime_type_transfer
           by (metis subsetI)
       qed
-      thus "list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_vars dp)"
+      thus "list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_var_bindings dp)"
         by (force simp: list_all_iff case_prod_unfold)
     qed
-    thus "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_vars dp))
+    thus "list_all (\<lambda>dp. list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_var_bindings dp))
                    ?substDps"
       by (simp add: list_all_iff)
   qed
@@ -3974,7 +3974,7 @@ next
             \<and> env_i = extend_env_with_pattern env ghost dp
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                       (dec_pattern_vars dp)
+                       (dec_pattern_var_bindings dp)
             \<and> tyenv_well_formed env_i
             \<and> elabenv_well_formed env_i elabEnv)
          finalizedArms ?rawDps"
@@ -4005,7 +4005,7 @@ next
             \<and> env_i = extend_env_with_pattern env ghost dp
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                       (dec_pattern_vars dp)
+                       (dec_pattern_var_bindings dp)
             \<and> tyenv_well_formed env_i
             \<and> elabenv_well_formed env_i elabEnv)
           (?rawDps ! i)"
@@ -4030,7 +4030,7 @@ next
             \<and> env_i = extend_env_with_pattern env ghost dp
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                       (dec_pattern_vars dp)
+                       (dec_pattern_var_bindings dp)
             \<and> tyenv_well_formed env_i
             \<and> elabenv_well_formed env_i elabEnv)
           (?rawDps ! i)"
@@ -4051,7 +4051,7 @@ next
             \<and> env_i = extend_env_with_pattern env ghost dp
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                       (dec_pattern_vars dp)
+                       (dec_pattern_var_bindings dp)
             \<and> tyenv_well_formed env_i
             \<and> elabenv_well_formed env_i elabEnv)
           (?rawDps ! i)"
@@ -4063,7 +4063,7 @@ next
     show "TE_TypeVars (snd (finalizedArms ! i)) = TE_TypeVars env"
       using env_i_eq
       unfolding extend_env_with_pattern_def
-      by (induction "dec_pattern_vars ?dp_i" arbitrary: env) simp_all
+      by (induction "dec_pattern_var_bindings ?dp_i" arbitrary: env) simp_all
   qed
   have jobs_envs_fresh:
     "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> n < mv2) ?bodyJobs"
@@ -4159,7 +4159,7 @@ next
               \<and> env_i = extend_env_with_pattern env ghost dp
               \<and> list_all (\<lambda>(_, _, vTy).
                             list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                         (dec_pattern_vars dp)
+                         (dec_pattern_var_bindings dp)
               \<and> tyenv_well_formed env_i
               \<and> elabenv_well_formed env_i elabEnv)
             (?rawDps ! i)"
@@ -4200,7 +4200,7 @@ next
         have wf_step: "tyenv_well_formed envAmbient" using envAmbient_wf .
         have dp_in_dps: "?dp_i \<in> set ?dps" using i_lt_finalized by simp
         have wk_amb: "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy)
-                                  (dec_pattern_vars ?dp_i)"
+                                  (dec_pattern_var_bindings ?dp_i)"
           using dps_bind_wk dp_in_dps
           by (simp add: i_lt_arms len_finalizedArms list_all_length)
         show ?thesis
@@ -4267,7 +4267,7 @@ next
           when ghost = NotGhost, also runtime (dps_bind_rt). \<close>
       have dp_in_dps: "?dp_i \<in> set ?dps"
         using i_lt_dps by simp
-      have wk_amb: "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_vars ?dp_i)"
+      have wk_amb: "list_all (\<lambda>(_, _, vTy). is_well_kinded envAmbient vTy) (dec_pattern_var_bindings ?dp_i)"
         using dps_bind_wk dp_in_dps
         by (simp add: i_lt_arms len_finalizedArms list_all_length)
       have ext_envAmbient_wf:
