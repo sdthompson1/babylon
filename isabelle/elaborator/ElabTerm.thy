@@ -630,11 +630,14 @@ where
 
    Steps:
    1. Unify each body type with bodyTyVar, threading accSubst \<rightarrow> finalSubst.
-   2. Apply finalSubst to scrutinee, dps, and body terms; build finalRows.
+   2. Apply finalSubst to scrutinee, dps, and body terms.
    3. Mint a fresh scrutinee binding name (match@@<n>) and validate that it
       doesn't clash with any free var of the substituted scrutinee or any
       pattern variable.
-   4. Hand the result to compile_match + matchtree_to_term.
+   4. Build the elaborated match: a CoreTm_Let binds the scrutinee to the
+      fresh name, then CoreTm_Match dispatches on the (binder-free) Core
+      patterns. Each arm's body is wrapped in a CoreTm_Let per surface
+      pattern variable, projecting from the fresh scrutinee.
 
    The `nextMv` argument is the next metavariable counter at entry; the
    returned counter is `nextMv + 1` (one more, for the synthesised name's
@@ -651,20 +654,21 @@ definition finalize_match_term ::
        Inl errs \<Rightarrow> Inl errs
      | Inr finalSubst \<Rightarrow>
          let finalScrut = apply_subst_to_term finalSubst scrutTm;
-             finalScrutTy = apply_subst finalSubst scrutTy;
-             finalRows = map (\<lambda>(dp, body).
-                                (apply_subst_to_dec_pattern finalSubst dp,
-                                 apply_subst_to_term finalSubst body))
-                              (zip dps bodyTms);
+             finalDps = map (apply_subst_to_dec_pattern finalSubst) dps;
+             finalBodies = map (apply_subst_to_term finalSubst) bodyTms;
              finalBodyTy = apply_subst finalSubst bodyTyVar;
              freshName = ''match@@'' @ nat_to_string nextMv
          in if freshName |\<in>| core_term_free_vars finalScrut
-               \<or> list_ex (\<lambda>(dp, _). freshName |\<in>| dec_pattern_var_names dp) finalRows
-               \<or> list_ex (\<lambda>(_, body). freshName |\<in>| core_term_free_vars body) finalRows
+               \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) finalDps
+               \<or> list_ex (\<lambda>body. freshName |\<in>| core_term_free_vars body) finalBodies
             then Inl [TyErr_InternalError_FreshnameClash loc freshName]
             else
-              let resultTm = matchtree_to_term
-                               (compile_match finalScrut finalScrutTy freshName finalRows)
+              let armPats = map dec_to_core_pat finalDps;
+                  armBodies = map (\<lambda>(dp, body). wrap_lets freshName dp body)
+                                  (zip finalDps finalBodies);
+                  matchTm = CoreTm_Match (CoreTm_Var freshName)
+                                         (zip armPats armBodies);
+                  resultTm = CoreTm_Let freshName finalScrut matchTm
               in Inr (resultTm, finalBodyTy, nextMv + 1))"
 
 
@@ -1005,7 +1009,8 @@ where
      every arm's body under the env extended with that arm's pattern variables,
      unify all body types against a fresh body-type metavariable, then apply
      the final substitution to the scrutinee, every DP_Var, and every arm body,
-     and hand the result off to the match compiler. *)
+     and hand the result off to finalize_match_term (which translates
+     DecPatterns to CorePatterns and emits the binder-projection Lets). *)
 | "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv =
     (if arms = [] then Inl [TyErr_EmptyMatch loc]
      else case elab_term env elabEnv ghost scrut next_mv of
