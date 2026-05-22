@@ -455,32 +455,38 @@ where
 
 section \<open>Single-variable env extension\<close>
 
-(* Env extension corresponding to a single name-binding, mirroring
-   exactly the env extension that CoreTm_Let / CoreStmt_VarDecl(Var)
-   perform. *)
-definition extend_env_with_bind ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> CoreTyEnv" where
-  "extend_env_with_bind env ghost x ty =
-     env \<lparr> TE_LocalVars := fmupd x ty (TE_LocalVars env),
-           TE_GhostLocals := (if ghost = Ghost
-                              then finsert x (TE_GhostLocals env)
-                              else fminus (TE_GhostLocals env) {|x|}),
-           TE_ConstLocals := finsert x (TE_ConstLocals env) \<rparr>"
+(* Env extension corresponding to a single (vr, name, type) binding,
+   mirroring exactly the env extension that CoreTm_Let /
+   CoreStmt_VarDecl(Var) perform. Pattern-bound variables are read-only
+   inside the arm body, so they land in TE_ConstLocals as well as
+   TE_LocalVars. Ghost arms put them in TE_GhostLocals. The VarOrRef
+   component is currently unused but kept so the binding triples that
+   dec_pattern_var_bindings produces can be consumed directly. *)
+definition extend_env_one_var ::
+  "GhostOrNot \<Rightarrow> (VarOrRef \<times> string \<times> CoreType) \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
+  "extend_env_one_var ghost binding env =
+    (case binding of (_, name, ty) \<Rightarrow>
+      env \<lparr> TE_LocalVars := fmupd name ty (TE_LocalVars env),
+            TE_GhostLocals := (if ghost = Ghost
+                               then finsert name (TE_GhostLocals env)
+                               else fminus (TE_GhostLocals env) {|name|}),
+            TE_ConstLocals := finsert name (TE_ConstLocals env) \<rparr>)"
 
 (* Specialisations of the TE_DataCtors_cong lemmas: dec_pattern_compatible
-   is invariant under extend_env_with_bind. *)
-lemma dec_pattern_compatible_extend_env_with_bind:
-  "dec_pattern_compatible (extend_env_with_bind env ghost x ty) p t
+   is invariant under extend_env_one_var. *)
+lemma dec_pattern_compatible_extend_env_one_var:
+  "dec_pattern_compatible (extend_env_one_var ghost b env) p t
    = dec_pattern_compatible env p t"
-  using dec_pattern_compatible_TE_DataCtors_cong[of "extend_env_with_bind env ghost x ty" env p t]
-  by (simp add: extend_env_with_bind_def)
+  using dec_pattern_compatible_TE_DataCtors_cong[of "extend_env_one_var ghost b env" env p t]
+  by (cases b) (simp add: extend_env_one_var_def)
 
-(* extend_env_with_bind commutes (in observable env state) when the two
-   bindings use distinct names. *)
-lemma extend_env_with_bind_commute:
+(* extend_env_one_var commutes (in observable env state) when the two
+   bindings use distinct names. Quantified over the VarOrRef components
+   vr1, vr2 so the lemma survives any future use of that field. *)
+lemma extend_env_one_var_commute:
   assumes "x \<noteq> y"
-  shows "extend_env_with_bind (extend_env_with_bind env ghost x t1) ghost y t2
-       = extend_env_with_bind (extend_env_with_bind env ghost y t2) ghost x t1"
+  shows "extend_env_one_var ghost (vr1, x, t1) (extend_env_one_var ghost (vr2, y, t2) env)
+       = extend_env_one_var ghost (vr2, y, t2) (extend_env_one_var ghost (vr1, x, t1) env)"
 proof -
   have fmupd_commute: "fmupd y t2 (fmupd x t1 (TE_LocalVars env))
                        = fmupd x t1 (fmupd y t2 (TE_LocalVars env))"
@@ -498,7 +504,7 @@ proof -
       by (rule finsert_commute)
     show ?thesis
       using True fmupd_commute finsert_commute_const finsert_commute_ghost
-      by (simp add: extend_env_with_bind_def)
+      by (simp add: extend_env_one_var_def)
   next
     case False
     have fminus_commute_ghost:
@@ -507,17 +513,17 @@ proof -
       by blast
     show ?thesis
       using False fmupd_commute finsert_commute_const fminus_commute_ghost
-      by (simp add: extend_env_with_bind_def)
+      by (simp add: extend_env_one_var_def)
   qed
 qed
 
 (* Two foldr-extend orderings agree when all binding names are distinct
    across the two lists. *)
-lemma foldr_extend_env_with_bind_append_swap:
+lemma foldr_extend_env_one_var_append_swap:
   assumes "distinct (map (\<lambda>(_, x, _). x) (xs @ ys))"
-  shows "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) (xs @ ys) env
-       = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys
-                (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) xs env)"
+  shows "foldr (extend_env_one_var ghost) (xs @ ys) env
+       = foldr (extend_env_one_var ghost) ys
+                (foldr (extend_env_one_var ghost) xs env)"
   using assms
 proof (induction xs arbitrary: env)
   case Nil
@@ -533,30 +539,28 @@ next
     "distinct (map (\<lambda>(_, x, _). x) (xs @ ys))"
     using Cons.prems b_eq by auto
   have IH:
-    "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) (xs @ ys) env
-     = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys
-              (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) xs env)"
+    "foldr (extend_env_one_var ghost) (xs @ ys) env
+     = foldr (extend_env_one_var ghost) ys
+              (foldr (extend_env_one_var ghost) xs env)"
     using Cons.IH[OF distinct_rest] .
-  let ?env_xs = "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) xs env"
-  let ?env_xs_ys = "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys ?env_xs"
-  \<comment> \<open>Goal: extend_env_with_bind ?env_xs_ys ghost x ty
-              = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys
-                       (extend_env_with_bind ?env_xs ghost x ty)
-      That follows from commuting `extend_env_with_bind ghost x ty` with each
-      entry of ys (all of which have names \<noteq> x). \<close>
+  let ?env_xs = "foldr (extend_env_one_var ghost) xs env"
+  let ?env_xs_ys = "foldr (extend_env_one_var ghost) ys ?env_xs"
+  \<comment> \<open>Goal: extend_env_one_var ghost (vr, x, ty) ?env_xs_ys
+              = foldr (extend_env_one_var ghost) ys
+                       (extend_env_one_var ghost (vr, x, ty) ?env_xs)
+      That follows from commuting `extend_env_one_var ghost (vr, x, ty)` with
+      each entry of ys (all of which have names \<noteq> x). \<close>
   have commute_through_ys:
-    "\<And>e. extend_env_with_bind
-            (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys e)
-            ghost x ty
-        = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys
-                 (extend_env_with_bind e ghost x ty)"
+    "\<And>e. extend_env_one_var ghost (vr, x, ty)
+            (foldr (extend_env_one_var ghost) ys e)
+        = foldr (extend_env_one_var ghost) ys
+                 (extend_env_one_var ghost (vr, x, ty) e)"
   proof -
     fix e
-    show "extend_env_with_bind
-            (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys e)
-            ghost x ty
-        = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys
-                 (extend_env_with_bind e ghost x ty)"
+    show "extend_env_one_var ghost (vr, x, ty)
+            (foldr (extend_env_one_var ghost) ys e)
+        = foldr (extend_env_one_var ghost) ys
+                 (extend_env_one_var ghost (vr, x, ty) e)"
       using x_fresh(2) proof (induction ys arbitrary: e)
       case Nil thus ?case by simp
     next
@@ -566,16 +570,18 @@ next
       have x_fresh_ys':
         "x \<notin> set (map (\<lambda>(_, x, _). x) ys')"
         using Cons.prems c_eq by simp
-      let ?e1 = "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys' e"
+      let ?e1 = "foldr (extend_env_one_var ghost) ys' e"
       have step1:
-        "extend_env_with_bind ?e1 ghost x ty
-         = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) ys'
-                 (extend_env_with_bind e ghost x ty)"
+        "extend_env_one_var ghost (vr, x, ty) ?e1
+         = foldr (extend_env_one_var ghost) ys'
+                 (extend_env_one_var ghost (vr, x, ty) e)"
         using Cons.IH[OF x_fresh_ys'] .
       have commute_step:
-        "extend_env_with_bind (extend_env_with_bind ?e1 ghost y t') ghost x ty
-         = extend_env_with_bind (extend_env_with_bind ?e1 ghost x ty) ghost y t'"
-        using extend_env_with_bind_commute[OF \<open>x \<noteq> y\<close>[symmetric]] by simp
+        "extend_env_one_var ghost (vr, x, ty)
+            (extend_env_one_var ghost (vr', y, t') ?e1)
+         = extend_env_one_var ghost (vr', y, t')
+            (extend_env_one_var ghost (vr, x, ty) ?e1)"
+        using extend_env_one_var_commute[OF \<open>x \<noteq> y\<close>] by simp
       show ?case
         unfolding c_eq
         using step1 commute_step
@@ -587,46 +593,48 @@ next
     by simp
 qed
 
-(* Pushing extend_env_with_bind for a fresh name through a foldr of
-   extend_env_with_bind: when x doesn't appear in bs's names, the
+(* Pushing extend_env_one_var for a fresh name through a foldr of
+   extend_env_one_var: when x doesn't appear in bs's names, the
    single binding can be commuted to the outside. *)
-lemma foldr_extend_env_with_bind_push:
+lemma foldr_extend_env_one_var_push:
   assumes "x \<notin> set (map (\<lambda>(_, x, _). x) bs)"
-  shows "foldr (\<lambda>(_, x', ty') e. extend_env_with_bind e ghost x' ty') bs
-                (extend_env_with_bind env ghost x ty)
-       = extend_env_with_bind
-            (foldr (\<lambda>(_, x', ty') e. extend_env_with_bind e ghost x' ty') bs env)
-            ghost x ty"
+  shows "foldr (extend_env_one_var ghost) bs
+                (extend_env_one_var ghost (vr, x, ty) env)
+       = extend_env_one_var ghost (vr, x, ty)
+            (foldr (extend_env_one_var ghost) bs env)"
   using assms
 proof (induction bs arbitrary: env)
   case Nil thus ?case by simp
 next
   case (Cons b bs)
-  obtain vr x' ty' where b_eq: "b = (vr, x', ty')" by (cases b) auto
+  obtain vr' x' ty' where b_eq: "b = (vr', x', ty')" by (cases b) auto
   have x_neq_x': "x \<noteq> x'" using Cons.prems b_eq by simp
   have x_fresh_bs: "x \<notin> set (map (\<lambda>(_, x, _). x) bs)"
     using Cons.prems b_eq by simp
-  let ?e1 = "foldr (\<lambda>(_, x', ty') e. extend_env_with_bind e ghost x' ty') bs env"
+  let ?e1 = "foldr (extend_env_one_var ghost) bs env"
   have IH:
-    "foldr (\<lambda>(_, x', ty') e. extend_env_with_bind e ghost x' ty') bs
-            (extend_env_with_bind env ghost x ty)
-     = extend_env_with_bind ?e1 ghost x ty"
+    "foldr (extend_env_one_var ghost) bs
+            (extend_env_one_var ghost (vr, x, ty) env)
+     = extend_env_one_var ghost (vr, x, ty) ?e1"
     using Cons.IH[OF x_fresh_bs] .
   have commute_step:
-    "extend_env_with_bind (extend_env_with_bind ?e1 ghost x ty) ghost x' ty'
-     = extend_env_with_bind (extend_env_with_bind ?e1 ghost x' ty') ghost x ty"
-    using extend_env_with_bind_commute[OF x_neq_x'] by simp
+    "extend_env_one_var ghost (vr', x', ty')
+        (extend_env_one_var ghost (vr, x, ty) ?e1)
+     = extend_env_one_var ghost (vr, x, ty)
+        (extend_env_one_var ghost (vr', x', ty') ?e1)"
+    using extend_env_one_var_commute[OF x_neq_x'[symmetric]] by simp
   show ?case
     unfolding b_eq
     using IH commute_step by simp
 qed
 
 (* If a term doesn't reference variable x, its type is unchanged when
-   env is extended by a new binding for x. *)
-lemma core_term_type_extend_env_with_bind_irrelevant:
+   env is extended by a new binding for x. Quantified over the VarOrRef
+   component vr. *)
+lemma core_term_type_extend_env_one_var_irrelevant:
   assumes "x |\<notin>| core_term_free_vars tm"
       and "core_term_type env ghost tm = Some ty"
-  shows "core_term_type (extend_env_with_bind env ghost x bindTy) ghost tm = Some ty"
+  shows "core_term_type (extend_env_one_var ghost (vr, x, bindTy) env) ghost tm = Some ty"
 proof -
   let ?env_modified = "env \<lparr> TE_LocalVars := fmupd x bindTy (TE_LocalVars env),
                               TE_GhostLocals := (if ghost = Ghost
@@ -640,9 +648,9 @@ proof -
     by auto
   have step1: "core_term_type ?env_modified ghost tm = Some ty"
     using core_term_type_irrelevant_var[OF assms(1) assms(2) ghost_eq] .
-  have step2: "extend_env_with_bind env ghost x bindTy
+  have step2: "extend_env_one_var ghost (vr, x, bindTy) env
                = ?env_modified \<lparr> TE_ConstLocals := finsert x (TE_ConstLocals env) \<rparr>"
-    by (simp add: extend_env_with_bind_def)
+    by (simp add: extend_env_one_var_def)
   show ?thesis
     using step1 step2 core_term_type_TE_ConstLocals_irrelevant by simp
 qed
@@ -678,14 +686,14 @@ section \<open>Pattern-list env extension\<close>
 definition extend_env_with_pattern_vars ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> DecPattern list \<Rightarrow> CoreTyEnv" where
   "extend_env_with_pattern_vars env ghost ps =
-     foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+     foldr (extend_env_one_var ghost)
            (dec_pattern_var_bindings_list ps) env"
-(* extend_env_with_pattern_vars commutes with extend_env_with_bind when the
+(* extend_env_with_pattern_vars commutes with extend_env_one_var when the
    bind's name doesn't appear in the pattern-list's DP_Var names. *)
-lemma extend_env_with_pattern_vars_extend_env_with_bind_swap:
+lemma extend_env_with_pattern_vars_extend_env_one_var_swap:
   assumes "x |\<notin>| dec_pattern_var_names_list ps"
-  shows "extend_env_with_pattern_vars (extend_env_with_bind env ghost x ty) ghost ps
-       = extend_env_with_bind (extend_env_with_pattern_vars env ghost ps) ghost x ty"
+  shows "extend_env_with_pattern_vars (extend_env_one_var ghost (vr, x, ty) env) ghost ps
+       = extend_env_one_var ghost (vr, x, ty) (extend_env_with_pattern_vars env ghost ps)"
 proof -
   let ?bs = "dec_pattern_var_bindings_list ps"
   have names_match:
@@ -706,7 +714,7 @@ proof -
     using assms names_match by (metis fset_of_list.rep_eq)
   show ?thesis
     unfolding extend_env_with_pattern_vars_def
-    using foldr_extend_env_with_bind_push[OF x_not_in_bs] .
+    using foldr_extend_env_one_var_push[OF x_not_in_bs] .
 qed
 
 
@@ -1155,28 +1163,6 @@ qed
 
 section \<open>Extending the type environment with pattern bindings\<close>
 
-(* Add a single pattern variable binding to the type environment.
-   Pattern-bound variables are read-only inside the arm body, so they
-   land in TE_ConstLocals as well as TE_LocalVars. Ghost arms put them
-   in TE_GhostLocals. *)
-definition extend_env_one_var ::
-  "GhostOrNot \<Rightarrow> (VarOrRef \<times> string \<times> CoreType) \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
-  "extend_env_one_var ghost binding env =
-    (case binding of (_, name, ty) \<Rightarrow>
-      env \<lparr> TE_LocalVars := fmupd name ty (TE_LocalVars env),
-            TE_ConstLocals := finsert name (TE_ConstLocals env),
-            TE_GhostLocals := (if ghost = Ghost
-                               then finsert name (TE_GhostLocals env)
-                               else fminus (TE_GhostLocals env) {|name|}) \<rparr>)"
-
-(* Add every variable bound by a decorated pattern, in left-to-right
-   order. Duplicate detection should already have run, so each name
-   appears at most once. *)
-definition extend_env_with_pattern ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> DecPattern \<Rightarrow> CoreTyEnv" where
-  "extend_env_with_pattern env ghost dp =
-    foldr (extend_env_one_var ghost) (dec_pattern_var_bindings dp) env"
-
 (* extend_env_one_var only modifies TE_LocalVars / TE_ConstLocals / TE_GhostLocals,
    so it leaves TE_TypeVars / TE_RuntimeTypeVars / TE_Datatypes / etc. alone. *)
 lemma extend_env_one_var_TE_TypeVars [simp]:
@@ -1195,13 +1181,13 @@ lemma foldr_extend_env_one_var_TE_RuntimeTypeVars [simp]:
   "TE_RuntimeTypeVars (foldr (extend_env_one_var ghost) bs env) = TE_RuntimeTypeVars env"
   by (induction bs) simp_all
 
-lemma extend_env_with_pattern_TE_TypeVars [simp]:
-  "TE_TypeVars (extend_env_with_pattern env ghost dp) = TE_TypeVars env"
-  unfolding extend_env_with_pattern_def by simp
+lemma extend_env_with_pattern_vars_TE_TypeVars [simp]:
+  "TE_TypeVars (extend_env_with_pattern_vars env ghost ps) = TE_TypeVars env"
+  unfolding extend_env_with_pattern_vars_def by simp
 
-lemma extend_env_with_pattern_TE_RuntimeTypeVars [simp]:
-  "TE_RuntimeTypeVars (extend_env_with_pattern env ghost dp) = TE_RuntimeTypeVars env"
-  unfolding extend_env_with_pattern_def by simp
+lemma extend_env_with_pattern_vars_TE_RuntimeTypeVars [simp]:
+  "TE_RuntimeTypeVars (extend_env_with_pattern_vars env ghost ps) = TE_RuntimeTypeVars env"
+  unfolding extend_env_with_pattern_vars_def by simp
 
 lemma extend_env_one_var_TE_Datatypes [simp]:
   "TE_Datatypes (extend_env_one_var ghost b env) = TE_Datatypes env"
@@ -1219,13 +1205,13 @@ lemma foldr_extend_env_one_var_TE_GhostDatatypes [simp]:
   "TE_GhostDatatypes (foldr (extend_env_one_var ghost) bs env) = TE_GhostDatatypes env"
   by (induction bs) simp_all
 
-lemma extend_env_with_pattern_TE_Datatypes [simp]:
-  "TE_Datatypes (extend_env_with_pattern env ghost dp) = TE_Datatypes env"
-  unfolding extend_env_with_pattern_def by simp
+lemma extend_env_with_pattern_vars_TE_Datatypes [simp]:
+  "TE_Datatypes (extend_env_with_pattern_vars env ghost ps) = TE_Datatypes env"
+  unfolding extend_env_with_pattern_vars_def by simp
 
-lemma extend_env_with_pattern_TE_GhostDatatypes [simp]:
-  "TE_GhostDatatypes (extend_env_with_pattern env ghost dp) = TE_GhostDatatypes env"
-  unfolding extend_env_with_pattern_def by simp
+lemma extend_env_with_pattern_vars_TE_GhostDatatypes [simp]:
+  "TE_GhostDatatypes (extend_env_with_pattern_vars env ghost ps) = TE_GhostDatatypes env"
+  unfolding extend_env_with_pattern_vars_def by simp
 
 (* extend_env_with_tyvars and extend_env_one_var commute (operate on disjoint
    record fields: extend_env_with_tyvars only touches TE_TypeVars/TE_RuntimeTypeVars;
@@ -1242,23 +1228,23 @@ lemma extend_env_with_tyvars_foldr_extend_env_one_var_commute:
   by (induction bs)
      (simp_all add: extend_env_with_tyvars_extend_env_one_var_commute)
 
-lemma extend_env_with_tyvars_extend_env_with_pattern_commute:
-  "extend_env_with_tyvars (extend_env_with_pattern env ghost dp) ghost lo hi
-   = extend_env_with_pattern (extend_env_with_tyvars env ghost lo hi) ghost dp"
-  unfolding extend_env_with_pattern_def
+lemma extend_env_with_tyvars_extend_env_with_pattern_vars_commute:
+  "extend_env_with_tyvars (extend_env_with_pattern_vars env ghost ps) ghost lo hi
+   = extend_env_with_pattern_vars (extend_env_with_tyvars env ghost lo hi) ghost ps"
+  unfolding extend_env_with_pattern_vars_def
   by (rule extend_env_with_tyvars_foldr_extend_env_one_var_commute)
 
 (* is_well_kinded only depends on TE_TypeVars and TE_Datatypes (is_well_kinded_cong_env);
-   extend_env_with_pattern doesn't touch either. *)
-lemma is_well_kinded_extend_env_with_pattern [simp]:
-  "is_well_kinded (extend_env_with_pattern env ghost dp) ty = is_well_kinded env ty"
-  using is_well_kinded_cong_env[of "extend_env_with_pattern env ghost dp" env ty] by simp
+   extend_env_with_pattern_vars doesn't touch either. *)
+lemma is_well_kinded_extend_env_with_pattern_vars [simp]:
+  "is_well_kinded (extend_env_with_pattern_vars env ghost ps) ty = is_well_kinded env ty"
+  using is_well_kinded_cong_env[of "extend_env_with_pattern_vars env ghost ps" env ty] by simp
 
 (* is_runtime_type only depends on TE_RuntimeTypeVars and TE_GhostDatatypes;
-   extend_env_with_pattern doesn't touch either. *)
-lemma is_runtime_type_extend_env_with_pattern [simp]:
-  "is_runtime_type (extend_env_with_pattern env ghost dp) ty = is_runtime_type env ty"
-  using is_runtime_type_cong_env[of "extend_env_with_pattern env ghost dp" env ty] by simp
+   extend_env_with_pattern_vars doesn't touch either. *)
+lemma is_runtime_type_extend_env_with_pattern_vars [simp]:
+  "is_runtime_type (extend_env_with_pattern_vars env ghost ps) ty = is_runtime_type env ty"
+  using is_runtime_type_cong_env[of "extend_env_with_pattern_vars env ghost ps" env ty] by simp
 
 (* tyenv_well_formed is preserved by extend_env_one_var, given the binding's
    type is well-kinded (and runtime if the extension is non-ghost). *)
@@ -1333,13 +1319,13 @@ next
     using tyenv_well_formed_extend_env_one_var[OF wf_rest wk_lift rt_lift] by simp
 qed
 
-lemma tyenv_well_formed_extend_env_with_pattern:
+lemma tyenv_well_formed_extend_env_with_pattern_vars:
   assumes "tyenv_well_formed env"
-      and "list_all (\<lambda>(_, _, ty). is_well_kinded env ty) (dec_pattern_var_bindings dp)"
+      and "list_all (\<lambda>(_, _, ty). is_well_kinded env ty) (dec_pattern_var_bindings_list ps)"
       and "ghost = NotGhost \<Longrightarrow>
-             list_all (\<lambda>(_, _, ty). is_runtime_type env ty) (dec_pattern_var_bindings dp)"
-  shows "tyenv_well_formed (extend_env_with_pattern env ghost dp)"
-  unfolding extend_env_with_pattern_def
+             list_all (\<lambda>(_, _, ty). is_runtime_type env ty) (dec_pattern_var_bindings_list ps)"
+  shows "tyenv_well_formed (extend_env_with_pattern_vars env ghost ps)"
+  unfolding extend_env_with_pattern_vars_def
   using assms tyenv_well_formed_foldr_extend_env_one_var
   by (auto simp: list_all_iff case_prod_unfold)
 
@@ -1352,24 +1338,10 @@ lemma foldr_extend_env_one_var_TE_DataCtors [simp]:
   "TE_DataCtors (foldr (extend_env_one_var ghost) bs env) = TE_DataCtors env"
   by (induction bs) simp_all
 
-lemma extend_env_with_pattern_TE_DataCtors [simp]:
-  "TE_DataCtors (extend_env_with_pattern env ghost dp) = TE_DataCtors env"
-  unfolding extend_env_with_pattern_def by simp
+lemma extend_env_with_pattern_vars_TE_DataCtors [simp]:
+  "TE_DataCtors (extend_env_with_pattern_vars env ghost ps) = TE_DataCtors env"
+  unfolding extend_env_with_pattern_vars_def by simp
 
-
-(* Bridge: extend_env_one_var on a (vr, name, ty) triple is the same as
-   extend_env_with_bind on (name, ty). *)
-lemma extend_env_one_var_eq_with_bind:
-  "extend_env_one_var ghost (vr, name, ty) env = extend_env_with_bind env ghost name ty"
-  by (simp add: extend_env_one_var_def extend_env_with_bind_def)
-
-(* foldr extend_env_one_var coincides with the bind-style foldr from
-   extend_env_with_pattern_vars. *)
-lemma foldr_extend_env_one_var_eq_extend_env_with_bind_foldr:
-  "foldr (extend_env_one_var ghost) bs env
-   = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) bs env"
-  by (induction bs arbitrary: env)
-     (auto simp: extend_env_one_var_eq_with_bind split: prod.splits)
 
 section \<open>wrap_lets_at preserves typing\<close>
 
@@ -1393,7 +1365,7 @@ lemma wrap_lets_at_preserves_typing:
    \<Longrightarrow> ghost = NotGhost \<longrightarrow> is_runtime_type env baseTy
    \<Longrightarrow> core_term_free_vars base |\<inter>| dec_pattern_var_names dp = {||}
    \<Longrightarrow> core_term_type
-         (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+         (foldr (extend_env_one_var ghost)
                 (dec_pattern_var_bindings dp) env)
          ghost body = Some bodyTy
    \<Longrightarrow> distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings dp))
@@ -1409,7 +1381,7 @@ lemma wrap_lets_at_preserves_typing:
          flds
    \<Longrightarrow> core_term_free_vars base |\<inter>| dec_pattern_var_names_list (map snd flds) = {||}
    \<Longrightarrow> core_term_type
-         (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+         (foldr (extend_env_one_var ghost)
                 (dec_pattern_var_bindings_list (map snd flds)) env)
          ghost body = Some bodyTy
    \<Longrightarrow> distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings_list (map snd flds)))
@@ -1422,14 +1394,14 @@ proof (induction base dp body and base flds body
     \<comment> \<open>DP_Var case: wrap_lets_at base (DP_Var vr name vTy) body = CoreTm_Let name base body. \<close>
   have vTy_eq: "vTy = baseTy" using "1.prems"(1) by simp
   have body_typed:
-    "core_term_type (extend_env_with_bind env ghost name vTy) ghost body = Some bodyTy"
+    "core_term_type (extend_env_one_var ghost (vr, name, vTy) env) ghost body = Some bodyTy"
     using "1.prems"(7) by simp
   have body_typed':
-    "core_term_type (extend_env_with_bind env ghost name baseTy) ghost body = Some bodyTy"
+    "core_term_type (extend_env_one_var ghost (vr, name, baseTy) env) ghost body = Some bodyTy"
     using body_typed vTy_eq by simp
   show ?case
     using "1.prems"(2) body_typed'
-    by (simp add: extend_env_with_bind_def)
+    by (simp add: extend_env_one_var_def)
 
 next
   case (2 base body)
@@ -1519,7 +1491,7 @@ next
   \<comment> \<open>Body env: dec_pattern_var_bindings (DP_Variant cn (Some inner)) = dec_pattern_var_bindings inner. \<close>
   have body_typed:
     "core_term_type
-       (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+       (foldr (extend_env_one_var ghost)
               (dec_pattern_var_bindings inner) env)
        ghost body = Some bodyTy"
     using "6.prems"(7) by simp
@@ -1583,7 +1555,7 @@ next
   \<comment> \<open>Body env: dec_pattern_var_bindings (DP_Record flds) = dec_pattern_var_bindings_list (map snd flds). \<close>
   have body_typed:
     "core_term_type
-       (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+       (foldr (extend_env_one_var ghost)
               (dec_pattern_var_bindings_list (map snd flds)) env)
        ghost body = Some bodyTy"
     using "7.prems"(7) by simp
@@ -1655,7 +1627,7 @@ next
     using "9.prems"(6) fv_proj_eq by auto
 
   \<comment> \<open>Define the env after extending by p's vars. \<close>
-  let ?env_p = "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+  let ?env_p = "foldr (extend_env_one_var ghost)
                        (dec_pattern_var_bindings p) env"
 
   \<comment> \<open>Distinctness sub-results. \<close>
@@ -1704,14 +1676,14 @@ next
       "\<And>bs :: (VarOrRef \<times> string \<times> CoreType) list.
             (\<forall>x \<in> set (map (\<lambda>(_, x, _). x) bs). x |\<notin>| core_term_free_vars base)
             \<Longrightarrow> core_term_type
-                  (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) bs env)
+                  (foldr (extend_env_one_var ghost) bs env)
                   ghost base
                 = core_term_type env ghost base"
     proof -
       fix bs :: "(VarOrRef \<times> string \<times> CoreType) list"
       show "(\<forall>x \<in> set (map (\<lambda>(_, x, _). x) bs). x |\<notin>| core_term_free_vars base)
             \<Longrightarrow> core_term_type
-                  (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) bs env)
+                  (foldr (extend_env_one_var ghost) bs env)
                   ghost base
                 = core_term_type env ghost base"
       proof (induction bs)
@@ -1724,7 +1696,7 @@ next
         have rest_fresh:
           "(\<forall>x \<in> set (map (\<lambda>(_, x, _). x) bs). x |\<notin>| core_term_free_vars base)"
           using Cons.prems b_eq by simp
-        let ?env_rest = "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty) bs env"
+        let ?env_rest = "foldr (extend_env_one_var ghost) bs env"
         have rest_eq: "core_term_type ?env_rest ghost base
                         = core_term_type env ghost base"
           using Cons.IH[OF rest_fresh] .
@@ -1738,8 +1710,8 @@ next
           have rest_some: "core_term_type ?env_rest ghost base = Some ty'"
             using rest_eq Some by simp
           have step:
-            "core_term_type (extend_env_with_bind ?env_rest ghost x ty) ghost base = Some ty'"
-            using core_term_type_extend_env_with_bind_irrelevant[OF x_fresh rest_some] .
+            "core_term_type (extend_env_one_var ghost (vr, x, ty) ?env_rest) ghost base = Some ty'"
+            using core_term_type_extend_env_one_var_irrelevant[OF x_fresh rest_some] .
           show ?thesis
             using step b_eq Some by simp
         qed
@@ -1760,7 +1732,7 @@ next
       using helper[OF all_p_fresh] "9.prems"(1) by simp
   qed
 
-  \<comment> \<open>tyenv_well_formed propagates under foldr extend_env_with_bind. \<close>
+  \<comment> \<open>tyenv_well_formed propagates under foldr extend_env_one_var. \<close>
   have p_bind_wk:
     "list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy) (dec_pattern_var_bindings p)"
     using dec_pattern_compatible_vars_well_kinded[OF p_compat fty_wk "9.prems"(2)] .
@@ -1776,7 +1748,7 @@ next
 
   have env_p_eq:
     "?env_p = foldr (extend_env_one_var ghost) (dec_pattern_var_bindings p) env"
-    using foldr_extend_env_one_var_eq_extend_env_with_bind_foldr by simp
+    by simp
   have p_bind_wk_b_lifted:
     "list_all (\<lambda>b. is_well_kinded env (snd (snd b))) (dec_pattern_var_bindings p)"
     using p_bind_wk by (auto simp: list_all_iff case_prod_unfold)
@@ -1786,7 +1758,6 @@ next
     using p_bind_rt by (auto simp: list_all_iff case_prod_unfold)
 
   have env_p_wf: "tyenv_well_formed ?env_p"
-    unfolding env_p_eq
     using tyenv_well_formed_foldr_extend_env_one_var[OF "9.prems"(2)
             p_bind_wk_b_lifted p_bind_rt_b_lifted] .
 
@@ -1794,17 +1765,17 @@ next
       Re-express ?env_p as a foldr extend_env_one_var, then use the simp lemmas. \<close>
   have env_p_as_one_var:
     "?env_p = foldr (extend_env_one_var ghost) (dec_pattern_var_bindings p) env"
-    using foldr_extend_env_one_var_eq_extend_env_with_bind_foldr by simp
+    by simp
   have env_p_tv: "TE_TypeVars ?env_p = TE_TypeVars env"
-    unfolding env_p_as_one_var by simp
+    by simp
   have env_p_dt: "TE_Datatypes ?env_p = TE_Datatypes env"
-    unfolding env_p_as_one_var by simp
+    by simp
   have env_p_rtv: "TE_RuntimeTypeVars ?env_p = TE_RuntimeTypeVars env"
-    unfolding env_p_as_one_var by simp
+    by simp
   have env_p_gd: "TE_GhostDatatypes ?env_p = TE_GhostDatatypes env"
-    unfolding env_p_as_one_var by simp
+    by simp
   have env_p_dc: "TE_DataCtors ?env_p = TE_DataCtors env"
-    unfolding env_p_as_one_var by simp
+    by simp
   have baseTy_wk_env_p: "is_well_kinded ?env_p (CoreTy_Record fldTys)"
     using "9.prems"(3) is_well_kinded_cong_env[OF env_p_tv env_p_dt] by metis
   have baseTy_rt_env_p:
@@ -1831,12 +1802,12 @@ next
 
   \<comment> \<open>Body env: dec_pattern_var_bindings_list (map snd ((fn,p)#rest))
                 = dec_pattern_var_bindings p @ dec_pattern_var_bindings_list (map snd rest).
-      Swap the two foldrs via foldr_extend_env_with_bind_append_swap, using
+      Swap the two foldrs via foldr_extend_env_one_var_append_swap, using
       that all binding names are distinct (from "9.prems"(8)). \<close>
   have body_env_split:
-    "foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+    "foldr (extend_env_one_var ghost)
            (dec_pattern_var_bindings_list (map snd ((fn, p) # rest))) env
-     = foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+     = foldr (extend_env_one_var ghost)
               (dec_pattern_var_bindings_list (map snd rest)) ?env_p"
   proof -
     have distinct_concat:
@@ -1845,13 +1816,13 @@ next
                         @ dec_pattern_var_bindings_list (map snd rest)))"
       using "9.prems"(8) by simp
     show ?thesis
-      using foldr_extend_env_with_bind_append_swap[OF distinct_concat]
+      using foldr_extend_env_one_var_append_swap[OF distinct_concat]
       by simp
   qed
 
   have body_typed_env_p:
     "core_term_type
-       (foldr (\<lambda>(_, x, ty) e. extend_env_with_bind e ghost x ty)
+       (foldr (extend_env_one_var ghost)
               (dec_pattern_var_bindings_list (map snd rest)) ?env_p)
        ghost body = Some bodyTy"
     using "9.prems"(7) body_env_split by simp
@@ -1873,15 +1844,15 @@ qed
 
 (* elabenv_well_formed only depends on env's TE_TypeVars/TE_Datatypes (via
    is_well_kinded inside typedefs_well_formed) and TE_DataCtors. All three are
-   invariant under extend_env_with_pattern. *)
-lemma elabenv_well_formed_extend_env_with_pattern:
+   invariant under extend_env_with_pattern_vars. *)
+lemma elabenv_well_formed_extend_env_with_pattern_vars:
   assumes "elabenv_well_formed env elabEnv"
-  shows "elabenv_well_formed (extend_env_with_pattern env ghost dp) elabEnv"
+  shows "elabenv_well_formed (extend_env_with_pattern_vars env ghost ps) elabEnv"
 proof -
-  let ?env' = "extend_env_with_pattern env ghost dp"
+  let ?env' = "extend_env_with_pattern_vars env ghost ps"
   have tv_eq: "TE_TypeVars ?env' = TE_TypeVars env" by simp
   have dt_eq: "TE_Datatypes ?env' = TE_Datatypes env"
-    unfolding extend_env_with_pattern_def by simp
+    unfolding extend_env_with_pattern_vars_def by simp
   have dc_eq: "TE_DataCtors ?env' = TE_DataCtors env" by simp
   have wk_cong: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
     using is_well_kinded_cong_env[OF tv_eq dt_eq] by simp
@@ -1979,7 +1950,7 @@ definition finalize_match_arms ::
                        \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                     (dec_pattern_var_bindings dp)) substDps
         then Inl [TyErr_CannotInferType loc]
-        else Inr (map (\<lambda>dp. (dp, extend_env_with_pattern env ghost dp)) substDps))"
+        else Inr (map (\<lambda>dp. (dp, extend_env_with_pattern_vars env ghost [dp])) substDps))"
 
 
 section \<open>Monotonicity of next_mv\<close>
@@ -4340,24 +4311,9 @@ next
   qed
 qed
 
-(* Bridge: extend_env_with_pattern (single dp) equals extend_env_with_pattern_vars
-   (singleton list). *)
-lemma extend_env_with_pattern_eq_pattern_vars_singleton:
-  "extend_env_with_pattern env ghost dp
-   = extend_env_with_pattern_vars env ghost [dp]"
-proof -
-  have list_singleton: "dec_pattern_var_bindings_list [dp] = dec_pattern_var_bindings dp"
-    by simp
-  show ?thesis
-    unfolding extend_env_with_pattern_def extend_env_with_pattern_vars_def
-    by (simp add: list_singleton
-                  foldr_extend_env_one_var_eq_extend_env_with_bind_foldr)
-qed
-
-
 (* Correctness for finalize_match_arms. After it returns Inr finalizedArms:
    each (dp, env_i) pair satisfies dp = apply_subst_to_dec_pattern accSubst (raw dp_i),
-   env_i = extend_env_with_pattern env ghost dp, dp's variable bindings are all
+   env_i = extend_env_with_pattern_vars env ghost [dp], dp's variable bindings are all
    meta-free under env's tyvars, and env_i is well-formed (both tyenv_well_formed
    and elabenv_well_formed). *)
 lemma finalize_match_arms_correct:
@@ -4379,7 +4335,7 @@ lemma finalize_match_arms_correct:
        \<and> list_all2
            (\<lambda>(dp, env_i) rawDp.
               dp = apply_subst_to_dec_pattern accSubst rawDp
-              \<and> env_i = extend_env_with_pattern env ghost dp
+              \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
               \<and> list_all (\<lambda>(_, _, vTy).
                             list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                          (dec_pattern_var_bindings dp)
@@ -4397,7 +4353,7 @@ proof -
     unfolding finalize_match_arms_def Let_def
     by (simp split: if_splits)
   have finalizedArms_eq:
-    "finalizedArms = map (\<lambda>dp. (dp, extend_env_with_pattern env ghost dp)) ?substDps"
+    "finalizedArms = map (\<lambda>dp. (dp, extend_env_with_pattern_vars env ghost [dp])) ?substDps"
     using assms(1) not_clash
     unfolding finalize_match_arms_def Let_def
     by (simp split: if_splits)
@@ -4419,7 +4375,7 @@ proof -
     "list_all2
        (\<lambda>(dp, env_i) rawDp.
           dp = apply_subst_to_dec_pattern accSubst rawDp
-          \<and> env_i = extend_env_with_pattern env ghost dp
+          \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
           \<and> list_all (\<lambda>(_, _, vTy).
                         list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                      (dec_pattern_var_bindings dp)
@@ -4430,7 +4386,7 @@ proof -
     have "\<And>i. i < length rawDps \<Longrightarrow>
            (case finalizedArms ! i of (dp, env_i) \<Rightarrow>
              dp = apply_subst_to_dec_pattern accSubst (rawDps ! i)
-             \<and> env_i = extend_env_with_pattern env ghost dp
+             \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
              \<and> list_all (\<lambda>(_, _, vTy).
                            list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                         (dec_pattern_var_bindings dp)
@@ -4439,7 +4395,7 @@ proof -
     proof -
       fix i assume i_lt: "i < length rawDps"
       let ?dp_i = "apply_subst_to_dec_pattern accSubst (rawDps ! i)"
-      let ?env_i = "extend_env_with_pattern env ghost ?dp_i"
+      let ?env_i = "extend_env_with_pattern_vars env ghost [?dp_i]"
       have nth_eq: "finalizedArms ! i = (?dp_i, ?env_i)"
         using finalizedArms_eq i_lt by simp
       have substDp_in: "?dp_i \<in> set ?substDps"
@@ -4456,14 +4412,26 @@ proof -
         "ghost = NotGhost \<Longrightarrow>
          list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_var_bindings ?dp_i)"
         using substDps_bind_rt substDp_in by (simp add: i_lt list_all_length)
-      \<comment> \<open>Well-formedness of env_i. \<close>
+      \<comment> \<open>Well-formedness of env_i. The hypotheses of
+          tyenv_well_formed_extend_env_with_pattern_vars are over
+          dec_pattern_var_bindings_list [?dp_i], which reduces to
+          dec_pattern_var_bindings ?dp_i. \<close>
+      have wk_at_list:
+        "list_all (\<lambda>(_, _, vTy). is_well_kinded env vTy)
+                  (dec_pattern_var_bindings_list [?dp_i])"
+        using wk_at by simp
+      have rt_at_ng_list:
+        "ghost = NotGhost \<Longrightarrow>
+         list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy)
+                  (dec_pattern_var_bindings_list [?dp_i])"
+        using rt_at_ng by simp
       have env_i_wf: "tyenv_well_formed ?env_i"
-        using tyenv_well_formed_extend_env_with_pattern[OF assms(2) wk_at rt_at_ng] .
+        using tyenv_well_formed_extend_env_with_pattern_vars[OF assms(2) wk_at_list rt_at_ng_list] .
       have env_i_wf_elab: "elabenv_well_formed ?env_i elabEnv"
-        by (simp add: assms(3) elabenv_well_formed_extend_env_with_pattern)
+        by (simp add: assms(3) elabenv_well_formed_extend_env_with_pattern_vars)
       show "(case finalizedArms ! i of (dp, env_i) \<Rightarrow>
               dp = apply_subst_to_dec_pattern accSubst (rawDps ! i)
-              \<and> env_i = extend_env_with_pattern env ghost dp
+              \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
               \<and> list_all (\<lambda>(_, _, vTy).
                             list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                          (dec_pattern_var_bindings dp)
