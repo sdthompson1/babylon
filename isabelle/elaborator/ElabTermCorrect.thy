@@ -1000,86 +1000,39 @@ using assms proof (induction locTys arbitrary: accSubst)
 next
   case (Cons hd rest)
   obtain loc bodyTy where hd_eq: "hd = (loc, bodyTy)" by (cases hd) auto
-  let ?actual = "apply_subst accSubst bodyTy"
-  let ?expected = "apply_subst accSubst expBodyTy"
-  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars envOuter"
 
-  \<comment> \<open>Unification step succeeded (else the function would have returned Inl). \<close>
+  \<comment> \<open>Unification step succeeded (else the function would have returned Inl).
+      try_unify_compose returns the composed substitution s directly. \<close>
   from Cons.prems(1) hd_eq obtain s where
-    unif_s: "unify ?is_flex ?actual ?expected = Some s" and
-    rec: "unify_arm_body_types envOuter expBodyTy rest (compose_subst s accSubst)
-            = Inr accSubst'"
-    by (auto simp: Let_def split: option.splits)
-
-  \<comment> \<open>Properties of the unifier s (well-kindedness branch). \<close>
-  have lookup_wk:
-    "\<And>n. n |\<in>| TE_TypeVars envAmbient \<Longrightarrow>
-            (case fmlookup accSubst n of
-                Some ty' \<Rightarrow> is_well_kinded envAmbient ty'
-              | None \<Rightarrow> n |\<in>| TE_TypeVars envAmbient)"
-    using Cons.prems(2)
-    by (auto split: option.splits simp: fmlookup_dom'_iff[symmetric] fmran'I)
+    tuc: "try_unify_compose envOuter bodyTy expBodyTy accSubst = Some s" and
+    rec: "unify_arm_body_types envOuter expBodyTy rest s = Inr accSubst'"
+    by (auto split: option.splits)
 
   have bodyTy_wk: "is_well_kinded envAmbient bodyTy"
     using Cons.prems(5) hd_eq by simp
 
-  have actual_wk: "is_well_kinded envAmbient ?actual"
-    using apply_subst_preserves_well_kinded[OF bodyTy_wk refl lookup_wk] .
-  have expected_wk: "is_well_kinded envAmbient ?expected"
-    using apply_subst_preserves_well_kinded[OF Cons.prems(6) refl lookup_wk] .
-  have s_range_wk: "\<forall>ty' \<in> fmran' s. is_well_kinded envAmbient ty'"
-    using unify_preserves_well_kinded[OF unif_s actual_wk expected_wk] .
+  \<comment> \<open>s's range is well-kinded under envAmbient. \<close>
+  have s_wk: "\<forall>ty' \<in> fmran' s. is_well_kinded envAmbient ty'"
+    using try_unify_compose_preserves_well_kinded[OF tuc Cons.prems(2) bodyTy_wk Cons.prems(6)] .
 
-  \<comment> \<open>Properties of the unifier s (runtime branch — only relevant when mode = NotGhost). \<close>
-  have s_range_rt:
+  \<comment> \<open>s's range is runtime under envAmbient (only relevant when mode = NotGhost). \<close>
+  have s_rt:
     "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' s. is_runtime_type envAmbient ty')"
-  proof
-    assume ng: "mode = NotGhost"
-    have lookup_rt:
-      "\<And>n. n |\<in>| TE_RuntimeTypeVars envAmbient \<Longrightarrow>
-              (case fmlookup accSubst n of
-                  Some ty' \<Rightarrow> is_runtime_type envAmbient ty'
-                | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars envAmbient)"
-      using Cons.prems(3) ng
-      by (auto split: option.splits simp: fmlookup_dom'_iff[symmetric] fmran'I)
-    have bodyTy_rt: "is_runtime_type envAmbient bodyTy"
-      using Cons.prems(7) ng hd_eq by simp
-    have expected_rt: "is_runtime_type envAmbient expBodyTy"
-      using Cons.prems(8) ng by simp
-    have actual_rt: "is_runtime_type envAmbient ?actual"
-      using apply_subst_preserves_runtime[OF bodyTy_rt _ lookup_rt] by simp
-    have expected_rt': "is_runtime_type envAmbient ?expected"
-      using apply_subst_preserves_runtime[OF expected_rt _ lookup_rt] by simp
-    show "\<forall>ty' \<in> fmran' s. is_runtime_type envAmbient ty'"
-      using unify_preserves_runtime[OF unif_s actual_rt expected_rt'] .
-  qed
-
-  have s_dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> n |\<notin>| TE_TypeVars envOuter"
-    using unify_dom_flex[OF unif_s] .
-
-  \<comment> \<open>Compose s with accSubst and check the invariants are preserved. \<close>
-  let ?next_acc = "compose_subst s accSubst"
-
-  have next_acc_wk: "\<forall>ty' \<in> fmran' ?next_acc. is_well_kinded envAmbient ty'"
-    using compose_subst_preserves_well_kinded[OF Cons.prems(2) s_range_wk] .
-  have next_acc_rt:
-    "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?next_acc. is_runtime_type envAmbient ty')"
   proof
     assume ng: "mode = NotGhost"
     have acc_rt: "\<forall>ty' \<in> fmran' accSubst. is_runtime_type envAmbient ty'"
       using Cons.prems(3) ng by simp
-    have s_rt: "\<forall>ty' \<in> fmran' s. is_runtime_type envAmbient ty'"
-      using s_range_rt ng by simp
-    show "\<forall>ty' \<in> fmran' ?next_acc. is_runtime_type envAmbient ty'"
-      using compose_subst_preserves_runtime[OF acc_rt s_rt] .
+    have bodyTy_rt: "is_runtime_type envAmbient bodyTy"
+      using Cons.prems(7) ng hd_eq by simp
+    have expBodyTy_rt: "is_runtime_type envAmbient expBodyTy"
+      using Cons.prems(8) ng by simp
+    show "\<forall>ty' \<in> fmran' s. is_runtime_type envAmbient ty'"
+      using try_unify_compose_preserves_runtime[OF tuc acc_rt bodyTy_rt expBodyTy_rt] .
   qed
-  have next_acc_dom: "fmdom ?next_acc |\<inter>| TE_TypeVars envOuter = {||}"
-  proof -
-    have "fmdom ?next_acc = fmdom s |\<union>| fmdom accSubst"
-      by (simp add: compose_subst_def)
-    thus ?thesis using s_dom_flex Cons.prems(4)
-      by auto
-  qed
+
+  \<comment> \<open>s's domain stays disjoint from envOuter's fixed tyvars. \<close>
+  have s_dom: "fmdom s |\<inter>| TE_TypeVars envOuter = {||}"
+    using try_unify_compose_dom_flex[OF tuc Cons.prems(4)] .
 
   \<comment> \<open>Tail conditions. \<close>
   have rest_wk: "\<forall>ty \<in> set (map snd rest). is_well_kinded envAmbient ty"
@@ -1089,27 +1042,27 @@ next
     using Cons.prems(7) hd_eq by auto
 
   \<comment> \<open>Apply IH to the recursive call. \<close>
-  from Cons.IH[OF rec next_acc_wk next_acc_rt next_acc_dom rest_wk Cons.prems(6) rest_rt Cons.prems(8)]
+  from Cons.IH[OF rec s_wk s_rt s_dom rest_wk Cons.prems(6) rest_rt Cons.prems(8)]
   obtain T where
     rest_unif:
       "list_all (\<lambda>(_, bodyTy). apply_subst accSubst' bodyTy = apply_subst accSubst' expBodyTy) rest" and
     accSubst'_wk: "\<forall>ty' \<in> fmran' accSubst'. is_well_kinded envAmbient ty'" and
     accSubst'_rt: "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' accSubst'. is_runtime_type envAmbient ty')" and
     accSubst'_dom: "fmdom accSubst' |\<inter>| TE_TypeVars envOuter = {||}" and
-    accSubst'_eq: "accSubst' = compose_subst T (compose_subst s accSubst)"
+    accSubst'_eq: "accSubst' = compose_subst T s"
     by blast
 
-  have unif_sound: "apply_subst s ?actual = apply_subst s ?expected"
-    using unify_sound[OF unif_s] .
-  have head_eq_at_next:
-    "apply_subst ?next_acc bodyTy = apply_subst ?next_acc expBodyTy"
-    using unif_sound by (simp add: compose_subst_correct)
+  \<comment> \<open>s already makes bodyTy and expBodyTy equal; accSubst' refines s, so it does too. \<close>
+  have head_eq_at_s: "apply_subst s bodyTy = apply_subst s expBodyTy"
+    using try_unify_compose_makes_equal[OF tuc] .
   have head_eq:
     "apply_subst accSubst' bodyTy = apply_subst accSubst' expBodyTy"
-    unfolding accSubst'_eq using head_eq_at_next by (simp add: compose_subst_correct)
+    unfolding accSubst'_eq using head_eq_at_s by (simp add: compose_subst_correct)
 
-  have refine: "accSubst' = compose_subst (compose_subst T s) accSubst"
-    using accSubst'_eq compose_subst_assoc by metis
+  \<comment> \<open>accSubst' refines accSubst: s = compose_subst _ accSubst, accSubst' = compose_subst T s. \<close>
+  have refine: "\<exists>T'. accSubst' = compose_subst T' accSubst"
+    using compose_subst_chain_exists[OF try_unify_compose_compose_shape[OF tuc]]
+          accSubst'_eq by blast
 
   show ?case using rest_unif accSubst'_wk accSubst'_rt accSubst'_dom head_eq hd_eq refine by auto
 qed

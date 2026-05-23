@@ -615,12 +615,10 @@ where
   "unify_arm_body_types _ _ [] accSubst = Inr accSubst"
 
 | "unify_arm_body_types env expBodyTy ((loc, bodyTy) # rest) accSubst =
-    (let actualTy = apply_subst accSubst bodyTy;
-         expectedTy = apply_subst accSubst expBodyTy
-     in (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) actualTy expectedTy of
-           None \<Rightarrow> Inl [TyErr_TypeMismatch loc expectedTy actualTy]
-         | Some s \<Rightarrow>
-             unify_arm_body_types env expBodyTy rest (compose_subst s accSubst)))"
+    (case try_unify_compose env bodyTy expBodyTy accSubst of
+       None \<Rightarrow> Inl [TyErr_TypeMismatch loc
+                      (apply_subst accSubst expBodyTy) (apply_subst accSubst bodyTy)]
+     | Some s \<Rightarrow> unify_arm_body_types env expBodyTy rest s)"
 
 
 (* Final-stage helper for term-context match elaboration. Takes the per-arm
