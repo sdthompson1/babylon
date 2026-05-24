@@ -210,11 +210,8 @@ lemma pattern_compatible_record_inv:
   assumes "pattern_compatible env (CorePat_Record pflds) ty"
   obtains fldTys where
     "ty = CoreTy_Record fldTys"
-    "map fst pflds = map fst fldTys"
-    "list_all (\<lambda>(name, p). case map_of fldTys name of
-                              None \<Rightarrow> False
-                            | Some fty \<Rightarrow> pattern_compatible env p fty)
-              pflds"
+    "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+               pflds fldTys"
   using assms by (cases ty) auto
 
 
@@ -612,14 +609,13 @@ proof -
     "pattern_compatible env (CorePat_Record pflds) (colTys ! c)" by simp
   from pattern_compatible_record_inv[OF this]
   obtain fldTys where
-    "colTys ! c = CoreTy_Record fldTys"
-    "map fst pflds = map fst fldTys"
-    "list_all (\<lambda>(name, p). case map_of fldTys name of
-                              None \<Rightarrow> False
-                            | Some fty \<Rightarrow> pattern_compatible env p fty)
-              pflds"
+    col_eq: "colTys ! c = CoreTy_Record fldTys" and
+    la2: "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+                    pflds fldTys"
     by metis
-  thus ?thesis using that by blast
+  have "map fst pflds = map fst fldTys"
+    using la2 by (induction pflds fldTys rule: list_all2_induct) auto
+  with col_eq show ?thesis using that by blast
 qed
 
 
@@ -767,14 +763,12 @@ qed
 
 (* Record expansion: column c's type list splices in the field types;
    each row's column c splices in its field sub-patterns (or wildcards
-   if the row is wildcard at c). Distinctness of fldTys field names
-   is needed to align map_of-based lookup with positional lookup. *)
+   if the row is wildcard at c). *)
 lemma expand_record_row_inv:
   assumes "length (fst r) = length colTys"
   assumes "list_all2 (pattern_compatible env) (fst r) colTys"
   assumes "c < length colTys"
   assumes "colTys ! c = CoreTy_Record fldTys"
-  assumes "distinct (map fst fldTys)"
   assumes "fld_names = map fst fldTys"
   defines "r' \<equiv> expand_record_row c fld_names r"
   defines "colTys' \<equiv> splice_at c (map snd fldTys) colTys"
@@ -788,42 +782,15 @@ proof -
   proof (cases "ps ! c")
     case (CorePat_Record row_flds)
     from pc_at_c CorePat_Record assms(4) have
-      names_eq: "map fst row_flds = map fst fldTys" and
-      sub_pc: "list_all (\<lambda>(name, p). case map_of fldTys name of
-                                       None \<Rightarrow> False
-                                     | Some fty \<Rightarrow> pattern_compatible env p fty)
-                        row_flds"
-      by auto
-    have len_eq: "length row_flds = length fldTys"
-      using names_eq by (metis length_map)
+      la2: "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+                      row_flds fldTys"
+      by simp
     have sub_pc_zip:
       "list_all2 (pattern_compatible env) (map snd row_flds) (map snd fldTys)"
-    proof (rule list_all2_all_nthI)
-      show "length (map snd row_flds) = length (map snd fldTys)"
-        using len_eq by simp
-    next
-      fix i assume i_lt: "i < length (map snd row_flds)"
-      from i_lt have i_lt': "i < length row_flds" by simp
-      from i_lt' len_eq have i_lt'': "i < length fldTys" by simp
-      obtain name pat where row_i: "row_flds ! i = (name, pat)" by (cases "row_flds ! i") auto
-      obtain name' fty where fld_i: "fldTys ! i = (name', fty)" by (cases "fldTys ! i") auto
-      have name_eq: "name = name'"
-        using names_eq i_lt' i_lt'' row_i fld_i
-        by (metis fst_conv nth_map)
-      from sub_pc i_lt' row_i nth_mem
-      have pc_lookup:
-        "case map_of fldTys name of
-            None \<Rightarrow> False
-          | Some fty \<Rightarrow> pattern_compatible env pat fty"
-        by (force simp: list_all_iff)
-      have mo: "map_of fldTys name = Some fty"
-        using assms(5) fld_i name_eq i_lt''
-        by (metis (no_types, lifting) map_of_eq_Some_iff in_set_conv_nth)
-      with pc_lookup have "pattern_compatible env pat fty"
-        by simp
-      thus "pattern_compatible env (map snd row_flds ! i) (map snd fldTys ! i)"
-        using row_i fld_i i_lt' i_lt'' by simp
-    qed
+      using la2
+      by (induction row_flds fldTys rule: list_all2_induct) auto
+    have len_eq: "length row_flds = length fldTys"
+      using la2 by (rule list_all2_lengthD)
     from CorePat_Record have
       ps'_eq: "fst r' = splice_at c (map snd row_flds) ps"
       using r'_def r_split by simp
@@ -848,7 +815,7 @@ proof -
       using r'_def r_split by simp
     have len_subs:
       "length (replicate (length fld_names) CorePat_Wildcard) = length (map snd fldTys)"
-      using assms(6) by simp
+      using assms(5) by simp
     have wild_pc:
       "list_all2 (pattern_compatible env)
                  (replicate (length fld_names) CorePat_Wildcard)
@@ -858,7 +825,7 @@ proof -
     proof
       show "length (fst r') = length colTys'"
         unfolding ps'_eq colTys'_def
-        using assms(1,3) r_split assms(6)
+        using assms(1,3) r_split assms(5)
         by (simp add: length_splice_at)
     next
       show "list_all2 (pattern_compatible env) (fst r') colTys'"
@@ -1213,7 +1180,7 @@ proof -
         len_ps: "length (fst r) = length colTys" and
         pcs: "list_all2 (pattern_compatible env) (fst r) colTys"
         by (auto simp: list_all_iff)
-      from expand_record_row_inv[OF len_ps pcs assms(2) assms(3) distinct_flds assms(4)]
+      from expand_record_row_inv[OF len_ps pcs assms(2) assms(3) assms(4)]
       show "case expand_record_row c fld_names r of (ps, _) \<Rightarrow>
               length ps = length (splice_at c (map snd fldTys) colTys)
             \<and> list_all2 (pattern_compatible env) ps (splice_at c (map snd fldTys) colTys)"
@@ -1458,8 +1425,11 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
         from pattern_compatible_record_inv[OF this]
         obtain fldTys where
           col_c_rec: "colTys ! c = CoreTy_Record fldTys" and
-          names_eq: "map fst pflds = map fst fldTys"
+          la2: "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+                          pflds fldTys"
           by metis
+        have names_eq: "map fst pflds = map fst fldTys"
+          using la2 by (induction pflds fldTys rule: list_all2_induct) auto
         have fld_names_eq': "fld_names = map fst fldTys"
           using fld_names_eq names_eq by simp
         from matrix_inv_expand_record[OF inv c_lt col_c_rec fld_names_eq']

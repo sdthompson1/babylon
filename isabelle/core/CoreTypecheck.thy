@@ -51,11 +51,9 @@ fun pattern_compatible :: "CoreTyEnv \<Rightarrow> CorePattern \<Rightarrow> Cor
 | "pattern_compatible env (CorePat_Record pflds) ty =
     (case ty of
       CoreTy_Record fldTys \<Rightarrow>
-        map fst pflds = map fst fldTys
-        \<and> list_all (\<lambda>(name, p). case map_of fldTys name of
-                                  None \<Rightarrow> False
-                                | Some fty \<Rightarrow> pattern_compatible env p fty)
-                   pflds
+        list_all2 (\<lambda>(pn, p) (fn, fty).
+                     pn = fn \<and> pattern_compatible env p fty)
+                  pflds fldTys
     | _ \<Rightarrow> False)"
 
 (* ========================================================================== *)
@@ -570,9 +568,35 @@ next
       show "pattern_compatible env1 p fty = pattern_compatible env2 p fty"
         using CorePat_Record.IH[OF np_in p_in_snds CorePat_Record.prems] .
     qed
+    have list_all2_iff:
+      "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env1 p fty) pflds fldTys
+       = list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env2 p fty) pflds fldTys"
+      using iff_each
+    proof (induction pflds arbitrary: fldTys)
+      case Nil thus ?case by simp
+    next
+      case (Cons pf pflds')
+      obtain pn p where pf_eq: "pf = (pn, p)" by (cases pf) auto
+      show ?case
+      proof (cases fldTys)
+        case Nil thus ?thesis by simp
+      next
+        case (Cons ft fldTys')
+        obtain fn' fty where ft_eq: "ft = (fn', fty)" by (cases ft) auto
+        have head_iff:
+          "pattern_compatible env1 p fty = pattern_compatible env2 p fty"
+          using Cons.prems[of pn p fty] pf_eq by simp
+        have tail_iff:
+          "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env1 p fty) pflds' fldTys'
+         = list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env2 p fty) pflds' fldTys'"
+          by (rule Cons.IH) (use Cons.prems in auto)
+        show ?thesis
+          using Cons head_iff tail_iff pf_eq ft_eq by simp
+      qed
+    qed
     show ?thesis
-      unfolding CoreTy_Record
-      by (auto simp: list_all_iff iff_each split: option.splits)
+      unfolding CoreTy_Record pattern_compatible.simps
+      by (simp only: CoreType.case list_all2_iff)
   qed auto
 qed auto
 

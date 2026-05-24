@@ -2555,43 +2555,34 @@ next
       using ih_step[OF inner_at_i fty_wk] .
   qed
 
-  have pflds_in_check:
-    "list_all (\<lambda>(name, p). case map_of fieldTypes name of
-                              None \<Rightarrow> False
-                            | Some fty \<Rightarrow> pattern_compatible env p fty)
-              ?pflds"
-  proof -
-    have "\<forall>i < length ?pflds.
-            (case ?pflds ! i of (name, p) \<Rightarrow>
-               (case map_of fieldTypes name of
-                 None \<Rightarrow> False
-               | Some fty \<Rightarrow> pattern_compatible env p fty))"
-    proof (intro allI impI)
-      fix i assume i_lt: "i < length ?pflds"
-      hence i_lt': "i < length flds" by simp
-      have name_at_i: "fst (flds ! i) = fst (fieldTypes ! i)"
-        using names_eq by (metis i_lt' len_eq nth_map)
-      \<comment> \<open>Since fieldTypes has distinct field names, map_of fieldTypes
-          (fst (fieldTypes ! i)) = Some (snd (fieldTypes ! i)). \<close>
-      have lookup_eq:
-        "map_of fieldTypes (fst (fieldTypes ! i)) = Some (snd (fieldTypes ! i))"
-        using fieldTypes_distinct i_lt' len_eq
-        by (metis len_eq map_of_eq_Some_iff nth_mem prod.collapse)
-      have lookup_at_name:
-        "map_of fieldTypes (fst (flds ! i)) = Some (snd (fieldTypes ! i))"
-        using lookup_eq name_at_i by simp
-      show "case ?pflds ! i of (name, p) \<Rightarrow>
-              (case map_of fieldTypes name of
-                None \<Rightarrow> False
-              | Some fty \<Rightarrow> pattern_compatible env p fty)"
-        using pflds_nth[OF i_lt'] IH_each[OF i_lt'] lookup_at_name
-        by (auto split: prod.splits)
-    qed
-    thus ?thesis unfolding list_all_length .
+  have pflds_la2:
+    "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+               ?pflds fieldTypes"
+  proof (rule list_all2_all_nthI)
+    show "length ?pflds = length fieldTypes" using len_eq by simp
+  next
+    fix i assume i_lt: "i < length ?pflds"
+    hence i_lt': "i < length flds" by simp
+    have name_at_i: "fst (flds ! i) = fst (fieldTypes ! i)"
+      using names_eq by (metis i_lt' len_eq nth_map)
+    obtain pn p where pf_i: "?pflds ! i = (pn, p)"
+      using pflds_nth[OF i_lt'] by simp
+    obtain fn' fty where ft_i: "fieldTypes ! i = (fn', fty)"
+      by (cases "fieldTypes ! i") auto
+    from pflds_nth[OF i_lt'] pf_i have pn_p_eq:
+      "pn = fst (flds ! i)" "p = dec_to_core_pat (snd (flds ! i))"
+      by auto
+    from ft_i have fn_fty_eq:
+      "fn' = fst (fieldTypes ! i)" "fty = snd (fieldTypes ! i)"
+      by auto
+    show "(case ?pflds ! i of (pn, p) \<Rightarrow>
+             \<lambda>(fn, fty). pn = fn \<and> pattern_compatible env p fty)
+          (fieldTypes ! i)"
+      using pf_i ft_i pn_p_eq fn_fty_eq name_at_i IH_each[OF i_lt']
+      by force
   qed
   show ?case
-    using ty_eq names_match pflds_in_check
-    by (simp add: case_prod_unfold)
+    using ty_eq pflds_la2 by simp
 qed (auto split: option.splits prod.splits CoreType.splits)
 
 
