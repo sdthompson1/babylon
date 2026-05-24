@@ -29,6 +29,16 @@ datatype CorePattern =
   | CorePat_Record "(string \<times> CorePattern) list"
   | CorePat_Wildcard
 
+(* A pattern is "flat" if it tests only at its top level: variant payloads
+   must be wildcards, and record patterns are disallowed entirely. The
+   match-compilation pass (core_passes/MatchCompile.thy) guarantees that
+   every pattern in its output is flat; downstream consumers (code
+   generation, etc.) may rely on this. *)
+fun flat_pattern :: "CorePattern \<Rightarrow> bool" where
+  "flat_pattern (CorePat_Variant _ p) = (p = CorePat_Wildcard)"
+| "flat_pattern (CorePat_Record _) = False"
+| "flat_pattern _ = True"
+
 (* Unary operator *)
 datatype CoreUnop =
   CoreUnop_Negate

@@ -5,6 +5,7 @@ session Babylon = "HOL-Library" +
     "bab_renamer"
     "bab_dependency"
     "core"
+    "core_passes"
     "elaborator"
     "interpreter"
     "util"
