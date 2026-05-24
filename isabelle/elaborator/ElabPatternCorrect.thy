@@ -2519,16 +2519,8 @@ next
     using DP_Record.prems(1) by (auto split: CoreType.splits)
   have len_eq: "length flds = length fieldTypes"
     using names_eq map_eq_imp_length_eq by metis
-  have fieldTypes_distinct: "distinct (map fst fieldTypes)"
-    using DP_Record.prems(2) ty_eq by simp
   have fieldTypes_wk: "list_all (is_well_kinded env) (map snd fieldTypes)"
     using DP_Record.prems(2) ty_eq by simp
-  have names_preserved:
-    "map fst (map (\<lambda>(n, p). (n, dec_to_core_pat p)) flds) = map fst flds"
-    by (induction flds) (auto split: prod.splits)
-  have names_match:
-    "map fst (map (\<lambda>(n, p). (n, dec_to_core_pat p)) flds) = map fst fieldTypes"
-    using names_preserved names_eq by simp
 
   let ?pflds = "map (\<lambda>(n, p). (n, dec_to_core_pat p)) flds"
   have pflds_nth:

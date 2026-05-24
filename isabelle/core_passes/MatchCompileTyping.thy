@@ -49,38 +49,22 @@ section \<open>Matrix typing invariant\<close>
 
 (* Each column has a CoreType; the scrutinee at that column types as
    that CoreType; every row's pattern at that column is compatible
-   with that CoreType; and every column type is well-kinded.
-   Well-kindedness is needed to discharge the record-column case in
-   the type-preservation proof, because pattern_compatible looks up
-   field types via map_of, which only agrees with positional lookup
-   under distinct field names — and is_well_kinded enforces that for
-   CoreTy_Record. The matrix may have any number of rows. *)
+   with that CoreType. The matrix may have any number of rows.
+   Well-kindedness of column types is not part of the invariant
+   itself — where the proof needs distinctness of record field names
+   (for CoreTm_RecordProj typing) or well-kindedness of a substituted
+   payload type, we derive it on the fly from tyenv_well_formed +
+   core_term_type_well_kinded applied to the column scrutinee. *)
 definition matrix_inv ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType list \<Rightarrow> 'body MatchMatrix \<Rightarrow> bool"
 where
   "matrix_inv env g colTys m \<longleftrightarrow>
      length (fst m) = length colTys
    \<and> list_all2 (\<lambda>s ty. core_term_type env g s = Some ty) (fst m) colTys
-   \<and> list_all (is_well_kinded env) colTys
    \<and> list_all (\<lambda>(ps, _).
          length ps = length colTys
        \<and> list_all2 (pattern_compatible env) ps colTys)
        (snd m)"
-
-
-subsection \<open>Well-kindedness propagation through column plumbing\<close>
-
-lemma list_all_drop_at:
-  "list_all P xs \<Longrightarrow> list_all P (drop_at c xs)"
-  by (induction c xs rule: drop_at.induct) auto
-
-lemma list_all_replace_at:
-  "list_all P xs \<Longrightarrow> (c < length xs \<Longrightarrow> P y) \<Longrightarrow> list_all P (replace_at c y xs)"
-  by (induction c y xs rule: replace_at.induct) auto
-
-lemma list_all_splice_at:
-  "list_all P xs \<Longrightarrow> list_all P ys \<Longrightarrow> list_all P (splice_at c ys xs)"
-  by (induction c ys xs rule: splice_at.induct) auto
 
 
 section \<open>List arithmetic for column plumbing\<close>
@@ -867,7 +851,6 @@ proof -
   from assms(1) have
     len: "length scruts = length colTys" and
     sc_pc: "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty) scruts colTys" and
-    cols_wk: "list_all (is_well_kinded env) colTys" and
     rows_inv: "list_all (\<lambda>(ps, _).
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
@@ -879,9 +862,6 @@ proof -
     "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty)
        (drop_at c scruts) (drop_at c colTys)"
     using list_all2_drop_at[OF sc_pc] .
-  have new_cols_wk:
-    "list_all (is_well_kinded env) (drop_at c colTys)"
-    by (rule list_all_drop_at[OF cols_wk])
   have new_rows_inv:
     "list_all (\<lambda>(ps, _).
        length ps = length (drop_at c colTys)
@@ -905,7 +885,7 @@ proof -
   qed
   show ?thesis
     unfolding matrix_inv_def
-    using new_len new_sc_pc new_cols_wk new_rows_inv by simp
+    using new_len new_sc_pc new_rows_inv by simp
 qed
 
 lemma matrix_inv_specialise_bool:
@@ -917,7 +897,6 @@ proof -
   from assms(1) have
     len: "length scruts = length colTys" and
     sc_pc: "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty) scruts colTys" and
-    cols_wk: "list_all (is_well_kinded env) colTys" and
     rows_inv: "list_all (\<lambda>(ps, _).
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
@@ -928,8 +907,6 @@ proof -
     "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty)
        (drop_at c scruts) (drop_at c colTys)"
     using list_all2_drop_at[OF sc_pc] .
-  have new_cols_wk: "list_all (is_well_kinded env) (drop_at c colTys)"
-    by (rule list_all_drop_at[OF cols_wk])
   have new_rows_inv:
     "list_all (\<lambda>(ps, _).
        length ps = length (drop_at c colTys)
@@ -953,7 +930,7 @@ proof -
   qed
   show ?thesis
     unfolding matrix_inv_def
-    using new_len new_sc_pc new_cols_wk new_rows_inv by simp
+    using new_len new_sc_pc new_rows_inv by simp
 qed
 
 lemma matrix_inv_specialise_int:
@@ -965,7 +942,6 @@ proof -
   from assms(1) have
     len: "length scruts = length colTys" and
     sc_pc: "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty) scruts colTys" and
-    cols_wk: "list_all (is_well_kinded env) colTys" and
     rows_inv: "list_all (\<lambda>(ps, _).
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
@@ -976,8 +952,6 @@ proof -
     "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty)
        (drop_at c scruts) (drop_at c colTys)"
     using list_all2_drop_at[OF sc_pc] .
-  have new_cols_wk: "list_all (is_well_kinded env) (drop_at c colTys)"
-    by (rule list_all_drop_at[OF cols_wk])
   have new_rows_inv:
     "list_all (\<lambda>(ps, _).
        length ps = length (drop_at c colTys)
@@ -1001,7 +975,7 @@ proof -
   qed
   show ?thesis
     unfolding matrix_inv_def
-    using new_len new_sc_pc new_cols_wk new_rows_inv by simp
+    using new_len new_sc_pc new_rows_inv by simp
 qed
 
 (* Variant case: column type at c changes from CoreTy_Datatype dt args
@@ -1024,7 +998,6 @@ proof -
   from assms(1) have
     len: "length scruts = length colTys" and
     sc_pc: "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty) scruts colTys" and
-    cols_wk: "list_all (is_well_kinded env) colTys" and
     rows_inv: "list_all (\<lambda>(ps, _).
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
@@ -1045,25 +1018,6 @@ proof -
        (replace_at c (CoreTm_VariantProj (scruts ! c) h) scruts)
        (replace_at c payloadTy' colTys)"
     by (rule list_all2_replace_at_sym[OF sc_pc]) (rule new_sc_at_c)
-  (* Well-kindedness of the substituted payload type. *)
-  from assms(6) have payloads_wk:
-    "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
-    using assms(4)
-    unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def
-    by blast
-  have col_c_wk: "is_well_kinded env (CoreTy_Datatype dtName tyArgs)"
-    using cols_wk assms(2,3)
-    by (auto simp: list_all_iff dest!: nth_mem)
-  have args_wk: "list_all (is_well_kinded env) tyArgs"
-    using col_c_wk
-    by (auto split: option.splits)
-  have payload'_wk: "is_well_kinded env payloadTy'"
-    unfolding payloadTy'_def
-    using apply_subst_specializes_well_kinded[OF payloads_wk args_wk] assms(5)
-    by simp
-  have new_cols_wk:
-    "list_all (is_well_kinded env) (replace_at c payloadTy' colTys)"
-    using list_all_replace_at[OF cols_wk] payload'_wk by blast
   have new_rows_inv:
     "list_all (\<lambda>(ps, _).
        length ps = length (replace_at c payloadTy' colTys)
@@ -1087,17 +1041,21 @@ proof -
   qed
   show ?thesis
     unfolding matrix_inv_def
-    using new_len new_sc_pc new_cols_wk new_rows_inv by simp
+    using new_len new_sc_pc new_rows_inv by simp
 qed
 
 (* Record case: column type at c is CoreTy_Record fldTys; new columns
    splice in (map snd fldTys) at position c; new scruts splice in one
-   CoreTm_RecordProj per field. *)
+   CoreTm_RecordProj per field. Distinctness of fldTys field names
+   (needed for CoreTm_RecordProj typing) is derived on the fly from
+   tyenv_well_formed via core_term_type_well_kinded applied to the
+   column scrutinee. *)
 lemma matrix_inv_expand_record:
   assumes "matrix_inv env g colTys (scruts, rows)"
   assumes "c < length colTys"
   assumes "colTys ! c = CoreTy_Record fldTys"
   assumes "fld_names = map fst fldTys"
+  assumes "tyenv_well_formed env"
   shows   "matrix_inv env g (splice_at c (map snd fldTys) colTys)
              (expand_record_scruts c (scruts ! c) fld_names scruts,
               map (expand_record_row c fld_names) rows)"
@@ -1105,7 +1063,6 @@ proof -
   from assms(1) have
     len: "length scruts = length colTys" and
     sc_pc: "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty) scruts colTys" and
-    cols_wk: "list_all (is_well_kinded env) colTys" and
     rows_inv: "list_all (\<lambda>(ps, _).
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
@@ -1114,14 +1071,9 @@ proof -
     have sc_at_c: "core_term_type env g (scruts ! c) = Some (colTys ! c)" by simp
   with assms(3) have sc_at_c': "core_term_type env g (scruts ! c) = Some (CoreTy_Record fldTys)"
     by simp
-  (* Distinctness of fldTys field names (needed for expand_record_row_inv) *)
-  have col_c_in: "colTys ! c \<in> set colTys" using assms(2) by (rule nth_mem)
-  with assms(3) cols_wk
   have col_c_wk: "is_well_kinded env (CoreTy_Record fldTys)"
-    by (metis assms(2) list_all_length)
+    using core_term_type_well_kinded[OF sc_at_c' assms(5)] .
   hence distinct_flds: "distinct (map fst fldTys)" by simp
-  from col_c_wk have sub_wk: "list_all (is_well_kinded env) (map snd fldTys)"
-    by simp
   (* New scrutinees splice in one RecordProj per field. *)
   have proj_typed:
     "list_all2 (\<lambda>s ty. core_term_type env g s = Some ty)
@@ -1159,9 +1111,6 @@ proof -
     unfolding expand_record_scruts_def
     using sc_pc proj_typed assms(4)
     by (auto intro!: list_all2_replace_at_both)
-  have new_cols_wk:
-    "list_all (is_well_kinded env) (splice_at c (map snd fldTys) colTys)"
-    by (rule list_all_splice_at[OF cols_wk sub_wk])
   have new_rows_inv:
     "list_all (\<lambda>(ps, _).
        length ps = length (splice_at c (map snd fldTys) colTys)
@@ -1190,7 +1139,7 @@ proof -
   qed
   show ?thesis
     unfolding matrix_inv_def
-    using new_len new_sc_pc new_cols_wk new_rows_inv by simp
+    using new_len new_sc_pc new_rows_inv by simp
 qed
 
 
@@ -1432,7 +1381,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
           using la2 by (induction pflds fldTys rule: list_all2_induct) auto
         have fld_names_eq': "fld_names = map fst fldTys"
           using fld_names_eq names_eq by simp
-        from matrix_inv_expand_record[OF inv c_lt col_c_rec fld_names_eq']
+        from matrix_inv_expand_record[OF inv c_lt col_c_rec fld_names_eq' wf]
         have inv': "matrix_inv env g (splice_at c (map snd fldTys) colTys)
                      (expand_record_scruts c (scruts ! c) fld_names scruts,
                       map (expand_record_row c fld_names) rows)" .
@@ -1465,7 +1414,6 @@ section \<open>Headline theorems for compile_match\<close>
 
 theorem compile_match_arm_patterns_compatible:
   assumes "core_term_type env g scrut = Some scrutTy"
-  assumes "is_well_kinded env scrutTy"
   assumes "arms \<noteq> []"
   assumes "list_all (\<lambda>(p, _). pattern_compatible env p scrutTy) arms"
   assumes "tyenv_well_formed env"
@@ -1474,9 +1422,9 @@ proof -
   let ?m = "([scrut], map (\<lambda>(p, b). ([p], b)) arms)"
   have inv: "matrix_inv env g [scrutTy] ?m"
     unfolding matrix_inv_def
-    using assms(1,2,4) by (auto simp: list_all_iff)
-  have ne: "snd ?m \<noteq> []" using assms(3) by simp
-  from compile_matrix_arm_patterns_compatible[OF inv ne assms(5)]
+    using assms(1,3) by (auto simp: list_all_iff)
+  have ne: "snd ?m \<noteq> []" using assms(2) by simp
+  from compile_matrix_arm_patterns_compatible[OF inv ne assms(4)]
   show ?thesis unfolding compile_match_def by simp
 qed
 
