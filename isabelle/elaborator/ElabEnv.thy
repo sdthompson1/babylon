@@ -1,5 +1,6 @@
 theory ElabEnv
-  imports "../core/CoreKindcheck" "HOL-Library.Finite_Map" "../util/NatToString"
+  imports "../core/CoreKindcheck" "../core/ExtendEnvWithTyvars" 
+    "../util/NatToString" "HOL-Library.Finite_Map" 
 begin
 
 (* This maps a typedef name to a list of type parameters (distinct tyvars)
@@ -51,5 +52,61 @@ definition elabenv_well_formed :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow>
     (typedefs_well_formed env (EE_Typedefs ee)
    \<and> (\<forall>name arity. fmlookup (EE_DataCtorArity ee) name = Some arity \<longrightarrow>
         data_ctor_arity_consistent env name arity))"
+
+
+(* elabenv_well_formed is preserved under extend_env_with_tyvars: it depends on env
+   only through TE_DataCtors (in data_ctor_arity_consistent — unchanged) and
+   is_well_kinded (in typedefs_well_formed — preserved by adding tyvars). *)
+lemma elabenv_well_formed_extend_env_with_tyvars:
+  assumes "elabenv_well_formed env elabEnv"
+  shows "elabenv_well_formed (extend_env_with_tyvars env ghost lo hi) elabEnv"
+proof -
+  let ?env' = "extend_env_with_tyvars env ghost lo hi"
+  have td_eq: "TE_Datatypes ?env' = TE_Datatypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have dc_eq: "TE_DataCtors ?env' = TE_DataCtors env"
+    unfolding extend_env_with_tyvars_def by simp
+  have td_wf: "typedefs_well_formed ?env' (EE_Typedefs elabEnv)"
+  proof -
+    have "\<forall>name tyvars targetTy.
+            fmlookup (EE_Typedefs elabEnv) name = Some (tyvars, targetTy) \<longrightarrow>
+              distinct tyvars \<and>
+              is_well_kinded ?env' targetTy \<and>
+              type_tyvars targetTy \<subseteq> set tyvars"
+    proof clarify
+      fix name tyvars targetTy
+      assume look: "fmlookup (EE_Typedefs elabEnv) name = Some (tyvars, targetTy)"
+      from assms have orig: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+        unfolding elabenv_well_formed_def by simp
+      from orig look have
+        d: "distinct tyvars" and
+        wk: "is_well_kinded env targetTy" and
+        sub: "type_tyvars targetTy \<subseteq> set tyvars"
+        unfolding typedefs_well_formed_def by auto
+      have wk': "is_well_kinded ?env' targetTy"
+        by (metis extend_env_with_tyvars_empty is_well_kinded_extend_env_with_tyvars_mono
+            linorder_le_cases wk)
+      show "distinct tyvars \<and>
+            is_well_kinded ?env' targetTy \<and>
+            type_tyvars targetTy \<subseteq> set tyvars"
+        using d wk' sub by blast
+    qed
+    thus ?thesis unfolding typedefs_well_formed_def by simp
+  qed
+  have ctor_arity:
+    "\<forall>name arity. fmlookup (EE_DataCtorArity elabEnv) name = Some arity \<longrightarrow>
+       data_ctor_arity_consistent ?env' name arity"
+  proof clarify
+    fix name arity
+    assume look: "fmlookup (EE_DataCtorArity elabEnv) name = Some arity"
+    from assms look have "data_ctor_arity_consistent env name arity"
+      unfolding elabenv_well_formed_def by simp
+    thus "data_ctor_arity_consistent ?env' name arity"
+      unfolding data_ctor_arity_consistent_def using dc_eq by simp
+  qed
+  show ?thesis
+    unfolding elabenv_well_formed_def
+    using td_wf ctor_arity by simp
+qed
 
 end
