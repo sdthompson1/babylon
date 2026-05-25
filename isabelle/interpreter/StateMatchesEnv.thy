@@ -76,12 +76,34 @@ definition global_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTy
       Some val \<Rightarrow> value_has_type env val ty
     | None \<Rightarrow> False)"
 
-(* Contract for an external function: when called with arguments of the expected
-   types, it returns values of the expected types. Currently a stub: discharging
-   this contract is the responsibility of whoever provides the ExternFunc, and
-   the soundness proof for extern calls is deferred. *)
+(* Contract for an external function: for every well-formed instantiation of the
+   callee's type arguments and every well-typed value list, the extern function
+   returns a return value of the (substituted) return type and a list of ref
+   updates (one per Ref parameter, in IF_Args / FI_TmArgs order) at the
+   (substituted) Ref-parameter types.
+   The world is opaque to soundness so it is left unconstrained.
+   Discharging this contract is the responsibility of whoever provides the
+   ExternFunc; the soundness proof for extern calls consumes it. *)
 definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
-  "extern_fun_contract env funInfo externFun = True"
+  "extern_fun_contract env funInfo externFun =
+    (\<forall>tySubst world vals.
+       \<comment> \<open>tySubst maps exactly the callee's type arguments to runtime, well-kinded
+           types in the caller's env\<close>
+       fmdom tySubst = fset_of_list (FI_TyArgs funInfo) \<and>
+       (\<forall>ty' \<in> fmran' tySubst. is_well_kinded env ty' \<and> is_runtime_type env ty') \<and>
+       \<comment> \<open>arguments have the substituted parameter types\<close>
+       list_all2 (value_has_type env)
+                 vals
+                 (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
+       \<longrightarrow>
+       (case externFun world vals of (newWorld, refUpdates, retVal) \<Rightarrow>
+          \<comment> \<open>return value has the substituted return type\<close>
+          value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo)) \<and>
+          \<comment> \<open>one ref update per Ref parameter, in IF_Args order, at the substituted type\<close>
+          list_all2 (value_has_type env)
+                    refUpdates
+                    (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
+                         (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))))"
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed because the body-typechecks clause (for Babylon functions)
@@ -105,14 +127,28 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
          (\<exists>env'. core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts = Some env')
      | Inr externFun \<Rightarrow> extern_fun_contract env funInfo externFun))"
 
+(* extern_fun_contract reads env only through is_well_kinded, is_runtime_type
+   and value_has_type, all of which ignore TE_ProofGoal. *)
+lemma extern_fun_contract_TE_ProofGoal_irrelevant [simp]:
+  "extern_fun_contract (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo externFun
+     = extern_fun_contract env funInfo externFun"
+proof -
+  have vht_eq: "value_has_type (env \<lparr> TE_ProofGoal := g \<rparr>) = value_has_type env"
+    by (rule ext)+ simp
+  show ?thesis
+    unfolding extern_fun_contract_def
+    using is_well_kinded_cong_env[where env' = "env \<lparr> TE_ProofGoal := g \<rparr>" and env = env]
+          is_runtime_type_cong_env[where env' = "env \<lparr> TE_ProofGoal := g \<rparr>" and env = env]
+          vht_eq
+    by simp
+qed
+
 (* fun_info_matches_interp_fun depends on env only through body_env_for env
-   funInfo (and extern_fun_contract, which is True), so the input env's proof
-   goal is irrelevant. *)
+   funInfo and extern_fun_contract, both of which ignore TE_ProofGoal. *)
 lemma fun_info_matches_interp_fun_TE_ProofGoal_irrelevant [simp]:
   "fun_info_matches_interp_fun (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo interpFun
      = fun_info_matches_interp_fun env funInfo interpFun"
-  by (simp add: fun_info_matches_interp_fun_def extern_fun_contract_def
-        split: sum.splits)
+  by (simp add: fun_info_matches_interp_fun_def split: sum.splits)
 
 
 (* All local variables in the type env (TE_LocalVars, but not ghost)
@@ -212,6 +248,20 @@ qed
    only the variable/function/store fields, never the proof goal. *)
 lemma state_matches_env_TE_ProofGoal_irrelevant [simp]:
   "state_matches_env state (env \<lparr> TE_ProofGoal := g \<rparr>) storeTyping
+     = state_matches_env state env storeTyping"
+  by (simp add: state_matches_env_def
+        local_vars_exist_in_state_def global_vars_exist_in_state_def
+        no_extra_local_vars_def no_extra_global_vars_def
+        funs_exist_in_state_def no_extra_funs_def
+        non_consts_in_locals_or_refs_def const_locals_match_def
+        store_well_typed_def
+        local_var_in_state_with_type_def global_var_in_state_with_type_def
+        split: option.splits)
+
+(* state_matches_env does not depend on IS_World: every conjunct projects
+   only IS_Locals, IS_Refs, IS_Globals, IS_Functions, IS_Store, or IS_ConstLocals. *)
+lemma state_matches_env_IS_World_irrelevant [simp]:
+  "state_matches_env (state \<lparr> IS_World := w \<rparr>) env storeTyping
      = state_matches_env state env storeTyping"
   by (simp add: state_matches_env_def
         local_vars_exist_in_state_def global_vars_exist_in_state_def
@@ -501,19 +551,38 @@ lemma body_env_for_cong:
   shows "body_env_for env1 funInfo = body_env_for env2 funInfo"
   using assms unfolding body_env_for_def by simp
 
-(* fun_info_matches_interp_fun congruence: same global fields imply same result. *)
+(* fun_info_matches_interp_fun congruence: agreement on the global fields plus
+   TE_TypeVars and TE_RuntimeTypeVars implies the same result. The Inl
+   (Babylon-body) case needs only the global fields (because body_env_for
+   overwrites TE_TypeVars / TE_RuntimeTypeVars from FunInfo), but the Inr
+   (extern) case reads them directly via extern_fun_contract. *)
 lemma fun_info_matches_interp_fun_cong_env:
-  assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
-      and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
-      and "TE_Functions env1 = TE_Functions env2"
-      and "TE_Datatypes env1 = TE_Datatypes env2"
-      and "TE_DataCtors env1 = TE_DataCtors env2"
-      and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-      and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+  assumes gv: "TE_GlobalVars env1 = TE_GlobalVars env2"
+      and gg: "TE_GhostGlobals env1 = TE_GhostGlobals env2"
+      and fn: "TE_Functions env1 = TE_Functions env2"
+      and dt: "TE_Datatypes env1 = TE_Datatypes env2"
+      and dc: "TE_DataCtors env1 = TE_DataCtors env2"
+      and dcbt: "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
+      and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+      and tv: "TE_TypeVars env1 = TE_TypeVars env2"
+      and rtv: "TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
   shows "fun_info_matches_interp_fun env1 funInfo interpFun =
          fun_info_matches_interp_fun env2 funInfo interpFun"
-  unfolding fun_info_matches_interp_fun_def
-  using body_env_for_cong[OF assms, of funInfo]
-  by (simp add: extern_fun_contract_def split: sum.splits)
+proof -
+  have body_eq: "body_env_for env1 funInfo = body_env_for env2 funInfo"
+    by (rule body_env_for_cong[OF gv gg fn dt dc dcbt gd])
+  have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
+    by (rule is_well_kinded_cong_env[OF tv dt])
+  have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
+    by (rule is_runtime_type_cong_env[OF gd rtv])
+  have vht_eq: "value_has_type env1 = value_has_type env2"
+    by (rule ext)+ (rule value_has_type_cong_env[OF dc dt tv gd rtv])
+  have ext_eq: "\<And>externFun. extern_fun_contract env1 funInfo externFun
+                              = extern_fun_contract env2 funInfo externFun"
+    by (simp add: extern_fun_contract_def wk_eq rt_eq vht_eq)
+  show ?thesis
+    unfolding fun_info_matches_interp_fun_def
+    by (simp add: body_eq ext_eq split: sum.splits)
+qed
 
 end

@@ -4106,6 +4106,89 @@ next
         unfolding bodyEnv_def bodyEnv0_def
         using "6.prems"(4) by (simp add: body_env_for_def)
 
+      \<comment> \<open>Shared arg-processing infrastructure (used by both Inl-body and
+          Inr-extern branches below). The writable-lvalue witness for Ref
+          positions is supplied by the caller via "6.prems"(8). \<close>
+      have argTms_lvalues_sh:
+        "\<forall>i < length argTms.
+           (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+            is_writable_lvalue env (argTms ! i))"
+        using "6.prems"(8) .
+      have argTms_typed_sh:
+        "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
+           argTms (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo))"
+        using "6.prems"(3) by (auto simp: list_all2_iff split: option.splits)
+
+      have IH_term_sh: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tm0 ty0.
+            state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+            tyenv_well_formed env0 \<Longrightarrow>
+            core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
+            sound_term_result env0 ty0 (interp_term fuel state0 tm0)"
+        using Suc.IH(1) by simp
+      have IH_lvalue_sh: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tm0 ty0.
+            state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+            tyenv_well_formed env0 \<Longrightarrow>
+            is_writable_lvalue env0 tm0 \<Longrightarrow>
+            core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
+            sound_lvalue_result state0 env0 storeTyping0 ty0
+              (interp_writable_lvalue fuel state0 tm0)"
+        using Suc.IH(3) by simp
+
+      have vals_sound_sh:
+        "\<forall>i < length (FI_TmArgs funInfo).
+           sound_term_result env
+             (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+             (map (interp_term fuel state) argTms ! i)"
+      proof (intro allI impI)
+        fix i assume i_lt: "i < length (FI_TmArgs funInfo)"
+        with len_argTms have i_lt_tms: "i < length argTms" by simp
+        from argTms_typed_sh i_lt_tms i_lt
+        have tm_typed: "core_term_type env NotGhost (argTms ! i)
+                          = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+          by (auto simp: list_all2_conv_all_nth split_def)
+        from IH_term_sh[OF "6.prems"(9) "6.prems"(10) tm_typed]
+        have "sound_term_result env
+                (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                (interp_term fuel state (argTms ! i))" .
+        thus "sound_term_result env
+                (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                (map (interp_term fuel state) argTms ! i)"
+          using i_lt_tms by simp
+      qed
+
+      have lvals_sound_sh:
+        "\<forall>i < length (FI_TmArgs funInfo).
+           snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+             sound_lvalue_result state env storeTyping
+               (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+               (map (interp_writable_lvalue fuel state) argTms ! i)"
+      proof (intro allI impI)
+        fix i
+        assume i_lt: "i < length (FI_TmArgs funInfo)"
+        assume is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+        with len_argTms i_lt have i_lt_tms: "i < length argTms" by simp
+        from argTms_lvalues_sh i_lt_tms is_ref
+        have is_wl: "is_writable_lvalue env (argTms ! i)" by simp
+        from argTms_typed_sh i_lt_tms i_lt
+        have tm_typed: "core_term_type env NotGhost (argTms ! i)
+                          = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+          by (auto simp: list_all2_conv_all_nth split_def)
+        from IH_lvalue_sh[OF "6.prems"(9) "6.prems"(10) is_wl tm_typed]
+        have "sound_lvalue_result state env storeTyping
+                (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                (interp_writable_lvalue fuel state (argTms ! i))" .
+        thus "sound_lvalue_result state env storeTyping
+                (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                (map (interp_writable_lvalue fuel state) argTms ! i)"
+          using i_lt_tms by simp
+      qed
+
+      have arg_proc_sound_sh:
+        "sound_arg_processing_result env funInfo ?tySubst storeTyping
+           (fold process_one_arg ?argTuples (Inr ?clearedState))"
+        using fold_process_one_arg_sound[OF "6.prems"(9,10,1,2) fi_match
+                                            vals_sound_sh lvals_sound_sh len_argTms] .
+
       show "sound_function_call_result env storeTyping retTy
               (interp_function_call (Suc fuel) state fnName argTms)"
       proof (cases "IF_Body f")
@@ -4281,100 +4364,11 @@ next
           unfolding bodyEnv_def
           using apply_subst_to_callee_env_well_formed[OF wf_bodyEnv0 "6.prems"(10) ok ok_rt ret_wk ret_rt] .
 
-        \<comment> \<open>HELPER 2 (arg processing soundness): invoke fold_process_one_arg_sound
-            to conclude that the arg fold is a sound arg processing result.
-            The writable-lvalue witness for Ref positions is supplied by the
-            caller (either via core_impure_call_type_fn_facts for impure
-            calls, or vacuously for pure calls where all args are Var). \<close>
-        have argTms_lvalues:
-          "\<forall>i < length argTms.
-             (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
-              is_writable_lvalue env (argTms ! i))"
-          using "6.prems"(8) .
-        have argTms_typed:
-          "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
-             argTms (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo))"
-          using "6.prems"(3) by (auto simp: list_all2_iff split: option.splits)
-
-        \<comment> \<open>Bind the term- and writable-lvalue-soundness IHs locally so they can be
-            applied per argTm. \<close>
-        have IH_term: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tm0 ty0.
-              state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
-              tyenv_well_formed env0 \<Longrightarrow>
-              core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
-              sound_term_result env0 ty0 (interp_term fuel state0 tm0)"
-          using Suc.IH(1) by simp
-        have IH_lvalue: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tm0 ty0.
-              state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
-              tyenv_well_formed env0 \<Longrightarrow>
-              is_writable_lvalue env0 tm0 \<Longrightarrow>
-              core_term_type env0 NotGhost tm0 = Some ty0 \<Longrightarrow>
-              sound_lvalue_result state0 env0 storeTyping0 ty0
-                (interp_writable_lvalue fuel state0 tm0)"
-          using Suc.IH(3) by simp
-
-        \<comment> \<open>Per-position soundness of interp_term on each argTm at its expected type. \<close>
-        have vals_sound:
-          "\<forall>i < length (FI_TmArgs funInfo).
-             sound_term_result env
-               (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
-               (map (interp_term fuel state) argTms ! i)"
-        proof (intro allI impI)
-          fix i assume i_lt: "i < length (FI_TmArgs funInfo)"
-          with len_argTms have i_lt_tms: "i < length argTms" by simp
-          from argTms_typed i_lt_tms i_lt
-          have tm_typed: "core_term_type env NotGhost (argTms ! i)
-                            = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
-            by (auto simp: list_all2_conv_all_nth split_def)
-          from IH_term[OF "6.prems"(9) "6.prems"(10) tm_typed]
-          have "sound_term_result env
-                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
-                  (interp_term fuel state (argTms ! i))" .
-          thus "sound_term_result env
-                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
-                  (map (interp_term fuel state) argTms ! i)"
-            using i_lt_tms by simp
-        qed
-
-        \<comment> \<open>Per-position soundness of interp_writable_lvalue on each Ref-parameter argTm. \<close>
-        have lvals_sound:
-          "\<forall>i < length (FI_TmArgs funInfo).
-             snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
-               sound_lvalue_result state env storeTyping
-                 (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
-                 (map (interp_writable_lvalue fuel state) argTms ! i)"
-        proof (intro allI impI)
-          fix i
-          assume i_lt: "i < length (FI_TmArgs funInfo)"
-          assume is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
-          with len_argTms i_lt have i_lt_tms: "i < length argTms" by simp
-          from argTms_lvalues i_lt_tms is_ref
-          have is_wl: "is_writable_lvalue env (argTms ! i)" by simp
-          from argTms_typed i_lt_tms i_lt
-          have tm_typed: "core_term_type env NotGhost (argTms ! i)
-                            = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
-            by (auto simp: list_all2_conv_all_nth split_def)
-          from IH_lvalue[OF "6.prems"(9) "6.prems"(10) is_wl tm_typed]
-          have "sound_lvalue_result state env storeTyping
-                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
-                  (interp_writable_lvalue fuel state (argTms ! i))" .
-          thus "sound_lvalue_result state env storeTyping
-                  (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
-                  (map (interp_writable_lvalue fuel state) argTms ! i)"
-            using i_lt_tms by simp
-        qed
-
-        have arg_proc_sound:
-          "sound_arg_processing_result env funInfo ?tySubst storeTyping
-             (fold process_one_arg ?argTuples (Inr ?clearedState))"
-          using fold_process_one_arg_sound[OF "6.prems"(9,10,1,2) fi_match
-                                              vals_sound lvals_sound len_argTms] .
-
         show ?thesis
         proof (cases "fold process_one_arg ?argTuples (Inr ?clearedState)")
           case Inl_fold: (Inl err)
           \<comment> \<open>Arg processing errored. Helper 2 gives us sound_error_result. \<close>
-          from arg_proc_sound Inl_fold have err_sound: "sound_error_result err"
+          from arg_proc_sound_sh Inl_fold have err_sound: "sound_error_result err"
             by (simp add: sound_arg_processing_result_def)
           have interp_eq:
             "interp_function_call (Suc fuel) state fnName argTms = Inl err"
@@ -4385,7 +4379,7 @@ next
           case Inr_fold: (Inr preCallState)
           \<comment> \<open>Arg processing succeeded. Helper 2 gives us a store typing for
               the cleared+populated state that matches bodyEnv. \<close>
-          from arg_proc_sound Inr_fold have arg_proc_ok:
+          from arg_proc_sound_sh Inr_fold have arg_proc_ok:
             "\<exists>bodyStoreTyping.
               state_matches_env preCallState bodyEnv bodyStoreTyping
             \<and> storeTyping_extends storeTyping bodyStoreTyping"
@@ -4588,11 +4582,377 @@ next
         qed
 
       next
-        case (Inr externFun)
-        \<comment> \<open>Extern-function case. Deferred — depends on extern_fun_contract being
-            given a real definition. \<close>
+        case Inr_body: (Inr externFun)
+        \<comment> \<open>Extern-function case. Discharged via extern_fun_contract (from fi_match)
+            and apply_ref_updates_sound. \<close>
+
+        \<comment> \<open>Extract the extern contract from fi_match. \<close>
+        have ext_contract: "extern_fun_contract env funInfo externFun"
+          using fi_match Inr_body
+          unfolding fun_info_matches_interp_fun_def
+          by (auto split: sum.splits)
+
         show ?thesis
-          sorry
+        proof (cases "fold process_one_arg ?argTuples (Inr ?clearedState)")
+          case Inl_fold: (Inl err)
+          from arg_proc_sound_sh Inl_fold have err_sound: "sound_error_result err"
+            by (simp add: sound_arg_processing_result_def)
+          have interp_eq:
+            "interp_function_call (Suc fuel) state fnName argTms = Inl err"
+            using if_lookup len_argTms_args Inr_body Inl_fold
+            by (simp add: Let_def)
+          show ?thesis using err_sound interp_eq by simp
+        next
+          case Inr_fold: (Inr preCallState)
+
+          \<comment> \<open>Per-position Inr-extraction from the successful fold. \<close>
+          have len_if_ref: "length (IF_Args f) = length ?refResults"
+            using len_argTms_args by simp
+          have len_if_val: "length (IF_Args f) = length ?valResults"
+            using len_argTms_args by simp
+          from fold_process_one_arg_inr_inversion[OF Inr_fold len_if_ref len_if_val]
+          have inrs:
+            "\<forall>i < length (IF_Args f).
+                (\<exists>v. ?valResults ! i = Inr v) \<and>
+                (snd (IF_Args f ! i) = Ref \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p)))" .
+
+          \<comment> \<open>All valResults are Inr, so vals = map projr valResults. \<close>
+          have all_vals_inr: "\<forall>i < length ?valResults. \<exists>v. ?valResults ! i = Inr v"
+            using inrs len_if_val by simp
+          let ?vals = "rights ?valResults"
+          \<comment> \<open>Generic fact: rights of an all-Inr list equals map projr. Proved here
+              inline by induction on a fresh schematic list. \<close>
+          have rights_of_all_inr:
+            "\<And>xs :: (InterpError + CoreValue) list.
+                \<forall>i < length xs. \<exists>v. xs ! i = Inr v \<Longrightarrow> rights xs = map projr xs"
+          proof -
+            fix xs :: "(InterpError + CoreValue) list"
+            assume "\<forall>i < length xs. \<exists>v. xs ! i = Inr v"
+            thus "rights xs = map projr xs"
+            proof (induction xs)
+              case Nil then show ?case by simp
+            next
+              case (Cons r rs)
+              from Cons.prems[rule_format, of 0] obtain v where r_eq: "r = Inr v" by auto
+              have rs_inr: "\<forall>i < length rs. \<exists>v. rs ! i = Inr v"
+              proof (intro allI impI)
+                fix i assume "i < length rs"
+                hence "Suc i < length (r # rs)" by simp
+                from Cons.prems[rule_format, OF this]
+                obtain v where "(r # rs) ! Suc i = Inr v" by blast
+                thus "\<exists>v. rs ! i = Inr v" by auto
+              qed
+              from Cons.IH[OF rs_inr] r_eq show ?case by simp
+            qed
+          qed
+          have vals_eq: "?vals = map projr ?valResults"
+            using rights_of_all_inr[OF all_vals_inr] .
+          have len_vals: "length ?vals = length ?valResults"
+            using vals_eq by simp
+
+          \<comment> \<open>vals are well-typed at the substituted FI_TmArgs types. \<close>
+          have vals_typed:
+            "list_all2 (value_has_type env) ?vals
+               (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo))"
+          proof (rule list_all2_all_nthI)
+            show "length ?vals
+                    = length (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo))"
+              using len_vals len_argTms by simp
+          next
+            fix i assume i_lt: "i < length ?vals"
+            from i_lt len_vals have i_lt_val: "i < length ?valResults" by simp
+            from i_lt_val have i_lt_tms: "i < length argTms" by simp
+            from i_lt_tms len_argTms have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
+            from all_vals_inr i_lt_val obtain v where
+              v_eq: "?valResults ! i = Inr v" by blast
+            from vals_sound_sh i_lt_fi
+            have "sound_term_result env
+                    (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+                    (?valResults ! i)" by simp
+            with v_eq have v_typed:
+              "value_has_type env v (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+              by simp
+            have "?vals ! i = v"
+              using vals_eq v_eq i_lt_val by simp
+            moreover have
+              "(map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)) ! i
+                  = apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! i)))"
+              using i_lt_fi by (simp add: case_prod_beta)
+            ultimately show
+              "value_has_type env (?vals ! i)
+                 ((map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)) ! i)"
+              using v_typed by simp
+          qed
+
+          \<comment> \<open>Substitution well-formedness for extern_fun_contract. \<close>
+          have distinct_tyArgs: "distinct (FI_TyArgs funInfo)"
+            using "6.prems"(10) "6.prems"(1)
+            unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def
+            by blast
+          have subst_range_eq: "fmran' ?tySubst = set tyArgs"
+            using fmran'_fmap_of_list_zip[OF "6.prems"(5)[symmetric] distinct_tyArgs] .
+          have subst_range_wk_rt:
+            "\<forall>ty' \<in> fmran' ?tySubst. is_well_kinded env ty' \<and> is_runtime_type env ty'"
+            using subst_range_eq "6.prems"(6,7) by (auto simp: list_all_iff)
+          have dom_eq: "fmdom ?tySubst = fset_of_list (FI_TyArgs funInfo)"
+          proof -
+            have "fset (fmdom ?tySubst) = set (FI_TyArgs funInfo)"
+              using fmdom_fmap_of_list_zip[OF "6.prems"(5)[symmetric]] .
+            also have "set (FI_TyArgs funInfo) = fset (fset_of_list (FI_TyArgs funInfo))"
+              by (simp add: fset_of_list.rep_eq)
+            finally have "fset (fmdom ?tySubst) = fset (fset_of_list (FI_TyArgs funInfo))" .
+            thus ?thesis by (rule fset_inject[THEN iffD1])
+          qed
+
+          \<comment> \<open>Apply the contract to extract the extern function's output shape. \<close>
+          obtain newWorld refUpdates retVal where
+            ext_eq: "externFun (IS_World state) ?vals = (newWorld, refUpdates, retVal)"
+            by (cases "externFun (IS_World state) ?vals") auto
+          from ext_contract dom_eq subst_range_wk_rt vals_typed ext_eq
+          have contract_out:
+            "value_has_type env retVal (apply_subst ?tySubst (FI_ReturnType funInfo)) \<and>
+             list_all2 (value_has_type env) refUpdates
+               (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))"
+            unfolding extern_fun_contract_def
+            by (drule_tac x = "?tySubst" in spec, drule_tac x = "IS_World state" in spec,
+                drule_tac x = "?vals" in spec, simp)
+          have ret_typed: "value_has_type env retVal retTy"
+            using contract_out "6.prems"(4) by simp
+          have refUpdates_typed:
+            "list_all2 (value_has_type env) refUpdates
+               (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))"
+            using contract_out by simp
+
+          \<comment> \<open>Build refs. For Ref positions, refResults ! i = Inr (a, p); for Var, the
+              map produces Inl, which rights skips. So refs equals the list of (a,p)
+              for Ref positions, in IF_Args order. \<close>
+          let ?refs = "rights (map (\<lambda>((_, vr), refResult).
+                                       if vr = Ref then refResult else Inl TypeError)
+                                   (zip (IF_Args f) ?refResults))"
+          let ?ref_idxs = "filter (\<lambda>i. snd (IF_Args f ! i) = Ref) [0 ..< length (IF_Args f)]"
+
+          \<comment> \<open>Length and per-element characterization of refs by indexing. \<close>
+          have ref_inrs_for_chars:
+            "\<forall>i < length (IF_Args f).
+                snd (IF_Args f ! i) = Ref \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p))"
+            using inrs by simp
+          have refs_chars:
+            "length ?refs = length ?ref_idxs \<and>
+             (\<forall>j < length ?ref_idxs.
+                 ?refResults ! (?ref_idxs ! j) = Inr (?refs ! j))"
+            using rights_filter_zip_refs_chars[OF len_if_ref ref_inrs_for_chars] .
+
+          \<comment> \<open>Pointwise agreement of the Var/Ref tag across FI_TmArgs and IF_Args
+              (from var_ref_match), plus the length agreement. Hoisted so both
+              len_filter_fi and refs_ok can use them. \<close>
+          have vors_match: "\<And>i. i < length (FI_TmArgs funInfo) \<Longrightarrow>
+                                  snd (snd (FI_TmArgs funInfo ! i)) = snd (IF_Args f ! i)"
+          proof -
+            fix i assume i_lt: "i < length (FI_TmArgs funInfo)"
+            from var_ref_match i_lt
+            have "(\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+                     (FI_TmArgs funInfo ! i) (IF_Args f ! i)"
+              by (simp add: list_all2_conv_all_nth)
+            thus "snd (snd (FI_TmArgs funInfo ! i)) = snd (IF_Args f ! i)"
+              by (cases "FI_TmArgs funInfo ! i"; cases "IF_Args f ! i") simp
+          qed
+          have len_fi_if: "length (FI_TmArgs funInfo) = length (IF_Args f)"
+            using var_ref_match by (rule list_all2_lengthD)
+
+          \<comment> \<open>Length of refs equals length of refUpdates (both = number of Ref positions). \<close>
+          have len_filter_fi:
+            "length (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))
+               = length ?ref_idxs"
+          proof -
+            \<comment> \<open>Count via the index set in both directions. \<close>
+            have "length (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))
+                    = card {i. i < length (FI_TmArgs funInfo)
+                              \<and> (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo ! i)}"
+              by (simp add: length_filter_conv_card)
+            also have "\<dots> = card {i. i < length (FI_TmArgs funInfo)
+                                    \<and> snd (snd (FI_TmArgs funInfo ! i)) = Ref}"
+              by (simp add: case_prod_beta)
+            also have "\<dots> = card {i. i < length (FI_TmArgs funInfo)
+                                    \<and> snd (IF_Args f ! i) = Ref}"
+              using vors_match by (intro arg_cong[where f = card]) auto
+            also have "\<dots> = card {i. i < length (IF_Args f)
+                                    \<and> snd (IF_Args f ! i) = Ref}"
+              using len_fi_if by simp
+            also have "\<dots> = length (filter (\<lambda>i. snd (IF_Args f ! i) = Ref)
+                                          [0 ..< length (IF_Args f)])"
+            proof -
+              have set_eq:
+                "{i. i < length (IF_Args f) \<and> snd (IF_Args f ! i) = Ref}
+                  = {i. i < length [0 ..< length (IF_Args f)]
+                          \<and> snd (IF_Args f ! ([0 ..< length (IF_Args f)] ! i)) = Ref}"
+                by auto
+              show ?thesis
+                unfolding length_filter_conv_card by (rule set_eq[THEN arg_cong[where f = card]])
+            qed
+            finally show ?thesis by simp
+          qed
+
+          have len_refs_updates:
+            "length ?refs = length refUpdates"
+            using refs_chars len_filter_fi refUpdates_typed
+            by (simp add: list_all2_lengthD)
+
+          \<comment> \<open>Per-Ref-position type-at-path facts via lvals_sound_sh. The j-th element
+              of ?refs corresponds (by refs_chars) to the j-th IF_Args Ref position;
+              that index is also the j-th FI_TmArgs Ref position (by vors_match), so
+              the substituted Ref-type at the contract side aligns with lvals_sound_sh's
+              expected type. \<close>
+          let ?idxs_fi = "filter (\<lambda>i. snd (snd (FI_TmArgs funInfo ! i)) = Ref)
+                                 [0 ..< length (FI_TmArgs funInfo)]"
+          have idxs_fi_eq_ref_idxs: "?idxs_fi = ?ref_idxs"
+            using vors_match len_fi_if by (intro filter_cong) simp_all
+          have refs_ok:
+            "\<forall>j < length ?refs.
+               fst (?refs ! j)
+                 < length (IS_Store (state \<lparr> IS_World := newWorld \<rparr>)) \<and>
+               type_at_path env
+                  (storeTyping ! (fst (?refs ! j))) (snd (?refs ! j))
+                  = Some ((map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                              (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+          proof (intro allI impI)
+            fix j assume j_lt: "j < length ?refs"
+            from j_lt refs_chars have j_lt_idxs: "j < length ?ref_idxs" by simp
+
+            \<comment> \<open>The i-th index into IF_Args / FI_TmArgs is in range and is a Ref position. \<close>
+            let ?i = "?ref_idxs ! j"
+            from j_lt_idxs have i_in_set: "?i \<in> set ?ref_idxs" using nth_mem by blast
+            hence i_props: "?i < length (IF_Args f) \<and> snd (IF_Args f ! ?i) = Ref"
+              by auto
+            then have i_lt_if: "?i < length (IF_Args f)"
+              and i_is_ref_if: "snd (IF_Args f ! ?i) = Ref" by auto
+            from i_lt_if len_fi_if have i_lt_fi: "?i < length (FI_TmArgs funInfo)" by simp
+            from i_is_ref_if vors_match[OF i_lt_fi]
+            have i_is_ref_fi: "snd (snd (FI_TmArgs funInfo ! ?i)) = Ref" by simp
+
+            \<comment> \<open>Soundness of the lvalue result at this index. \<close>
+            from lvals_sound_sh i_lt_fi i_is_ref_fi
+            have lv_sound: "sound_lvalue_result state env storeTyping
+                              (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! ?i))))
+                              (?refResults ! ?i)"
+              by simp
+
+            \<comment> \<open>refResults at this index equals Inr (?refs ! j). \<close>
+            from refs_chars j_lt_idxs
+            have refResults_i_eq: "?refResults ! ?i = Inr (?refs ! j)" by simp
+
+            \<comment> \<open>Combine: lvalue soundness on Inr gives address-in-range + type-at-path. \<close>
+            obtain a p where refs_j_eq: "?refs ! j = (a, p)" by (cases "?refs ! j")
+            from lv_sound refResults_i_eq refs_j_eq
+            have lv_unfold: "a < length (IS_Store state) \<and>
+                             type_at_path env (storeTyping ! a) p
+                               = Some (apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! ?i))))"
+              by simp
+
+            \<comment> \<open>Align with the contract's filtered-FI_TmArgs view. Use the standard
+                identity filter P xs = map ((!) xs) (filter (\<lambda>i. P (xs!i)) [0..<length xs]),
+                proved inline by list induction. \<close>
+            have filter_via_indices:
+              "\<And>P xs. filter P xs
+                        = map ((!) xs) (filter (\<lambda>i. P (xs ! i)) [0 ..< length xs])"
+            proof -
+              fix P :: "'a \<Rightarrow> bool" and xs :: "'a list"
+              show "filter P xs
+                      = map ((!) xs) (filter (\<lambda>i. P (xs ! i)) [0 ..< length xs])"
+              proof (induction xs)
+                case Nil then show ?case by simp
+              next
+                case (Cons x xs)
+                have upt_step: "[0 ..< length (x # xs)] = 0 # map Suc [0 ..< length xs]"
+                  by (metis length_Cons length_greater_0_conv list.distinct(1) map_Suc_upt upt_conv_Cons)
+                \<comment> \<open>Mapping (x#xs)!\<sqdot> over Suc-shifted indices equals mapping xs!\<sqdot> over the originals. \<close>
+                have suc_step:
+                  "map ((!) (x # xs)) (map Suc (filter (\<lambda>i. P (xs ! i)) [0 ..< length xs]))
+                    = map ((!) xs) (filter (\<lambda>i. P (xs ! i)) [0 ..< length xs])"
+                  by (simp add: comp_def)
+                \<comment> \<open>Splitting the head-index from the rest, with the head conditional on P x. \<close>
+                have filter_step:
+                  "filter (\<lambda>i. P ((x # xs) ! i)) (0 # map Suc [0 ..< length xs])
+                    = (if P x then 0 # map Suc (filter (\<lambda>i. P (xs ! i)) [0 ..< length xs])
+                              else map Suc (filter (\<lambda>i. P (xs ! i)) [0 ..< length xs]))"
+                  by (simp add: filter_map comp_def)
+                show ?case
+                  using Cons.IH upt_step suc_step filter_step by simp
+              qed
+            qed
+            have filter_fi_at_j:
+              "(filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)) ! j
+                  = FI_TmArgs funInfo ! ?i"
+            proof -
+              have "(filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)) ! j
+                      = (map ((!) (FI_TmArgs funInfo)) ?idxs_fi) ! j"
+                using filter_via_indices[of "\<lambda>(_, _, vor). vor = Ref" "FI_TmArgs funInfo"]
+                by (simp add: case_prod_beta)
+              also have "\<dots> = FI_TmArgs funInfo ! (?idxs_fi ! j)"
+                using j_lt_idxs idxs_fi_eq_ref_idxs by simp
+              also have "\<dots> = FI_TmArgs funInfo ! ?i"
+                using idxs_fi_eq_ref_idxs by simp
+              finally show ?thesis .
+            qed
+            have map_at_j:
+              "(map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))) ! j
+                  = apply_subst ?tySubst (fst (snd (FI_TmArgs funInfo ! ?i)))"
+              using j_lt_idxs len_filter_fi filter_fi_at_j
+              by (simp add: case_prod_beta)
+
+            show "fst (?refs ! j) < length (IS_Store (state \<lparr> IS_World := newWorld \<rparr>)) \<and>
+                  type_at_path env (storeTyping ! (fst (?refs ! j))) (snd (?refs ! j))
+                    = Some ((map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                                (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+              using lv_unfold refs_j_eq map_at_j by simp
+          qed
+
+          \<comment> \<open>Discharge apply_ref_updates_sound. \<close>
+          have vals_typed_for_aru:
+            "\<forall>j < length refUpdates.
+                value_has_type env (refUpdates ! j)
+                  ((map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                       (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+            using list_all2_nthD refUpdates_typed by blast
+
+          have sme_world: "state_matches_env (state \<lparr> IS_World := newWorld \<rparr>) env storeTyping"
+            using "6.prems"(9) by simp
+
+          have len_tys: "length (map (\<lambda>(_, ty, _). apply_subst ?tySubst ty)
+                                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))
+                        = length ?refs"
+            using len_filter_fi refs_chars by simp
+
+          from apply_ref_updates_sound[OF sme_world len_refs_updates len_tys refs_ok vals_typed_for_aru]
+          have aru_sound:
+            "case apply_ref_updates (state \<lparr> IS_World := newWorld \<rparr>) ?refs refUpdates of
+               Inl err \<Rightarrow> sound_error_result err
+             | Inr finalState \<Rightarrow> state_matches_env finalState env storeTyping" .
+
+          \<comment> \<open>Plumb through the interpreter's case structure. \<close>
+          have interp_match:
+            "interp_function_call (Suc fuel) state fnName argTms
+              = (case apply_ref_updates (state \<lparr> IS_World := newWorld \<rparr>) ?refs refUpdates of
+                   Inr finalState \<Rightarrow> Inr (finalState, retVal)
+                 | Inl err \<Rightarrow> Inl err)"
+            using if_lookup len_argTms_args Inr_body Inr_fold ext_eq
+            by (simp add: Let_def)
+
+          show ?thesis
+          proof (cases "apply_ref_updates (state \<lparr> IS_World := newWorld \<rparr>) ?refs refUpdates")
+            case (Inl err)
+            with aru_sound have "sound_error_result err" by simp
+            with interp_match Inl show ?thesis by simp
+          next
+            case (Inr finalState)
+            with aru_sound have sme_final: "state_matches_env finalState env storeTyping" by simp
+            have ext_st: "storeTyping_extends storeTyping storeTyping"
+              by (rule storeTyping_extends_refl)
+            from interp_match Inr ret_typed sme_final ext_st show ?thesis by auto
+          qed
+        qed
       qed
     qed
   }

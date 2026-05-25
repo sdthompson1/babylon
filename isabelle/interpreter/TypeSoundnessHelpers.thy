@@ -1591,6 +1591,312 @@ proof -
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed
 
+(* Soundness of apply_ref_updates: given a list of ref-lvalues each pointing at
+   a value of some type ty_i in the existing store, and a parallel list of new
+   values each of type ty_i, the fold either errors soundly (RuntimeError, when
+   an intermediate update_value_at_path fails on a dangling path) or produces a
+   new state matching the same env under the same storeTyping. The storeTyping
+   itself does not change because each step only mutates an existing slot
+   (no append). *)
+lemma apply_ref_updates_sound:
+  assumes sme: "state_matches_env state env storeTyping"
+      and len: "length refs = length newVals"
+      and len_tys: "length tys = length refs"
+      and refs_ok: "\<forall>i < length refs.
+                       fst (refs ! i) < length (IS_Store state) \<and>
+                       type_at_path env (storeTyping ! (fst (refs ! i)))
+                                        (snd (refs ! i)) = Some (tys ! i)"
+      and vals_typed: "\<forall>i < length newVals. value_has_type env (newVals ! i) (tys ! i)"
+  shows "(case apply_ref_updates state refs newVals of
+            Inl err \<Rightarrow> sound_error_result err
+          | Inr finalState \<Rightarrow> state_matches_env finalState env storeTyping)"
+using assms proof (induction state refs newVals arbitrary: tys rule: apply_ref_updates.induct)
+  case (1 state)
+  from "1.prems"(1) show ?case by simp
+next
+  case (2 state addr path rest_lvals newVal rest_vals)
+  \<comment> \<open>Peel off the head of tys.\<close>
+  from "2.prems"(3) obtain ty rest_tys where tys_eq: "tys = ty # rest_tys"
+    by (cases tys) auto
+  with "2.prems"(3) have len_rest_tys: "length rest_tys = length rest_lvals" by simp
+  from "2.prems"(2) have len_rest: "length rest_lvals = length rest_vals" by simp
+
+  \<comment> \<open>The head ref is well-formed in the current state and storeTyping.\<close>
+  have len_pos: "0 < length ((addr, path) # rest_lvals)" by simp
+  from "2.prems"(4)[rule_format, OF len_pos]
+  have head_ok: "addr < length (IS_Store state) \<and>
+                 type_at_path env (storeTyping ! addr) path = Some ty"
+    using tys_eq by simp
+  hence addr_valid: "addr < length (IS_Store state)"
+    and path_ty: "type_at_path env (storeTyping ! addr) path = Some ty" by auto
+
+  \<comment> \<open>The head newVal has the path's type.\<close>
+  have len_pos_vals: "0 < length (newVal # rest_vals)" by simp
+  from "2.prems"(5)[rule_format, OF len_pos_vals]
+  have head_typed: "value_has_type env newVal ty"
+    using tys_eq by simp
+
+  \<comment> \<open>The old slot has the store-typing type.\<close>
+  from sme addr_valid
+  have old_slot_typed: "value_has_type env (IS_Store state ! addr) (storeTyping ! addr)"
+    unfolding state_matches_env_def store_well_typed_def
+    using "2.prems"(1) state_matches_env_def store_well_typed_def by blast
+
+  show ?case
+  proof (cases "update_value_at_path (IS_Store state ! addr) path newVal")
+    case (Inl err)
+    from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl]
+    have "err = RuntimeError" .
+    with Inl show ?thesis by simp
+  next
+    case (Inr updated_val)
+    \<comment> \<open>The updated slot still has the slot's type.\<close>
+    from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty head_typed]
+    have new_slot_typed: "value_has_type env updated_val (storeTyping ! addr)" .
+
+    \<comment> \<open>Lift to state_matches_env on the new state.\<close>
+    let ?state1 = "state \<lparr> IS_Store := (IS_Store state)[addr := updated_val] \<rparr>"
+    have state1_eq: "?state1 = state \<lparr> IS_Store := (IS_Store state)[addr := updated_val] \<rparr>"
+      by simp
+    from state_matches_env_update_store[OF "2.prems"(1) addr_valid new_slot_typed state1_eq]
+    have sme1: "state_matches_env ?state1 env storeTyping" .
+
+    \<comment> \<open>The store length and storeTyping are unchanged, so the remaining ref-lvalues
+        are still well-formed under the new state.\<close>
+    have store1_len: "length (IS_Store ?state1) = length (IS_Store state)" by simp
+    have rest_refs_ok: "\<forall>i < length rest_lvals.
+                          fst (rest_lvals ! i) < length (IS_Store ?state1) \<and>
+                          type_at_path env (storeTyping ! (fst (rest_lvals ! i)))
+                                           (snd (rest_lvals ! i)) = Some (rest_tys ! i)"
+    proof (intro allI impI)
+      fix i assume i_lt: "i < length rest_lvals"
+      hence "Suc i < length ((addr, path) # rest_lvals)" by simp
+      from "2.prems"(4)[rule_format, OF this]
+      have "fst (((addr, path) # rest_lvals) ! Suc i) < length (IS_Store state) \<and>
+            type_at_path env (storeTyping ! (fst (((addr, path) # rest_lvals) ! Suc i)))
+                             (snd (((addr, path) # rest_lvals) ! Suc i))
+            = Some (tys ! Suc i)" .
+      thus "fst (rest_lvals ! i) < length (IS_Store ?state1) \<and>
+            type_at_path env (storeTyping ! (fst (rest_lvals ! i)))
+                             (snd (rest_lvals ! i)) = Some (rest_tys ! i)"
+        using store1_len tys_eq by simp
+    qed
+
+    have rest_vals_typed: "\<forall>i < length rest_vals. value_has_type env (rest_vals ! i) (rest_tys ! i)"
+    proof (intro allI impI)
+      fix i assume i_lt: "i < length rest_vals"
+      hence "Suc i < length (newVal # rest_vals)" by simp
+      from "2.prems"(5)[rule_format, OF this]
+      have "value_has_type env ((newVal # rest_vals) ! Suc i) (tys ! Suc i)" .
+      thus "value_has_type env (rest_vals ! i) (rest_tys ! i)"
+        using tys_eq by simp
+    qed
+
+    from "2.IH"[OF Inr state1_eq sme1 len_rest len_rest_tys rest_refs_ok rest_vals_typed]
+    have IH_result: "case apply_ref_updates ?state1 rest_lvals rest_vals of
+                       Inl err \<Rightarrow> sound_error_result err
+                     | Inr finalState \<Rightarrow> state_matches_env finalState env storeTyping" .
+    have step_eq: "apply_ref_updates state ((addr, path) # rest_lvals) (newVal # rest_vals)
+                     = apply_ref_updates ?state1 rest_lvals rest_vals"
+      using Inr by (simp add: Let_def)
+    from IH_result step_eq show ?thesis by simp
+  qed
+qed (simp_all)
+
+(* The interpreter's extern-call branch builds the list of ref-lvalue updates by
+   mapping over (IF_Args, refResults), replacing Var-position refResults with
+   Inl TypeError (which `rights` then drops), then taking `rights`. This lemma
+   characterises the result: its length is the number of Ref positions, and
+   its j-th element is the projected refResult at the j-th Ref index.
+
+   Hypothesis: every Ref-position's refResult is actually Inr (which the caller
+   establishes from a successful arg-processing fold via
+   fold_process_one_arg_inr_inversion). *)
+lemma rights_filter_zip_refs_chars_aux:
+  fixes ifs :: "(string \<times> VarOrRef) list"
+    and rrs :: "(InterpError + (nat \<times> LValuePath list)) list"
+  assumes "length ifs = length rrs"
+      and "\<forall>i < length ifs. snd (ifs ! i) = Ref \<longrightarrow> (\<exists>a p. rrs ! i = Inr (a, p))"
+  shows
+    "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                          (zip ifs rrs)))
+       = length (filter (\<lambda>i. snd (ifs ! i) = Ref) [0 ..< length ifs])
+     \<and> (\<forall>j < length (filter (\<lambda>i. snd (ifs ! i) = Ref) [0 ..< length ifs]).
+            rrs ! ((filter (\<lambda>i. snd (ifs ! i) = Ref) [0 ..< length ifs]) ! j)
+              = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                                 (zip ifs rrs)) ! j))"
+using assms proof (induction ifs arbitrary: rrs)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons ifa ifrest)
+  from Cons.prems(1) obtain rr rrest where rrs_eq: "rrs = rr # rrest"
+    by (cases rrs) auto
+  obtain name vor where ifa_eq: "ifa = (name, vor)" by (cases ifa)
+
+  have len_rest: "length ifrest = length rrest"
+    using Cons.prems(1) rrs_eq by simp
+  have rest_inrs:
+    "\<forall>i < length ifrest. snd (ifrest ! i) = Ref \<longrightarrow> (\<exists>a p. rrest ! i = Inr (a, p))"
+  proof (intro allI impI)
+    fix i assume i_lt: "i < length ifrest" and i_ref: "snd (ifrest ! i) = Ref"
+    have "Suc i < length (ifa # ifrest)" using i_lt by simp
+    moreover have "snd ((ifa # ifrest) ! Suc i) = Ref" using i_ref by simp
+    ultimately have "\<exists>a p. rrs ! Suc i = Inr (a, p)"
+      using Cons.prems(2) by blast
+    thus "\<exists>a p. rrest ! i = Inr (a, p)" using rrs_eq by simp
+  qed
+
+  \<comment> \<open>IH on the tail. \<close>
+  from Cons.IH[OF len_rest rest_inrs]
+  have IH_len:
+    "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                          (zip ifrest rrest)))
+       = length (filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest])"
+    and IH_chars:
+    "\<And>j. j < length (filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest]) \<Longrightarrow>
+          rrest ! ((filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest]) ! j)
+            = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                                (zip ifrest rrest)) ! j)"
+    by auto
+
+  let ?map_rest = "map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                       (zip ifrest rrest)"
+  let ?idxs_rest = "filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest]"
+
+  have upt_split: "[0 ..< length (ifa # ifrest)] = 0 # map Suc [0 ..< length ifrest]"
+    using map_Suc_upt upt_rec by auto
+  have idxs_split:
+    "filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref) [0 ..< length (ifa # ifrest)]
+      = (if vor = Ref then 0 # map Suc ?idxs_rest else map Suc ?idxs_rest)"
+    using upt_split ifa_eq by (simp add: filter_map o_def)
+
+  show ?case
+  proof (cases vor)
+    case Var
+    have rights_step:
+      "rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                   (zip (ifa # ifrest) (rr # rrest)))
+         = rights ?map_rest"
+      using ifa_eq Var by simp
+    have idxs_step:
+      "filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref) [0 ..< length (ifa # ifrest)]
+         = map Suc ?idxs_rest"
+      using idxs_split Var by simp
+
+    have len_part:
+      "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                            (zip (ifa # ifrest) (rr # rrest))))
+         = length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                          [0 ..< length (ifa # ifrest)])"
+      using rights_step idxs_step IH_len by simp
+
+    have chars_part:
+      "\<forall>j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                            [0 ..< length (ifa # ifrest)]).
+          (rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                                   [0 ..< length (ifa # ifrest)]) ! j)
+            = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                                (zip (ifa # ifrest) (rr # rrest))) ! j)"
+    proof (intro allI impI)
+      fix j
+      assume "j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                                  [0 ..< length (ifa # ifrest)])"
+      hence j_lt: "j < length ?idxs_rest" using idxs_step length_map by metis
+      have rhs: "(filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                          [0 ..< length (ifa # ifrest)]) ! j
+                   = Suc (?idxs_rest ! j)"
+        using idxs_step j_lt by simp
+      show "(rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                                     [0 ..< length (ifa # ifrest)]) ! j)
+              = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                                  (zip (ifa # ifrest) (rr # rrest))) ! j)"
+        using rhs rights_step IH_chars[OF j_lt] by simp
+    qed
+
+    from len_part chars_part rrs_eq show ?thesis by simp
+  next
+    case Ref
+    have head_inr: "\<exists>a p. rr = Inr (a, p)"
+    proof -
+      have "0 < length (ifa # ifrest)" by simp
+      moreover have "snd ((ifa # ifrest) ! 0) = Ref" using ifa_eq Ref by simp
+      ultimately have "\<exists>a p. rrs ! 0 = Inr (a, p)"
+        using Cons.prems(2) by blast
+      thus ?thesis using rrs_eq by simp
+    qed
+    then obtain a p where rr_eq: "rr = Inr (a, p)" by blast
+
+    have rights_step:
+      "rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                   (zip (ifa # ifrest) (rr # rrest)))
+         = (a, p) # rights ?map_rest"
+      using ifa_eq Ref rr_eq by simp
+    have idxs_step:
+      "filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref) [0 ..< length (ifa # ifrest)]
+         = 0 # map Suc ?idxs_rest"
+      using idxs_split Ref by simp
+
+    have len_part:
+      "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                            (zip (ifa # ifrest) (rr # rrest))))
+         = length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                          [0 ..< length (ifa # ifrest)])"
+      using rights_step idxs_step IH_len by simp
+
+    have chars_part:
+      "\<forall>j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                            [0 ..< length (ifa # ifrest)]).
+          (rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                                   [0 ..< length (ifa # ifrest)]) ! j)
+            = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                                (zip (ifa # ifrest) (rr # rrest))) ! j)"
+    proof (intro allI impI)
+      fix j
+      assume j_lt_outer:
+        "j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                             [0 ..< length (ifa # ifrest)])"
+      show "(rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                                     [0 ..< length (ifa # ifrest)]) ! j)
+              = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                                  (zip (ifa # ifrest) (rr # rrest))) ! j)"
+      proof (cases j)
+        case 0
+        have idx0: "(filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                             [0 ..< length (ifa # ifrest)]) ! 0 = 0"
+          using idxs_step by simp
+        from idx0 0 rr_eq rights_step show ?thesis by simp
+      next
+        case (Suc k)
+        from j_lt_outer Suc idxs_step have k_lt: "k < length ?idxs_rest"
+          by (metis Suc_less_eq length_Cons length_map)
+        have idxk: "(filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
+                             [0 ..< length (ifa # ifrest)]) ! Suc k
+                      = Suc (?idxs_rest ! k)"
+          using idxs_step k_lt by simp
+        from idxk rights_step IH_chars[OF k_lt] Suc show ?thesis by simp
+      qed
+    qed
+
+    from len_part chars_part rrs_eq show ?thesis by simp
+  qed
+qed
+
+lemma rights_filter_zip_refs_chars:
+  fixes ifArgs :: "(string \<times> VarOrRef) list"
+    and refResults :: "(InterpError + (nat \<times> LValuePath list)) list"
+  defines "mapped \<equiv> map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
+                        (zip ifArgs refResults)"
+      and "idxs \<equiv> filter (\<lambda>i. snd (ifArgs ! i) = Ref) [0 ..< length ifArgs]"
+  assumes len_eq: "length ifArgs = length refResults"
+      and ref_inrs: "\<forall>i < length ifArgs.
+                       snd (ifArgs ! i) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p))"
+  shows "length (rights mapped) = length idxs \<and>
+         (\<forall>j < length idxs.
+             refResults ! (idxs ! j) = Inr (rights mapped ! j))"
+  using rights_filter_zip_refs_chars_aux[OF len_eq ref_inrs]
+  unfolding mapped_def idxs_def by blast
+
 (* If find_matching_arm succeeds, the result is the body of some arm in the list *)
 lemma find_matching_arm_in_set:
   assumes "find_matching_arm val arms = Inr rhs"
@@ -1889,7 +2195,8 @@ proof -
     using fun_info_matches_interp_fun_cong_env
             [OF pEnv_globals[symmetric] pEnv_ghost_globals[symmetric]
                 pEnv_funs[symmetric] pEnv_datatypes[symmetric] pEnv_dactors[symmetric]
-                pEnv_dactors_by_ty[symmetric] pEnv_ghost_dt[symmetric]]
+                pEnv_dactors_by_ty[symmetric] pEnv_ghost_dt[symmetric]
+                pEnv_tyvars[symmetric] pEnv_rt_tyvars[symmetric]]
     by auto
   have fes_tgt: "funs_exist_in_state ?clearedState ?pEnv"
     unfolding funs_exist_in_state_def
@@ -2389,6 +2696,102 @@ proof -
           using sme_new ext_partial step_eq
           unfolding sound_partial_arg_processing_result_def by auto
       qed
+    qed
+  qed
+qed
+
+(* If a single process_one_arg step succeeds, then the val-result was Inr (in
+   both Var and Ref clauses) and, for the Ref clause, the ref-result was Inr too. *)
+lemma process_one_arg_inr_inversion:
+  assumes "process_one_arg ((name, vor), refResult, valResult) (Inr state) = Inr state'"
+  shows "(\<exists>v. valResult = Inr v) \<and> (vor = Ref \<longrightarrow> (\<exists>a p. refResult = Inr (a, p)))"
+proof (cases vor)
+  case Var
+  show ?thesis using assms Var by (cases valResult) auto
+next
+  case Ref
+  show ?thesis
+  proof (cases refResult)
+    case (Inl err) with assms Ref show ?thesis by simp
+  next
+    case (Inr ap)
+    obtain a p where ap_eq: "ap = (a, p)" by (cases ap)
+    show ?thesis using assms Ref Inr ap_eq by (cases valResult) auto
+  qed
+qed
+
+(* Strengthening: if the entire fold succeeds, every val-result in the tuple
+   list is Inr, and every Ref-position's ref-result is Inr.
+
+   Stated by index over the formal parameters / refResults / valResults
+   (which are length-aligned by construction). The fold is over
+   zip ifArgs (zip refResults valResults), so we induct on this list. *)
+lemma fold_process_one_arg_inr_inversion:
+  assumes "fold process_one_arg (zip ifArgs (zip refResults valResults)) (Inr initState)
+             = Inr finalState"
+      and "length ifArgs = length refResults"
+      and "length ifArgs = length valResults"
+  shows "\<forall>i < length ifArgs.
+           (\<exists>v. valResults ! i = Inr v) \<and>
+           (snd (ifArgs ! i) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p)))"
+using assms proof (induction ifArgs arbitrary: refResults valResults initState)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons ifa ifrest)
+  from Cons.prems(2) obtain rr rrest where rr_eq: "refResults = rr # rrest"
+    by (cases refResults) auto
+  from Cons.prems(3) obtain vv vrest where vv_eq: "valResults = vv # vrest"
+    by (cases valResults) auto
+  obtain name vor where ifa_eq: "ifa = (name, vor)" by (cases ifa)
+
+  let ?step = "process_one_arg ((name, vor), rr, vv) (Inr initState)"
+  have fold_unfold:
+    "fold process_one_arg (zip (ifa # ifrest) (zip refResults valResults)) (Inr initState)
+       = fold process_one_arg (zip ifrest (zip rrest vrest)) ?step"
+    using rr_eq vv_eq ifa_eq by simp
+
+  \<comment> \<open>If ?step were Inl, the fold would stay Inl, contradicting Cons.prems(1).\<close>
+  have step_inr: "\<exists>s'. ?step = Inr s'"
+  proof (cases ?step)
+    case (Inl err)
+    show ?thesis
+      by (metis Cons.prems(1) Inl fold_process_one_arg_error fold_unfold) 
+  next
+    case (Inr s') then show ?thesis by blast
+  qed
+  then obtain s' where step_eq: "?step = Inr s'" by blast
+
+  \<comment> \<open>Apply the per-step inversion to the head. \<close>
+  from process_one_arg_inr_inversion[OF step_eq[unfolded ifa_eq]]
+  have head: "(\<exists>v. vv = Inr v) \<and> (vor = Ref \<longrightarrow> (\<exists>a p. rr = Inr (a, p)))" .
+
+  \<comment> \<open>The IH gives us the rest. \<close>
+  from fold_unfold step_eq Cons.prems(1)
+  have rest_fold: "fold process_one_arg (zip ifrest (zip rrest vrest)) (Inr s') = Inr finalState"
+    by simp
+  from Cons.prems(2) rr_eq have len_rrest: "length ifrest = length rrest" by simp
+  from Cons.prems(3) vv_eq have len_vrest: "length ifrest = length vrest" by simp
+  from Cons.IH[OF rest_fold len_rrest len_vrest]
+  have rest: "\<forall>i < length ifrest.
+                (\<exists>v. vrest ! i = Inr v) \<and>
+                (snd (ifrest ! i) = Ref \<longrightarrow> (\<exists>a p. rrest ! i = Inr (a, p)))" .
+
+  show ?case
+  proof (intro allI impI)
+    fix i assume i_lt: "i < length (ifa # ifrest)"
+    show "(\<exists>v. valResults ! i = Inr v) \<and>
+          (snd ((ifa # ifrest) ! i) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p)))"
+    proof (cases i)
+      case 0
+      from head ifa_eq show ?thesis using 0 rr_eq vv_eq by simp
+    next
+      case (Suc j)
+      from i_lt Suc have j_lt: "j < length ifrest" by simp
+      from rest j_lt have
+        "(\<exists>v. vrest ! j = Inr v) \<and>
+         (snd (ifrest ! j) = Ref \<longrightarrow> (\<exists>a p. rrest ! j = Inr (a, p)))" by simp
+      thus ?thesis using Suc rr_eq vv_eq by simp
     qed
   qed
 qed
