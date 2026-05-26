@@ -221,49 +221,47 @@ next
   proof (cases ty)
     case (CoreTy_Record fldTys)
     with Record.prems have
-      names_eq: "map fst pflds = map fst fldTys" and
-      flds_ok: "list_all (\<lambda>(name, p). case map_of fldTys name of
-                                        None \<Rightarrow> False
-                                      | Some fty \<Rightarrow> pattern_compatible env p fty)
-                         pflds"
+      flds_ok: "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+                          pflds fldTys"
       by auto
     \<comment> \<open>The substituted record type has the same field names, with each field's
         type substituted. \<close>
     let ?subst_fldTys = "map (\<lambda>(name, fty). (name, apply_subst subst fty)) fldTys"
     have subst_ty_eq: "apply_subst subst ty = CoreTy_Record ?subst_fldTys"
       using CoreTy_Record by simp
-    have subst_names: "map fst ?subst_fldTys = map fst fldTys"
-      by (induction fldTys) auto
-    have names_eq': "map fst pflds = map fst ?subst_fldTys"
-      using names_eq subst_names by simp
-    \<comment> \<open>For each (name, p) \<in> pflds, the IH gives subst-compatibility of p with
-        the substituted field type. \<close>
+    have lens_eq: "length pflds = length fldTys"
+      using flds_ok by (simp add: list_all2_lengthD)
+    \<comment> \<open>For each index i, the IH gives subst-compatibility of the i-th pattern
+        with the substituted i-th field type. \<close>
     have flds_ok':
-      "list_all (\<lambda>(name, p). case map_of ?subst_fldTys name of
-                              None \<Rightarrow> False
-                            | Some fty \<Rightarrow> pattern_compatible env p fty)
-                pflds"
-      unfolding list_all_iff
-    proof (intro ballI, clarify)
-      fix name p assume np_in: "(name, p) \<in> set pflds"
-      with flds_ok obtain fty where
-        lookup_orig: "map_of fldTys name = Some fty" and
-        pc_fty: "pattern_compatible env p fty"
-        by (auto simp: list_all_iff split: option.splits)
-      have lookup_subst:
-        "map_of ?subst_fldTys name = Some (apply_subst subst fty)"
-        using lookup_orig by (induction fldTys) auto
-      \<comment> \<open>IH on (name, p). \<close>
-      have ih_pc:
-        "pattern_compatible env p (apply_subst subst fty)"
-        by (meson CoreTy_Record Record.IH Record.prems(1) lookup_orig np_in pc_fty)
-      show "case map_of ?subst_fldTys name of
-              None \<Rightarrow> False
-            | Some fty' \<Rightarrow> pattern_compatible env p fty'"
-        using lookup_subst ih_pc by simp
+      "list_all2 (\<lambda>(pn, p) (fn, fty'). pn = fn \<and> pattern_compatible env p fty')
+                 pflds ?subst_fldTys"
+      unfolding list_all2_conv_all_nth
+    proof (intro conjI allI impI)
+      show "length pflds = length ?subst_fldTys" using lens_eq by simp
+    next
+      fix i assume i_lt: "i < length pflds"
+      let ?pf = "pflds ! i"
+      let ?ft = "fldTys ! i"
+      obtain pn p where pf_eq: "?pf = (pn, p)" by (cases ?pf)
+      obtain fn fty where ft_eq: "?ft = (fn, fty)" by (cases ?ft)
+      have pf_in: "?pf \<in> set pflds" using i_lt by simp
+      have ft_in: "?ft \<in> set fldTys" using i_lt lens_eq by simp
+      from flds_ok i_lt have
+        names_eq: "pn = fn" and
+        pc_p: "pattern_compatible env p fty"
+        using pf_eq ft_eq lens_eq by (auto simp: list_all2_conv_all_nth)
+      have ih_pc: "pattern_compatible env p (apply_subst subst fty)"
+        using Record.IH[OF CoreTy_Record pf_in ft_in pf_eq[symmetric] Record.prems(1) pc_p] .
+      have subst_nth: "?subst_fldTys ! i = (fn, apply_subst subst fty)"
+        using i_lt lens_eq ft_eq by simp
+      show "(case pflds ! i of (pn, p) \<Rightarrow>
+              \<lambda>(fn, fty'). pn = fn \<and> pattern_compatible env p fty')
+            (?subst_fldTys ! i)"
+        using pf_eq subst_nth names_eq ih_pc by simp
     qed
     show ?thesis
-      using subst_ty_eq names_eq' flds_ok' by simp
+      using subst_ty_eq flds_ok' by simp
   qed (use Record.prems in \<open>auto split: CoreType.splits\<close>)
 qed
 
