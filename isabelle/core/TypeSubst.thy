@@ -258,7 +258,6 @@ next
   qed
 qed
 
-
 (* Helper: map_of on zipped lists with mapped second component *)
 lemma map_of_zip_map:
   assumes "length vars = length tys"
