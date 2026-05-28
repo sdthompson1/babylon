@@ -198,12 +198,21 @@ definition no_extra_funs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow
       fmlookup (IS_Functions state) name = None"
 
 (* Non-constant, non-ghost local variables are in IS_Locals or IS_Refs.
-   (Globals are implicitly constant and are always in IS_Globals, not here.) *)
+   (This is a consequence of local_vars_exist_in_state.) *)
 definition non_consts_in_locals_or_refs :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "non_consts_in_locals_or_refs state env \<equiv>
     \<forall>name. fmlookup (TE_LocalVars env) name \<noteq> None \<and>
            name |\<notin>| TE_GhostLocals env \<and> name |\<notin>| TE_ConstLocals env \<longrightarrow>
       (fmlookup (IS_Locals state) name \<noteq> None \<or> fmlookup (IS_Refs state) name \<noteq> None)"
+
+(* Proof that local_vars_exist_in_state implies non_consts_in_locals_or_refs. *)
+lemma local_vars_exist_in_state_implies_non_consts_in_locals_or_refs:
+  assumes "local_vars_exist_in_state state env storeTyping"
+  shows "non_consts_in_locals_or_refs state env"
+  using assms
+  unfolding local_vars_exist_in_state_def non_consts_in_locals_or_refs_def
+            local_var_in_state_with_type_def
+  by (metis (lifting) option.exhaust option.simps(4))
 
 (* The interpreter's IS_ConstLocals matches the type environment's TE_ConstLocals,
    minus ghost names (which don't exist at runtime). *)
@@ -237,7 +246,6 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     no_extra_global_vars state env \<and>
     funs_exist_in_state state env \<and>
     no_extra_funs state env \<and>
-    non_consts_in_locals_or_refs state env \<and>
     const_locals_match state env \<and>
     store_well_typed state env storeTyping \<and>
     ty_args_well_formed state env"
@@ -257,7 +265,7 @@ proof -
           local_vars_exist_in_state_def global_vars_exist_in_state_def
           no_extra_local_vars_def no_extra_global_vars_def
           funs_exist_in_state_def no_extra_funs_def
-          non_consts_in_locals_or_refs_def const_locals_match_def
+          const_locals_match_def
           store_well_typed_def ty_args_well_formed_def
           local_var_in_state_with_type_def global_var_in_state_with_type_def
           rt_eq wk_eq
@@ -272,7 +280,7 @@ lemma state_matches_env_IS_World_irrelevant [simp]:
         local_vars_exist_in_state_def global_vars_exist_in_state_def
         no_extra_local_vars_def no_extra_global_vars_def
         funs_exist_in_state_def no_extra_funs_def
-        non_consts_in_locals_or_refs_def const_locals_match_def
+        const_locals_match_def
         store_well_typed_def ty_args_well_formed_def
         local_var_in_state_with_type_def global_var_in_state_with_type_def
         split: option.splits)

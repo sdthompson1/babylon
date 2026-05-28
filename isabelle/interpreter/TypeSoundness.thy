@@ -2234,7 +2234,9 @@ next
         have in_locals_or_refs:
           "fmlookup (IS_Locals state) varName \<noteq> None \<or>
            fmlookup (IS_Refs state) varName \<noteq> None"
-          unfolding state_matches_env_def non_consts_in_locals_or_refs_def by blast
+          unfolding state_matches_env_def non_consts_in_locals_or_refs_def
+          using local_vars_exist_in_state_implies_non_consts_in_locals_or_refs
+            non_consts_in_locals_or_refs_def by blast
         (* Variable has correct type in state as a local *)
         from local_lookup obtain localTy where
           local_lookup_eq: "fmlookup (TE_LocalVars env) varName = Some localTy" by auto
@@ -2780,28 +2782,6 @@ next
                 using old_sme env'_eq
                 unfolding state_matches_env_def no_extra_funs_def by simp
             next
-              (* non_consts_in_locals_or_refs: non-ghost non-const locals must be in
-                 IS_Locals or IS_Refs. varName is ghost so excluded. Others: same as before. *)
-              show "non_consts_in_locals_or_refs ?state' env'"
-                unfolding non_consts_in_locals_or_refs_def
-              proof (intro allI impI, elim conjE)
-                fix name
-                assume lk: "fmlookup (TE_LocalVars env') name \<noteq> None"
-                  and ng: "name |\<notin>| TE_GhostLocals env'"
-                  and nc: "name |\<notin>| TE_ConstLocals env'"
-                from ng env'_eq have "name \<noteq> varName" by auto
-                with lk env'_eq have "fmlookup (TE_LocalVars env) name \<noteq> None" by simp
-                moreover from ng env'_eq \<open>name \<noteq> varName\<close> have "name |\<notin>| TE_GhostLocals env" by auto
-                moreover from nc env'_eq \<open>name \<noteq> varName\<close> have "name |\<notin>| TE_ConstLocals env" by auto
-                ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
-                    fmlookup (IS_Refs state) name \<noteq> None"
-                  using old_sme unfolding state_matches_env_def non_consts_in_locals_or_refs_def
-                  by blast
-                with \<open>name \<noteq> varName\<close> show "fmlookup (IS_Locals ?state') name \<noteq> None \<or>
-                    fmlookup (IS_Refs ?state') name \<noteq> None"
-                  by simp
-              qed
-            next
               show "const_locals_match ?state' env'"
                 using old_sme env'_eq
                 unfolding state_matches_env_def const_locals_match_def by auto
@@ -2958,27 +2938,6 @@ next
                 using old_sme env'_eq
                 unfolding state_matches_env_def no_extra_funs_def by simp
             next
-              show "non_consts_in_locals_or_refs ?state' env'"
-                unfolding non_consts_in_locals_or_refs_def
-              proof (intro allI impI, elim conjE)
-                fix name
-                assume lk: "fmlookup (TE_LocalVars env') name \<noteq> None"
-                  and ng: "name |\<notin>| TE_GhostLocals env'"
-                  and nc: "name |\<notin>| TE_ConstLocals env'"
-                from ng env'_eq have "name \<noteq> varName" by auto
-                with lk env'_eq have "fmlookup (TE_LocalVars env) name \<noteq> None" by simp
-                moreover from ng env'_eq \<open>name \<noteq> varName\<close> have "name |\<notin>| TE_GhostLocals env" by auto
-                moreover from nc env'_eq \<open>name \<noteq> varName\<close>
-                have "name |\<notin>| TE_ConstLocals env" by (auto split: if_splits)
-                ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
-                    fmlookup (IS_Refs state) name \<noteq> None"
-                  using old_sme unfolding state_matches_env_def non_consts_in_locals_or_refs_def
-                  by blast
-                with \<open>name \<noteq> varName\<close> show "fmlookup (IS_Locals ?state') name \<noteq> None \<or>
-                    fmlookup (IS_Refs ?state') name \<noteq> None"
-                  by simp
-              qed
-            next
               show "const_locals_match ?state' env'"
                 using old_sme env'_eq
                 unfolding state_matches_env_def const_locals_match_def
@@ -3058,7 +3017,9 @@ next
               from old_sme in_locals not_ghost not_const
               have in_state: "fmlookup (IS_Locals state) baseName \<noteq> None
                               \<or> fmlookup (IS_Refs state) baseName \<noteq> None"
-                unfolding state_matches_env_def non_consts_in_locals_or_refs_def by blast
+                unfolding state_matches_env_def
+                using local_vars_exist_in_state_implies_non_consts_in_locals_or_refs
+                  non_consts_in_locals_or_refs_def by blast
               show "baseName |\<notin>| IS_ConstLocals state
                     \<and> (fmlookup (IS_Locals state) baseName \<noteq> None
                        \<or> fmlookup (IS_Refs state) baseName \<noteq> None)"
@@ -3130,7 +3091,9 @@ next
                 \<comment> \<open>var_fresh and var_not_ghost preconditions for state_matches_env_add_ref. \<close>
                 from "4.prems"(2) have wf: "tyenv_well_formed env" .
                 from old_sme have nc_invariant: "non_consts_in_locals_or_refs state env"
-                  unfolding state_matches_env_def by simp
+                  using local_vars_exist_in_state_implies_non_consts_in_locals_or_refs state_matches_env_def
+                  by blast
+
                 \<comment> \<open>We need varName \<notin> TE_LocalVars and varName \<notin> TE_GhostLocals. These come
                     from tyenv well-formedness applied to env'? No — env' adds varName to
                     TE_LocalVars, so we need that varName is fresh in env. Hmm — actually,
@@ -3277,31 +3240,6 @@ next
                   show "no_extra_funs ?state' env'"
                     using old_sme env'_writable_eq
                     unfolding state_matches_env_def no_extra_funs_def by simp
-                next
-                  show "non_consts_in_locals_or_refs ?state' env'"
-                    unfolding non_consts_in_locals_or_refs_def
-                  proof (intro allI impI, elim conjE)
-                    fix name
-                    assume lk: "fmlookup (TE_LocalVars env') name \<noteq> None"
-                      and ng: "name |\<notin>| TE_GhostLocals env'"
-                      and nc: "name |\<notin>| TE_ConstLocals env'"
-                    show "fmlookup (IS_Locals ?state') name \<noteq> None \<or>
-                          fmlookup (IS_Refs ?state') name \<noteq> None"
-                    proof (cases "name = varName")
-                      case True
-                      then show ?thesis by simp
-                    next
-                      case False
-                      from lk env'_writable_eq False have "fmlookup (TE_LocalVars env) name \<noteq> None" by simp
-                      moreover from ng env'_writable_eq False have "name |\<notin>| TE_GhostLocals env" by auto
-                      moreover from nc env'_writable_eq False have "name |\<notin>| TE_ConstLocals env" by auto
-                      ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
-                          fmlookup (IS_Refs state) name \<noteq> None"
-                        using old_sme
-                        unfolding state_matches_env_def non_consts_in_locals_or_refs_def by blast
-                      with False show ?thesis by simp
-                    qed
-                  qed
                 next
                   show "const_locals_match ?state' env'"
                     using old_sme env'_writable_eq
@@ -5521,11 +5459,6 @@ next
           show "no_extra_funs ?stateW env"
             using state_env
             unfolding state_matches_env_def no_extra_funs_def
-            by simp
-        next
-          show "non_consts_in_locals_or_refs ?stateW env"
-            using state_env
-            unfolding state_matches_env_def non_consts_in_locals_or_refs_def
             by simp
         next
           show "const_locals_match ?stateW env"

@@ -446,8 +446,8 @@ proof -
         using nc cn_other[OF False] by simp
       ultimately have "fmlookup (IS_Locals state) name \<noteq> None \<or>
                        fmlookup (IS_Refs state) name \<noteq> None"
-        using state_env
-        unfolding state_matches_env_def non_consts_in_locals_or_refs_def by blast
+        using state_env state_matches_env_def non_consts_in_locals_or_refs_def
+          local_vars_exist_in_state_implies_non_consts_in_locals_or_refs by blast
       then show ?thesis using False locals''_eq refs''_eq by simp
     qed
   qed
@@ -555,7 +555,9 @@ proof -
     nc_src: "non_consts_in_locals_or_refs state env" and
     cn_src: "const_locals_match state env" and
     swt_src: "store_well_typed state env storeTyping"
-    unfolding state_matches_env_def by blast+
+    unfolding state_matches_env_def 
+    using local_vars_exist_in_state_implies_non_consts_in_locals_or_refs
+    by blast+
 
   \<comment> \<open>1. local_vars_exist_in_state. \<close>
   have lv_tgt: "local_vars_exist_in_state state' env' storeTyping"
@@ -1607,8 +1609,8 @@ proof -
 
   (* 7. non_consts_in_locals_or_refs: unchanged *)
   moreover have "non_consts_in_locals_or_refs state' env"
-    using state_env locals'_eq refs'_eq
-    unfolding state_matches_env_def non_consts_in_locals_or_refs_def by simp
+    using calculation(1) local_vars_exist_in_state_implies_non_consts_in_locals_or_refs
+    by auto
 
   (* 8. const_locals_match: unchanged *)
   moreover have "const_locals_match state' env"
@@ -2588,7 +2590,8 @@ proof -
     cn_src: "const_locals_match state env" and
     swt_src: "store_well_typed state env storeTyping" and
     ta_src: "ty_args_well_formed state env"
-    unfolding state_matches_env_def by blast+
+    unfolding state_matches_env_def
+    using local_vars_exist_in_state_implies_non_consts_in_locals_or_refs by blast+
 
   \<comment> \<open>(a) Discharge value_has_type congruence for ground types. This is the
       replacement for the old value_has_type_cong_env step, which required
@@ -4397,7 +4400,8 @@ proof -
     cn_src: "const_locals_match state env" and
     swt_src: "store_well_typed state env storeTyping" and
     ta_src: "ty_args_well_formed state env"
-    unfolding state_matches_env_def by blast+
+    unfolding state_matches_env_def 
+    using local_vars_exist_in_state_implies_non_consts_in_locals_or_refs by blast+
 
   from post_env_mid have
     swt_post: "store_well_typed postCallState env_mid postStoreTyping"
