@@ -1,5 +1,6 @@
 theory ElabTermCorrectHelpers
-  imports ElabTerm ElabTypeCorrect ElabPatternCorrect "../core/CoreTypecheck" Unify3
+  imports ElabTerm ElabTypeCorrect ElabPatternCorrect Unify3
+    "../core/CoreTypecheck" "../core/TypeSubstPreservation"
 begin
 
 (* Weakening: extending the interval further preserves core_term_type.

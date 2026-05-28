@@ -1,12 +1,13 @@
-theory CoreTypeSubstInternal
-  imports CoreTypeSubstTerm
+theory TypeSubstHelpers
+  imports TypeSubstTerm
 begin
 
 (* Internal proof-engine for apply_subst_to_term_preserves_typing.
 
    This file's only purpose is to help prove apply_subst_to_term_preserves_typing 
-   (in CoreTypeSubst.thy). The heavyweight lemma here is core_term_type_subst_callee_env; 
-   the corollary in CoreTypeSubst.thy is the degenerate (caller = callee) case.
+   (in TypeSubstPreservation.thy). The heavyweight lemma here is 
+   core_term_type_subst_callee_env; the corollary in TypeSubstPreservation.thy
+   is the degenerate (caller = callee) case.
 
    The caller/callee asymmetry of apply_subst_to_callee_env dates from a
    previous design where statement-level type soundness substituted the
@@ -19,6 +20,111 @@ begin
 (* ========================================================================== *)
 (* Substitution on callee environments                                         *)
 (* ========================================================================== *)
+
+(* If a pattern is compatible with a type, it is compatible with that type
+   after substitution. (The reverse is not true if ty is a CoreTy_Var.) *)
+lemma pattern_compatible_apply_subst:
+  assumes "tyenv_well_formed env"
+      and "pattern_compatible env p ty"
+  shows "pattern_compatible env p (apply_subst subst ty)"
+  using assms
+proof (induction p ty rule: pattern_compatible.induct[case_names Wildcard Bool Int Variant Record, consumes 0])
+  case (Wildcard env uu)
+  then show ?case by simp
+next
+  case (Bool env uv ty)
+  then show ?case by (cases ty) auto
+next
+  case (Int env uw ty)
+  then show ?case by (cases ty) auto
+next
+  case (Variant env ctorName payloadPat ty)
+  from Variant.prems show ?case
+  proof (cases ty)
+    case (CoreTy_Datatype tyName tyArgs)
+    with Variant.prems obtain dtName tyvars payloadTy where
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
+      dt_eq: "tyName = dtName" and
+      len_eq: "length tyArgs = length tyvars" and
+      pc_payload: "pattern_compatible env payloadPat
+                     (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      by (auto split: option.splits prod.splits)
+    \<comment> \<open>The data-ctor's payload is well-kinded in an env whose tyvars are
+        exactly ctor's tyvars, hence its free vars are a subset. \<close>
+    have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+      using Variant.prems(1) ctor_lookup
+      unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
+    have tyvars_distinct: "distinct tyvars"
+      using Variant.prems(1) ctor_lookup
+      unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
+    have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
+      using is_well_kinded_type_tyvars_subset[OF payload_wk]
+      by (simp add: fset_of_list.rep_eq)
+    \<comment> \<open>Substitution composition: apply_subst subst commutes with the inner
+        tyvar-to-tyArgs subst, since payload free vars stay within tyvars. \<close>
+    have compose:
+      "apply_subst (fmap_of_list (zip tyvars (map (apply_subst subst) tyArgs))) payloadTy
+         = apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst] .
+    \<comment> \<open>IH on payloadPat. \<close>
+    have ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
+      using CoreTy_Datatype dt_eq by simp
+    have payload_subst:
+      "pattern_compatible env payloadPat
+         (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))"
+      using Variant.IH[OF ctor_lookup refl refl ty_eq Variant.prems(1) pc_payload] .
+    show ?thesis
+      using ctor_lookup CoreTy_Datatype dt_eq len_eq payload_subst compose by simp
+  qed (use Variant.prems in \<open>auto split: option.splits prod.splits\<close>)
+next
+  case (Record env pflds ty)
+  from Record.prems show ?case
+  proof (cases ty)
+    case (CoreTy_Record fldTys)
+    with Record.prems have
+      flds_ok: "list_all2 (\<lambda>(pn, p) (fn, fty). pn = fn \<and> pattern_compatible env p fty)
+                          pflds fldTys"
+      by auto
+    \<comment> \<open>The substituted record type has the same field names, with each field's
+        type substituted. \<close>
+    let ?subst_fldTys = "map (\<lambda>(name, fty). (name, apply_subst subst fty)) fldTys"
+    have subst_ty_eq: "apply_subst subst ty = CoreTy_Record ?subst_fldTys"
+      using CoreTy_Record by simp
+    have lens_eq: "length pflds = length fldTys"
+      using flds_ok by (simp add: list_all2_lengthD)
+    \<comment> \<open>For each index i, the IH gives subst-compatibility of the i-th pattern
+        with the substituted i-th field type. \<close>
+    have flds_ok':
+      "list_all2 (\<lambda>(pn, p) (fn, fty'). pn = fn \<and> pattern_compatible env p fty')
+                 pflds ?subst_fldTys"
+      unfolding list_all2_conv_all_nth
+    proof (intro conjI allI impI)
+      show "length pflds = length ?subst_fldTys" using lens_eq by simp
+    next
+      fix i assume i_lt: "i < length pflds"
+      let ?pf = "pflds ! i"
+      let ?ft = "fldTys ! i"
+      obtain pn p where pf_eq: "?pf = (pn, p)" by (cases ?pf)
+      obtain fn fty where ft_eq: "?ft = (fn, fty)" by (cases ?ft)
+      have pf_in: "?pf \<in> set pflds" using i_lt by simp
+      have ft_in: "?ft \<in> set fldTys" using i_lt lens_eq by simp
+      from flds_ok i_lt have
+        names_eq: "pn = fn" and
+        pc_p: "pattern_compatible env p fty"
+        using pf_eq ft_eq lens_eq by (auto simp: list_all2_conv_all_nth)
+      have ih_pc: "pattern_compatible env p (apply_subst subst fty)"
+        using Record.IH[OF CoreTy_Record pf_in ft_in pf_eq[symmetric] Record.prems(1) pc_p] .
+      have subst_nth: "?subst_fldTys ! i = (fn, apply_subst subst fty)"
+        using i_lt lens_eq ft_eq by simp
+      show "(case pflds ! i of (pn, p) \<Rightarrow>
+              \<lambda>(fn, fty'). pn = fn \<and> pattern_compatible env p fty')
+            (?subst_fldTys ! i)"
+        using pf_eq subst_nth names_eq ih_pc by simp
+    qed
+    show ?thesis
+      using subst_ty_eq flds_ok' by simp
+  qed (use Record.prems in \<open>auto split: CoreType.splits\<close>)
+qed
 
 (* At a function call site, the callee body was originally typechecked in an
    environment with the callee's own type variables (FI_TyArgs) in scope. To

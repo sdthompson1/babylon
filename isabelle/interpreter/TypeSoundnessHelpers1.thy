@@ -1,6 +1,6 @@
 theory TypeSoundnessHelpers1
   imports StateMatchesEnv CoreInterpPreservation
-          "../core/CoreStmtTypecheck" "../core/CoreTypeSubst"
+          "../core/CoreStmtTypecheck" "../core/TypeSubst"
 begin
 
 (*-----------------------------------------------------------------------------*)

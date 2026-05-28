@@ -1,21 +1,10 @@
-theory CoreTypeSubst
-  imports CoreTypeSubstInternal
+theory TypeSubstPreservation
+  imports TypeSubstHelpers
 begin
 
-(* Proof that substituting type variables in terms preserves typing.
-
-   The elaborator produces terms with metavariables (type variables used as
-   unifiable placeholders) that get progressively resolved by unification,
-   then substituted away. apply_subst_to_term (in CoreTypeSubstTerm.thy) is
-   the workhorse for that, and apply_subst_to_term_preserves_typing below is
-   the lemma ElabTermCorrect uses to show that the elaborator's substitutions
-   don't break typing.
-
-   The proof of apply_subst_to_term_preserves_typing reduces to a degenerate
-   (caller = callee) case of core_term_type_subst_callee_env in
-   CoreTypeSubstInternal.thy. 
-*)
-
+(* ========================================================================== *)
+(* A type preservation theorem for apply_subst_to_term. *)
+(* ========================================================================== *)
 
 (* If a term has type ty, then apply_subst_to_term subst tm has type
    (apply_subst subst ty), under the following conditions:

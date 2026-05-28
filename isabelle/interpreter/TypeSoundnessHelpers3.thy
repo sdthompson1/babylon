@@ -1,5 +1,5 @@
 theory TypeSoundnessHelpers3
-  imports TypeSoundnessHelpers2
+  imports TypeSoundnessHelpers2 "../core/TypeSubstTerm"
 begin
 
 (*-----------------------------------------------------------------------------*)

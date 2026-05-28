@@ -1,5 +1,5 @@
 theory ElabTypeCorrect
-  imports ElabType "../core/TypeSubst" "../core/CoreTyEnvWellFormed" "../core/CoreTypeSubst"
+  imports ElabType "../core/TypeSubst" "../core/CoreTyEnvWellFormed" "../core/TypeSubst"
 begin
 
 (* Correctness properties for elab_type:
