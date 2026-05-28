@@ -125,8 +125,8 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
         extern contract holds.\<close>
     (case IF_Body interpFun of
        Inl bodyStmts \<Rightarrow>
-         (\<exists>env'. core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts = Some env')
-     | Inr externFun \<Rightarrow> 
+         core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts \<noteq> None
+     | Inr externFun \<Rightarrow>
          extern_fun_contract env funInfo externFun))"
 
 (* Lemma: extern_fun_contract does not depend on TE_ProofGoal. *)

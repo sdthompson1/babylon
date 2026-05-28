@@ -2697,14 +2697,12 @@ proof -
       have body_match:
         "(case IF_Body interpFun of
             Inl bodyStmts \<Rightarrow>
-              (\<exists>env''. core_statement_list_type (body_env_for ?pEnv info') NotGhost bodyStmts
-                          = Some env'')
+              core_statement_list_type (body_env_for ?pEnv info') NotGhost bodyStmts \<noteq> None
           | Inr externFun \<Rightarrow> extern_fun_contract ?pEnv info' externFun)"
       proof (cases "IF_Body interpFun")
         case (Inl bodyStmts)
         with fim have
-          "\<exists>env''. core_statement_list_type (body_env_for env info') NotGhost bodyStmts
-                    = Some env''"
+          "core_statement_list_type (body_env_for env info') NotGhost bodyStmts \<noteq> None"
           unfolding fun_info_matches_interp_fun_def by simp
         moreover have "body_env_for env info' = body_env_for ?pEnv info'"
           by (rule body_env_for_cong[symmetric])
