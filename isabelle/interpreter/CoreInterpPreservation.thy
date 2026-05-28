@@ -2,27 +2,23 @@ theory CoreInterpPreservation
   imports CoreInterp
 begin
 
-(* The interpreter never modifies IS_Globals or IS_Functions. No clause in
-   interp_term, interp_term_list, interp_writable_lvalue, interp_statement,
-   interp_statement_list, or interp_function_call writes to those record
-   fields, and none of the supporting helpers (alloc_store, process_one_arg,
-   apply_ref_updates, perform_swap, restore_scope) do either. This lemma
-   threads that observation through the mutual recursion so that callers
-   can assume IS_Globals / IS_Functions are preserved across any successful
-   interpreter run. *)
+(* The interpreter never modifies IS_Globals, IS_Functions, or (externally
+   visible) IS_TyArgs. *)
 
-(* Helpers: IS_Globals / IS_Functions preservation for the leaf state
-   transformers used inside the interpreter. *)
+(* Helpers: IS_Globals / IS_Functions / IS_TyArgs preservation for the leaf
+   state transformers used inside the interpreter. *)
 
 lemma alloc_store_preserves_globals_funs:
   "IS_Globals (fst (alloc_store state v)) = IS_Globals state"
   "IS_Functions (fst (alloc_store state v)) = IS_Functions state"
+  "IS_TyArgs (fst (alloc_store state v)) = IS_TyArgs state"
   by (simp_all add: Let_def)
 
 lemma process_one_arg_preserves_globals_funs:
   assumes "process_one_arg arg (Inr state) = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
-         IS_Functions state' = IS_Functions state"
+         IS_Functions state' = IS_Functions state \<and>
+         IS_TyArgs state' = IS_TyArgs state"
 proof -
   obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
     by (cases arg) auto
@@ -80,7 +76,8 @@ lemma fold_process_one_arg_error:
 lemma fold_process_one_arg_preserves_globals_funs:
   assumes "fold process_one_arg args (Inr state) = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
-         IS_Functions state' = IS_Functions state"
+         IS_Functions state' = IS_Functions state \<and>
+         IS_TyArgs state' = IS_TyArgs state"
   using assms
 proof (induction args arbitrary: state)
   case Nil
@@ -97,7 +94,8 @@ next
     case (Inr state1)
     from process_one_arg_preserves_globals_funs[OF Inr]
     have step: "IS_Globals state1 = IS_Globals state \<and>
-                IS_Functions state1 = IS_Functions state" by simp
+                IS_Functions state1 = IS_Functions state \<and>
+                IS_TyArgs state1 = IS_TyArgs state" by simp
     from Inr Cons.prems have "fold process_one_arg args (Inr state1) = Inr state'"
       by simp
     from Cons.IH[OF this] step show ?thesis by simp
@@ -107,7 +105,8 @@ qed
 lemma apply_ref_updates_preserves_globals_funs:
   assumes "apply_ref_updates state lvs vs = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
-         IS_Functions state' = IS_Functions state"
+         IS_Functions state' = IS_Functions state \<and>
+         IS_TyArgs state' = IS_TyArgs state"
   using assms
 proof (induction state lvs vs arbitrary: state' rule: apply_ref_updates.induct)
   case (1 state)
@@ -130,7 +129,8 @@ qed simp_all
 lemma perform_swap_preserves_globals_funs:
   assumes "perform_swap state lv1 lv2 = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
-         IS_Functions state' = IS_Functions state"
+         IS_Functions state' = IS_Functions state \<and>
+         IS_TyArgs state' = IS_TyArgs state"
 proof -
   obtain addr1 path1 where lv1_eq: "lv1 = (addr1, path1)" by (cases lv1)
   obtain addr2 path2 where lv2_eq: "lv2 = (addr2, path2)" by (cases lv2)
@@ -142,59 +142,58 @@ qed
 lemma restore_scope_preserves_globals_funs:
   "IS_Globals (restore_scope old_state new_state) = IS_Globals new_state"
   "IS_Functions (restore_scope old_state new_state) = IS_Functions new_state"
+  "IS_TyArgs (restore_scope old_state new_state) = IS_TyArgs old_state"
   by simp_all
 
 
-(* The main preservation theorem: interp_* never changes IS_Globals / IS_Functions.
-
-   The six conjuncts are packaged into a single \<forall>-schematic statement so the
-   mutual induction rule
-     interp_term_interp_term_list_interp_writable_lvalue_interp_statement_
-     interp_statement_list_interp_function_call.induct
-   can be applied uniformly. Terms and lvalues don't produce states, so their
-   conjuncts are trivially True. *)
+(* Definitions used by the main theorem statement. *)
 
 definition exec_result_preserves_gf :: "'w InterpState \<Rightarrow> 'w ExecResult \<Rightarrow> bool" where
   "exec_result_preserves_gf state res \<equiv>
     (case res of
        Continue state' \<Rightarrow>
          IS_Globals state' = IS_Globals state \<and>
-         IS_Functions state' = IS_Functions state
+         IS_Functions state' = IS_Functions state \<and>
+         IS_TyArgs state' = IS_TyArgs state
      | Return state' _ \<Rightarrow>
          IS_Globals state' = IS_Globals state \<and>
-         IS_Functions state' = IS_Functions state)"
+         IS_Functions state' = IS_Functions state \<and>
+         IS_TyArgs state' = IS_TyArgs state)"
 
 lemma exec_result_preserves_gf_Continue:
   "exec_result_preserves_gf state (Continue state') \<longleftrightarrow>
      IS_Globals state' = IS_Globals state \<and>
-     IS_Functions state' = IS_Functions state"
+     IS_Functions state' = IS_Functions state \<and>
+     IS_TyArgs state' = IS_TyArgs state"
   by (simp add: exec_result_preserves_gf_def)
 
 lemma exec_result_preserves_gf_Return:
   "exec_result_preserves_gf state (Return state' v) \<longleftrightarrow>
      IS_Globals state' = IS_Globals state \<and>
-     IS_Functions state' = IS_Functions state"
+     IS_Functions state' = IS_Functions state \<and>
+     IS_TyArgs state' = IS_TyArgs state"
   by (simp add: exec_result_preserves_gf_def)
+
+
+(* The main preservation theorem: interp_* never changes IS_Globals /
+   IS_Functions / IS_TyArgs (externally).
+   All three statements are proved simultaneously via fuel induction.
+*)
 
 lemma interp_preserves_globals_funs:
   fixes dummy :: "'w InterpState"
-  shows "\<forall>(state :: 'w InterpState) (val :: CoreValue).
-           interp_term fuel state tm = Inr val \<longrightarrow> True"
-    and "\<forall>(state :: 'w InterpState) (vals :: CoreValue list).
-           interp_term_list fuel state tms = Inr vals \<longrightarrow> True"
-    and "\<forall>(state :: 'w InterpState) (ap :: nat \<times> LValuePath list).
-           interp_writable_lvalue fuel state lvTm = Inr ap \<longrightarrow> True"
-    and "\<forall>(state :: 'w InterpState) res.
+  shows "\<forall>(state :: 'w InterpState) res.
            interp_statement fuel state stmt = Inr res \<longrightarrow>
              exec_result_preserves_gf state res"
     and "\<forall>(state :: 'w InterpState) res.
            interp_statement_list fuel state stmts = Inr res \<longrightarrow>
              exec_result_preserves_gf state res"
     and "\<forall>(state :: 'w InterpState) state' retVal.
-           interp_function_call fuel state fnName argTms = Inr (state', retVal) \<longrightarrow>
+           interp_function_call fuel state fnName argTys argTms = Inr (state', retVal) \<longrightarrow>
              IS_Globals state' = IS_Globals state \<and>
-             IS_Functions state' = IS_Functions state"
-proof (induction fuel arbitrary: tm tms lvTm stmt stmts fnName argTms rule: nat.induct)
+             IS_Functions state' = IS_Functions state \<and>
+             IS_TyArgs state' = IS_TyArgs state"
+proof (induction fuel arbitrary: stmt stmts fnName argTys argTms rule: nat.induct)
   case zero
   {
     case 1 show ?case by simp
@@ -202,29 +201,14 @@ proof (induction fuel arbitrary: tm tms lvTm stmt stmts fnName argTms rule: nat.
     case 2 show ?case by simp
   next
     case 3 show ?case by simp
-  next
-    case 4 show ?case by simp
-  next
-    case 5 show ?case by simp
-  next
-    case 6 show ?case by simp
   }
 next
   case (Suc fuel)
-  note IH_term = Suc.IH(1)
-  note IH_term_list = Suc.IH(2)
-  note IH_lvalue = Suc.IH(3)
-  note IH_stmt = Suc.IH(4)
-  note IH_stmt_list = Suc.IH(5)
-  note IH_call = Suc.IH(6)
+  note IH_stmt = Suc.IH(1)
+  note IH_stmt_list = Suc.IH(2)
+  note IH_call = Suc.IH(3)
   {
-    case 1 show ?case by simp
-  next
-    case 2 show ?case by simp
-  next
-    case 3 show ?case by simp
-  next
-    case (4 stmt) show ?case
+    case (1 stmt) show ?case
     proof (intro allI impI)
       fix state :: "'w InterpState" and res :: "'w ExecResult"
       assume H: "interp_statement (Suc fuel) state stmt = Inr res"
@@ -253,11 +237,12 @@ next
               then obtain fn ts ams where init_eq: "initTm = CoreTm_FunctionCall fn ts ams" by blast
               from NotGhost Var H CoreStmt_VarDecl init_eq
               obtain newState initVal where
-                call: "interp_function_call fuel state fn ams = Inr (newState, initVal)"
+                call: "interp_function_call fuel state fn ts ams = Inr (newState, initVal)"
                 by (auto split: sum.splits prod.splits)
               from IH_call call
               have call_gf: "IS_Globals newState = IS_Globals state \<and>
-                             IS_Functions newState = IS_Functions state"
+                             IS_Functions newState = IS_Functions state \<and>
+                             IS_TyArgs newState = IS_TyArgs state"
                 by blast
               let ?alloc = "alloc_store newState initVal"
               from NotGhost Var H CoreStmt_VarDecl init_eq call
@@ -269,6 +254,7 @@ next
                 by (simp add: case_prod_beta)
               have alloc_gf: "IS_Globals (fst ?alloc) = IS_Globals newState"
                              "IS_Functions (fst ?alloc) = IS_Functions newState"
+                             "IS_TyArgs (fst ?alloc) = IS_TyArgs newState"
                 by (simp_all add: alloc_store_preserves_globals_funs)
               from res_eq alloc_gf call_gf show ?thesis
                 by (simp add: exec_result_preserves_gf_Continue)
@@ -287,6 +273,7 @@ next
                 by (cases initTm; simp_all add: case_prod_beta)
               have "IS_Globals (fst ?alloc) = IS_Globals state"
                    "IS_Functions (fst ?alloc) = IS_Functions state"
+                   "IS_TyArgs (fst ?alloc) = IS_TyArgs state"
                 by (simp_all add: alloc_store_preserves_globals_funs)
               with res_eq show ?thesis
                 by (simp add: exec_result_preserves_gf_Continue)
@@ -317,6 +304,7 @@ next
                 by (simp add: case_prod_beta)
               have "IS_Globals (fst ?alloc) = IS_Globals state"
                    "IS_Functions (fst ?alloc) = IS_Functions state"
+                   "IS_TyArgs (fst ?alloc) = IS_TyArgs state"
                 by (simp_all add: alloc_store_preserves_globals_funs)
               with res_eq show ?thesis
                 by (simp add: exec_result_preserves_gf_Continue)
@@ -355,11 +343,12 @@ next
             then obtain fn ts ams where rhs_eq: "rhsTm = CoreTm_FunctionCall fn ts ams" by blast
             from NotGhost H CoreStmt_Assign lv rhs_eq
             obtain newState rhsVal where
-              call: "interp_function_call fuel state fn ams = Inr (newState, rhsVal)"
+              call: "interp_function_call fuel state fn ts ams = Inr (newState, rhsVal)"
               by (auto split: sum.splits prod.splits)
             from IH_call call
             have call_gf: "IS_Globals newState = IS_Globals state \<and>
-                           IS_Functions newState = IS_Functions state"
+                           IS_Functions newState = IS_Functions state \<and>
+                           IS_TyArgs newState = IS_TyArgs state"
               by blast
             from NotGhost H CoreStmt_Assign lv rhs_eq call
             obtain newVal where
@@ -451,12 +440,14 @@ next
                 case (Continue state1)
                 from body_gf Continue
                 have gf1: "IS_Globals state1 = IS_Globals state \<and>
-                           IS_Functions state1 = IS_Functions state"
+                           IS_Functions state1 = IS_Functions state \<and>
+                           IS_TyArgs state1 = IS_TyArgs state"
                   by (simp add: exec_result_preserves_gf_Continue)
                 let ?rs = "restore_scope state state1"
                 have rs_gf:
                   "IS_Globals ?rs = IS_Globals state"
                   "IS_Functions ?rs = IS_Functions state"
+                  "IS_TyArgs ?rs = IS_TyArgs state"
                   using gf1 by (simp_all add: restore_scope_preserves_globals_funs)
                 from NotGhost CoreStmt_While H cv CV_Bool True body Continue
                 have rec_eq: "interp_statement fuel ?rs
@@ -470,7 +461,8 @@ next
                 case (Return state1 v)
                 from body_gf Return
                 have gf1: "IS_Globals state1 = IS_Globals state \<and>
-                           IS_Functions state1 = IS_Functions state"
+                           IS_Functions state1 = IS_Functions state \<and>
+                           IS_TyArgs state1 = IS_TyArgs state"
                   by (simp add: exec_result_preserves_gf_Return)
                 from NotGhost CoreStmt_While H cv CV_Bool True body Return
                 have res_eq: "res = Return (restore_scope state state1) v"
@@ -516,7 +508,8 @@ next
             case (Continue state1)
             from body_gf Continue
             have gf1: "IS_Globals state1 = IS_Globals state \<and>
-                       IS_Functions state1 = IS_Functions state"
+                       IS_Functions state1 = IS_Functions state \<and>
+                       IS_TyArgs state1 = IS_TyArgs state"
               by (simp add: exec_result_preserves_gf_Continue)
             from NotGhost CoreStmt_Match H sv arm body Continue
             have res_eq: "res = Continue (restore_scope state state1)" by simp
@@ -527,7 +520,8 @@ next
             case (Return state1 v)
             from body_gf Return
             have gf1: "IS_Globals state1 = IS_Globals state \<and>
-                       IS_Functions state1 = IS_Functions state"
+                       IS_Functions state1 = IS_Functions state \<and>
+                       IS_TyArgs state1 = IS_TyArgs state"
               by (simp add: exec_result_preserves_gf_Return)
             from NotGhost CoreStmt_Match H sv arm body Return
             have res_eq: "res = Return (restore_scope state state1) v" by simp
@@ -563,7 +557,7 @@ next
       qed
     qed
   next
-    case (5 stmts) show ?case
+    case (2 stmts) show ?case
     proof (intro allI impI)
       fix state :: "'w InterpState" and res :: "'w ExecResult"
       assume H: "interp_statement_list (Suc fuel) state stmts = Inr res"
@@ -582,7 +576,8 @@ next
           case (Continue state1)
           from IH_stmt r1 Continue
           have gf1: "IS_Globals state1 = IS_Globals state \<and>
-                     IS_Functions state1 = IS_Functions state"
+                     IS_Functions state1 = IS_Functions state \<and>
+                     IS_TyArgs state1 = IS_TyArgs state"
             by (force simp: exec_result_preserves_gf_Continue)
           from Cons H r1 Continue
           have rec: "interp_statement_list fuel state1 rest = Inr res" by simp
@@ -593,7 +588,8 @@ next
           case (Return state1 v)
           from IH_stmt r1 Return
           have gf1: "IS_Globals state1 = IS_Globals state \<and>
-                     IS_Functions state1 = IS_Functions state"
+                     IS_Functions state1 = IS_Functions state \<and>
+                     IS_TyArgs state1 = IS_TyArgs state"
             by (force simp: exec_result_preserves_gf_Return)
           from Cons H r1 Return have "res = Return state1 v" by simp
           with gf1 show ?thesis by (simp add: exec_result_preserves_gf_Return)
@@ -601,38 +597,46 @@ next
       qed
     qed
   next
-    case (6 fnName argTms) show ?case
+    case (3 fnName argTys argTms) show ?case
     proof (intro allI impI)
       fix state :: "'w InterpState" and state' :: "'w InterpState" and retVal
-      assume H: "interp_function_call (Suc fuel) state fnName argTms = Inr (state', retVal)"
+      assume H: "interp_function_call (Suc fuel) state fnName argTys argTms = Inr (state', retVal)"
       \<comment> \<open>Unfold the function-call body enough to name each intermediate state. \<close>
       obtain f where f_lookup: "fmlookup (IS_Functions state) fnName = Some f"
         using H by (cases "fmlookup (IS_Functions state) fnName") simp_all
       from H f_lookup have len_eq: "length argTms = length (IF_Args f)"
         by (cases "length argTms = length (IF_Args f)") simp_all
+      from H f_lookup len_eq have tyLen_eq: "length argTys = length (IF_TyArgs f)"
+        by (cases "length argTys = length (IF_TyArgs f)") simp_all
       let ?refResults = "map (interp_writable_lvalue fuel state) argTms"
       let ?valResults = "map (interp_term fuel state) argTms"
       let ?argTuples = "zip (IF_Args f) (zip ?refResults ?valResults)"
+      let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
       let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                                     IS_ConstLocals := {||} \<rparr>"
+                                     IS_ConstLocals := {||},
+                                     IS_TyArgs := ?calleeTyArgs \<rparr>"
       have cleared_gf:
         "IS_Globals ?clearedState = IS_Globals state"
         "IS_Functions ?clearedState = IS_Functions state"
         by simp_all
       obtain preCallState where
         fold_eq: "fold process_one_arg ?argTuples (Inr ?clearedState) = Inr preCallState"
-        using H f_lookup len_eq
+        using H f_lookup len_eq tyLen_eq
         by (cases "fold process_one_arg ?argTuples (Inr ?clearedState)") (simp_all add: Let_def)
       from fold_process_one_arg_preserves_globals_funs[OF fold_eq] cleared_gf
       have pre_gf: "IS_Globals preCallState = IS_Globals state \<and>
                     IS_Functions preCallState = IS_Functions state"
         by simp
+      \<comment> \<open>For the Babylon-body branch, we don't need IS_TyArgs preCallState = IS_TyArgs state
+          (in fact it isn't — the cleared state installs ?calleeTyArgs). The interpreter's
+          return value goes through restore_scope, which puts the caller's IS_TyArgs back. \<close>
       show "IS_Globals state' = IS_Globals state \<and>
-            IS_Functions state' = IS_Functions state"
+            IS_Functions state' = IS_Functions state \<and>
+            IS_TyArgs state' = IS_TyArgs state"
       proof (cases "IF_Body f")
         case (Inl bodyStmts)
         \<comment> \<open>Babylon body. \<close>
-        from H f_lookup len_eq fold_eq Inl
+        from H f_lookup len_eq tyLen_eq fold_eq Inl
         obtain bodyRes where bodyEval:
           "interp_statement_list fuel preCallState bodyStmts = Inr bodyRes"
           by (cases "interp_statement_list fuel preCallState bodyStmts")
@@ -640,7 +644,7 @@ next
         show ?thesis
         proof (cases bodyRes)
           case (Continue _)
-          with H f_lookup len_eq fold_eq Inl bodyEval show ?thesis
+          with H f_lookup len_eq tyLen_eq fold_eq Inl bodyEval show ?thesis
             by (simp add: Let_def)
         next
           case (Return postCallState bodyRetVal)
@@ -648,7 +652,7 @@ next
           have body_gf: "IS_Globals postCallState = IS_Globals preCallState \<and>
                          IS_Functions postCallState = IS_Functions preCallState"
             by (force simp: exec_result_preserves_gf_Return)
-          from H f_lookup len_eq fold_eq Inl bodyEval Return
+          from H f_lookup len_eq tyLen_eq fold_eq Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
             by (simp add: Let_def)
           from state'_eq body_gf pre_gf
@@ -669,8 +673,9 @@ next
         have stateW_gf:
           "IS_Globals ?stateW = IS_Globals state"
           "IS_Functions ?stateW = IS_Functions state"
+          "IS_TyArgs ?stateW = IS_TyArgs state"
           by simp_all
-        from H f_lookup len_eq fold_eq Inr ext_eq
+        from H f_lookup len_eq tyLen_eq fold_eq Inr ext_eq
         obtain finalState where final_eq:
           "apply_ref_updates ?stateW ?refs refUpdates = Inr finalState"
           and state'_eq: "state' = finalState" and "retVal = externRetVal"
@@ -685,50 +690,97 @@ qed
 
 (* Convenient corollaries that match how callers use them. *)
 
-lemma interp_statement_list_preserves_globals:
+corollary interp_statement_list_preserves_globals:
   assumes "interp_statement_list fuel state stmts = Inr (Continue state')"
   shows "IS_Globals state' = IS_Globals state"
 proof -
-  from interp_preserves_globals_funs(5)[of fuel stmts] assms
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
   have "exec_result_preserves_gf state (Continue state')" by blast
   thus ?thesis by (simp add: exec_result_preserves_gf_Continue)
 qed
 
-lemma interp_statement_list_preserves_functions:
+corollary interp_statement_list_preserves_functions:
   assumes "interp_statement_list fuel state stmts = Inr (Continue state')"
   shows "IS_Functions state' = IS_Functions state"
 proof -
-  from interp_preserves_globals_funs(5)[of fuel stmts] assms
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
   have "exec_result_preserves_gf state (Continue state')" by blast
   thus ?thesis by (simp add: exec_result_preserves_gf_Continue)
 qed
 
-lemma interp_statement_list_return_preserves_globals:
+corollary interp_statement_list_return_preserves_globals:
   assumes "interp_statement_list fuel state stmts = Inr (Return state' retVal)"
   shows "IS_Globals state' = IS_Globals state"
 proof -
-  from interp_preserves_globals_funs(5)[of fuel stmts] assms
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
   have "exec_result_preserves_gf state (Return state' retVal)" by blast
   thus ?thesis by (simp add: exec_result_preserves_gf_Return)
 qed
 
-lemma interp_statement_list_return_preserves_functions:
+corollary interp_statement_list_return_preserves_functions:
   assumes "interp_statement_list fuel state stmts = Inr (Return state' retVal)"
   shows "IS_Functions state' = IS_Functions state"
 proof -
-  from interp_preserves_globals_funs(5)[of fuel stmts] assms
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
   have "exec_result_preserves_gf state (Return state' retVal)" by blast
   thus ?thesis by (simp add: exec_result_preserves_gf_Return)
 qed
 
-lemma interp_function_call_preserves_globals:
-  assumes "interp_function_call fuel state fnName argTms = Inr (state', retVal)"
+corollary interp_function_call_preserves_globals:
+  assumes "interp_function_call fuel state fnName argTys argTms = Inr (state', retVal)"
   shows "IS_Globals state' = IS_Globals state"
-  using interp_preserves_globals_funs(6)[of fuel fnName argTms] assms by blast
+  using interp_preserves_globals_funs(3)[of fuel fnName argTys argTms] assms by blast
 
-lemma interp_function_call_preserves_functions:
-  assumes "interp_function_call fuel state fnName argTms = Inr (state', retVal)"
+corollary interp_function_call_preserves_functions:
+  assumes "interp_function_call fuel state fnName argTys argTms = Inr (state', retVal)"
   shows "IS_Functions state' = IS_Functions state"
-  using interp_preserves_globals_funs(6)[of fuel fnName argTms] assms by blast
+  using interp_preserves_globals_funs(3)[of fuel fnName argTys argTms] assms by blast
+
+(* IS_TyArgs corollaries: same pattern. interp_statement and interp_statement_list
+   preserve IS_TyArgs across both Continue and Return; interp_function_call
+   restores the caller's IS_TyArgs via restore_scope. These are the lemmas to cite
+   when discharging the IS_TyArgs preservation clause of sound_statement_result
+   and sound_function_call_result. *)
+
+corollary interp_statement_preserves_IS_TyArgs_Continue:
+  assumes "interp_statement fuel state stmt = Inr (Continue state')"
+  shows "IS_TyArgs state' = IS_TyArgs state"
+proof -
+  from interp_preserves_globals_funs(1)[of fuel stmt] assms
+  have "exec_result_preserves_gf state (Continue state')" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Continue)
+qed
+
+corollary interp_statement_preserves_IS_TyArgs_Return:
+  assumes "interp_statement fuel state stmt = Inr (Return state' retVal)"
+  shows "IS_TyArgs state' = IS_TyArgs state"
+proof -
+  from interp_preserves_globals_funs(1)[of fuel stmt] assms
+  have "exec_result_preserves_gf state (Return state' retVal)" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Return)
+qed
+
+corollary interp_statement_list_preserves_IS_TyArgs_Continue:
+  assumes "interp_statement_list fuel state stmts = Inr (Continue state')"
+  shows "IS_TyArgs state' = IS_TyArgs state"
+proof -
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
+  have "exec_result_preserves_gf state (Continue state')" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Continue)
+qed
+
+corollary interp_statement_list_preserves_IS_TyArgs_Return:
+  assumes "interp_statement_list fuel state stmts = Inr (Return state' retVal)"
+  shows "IS_TyArgs state' = IS_TyArgs state"
+proof -
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
+  have "exec_result_preserves_gf state (Return state' retVal)" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Return)
+qed
+
+corollary interp_function_call_preserves_IS_TyArgs:
+  assumes "interp_function_call fuel state fnName argTys argTms = Inr (state', retVal)"
+  shows "IS_TyArgs state' = IS_TyArgs state"
+  using interp_preserves_globals_funs(3)[of fuel fnName argTys argTms] assms by blast
 
 end

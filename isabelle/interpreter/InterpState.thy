@@ -15,6 +15,7 @@ type_synonym 'w ExternFunc = "'w \<Rightarrow> CoreValue list \<Rightarrow> 'w \
 
 (* Function info for the interpreter *)
 record 'w InterpFun =
+  IF_TyArgs :: "nat list"
   IF_Args :: "(string \<times> VarOrRef) list"
   IF_Body :: "CoreStatement list + 'w ExternFunc"
   IF_Impure :: bool
@@ -40,6 +41,10 @@ record 'world InterpState =
      names appearing in IS_Locals \<union> IS_Refs; globals (IS_Globals) are
      implicitly read-only and do not need to be listed here. *)
   IS_ConstLocals :: "string fset"
+
+  (* Runtime type-variable bindings for the current function frame.
+     Maps each type parameter (by ID) to a ground CoreType. *)
+  IS_TyArgs :: "(nat, CoreType) fmap"
 
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"

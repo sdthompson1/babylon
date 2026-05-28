@@ -135,6 +135,35 @@ lemma is_runtime_type_cong_env:
    is_runtime_type env' ty = is_runtime_type env ty"
   by (induction ty) (auto simp: list_all_iff)
 
+(* For ground types (no type variables), is_runtime_type doesn't consult
+   TE_RuntimeTypeVars at all — the CoreTy_Var case is unreachable. So changing
+   that field is irrelevant. Only TE_GhostDatatypes still matters. *)
+lemma is_runtime_type_ground_cong_env:
+  assumes ground: "type_tyvars ty = {}"
+      and gd_eq:  "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+  shows "is_runtime_type env' ty = is_runtime_type env ty"
+using ground proof (induction ty)
+  case (CoreTy_Datatype nm tyargs)
+  from CoreTy_Datatype.prems have args_ground: "\<forall>t \<in> set tyargs. type_tyvars t = {}"
+    by auto
+  have IH: "\<And>t. t \<in> set tyargs \<Longrightarrow> is_runtime_type env' t = is_runtime_type env t"
+    using CoreTy_Datatype.IH args_ground by auto
+  hence "list_all (is_runtime_type env') tyargs = list_all (is_runtime_type env) tyargs"
+    by (induction tyargs) auto
+  thus ?case using gd_eq by auto
+next
+  case (CoreTy_Record flds)
+  from CoreTy_Record.prems have flds_ground: "\<forall>(nm, t) \<in> set flds. type_tyvars t = {}"
+    by (auto simp: case_prod_beta)
+  have IH: "\<And>t. t \<in> snd ` set flds \<Longrightarrow> is_runtime_type env' t = is_runtime_type env t"
+    using CoreTy_Record.IH flds_ground by auto
+  hence "list_all (is_runtime_type env') (map snd flds) = list_all (is_runtime_type env) (map snd flds)"
+    by (induction flds) auto
+  thus ?case by auto
+next
+  case (CoreTy_Var n) thus ?case by simp
+qed auto
+
 lemma is_runtime_type_TE_ConstLocals_irrelevant [simp]:
   "is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty"
   using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp

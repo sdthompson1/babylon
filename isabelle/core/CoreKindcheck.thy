@@ -167,6 +167,37 @@ next
   then show ?case by auto
 qed auto
 
+(* For ground types, is_well_kinded doesn't consult TE_TypeVars at all — the
+   CoreTy_Var case is unreachable. So changing that field is irrelevant.
+   Only TE_Datatypes still matters. *)
+lemma is_well_kinded_ground_cong_env:
+  assumes ground: "type_tyvars ty = {}"
+      and dt_eq:  "TE_Datatypes env' = TE_Datatypes env"
+  shows "is_well_kinded env' ty = is_well_kinded env ty"
+using ground proof (induction ty)
+  case (CoreTy_Datatype name argTypes)
+  from CoreTy_Datatype.prems have args_ground: "\<forall>t \<in> set argTypes. type_tyvars t = {}"
+    by auto
+  have IH: "\<And>t. t \<in> set argTypes \<Longrightarrow> is_well_kinded env' t = is_well_kinded env t"
+    using CoreTy_Datatype.IH args_ground by auto
+  hence "list_all (is_well_kinded env') argTypes = list_all (is_well_kinded env) argTypes"
+    by (induction argTypes) auto
+  thus ?case using dt_eq by (auto split: option.splits)
+next
+  case (CoreTy_Record flds)
+  from CoreTy_Record.prems have flds_ground: "\<forall>(nm, t) \<in> set flds. type_tyvars t = {}"
+    by (auto simp: case_prod_beta)
+  have IH: "\<And>t. t \<in> snd ` set flds \<Longrightarrow> is_well_kinded env' t = is_well_kinded env t"
+    using CoreTy_Record.IH flds_ground by auto
+  hence "list_all (is_well_kinded env') (map snd flds) = list_all (is_well_kinded env) (map snd flds)"
+    by (induction flds) auto
+  thus ?case by auto
+next
+  case (CoreTy_Array elemTy dims) thus ?case by auto
+next
+  case (CoreTy_Var n) thus ?case by simp
+qed auto
+
 lemma is_well_kinded_TE_ConstLocals_irrelevant [simp]:
   "is_well_kinded (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_well_kinded env ty"
   using is_well_kinded_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp

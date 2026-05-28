@@ -252,6 +252,17 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     type_at_path env elemTy rest"
 | "type_at_path _ _ (_ # _) = None"
 
+(* Lemma: type_at_path does not depend on TE_ProofGoal. *)
+lemma type_at_path_TE_ProofGoal_irrelevant [simp]:
+  "type_at_path (env \<lparr> TE_ProofGoal := g \<rparr>) ty p = type_at_path env ty p"
+proof (induction p arbitrary: ty)
+  case Nil then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+qed
+
 
 (* ========================================================================== *)
 (* Store and scope operations *)
@@ -273,6 +284,7 @@ fun restore_scope :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> 
     new_state \<lparr> IS_Locals := IS_Locals old_state,
                 IS_Refs := IS_Refs old_state,
                 IS_ConstLocals := IS_ConstLocals old_state,
+                IS_TyArgs := IS_TyArgs old_state,
                 IS_Store := take (length (IS_Store old_state)) (IS_Store new_state) \<rparr>"
 
 (* Exchange values at two lvalue locations *)
@@ -360,7 +372,7 @@ function interp_term :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm
   and interp_writable_lvalue :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
   and interp_statement :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement \<Rightarrow> InterpError + 'w ExecResult"
   and interp_statement_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement list \<Rightarrow> InterpError + 'w ExecResult"
-  and interp_function_call :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> string \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)"
+  and interp_function_call :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)"
 where
   (* Interpret a term *)
   "interp_term 0 _ _ = Inl InsufficientFuel"
@@ -430,7 +442,7 @@ where
   (* Function call *)
 | "interp_term (Suc fuel) state (CoreTm_FunctionCall fnName argTypes argTms) =
     (if is_pure_fun state fnName then
-      (case interp_function_call fuel state fnName argTms of
+      (case interp_function_call fuel state fnName argTypes argTms of
         \<comment> \<open>Pure functions don't change the state, so we can ignore the new state here\<close>
         Inr (newState, retVal) \<Rightarrow> Inr retVal
       | Inl err \<Rightarrow> Inl err)
@@ -575,8 +587,8 @@ where
         We remove varName from IS_ConstLocals in case it was previously a const
         local (now shadowed by this fresh non-const declaration). \<close>
     (case (case initialTm of
-             CoreTm_FunctionCall fnName _ argTms \<Rightarrow>
-               interp_function_call fuel state fnName argTms
+             CoreTm_FunctionCall fnName argTys argTms \<Rightarrow>
+               interp_function_call fuel state fnName argTys argTms
            | _ \<Rightarrow>
                (case interp_term fuel state initialTm of
                   Inr initialVal \<Rightarrow> Inr (state, initialVal)
@@ -630,8 +642,8 @@ where
         \<comment> \<open>Compute new state (after any function call) and rhs value\<close>
         (case
           (case rhsTm of
-            CoreTm_FunctionCall fnName _ argTms \<Rightarrow>
-              interp_function_call fuel state fnName argTms
+            CoreTm_FunctionCall fnName argTys argTms \<Rightarrow>
+              interp_function_call fuel state fnName argTys argTms
           | _ \<Rightarrow>
               (case interp_term fuel state rhsTm of
                 Inr rhsVal \<Rightarrow> Inr (state, rhsVal)
@@ -723,18 +735,26 @@ where
     | Inr (Return state' retVal) \<Rightarrow> Inr (Return state' retVal))"
 
   (* Interpret a function call *)
-| "interp_function_call 0 _ _ _ = Inl InsufficientFuel"
-| "interp_function_call (Suc fuel) state fnName argTms =
+| "interp_function_call 0 _ _ _ _ = Inl InsufficientFuel"
+| "interp_function_call (Suc fuel) state fnName argTys argTms =
     (case fmlookup (IS_Functions state) fnName of
       Some f \<Rightarrow>
-        (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of args\<close>
-        else 
+        (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
+        else if length argTys \<noteq> length (IF_TyArgs f) then Inl TypeError  \<comment> \<open>wrong number of type args\<close>
+        else
             let refResults = map (interp_writable_lvalue fuel state) argTms;
                 valResults = map (interp_term fuel state) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
+                \<comment> \<open>Resolve each argTy against the caller's IS_TyArgs (which is
+                    ground by the well-formedness invariant) before binding it.
+                    This gives the callee a fully ground IS_TyArgs. \<close>
+                calleeTyArgs = fmap_of_list
+                  (zip (IF_TyArgs f)
+                       (map (apply_subst (IS_TyArgs state)) argTys));
                 clearedState = state \<lparr> IS_Locals := fmempty,
                                           IS_Refs := fmempty,
-                                          IS_ConstLocals := {||} \<rparr>
+                                          IS_ConstLocals := {||},
+                                          IS_TyArgs := calleeTyArgs \<rparr>
             in
               (case fold process_one_arg argTuples (Inr clearedState) of
                 Inl err \<Rightarrow> Inl err

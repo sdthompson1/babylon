@@ -79,6 +79,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
             length tyvars = length argTypes \<and>
             list_all (is_well_kinded env) argTypes \<and>
             list_all (is_runtime_type env) argTypes \<and>
+            list_all (\<lambda>a. type_tyvars a = {}) argTypes \<and>
             dty1 |\<notin>| TE_GhostDatatypes env \<and>
             value_has_type env payload
                 (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy))
@@ -89,6 +90,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
       CoreTy_Array elemTy dims \<Rightarrow>
         is_well_kinded env elemTy \<and>
         is_runtime_type env elemTy \<and>
+        type_tyvars elemTy = {} \<and>
         (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy) \<and>
         array_dims_well_kinded dims \<and>
         fmap_matches_sizes sizes valuesMap \<and>
@@ -177,6 +179,205 @@ qed
 
 
 (* ========================================================================== *)
+(* Value types are well-kinded, runtime, and ground. *)
+(* ========================================================================== *)
+
+lemma value_has_type_well_kinded:
+  assumes "value_has_type env val ty"
+      and "tyenv_well_formed env"
+  shows "is_well_kinded env ty"
+using assms proof (induction val arbitrary: ty)
+  case (CV_Bool b)
+  then show ?case by simp
+next
+  case (CV_FiniteInt sign bits i)
+  then show ?case by simp
+next
+  case (CV_Record fieldValues)
+  then obtain fieldTypes where
+    ty_eq: "ty = CoreTy_Record fieldTypes" and
+    distinct_names: "distinct (map fst fieldTypes)" and
+    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+             fieldValues fieldTypes"
+    by (cases ty) auto
+  have "list_all (is_well_kinded env) (map snd fieldTypes)"
+    unfolding list_all_iff
+  proof
+    fix fldTy
+    assume "fldTy \<in> set (map snd fieldTypes)"
+    then obtain name2 where name2_in: "(name2, fldTy) \<in> set fieldTypes" by auto
+    from all2 have len_eq: "length fieldValues = length fieldTypes"
+      by (rule list_all2_lengthD)
+    from name2_in obtain i where
+      i_bound: "i < length fieldTypes" and
+      idx_eq: "fieldTypes ! i = (name2, fldTy)"
+      by (metis in_set_conv_nth)
+    with len_eq have i_bound': "i < length fieldValues" by simp
+    define fldVal where "fldVal = snd (fieldValues ! i)"
+    define name1 where "name1 = fst (fieldValues ! i)"
+    have fv_idx: "fieldValues ! i = (name1, fldVal)"
+      by (simp add: name1_def fldVal_def)
+    from all2 i_bound have "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+                             (fieldValues ! i) (fieldTypes ! i)"
+      by (simp add: list_all2_nthD2)
+    with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
+    from i_bound' fv_idx have in_fv: "(name1, fldVal) \<in> set fieldValues"
+      by (metis nth_mem)
+    from in_fv have "fldVal \<in> snd ` set fieldValues" by force
+    then show "is_well_kinded env fldTy"
+      using CV_Record.IH assms(2) typed by fastforce
+  qed
+  then show ?case using ty_eq distinct_names by simp
+next
+  case (CV_Variant ctor payload)
+  then obtain dtName argTypes tyvars payloadTy where
+    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
+    lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
+    len_eq: "length tyvars = length argTypes" and
+    args_wk: "list_all (is_well_kinded env) argTypes"
+    by (cases ty) (auto split: option.splits prod.splits)
+  (* From tyenv_well_formed, we know ctors are consistent with datatypes *)
+  from CV_Variant.prems(2) have "tyenv_ctors_consistent env"
+    unfolding tyenv_well_formed_def by simp
+  then have dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some (length tyvars)"
+    using lookup unfolding tyenv_ctors_consistent_def by blast
+  show ?case
+    using ty_eq dt_lookup len_eq args_wk by simp
+next
+  case (CV_Array sizes valuesMap)
+  then obtain elemTy dims where
+    ty_eq: "ty = CoreTy_Array elemTy dims" and
+    elem_wk: "is_well_kinded env elemTy" and
+    dims_wk: "array_dims_well_kinded dims"
+    by (cases ty) auto
+  show ?case
+    using ty_eq elem_wk dims_wk by simp
+qed
+
+lemma value_has_type_runtime:
+  assumes "value_has_type env val ty"
+  shows "is_runtime_type env ty"
+using assms proof (induction val arbitrary: ty)
+  case (CV_Bool b)
+  then show ?case by simp
+next
+  case (CV_FiniteInt sign bits i)
+  then show ?case by simp
+next
+  case (CV_Record fieldValues)
+  then obtain fieldTypes where
+    ty_eq: "ty = CoreTy_Record fieldTypes" and
+    distinct_names: "distinct (map fst fieldTypes)" and
+    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+             fieldValues fieldTypes"
+    by (cases ty) auto
+  have "list_all (is_runtime_type env) (map snd fieldTypes)"
+    unfolding list_all_iff
+  proof
+    fix fldTy
+    assume "fldTy \<in> set (map snd fieldTypes)"
+    then obtain name2 where name2_in: "(name2, fldTy) \<in> set fieldTypes" by auto
+    from all2 have len_eq: "length fieldValues = length fieldTypes"
+      by (rule list_all2_lengthD)
+    from name2_in obtain i where
+      i_bound: "i < length fieldTypes" and
+      idx_eq: "fieldTypes ! i = (name2, fldTy)"
+      by (metis in_set_conv_nth)
+    with len_eq have i_bound': "i < length fieldValues" by simp
+    define fldVal where "fldVal = snd (fieldValues ! i)"
+    define name1 where "name1 = fst (fieldValues ! i)"
+    have fv_idx: "fieldValues ! i = (name1, fldVal)"
+      by (simp add: name1_def fldVal_def)
+    from all2 i_bound have "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+                             (fieldValues ! i) (fieldTypes ! i)"
+      by (simp add: list_all2_nthD2)
+    with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
+    from i_bound' fv_idx have in_fv: "(name1, fldVal) \<in> set fieldValues"
+      by (metis nth_mem)
+    then show "is_runtime_type env fldTy"
+      using CV_Record.IH typed by fastforce
+  qed
+  then show ?case using ty_eq distinct_names by simp
+next
+  case (CV_Variant ctor payload)
+  then obtain dtName argTypes where
+    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
+    dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
+    args_rt: "list_all (is_runtime_type env) argTypes"
+    by (cases ty) (auto split: option.splits prod.splits)
+  show ?case
+    using ty_eq dt_nonghost args_rt by simp
+next
+  case (CV_Array sizes valuesMap)
+  then obtain elemTy dims where
+    ty_eq: "ty = CoreTy_Array elemTy dims" and
+    elem_rt: "is_runtime_type env elemTy"
+    by (cases ty) auto
+  show ?case
+    using ty_eq elem_rt by simp
+qed
+
+(* value_has_type only succeeds for ground types. The CV_Variant and CV_Array
+   cases enforce groundness directly on argTypes / elemTy; the recursive Record
+   case picks up the rest. *)
+lemma value_has_type_ground:
+  assumes "value_has_type env val ty"
+  shows "type_tyvars ty = {}"
+using assms proof (induction val arbitrary: ty)
+  case (CV_Bool b)
+  then show ?case by (cases ty) auto
+next
+  case (CV_FiniteInt sign bits i)
+  then show ?case by (cases ty) auto
+next
+  case (CV_Record fieldValues)
+  then obtain fieldTypes where
+    ty_eq: "ty = CoreTy_Record fieldTypes" and
+    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+             fieldValues fieldTypes"
+    by (cases ty) auto
+  have "\<forall>(name, fldTy) \<in> set fieldTypes. type_tyvars fldTy = {}"
+  proof (intro ballI, clarify)
+    fix name fldTy assume in_set: "(name, fldTy) \<in> set fieldTypes"
+    from all2 have len_eq: "length fieldValues = length fieldTypes"
+      by (rule list_all2_lengthD)
+    from in_set obtain i where
+      i_bound: "i < length fieldTypes" and
+      idx_eq: "fieldTypes ! i = (name, fldTy)"
+      by (metis in_set_conv_nth)
+    define fldVal where "fldVal = snd (fieldValues ! i)"
+    define name1 where "name1 = fst (fieldValues ! i)"
+    have fv_idx: "fieldValues ! i = (name1, fldVal)"
+      by (simp add: name1_def fldVal_def)
+    from all2 i_bound have "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+                             (fieldValues ! i) (fieldTypes ! i)"
+      by (simp add: list_all2_nthD2)
+    with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
+    from i_bound len_eq have "(name1, fldVal) \<in> set fieldValues"
+      using fv_idx by (metis nth_mem)
+    then show "type_tyvars fldTy = {}"
+      using CV_Record.IH typed by fastforce
+  qed
+  then show ?case using ty_eq by (simp add: case_prod_beta)
+next
+  case (CV_Variant ctor payload)
+  then obtain dtName argTypes where
+    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
+    args_ground: "list_all (\<lambda>a. type_tyvars a = {}) argTypes"
+    by (cases ty) (auto split: option.splits prod.splits)
+  show ?case
+    using ty_eq args_ground by (simp add: list_all_iff)
+next
+  case (CV_Array sizes valuesMap)
+  then obtain elemTy dims where
+    ty_eq: "ty = CoreTy_Array elemTy dims" and
+    elem_ground: "type_tyvars elemTy = {}"
+    by (cases ty) auto
+  show ?case using ty_eq elem_ground by simp
+qed
+
+
+(* ========================================================================== *)
 (* value_has_type only depends on TE_DataCtors, TE_Datatypes and TE_TypeVars,
    not on TE_LocalVars, TE_GlobalVars or TE_GhostLocals/TE_GhostGlobals. *)
 (* ========================================================================== *)
@@ -246,11 +447,7 @@ lemma value_has_type_TE_ProofGoal_irrelevant [simp]:
    that the type ty is well-kinded and runtime in both envs (plus agreement on
    the datatype fields). This is useful when transferring value_has_type across
    a function-call boundary, where the caller and callee have different
-   TE_TypeVars but the store-typing types are well-kinded in both because
-   (a) the caller's original store typing is well-kinded in the caller's env,
-       since it came from value_has_type under the caller's env, and
-   (b) the same types are well-kinded in the callee's env because we have
-       value_has_type under the callee's env for those same slots. *)
+   type vars, but the store-typing types are well-kinded in both. *)
 lemma value_has_type_cong_env_wk:
   assumes dc: "TE_DataCtors env' = TE_DataCtors env"
       and dt: "TE_Datatypes env' = TE_Datatypes env"
@@ -470,8 +667,10 @@ next
     qed
     from CV_Variant.IH[OF payload_vht subst_ty_wk subst_ty_wk' subst_ty_rt subst_ty_rt']
     have payload_vht': "value_has_type env' payload (apply_subst ?subst payloadTy)" .
+    have args_ground: "list_all (\<lambda>a. type_tyvars a = {}) argTypes"
+      using CV_Variant.prems(1) CoreTy_Datatype by (auto split: option.splits)
     show ?thesis
-      using CoreTy_Datatype lookup' dty_eq len_eq args_wk' args_rt' not_ghost' payload_vht'
+      using CoreTy_Datatype lookup' dty_eq len_eq args_wk' args_rt' args_ground not_ghost' payload_vht'
       by simp
   qed (use CV_Variant.prems(1) in auto)
 next
@@ -482,6 +681,7 @@ next
     from CV_Array.prems(1) CoreTy_Array have
       elem_wk: "is_well_kinded env elemTy" and
       elem_rt: "is_runtime_type env elemTy" and
+      elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
                              \<longrightarrow> value_has_type env val elemTy" and
       dims_wk: "array_dims_well_kinded dims" and
@@ -501,148 +701,8 @@ next
         by (auto simp: fmran'I)
     qed
     show ?thesis
-      using CoreTy_Array elem_wk' elem_rt' elems_vht' dims_wk matches sizes_ok by simp
+      using CoreTy_Array elem_wk' elem_rt' elem_ground elems_vht' dims_wk matches sizes_ok by simp
   qed (use CV_Array.prems(1) in auto)
-qed
-
-
-(* ========================================================================== *)
-(* Value types are well-kinded and runtime *)
-(* ========================================================================== *)
-
-lemma value_has_type_well_kinded:
-  assumes "value_has_type env val ty"
-      and "tyenv_well_formed env"
-  shows "is_well_kinded env ty"
-using assms proof (induction val arbitrary: ty)
-  case (CV_Bool b)
-  then show ?case by simp
-next
-  case (CV_FiniteInt sign bits i)
-  then show ?case by simp
-next
-  case (CV_Record fieldValues)
-  then obtain fieldTypes where
-    ty_eq: "ty = CoreTy_Record fieldTypes" and
-    distinct_names: "distinct (map fst fieldTypes)" and
-    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
-             fieldValues fieldTypes"
-    by (cases ty) auto
-  have "list_all (is_well_kinded env) (map snd fieldTypes)"
-    unfolding list_all_iff
-  proof
-    fix fldTy
-    assume "fldTy \<in> set (map snd fieldTypes)"
-    then obtain name2 where name2_in: "(name2, fldTy) \<in> set fieldTypes" by auto
-    from all2 have len_eq: "length fieldValues = length fieldTypes"
-      by (rule list_all2_lengthD)
-    from name2_in obtain i where
-      i_bound: "i < length fieldTypes" and
-      idx_eq: "fieldTypes ! i = (name2, fldTy)"
-      by (metis in_set_conv_nth)
-    with len_eq have i_bound': "i < length fieldValues" by simp
-    define fldVal where "fldVal = snd (fieldValues ! i)"
-    define name1 where "name1 = fst (fieldValues ! i)"
-    have fv_idx: "fieldValues ! i = (name1, fldVal)"
-      by (simp add: name1_def fldVal_def)
-    from all2 i_bound have "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
-                             (fieldValues ! i) (fieldTypes ! i)"
-      by (simp add: list_all2_nthD2)
-    with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
-    from i_bound' fv_idx have in_fv: "(name1, fldVal) \<in> set fieldValues"
-      by (metis nth_mem)
-    from in_fv have "fldVal \<in> snd ` set fieldValues" by force
-    then show "is_well_kinded env fldTy"
-      using CV_Record.IH assms(2) typed by fastforce
-  qed
-  then show ?case using ty_eq distinct_names by simp
-next
-  case (CV_Variant ctor payload)
-  then obtain dtName argTypes tyvars payloadTy where
-    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-    lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
-    len_eq: "length tyvars = length argTypes" and
-    args_wk: "list_all (is_well_kinded env) argTypes"
-    by (cases ty) (auto split: option.splits prod.splits)
-  (* From tyenv_well_formed, we know ctors are consistent with datatypes *)
-  from CV_Variant.prems(2) have "tyenv_ctors_consistent env"
-    unfolding tyenv_well_formed_def by simp
-  then have dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some (length tyvars)"
-    using lookup unfolding tyenv_ctors_consistent_def by blast
-  show ?case
-    using ty_eq dt_lookup len_eq args_wk by simp
-next
-  case (CV_Array sizes valuesMap)
-  then obtain elemTy dims where
-    ty_eq: "ty = CoreTy_Array elemTy dims" and
-    elem_wk: "is_well_kinded env elemTy" and
-    dims_wk: "array_dims_well_kinded dims"
-    by (cases ty) auto
-  show ?case
-    using ty_eq elem_wk dims_wk by simp
-qed
-
-lemma value_has_type_runtime:
-  assumes "value_has_type env val ty"
-  shows "is_runtime_type env ty"
-using assms proof (induction val arbitrary: ty)
-  case (CV_Bool b)
-  then show ?case by simp
-next
-  case (CV_FiniteInt sign bits i)
-  then show ?case by simp
-next
-  case (CV_Record fieldValues)
-  then obtain fieldTypes where
-    ty_eq: "ty = CoreTy_Record fieldTypes" and
-    distinct_names: "distinct (map fst fieldTypes)" and
-    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
-             fieldValues fieldTypes"
-    by (cases ty) auto
-  have "list_all (is_runtime_type env) (map snd fieldTypes)"
-    unfolding list_all_iff
-  proof
-    fix fldTy
-    assume "fldTy \<in> set (map snd fieldTypes)"
-    then obtain name2 where name2_in: "(name2, fldTy) \<in> set fieldTypes" by auto
-    from all2 have len_eq: "length fieldValues = length fieldTypes"
-      by (rule list_all2_lengthD)
-    from name2_in obtain i where
-      i_bound: "i < length fieldTypes" and
-      idx_eq: "fieldTypes ! i = (name2, fldTy)"
-      by (metis in_set_conv_nth)
-    with len_eq have i_bound': "i < length fieldValues" by simp
-    define fldVal where "fldVal = snd (fieldValues ! i)"
-    define name1 where "name1 = fst (fieldValues ! i)"
-    have fv_idx: "fieldValues ! i = (name1, fldVal)"
-      by (simp add: name1_def fldVal_def)
-    from all2 i_bound have "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
-                             (fieldValues ! i) (fieldTypes ! i)"
-      by (simp add: list_all2_nthD2)
-    with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
-    from i_bound' fv_idx have in_fv: "(name1, fldVal) \<in> set fieldValues"
-      by (metis nth_mem)
-    then show "is_runtime_type env fldTy"
-      using CV_Record.IH typed by fastforce
-  qed
-  then show ?case using ty_eq distinct_names by simp
-next
-  case (CV_Variant ctor payload)
-  then obtain dtName argTypes where
-    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-    dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
-    args_rt: "list_all (is_runtime_type env) argTypes"
-    by (cases ty) (auto split: option.splits prod.splits)
-  show ?case
-    using ty_eq dt_nonghost args_rt by simp
-next
-  case (CV_Array sizes valuesMap)
-  then obtain elemTy dims where
-    ty_eq: "ty = CoreTy_Array elemTy dims" and
-    elem_rt: "is_runtime_type env elemTy"
-    by (cases ty) auto
-  show ?case
-    using ty_eq elem_rt by simp
 qed
 
 

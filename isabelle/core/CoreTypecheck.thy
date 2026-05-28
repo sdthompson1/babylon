@@ -2020,5 +2020,19 @@ lemma core_term_type_notghost_runtime:
   shows "is_runtime_type env ty"
   using core_term_type_well_kinded_and_runtime[OF assms] by blast
 
+(* If a CoreTm_Binop typechecks in NotGhost mode, each operand's type must be
+   CoreTy_Bool or numeric: the typechecker only accepts operands satisfying
+   is_numeric_type / is_integer_type / is_finite_integer_type, or equal to
+   CoreTy_Bool directly. *)
+lemma binop_operand_type_bool_or_numeric:
+  assumes "core_term_type env NotGhost (CoreTm_Binop op lhs rhs) = Some ty"
+      and "core_term_type env NotGhost lhs = Some lhsTy"
+      and "core_term_type env NotGhost rhs = Some rhsTy"
+  shows "lhsTy = CoreTy_Bool \<or> is_numeric_type lhsTy"
+    and "rhsTy = CoreTy_Bool \<or> is_numeric_type rhsTy"
+  using assms
+  by (auto split: if_splits)
+     (cases lhsTy; auto)+
+
 
 end
