@@ -115,8 +115,6 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
   "fun_info_matches_interp_fun env funInfo interpFun =
     \<comment> \<open>Type arguments match\<close>
     (FI_TyArgs funInfo = IF_TyArgs interpFun \<and>
-    \<comment> \<open>Same number of term arguments (redundant because list_all2 requires the same length anyway!)\<close>
-    length (FI_TmArgs funInfo) = length (IF_Args interpFun) \<and>
     \<comment> \<open>Term arguments match\<close>
     list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>

@@ -2015,10 +2015,11 @@ next
             fi_match: "fun_info_matches_interp_fun env funInfo interpFun"
             unfolding state_matches_env_def funs_exist_in_state_def
             using case_optionE by blast
-          from fi_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
-            and vor_match: "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+          from fi_match have vor_match: "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
                                       (FI_TmArgs funInfo) (IF_Args interpFun)"
             unfolding fun_info_matches_interp_fun_def by auto
+          from vor_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
+            by (rule list_all2_lengthD)
           have "\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args interpFun)"
           proof -
             have "\<And>i. i < length (IF_Args interpFun) \<Longrightarrow> snd (IF_Args interpFun ! i) = Var"
@@ -4383,7 +4384,7 @@ next
 
     \<comment> \<open>Length match between argTms and f's args (via fi_match + args_typed). \<close>
     from fi_match have len_fi: "length (FI_TmArgs funInfo) = length (IF_Args f)"
-      unfolding fun_info_matches_interp_fun_def by simp
+      unfolding fun_info_matches_interp_fun_def by (auto dest: list_all2_lengthD)
     from args_typed have len_argTms_fi: "length argTms = length (FI_TmArgs funInfo)"
       by (simp add: list_all2_lengthD)
     hence len_argTms: "length argTms = length (IF_Args f)"

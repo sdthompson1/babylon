@@ -2689,7 +2689,6 @@ proof -
       \<comment> \<open>Step 1: the equality on non-body components. \<close>
       from fim have non_body_eqs:
         "FI_TyArgs info' = IF_TyArgs interpFun"
-        "length (FI_TmArgs info') = length (IF_Args interpFun)"
         "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
                    (FI_TmArgs info') (IF_Args interpFun)"
         "FI_Impure info' = IF_Impure interpFun"
@@ -4314,8 +4313,8 @@ proof -
     "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
                (FI_TmArgs funInfo) (IF_Args f)"
     unfolding fun_info_matches_interp_fun_def by simp
-  from fi_match have len_ifArgs: "length (FI_TmArgs funInfo) = length (IF_Args f)"
-    unfolding fun_info_matches_interp_fun_def by simp
+  from var_ref_match have len_ifArgs: "length (FI_TmArgs funInfo) = length (IF_Args f)"
+    by (rule list_all2_lengthD)
 
   have len_vals: "length (IF_Args f) = length ?valResults"
     using len_ifArgs len_argTms by simp
