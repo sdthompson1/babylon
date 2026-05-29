@@ -165,7 +165,8 @@ proof -
     be_fun_ghost: "tyenv_fun_ghost_constraint ?be" and
     be_nonghost_payloads: "tyenv_nonghost_payloads_runtime ?be" and
     be_ghost_dt_subset: "tyenv_ghost_datatypes_subset ?be" and
-    be_rt_subset: "tyenv_runtime_tyvars_subset ?be"
+    be_rt_subset: "tyenv_runtime_tyvars_subset ?be" and
+    be_dt_nonempty: "tyenv_datatypes_nonempty ?be"
     unfolding tyenv_well_formed_def by auto
 
   \<comment> \<open>Field congruence: is_well_kinded / is_runtime_type only depend on
@@ -381,7 +382,12 @@ proof -
     unfolding tyenv_runtime_tyvars_subset_def
     by (simp add: other_eq)
 
-  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15
+  have c16: "tyenv_datatypes_nonempty ?pEnv"
+    using be_dt_nonempty
+    unfolding tyenv_datatypes_nonempty_def
+    by (simp add: other_eq)
+
+  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by blast
 qed
 
@@ -1141,9 +1147,15 @@ proof -
     unfolding ty_args_well_formed_def
     using dom_tgt range_ground_tgt range_wk_rt_tgt by blast
 
+  have dc_tgt: "default_ctors_match ?clearedState ?pEnv"
+    using sme
+    unfolding state_matches_env_def default_ctors_match_def
+              partial_body_env_for_def body_env_for_def
+    by simp
+
   show ?thesis
     unfolding state_matches_env_def
-    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt ta_tgt
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt ta_tgt dc_tgt
     by blast
 qed
 
@@ -2288,6 +2300,7 @@ lemma restore_scope_sound:
       and ext_post: "storeTyping_extends storeTyping postStoreTyping"
       and globals_eq: "IS_Globals postCallState = IS_Globals state"
       and functions_eq: "IS_Functions postCallState = IS_Functions state"
+      and default_ctors_eq: "IS_DefaultCtors postCallState = IS_DefaultCtors state"
       and dt_eq: "TE_DataCtors env = TE_DataCtors env_mid"
       and ty_eq: "TE_Datatypes env = TE_Datatypes env_mid"
       and gd_eq: "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
@@ -2479,7 +2492,12 @@ proof -
   have rs_ta: "ty_args_well_formed ?rs env"
     using ta_src rs_tyargs unfolding ty_args_well_formed_def by simp
 
-  from rs_lv rs_gv rs_no_lv rs_no_gv rs_fes rs_no_fun rs_nc rs_cn rs_swt rs_ta
+  have rs_dc: "default_ctors_match ?rs env"
+    using state_env default_ctors_eq
+    unfolding state_matches_env_def default_ctors_match_def
+    by simp
+
+  from rs_lv rs_gv rs_no_lv rs_no_gv rs_fes rs_no_fun rs_nc rs_cn rs_swt rs_ta rs_dc
   show ?thesis
     unfolding state_matches_env_def by blast
 qed

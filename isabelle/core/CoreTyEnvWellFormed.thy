@@ -120,6 +120,14 @@ definition tyenv_ghost_datatypes_subset :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_ghost_datatypes_subset env =
     (TE_GhostDatatypes env |\<subseteq>| fmdom (TE_Datatypes env))"
 
+(* Every datatype has at least one constructor. (Used to give CoreTm_Default a
+   default value for datatype types: the "first" constructor of the datatype.) *)
+definition tyenv_datatypes_nonempty :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_datatypes_nonempty env =
+    (\<forall>dtName |\<in>| fmdom (TE_Datatypes env).
+       \<exists>ctorName ctors.
+         fmlookup (TE_DataCtorsByType env) dtName = Some (ctorName # ctors))"
+
 (* TE_RuntimeTypeVars is a subset of TE_TypeVars: a type variable can only be a
    runtime type variable if it is in scope at all. *)
 definition tyenv_runtime_tyvars_subset :: "CoreTyEnv \<Rightarrow> bool" where
@@ -143,7 +151,8 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_fun_ghost_constraint env \<and>
      tyenv_nonghost_payloads_runtime env \<and>
      tyenv_ghost_datatypes_subset env \<and>
-     tyenv_runtime_tyvars_subset env)"
+     tyenv_runtime_tyvars_subset env \<and>
+     tyenv_datatypes_nonempty env)"
 
 (* Adding a well-kinded, runtime, non-ghost local variable preserves tyenv_well_formed. *)
 lemma tyenv_well_formed_add_var:
@@ -169,6 +178,7 @@ proof -
               "tyenv_nonghost_payloads_runtime env"
               "tyenv_ghost_datatypes_subset env"
               "tyenv_runtime_tyvars_subset env"
+              "tyenv_datatypes_nonempty env"
     unfolding tyenv_well_formed_def by auto
 
   \<comment> \<open>is_well_kinded only depends on TE_Datatypes and TE_TypeVars, not TE_LocalVars\<close>
@@ -248,6 +258,8 @@ proof -
     unfolding tyenv_ghost_datatypes_subset_def by simp
   moreover have "tyenv_runtime_tyvars_subset ?env'" using rest(11)
     unfolding tyenv_runtime_tyvars_subset_def by simp
+  moreover have "tyenv_datatypes_nonempty ?env'" using rest(12)
+    unfolding tyenv_datatypes_nonempty_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
@@ -275,6 +287,7 @@ proof -
               "tyenv_nonghost_payloads_runtime env"
               "tyenv_ghost_datatypes_subset env"
               "tyenv_runtime_tyvars_subset env"
+              "tyenv_datatypes_nonempty env"
     unfolding tyenv_well_formed_def by auto
 
   have env'_fields: "TE_TypeVars ?env' = TE_TypeVars env"
@@ -352,6 +365,8 @@ proof -
     unfolding tyenv_ghost_datatypes_subset_def by simp
   moreover have "tyenv_runtime_tyvars_subset ?env'" using rest(11)
     unfolding tyenv_runtime_tyvars_subset_def by simp
+  moreover have "tyenv_datatypes_nonempty ?env'" using rest(12)
+    unfolding tyenv_datatypes_nonempty_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
 qed
 
@@ -385,6 +400,7 @@ proof -
     tyenv_fun_ghost_constraint_def Let_def
     tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
     tyenv_runtime_tyvars_subset_def
+    tyenv_datatypes_nonempty_def
     by (force simp: wk rt scope_wk scope_wk_one scope_rt)
 qed
 
@@ -418,6 +434,7 @@ proof -
     tyenv_fun_ghost_constraint_def Let_def
     tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
     tyenv_runtime_tyvars_subset_def
+    tyenv_datatypes_nonempty_def
     by (force simp: wk rt scope_wk scope_wk_one scope_rt)
 qed
 
@@ -466,6 +483,7 @@ proof -
     and nonghost_payloads: "tyenv_nonghost_payloads_runtime env"
     and ghost_dt_subset: "tyenv_ghost_datatypes_subset env"
     and rt_subset: "tyenv_runtime_tyvars_subset env"
+    and dt_nonempty: "tyenv_datatypes_nonempty env"
     unfolding tyenv_well_formed_def by auto
 
   have "tyenv_vars_well_kinded ?env'"
@@ -506,7 +524,26 @@ proof -
   moreover have "tyenv_runtime_tyvars_subset ?env'"
     using rt_subset assms(2) unfolding tyenv_runtime_tyvars_subset_def
     by simp blast
+  moreover have "tyenv_datatypes_nonempty ?env'"
+    using dt_nonempty unfolding tyenv_datatypes_nonempty_def by simp
   ultimately show ?thesis unfolding tyenv_well_formed_def by auto
+qed
+
+(* If a datatype's ctor list in TE_DataCtorsByType begins with ctorName, then
+   TE_DataCtors records ctorName as belonging to this datatype, with some
+   tyvars and payload. (Derived from tyenv_ctors_by_type_consistent; this is
+   the form callers — notably default_value_sound — actually need.) *)
+lemma tyenv_first_ctor_consistent:
+  assumes wf: "tyenv_well_formed env"
+      and lookup: "fmlookup (TE_DataCtorsByType env) dtName = Some (ctorName # ctors)"
+  shows "\<exists>tyvars payload.
+            fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payload)"
+proof -
+  from wf have cons: "tyenv_ctors_by_type_consistent env"
+    unfolding tyenv_well_formed_def by simp
+  have "ctorName \<in> set (ctorName # ctors)" by simp
+  with cons lookup show ?thesis
+    unfolding tyenv_ctors_by_type_consistent_def by blast
 qed
 
 end

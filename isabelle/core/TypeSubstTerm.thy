@@ -46,6 +46,8 @@ fun apply_subst_to_term :: "TypeSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreT
     CoreTm_Allocated (apply_subst_to_term subst tm)"
 | "apply_subst_to_term subst (CoreTm_Old tm) =
     CoreTm_Old (apply_subst_to_term subst tm)"
+| "apply_subst_to_term subst (CoreTm_Default ty) =
+    CoreTm_Default (apply_subst subst ty)"
 
 
 (* Helper for proving map over lists *)

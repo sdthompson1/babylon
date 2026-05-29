@@ -237,6 +237,17 @@ definition ty_args_well_formed :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
      subst_range_tyvars (IS_TyArgs state) = {} \<and>
      (\<forall>ty \<in> fmran' (IS_TyArgs state). is_well_kinded env ty \<and> is_runtime_type env ty)"
 
+(* For each datatype, if env says defCtorName heads the ctor list and
+   TE_DataCtors records (dtName', tyvars, payload) for defCtorName, then
+   IS_DefaultCtors carries the matching triple at dtName. Used to evaluate
+   CoreTm_Default at a datatype type. *)
+definition default_ctors_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
+  "default_ctors_match state env \<equiv>
+     \<forall>dtName defCtorName otherCtors dtName' tyvars payload.
+       fmlookup (TE_DataCtorsByType env) dtName = Some (defCtorName # otherCtors) \<longrightarrow>
+       fmlookup (TE_DataCtors env) defCtorName = Some (dtName', tyvars, payload) \<longrightarrow>
+       fmlookup (IS_DefaultCtors state) dtName = Some (defCtorName, tyvars, payload)"
+
 (* Overall definition: state matches environment under a given store typing *)
 definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> bool" where
   "state_matches_env state env storeTyping \<equiv>
@@ -248,7 +259,8 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     no_extra_funs state env \<and>
     const_locals_match state env \<and>
     store_well_typed state env storeTyping \<and>
-    ty_args_well_formed state env"
+    ty_args_well_formed state env \<and>
+    default_ctors_match state env"
 
 
 (* Lemma: state_matches_env does not depend on TE_ProofGoal. *)
@@ -267,6 +279,7 @@ proof -
           funs_exist_in_state_def no_extra_funs_def
           const_locals_match_def
           store_well_typed_def ty_args_well_formed_def
+          default_ctors_match_def
           local_var_in_state_with_type_def global_var_in_state_with_type_def
           rt_eq wk_eq
           split: option.splits)
@@ -282,6 +295,7 @@ lemma state_matches_env_IS_World_irrelevant [simp]:
         funs_exist_in_state_def no_extra_funs_def
         const_locals_match_def
         store_well_typed_def ty_args_well_formed_def
+        default_ctors_match_def
         local_var_in_state_with_type_def global_var_in_state_with_type_def
         split: option.splits)
 
@@ -340,7 +354,8 @@ proof -
     fun_ghost: "tyenv_fun_ghost_constraint env" and
     nonghost_payloads: "tyenv_nonghost_payloads_runtime env" and
     ghost_dt_subset: "tyenv_ghost_datatypes_subset env" and
-    rt_subset: "tyenv_runtime_tyvars_subset env"
+    rt_subset: "tyenv_runtime_tyvars_subset env" and
+    dt_nonempty: "tyenv_datatypes_nonempty env"
     unfolding tyenv_well_formed_def by auto
 
   \<comment> \<open>FI_TmArgs types are well-kinded in ?inner. \<close>
@@ -537,7 +552,12 @@ proof -
     using ghost_dt_subset unfolding tyenv_ghost_datatypes_subset_def
     by (simp add: body_env_for_def)
 
-  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15
+  \<comment> \<open>(16) tyenv_datatypes_nonempty ?be: TE_Datatypes, TE_DataCtorsByType inherited. \<close>
+  have c16: "tyenv_datatypes_nonempty ?be"
+    using dt_nonempty unfolding tyenv_datatypes_nonempty_def
+    by (simp add: body_env_for_def)
+
+  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 

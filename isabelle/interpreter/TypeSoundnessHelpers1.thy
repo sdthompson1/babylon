@@ -573,6 +573,9 @@ proof -
       using state_env tyargs''_eq env'_eq rt_eq wk_eq
       unfolding state_matches_env_def ty_args_well_formed_def by simp
   qed
+  moreover have "default_ctors_match state'' env'"
+    using state_env state''_eq state'_eq env'_eq
+    unfolding state_matches_env_def default_ctors_match_def by simp
   ultimately show ?thesis
     unfolding state_matches_env_def by auto
 qed
@@ -814,9 +817,13 @@ proof -
       unfolding state_matches_env_def ty_args_well_formed_def by simp
   qed
 
+  have dc_tgt: "default_ctors_match state' env'"
+    using state_env state'_eq env'_eq
+    unfolding state_matches_env_def default_ctors_match_def by simp
+
   show ?thesis
     unfolding state_matches_env_def
-    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt ta_tgt
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt ta_tgt dc_tgt
     by blast
 qed
 
@@ -1726,6 +1733,10 @@ proof -
   moreover have "ty_args_well_formed state' env"
     using state_env
     unfolding state_matches_env_def ty_args_well_formed_def by simp
+
+  moreover have "default_ctors_match state' env"
+    using state_env state'_eq
+    unfolding state_matches_env_def default_ctors_match_def by simp
 
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed

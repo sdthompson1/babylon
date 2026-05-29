@@ -12,13 +12,15 @@ lemma alloc_store_preserves_globals_funs:
   "IS_Globals (fst (alloc_store state v)) = IS_Globals state"
   "IS_Functions (fst (alloc_store state v)) = IS_Functions state"
   "IS_TyArgs (fst (alloc_store state v)) = IS_TyArgs state"
+  "IS_DefaultCtors (fst (alloc_store state v)) = IS_DefaultCtors state"
   by (simp_all add: Let_def)
 
 lemma process_one_arg_preserves_globals_funs:
   assumes "process_one_arg arg (Inr state) = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
-         IS_TyArgs state' = IS_TyArgs state"
+         IS_TyArgs state' = IS_TyArgs state \<and>
+         IS_DefaultCtors state' = IS_DefaultCtors state"
 proof -
   obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
     by (cases arg) auto
@@ -40,6 +42,7 @@ proof -
         by (simp add: case_prod_beta)
       have "IS_Globals (fst ?alloc) = IS_Globals state"
            "IS_Functions (fst ?alloc) = IS_Functions state"
+           "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors state"
         by (simp_all add: alloc_store_preserves_globals_funs)
       with state'_eq show ?thesis by simp
     qed
@@ -77,7 +80,8 @@ lemma fold_process_one_arg_preserves_globals_funs:
   assumes "fold process_one_arg args (Inr state) = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
-         IS_TyArgs state' = IS_TyArgs state"
+         IS_TyArgs state' = IS_TyArgs state \<and>
+         IS_DefaultCtors state' = IS_DefaultCtors state"
   using assms
 proof (induction args arbitrary: state)
   case Nil
@@ -95,7 +99,8 @@ next
     from process_one_arg_preserves_globals_funs[OF Inr]
     have step: "IS_Globals state1 = IS_Globals state \<and>
                 IS_Functions state1 = IS_Functions state \<and>
-                IS_TyArgs state1 = IS_TyArgs state" by simp
+                IS_TyArgs state1 = IS_TyArgs state \<and>
+                IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
     from Inr Cons.prems have "fold process_one_arg args (Inr state1) = Inr state'"
       by simp
     from Cons.IH[OF this] step show ?thesis by simp
@@ -106,7 +111,8 @@ lemma apply_ref_updates_preserves_globals_funs:
   assumes "apply_ref_updates state lvs vs = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
-         IS_TyArgs state' = IS_TyArgs state"
+         IS_TyArgs state' = IS_TyArgs state \<and>
+         IS_DefaultCtors state' = IS_DefaultCtors state"
   using assms
 proof (induction state lvs vs arbitrary: state' rule: apply_ref_updates.induct)
   case (1 state)
@@ -130,7 +136,8 @@ lemma perform_swap_preserves_globals_funs:
   assumes "perform_swap state lv1 lv2 = Inr state'"
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
-         IS_TyArgs state' = IS_TyArgs state"
+         IS_TyArgs state' = IS_TyArgs state \<and>
+         IS_DefaultCtors state' = IS_DefaultCtors state"
 proof -
   obtain addr1 path1 where lv1_eq: "lv1 = (addr1, path1)" by (cases lv1)
   obtain addr2 path2 where lv2_eq: "lv2 = (addr2, path2)" by (cases lv2)
@@ -154,30 +161,34 @@ definition exec_result_preserves_gf :: "'w InterpState \<Rightarrow> 'w ExecResu
        Continue state' \<Rightarrow>
          IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
-         IS_TyArgs state' = IS_TyArgs state
+         IS_TyArgs state' = IS_TyArgs state \<and>
+         IS_DefaultCtors state' = IS_DefaultCtors state
      | Return state' _ \<Rightarrow>
          IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
-         IS_TyArgs state' = IS_TyArgs state)"
+         IS_TyArgs state' = IS_TyArgs state \<and>
+         IS_DefaultCtors state' = IS_DefaultCtors state)"
 
 lemma exec_result_preserves_gf_Continue:
   "exec_result_preserves_gf state (Continue state') \<longleftrightarrow>
      IS_Globals state' = IS_Globals state \<and>
      IS_Functions state' = IS_Functions state \<and>
-     IS_TyArgs state' = IS_TyArgs state"
+     IS_TyArgs state' = IS_TyArgs state \<and>
+     IS_DefaultCtors state' = IS_DefaultCtors state"
   by (simp add: exec_result_preserves_gf_def)
 
 lemma exec_result_preserves_gf_Return:
   "exec_result_preserves_gf state (Return state' v) \<longleftrightarrow>
      IS_Globals state' = IS_Globals state \<and>
      IS_Functions state' = IS_Functions state \<and>
-     IS_TyArgs state' = IS_TyArgs state"
+     IS_TyArgs state' = IS_TyArgs state \<and>
+     IS_DefaultCtors state' = IS_DefaultCtors state"
   by (simp add: exec_result_preserves_gf_def)
 
 
 (* The main preservation theorem: interp_* never changes IS_Globals /
-   IS_Functions / IS_TyArgs (externally).
-   All three statements are proved simultaneously via fuel induction.
+   IS_Functions / IS_TyArgs (externally) / IS_DefaultCtors.
+   All four statements are proved simultaneously via fuel induction.
 *)
 
 lemma interp_preserves_globals_funs:
@@ -192,7 +203,8 @@ lemma interp_preserves_globals_funs:
            interp_function_call fuel state fnName argTys argTms = Inr (state', retVal) \<longrightarrow>
              IS_Globals state' = IS_Globals state \<and>
              IS_Functions state' = IS_Functions state \<and>
-             IS_TyArgs state' = IS_TyArgs state"
+             IS_TyArgs state' = IS_TyArgs state \<and>
+             IS_DefaultCtors state' = IS_DefaultCtors state"
 proof (induction fuel arbitrary: stmt stmts fnName argTys argTms rule: nat.induct)
   case zero
   {
@@ -242,7 +254,8 @@ next
               from IH_call call
               have call_gf: "IS_Globals newState = IS_Globals state \<and>
                              IS_Functions newState = IS_Functions state \<and>
-                             IS_TyArgs newState = IS_TyArgs state"
+                             IS_TyArgs newState = IS_TyArgs state \<and>
+                             IS_DefaultCtors newState = IS_DefaultCtors state"
                 by blast
               let ?alloc = "alloc_store newState initVal"
               from NotGhost Var H CoreStmt_VarDecl init_eq call
@@ -255,6 +268,7 @@ next
               have alloc_gf: "IS_Globals (fst ?alloc) = IS_Globals newState"
                              "IS_Functions (fst ?alloc) = IS_Functions newState"
                              "IS_TyArgs (fst ?alloc) = IS_TyArgs newState"
+                             "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors newState"
                 by (simp_all add: alloc_store_preserves_globals_funs)
               from res_eq alloc_gf call_gf show ?thesis
                 by (simp add: exec_result_preserves_gf_Continue)
@@ -274,6 +288,7 @@ next
               have "IS_Globals (fst ?alloc) = IS_Globals state"
                    "IS_Functions (fst ?alloc) = IS_Functions state"
                    "IS_TyArgs (fst ?alloc) = IS_TyArgs state"
+                   "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors state"
                 by (simp_all add: alloc_store_preserves_globals_funs)
               with res_eq show ?thesis
                 by (simp add: exec_result_preserves_gf_Continue)
@@ -348,7 +363,8 @@ next
             from IH_call call
             have call_gf: "IS_Globals newState = IS_Globals state \<and>
                            IS_Functions newState = IS_Functions state \<and>
-                           IS_TyArgs newState = IS_TyArgs state"
+                           IS_TyArgs newState = IS_TyArgs state \<and>
+                           IS_DefaultCtors newState = IS_DefaultCtors state"
               by blast
             from NotGhost H CoreStmt_Assign lv rhs_eq call
             obtain newVal where
@@ -441,13 +457,15 @@ next
                 from body_gf Continue
                 have gf1: "IS_Globals state1 = IS_Globals state \<and>
                            IS_Functions state1 = IS_Functions state \<and>
-                           IS_TyArgs state1 = IS_TyArgs state"
+                           IS_TyArgs state1 = IS_TyArgs state \<and>
+                           IS_DefaultCtors state1 = IS_DefaultCtors state"
                   by (simp add: exec_result_preserves_gf_Continue)
                 let ?rs = "restore_scope state state1"
                 have rs_gf:
                   "IS_Globals ?rs = IS_Globals state"
                   "IS_Functions ?rs = IS_Functions state"
                   "IS_TyArgs ?rs = IS_TyArgs state"
+                  "IS_DefaultCtors ?rs = IS_DefaultCtors state"
                   using gf1 by (simp_all add: restore_scope_preserves_globals_funs)
                 from NotGhost CoreStmt_While H cv CV_Bool True body Continue
                 have rec_eq: "interp_statement fuel ?rs
@@ -462,7 +480,8 @@ next
                 from body_gf Return
                 have gf1: "IS_Globals state1 = IS_Globals state \<and>
                            IS_Functions state1 = IS_Functions state \<and>
-                           IS_TyArgs state1 = IS_TyArgs state"
+                           IS_TyArgs state1 = IS_TyArgs state \<and>
+                           IS_DefaultCtors state1 = IS_DefaultCtors state"
                   by (simp add: exec_result_preserves_gf_Return)
                 from NotGhost CoreStmt_While H cv CV_Bool True body Return
                 have res_eq: "res = Return (restore_scope state state1) v"
@@ -509,7 +528,8 @@ next
             from body_gf Continue
             have gf1: "IS_Globals state1 = IS_Globals state \<and>
                        IS_Functions state1 = IS_Functions state \<and>
-                       IS_TyArgs state1 = IS_TyArgs state"
+                       IS_TyArgs state1 = IS_TyArgs state \<and>
+                       IS_DefaultCtors state1 = IS_DefaultCtors state"
               by (simp add: exec_result_preserves_gf_Continue)
             from NotGhost CoreStmt_Match H sv arm body Continue
             have res_eq: "res = Continue (restore_scope state state1)" by simp
@@ -521,7 +541,8 @@ next
             from body_gf Return
             have gf1: "IS_Globals state1 = IS_Globals state \<and>
                        IS_Functions state1 = IS_Functions state \<and>
-                       IS_TyArgs state1 = IS_TyArgs state"
+                       IS_TyArgs state1 = IS_TyArgs state \<and>
+                       IS_DefaultCtors state1 = IS_DefaultCtors state"
               by (simp add: exec_result_preserves_gf_Return)
             from NotGhost CoreStmt_Match H sv arm body Return
             have res_eq: "res = Return (restore_scope state state1) v" by simp
@@ -577,7 +598,8 @@ next
           from IH_stmt r1 Continue
           have gf1: "IS_Globals state1 = IS_Globals state \<and>
                      IS_Functions state1 = IS_Functions state \<and>
-                     IS_TyArgs state1 = IS_TyArgs state"
+                     IS_TyArgs state1 = IS_TyArgs state \<and>
+                     IS_DefaultCtors state1 = IS_DefaultCtors state"
             by (force simp: exec_result_preserves_gf_Continue)
           from Cons H r1 Continue
           have rec: "interp_statement_list fuel state1 rest = Inr res" by simp
@@ -589,7 +611,8 @@ next
           from IH_stmt r1 Return
           have gf1: "IS_Globals state1 = IS_Globals state \<and>
                      IS_Functions state1 = IS_Functions state \<and>
-                     IS_TyArgs state1 = IS_TyArgs state"
+                     IS_TyArgs state1 = IS_TyArgs state \<and>
+                     IS_DefaultCtors state1 = IS_DefaultCtors state"
             by (force simp: exec_result_preserves_gf_Return)
           from Cons H r1 Return have "res = Return state1 v" by simp
           with gf1 show ?thesis by (simp add: exec_result_preserves_gf_Return)
@@ -618,6 +641,7 @@ next
       have cleared_gf:
         "IS_Globals ?clearedState = IS_Globals state"
         "IS_Functions ?clearedState = IS_Functions state"
+        "IS_DefaultCtors ?clearedState = IS_DefaultCtors state"
         by simp_all
       obtain preCallState where
         fold_eq: "fold process_one_arg ?argTuples (Inr ?clearedState) = Inr preCallState"
@@ -625,14 +649,16 @@ next
         by (cases "fold process_one_arg ?argTuples (Inr ?clearedState)") (simp_all add: Let_def)
       from fold_process_one_arg_preserves_globals_funs[OF fold_eq] cleared_gf
       have pre_gf: "IS_Globals preCallState = IS_Globals state \<and>
-                    IS_Functions preCallState = IS_Functions state"
+                    IS_Functions preCallState = IS_Functions state \<and>
+                    IS_DefaultCtors preCallState = IS_DefaultCtors state"
         by simp
       \<comment> \<open>For the Babylon-body branch, we don't need IS_TyArgs preCallState = IS_TyArgs state
           (in fact it isn't — the cleared state installs ?calleeTyArgs). The interpreter's
           return value goes through restore_scope, which puts the caller's IS_TyArgs back. \<close>
       show "IS_Globals state' = IS_Globals state \<and>
             IS_Functions state' = IS_Functions state \<and>
-            IS_TyArgs state' = IS_TyArgs state"
+            IS_TyArgs state' = IS_TyArgs state \<and>
+            IS_DefaultCtors state' = IS_DefaultCtors state"
       proof (cases "IF_Body f")
         case (Inl bodyStmts)
         \<comment> \<open>Babylon body. \<close>
@@ -650,7 +676,8 @@ next
           case (Return postCallState bodyRetVal)
           from IH_stmt_list bodyEval Return
           have body_gf: "IS_Globals postCallState = IS_Globals preCallState \<and>
-                         IS_Functions postCallState = IS_Functions preCallState"
+                         IS_Functions postCallState = IS_Functions preCallState \<and>
+                         IS_DefaultCtors postCallState = IS_DefaultCtors preCallState"
             by (force simp: exec_result_preserves_gf_Return)
           from H f_lookup len_eq tyLen_eq fold_eq Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
@@ -781,6 +808,50 @@ qed
 corollary interp_function_call_preserves_IS_TyArgs:
   assumes "interp_function_call fuel state fnName argTys argTms = Inr (state', retVal)"
   shows "IS_TyArgs state' = IS_TyArgs state"
+  using interp_preserves_globals_funs(3)[of fuel fnName argTys argTms] assms by blast
+
+(* IS_DefaultCtors corollaries: same pattern. interp_* never modifies
+   IS_DefaultCtors at any level. *)
+
+corollary interp_statement_preserves_IS_DefaultCtors_Continue:
+  assumes "interp_statement fuel state stmt = Inr (Continue state')"
+  shows "IS_DefaultCtors state' = IS_DefaultCtors state"
+proof -
+  from interp_preserves_globals_funs(1)[of fuel stmt] assms
+  have "exec_result_preserves_gf state (Continue state')" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Continue)
+qed
+
+corollary interp_statement_preserves_IS_DefaultCtors_Return:
+  assumes "interp_statement fuel state stmt = Inr (Return state' retVal)"
+  shows "IS_DefaultCtors state' = IS_DefaultCtors state"
+proof -
+  from interp_preserves_globals_funs(1)[of fuel stmt] assms
+  have "exec_result_preserves_gf state (Return state' retVal)" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Return)
+qed
+
+corollary interp_statement_list_preserves_IS_DefaultCtors_Continue:
+  assumes "interp_statement_list fuel state stmts = Inr (Continue state')"
+  shows "IS_DefaultCtors state' = IS_DefaultCtors state"
+proof -
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
+  have "exec_result_preserves_gf state (Continue state')" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Continue)
+qed
+
+corollary interp_statement_list_preserves_IS_DefaultCtors_Return:
+  assumes "interp_statement_list fuel state stmts = Inr (Return state' retVal)"
+  shows "IS_DefaultCtors state' = IS_DefaultCtors state"
+proof -
+  from interp_preserves_globals_funs(2)[of fuel stmts] assms
+  have "exec_result_preserves_gf state (Return state' retVal)" by blast
+  thus ?thesis by (simp add: exec_result_preserves_gf_Return)
+qed
+
+corollary interp_function_call_preserves_IS_DefaultCtors:
+  assumes "interp_function_call fuel state fnName argTys argTms = Inr (state', retVal)"
+  shows "IS_DefaultCtors state' = IS_DefaultCtors state"
   using interp_preserves_globals_funs(3)[of fuel fnName argTys argTms] assms by blast
 
 end

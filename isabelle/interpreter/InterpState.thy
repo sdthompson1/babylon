@@ -46,6 +46,11 @@ record 'world InterpState =
      Maps each type parameter (by ID) to a ground CoreType. *)
   IS_TyArgs :: "(nat, CoreType) fmap"
 
+  (* For each non-ghost datatype, a triple (firstCtorName, ctorTyvars, ctorPayloadType)
+     giving the first data constructor of the datatype, used to evaluate
+     CoreTm_Default at a datatype type. *)
+  IS_DefaultCtors :: "(string, string \<times> nat list \<times> CoreType) fmap"
+
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"
 

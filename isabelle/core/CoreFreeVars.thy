@@ -30,6 +30,7 @@ fun core_term_free_vars :: "CoreTerm \<Rightarrow> string fset" where
 | "core_term_free_vars (CoreTm_Sizeof tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Allocated tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Old tm) = core_term_free_vars tm"
+| "core_term_free_vars (CoreTm_Default _) = {||}"
 
 (* Membership in ffUnion (f |`| fset_of_list xs) reduces to a list quantifier
    over the underlying list. Useful for case-splits on the recursive shapes

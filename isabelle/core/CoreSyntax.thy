@@ -91,6 +91,7 @@ datatype CoreTerm =
   | CoreTm_Sizeof CoreTerm
   | CoreTm_Allocated CoreTerm
   | CoreTm_Old CoreTerm  (* in postcondition, returns "old" value of term; elsewhere, just returns the term *)
+  | CoreTm_Default CoreType  (* default value of the given (well-kinded) type *)
 
 (* Extract the base variable name from a syntactic lvalue *)
 fun lvalue_base_name :: "CoreTerm \<Rightarrow> string option" where
@@ -124,6 +125,7 @@ lemma is_lvalue_simps [simp]:
   "is_lvalue (CoreTm_Allocated tm) = False"
   "is_lvalue (CoreTm_Old tm) = False"
   "is_lvalue (CoreTm_Sizeof tm) = False"
+  "is_lvalue (CoreTm_Default ty) = False"
   by (simp_all add: is_lvalue_def)
 
 datatype CoreStatement =

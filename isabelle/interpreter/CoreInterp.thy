@@ -364,6 +364,71 @@ fun apply_ref_updates :: "'w InterpState \<Rightarrow> (nat \<times> LValuePath 
 
 
 (* ========================================================================== *)
+(* Default values                                                              *)
+(* ========================================================================== *)
+
+(* Extract the size of each Fixed dimension as an int list. If the input
+   contains any non-Fixed dimension, the result is meaningless (only used in
+   the all-Fixed branch of default_value). *)
+fun fixed_dim_sizes :: "CoreDimension list \<Rightarrow> int list" where
+  "fixed_dim_sizes [] = []"
+| "fixed_dim_sizes (CoreDim_Fixed n # ds) = n # fixed_dim_sizes ds"
+| "fixed_dim_sizes (_ # ds) = fixed_dim_sizes ds"
+
+(* Compute the default value of a (ground, runtime) CoreType. Fuel is required
+   because the recursion goes through datatype payload types substituted by
+   the datatype's tyArgs, which need not be syntactically smaller than the
+   input. Runs out-of-fuel with InsufficientFuel; encounters MathInt/MathReal
+   or a CoreTy_Var with TypeError (statically impossible for a well-typed,
+   ground, runtime input). *)
+function default_value :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreType \<Rightarrow> InterpError + CoreValue"
+  and default_value_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreType list \<Rightarrow> InterpError + CoreValue list"
+where
+  "default_value 0 _ _ = Inl InsufficientFuel"
+| "default_value (Suc _) _ CoreTy_Bool = Inr (CV_Bool False)"
+| "default_value (Suc _) _ (CoreTy_FiniteInt sign bits) = Inr (CV_FiniteInt sign bits 0)"
+| "default_value (Suc fuel) state (CoreTy_Record flds) =
+    (case default_value_list fuel state (map snd flds) of
+      Inl err \<Rightarrow> Inl err
+    | Inr vals \<Rightarrow> Inr (CV_Record (zip (map fst flds) vals)))"
+| "default_value (Suc fuel) state (CoreTy_Datatype dtName tyArgs) =
+    (case fmlookup (IS_DefaultCtors state) dtName of
+      None \<Rightarrow> Inl TypeError
+    | Some (ctorName, tyvars, payloadTy) \<Rightarrow>
+        if length tyvars = length tyArgs then
+          let subst = fmap_of_list (zip tyvars tyArgs);
+              substPayloadTy = apply_subst subst payloadTy in
+          (case default_value fuel state substPayloadTy of
+            Inl err \<Rightarrow> Inl err
+          | Inr v \<Rightarrow> Inr (CV_Variant ctorName v))
+        else Inl TypeError)"
+| "default_value (Suc fuel) state (CoreTy_Array elemTy dims) =
+    (if list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims then
+       let sizes = fixed_dim_sizes dims in
+       (case default_value fuel state elemTy of
+         Inl err \<Rightarrow> Inl err
+       | Inr ev \<Rightarrow>
+           Inr (CV_Array sizes (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices sizes)))))
+     else
+       Inr (CV_Array (replicate (length dims) 0) fmempty))"
+| "default_value (Suc _) _ CoreTy_MathInt = Inl TypeError"
+| "default_value (Suc _) _ CoreTy_MathReal = Inl TypeError"
+| "default_value (Suc _) _ (CoreTy_Var _) = Inl TypeError"
+
+| "default_value_list 0 _ _ = Inl InsufficientFuel"
+| "default_value_list (Suc _) _ [] = Inr []"
+| "default_value_list (Suc fuel) state (ty # tys) =
+    (case default_value fuel state ty of
+      Inl err \<Rightarrow> Inl err
+    | Inr v \<Rightarrow>
+        (case default_value_list fuel state tys of
+          Inl err \<Rightarrow> Inl err
+        | Inr vs \<Rightarrow> Inr (v # vs)))"
+  by pat_completeness auto
+termination by lexicographic_order
+
+
+(* ========================================================================== *)
 (* The main intepreter definitions *)
 (* ========================================================================== *)
 
@@ -514,6 +579,11 @@ where
 | "interp_term (Suc _) state (CoreTm_Quantifier _ _ _ _) = Inl TypeError"
 | "interp_term (Suc _) _ (CoreTm_Allocated _) = Inl TypeError"
 | "interp_term (Suc _) _ (CoreTm_Old _) = Inl TypeError"
+
+  (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
+     delegate to the recursive default_value helper. *)
+| "interp_term (Suc fuel) state (CoreTm_Default ty) =
+    default_value fuel state (apply_subst (IS_TyArgs state) ty)"
 
   (* Evaluate a writable lvalue into (addr, path).
      Returns TypeError if the base variable is read-only (in IS_ConstLocals).

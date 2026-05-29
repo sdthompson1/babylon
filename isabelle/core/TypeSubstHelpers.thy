@@ -438,7 +438,8 @@ proof -
     callee_fun_ghost: "tyenv_fun_ghost_constraint calleeEnv" and
     callee_nonghost_payloads: "tyenv_nonghost_payloads_runtime calleeEnv" and
     callee_ghost_dt_subset: "tyenv_ghost_datatypes_subset calleeEnv" and
-    callee_rt_subset: "tyenv_runtime_tyvars_subset calleeEnv"
+    callee_rt_subset: "tyenv_runtime_tyvars_subset calleeEnv" and
+    callee_dt_nonempty: "tyenv_datatypes_nonempty calleeEnv"
     unfolding tyenv_well_formed_def by auto
 
   from wf_caller have
@@ -646,7 +647,12 @@ proof -
   have c15: "tyenv_runtime_tyvars_subset ?be"
     using caller_rt_subset unfolding tyenv_runtime_tyvars_subset_def by simp
 
-  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15
+  \<comment> \<open>(16) tyenv_datatypes_nonempty ?be: TE_Datatypes and TE_DataCtorsByType inherited. \<close>
+  have c16: "tyenv_datatypes_nonempty ?be"
+    using callee_dt_nonempty unfolding tyenv_datatypes_nonempty_def
+    by (simp add: apply_subst_to_callee_env_def)
+
+  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 
@@ -1798,6 +1804,32 @@ next
             = Some (apply_subst subst ty)" by simp
     with Ghost show ?thesis by simp
   qed
+next
+  case (CoreTm_Default tyD)
+  \<comment> \<open>Default ty: result type is ty itself. After substitution, the well-kindedness
+      and (if NotGhost) runtime-ness transfer through to the substituted env. \<close>
+  from CoreTm_Default.prems(1) have
+    wk: "is_well_kinded calleeEnv tyD" and
+    rt: "ghost = NotGhost \<longrightarrow> is_runtime_type calleeEnv tyD" and
+    ty_eq: "ty = tyD"
+    by (auto split: if_splits)
+  have wk_subst: "is_well_kinded (apply_subst_to_callee_env subst callerEnv calleeEnv)
+                                  (apply_subst subst tyD)"
+    using apply_subst_preserves_well_kinded_callee[OF wk CoreTm_Default.prems(3)] .
+  have rt_subst:
+    "ghost = NotGhost \<longrightarrow>
+       is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv)
+                       (apply_subst subst tyD)"
+  proof
+    assume ng: "ghost = NotGhost"
+    with rt have rt': "is_runtime_type calleeEnv tyD" by simp
+    from ng CoreTm_Default.prems(6) have ok_rt: "callee_env_subst_runtime_ok subst callerEnv calleeEnv"
+      by simp
+    from apply_subst_preserves_runtime_callee[OF rt' CoreTm_Default.prems(3) ok_rt]
+    show "is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv)
+                          (apply_subst subst tyD)" .
+  qed
+  show ?case using wk_subst rt_subst ty_eq by simp
 qed
 
 

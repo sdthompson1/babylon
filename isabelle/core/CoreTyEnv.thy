@@ -83,6 +83,7 @@ record CoreTyEnv =
      contains MathInt, MathReal, or another ghost datatype. *)
   TE_GhostDatatypes :: "string fset"
 
+
 (* Is a variable ghost? For locals, check TE_GhostLocals; for globals, TE_GhostGlobals.
    Locals shadow globals, so if a name is in both TE_LocalVars and TE_GlobalVars,
    only the local ghost status matters. *)

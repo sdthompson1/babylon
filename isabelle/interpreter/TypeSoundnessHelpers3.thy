@@ -1965,6 +1965,7 @@ proof -
           from fold_process_one_arg_preserves_globals_funs[OF fold_eq]
           have pre_globals: "IS_Globals preCallState = IS_Globals state"
             and pre_functions: "IS_Functions preCallState = IS_Functions state"
+            and pre_default_ctors: "IS_DefaultCtors preCallState = IS_DefaultCtors state"
             by auto
 
           \<comment> \<open>postCallState inherits IS_Globals / IS_Functions from preCallState
@@ -1978,6 +1979,10 @@ proof -
             by simp
           have post_functions: "IS_Functions postCallState = IS_Functions state"
             using interp_statement_list_return_preserves_functions[OF body_list_eq] pre_functions
+            by simp
+          have post_default_ctors: "IS_DefaultCtors postCallState = IS_DefaultCtors state"
+            using interp_statement_list_preserves_IS_DefaultCtors_Return[OF body_list_eq]
+                  pre_default_ctors
             by simp
 
           \<comment> \<open>tyenv_fixed_eq carries the dt-relevant field equalities. We also
@@ -2005,7 +2010,7 @@ proof -
           \<comment> \<open>Apply restore_scope_sound to get state_matches for the restored state. \<close>
           have sme_rs: "state_matches_env (restore_scope state postCallState) env storeTyping"
             using restore_scope_sound[OF state_env sme_post ext_chain
-                                          post_globals post_functions
+                                          post_globals post_functions post_default_ctors
                                           dt_eq(1) dt_eq(2) dt_eq(3)
                                           wf_env wf_mid] .
 
@@ -2776,6 +2781,11 @@ proof -
           using state_env
           unfolding state_matches_env_def ty_args_well_formed_def
           by simp
+      next
+        show "default_ctors_match ?stateW env"
+          using state_env
+          unfolding state_matches_env_def default_ctors_match_def
+          by simp
       qed
 
       \<comment> \<open>Apply apply_ref_updates_sound to get state_matches for the final state. \<close>
@@ -2852,6 +2862,542 @@ proof -
         show ?thesis by simp
       qed
     qed
+  qed
+qed
+
+(* ========================================================================== *)
+(* Soundness of default_value                                                  *)
+(* ========================================================================== *)
+
+(* Helper: every value produced by replicating one element across all indices
+   of a multi-dimensional array has the element's type. The fmap is built by
+   zipping the all_indices list with replicate (length idxs) ev. *)
+lemma default_array_fmap_typed:
+  fixes ev :: CoreValue
+  assumes "value_has_type env ev elemTy"
+  shows "\<forall>idx val.
+          fmlookup (fmap_of_list (map (\<lambda>i. (i, ev)) (all_indices sizes))) idx = Some val
+            \<longrightarrow> value_has_type env val elemTy"
+proof (intro allI impI)
+  fix idx val
+  assume lk: "fmlookup (fmap_of_list (map (\<lambda>i. (i, ev)) (all_indices sizes))) idx = Some val"
+  hence "map_of (map (\<lambda>i. (i, ev)) (all_indices sizes)) idx = Some val"
+    by (simp add: fmlookup_of_list)
+  hence "(idx, val) \<in> set (map (\<lambda>i. (i, ev)) (all_indices sizes))"
+    by (rule map_of_SomeD)
+  hence "val = ev" by auto
+  with assms show "value_has_type env val elemTy" by simp
+qed
+
+(* Helper: the fmap built by tagging all_indices with ev has domain exactly
+   the all_indices fset. *)
+lemma default_array_fmap_dom:
+  "fmdom (fmap_of_list (map (\<lambda>i. (i, ev)) (all_indices sizes)))
+     = fset_of_list (all_indices sizes)"
+  by (simp add: comp_def)
+
+(* Helper: fixed_dim_sizes on an all-Fixed list extracts the sizes and has
+   the right length. *)
+lemma fixed_dim_sizes_length:
+  "list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims
+     \<Longrightarrow> length (fixed_dim_sizes dims) = length dims"
+  by (induction dims rule: fixed_dim_sizes.induct) auto
+
+lemma fixed_dim_sizes_match_dims:
+  "list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims
+     \<Longrightarrow> sizes_match_dims (fixed_dim_sizes dims) dims"
+  by (induction dims rule: fixed_dim_sizes.induct) auto
+
+lemma fixed_dim_sizes_valid:
+  assumes "array_dims_well_kinded dims"
+      and "list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims"
+  shows "sizes_valid (fixed_dim_sizes dims)"
+proof -
+  from assms have all_fixed: "list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims" by simp
+  from assms(1) have all_in_range: "list_all dim_in_range dims"
+    unfolding array_dims_well_kinded_def by simp
+  show ?thesis
+    using all_fixed all_in_range
+  proof (induction dims rule: fixed_dim_sizes.induct)
+    case 1 then show ?case by (simp add: sizes_valid_def)
+  next
+    case (2 n ds)
+    from "2.prems"(2) have n_in: "dim_in_range (CoreDim_Fixed n)" by simp
+    from "2.prems"(2) have rest_in: "list_all dim_in_range ds" by simp
+    from "2.prems"(1) have rest_fixed: "list_all (\<lambda>d. dim_category d = DimCat_Fixed) ds" by simp
+    from "2.IH"[OF rest_fixed rest_in] have rec: "sizes_valid (fixed_dim_sizes ds)" .
+    from n_in have "int_in_range (int_range Unsigned IntBits_64) n" by simp
+    hence "n \<ge> 0 \<and> n \<le> snd (int_range Unsigned IntBits_64)"
+      by (cases "int_range Unsigned IntBits_64") simp
+    with rec show ?case by (simp add: sizes_valid_def)
+  qed auto
+qed
+
+(* Allocatable / Unknown branch: sizes_match_dims with replicate-zero sizes
+   holds because every dim is non-Fixed (dims_uniform from array_dims_well_kinded
+   ensures uniformity, so if one is non-Fixed they all are). *)
+lemma sizes_match_dims_replicate_zero:
+  assumes "array_dims_well_kinded dims"
+      and "\<not> list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims"
+  shows "sizes_match_dims (replicate (length dims) 0) dims"
+proof -
+  from assms(1) have uniform: "dims_uniform dims"
+    and nonempty: "dims \<noteq> []"
+    unfolding array_dims_well_kinded_def by simp_all
+  from assms(2) obtain d where d_in: "d \<in> set dims"
+                            and d_notFixed: "dim_category d \<noteq> DimCat_Fixed"
+    by (auto simp: list_all_iff)
+  \<comment> \<open>All dims share the same category. \<close>
+  have all_same_pairwise: "\<forall>d1 \<in> set dims. \<forall>d2 \<in> set dims. dim_category d1 = dim_category d2"
+    using uniform
+  proof (induction dims rule: dims_uniform.induct)
+    case 1 then show ?case by simp
+  next
+    case (2 d') then show ?case by simp
+  next
+    case (3 d1 d2 ds)
+    from "3.prems" have cat_eq: "dim_category d1 = dim_category d2"
+      and rest_uniform: "dims_uniform (d2 # ds)" by simp_all
+    from "3.IH"[OF rest_uniform]
+    have rest_pairwise: "\<forall>x \<in> set (d2 # ds). \<forall>y \<in> set (d2 # ds). dim_category x = dim_category y" .
+    show ?case
+    proof (intro ballI)
+      fix x y
+      assume x_in: "x \<in> set (d1 # d2 # ds)" and y_in: "y \<in> set (d1 # d2 # ds)"
+      have d2_cat: "\<And>z. z \<in> set (d2 # ds) \<Longrightarrow> dim_category z = dim_category d2"
+        using rest_pairwise by auto
+      have d1_cat: "dim_category d1 = dim_category d2" using cat_eq .
+      have x_cat: "dim_category x = dim_category d2"
+      proof (cases "x = d1")
+        case True with d1_cat show ?thesis by simp
+      next
+        case False with x_in have "x \<in> set (d2 # ds)" by simp
+        thus ?thesis by (rule d2_cat)
+      qed
+      have y_cat: "dim_category y = dim_category d2"
+      proof (cases "y = d1")
+        case True with d1_cat show ?thesis by simp
+      next
+        case False with y_in have "y \<in> set (d2 # ds)" by simp
+        thus ?thesis by (rule d2_cat)
+      qed
+      from x_cat y_cat show "dim_category x = dim_category y" by simp
+    qed
+  qed
+  have all_same_cat: "\<forall>d' \<in> set dims. dim_category d' = dim_category d"
+    using all_same_pairwise d_in by blast
+  with d_notFixed have all_non_fixed: "\<forall>d' \<in> set dims. dim_category d' \<noteq> DimCat_Fixed"
+    by auto
+  show ?thesis
+    using all_non_fixed
+  proof (induction dims)
+    case Nil then show ?case by simp
+  next
+    case (Cons d' rest)
+    from Cons.prems have d'_non_fixed: "dim_category d' \<noteq> DimCat_Fixed" by simp
+    from Cons.prems have rest_non_fixed: "\<forall>d'' \<in> set rest. dim_category d'' \<noteq> DimCat_Fixed" by simp
+    from Cons.IH[OF rest_non_fixed]
+    have rec: "sizes_match_dims (replicate (length rest) 0) rest" .
+    show ?case
+    proof (cases d')
+      case CoreDim_Unknown
+      with rec show ?thesis by simp
+    next
+      case CoreDim_Allocatable
+      with rec show ?thesis by simp
+    next
+      case (CoreDim_Fixed n)
+      with d'_non_fixed show ?thesis by simp
+    qed
+  qed
+qed
+
+(* Allocatable/Unknown branch: with sizes = replicate (length dims) 0, the
+   index set is empty (some dim is 0), so fmempty matches. *)
+lemma all_indices_replicate_zero_empty:
+  assumes "dims \<noteq> []"
+  shows "all_indices (replicate (length dims) 0) = []"
+proof -
+  from assms obtain d ds where dims_eq: "dims = d # ds" by (cases dims) auto
+  hence rep_eq: "replicate (length dims) 0 = 0 # replicate (length ds) 0" by simp
+  have "all_indices (0 # replicate (length ds) 0) = []"
+    by (simp add: Let_def)
+  with rep_eq show ?thesis by metis
+qed
+
+lemma fmap_matches_sizes_empty_replicate:
+  assumes "dims \<noteq> []"
+  shows "fmap_matches_sizes (replicate (length dims) 0) fmempty"
+proof -
+  have sv: "sizes_valid (replicate (length dims) 0)"
+    by (simp add: sizes_valid_def list_all_iff)
+  have empty: "all_indices (replicate (length dims) 0) = []"
+    using all_indices_replicate_zero_empty[OF assms] .
+  show ?thesis by (simp add: fmap_matches_sizes_def sv empty)
+qed
+
+(* Main soundness theorem for default_value.
+
+   Statement: under state_matches_env and tyenv_well_formed, evaluating
+   default_value on a well-kinded, runtime, ground type yields either a
+   sound error or a CoreValue whose type matches.
+
+   Proved by mutual induction following default_value_default_value_list.induct.
+*)
+lemma default_value_sound:
+  shows default_value_sound_main:
+          "state_matches_env (state :: 'w InterpState) env storeTyping \<Longrightarrow>
+           tyenv_well_formed env \<Longrightarrow>
+           is_well_kinded env ty \<Longrightarrow>
+           is_runtime_type env ty \<Longrightarrow>
+           type_tyvars ty = {} \<Longrightarrow>
+           (case default_value fuel state ty of
+              Inl err \<Rightarrow> sound_error_result err
+            | Inr val \<Rightarrow> value_has_type env val ty)"
+    and default_value_list_sound_main:
+          "state_matches_env (state :: 'w InterpState) env storeTyping \<Longrightarrow>
+           tyenv_well_formed env \<Longrightarrow>
+           list_all (is_well_kinded env) tys \<Longrightarrow>
+           list_all (is_runtime_type env) tys \<Longrightarrow>
+           list_all (\<lambda>ty. type_tyvars ty = {}) tys \<Longrightarrow>
+           (case default_value_list fuel state tys of
+              Inl err \<Rightarrow> sound_error_result err
+            | Inr vals \<Rightarrow> list_all2 (value_has_type env) vals tys)"
+proof (induction rule: default_value_default_value_list.induct)
+  case (1 uu uv) then show ?case by simp
+next
+  \<comment> \<open>Bool: trivial. \<close>
+  case (2 uw ux)
+  then show ?case by simp
+next
+  \<comment> \<open>FiniteInt: zero fits. \<close>
+  case (3 uy uz sign bits)
+  have "int_fits sign bits 0"
+    by (cases sign; cases bits; simp)
+  then show ?case by simp
+next
+  \<comment> \<open>Record: recurse on field types via default_value_list. \<close>
+  case (4 fuel state flds)
+  from "4.prems"(3) have
+    distinct_names: "distinct (map fst flds)" and
+    flds_wk: "list_all (is_well_kinded env) (map snd flds)"
+    by simp_all
+  from "4.prems"(4) have flds_rt: "list_all (is_runtime_type env) (map snd flds)" by simp
+  from "4.prems"(5) have flds_ground: "list_all (\<lambda>ty. type_tyvars ty = {}) (map snd flds)"
+    by (auto simp: list_all_iff case_prod_beta)
+  from "4.IH"[OF "4.prems"(1,2) flds_wk flds_rt flds_ground]
+  have IH_list: "case default_value_list fuel state (map snd flds) of
+                   Inl err \<Rightarrow> sound_error_result err
+                 | Inr vals \<Rightarrow> list_all2 (value_has_type env) vals (map snd flds)" .
+  show ?case
+  proof (cases "default_value_list fuel state (map snd flds)")
+    case (Inl err)
+    with IH_list show ?thesis by simp
+  next
+    case (Inr vals)
+    with IH_list have vals_typed:
+      "list_all2 (value_has_type env) vals (map snd flds)" by simp
+    have len_eq: "length vals = length flds"
+      using vals_typed by (auto dest: list_all2_lengthD)
+    let ?fieldVals = "zip (map fst flds) vals"
+    have len_pairs: "length ?fieldVals = length flds" using len_eq by simp
+    have fst_eq: "map fst ?fieldVals = map fst flds"
+      using len_eq by simp
+    have rec_typed: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
+                       ?fieldVals flds"
+      unfolding list_all2_conv_all_nth
+    proof (intro conjI allI impI)
+      show "length ?fieldVals = length flds" using len_pairs .
+    next
+      fix i assume i_lt: "i < length ?fieldVals"
+      hence i_lt': "i < length flds" using len_pairs by simp
+      from vals_typed i_lt' len_eq
+      have "value_has_type env (vals ! i) (map snd flds ! i)"
+        by (simp add: list_all2_conv_all_nth)
+      hence v_typed: "value_has_type env (vals ! i) (snd (flds ! i))"
+        using i_lt' by simp
+      have "?fieldVals ! i = (fst (flds ! i), vals ! i)"
+        using i_lt' len_eq by simp
+      then show "(case ?fieldVals ! i of (n1, v) \<Rightarrow>
+                   \<lambda>(n2, t). n1 = n2 \<and> value_has_type env v t) (flds ! i)"
+        using v_typed by (cases "flds ! i"; simp)
+    qed
+    have "value_has_type env (CV_Record ?fieldVals) (CoreTy_Record flds)"
+      using distinct_names rec_typed by simp
+    with Inr show ?thesis by simp
+  qed
+next
+  \<comment> \<open>Datatype: look up first ctor in IS_DefaultCtors, recurse on payload. \<close>
+  case (5 fuel state dtName tyArgs)
+  from "5.prems"(3) obtain numTyArgs where
+    dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some numTyArgs" and
+    len_args: "length tyArgs = numTyArgs" and
+    args_wk: "list_all (is_well_kinded env) tyArgs"
+    by (auto split: option.splits)
+  from "5.prems"(4) have
+    dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
+    args_rt: "list_all (is_runtime_type env) tyArgs"
+    by simp_all
+  from "5.prems"(5) have args_ground: "\<forall>arg \<in> set tyArgs. type_tyvars arg = {}" by auto
+
+  \<comment> \<open>tyenv_datatypes_nonempty + tyenv_first_ctor_consistent give us the first ctor. \<close>
+  from "5.prems"(2) have wf: "tyenv_well_formed env" .
+  from wf have dt_ne: "tyenv_datatypes_nonempty env"
+    unfolding tyenv_well_formed_def by simp
+  from dt_ne dt_lookup obtain ctorName otherCtors where
+    ctors_lookup: "fmlookup (TE_DataCtorsByType env) dtName = Some (ctorName # otherCtors)"
+    unfolding tyenv_datatypes_nonempty_def by force
+  from tyenv_first_ctor_consistent[OF wf ctors_lookup] obtain tyvars payload where
+    ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payload)"
+    by blast
+
+  \<comment> \<open>default_ctors_match gives us the IS_DefaultCtors entry. \<close>
+  from "5.prems"(1) have dcm: "default_ctors_match state env"
+    unfolding state_matches_env_def by simp
+  from dcm ctors_lookup ctor_lookup
+  have dc_lookup: "fmlookup (IS_DefaultCtors state) dtName = Some (ctorName, tyvars, payload)"
+    unfolding default_ctors_match_def by blast
+
+  \<comment> \<open>tyenv_ctors_consistent gives length tyvars = numTyArgs = length tyArgs. \<close>
+  from wf have ctors_cons: "tyenv_ctors_consistent env"
+    unfolding tyenv_well_formed_def by simp
+  from ctors_cons ctor_lookup dt_lookup
+  have len_tyvars: "length tyvars = length tyArgs"
+    using len_args unfolding tyenv_ctors_consistent_def by force
+
+  \<comment> \<open>tyenv_payloads_well_kinded: payload is well-kinded in env-with-tyvars. \<close>
+  from wf have pwk: "tyenv_payloads_well_kinded env"
+    unfolding tyenv_well_formed_def by simp
+  from pwk ctor_lookup
+  have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payload"
+    unfolding tyenv_payloads_well_kinded_def by blast
+
+  \<comment> \<open>tyenv_nonghost_payloads_runtime: payload is runtime in env-with-tyvars+rttyvars. \<close>
+  from wf have npr: "tyenv_nonghost_payloads_runtime env"
+    unfolding tyenv_well_formed_def by simp
+  from npr ctor_lookup dt_nonghost
+  have payload_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list tyvars,
+                                            TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>) payload"
+    unfolding tyenv_nonghost_payloads_runtime_def by blast
+
+  \<comment> \<open>Substituted payload is well-kinded and runtime in env. \<close>
+  let ?subst = "fmap_of_list (zip tyvars tyArgs)"
+  let ?substPayload = "apply_subst ?subst payload"
+  have substPayload_wk: "is_well_kinded env ?substPayload"
+    using apply_subst_specializes_well_kinded[OF payload_wk args_wk len_tyvars] .
+  have substPayload_rt: "is_runtime_type env ?substPayload"
+    using apply_subst_specializes_runtime[OF payload_rt args_rt len_tyvars] .
+
+  \<comment> \<open>Groundness of the substituted payload: payload's free tyvars are within
+      set tyvars (so dom subst covers them), and the subst's range is ground
+      because tyArgs are. \<close>
+  have payload_tyvars: "type_tyvars payload \<subseteq> fset (fset_of_list tyvars)"
+    using is_well_kinded_type_tyvars_subset[OF payload_wk] by simp
+  have subst_dom: "fmdom ?subst = fset_of_list tyvars"
+    using len_tyvars by simp
+  have subst_range_ground: "subst_range_tyvars ?subst = {}"
+  proof -
+    have "\<And>ty'. ty' \<in> fmran' ?subst \<Longrightarrow> type_tyvars ty' = {}"
+    proof -
+      fix ty' assume "ty' \<in> fmran' ?subst"
+      then obtain n where "fmlookup ?subst n = Some ty'" by (auto simp: fmran'_alt_def)
+      hence "(n, ty') \<in> set (zip tyvars tyArgs)"
+        by (meson fmap_of_list_SomeD)
+      hence "ty' \<in> set tyArgs" using set_zip_rightD by metis
+      with args_ground show "type_tyvars ty' = {}" by simp
+    qed
+    thus ?thesis unfolding subst_range_tyvars_def by simp
+  qed
+  have substPayload_ground: "type_tyvars ?substPayload = {}"
+  proof -
+    have "type_tyvars ?substPayload \<subseteq>
+            (type_tyvars payload - fset (fmdom ?subst)) \<union> subst_range_tyvars ?subst"
+      by (rule apply_subst_tyvars_result)
+    also have "... \<subseteq> {}"
+      using payload_tyvars subst_dom subst_range_ground by auto
+    finally show ?thesis by simp
+  qed
+
+  \<comment> \<open>Apply the IH to the substituted payload type. The IH requires the triple
+      to be presented as two nested pair-equations (one per pair destructuring). \<close>
+  obtain triple where triple_def: "triple = (ctorName, tyvars, payload)" by simp
+  obtain rest where rest_def: "rest = (tyvars, payload)" by simp
+  have dc_lookup': "fmlookup (IS_DefaultCtors state) dtName = Some triple"
+    using dc_lookup triple_def by simp
+  have pair1: "(ctorName, rest) = triple" using triple_def rest_def by simp
+  have pair2: "(tyvars, payload) = rest" using rest_def by simp
+  have IH_payload: "case default_value fuel state ?substPayload of
+                      Inl err \<Rightarrow> sound_error_result err
+                    | Inr v \<Rightarrow> value_has_type env v ?substPayload"
+    using "5.IH" "5.prems"(1) dc_lookup' len_tyvars local.wf pair1 rest_def substPayload_ground
+      substPayload_rt substPayload_wk by auto
+
+  show ?case
+  proof (cases "default_value fuel state ?substPayload")
+    case (Inl err)
+    with IH_payload dc_lookup len_tyvars show ?thesis by (simp add: Let_def)
+  next
+    case (Inr v)
+    with IH_payload have v_typed: "value_has_type env v ?substPayload" by simp
+    \<comment> \<open>Build value_has_type for the variant. \<close>
+    have ty_args_ground: "list_all (\<lambda>a. type_tyvars a = {}) tyArgs"
+      using args_ground by (simp add: list_all_iff)
+    have value_typed:
+      "value_has_type env (CV_Variant ctorName v) (CoreTy_Datatype dtName tyArgs)"
+      using ctor_lookup len_tyvars args_wk args_rt ty_args_ground dt_nonghost v_typed
+      by (simp split: option.splits)
+    from dc_lookup len_tyvars Inr value_typed
+    show ?thesis by (simp add: Let_def)
+  qed
+next
+  \<comment> \<open>Array: two branches (all-Fixed, else). \<close>
+  case (6 fuel state elemTy dims)
+  from "6.prems"(3) have
+    elem_wk: "is_well_kinded env elemTy" and
+    dims_wk: "array_dims_well_kinded dims"
+    by simp_all
+  from "6.prems"(4) have elem_rt: "is_runtime_type env elemTy" by simp
+  from "6.prems"(5) have elem_ground: "type_tyvars elemTy = {}" by simp
+  from dims_wk have dims_nonempty: "dims \<noteq> []"
+    unfolding array_dims_well_kinded_def by simp
+
+  show ?case
+  proof (cases "list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims")
+    case True
+    let ?sizes = "fixed_dim_sizes dims"
+    from "6.IH"(1)[OF True refl "6.prems"(1,2) elem_wk elem_rt elem_ground]
+    have IH_elem: "case default_value fuel state elemTy of
+                     Inl err \<Rightarrow> sound_error_result err
+                   | Inr ev \<Rightarrow> value_has_type env ev elemTy" .
+    show ?thesis
+    proof (cases "default_value fuel state elemTy")
+      case (Inl err)
+      with IH_elem True show ?thesis by (simp add: Let_def)
+    next
+      case (Inr ev)
+      with IH_elem have ev_typed: "value_has_type env ev elemTy" by simp
+      let ?fm = "fmap_of_list (map (\<lambda>i. (i, ev)) (all_indices ?sizes))"
+      have fms: "fmap_matches_sizes ?sizes ?fm"
+        unfolding fmap_matches_sizes_def
+        using fixed_dim_sizes_valid[OF dims_wk True] default_array_fmap_dom by simp
+      have smd: "sizes_match_dims ?sizes dims"
+        using fixed_dim_sizes_match_dims[OF True] .
+      have fm_vals_typed:
+        "\<forall>idx val. fmlookup ?fm idx = Some val \<longrightarrow> value_has_type env val elemTy"
+        by (rule default_array_fmap_typed[OF ev_typed])
+      have value_typed:
+        "value_has_type env (CV_Array ?sizes ?fm) (CoreTy_Array elemTy dims)"
+        using elem_wk elem_rt elem_ground fm_vals_typed dims_wk fms smd
+        by simp
+      from True Inr value_typed
+      show ?thesis by (simp add: Let_def)
+    qed
+  next
+    case False
+    let ?sizes = "replicate (length dims) (0::int)"
+    have fms: "fmap_matches_sizes ?sizes fmempty"
+      using fmap_matches_sizes_empty_replicate[OF dims_nonempty] .
+    have smd: "sizes_match_dims ?sizes dims"
+      using sizes_match_dims_replicate_zero[OF dims_wk False] .
+    have value_typed:
+      "value_has_type env (CV_Array ?sizes fmempty) (CoreTy_Array elemTy dims)"
+      using elem_wk elem_rt elem_ground dims_wk fms smd by simp
+    from False value_typed
+    show ?thesis by simp
+  qed
+next
+  \<comment> \<open>MathInt: not runtime, contradicts prems. \<close>
+  case (7 va vb)
+  then show ?case by simp
+next
+  \<comment> \<open>MathReal: not runtime, contradicts prems. \<close>
+  case (8 vc vd)
+  then show ?case by simp
+next
+  \<comment> \<open>Var: not ground, contradicts prems. \<close>
+  case (9 ve vf vg)
+  then show ?case by simp
+next
+  \<comment> \<open>default_value_list 0: out of fuel. \<close>
+  case (10 vh vi)
+  then show ?case by simp
+next
+  \<comment> \<open>default_value_list (Suc _) []: trivial. \<close>
+  case (11 vj vk)
+  then show ?case by simp
+next
+  \<comment> \<open>default_value_list cons. \<close>
+  case (12 fuel state ty tys)
+  from "12.prems"(3) have ty_wk: "is_well_kinded env ty"
+    and tys_wk: "list_all (is_well_kinded env) tys" by simp_all
+  from "12.prems"(4) have ty_rt: "is_runtime_type env ty"
+    and tys_rt: "list_all (is_runtime_type env) tys" by simp_all
+  from "12.prems"(5) have ty_ground: "type_tyvars ty = {}"
+    and tys_ground: "list_all (\<lambda>t. type_tyvars t = {}) tys" by simp_all
+  from "12.IH"(1)[OF "12.prems"(1,2) ty_wk ty_rt ty_ground]
+  have IH_head: "case default_value fuel state ty of
+                   Inl err \<Rightarrow> sound_error_result err
+                 | Inr v \<Rightarrow> value_has_type env v ty" .
+  show ?case
+  proof (cases "default_value fuel state ty")
+    case (Inl err)
+    with IH_head show ?thesis by simp
+  next
+    case (Inr v)
+    with IH_head have v_typed: "value_has_type env v ty" by simp
+    from "12.IH"(2)[OF Inr "12.prems"(1,2) tys_wk tys_rt tys_ground]
+    have IH_tail: "case default_value_list fuel state tys of
+                     Inl err \<Rightarrow> sound_error_result err
+                   | Inr vs \<Rightarrow> list_all2 (value_has_type env) vs tys" by simp
+    show ?thesis
+    proof (cases "default_value_list fuel state tys")
+      case Inl2: (Inl err)
+      with IH_tail Inr show ?thesis by simp
+    next
+      case Inr2: (Inr vs)
+      with IH_tail have vs_typed: "list_all2 (value_has_type env) vs tys" by simp
+      from Inr Inr2 v_typed vs_typed
+      show ?thesis by simp
+    qed
+  qed
+qed
+
+
+(* Wrapper used at the top-level cases tm branch of type_soundness. *)
+lemma type_soundness_default:
+  assumes state_env: "state_matches_env (state :: 'w InterpState) env storeTyping"
+    and wf_env: "tyenv_well_formed env"
+    and typing: "core_term_type env NotGhost (CoreTm_Default ty) = Some ty'"
+  shows "sound_term_result state env ty' (interp_term (Suc fuel) state (CoreTm_Default ty))"
+proof -
+  from typing have
+    wk: "is_well_kinded env ty" and
+    rt: "is_runtime_type env ty" and
+    ty_eq: "ty' = ty"
+    by (auto split: if_splits)
+  let ?gty = "apply_subst (IS_TyArgs state) ty"
+  have gty_wk: "is_well_kinded env ?gty"
+    using is_well_kinded_apply_IS_TyArgs[OF state_env wf_env wk] .
+  have gty_rt: "is_runtime_type env ?gty"
+    using is_runtime_type_apply_IS_TyArgs[OF state_env rt] .
+  have gty_ground: "type_tyvars ?gty = {}"
+    using is_runtime_type_apply_IS_TyArgs_ground[OF state_env rt] .
+  from default_value_sound_main[OF state_env wf_env gty_wk gty_rt gty_ground]
+  have sound: "case default_value fuel state ?gty of
+                 Inl err \<Rightarrow> sound_error_result err
+               | Inr val \<Rightarrow> value_has_type env val ?gty" .
+  have interp_eq:
+    "interp_term (Suc fuel) state (CoreTm_Default ty) = default_value fuel state ?gty"
+    by simp
+  show ?thesis
+  proof (cases "default_value fuel state ?gty")
+    case (Inl err)
+    with sound interp_eq ty_eq show ?thesis by simp
+  next
+    case (Inr val)
+    with sound interp_eq ty_eq
+    have "value_has_type env val ?gty" by simp
+    with Inr interp_eq ty_eq show ?thesis by simp
   qed
 qed
 

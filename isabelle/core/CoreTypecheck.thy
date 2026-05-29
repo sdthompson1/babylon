@@ -313,6 +313,12 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 | "core_term_type env NotGhost (CoreTm_Old _) = None"
 | "core_term_type env Ghost (CoreTm_Old tm) = core_term_type env Ghost tm"
 
+  (* Default value of a type. Type must be well-kinded; in NotGhost mode it
+     must additionally be a runtime type. *)
+| "core_term_type env ghost (CoreTm_Default ty) =
+    (if is_well_kinded env ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env ty)
+     then Some ty else None)"
+
   by pat_completeness auto
 
 termination
@@ -828,6 +834,13 @@ proof -
     have "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
       using CoreTm_Sizeof.IH CoreTm_Sizeof.prems by blast
     then show ?case by (simp split: option.splits CoreType.splits)
+  next
+    case (CoreTm_Default ty)
+    have wk_eq: "is_well_kinded env1 ty = is_well_kinded env2 ty"
+      using is_well_kinded_cong_env CoreTm_Default.prems by metis
+    have rt_eq: "is_runtime_type env1 ty = is_runtime_type env2 ty"
+      using is_runtime_type_cong_env CoreTm_Default.prems by metis
+    show ?case by (simp add: wk_eq rt_eq)
   qed simp_all
 qed
 
@@ -1240,6 +1253,16 @@ next
   case (CoreTm_Old tm)
   then show ?case
     by (cases ghost) auto
+next
+  case (CoreTm_Default tyD)
+  let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
+                       TE_GhostLocals := gv' \<rparr>"
+  have wk_eq: "is_well_kinded ?env_x tyD = is_well_kinded env tyD"
+    using is_well_kinded_cong_env[of ?env_x env] by simp
+  have rt_eq: "is_runtime_type ?env_x tyD = is_runtime_type env tyD"
+    using is_runtime_type_cong_env[of ?env_x env] by simp
+  from CoreTm_Default.prems(2) show ?case
+    by (simp add: wk_eq rt_eq)
 qed
 
 
@@ -1590,6 +1613,20 @@ next
     using CoreTm_Sizeof.IH tm_ty by blast
   show ?case using CoreTm_Sizeof.prems tm_ty tm_ty'
     by (auto split: option.splits CoreType.splits if_splits)
+next
+  case (CoreTm_Default tyD)
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
+  from CoreTm_Default.prems have
+    wk: "is_well_kinded env tyD" and
+    rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env tyD" and
+    ty_eq: "ty = tyD"
+    by (auto split: if_splits)
+  have wk': "is_well_kinded ?env' tyD"
+    using is_well_kinded_extend_tyvars[OF wk] .
+  have rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' tyD"
+    using rt is_runtime_type_extend_runtime_tyvars by blast
+  show ?case using wk' rt' ty_eq by simp
 qed
 
 
@@ -2005,6 +2042,10 @@ next
   case (CoreTm_Old tm)
   show ?case using CoreTm_Old.prems(1) CoreTm_Old.IH CoreTm_Old.prems(2)
     by (cases ghost) auto
+next
+  case (CoreTm_Default tyD)
+  show ?case using CoreTm_Default.prems(1)
+    by (auto split: if_splits)
 qed
 
 (* Corollaries for convenient use at call sites *)
