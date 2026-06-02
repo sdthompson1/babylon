@@ -37,6 +37,10 @@ datatype TypeError =
   | TyErr_MixedDirectionsInChain Location
   (* Type inference errors *)
   | TyErr_CannotInferType Location
+  (* Variable declaration errors *)
+  | TyErr_VarDeclNeedsTypeOrValue Location  (* `var x;` with neither type annotation nor initializer *)
+  | TyErr_RefDeclNeedsValue Location  (* `ref x;` with no initializer *)
+  | TyErr_RefDeclNeedsLvalue Location  (* `ref x = e;` where e is not an lvalue *)
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType

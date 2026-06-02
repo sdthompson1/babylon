@@ -3,33 +3,6 @@ theory ElabTermCorrectHelpers
     "../core/CoreTypecheck" "../core/TypeSubstPreservation"
 begin
 
-(* Weakening: extending the interval further preserves core_term_type.
-   Both endpoints may move outward (lo' \<le> lo, hi' \<ge> hi). *)
-lemma core_term_type_extend_env_with_tyvars_mono:
-  assumes "core_term_type (extend_env_with_tyvars env ghost lo hi) ghost tm = Some ty"
-    and "lo' \<le> lo" and "hi \<le> hi'"
-  shows "core_term_type (extend_env_with_tyvars env ghost lo' hi') ghost tm = Some ty"
-proof -
-  let ?env_src = "extend_env_with_tyvars env ghost lo hi"
-  let ?env_tgt = "extend_env_with_tyvars env ghost lo' hi'"
-  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
-  \<comment> \<open>[lo..<hi] is contained in [lo'..<hi'] when endpoints move outward\<close>
-  have contained: "fset_of_list [lo..<hi] |\<subseteq>| fset_of_list [lo'..<hi']"
-    using assms(2,3) by (auto simp: fset_of_list_elem)
-  \<comment> \<open>Union of a subset with the difference is the whole\<close>
-  have union_eq: "fset_of_list [lo..<hi] |\<union>| ?diff = fset_of_list [lo'..<hi']"
-    using contained by auto
-  \<comment> \<open>Target env = source env with extra type vars added\<close>
-  have env_eq: "?env_tgt = ?env_src \<lparr> TE_TypeVars := TE_TypeVars ?env_src |\<union>| ?diff,
-                                      TE_RuntimeTypeVars := TE_RuntimeTypeVars ?env_src |\<union>|
-                                                            (if ghost = NotGhost then ?diff else {||}) \<rparr>"
-    unfolding extend_env_with_tyvars_def
-    using union_eq by (cases "ghost = NotGhost") (auto simp: funion_assoc)
-  show ?thesis
-    using assms(1) core_term_type_irrelevant_tyvar
-    by (simp add: env_eq)
-qed
-
 (* Monotonicity of next_mv: elab_term / elab_term_list / elab_term_list_with_envs only advance the counter. *)
 lemma elab_term_next_mv_monotone:
   "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"

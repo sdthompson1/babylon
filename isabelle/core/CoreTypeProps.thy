@@ -272,6 +272,17 @@ fun is_writable_lvalue :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" 
 | "is_writable_lvalue env (CoreTm_ArrayProj tm _) = is_writable_lvalue env tm"
 | "is_writable_lvalue _ _ = False"
 
+(* is_writable_lvalue depends on the environment only through TE_LocalVars and
+   TE_ConstLocals (via tyenv_var_writable), so it is unaffected by adding type
+   variables to the environment. *)
+lemma is_writable_lvalue_irrelevant_tyvar [simp]:
+  "is_writable_lvalue
+     (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+            TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) tm
+   = is_writable_lvalue env tm"
+  by (induction tm rule: is_writable_lvalue.induct)
+     (auto simp: tyenv_var_writable_def)
+
 
 (* ========================================================================== *)
 (* Binary operator classification *)

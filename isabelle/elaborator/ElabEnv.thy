@@ -54,6 +54,26 @@ definition elabenv_well_formed :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow>
         data_ctor_arity_consistent env name arity))"
 
 
+(* elabenv_well_formed depends on env only through TE_TypeVars, TE_Datatypes and
+   TE_DataCtors (the first two via is_well_kinded in typedefs_well_formed, the last
+   in data_ctor_arity_consistent). Any two envs agreeing on those three fields are
+   equally well-formed. In particular the local-variable updates that statement
+   elaboration performs (TE_LocalVars / TE_GhostLocals / TE_ConstLocals /
+   TE_ProofGoal) leave elabenv_well_formed unchanged. *)
+lemma elabenv_well_formed_cong_env:
+  assumes "TE_TypeVars env' = TE_TypeVars env"
+    and "TE_Datatypes env' = TE_Datatypes env"
+    and "TE_DataCtors env' = TE_DataCtors env"
+  shows "elabenv_well_formed env' elabEnv = elabenv_well_formed env elabEnv"
+proof -
+  have wk_cong: "\<And>ty. is_well_kinded env' ty = is_well_kinded env ty"
+    using is_well_kinded_cong_env[OF assms(1,2)] by blast
+  show ?thesis
+    unfolding elabenv_well_formed_def typedefs_well_formed_def
+              data_ctor_arity_consistent_def
+    using wk_cong assms(3) by simp
+qed
+
 (* elabenv_well_formed is preserved under extend_env_with_tyvars: it depends on env
    only through TE_DataCtors (in data_ctor_arity_consistent — unchanged) and
    is_well_kinded (in typedefs_well_formed — preserved by adding tyvars). *)
