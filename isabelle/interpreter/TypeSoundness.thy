@@ -1913,10 +1913,154 @@ next
         from typing CoreStmt_Fix show ?thesis
           by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
       next
-        case (CoreStmt_Obtain _ _ _)
-        \<comment> \<open>Obtain only typechecks in Ghost mode; the outer case is NotGhost. \<close>
-        from typing CoreStmt_Obtain show ?thesis
+        case (CoreStmt_Obtain varName varTy condTm)
+        \<comment> \<open>Obtain: a runtime no-op that introduces a ghost local. Like the Ghost
+            Var VarDecl case, the interpreter drops varName from the runtime
+            maps and we extend env with the new ghost local. \<close>
+        from typing CoreStmt_Obtain have
+          env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                 TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                                 TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
           by (auto simp: Let_def split: if_splits)
+        let ?state' = "state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                               IS_Refs := fmdrop varName (IS_Refs state),
+                               IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>"
+        have interp_eq: "interp_statement (Suc fuel) state
+            (CoreStmt_Obtain varName varTy condTm) = Inr (Continue ?state')"
+          by simp
+        from "4.prems"(1) have
+          old_sme: "state_matches_env state env storeTyping" .
+        have tyargs_eq [simp]: "IS_TyArgs ?state' = IS_TyArgs state" by simp
+        have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
+                          "TE_Datatypes env' = TE_Datatypes env"
+                          "TE_TypeVars env' = TE_TypeVars env"
+                          "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+                          "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
+          using env'_eq by simp_all
+        have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
+          using value_has_type_cong_env[OF env'_fields] .
+        have tap_eq: "\<And>t p. type_at_path env t p = type_at_path env' t p"
+          using type_at_path_cong_env[OF env'_fields(1)] .
+        have "state_matches_env ?state' env' storeTyping"
+          unfolding state_matches_env_def
+        proof (intro conjI)
+          show "local_vars_exist_in_state ?state' env' storeTyping"
+            unfolding local_vars_exist_in_state_def
+          proof (intro allI impI, elim conjE)
+            fix name ty
+            assume lk: "fmlookup (TE_LocalVars env') name = Some ty"
+              and ng: "name |\<notin>| TE_GhostLocals env'"
+            from ng env'_eq have "name \<noteq> varName" by auto
+            with lk env'_eq have lk_old: "fmlookup (TE_LocalVars env) name = Some ty" by simp
+            from ng env'_eq \<open>name \<noteq> varName\<close> have ng_old: "name |\<notin>| TE_GhostLocals env" by auto
+            from old_sme lk_old ng_old
+            have "local_var_in_state_with_type state env storeTyping name ty"
+              unfolding state_matches_env_def local_vars_exist_in_state_def by blast
+            with \<open>name \<noteq> varName\<close> tap_eq show "local_var_in_state_with_type ?state' env' storeTyping name ty"
+              unfolding local_var_in_state_with_type_def Let_def
+              by (auto split: option.splits)
+          qed
+        next
+          show "global_vars_exist_in_state ?state' env'"
+          proof -
+            from old_sme have old_gv: "global_vars_exist_in_state state env"
+              unfolding state_matches_env_def by simp
+            have gv_eq: "TE_GlobalVars env' = TE_GlobalVars env" using env'_eq by simp
+            have gg_eq: "TE_GhostGlobals env' = TE_GhostGlobals env" using env'_eq by simp
+            show ?thesis unfolding global_vars_exist_in_state_def
+            proof (intro allI impI, elim conjE)
+              fix name ty
+              assume lk: "fmlookup (TE_GlobalVars env') name = Some ty"
+                and ng: "name |\<notin>| TE_GhostGlobals env'"
+              from lk gv_eq have "fmlookup (TE_GlobalVars env) name = Some ty" by simp
+              moreover from ng gg_eq have "name |\<notin>| TE_GhostGlobals env" by simp
+              ultimately have "global_var_in_state_with_type state env name ty"
+                using old_gv unfolding global_vars_exist_in_state_def by blast
+              thus "global_var_in_state_with_type ?state' env' name ty"
+                using vht_eq unfolding global_var_in_state_with_type_def
+                by (auto split: option.splits)
+            qed
+          qed
+        next
+          show "no_extra_local_vars ?state' env'"
+            unfolding no_extra_local_vars_def
+          proof (intro allI impI)
+            fix name
+            assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostLocals env'"
+            show "fmlookup (IS_Locals ?state') name = None \<and>
+                  fmlookup (IS_Refs ?state') name = None"
+            proof (cases "name = varName")
+              case True
+              then show ?thesis by simp
+            next
+              case False
+              from ante False env'_eq
+              have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostLocals env" by auto
+              with old_sme have "fmlookup (IS_Locals state) name = None \<and>
+                  fmlookup (IS_Refs state) name = None"
+                unfolding state_matches_env_def no_extra_local_vars_def by blast
+              with False show ?thesis by simp
+            qed
+          qed
+        next
+          show "no_extra_global_vars ?state' env'"
+            using old_sme env'_eq
+            unfolding state_matches_env_def no_extra_global_vars_def by simp
+        next
+          show "funs_exist_in_state ?state' env'"
+            unfolding funs_exist_in_state_def
+          proof (intro allI impI, elim conjE)
+            fix name info
+            assume lk: "fmlookup (TE_Functions env') name = Some info"
+              and ng: "FI_Ghost info = NotGhost"
+            from old_sme have old_fes: "funs_exist_in_state state env"
+              unfolding state_matches_env_def by simp
+            have funs_eq: "TE_Functions env' = TE_Functions env" using env'_eq by simp
+            from lk funs_eq have lk': "fmlookup (TE_Functions env) name = Some info" by simp
+            from old_fes lk' ng obtain interpFun where
+              if_lk: "fmlookup (IS_Functions state) name = Some interpFun" and
+              matches: "fun_info_matches_interp_fun env info interpFun"
+              unfolding funs_exist_in_state_def by (auto split: option.splits)
+            have if_lk': "fmlookup (IS_Functions ?state') name = Some interpFun"
+              using if_lk by simp
+            have fcong: "fun_info_matches_interp_fun env' info interpFun =
+                          fun_info_matches_interp_fun env info interpFun"
+              by (rule fun_info_matches_interp_fun_cong_env)
+                 (use env'_eq in simp_all)
+            have "fun_info_matches_interp_fun env' info interpFun"
+              using matches fcong by simp
+            with if_lk' show "case fmlookup (IS_Functions ?state') name of
+                                None \<Rightarrow> False
+                              | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env' info interpFun"
+              by simp
+          qed
+        next
+          show "no_extra_funs ?state' env'"
+            using old_sme env'_eq
+            unfolding state_matches_env_def no_extra_funs_def by simp
+        next
+          show "const_locals_match ?state' env'"
+            using old_sme env'_eq
+            unfolding state_matches_env_def const_locals_match_def by auto
+        next
+          show "store_well_typed ?state' env' storeTyping"
+            using old_sme vht_eq
+            unfolding state_matches_env_def store_well_typed_def by simp
+        next
+          have rt_eq: "\<And>ty. is_runtime_type env' ty = is_runtime_type env ty"
+            by (rule is_runtime_type_cong_env) (use env'_fields in simp_all)
+          have wk_eq: "\<And>ty. is_well_kinded env' ty = is_well_kinded env ty"
+            by (rule is_well_kinded_cong_env) (use env'_fields in simp_all)
+          show "ty_args_well_formed ?state' env'"
+            using old_sme env'_fields rt_eq wk_eq
+            unfolding state_matches_env_def ty_args_well_formed_def by simp
+        next
+          show "default_ctors_match ?state' env'"
+            using old_sme env'_eq
+            unfolding state_matches_env_def default_ctors_match_def by simp
+        qed
+        with CoreStmt_Obtain show ?thesis
+          using interp_eq storeTyping_extends_refl by auto
       next
         case (CoreStmt_Use _)
         \<comment> \<open>Use only typechecks in Ghost mode; the outer case is NotGhost, so

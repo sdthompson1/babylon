@@ -679,12 +679,13 @@ where
            | _ \<Rightarrow> None)
      else None)"
 
-  (* Obtain: "obtain x of type T where P(x)". Only valid in Ghost mode. The
-     type T must be well-kinded. The predicate P (given as a CoreTerm) must
-     typecheck to Bool in the env extended with the new ghost variable x.
-     The resulting env keeps x in scope for subsequent statements. *)
+  (* Obtain: "obtain x of type T where P(x)". Introduces a ghost local x (like a
+     CoreStmt_VarDecl with declGhost = Ghost), so it is allowed in any ambient
+     context: x goes into TE_GhostLocals, where only ghost code can see it. The
+     type T must be well-kinded and the predicate P must typecheck to Bool in the
+     env extended with x. The resulting env keeps x in scope. *)
 | "core_statement_type env ghost (CoreStmt_Obtain varName varTy condTm) =
-    (if ghost = Ghost \<and> is_well_kinded env varTy
+    (if is_well_kinded env varTy
      then let env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                             TE_GhostLocals := finsert varName (TE_GhostLocals env),
                             TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>
@@ -1413,7 +1414,7 @@ next
                         TE_GhostLocals := finsert varName (TE_GhostLocals e),
                         TE_ConstLocals := fminus (TE_ConstLocals e) {|varName|} \<rparr>"
   from "11.prems" have
-    gh: "ghost = Ghost" and wk: "is_well_kinded env varTy" and
+    wk: "is_well_kinded env varTy" and
     cond: "core_term_type (?envX env) Ghost condTm = Some CoreTy_Bool" and
     env'_eq: "env' = ?envX env"
     by (auto simp: Let_def split: if_splits)
@@ -1424,7 +1425,7 @@ next
     using cond core_term_type_irrelevant_tyvar by blast
   hence cond': "core_term_type (?envX ?env1) Ghost condTm = Some CoreTy_Bool"
     by (simp only: shape)
-  from gh wk' cond' show ?case
+  from wk' cond' show ?case
     by (simp add: env'_eq Let_def)
 next
   \<comment> \<open>Fix: requires a Quant_Forall goal; adds a ghost const local and updates the goal.\<close>
