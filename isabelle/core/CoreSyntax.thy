@@ -136,7 +136,8 @@ datatype CoreStatement =
   | CoreStmt_Assign GhostOrNot CoreTerm CoreTerm  (* lhs must be lvalue *)
   | CoreStmt_Swap GhostOrNot CoreTerm CoreTerm    (* both terms must be lvalues *)
   | CoreStmt_Return CoreTerm
-  | CoreStmt_Assert CoreTerm "CoreStatement list"
+  | CoreStmt_Assert "CoreTerm option" "CoreStatement list"
+      (* condition (None = "assert *", i.e. assert the current proof goal), proof body *)
   | CoreStmt_Assume CoreTerm
   | CoreStmt_While GhostOrNot CoreTerm "CoreTerm list" CoreTerm "CoreStatement list"  
          (* ghost flag, condition, invariants, decreases-term, loop body *)

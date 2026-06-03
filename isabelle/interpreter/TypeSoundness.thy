@@ -2256,11 +2256,11 @@ next
           with CoreStmt_Return interp_eq show ?thesis by simp
         qed
       next
-        case (CoreStmt_Assert condTm proofBody)
+        case (CoreStmt_Assert condOpt proofBody)
         \<comment> \<open>Assert is a runtime no-op: Inr (Continue state), and env' = env.\<close>
         from typing CoreStmt_Assert have env'_eq: "env' = env"
-          by (auto split: if_splits option.splits)
-        have interp_eq: "interp_statement (Suc fuel) state (CoreStmt_Assert condTm proofBody)
+          by (auto simp: Let_def split: if_splits option.splits)
+        have interp_eq: "interp_statement (Suc fuel) state (CoreStmt_Assert condOpt proofBody)
                         = Inr (Continue state)"
           by simp
         from "4.prems"(1) env'_eq have "state_matches_env state env' storeTyping" by simp

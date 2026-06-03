@@ -608,17 +608,22 @@ where
      else None)"
 
   (* Assert: condition must be bool; proof body typechecks in Ghost context.
-     We install condTm as TE_ProofGoal so that top-level CoreStmt_Fix statements
-     in proofBody can peel its leading Quant_Forall quantifiers. The result env
-     is the original env, so the goal (and any Fix-introduced locals) do not
-     escape the assert. *)
-| "core_statement_type env ghost (CoreStmt_Assert condTm proofBody) =
-    (if core_term_type env Ghost condTm = Some CoreTy_Bool
-     then (case core_statement_list_type (env \<lparr> TE_ProofGoal := Some condTm \<rparr>)
-                  Ghost proofBody of
-             Some _ \<Rightarrow> Some env
-           | None \<Rightarrow> None)
-     else None)"
+     When a condition is present ("assert condTm"), we install condTm as
+     TE_ProofGoal so that top-level CoreStmt_Fix statements in proofBody can peel
+     its leading Quant_Forall quantifiers. When the condition is absent
+     ("assert *"), the asserted goal is the current proof goal, so TE_ProofGoal
+     is left unchanged. In both cases the result env is the original env, so the
+     goal (and any Fix-introduced locals) do not escape the assert. *)
+| "core_statement_type env ghost (CoreStmt_Assert condOpt proofBody) =
+    (let goalEnv = (case condOpt of Some condTm \<Rightarrow> env \<lparr> TE_ProofGoal := Some condTm \<rparr>
+                                  | None \<Rightarrow> env);
+         condOk = (case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
+                                 | None \<Rightarrow> True)
+     in (if condOk
+         then (case core_statement_list_type goalEnv Ghost proofBody of
+                 Some _ \<Rightarrow> Some env
+               | None \<Rightarrow> None)
+         else None))"
 
   (* Assume: term must be bool *)
 | "core_statement_type env ghost (CoreStmt_Assume tm) =
@@ -931,7 +936,7 @@ next
   with assms show ?thesis by simp
 next
   case (CoreStmt_Assert _ _)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
+  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
   with assms show ?thesis by simp
 next
   case (CoreStmt_Assume _)
@@ -984,7 +989,7 @@ next
   with assms show ?thesis by (auto split: if_splits)
 next
   case (CoreStmt_Assert _ _)
-  with assms show ?thesis by (auto split: if_splits option.splits)
+  with assms show ?thesis by (auto simp: Let_def split: if_splits option.splits)
 next
   case (CoreStmt_Assume _)
   with assms show ?thesis by (auto split: if_splits)
@@ -1106,7 +1111,7 @@ next
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Assert _ _)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
+  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Assume _)
@@ -1304,29 +1309,35 @@ next
     using rhs core_term_type_irrelevant_tyvar by blast
   from gh wl wr lhs' rhs' show ?case by (simp add: env'_eq)
 next
-  \<comment> \<open>Assert: env unchanged; body checked under TE_ProofGoal := Some condTm.\<close>
-  case (6 env ghost condTm proofBody)
+  \<comment> \<open>Assert: env unchanged; body checked under goalEnv, which installs
+      TE_ProofGoal := Some condTm when a condition is present, or leaves env
+      unchanged for "assert *" (condOpt = None). ?ext commutes with goalEnv.\<close>
+  case (6 env ghost condOpt proofBody)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "6.prems" obtain bodyEnv where
-    cond: "core_term_type env Ghost condTm = Some CoreTy_Bool" and
-    body: "core_statement_list_type (env \<lparr> TE_ProofGoal := Some condTm \<rparr>) Ghost proofBody
-             = Some bodyEnv" and
-    env'_eq: "env' = env"
-    by (auto split: if_splits option.splits)
   let ?env1 = "?ext env"
-  have cond': "core_term_type ?env1 Ghost condTm = Some CoreTy_Bool"
-    using cond core_term_type_irrelevant_tyvar by blast
-  \<comment> \<open>The IH for the body applies to the goal-extended env; ?ext commutes with
-      the TE_ProofGoal update.\<close>
-  have shape: "?ext (env \<lparr> TE_ProofGoal := Some condTm \<rparr>)
-                 = ?env1 \<lparr> TE_ProofGoal := Some condTm \<rparr>" by simp
-  from "6.IH"[OF cond body] have
-    "core_statement_list_type (?env1 \<lparr> TE_ProofGoal := Some condTm \<rparr>) Ghost proofBody
-       = Some (?ext bodyEnv)"
-    using shape by argo
-  with cond' show ?case by (simp add: env'_eq)
+  let ?goalEnv = "\<lambda>e. case condOpt of Some condTm \<Rightarrow> e \<lparr> TE_ProofGoal := Some condTm \<rparr>
+                                     | None \<Rightarrow> e"
+  let ?condOk = "case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
+                               | None \<Rightarrow> True"
+  from "6.prems" obtain bodyEnv where
+    condOk: "?condOk" and
+    body: "core_statement_list_type (?goalEnv env) Ghost proofBody = Some bodyEnv" and
+    env'_eq: "env' = env"
+    by (auto simp: Let_def split: if_splits option.splits)
+  \<comment> \<open>?ext commutes with the goal-env update, in either branch of condOpt.\<close>
+  have shape: "?ext (?goalEnv env) = ?goalEnv ?env1"
+    by (cases condOpt) simp_all
+  from "6.IH"[OF refl refl condOk body] shape have body':
+    "core_statement_list_type (?goalEnv ?env1) Ghost proofBody = Some (?ext bodyEnv)"
+    by argo
+  \<comment> \<open>The condition (if any) still typechecks under the extended env.\<close>
+  have condOk': "case condOpt of
+                   Some condTm \<Rightarrow> core_term_type ?env1 Ghost condTm = Some CoreTy_Bool
+                 | None \<Rightarrow> True"
+    using condOk core_term_type_irrelevant_tyvar by (cases condOpt) auto
+  from condOk' body' show ?case by (simp add: env'_eq Let_def)
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (7 env ghost tm)
