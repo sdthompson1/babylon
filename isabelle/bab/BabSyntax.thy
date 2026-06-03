@@ -94,20 +94,21 @@ datatype BabAttribute =
   | BabAttr_Decreases Location BabTerm
 
 datatype BabStatement =
-  BabStmt_VarDecl Location GhostOrNot string VarOrRef "BabType option" "BabTerm option"
+  BabStmt_VarDecl Location string VarOrRef "BabType option" "BabTerm option"
   | BabStmt_Fix Location string BabType
   | BabStmt_Obtain Location string BabType BabTerm
   | BabStmt_Use Location BabTerm
-  | BabStmt_Assign Location GhostOrNot BabTerm BabTerm
-  | BabStmt_Swap Location GhostOrNot BabTerm BabTerm
-  | BabStmt_Return Location GhostOrNot "BabTerm option"
+  | BabStmt_Assign Location BabTerm BabTerm
+  | BabStmt_Swap Location BabTerm BabTerm
+  | BabStmt_Return Location "BabTerm option"
   | BabStmt_Assert Location "BabTerm option" "BabStatement list"
   | BabStmt_Assume Location BabTerm
-  | BabStmt_If Location GhostOrNot BabTerm "BabStatement list" "BabStatement list"
-  | BabStmt_While Location GhostOrNot BabTerm "BabAttribute list" "BabStatement list"
-  | BabStmt_Call Location GhostOrNot BabTerm   (* BabTm_Call term *)
-  | BabStmt_Match Location GhostOrNot BabTerm "(BabPattern \<times> BabStatement list) list"
+  | BabStmt_If Location BabTerm "BabStatement list" "BabStatement list"
+  | BabStmt_While Location BabTerm "BabAttribute list" "BabStatement list"
+  | BabStmt_Call Location BabTerm   (* BabTm_Call term *)
+  | BabStmt_Match Location BabTerm "(BabPattern \<times> BabStatement list) list"
   | BabStmt_ShowHide Location ShowOrHide string
+  | BabStmt_Ghost Location BabStatement   (* inner statement runs in Ghost mode *)
 
 datatype AllocLevel = AllocNever | AllocIfNotDefault | AllocAlways
 
@@ -216,20 +217,21 @@ fun bab_attribute_location :: "BabAttribute \<Rightarrow> Location" where
 | "bab_attribute_location (BabAttr_Decreases loc _) = loc"
 
 fun bab_statement_location :: "BabStatement \<Rightarrow> Location" where
-  "bab_statement_location (BabStmt_VarDecl loc _ _ _ _ _) = loc"
+  "bab_statement_location (BabStmt_VarDecl loc _ _ _ _) = loc"
 | "bab_statement_location (BabStmt_Fix loc _ _) = loc"
 | "bab_statement_location (BabStmt_Obtain loc _ _ _) = loc"
 | "bab_statement_location (BabStmt_Use loc _) = loc"
-| "bab_statement_location (BabStmt_Assign loc _ _ _) = loc"
-| "bab_statement_location (BabStmt_Swap loc _ _ _) = loc"
-| "bab_statement_location (BabStmt_Return loc _ _) = loc"
+| "bab_statement_location (BabStmt_Assign loc _ _) = loc"
+| "bab_statement_location (BabStmt_Swap loc _ _) = loc"
+| "bab_statement_location (BabStmt_Return loc _) = loc"
 | "bab_statement_location (BabStmt_Assert loc _ _) = loc"
 | "bab_statement_location (BabStmt_Assume loc _) = loc"
-| "bab_statement_location (BabStmt_If loc _ _ _ _) = loc"
-| "bab_statement_location (BabStmt_Match loc _ _ _) = loc"
-| "bab_statement_location (BabStmt_While loc _ _ _ _) = loc"
-| "bab_statement_location (BabStmt_Call loc _ _) = loc"
+| "bab_statement_location (BabStmt_If loc _ _ _) = loc"
+| "bab_statement_location (BabStmt_Match loc _ _) = loc"
+| "bab_statement_location (BabStmt_While loc _ _ _) = loc"
+| "bab_statement_location (BabStmt_Call loc _) = loc"
 | "bab_statement_location (BabStmt_ShowHide loc _ _) = loc"
+| "bab_statement_location (BabStmt_Ghost loc _) = loc"
 
 fun bab_declaration_location :: "BabDeclaration \<Rightarrow> Location" where
   "bab_declaration_location (BabDecl_Const dc) = DC_Location dc"

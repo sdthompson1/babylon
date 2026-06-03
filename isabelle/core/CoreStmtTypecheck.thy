@@ -765,6 +765,25 @@ where
 
 
 (* ========================================================================== *)
+(* Ambient-ghost weakening                                                    *)
+(*                                                                            *)
+(* If a statement typechecks in Ghost mode, then it can be promoted to        *)
+(* NotGhost mode and still typecheck -- provided that we are within an        *)
+(* executable function (TE_FunctionGhost is NotGhost) and not inside an       *)
+(* assert proof-block (TE_ProofGoal is None).                                 *)
+(* ========================================================================== *)
+
+lemma core_statement_type_ghost_to_notghost:
+  assumes "core_statement_type env Ghost stmt = Some env'"
+    and "TE_FunctionGhost env = NotGhost"
+    and "TE_ProofGoal env = None"
+  shows "core_statement_type env NotGhost stmt = Some env'"
+  using assms
+  by (cases "(env, Ghost, stmt)" rule: core_statement_type.cases)
+     (auto simp: Let_def split: VarOrRef.splits option.splits if_splits CoreType.splits)
+
+
+(* ========================================================================== *)
 (* Well-formedness and return type preservation                               *)
 (* ========================================================================== *)
 

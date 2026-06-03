@@ -616,7 +616,7 @@ fun rename_statement :: "RenameEnv \<Rightarrow> BabStatement \<Rightarrow>
 and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow>
                           RenameError list * BabStatement list"
   where
-"rename_statement env (BabStmt_VarDecl loc ghost var varOrRef optTy optTm) =
+"rename_statement env (BabStmt_VarDecl loc var varOrRef optTy optTm) =
     (let (tyErrs, newOptTy) = (case optTy of
            None \<Rightarrow> ([], None)
            | Some ty \<Rightarrow> let (errs, newTy) = rename_type env ty
@@ -625,7 +625,7 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
            None \<Rightarrow> ([], None)
            | Some tm \<Rightarrow> let (errs, newTm) = rename_term env tm
                         in (errs, Some newTm))
-     in (tyErrs @ tmErrs, BabStmt_VarDecl loc ghost var varOrRef newOptTy newOptTm, [var]))"
+     in (tyErrs @ tmErrs, BabStmt_VarDecl loc var varOrRef newOptTy newOptTm, [var]))"
 | "rename_statement env (BabStmt_Fix loc var ty) =
     (case rename_type env ty of
       (errs, newTy) \<Rightarrow> (errs, BabStmt_Fix loc var newTy, [var]))"
@@ -639,24 +639,24 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
 | "rename_statement env (BabStmt_Use loc tm) =
     (case rename_term env tm of
       (errs, newTm) \<Rightarrow> (errs, BabStmt_Use loc newTm, []))"
-| "rename_statement env (BabStmt_Assign loc ghost lhs rhs) =
+| "rename_statement env (BabStmt_Assign loc lhs rhs) =
     (case rename_term env lhs of
       (errs1, newLhs) \<Rightarrow>
         (case rename_term env rhs of
           (errs2, newRhs) \<Rightarrow>
-            (errs1 @ errs2, BabStmt_Assign loc ghost newLhs newRhs, [])))"
-| "rename_statement env (BabStmt_Swap loc ghost lhs rhs) =
+            (errs1 @ errs2, BabStmt_Assign loc newLhs newRhs, [])))"
+| "rename_statement env (BabStmt_Swap loc lhs rhs) =
     (case rename_term env lhs of
       (errs1, newLhs) \<Rightarrow>
         (case rename_term env rhs of
           (errs2, newRhs) \<Rightarrow>
-            (errs1 @ errs2, BabStmt_Swap loc ghost newLhs newRhs, [])))"
-| "rename_statement env (BabStmt_Return loc ghost optTm) =
+            (errs1 @ errs2, BabStmt_Swap loc newLhs newRhs, [])))"
+| "rename_statement env (BabStmt_Return loc optTm) =
     (case optTm of
-      None \<Rightarrow> ([], BabStmt_Return loc ghost None, [])
+      None \<Rightarrow> ([], BabStmt_Return loc None, [])
       | Some tm \<Rightarrow>
           (case rename_term env tm of
-            (errs, newTm) \<Rightarrow> (errs, BabStmt_Return loc ghost (Some newTm), [])))"
+            (errs, newTm) \<Rightarrow> (errs, BabStmt_Return loc (Some newTm), [])))"
 | "rename_statement env (BabStmt_Assert loc optTm stmts) =
     (let (tmErrs, newOptTm) = (case optTm of
            None \<Rightarrow> ([], None)
@@ -668,15 +668,15 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
 | "rename_statement env (BabStmt_Assume loc tm) =
     (case rename_term env tm of
       (errs, newTm) \<Rightarrow> (errs, BabStmt_Assume loc newTm, []))"
-| "rename_statement env (BabStmt_If loc ghost cond thenStmts elseStmts) =
+| "rename_statement env (BabStmt_If loc cond thenStmts elseStmts) =
     (case rename_term env cond of
       (errs1, newCond) \<Rightarrow>
         (let thenScopeEnv = open_term_scope env;
              (thenErrs, newThenStmts) = rename_statements thenScopeEnv thenStmts;
              elseScopeEnv = open_term_scope env;
              (elseErrs, newElseStmts) = rename_statements elseScopeEnv elseStmts
-         in (errs1 @ thenErrs @ elseErrs, BabStmt_If loc ghost newCond newThenStmts newElseStmts, [])))"
-| "rename_statement env (BabStmt_While loc ghost cond attrs bodyStmts) =
+         in (errs1 @ thenErrs @ elseErrs, BabStmt_If loc newCond newThenStmts newElseStmts, [])))"
+| "rename_statement env (BabStmt_While loc cond attrs bodyStmts) =
     (case rename_term env cond of
       (errs1, newCond) \<Rightarrow>
         (let attrResults = map (rename_attribute env) attrs;
@@ -684,11 +684,11 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
              newAttrs = map snd attrResults;
              bodyScopeEnv = open_term_scope env;
              (bodyErrs, newBodyStmts) = rename_statements bodyScopeEnv bodyStmts
-         in (errs1 @ attrErrs @ bodyErrs, BabStmt_While loc ghost newCond newAttrs newBodyStmts, [])))"
-| "rename_statement env (BabStmt_Call loc ghost tm) =
+         in (errs1 @ attrErrs @ bodyErrs, BabStmt_While loc newCond newAttrs newBodyStmts, [])))"
+| "rename_statement env (BabStmt_Call loc tm) =
     (case rename_term env tm of
-      (errs, newTm) \<Rightarrow> (errs, BabStmt_Call loc ghost newTm, []))"
-| "rename_statement env (BabStmt_Match loc ghost tm cases) =
+      (errs, newTm) \<Rightarrow> (errs, BabStmt_Call loc newTm, []))"
+| "rename_statement env (BabStmt_Match loc tm cases) =
     (case rename_term env tm of
       (errs1, newTm) \<Rightarrow>
         (let results = map (\<lambda>(pat, caseStmts).
@@ -700,10 +700,13 @@ and rename_statements :: "RenameEnv \<Rightarrow> BabStatement list \<Rightarrow
                                   in (patErrs @ varErrs @ stmtErrs, (newPat, newCaseStmts))) cases;
              allErrs = concat (map fst results);
              newCases = map snd results
-         in (errs1 @ allErrs, BabStmt_Match loc ghost newTm newCases, [])))"
+         in (errs1 @ allErrs, BabStmt_Match loc newTm newCases, [])))"
 | "rename_statement env (BabStmt_ShowHide loc showHide name) =
     (case rename_term_name env loc name of
       (errs, newName) \<Rightarrow> (errs, BabStmt_ShowHide loc showHide newName, []))"
+| "rename_statement env (BabStmt_Ghost loc inner) =
+    (case rename_statement env inner of
+      (errs, newInner, boundVars) \<Rightarrow> (errs, BabStmt_Ghost loc newInner, boundVars))"
 
 | "rename_statements env [] = ([], [])"
 | "rename_statements env (stmt#stmts) =

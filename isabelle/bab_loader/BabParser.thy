@@ -693,7 +693,6 @@ definition ghost_prefix :: "GhostOrNot Parser" where
 
 definition parse_var_decl_stmt :: "BabStatement Parser" where
   "parse_var_decl_stmt = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     varOrRef \<leftarrow> (expect (KEYWORD KW_REF) \<then> return Ref)
                 <|> (expect (KEYWORD KW_VAR) \<then> return Var);
     name \<leftarrow> parse_name;
@@ -704,12 +703,11 @@ definition parse_var_decl_stmt :: "BabStatement Parser" where
       return (Some tm)
     }) <|> (if varOrRef = Ref then fail else return None);
     expect SEMICOLON;
-    return (\<lambda>loc. BabStmt_VarDecl loc ghost name varOrRef maybeType maybeRhs)
+    return (\<lambda>loc. BabStmt_VarDecl loc name varOrRef maybeType maybeRhs)
   })"
 
 definition parse_fix_stmt :: "BabStatement Parser" where
   "parse_fix_stmt = with_loc (do {
-    ghost_prefix;
     expect (KEYWORD KW_FIX);
     name \<leftarrow> parse_name;
     expect COLON;
@@ -720,7 +718,6 @@ definition parse_fix_stmt :: "BabStatement Parser" where
 
 definition parse_obtain_stmt :: "BabStatement Parser" where
   "parse_obtain_stmt = with_loc (do {
-    ghost_prefix;
     expect (KEYWORD KW_OBTAIN);
     expect LPAREN;
     name \<leftarrow> parse_name;
@@ -734,7 +731,6 @@ definition parse_obtain_stmt :: "BabStatement Parser" where
 
 definition parse_use_stmt :: "BabStatement Parser" where
   "parse_use_stmt = with_loc (do {
-    ghost_prefix;
     expect (KEYWORD KW_USE);
     tm \<leftarrow> parse_term;
     expect SEMICOLON;
@@ -743,38 +739,35 @@ definition parse_use_stmt :: "BabStatement Parser" where
 
 definition parse_swap_stmt :: "BabStatement Parser" where
   "parse_swap_stmt = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     expect (KEYWORD KW_SWAP);
     lhs \<leftarrow> parse_term;
     expect COMMA;
     rhs \<leftarrow> parse_term;
     expect SEMICOLON;
-    return (\<lambda>loc. BabStmt_Swap loc ghost lhs rhs)
+    return (\<lambda>loc. BabStmt_Swap loc lhs rhs)
   })"
 
 definition parse_return_stmt :: "BabStatement Parser" where
   "parse_return_stmt = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     expect (KEYWORD KW_RETURN);
     maybeTerm \<leftarrow> optional parse_term;
     expect SEMICOLON;
-    return (\<lambda>loc. BabStmt_Return loc ghost maybeTerm)
+    return (\<lambda>loc. BabStmt_Return loc maybeTerm)
   })"
 
 (* both of these begin with a term (as opposed to a keyword) *)
 (* also, they must start with LPAREN or NAME *)
 definition parse_assignment_or_call_stmt :: "BabStatement Parser" where
   "parse_assignment_or_call_stmt = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     look_ahead (expect LPAREN <|> satisfy is_name_token);
     lhs \<leftarrow> parse_term;
     result \<leftarrow> (do {
       expect EQUAL;
       rhs \<leftarrow> parse_term;
-      return (\<lambda>loc. BabStmt_Assign loc ghost lhs rhs)
-    }) <|> 
+      return (\<lambda>loc. BabStmt_Assign loc lhs rhs)
+    }) <|>
       (case lhs of
-        BabTm_Call _ _ _ \<Rightarrow> return (\<lambda>loc. BabStmt_Call loc ghost lhs)
+        BabTm_Call _ _ _ \<Rightarrow> return (\<lambda>loc. BabStmt_Call loc lhs)
         | _ \<Rightarrow> fail);
     expect SEMICOLON;
     return result
@@ -782,7 +775,6 @@ definition parse_assignment_or_call_stmt :: "BabStatement Parser" where
 
 definition parse_assume_stmt :: "BabStatement Parser" where
   "parse_assume_stmt = with_loc (do {
-    ghost_prefix;
     expect (KEYWORD KW_ASSUME);
     cond \<leftarrow> parse_term;
     expect SEMICOLON;
@@ -791,7 +783,6 @@ definition parse_assume_stmt :: "BabStatement Parser" where
 
 definition parse_show_hide_stmt :: "BabStatement Parser" where
   "parse_show_hide_stmt = with_loc (do {
-    ghost_prefix;
     showOrHide \<leftarrow>
       (expect (KEYWORD KW_SHOW) \<then> return Show)
       <|> (expect (KEYWORD KW_HIDE) \<then> return Hide);
@@ -808,7 +799,6 @@ fun parse_assert_stmt :: "nat \<Rightarrow> BabStatement Parser"
   and parse_stmts_fuelled :: "nat \<Rightarrow> BabStatement list Parser"
 where
   "parse_assert_stmt fuel = with_loc (do {
-    ghost_prefix;
     expect (KEYWORD KW_ASSERT);
     maybeCond \<leftarrow> 
       (parse_restricted_term \<bind> return \<circ> Some) 
@@ -820,7 +810,6 @@ where
   })"
 
 | "parse_if_stmt fuel = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     expect (KEYWORD KW_IF);
     cond \<leftarrow> parse_restricted_term;
     thenBlock \<leftarrow> braces (delay (\<lambda>_. parse_stmts_fuelled fuel));
@@ -836,11 +825,10 @@ where
         return [ifStmt]
       })
       <|> (return []);
-    return (\<lambda>loc. BabStmt_If loc ghost cond thenBlock elseBlock)
+    return (\<lambda>loc. BabStmt_If loc cond thenBlock elseBlock)
   })"
 
 | "parse_match_stmt fuel = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     expect (KEYWORD KW_MATCH);
     scrut \<leftarrow> parse_restricted_term;
     arms \<leftarrow> braces (many (do {
@@ -850,33 +838,38 @@ where
       stmts \<leftarrow> parse_stmts_fuelled fuel;
       return (pat, stmts)
     }));
-    return (\<lambda>loc. BabStmt_Match loc ghost scrut arms)
+    return (\<lambda>loc. BabStmt_Match loc scrut arms)
   })"
 
 | "parse_while_stmt fuel = with_loc (do {
-    ghost \<leftarrow> ghost_prefix;
     expect (KEYWORD KW_WHILE);
     cond \<leftarrow> parse_restricted_term;
     attrs \<leftarrow> many parse_attribute;
     body \<leftarrow> braces (delay (\<lambda>_. parse_stmts_fuelled fuel));
-    return (\<lambda>loc. BabStmt_While loc ghost cond attrs body)
+    return (\<lambda>loc. BabStmt_While loc cond attrs body)
   })"
 
 | "parse_stmt_fuelled 0 = undefined"   (* out of fuel *)
-| "parse_stmt_fuelled (Suc fuel) = 
-    parse_var_decl_stmt
-    <|> parse_fix_stmt
-    <|> parse_obtain_stmt
-    <|> parse_use_stmt
-    <|> parse_swap_stmt
-    <|> parse_return_stmt
-    <|> parse_assignment_or_call_stmt
-    <|> parse_assume_stmt
-    <|> parse_show_hide_stmt
-    <|> parse_assert_stmt fuel
-    <|> parse_if_stmt fuel
-    <|> parse_match_stmt fuel
-    <|> parse_while_stmt fuel"
+| "parse_stmt_fuelled (Suc fuel) = with_loc (do {
+    \<comment> \<open>An optional leading `ghost` keyword wraps the statement in BabStmt_Ghost,
+        which the elaborator re-elaborates in Ghost mode.\<close>
+    ghost \<leftarrow> ghost_prefix;
+    stmt \<leftarrow>
+      parse_var_decl_stmt
+      <|> parse_fix_stmt
+      <|> parse_obtain_stmt
+      <|> parse_use_stmt
+      <|> parse_swap_stmt
+      <|> parse_return_stmt
+      <|> parse_assignment_or_call_stmt
+      <|> parse_assume_stmt
+      <|> parse_show_hide_stmt
+      <|> parse_assert_stmt fuel
+      <|> parse_if_stmt fuel
+      <|> parse_match_stmt fuel
+      <|> parse_while_stmt fuel;
+    return (\<lambda>loc. if ghost = Ghost then BabStmt_Ghost loc stmt else stmt)
+  })"
 
 | "parse_stmts_fuelled fuel = do {
     maybeStmts \<leftarrow> many (delay (\<lambda>_.
@@ -1372,31 +1365,32 @@ fun post_parse_attribute :: "BabAttribute \<Rightarrow> (Location \<times> PostP
 fun post_parse_statement :: "BabStatement \<Rightarrow> (Location \<times> PostParseError) list"
 and post_parse_stmt_arm :: "BabPattern \<times> BabStatement list \<Rightarrow> (Location \<times> PostParseError) list"
 where
-  "post_parse_statement (BabStmt_VarDecl _ _ _ _ maybeType maybeTerm) =
-    case_option [] (post_parse_type False) maybeType 
+  "post_parse_statement (BabStmt_VarDecl _ _ _ maybeType maybeTerm) =
+    case_option [] (post_parse_type False) maybeType
     @ case_option [] (post_parse_term False) maybeTerm"
 | "post_parse_statement (BabStmt_Fix _ _ ty) = post_parse_type False ty"
 | "post_parse_statement (BabStmt_Obtain _ _ ty tm) = post_parse_type False ty @ post_parse_term False tm"
 | "post_parse_statement (BabStmt_Use _ tm) = post_parse_term False tm"
-| "post_parse_statement (BabStmt_Assign _ _ tm1 tm2) = post_parse_term False tm1 @ post_parse_term False tm2"
-| "post_parse_statement (BabStmt_Swap _ _ tm1 tm2) = post_parse_term False tm1 @ post_parse_term False tm2"
-| "post_parse_statement (BabStmt_Return _ _ maybeTm) = case_option [] (post_parse_term False) maybeTm"
+| "post_parse_statement (BabStmt_Assign _ tm1 tm2) = post_parse_term False tm1 @ post_parse_term False tm2"
+| "post_parse_statement (BabStmt_Swap _ tm1 tm2) = post_parse_term False tm1 @ post_parse_term False tm2"
+| "post_parse_statement (BabStmt_Return _ maybeTm) = case_option [] (post_parse_term False) maybeTm"
 | "post_parse_statement (BabStmt_Assert _ maybeTm stmts) =
     case_option [] (post_parse_term False) maybeTm
     @ concat (map post_parse_statement stmts)"
 | "post_parse_statement (BabStmt_Assume _ tm) = post_parse_term False tm"
-| "post_parse_statement (BabStmt_If _ _ tm stmts1 stmts2) =
+| "post_parse_statement (BabStmt_If _ tm stmts1 stmts2) =
     post_parse_term False tm
     @ concat (map post_parse_statement stmts1)
     @ concat (map post_parse_statement stmts2)"
-| "post_parse_statement (BabStmt_While _ _ tm attrs stmts) =
+| "post_parse_statement (BabStmt_While _ tm attrs stmts) =
     post_parse_term False tm
     @ concat (map post_parse_attribute attrs)
     @ concat (map post_parse_statement stmts)"
-| "post_parse_statement (BabStmt_Call _ _ tm) = post_parse_term False tm"
-| "post_parse_statement (BabStmt_Match _ _ scrut arms) = 
+| "post_parse_statement (BabStmt_Call _ tm) = post_parse_term False tm"
+| "post_parse_statement (BabStmt_Match _ scrut arms) =
     post_parse_term False scrut @ concat (map post_parse_stmt_arm arms)"
 | "post_parse_statement (BabStmt_ShowHide _ _ _) = []"
+| "post_parse_statement (BabStmt_Ghost _ inner) = post_parse_statement inner"
 | "post_parse_stmt_arm (pat, stmts) = concat (map post_parse_statement stmts)"
 
 

@@ -43,17 +43,10 @@ where
      via CoreTm_Default. A Ref declaration must have an initializer that
      elaborates to an lvalue. *)
   "elab_statement env elabEnv ghost
-       (BabStmt_VarDecl loc declGhost varName vorf tyOpt tmOpt) next_mv =
-    (if ghost = Ghost \<and> declGhost = NotGhost then
-       \<comment> \<open>A non-ghost declaration is not allowed inside a ghost context
-           (mirrors the core_statement_type VarDecl rule's
-           ghost = Ghost \<longrightarrow> declGhost = Ghost guard).\<close>
-       Inl [TyErr_RequiresGhostContext loc]
-     else
-     let declMode = (if declGhost = Ghost then Ghost else ghost);
-         add_var = \<lambda>varTy. env \<lparr>
+       (BabStmt_VarDecl loc varName vorf tyOpt tmOpt) next_mv =
+    (let add_var = \<lambda>varTy. env \<lparr>
              TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-             TE_GhostLocals := (if declGhost = Ghost
+             TE_GhostLocals := (if ghost = Ghost
                                 then finsert varName (TE_GhostLocals env)
                                 else fminus (TE_GhostLocals env) {|varName|}) \<rparr>
      in case vorf of
@@ -62,21 +55,21 @@ where
                (None, None) \<Rightarrow> Inl [TyErr_VarDeclNeedsTypeOrValue loc]
              | (Some ty, None) \<Rightarrow>
                  \<comment> \<open>Default-initialized: use the annotation type.\<close>
-                 (case elab_type env elabEnv declMode ty of
+                 (case elab_type env elabEnv ghost ty of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr coreTy \<Rightarrow>
-                      Inr (CoreStmt_VarDecl declGhost varName Var coreTy (CoreTm_Default coreTy),
+                      Inr (CoreStmt_VarDecl ghost varName Var coreTy (CoreTm_Default coreTy),
                            (add_var coreTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
                            next_mv))
              | (None, Some tm) \<Rightarrow>
                  \<comment> \<open>Inferred type from the initializer; reject unresolved metavariables.\<close>
-                 (case elab_term env elabEnv declMode tm next_mv of
+                 (case elab_term env elabEnv ghost tm next_mv of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (coreTm, rhsTy, next_mv') \<Rightarrow>
                       if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
                       then Inl [TyErr_CannotInferType loc]
                       else
-                        Inr (CoreStmt_VarDecl declGhost varName Var rhsTy
+                        Inr (CoreStmt_VarDecl ghost varName Var rhsTy
                                 (clear_metavars next_mv next_mv' coreTm),
                              (add_var rhsTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
                              next_mv'))
@@ -87,15 +80,15 @@ where
                      metavariables in the rhs type); failing that, if both types are
                      integers we insert an integer cast, mirroring BabTm_Cast and the
                      coercion that unify_and_coerce performs for calls.\<close>
-                 (case elab_type env elabEnv declMode ty of
+                 (case elab_type env elabEnv ghost ty of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr coreTy \<Rightarrow>
-                      (case elab_term env elabEnv declMode tm next_mv of
+                      (case elab_term env elabEnv ghost tm next_mv of
                          Inl errs \<Rightarrow> Inl errs
                        | Inr (coreTm, rhsTy, next_mv') \<Rightarrow>
                            (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) rhsTy coreTy of
                               Some subst \<Rightarrow>
-                                Inr (CoreStmt_VarDecl declGhost varName Var coreTy
+                                Inr (CoreStmt_VarDecl ghost varName Var coreTy
                                         (clear_metavars next_mv next_mv'
                                            (apply_subst_to_term subst coreTm)),
                                      (add_var coreTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
@@ -104,7 +97,7 @@ where
                                 if is_integer_type rhsTy \<and> is_integer_type coreTy
                                 then
                                   \<comment> \<open>e.g. var x: i16 = 10; casts the i32 rhs to i16.\<close>
-                                  Inr (CoreStmt_VarDecl declGhost varName Var coreTy
+                                  Inr (CoreStmt_VarDecl ghost varName Var coreTy
                                           (clear_metavars next_mv next_mv'
                                              (CoreTm_Cast coreTy coreTm)),
                                        (add_var coreTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
@@ -114,7 +107,7 @@ where
             (case tmOpt of
                None \<Rightarrow> Inl [TyErr_RefDeclNeedsValue loc]
              | Some tm \<Rightarrow>
-                 (case elab_term env elabEnv declMode tm next_mv of
+                 (case elab_term env elabEnv ghost tm next_mv of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (coreTm, rhsTy, next_mv') \<Rightarrow>
                       if \<not> is_lvalue coreTm then Inl [TyErr_RefDeclNeedsLvalue loc]
@@ -124,7 +117,7 @@ where
                         (let constUpd = (if is_writable_lvalue env coreTm
                                          then fminus (TE_ConstLocals env) {|varName|}
                                          else finsert varName (TE_ConstLocals env))
-                         in Inr (CoreStmt_VarDecl declGhost varName Ref rhsTy
+                         in Inr (CoreStmt_VarDecl ghost varName Ref rhsTy
                                     (clear_metavars next_mv next_mv' coreTm),
                                  (add_var rhsTy) \<lparr> TE_ConstLocals := constUpd \<rparr>,
                                  next_mv')))))"
@@ -135,11 +128,11 @@ where
 
 | "elab_statement env elabEnv ghost (BabStmt_Use loc tm) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_Assign loc assignGhost lhs rhs) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Assign loc lhs rhs) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_Swap loc swapGhost lhs rhs) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Swap loc lhs rhs) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_Return loc returnGhost tmOpt) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Return loc tmOpt) next_mv = undefined"
 
 | "elab_statement env elabEnv ghost (BabStmt_Assert loc condOpt proofBody) next_mv = undefined"
 
@@ -154,17 +147,21 @@ where
          then Inr (CoreStmt_Assume (clear_metavars next_mv next_mv' coreTm), env, next_mv')
          else Inl [TyErr_TypeMismatch loc CoreTy_Bool ty])"
 
-| "elab_statement env elabEnv ghost (BabStmt_If loc ifGhost cond thenB elseB) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_If loc cond thenB elseB) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_While loc whileGhost cond attrs body) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_While loc cond attrs body) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_Call loc callGhost tm) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Call loc tm) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_Match loc matchGhost scrut arms) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Match loc scrut arms) next_mv = undefined"
 
   (* ShowHide: no term, no environment change, counter unchanged. *)
 | "elab_statement env elabEnv ghost (BabStmt_ShowHide loc sh name) next_mv =
     Inr (CoreStmt_ShowHide sh name, env, next_mv)"
+
+  (* Ghost: elaborate the inner statement in Ghost mode. *)
+| "elab_statement env elabEnv ghost (BabStmt_Ghost loc inner) next_mv =
+    elab_statement env elabEnv Ghost inner next_mv"
 
   (* Statement lists: thread the environment and counter left-to-right. *)
 | "elab_statement_list env elabEnv ghost [] next_mv = Inr ([], env, next_mv)"
