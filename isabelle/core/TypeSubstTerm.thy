@@ -179,6 +179,104 @@ next
 qed simp_all
 
 
+(* Free type variables after substituting a term come from: free tyvars of the
+   original term not in dom(subst), or tyvars in the range of subst. Mirrors
+   apply_subst_tyvars_result (TypeSubst.thy) at each embedded type annotation. *)
+lemma apply_subst_to_term_free_tyvars:
+  "core_term_free_tyvars (apply_subst_to_term subst tm) \<subseteq>
+   (core_term_free_tyvars tm - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+proof (induction tm)
+  case (CoreTm_LitArray elemTy tms)
+  have ty: "type_tyvars (apply_subst subst elemTy) \<subseteq>
+            (type_tyvars elemTy - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    by (rule apply_subst_tyvars_result)
+  from CoreTm_LitArray show ?case using ty by (induction tms) auto
+next
+  case (CoreTm_Cast targetTy tm)
+  have ty: "type_tyvars (apply_subst subst targetTy) \<subseteq>
+            (type_tyvars targetTy - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    by (rule apply_subst_tyvars_result)
+  from CoreTm_Cast show ?case using ty by auto
+next
+  case (CoreTm_Quantifier q var varTy body)
+  have ty: "type_tyvars (apply_subst subst varTy) \<subseteq>
+            (type_tyvars varTy - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    by (rule apply_subst_tyvars_result)
+  from CoreTm_Quantifier show ?case using ty by auto
+next
+  case (CoreTm_FunctionCall fnName tyArgs args)
+  have tyargs: "\<Union>(type_tyvars ` set (map (apply_subst subst) tyArgs)) \<subseteq>
+                (\<Union>(type_tyvars ` set tyArgs) - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    using apply_subst_tyvars_result by fastforce
+  from CoreTm_FunctionCall show ?case using tyargs by (induction args) auto
+next
+  case (CoreTm_VariantCtor ctorName tyArgs arg)
+  have tyargs: "\<Union>(type_tyvars ` set (map (apply_subst subst) tyArgs)) \<subseteq>
+                (\<Union>(type_tyvars ` set tyArgs) - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    using apply_subst_tyvars_result by fastforce
+  from CoreTm_VariantCtor show ?case using tyargs by auto
+next
+  case (CoreTm_Record flds)
+  have IH: "\<And>n t. (n, t) \<in> set flds \<Longrightarrow>
+    core_term_free_tyvars (apply_subst_to_term subst t) \<subseteq>
+    (core_term_free_tyvars t - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    using CoreTm_Record.IH by auto
+  show ?case
+  proof
+    fix x assume "x \<in> core_term_free_tyvars (apply_subst_to_term subst (CoreTm_Record flds))"
+    then obtain n t where mem: "(n, t) \<in> set flds"
+      and x_in: "x \<in> core_term_free_tyvars (apply_subst_to_term subst t)"
+      by auto
+    from IH[OF mem] x_in have
+      "x \<in> (core_term_free_tyvars t - fset (fmdom subst)) \<union> subst_range_tyvars subst" by blast
+    moreover have "core_term_free_tyvars t \<subseteq> core_term_free_tyvars (CoreTm_Record flds)"
+      using mem by force
+    ultimately show "x \<in> (core_term_free_tyvars (CoreTm_Record flds) - fset (fmdom subst))
+                          \<union> subst_range_tyvars subst" by auto
+  qed
+next
+  case (CoreTm_ArrayProj arr idxs)
+  from CoreTm_ArrayProj show ?case by (induction idxs) auto
+next
+  case (CoreTm_Match scrut arms)
+  have IH2: "\<And>p t. (p, t) \<in> set arms \<Longrightarrow>
+    core_term_free_tyvars (apply_subst_to_term subst t) \<subseteq>
+    (core_term_free_tyvars t - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    using CoreTm_Match.IH by auto
+  show ?case
+  proof
+    fix x assume "x \<in> core_term_free_tyvars (apply_subst_to_term subst (CoreTm_Match scrut arms))"
+    then consider (scrut) "x \<in> core_term_free_tyvars (apply_subst_to_term subst scrut)"
+      | (arm) p t where "(p, t) \<in> set arms" "x \<in> core_term_free_tyvars (apply_subst_to_term subst t)"
+      by auto
+    thus "x \<in> (core_term_free_tyvars (CoreTm_Match scrut arms) - fset (fmdom subst))
+               \<union> subst_range_tyvars subst"
+    proof cases
+      case scrut
+      with CoreTm_Match.IH(1) show ?thesis by auto
+    next
+      case (arm p t)
+      from IH2[OF arm(1)] arm(2) have
+        "x \<in> (core_term_free_tyvars t - fset (fmdom subst)) \<union> subst_range_tyvars subst" by blast
+      moreover have "core_term_free_tyvars t \<subseteq> core_term_free_tyvars (CoreTm_Match scrut arms)"
+        using arm(1) by force
+      ultimately show ?thesis by auto
+    qed
+  qed
+next
+  case (CoreTm_Default ty)
+  show ?case using apply_subst_tyvars_result by simp
+qed auto
+
+(* Corollary: a ground substitution (empty range tyvars) whose domain covers an
+   interval removes those interval tyvars from a term. *)
+corollary apply_subst_to_term_free_tyvars_ground:
+  assumes "subst_range_tyvars subst = {}"
+  shows "core_term_free_tyvars (apply_subst_to_term subst tm) \<subseteq>
+         core_term_free_tyvars tm - fset (fmdom subst)"
+  using apply_subst_to_term_free_tyvars[of subst tm] assms by auto
+
+
 (* Integer/numeric/etc. types are all closed under substitution (they only match
    on concrete, type-variable-free type constructors). *)
 lemma is_integer_type_apply_subst:

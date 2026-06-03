@@ -1,5 +1,5 @@
 theory CoreTypeProps
-  imports CoreTyEnv
+  imports CoreTyEnv CoreFreeVars
 begin
 
 (* ========================================================================== *)
@@ -53,36 +53,6 @@ fun is_finite_integer_type :: "CoreType \<Rightarrow> bool" where
   "is_finite_integer_type (CoreTy_FiniteInt _ _) = True"
 | "is_finite_integer_type _ = False"
 
-(* Collect all type variables in a type *)
-fun type_tyvars :: "CoreType \<Rightarrow> nat set" where
-  "type_tyvars (CoreTy_Datatype _ tyargs) = \<Union>(set (map type_tyvars tyargs))"
-| "type_tyvars CoreTy_Bool = {}"
-| "type_tyvars (CoreTy_FiniteInt _ _) = {}"
-| "type_tyvars CoreTy_MathInt = {}"
-| "type_tyvars CoreTy_MathReal = {}"
-| "type_tyvars (CoreTy_Record flds) = \<Union>(set (map (type_tyvars \<circ> snd) flds))"
-| "type_tyvars (CoreTy_Array elemTy dims) = type_tyvars elemTy"
-| "type_tyvars (CoreTy_Var n) = {n}"
-
-(* Collect all type variables in a type as a list (executable) *)
-fun type_tyvars_list :: "CoreType \<Rightarrow> nat list" where
-  "type_tyvars_list (CoreTy_Datatype _ args) = concat (map type_tyvars_list args)"
-| "type_tyvars_list CoreTy_Bool = []"
-| "type_tyvars_list (CoreTy_FiniteInt _ _) = []"
-| "type_tyvars_list CoreTy_MathInt = []"
-| "type_tyvars_list CoreTy_MathReal = []"
-| "type_tyvars_list (CoreTy_Record flds) = concat (map (type_tyvars_list \<circ> snd) flds)"
-| "type_tyvars_list (CoreTy_Array elemTy _) = type_tyvars_list elemTy"
-| "type_tyvars_list (CoreTy_Var n) = [n]"
-
-(* Collect all type variables in a list of types *)
-definition list_tyvars :: "CoreType list \<Rightarrow> nat set" where
-  "list_tyvars tys = \<Union>(set (map type_tyvars tys))"
-
-(* Check if type variable n occurs in type ty *)
-definition occurs :: "nat \<Rightarrow> CoreType \<Rightarrow> bool" where
-  "occurs n ty = (n \<in> type_tyvars ty)"
-
 
 (* ========================================================================== *)
 (* Lemmas about type properties *)
@@ -108,18 +78,6 @@ lemma is_integer_type_cases:
 lemma integer_type_no_tyvars:
   "is_integer_type ty \<Longrightarrow> type_tyvars ty = {}"
   by (cases ty) auto
-
-(* Type variables in a type are finite *)
-lemma finite_type_tyvars: "finite (type_tyvars ty)"
-  by (induct ty) auto
-
-(* Type variables in a list of types are finite *)
-lemma finite_list_tyvars: "finite (list_tyvars tys)"
-  using list_tyvars_def finite_type_tyvars by auto
-
-(* type_tyvars_list collects the same set as type_tyvars *)
-lemma set_type_tyvars_list: "set (type_tyvars_list ty) = type_tyvars ty"
-  by (induct ty) auto
 
 (* A list of type variables (as types) satisfies list_all is_runtime_type, provided
    the variables are all declared runtime in the env *)

@@ -18,6 +18,15 @@ begin
 (*                                                                            *)
 (* ========================================================================== *)
 
+(* Substitute every metavariable in the interval [lo, hi) with the unit type
+   CoreTy_Record []. The term elaborator allocates fresh metavariables in this
+   interval; some may remain unresolved in the emitted term (phantom type
+   arguments). Clearing them with a ground runtime type lets the elaborated
+   statement typecheck in the original env, with no fresh-tyvar extension. *)
+definition clear_metavars :: "nat \<Rightarrow> nat \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
+  "clear_metavars lo hi tm =
+     apply_subst_to_term (fmap_of_list (map (\<lambda>n. (n, CoreTy_Record [])) [lo ..< hi])) tm"
+
 function (sequential)
   elab_statement :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabStatement \<Rightarrow> nat
                       \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)"
@@ -67,7 +76,8 @@ where
                       if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
                       then Inl [TyErr_CannotInferType loc]
                       else
-                        Inr (CoreStmt_VarDecl declGhost varName Var rhsTy coreTm,
+                        Inr (CoreStmt_VarDecl declGhost varName Var rhsTy
+                                (clear_metavars next_mv next_mv' coreTm),
                              (add_var rhsTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
                              next_mv'))
              | (Some ty, Some tm) \<Rightarrow>
@@ -86,7 +96,8 @@ where
                            (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) rhsTy coreTy of
                               Some subst \<Rightarrow>
                                 Inr (CoreStmt_VarDecl declGhost varName Var coreTy
-                                        (apply_subst_to_term subst coreTm),
+                                        (clear_metavars next_mv next_mv'
+                                           (apply_subst_to_term subst coreTm)),
                                      (add_var coreTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
                                      next_mv')
                             | None \<Rightarrow>
@@ -94,7 +105,8 @@ where
                                 then
                                   \<comment> \<open>e.g. var x: i16 = 10; casts the i32 rhs to i16.\<close>
                                   Inr (CoreStmt_VarDecl declGhost varName Var coreTy
-                                          (CoreTm_Cast coreTy coreTm),
+                                          (clear_metavars next_mv next_mv'
+                                             (CoreTm_Cast coreTy coreTm)),
                                        (add_var coreTy) \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>,
                                        next_mv')
                                 else Inl [TyErr_TypeMismatch loc coreTy rhsTy]))))
@@ -112,7 +124,8 @@ where
                         (let constUpd = (if is_writable_lvalue env coreTm
                                          then fminus (TE_ConstLocals env) {|varName|}
                                          else finsert varName (TE_ConstLocals env))
-                         in Inr (CoreStmt_VarDecl declGhost varName Ref rhsTy coreTm,
+                         in Inr (CoreStmt_VarDecl declGhost varName Ref rhsTy
+                                    (clear_metavars next_mv next_mv' coreTm),
                                  (add_var rhsTy) \<lparr> TE_ConstLocals := constUpd \<rparr>,
                                  next_mv')))))"
 
@@ -138,7 +151,7 @@ where
        Inl errs \<Rightarrow> Inl errs
      | Inr (coreTm, ty, next_mv') \<Rightarrow>
          if ty = CoreTy_Bool
-         then Inr (CoreStmt_Assume coreTm, env, next_mv')
+         then Inr (CoreStmt_Assume (clear_metavars next_mv next_mv' coreTm), env, next_mv')
          else Inl [TyErr_TypeMismatch loc CoreTy_Bool ty])"
 
 | "elab_statement env elabEnv ghost (BabStmt_If loc ifGhost cond thenB elseB) next_mv = undefined"
