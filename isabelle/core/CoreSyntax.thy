@@ -130,10 +130,19 @@ lemma is_lvalue_simps [simp]:
 
 datatype CoreStatement =
   CoreStmt_VarDecl GhostOrNot string VarOrRef CoreType CoreTerm
+  (* Variable declaration initialized from an impure function call.
+     declGhost, varName, variable type, optional cast type for the return value,
+     fnName, type args, term args. The variable type is explicit (like
+     CoreStmt_VarDecl); if a cast type is given it must equal the variable type. *)
+  | CoreStmt_VarDeclCall GhostOrNot string CoreType "CoreType option" string "CoreType list" "CoreTerm list"
   | CoreStmt_Fix string CoreType
   | CoreStmt_Obtain string CoreType CoreTerm
   | CoreStmt_Use CoreTerm
   | CoreStmt_Assign GhostOrNot CoreTerm CoreTerm  (* lhs must be lvalue *)
+  (* Assignment whose rhs is an impure function call.
+     assignGhost, lhs (must be lvalue), optional cast type for the return value,
+     fnName, type args, term args. *)
+  | CoreStmt_AssignCall GhostOrNot CoreTerm "CoreType option" string "CoreType list" "CoreTerm list"
   | CoreStmt_Swap GhostOrNot CoreTerm CoreTerm    (* both terms must be lvalues *)
   | CoreStmt_Return CoreTerm
   | CoreStmt_Assert "CoreTerm option" "CoreStatement list"

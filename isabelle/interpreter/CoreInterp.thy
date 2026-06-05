@@ -428,6 +428,18 @@ where
 termination by lexicographic_order
 
 
+(* Apply an optional integer cast to a value (used for the return value of an
+   impure call on the rhs of VarDeclCall / AssignCall). None passes the value
+   through; Some t narrows a finite-int value to the finite-int type t, matching
+   the CoreTm_Cast interpretation. *)
+fun apply_cast_opt :: "CoreType option \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "apply_cast_opt None v = Inr v"
+| "apply_cast_opt (Some (CoreTy_FiniteInt sign bits)) (CV_FiniteInt _ _ i) =
+     (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
+      else Inl RuntimeError)"
+| "apply_cast_opt _ _ = Inl TypeError"
+
+
 (* ========================================================================== *)
 (* The main intepreter definitions *)
 (* ========================================================================== *)
@@ -648,28 +660,38 @@ where
                            IS_Refs := fmdrop varName (IS_Refs state),
                            IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
-    \<comment> \<open>Compute new state (after any function call) and the initial value.
-        When the rhs is a function call (including impure ones that take Ref
-        args or have observable effects), dispatch via interp_function_call so
-        that the state update from the call is observed. Otherwise evaluate
-        the term normally (state is unchanged).
+    \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
+        CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
 
         We remove varName from IS_ConstLocals in case it was previously a const
         local (now shadowed by this fresh non-const declaration). \<close>
-    (case (case initialTm of
-             CoreTm_FunctionCall fnName argTys argTms \<Rightarrow>
-               interp_function_call fuel state fnName argTys argTms
-           | _ \<Rightarrow>
-               (case interp_term fuel state initialTm of
-                  Inr initialVal \<Rightarrow> Inr (state, initialVal)
-                | Inl err \<Rightarrow> Inl err))
-      of
-        Inr (newState, initialVal) \<Rightarrow>
-          (let (state', addr) = alloc_store newState initialVal
-           in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                       IS_Refs := fmdrop varName (IS_Refs state'),
-                                       IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
-      | Inl err \<Rightarrow> Inl err)"
+    (case interp_term fuel state initialTm of
+       Inr initialVal \<Rightarrow>
+         (let (state', addr) = alloc_store state initialVal
+          in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                      IS_Refs := fmdrop varName (IS_Refs state'),
+                                      IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
+     | Inl err \<Rightarrow> Inl err)"
+
+| "interp_statement (Suc fuel) state (CoreStmt_VarDeclCall Ghost varName _ _ _ _ _) =
+    \<comment> \<open>Ghost declaration: the call is not executed; just drop any shadowed binding.\<close>
+    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                           IS_Refs := fmdrop varName (IS_Refs state),
+                           IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
+
+| "interp_statement (Suc fuel) state (CoreStmt_VarDeclCall NotGhost varName _ castOpt fnName argTys argTms) =
+    \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
+        optional cast to the returned value before binding it.\<close>
+    (case interp_function_call fuel state fnName argTys argTms of
+       Inr (newState, retVal) \<Rightarrow>
+         (case apply_cast_opt castOpt retVal of
+            Inr initialVal \<Rightarrow>
+              (let (state', addr) = alloc_store newState initialVal
+               in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                           IS_Refs := fmdrop varName (IS_Refs state'),
+                                           IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
+          | Inl err \<Rightarrow> Inl err)
+     | Inl err \<Rightarrow> Inl err)"
 | "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
@@ -706,25 +728,37 @@ where
   (* Assignment *)
 | "interp_statement (Suc _) state (CoreStmt_Assign Ghost _ _) = Inr (Continue state)"
 | "interp_statement (Suc fuel) state (CoreStmt_Assign NotGhost lhsLvalue rhsTm) =
-    \<comment> \<open>Resolve the lhs to an address and path\<close>
+    \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
+        term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
+        evaluating it.\<close>
     (case interp_writable_lvalue fuel state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        \<comment> \<open>Compute new state (after any function call) and rhs value\<close>
-        (case
-          (case rhsTm of
-            CoreTm_FunctionCall fnName argTys argTms \<Rightarrow>
-              interp_function_call fuel state fnName argTys argTms
-          | _ \<Rightarrow>
-              (case interp_term fuel state rhsTm of
-                Inr rhsVal \<Rightarrow> Inr (state, rhsVal)
-              | Inl err \<Rightarrow> Inl err))
-        of
-          Inr (newState, rhsVal) \<Rightarrow>
-            \<comment> \<open>Perform the assignment\<close>
-            (let oldVal = IS_Store newState ! addr in
+        (case interp_term fuel state rhsTm of
+          Inr rhsVal \<Rightarrow>
+            (let oldVal = IS_Store state ! addr in
             case update_value_at_path oldVal path rhsVal of
-              Inr newVal \<Rightarrow> 
-                Inr (Continue (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>))
+              Inr newVal \<Rightarrow>
+                Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
+            | Inl err \<Rightarrow> Inl err)
+        | Inl err \<Rightarrow> Inl err)
+    | Inl err \<Rightarrow> Inl err)"
+
+  (* Assignment from an impure call *)
+| "interp_statement (Suc _) state (CoreStmt_AssignCall Ghost _ _ _ _ _) = Inr (Continue state)"
+| "interp_statement (Suc fuel) state (CoreStmt_AssignCall NotGhost lhsLvalue castOpt fnName argTys argTms) =
+    \<comment> \<open>Resolve the lhs first, then run the (possibly impure) call observing its
+        state effect, apply the optional cast, and store the result.\<close>
+    (case interp_writable_lvalue fuel state lhsLvalue of
+      Inr (addr, path) \<Rightarrow>
+        (case interp_function_call fuel state fnName argTys argTms of
+          Inr (newState, retVal) \<Rightarrow>
+            (case apply_cast_opt castOpt retVal of
+              Inr rhsVal \<Rightarrow>
+                (let oldVal = IS_Store newState ! addr in
+                case update_value_at_path oldVal path rhsVal of
+                  Inr newVal \<Rightarrow>
+                    Inr (Continue (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>))
+                | Inl err \<Rightarrow> Inl err)
             | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"

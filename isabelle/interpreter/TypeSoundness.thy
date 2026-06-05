@@ -860,154 +860,50 @@ next
           case Var
           then show ?thesis proof (cases declGhost)
             case NotGhost
-            \<comment> \<open>NotGhost Var VarDecl: evaluates initTm (via interp_function_call
-                if it's a CoreTm_FunctionCall, else via interp_term), then
-                alloc_store + fmupd for the new local. The rhs may be an
-                impure function call (typechecked via core_impure_call_type)
-                or a plain term (typechecked via core_term_type). \<close>
-            from typing CoreStmt_VarDecl Var NotGhost have init_ty_disj:
-              "core_impure_call_type env NotGhost initTm = Some varTy
-               \<or> core_term_type env NotGhost initTm = Some varTy"
+            \<comment> \<open>NotGhost Var VarDecl: the initializer is an ordinary (pure) term;
+                evaluate it via interp_term, then alloc_store + fmupd the new
+                local. (Impure-call initializers use CoreStmt_VarDeclCall.) \<close>
+            from typing CoreStmt_VarDecl Var NotGhost have init_ty:
+              "core_term_type env NotGhost initTm = Some varTy"
               by (auto split: if_splits)
             from typing CoreStmt_VarDecl Var NotGhost have env'_eq:
               "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                             TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
                             TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
               by (auto split: if_splits)
-
-            \<comment> \<open>Normalize the disjunction via the shared helper. \<close>
-            note fn_call_facts_or_pure = fn_call_facts_from_disjunct[OF init_ty_disj]
-
+            from IH_term[OF "4.prems"(1,2) init_ty]
+            have init_sound: "sound_term_result state env varTy (interp_term fuel state initTm)" .
             show ?thesis
-            proof (cases "\<exists>fnName tyArgs argTms. initTm = CoreTm_FunctionCall fnName tyArgs argTms")
-              case True
-              \<comment> \<open>Function-call initTm: use IH_fc and alloc_store newState. \<close>
-              then obtain fnName tyArgs argTms where initTm_eq:
-                "initTm = CoreTm_FunctionCall fnName tyArgs argTms" by auto
-              from fn_call_facts_or_pure initTm_eq obtain funInfo fnName' tyArgs' argTms' where
-                initTm_eq': "initTm = CoreTm_FunctionCall fnName' tyArgs' argTms'" and
-                fn_lookup: "fmlookup (TE_Functions env) fnName' = Some funInfo" and
-                len_tyargs: "length tyArgs' = length (FI_TyArgs funInfo)" and
-                tyargs_wk: "list_all (is_well_kinded env) tyArgs'" and
-                tyargs_rt: "list_all (is_runtime_type env) tyArgs'" and
-                fn_not_ghost: "FI_Ghost funInfo = NotGhost" and
-                len_tmargs: "length argTms' = length (FI_TmArgs funInfo)" and
-                args_check: "list_all2 (\<lambda>tm expectedTy.
-                               case core_term_type env NotGhost tm of
-                                 None \<Rightarrow> False
-                               | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                             argTms'
-                             (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs')) ty)
-                                  (FI_TmArgs funInfo))" and
-                fn_ty_eq: "varTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs'))
-                                               (FI_ReturnType funInfo)" and
-                ref_lvalues: "\<forall>i < length argTms'.
-                                snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                                  \<longrightarrow> is_writable_lvalue env (argTms' ! i)"
-                by blast
-              from initTm_eq initTm_eq' have name_eqs:
-                "fnName' = fnName" "tyArgs' = tyArgs" "argTms' = argTms"
-                by auto
-              note fn_lookup = fn_lookup[unfolded name_eqs]
-              note len_tyargs = len_tyargs[unfolded name_eqs]
-              note tyargs_wk = tyargs_wk[unfolded name_eqs]
-              note tyargs_rt = tyargs_rt[unfolded name_eqs]
-              note len_tmargs = len_tmargs[unfolded name_eqs]
-              note args_check = args_check[unfolded name_eqs]
-              note fn_ty_eq = fn_ty_eq[unfolded name_eqs]
-              note ref_lvalues = ref_lvalues[unfolded name_eqs]
-              from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost args_check fn_ty_eq
-                            len_tyargs tyargs_wk tyargs_rt ref_lvalues]
-              have fc_sound: "sound_function_call_result state env storeTyping varTy
-                  (interp_function_call fuel state fnName tyArgs argTms)" .
-              show ?thesis
-              proof (cases "interp_function_call fuel state fnName tyArgs argTms")
-                case (Inl err)
-                with fc_sound have err_sound: "sound_error_result err" by simp
-                have interp_err: "interp_statement (Suc fuel) state
+            proof (cases "interp_term fuel state initTm")
+              case (Inl err)
+              with init_sound have err_sound: "sound_error_result err" by simp
+              from Inl have interp_err:
+                "interp_statement (Suc fuel) state
                     (CoreStmt_VarDecl NotGhost varName Var varTy initTm) = Inl err"
-                  using Inl initTm_eq by simp
-                with err_sound CoreStmt_VarDecl Var NotGhost show ?thesis by simp
-              next
-                case (Inr fcResult)
-                obtain newState initialVal where fcResult_eq: "fcResult = (newState, initialVal)"
-                  by (cases fcResult) auto
-                from fc_sound Inr fcResult_eq obtain storeTyping1 where
-                  new_sme: "state_matches_env newState env storeTyping1" and
-                  ext1: "storeTyping_extends storeTyping storeTyping1" and
-                  tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
-                  val_typed: "value_has_type env initialVal
-                                (apply_subst (IS_TyArgs state) varTy)"
-                  by auto
-                from val_typed tyargs_eq
-                have val_typed': "value_has_type env initialVal
-                                    (apply_subst (IS_TyArgs newState) varTy)"
-                  by simp
-                \<comment> \<open>Now alloc_store newState and fmupd the new local. \<close>
-                obtain state' addr where alloc_eq:
-                  "(state', addr) = alloc_store newState initialVal"
-                  by (cases "alloc_store newState initialVal") auto
-                let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                         IS_Refs := fmdrop varName (IS_Refs state'),
-                                         IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>"
-                have interp_eq: "interp_statement (Suc fuel) state
-                    (CoreStmt_VarDecl NotGhost varName Var varTy initTm) = Inr (Continue ?state'')"
-                  using Inr fcResult_eq alloc_eq initTm_eq
-                  by (simp add: case_prod_beta)
-                let ?subVarTy = "apply_subst (IS_TyArgs newState) varTy"
-                \<comment> \<open>Extend storeTyping1 by [?subVarTy] to get the new storeTyping. \<close>
-                from state_matches_env_add_nonconst_local[OF new_sme val_typed'
-                    alloc_eq refl env'_eq]
-                have new_sme_ext: "state_matches_env ?state'' env' (storeTyping1 @ [?subVarTy])" .
-                have ext2: "storeTyping_extends storeTyping1 (storeTyping1 @ [?subVarTy])"
-                  using storeTyping_extends_append .
-                have ext_total: "storeTyping_extends storeTyping (storeTyping1 @ [?subVarTy])"
-                  using storeTyping_extends_trans[OF ext1 ext2] .
-                from new_sme_ext ext_total interp_eq CoreStmt_VarDecl Var NotGhost
-                show ?thesis by auto
-              qed
+                by simp
+              with err_sound CoreStmt_VarDecl Var NotGhost show ?thesis by simp
             next
-              case False
-              \<comment> \<open>Non-function-call initTm: use IH_term, alloc_store state. \<close>
-              hence not_fc: "\<And>fnName tyArgs argTms.
-                  initTm \<noteq> CoreTm_FunctionCall fnName tyArgs argTms" by auto
-              from fn_call_facts_or_pure not_fc have init_ty:
-                "core_term_type env NotGhost initTm = Some varTy" by blast
-              from IH_term[OF "4.prems"(1,2) init_ty]
-              have init_sound: "sound_term_result state env varTy (interp_term fuel state initTm)" .
-              show ?thesis
-              proof (cases "interp_term fuel state initTm")
-                case (Inl err)
-                with init_sound have err_sound: "sound_error_result err" by simp
-                from Inl not_fc have interp_err:
-                  "interp_statement (Suc fuel) state
-                      (CoreStmt_VarDecl NotGhost varName Var varTy initTm) = Inl err"
-                  by (cases initTm) auto
-                with err_sound CoreStmt_VarDecl Var NotGhost show ?thesis by simp
-              next
-                case (Inr initialVal)
-                from init_sound Inr
-                have val_typed: "value_has_type env initialVal
-                                   (apply_subst (IS_TyArgs state) varTy)" by simp
-                obtain state' addr where alloc_eq: "(state', addr) = alloc_store state initialVal"
-                  by (cases "alloc_store state initialVal") auto
-                let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                         IS_Refs := fmdrop varName (IS_Refs state'),
-                                         IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>"
-                have interp_eq: "interp_statement (Suc fuel) state
-                    (CoreStmt_VarDecl NotGhost varName Var varTy initTm) =
-                    Inr (Continue ?state'')"
-                  using Inr alloc_eq not_fc
-                  by (cases initTm) (auto simp: case_prod_beta split: prod.splits)
-                let ?subVarTy = "apply_subst (IS_TyArgs state) varTy"
-                have new_sme: "state_matches_env ?state'' env' (storeTyping @ [?subVarTy])"
-                  using state_matches_env_add_nonconst_local[OF "4.prems"(1) val_typed
-                      alloc_eq refl env'_eq] .
-                have ext: "storeTyping_extends storeTyping (storeTyping @ [?subVarTy])"
-                  using storeTyping_extends_append .
-                from new_sme ext interp_eq CoreStmt_VarDecl Var NotGhost
-                show ?thesis by auto
-              qed
+              case (Inr initialVal)
+              from init_sound Inr
+              have val_typed: "value_has_type env initialVal
+                                 (apply_subst (IS_TyArgs state) varTy)" by simp
+              obtain state' addr where alloc_eq: "(state', addr) = alloc_store state initialVal"
+                by (cases "alloc_store state initialVal") auto
+              let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                       IS_Refs := fmdrop varName (IS_Refs state'),
+                                       IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>"
+              have interp_eq: "interp_statement (Suc fuel) state
+                  (CoreStmt_VarDecl NotGhost varName Var varTy initTm) =
+                  Inr (Continue ?state'')"
+                using Inr alloc_eq by (simp add: case_prod_beta)
+              let ?subVarTy = "apply_subst (IS_TyArgs state) varTy"
+              have new_sme: "state_matches_env ?state'' env' (storeTyping @ [?subVarTy])"
+                using state_matches_env_add_nonconst_local[OF "4.prems"(1) val_typed
+                    alloc_eq refl env'_eq] .
+              have ext: "storeTyping_extends storeTyping (storeTyping @ [?subVarTy])"
+                using storeTyping_extends_append .
+              from new_sme ext interp_eq CoreStmt_VarDecl Var NotGhost
+              show ?thesis by auto
             qed
           next
             case Ghost
@@ -1030,142 +926,8 @@ next
                (which fmdrop ensures). All other variables are unchanged. *)
             from "4.prems"(1) have
               old_sme: "state_matches_env state env storeTyping" .
-            have tyargs_eq [simp]: "IS_TyArgs ?state' = IS_TyArgs state" by simp
-            have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
-                              "TE_Datatypes env' = TE_Datatypes env"
-                              "TE_TypeVars env' = TE_TypeVars env"
-                              "TE_GhostDatatypes env' = TE_GhostDatatypes env"
-                              "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
-              using env'_eq by simp_all
-            have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
-              using value_has_type_cong_env[OF env'_fields] .
-            have tap_eq: "\<And>t p. type_at_path env t p = type_at_path env' t p"
-              using type_at_path_cong_env[OF env'_fields(1)] .
             have "state_matches_env ?state' env' storeTyping"
-              unfolding state_matches_env_def
-            proof (intro conjI)
-              (* local_vars_exist: non-ghost locals in env' must be in ?state'.
-                 varName is ghost in env' so excluded. Others are in env (non-ghost)
-                 so in state, and fmdrop doesn't affect them. *)
-              show "local_vars_exist_in_state ?state' env' storeTyping"
-                unfolding local_vars_exist_in_state_def
-              proof (intro allI impI, elim conjE)
-                fix name ty
-                assume lk: "fmlookup (TE_LocalVars env') name = Some ty"
-                  and ng: "name |\<notin>| TE_GhostLocals env'"
-                from ng env'_eq have "name \<noteq> varName" by auto
-                with lk env'_eq have lk_old: "fmlookup (TE_LocalVars env) name = Some ty" by simp
-                from ng env'_eq \<open>name \<noteq> varName\<close> have ng_old: "name |\<notin>| TE_GhostLocals env" by auto
-                from old_sme lk_old ng_old
-                have "local_var_in_state_with_type state env storeTyping name ty"
-                  unfolding state_matches_env_def local_vars_exist_in_state_def by blast
-                with \<open>name \<noteq> varName\<close> tap_eq show "local_var_in_state_with_type ?state' env' storeTyping name ty"
-                  unfolding local_var_in_state_with_type_def Let_def
-                  by (auto split: option.splits)
-              qed
-            next
-              (* global_vars_exist: globals unchanged (TE_GlobalVars and TE_GhostGlobals same).
-                 IS_Globals is unchanged (?state' only modifies IS_Locals/IS_Refs). *)
-              show "global_vars_exist_in_state ?state' env'"
-              proof -
-                from old_sme have old_gv: "global_vars_exist_in_state state env"
-                  unfolding state_matches_env_def by simp
-                have gv_eq: "TE_GlobalVars env' = TE_GlobalVars env" using env'_eq by simp
-                have gg_eq: "TE_GhostGlobals env' = TE_GhostGlobals env" using env'_eq by simp
-                show ?thesis unfolding global_vars_exist_in_state_def
-                proof (intro allI impI, elim conjE)
-                  fix name ty
-                  assume lk: "fmlookup (TE_GlobalVars env') name = Some ty"
-                    and ng: "name |\<notin>| TE_GhostGlobals env'"
-                  from lk gv_eq have "fmlookup (TE_GlobalVars env) name = Some ty" by simp
-                  moreover from ng gg_eq have "name |\<notin>| TE_GhostGlobals env" by simp
-                  ultimately have "global_var_in_state_with_type state env name ty"
-                    using old_gv unfolding global_vars_exist_in_state_def by blast
-                  thus "global_var_in_state_with_type ?state' env' name ty"
-                    using vht_eq unfolding global_var_in_state_with_type_def
-                    by (auto split: option.splits)
-                qed
-              qed
-            next
-              (* no_extra_local_vars: if not in TE_LocalVars or ghost, not in IS_Locals/IS_Refs.
-                 fmdrop removes varName. For others, same as before. *)
-              show "no_extra_local_vars ?state' env'"
-                unfolding no_extra_local_vars_def
-              proof (intro allI impI)
-                fix name
-                assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostLocals env'"
-                show "fmlookup (IS_Locals ?state') name = None \<and>
-                      fmlookup (IS_Refs ?state') name = None"
-                proof (cases "name = varName")
-                  case True
-                  then show ?thesis by simp
-                next
-                  case False
-                  from ante False env'_eq
-                  have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostLocals env" by auto
-                  with old_sme have "fmlookup (IS_Locals state) name = None \<and>
-                      fmlookup (IS_Refs state) name = None"
-                    unfolding state_matches_env_def no_extra_local_vars_def by blast
-                  with False show ?thesis by simp
-                qed
-              qed
-            next
-              show "no_extra_global_vars ?state' env'"
-                using old_sme env'_eq
-                unfolding state_matches_env_def no_extra_global_vars_def by simp
-            next
-              show "funs_exist_in_state ?state' env'"
-                unfolding funs_exist_in_state_def
-              proof (intro allI impI, elim conjE)
-                fix name info
-                assume lk: "fmlookup (TE_Functions env') name = Some info"
-                  and ng: "FI_Ghost info = NotGhost"
-                from old_sme have old_fes: "funs_exist_in_state state env"
-                  unfolding state_matches_env_def by simp
-                have funs_eq: "TE_Functions env' = TE_Functions env" using env'_eq by simp
-                from lk funs_eq have lk': "fmlookup (TE_Functions env) name = Some info" by simp
-                from old_fes lk' ng obtain interpFun where
-                  if_lk: "fmlookup (IS_Functions state) name = Some interpFun" and
-                  matches: "fun_info_matches_interp_fun env info interpFun"
-                  unfolding funs_exist_in_state_def by (auto split: option.splits)
-                have if_lk': "fmlookup (IS_Functions ?state') name = Some interpFun"
-                  using if_lk by simp
-                have fcong: "fun_info_matches_interp_fun env' info interpFun =
-                              fun_info_matches_interp_fun env info interpFun"
-                  by (rule fun_info_matches_interp_fun_cong_env)
-                     (use env'_eq in simp_all)
-                have "fun_info_matches_interp_fun env' info interpFun"
-                  using matches fcong by simp
-                with if_lk' show "case fmlookup (IS_Functions ?state') name of
-                                    None \<Rightarrow> False
-                                  | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env' info interpFun"
-                  by simp
-              qed
-            next
-              show "no_extra_funs ?state' env'"
-                using old_sme env'_eq
-                unfolding state_matches_env_def no_extra_funs_def by simp
-            next
-              show "const_locals_match ?state' env'"
-                using old_sme env'_eq
-                unfolding state_matches_env_def const_locals_match_def by auto
-            next
-              show "store_well_typed ?state' env' storeTyping"
-                using old_sme vht_eq
-                unfolding state_matches_env_def store_well_typed_def by simp
-            next
-              have rt_eq: "\<And>ty. is_runtime_type env' ty = is_runtime_type env ty"
-                by (rule is_runtime_type_cong_env) (use env'_fields in simp_all)
-              have wk_eq: "\<And>ty. is_well_kinded env' ty = is_well_kinded env ty"
-                by (rule is_well_kinded_cong_env) (use env'_fields in simp_all)
-              show "ty_args_well_formed ?state' env'"
-                using old_sme env'_fields rt_eq wk_eq
-                unfolding state_matches_env_def ty_args_well_formed_def by simp
-            next
-              show "default_ctors_match ?state' env'"
-                using old_sme env'_eq
-                unfolding state_matches_env_def default_ctors_match_def by simp
-            qed
+              using state_matches_env_add_ghost_local[OF old_sme env'_eq refl] .
             with CoreStmt_VarDecl Var Ghost show ?thesis
               using interp_eq storeTyping_extends_refl by auto
           qed
@@ -1684,6 +1446,129 @@ next
           qed
         qed
       next
+        case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
+        \<comment> \<open>Extract the call facts and the cast result type from typing (both ghost
+            modes share these; they differ only in the env'/interpreter shape).
+            varTy is the explicit declared type; the cast result must equal it. \<close>
+        from typing CoreStmt_VarDeclCall obtain retTy where
+          call_ty: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
+          cast_ty: "cast_result_type env declGhost retTy castOpt = Some varTy"
+          by (auto split: if_splits option.splits)
+        show ?thesis proof (cases declGhost)
+          case Ghost
+          \<comment> \<open>Ghost VarDeclCall: the call is not executed; the interpreter drops
+              varName from the runtime maps. Mirrors Ghost VarDecl(Var). \<close>
+          from typing CoreStmt_VarDeclCall Ghost call_ty cast_ty have env'_eq:
+            "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                          TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                          TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+            by (simp split: if_splits)
+          let ?state' = "state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                                 IS_Refs := fmdrop varName (IS_Refs state),
+                                 IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>"
+          have interp_eq: "interp_statement (Suc fuel) state
+              (CoreStmt_VarDeclCall Ghost varName varTy castOpt fnName tyArgs argTms)
+                = Inr (Continue ?state')"
+            by simp
+          from "4.prems"(1) have old_sme: "state_matches_env state env storeTyping" .
+          have "state_matches_env ?state' env' storeTyping"
+            using state_matches_env_add_ghost_local[OF old_sme env'_eq refl] .
+          with CoreStmt_VarDeclCall Ghost show ?thesis
+            using interp_eq storeTyping_extends_refl by auto
+        next
+          case NotGhost
+          \<comment> \<open>NotGhost VarDeclCall: run the call, apply the optional cast, then
+              alloc_store + fmupd the new local. \<close>
+          from typing CoreStmt_VarDeclCall NotGhost call_ty cast_ty have env'_eq:
+            "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                          TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
+                          TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+            by (simp split: if_splits)
+          \<comment> \<open>Function-call facts for IH_fc. \<close>
+          from core_impure_call_type_fn_facts[OF call_ty[unfolded NotGhost]] obtain funInfo where
+            fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+            len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+            tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+            tyargs_rt: "NotGhost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
+            fn_not_ghost: "NotGhost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
+            len_tmargs: "length argTms = length (FI_TmArgs funInfo)" and
+            fn_ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                           (FI_ReturnType funInfo)" and
+            args_check: "list_all2 (\<lambda>tm expectedTy.
+                           case core_term_type env NotGhost tm of
+                             None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                         argTms
+                         (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                              (FI_TmArgs funInfo))" and
+            ref_lvalues: "\<forall>i < length argTms.
+                            snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                              \<longrightarrow> is_writable_lvalue env (argTms ! i)"
+            by blast
+          have fn_not_ghost': "FI_Ghost funInfo = NotGhost"
+            using fn_not_ghost by (cases "FI_Ghost funInfo") auto
+          have tyargs_rt': "list_all (is_runtime_type env) tyArgs" using tyargs_rt by simp
+          from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost' args_check fn_ty_eq
+                        len_tyargs tyargs_wk tyargs_rt' ref_lvalues]
+          have fc_sound: "sound_function_call_result state env storeTyping retTy
+              (interp_function_call fuel state fnName tyArgs argTms)" .
+          show ?thesis
+          proof (cases "interp_function_call fuel state fnName tyArgs argTms")
+            case (Inl err)
+            with fc_sound have err_sound: "sound_error_result err" by simp
+            have interp_err: "interp_statement (Suc fuel) state
+                (CoreStmt_VarDeclCall NotGhost varName varTy castOpt fnName tyArgs argTms) = Inl err"
+              using Inl by simp
+            with err_sound CoreStmt_VarDeclCall NotGhost show ?thesis by simp
+          next
+            case (Inr fcResult)
+            obtain newState retVal where fcResult_eq: "fcResult = (newState, retVal)"
+              by (cases fcResult) auto
+            from fc_sound Inr fcResult_eq obtain storeTyping1 where
+              new_sme: "state_matches_env newState env storeTyping1" and
+              ext1: "storeTyping_extends storeTyping storeTyping1" and
+              tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
+              ret_typed: "value_has_type env retVal (apply_subst (IS_TyArgs state) retTy)"
+              by auto
+            show ?thesis
+            proof (cases "apply_cast_opt castOpt retVal")
+              case (Inl err)
+              have err_eq: "err = RuntimeError"
+                using apply_cast_opt_error_is_runtime[OF Inl cast_ty[unfolded NotGhost] ret_typed] .
+              have interp_err: "interp_statement (Suc fuel) state
+                  (CoreStmt_VarDeclCall NotGhost varName varTy castOpt fnName tyArgs argTms) = Inl RuntimeError"
+                using Inl Inr fcResult_eq err_eq by simp
+              with CoreStmt_VarDeclCall NotGhost show ?thesis by simp
+            next
+              case (Inr initialVal)
+              from apply_cast_opt_sound[OF Inr cast_ty[unfolded NotGhost] ret_typed[unfolded tyargs_eq[symmetric]]]
+              have val_typed_new: "value_has_type env initialVal (apply_subst (IS_TyArgs newState) varTy)" .
+              hence val_typed: "value_has_type env initialVal (apply_subst (IS_TyArgs state) varTy)"
+                using tyargs_eq by simp
+              obtain state' addr where alloc_eq:
+                "(state', addr) = alloc_store newState initialVal"
+                by (cases "alloc_store newState initialVal") auto
+              let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                                       IS_Refs := fmdrop varName (IS_Refs state'),
+                                       IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>"
+              have interp_eq: "interp_statement (Suc fuel) state
+                  (CoreStmt_VarDeclCall NotGhost varName varTy castOpt fnName tyArgs argTms)
+                    = Inr (Continue ?state'')"
+                using \<open>interp_function_call fuel state fnName tyArgs argTms = Inr fcResult\<close>
+                      fcResult_eq Inr alloc_eq by (simp add: case_prod_beta)
+              let ?subVarTy = "apply_subst (IS_TyArgs newState) varTy"
+              from state_matches_env_add_nonconst_local[OF new_sme val_typed_new
+                  alloc_eq refl env'_eq]
+              have new_sme_ext: "state_matches_env ?state'' env' (storeTyping1 @ [?subVarTy])" .
+              have ext2: "storeTyping_extends storeTyping1 (storeTyping1 @ [?subVarTy])"
+                using storeTyping_extends_append .
+              have ext_total: "storeTyping_extends storeTyping (storeTyping1 @ [?subVarTy])"
+                using storeTyping_extends_trans[OF ext1 ext2] .
+              from new_sme_ext ext_total interp_eq CoreStmt_VarDeclCall NotGhost
+              show ?thesis by auto
+            qed
+          qed
+        qed
+      next
         case (CoreStmt_Assign assignGhost lhsTm rhsTm)
         then show ?thesis proof (cases assignGhost)
           case Ghost
@@ -1694,21 +1579,18 @@ next
             using storeTyping_extends_refl by auto
         next
           case NotGhost
-          \<comment> \<open>NotGhost Assign: evaluates lhs lvalue and rhs term, updates store.
-              For now we handle only the non-function-call rhs case.\<close>
+          \<comment> \<open>NotGhost Assign: rhs is an ordinary (pure) term. Evaluate lhs lvalue
+              and rhs term, then update the store. (Impure-call rhs's are handled
+              by CoreStmt_AssignCall.)\<close>
           from typing CoreStmt_Assign NotGhost obtain lhsTy where
             lhs_writable: "is_writable_lvalue env lhsTm" and
             lhs_ty: "core_term_type env NotGhost lhsTm = Some lhsTy" and
-            rhs_ty_disj: "core_impure_call_type env NotGhost rhsTm = Some lhsTy
-                          \<or> core_term_type env NotGhost rhsTm = Some lhsTy" and
+            rhs_ty: "core_term_type env NotGhost rhsTm = Some lhsTy" and
             env'_eq: "env' = env"
             by (auto split: if_splits option.splits)
           from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty]]
           have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
               (interp_writable_lvalue fuel state lhsTm)" .
-          \<comment> \<open>Normalize the disjunction via the shared helper. \<close>
-          note fn_call_facts_or_pure = fn_call_facts_from_disjunct[OF rhs_ty_disj]
-
           show ?thesis
           proof (cases "interp_writable_lvalue fuel state lhsTm")
             case (Inl err)
@@ -1723,183 +1605,209 @@ next
               path_ty: "type_at_path env (storeTyping ! addr) path
                           = Some (apply_subst (IS_TyArgs state) lhsTy)"
               by auto
-            \<comment> \<open>Handle the function-call rhs separately from other term rhs.\<close>
+            from IH_term[OF "4.prems"(1,2) rhs_ty]
+            have rhs_sound: "sound_term_result state env lhsTy (interp_term fuel state rhsTm)" .
             show ?thesis
-            proof (cases "\<exists>fnName tyArgs argTms. rhsTm = CoreTm_FunctionCall fnName tyArgs argTms")
-              case True
-              \<comment> \<open>Function call rhs: use interp_function_call_sound (IH_fc).\<close>
-              then obtain fnName tyArgs argTms where rhsTm_eq:
-                "rhsTm = CoreTm_FunctionCall fnName tyArgs argTms" by auto
-              \<comment> \<open>Extract function-call facts from fn_call_facts_or_pure (either branch
-                  of the impure/pure disjunction). \<close>
-              from fn_call_facts_or_pure rhsTm_eq obtain funInfo fnName' tyArgs' argTms' where
-                rhsTm_eq': "rhsTm = CoreTm_FunctionCall fnName' tyArgs' argTms'" and
-                fn_lookup: "fmlookup (TE_Functions env) fnName' = Some funInfo" and
-                len_tyargs: "length tyArgs' = length (FI_TyArgs funInfo)" and
-                tyargs_wk: "list_all (is_well_kinded env) tyArgs'" and
-                tyargs_rt: "list_all (is_runtime_type env) tyArgs'" and
-                fn_not_ghost: "FI_Ghost funInfo = NotGhost" and
-                len_tmargs: "length argTms' = length (FI_TmArgs funInfo)" and
-                args_check: "list_all2 (\<lambda>tm expectedTy.
-                               case core_term_type env NotGhost tm of
-                                 None \<Rightarrow> False
-                               | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                             argTms'
-                             (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs')) ty)
-                                  (FI_TmArgs funInfo))" and
-                fn_ty_eq: "lhsTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs'))
-                                               (FI_ReturnType funInfo)" and
-                ref_lvalues: "\<forall>i < length argTms'.
-                                snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                                  \<longrightarrow> is_writable_lvalue env (argTms' ! i)"
-                by blast
-              from rhsTm_eq rhsTm_eq' have name_eqs:
-                "fnName' = fnName" "tyArgs' = tyArgs" "argTms' = argTms"
-                by auto
-              note fn_lookup = fn_lookup[unfolded name_eqs]
-              note len_tyargs = len_tyargs[unfolded name_eqs]
-              note tyargs_wk = tyargs_wk[unfolded name_eqs]
-              note tyargs_rt = tyargs_rt[unfolded name_eqs]
-              note len_tmargs = len_tmargs[unfolded name_eqs]
-              note args_check = args_check[unfolded name_eqs]
-              note fn_ty_eq = fn_ty_eq[unfolded name_eqs]
-              note ref_lvalues = ref_lvalues[unfolded name_eqs]
-              from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost args_check fn_ty_eq
-                            len_tyargs tyargs_wk tyargs_rt ref_lvalues]
-              have fc_sound: "sound_function_call_result state env storeTyping lhsTy
-                  (interp_function_call fuel state fnName tyArgs argTms)" .
+            proof (cases "interp_term fuel state rhsTm")
+              case (Inl err)
+              with rhs_sound have err_sound: "sound_error_result err" by simp
+              have interp_err: "interp_statement (Suc fuel) state
+                  (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl err"
+                using Inl \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
+              with err_sound CoreStmt_Assign NotGhost show ?thesis by simp
+            next
+              case (Inr rhsVal)
+              from rhs_sound Inr
+              have rhs_typed: "value_has_type env rhsVal
+                                 (apply_subst (IS_TyArgs state) lhsTy)" by simp
+              from "4.prems"(1) addr_valid
+              have old_slot_typed: "value_has_type env (IS_Store state ! addr) (storeTyping ! addr)"
+                unfolding state_matches_env_def store_well_typed_def by simp
               show ?thesis
-              proof (cases "interp_function_call fuel state fnName tyArgs argTms")
+              proof (cases "update_value_at_path (IS_Store state ! addr) path rhsVal")
                 case (Inl err)
-                with fc_sound have err_sound: "sound_error_result err" by simp
+                from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl]
+                have err_eq: "err = RuntimeError" .
                 have interp_err: "interp_statement (Suc fuel) state
-                    (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl err"
-                  using Inl \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq rhsTm_eq
-                  by simp
-                with err_sound CoreStmt_Assign NotGhost show ?thesis by simp
+                    (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl RuntimeError"
+                  using Inl Inr \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close>
+                        ap_eq err_eq by simp
+                with CoreStmt_Assign NotGhost show ?thesis by simp
               next
-                case (Inr fcResult)
-                obtain newState rhsVal where fcResult_eq: "fcResult = (newState, rhsVal)"
-                  by (cases fcResult) auto
-                from fc_sound Inr fcResult_eq obtain storeTyping1 where
-                  new_sme: "state_matches_env newState env storeTyping1" and
-                  ext1: "storeTyping_extends storeTyping storeTyping1" and
-                  tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
-                  rhs_typed: "value_has_type env rhsVal
-                                (apply_subst (IS_TyArgs state) lhsTy)"
-                  by auto
-                \<comment> \<open>Since storeTyping_extends, the original addr's type is preserved.\<close>
-                from ext1 obtain suffix where st1_eq: "storeTyping1 = storeTyping @ suffix"
-                  unfolding storeTyping_extends_def by auto
-                from new_sme
-                have st1_len: "length storeTyping1 = length (IS_Store newState)"
-                  unfolding state_matches_env_def store_well_typed_def by simp
-                from "4.prems"(1)
-                have st_len: "length storeTyping = length (IS_Store state)"
-                  unfolding state_matches_env_def store_well_typed_def by simp
-                from addr_valid st_len have addr_lt_st: "addr < length storeTyping" by simp
-                have st1_at_addr: "storeTyping1 ! addr = storeTyping ! addr"
-                  using st1_eq addr_lt_st by (simp add: nth_append)
-                from addr_lt_st st1_eq have addr_lt_st1: "addr < length storeTyping1" by simp
-                from addr_lt_st1 st1_len
-                have addr_valid_new: "addr < length (IS_Store newState)" by simp
-                from path_ty st1_at_addr
-                have path_ty_new: "type_at_path env (storeTyping1 ! addr) path
-                                     = Some (apply_subst (IS_TyArgs state) lhsTy)" by simp
-                \<comment> \<open>Get the old slot value (in newState) typed at storeTyping1 ! addr.\<close>
-                from new_sme addr_valid_new
-                have old_slot_typed: "value_has_type env (IS_Store newState ! addr)
-                                        (storeTyping1 ! addr)"
-                  unfolding state_matches_env_def store_well_typed_def by simp
+                case (Inr newVal)
+                from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty rhs_typed]
+                have new_slot_typed: "value_has_type env newVal (storeTyping ! addr)" .
+                let ?state' = "state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>"
+                have interp_eq: "interp_statement (Suc fuel) state
+                    (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inr (Continue ?state')"
+                  using Inr \<open>interp_term fuel state rhsTm = Inr rhsVal\<close>
+                    \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
+                from state_matches_env_update_store[OF "4.prems"(1) addr_valid
+                    new_slot_typed refl]
+                have new_sme: "state_matches_env ?state' env storeTyping" .
+                have ext: "storeTyping_extends storeTyping storeTyping"
+                  using storeTyping_extends_refl .
+                from new_sme ext interp_eq env'_eq CoreStmt_Assign NotGhost
+                show ?thesis by auto
+              qed
+            qed
+          qed
+        qed
+      next
+        case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
+        then show ?thesis proof (cases assignGhost)
+          case Ghost
+          \<comment> \<open>Ghost AssignCall: interpreter returns Continue state, env unchanged.\<close>
+          from typing CoreStmt_AssignCall Ghost have "env' = env"
+            by (auto split: if_splits option.splits)
+          with Ghost CoreStmt_AssignCall "4.prems"(1) show ?thesis
+            using storeTyping_extends_refl by auto
+        next
+          case NotGhost
+          \<comment> \<open>NotGhost AssignCall: resolve lhs, run the call, apply the optional cast,
+              update the store. The call facts come from core_impure_call_type. \<close>
+          from typing CoreStmt_AssignCall NotGhost have lhs_writable: "is_writable_lvalue env lhsTm"
+            by (simp split: if_splits)
+          from typing CoreStmt_AssignCall NotGhost lhs_writable obtain lhsTy where
+            lhs_ty: "core_term_type env NotGhost lhsTm = Some lhsTy"
+            by (simp split: option.splits)
+          from typing CoreStmt_AssignCall NotGhost lhs_writable lhs_ty obtain retTy where
+            call_ty: "core_impure_call_type env NotGhost fnName tyArgs argTms = Some retTy"
+            by (simp split: option.splits)
+          from typing CoreStmt_AssignCall NotGhost lhs_writable lhs_ty call_ty have
+            cast_ty: "cast_result_type env NotGhost retTy castOpt = Some lhsTy" and
+            env'_eq: "env' = env"
+            by (simp split: if_splits)+
+          \<comment> \<open>Extract the function-call facts (shape for IH_fc / type_soundness_function_call). \<close>
+          from core_impure_call_type_fn_facts[OF call_ty] obtain funInfo where
+            fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+            len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+            tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+            tyargs_rt: "NotGhost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
+            fn_not_ghost: "NotGhost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
+            len_tmargs: "length argTms = length (FI_TmArgs funInfo)" and
+            fn_ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                           (FI_ReturnType funInfo)" and
+            args_check: "list_all2 (\<lambda>tm expectedTy.
+                           case core_term_type env NotGhost tm of
+                             None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                         argTms
+                         (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                              (FI_TmArgs funInfo))" and
+            ref_lvalues: "\<forall>i < length argTms.
+                            snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                              \<longrightarrow> is_writable_lvalue env (argTms ! i)"
+            by blast
+          have fn_not_ghost': "FI_Ghost funInfo = NotGhost"
+            using fn_not_ghost by (cases "FI_Ghost funInfo") auto
+          have tyargs_rt': "list_all (is_runtime_type env) tyArgs" using tyargs_rt by simp
+          from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty]]
+          have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
+              (interp_writable_lvalue fuel state lhsTm)" .
+          from IH_fc[OF "4.prems"(1,2) fn_lookup fn_not_ghost' args_check fn_ty_eq
+                        len_tyargs tyargs_wk tyargs_rt' ref_lvalues]
+          have fc_sound: "sound_function_call_result state env storeTyping retTy
+              (interp_function_call fuel state fnName tyArgs argTms)" .
+          show ?thesis
+          proof (cases "interp_writable_lvalue fuel state lhsTm")
+            case (Inl err)
+            with lhs_sound have "sound_error_result err" by simp
+            with Inl CoreStmt_AssignCall NotGhost show ?thesis by simp
+          next
+            case (Inr addrPath)
+            obtain addr path where ap_eq: "addrPath = (addr, path)"
+              by (cases addrPath) auto
+            from lhs_sound Inr ap_eq have
+              addr_valid: "addr < length (IS_Store state)" and
+              path_ty: "type_at_path env (storeTyping ! addr) path
+                          = Some (apply_subst (IS_TyArgs state) lhsTy)"
+              by auto
+            show ?thesis
+            proof (cases "interp_function_call fuel state fnName tyArgs argTms")
+              case (Inl err)
+              with fc_sound have err_sound: "sound_error_result err" by simp
+              have interp_err: "interp_statement (Suc fuel) state
+                  (CoreStmt_AssignCall NotGhost lhsTm castOpt fnName tyArgs argTms) = Inl err"
+                using Inl \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
+              with err_sound CoreStmt_AssignCall NotGhost show ?thesis by simp
+            next
+              case (Inr fcResult)
+              obtain newState retVal where fcResult_eq: "fcResult = (newState, retVal)"
+                by (cases fcResult) auto
+              from fc_sound Inr fcResult_eq obtain storeTyping1 where
+                new_sme: "state_matches_env newState env storeTyping1" and
+                ext1: "storeTyping_extends storeTyping storeTyping1" and
+                tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
+                ret_typed: "value_has_type env retVal
+                              (apply_subst (IS_TyArgs state) retTy)"
+                by auto
+              \<comment> \<open>storeTyping_extends preserves the original addr's type.\<close>
+              from ext1 obtain suffix where st1_eq: "storeTyping1 = storeTyping @ suffix"
+                unfolding storeTyping_extends_def by auto
+              from new_sme
+              have st1_len: "length storeTyping1 = length (IS_Store newState)"
+                unfolding state_matches_env_def store_well_typed_def by simp
+              from "4.prems"(1)
+              have st_len: "length storeTyping = length (IS_Store state)"
+                unfolding state_matches_env_def store_well_typed_def by simp
+              from addr_valid st_len have addr_lt_st: "addr < length storeTyping" by simp
+              have st1_at_addr: "storeTyping1 ! addr = storeTyping ! addr"
+                using st1_eq addr_lt_st by (simp add: nth_append)
+              from addr_lt_st st1_eq have addr_lt_st1: "addr < length storeTyping1" by simp
+              from addr_lt_st1 st1_len
+              have addr_valid_new: "addr < length (IS_Store newState)" by simp
+              from path_ty st1_at_addr
+              have path_ty_new: "type_at_path env (storeTyping1 ! addr) path
+                                   = Some (apply_subst (IS_TyArgs state) lhsTy)" by simp
+              from new_sme addr_valid_new
+              have old_slot_typed: "value_has_type env (IS_Store newState ! addr)
+                                      (storeTyping1 ! addr)"
+                unfolding state_matches_env_def store_well_typed_def by simp
+              \<comment> \<open>Apply the optional cast to the call's return value. \<close>
+              show ?thesis
+              proof (cases "apply_cast_opt castOpt retVal")
+                case (Inl err)
+                \<comment> \<open>A failed cast is a RuntimeError (apply_cast_opt overflow). \<close>
+                have err_eq: "err = RuntimeError"
+                  using apply_cast_opt_error_is_runtime[OF Inl cast_ty ret_typed] .
+                have interp_err: "interp_statement (Suc fuel) state
+                    (CoreStmt_AssignCall NotGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
+                  using Inl Inr fcResult_eq
+                        \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq err_eq by simp
+                with CoreStmt_AssignCall NotGhost show ?thesis by simp
+              next
+                case (Inr rhsVal)
+                from apply_cast_opt_sound[OF Inr cast_ty ret_typed[unfolded tyargs_eq[symmetric]]]
+                have rhs_typed: "value_has_type env rhsVal (apply_subst (IS_TyArgs newState) lhsTy)" .
+                hence rhs_typed': "value_has_type env rhsVal (apply_subst (IS_TyArgs state) lhsTy)"
+                  using tyargs_eq by simp
                 show ?thesis
                 proof (cases "update_value_at_path (IS_Store newState ! addr) path rhsVal")
                   case (Inl err)
                   from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty_new Inl]
                   have err_eq: "err = RuntimeError" .
                   have interp_err: "interp_statement (Suc fuel) state
-                      (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl RuntimeError"
-                    using Inl Inr fcResult_eq
+                      (CoreStmt_AssignCall NotGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
+                    using Inl \<open>interp_function_call fuel state fnName tyArgs argTms = Inr fcResult\<close>
+                          fcResult_eq \<open>apply_cast_opt castOpt retVal = Inr rhsVal\<close>
                           \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close>
-                          ap_eq rhsTm_eq err_eq by simp
-                  with CoreStmt_Assign NotGhost show ?thesis by simp
+                          ap_eq err_eq by simp
+                  with CoreStmt_AssignCall NotGhost show ?thesis by simp
                 next
                   case (Inr newVal)
-                  from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty_new rhs_typed]
+                  from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty_new rhs_typed']
                   have new_slot_typed: "value_has_type env newVal (storeTyping1 ! addr)" .
-                  \<comment> \<open>Build the final state.\<close>
                   let ?finalState = "newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>"
                   have interp_eq: "interp_statement (Suc fuel) state
-                      (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inr (Continue ?finalState)"
+                      (CoreStmt_AssignCall NotGhost lhsTm castOpt fnName tyArgs argTms)
+                        = Inr (Continue ?finalState)"
                     using Inr \<open>interp_function_call fuel state fnName tyArgs argTms = Inr fcResult\<close>
-                          fcResult_eq
-                          \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close>
-                          ap_eq rhsTm_eq by simp
+                          fcResult_eq \<open>apply_cast_opt castOpt retVal = Inr rhsVal\<close>
+                          \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
                   from state_matches_env_update_store[OF new_sme addr_valid_new
                       new_slot_typed refl]
                   have final_sme: "state_matches_env ?finalState env storeTyping1" .
-                  from final_sme ext1 interp_eq env'_eq CoreStmt_Assign NotGhost
-                  show ?thesis by auto
-                qed
-              qed
-            next
-              case False
-              \<comment> \<open>Non-function-call rhs: use IH_term.\<close>
-              from False have not_fc: "\<And>fnName tyArgs argTms.
-                  rhsTm \<noteq> CoreTm_FunctionCall fnName tyArgs argTms" by auto
-              from fn_call_facts_or_pure not_fc have rhs_ty:
-                "core_term_type env NotGhost rhsTm = Some lhsTy" by blast
-              from IH_term[OF "4.prems"(1,2) rhs_ty]
-              have rhs_sound: "sound_term_result state env lhsTy (interp_term fuel state rhsTm)" .
-              show ?thesis
-              proof (cases "interp_term fuel state rhsTm")
-                case (Inl err)
-                with rhs_sound have err_sound: "sound_error_result err" by simp
-                have interp_err: "interp_statement (Suc fuel) state
-                    (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl err"
-                  using Inl \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq not_fc
-                  by (cases rhsTm) auto
-                with err_sound CoreStmt_Assign NotGhost show ?thesis by simp
-              next
-                case (Inr rhsVal)
-                from rhs_sound Inr
-                have rhs_typed: "value_has_type env rhsVal
-                                   (apply_subst (IS_TyArgs state) lhsTy)" by simp
-                \<comment> \<open>Get the old slot value typed at storeTyping ! addr.\<close>
-                from "4.prems"(1) addr_valid
-                have old_slot_typed: "value_has_type env (IS_Store state ! addr) (storeTyping ! addr)"
-                  unfolding state_matches_env_def store_well_typed_def by simp
-                show ?thesis
-                proof (cases "update_value_at_path (IS_Store state ! addr) path rhsVal")
-                  case (Inl err)
-                  \<comment> \<open>update_value_at_path failed — must be a sound error.
-                      By update_value_at_path_error_is_runtime.\<close>
-                  from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl]
-                  have err_eq: "err = RuntimeError" .
-                  have interp_err: "interp_statement (Suc fuel) state
-                      (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl RuntimeError"
-                    using Inl Inr \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close>
-                          ap_eq err_eq not_fc
-                    by (cases rhsTm) auto
-                  with CoreStmt_Assign NotGhost show ?thesis by simp
-                next
-                  case (Inr newVal)
-                  \<comment> \<open>update_value_at_path succeeded with newVal of the slot's type.\<close>
-                  from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty rhs_typed]
-                  have new_slot_typed: "value_has_type env newVal (storeTyping ! addr)" .
-                  \<comment> \<open>Build the new state.\<close>
-                  let ?state' = "state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>"
-                  have interp_eq: "interp_statement (Suc fuel) state
-                      (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inr (Continue ?state')"
-                    using Inr \<open>interp_term fuel state rhsTm = Inr rhsVal\<close>
-                      \<open>interp_writable_lvalue fuel state lhsTm = Inr addrPath\<close> ap_eq not_fc
-                    by (cases rhsTm) auto
-                  \<comment> \<open>Apply state_matches_env_update_store to get new state matches env.\<close>
-                  from state_matches_env_update_store[OF "4.prems"(1) addr_valid
-                      new_slot_typed refl]
-                  have new_sme: "state_matches_env ?state' env storeTyping" .
-                  have ext: "storeTyping_extends storeTyping storeTyping"
-                    using storeTyping_extends_refl .
-                  from new_sme ext interp_eq env'_eq CoreStmt_Assign NotGhost
+                  from final_sme ext1 interp_eq env'_eq CoreStmt_AssignCall NotGhost
                   show ?thesis by auto
                 qed
               qed

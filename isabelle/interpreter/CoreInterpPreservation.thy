@@ -241,58 +241,25 @@ next
           show ?thesis
           proof (cases vr)
             case Var
-            \<comment> \<open>Two sub-cases for initTm: function call (which may return a new
-                state via interp_function_call) vs. plain term (state unchanged). \<close>
-            show ?thesis
-            proof (cases "\<exists>fn ts ams. initTm = CoreTm_FunctionCall fn ts ams")
-              case True
-              then obtain fn ts ams where init_eq: "initTm = CoreTm_FunctionCall fn ts ams" by blast
-              from NotGhost Var H CoreStmt_VarDecl init_eq
-              obtain newState initVal where
-                call: "interp_function_call fuel state fn ts ams = Inr (newState, initVal)"
-                by (auto split: sum.splits prod.splits)
-              from IH_call call
-              have call_gf: "IS_Globals newState = IS_Globals state \<and>
-                             IS_Functions newState = IS_Functions state \<and>
-                             IS_TyArgs newState = IS_TyArgs state \<and>
-                             IS_DefaultCtors newState = IS_DefaultCtors state"
-                by blast
-              let ?alloc = "alloc_store newState initVal"
-              from NotGhost Var H CoreStmt_VarDecl init_eq call
-              have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
-                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
-                               IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
-                               IS_ConstLocals :=
-                                 fminus (IS_ConstLocals (fst ?alloc)) {|varName|} \<rparr>)"
-                by (simp add: case_prod_beta)
-              have alloc_gf: "IS_Globals (fst ?alloc) = IS_Globals newState"
-                             "IS_Functions (fst ?alloc) = IS_Functions newState"
-                             "IS_TyArgs (fst ?alloc) = IS_TyArgs newState"
-                             "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors newState"
-                by (simp_all add: alloc_store_preserves_globals_funs)
-              from res_eq alloc_gf call_gf show ?thesis
-                by (simp add: exec_result_preserves_gf_Continue)
-            next
-              case False
-              with NotGhost Var H CoreStmt_VarDecl obtain initVal where
-                iv: "interp_term fuel state initTm = Inr initVal"
-                by (cases initTm; auto split: sum.splits)
-              let ?alloc = "alloc_store state initVal"
-              from NotGhost Var H CoreStmt_VarDecl False iv
-              have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
-                               fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
-                               IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
-                               IS_ConstLocals :=
-                                 fminus (IS_ConstLocals (fst ?alloc)) {|varName|} \<rparr>)"
-                by (cases initTm; simp_all add: case_prod_beta)
-              have "IS_Globals (fst ?alloc) = IS_Globals state"
-                   "IS_Functions (fst ?alloc) = IS_Functions state"
-                   "IS_TyArgs (fst ?alloc) = IS_TyArgs state"
-                   "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors state"
-                by (simp_all add: alloc_store_preserves_globals_funs)
-              with res_eq show ?thesis
-                by (simp add: exec_result_preserves_gf_Continue)
-            qed
+            \<comment> \<open>The initializer is an ordinary (pure) term; state unchanged. \<close>
+            from NotGhost Var H CoreStmt_VarDecl obtain initVal where
+              iv: "interp_term fuel state initTm = Inr initVal"
+              by (auto split: sum.splits)
+            let ?alloc = "alloc_store state initVal"
+            from NotGhost Var H CoreStmt_VarDecl iv
+            have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
+                             fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
+                             IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
+                             IS_ConstLocals :=
+                               fminus (IS_ConstLocals (fst ?alloc)) {|varName|} \<rparr>)"
+              by (simp add: case_prod_beta)
+            have "IS_Globals (fst ?alloc) = IS_Globals state"
+                 "IS_Functions (fst ?alloc) = IS_Functions state"
+                 "IS_TyArgs (fst ?alloc) = IS_TyArgs state"
+                 "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors state"
+              by (simp_all add: alloc_store_preserves_globals_funs)
+            with res_eq show ?thesis
+              by (simp add: exec_result_preserves_gf_Continue)
           next
             case Ref
             \<comment> \<open>Two branches: const-base (copy) or writable-base (alias). \<close>
@@ -348,50 +315,100 @@ next
           then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
         next
           case NotGhost
+          \<comment> \<open>The rhs is an ordinary (pure) term; state unchanged apart from the store. \<close>
           with H CoreStmt_Assign obtain addr path where
             lv: "interp_writable_lvalue fuel state lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)
-          \<comment> \<open>Two cases for rhsTm: function call vs. plain term. \<close>
-          show ?thesis
-          proof (cases "\<exists>fn ts ams. rhsTm = CoreTm_FunctionCall fn ts ams")
-            case True
-            then obtain fn ts ams where rhs_eq: "rhsTm = CoreTm_FunctionCall fn ts ams" by blast
-            from NotGhost H CoreStmt_Assign lv rhs_eq
-            obtain newState rhsVal where
-              call: "interp_function_call fuel state fn ts ams = Inr (newState, rhsVal)"
-              by (auto split: sum.splits prod.splits)
-            from IH_call call
-            have call_gf: "IS_Globals newState = IS_Globals state \<and>
-                           IS_Functions newState = IS_Functions state \<and>
-                           IS_TyArgs newState = IS_TyArgs state \<and>
-                           IS_DefaultCtors newState = IS_DefaultCtors state"
-              by blast
-            from NotGhost H CoreStmt_Assign lv rhs_eq call
-            obtain newVal where
-              upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"
-              by (auto split: sum.splits)
-            from NotGhost H CoreStmt_Assign lv rhs_eq call upd
-            have res_eq: "res = Continue
-                (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>)"
-              by (simp add: Let_def)
-            from call_gf res_eq show ?thesis
-              by (simp add: exec_result_preserves_gf_Continue)
-          next
-            case False
-            with NotGhost H CoreStmt_Assign lv
-            obtain rhsVal where
-              rv: "interp_term fuel state rhsTm = Inr rhsVal"
-              by (cases rhsTm; auto split: sum.splits)
-            from NotGhost H CoreStmt_Assign lv False rv
-            obtain newVal where
-              upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
-              by (cases rhsTm; auto split: sum.splits)
-            from NotGhost H CoreStmt_Assign lv False rv upd
-            have res_eq: "res = Continue
-                (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>)"
-              by (cases rhsTm; simp_all add: Let_def)
-            then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
-          qed
+          from NotGhost H CoreStmt_Assign lv
+          obtain rhsVal where
+            rv: "interp_term fuel state rhsTm = Inr rhsVal"
+            by (auto split: sum.splits)
+          from NotGhost H CoreStmt_Assign lv rv
+          obtain newVal where
+            upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
+            by (auto split: sum.splits)
+          from NotGhost H CoreStmt_Assign lv rv upd
+          have res_eq: "res = Continue
+              (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>)"
+            by (simp add: Let_def)
+          then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
+        qed
+      next
+        case (CoreStmt_VarDeclCall g varName varTy castOpt fnName argTys argTms)
+        show ?thesis
+        proof (cases g)
+          case Ghost
+          with H CoreStmt_VarDeclCall have
+            "res = Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                                      IS_Refs := fmdrop varName (IS_Refs state),
+                                      IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>)"
+            by simp
+          then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
+        next
+          case NotGhost
+          \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
+          from NotGhost H CoreStmt_VarDeclCall obtain newState retVal where
+            call: "interp_function_call fuel state fnName argTys argTms = Inr (newState, retVal)"
+            by (auto split: sum.splits prod.splits)
+          from IH_call call
+          have call_gf: "IS_Globals newState = IS_Globals state \<and>
+                         IS_Functions newState = IS_Functions state \<and>
+                         IS_TyArgs newState = IS_TyArgs state \<and>
+                         IS_DefaultCtors newState = IS_DefaultCtors state"
+            by blast
+          from NotGhost H CoreStmt_VarDeclCall call obtain initVal where
+            cast: "apply_cast_opt castOpt retVal = Inr initVal"
+            by (auto split: sum.splits)
+          let ?alloc = "alloc_store newState initVal"
+          from NotGhost H CoreStmt_VarDeclCall call cast
+          have res_eq: "res = Continue ((fst ?alloc) \<lparr> IS_Locals :=
+                           fmupd varName (snd ?alloc) (IS_Locals (fst ?alloc)),
+                           IS_Refs := fmdrop varName (IS_Refs (fst ?alloc)),
+                           IS_ConstLocals :=
+                             fminus (IS_ConstLocals (fst ?alloc)) {|varName|} \<rparr>)"
+            by (simp add: case_prod_beta)
+          have alloc_gf: "IS_Globals (fst ?alloc) = IS_Globals newState"
+                         "IS_Functions (fst ?alloc) = IS_Functions newState"
+                         "IS_TyArgs (fst ?alloc) = IS_TyArgs newState"
+                         "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors newState"
+            by (simp_all add: alloc_store_preserves_globals_funs)
+          from res_eq alloc_gf call_gf show ?thesis
+            by (simp add: exec_result_preserves_gf_Continue)
+        qed
+      next
+        case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
+        show ?thesis
+        proof (cases g)
+          case Ghost
+          with H CoreStmt_AssignCall have "res = Continue state" by simp
+          then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
+        next
+          case NotGhost
+          \<comment> \<open>Resolve lhs, run the call (newState), apply cast, store. \<close>
+          from NotGhost H CoreStmt_AssignCall obtain addr path where
+            lv: "interp_writable_lvalue fuel state lhsLv = Inr (addr, path)"
+            by (auto split: sum.splits)
+          from NotGhost H CoreStmt_AssignCall lv obtain newState retVal where
+            call: "interp_function_call fuel state fnName argTys argTms = Inr (newState, retVal)"
+            by (auto split: sum.splits prod.splits)
+          from IH_call call
+          have call_gf: "IS_Globals newState = IS_Globals state \<and>
+                         IS_Functions newState = IS_Functions state \<and>
+                         IS_TyArgs newState = IS_TyArgs state \<and>
+                         IS_DefaultCtors newState = IS_DefaultCtors state"
+            by blast
+          from NotGhost H CoreStmt_AssignCall lv call obtain rhsVal where
+            cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+            by (auto split: sum.splits)
+          from NotGhost H CoreStmt_AssignCall lv call cast obtain newVal where
+            upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"
+            by (auto split: sum.splits)
+          from NotGhost H CoreStmt_AssignCall lv call cast upd
+          have res_eq: "res = Continue
+              (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>)"
+            by (simp add: Let_def)
+          from call_gf res_eq show ?thesis
+            by (simp add: exec_result_preserves_gf_Continue)
         qed
       next
         case (CoreStmt_Swap g lhsTm rhsTm)

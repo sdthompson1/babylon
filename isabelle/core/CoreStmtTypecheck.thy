@@ -19,37 +19,49 @@ begin
 (*     calls stay pure.                                                       *)
 (* ========================================================================== *)
 
-definition core_impure_call_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreTerm \<Rightarrow> CoreType option" where
-  "core_impure_call_type env ghost tm =
-    (case tm of
-       CoreTm_FunctionCall fnName tyArgs tmArgs \<Rightarrow>
-         (case fmlookup (TE_Functions env) fnName of
-            None \<Rightarrow> None
-          | Some funInfo \<Rightarrow>
-              if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
-              else if \<not> list_all (is_well_kinded env) tyArgs then None
-              else if ghost = NotGhost
-                      \<and> (\<not> list_all (is_runtime_type env) tyArgs
-                         \<or> FI_Ghost funInfo = Ghost) then None
-              else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
-              else
-                let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
-                    expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
-                    varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
-                in if list_all2 (\<lambda>(tm, vor) expectedTy.
-                         case vor of
-                           Var \<Rightarrow>
-                             (case core_term_type env ghost tm of
-                                None \<Rightarrow> False
-                              | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                         | Ref \<Rightarrow>
-                             is_writable_lvalue env tm
-                             \<and> core_term_type env ghost tm = Some expectedTy)
-                       (zip tmArgs varOrRefs) expectedArgTypes
-                   then Some (apply_subst tySubst (FI_ReturnType funInfo))
-                   else None)
-     | _ \<Rightarrow> None)"
+definition core_impure_call_type ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType option" where
+  "core_impure_call_type env ghost fnName tyArgs tmArgs =
+    (case fmlookup (TE_Functions env) fnName of
+       None \<Rightarrow> None
+     | Some funInfo \<Rightarrow>
+         if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
+         else if \<not> list_all (is_well_kinded env) tyArgs then None
+         else if ghost = NotGhost
+                 \<and> (\<not> list_all (is_runtime_type env) tyArgs
+                    \<or> FI_Ghost funInfo = Ghost) then None
+         else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
+         else
+           let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
+               expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+               varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+           in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                    case vor of
+                      Var \<Rightarrow>
+                        (case core_term_type env ghost tm of
+                           None \<Rightarrow> False
+                         | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                    | Ref \<Rightarrow>
+                        is_writable_lvalue env tm
+                        \<and> core_term_type env ghost tm = Some expectedTy)
+                  (zip tmArgs varOrRefs) expectedArgTypes
+              then Some (apply_subst tySubst (FI_ReturnType funInfo))
+              else None)"
 
+
+(* The type produced by an optional cast applied to a call's return value.
+   None: no cast; the result type is the call's return type.
+   Some t: cast the return value to t; valid only as an integer cast (mirroring
+   core_term_type's CoreTm_Cast rule), with t runtime in NotGhost mode. *)
+definition cast_result_type ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType \<Rightarrow> CoreType option \<Rightarrow> CoreType option" where
+  "cast_result_type env ghost retTy castOpt =
+    (case castOpt of
+       None \<Rightarrow> Some retTy
+     | Some t \<Rightarrow>
+         if is_integer_type retTy \<and> is_integer_type t
+            \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
+         then Some t else None)"
 
 (* A convenient corollary of core_impure_call_type = Some: the function is
    looked up, and every argument term typechecks to *some* type via
@@ -57,8 +69,7 @@ definition core_impure_call_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Righta
    fuel-monotonicity, preservation) that only need to know the arguments are
    well-typed rather than the full Var/Ref-respecting check. *)
 lemma core_impure_call_type_args_typed:
-  assumes "core_impure_call_type env ghost tm = Some ty"
-      and "tm = CoreTm_FunctionCall fnName tyArgs tmArgs"
+  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
   shows "\<exists>fi. fmlookup (TE_Functions env) fnName = Some fi
               \<and> length tmArgs = length (FI_TmArgs fi)
               \<and> list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
@@ -201,8 +212,7 @@ qed
    writable lvalues), so every argument — Var or Ref — has a corresponding
    core_term_type entry. *)
 lemma core_impure_call_type_fn_facts:
-  assumes "core_impure_call_type env ghost tm = Some ty"
-      and "tm = CoreTm_FunctionCall fnName tyArgs tmArgs"
+  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
   shows "\<exists>funInfo.
             fmlookup (TE_Functions env) fnName = Some funInfo
             \<and> length tyArgs = length (FI_TyArgs funInfo)
@@ -416,23 +426,33 @@ proof -
 qed
 
 
+(* cast_result_type is preserved under adding type variables to the environment:
+   it depends on env only through is_runtime_type, which is monotone. *)
+lemma cast_result_type_irrelevant_tyvar:
+  assumes "cast_result_type env ghost retTy castOpt = Some ty"
+  shows "cast_result_type
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
+           ghost retTy castOpt = Some ty"
+  using assms unfolding cast_result_type_def
+  by (cases castOpt) (auto split: if_splits simp: is_runtime_type_extend_runtime_tyvars)
+
+
 (* The impure-call typecheck is preserved under adding type variables to the
    environment. The embedded checks (fmlookup TE_Functions / is_well_kinded /
    is_runtime_type / core_term_type / is_writable_lvalue) are all unchanged or
    monotone under this extension, and the returned type does not depend on the
    tyvar sets, so a successful check stays successful with the same result. *)
 lemma core_impure_call_type_irrelevant_tyvar:
-  assumes "core_impure_call_type env ghost tm = Some ty"
+  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
   shows "core_impure_call_type
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
-                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) ghost tm = Some ty"
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
+           ghost fnName tyArgs tmArgs = Some ty"
 proof -
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
-  from assms obtain fnName tyArgs tmArgs where
-    tm_eq: "tm = CoreTm_FunctionCall fnName tyArgs tmArgs"
-    by (cases tm) (auto simp: core_impure_call_type_def)
-  from core_impure_call_type_fn_facts[OF assms tm_eq] obtain funInfo where
+  from core_impure_call_type_fn_facts[OF assms] obtain funInfo where
     fi: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
     wk: "list_all (is_well_kinded env) tyArgs" and
@@ -512,7 +532,7 @@ proof -
     using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
 
   show ?thesis
-    unfolding core_impure_call_type_def tm_eq
+    unfolding core_impure_call_type_def
     using fi wk' rt' fn_ng len_ty len_tm l2_full' ty_eq
     by (auto simp: fns_eq Let_def)
 qed
@@ -535,19 +555,39 @@ and core_statement_list_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow
 where
 
   (* Variable declaration (Var).
-     The rhs may be an impure function call at the outermost position; nested
-     calls must still be pure (handled by core_term_type). *)
+     The initializer is an ordinary (pure) term. Impure function-call
+     initializers use CoreStmt_VarDeclCall instead. *)
   "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
     (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
-        \<and> (core_impure_call_type env declGhost initTm = Some varTy
-           \<or> core_term_type env declGhost initTm = Some varTy)
+        \<and> core_term_type env declGhost initTm = Some varTy
      then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := (if declGhost = Ghost
                                        then finsert varName (TE_GhostLocals env)
                                        else fminus (TE_GhostLocals env) {|varName|}),
                       TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
+     else None)"
+
+  (* Variable declaration initialized from an impure function call.
+     The variable type is explicit (and must be well-kinded, and runtime in
+     NotGhost mode, exactly as for CoreStmt_VarDecl). The call is typechecked by
+     core_impure_call_type, and the (optionally cast) return type must equal the
+     declared variable type. *)
+| "core_statement_type env ghost (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms) =
+    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
+        \<and> is_well_kinded env varTy
+        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+     then (case core_impure_call_type env declGhost fnName tyArgs argTms of
+             Some retTy \<Rightarrow>
+               if cast_result_type env declGhost retTy castOpt = Some varTy
+               then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                TE_GhostLocals := (if declGhost = Ghost
+                                                 then finsert varName (TE_GhostLocals env)
+                                                 else fminus (TE_GhostLocals env) {|varName|}),
+                                TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
+               else None
+           | None \<Rightarrow> None)
      else None)"
 
   (* Variable declaration (Ref).
@@ -569,17 +609,32 @@ where
      else None)"
 
   (* Assignment.
-     The rhs may be an impure function call at the outermost position; nested
-     calls must still be pure (handled by core_term_type). *)
+     The rhs is an ordinary (pure) term. Impure function-call rhs's use
+     CoreStmt_AssignCall instead. *)
 | "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
      then (case core_term_type env assignGhost lhsTm of
              Some lhsTy \<Rightarrow>
-               if core_impure_call_type env assignGhost rhsTm = Some lhsTy
-                  \<or> core_term_type env assignGhost rhsTm = Some lhsTy
+               if core_term_type env assignGhost rhsTm = Some lhsTy
                then Some env
                else None
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Assignment whose rhs is an impure function call.
+     The lhs must be a writable lvalue; the call's (optionally cast) return type
+     must equal the lhs type. *)
+| "core_statement_type env ghost (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) =
+    (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
+        \<and> is_writable_lvalue env lhsTm
+     then (case core_term_type env assignGhost lhsTm of
+             Some lhsTy \<Rightarrow>
+               (case core_impure_call_type env assignGhost fnName tyArgs argTms of
+                  Some retTy \<Rightarrow>
+                    if cast_result_type env assignGhost retTy castOpt = Some lhsTy
+                    then Some env else None
+                | None \<Rightarrow> None)
            | None \<Rightarrow> None)
      else None)"
 
@@ -887,6 +942,43 @@ next
   case (CoreStmt_Assign assignGhost lhsTm rhsTm)
   with assms show ?thesis by (auto split: if_splits option.splits)
 next
+  case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  with assms show ?thesis by simp
+next
+  case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
+  \<comment> \<open>The variable type is explicit and (by the rule) well-kinded, and runtime in
+      NotGhost mode; env extends like VarDecl(Var).\<close>
+  from assms CoreStmt_VarDeclCall obtain retTy where
+    wk: "is_well_kinded env varTy" and
+    rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    ct: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
+    cast: "cast_result_type env declGhost retTy castOpt = Some varTy" and
+    env'_eq:
+      "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                    TE_GhostLocals := (if declGhost = Ghost
+                                     then finsert varName (TE_GhostLocals env)
+                                     else fminus (TE_GhostLocals env) {|varName|}),
+                    TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+    by (auto split: if_splits option.splits)
+  show ?thesis
+  proof (cases declGhost)
+    case NotGhost
+    from rt NotGhost have rt': "is_runtime_type env varTy" by simp
+    from tyenv_well_formed_add_var[OF assms(2) wk rt']
+    have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                        TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)" .
+    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf'] NotGhost show ?thesis
+      by (simp add: env'_eq)
+  next
+    case Ghost
+    from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
+    have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                        TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
+    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf'] Ghost show ?thesis
+      by (simp add: env'_eq)
+  qed
+next
   case (CoreStmt_Fix varName varTy)
   from assms CoreStmt_Fix obtain bodyTm where
     wk: "is_well_kinded env varTy" and env'_eq:
@@ -971,6 +1063,12 @@ using assms proof (cases stmt)
   qed
 next
   case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+  with assms show ?thesis by (auto split: if_splits option.splits)
+next
+  case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
+  with assms show ?thesis by (auto split: if_splits option.splits)
+next
+  case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
   with assms show ?thesis by (auto split: if_splits option.splits)
 next
   case (CoreStmt_Fix _ _) with assms show ?thesis
@@ -1078,6 +1176,20 @@ next
   case (CoreStmt_Assign assignGhost lhsTm rhsTm)
   with assms have "env' = env" by (auto split: if_splits option.splits)
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
+next
+  case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
+  with assms have "env' = env" by (auto split: if_splits option.splits)
+  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
+next
+  case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
+  from assms CoreStmt_VarDeclCall have env'_eq:
+    "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                  TE_GhostLocals := (if declGhost = Ghost
+                                   then finsert varName (TE_GhostLocals env)
+                                   else fminus (TE_GhostLocals env) {|varName|}),
+                  TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+    by (auto split: if_splits option.splits)
+  show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
 next
   case (CoreStmt_Fix varName varTy)
   from assms CoreStmt_Fix obtain bodyTm where
@@ -1200,17 +1312,15 @@ proof (induction env ghost stmt and env ghost stmts
     "(ghost = Ghost \<longrightarrow> declGhost = Ghost)
        \<and> is_well_kinded env varTy
        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
-       \<and> (core_impure_call_type env declGhost initTm = Some varTy
-          \<or> core_term_type env declGhost initTm = Some varTy)"
+       \<and> core_term_type env declGhost initTm = Some varTy"
     by (auto split: if_splits)
   hence wk: "is_well_kinded ?env1 varTy"
     using is_well_kinded_extend_tyvars by fastforce
   from conds have rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type ?env1 varTy"
     using is_runtime_type_extend_runtime_tyvars by fastforce
   from conds have rhs:
-    "core_impure_call_type ?env1 declGhost initTm = Some varTy
-       \<or> core_term_type ?env1 declGhost initTm = Some varTy"
-    using core_impure_call_type_irrelevant_tyvar core_term_type_irrelevant_tyvar by blast
+    "core_term_type ?env1 declGhost initTm = Some varTy"
+    using core_term_type_irrelevant_tyvar by blast
   from "1.prems" conds have env'_eq:
     "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                   TE_GhostLocals := (if declGhost = Ghost
@@ -1221,13 +1331,44 @@ proof (induction env ghost stmt and env ghost stmts
   from conds wk rt rhs show ?case
     by (simp add: env'_eq)
 next
-  \<comment> \<open>VarDecl (Ref): the rhs must be an lvalue; same commutation.\<close>
-  case (2 env ghost declGhost varName varTy initTm)
+  \<comment> \<open>VarDeclCall: adds a local of the (optionally cast) call return type. The
+      call check and cast both survive ?ext; local-var updates commute with it.\<close>
+  case (2 env ghost declGhost varName varTy castOpt fnName tyArgs argTms)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
   let ?env1 = "?ext env"
-  from "2.prems" have conds:
+  from "2.prems" obtain retTy where
+    gh: "ghost = Ghost \<longrightarrow> declGhost = Ghost" and
+    wk: "is_well_kinded env varTy" and
+    rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    ct: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
+    cast: "cast_result_type env declGhost retTy castOpt = Some varTy" and
+    env'_eq:
+      "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                    TE_GhostLocals := (if declGhost = Ghost
+                                     then finsert varName (TE_GhostLocals env)
+                                     else fminus (TE_GhostLocals env) {|varName|}),
+                    TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+    by (auto split: if_splits option.splits)
+  have wk': "is_well_kinded ?env1 varTy"
+    using wk is_well_kinded_extend_tyvars by fastforce
+  have rt': "declGhost = NotGhost \<longrightarrow> is_runtime_type ?env1 varTy"
+    using rt is_runtime_type_extend_runtime_tyvars by fastforce
+  have ct': "core_impure_call_type ?env1 declGhost fnName tyArgs argTms = Some retTy"
+    using ct core_impure_call_type_irrelevant_tyvar by blast
+  have cast': "cast_result_type ?env1 declGhost retTy castOpt = Some varTy"
+    using cast cast_result_type_irrelevant_tyvar by blast
+  from gh wk' rt' ct' cast' show ?case
+    by (simp add: env'_eq)
+next
+  \<comment> \<open>VarDecl (Ref): the rhs must be an lvalue; same commutation.\<close>
+  case (3 env ghost declGhost varName varTy initTm)
+  let ?ext = "\<lambda>e :: CoreTyEnv.
+                e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
+                    TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
+  let ?env1 = "?ext env"
+  from "3.prems" have conds:
     "(ghost = Ghost \<longrightarrow> declGhost = Ghost)
        \<and> is_well_kinded env varTy
        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
@@ -1240,7 +1381,7 @@ next
     using is_runtime_type_extend_runtime_tyvars by fastforce
   from conds have rhs: "core_term_type ?env1 declGhost initTm = Some varTy"
     using core_term_type_irrelevant_tyvar by blast
-  from "2.prems" conds have env'_eq:
+  from "3.prems" conds have env'_eq:
     "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                   TE_GhostLocals := (if declGhost = Ghost
                                    then finsert varName (TE_GhostLocals env)
@@ -1253,33 +1394,61 @@ next
     by (simp add: env'_eq)
 next
   \<comment> \<open>Assign: env unchanged.\<close>
-  case (3 env ghost assignGhost lhsTm rhsTm)
+  case (4 env ghost assignGhost lhsTm rhsTm)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "3.prems" obtain lhsTy where
+  from "4.prems" obtain lhsTy where
     wl: "is_writable_lvalue env lhsTm" and
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     lhs: "core_term_type env assignGhost lhsTm = Some lhsTy" and
-    rhs: "core_impure_call_type env assignGhost rhsTm = Some lhsTy
-            \<or> core_term_type env assignGhost rhsTm = Some lhsTy" and
+    rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     env'_eq: "env' = env"
     by (auto split: if_splits option.splits)
   let ?env1 = "?ext env"
   have lhs': "core_term_type ?env1 assignGhost lhsTm = Some lhsTy"
     using lhs core_term_type_irrelevant_tyvar by blast
-  have rhs': "core_impure_call_type ?env1 assignGhost rhsTm = Some lhsTy
-                \<or> core_term_type ?env1 assignGhost rhsTm = Some lhsTy"
-    using rhs core_impure_call_type_irrelevant_tyvar core_term_type_irrelevant_tyvar by blast
+  have rhs': "core_term_type ?env1 assignGhost rhsTm = Some lhsTy"
+    using rhs core_term_type_irrelevant_tyvar by blast
   from gh wl lhs' rhs' show ?case
     by (simp add: env'_eq)
 next
-  \<comment> \<open>Return: env unchanged. TE_ReturnType / TE_FunctionGhost survive ?ext.\<close>
-  case (4 env ghost tm)
+  \<comment> \<open>AssignCall: env unchanged. The call check and cast both survive ?ext.\<close>
+  case (5 env ghost assignGhost lhsTm castOpt fnName tyArgs argTms)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "4.prems" have
+  let ?env1 = "?ext env"
+  from "5.prems" have
+    pre: "(ghost = Ghost \<longrightarrow> assignGhost = Ghost) \<and> is_writable_lvalue env lhsTm"
+    by (simp split: if_splits)
+  hence gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and wl: "is_writable_lvalue env lhsTm"
+    by simp_all
+  from "5.prems" pre obtain lhsTy where
+    lhs: "core_term_type env assignGhost lhsTm = Some lhsTy"
+    by (simp split: option.splits)
+  from "5.prems" pre lhs obtain retTy where
+    ct: "core_impure_call_type env assignGhost fnName tyArgs argTms = Some retTy"
+    by (simp split: option.splits)
+  from "5.prems" pre lhs ct have
+    cast: "cast_result_type env assignGhost retTy castOpt = Some lhsTy" and
+    env'_eq: "env' = env"
+    by (simp split: if_splits)+
+  have lhs': "core_term_type ?env1 assignGhost lhsTm = Some lhsTy"
+    using lhs core_term_type_irrelevant_tyvar by blast
+  have ct': "core_impure_call_type ?env1 assignGhost fnName tyArgs argTms = Some retTy"
+    using ct core_impure_call_type_irrelevant_tyvar by blast
+  have cast': "cast_result_type ?env1 assignGhost retTy castOpt = Some lhsTy"
+    using cast cast_result_type_irrelevant_tyvar by blast
+  from gh wl lhs' ct' cast' show ?case
+    by (simp add: env'_eq)
+next
+  \<comment> \<open>Return: env unchanged. TE_ReturnType / TE_FunctionGhost survive ?ext.\<close>
+  case (6 env ghost tm)
+  let ?ext = "\<lambda>e :: CoreTyEnv.
+                e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
+                    TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
+  from "6.prems" have
     gh: "ghost = TE_FunctionGhost env" and
     tm: "core_term_type env ghost tm = Some (TE_ReturnType env)" and
     env'_eq: "env' = env"
@@ -1290,11 +1459,11 @@ next
   from gh tm' show ?case by (simp add: env'_eq)
 next
   \<comment> \<open>Swap: env unchanged.\<close>
-  case (5 env ghost swapGhost lhsTm rhsTm)
+  case (7 env ghost swapGhost lhsTm rhsTm)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "5.prems" obtain lhsTy where
+  from "7.prems" obtain lhsTy where
     gh: "ghost = Ghost \<longrightarrow> swapGhost = Ghost" and
     wl: "is_writable_lvalue env lhsTm" and
     wr: "is_writable_lvalue env rhsTm" and
@@ -1312,7 +1481,7 @@ next
   \<comment> \<open>Assert: env unchanged; body checked under goalEnv, which installs
       TE_ProofGoal := Some condTm when a condition is present, or leaves env
       unchanged for "assert *" (condOpt = None). ?ext commutes with goalEnv.\<close>
-  case (6 env ghost condOpt proofBody)
+  case (8 env ghost condOpt proofBody)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
@@ -1321,7 +1490,7 @@ next
                                      | None \<Rightarrow> e"
   let ?condOk = "case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
                                | None \<Rightarrow> True"
-  from "6.prems" obtain bodyEnv where
+  from "8.prems" obtain bodyEnv where
     condOk: "?condOk" and
     body: "core_statement_list_type (?goalEnv env) Ghost proofBody = Some bodyEnv" and
     env'_eq: "env' = env"
@@ -1329,7 +1498,7 @@ next
   \<comment> \<open>?ext commutes with the goal-env update, in either branch of condOpt.\<close>
   have shape: "?ext (?goalEnv env) = ?goalEnv ?env1"
     by (cases condOpt) simp_all
-  from "6.IH"[OF refl refl condOk body] shape have body':
+  from "8.IH"[OF refl refl condOk body] shape have body':
     "core_statement_list_type (?goalEnv ?env1) Ghost proofBody = Some (?ext bodyEnv)"
     by argo
   \<comment> \<open>The condition (if any) still typechecks under the extended env.\<close>
@@ -1340,11 +1509,11 @@ next
   from condOk' body' show ?case by (simp add: env'_eq Let_def)
 next
   \<comment> \<open>Assume: env unchanged.\<close>
-  case (7 env ghost tm)
+  case (9 env ghost tm)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "7.prems" have
+  from "9.prems" have
     tm: "core_term_type env Ghost tm = Some CoreTy_Bool" and env'_eq: "env' = env"
     by (auto split: if_splits)
   let ?env1 = "?ext env"
@@ -1353,18 +1522,18 @@ next
   from tm' show ?case by (simp add: env'_eq)
 next
   \<comment> \<open>ShowHide: env unchanged, no embedded checks.\<close>
-  case (8 env ghost sh name)
-  from "8.prems" have "env' = env" by simp
+  case (10 env ghost sh name)
+  from "10.prems" have "env' = env" by simp
   thus ?case by simp
 next
   \<comment> \<open>Match: env unchanged; pattern_compatible depends only on TE_DataCtors, and
       each arm body is checked under TE_ProofGoal := None.\<close>
-  case (9 env ghost matchGhost scrut arms)
+  case (11 env ghost matchGhost scrut arms)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
   let ?env1 = "?ext env"
-  from "9.prems" obtain scrutTy where
+  from "11.prems" obtain scrutTy where
     gh: "ghost = Ghost \<longrightarrow> matchGhost = Ghost" and
     scrut: "core_term_type env matchGhost scrut = Some scrutTy" and
     pats: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
@@ -1394,7 +1563,7 @@ next
     then obtain bEnv where
       bsome: "core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body = Some bEnv"
       by blast
-    from "9.IH"[OF gh scrut refl refl pats_nn body_in bsome] goal_shape
+    from "11.IH"[OF gh scrut refl refl pats_nn body_in bsome] goal_shape
     have "core_statement_list_type (?env1 \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body
             = Some (?ext bEnv)"
       by argo
@@ -1405,12 +1574,12 @@ next
     by (simp add: env'_eq Let_def)
 next
   \<comment> \<open>While: env unchanged; condition / invariants / decreases are terms, body is a list.\<close>
-  case (10 env ghost whileGhost condTm invars decrTm body)
+  case (12 env ghost whileGhost condTm invars decrTm body)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
   let ?env1 = "?ext env"
-  from "10.prems" obtain decrTy bodyEnv where
+  from "12.prems" obtain decrTy bodyEnv where
     gh: "ghost = Ghost \<longrightarrow> whileGhost = Ghost" and
     cond: "core_term_type env whileGhost condTm = Some CoreTy_Bool" and
     invs: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
@@ -1427,7 +1596,7 @@ next
     using decr core_term_type_irrelevant_tyvar by blast
   have goal_shape: "?ext (env \<lparr> TE_ProofGoal := None \<rparr>)
                       = ?env1 \<lparr> TE_ProofGoal := None \<rparr>" by simp
-  from "10.IH"[OF gh cond refl invs decr decr_valid body] goal_shape have body':
+  from "12.IH"[OF gh cond refl invs decr decr_valid body] goal_shape have body':
     "core_statement_list_type (?env1 \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body
        = Some (?ext bodyEnv)"
     by argo
@@ -1435,7 +1604,7 @@ next
     by (simp add: env'_eq)
 next
   \<comment> \<open>Obtain: adds a ghost local; condTm checked under the extended env.\<close>
-  case (11 env ghost varName varTy condTm)
+  case (13 env ghost varName varTy condTm)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
@@ -1443,7 +1612,7 @@ next
   let ?envX = "\<lambda>e. e \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars e),
                         TE_GhostLocals := finsert varName (TE_GhostLocals e),
                         TE_ConstLocals := fminus (TE_ConstLocals e) {|varName|} \<rparr>"
-  from "11.prems" have
+  from "13.prems" have
     wk: "is_well_kinded env varTy" and
     cond: "core_term_type (?envX env) Ghost condTm = Some CoreTy_Bool" and
     env'_eq: "env' = ?envX env"
@@ -1459,11 +1628,11 @@ next
     by (simp add: env'_eq Let_def)
 next
   \<comment> \<open>Fix: requires a Quant_Forall goal; adds a ghost const local and updates the goal.\<close>
-  case (12 env ghost varName varTy)
+  case (14 env ghost varName varTy)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "12.prems" obtain qName bodyTm where
+  from "14.prems" obtain qName bodyTm where
     goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Forall qName varTy bodyTm)" and
     gh: "ghost = Ghost" and wk: "is_well_kinded env varTy" and
     env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
@@ -1480,11 +1649,11 @@ next
     by (simp add: env'_eq)
 next
   \<comment> \<open>Use: requires a Quant_Exists goal; updates the goal, env otherwise unchanged.\<close>
-  case (13 env ghost witnessTm)
+  case (15 env ghost witnessTm)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "13.prems" obtain qName qVarTy bodyTm where
+  from "15.prems" obtain qName qVarTy bodyTm where
     goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Exists qName qVarTy bodyTm)" and
     gh: "ghost = Ghost" and
     wit: "core_term_type env ghost witnessTm = Some qVarTy" and
@@ -1499,23 +1668,23 @@ next
     by (simp add: env'_eq)
 next
   \<comment> \<open>Empty statement list.\<close>
-  case (14 env ghost)
-  from "14.prems" have "env' = env" by simp
+  case (16 env ghost)
+  from "16.prems" have "env' = env" by simp
   thus ?case by simp
 next
   \<comment> \<open>Cons: thread the env through head then tail.\<close>
-  case (15 env ghost stmt stmts)
+  case (17 env ghost stmt stmts)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "15.prems" obtain envMid where
+  from "17.prems" obtain envMid where
     head: "core_statement_type env ghost stmt = Some envMid" and
     tail: "core_statement_list_type envMid ghost stmts = Some env'"
     by (auto split: option.splits)
-  from "15.IH"(1)[OF head] have head':
+  from "17.IH"(1)[OF head] have head':
     "core_statement_type (?ext env) ghost stmt
        = Some (?ext envMid)" .
-  from "15.IH"(2)[OF head tail] have tail':
+  from "17.IH"(2)[OF head tail] have tail':
     "core_statement_list_type (?ext envMid) ghost stmts
        = Some (?ext env')" .
   from head' tail' show ?case by simp

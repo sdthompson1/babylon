@@ -886,6 +886,152 @@ proof -
 qed
 
 
+(* Add a ghost local: the variable is ghost in env', so it occupies no store slot.
+   The interpreter drops the name from the runtime maps (IS_Locals / IS_Refs /
+   IS_ConstLocals). storeTyping is unchanged. Used by the Ghost branches of
+   CoreStmt_VarDecl(Var) and CoreStmt_VarDeclCall. *)
+lemma state_matches_env_add_ghost_local:
+  assumes old_sme: "state_matches_env state env storeTyping"
+    and env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+                               TE_GhostLocals := finsert var (TE_GhostLocals env),
+                               TE_ConstLocals := fminus (TE_ConstLocals env) {|var|} \<rparr>"
+    and state'_eq: "state' = state \<lparr> IS_Locals := fmdrop var (IS_Locals state),
+                                     IS_Refs := fmdrop var (IS_Refs state),
+                                     IS_ConstLocals := fminus (IS_ConstLocals state) {|var|} \<rparr>"
+  shows "state_matches_env state' env' storeTyping"
+proof -
+  have tyargs_eq [simp]: "IS_TyArgs state' = IS_TyArgs state" using state'_eq by simp
+  have env'_fields: "TE_DataCtors env' = TE_DataCtors env"
+                    "TE_Datatypes env' = TE_Datatypes env"
+                    "TE_TypeVars env' = TE_TypeVars env"
+                    "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+                    "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
+    using env'_eq by simp_all
+  have vht_eq: "\<And>v t. value_has_type env' v t = value_has_type env v t"
+    using value_has_type_cong_env[OF env'_fields] .
+  have tap_eq: "\<And>t p. type_at_path env t p = type_at_path env' t p"
+    using type_at_path_cong_env[OF env'_fields(1)] .
+  show "state_matches_env state' env' storeTyping"
+    unfolding state_matches_env_def
+  proof (intro conjI)
+    show "local_vars_exist_in_state state' env' storeTyping"
+      unfolding local_vars_exist_in_state_def
+    proof (intro allI impI, elim conjE)
+      fix name ty
+      assume lk: "fmlookup (TE_LocalVars env') name = Some ty"
+        and ng: "name |\<notin>| TE_GhostLocals env'"
+      from ng env'_eq have "name \<noteq> var" by auto
+      with lk env'_eq have lk_old: "fmlookup (TE_LocalVars env) name = Some ty" by simp
+      from ng env'_eq \<open>name \<noteq> var\<close> have ng_old: "name |\<notin>| TE_GhostLocals env" by auto
+      from old_sme lk_old ng_old
+      have "local_var_in_state_with_type state env storeTyping name ty"
+        unfolding state_matches_env_def local_vars_exist_in_state_def by blast
+      with \<open>name \<noteq> var\<close> tap_eq state'_eq show "local_var_in_state_with_type state' env' storeTyping name ty"
+        unfolding local_var_in_state_with_type_def Let_def
+        by (auto split: option.splits)
+    qed
+  next
+    show "global_vars_exist_in_state state' env'"
+    proof -
+      from old_sme have old_gv: "global_vars_exist_in_state state env"
+        unfolding state_matches_env_def by simp
+      have gv_eq: "TE_GlobalVars env' = TE_GlobalVars env" using env'_eq by simp
+      have gg_eq: "TE_GhostGlobals env' = TE_GhostGlobals env" using env'_eq by simp
+      show ?thesis unfolding global_vars_exist_in_state_def
+      proof (intro allI impI, elim conjE)
+        fix name ty
+        assume lk: "fmlookup (TE_GlobalVars env') name = Some ty"
+          and ng: "name |\<notin>| TE_GhostGlobals env'"
+        from lk gv_eq have "fmlookup (TE_GlobalVars env) name = Some ty" by simp
+        moreover from ng gg_eq have "name |\<notin>| TE_GhostGlobals env" by simp
+        ultimately have "global_var_in_state_with_type state env name ty"
+          using old_gv unfolding global_vars_exist_in_state_def by blast
+        thus "global_var_in_state_with_type state' env' name ty"
+          using vht_eq state'_eq unfolding global_var_in_state_with_type_def
+          by (auto split: option.splits)
+      qed
+    qed
+  next
+    show "no_extra_local_vars state' env'"
+      unfolding no_extra_local_vars_def
+    proof (intro allI impI)
+      fix name
+      assume ante: "fmlookup (TE_LocalVars env') name = None \<or> name |\<in>| TE_GhostLocals env'"
+      show "fmlookup (IS_Locals state') name = None \<and>
+            fmlookup (IS_Refs state') name = None"
+      proof (cases "name = var")
+        case True
+        then show ?thesis using state'_eq by simp
+      next
+        case False
+        from ante False env'_eq
+        have "fmlookup (TE_LocalVars env) name = None \<or> name |\<in>| TE_GhostLocals env" by auto
+        with old_sme have "fmlookup (IS_Locals state) name = None \<and>
+            fmlookup (IS_Refs state) name = None"
+          unfolding state_matches_env_def no_extra_local_vars_def by blast
+        with False state'_eq show ?thesis by simp
+      qed
+    qed
+  next
+    show "no_extra_global_vars state' env'"
+      using old_sme env'_eq state'_eq
+      unfolding state_matches_env_def no_extra_global_vars_def by simp
+  next
+    show "funs_exist_in_state state' env'"
+      unfolding funs_exist_in_state_def
+    proof (intro allI impI, elim conjE)
+      fix name info
+      assume lk: "fmlookup (TE_Functions env') name = Some info"
+        and ng: "FI_Ghost info = NotGhost"
+      from old_sme have old_fes: "funs_exist_in_state state env"
+        unfolding state_matches_env_def by simp
+      have funs_eq: "TE_Functions env' = TE_Functions env" using env'_eq by simp
+      from lk funs_eq have lk': "fmlookup (TE_Functions env) name = Some info" by simp
+      from old_fes lk' ng obtain interpFun where
+        if_lk: "fmlookup (IS_Functions state) name = Some interpFun" and
+        matches: "fun_info_matches_interp_fun env info interpFun"
+        unfolding funs_exist_in_state_def by (auto split: option.splits)
+      have if_lk': "fmlookup (IS_Functions state') name = Some interpFun"
+        using if_lk state'_eq by simp
+      have fcong: "fun_info_matches_interp_fun env' info interpFun =
+                    fun_info_matches_interp_fun env info interpFun"
+        by (rule fun_info_matches_interp_fun_cong_env)
+           (use env'_eq in simp_all)
+      have "fun_info_matches_interp_fun env' info interpFun"
+        using matches fcong by simp
+      with if_lk' show "case fmlookup (IS_Functions state') name of
+                          None \<Rightarrow> False
+                        | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env' info interpFun"
+        by simp
+    qed
+  next
+    show "no_extra_funs state' env'"
+      using old_sme env'_eq state'_eq
+      unfolding state_matches_env_def no_extra_funs_def by simp
+  next
+    show "const_locals_match state' env'"
+      using old_sme env'_eq state'_eq
+      unfolding state_matches_env_def const_locals_match_def by auto
+  next
+    show "store_well_typed state' env' storeTyping"
+      using old_sme vht_eq state'_eq
+      unfolding state_matches_env_def store_well_typed_def by simp
+  next
+    have rt_eq: "\<And>ty. is_runtime_type env' ty = is_runtime_type env ty"
+      by (rule is_runtime_type_cong_env) (use env'_fields in simp_all)
+    have wk_eq: "\<And>ty. is_well_kinded env' ty = is_well_kinded env ty"
+      by (rule is_well_kinded_cong_env) (use env'_fields in simp_all)
+    show "ty_args_well_formed state' env'"
+      using old_sme env'_fields rt_eq wk_eq state'_eq
+      unfolding state_matches_env_def ty_args_well_formed_def by simp
+  next
+    show "default_ctors_match state' env'"
+      using old_sme env'_eq state'_eq
+      unfolding state_matches_env_def default_ctors_match_def by simp
+  qed
+qed
+
+
 (* If two association lists are related by list_all2 with matching keys,
    then map_of on the first succeeds whenever map_of on the second does *)
 lemma map_of_list_all2:
