@@ -12,7 +12,7 @@ datatype TypeError =
   (* Ghost errors *)
   | TyErr_RequiresGhostContext Location
   | TyErr_GhostVariableInNonGhost Location string
-  | TyErr_GhostFunctionInNonGhost Location string
+  | TyErr_GhostFunctionInNonGhost Location string  (* executable code tried to call a ghost function *)
   | TyErr_GhostTypeInNonGhost Location
   (* Type mismatch errors *)
   | TyErr_TypeMismatch Location CoreType CoreType  (* loc, type1, type2 *)
@@ -41,6 +41,8 @@ datatype TypeError =
   | TyErr_VarDeclNeedsTypeOrValue Location  (* `var x;` with neither type annotation nor initializer *)
   | TyErr_RefDeclNeedsValue Location  (* `ref x;` with no initializer *)
   | TyErr_RefDeclNeedsLvalue Location  (* `ref x = e;` where e is not an lvalue *)
+  (* Assignment errors *)
+  | TyErr_NotWritableLvalue Location  (* assignment lhs is not a writable lvalue *)
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType

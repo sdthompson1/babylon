@@ -1,23 +1,19 @@
 theory CoreStmtTypecheck
-  imports CoreTypecheck CoreTypeProps
+  imports CoreTypecheck CoreTypeProps TypeSubst
 begin
 
 (* ========================================================================== *)
 (* Impure function-call typechecking                                          *)
-(*                                                                            *)
-(* A term-level function call (core_term_type CoreTm_FunctionCall) rejects    *)
-(* calls that take Ref parameters or are marked FI_Impure. But at the         *)
-(* outermost position on the rhs of an Assign or a VarDecl(Var), the source   *)
-(* language does allow such calls. This helper typechecks such a call         *)
-(* occurring at the outermost position. It returns None for any term that    *)
-(* is not a CoreTm_FunctionCall, so callers can fall back to core_term_type. *)
-(*                                                                            *)
-(* For each argument:                                                         *)
-(*   - Ref parameter: argument must be a writable lvalue of the expected      *)
-(*     (substituted) type.                                                    *)
-(*   - Var parameter: argument is typechecked via core_term_type, so nested   *)
-(*     calls stay pure.                                                       *)
 (* ========================================================================== *)
+
+(* Typecheck an impure call (e.g. one occurring in CoreStmt_VarDeclCall or
+   CoreStmt_AssignCall). The fnName must exist in the env and the number of
+   tyArgs and tmArgs must be correct. The tyArgs must be well-kinded and (in
+   NotGhost mode) runtime types. For each argument:
+     - Ref parameter: argument must be a writable lvalue of the expected
+       (substituted) type.
+     - Var parameter: argument is typechecked via core_term_type, so nested
+       calls must be pure (only the outermost call is impure).    *)
 
 definition core_impure_call_type ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType option" where
@@ -48,169 +44,9 @@ definition core_impure_call_type ::
               then Some (apply_subst tySubst (FI_ReturnType funInfo))
               else None)"
 
-
-(* The type produced by an optional cast applied to a call's return value.
-   None: no cast; the result type is the call's return type.
-   Some t: cast the return value to t; valid only as an integer cast (mirroring
-   core_term_type's CoreTm_Cast rule), with t runtime in NotGhost mode. *)
-definition cast_result_type ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType \<Rightarrow> CoreType option \<Rightarrow> CoreType option" where
-  "cast_result_type env ghost retTy castOpt =
-    (case castOpt of
-       None \<Rightarrow> Some retTy
-     | Some t \<Rightarrow>
-         if is_integer_type retTy \<and> is_integer_type t
-            \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
-         then Some t else None)"
-
-(* A convenient corollary of core_impure_call_type = Some: the function is
-   looked up, and every argument term typechecks to *some* type via
-   core_term_type. This is enough for several downstream proofs (erasure,
-   fuel-monotonicity, preservation) that only need to know the arguments are
-   well-typed rather than the full Var/Ref-respecting check. *)
-lemma core_impure_call_type_args_typed:
-  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
-  shows "\<exists>fi. fmlookup (TE_Functions env) fnName = Some fi
-              \<and> length tmArgs = length (FI_TmArgs fi)
-              \<and> list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
-proof -
-  from assms have unfolded:
-    "(case fmlookup (TE_Functions env) fnName of
-        None \<Rightarrow> None
-      | Some fi \<Rightarrow>
-          if length tyArgs \<noteq> length (FI_TyArgs fi) then None
-          else if \<not> list_all (is_well_kinded env) tyArgs then None
-          else if ghost = NotGhost
-                  \<and> (\<not> list_all (is_runtime_type env) tyArgs
-                     \<or> FI_Ghost fi = Ghost) then None
-          else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
-          else
-            let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-                expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-                varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
-            in if list_all2 (\<lambda>(tm, vor) expectedTy.
-                     case vor of
-                       Var \<Rightarrow>
-                         (case core_term_type env ghost tm of
-                            None \<Rightarrow> False
-                          | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                     | Ref \<Rightarrow>
-                         is_writable_lvalue env tm
-                         \<and> core_term_type env ghost tm = Some expectedTy)
-                   (zip tmArgs varOrRefs) expectedArgTypes
-               then Some (apply_subst tySubst (FI_ReturnType fi))
-               else None) = Some ty"
-    unfolding core_impure_call_type_def by simp
-  from unfolded obtain fi where
-    fi_lookup: "fmlookup (TE_Functions env) fnName = Some fi"
-    by (cases "fmlookup (TE_Functions env) fnName") auto
-  from unfolded fi_lookup have body:
-    "(if length tyArgs \<noteq> length (FI_TyArgs fi) then None
-      else if \<not> list_all (is_well_kinded env) tyArgs then None
-      else if ghost = NotGhost
-              \<and> (\<not> list_all (is_runtime_type env) tyArgs
-                 \<or> FI_Ghost fi = Ghost) then None
-      else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
-      else
-        let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-            expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-            varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
-        in if list_all2 (\<lambda>(tm, vor) expectedTy.
-                 case vor of
-                   Var \<Rightarrow>
-                     (case core_term_type env ghost tm of
-                        None \<Rightarrow> False
-                      | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                 | Ref \<Rightarrow>
-                     is_writable_lvalue env tm
-                     \<and> core_term_type env ghost tm = Some expectedTy)
-               (zip tmArgs varOrRefs) expectedArgTypes
-           then Some (apply_subst tySubst (FI_ReturnType fi))
-           else None) = Some ty"
-    by simp
-  have len_tmArgs: "length tmArgs = length (FI_TmArgs fi)"
-    using body by (metis option.distinct(1))
-  from body len_tmArgs
-  have after_ifs:
-    "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-          expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-          varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
-      in if list_all2 (\<lambda>(tm, vor) expectedTy.
-               case vor of
-                 Var \<Rightarrow>
-                   (case core_term_type env ghost tm of
-                      None \<Rightarrow> False
-                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
-               | Ref \<Rightarrow>
-                   is_writable_lvalue env tm
-                   \<and> core_term_type env ghost tm = Some expectedTy)
-             (zip tmArgs varOrRefs) expectedArgTypes
-         then Some (apply_subst tySubst (FI_ReturnType fi))
-         else None) = Some ty"
-    by (meson option.distinct(1))
-  from after_ifs have argTms_l2:
-    "list_all2 (\<lambda>(tm, vor) expectedTy.
-                  case vor of
-                    Var \<Rightarrow>
-                      (case core_term_type env ghost tm of
-                         None \<Rightarrow> False
-                       | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  | Ref \<Rightarrow>
-                      is_writable_lvalue env tm
-                      \<and> core_term_type env ghost tm = Some expectedTy)
-               (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))
-               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-                    (FI_TmArgs fi))"
-    by (simp add: Let_def split: if_splits)
-
-  have args_typed:
-    "list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
-    unfolding list_all_length
-  proof (intro allI impI)
-    fix i assume i_lt: "i < length tmArgs"
-    with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
-    have i_lt_zip: "i < length (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))"
-      using i_lt len_tmArgs by simp
-
-    obtain n ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (n, ti, vor)"
-      by (cases "FI_TmArgs fi ! i") auto
-    have zip_nth: "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)) ! i
-                    = (tmArgs ! i, vor)"
-      using i_lt i_lt_fi fi_arg_eq by simp
-    have expected_nth:
-      "(map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-            (FI_TmArgs fi)) ! i
-          = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
-      using i_lt_fi fi_arg_eq by simp
-
-    have nth_check:
-      "(case vor of
-          Var \<Rightarrow>
-            (case core_term_type env ghost (tmArgs ! i) of
-               None \<Rightarrow> False
-             | Some actualTy \<Rightarrow> actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti)
-        | Ref \<Rightarrow>
-            is_writable_lvalue env (tmArgs ! i)
-            \<and> core_term_type env ghost (tmArgs ! i)
-                = Some (apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti))"
-      using list_all2_nthD2[OF argTms_l2, of i] i_lt_zip zip_nth expected_nth
-      by simp
-
-    show "\<exists>t. core_term_type env ghost (tmArgs ! i) = Some t"
-      using nth_check by (cases vor; auto split: option.splits)
-  qed
-  from fi_lookup len_tmArgs args_typed show ?thesis by blast
-qed
-
-
-(* A stronger corollary of core_impure_call_type = Some: produce the full set
-   of function-call facts the TypeSoundness Assign proof uses from the pure
-   core_term_type case, including a *pure-shape* list_all2 relating each
-   argument to its expected type via core_term_type. This works because in
-   core_impure_call_type, Ref arguments also require
-   `core_term_type env ghost tm = Some expectedTy` (in addition to being
-   writable lvalues), so every argument — Var or Ref — has a corresponding
-   core_term_type entry. *)
+(* Various facts that follow from core_impure_call_type being Some, including
+   a list_all2 relating each argument type to its expected type via core_term_type.
+   Used by the TypeSoundness and ElabStmtCorrect proofs. *)
 lemma core_impure_call_type_fn_facts:
   assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
   shows "\<exists>funInfo.
@@ -425,18 +261,35 @@ proof -
   show ?thesis by blast
 qed
 
-
-(* cast_result_type is preserved under adding type variables to the environment:
-   it depends on env only through is_runtime_type, which is monotone. *)
-lemma cast_result_type_irrelevant_tyvar:
-  assumes "cast_result_type env ghost retTy castOpt = Some ty"
-  shows "cast_result_type
-           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
-                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
-           ghost retTy castOpt = Some ty"
-  using assms unfolding cast_result_type_def
-  by (cases castOpt) (auto split: if_splits simp: is_runtime_type_extend_runtime_tyvars)
-
+(* A convenient weaker corollary of core_impure_call_type = Some, derived from
+   core_impure_call_type_fn_facts: the function is looked up, and every argument
+   term typechecks to *some* type via core_term_type. This is enough for several
+   downstream proofs (erasure, fuel-monotonicity, preservation) that only need
+   to know the arguments are well-typed rather than the full Var/Ref-respecting
+   check. *)
+lemma core_impure_call_type_args_typed:
+  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
+  shows "\<exists>fi. fmlookup (TE_Functions env) fnName = Some fi
+              \<and> length tmArgs = length (FI_TmArgs fi)
+              \<and> list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
+proof -
+  from core_impure_call_type_fn_facts[OF assms] obtain fi where
+    fi_lookup: "fmlookup (TE_Functions env) fnName = Some fi" and
+    len_tmArgs: "length tmArgs = length (FI_TmArgs fi)" and
+    argTms_l2:
+      "list_all2 (\<lambda>tm expectedTy.
+                    case core_term_type env ghost tm of
+                      None \<Rightarrow> False
+                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                 tmArgs
+                 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                      (FI_TmArgs fi))"
+    by blast
+  have "list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
+    using argTms_l2
+    by (fastforce simp: list_all_length list_all2_conv_all_nth split: option.splits)
+  with fi_lookup len_tmArgs show ?thesis by blast
+qed
 
 (* The impure-call typecheck is preserved under adding type variables to the
    environment. The embedded checks (fmlookup TE_Functions / is_well_kinded /
@@ -536,6 +389,76 @@ proof -
     using fi wk' rt' fn_ng len_ty len_tm l2_full' ty_eq
     by (auto simp: fns_eq Let_def)
 qed
+
+(* The return type produced by core_impure_call_type is well-kinded (and, in
+   NotGhost mode, a runtime type) in a well-formed env. *)
+lemma core_impure_call_type_well_kinded_and_runtime:
+  assumes ct: "core_impure_call_type env ghost fnName tyArgs tmArgs = Some retTy"
+    and wf: "tyenv_well_formed env"
+  shows "is_well_kinded env retTy
+         \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
+proof -
+  from core_impure_call_type_fn_facts[OF ct] obtain funInfo where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+    len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
+    not_ghost_fn: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
+    ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                (FI_ReturnType funInfo)"
+    by blast
+  \<comment> \<open>Well-kinded part: the declared return type is well-kinded under the function's
+      type parameters, and the (well-kinded) type args specialize it.\<close>
+  have "tyenv_fun_types_well_kinded env"
+    using wf tyenv_well_formed_def by blast
+  hence ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                                (FI_ReturnType funInfo)"
+    using fn_lookup tyenv_fun_types_well_kinded_def by blast
+  have wk: "is_well_kinded env retTy"
+    using apply_subst_specializes_well_kinded len_tyargs ret_wk ty_eq tyargs_wk by simp
+  \<comment> \<open>Runtime part (NotGhost only).\<close>
+  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env retTy"
+  proof
+    assume ng: "ghost = NotGhost"
+    have "tyenv_fun_ghost_constraint env"
+      using wf tyenv_well_formed_def by blast
+    hence ret_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
+                                          TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                                  (FI_ReturnType funInfo)"
+      using fn_lookup not_ghost_fn[rule_format, OF ng] tyenv_fun_ghost_constraint_def Let_def
+      by (meson GhostOrNot.exhaust)
+    show "is_runtime_type env retTy"
+      using ty_eq apply_subst_specializes_runtime
+      by (simp add: len_tyargs ret_rt tyargs_rt[rule_format, OF ng])
+  qed
+  ultimately show ?thesis by blast
+qed
+
+
+(* The type produced by the optional cast applied to an impure call's return value.
+   None: no cast; the result type is the call's return type.
+   Some t: cast the return value to t; valid only as an integer cast (mirroring
+   core_term_type's CoreTm_Cast rule), with t runtime in NotGhost mode. *)
+definition cast_result_type ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType \<Rightarrow> CoreType option \<Rightarrow> CoreType option" where
+  "cast_result_type env ghost retTy castOpt =
+    (case castOpt of
+       None \<Rightarrow> Some retTy
+     | Some t \<Rightarrow>
+         if is_integer_type retTy \<and> is_integer_type t
+            \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
+         then Some t else None)"
+
+(* cast_result_type is preserved under adding type variables to the environment:
+   it depends on env only through is_runtime_type, which is monotone. *)
+lemma cast_result_type_irrelevant_tyvar:
+  assumes "cast_result_type env ghost retTy castOpt = Some ty"
+  shows "cast_result_type
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
+           ghost retTy castOpt = Some ty"
+  using assms unfolding cast_result_type_def
+  by (cases castOpt) (auto split: if_splits simp: is_runtime_type_extend_runtime_tyvars)
 
 
 (* ========================================================================== *)

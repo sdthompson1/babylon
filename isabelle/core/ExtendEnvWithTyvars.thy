@@ -157,6 +157,14 @@ lemma core_term_type_extend_env_with_tyvars_mono:
   using assms(1) core_term_type_irrelevant_tyvar
   by (simp add: extend_env_with_tyvars_widen_as_irrelevant[OF assms(2,3)])
 
+(* Impure-call version: widening the fresh interval preserves core_impure_call_type. *)
+lemma core_impure_call_type_extend_env_with_tyvars_mono:
+  assumes "core_impure_call_type (extend_env_with_tyvars env ghost lo hi) ghost fnName tyArgs argTms = Some ty"
+    and "lo' \<le> lo" and "hi \<le> hi'"
+  shows "core_impure_call_type (extend_env_with_tyvars env ghost lo' hi') ghost fnName tyArgs argTms = Some ty"
+  using assms(1) core_impure_call_type_irrelevant_tyvar
+  by (simp add: extend_env_with_tyvars_widen_as_irrelevant[OF assms(2,3)])
+
 (* Statement version: widening the interval preserves core_statement_type and
    carries the result environment through the same widening. *)
 lemma core_statement_type_extend_env_with_tyvars_mono:
