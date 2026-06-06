@@ -601,6 +601,10 @@ definition build_updated_record ::
      in (CoreTm_Record resultFlds, CoreTy_Record finalParentFields))"
 
 
+(* ========================================================================== *)
+(* Match helpers *)
+(* ========================================================================== *)
+
 (* Unify a list of arm-body types against an expected body type, threading
    a substitution. Each entry pairs the body's source location (for error
    reporting) with its actual type. Used by BabTm_Match after each arm's
@@ -619,7 +623,6 @@ where
        None \<Rightarrow> Inl [TyErr_TypeMismatch loc
                       (apply_subst accSubst expBodyTy) (apply_subst accSubst bodyTy)]
      | Some s \<Rightarrow> unify_arm_body_types env expBodyTy rest s)"
-
 
 (* Final-stage helper for term-context match elaboration. Takes the per-arm
    results (as four parallel lists: dps, body terms, body locations, body
@@ -670,7 +673,11 @@ definition finalize_match_term ::
               in Inr (resultTm, finalBodyTy, nextMv + 1))"
 
 
-(* Elaborate a term. Returns elaborated (core) term and type, or error.
+(* ========================================================================== *)
+(* Main recursive term elaboration functions *)
+(* ========================================================================== *)
+
+(* Elaborate a (pure) term. Returns elaborated (core) term and type, or error.
    The nat parameter is the "next metavariable" counter - all generated metavariables
    will be >= this value, and the returned counter is the next available one. *)
 function (sequential)

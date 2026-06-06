@@ -3,19 +3,7 @@ theory ElabStmt
 begin
 
 (* ========================================================================== *)
-(* Statement elaboration                                                      *)
-(*                                                                            *)
-(* elab_statement translates a Babylon AST statement (BabStatement) into a    *)
-(* Core statement (CoreStatement). Like elab_term, it threads a metavariable  *)
-(* counter (nat) for the fresh type variables that term elaboration may       *)
-(* allocate; unlike elab_term, a statement transforms the type environment    *)
-(* (e.g. a VarDecl adds a local), so it also returns the updated CoreTyEnv    *)
-(* (mirroring core_statement_type, which is the spec the output must satisfy). *)
-(*                                                                            *)
-(* On success it returns (elaborated statement, transformed env, advanced     *)
-(* counter); on failure a list of TypeErrors. elab_statement_list threads the *)
-(* env left-to-right through the statements.                                  *)
-(*                                                                            *)
+(* Metavariable clearing helpers *)
 (* ========================================================================== *)
 
 (* Substitute every metavariable in the interval [lo, hi) with the unit type
@@ -33,6 +21,24 @@ definition clear_metavars_type :: "nat \<Rightarrow> nat \<Rightarrow> CoreType 
   "clear_metavars_type lo hi ty =
      apply_subst (fmap_of_list (map (\<lambda>n. (n, CoreTy_Record [])) [lo ..< hi])) ty"
 
+
+(* ========================================================================== *)
+(* Impure call helpers *)
+(* ========================================================================== *)
+
+(* Determine if a term represents an impure BabTm_Call. Impure means that FI_Impure
+   is true, or there is at least one Ref arg. *)
+definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabTerm \<Rightarrow> bool" where
+  "is_impure_call env elabEnv rhs =
+    (case rhs of
+       BabTm_Call _ (BabTm_Name _ name _) _ \<Rightarrow>
+         name |\<notin>| fmdom (EE_DataCtorArity elabEnv) \<and>
+         (case fmlookup (TE_Functions env) name of
+            None \<Rightarrow> False
+          | Some funInfo \<Rightarrow>
+              FI_Impure funInfo
+              \<or> \<not> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo))
+     | _ \<Rightarrow> False)"
 
 (* Resolve the callee of an impure call. This checks that the callee is a non-void, 
    ghost-compatible function; resolves the type arguments (allocating fresh metavariables
@@ -99,11 +105,10 @@ fun validate_call_args ::
                   | Inr rest \<Rightarrow> Inr (tm' # rest)))"
 | "validate_call_args env loc subst _ _ _ _ = undefined"
 
-(* Elaborate a function call appearing at the outermost rhs of an Assign.
-   callee must name a function (data constructors are not impure-callable here).
+(* Elaborate an impure function call term appearing at the outermost rhs of an
+   Assign or VarDecl.
+   (This is a combination of the previous two helper functions.)
    Returns the elaborated call term, its return type, and the advanced counter. *)
-(* Returns the destructured call (fnName, type args, term args), its return type,
-   and the advanced counter -- the shape CoreStmt_AssignCall / VarDeclCall need. *)
 definition elab_impure_call_term ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (string \<times> CoreType list \<times> CoreTerm list \<times> CoreType \<times> nat)" where
@@ -134,25 +139,8 @@ definition elab_impure_call_term ::
 
 
 (* ========================================================================== *)
-(* Helpers shared by the VarDecl and Assign cases                             *)
+(* Helpers for VarDecl and Assign elaboration *)
 (* ========================================================================== *)
-
-(* Does this rhs term need the dedicated impure-call statement form
-   (CoreStmt_VarDeclCall / CoreStmt_AssignCall)? True iff it is syntactically a
-   call to a *function* (not a data constructor) that is impure or takes a Ref
-   argument. Pure function calls and data-constructor calls return False: they
-   elaborate fine via elab_term and use the ordinary VarDecl / Assign forms. *)
-definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabTerm \<Rightarrow> bool" where
-  "is_impure_call env elabEnv rhs =
-    (case rhs of
-       BabTm_Call _ (BabTm_Name _ name _) _ \<Rightarrow>
-         name |\<notin>| fmdom (EE_DataCtorArity elabEnv) \<and>
-         (case fmlookup (TE_Functions env) name of
-            None \<Rightarrow> False
-          | Some funInfo \<Rightarrow>
-              FI_Impure funInfo
-              \<or> \<not> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo))
-     | _ \<Rightarrow> False)"
 
 (* Coerce an elaborated (pure) term `tm` of type `srcTy` to the target type
    `tgtTy`: try to unify (binding flexible metavariables, then applying the
@@ -191,6 +179,8 @@ definition reconcile_call_result ::
          then Inr (Some tgtTy, tyArgs, argTms)
          else Inl [TyErr_TypeMismatch loc tgtTy retTy])"
 
+(* ----- VarDecl branch helpers ----- *)
+
 (* Install `varName` as a local of type `varTy`: set its type, set/clear its
    ghost flag from the ambient `ghost`, and clear its const flag (the Ref helper
    overrides TE_ConstLocals afterwards when the base is read-only). *)
@@ -202,9 +192,6 @@ definition vardecl_add_local ::
                               then finsert varName (TE_GhostLocals env)
                               else fminus (TE_GhostLocals env) {|varName|}),
            TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
-
-
-(* ----- VarDecl branch helpers ----- *)
 
 (* VarDecl(Var) with a pure initializer. With no annotation the declared type is
    the inferred rhs type (which must be metavariable-free); with an annotation the
@@ -300,7 +287,6 @@ definition elab_vardecl_ref ::
                                             else finsert varName (TE_ConstLocals env)) \<rparr>,
                      next_mv')))"
 
-
 (* ----- Assign branch helpers ----- *)
 
 (* Assignment with a pure rhs: coerce the rhs to the lhs type (unify or integer
@@ -347,7 +333,20 @@ definition elab_assign_impure ::
      | _ \<Rightarrow> undefined)"
 
 
-(* The main statement and statement-list elaborator functions. *)
+(* ========================================================================== *)
+(* Main statement elaboration functions *)
+(* ========================================================================== *)
+
+(* elab_statement translates a Babylon AST statement (BabStatement) into a 
+   Core statement (CoreStatement). Like elab_term, it threads a metavariable  
+   counter (nat) for the fresh type variables that term elaboration may       
+   allocate; unlike elab_term, a statement transforms the type environment    
+   (e.g. a VarDecl adds a local), so it also returns the updated CoreTyEnv    
+   (mirroring core_statement_type, which is the spec the output must satisfy). *)
+
+(* On success it returns (elaborated statement, transformed env, advanced
+   counter); on failure a list of TypeErrors. elab_statement_list threads the
+   env left-to-right through the statements. *)
 
 function (sequential)
   elab_statement :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabStatement \<Rightarrow> nat

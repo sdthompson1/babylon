@@ -25,8 +25,8 @@ definition typedefs_well_formed :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarro
    - The Babylon-level arity of each data constructor (Core always has a single payload;
      the arity tells us how to decompose/construct it)
    - The set of function names that were declared void at the Babylon level.
-     In Core, these are represented as functions returning CoreTy_Record [] (unit),
-     but they must not be callable in term position — only in statement position. *)
+     (In Core, these are represented as functions returning CoreTy_Record [] (unit),
+     but they cannot be called in term position, only statement position.) *)
 record ElabEnv =
   EE_Typedefs :: Typedefs
   EE_DataCtorArity :: "(string, nat) fmap"
