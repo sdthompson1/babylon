@@ -71,6 +71,19 @@ lemma extend_env_with_pattern_vars_TE_DataCtors [simp]:
   "TE_DataCtors (extend_env_with_pattern_vars env ghost ps) = TE_DataCtors env"
   unfolding extend_env_with_pattern_vars_def by simp
 
+(* extend_env_one_var preserves TE_ReturnType. *)
+lemma extend_env_one_var_TE_ReturnType [simp]:
+  "TE_ReturnType (extend_env_one_var ghost b env) = TE_ReturnType env"
+  by (cases b) (simp add: extend_env_one_var_def)
+
+lemma foldr_extend_env_one_var_TE_ReturnType [simp]:
+  "TE_ReturnType (foldr (extend_env_one_var ghost) bs env) = TE_ReturnType env"
+  by (induction bs) simp_all
+
+lemma extend_env_with_pattern_vars_TE_ReturnType [simp]:
+  "TE_ReturnType (extend_env_with_pattern_vars env ghost ps) = TE_ReturnType env"
+  unfolding extend_env_with_pattern_vars_def by simp
+
 (* extend_env_one_var commutes (in observable env state) when the two
    bindings use distinct names. Quantified over the VarOrRef components
    vr1, vr2 so the lemma survives any future use of that field. *)
@@ -403,12 +416,9 @@ proof -
   have dt_eq: "TE_Datatypes ?env' = TE_Datatypes env"
     unfolding extend_env_with_pattern_vars_def by simp
   have dc_eq: "TE_DataCtors ?env' = TE_DataCtors env" by simp
-  have wk_cong: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[OF tv_eq dt_eq] by simp
+  have rt_eq: "TE_ReturnType ?env' = TE_ReturnType env" by simp
   show ?thesis
-    using assms wk_cong dc_eq
-    unfolding elabenv_well_formed_def typedefs_well_formed_def data_ctor_arity_consistent_def
-    by metis
+    using assms elabenv_well_formed_cong_env[OF tv_eq dt_eq dc_eq rt_eq] by simp
 qed
 
 

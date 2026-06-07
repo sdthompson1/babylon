@@ -2742,17 +2742,8 @@ next
   qed
 
   have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
-  proof -
-    have wk_eq: "\<And>t. is_well_kinded ?body_env t = is_well_kinded env t"
-      using is_well_kinded_cong_env[of ?body_env env] by simp
-    have td_wf: "typedefs_well_formed ?body_env (EE_Typedefs elabEnv)"
-      using "7.prems"(3) unfolding elabenv_well_formed_def typedefs_well_formed_def wk_eq by auto
-    have dc_eq: "TE_DataCtors ?body_env = TE_DataCtors env" by simp
-    have arity_wf: "\<forall>name arity. fmlookup (EE_DataCtorArity elabEnv) name = Some arity \<longrightarrow>
-                      data_ctor_arity_consistent ?body_env name arity"
-      using "7.prems"(3) dc_eq unfolding elabenv_well_formed_def data_ctor_arity_consistent_def by auto
-    show ?thesis unfolding elabenv_well_formed_def using td_wf arity_wf by auto
-  qed
+    using "7.prems"(3) elabenv_well_formed_cong_env[where env' = ?body_env and env = env]
+    by simp
 
   \<comment> \<open>Freshness carries through to next_mv1; ?body_env has same TE_TypeVars as env\<close>
   have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> n < next_mv1"
@@ -2835,17 +2826,8 @@ next
 
   \<comment> \<open>elabenv is well-formed w.r.t. body_env\<close>
   have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
-  proof -
-    have wk_eq: "\<And>t. is_well_kinded ?body_env t = is_well_kinded env t"
-      using is_well_kinded_cong_env[of ?body_env env] by simp
-    have td_wf: "typedefs_well_formed ?body_env (EE_Typedefs elabEnv)"
-      using "8.prems"(3) unfolding elabenv_well_formed_def typedefs_well_formed_def wk_eq by auto
-    have dc_eq: "TE_DataCtors ?body_env = TE_DataCtors env" by simp
-    have arity_wf: "\<forall>name arity. fmlookup (EE_DataCtorArity elabEnv) name = Some arity \<longrightarrow>
-                      data_ctor_arity_consistent ?body_env name arity"
-      using "8.prems"(3) dc_eq unfolding elabenv_well_formed_def data_ctor_arity_consistent_def by auto
-    show ?thesis unfolding elabenv_well_formed_def using td_wf arity_wf by auto
-  qed
+    using "8.prems"(3) elabenv_well_formed_cong_env[where env' = ?body_env and env = env]
+    by simp
 
   \<comment> \<open>Freshness for the body call\<close>
   have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> n < next_mv"

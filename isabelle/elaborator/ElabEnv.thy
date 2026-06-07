@@ -26,11 +26,14 @@ definition typedefs_well_formed :: "CoreTyEnv \<Rightarrow> Typedefs \<Rightarro
      the arity tells us how to decompose/construct it)
    - The set of function names that were declared void at the Babylon level.
      (In Core, these are represented as functions returning CoreTy_Record [] (unit),
-     but they cannot be called in term position, only statement position.) *)
+     but they cannot be called in term position, only statement position.)
+   - Whether the function currently being elaborated was declared void at the
+     Babylon level. (Used to decide whether a bare `return;` is legal.) *)
 record ElabEnv =
   EE_Typedefs :: Typedefs
   EE_DataCtorArity :: "(string, nat) fmap"
   EE_VoidFunctions :: "string fset"
+  EE_CurrentFunctionVoid :: bool
 
 (* The arity of a data constructor is consistent with the Core payload type:
    * Arity 0: payload type is CoreTy_Record [] (unit)
@@ -46,24 +49,28 @@ definition data_ctor_arity_consistent :: "CoreTyEnv \<Rightarrow> string \<Right
 
 (* Well-formedness of the elaborator environment:
    - Typedefs are well-formed
-   - Every data constructor arity entry is consistent with TE_DataCtors *)
+   - Every data constructor arity entry is consistent with TE_DataCtors
+   - If the current function is void then its Core return type is unit *)
 definition elabenv_well_formed :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> bool" where
   "elabenv_well_formed env ee =
     (typedefs_well_formed env (EE_Typedefs ee)
    \<and> (\<forall>name arity. fmlookup (EE_DataCtorArity ee) name = Some arity \<longrightarrow>
-        data_ctor_arity_consistent env name arity))"
+        data_ctor_arity_consistent env name arity)
+   \<and> (EE_CurrentFunctionVoid ee \<longrightarrow> TE_ReturnType env = CoreTy_Record []))"
 
 
-(* elabenv_well_formed depends on env only through TE_TypeVars, TE_Datatypes and
-   TE_DataCtors (the first two via is_well_kinded in typedefs_well_formed, the last
-   in data_ctor_arity_consistent). Any two envs agreeing on those three fields are
-   equally well-formed. In particular the local-variable updates that statement
-   elaboration performs (TE_LocalVars / TE_GhostLocals / TE_ConstLocals /
-   TE_ProofGoal) leave elabenv_well_formed unchanged. *)
+(* elabenv_well_formed depends on env only through TE_TypeVars, TE_Datatypes,
+   TE_DataCtors (the first two via is_well_kinded in typedefs_well_formed, the third
+   in data_ctor_arity_consistent) and TE_ReturnType (in the void clause). Any two
+   envs agreeing on those four fields are equally well-formed. In particular the
+   local-variable / proof-field updates that statement elaboration performs
+   (TE_LocalVars / TE_GhostLocals / TE_ConstLocals / TE_ProofGoal / TE_ProofTopLevel)
+   leave all four fields - hence elabenv_well_formed - unchanged. *)
 lemma elabenv_well_formed_cong_env:
   assumes "TE_TypeVars env' = TE_TypeVars env"
     and "TE_Datatypes env' = TE_Datatypes env"
     and "TE_DataCtors env' = TE_DataCtors env"
+    and "TE_ReturnType env' = TE_ReturnType env"
   shows "elabenv_well_formed env' elabEnv = elabenv_well_formed env elabEnv"
 proof -
   have wk_cong: "\<And>ty. is_well_kinded env' ty = is_well_kinded env ty"
@@ -71,7 +78,7 @@ proof -
   show ?thesis
     unfolding elabenv_well_formed_def typedefs_well_formed_def
               data_ctor_arity_consistent_def
-    using wk_cong assms(3) by simp
+    using wk_cong assms(3,4) by simp
 qed
 
 (* elabenv_well_formed is preserved under extend_env_with_tyvars: it depends on env
@@ -86,6 +93,10 @@ proof -
     unfolding extend_env_with_tyvars_def by simp
   have dc_eq: "TE_DataCtors ?env' = TE_DataCtors env"
     unfolding extend_env_with_tyvars_def by simp
+  have rt_eq: "TE_ReturnType ?env' = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  have void_clause: "EE_CurrentFunctionVoid elabEnv \<longrightarrow> TE_ReturnType ?env' = CoreTy_Record []"
+    using assms rt_eq unfolding elabenv_well_formed_def by simp
   have td_wf: "typedefs_well_formed ?env' (EE_Typedefs elabEnv)"
   proof -
     have "\<forall>name tyvars targetTy.
@@ -126,7 +137,7 @@ proof -
   qed
   show ?thesis
     unfolding elabenv_well_formed_def
-    using td_wf ctor_arity by simp
+    using td_wf ctor_arity void_clause by simp
 qed
 
 end

@@ -1107,6 +1107,7 @@ lemma vardecl_add_local_fields [simp]:
   "TE_ProofGoal (vardecl_add_local env ghost varName varTy) = TE_ProofGoal env"
   "TE_Datatypes (vardecl_add_local env ghost varName varTy) = TE_Datatypes env"
   "TE_DataCtors (vardecl_add_local env ghost varName varTy) = TE_DataCtors env"
+  "TE_ReturnType (vardecl_add_local env ghost varName varTy) = TE_ReturnType env"
   by (simp_all add: vardecl_add_local_def)
 
 (* Adding a (well-kinded, and in the non-ghost case runtime) variable to a
@@ -1159,7 +1160,8 @@ lemma elab_vardecl_pure_cong_fields:
   "elab_vardecl_pure env elabEnv ghost loc varName tyOpt tm next_mv = Inr (coreStmt, env', next_mv')
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
-       \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env"
+       \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
+       \<and> TE_ReturnType env' = TE_ReturnType env"
   by (auto simp: elab_vardecl_pure_def coerce_term_to_type_def vardecl_add_local_def
            split: sum.splits prod.splits option.splits if_splits)
 
@@ -1167,7 +1169,8 @@ lemma elab_vardecl_ref_cong_fields:
   "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv = Inr (coreStmt, env', next_mv')
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
-       \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env"
+       \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
+       \<and> TE_ReturnType env' = TE_ReturnType env"
   by (auto simp: elab_vardecl_ref_def vardecl_add_local_def
            split: sum.splits prod.splits option.splits if_splits)
 
@@ -1178,7 +1181,8 @@ lemma elab_vardecl_impure_cong_fields:
      \<Longrightarrow> is_impure_call env elabEnv tm
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
-       \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env"
+       \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
+       \<and> TE_ReturnType env' = TE_ReturnType env"
   by (auto simp: elab_vardecl_impure_def is_impure_call_def reconcile_call_result_def Let_def
                  vardecl_add_local_def
            split: BabTerm.splits sum.splits prod.splits option.splits if_splits)
@@ -2066,7 +2070,14 @@ next
 next
   case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
 next
-  case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
+  \<comment> \<open>Return: the void / no-value branches keep next_mv; the non-void value branch
+      advances it only via the returned term's elab_term.\<close>
+  case (7 env elabEnv ghost loc tmOpt next_mv)
+  show ?case
+    using "7.prems"
+    by (auto simp: coerce_term_to_type_def
+             dest!: elab_term_next_mv_monotone
+             split: sum.splits prod.splits option.splits if_splits)
 next
   \<comment> \<open>Assert: in the "assert *" branch the counter advances only via the proof-body
       list elaboration; in the "assert cond" branch via the condition's elab_term then
@@ -2234,7 +2245,11 @@ next
 next
   case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
 next
-  case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
+  \<comment> \<open>Return: env unchanged in every success path.\<close>
+  case (7 env elabEnv ghost loc tmOpt next_mv)
+  show ?case using "7.prems"(1)
+    by (auto simp: coerce_term_to_type_def
+             split: sum.splits prod.splits option.splits if_splits)
 next
   \<comment> \<open>Assert: env' = env in every success path (the proof-body env is discarded), so
       all four tracked fields are trivially unchanged.\<close>
@@ -2287,9 +2302,9 @@ qed
 
 (* Elaboration preserves elabenv_well_formed. This needs no hypotheses about env
    beyond elabenv_well_formed itself: every statement form leaves TE_TypeVars,
-   TE_Datatypes and TE_DataCtors unchanged (it only touches local-variable fields
-   and TE_ProofGoal), and those three fields are all that elabenv_well_formed
-   depends on (elabenv_well_formed_cong_env). *)
+   TE_Datatypes, TE_DataCtors and TE_ReturnType unchanged (it only touches
+   local-variable fields and TE_ProofGoal), and those four fields are all that
+   elabenv_well_formed depends on (elabenv_well_formed_cong_env). *)
 lemma elab_statement_preserves_elabenv_well_formed:
   "elab_statement env elabEnv ghost stmt next_mv = Inr (coreStmt, env', next_mv')
      \<Longrightarrow> elabenv_well_formed env elabEnv \<Longrightarrow> elabenv_well_formed env' elabEnv"
@@ -2303,7 +2318,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       unchanged (cong-fields lemmas), so elabenv_well_formed is preserved by congruence.\<close>
   case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
   have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
-                \<and> TE_DataCtors env' = TE_DataCtors env"
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
   proof (cases vorf)
     case Var
     consider (none) "tyOpt = None \<and> tmOpt = None"
@@ -2339,22 +2354,25 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
   qed
   show ?case
     using "1.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct2[OF conjunct2[OF flds]]]
+            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
+            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
     by simp
 next
   case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
 next
   \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy leaves TE_TypeVars /
-      TE_Datatypes / TE_DataCtors unchanged, so elabenv_well_formed is preserved.\<close>
+      TE_Datatypes / TE_DataCtors / TE_ReturnType unchanged, so elabenv_well_formed
+      is preserved.\<close>
   case (3 env elabEnv ghost loc varName ty tm next_mv)
   have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
-                \<and> TE_DataCtors env' = TE_DataCtors env"
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
     using "3.prems"(1)
     by (auto simp: Let_def vardecl_add_local_def
              split: sum.splits prod.splits option.splits if_splits)
   show ?case
     using "3.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct2[OF conjunct2[OF flds]]]
+            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
+            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
     by simp
 next
   case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
@@ -2382,7 +2400,12 @@ next
 next
   case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
 next
-  case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
+  \<comment> \<open>Return: env unchanged.\<close>
+  case (7 env elabEnv ghost loc tmOpt next_mv)
+  from "7.prems"(1) have "env' = env"
+    by (auto simp: coerce_term_to_type_def
+             split: sum.splits prod.splits option.splits if_splits)
+  thus ?case using "7.prems"(2) by simp
 next
   \<comment> \<open>Assert: env unchanged (the proof-body env is discarded).\<close>
   case (8 env elabEnv ghost loc condOpt proofBody next_mv)
@@ -2556,7 +2579,12 @@ next
 next
   case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
 next
-  case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
+  \<comment> \<open>Return: env unchanged.\<close>
+  case (7 env elabEnv ghost loc tmOpt next_mv)
+  from "7.prems"(1) have "env' = env"
+    by (auto simp: coerce_term_to_type_def
+             split: sum.splits prod.splits option.splits if_splits)
+  thus ?case using "7.prems"(2) by simp
 next
   \<comment> \<open>Assert: env unchanged (the proof-body env is discarded).\<close>
   case (8 env elabEnv ghost loc condOpt proofBody next_mv)
@@ -2732,14 +2760,15 @@ next
       the local-var fields, so it is well-formed, tyvar-bounded, and elabenv-compatible.\<close>
   let ?eo = "vardecl_add_local env Ghost varName coreTy"
   have flds: "TE_TypeVars ?eo = TE_TypeVars env \<and> TE_Datatypes ?eo = TE_Datatypes env
-                \<and> TE_DataCtors ?eo = TE_DataCtors env"
+                \<and> TE_DataCtors ?eo = TE_DataCtors env \<and> TE_ReturnType ?eo = TE_ReturnType env"
     by (simp add: vardecl_add_local_def)
   have wf_obtain: "tyenv_well_formed ?eo"
     using tyenv_well_formed_vardecl_add_local[OF "3.prems"(2) wk] by simp
   have ee_obtain: "elabenv_well_formed ?eo elabEnv"
     using "3.prems"(3)
           elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct2[OF conjunct2[OF flds]]] by simp
+            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
+            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]] by simp
   have bound_obtain: "\<forall>n. n |\<in>| TE_TypeVars ?eo \<longrightarrow> n < next_mv"
     using "3.prems"(4) conjunct1[OF flds] by simp
   \<comment> \<open>From here, the Assume reasoning over env_obtain.\<close>
@@ -2817,7 +2846,116 @@ next
 next
   case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
 next
-  case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
+  \<comment> \<open>Return: env' = env. The elaborator's guard gives ghost = TE_FunctionGhost env
+      (the Core rule's first obligation). In a void function the only success is a
+      bare `return;` \<rightarrow> CoreStmt_Return (CoreTm_Record []), which types to
+      CoreTy_Record [] = TE_ReturnType env (the elabenv_well_formed void clause). In a
+      non-void function the value is elaborated and coerced to TE_ReturnType env (which
+      is metavar-free), then cleared - identical to elab_assign_pure_correct's coerce
+      step, retargeted at the return type.\<close>
+  case (7 env elabEnv ghost loc tmOpt next_mv)
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  \<comment> \<open>The elaborator only succeeds when ghost matches the function-ghost flag.\<close>
+  from "7.prems"(1) have gh: "ghost = TE_FunctionGhost env"
+    by (auto split: if_splits)
+  show ?case
+  proof (cases "EE_CurrentFunctionVoid elabEnv")
+    case True
+    \<comment> \<open>Void: only a bare `return;` succeeds, returning unit.\<close>
+    from "7.prems"(1) gh True obtain where_none: "tmOpt = None"
+      by (cases tmOpt) (auto split: if_splits)
+    have cs_eq: "coreStmt = CoreStmt_Return (CoreTm_Record [])" and env'_eq: "env' = env"
+      using "7.prems"(1) gh True where_none by (auto split: if_splits)
+    \<comment> \<open>The void clause of elabenv_well_formed pins TE_ReturnType env to unit.\<close>
+    have ret_unit: "TE_ReturnType env = CoreTy_Record []"
+      using "7.prems"(3) True unfolding elabenv_well_formed_def by simp
+    have init_typed: "core_term_type env ghost (CoreTm_Record []) = Some (TE_ReturnType env)"
+      using ret_unit by simp
+    show ?thesis using gh init_typed by (simp add: cs_eq env'_eq)
+  next
+    case False
+    \<comment> \<open>Non-void: a value is required; coerce it to the (metavar-free) return type.\<close>
+    from "7.prems"(1) gh False obtain tm where where_some: "tmOpt = Some tm"
+      by (cases tmOpt) (auto split: if_splits)
+    from "7.prems"(1) gh False where_some obtain coreTm tmTy coreTm' where
+      etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, tmTy, next_mv')" and
+      coerce: "coerce_term_to_type env loc coreTm tmTy (TE_ReturnType env) = Inr coreTm'" and
+      cs_eq: "coreStmt = CoreStmt_Return (clear_metavars next_mv next_mv' coreTm')" and
+      env'_eq: "env' = env"
+      by (auto split: sum.splits prod.splits)
+    let ?retTy = "TE_ReturnType env"
+    let ?envD = "extend_env_with_tyvars env ghost next_mv next_mv'"
+    have wfD: "tyenv_well_formed ?envD" using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+    \<comment> \<open>The return type is well-kinded in env, so its tyvars are < next_mv (metavar-free).\<close>
+    have retTy_wk: "is_well_kinded env ?retTy"
+      using "7.prems"(2) unfolding tyenv_well_formed_def tyenv_return_type_well_kinded_def by blast
+    have retTy_below: "type_tyvars ?retTy \<subseteq> {n. n < next_mv}"
+      using is_well_kinded_type_tyvars_subset[OF retTy_wk] "7.prems"(4) by auto
+    \<comment> \<open>The elaborated term types in the extended env.\<close>
+    have coreTm_typed: "core_term_type ?envD ghost coreTm = Some tmTy"
+      using elab_term_correct(1)[OF etm "7.prems"(2,3)] "7.prems"(4) by simp
+    have tmTy_wk: "is_well_kinded ?envD tmTy"
+      using core_term_type_well_kinded[OF coreTm_typed wfD] .
+    have tmTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?envD tmTy"
+      using core_term_type_notghost_runtime coreTm_typed wfD by auto
+    have retTy_wkD: "is_well_kinded ?envD ?retTy"
+      using is_well_kinded_extend_env_with_tyvars_mono retTy_wk extend_env_with_tyvars_empty
+      by (metis linorder_le_cases)
+    have retTy_rtD: "ghost = NotGhost \<longrightarrow> is_runtime_type ?envD ?retTy"
+    proof
+      assume ng: "ghost = NotGhost"
+      \<comment> \<open>GAP: tyenv_well_formed currently guarantees only that TE_ReturnType is
+          well-kinded, not that it is runtime when TE_FunctionGhost = NotGhost. A
+          non-ghost function returning a ghost type (e.g. MathInt) is nonsensical, so
+          this should be a tyenv_well_formed invariant (tyenv_return_type_runtime,
+          mirroring tyenv_return_type_well_kinded). Once that clause is added, derive
+          is_runtime_type env ?retTy from "7.prems"(2) + ng + gh and lift it through
+          extend_env_with_tyvars as below. TODO: close this sorry then.\<close>
+      have rt: "is_runtime_type env ?retTy" sorry
+      show "is_runtime_type ?envD ?retTy"
+        using is_runtime_type_extend_env_with_tyvars_mono rt extend_env_with_tyvars_empty ng
+        by (metis linorder_le_cases)
+    qed
+    \<comment> \<open>The cleared coerced term types to the return type in env (coerce reasoning).\<close>
+    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some ?retTy"
+    proof (cases "unify ?is_flex tmTy ?retTy")
+      case (Some subst)
+      from coerce Some have coreTm'_eq: "coreTm' = apply_subst_to_term subst coreTm"
+        by (simp add: coerce_term_to_type_def)
+      have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+        using unify_preserves_well_kinded[OF Some tmTy_wk retTy_wkD] .
+      have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envD ty')"
+        using unify_preserves_runtime[OF Some] tmTy_rt retTy_rtD by blast
+      have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+        using unify_unify_list_dom_flex(1)[OF Some] .
+      have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env" unfolding extend_env_with_tyvars_def by simp
+      have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env" unfolding extend_env_with_tyvars_def by simp
+      from flex_subst_identity_on_env[OF dom_flex "7.prems"(2) envD_locals envD_ret]
+      have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                          \<Longrightarrow> apply_subst subst ty' = ty'"
+        and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD" by blast+
+      have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term subst coreTm) = Some (apply_subst subst tmTy)"
+        using apply_subst_to_term_preserves_typing
+                [OF coreTm_typed wfD subst_wk subst_rt locals_unaffected ret_unaffected] .
+      have retTy_tvs: "type_tyvars ?retTy \<subseteq> fset (TE_TypeVars env)"
+        using is_well_kinded_type_tyvars_subset retTy_wk by auto
+      have dom_disj: "type_tyvars ?retTy \<inter> fset (fmdom subst) = {}" using dom_flex retTy_tvs by auto
+      have "apply_subst subst tmTy = apply_subst subst ?retTy" using unify_sound[OF Some] .
+      also have "apply_subst subst ?retTy = ?retTy" using apply_subst_disjoint_id[OF dom_disj] .
+      finally have "core_term_type ?envD ghost (apply_subst_to_term subst coreTm) = Some ?retTy"
+        using subst_typed by simp
+      thus ?thesis using clear_metavars_typed_in_env[OF _ "7.prems"(2,4) retTy_below] coreTm'_eq by simp
+    next
+      case None
+      from coerce None have ints: "is_integer_type tmTy \<and> is_integer_type ?retTy"
+        and coreTm'_eq: "coreTm' = CoreTm_Cast ?retTy coreTm"
+        by (auto simp: coerce_term_to_type_def split: if_splits)
+      have cast_typed: "core_term_type ?envD ghost (CoreTm_Cast ?retTy coreTm) = Some ?retTy"
+        using coreTm_typed ints retTy_wkD retTy_rtD by auto
+      thus ?thesis using clear_metavars_typed_in_env[OF cast_typed "7.prems"(2,4) retTy_below] coreTm'_eq by simp
+    qed
+    show ?thesis using gh init_typed by (simp add: cs_eq env'_eq)
+  qed
 next
   \<comment> \<open>Assert: emits CoreStmt_Assert with env' = env. The asserted condition (if any)
       is elaborated and coerced to Bool exactly as in Assume, so it typechecks in env

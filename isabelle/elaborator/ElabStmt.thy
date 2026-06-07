@@ -420,7 +420,26 @@ where
 
   (* Return from current function. The term must be pure and must match the current
      function's return type (or be absent if the current function is void). *)
-| "elab_statement env elabEnv ghost (BabStmt_Return loc tmOpt) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Return loc tmOpt) next_mv =
+    (if ghost \<noteq> TE_FunctionGhost env then Inl [TyErr_ReturnInGhostContext loc]
+     else if EE_CurrentFunctionVoid elabEnv then
+       \<comment> \<open>Void function: only a bare `return;` is legal; it returns unit.\<close>
+       (case tmOpt of
+          None \<Rightarrow> Inr (CoreStmt_Return (CoreTm_Record []), env, next_mv)
+        | Some _ \<Rightarrow> Inl [TyErr_VoidReturnWithValue loc])
+     else
+       \<comment> \<open>Non-void function: a value is required; coerce it to the return type.\<close>
+       (case tmOpt of
+          None \<Rightarrow> Inl [TyErr_NonVoidReturnNeedsValue loc]
+        | Some tm \<Rightarrow>
+            (case elab_term env elabEnv ghost tm next_mv of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (coreTm, tmTy, next_mv') \<Rightarrow>
+                 (case coerce_term_to_type env loc coreTm tmTy (TE_ReturnType env) of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr coreTm' \<Rightarrow>
+                      Inr (CoreStmt_Return (clear_metavars next_mv next_mv' coreTm'),
+                           env, next_mv')))))"
 
   (* Assert: asserts that a given boolean condition is true. This creates a proof
      obligation. An optional proof body (list of statements) can be given; TE_ProofGoal
