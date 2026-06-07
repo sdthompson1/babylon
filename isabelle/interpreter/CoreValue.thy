@@ -441,6 +441,11 @@ lemma value_has_type_TE_ProofGoal_irrelevant [simp]:
   "value_has_type (env \<lparr> TE_ProofGoal := g \<rparr>) val ty = value_has_type env val ty"
   by (rule value_has_type_cong_env) simp_all
 
+(* Likewise, value_has_type does not depend on TE_ProofTopLevel. *)
+lemma value_has_type_TE_ProofTopLevel_irrelevant [simp]:
+  "value_has_type (env \<lparr> TE_ProofTopLevel := b \<rparr>) val ty = value_has_type env val ty"
+  by (rule value_has_type_cong_env) simp_all
+
 
 (* A weaker congruence lemma for value_has_type. Instead of requiring that the
    two environments agree on TE_TypeVars and TE_RuntimeTypeVars, it asks only

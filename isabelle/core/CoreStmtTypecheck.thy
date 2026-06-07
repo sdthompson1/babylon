@@ -181,12 +181,15 @@ where
      When a condition is present ("assert condTm"), we install condTm as
      TE_ProofGoal during the proof. 
      When the condition is absent ("assert *"), the asserted goal is the current proof
-     goal, so TE_ProofGoal is left unchanged. *)
+     goal (which must exist!), so TE_ProofGoal is left unchanged. *)
 | "core_statement_type env ghost (CoreStmt_Assert condOpt proofBody) =
-    (let goalEnv = (case condOpt of Some condTm \<Rightarrow> env \<lparr> TE_ProofGoal := Some condTm \<rparr>
-                                  | None \<Rightarrow> env);
-         condOk = (case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
-                                 | None \<Rightarrow> True)
+    (let newGoal = (case condOpt of Some condTm \<Rightarrow> Some condTm
+                               | None \<Rightarrow> TE_ProofGoal env);
+         goalEnv = env \<lparr> TE_ProofGoal := newGoal,
+                         TE_ProofTopLevel := True \<rparr>;
+         condOk = (case condOpt of 
+                     Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
+                   | None \<Rightarrow> TE_ProofGoal env \<noteq> None)
      in (if condOk
          then (case core_statement_list_type goalEnv Ghost proofBody of
                  Some _ \<Rightarrow> Some env
@@ -219,7 +222,7 @@ where
                    bodies = map snd arms
                in if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
                   else if list_all (\<lambda>body. core_statement_list_type
-                                              (env \<lparr> TE_ProofGoal := None \<rparr>)
+                                              (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                                               matchGhost body \<noteq> None) bodies
                        then Some env
                        else None)
@@ -240,7 +243,7 @@ where
                        Some decrTy \<Rightarrow>
                          if is_valid_decreases_type decrTy
                          then (case core_statement_list_type
-                                      (env \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body of
+                                      (env \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body of
                                  Some _ \<Rightarrow> Some env
                                | None \<Rightarrow> None)
                          else None
@@ -264,14 +267,15 @@ where
      else None)"
 
   (* Fix: "fix x : T". Only valid if there is a current proof goal of the form
-     "forall x' : T. P(x')". Introduces a ghost variable "x : T" and changes the goal
+     "forall x' : T. P(x')", and we are at the top level of the proof (not inside 
+     nested match/while). Introduces a ghost variable "x : T" and changes the goal
      to "P(x)".
      Note: we don't actually bother renaming x' to x in the goal. This is sound because
      TE_ProofGoal is only consumed structurually. *)
 | "core_statement_type env ghost (CoreStmt_Fix varName varTy) =
     (case TE_ProofGoal env of
        Some (CoreTm_Quantifier Quant_Forall _ qVarTy bodyTm) \<Rightarrow>
-         (if ghost = Ghost \<and> qVarTy = varTy \<and> is_well_kinded env varTy
+         (if ghost = Ghost \<and> qVarTy = varTy \<and> is_well_kinded env varTy \<and> TE_ProofTopLevel env
           then Some (env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
                             TE_GhostLocals := finsert varName (TE_GhostLocals env),
                             TE_ConstLocals := finsert varName (TE_ConstLocals env),
@@ -319,7 +323,7 @@ where
       by (simp add: size_list_estimation')
     hence z_le: "size_list size z \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
       by simp
-    show "(Inr (env \<lparr> TE_ProofGoal := None \<rparr>, matchGhost, z),
+    show "(Inr (env \<lparr> TE_ProofTopLevel := False \<rparr>, matchGhost, z),
            Inl (env, ghost, CoreStmt_Match matchGhost scrut arms))
           \<in> measure (\<lambda>y. case y of
               Inl (_, _, stmt) \<Rightarrow> size stmt
@@ -1319,33 +1323,40 @@ next
     using rhs core_term_type_irrelevant_tyvar by blast
   from gh wl wr lhs' rhs' show ?case by (simp add: env'_eq)
 next
-  \<comment> \<open>Assert: env unchanged; body checked under goalEnv, which installs
-      TE_ProofGoal := Some condTm when a condition is present, or leaves env
-      unchanged for "assert *" (condOpt = None). ?ext commutes with goalEnv.\<close>
+  \<comment> \<open>Assert: env unchanged; body checked under goalEnv, which sets
+      TE_ProofGoal to condTm when a condition is present, or keeps the current goal
+      for "assert *" (condOpt = None), and sets TE_ProofTopLevel := True.
+      ?ext commutes with goalEnv.\<close>
   case (8 env ghost condOpt proofBody)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
   let ?env1 = "?ext env"
-  let ?goalEnv = "\<lambda>e. case condOpt of Some condTm \<Rightarrow> e \<lparr> TE_ProofGoal := Some condTm \<rparr>
-                                     | None \<Rightarrow> e"
-  let ?condOk = "case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
-                               | None \<Rightarrow> True"
+  \<comment> \<open>?goalEnv computes the new goal directly from its argument, so it agrees with
+      the form Isabelle unfolds the rule into for both env and ?env1.\<close>
+  let ?goalEnv = "\<lambda>e. e \<lparr> TE_ProofGoal := (case condOpt of Some condTm \<Rightarrow> Some condTm
+                                                          | None \<Rightarrow> TE_ProofGoal e),
+                          TE_ProofTopLevel := True \<rparr>"
+  let ?condOk = "case condOpt of
+                   Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
+                 | None \<Rightarrow> TE_ProofGoal env \<noteq> None"
   from "8.prems" obtain bodyEnv where
     condOk: "?condOk" and
     body: "core_statement_list_type (?goalEnv env) Ghost proofBody = Some bodyEnv" and
     env'_eq: "env' = env"
     by (auto simp: Let_def split: if_splits option.splits)
-  \<comment> \<open>?ext commutes with the goal-env update, in either branch of condOpt.\<close>
+  \<comment> \<open>?ext commutes with the goal-env update; the new goal (which in the None branch
+      reads TE_ProofGoal of the argument) is unchanged by ?ext.\<close>
   have shape: "?ext (?goalEnv env) = ?goalEnv ?env1"
     by (cases condOpt) simp_all
-  from "8.IH"[OF refl refl condOk body] shape have body':
+  from "8.IH"[OF refl refl refl condOk body] shape have body':
     "core_statement_list_type (?goalEnv ?env1) Ghost proofBody = Some (?ext bodyEnv)"
     by argo
-  \<comment> \<open>The condition (if any) still typechecks under the extended env.\<close>
+  \<comment> \<open>The condition (if any) still typechecks under the extended env, and the
+      "assert *" side-condition (current goal present) is preserved by ?ext.\<close>
   have condOk': "case condOpt of
                    Some condTm \<Rightarrow> core_term_type ?env1 Ghost condTm = Some CoreTy_Bool
-                 | None \<Rightarrow> True"
+                 | None \<Rightarrow> TE_ProofGoal ?env1 \<noteq> None"
     using condOk core_term_type_irrelevant_tyvar by (cases condOpt) auto
   from condOk' body' show ?case by (simp add: env'_eq Let_def)
 next
@@ -1368,7 +1379,7 @@ next
   thus ?case by simp
 next
   \<comment> \<open>Match: env unchanged; pattern_compatible depends only on TE_DataCtors, and
-      each arm body is checked under TE_ProofGoal := None.\<close>
+      each arm body is checked under TE_ProofTopLevel := False.\<close>
   case (11 env ghost matchGhost scrut arms)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
@@ -1378,7 +1389,7 @@ next
     gh: "ghost = Ghost \<longrightarrow> matchGhost = Ghost" and
     scrut: "core_term_type env matchGhost scrut = Some scrutTy" and
     pats: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
-    bodies: "list_all (\<lambda>body. core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>)
+    bodies: "list_all (\<lambda>body. core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                                   matchGhost body \<noteq> None) (map snd arms)" and
     env'_eq: "env' = env"
     by (auto simp: Let_def split: if_splits option.splits)
@@ -1391,24 +1402,25 @@ next
   have pats_nn: "\<not> \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)"
     using pats by simp
   \<comment> \<open>Each arm body still typechecks (to *some* env) under the extended env.
-      ?ext commutes with the TE_ProofGoal := None update.\<close>
-  have goal_shape: "?ext (env \<lparr> TE_ProofGoal := None \<rparr>)
-                      = ?env1 \<lparr> TE_ProofGoal := None \<rparr>" by simp
-  have bodies': "list_all (\<lambda>body. core_statement_list_type (?env1 \<lparr> TE_ProofGoal := None \<rparr>)
+      ?ext commutes with the TE_ProofTopLevel := False update.\<close>
+  have goal_shape: "?ext (env \<lparr> TE_ProofTopLevel := False \<rparr>)
+                      = ?env1 \<lparr> TE_ProofTopLevel := False \<rparr>" by simp
+  have bodies': "list_all (\<lambda>body. core_statement_list_type (?env1 \<lparr> TE_ProofTopLevel := False \<rparr>)
                                      matchGhost body \<noteq> None) (map snd arms)"
     unfolding list_all_iff
   proof (rule ballI)
     fix body assume body_in: "body \<in> set (map snd arms)"
-    with bodies have "core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body \<noteq> None"
-      by (metis (mono_tags, lifting) in_set_conv_decomp list_all_append list_all_simps(1))
+    from bodies[unfolded list_all_iff] body_in
+    have "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) matchGhost body \<noteq> None"
+      by blast
     then obtain bEnv where
-      bsome: "core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body = Some bEnv"
+      bsome: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) matchGhost body = Some bEnv"
       by blast
     from "11.IH"[OF gh scrut refl refl pats_nn body_in bsome] goal_shape
-    have "core_statement_list_type (?env1 \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body
+    have "core_statement_list_type (?env1 \<lparr> TE_ProofTopLevel := False \<rparr>) matchGhost body
             = Some (?ext bEnv)"
       by argo
-    thus "core_statement_list_type (?env1 \<lparr> TE_ProofGoal := None \<rparr>) matchGhost body \<noteq> None"
+    thus "core_statement_list_type (?env1 \<lparr> TE_ProofTopLevel := False \<rparr>) matchGhost body \<noteq> None"
       by simp
   qed
   from gh scrut' pats' bodies' show ?case
@@ -1426,7 +1438,7 @@ next
     invs: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
     decr: "core_term_type env Ghost decrTm = Some decrTy" and
     decr_valid: "is_valid_decreases_type decrTy" and
-    body: "core_statement_list_type (env \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body = Some bodyEnv" and
+    body: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body = Some bodyEnv" and
     env'_eq: "env' = env"
     by (auto split: if_splits option.splits CoreType.splits)
   have cond': "core_term_type ?env1 whileGhost condTm = Some CoreTy_Bool"
@@ -1435,10 +1447,10 @@ next
     using invs core_term_type_irrelevant_tyvar by (simp add: list_all_iff)
   have decr': "core_term_type ?env1 Ghost decrTm = Some decrTy"
     using decr core_term_type_irrelevant_tyvar by blast
-  have goal_shape: "?ext (env \<lparr> TE_ProofGoal := None \<rparr>)
-                      = ?env1 \<lparr> TE_ProofGoal := None \<rparr>" by simp
+  have goal_shape: "?ext (env \<lparr> TE_ProofTopLevel := False \<rparr>)
+                      = ?env1 \<lparr> TE_ProofTopLevel := False \<rparr>" by simp
   from "12.IH"[OF gh cond refl invs decr decr_valid body] goal_shape have body':
-    "core_statement_list_type (?env1 \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body
+    "core_statement_list_type (?env1 \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body
        = Some (?ext bodyEnv)"
     by argo
   from gh cond' invs' decr' decr_valid body' show ?case
@@ -1476,6 +1488,7 @@ next
   from "14.prems" obtain qName bodyTm where
     goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Forall qName varTy bodyTm)" and
     gh: "ghost = Ghost" and wk: "is_well_kinded env varTy" and
+    topLevel: "TE_ProofTopLevel env" and
     env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                             TE_GhostLocals := finsert varName (TE_GhostLocals env),
                             TE_ConstLocals := finsert varName (TE_ConstLocals env),
@@ -1486,7 +1499,9 @@ next
     using goal by simp
   have wk': "is_well_kinded ?env1 varTy"
     using wk is_well_kinded_extend_tyvars by fastforce
-  from gh goal' wk' show ?case
+  have topLevel': "TE_ProofTopLevel ?env1"
+    using topLevel by simp
+  from gh goal' wk' topLevel' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>Use: requires a Quant_Exists goal; updates the goal, env otherwise unchanged.\<close>

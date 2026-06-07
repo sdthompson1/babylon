@@ -2205,9 +2205,9 @@ next
         next
           case NotGhost
           note whileGhost_eq = NotGhost
-          \<comment> \<open>The loop body typechecks in env with TE_ProofGoal reset to None
+          \<comment> \<open>The loop body typechecks in env with TE_ProofTopLevel reset to False
               (a loop body is not at the top level of an assert proof). \<close>
-          define benv where "benv = env \<lparr> TE_ProofGoal := None \<rparr>"
+          define benv where "benv = env \<lparr> TE_ProofTopLevel := False \<rparr>"
           from typing CoreStmt_While NotGhost have
             cond_ty: "core_term_type env NotGhost condTm = Some CoreTy_Bool" and
             body_typed: "\<exists>bodyEnv'. core_statement_list_type benv NotGhost bodyStmts
@@ -2265,16 +2265,16 @@ next
                 body_ty: "core_statement_list_type benv NotGhost bodyStmts = Some bodyEnv'"
                 by blast
               \<comment> \<open>state_matches_env / tyenv_well_formed transfer from env to benv
-                  (benv differs only in TE_ProofGoal, which they ignore). \<close>
+                  (benv differs only in TE_ProofTopLevel, which they ignore). \<close>
               have sme_benv: "state_matches_env state benv storeTyping"
                 using "4.prems"(1) unfolding benv_def by simp
               have wf_benv: "tyenv_well_formed benv"
                 using "4.prems"(2) unfolding benv_def
-                by (simp add: tyenv_well_formed_TE_ProofGoal_irrelevant)
+                by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
               from IH_stmts[OF sme_benv wf_benv body_ty]
               have "sound_statement_result benv bodyEnv' storeTyping
                   (interp_statement_list fuel state bodyStmts)" .
-              \<comment> \<open>sound_statement_result ignores TE_ProofGoal of its first env, so we
+              \<comment> \<open>sound_statement_result ignores TE_ProofTopLevel of its first env, so we
                   may restate it with env in place of benv. \<close>
               hence body_sound: "sound_statement_result env bodyEnv' storeTyping
                   (interp_statement_list fuel state bodyStmts)"
@@ -2417,9 +2417,9 @@ next
         next
           case NotGhost
           note matchGhost_eq = NotGhost
-          \<comment> \<open>Arm bodies typecheck in env with TE_ProofGoal reset to None (a match
+          \<comment> \<open>Arm bodies typecheck in env with TE_ProofTopLevel reset to False (a match
               arm is not at the top level of an assert proof). \<close>
-          define benv where "benv = env \<lparr> TE_ProofGoal := None \<rparr>"
+          define benv where "benv = env \<lparr> TE_ProofTopLevel := False \<rparr>"
           from typing CoreStmt_Match NotGhost obtain scrutTy where
             scrut_ty: "core_term_type env NotGhost scrut = Some scrutTy" and
             bodies_typed: "list_all (\<lambda>body.
@@ -2430,7 +2430,7 @@ next
             using "4.prems"(1) unfolding benv_def by simp
           have wf_benv: "tyenv_well_formed benv"
             using "4.prems"(2) unfolding benv_def
-            by (simp add: tyenv_well_formed_TE_ProofGoal_irrelevant)
+            by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
           from IH_term[OF "4.prems"(1,2) scrut_ty]
           have scrut_sound: "sound_term_result state env scrutTy (interp_term fuel state scrut)" .
           have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 stmts0 env0'.
@@ -2468,7 +2468,7 @@ next
               from IH_stmts[OF sme_benv wf_benv body_typed]
               have "sound_statement_result benv bodyEnv' storeTyping
                   (interp_statement_list fuel state armBody)" .
-              \<comment> \<open>sound_statement_result ignores TE_ProofGoal of its first env. \<close>
+              \<comment> \<open>sound_statement_result ignores TE_ProofTopLevel of its first env. \<close>
               hence body_sound: "sound_statement_result env bodyEnv' storeTyping
                   (interp_statement_list fuel state armBody)"
                 unfolding benv_def by simp

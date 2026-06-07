@@ -263,6 +263,17 @@ next
     by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
 qed
 
+(* Lemma: type_at_path does not depend on TE_ProofTopLevel. *)
+lemma type_at_path_TE_ProofTopLevel_irrelevant [simp]:
+  "type_at_path (env \<lparr> TE_ProofTopLevel := b \<rparr>) ty p = type_at_path env ty p"
+proof (induction p arbitrary: ty)
+  case Nil then show ?case by simp
+next
+  case (Cons step rest)
+  show ?case
+    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+qed
+
 
 (* ========================================================================== *)
 (* Store and scope operations *)

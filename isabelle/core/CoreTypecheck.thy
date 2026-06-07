@@ -616,8 +616,8 @@ lemma pattern_compatible_TE_ConstLocals_irrelevant [simp]:
    reads: the variable maps (locals/globals and their ghost sets), the function
    and datatype/constructor tables, and the type-variable scopes (via
    is_well_kinded / is_runtime_type). It does NOT depend on TE_ConstLocals,
-   TE_ProofGoal, TE_ReturnType, or TE_FunctionGhost. Hence any two environments
-   agreeing on the read fields assign the same type to any term. *)
+   TE_ProofGoal, TE_ProofTopLevel, TE_ReturnType, or TE_FunctionGhost. Hence any two
+   environments agreeing on the read fields assign the same type to any term. *)
 lemma core_term_type_cong_env:
   assumes "TE_LocalVars env1 = TE_LocalVars env2"
     and "TE_GlobalVars env1 = TE_GlobalVars env2"
@@ -854,6 +854,11 @@ lemma core_term_type_TE_ConstLocals_irrelevant:
 (* core_term_type does not depend on TE_ProofGoal (same reasoning). *)
 lemma core_term_type_TE_ProofGoal_irrelevant:
   "core_term_type (env \<lparr> TE_ProofGoal := g \<rparr>) ghost tm =
+   core_term_type env ghost tm"
+  by (rule core_term_type_cong_env) simp_all
+
+lemma core_term_type_TE_ProofTopLevel_irrelevant:
+  "core_term_type (env \<lparr> TE_ProofTopLevel := g \<rparr>) ghost tm =
    core_term_type env ghost tm"
   by (rule core_term_type_cong_env) simp_all
 

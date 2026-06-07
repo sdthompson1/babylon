@@ -121,6 +121,28 @@ next
     by (cases execRes) simp_all
 qed
 
+(* Likewise, sound_statement_result does not depend on TE_ProofTopLevel of either
+   env, for the same reasons. *)
+lemma sound_statement_result_TE_ProofTopLevel_irrelevant_left [simp]:
+  "sound_statement_result (env \<lparr> TE_ProofTopLevel := b \<rparr>) env' storeTyping res
+     = sound_statement_result env env' storeTyping res"
+proof (cases res)
+  case (Inl err) then show ?thesis by simp
+next
+  case (Inr execRes) then show ?thesis
+    by (cases execRes) simp_all
+qed
+
+lemma sound_statement_result_TE_ProofTopLevel_irrelevant_right [simp]:
+  "sound_statement_result env (env' \<lparr> TE_ProofTopLevel := b \<rparr>) storeTyping res
+     = sound_statement_result env env' storeTyping res"
+proof (cases res)
+  case (Inl err) then show ?thesis by simp
+next
+  case (Inr execRes) then show ?thesis
+    by (cases execRes) simp_all
+qed
+
 
 (*-----------------------------------------------------------------------------*)
 (* Various helper lemmas *)

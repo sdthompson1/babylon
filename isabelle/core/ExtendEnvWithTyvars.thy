@@ -221,7 +221,7 @@ qed
 
 (* extend_env_with_tyvars commutes with local-variable record updates: it only
    touches the tyvar sets, so updates to TE_LocalVars / TE_GhostLocals /
-   TE_ConstLocals / TE_ProofGoal pass through unchanged. *)
+   TE_ConstLocals / TE_ProofGoal / TE_ProofTopLevel pass through unchanged. *)
 lemma extend_env_with_tyvars_TE_LocalVars_commute:
   "extend_env_with_tyvars
       (env \<lparr> TE_LocalVars := lv, TE_GhostLocals := gl, TE_ConstLocals := cl \<rparr>) ghost lo hi

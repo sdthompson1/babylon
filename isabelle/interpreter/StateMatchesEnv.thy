@@ -30,12 +30,18 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTy
       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_ReturnType := FI_ReturnType funInfo,
       TE_FunctionGhost := NotGhost,
-      TE_ProofGoal := None
+      TE_ProofGoal := None,
+      TE_ProofTopLevel := False
     \<rparr>"
 
 (* Lemma: body_env_for does not depend on TE_ProofGoal. *)
 lemma body_env_for_input_TE_ProofGoal_irrelevant [simp]:
   "body_env_for (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo = body_env_for env funInfo"
+  by (simp add: body_env_for_def)
+
+(* Lemma: body_env_for does not depend on TE_ProofTopLevel. *)
+lemma body_env_for_input_TE_ProofTopLevel_irrelevant [simp]:
+  "body_env_for (env \<lparr> TE_ProofTopLevel := b \<rparr>) funInfo = body_env_for env funInfo"
   by (simp add: body_env_for_def)
 
 
@@ -144,9 +150,30 @@ proof -
     by simp
 qed
 
+(* Lemma: extern_fun_contract does not depend on TE_ProofTopLevel. *)
+lemma extern_fun_contract_TE_ProofTopLevel_irrelevant [simp]:
+  "extern_fun_contract (env \<lparr> TE_ProofTopLevel := b \<rparr>) funInfo externFun
+     = extern_fun_contract env funInfo externFun"
+proof -
+  have vht_eq: "value_has_type (env \<lparr> TE_ProofTopLevel := b \<rparr>) = value_has_type env"
+    by (rule ext)+ simp
+  show ?thesis
+    unfolding extern_fun_contract_def
+    using is_well_kinded_cong_env[where env' = "env \<lparr> TE_ProofTopLevel := b \<rparr>" and env = env]
+          is_runtime_type_cong_env[where env' = "env \<lparr> TE_ProofTopLevel := b \<rparr>" and env = env]
+          vht_eq
+    by simp
+qed
+
 (* Lemma: fun_info_matches_interp_fun does not depend on TE_ProofGoal. *)
 lemma fun_info_matches_interp_fun_TE_ProofGoal_irrelevant [simp]:
   "fun_info_matches_interp_fun (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo interpFun
+     = fun_info_matches_interp_fun env funInfo interpFun"
+  by (simp add: fun_info_matches_interp_fun_def split: sum.splits)
+
+(* Lemma: fun_info_matches_interp_fun does not depend on TE_ProofTopLevel. *)
+lemma fun_info_matches_interp_fun_TE_ProofTopLevel_irrelevant [simp]:
+  "fun_info_matches_interp_fun (env \<lparr> TE_ProofTopLevel := b \<rparr>) funInfo interpFun
      = fun_info_matches_interp_fun env funInfo interpFun"
   by (simp add: fun_info_matches_interp_fun_def split: sum.splits)
 
@@ -271,6 +298,28 @@ proof -
   have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ProofGoal := g \<rparr>) ty = is_runtime_type env ty"
     by (rule is_runtime_type_cong_env) simp_all
   have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ProofGoal := g \<rparr>) ty = is_well_kinded env ty"
+    by (rule is_well_kinded_cong_env) simp_all
+  show ?thesis
+    by (simp add: state_matches_env_def
+          local_vars_exist_in_state_def global_vars_exist_in_state_def
+          no_extra_local_vars_def no_extra_global_vars_def
+          funs_exist_in_state_def no_extra_funs_def
+          const_locals_match_def
+          store_well_typed_def ty_args_well_formed_def
+          default_ctors_match_def
+          local_var_in_state_with_type_def global_var_in_state_with_type_def
+          rt_eq wk_eq
+          split: option.splits)
+qed
+
+(* Lemma: state_matches_env does not depend on TE_ProofTopLevel. *)
+lemma state_matches_env_TE_ProofTopLevel_irrelevant [simp]:
+  "state_matches_env state (env \<lparr> TE_ProofTopLevel := b \<rparr>) storeTyping
+     = state_matches_env state env storeTyping"
+proof -
+  have rt_eq: "\<And>ty. is_runtime_type (env \<lparr> TE_ProofTopLevel := b \<rparr>) ty = is_runtime_type env ty"
+    by (rule is_runtime_type_cong_env) simp_all
+  have wk_eq: "\<And>ty. is_well_kinded (env \<lparr> TE_ProofTopLevel := b \<rparr>) ty = is_well_kinded env ty"
     by (rule is_well_kinded_cong_env) simp_all
   show ?thesis
     by (simp add: state_matches_env_def

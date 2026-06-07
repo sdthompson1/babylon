@@ -53,15 +53,12 @@ record CoreTyEnv =
   (* Ghost-ness of the enclosing function. *)
   TE_FunctionGhost :: GhostOrNot
 
-  (* The remaining goal of the immediately-enclosing assert proof, if we are
-     directly at the top level of an assert proof body.
-       - None: we are not directly inside an assert proof (either not in one at
-         all, or nested inside a while/match/inner-assert body, which reset this).
-       - Some g: g is the (possibly partially stripped) assert goal term. Each
-         top-level CoreStmt_Fix peels one Quant_Forall off g.
-     This is a "mutable scoping" field (changes during statement checking, like
-     TE_LocalVars), so it is deliberately NOT part of tyenv_fixed_eq below. *)
+  (* The remaining goal of the immediately-enclosing assert proof (if applicable). *)
   TE_ProofGoal :: "CoreTerm option"
+
+  (* True if we are at the *top level* (not inside a nested Match or While) in an
+     assert proof. *)
+  TE_ProofTopLevel :: bool
 
   (* Function signatures *)
   TE_Functions :: "(string, FunInfo) fmap"
@@ -146,6 +143,14 @@ lemma tyenv_fixed_eq_TE_ProofGoal_left [simp]:
 
 lemma tyenv_fixed_eq_TE_ProofGoal_right [simp]:
   "tyenv_fixed_eq env1 (env2 \<lparr> TE_ProofGoal := g \<rparr>) = tyenv_fixed_eq env1 env2"
+  unfolding tyenv_fixed_eq_def by simp
+
+lemma tyenv_fixed_eq_TE_ProofTopLevel_left [simp]:
+  "tyenv_fixed_eq (env1 \<lparr> TE_ProofTopLevel := g \<rparr>) env2 = tyenv_fixed_eq env1 env2"
+  unfolding tyenv_fixed_eq_def by simp
+
+lemma tyenv_fixed_eq_TE_ProofTopLevel_right [simp]:
+  "tyenv_fixed_eq env1 (env2 \<lparr> TE_ProofTopLevel := g \<rparr>) = tyenv_fixed_eq env1 env2"
   unfolding tyenv_fixed_eq_def by simp
 
 lemma tyenv_lookup_var_local [simp]:
