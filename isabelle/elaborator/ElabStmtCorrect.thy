@@ -2030,7 +2030,13 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
 next
   case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix (unimplemented)\<close>
 next
-  case (3 env elabEnv ghost loc varName ty tm next_mv) thus ?case sorry  \<comment> \<open>Obtain\<close>
+  \<comment> \<open>Obtain: next_mv advances only via the predicate's elab_term (elab_type and
+      the unify do not touch the counter).\<close>
+  case (3 env elabEnv ghost loc varName ty tm next_mv)
+  show ?case
+    using "3.prems"
+    by (auto simp: Let_def dest!: elab_term_next_mv_monotone
+             split: sum.splits prod.splits option.splits if_splits)
 next
   case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
 next
@@ -2068,7 +2074,7 @@ next
   case (9 env elabEnv ghost loc tm next_mv)
   show ?case
     using "9.prems"
-    by (auto dest!: elab_term_next_mv_monotone split: sum.splits prod.splits if_splits)
+    by (auto dest!: elab_term_next_mv_monotone split: sum.splits prod.splits option.splits if_splits)
 next
   case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
 next
@@ -2167,7 +2173,12 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
 next
   case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
 next
-  case (3 env elabEnv ghost loc varName ty tm next_mv) thus ?case sorry  \<comment> \<open>Obtain\<close>
+  \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy, which touches only
+      the local-var fields, so all four tracked fields are unchanged.\<close>
+  case (3 env elabEnv ghost loc varName ty tm next_mv)
+  show ?case using "3.prems"(1)
+    by (auto simp: Let_def vardecl_add_local_def
+             split: sum.splits prod.splits option.splits if_splits)
 next
   case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
 next
@@ -2200,7 +2211,7 @@ next
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
-  show ?case using "9.prems"(1) by (auto split: sum.splits prod.splits if_splits)
+  show ?case using "9.prems"(1) by (auto split: sum.splits prod.splits option.splits if_splits)
 next
   case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
 next
@@ -2299,7 +2310,18 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
 next
   case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
 next
-  case (3 env elabEnv ghost loc varName ty tm next_mv) thus ?case sorry  \<comment> \<open>Obtain\<close>
+  \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy leaves TE_TypeVars /
+      TE_Datatypes / TE_DataCtors unchanged, so elabenv_well_formed is preserved.\<close>
+  case (3 env elabEnv ghost loc varName ty tm next_mv)
+  have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
+                \<and> TE_DataCtors env' = TE_DataCtors env"
+    using "3.prems"(1)
+    by (auto simp: Let_def vardecl_add_local_def
+             split: sum.splits prod.splits option.splits if_splits)
+  show ?case
+    using "3.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
+            conjunct1[OF conjunct2[OF flds]] conjunct2[OF conjunct2[OF flds]]]
+    by simp
 next
   case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
 next
@@ -2332,7 +2354,7 @@ next
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
-  from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits if_splits)
+  from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits option.splits if_splits)
   thus ?case using "9.prems"(2) by simp
 next
   case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
@@ -2454,7 +2476,21 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
 next
   case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
 next
-  case (3 env elabEnv ghost loc varName ty tm next_mv) thus ?case sorry  \<comment> \<open>Obtain\<close>
+  \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy, where coreTy is the
+      Ghost-mode elaboration of the annotation (hence well-kinded). The runtime
+      condition is vacuous (the local is ghost), so tyenv_well_formed is preserved.\<close>
+  case (3 env elabEnv ghost loc varName ty tm next_mv)
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using "3.prems"(3) unfolding elabenv_well_formed_def by simp
+  from "3.prems"(1) obtain coreTy where
+    ety: "elab_type env elabEnv Ghost ty = Inr coreTy" and
+    env'_eq: "env' = vardecl_add_local env Ghost varName coreTy"
+    by (auto simp: Let_def vardecl_add_local_def
+             split: sum.splits prod.splits option.splits if_splits)
+  have wk: "is_well_kinded env coreTy"
+    using elab_type_is_well_kinded(1)[OF td_wf "3.prems"(2) ety] .
+  show ?case
+    using env'_eq tyenv_well_formed_vardecl_add_local[OF "3.prems"(2) wk] by simp
 next
   case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
 next
@@ -2487,7 +2523,7 @@ next
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
-  from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits if_splits)
+  from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits option.splits if_splits)
   thus ?case using "9.prems"(2) by simp
 next
   case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
@@ -2567,17 +2603,8 @@ and elab_statement_list_correct:
 proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next_mv
        arbitrary: coreStmt env' next_mv' and coreStmts env' next_mv'
        rule: elab_statement_elab_statement_list.induct)
-  \<comment> \<open>VarDecl: dispatch on the helper used by the elaborator clause.
-      - default-init (Some ty, None): inline, emits CoreStmt_VarDecl \<dots> (CoreTm_Default coreTy);
-      - pure initializer:  elab_vardecl_pure_correct;
-      - Ref:               elab_vardecl_ref_correct;
-      - impure initializer (CoreStmt_VarDeclCall): SORRY. This still needs a
-        clear_metavars bridge for core_impure_call_type (the call's leftover
-        interval metavariables, in its ty-args and arg-terms, must be cleared so
-        the call typechecks in the un-extended env), analogous to
-        clear_metavars_typed_in_env for single terms. elab_impure_call_term_correct
-        already gives the call's typing in the EXTENDED env. TODO: build that bridge.\<close>
-  case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
+case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
+  \<comment> \<open>VarDecl: dispatch on the helper used by the elaborator clause.\<close>
   show ?case
   proof (cases vorf)
     case Var
@@ -2635,7 +2662,81 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
 next
   case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
 next
-  case (3 env elabEnv ghost loc varName ty tm next_mv) thus ?case sorry  \<comment> \<open>Obtain\<close>
+  \<comment> \<open>Obtain: elaborate the annotation in Ghost mode to coreTy (well-kinded), then
+      the predicate in Ghost mode under env_obtain = env extended with the ghost
+      local varName : coreTy. Its type unifies with Bool; apply the unifier and
+      clear interval metavariables, so it typechecks as Bool in env_obtain (the
+      Assume reasoning, lifted to env_obtain). The Core Obtain rule fixes
+      declGhost = Ghost, so env_obtain matches its result env exactly.\<close>
+  case (3 env elabEnv ghost loc varName ty tm next_mv)
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using "3.prems"(3) unfolding elabenv_well_formed_def by simp
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  from "3.prems"(1) obtain coreTy coreTm condTy subst where
+    ety: "elab_type env elabEnv Ghost ty = Inr coreTy" and
+    etm: "elab_term (vardecl_add_local env Ghost varName coreTy) elabEnv Ghost tm next_mv
+            = Inr (coreTm, condTy, next_mv')" and
+    unif: "unify ?is_flex condTy CoreTy_Bool = Some subst" and
+    cs_eq: "coreStmt = CoreStmt_Obtain varName coreTy
+                         (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))" and
+    env'_eq: "env' = vardecl_add_local env Ghost varName coreTy"
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+  \<comment> \<open>coreTy is well-kinded (Ghost-mode elaboration of the annotation).\<close>
+  have wk: "is_well_kinded env coreTy"
+    using elab_type_is_well_kinded(1)[OF td_wf "3.prems"(2) ety] .
+  \<comment> \<open>env_obtain = the env extended with the ghost local. It differs from env only in
+      the local-var fields, so it is well-formed, tyvar-bounded, and elabenv-compatible.\<close>
+  let ?eo = "vardecl_add_local env Ghost varName coreTy"
+  have flds: "TE_TypeVars ?eo = TE_TypeVars env \<and> TE_Datatypes ?eo = TE_Datatypes env
+                \<and> TE_DataCtors ?eo = TE_DataCtors env"
+    by (simp add: vardecl_add_local_def)
+  have wf_obtain: "tyenv_well_formed ?eo"
+    using tyenv_well_formed_vardecl_add_local[OF "3.prems"(2) wk] by simp
+  have ee_obtain: "elabenv_well_formed ?eo elabEnv"
+    using "3.prems"(3)
+          elabenv_well_formed_cong_env[OF conjunct1[OF flds]
+            conjunct1[OF conjunct2[OF flds]] conjunct2[OF conjunct2[OF flds]]] by simp
+  have bound_obtain: "\<forall>n. n |\<in>| TE_TypeVars ?eo \<longrightarrow> n < next_mv"
+    using "3.prems"(4) conjunct1[OF flds] by simp
+  \<comment> \<open>From here, the Assume reasoning over env_obtain.\<close>
+  let ?envD = "extend_env_with_tyvars ?eo Ghost next_mv next_mv'"
+  have typed_ghost: "core_term_type ?envD Ghost coreTm = Some condTy"
+    using elab_term_correct(1)[OF etm wf_obtain ee_obtain] bound_obtain by simp
+  have wfD: "tyenv_well_formed ?envD"
+    using wf_obtain tyenv_well_formed_extend_env_with_tyvars by blast
+  have condTy_wk: "is_well_kinded ?envD condTy"
+    using core_term_type_well_kinded[OF typed_ghost wfD] .
+  have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+    using unify_preserves_well_kinded[OF unif condTy_wk] by simp
+  \<comment> \<open>The flex predicate is stated over env, but TE_TypeVars ?eo = TE_TypeVars env.\<close>
+  have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> n |\<notin>| TE_TypeVars ?eo"
+    using unify_unify_list_dom_flex(1)[OF unif] conjunct1[OF flds] by simp
+  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars ?eo"
+    unfolding extend_env_with_tyvars_def by simp
+  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType ?eo"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF dom_flex wf_obtain envD_locals envD_ret]
+  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                        \<Longrightarrow> apply_subst subst ty' = ty'"
+    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
+    by blast+
+  have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
+                       = Some (apply_subst subst condTy)"
+    using apply_subst_to_term_preserves_typing
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected] by simp
+  have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
+    using unify_sound[OF unif] .
+  hence subst_typed_bool:
+    "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
+    using subst_typed by simp
+  have cond_typed: "core_term_type ?eo Ghost
+                      (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))
+                        = Some CoreTy_Bool"
+    using clear_metavars_typed_in_env[OF subst_typed_bool wf_obtain bound_obtain] by simp
+  \<comment> \<open>Assemble the Core Obtain rule: is_well_kinded env coreTy plus the Bool-typed
+      predicate under env_obtain, which is definitionally the rule's result env.\<close>
+  show ?case using wk cond_typed
+    by (simp add: cs_eq env'_eq vardecl_add_local_def)
 next
   case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
 next
@@ -2676,20 +2777,55 @@ next
 next
   case (8 env elabEnv ghost loc condOpt proofBody next_mv) thus ?case sorry  \<comment> \<open>Assert\<close>
 next
-  \<comment> \<open>Assume: elaborate the predicate in Ghost mode and clear its interval
-      metavariables, so it typechecks as Bool in env directly. The Core Assume
-      rule re-checks in Ghost mode and leaves the env unchanged.\<close>
+  \<comment> \<open>Assume: elaborate the predicate in Ghost mode; its type unifies with Bool.
+      Apply the unifier to the term and clear its interval metavariables, so it
+      typechecks as Bool in env directly (Bool is ground, so the unifier leaves
+      it fixed). The Core Assume rule re-checks in Ghost mode and leaves the env
+      unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
-  from "9.prems"(1) obtain coreTm where
-    etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, CoreTy_Bool, next_mv')" and
-    cs_eq: "coreStmt = CoreStmt_Assume (clear_metavars next_mv next_mv' coreTm)" and
+  let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv'"
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  from "9.prems"(1) obtain coreTm condTy subst where
+    etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, condTy, next_mv')" and
+    unif: "unify ?is_flex condTy CoreTy_Bool = Some subst" and
+    cs_eq: "coreStmt = CoreStmt_Assume
+                         (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))" and
     env'_eq: "env' = env"
-    by (auto split: sum.splits prod.splits if_splits)
-  have typed_ghost: "core_term_type (extend_env_with_tyvars env Ghost next_mv next_mv') Ghost coreTm
-                       = Some CoreTy_Bool"
+    by (auto split: sum.splits prod.splits option.splits if_splits)
+  have typed_ghost: "core_term_type ?envD Ghost coreTm = Some condTy"
     using elab_term_correct(1)[OF etm "9.prems"(2,3)] "9.prems"(4) by simp
-  have init_typed: "core_term_type env Ghost (clear_metavars next_mv next_mv' coreTm) = Some CoreTy_Bool"
-    using clear_metavars_typed_in_env[OF typed_ghost "9.prems"(2,4)] by simp
+  have wfD: "tyenv_well_formed ?envD"
+    using "9.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+  have condTy_wk: "is_well_kinded ?envD condTy"
+    using core_term_type_well_kinded[OF typed_ghost wfD] .
+  \<comment> \<open>The unifying substitution preserves typing and fixes the ground target Bool.\<close>
+  have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+    using unify_preserves_well_kinded[OF unif condTy_wk] by simp
+  have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+    using unify_unify_list_dom_flex(1)[OF unif] .
+  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
+    unfolding extend_env_with_tyvars_def by simp
+  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF dom_flex "9.prems"(2) envD_locals envD_ret]
+  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                        \<Longrightarrow> apply_subst subst ty' = ty'"
+    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
+    by blast+
+  have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
+                       = Some (apply_subst subst condTy)"
+    using apply_subst_to_term_preserves_typing
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected] by simp
+  \<comment> \<open>apply_subst subst condTy = apply_subst subst Bool = Bool (Bool is ground).\<close>
+  have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
+    using unify_sound[OF unif] .
+  hence subst_typed_bool:
+    "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
+    using subst_typed by simp
+  have init_typed: "core_term_type env Ghost
+                      (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))
+                        = Some CoreTy_Bool"
+    using clear_metavars_typed_in_env[OF subst_typed_bool "9.prems"(2,4)] by simp
   show ?case using init_typed by (simp add: cs_eq env'_eq)
 next
   case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>

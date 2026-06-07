@@ -355,20 +355,9 @@ and elab_statement_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostO
                            \<Rightarrow> TypeError list + (CoreStatement list \<times> CoreTyEnv \<times> nat)"
 where
 
-  (* Variable declaration.
-     The surface form must supply a type annotation, an initializer, or both
-     (`var x;` with neither is rejected). The chosen Core type is the
-     annotation when present, otherwise the inferred type of the initializer
-     (which must contain no unresolved metavariables, mirroring BabTm_Let).
-     With an annotation but no initializer the variable is default-initialized
-     via CoreTm_Default. A Ref declaration must have an initializer that
-     elaborates to an lvalue.
-
-     The actual work is delegated to per-branch helpers (above):
-     elab_vardecl_pure / elab_vardecl_impure / elab_vardecl_ref; this clause just
-     dispatches. An initializer that is_impure_call routes to elab_vardecl_impure
-     (emitting CoreStmt_VarDeclCall); any other initializer routes to
-     elab_vardecl_pure (emitting CoreStmt_VarDecl). *)
+  (* Variable declaration: Introduce a new variable into scope. The user can supply
+     a type declaration, an initializer term, or both. The initializer term can be either
+     pure or impure. *)
   "elab_statement env elabEnv ghost
        (BabStmt_VarDecl loc varName vorf tyOpt tmOpt) next_mv =
     (case vorf of
@@ -388,19 +377,31 @@ where
               else elab_vardecl_pure   env elabEnv ghost loc varName tyOpt tm next_mv)
      | Ref \<Rightarrow> elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv)"
 
+  (* Fix: Introduce a ghost local corresponding to an enclosing universal TE_ProofGoal. *)
 | "elab_statement env elabEnv ghost (BabStmt_Fix loc varName ty) next_mv = undefined"
 
-| "elab_statement env elabEnv ghost (BabStmt_Obtain loc varName ty tm) next_mv = undefined"
+  (* Obtain: Introduce a ghost local satisfying a given boolean condition. *)
+| "elab_statement env elabEnv ghost (BabStmt_Obtain loc varName ty tm) next_mv =
+    (case elab_type env elabEnv Ghost ty of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr coreTy \<Rightarrow>
+         (let env' = vardecl_add_local env Ghost varName coreTy
+          in case elab_term env' elabEnv Ghost tm next_mv of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (coreTm, condTy, next_mv') \<Rightarrow>
+                 (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
+                    None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
+                  | Some subst \<Rightarrow>
+                      Inr (CoreStmt_Obtain varName coreTy
+                             (clear_metavars next_mv next_mv'
+                                (apply_subst_to_term subst coreTm)),
+                           env', next_mv'))))"
 
+  (* Use: Supply a witness for an enclosing existential TE_ProofGoal. *)
 | "elab_statement env elabEnv ghost (BabStmt_Use loc tm) next_mv = undefined"
 
-  (* Assignment.
-     Elaborate the lhs; it must be a writable lvalue of a fully-resolved
-     (metavariable-free) type. The rhs is reconciled to the lhs type, with the
-     work delegated to per-branch helpers (above): an is_impure_call rhs routes to
-     elab_assign_impure (emitting CoreStmt_AssignCall); any other rhs (including
-     pure / data-constructor calls) routes to elab_assign_pure (emitting
-     CoreStmt_Assign). *)
+  (* Assignment. Lhs term must be a writable lvalue. Rhs term can be either pure or
+     impure, and must match the type of the lhs. *)
 | "elab_statement env elabEnv ghost (BabStmt_Assign loc lhs rhs) next_mv =
     \<comment> \<open>Elaborate lhs (the assignment target).\<close>
     (case elab_term env elabEnv ghost lhs next_mv of
@@ -414,36 +415,53 @@ where
          then elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
          else elab_assign_pure   env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"
 
+  (* Swap: Swap two writable lvalues. They must have the same type. *)
 | "elab_statement env elabEnv ghost (BabStmt_Swap loc lhs rhs) next_mv = undefined"
 
+  (* Return from current function. The term must be pure and must match the current
+     function's return type (or be absent if the current function is void). *)
 | "elab_statement env elabEnv ghost (BabStmt_Return loc tmOpt) next_mv = undefined"
 
+  (* Assert: asserts that a given boolean condition is true. This creates a proof
+     obligation. An optional proof body (list of statements) can be given; TE_ProofGoal
+     will be set appropriately when typechecking these. *)
 | "elab_statement env elabEnv ghost (BabStmt_Assert loc condOpt proofBody) next_mv = undefined"
 
-  (* Assume: elaborate the predicate in Ghost mode (matching the Core rule, which
-     checks the term in Ghost context), require it to be Bool, and leave the
-     environment unchanged. *)
+  (* Assume: states without proof that a given boolean condition is true. This can be 
+     used to bypass the verifier. *)
 | "elab_statement env elabEnv ghost (BabStmt_Assume loc tm) next_mv =
     (case elab_term env elabEnv Ghost tm next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (coreTm, ty, next_mv') \<Rightarrow>
-         if ty = CoreTy_Bool
-         then Inr (CoreStmt_Assume (clear_metavars next_mv next_mv' coreTm), env, next_mv')
-         else Inl [TyErr_TypeMismatch loc CoreTy_Bool ty])"
+         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) ty CoreTy_Bool of
+            None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool ty]
+          | Some subst \<Rightarrow>
+              Inr (CoreStmt_Assume
+                     (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm)),
+                   env, next_mv')))"
 
+  (* If-then-else: Evaluate a boolean condition and branch to one of two statement blocks.
+     Each block creates a new variable scope. Elaborates to CoreStmt_Match. *)
 | "elab_statement env elabEnv ghost (BabStmt_If loc cond thenB elseB) next_mv = undefined"
 
+  (* While: loop while a condition remains true. The cond must be boolean. The attrs can
+     include only "invariant" and "decreases" (with proper types) and there can be at most
+     one "decreases". The body is typechecked in a new scope. *)
 | "elab_statement env elabEnv ghost (BabStmt_While loc cond attrs body) next_mv = undefined"
 
+  (* Call an impure function, disregarding the return value. TODO (needs Core change). *)
 | "elab_statement env elabEnv ghost (BabStmt_Call loc tm) next_mv = undefined"
 
+  (* Match: elaborates to CoreStmt_Match. *)
 | "elab_statement env elabEnv ghost (BabStmt_Match loc scrut arms) next_mv = undefined"
 
-  (* ShowHide: no term, no environment change, counter unchanged. *)
+  (* ShowHide: show or hide a name from the verifier. Has no effect on typechecking.
+     TODO: We should at least check that the name is in scope. *)
 | "elab_statement env elabEnv ghost (BabStmt_ShowHide loc sh name) next_mv =
     Inr (CoreStmt_ShowHide sh name, env, next_mv)"
 
-  (* Ghost: elaborate the inner statement in Ghost mode. *)
+  (* Ghost: This is just a marker to say that the inner statements should be typechecked
+     in Ghost mode. It does not create a separate nested scope. *)
 | "elab_statement env elabEnv ghost (BabStmt_Ghost loc inner) next_mv =
     elab_statement env elabEnv Ghost inner next_mv"
 
