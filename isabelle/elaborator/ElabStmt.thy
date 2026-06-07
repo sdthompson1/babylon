@@ -425,7 +425,32 @@ where
   (* Assert: asserts that a given boolean condition is true. This creates a proof
      obligation. An optional proof body (list of statements) can be given; TE_ProofGoal
      will be set appropriately when typechecking these. *)
-| "elab_statement env elabEnv ghost (BabStmt_Assert loc condOpt proofBody) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Assert loc condOpt proofBody) next_mv =
+    (case condOpt of
+       None \<Rightarrow>
+         \<comment> \<open>`assert *`: the asserted goal is the current proof goal, which must exist.\<close>
+         (if TE_ProofGoal env = None then Inl [TyErr_AssertStarNoGoal loc]
+          else let goalEnv = env \<lparr> TE_ProofTopLevel := True \<rparr>
+               in (case elab_statement_list goalEnv elabEnv Ghost proofBody next_mv of
+                     Inl errs \<Rightarrow> Inl errs
+                   | Inr (coreBody, _, next_mv') \<Rightarrow>
+                       Inr (CoreStmt_Assert None coreBody, env, next_mv')))
+     | Some cond \<Rightarrow>
+         \<comment> \<open>`assert cond`: elaborate cond to Bool (as in Assume), install it as the goal.\<close>
+         (case elab_term env elabEnv Ghost cond next_mv of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (coreCond, condTy, next_mv1) \<Rightarrow>
+              (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
+                 None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
+               | Some subst \<Rightarrow>
+                   let clearedCond =
+                         clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond);
+                       goalEnv = env \<lparr> TE_ProofGoal := Some clearedCond,
+                                       TE_ProofTopLevel := True \<rparr>
+                   in (case elab_statement_list goalEnv elabEnv Ghost proofBody next_mv1 of
+                         Inl errs \<Rightarrow> Inl errs
+                       | Inr (coreBody, _, next_mv') \<Rightarrow>
+                           Inr (CoreStmt_Assert (Some clearedCond) coreBody, env, next_mv')))))"
 
   (* Assume: states without proof that a given boolean condition is true. This can be 
      used to bypass the verifier. *)

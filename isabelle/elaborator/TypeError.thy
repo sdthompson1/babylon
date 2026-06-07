@@ -43,6 +43,8 @@ datatype TypeError =
   | TyErr_RefDeclNeedsLvalue Location  (* `ref x = e;` where e is not an lvalue *)
   (* Assignment errors *)
   | TyErr_NotWritableLvalue Location  (* assignment lhs is not a writable lvalue *)
+  (* Assert errors *)
+  | TyErr_AssertStarNoGoal Location  (* `assert *` with no enclosing proof goal *)
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType

@@ -2068,7 +2068,36 @@ next
 next
   case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
 next
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv) thus ?case sorry  \<comment> \<open>Assert\<close>
+  \<comment> \<open>Assert: in the "assert *" branch the counter advances only via the proof-body
+      list elaboration; in the "assert cond" branch via the condition's elab_term then
+      the proof-body list. Both list recursions are covered by the mutual IH.\<close>
+  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
+  show ?case
+  proof (cases condOpt)
+    case None
+    with "8.prems" obtain coreBody benv where
+      goal: "TE_ProofGoal env \<noteq> None" and
+      body: "elab_statement_list (env \<lparr> TE_ProofTopLevel := True \<rparr>) elabEnv Ghost proofBody next_mv
+               = Inr (coreBody, benv, next_mv')"
+      by (auto simp: Let_def split: if_splits sum.splits prod.splits)
+    from goal have goal': "\<exists>y. TE_ProofGoal env = Some y" by auto
+    show ?thesis using "8.IH"(1)[OF None] goal' body by simp
+  next
+    case (Some cond)
+    with "8.prems" obtain coreCond condTy next_mv1 subst coreBody benv where
+      etm: "elab_term env elabEnv Ghost cond next_mv = Inr (coreCond, condTy, next_mv1)" and
+      unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool = Some subst" and
+      body: "elab_statement_list
+               (env \<lparr> TE_ProofGoal := Some (clear_metavars next_mv next_mv1
+                                              (apply_subst_to_term subst coreCond)),
+                      TE_ProofTopLevel := True \<rparr>)
+               elabEnv Ghost proofBody next_mv1 = Inr (coreBody, benv, next_mv')"
+      by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+    have mono1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+    have mono2: "next_mv1 \<le> next_mv'"
+      using "8.IH"(2) Some etm unif body by simp
+    from mono1 mono2 show ?thesis by simp
+  qed
 next
   \<comment> \<open>Assume: next_mv advances via elab_term.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
@@ -2207,7 +2236,12 @@ next
 next
   case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
 next
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv) thus ?case sorry  \<comment> \<open>Assert\<close>
+  \<comment> \<open>Assert: env' = env in every success path (the proof-body env is discarded), so
+      all four tracked fields are trivially unchanged.\<close>
+  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
+  show ?case using "8.prems"(1)
+    by (cases condOpt)
+       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
@@ -2350,7 +2384,12 @@ next
 next
   case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
 next
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv) thus ?case sorry  \<comment> \<open>Assert\<close>
+  \<comment> \<open>Assert: env unchanged (the proof-body env is discarded).\<close>
+  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
+  from "8.prems"(1) have "env' = env"
+    by (cases condOpt)
+       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+  thus ?case using "8.prems"(2) by simp
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
@@ -2519,7 +2558,12 @@ next
 next
   case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
 next
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv) thus ?case sorry  \<comment> \<open>Assert\<close>
+  \<comment> \<open>Assert: env unchanged (the proof-body env is discarded).\<close>
+  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
+  from "8.prems"(1) have "env' = env"
+    by (cases condOpt)
+       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+  thus ?case using "8.prems"(2) by simp
 next
   \<comment> \<open>Assume: env unchanged.\<close>
   case (9 env elabEnv ghost loc tm next_mv)
@@ -2775,7 +2819,103 @@ next
 next
   case (7 env elabEnv ghost loc tmOpt next_mv) thus ?case sorry  \<comment> \<open>Return\<close>
 next
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv) thus ?case sorry  \<comment> \<open>Assert\<close>
+  \<comment> \<open>Assert: emits CoreStmt_Assert with env' = env. The asserted condition (if any)
+      is elaborated and coerced to Bool exactly as in Assume, so it typechecks in env
+      under Ghost mode (giving condOk). The proof body is elaborated in Ghost mode under
+      goalEnv = env with TE_ProofGoal set to the (cleared) condition / kept as-is, and
+      TE_ProofTopLevel := True — definitionally the Core rule's goalEnv. The list IH,
+      whose two ambient invariants are trivial/vacuous in Ghost mode, certifies the body.\<close>
+  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
+  show ?case
+  proof (cases condOpt)
+    case None
+    \<comment> \<open>"assert *": the asserted goal is the (existing) current goal; goalEnv keeps it.\<close>
+    let ?goalEnv = "env \<lparr> TE_ProofTopLevel := True \<rparr>"
+    from "8.prems"(1) None obtain coreBody benv where
+      goal: "TE_ProofGoal env \<noteq> None" and
+      cs_eq: "coreStmt = CoreStmt_Assert None coreBody" and
+      env'_eq: "env' = env" and
+      body: "elab_statement_list ?goalEnv elabEnv Ghost proofBody next_mv
+               = Inr (coreBody, benv, next_mv')"
+      by (auto simp: Let_def split: if_splits sum.splits prod.splits)
+    \<comment> \<open>goalEnv premises for the list IH (it differs from env only in the two proof fields).\<close>
+    have wf_goal: "tyenv_well_formed ?goalEnv"
+      using "8.prems"(2) tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
+    have ee_goal: "elabenv_well_formed ?goalEnv elabEnv"
+      using "8.prems"(3) elabenv_well_formed_cong_env[where env' = ?goalEnv and env = env] by simp
+    have bound_goal: "\<forall>n. n |\<in>| TE_TypeVars ?goalEnv \<longrightarrow> n < next_mv"
+      using "8.prems"(4) by simp
+    have body_typed: "core_statement_list_type ?goalEnv Ghost coreBody = Some benv"
+      using "8.IH"(1)[OF None] goal wf_goal ee_goal bound_goal body by simp
+    \<comment> \<open>Assemble the Core Assert rule: condOk = (goal exists); body typechecks under goalEnv.\<close>
+    show ?thesis using goal body_typed by (simp add: cs_eq env'_eq None Let_def)
+  next
+    case (Some cond)
+    \<comment> \<open>"assert cond": elaborate cond to Bool (Assume reasoning), install it as the goal.\<close>
+    let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+    \<comment> \<open>Peel the elaborator's nested cases one at a time (avoiding Let_def, which loops
+        on the nested let goalEnv = \<dots> wrapping a further case-split).\<close>
+    from "8.prems"(1) Some obtain coreCond condTy next_mv1 where
+      etm: "elab_term env elabEnv Ghost cond next_mv = Inr (coreCond, condTy, next_mv1)"
+      by (cases "elab_term env elabEnv Ghost cond next_mv")
+         (auto split: prod.splits)
+    from "8.prems"(1) Some etm obtain subst where
+      unif: "unify ?is_flex condTy CoreTy_Bool = Some subst"
+      by (cases "unify ?is_flex condTy CoreTy_Bool") auto
+    let ?clearedCond0 = "clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond)"
+    let ?goalEnv0 = "env \<lparr> TE_ProofGoal := Some ?clearedCond0, TE_ProofTopLevel := True \<rparr>"
+    from "8.prems"(1) Some etm unif obtain coreBody benv where
+      cs_eq: "coreStmt = CoreStmt_Assert (Some ?clearedCond0) coreBody" and
+      env'_eq: "env' = env" and
+      body: "elab_statement_list ?goalEnv0 elabEnv Ghost proofBody next_mv1
+               = Inr (coreBody, benv, next_mv')"
+      by (cases "elab_statement_list ?goalEnv0 elabEnv Ghost proofBody next_mv1")
+         (auto simp: Let_def split: prod.splits)
+    \<comment> \<open>The cleared condition typechecks to Bool in env under Ghost mode (Assume reasoning).\<close>
+    let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv1"
+    have typed_ghost: "core_term_type ?envD Ghost coreCond = Some condTy"
+      using elab_term_correct(1)[OF etm "8.prems"(2,3)] "8.prems"(4) by simp
+    have wfD: "tyenv_well_formed ?envD"
+      using "8.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+    have condTy_wk: "is_well_kinded ?envD condTy"
+      using core_term_type_well_kinded[OF typed_ghost wfD] .
+    have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+      using unify_preserves_well_kinded[OF unif condTy_wk] by simp
+    have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+      using unify_unify_list_dom_flex(1)[OF unif] .
+    have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
+      unfolding extend_env_with_tyvars_def by simp
+    have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
+      unfolding extend_env_with_tyvars_def by simp
+    from flex_subst_identity_on_env[OF dom_flex "8.prems"(2) envD_locals envD_ret]
+    have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                          \<Longrightarrow> apply_subst subst ty' = ty'"
+      and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
+      by blast+
+    have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreCond)
+                         = Some (apply_subst subst condTy)"
+      using apply_subst_to_term_preserves_typing
+              [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected] by simp
+    have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
+      using unify_sound[OF unif] .
+    hence subst_typed_bool:
+      "core_term_type ?envD Ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
+      using subst_typed by simp
+    have cond_typed: "core_term_type env Ghost ?clearedCond0 = Some CoreTy_Bool"
+      using clear_metavars_typed_in_env[OF subst_typed_bool "8.prems"(2,4)] by simp
+    \<comment> \<open>goalEnv0 = env with the cleared condition installed; premises for the list IH.\<close>
+    have wf_goal: "tyenv_well_formed ?goalEnv0"
+      using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF
+              tyenv_well_formed_TE_ProofGoal_irrelevant[OF "8.prems"(2)]] by simp
+    have ee_goal: "elabenv_well_formed ?goalEnv0 elabEnv"
+      using "8.prems"(3) elabenv_well_formed_cong_env[where env' = ?goalEnv0 and env = env] by simp
+    have bound_goal: "\<forall>n. n |\<in>| TE_TypeVars ?goalEnv0 \<longrightarrow> n < next_mv1"
+      using "8.prems"(4) elab_term_next_mv_monotone[OF etm] by auto
+    have body_typed: "core_statement_list_type ?goalEnv0 Ghost coreBody = Some benv"
+      using "8.IH"(2) Some etm unif wf_goal ee_goal bound_goal body by simp
+    \<comment> \<open>Assemble the Core Assert rule: condOk = cond typechecks to Bool; body under goalEnv.\<close>
+    show ?thesis using cond_typed body_typed by (simp add: cs_eq env'_eq Some Let_def)
+  qed
 next
   \<comment> \<open>Assume: elaborate the predicate in Ghost mode; its type unifies with Bool.
       Apply the unifier to the term and clear its interval metavariables, so it
