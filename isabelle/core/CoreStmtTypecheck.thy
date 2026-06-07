@@ -7,7 +7,7 @@ begin
 (* ========================================================================== *)
 
 (* Typecheck an impure call (e.g. one occurring in CoreStmt_VarDeclCall or
-   CoreStmt_AssignCall). The fnName must exist in the env and the number of
+   CoreStmt_AssignCall). The fnName must exist in the env, and the numbers of
    tyArgs and tmArgs must be correct. The tyArgs must be well-kinded and (in
    NotGhost mode) runtime types. For each argument:
      - Ref parameter: argument must be a writable lvalue of the expected
@@ -43,6 +43,294 @@ definition core_impure_call_type ::
                   (zip tmArgs varOrRefs) expectedArgTypes
               then Some (apply_subst tySubst (FI_ReturnType funInfo))
               else None)"
+
+(* The type produced by the optional cast applied to an impure call's return value.
+   None: no cast; the result type is the call's return type.
+   Some t: cast the return value to t; valid only as an integer cast (mirroring
+   core_term_type's CoreTm_Cast rule), with t runtime in NotGhost mode. *)
+definition cast_result_type ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType \<Rightarrow> CoreType option \<Rightarrow> CoreType option" where
+  "cast_result_type env ghost retTy castOpt =
+    (case castOpt of
+       None \<Rightarrow> Some retTy
+     | Some t \<Rightarrow>
+         if is_integer_type retTy \<and> is_integer_type t
+            \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
+         then Some t else None)"
+
+
+(* ========================================================================== *)
+(* Statement typechecking *)
+(* ========================================================================== *)
+
+(* Statement typechecking transforms the type environment (e.g. VarDecl adds 
+   a new variable). Therefore, core_statement_type returns a new env, or None
+   if ill-typed. *)
+
+function core_statement_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement \<Rightarrow> CoreTyEnv option"
+and core_statement_list_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement list \<Rightarrow> CoreTyEnv option"
+where
+
+  (* Variable declaration (Var).
+     The initializer is an ordinary (pure) term. Impure function-call
+     initializers use CoreStmt_VarDeclCall instead. *)
+  "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
+    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
+        \<and> is_well_kinded env varTy
+        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+        \<and> core_term_type env declGhost initTm = Some varTy
+     then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                      TE_GhostLocals := (if declGhost = Ghost
+                                       then finsert varName (TE_GhostLocals env)
+                                       else fminus (TE_GhostLocals env) {|varName|}),
+                      TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
+     else None)"
+
+  (* Variable declaration initialized from an impure function call.
+     The call is typechecked by core_impure_call_type, and the (optionally cast) return
+     type must equal the declared variable type. *)
+| "core_statement_type env ghost (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms) =
+    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
+        \<and> is_well_kinded env varTy
+        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+     then (case core_impure_call_type env declGhost fnName tyArgs argTms of
+             Some retTy \<Rightarrow>
+               if cast_result_type env declGhost retTy castOpt = Some varTy
+               then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                TE_GhostLocals := (if declGhost = Ghost
+                                                 then finsert varName (TE_GhostLocals env)
+                                                 else fminus (TE_GhostLocals env) {|varName|}),
+                                TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
+               else None
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Variable declaration (Ref).
+     The rhs must be a syntactic lvalue with the declared type. The new ref
+     becomes const iff its base is read-only (a const local or a global). *)
+| "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Ref varTy initTm) =
+    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
+        \<and> is_well_kinded env varTy
+        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+        \<and> is_lvalue initTm
+        \<and> core_term_type env declGhost initTm = Some varTy
+     then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                      TE_GhostLocals := (if declGhost = Ghost
+                                       then finsert varName (TE_GhostLocals env)
+                                       else fminus (TE_GhostLocals env) {|varName|}),
+                      TE_ConstLocals := (if is_writable_lvalue env initTm
+                                        then fminus (TE_ConstLocals env) {|varName|}
+                                        else finsert varName (TE_ConstLocals env)) \<rparr>)
+     else None)"
+
+  (* Assignment.
+     The rhs is an ordinary (pure) term. Impure function-call rhs's use
+     CoreStmt_AssignCall instead. *)
+| "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
+    (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
+        \<and> is_writable_lvalue env lhsTm
+     then (case core_term_type env assignGhost lhsTm of
+             Some lhsTy \<Rightarrow>
+               if core_term_type env assignGhost rhsTm = Some lhsTy
+               then Some env
+               else None
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Assignment whose rhs is an impure function call.
+     The lhs must be a writable lvalue; the call's (optionally cast) return type
+     must equal the lhs type. *)
+| "core_statement_type env ghost (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) =
+    (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
+        \<and> is_writable_lvalue env lhsTm
+     then (case core_term_type env assignGhost lhsTm of
+             Some lhsTy \<Rightarrow>
+               (case core_impure_call_type env assignGhost fnName tyArgs argTms of
+                  Some retTy \<Rightarrow>
+                    if cast_result_type env assignGhost retTy castOpt = Some lhsTy
+                    then Some env else None
+                | None \<Rightarrow> None)
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Return: the term must have the expected return type.
+     We require ghost = TE_FunctionGhost env:
+       - In a ghost function, we always typecheck in Ghost mode, so both are Ghost.
+       - In a non-ghost function, Return is only allowed in NotGhost mode
+         (not inside a Ghost block). *)
+| "core_statement_type env ghost (CoreStmt_Return tm) =
+    (if ghost = TE_FunctionGhost env
+        \<and> core_term_type env ghost tm = Some (TE_ReturnType env)
+     then Some env
+     else None)"
+
+  (* Swap: both sides must be writable lvalues of the same type. *)
+| "core_statement_type env ghost (CoreStmt_Swap swapGhost lhsTm rhsTm) =
+    (if (ghost = Ghost \<longrightarrow> swapGhost = Ghost)
+        \<and> is_writable_lvalue env lhsTm
+        \<and> is_writable_lvalue env rhsTm
+     then (case core_term_type env swapGhost lhsTm of
+             Some lhsTy \<Rightarrow>
+               if core_term_type env swapGhost rhsTm = Some lhsTy
+               then Some env
+               else None
+           | None \<Rightarrow> None)
+     else None)"
+
+  (* Assert: condition must be bool. Proof body typechecks in Ghost context.
+     When a condition is present ("assert condTm"), we install condTm as
+     TE_ProofGoal during the proof. 
+     When the condition is absent ("assert *"), the asserted goal is the current proof
+     goal, so TE_ProofGoal is left unchanged. *)
+| "core_statement_type env ghost (CoreStmt_Assert condOpt proofBody) =
+    (let goalEnv = (case condOpt of Some condTm \<Rightarrow> env \<lparr> TE_ProofGoal := Some condTm \<rparr>
+                                  | None \<Rightarrow> env);
+         condOk = (case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
+                                 | None \<Rightarrow> True)
+     in (if condOk
+         then (case core_statement_list_type goalEnv Ghost proofBody of
+                 Some _ \<Rightarrow> Some env
+               | None \<Rightarrow> None)
+         else None))"
+
+  (* Assume: term must be bool. *)
+| "core_statement_type env ghost (CoreStmt_Assume tm) =
+    (if core_term_type env Ghost tm = Some CoreTy_Bool
+     then Some env
+     else None)"
+
+  (* ShowHide: no-op. (TODO: should check that the name is in scope) *)
+| "core_statement_type env ghost (CoreStmt_ShowHide _ _) = Some env"
+
+  (* Pattern match.
+     The scrutinee must typecheck. Each pattern must be compatible with the
+     scrutinee type. Each arm's statement list must typecheck under the same env
+     (match arms run in their own scope, so bindings they introduce are discarded 
+     on exit).
+     Note: exhaustiveness is NOT checked; "no arms match" is a runtime error, not 
+     a type error. In particular, an empty match is well-typed (and always fails at
+     runtime). *)
+| "core_statement_type env ghost (CoreStmt_Match matchGhost scrut arms) =
+    (if ghost = Ghost \<longrightarrow> matchGhost = Ghost
+     then (case core_term_type env matchGhost scrut of
+             None \<Rightarrow> None
+           | Some scrutTy \<Rightarrow>
+               let pats = map fst arms;
+                   bodies = map snd arms
+               in if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
+                  else if list_all (\<lambda>body. core_statement_list_type
+                                              (env \<lparr> TE_ProofGoal := None \<rparr>)
+                                              matchGhost body \<noteq> None) bodies
+                       then Some env
+                       else None)
+     else None)"
+
+  (* While loop.
+     The condition must be Bool.
+     Invariants must be Bool and are Ghost.
+     The decreases term must be a valid_decreases_type and is Ghost.
+     The body typechecks as a statement list; it runs in a separate variable scope, so
+     its result env is discarded. *)
+| "core_statement_type env ghost (CoreStmt_While whileGhost condTm invars decrTm body) =
+    (if ghost = Ghost \<longrightarrow> whileGhost = Ghost
+     then (case core_term_type env whileGhost condTm of
+             Some CoreTy_Bool \<Rightarrow>
+               if list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars
+               then (case core_term_type env Ghost decrTm of
+                       Some decrTy \<Rightarrow>
+                         if is_valid_decreases_type decrTy
+                         then (case core_statement_list_type
+                                      (env \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body of
+                                 Some _ \<Rightarrow> Some env
+                               | None \<Rightarrow> None)
+                         else None
+                     | None \<Rightarrow> None)
+               else None
+           | _ \<Rightarrow> None)
+     else None)"
+
+  (* Obtain: "obtain x of type T where P(x)". Introduces a ghost local x (like a
+     CoreStmt_VarDecl with declGhost = Ghost). The type T must be well-kinded and the
+      predicate P must typecheck to Bool in the env extended with x. The resulting 
+      env keeps x in scope. *)
+| "core_statement_type env ghost (CoreStmt_Obtain varName varTy condTm) =
+    (if is_well_kinded env varTy
+     then let env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                            TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                            TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>
+          in if core_term_type env' Ghost condTm = Some CoreTy_Bool
+             then Some env'
+             else None
+     else None)"
+
+  (* Fix: "fix x : T". Only valid if there is a current proof goal of the form
+     "forall x' : T. P(x')". Introduces a ghost variable "x : T" and changes the goal
+     to "P(x)".
+     Note: we don't actually bother renaming x' to x in the goal. This is sound because
+     TE_ProofGoal is only consumed structurually. *)
+| "core_statement_type env ghost (CoreStmt_Fix varName varTy) =
+    (case TE_ProofGoal env of
+       Some (CoreTm_Quantifier Quant_Forall _ qVarTy bodyTm) \<Rightarrow>
+         (if ghost = Ghost \<and> qVarTy = varTy \<and> is_well_kinded env varTy
+          then Some (env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
+                            TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                            TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                            TE_ProofGoal   := Some bodyTm \<rparr>)
+          else None)
+     | _ \<Rightarrow> None)"
+
+  (* Use: "use e". Only valid if there is a current proof goal of the form
+     "exists x : T. P(x)". The term "e" must be of type T. Changes the goal to 
+     "P(e)".
+     Note: As with Fix, we don't bother substituting in the goal - TE_ProofGoal remains
+     "P(x)", which is sound for typechecking because TE_ProofGoal is only consumed
+     structurally. *)
+| "core_statement_type env ghost (CoreStmt_Use witnessTm) =
+    (case TE_ProofGoal env of
+       Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
+         (if ghost = Ghost \<and> core_term_type env ghost witnessTm = Some qVarTy
+          then Some (env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>)
+          else None)
+     | _ \<Rightarrow> None)"
+
+  (* Statement lists *)
+| "core_statement_list_type env _ [] = Some env"
+| "core_statement_list_type env ghost (stmt # stmts) =
+    (case core_statement_type env ghost stmt of
+       Some env' \<Rightarrow> core_statement_list_type env' ghost stmts
+     | None \<Rightarrow> None)"
+
+  by pat_completeness auto
+  termination
+  proof (relation "measure (\<lambda>x. case x of
+      Inl (_, _, stmt) \<Rightarrow> size stmt
+    | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)"; (simp; fail)?)
+    \<comment> \<open>CoreStmt_Match arm bodies are smaller than the whole match statement. \<close>
+    fix env :: CoreTyEnv
+    fix ghost :: GhostOrNot
+    fix matchGhost :: GhostOrNot
+    fix scrut :: CoreTerm
+    fix arms :: "(CorePattern \<times> CoreStatement list) list"
+    fix x2 x xa z
+    assume xa_eq: "xa = map snd arms" and z_in: "z \<in> set xa"
+    from xa_eq z_in obtain a where "(a, z) \<in> set arms" by auto
+    hence "size_prod (\<lambda>y. 0) (size_list size) (a, z)
+             \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
+      by (simp add: size_list_estimation')
+    hence z_le: "size_list size z \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
+      by simp
+    show "(Inr (env \<lparr> TE_ProofGoal := None \<rparr>, matchGhost, z),
+           Inl (env, ghost, CoreStmt_Match matchGhost scrut arms))
+          \<in> measure (\<lambda>y. case y of
+              Inl (_, _, stmt) \<Rightarrow> size stmt
+            | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)"
+      using z_le by simp
+  qed
+
+
+(* ========================================================================== *)
+(* Lemmas about impure call typechecking *)
+(* ========================================================================== *)
 
 (* Various facts that follow from core_impure_call_type being Some, including
    a list_all2 relating each argument type to its expected type via core_term_type.
@@ -435,20 +723,6 @@ proof -
 qed
 
 
-(* The type produced by the optional cast applied to an impure call's return value.
-   None: no cast; the result type is the call's return type.
-   Some t: cast the return value to t; valid only as an integer cast (mirroring
-   core_term_type's CoreTm_Cast rule), with t runtime in NotGhost mode. *)
-definition cast_result_type ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType \<Rightarrow> CoreType option \<Rightarrow> CoreType option" where
-  "cast_result_type env ghost retTy castOpt =
-    (case castOpt of
-       None \<Rightarrow> Some retTy
-     | Some t \<Rightarrow>
-         if is_integer_type retTy \<and> is_integer_type t
-            \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
-         then Some t else None)"
-
 (* cast_result_type is preserved under adding type variables to the environment:
    it depends on env only through is_runtime_type, which is monotone. *)
 lemma cast_result_type_irrelevant_tyvar:
@@ -462,300 +736,13 @@ lemma cast_result_type_irrelevant_tyvar:
 
 
 (* ========================================================================== *)
-(* Statement typechecking                                                     *)
-(*                                                                            *)
-(* A statement transforms the type environment (e.g. VarDecl adds a new       *)
-(* variable). The typechecking function returns the resulting environment,     *)
-(* or None if ill-typed.                                                      *)
-(*                                                                            *)
-(* The GhostOrNot parameter represents the ghost context:                     *)
-(*   - Ghost context: only ghost statements are allowed                       *)
-(*   - NotGhost context: both ghost and non-ghost statements are allowed      *)
+(* Ambient-ghost weakening *)
 (* ========================================================================== *)
 
-function core_statement_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement \<Rightarrow> CoreTyEnv option"
-and core_statement_list_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement list \<Rightarrow> CoreTyEnv option"
-where
-
-  (* Variable declaration (Var).
-     The initializer is an ordinary (pure) term. Impure function-call
-     initializers use CoreStmt_VarDeclCall instead. *)
-  "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
-    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
-        \<and> is_well_kinded env varTy
-        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
-        \<and> core_term_type env declGhost initTm = Some varTy
-     then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostLocals := (if declGhost = Ghost
-                                       then finsert varName (TE_GhostLocals env)
-                                       else fminus (TE_GhostLocals env) {|varName|}),
-                      TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
-     else None)"
-
-  (* Variable declaration initialized from an impure function call.
-     The variable type is explicit (and must be well-kinded, and runtime in
-     NotGhost mode, exactly as for CoreStmt_VarDecl). The call is typechecked by
-     core_impure_call_type, and the (optionally cast) return type must equal the
-     declared variable type. *)
-| "core_statement_type env ghost (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms) =
-    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
-        \<and> is_well_kinded env varTy
-        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
-     then (case core_impure_call_type env declGhost fnName tyArgs argTms of
-             Some retTy \<Rightarrow>
-               if cast_result_type env declGhost retTy castOpt = Some varTy
-               then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                TE_GhostLocals := (if declGhost = Ghost
-                                                 then finsert varName (TE_GhostLocals env)
-                                                 else fminus (TE_GhostLocals env) {|varName|}),
-                                TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)
-               else None
-           | None \<Rightarrow> None)
-     else None)"
-
-  (* Variable declaration (Ref).
-     The rhs must be a syntactic lvalue with the declared type. The new ref
-     becomes const iff its base is read-only (a const local or a global). *)
-| "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Ref varTy initTm) =
-    (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
-        \<and> is_well_kinded env varTy
-        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
-        \<and> is_lvalue initTm
-        \<and> core_term_type env declGhost initTm = Some varTy
-     then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostLocals := (if declGhost = Ghost
-                                       then finsert varName (TE_GhostLocals env)
-                                       else fminus (TE_GhostLocals env) {|varName|}),
-                      TE_ConstLocals := (if is_writable_lvalue env initTm
-                                        then fminus (TE_ConstLocals env) {|varName|}
-                                        else finsert varName (TE_ConstLocals env)) \<rparr>)
-     else None)"
-
-  (* Assignment.
-     The rhs is an ordinary (pure) term. Impure function-call rhs's use
-     CoreStmt_AssignCall instead. *)
-| "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
-    (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
-        \<and> is_writable_lvalue env lhsTm
-     then (case core_term_type env assignGhost lhsTm of
-             Some lhsTy \<Rightarrow>
-               if core_term_type env assignGhost rhsTm = Some lhsTy
-               then Some env
-               else None
-           | None \<Rightarrow> None)
-     else None)"
-
-  (* Assignment whose rhs is an impure function call.
-     The lhs must be a writable lvalue; the call's (optionally cast) return type
-     must equal the lhs type. *)
-| "core_statement_type env ghost (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) =
-    (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
-        \<and> is_writable_lvalue env lhsTm
-     then (case core_term_type env assignGhost lhsTm of
-             Some lhsTy \<Rightarrow>
-               (case core_impure_call_type env assignGhost fnName tyArgs argTms of
-                  Some retTy \<Rightarrow>
-                    if cast_result_type env assignGhost retTy castOpt = Some lhsTy
-                    then Some env else None
-                | None \<Rightarrow> None)
-           | None \<Rightarrow> None)
-     else None)"
-
-  (* Return: the term must have the expected return type.
-     We require ghost = TE_FunctionGhost env:
-       - In a ghost function, we always typecheck in Ghost mode, so both are Ghost.
-       - In a non-ghost function, Return is only allowed in NotGhost mode
-         (not inside a Ghost block). *)
-| "core_statement_type env ghost (CoreStmt_Return tm) =
-    (if ghost = TE_FunctionGhost env
-        \<and> core_term_type env ghost tm = Some (TE_ReturnType env)
-     then Some env
-     else None)"
-
-  (* Swap: both sides must be writable lvalues of the same type *)
-| "core_statement_type env ghost (CoreStmt_Swap swapGhost lhsTm rhsTm) =
-    (if (ghost = Ghost \<longrightarrow> swapGhost = Ghost)
-        \<and> is_writable_lvalue env lhsTm
-        \<and> is_writable_lvalue env rhsTm
-     then (case core_term_type env swapGhost lhsTm of
-             Some lhsTy \<Rightarrow>
-               if core_term_type env swapGhost rhsTm = Some lhsTy
-               then Some env
-               else None
-           | None \<Rightarrow> None)
-     else None)"
-
-  (* Assert: condition must be bool; proof body typechecks in Ghost context.
-     When a condition is present ("assert condTm"), we install condTm as
-     TE_ProofGoal so that top-level CoreStmt_Fix statements in proofBody can peel
-     its leading Quant_Forall quantifiers. When the condition is absent
-     ("assert *"), the asserted goal is the current proof goal, so TE_ProofGoal
-     is left unchanged. In both cases the result env is the original env, so the
-     goal (and any Fix-introduced locals) do not escape the assert. *)
-| "core_statement_type env ghost (CoreStmt_Assert condOpt proofBody) =
-    (let goalEnv = (case condOpt of Some condTm \<Rightarrow> env \<lparr> TE_ProofGoal := Some condTm \<rparr>
-                                  | None \<Rightarrow> env);
-         condOk = (case condOpt of Some condTm \<Rightarrow> core_term_type env Ghost condTm = Some CoreTy_Bool
-                                 | None \<Rightarrow> True)
-     in (if condOk
-         then (case core_statement_list_type goalEnv Ghost proofBody of
-                 Some _ \<Rightarrow> Some env
-               | None \<Rightarrow> None)
-         else None))"
-
-  (* Assume: term must be bool *)
-| "core_statement_type env ghost (CoreStmt_Assume tm) =
-    (if core_term_type env Ghost tm = Some CoreTy_Bool
-     then Some env
-     else None)"
-
-  (* ShowHide: no-op *)
-| "core_statement_type env ghost (CoreStmt_ShowHide _ _) = Some env"
-
-  (* Pattern match.
-     The scrutinee must typecheck. Each pattern must be compatible with the
-     scrutinee type, and the pattern list must be regular (no duplicates and
-     no patterns after a wildcard). Each arm's statement list must typecheck
-     under the same env (match arms run in their own scope, so bindings they
-     introduce are discarded on exit).
-     Note: exhaustiveness is NOT checked; a non-exhaustive match that finds no
-     matching arm at runtime is a runtime error, not a type error. In
-     particular, an empty match is allowed and always fails at runtime. *)
-| "core_statement_type env ghost (CoreStmt_Match matchGhost scrut arms) =
-    (if ghost = Ghost \<longrightarrow> matchGhost = Ghost
-     then (case core_term_type env matchGhost scrut of
-             None \<Rightarrow> None
-           | Some scrutTy \<Rightarrow>
-               let pats = map fst arms;
-                   bodies = map snd arms
-               in if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-                  else if list_all (\<lambda>body. core_statement_list_type
-                                              (env \<lparr> TE_ProofGoal := None \<rparr>)
-                                              matchGhost body \<noteq> None) bodies
-                       then Some env
-                       else None)
-     else None)"
-
-  (* While loop.
-     The condition must be Bool, checked in the loop's ghost mode (since it's
-     runtime-evaluated when whileGhost = NotGhost). Invariants are specification
-     only (never evaluated at runtime) so they're checked in Ghost mode, as is
-     the decreases term. The decreases term's type must be one for which
-     is_valid_decreases_type holds (integer or lexicographic record of same).
-     The body typechecks as a statement list in whileGhost mode; its result
-     env is discarded (body scope is popped via restore_scope at runtime). *)
-| "core_statement_type env ghost (CoreStmt_While whileGhost condTm invars decrTm body) =
-    (if ghost = Ghost \<longrightarrow> whileGhost = Ghost
-     then (case core_term_type env whileGhost condTm of
-             Some CoreTy_Bool \<Rightarrow>
-               if list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars
-               then (case core_term_type env Ghost decrTm of
-                       Some decrTy \<Rightarrow>
-                         if is_valid_decreases_type decrTy
-                         then (case core_statement_list_type
-                                      (env \<lparr> TE_ProofGoal := None \<rparr>) whileGhost body of
-                                 Some _ \<Rightarrow> Some env
-                               | None \<Rightarrow> None)
-                         else None
-                     | None \<Rightarrow> None)
-               else None
-           | _ \<Rightarrow> None)
-     else None)"
-
-  (* Obtain: "obtain x of type T where P(x)". Introduces a ghost local x (like a
-     CoreStmt_VarDecl with declGhost = Ghost), so it is allowed in any ambient
-     context: x goes into TE_GhostLocals, where only ghost code can see it. The
-     type T must be well-kinded and the predicate P must typecheck to Bool in the
-     env extended with x. The resulting env keeps x in scope. *)
-| "core_statement_type env ghost (CoreStmt_Obtain varName varTy condTm) =
-    (if is_well_kinded env varTy
-     then let env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                            TE_GhostLocals := finsert varName (TE_GhostLocals env),
-                            TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>
-          in if core_term_type env' Ghost condTm = Some CoreTy_Bool
-             then Some env'
-             else None
-     else None)"
-
-  (* Fix: "fix x : T". Only valid in Ghost mode and at the immediate top level
-     of an enclosing assert's proof body (tracked by TE_ProofGoal). The current 
-     goal must be a universally-quantified term whose bound-variable type is exactly T
-     (the quantifier's own bound name is irrelevant). The fixed variable is a ghost,
-     const local (it is a spec-only, non-assignable witness). Stripping the
-     Quant_Forall and storing the body as the new TE_ProofGoal lets a following
-     Fix peel the next quantifier. The goal body is carried unchanged (it still
-     refers to the quantifier's original bound name); this is sound because
-     TE_ProofGoal is only consumed structurally. *)
-| "core_statement_type env ghost (CoreStmt_Fix varName varTy) =
-    (case TE_ProofGoal env of
-       Some (CoreTm_Quantifier Quant_Forall _ qVarTy bodyTm) \<Rightarrow>
-         (if ghost = Ghost \<and> qVarTy = varTy \<and> is_well_kinded env varTy
-          then Some (env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
-                            TE_GhostLocals := finsert varName (TE_GhostLocals env),
-                            TE_ConstLocals := finsert varName (TE_ConstLocals env),
-                            TE_ProofGoal   := Some bodyTm \<rparr>)
-          else None)
-     | _ \<Rightarrow> None)"
-
-  (* Use: "use e". Only valid in Ghost mode and at the immediate top level of
-     an enclosing assert's proof body. Supplies a witness for an existential
-     goal: TE_ProofGoal must be a Quant_Exists whose bound-variable type equals
-     the type of e (the bound name is irrelevant). No variable is brought into
-     scope; we strip the Quant_Exists and store the body as the new TE_ProofGoal
-     so a following Fix/Use peels the next quantifier. As with Fix, the body is
-     carried unchanged (TE_ProofGoal is only consumed structurally). *)
-| "core_statement_type env ghost (CoreStmt_Use witnessTm) =
-    (case TE_ProofGoal env of
-       Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
-         (if ghost = Ghost \<and> core_term_type env ghost witnessTm = Some qVarTy
-          then Some (env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>)
-          else None)
-     | _ \<Rightarrow> None)"
-
-  (* Statement lists *)
-| "core_statement_list_type env _ [] = Some env"
-| "core_statement_list_type env ghost (stmt # stmts) =
-    (case core_statement_type env ghost stmt of
-       Some env' \<Rightarrow> core_statement_list_type env' ghost stmts
-     | None \<Rightarrow> None)"
-
-  by pat_completeness auto
-  termination
-  proof (relation "measure (\<lambda>x. case x of
-      Inl (_, _, stmt) \<Rightarrow> size stmt
-    | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)"; (simp; fail)?)
-    \<comment> \<open>CoreStmt_Match arm bodies are smaller than the whole match statement. \<close>
-    fix env :: CoreTyEnv
-    fix ghost :: GhostOrNot
-    fix matchGhost :: GhostOrNot
-    fix scrut :: CoreTerm
-    fix arms :: "(CorePattern \<times> CoreStatement list) list"
-    fix x2 x xa z
-    assume xa_eq: "xa = map snd arms" and z_in: "z \<in> set xa"
-    from xa_eq z_in obtain a where "(a, z) \<in> set arms" by auto
-    hence "size_prod (\<lambda>y. 0) (size_list size) (a, z)
-             \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
-      by (simp add: size_list_estimation')
-    hence z_le: "size_list size z \<le> size_list (size_prod (\<lambda>y. 0) (size_list size)) arms"
-      by simp
-    show "(Inr (env \<lparr> TE_ProofGoal := None \<rparr>, matchGhost, z),
-           Inl (env, ghost, CoreStmt_Match matchGhost scrut arms))
-          \<in> measure (\<lambda>y. case y of
-              Inl (_, _, stmt) \<Rightarrow> size stmt
-            | Inr (_, _, stmts) \<Rightarrow> size_list size stmts)"
-      using z_le by simp
-  qed
-
-
-(* ========================================================================== *)
-(* Ambient-ghost weakening                                                    *)
-(*                                                                            *)
-(* If a statement typechecks in Ghost mode, then it can be promoted to        *)
-(* NotGhost mode and still typecheck -- provided that we are within an        *)
-(* executable function (TE_FunctionGhost is NotGhost) and not inside an       *)
-(* assert proof-block (TE_ProofGoal is None).                                 *)
-(* ========================================================================== *)
-
+(* If a statement typechecks in Ghost mode, then it can be promoted to
+   NotGhost mode and still typecheck -- provided that we are within an
+   executable function (TE_FunctionGhost is NotGhost) and not inside an
+   assert proof-block (TE_ProofGoal is None). *)
 lemma core_statement_type_ghost_to_notghost:
   assumes "core_statement_type env Ghost stmt = Some env'"
     and "TE_FunctionGhost env = NotGhost"
@@ -767,7 +754,7 @@ lemma core_statement_type_ghost_to_notghost:
 
 
 (* ========================================================================== *)
-(* Well-formedness and return type preservation                               *)
+(* Well-formedness preservation *)
 (* ========================================================================== *)
 
 (* core_statement_type preserves tyenv_well_formed *)
@@ -971,78 +958,6 @@ next
   with assms show ?thesis by simp
 qed
 
-(* core_statement_type preserves TE_ReturnType *)
-lemma core_statement_type_preserves_return_type:
-  assumes "core_statement_type env ghost stmt = Some env'"
-  shows "TE_ReturnType env' = TE_ReturnType env"
-using assms proof (cases stmt)
-  case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
-  show ?thesis proof (cases varOrRef)
-    case Var
-    with assms CoreStmt_VarDecl show ?thesis by (auto split: if_splits)
-  next
-    case Ref
-    with assms CoreStmt_VarDecl show ?thesis by (auto split: if_splits)
-  qed
-next
-  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
-  with assms show ?thesis by (auto split: if_splits option.splits)
-next
-  case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
-  with assms show ?thesis by (auto split: if_splits option.splits)
-next
-  case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
-  with assms show ?thesis by (auto split: if_splits option.splits)
-next
-  case (CoreStmt_Fix _ _) with assms show ?thesis
-    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
-next
-  case (CoreStmt_Obtain _ _ _) with assms show ?thesis
-    by (auto simp: Let_def split: if_splits)
-next
-  case (CoreStmt_Use _) with assms show ?thesis
-    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
-next
-  case (CoreStmt_Swap _ _ _)
-  with assms show ?thesis by (auto split: if_splits option.splits)
-next
-  case (CoreStmt_Return _)
-  with assms show ?thesis by (auto split: if_splits)
-next
-  case (CoreStmt_Assert _ _)
-  with assms show ?thesis by (auto simp: Let_def split: if_splits option.splits)
-next
-  case (CoreStmt_Assume _)
-  with assms show ?thesis by (auto split: if_splits)
-next
-  case (CoreStmt_While _ _ _ _ _)
-  with assms show ?thesis by (auto split: if_splits option.splits CoreType.splits)
-next
-  case (CoreStmt_Match _ _ _)
-  with assms show ?thesis by (auto simp: Let_def split: if_splits option.splits)
-next
-  case (CoreStmt_ShowHide _ _)
-  with assms show ?thesis by simp
-qed
-
-(* core_statement_list_type preserves TE_ReturnType *)
-lemma core_statement_list_type_preserves_return_type:
-  assumes "core_statement_list_type env ghost stmts = Some env'"
-  shows "TE_ReturnType env' = TE_ReturnType env"
-using assms proof (induction stmts arbitrary: env)
-  case Nil
-  then show ?case by simp
-next
-  case (Cons stmt stmts)
-  from Cons.prems obtain env_mid where
-    mid: "core_statement_type env ghost stmt = Some env_mid" and
-    rest: "core_statement_list_type env_mid ghost stmts = Some env'"
-    by (auto split: option.splits)
-  from core_statement_type_preserves_return_type[OF mid]
-  have "TE_ReturnType env_mid = TE_ReturnType env" .
-  with Cons.IH[OF rest] show ?case by simp
-qed
-
 (* core_statement_list_type preserves tyenv_well_formed *)
 lemma core_statement_list_type_preserves_well_formed:
   assumes "core_statement_list_type env ghost stmts = Some env'"
@@ -1183,27 +1098,30 @@ next
   with tyenv_fixed_eq_trans Cons.IH[OF rest] show ?case by blast
 qed
 
+(* core_statement_type preserves TE_ReturnType *)
+corollary core_statement_type_preserves_return_type:
+  assumes "core_statement_type env ghost stmt = Some env'"
+  shows "TE_ReturnType env' = TE_ReturnType env"
+  using assms core_statement_type_fixed_eq tyenv_fixed_eq_def by auto
+
+(* core_statement_list_type preserves TE_ReturnType *)
+corollary core_statement_list_type_preserves_return_type:
+  assumes "core_statement_list_type env ghost stmts = Some env'"
+  shows "TE_ReturnType env' = TE_ReturnType env"
+  using assms core_statement_list_type_fixed_eq tyenv_fixed_eq_def by auto
+
 
 (* ========================================================================== *)
 (* Tyvar weakening for statements                                             *)
-(*                                                                            *)
-(* Adding (unused) type variables to the environment does not change what     *)
-(* core_statement_type accepts; the resulting environment is the original     *)
-(* result with the same extra type variables added. This mirrors              *)
-(* core_term_type_irrelevant_tyvar (CoreTypecheck.thy). The variant phrased    *)
-(* with extend_env_with_tyvars is in ExtendEnvWithTyvars.thy (which imports    *)
-(* this theory).                                                              *)
-(*                                                                            *)
-(* Embedded checks are handled as follows: terms via                          *)
-(* core_term_type_irrelevant_tyvar; impure calls via                          *)
-(* core_impure_call_type_irrelevant_tyvar; types via is_well_kinded_extend_   *)
-(* tyvars / is_runtime_type_extend_runtime_tyvars; writability via            *)
-(* is_writable_lvalue_irrelevant_tyvar; pattern compatibility via             *)
-(* pattern_compatible_cong_env; the purely syntactic is_lvalue and the        *)
-(* env-free is_valid_decreases_type are unchanged. For VarDecl / Obtain / Fix *)
-(* the local-variable record updates commute with the tyvar-set update, so    *)
-(* the result env carries the extras through unchanged.                       *)
 (* ========================================================================== *)
+
+(* Adding (unused) type variables to the environment does not change what
+   core_statement_type accepts, and the resulting environment is the original
+   result with the extra type variables added. *)
+
+(* This mirrors core_term_type_irrelevant_tyvar (CoreTypecheck.thy). The variant 
+   phrased with extend_env_with_tyvars is in ExtendEnvWithTyvars.thy (which 
+   imports this theory. *)
 
 lemma core_statement_type_irrelevant_tyvar:
   "core_statement_type env ghost stmt = Some env' \<Longrightarrow>
