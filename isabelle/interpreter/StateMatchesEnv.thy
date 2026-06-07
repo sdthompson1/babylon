@@ -419,6 +419,10 @@ proof -
   from fun_ghost fn_lookup not_ghost have args_rt_inner:
     "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). is_runtime_type ?inner_rt ty"
     unfolding tyenv_fun_ghost_constraint_def Let_def by auto
+  \<comment> \<open>FI_ReturnType is runtime in ?inner_rt (using non-ghost). \<close>
+  from fun_ghost fn_lookup not_ghost have ret_rt_inner:
+    "is_runtime_type ?inner_rt (FI_ReturnType funInfo)"
+    unfolding tyenv_fun_ghost_constraint_def Let_def by auto
 
   \<comment> \<open>(1) tyenv_vars_well_kinded ?be \<close>
   have c1: "tyenv_vars_well_kinded ?be"
@@ -483,6 +487,13 @@ proof -
   have c4: "tyenv_return_type_well_kinded ?be"
     unfolding tyenv_return_type_well_kinded_def
     using ret_wk_inner wk_inner_eq by (simp add: body_env_for_def)
+
+  \<comment> \<open>(4b) tyenv_return_type_runtime ?be: TE_FunctionGhost ?be = NotGhost and
+       TE_ReturnType ?be = FI_ReturnType, runtime in ?inner_rt by the non-ghost
+       fun-ghost constraint, bridged to ?be by rt_inner_eq. \<close>
+  have c4b: "tyenv_return_type_runtime ?be"
+    unfolding tyenv_return_type_runtime_def
+    using ret_rt_inner rt_inner_eq by (simp add: body_env_for_def)
 
   \<comment> \<open>(5) tyenv_ctors_consistent ?be: TE_DataCtors and TE_Datatypes inherited. \<close>
   have c5: "tyenv_ctors_consistent ?be"
@@ -606,7 +617,7 @@ proof -
     using dt_nonempty unfolding tyenv_datatypes_nonempty_def
     by (simp add: body_env_for_def)
 
-  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
+  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 

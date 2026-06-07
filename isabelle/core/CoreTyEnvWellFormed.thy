@@ -38,6 +38,11 @@ definition tyenv_return_type_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_return_type_well_kinded env =
     is_well_kinded env (TE_ReturnType env)"
 
+(* For a non-ghost (executable) function, the return type must be a runtime type. *)
+definition tyenv_return_type_runtime :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_return_type_runtime env =
+    (TE_FunctionGhost env = NotGhost \<longrightarrow> is_runtime_type env (TE_ReturnType env))"
+
 (* Data constructors are consistent with datatypes:
    For each ctor in TE_DataCtors mapping to (dtName, tyVars, payload),
    dtName must be in TE_Datatypes with matching numTyArgs *)
@@ -141,6 +146,7 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_vars_runtime env \<and>
      tyenv_ghost_vars_subset env \<and>
      tyenv_return_type_well_kinded env \<and>
+     tyenv_return_type_runtime env \<and>
      tyenv_ctors_consistent env \<and>
      tyenv_payloads_well_kinded env \<and>
      tyenv_ctor_tyvars_distinct env \<and>
@@ -167,6 +173,7 @@ proof -
   from wf have wk: "tyenv_vars_well_kinded env"
     and rt: "tyenv_vars_runtime env"
     and gvs: "tyenv_ghost_vars_subset env"
+    and ret_rt: "tyenv_return_type_runtime env"
     and rest: "tyenv_ctors_consistent env"
               "tyenv_payloads_well_kinded env"
               "tyenv_ctor_tyvars_distinct env"
@@ -216,6 +223,8 @@ proof -
   moreover have "tyenv_return_type_well_kinded ?env'"
     using local.wf tyenv_return_type_well_kinded_def tyenv_well_formed_def wk_preserved
     by auto
+  moreover have "tyenv_return_type_runtime ?env'"
+    using ret_rt rt_preserved unfolding tyenv_return_type_runtime_def by simp
   moreover have "tyenv_ctors_consistent ?env'" using rest(1)
     unfolding tyenv_ctors_consistent_def by simp
   moreover have "tyenv_payloads_well_kinded ?env'"
@@ -276,6 +285,7 @@ proof -
   from wf have wk: "tyenv_vars_well_kinded env"
     and rt: "tyenv_vars_runtime env"
     and gvs: "tyenv_ghost_vars_subset env"
+    and ret_rt: "tyenv_return_type_runtime env"
     and rest: "tyenv_ctors_consistent env"
               "tyenv_payloads_well_kinded env"
               "tyenv_ctor_tyvars_distinct env"
@@ -323,6 +333,8 @@ proof -
   moreover have "tyenv_return_type_well_kinded ?env'"
     using local.wf tyenv_return_type_well_kinded_def tyenv_well_formed_def wk_preserved
     by auto
+  moreover have "tyenv_return_type_runtime ?env'"
+    using ret_rt rt_preserved unfolding tyenv_return_type_runtime_def by simp
   moreover have "tyenv_ctors_consistent ?env'" using rest(1)
     unfolding tyenv_ctors_consistent_def by simp
   moreover have "tyenv_payloads_well_kinded ?env'"
@@ -392,7 +404,8 @@ proof -
     by (rule is_runtime_type_cong_env) simp_all
   from assms show ?thesis unfolding tyenv_well_formed_def
     tyenv_vars_well_kinded_def tyenv_vars_runtime_def
-    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def tyenv_ctors_consistent_def
+    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
+    tyenv_return_type_runtime_def tyenv_ctors_consistent_def
     tyenv_payloads_well_kinded_def
     tyenv_ctor_tyvars_distinct_def tyenv_ctors_by_type_consistent_def
     tyenv_fun_types_well_kinded_def
@@ -426,7 +439,8 @@ proof -
     by (rule is_runtime_type_cong_env) simp_all
   from assms show ?thesis unfolding tyenv_well_formed_def
     tyenv_vars_well_kinded_def tyenv_vars_runtime_def
-    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def tyenv_ctors_consistent_def
+    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
+    tyenv_return_type_runtime_def tyenv_ctors_consistent_def
     tyenv_payloads_well_kinded_def
     tyenv_ctor_tyvars_distinct_def tyenv_ctors_by_type_consistent_def
     tyenv_fun_types_well_kinded_def
@@ -460,7 +474,8 @@ proof -
     by (rule is_runtime_type_cong_env) simp_all
   from assms show ?thesis unfolding tyenv_well_formed_def
     tyenv_vars_well_kinded_def tyenv_vars_runtime_def
-    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def tyenv_ctors_consistent_def
+    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
+    tyenv_return_type_runtime_def tyenv_ctors_consistent_def
     tyenv_payloads_well_kinded_def
     tyenv_ctor_tyvars_distinct_def tyenv_ctors_by_type_consistent_def
     tyenv_fun_types_well_kinded_def
@@ -506,6 +521,7 @@ proof -
     and vars_rt: "tyenv_vars_runtime env"
     and ghost_subset: "tyenv_ghost_vars_subset env"
     and ret_wk: "tyenv_return_type_well_kinded env"
+    and ret_rt: "tyenv_return_type_runtime env"
     and ctors_cons: "tyenv_ctors_consistent env"
     and payloads_wk: "tyenv_payloads_well_kinded env"
     and ctor_tyvars_distinct: "tyenv_ctor_tyvars_distinct env"
@@ -531,6 +547,9 @@ proof -
   moreover have "tyenv_return_type_well_kinded ?env'"
     using ret_wk is_well_kinded_extend_tyvars
     unfolding tyenv_return_type_well_kinded_def by simp
+  moreover have "tyenv_return_type_runtime ?env'"
+    using ret_rt is_runtime_type_extend_runtime_tyvars
+    unfolding tyenv_return_type_runtime_def by simp
   moreover have "tyenv_ctors_consistent ?env'"
     using ctors_cons unfolding tyenv_ctors_consistent_def by simp
   moreover have "tyenv_payloads_well_kinded ?env'"

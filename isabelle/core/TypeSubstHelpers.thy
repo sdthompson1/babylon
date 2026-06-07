@@ -529,6 +529,17 @@ proof -
     unfolding tyenv_return_type_well_kinded_def
     using ret_wk wk_be_caller_eq by simp
 
+  \<comment> \<open>(4b) tyenv_return_type_runtime ?be: TE_FunctionGhost ?be = TE_FunctionGhost calleeEnv and
+       TE_ReturnType ?be = apply_subst subst (TE_ReturnType calleeEnv); the runtime fact is the
+       ret_rt premise, bridged from callerEnv to ?be by congruence (?be and callerEnv share
+       TE_RuntimeTypeVars and TE_GhostDatatypes — the latter via dt/gd_eq). \<close>
+  have rt_be_caller_eq:
+    "\<And>ty. is_runtime_type ?be ty = is_runtime_type callerEnv ty"
+    by (rule is_runtime_type_cong_env) (simp_all add: gd_eq[symmetric])
+  have c4b: "tyenv_return_type_runtime ?be"
+    unfolding tyenv_return_type_runtime_def
+    using ret_rt rt_be_caller_eq by simp
+
   \<comment> \<open>(5) tyenv_ctors_consistent ?be: TE_DataCtors and TE_Datatypes inherited from calleeEnv. \<close>
   have c5: "tyenv_ctors_consistent ?be"
     using callee_ctors_cons unfolding tyenv_ctors_consistent_def
@@ -652,7 +663,7 @@ proof -
     using callee_dt_nonempty unfolding tyenv_datatypes_nonempty_def
     by (simp add: apply_subst_to_callee_env_def)
 
-  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
+  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 

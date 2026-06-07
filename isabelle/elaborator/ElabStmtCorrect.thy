@@ -2904,14 +2904,12 @@ next
     have retTy_rtD: "ghost = NotGhost \<longrightarrow> is_runtime_type ?envD ?retTy"
     proof
       assume ng: "ghost = NotGhost"
-      \<comment> \<open>GAP: tyenv_well_formed currently guarantees only that TE_ReturnType is
-          well-kinded, not that it is runtime when TE_FunctionGhost = NotGhost. A
-          non-ghost function returning a ghost type (e.g. MathInt) is nonsensical, so
-          this should be a tyenv_well_formed invariant (tyenv_return_type_runtime,
-          mirroring tyenv_return_type_well_kinded). Once that clause is added, derive
-          is_runtime_type env ?retTy from "7.prems"(2) + ng + gh and lift it through
-          extend_env_with_tyvars as below. TODO: close this sorry then.\<close>
-      have rt: "is_runtime_type env ?retTy" sorry
+      \<comment> \<open>ng + gh give TE_FunctionGhost env = NotGhost, so the tyenv_return_type_runtime
+          well-formedness clause makes the return type runtime in env; lift it through
+          the fresh-tyvar extension.\<close>
+      have fg: "TE_FunctionGhost env = NotGhost" using ng gh by simp
+      have rt: "is_runtime_type env ?retTy"
+        using "7.prems"(2) fg unfolding tyenv_well_formed_def tyenv_return_type_runtime_def by simp
       show "is_runtime_type ?envD ?retTy"
         using is_runtime_type_extend_env_with_tyvars_mono rt extend_env_with_tyvars_empty ng
         by (metis linorder_le_cases)

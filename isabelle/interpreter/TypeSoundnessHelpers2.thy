@@ -155,6 +155,7 @@ proof -
     be_vars_rt: "tyenv_vars_runtime ?be" and
     be_ghost_subset: "tyenv_ghost_vars_subset ?be" and
     be_ret_wk: "tyenv_return_type_well_kinded ?be" and
+    be_ret_rt: "tyenv_return_type_runtime ?be" and
     be_ctors_cons: "tyenv_ctors_consistent ?be" and
     be_payloads_wk: "tyenv_payloads_well_kinded ?be" and
     be_ctor_tyvars_distinct: "tyenv_ctor_tyvars_distinct ?be" and
@@ -248,6 +249,12 @@ proof -
   have c4: "tyenv_return_type_well_kinded ?pEnv"
     using be_ret_wk wk_self_eq other_eq(10)
     unfolding tyenv_return_type_well_kinded_def by simp
+
+  have fg_eq: "TE_FunctionGhost ?pEnv = TE_FunctionGhost ?be"
+    by (simp add: partial_body_env_for_def body_env_for_def)
+  have c4b: "tyenv_return_type_runtime ?pEnv"
+    using be_ret_rt rt_self_eq other_eq(10) fg_eq
+    unfolding tyenv_return_type_runtime_def by simp
 
   have c5: "tyenv_ctors_consistent ?pEnv"
     using be_ctors_cons unfolding tyenv_ctors_consistent_def
@@ -387,7 +394,7 @@ proof -
     unfolding tyenv_datatypes_nonempty_def
     by (simp add: other_eq)
 
-  from c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
+  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by blast
 qed
 
