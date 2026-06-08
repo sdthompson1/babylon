@@ -49,6 +49,9 @@ datatype TypeError =
   | TyErr_ReturnInGhostContext Location  (* `return` in a ghost block of an executable function *)
   (* Assert errors *)
   | TyErr_AssertStarNoGoal Location  (* `assert *` with no enclosing proof goal *)
+  (* Fix errors *)
+  | TyErr_FixNoForallGoal Location  (* `fix x` with no enclosing universally-quantified proof goal *)
+  | TyErr_FixNotAtProofTopLevel Location  (* `fix x` nested inside a match/while in a proof body *)
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType

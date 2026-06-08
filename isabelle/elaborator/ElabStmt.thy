@@ -139,7 +139,7 @@ definition elab_impure_call_term ::
 
 
 (* ========================================================================== *)
-(* Helpers for VarDecl and Assign elaboration *)
+(* Helpers for VarDecl, Assign, etc. *)
 (* ========================================================================== *)
 
 (* Coerce an elaborated (pure) term `tm` of type `srcTy` to the target type
@@ -356,6 +356,36 @@ definition elab_swap ::
                 env, next_mv2))"
 
 
+(* ----- Fix branch helper ----- *)
+
+(* Fix introduces a ghost local `varName : ty` corresponding to an enclosing
+   universally-quantified proof goal `forall x : ty. P(x)`. It is only valid in
+   Ghost mode, at the top level of a proof body (TE_ProofTopLevel), when there is
+   such a goal whose bound-variable type matches the (elaborated) annotation. The
+   resulting env adds the const ghost local and replaces the proof goal with the
+   quantifier body P (the Core rule does not alpha-rename x; the goal is only
+   consumed structurally). Allocates no fresh metavariables. Emits CoreStmt_Fix. *)
+definition elab_fix ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabType \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
+  "elab_fix env elabEnv ghost loc varName ty next_mv =
+    (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
+     else case TE_ProofGoal env of
+            Some (CoreTm_Quantifier Quant_Forall _ qVarTy bodyTm) \<Rightarrow>
+              (if \<not> TE_ProofTopLevel env then Inl [TyErr_FixNotAtProofTopLevel loc]
+               else case elab_type env elabEnv Ghost ty of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr coreTy \<Rightarrow>
+                        if qVarTy \<noteq> coreTy then Inl [TyErr_TypeMismatch loc qVarTy coreTy]
+                        else Inr (CoreStmt_Fix varName coreTy,
+                                  env \<lparr> TE_LocalVars   := fmupd varName coreTy (TE_LocalVars env),
+                                        TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                                        TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                                        TE_ProofGoal   := Some bodyTm \<rparr>,
+                                  next_mv))
+          | _ \<Rightarrow> Inl [TyErr_FixNoForallGoal loc])"
+
+
 (* ========================================================================== *)
 (* Main statement elaboration functions *)
 (* ========================================================================== *)
@@ -401,7 +431,8 @@ where
      | Ref \<Rightarrow> elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv)"
 
   (* Fix: Introduce a ghost local corresponding to an enclosing universal TE_ProofGoal. *)
-| "elab_statement env elabEnv ghost (BabStmt_Fix loc varName ty) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Fix loc varName ty) next_mv =
+    elab_fix env elabEnv ghost loc varName ty next_mv"
 
   (* Obtain: Introduce a ghost local satisfying a given boolean condition. *)
 | "elab_statement env elabEnv ghost (BabStmt_Obtain loc varName ty tm) next_mv =

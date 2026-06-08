@@ -1096,7 +1096,7 @@ qed
 
 
 (* ========================================================================== *)
-(* Correctness of the VarDecl, Assign, Swap helpers *)
+(* Correctness of the VarDecl, Assign, etc. helpers *)
 (* ========================================================================== *)
 
 (* vardecl_add_local only touches the three local-variable fields. *)
@@ -2045,6 +2045,62 @@ proof -
 qed
 
 
+(* ----- Fix branch helper ----- *)
+
+(* Fix allocates no fresh metavariables, so the counter is unchanged. *)
+lemma elab_fix_next_mv:
+  "elab_fix env elabEnv ghost loc varName ty next_mv = Inr (coreStmt, env', next_mv')
+     \<Longrightarrow> next_mv' = next_mv"
+  by (auto simp: elab_fix_def
+           split: CoreTerm.splits Quantifier.splits option.splits sum.splits if_splits)
+
+(* On success, elab_fix's result env (which adds the ghost local and rewrites the
+   goal to the quantifier body) differs from env only in the local-variable fields
+   and TE_ProofGoal; the type-variable / datatype / return-type fields are unchanged.
+   And it only fires when a goal is already present, so it never turns a None goal
+   into a Some. *)
+lemma elab_fix_cong_fields:
+  assumes "elab_fix env elabEnv ghost loc varName ty next_mv = Inr (coreStmt, env', next_mv')"
+  shows "TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
+       \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_Datatypes env' = TE_Datatypes env
+       \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+       \<and> TE_ProofGoal env \<noteq> None"
+  using assms
+  by (auto simp: elab_fix_def
+           split: CoreTerm.splits Quantifier.splits option.splits sum.splits if_splits)
+
+(* elab_fix emits a CoreStmt_Fix that typechecks in env to the same env'. The
+   elaborator's guards (ghost = Ghost, a universal goal whose bound-variable type
+   matches the annotation, at proof top level) line up exactly with the Core Fix
+   rule, and the well-kindedness of the annotation comes from elab_type. *)
+lemma elab_fix_correct:
+  assumes elab: "elab_fix env elabEnv ghost loc varName ty next_mv = Inr (coreStmt, env', next_mv')"
+    and wf: "tyenv_well_formed env"
+    and ee_wf: "elabenv_well_formed env elabEnv"
+  shows "core_statement_type env ghost coreStmt = Some env'"
+proof -
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using ee_wf unfolding elabenv_well_formed_def by simp
+  from elab obtain qName qVarTy bodyTm coreTy where
+    gh: "ghost = Ghost" and
+    goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Forall qName qVarTy bodyTm)" and
+    top: "TE_ProofTopLevel env" and
+    ety: "elab_type env elabEnv Ghost ty = Inr coreTy" and
+    ty_eq: "qVarTy = coreTy" and
+    cs_eq: "coreStmt = CoreStmt_Fix varName coreTy" and
+    env'_eq: "env' = env \<lparr> TE_LocalVars   := fmupd varName coreTy (TE_LocalVars env),
+                           TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                           TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                           TE_ProofGoal   := Some bodyTm \<rparr>"
+    by (auto simp: elab_fix_def
+             split: CoreTerm.splits Quantifier.splits option.splits sum.splits if_splits)
+  have wk: "is_well_kinded env coreTy"
+    using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+  show ?thesis
+    using gh goal top wk ty_eq by (simp add: cs_eq env'_eq)
+qed
+
+
 (* ========================================================================== *)
 (* elab_statement monotonicity, well-formedness preservation, etc. *)
 (* ========================================================================== *)
@@ -2096,7 +2152,11 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
     thus ?thesis using "1.prems" by (auto dest!: elab_vardecl_ref_next_mv)
   qed
 next
-  case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix (unimplemented)\<close>
+  \<comment> \<open>Fix: allocates no metavariables, so the counter is unchanged.\<close>
+  case (2 env elabEnv ghost loc varName ty next_mv)
+  from "2.prems" have "elab_fix env elabEnv ghost loc varName ty next_mv
+                         = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_fix_next_mv by blast
 next
   \<comment> \<open>Obtain: next_mv advances only via the predicate's elab_term (elab_type and
       the unify do not touch the counter).\<close>
@@ -2220,23 +2280,20 @@ next
     by (fastforce split: sum.splits prod.splits dest: order_trans)
 qed
 
-(* Elaboration never changes the in-scope type variables (TE_TypeVars /
-   TE_RuntimeTypeVars), nor the function-ghost flag (TE_FunctionGhost) or the
-   proof goal (TE_ProofGoal): a statement only touches the local-variable fields.
-   The TE_FunctionGhost / TE_ProofGoal parts let the cons case thread the two
-   entry invariants of elab_statement_correct through the head statement. *)
+(* Elaboration leaves TE_TypeVars / TE_RuntimeTypeVars / TE_FunctionGhost unchanged,
+   and never creates a TE_ProofGoal if there wasn't one already. *)
 lemma elab_statement_preserves_TE_TypeVars:
   "elab_statement env elabEnv ghost stmt next_mv = Inr (coreStmt, env', next_mv')
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env
        \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env
-       \<and> TE_ProofGoal env' = TE_ProofGoal env"
+       \<and> (TE_ProofGoal env = None \<longrightarrow> TE_ProofGoal env' = None)"
 and elab_statement_list_preserves_TE_TypeVars:
   "elab_statement_list env elabEnv ghost stmts next_mv = Inr (coreStmts, env', next_mv')
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env
        \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env
-       \<and> TE_ProofGoal env' = TE_ProofGoal env"
+       \<and> (TE_ProofGoal env = None \<longrightarrow> TE_ProofGoal env' = None)"
 proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next_mv
        arbitrary: coreStmt env' next_mv' and coreStmts env' next_mv'
        rule: elab_statement_elab_statement_list.induct)
@@ -2286,7 +2343,13 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
     thus ?thesis using elab_vardecl_ref_cong_fields by simp
   qed
 next
-  case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
+  \<comment> \<open>Fix: the tyvar / ghost fields are unchanged (elab_fix_cong_fields); the goal is
+      rewritten, but only when one was already present, so the "no goal in" implication
+      is vacuous.\<close>
+  case (2 env elabEnv ghost loc varName ty next_mv)
+  from "2.prems"(1) have "elab_fix env elabEnv ghost loc varName ty next_mv
+                            = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_fix_cong_fields by blast
 next
   \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy, which touches only
       the local-var fields, so all four tracked fields are unchanged.\<close>
@@ -2376,10 +2439,12 @@ next
              = Inr (coreStmts1, env', next_mv')"
     by (auto split: sum.splits prod.splits)
   have e1: "TE_TypeVars env1 = TE_TypeVars env \<and> TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env
-              \<and> TE_FunctionGhost env1 = TE_FunctionGhost env \<and> TE_ProofGoal env1 = TE_ProofGoal env"
+              \<and> TE_FunctionGhost env1 = TE_FunctionGhost env
+              \<and> (TE_ProofGoal env = None \<longrightarrow> TE_ProofGoal env1 = None)"
     using "17.IH"(1)[OF head] by simp
   moreover have "TE_TypeVars env' = TE_TypeVars env1 \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env1
-                  \<and> TE_FunctionGhost env' = TE_FunctionGhost env1 \<and> TE_ProofGoal env' = TE_ProofGoal env1"
+                  \<and> TE_FunctionGhost env' = TE_FunctionGhost env1
+                  \<and> (TE_ProofGoal env1 = None \<longrightarrow> TE_ProofGoal env' = None)"
     using "17.IH"(2) head tail by blast
   ultimately show ?case by simp
 qed
@@ -2442,7 +2507,19 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
             conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
     by simp
 next
-  case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
+  \<comment> \<open>Fix: elab_fix leaves TE_TypeVars / TE_Datatypes / TE_DataCtors / TE_ReturnType
+      unchanged, so elabenv_well_formed is preserved by congruence.\<close>
+  case (2 env elabEnv ghost loc varName ty next_mv)
+  from "2.prems"(1) have elab: "elab_fix env elabEnv ghost loc varName ty next_mv
+                                  = Inr (coreStmt, env', next_mv')" by simp
+  have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
+    using elab_fix_cong_fields[OF elab] by simp
+  show ?case
+    using "2.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
+            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
+            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
+    by simp
 next
   \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy leaves TE_TypeVars /
       TE_Datatypes / TE_DataCtors / TE_ReturnType unchanged, so elabenv_well_formed
@@ -2629,7 +2706,35 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       by (simp add: vardecl_add_local_def)
   qed
 next
-  case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
+  \<comment> \<open>Fix: env' adds a const ghost local of type coreTy (the well-kinded Ghost-mode
+      elaboration of the annotation) and rewrites the proof goal. Adding a well-kinded
+      ghost local keeps the env well-formed (tyenv_well_formed_vardecl_result, which
+      allows any TE_ConstLocals); the goal rewrite is irrelevant to well-formedness.\<close>
+  case (2 env elabEnv ghost loc varName ty next_mv)
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using "2.prems"(3) unfolding elabenv_well_formed_def by simp
+  from "2.prems"(1) obtain bodyTm coreTy where
+    ety: "elab_type env elabEnv Ghost ty = Inr coreTy" and
+    env'_eq: "env' = env \<lparr> TE_LocalVars   := fmupd varName coreTy (TE_LocalVars env),
+                           TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                           TE_ConstLocals := finsert varName (TE_ConstLocals env),
+                           TE_ProofGoal   := Some bodyTm \<rparr>"
+    by (auto simp: elab_fix_def
+             split: CoreTerm.splits Quantifier.splits option.splits sum.splits if_splits)
+  have wk: "is_well_kinded env coreTy"
+    using elab_type_is_well_kinded(1)[OF td_wf "2.prems"(2) ety] .
+  \<comment> \<open>Adding the ghost local (any TE_ConstLocals) keeps the env well-formed.\<close>
+  have wf1: "tyenv_well_formed
+               (env \<lparr> TE_LocalVars := fmupd varName coreTy (TE_LocalVars env),
+                      TE_GhostLocals := (if Ghost = Ghost
+                                         then finsert varName (TE_GhostLocals env)
+                                         else fminus (TE_GhostLocals env) {|varName|}) \<rparr>
+                  \<lparr> TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>)"
+    using tyenv_well_formed_vardecl_result[OF "2.prems"(2) wk, where ghost=Ghost] by blast
+  \<comment> \<open>The goal rewrite does not affect well-formedness.\<close>
+  show ?case
+    using tyenv_well_formed_TE_ProofGoal_irrelevant[OF wf1, where g="Some bodyTm"]
+    by (simp add: env'_eq)
 next
   \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy, where coreTy is the
       Ghost-mode elaboration of the annotation (hence well-kinded). The runtime
@@ -2834,7 +2939,13 @@ case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
     thus ?thesis using elab_vardecl_ref_correct[OF _ "1.prems"(2,3,4)] by simp
   qed
 next
-  case (2 env elabEnv ghost loc varName ty next_mv) thus ?case sorry  \<comment> \<open>Fix\<close>
+  \<comment> \<open>Fix: the elaborator's guards (ghost = Ghost, a universal goal whose bound-variable
+      type matches the elaborated annotation, at proof top level) line up exactly with
+      the Core Fix rule; well-kindedness of the annotation comes from elab_type.\<close>
+  case (2 env elabEnv ghost loc varName ty next_mv)
+  from "2.prems"(1) have "elab_fix env elabEnv ghost loc varName ty next_mv
+                            = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_fix_correct[OF _ "2.prems"(2,3)] by simp
 next
   \<comment> \<open>Obtain: elaborate the annotation in Ghost mode to coreTy (well-kinded), then
       the predicate in Ghost mode under env_obtain = env extended with the ghost
@@ -3285,17 +3396,24 @@ next
     cs_eq: "coreStmts = coreStmt1 # coreStmts1"
     by (auto split: sum.splits prod.splits)
   \<comment> \<open>Bounds / preservation facts needed for the tail IH. The head preserves
-      TE_FunctionGhost / TE_ProofGoal, so the two entry invariants carry to env1.\<close>
+      TE_FunctionGhost and never creates a goal, so the two entry invariants carry to
+      env1.\<close>
   have nmv1: "next_mv \<le> next_mv1" using elab_statement_next_mv_monotone(1)[OF head] .
   have pres: "TE_TypeVars env1 = TE_TypeVars env
-                \<and> TE_FunctionGhost env1 = TE_FunctionGhost env \<and> TE_ProofGoal env1 = TE_ProofGoal env"
+                \<and> TE_FunctionGhost env1 = TE_FunctionGhost env
+                \<and> (TE_ProofGoal env = None \<longrightarrow> TE_ProofGoal env1 = None)"
     using elab_statement_preserves_TE_TypeVars(1)[OF head] by simp
   have wf1: "tyenv_well_formed env1"
     using elab_statement_preserves_well_formed(1)[OF head "17.prems"(2,3,4)] .
   have ee1: "elabenv_well_formed env1 elabEnv"
     using elab_statement_preserves_elabenv_well_formed(1)[OF head "17.prems"(3)] .
+  have tv1: "TE_TypeVars env1 = TE_TypeVars env" using pres by simp
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env1 \<longrightarrow> n < next_mv1"
-    using "17.prems"(4) pres nmv1 by auto
+  proof (intro allI impI)
+    fix n assume "n |\<in>| TE_TypeVars env1"
+    hence "n < next_mv" using "17.prems"(4) tv1 by simp
+    thus "n < next_mv1" using nmv1 by simp
+  qed
   have fg1: "TE_FunctionGhost env1 = Ghost \<longrightarrow> ghost = Ghost"
     using "17.prems"(5) pres by simp
   have pg1: "ghost = NotGhost \<longrightarrow> TE_ProofGoal env1 = None"
