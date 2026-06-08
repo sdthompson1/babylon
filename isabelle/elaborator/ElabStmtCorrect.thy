@@ -1096,7 +1096,7 @@ qed
 
 
 (* ========================================================================== *)
-(* Correctness of the VarDecl and Assign helpers *)
+(* Correctness of the VarDecl, Assign, Swap helpers *)
 (* ========================================================================== *)
 
 (* vardecl_add_local only touches the three local-variable fields. *)
@@ -1981,6 +1981,70 @@ proof -
 qed
 
 
+(* ----- Swap branch helper ----- *)
+
+(* The swap helper advances the counter (from next_mv1, via the rhs elab_term) and
+   leaves the env unchanged. *)
+lemma elab_swap_next_mv:
+  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+     = Inr (coreStmt, env', next_mv') \<Longrightarrow> next_mv1 \<le> next_mv'"
+  by (auto simp: elab_swap_def
+           dest!: elab_term_next_mv_monotone
+           split: sum.splits prod.splits if_splits)
+
+lemma elab_swap_env:
+  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+     = Inr (coreStmt, env', next_mv') \<Longrightarrow> env' = env"
+  by (auto simp: elab_swap_def
+           split: sum.splits prod.splits if_splits)
+
+(* elab_swap emits a CoreStmt_Swap that typechecks in env. Both the lhs (elaborated
+   at next_mv, output next_mv1, a writable lvalue of the metavar-free type lhsTy) and
+   the rhs (elaborated at next_mv1) are widened to next_mv2 and cleared; the rhs is
+   required to be a writable lvalue of exactly type lhsTy (no coercion). *)
+lemma elab_swap_correct:
+  assumes elab: "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+                   = Inr (coreStmt, env', next_mv')"
+    and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
+    and lhs_wl: "is_writable_lvalue env lhsTm"
+    and lhs_below: "type_tyvars lhsTy \<subseteq> {n. n < next_mv}"
+    and mono_lhs: "next_mv \<le> next_mv1"
+    and wf: "tyenv_well_formed env"
+    and ee_wf: "elabenv_well_formed env elabEnv"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+  shows "core_statement_type env ghost coreStmt = Some env'"
+proof -
+  from elab obtain rhsTm rhsTy where
+    erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv')" and
+    rhs_wl: "is_writable_lvalue env rhsTm" and
+    rhs_ty: "rhsTy = lhsTy" and
+    cs_eq: "coreStmt = CoreStmt_Swap ghost
+                          (clear_metavars next_mv next_mv' lhsTm)
+                          (clear_metavars next_mv next_mv' rhsTm)" and
+    env'_eq: "env' = env"
+    by (auto simp: elab_swap_def split: sum.splits prod.splits if_splits)
+  have mono_rhs: "next_mv1 \<le> next_mv'" using elab_term_next_mv_monotone[OF erhs] .
+  \<comment> \<open>lhs: widen to next_mv', clear (lhsTy metavar-free), preserve writability.\<close>
+  have lhs_typedD: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost lhsTm = Some lhsTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF lhs_typed le_refl mono_rhs] .
+  have lhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' lhsTm) = Some lhsTy"
+    using clear_metavars_typed_in_env[OF lhs_typedD wf bound lhs_below] .
+  have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
+    using lhs_wl unfolding clear_metavars_def by simp
+  \<comment> \<open>rhs: typed at extend env next_mv next_mv' (widen from next_mv1); its type is
+      exactly lhsTy (metavar-free), so clearing types it to lhsTy in env.\<close>
+  have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost rhsTm = Some rhsTy"
+    using elab_term_correct(1)[OF erhs wf ee_wf] bound mono_lhs order_less_le_trans by auto
+  have rhs_typedD: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost rhsTm = Some lhsTy"
+    using core_term_type_extend_env_with_tyvars_mono[OF rhs_typed1 mono_lhs le_refl] rhs_ty by simp
+  have rhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' rhsTm) = Some lhsTy"
+    using clear_metavars_typed_in_env[OF rhs_typedD wf bound lhs_below] .
+  have rhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' rhsTm)"
+    using rhs_wl unfolding clear_metavars_def by simp
+  show ?thesis using lhs_wl' rhs_wl' lhs_init rhs_init by (simp add: cs_eq env'_eq)
+qed
+
+
 (* ========================================================================== *)
 (* elab_statement monotonicity, well-formedness preservation, etc. *)
 (* ========================================================================== *)
@@ -2068,7 +2132,18 @@ next
     thus ?thesis using mono_lhs elab_assign_pure_next_mv by fastforce
   qed
 next
-  case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
+  \<comment> \<open>Swap: the lhs elaboration advances next_mv to next_mv1, then elab_swap advances
+      next_mv1 to next_mv' (via the rhs elab_term).\<close>
+  case (6 env elabEnv ghost loc lhs rhs next_mv)
+  from "6.prems" obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
+    by (auto split: sum.splits prod.splits)
+  have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
+  from "6.prems" lhs_elab
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+          = Inr (coreStmt, env', next_mv')"
+    by (auto split: if_splits)
+  thus ?case using mono_lhs elab_swap_next_mv by fastforce
 next
   \<comment> \<open>Return: the void / no-value branches keep next_mv; the non-void value branch
       advances it only via the returned term's elab_term.\<close>
@@ -2243,7 +2318,16 @@ next
   qed
   thus ?case by simp
 next
-  case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
+  \<comment> \<open>Swap: env unchanged (elab_swap leaves env alone).\<close>
+  case (6 env elabEnv ghost loc lhs rhs next_mv)
+  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
+    by (auto split: sum.splits prod.splits)
+  from "6.prems"(1) lhs_elab
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+  hence "env' = env" using elab_swap_env by simp
+  thus ?case by simp
 next
   \<comment> \<open>Return: env unchanged in every success path.\<close>
   case (7 env elabEnv ghost loc tmOpt next_mv)
@@ -2398,7 +2482,16 @@ next
   qed
   thus ?case using "5.prems"(2) by simp
 next
-  case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
+  \<comment> \<open>Swap: env unchanged.\<close>
+  case (6 env elabEnv ghost loc lhs rhs next_mv)
+  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
+    by (auto split: sum.splits prod.splits)
+  from "6.prems"(1) lhs_elab
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+  hence "env' = env" using elab_swap_env by simp
+  thus ?case using "6.prems"(2) by simp
 next
   \<comment> \<open>Return: env unchanged.\<close>
   case (7 env elabEnv ghost loc tmOpt next_mv)
@@ -2577,7 +2670,16 @@ next
   qed
   thus ?case using "5.prems"(2) by simp
 next
-  case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
+  \<comment> \<open>Swap: env unchanged.\<close>
+  case (6 env elabEnv ghost loc lhs rhs next_mv)
+  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
+    by (auto split: sum.splits prod.splits)
+  from "6.prems"(1) lhs_elab
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+  hence "env' = env" using elab_swap_env by simp
+  thus ?case using "6.prems"(2) by simp
 next
   \<comment> \<open>Return: env unchanged.\<close>
   case (7 env elabEnv ghost loc tmOpt next_mv)
@@ -2844,7 +2946,26 @@ next
       using elab_assign_pure_correct[OF _ lhs_typed lhs_wl lhs_below mono_lhs "5.prems"(2,3,4)] by simp
   qed
 next
-  case (6 env elabEnv ghost loc lhs rhs next_mv) thus ?case sorry  \<comment> \<open>Swap\<close>
+  \<comment> \<open>Swap: elaborate the lhs (a writable lvalue of a metavar-free type) exactly as in
+      Assign, then hand off to elab_swap, which elaborates the rhs and requires it to be
+      a writable lvalue of the same (exact) type.\<close>
+  case (6 env elabEnv ghost loc lhs rhs next_mv)
+  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)" and
+    lhs_wl: "is_writable_lvalue env lhsTm" and
+    lhs_no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)"
+    by (auto split: sum.splits prod.splits if_splits)
+  have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
+  have lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
+    using elab_term_correct(1)[OF lhs_elab "6.prems"(2,3)] "6.prems"(4) by simp
+  have lhs_below: "type_tyvars lhsTy \<subseteq> {n. n < next_mv}"
+    using lhs_no_meta "6.prems"(4)
+    by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
+  from "6.prems"(1) lhs_elab lhs_wl lhs_no_meta
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+  thus ?case
+    using elab_swap_correct[OF _ lhs_typed lhs_wl lhs_below mono_lhs "6.prems"(2,3,4)] by simp
 next
   \<comment> \<open>Return: env' = env. The elaborator's guard gives ghost = TE_FunctionGhost env
       (the Core rule's first obligation). In a void function the only success is a

@@ -332,6 +332,29 @@ definition elab_assign_impure ::
                         env, next_mv2)))
      | _ \<Rightarrow> undefined)"
 
+(* ----- Swap branch helper ----- *)
+
+(* Swap of two writable lvalues. The lhs has already been elaborated by the caller
+   (giving lhsTm of type lhsTy, a writable lvalue of a metavariable-free type,
+   counter advanced to next_mv1). This elaborates the rhs (pure), requires it to be
+   a writable lvalue whose type is EXACTLY lhsTy (no coercion, unlike Assign), and
+   emits CoreStmt_Swap. The environment is unchanged. *)
+definition elab_swap ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+   \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
+  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
+    (case elab_term env elabEnv ghost rhs next_mv1 of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (rhsTm, rhsTy, next_mv2) \<Rightarrow>
+         if \<not> is_writable_lvalue env rhsTm then Inl [TyErr_NotWritableLvalue loc]
+         else if rhsTy \<noteq> lhsTy then Inl [TyErr_TypeMismatch loc lhsTy rhsTy]
+         else
+           Inr (CoreStmt_Swap ghost
+                  (clear_metavars next_mv next_mv2 lhsTm)
+                  (clear_metavars next_mv next_mv2 rhsTm),
+                env, next_mv2))"
+
 
 (* ========================================================================== *)
 (* Main statement elaboration functions *)
@@ -415,8 +438,19 @@ where
          then elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
          else elab_assign_pure   env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"
 
-  (* Swap: Swap two writable lvalues. They must have the same type. *)
-| "elab_statement env elabEnv ghost (BabStmt_Swap loc lhs rhs) next_mv = undefined"
+  (* Swap: Swap two writable lvalues. Both terms must be writable lvalues and they
+     must have exactly the same type. (No unifying is necessary, because lvalues always
+     have ground types.) *)
+| "elab_statement env elabEnv ghost (BabStmt_Swap loc lhs rhs) next_mv =
+    \<comment> \<open>Elaborate lhs (the first swap operand).\<close>
+    (case elab_term env elabEnv ghost lhs next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (lhsTm, lhsTy, next_mv1) \<Rightarrow>
+         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars).\<close>
+         if \<not> is_writable_lvalue env lhsTm then Inl [TyErr_NotWritableLvalue loc]
+         else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)
+         then Inl [TyErr_CannotInferType loc]
+         else elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"
 
   (* Return from current function. The term must be pure and must match the current
      function's return type (or be absent if the current function is void). *)
