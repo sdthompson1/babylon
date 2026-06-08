@@ -386,6 +386,34 @@ definition elab_fix ::
           | _ \<Rightarrow> Inl [TyErr_FixNoForallGoal loc])"
 
 
+(* ----- Use branch helper ----- *)
+
+(* Use supplies a witness for an enclosing existential proof goal
+   `exists x : T. P(x)`. It is only valid in Ghost mode, when there is such a goal;
+   the witness term is elaborated (pure) and coerced (unify-or-integer-cast) to the
+   bound-variable type T. The resulting env replaces the proof goal with the quantifier
+   body P (witness is NOT substituted in). The `is_well_kinded env qVarTy` guard is
+   not expected to fail in practice. *)
+definition elab_use ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
+  "elab_use env elabEnv ghost loc tm next_mv =
+    (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
+     else case TE_ProofGoal env of
+            Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
+              (if \<not> is_well_kinded env qVarTy
+               then Inl [TyErr_InternalError_IllKindedProofGoal loc]
+               else case elab_term env elabEnv Ghost tm next_mv of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (coreTm, tmTy, next_mv') \<Rightarrow>
+                        (case coerce_term_to_type env loc coreTm tmTy qVarTy of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr coreTm' \<Rightarrow>
+                             Inr (CoreStmt_Use (clear_metavars next_mv next_mv' coreTm'),
+                                  env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>, next_mv')))
+          | _ \<Rightarrow> Inl [TyErr_UseNoExistsGoal loc])"
+
+
 (* ========================================================================== *)
 (* Main statement elaboration functions *)
 (* ========================================================================== *)
@@ -452,7 +480,8 @@ where
                            env', next_mv'))))"
 
   (* Use: Supply a witness for an enclosing existential TE_ProofGoal. *)
-| "elab_statement env elabEnv ghost (BabStmt_Use loc tm) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_Use loc tm) next_mv =
+    elab_use env elabEnv ghost loc tm next_mv"
 
   (* Assignment. Lhs term must be a writable lvalue. Rhs term can be either pure or
      impure, and must match the type of the lhs. *)

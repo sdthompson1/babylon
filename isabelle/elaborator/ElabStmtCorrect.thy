@@ -2101,6 +2101,107 @@ proof -
 qed
 
 
+(* ----- Use branch helper ----- *)
+
+(* Use advances the counter only through the witness's elab_term. *)
+lemma elab_use_next_mv:
+  "elab_use env elabEnv ghost loc tm next_mv = Inr (coreStmt, env', next_mv')
+     \<Longrightarrow> next_mv \<le> next_mv'"
+  by (auto simp: elab_use_def coerce_term_to_type_def
+           dest!: elab_term_next_mv_monotone
+           split: CoreTerm.splits Quantifier.splits option.splits sum.splits prod.splits if_splits)
+
+(* On success, elab_use's result env differs from env only in TE_ProofGoal (the
+   tyvar / datatype / return-type fields are unchanged), and it only fires when a
+   goal is already present, so it never turns a None goal into a Some. *)
+lemma elab_use_cong_fields:
+  assumes "elab_use env elabEnv ghost loc tm next_mv = Inr (coreStmt, env', next_mv')"
+  shows "TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
+       \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_Datatypes env' = TE_Datatypes env
+       \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+       \<and> TE_ProofGoal env \<noteq> None"
+  using assms
+  by (auto simp: elab_use_def coerce_term_to_type_def
+           split: CoreTerm.splits Quantifier.splits option.splits sum.splits prod.splits if_splits)
+
+(* elab_use emits a CoreStmt_Use that typechecks in env to env'. The witness is
+   elaborated and coerced (unify-or-integer-cast) to the existential goal's bound-
+   variable type qVarTy, then cleared, so it types to exactly qVarTy in env — the
+   Core Use rule's requirement. qVarTy's well-kindedness comes from the elaborator's
+   own (never-failing) guard, not from a well-formedness invariant about the goal. *)
+lemma elab_use_correct:
+  assumes elab: "elab_use env elabEnv ghost loc tm next_mv = Inr (coreStmt, env', next_mv')"
+    and wf: "tyenv_well_formed env"
+    and ee_wf: "elabenv_well_formed env elabEnv"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+  shows "core_statement_type env ghost coreStmt = Some env'"
+proof -
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  from elab obtain qName qVarTy bodyTm coreTm tmTy coreTm' where
+    gh: "ghost = Ghost" and
+    goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Exists qName qVarTy bodyTm)" and
+    qVarTy_wk: "is_well_kinded env qVarTy" and
+    etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, tmTy, next_mv')" and
+    coerce: "coerce_term_to_type env loc coreTm tmTy qVarTy = Inr coreTm'" and
+    cs_eq: "coreStmt = CoreStmt_Use (clear_metavars next_mv next_mv' coreTm')" and
+    env'_eq: "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
+    by (auto simp: elab_use_def
+             split: CoreTerm.splits Quantifier.splits option.splits sum.splits prod.splits if_splits)
+  let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv'"
+  have wfD: "tyenv_well_formed ?envD" using wf tyenv_well_formed_extend_env_with_tyvars by blast
+  \<comment> \<open>qVarTy is metavar-free (well-kinded in env, whose tyvars are < next_mv).\<close>
+  have qVarTy_below: "type_tyvars qVarTy \<subseteq> {n. n < next_mv}"
+    using is_well_kinded_type_tyvars_subset[OF qVarTy_wk] bound by auto
+  \<comment> \<open>The witness types in the extended env.\<close>
+  have coreTm_typed: "core_term_type ?envD Ghost coreTm = Some tmTy"
+    using elab_term_correct(1)[OF etm wf ee_wf] bound by simp
+  have tmTy_wk: "is_well_kinded ?envD tmTy"
+    using core_term_type_well_kinded[OF coreTm_typed wfD] .
+  have tmTy_rt: "Ghost = NotGhost \<longrightarrow> is_runtime_type ?envD tmTy" by simp
+  \<comment> \<open>qVarTy is well-kinded in the extended env (metavar-free, well-kinded in env).\<close>
+  have qVarTy_wkD: "is_well_kinded ?envD qVarTy"
+    using is_well_kinded_extend_env_with_tyvars_mono qVarTy_wk extend_env_with_tyvars_empty
+    by (metis linorder_le_cases)
+  \<comment> \<open>The cleared coerced witness types to qVarTy in env (coerce reasoning, Ghost mode).\<close>
+  have witness_typed: "core_term_type env Ghost (clear_metavars next_mv next_mv' coreTm') = Some qVarTy"
+  proof (cases "unify ?is_flex tmTy qVarTy")
+    case (Some subst)
+    from coerce Some have coreTm'_eq: "coreTm' = apply_subst_to_term subst coreTm"
+      by (simp add: coerce_term_to_type_def)
+    have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+      using unify_preserves_well_kinded[OF Some tmTy_wk qVarTy_wkD] .
+    have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+      using unify_unify_list_dom_flex(1)[OF Some] .
+    have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env" unfolding extend_env_with_tyvars_def by simp
+    have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env" unfolding extend_env_with_tyvars_def by simp
+    from flex_subst_identity_on_env[OF dom_flex wf envD_locals envD_ret]
+    have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                        \<Longrightarrow> apply_subst subst ty' = ty'"
+      and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD" by blast+
+    have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some (apply_subst subst tmTy)"
+      using apply_subst_to_term_preserves_typing
+              [OF coreTm_typed wfD subst_wk _ locals_unaffected ret_unaffected] by simp
+    have qVarTy_tvs: "type_tyvars qVarTy \<subseteq> fset (TE_TypeVars env)"
+      using is_well_kinded_type_tyvars_subset[OF qVarTy_wk] by simp
+    have dom_disj: "type_tyvars qVarTy \<inter> fset (fmdom subst) = {}" using dom_flex qVarTy_tvs by auto
+    have "apply_subst subst tmTy = apply_subst subst qVarTy" using unify_sound[OF Some] .
+    also have "apply_subst subst qVarTy = qVarTy" using apply_subst_disjoint_id[OF dom_disj] .
+    finally have "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some qVarTy"
+      using subst_typed by simp
+    thus ?thesis using clear_metavars_typed_in_env[OF _ wf bound qVarTy_below] coreTm'_eq by simp
+  next
+    case None
+    from coerce None have ints: "is_integer_type tmTy \<and> is_integer_type qVarTy"
+      and coreTm'_eq: "coreTm' = CoreTm_Cast qVarTy coreTm"
+      by (auto simp: coerce_term_to_type_def split: if_splits)
+    have cast_typed: "core_term_type ?envD Ghost (CoreTm_Cast qVarTy coreTm) = Some qVarTy"
+      using coreTm_typed ints qVarTy_wkD by auto
+    thus ?thesis using clear_metavars_typed_in_env[OF cast_typed wf bound qVarTy_below] coreTm'_eq by simp
+  qed
+  show ?thesis using gh goal witness_typed by (simp add: cs_eq env'_eq)
+qed
+
+
 (* ========================================================================== *)
 (* elab_statement monotonicity, well-formedness preservation, etc. *)
 (* ========================================================================== *)
@@ -2166,7 +2267,11 @@ next
     by (auto simp: Let_def dest!: elab_term_next_mv_monotone
              split: sum.splits prod.splits option.splits if_splits)
 next
-  case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
+  \<comment> \<open>Use: the counter advances only through the witness's elab_term (in elab_use).\<close>
+  case (4 env elabEnv ghost loc tm next_mv)
+  from "4.prems" have "elab_use env elabEnv ghost loc tm next_mv
+                         = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_use_next_mv by simp
 next
   \<comment> \<open>Assign: the lhs elaboration advances next_mv to next_mv1, then the chosen
       helper advances next_mv1 to next_mv'.\<close>
@@ -2358,7 +2463,13 @@ next
     by (auto simp: Let_def vardecl_add_local_def
              split: sum.splits prod.splits option.splits if_splits)
 next
-  case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
+  \<comment> \<open>Use: like Fix — the tyvar / ghost fields are unchanged (elab_use_cong_fields); the
+      goal is rewritten, but only when one was already present, so the "no goal in"
+      implication is vacuous.\<close>
+  case (4 env elabEnv ghost loc tm next_mv)
+  from "4.prems"(1) have "elab_use env elabEnv ghost loc tm next_mv
+                            = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_use_cong_fields by blast
 next
   \<comment> \<open>Assign: env unchanged (both helpers leave env alone).\<close>
   case (5 env elabEnv ghost loc lhs rhs next_mv)
@@ -2536,7 +2647,19 @@ next
             conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
     by simp
 next
-  case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
+  \<comment> \<open>Use: like Fix — elab_use leaves TE_TypeVars / TE_Datatypes / TE_DataCtors /
+      TE_ReturnType unchanged, so elabenv_well_formed is preserved by congruence.\<close>
+  case (4 env elabEnv ghost loc tm next_mv)
+  from "4.prems"(1) have elab: "elab_use env elabEnv ghost loc tm next_mv
+                                  = Inr (coreStmt, env', next_mv')" by simp
+  have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
+    using elab_use_cong_fields[OF elab] by simp
+  show ?case
+    using "4.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
+            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
+            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
+    by simp
 next
   \<comment> \<open>Assign: env unchanged.\<close>
   case (5 env elabEnv ghost loc lhs rhs next_mv)
@@ -2752,7 +2875,16 @@ next
   show ?case
     using env'_eq tyenv_well_formed_vardecl_add_local[OF "3.prems"(2) wk] by simp
 next
-  case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
+  \<comment> \<open>Use: env' = env with only TE_ProofGoal changed, which is irrelevant to
+      well-formedness.\<close>
+  case (4 env elabEnv ghost loc tm next_mv)
+  from "4.prems"(1) obtain bodyTm where
+    env'_eq: "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
+    by (auto simp: elab_use_def coerce_term_to_type_def
+             split: CoreTerm.splits Quantifier.splits option.splits sum.splits prod.splits if_splits)
+  show ?case
+    using tyenv_well_formed_TE_ProofGoal_irrelevant[OF "4.prems"(2), where g="Some bodyTm"]
+    by (simp add: env'_eq)
 next
   \<comment> \<open>Assign: env unchanged.\<close>
   case (5 env elabEnv ghost loc lhs rhs next_mv)
@@ -3024,7 +3156,13 @@ next
   show ?case using wk cond_typed
     by (simp add: cs_eq env'_eq vardecl_add_local_def)
 next
-  case (4 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Use\<close>
+  \<comment> \<open>Use: the elaborator's guards (ghost = Ghost, an existential goal, the goal's
+      bound-var type well-kinded) line up with the Core Use rule; the witness is
+      coerced to that bound-var type exactly, mirroring the Return coerce step.\<close>
+  case (4 env elabEnv ghost loc tm next_mv)
+  from "4.prems"(1) have "elab_use env elabEnv ghost loc tm next_mv
+                            = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_use_correct[OF _ "4.prems"(2,3,4)] by simp
 next
   \<comment> \<open>Assign: elaborate the lhs (a writable lvalue of a metavar-free type), then
       dispatch the rhs to the pure or impure Assign helper.\<close>

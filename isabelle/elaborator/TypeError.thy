@@ -52,6 +52,8 @@ datatype TypeError =
   (* Fix errors *)
   | TyErr_FixNoForallGoal Location  (* `fix x` with no enclosing universally-quantified proof goal *)
   | TyErr_FixNotAtProofTopLevel Location  (* `fix x` nested inside a match/while in a proof body *)
+  (* Use errors *)
+  | TyErr_UseNoExistsGoal Location  (* `use e` with no enclosing existentially-quantified proof goal *)
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType
@@ -71,5 +73,6 @@ datatype TypeError =
   | TyErr_InternalError_NameNotFound Location string  (* should have been caught by the renamer *)
   | TyErr_InternalError_UnexpectedChainVar Location
   | TyErr_InternalError_FreshnameClash Location string  (* synthesised match@@n name collided with a free var or pattern var *)
+  | TyErr_InternalError_IllKindedProofGoal Location  (* a stored proof goal contained an ill-kinded quantifier type — impossible, as goals come from elaborated (well-typed) Asserts *)
 
 end

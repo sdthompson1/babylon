@@ -53,7 +53,11 @@ record CoreTyEnv =
   (* Ghost-ness of the enclosing function. *)
   TE_FunctionGhost :: GhostOrNot
 
-  (* The remaining goal of the immediately-enclosing assert proof (if applicable). *)
+  (* The remaining goal of the immediately-enclosing assert proof (if applicable).
+     Note: Fix and Use strip quantifiers from the TE_ProofGoal, without renaming or
+     substituting into the body correctly, so this might not be a well-typed term.
+     This does not matter for typechecking, because the proof goal is only consumed
+     structurally. *)
   TE_ProofGoal :: "CoreTerm option"
 
   (* True if we are at the *top level* (not inside a nested Match or While) in an
