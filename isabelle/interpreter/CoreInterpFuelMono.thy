@@ -1571,17 +1571,37 @@ next
   then show ?case
     by (metis Suc_le_D interp_statement.simps(23))
 next
+  (* interp_statement (Suc fuel) Block - runs the body list in a fresh scope.
+     Mirrors the Match NotGhost case minus the scrutinee / arm-finding layers. *)
+  case (50 fuel state body)
+  then show ?case
+  proof (intro allI impI)
+    fix f' assume "f' \<ge> Suc fuel"
+    then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
+      using Suc_le_D by auto
+    assume noFuel: "interp_statement (Suc fuel) state (CoreStmt_Block body) \<noteq> Inl InsufficientFuel"
+    hence body_noFuel: "interp_statement_list fuel state body \<noteq> Inl InsufficientFuel"
+      by (auto split: sum.splits ExecResult.splits)
+    hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list f' state body = interp_statement_list fuel state body"
+      using "50.IH" by blast
+    have body_f'': "interp_statement_list f'' state body = interp_statement_list fuel state body"
+      using IH_body f''_ge by metis
+    show "interp_statement f' state (CoreStmt_Block body) =
+          interp_statement (Suc fuel) state (CoreStmt_Block body)"
+      using f'_eq body_f'' by simp
+  qed
+next
   (* interp_statement_list 0 *)
-  case (50 xe xf)
+  case (51 xe xf)
   then show ?case by simp
 next
   (* interp_statement_list (Suc _) [] *)
-  case (51 xg state)
+  case (52 xg state)
   then show ?case
     by (metis Suc_le_D interp_statement_list.simps(2))
 next
   (* interp_statement_list (Suc fuel) (stmt # stmts) *)
-  case (52 fuel state stmt stmts)
+  case (53 fuel state stmt stmts)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1591,7 +1611,7 @@ next
     hence stmt_noFuel: "interp_statement fuel state stmt \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits ExecResult.splits)
     hence IH_stmt: "\<forall>f'\<ge>fuel. interp_statement f' state stmt = interp_statement fuel state stmt"
-      using "52.IH"(1) by blast
+      using "53.IH"(1) by blast
     show "interp_statement_list f' state (stmt # stmts) =
           interp_statement_list (Suc fuel) state (stmt # stmts)"
     proof (cases "interp_statement fuel state stmt")
@@ -1609,7 +1629,7 @@ next
         hence stmts_noFuel: "interp_statement_list fuel state' stmts \<noteq> Inl InsufficientFuel"
           using noFuel by (auto split: sum.splits)
         hence IH_stmts: "\<forall>f'\<ge>fuel. interp_statement_list f' state' stmts = interp_statement_list fuel state' stmts"
-          using "52.IH"(2) Inr Continue by blast
+          using "53.IH"(2) Inr Continue by blast
         have "interp_statement f'' state stmt = Inr (Continue state')"
           using IH_stmt stmt_fuel f''_ge by metis
         moreover have "interp_statement_list f'' state' stmts = interp_statement_list fuel state' stmts"
@@ -1627,11 +1647,11 @@ next
   qed
 next
   (* interp_function_call 0 *)
-  case (53 xh xi xj xk)
+  case (54 xh xi xj xk)
   then show ?case by simp
 next
   (* interp_function_call (Suc fuel) *)
-  case (54 fuel state fnName argTys argTms)
+  case (55 fuel state fnName argTys argTms)
   then show ?case
   proof (intro allI impI)
     fix f' assume f'_ge: "f' \<ge> Suc fuel"
@@ -1680,11 +1700,11 @@ next
           have tm_IH: "\<forall>argTm \<in> set argTms.
                         interp_term fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> (\<forall>f' \<ge> fuel. interp_term f' state argTm = interp_term fuel state argTm)"
-            using "54.IH"(1) Some by (meson "54.IH"(2) False tyLen)
+            using "55.IH"(2) False Some tyLen by blast
           have lv_IH: "\<forall>argTm \<in> set argTms.
                         interp_writable_lvalue fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> (\<forall>f' \<ge> fuel. interp_writable_lvalue f' state argTm = interp_writable_lvalue fuel state argTm)"
-            using "54.IH"(2) Some by (meson "54.IH"(1) False tyLen)
+            using "55.IH"(1) False Some tyLen by blast
 
           (* Use fold_process_one_arg_more_fuel *)
           have fold_all: "\<forall>f' \<ge> fuel. fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue f' state) argTms)
@@ -1711,7 +1731,7 @@ next
                 using noFuel Some False tyLen PreCall by (auto split: sum.splits ExecResult.splits simp: Let_def)
               hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list f' preCallState bodyStmts =
                                         interp_statement_list fuel preCallState bodyStmts"
-                using "54.IH"(3) Some False tyLen PreCall Inl by blast
+                using "55.IH"(3) Some False tyLen PreCall Inl by blast
               have "interp_statement_list f'' preCallState bodyStmts =
                     interp_statement_list fuel preCallState bodyStmts"
                 using IH_body f''_ge by metis

@@ -2597,6 +2597,152 @@ next
           by simp
         from "4.prems"(1) env'_eq have "state_matches_env state env' storeTyping" by simp
         with CoreStmt_ShowHide interp_eq show ?thesis using storeTyping_extends_refl by auto
+      next
+        case (CoreStmt_Block body)
+        \<comment> \<open>Block: a strict subset of the Match NotGhost case. The interpreter runs the
+            body list in a fresh scope and calls restore_scope on the result; the
+            typechecker's result env equals the input env (body scope discarded).
+            No matchGhost split (a block has no flag), no scrutinee, no arm-finding;
+            body_typed comes straight from the typecheck clause (like While). \<close>
+        from typing CoreStmt_Block have env'_eq: "env' = env"
+          by (auto split: option.splits)
+        \<comment> \<open>Body typechecks in env with TE_ProofTopLevel reset to False. \<close>
+        define benv where "benv = env \<lparr> TE_ProofTopLevel := False \<rparr>"
+        from typing CoreStmt_Block obtain bodyEnv' where
+          body_typed: "core_statement_list_type benv NotGhost body = Some bodyEnv'"
+          unfolding benv_def by (auto split: option.splits)
+        have sme_benv: "state_matches_env state benv storeTyping"
+          using "4.prems"(1) unfolding benv_def by simp
+        have wf_benv: "tyenv_well_formed benv"
+          using "4.prems"(2) unfolding benv_def
+          by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
+        have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 stmts0 env0'.
+                state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                tyenv_well_formed env0 \<Longrightarrow>
+                core_statement_list_type env0 NotGhost stmts0 = Some env0' \<Longrightarrow>
+                sound_statement_result env0 env0' storeTyping0
+                  (interp_statement_list fuel state0 stmts0)"
+          using Suc.IH(5) by simp
+        from IH_stmts[OF sme_benv wf_benv body_typed]
+        have "sound_statement_result benv bodyEnv' storeTyping
+            (interp_statement_list fuel state body)" .
+        \<comment> \<open>sound_statement_result ignores TE_ProofTopLevel of its first env. \<close>
+        hence body_sound: "sound_statement_result env bodyEnv' storeTyping
+            (interp_statement_list fuel state body)"
+          unfolding benv_def by simp
+        from core_statement_list_type_preserves_well_formed[OF body_typed wf_benv]
+        have wf_bodyEnv': "tyenv_well_formed bodyEnv'" .
+        from core_statement_list_type_fixed_eq[OF body_typed]
+        have "tyenv_fixed_eq benv bodyEnv'" .
+        hence fxeq_body: "tyenv_fixed_eq env bodyEnv'"
+          unfolding benv_def by simp
+        show ?thesis
+        proof (cases "interp_statement_list fuel state body")
+          case (Inl body_err)
+          with body_sound have "sound_error_result body_err" by simp
+          moreover have "interp_statement (Suc fuel) state
+                (CoreStmt_Block body) = Inl body_err"
+            using Inl by simp
+          ultimately show ?thesis using CoreStmt_Block by simp
+        next
+          case (Inr bodyRes)
+          note body_eval = Inr
+          show ?thesis
+          proof (cases bodyRes)
+            case (Continue state1)
+            from body_sound body_eval Continue obtain bodyStoreTyping where
+              sme_body: "state_matches_env state1 bodyEnv' bodyStoreTyping" and
+              ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
+              by auto
+            \<comment> \<open>Globals/functions preserved through the body. \<close>
+            from body_eval Continue
+            have body_list_eq: "interp_statement_list fuel state body
+                                = Inr (Continue state1)" by simp
+            from interp_statement_list_preserves_globals[OF body_list_eq]
+            have globals_eq: "IS_Globals state1 = IS_Globals state" .
+            from interp_statement_list_preserves_functions[OF body_list_eq]
+            have functions_eq: "IS_Functions state1 = IS_Functions state" .
+            from interp_statement_list_preserves_IS_DefaultCtors_Continue[OF body_list_eq]
+            have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" .
+            \<comment> \<open>Apply restore_scope_sound. \<close>
+            from fxeq_body have dt_eq:
+              "TE_DataCtors env = TE_DataCtors bodyEnv'"
+              "TE_Datatypes env = TE_Datatypes bodyEnv'"
+              "TE_GhostDatatypes env = TE_GhostDatatypes bodyEnv'"
+              unfolding tyenv_fixed_eq_def by simp_all
+            have sme_rs: "state_matches_env (restore_scope state state1)
+                            env storeTyping"
+              using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
+                                           globals_eq functions_eq default_ctors_eq
+                                           dt_eq(1) dt_eq(2) dt_eq(3)
+                                           "4.prems"(2) wf_bodyEnv'] .
+            have interp_eq: "interp_statement (Suc fuel) state
+                (CoreStmt_Block body)
+                = Inr (Continue (restore_scope state state1))"
+              using body_eval Continue by simp
+            from sme_rs interp_eq env'_eq CoreStmt_Block
+            show ?thesis using storeTyping_extends_refl by auto
+          next
+            case (Return state1 retVal)
+            from body_sound body_eval Return have
+              ret_typed: "value_has_type env retVal
+                             (apply_subst (IS_TyArgs state1) (TE_ReturnType env))" and
+              body_return_ex: "\<exists>env_mid storeTyping'.
+                  tyenv_fixed_eq env env_mid \<and> tyenv_fixed_eq env_mid bodyEnv' \<and>
+                  tyenv_well_formed env_mid \<and>
+                  state_matches_env state1 env_mid storeTyping' \<and>
+                  storeTyping_extends storeTyping storeTyping'"
+              by auto
+            from body_return_ex obtain env_mid bodyStoreTyping where
+              fxeq1: "tyenv_fixed_eq env env_mid" and
+              fxeq2: "tyenv_fixed_eq env_mid bodyEnv'" and
+              wf_mid: "tyenv_well_formed env_mid" and
+              sme_body: "state_matches_env state1 env_mid bodyStoreTyping" and
+              ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
+              by blast
+            \<comment> \<open>Globals/functions preserved through the body (Return). \<close>
+            from body_eval Return
+            have body_list_eq: "interp_statement_list fuel state body
+                                = Inr (Return state1 retVal)" by simp
+            from interp_statement_list_return_preserves_globals[OF body_list_eq]
+            have globals_eq: "IS_Globals state1 = IS_Globals state" .
+            from interp_statement_list_return_preserves_functions[OF body_list_eq]
+            have functions_eq: "IS_Functions state1 = IS_Functions state" .
+            from interp_statement_list_preserves_IS_TyArgs_Return[OF body_list_eq]
+            have tyargs_eq: "IS_TyArgs state1 = IS_TyArgs state" .
+            from interp_statement_list_preserves_IS_DefaultCtors_Return[OF body_list_eq]
+            have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" .
+            \<comment> \<open>Apply restore_scope_sound with env_mid. \<close>
+            from fxeq1 have dt_eq:
+              "TE_DataCtors env = TE_DataCtors env_mid"
+              "TE_Datatypes env = TE_Datatypes env_mid"
+              "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
+              unfolding tyenv_fixed_eq_def by simp_all
+            have sme_rs: "state_matches_env (restore_scope state state1)
+                            env storeTyping"
+              using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
+                                           globals_eq functions_eq default_ctors_eq
+                                           dt_eq(1) dt_eq(2) dt_eq(3)
+                                           "4.prems"(2) wf_mid] .
+            have interp_eq: "interp_statement (Suc fuel) state
+                (CoreStmt_Block body)
+                = Inr (Return (restore_scope state state1) retVal)"
+              using body_eval Return by simp
+            from ret_typed tyargs_eq
+            have ret_typed': "value_has_type env retVal
+                                 (apply_subst (IS_TyArgs state) (TE_ReturnType env))"
+              by simp
+            \<comment> \<open>Build the Return-case sound_statement_result: use env itself as
+                env_mid (fxeq refl both sides) with storeTyping unchanged. \<close>
+            have "sound_statement_result env env' storeTyping
+                   (Inr (Return (restore_scope state state1) retVal))"
+              unfolding env'_eq
+              using ret_typed' sme_rs "4.prems"(2)
+              by (auto intro!: exI[of _ env] exI[of _ storeTyping]
+                               tyenv_fixed_eq_refl storeTyping_extends_refl)
+            with interp_eq CoreStmt_Block show ?thesis by simp
+          qed
+        qed
       qed
     qed
   next

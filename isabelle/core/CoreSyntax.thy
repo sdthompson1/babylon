@@ -129,29 +129,61 @@ lemma is_lvalue_simps [simp]:
   by (simp_all add: is_lvalue_def)
 
 datatype CoreStatement =
+(* Declare a new variable, initialized by a pure term *)
   CoreStmt_VarDecl GhostOrNot string VarOrRef CoreType CoreTerm
-  (* Variable declaration initialized from an impure function call.
-     declGhost, varName, variable type, optional cast type for the return value,
-     fnName, type args, term args. The variable type is explicit (like
-     CoreStmt_VarDecl); if a cast type is given it must equal the variable type. *)
-  | CoreStmt_VarDeclCall GhostOrNot string CoreType "CoreType option" string "CoreType list" "CoreTerm list"
-  | CoreStmt_Fix string CoreType
-  | CoreStmt_Obtain string CoreType CoreTerm
-  | CoreStmt_Use CoreTerm
-  | CoreStmt_Assign GhostOrNot CoreTerm CoreTerm  (* lhs must be lvalue *)
-  (* Assignment whose rhs is an impure function call.
-     assignGhost, lhs (must be lvalue), optional cast type for the return value,
-     fnName, type args, term args. *)
-  | CoreStmt_AssignCall GhostOrNot CoreTerm "CoreType option" string "CoreType list" "CoreTerm list"
-  | CoreStmt_Swap GhostOrNot CoreTerm CoreTerm    (* both terms must be lvalues *)
-  | CoreStmt_Return CoreTerm
-  | CoreStmt_Assert "CoreTerm option" "CoreStatement list"
-      (* condition (None = "assert *", i.e. assert the current proof goal), proof body *)
-  | CoreStmt_Assume CoreTerm
-  | CoreStmt_While GhostOrNot CoreTerm "CoreTerm list" CoreTerm "CoreStatement list"  
-         (* ghost flag, condition, invariants, decreases-term, loop body *)
-  | CoreStmt_Match GhostOrNot CoreTerm "(CorePattern \<times> CoreStatement list) list"
-  | CoreStmt_ShowHide ShowOrHide string
+
+(* Declare a new variable, initialized from an impure function call.
+   Parameters: declGhost, varName, variable type, optional cast type for the return value, 
+   fnName, type args, term args. (If cast type present, it must match the var type.) *)
+| CoreStmt_VarDeclCall GhostOrNot string CoreType "CoreType option" string "CoreType list" "CoreTerm list"
+
+(* Fix: introduce a universally quantified variable in a proof. *)
+| CoreStmt_Fix string CoreType
+
+(* Obtain: create a ghost variable of the given type, satisfying the given boolean condition. *)
+| CoreStmt_Obtain string CoreType CoreTerm
+
+(* Use: specify a witness for an existential variable in a proof. *)
+| CoreStmt_Use CoreTerm
+
+(* Assignment. Rhs must be a pure term; lhs must be an lvalue. *)
+| CoreStmt_Assign GhostOrNot CoreTerm CoreTerm
+
+(* Assignment whose rhs is an impure function call.
+   assignGhost, lhs (must be lvalue), optional cast type for the return value,
+   fnName, type args, term args. *)
+| CoreStmt_AssignCall GhostOrNot CoreTerm "CoreType option" string "CoreType list" "CoreTerm list"
+
+(* Swap two lvalues in place. *)
+| CoreStmt_Swap GhostOrNot CoreTerm CoreTerm
+
+(* Return a value from the current function. *)
+| CoreStmt_Return CoreTerm
+
+(* Assert that a condition is true (creates a proof obligation).
+   If condition = None, this is "assert *" i.e. assert the current proof goal.
+   The statement list is the proof body (contains fix, asserts, etc., to help the SMT solver;
+   can be empty). *)
+| CoreStmt_Assert "CoreTerm option" "CoreStatement list"
+
+(* Assume that a given boolean term is True. May be unsound; use carefully. *)
+| CoreStmt_Assume CoreTerm
+
+(* While-loop with: ghost flag, condition, invariants, decreases-term, loop body.
+   The loop body runs inside its own scope, i.e. it is implicitly inside a CoreStmt_Block. *)
+| CoreStmt_While GhostOrNot CoreTerm "CoreTerm list" CoreTerm "CoreStatement list"  
+
+(* Match-stmt with: ghost flag, scrutinee, list of arms. Each arm is a pattern and a 
+   statement-list (which runs inside its own scope, i.e. is implicitly inside a CoreStmt_Block). *)
+| CoreStmt_Match GhostOrNot CoreTerm "(CorePattern \<times> CoreStatement list) list"
+
+(* Show or hide a name from the SMT solvers. Has no semantic effect; this just impacts how the
+   proof obligations are verified. *)
+| CoreStmt_ShowHide ShowOrHide string
+
+(* Execute a list of statements in a fresh runtime scope, discarded on exit (an analogue 
+   of C's `{ ... }`). *)
+| CoreStmt_Block "CoreStatement list"
 
 (* TODO: Decls, etc. *)
 

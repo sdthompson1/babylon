@@ -592,6 +592,43 @@ next
         then show ?thesis by (simp add: exec_result_preserves_gf_Continue)
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
+      next
+        case (CoreStmt_Block body)
+        \<comment> \<open>Like the Match NotGhost branch (run body, restore_scope on exit), minus
+            the Ghost split and the scrutinee / arm-finding layers.\<close>
+        from H CoreStmt_Block obtain bodyRes where
+          body: "interp_statement_list fuel state body = Inr bodyRes"
+          by (auto split: sum.splits)
+        from IH_stmt_list body
+        have body_gf: "exec_result_preserves_gf state bodyRes" by blast
+        show ?thesis
+        proof (cases bodyRes)
+          case (Continue state1)
+          from body_gf Continue
+          have gf1: "IS_Globals state1 = IS_Globals state \<and>
+                     IS_Functions state1 = IS_Functions state \<and>
+                     IS_TyArgs state1 = IS_TyArgs state \<and>
+                     IS_DefaultCtors state1 = IS_DefaultCtors state"
+            by (simp add: exec_result_preserves_gf_Continue)
+          from CoreStmt_Block H body Continue
+          have res_eq: "res = Continue (restore_scope state state1)" by simp
+          from res_eq gf1 show ?thesis
+            by (simp add: exec_result_preserves_gf_Continue
+                          restore_scope_preserves_globals_funs)
+        next
+          case (Return state1 v)
+          from body_gf Return
+          have gf1: "IS_Globals state1 = IS_Globals state \<and>
+                     IS_Functions state1 = IS_Functions state \<and>
+                     IS_TyArgs state1 = IS_TyArgs state \<and>
+                     IS_DefaultCtors state1 = IS_DefaultCtors state"
+            by (simp add: exec_result_preserves_gf_Return)
+          from CoreStmt_Block H body Return
+          have res_eq: "res = Return (restore_scope state state1) v" by simp
+          from res_eq gf1 show ?thesis
+            by (simp add: exec_result_preserves_gf_Return
+                          restore_scope_preserves_globals_funs)
+        qed
       qed
     qed
   next

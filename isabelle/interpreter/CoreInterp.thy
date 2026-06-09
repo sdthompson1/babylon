@@ -840,6 +840,13 @@ where
 | "interp_statement (Suc fuel) _ (CoreStmt_Fix _ _) = Inl TypeError"
 | "interp_statement (Suc fuel) _ (CoreStmt_Use _) = Inl TypeError"
 
+  (* Block: interpret a list of statements in a fresh scope. *)
+| "interp_statement (Suc fuel) state (CoreStmt_Block body) =
+    (case interp_statement_list fuel state body of
+      Inr (Continue state') \<Rightarrow> Inr (Continue (restore_scope state state'))
+    | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
+    | Inl err \<Rightarrow> Inl err)"
+
   (* Interpret a list of statements *)
 | "interp_statement_list 0 _ _ = Inl InsufficientFuel"
 | "interp_statement_list (Suc _) state [] = Inr (Continue state)"
