@@ -73,6 +73,23 @@ fun is_valid_decreases_type :: "CoreType \<Rightarrow> bool" where
      list_all (\<lambda>(_, ty). is_valid_decreases_type ty) flds"
 | "is_valid_decreases_type _ = False"
 
+(* A valid decreases type is built from Bool / finite-int / math-int / records of the
+   same, so it contains no type variables. *)
+lemma is_valid_decreases_type_no_tyvars:
+  "is_valid_decreases_type ty \<Longrightarrow> type_tyvars ty = {}"
+proof (induction ty rule: is_valid_decreases_type.induct)
+  case (4 flds)
+  have "\<And>f. f \<in> set flds \<Longrightarrow> type_tyvars (snd f) = {}"
+  proof -
+    fix f assume f_in: "f \<in> set flds"
+    obtain nm fty where f_eq: "f = (nm, fty)" by (cases f)
+    have "is_valid_decreases_type fty"
+      using "4.prems" f_in f_eq by (auto simp: list_all_iff)
+    thus "type_tyvars (snd f) = {}" using "4.IH"[OF f_in[unfolded f_eq]] f_eq by simp
+  qed
+  thus ?case by auto
+qed auto
+
 (* ========================================================================== *)
 (* Main type-checking function *)
 (* ========================================================================== *)

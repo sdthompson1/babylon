@@ -54,6 +54,10 @@ datatype TypeError =
   | TyErr_FixNotAtProofTopLevel Location  (* `fix x` nested inside a match/while in a proof body *)
   (* Use errors *)
   | TyErr_UseNoExistsGoal Location  (* `use e` with no enclosing existentially-quantified proof goal *)
+  (* While errors *)
+  | TyErr_InvalidWhileAttribute Location  (* a while attribute other than `invariant` or `decreases` *)
+  | TyErr_WhileNeedsOneDecreases Location  (* a while loop without exactly one `decreases` attribute *)
+  | TyErr_InvalidDecreasesType Location CoreType  (* `decreases e` where e's type is not a valid decreases type *)
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
   | TyErr_NotARecordType Location CoreType

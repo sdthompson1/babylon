@@ -2202,6 +2202,189 @@ proof -
 qed
 
 
+(* ----- While branch helper lemmas ----- *)
+
+(* elab_while_invariants only advances the metavariable counter. *)
+lemma elab_while_invariants_next_mv:
+  "elab_while_invariants env elabEnv invs next_mv = Inr (coreInvars, next_mv')
+     \<Longrightarrow> next_mv \<le> next_mv'"
+proof (induction env elabEnv invs next_mv arbitrary: coreInvars next_mv'
+       rule: elab_while_invariants.induct)
+  case (1 env elabEnv next_mv)
+  thus ?case by simp
+next
+  case (2 env elabEnv invTm invs next_mv)
+  from "2.prems" obtain coreInv invTy next_mv1 subst rest where
+    etm: "elab_term env elabEnv Ghost invTm next_mv = Inr (coreInv, invTy, next_mv1)" and
+    unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) invTy CoreTy_Bool = Some subst" and
+    rec: "elab_while_invariants env elabEnv invs next_mv1 = Inr (rest, next_mv')"
+    by (auto split: sum.splits prod.splits option.splits)
+  have "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+  also have "next_mv1 \<le> next_mv'" using "2.IH" etm unif rec by simp
+  finally show ?case .
+qed
+
+(* Each invariant term elaborated by elab_while_invariants, after clearing, typechecks to
+   Bool in env under Ghost mode — exactly the Assume reasoning, applied per element. *)
+lemma elab_while_invariants_correct:
+  "elab_while_invariants env elabEnv invs next_mv = Inr (coreInvars, next_mv') \<Longrightarrow>
+   tyenv_well_formed env \<Longrightarrow> elabenv_well_formed env elabEnv \<Longrightarrow>
+   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
+   list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars"
+proof (induction env elabEnv invs next_mv arbitrary: coreInvars next_mv'
+       rule: elab_while_invariants.induct)
+  case (1 env elabEnv next_mv)
+  thus ?case by simp
+next
+  case (2 env elabEnv invTm invs next_mv)
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  from "2.prems"(1) obtain coreInv invTy next_mv1 subst rest where
+    etm: "elab_term env elabEnv Ghost invTm next_mv = Inr (coreInv, invTy, next_mv1)" and
+    unif: "unify ?is_flex invTy CoreTy_Bool = Some subst" and
+    rec: "elab_while_invariants env elabEnv invs next_mv1 = Inr (rest, next_mv')" and
+    ci_eq: "coreInvars = clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreInv) # rest"
+    by (auto split: sum.splits prod.splits option.splits)
+  \<comment> \<open>Head invariant types to Bool in env (Assume reasoning, Ghost mode).\<close>
+  let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv1"
+  have typed_ghost: "core_term_type ?envD Ghost coreInv = Some invTy"
+    using elab_term_correct(1)[OF etm "2.prems"(2,3)] "2.prems"(4) by simp
+  have wfD: "tyenv_well_formed ?envD"
+    using "2.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+  have invTy_wk: "is_well_kinded ?envD invTy"
+    using core_term_type_well_kinded[OF typed_ghost wfD] .
+  have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+    using unify_preserves_well_kinded[OF unif invTy_wk] by simp
+  have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+    using unify_unify_list_dom_flex(1)[OF unif] .
+  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
+    unfolding extend_env_with_tyvars_def by simp
+  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF dom_flex "2.prems"(2) envD_locals envD_ret]
+  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                        \<Longrightarrow> apply_subst subst ty' = ty'"
+    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
+    by blast+
+  have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreInv)
+                       = Some (apply_subst subst invTy)"
+    using apply_subst_to_term_preserves_typing
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected] by simp
+  have "apply_subst subst invTy = apply_subst subst CoreTy_Bool"
+    using unify_sound[OF unif] .
+  hence subst_typed_bool:
+    "core_term_type ?envD Ghost (apply_subst_to_term subst coreInv) = Some CoreTy_Bool"
+    using subst_typed by simp
+  have head_typed: "core_term_type env Ghost
+                      (clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreInv))
+                        = Some CoreTy_Bool"
+    using clear_metavars_typed_in_env[OF subst_typed_bool "2.prems"(2,4)] by simp
+  \<comment> \<open>Tail invariants type to Bool via the IH (the tyvar bound lifts to next_mv1).\<close>
+  have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+  have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1" using "2.prems"(4) nmv1 by auto
+  have tail_typed: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) rest"
+    using "2.IH" etm unif rec "2.prems"(2,3) bound1 by simp
+  show ?case using head_typed tail_typed by (simp add: ci_eq)
+qed
+
+(* elab_while_header only advances the metavariable counter. *)
+lemma elab_while_header_next_mv:
+  "elab_while_header env elabEnv ghost loc cond invs decr next_mv
+     = Inr (clearedCond, coreInvars, clearedDecr, next_mv')
+   \<Longrightarrow> next_mv \<le> next_mv'"
+  by (auto simp: elab_while_header_def
+           dest!: elab_term_next_mv_monotone elab_while_invariants_next_mv
+           split: sum.splits prod.splits option.splits if_splits
+           intro: order_trans)
+
+(* elab_while_header produces a cleared condition that types to Bool in env (ambient
+   ghost), cleared invariants that each type to Bool in env (Ghost), and a cleared
+   decreases term that types to a valid decreases type in env (Ghost). This bundles the
+   three premises the Core While rule needs (besides the body). *)
+lemma elab_while_header_correct:
+  assumes elab: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
+                   = Inr (clearedCond, coreInvars, clearedDecr, next_mv')"
+    and wf: "tyenv_well_formed env"
+    and ee_wf: "elabenv_well_formed env elabEnv"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+  shows "core_term_type env ghost clearedCond = Some CoreTy_Bool
+       \<and> list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars
+       \<and> (\<exists>decrTy. core_term_type env Ghost clearedDecr = Some decrTy
+                   \<and> is_valid_decreases_type decrTy)"
+proof -
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  \<comment> \<open>Peel the header: condition, unifier, invariants, decreases.\<close>
+  from elab obtain coreCond condTy next_mv1 subst next_mv2 coreDecr decrTy where
+    etm: "elab_term env elabEnv ghost cond next_mv = Inr (coreCond, condTy, next_mv1)" and
+    unif: "unify ?is_flex condTy CoreTy_Bool = Some subst" and
+    invsE: "elab_while_invariants env elabEnv invs next_mv1 = Inr (coreInvars, next_mv2)" and
+    decrE: "elab_term env elabEnv Ghost decr next_mv2 = Inr (coreDecr, decrTy, next_mv')" and
+    decr_valid: "is_valid_decreases_type decrTy" and
+    cc_eq: "clearedCond = clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond)" and
+    cd_eq: "clearedDecr = clear_metavars next_mv2 next_mv' coreDecr"
+    by (auto simp: elab_while_header_def
+             split: sum.splits prod.splits option.splits if_splits)
+  \<comment> \<open>(1) The cleared condition types to Bool in env (Assume reasoning at ambient ghost).\<close>
+  let ?envC = "extend_env_with_tyvars env ghost next_mv next_mv1"
+  have cond_typed: "core_term_type ?envC ghost coreCond = Some condTy"
+    using elab_term_correct(1)[OF etm wf ee_wf] bound by simp
+  have wfC: "tyenv_well_formed ?envC" using wf tyenv_well_formed_extend_env_with_tyvars by blast
+  have condTy_wk: "is_well_kinded ?envC condTy"
+    using core_term_type_well_kinded[OF cond_typed wfC] .
+  have condTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?envC condTy"
+    using core_term_type_notghost_runtime cond_typed wfC by auto
+  have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envC ty'"
+    using unify_preserves_well_kinded[OF unif condTy_wk] by simp
+  have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envC ty')"
+  proof
+    assume ng: "ghost = NotGhost"
+    show "\<forall>ty' \<in> fmran' subst. is_runtime_type ?envC ty'"
+      using unify_preserves_runtime[OF unif] condTy_rt ng by simp
+  qed
+  have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+    using unify_unify_list_dom_flex(1)[OF unif] .
+  have envC_locals: "TE_LocalVars ?envC = TE_LocalVars env"
+    unfolding extend_env_with_tyvars_def by simp
+  have envC_ret: "TE_ReturnType ?envC = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF dom_flex wf envC_locals envC_ret]
+  have c_locals: "\<And>name ty'. fmlookup (TE_LocalVars ?envC) name = Some ty'
+                               \<Longrightarrow> apply_subst subst ty' = ty'"
+    and c_ret: "apply_subst subst (TE_ReturnType ?envC) = TE_ReturnType ?envC"
+    by blast+
+  have subst_typed: "core_term_type ?envC ghost (apply_subst_to_term subst coreCond)
+                       = Some (apply_subst subst condTy)"
+    using apply_subst_to_term_preserves_typing
+            [OF cond_typed wfC subst_wk subst_rt c_locals c_ret] .
+  have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
+    using unify_sound[OF unif] .
+  hence subst_typed_bool:
+    "core_term_type ?envC ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
+    using subst_typed by simp
+  have cond_bool: "core_term_type env ghost clearedCond = Some CoreTy_Bool"
+    using clear_metavars_typed_in_env[OF subst_typed_bool wf bound] cc_eq by simp
+  \<comment> \<open>Lift the tyvar bound across the cond / invariant intervals.\<close>
+  have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+  have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1" using bound nmv1 by auto
+  have nmv2: "next_mv1 \<le> next_mv2" using elab_while_invariants_next_mv[OF invsE] .
+  have bound2: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv2" using bound1 nmv2 by auto
+  \<comment> \<open>(2) Each cleared invariant types to Bool in env (Ghost mode).\<close>
+  have inv_bool: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars"
+    using elab_while_invariants_correct[OF invsE wf ee_wf bound1] .
+  \<comment> \<open>(3) The cleared decreases term types to decrTy (a valid decreases type) in env (Ghost).\<close>
+  let ?envD = "extend_env_with_tyvars env Ghost next_mv2 next_mv'"
+  have decr_typed: "core_term_type ?envD Ghost coreDecr = Some decrTy"
+    using elab_term_correct(1)[OF decrE wf ee_wf] bound2 by simp
+  have wfD: "tyenv_well_formed ?envD" using wf tyenv_well_formed_extend_env_with_tyvars by blast
+  \<comment> \<open>decrTy is a valid decreases type, hence has no type variables, so clearing the term's
+      interval metavariables leaves the type unchanged.\<close>
+  have decrTy_below: "type_tyvars decrTy \<subseteq> {n. n < next_mv2}"
+    using is_valid_decreases_type_no_tyvars[OF decr_valid] by simp
+  have decr_cleared: "core_term_type env Ghost clearedDecr = Some decrTy"
+    using clear_metavars_typed_in_env[OF decr_typed wf bound2 decrTy_below] cd_eq by simp
+  show ?thesis using cond_bool inv_bool decr_cleared decr_valid by blast
+qed
+
+
 (* ========================================================================== *)
 (* elab_statement monotonicity, well-formedness preservation, etc. *)
 (* ========================================================================== *)
@@ -2372,7 +2555,26 @@ next
   have m3: "next_mv2 \<le> next_mv'" using "10.IH"(2) etm unif thenE elseE by simp
   from m1 m2 m3 show ?case by simp
 next
-  case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
+  \<comment> \<open>While: the header (cond / invariants / decreases) advances next_mv to next_mv3, then
+      the body list advances next_mv3 to next_mv' (via the mutual IH).\<close>
+  case (11 env elabEnv ghost loc cond attrs body next_mv)
+  let ?bodyEnv = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
+  from "11.prems" obtain invs decr where
+    attrs_ok: "collect_while_attributes loc attrs = Inr (invs, [decr])"
+    by (cases "collect_while_attributes loc attrs") (auto split: prod.splits list.splits)
+  from "11.prems" attrs_ok obtain clearedCond coreInvars clearedDecr next_mv3 where
+    hdr: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
+            = Inr (clearedCond, coreInvars, clearedDecr, next_mv3)"
+    by (cases "elab_while_header env elabEnv ghost loc cond invs decr next_mv")
+       (auto split: prod.splits)
+  from "11.prems" attrs_ok hdr obtain coreBody benv where
+    bodyE: "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3
+              = Inr (coreBody, benv, next_mv')"
+    by (cases "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3")
+       (auto simp: Let_def split: prod.splits)
+  have m1: "next_mv \<le> next_mv3" using elab_while_header_next_mv[OF hdr] .
+  have m2: "next_mv3 \<le> next_mv'" using "11.IH" attrs_ok hdr bodyE by fastforce
+  from m1 m2 show ?case by simp
 next
   case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
 next
@@ -2540,7 +2742,11 @@ next
   show ?case using "10.prems"(1)
     by (auto simp: Let_def split: sum.splits prod.splits option.splits)
 next
-  case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
+  \<comment> \<open>While: env' = env in every success path (the body env is discarded), so all four
+      tracked fields are trivially unchanged.\<close>
+  case (11 env elabEnv ghost loc cond attrs body next_mv)
+  show ?case using "11.prems"(1)
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
 next
   case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
 next
@@ -2736,7 +2942,11 @@ next
     by (auto simp: Let_def split: sum.splits prod.splits option.splits)
   thus ?case using "10.prems"(2) by simp
 next
-  case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
+  \<comment> \<open>While: env unchanged (the body env is discarded).\<close>
+  case (11 env elabEnv ghost loc cond attrs body next_mv)
+  from "11.prems"(1) have "env' = env"
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
+  thus ?case using "11.prems"(2) by simp
 next
   case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
 next
@@ -2965,7 +3175,11 @@ next
     by (auto simp: Let_def split: sum.splits prod.splits option.splits)
   thus ?case using "10.prems"(2) by simp
 next
-  case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
+  \<comment> \<open>While: env unchanged (the body env is discarded).\<close>
+  case (11 env elabEnv ghost loc cond attrs body next_mv)
+  from "11.prems"(1) have "env' = env"
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
+  thus ?case using "11.prems"(2) by simp
 next
   case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
 next
@@ -3600,7 +3814,58 @@ next
     using scrut_typed then_typed else_typed
     by (simp add: cs_eq env'_eq)
 next
-  case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
+  \<comment> \<open>While: emits CoreStmt_While with env' = env (the Core While rule discards the body
+      scope and returns the entry env). The header (condition / invariants / decreases) is
+      certified by elab_while_header_correct: the cleared condition types to Bool in env
+      (ambient ghost), each cleared invariant types to Bool (Ghost), and the cleared
+      decreases term types to a valid decreases type (Ghost). The body typechecks under
+      bodyEnv = env with TE_ProofTopLevel := False via the (single) list IH, whose two
+      ambient invariants transfer since bodyEnv only changes TE_ProofTopLevel.\<close>
+  case (11 env elabEnv ghost loc cond attrs body next_mv)
+  let ?bodyEnv = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
+  \<comment> \<open>Peel the attribute split, the single decreases, the header, and the body.\<close>
+  from "11.prems"(1) obtain invs decr where
+    attrs_ok: "collect_while_attributes loc attrs = Inr (invs, [decr])"
+    by (cases "collect_while_attributes loc attrs")
+       (auto split: prod.splits list.splits)
+  from "11.prems"(1) attrs_ok obtain clearedCond coreInvars clearedDecr next_mv3 where
+    hdr: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
+            = Inr (clearedCond, coreInvars, clearedDecr, next_mv3)"
+    by (cases "elab_while_header env elabEnv ghost loc cond invs decr next_mv")
+       (auto split: prod.splits)
+  from "11.prems"(1) attrs_ok hdr obtain coreBody benv where
+    bodyE: "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3
+              = Inr (coreBody, benv, next_mv')" and
+    cs_eq: "coreStmt = CoreStmt_While ghost clearedCond coreInvars clearedDecr coreBody" and
+    env'_eq: "env' = env"
+    by (cases "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3")
+       (auto simp: Let_def split: prod.splits)
+  \<comment> \<open>The header obligations (cond Bool, invariants Bool, decreases valid).\<close>
+  from elab_while_header_correct[OF hdr "11.prems"(2,3,4)] obtain decrTy where
+    cond_bool: "core_term_type env ghost clearedCond = Some CoreTy_Bool" and
+    inv_bool: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars" and
+    decr_typed: "core_term_type env Ghost clearedDecr = Some decrTy" and
+    decr_valid: "is_valid_decreases_type decrTy"
+    by blast
+  \<comment> \<open>The body typechecks under bodyEnv (the list IH). bodyEnv differs from env only in
+      TE_ProofTopLevel, so the IH premises transfer.\<close>
+  have wf_body: "tyenv_well_formed ?bodyEnv"
+    using "11.prems"(2) tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
+  have ee_body: "elabenv_well_formed ?bodyEnv elabEnv"
+    using "11.prems"(3) elabenv_well_formed_cong_env[where env' = ?bodyEnv and env = env] by simp
+  have inv1_body: "TE_FunctionGhost ?bodyEnv = Ghost \<longrightarrow> ghost = Ghost"
+    using "11.prems"(5) by simp
+  have inv2_body: "ghost = NotGhost \<longrightarrow> TE_ProofGoal ?bodyEnv = None"
+    using "11.prems"(6) by simp
+  have nmv3: "next_mv \<le> next_mv3" using elab_while_header_next_mv[OF hdr] .
+  have bound_body: "\<forall>n. n |\<in>| TE_TypeVars ?bodyEnv \<longrightarrow> n < next_mv3"
+    using "11.prems"(4) nmv3 by auto
+  have body_typed: "core_statement_list_type ?bodyEnv ghost coreBody = Some benv"
+    using "11.IH" attrs_ok hdr bodyE wf_body ee_body bound_body inv1_body inv2_body by simp
+  \<comment> \<open>Assemble the Core While rule (whileGhost = ghost, so the ghost guard is trivial).\<close>
+  show ?case
+    using cond_bool inv_bool decr_typed decr_valid body_typed
+    by (simp add: cs_eq env'_eq)
 next
   case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
 next

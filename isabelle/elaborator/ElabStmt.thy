@@ -414,6 +414,78 @@ definition elab_use ::
           | _ \<Rightarrow> Inl [TyErr_UseNoExistsGoal loc])"
 
 
+(* ----- While branch helpers ----- *)
+
+(* Validate a while loop's attribute list and split it into the invariant terms (in
+   order) and the single decreases term. Every attribute must be a `BabAttr_Invariant`
+   or a `BabAttr_Decreases` (anything else is an error), and there must be exactly one
+   `decreases`. `loc` is the while-loop location (used for the "needs one decreases"
+   error). *)
+fun collect_while_attributes ::
+  "Location \<Rightarrow> BabAttribute list \<Rightarrow> TypeError list + (BabTerm list \<times> BabTerm list)" where
+  "collect_while_attributes loc [] = Inr ([], [])"
+| "collect_while_attributes loc (attr # attrs) =
+    (case collect_while_attributes loc attrs of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (invs, decrs) \<Rightarrow>
+         (case attr of
+            BabAttr_Invariant _ tm \<Rightarrow> Inr (tm # invs, decrs)
+          | BabAttr_Decreases _ tm \<Rightarrow> Inr (invs, tm # decrs)
+          | _ \<Rightarrow> Inl [TyErr_InvalidWhileAttribute (bab_attribute_location attr)]))"
+
+(* Elaborate a list of while-loop invariant terms. Each is elaborated in Ghost mode and
+   its type unified with Bool (as in Assume); the unifier is applied and the interval
+   metavariables cleared, so each cleared term typechecks to Bool in the original env.
+   Threads the metavariable counter left-to-right. *)
+fun elab_while_invariants ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabTerm list \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm list \<times> nat)" where
+  "elab_while_invariants env elabEnv [] next_mv = Inr ([], next_mv)"
+| "elab_while_invariants env elabEnv (invTm # invs) next_mv =
+    (case elab_term env elabEnv Ghost invTm next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (coreInv, invTy, next_mv1) \<Rightarrow>
+         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) invTy CoreTy_Bool of
+            None \<Rightarrow> Inl [TyErr_TypeMismatch (bab_term_location invTm) CoreTy_Bool invTy]
+          | Some subst \<Rightarrow>
+              (case elab_while_invariants env elabEnv invs next_mv1 of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr (rest, next_mv2) \<Rightarrow>
+                   Inr (clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreInv) # rest,
+                        next_mv2))))"
+
+(* Elaborate the "header" of a while loop, given the invariant terms and the (single)
+   decreases term already extracted from the attribute list. The condition is elaborated in
+   the ambient ghost mode and coerced to Bool (like BabStmt_If); the invariants are each
+   elaborated in Ghost mode and coerced to Bool; the decreases term is elaborated in Ghost
+   mode and must have a valid decreases type. Returns the cleared condition, the cleared
+   invariant terms, the cleared decreases term, and the advanced counter. The body
+   elaboration (which recurses into elab_statement_list) is left to the main clause. *)
+definition elab_while_header ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> BabTerm \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm \<times> CoreTerm list \<times> CoreTerm \<times> nat)" where
+  "elab_while_header env elabEnv ghost loc cond invs decr next_mv =
+    (case elab_term env elabEnv ghost cond next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (coreCond, condTy, next_mv1) \<Rightarrow>
+         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
+            None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
+          | Some subst \<Rightarrow>
+              (case elab_while_invariants env elabEnv invs next_mv1 of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr (coreInvars, next_mv2) \<Rightarrow>
+                   (case elab_term env elabEnv Ghost decr next_mv2 of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (coreDecr, decrTy, next_mv3) \<Rightarrow>
+                        if \<not> is_valid_decreases_type decrTy
+                        then Inl [TyErr_InvalidDecreasesType (bab_term_location decr) decrTy]
+                        else
+                          Inr (clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond),
+                               coreInvars,
+                               clear_metavars next_mv2 next_mv3 coreDecr,
+                               next_mv3)))))"
+
+
 (* ========================================================================== *)
 (* Main statement elaboration functions *)
 (* ========================================================================== *)
@@ -602,9 +674,26 @@ where
                                 env, next_mv3)))))"
 
   (* While: loop while a condition remains true. The cond must be boolean. The attrs can
-     include only "invariant" and "decreases" (with proper types) and there can be at most
+     include only "invariant" and "decreases" (with proper types) and there must be exactly
      one "decreases". The body is typechecked in a new scope. *)
-| "elab_statement env elabEnv ghost (BabStmt_While loc cond attrs body) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_While loc cond attrs body) next_mv =
+    \<comment> \<open>Validate the attribute list and require exactly one `decreases`.\<close>
+    (case collect_while_attributes loc attrs of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (invs, decrs) \<Rightarrow>
+         (case decrs of
+            [decr] \<Rightarrow>
+              \<comment> \<open>Elaborate the condition / invariants / decreases (header), then the body.\<close>
+              (case elab_while_header env elabEnv ghost loc cond invs decr next_mv of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr (clearedCond, coreInvars, clearedDecr, next_mv3) \<Rightarrow>
+                   (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
+                    in case elab_statement_list bodyEnv elabEnv ghost body next_mv3 of
+                         Inl errs \<Rightarrow> Inl errs
+                       | Inr (coreBody, _, next_mv4) \<Rightarrow>
+                           Inr (CoreStmt_While ghost clearedCond coreInvars clearedDecr coreBody,
+                                env, next_mv4)))
+          | _ \<Rightarrow> Inl [TyErr_WhileNeedsOneDecreases loc]))"
 
   (* Call an impure function, disregarding the return value. TODO (needs Core change). *)
 | "elab_statement env elabEnv ghost (BabStmt_Call loc tm) next_mv = undefined"
