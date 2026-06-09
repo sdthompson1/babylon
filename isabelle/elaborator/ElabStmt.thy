@@ -580,7 +580,26 @@ where
 
   (* If-then-else: Evaluate a boolean condition and branch to one of two statement blocks.
      Each block creates a new variable scope. Elaborates to CoreStmt_Match. *)
-| "elab_statement env elabEnv ghost (BabStmt_If loc cond thenB elseB) next_mv = undefined"
+| "elab_statement env elabEnv ghost (BabStmt_If loc cond thenB elseB) next_mv =
+    (case elab_term env elabEnv ghost cond next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (coreCond, condTy, next_mv1) \<Rightarrow>
+         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
+            None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
+          | Some subst \<Rightarrow>
+              (let armEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
+               in case elab_statement_list armEnv elabEnv ghost thenB next_mv1 of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr (coreThen, _, next_mv2) \<Rightarrow>
+                      (case elab_statement_list armEnv elabEnv ghost elseB next_mv2 of
+                         Inl errs \<Rightarrow> Inl errs
+                       | Inr (coreElse, _, next_mv3) \<Rightarrow>
+                           Inr (CoreStmt_Match ghost
+                                  (clear_metavars next_mv next_mv1
+                                     (apply_subst_to_term subst coreCond))
+                                  [(CorePat_Bool True, coreThen),
+                                   (CorePat_Bool False, coreElse)],
+                                env, next_mv3)))))"
 
   (* While: loop while a condition remains true. The cond must be boolean. The attrs can
      include only "invariant" and "decreases" (with proper types) and there can be at most

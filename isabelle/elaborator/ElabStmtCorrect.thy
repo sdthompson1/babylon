@@ -2356,7 +2356,21 @@ next
     using "9.prems"
     by (auto dest!: elab_term_next_mv_monotone split: sum.splits prod.splits option.splits if_splits)
 next
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
+  \<comment> \<open>If: cond advances next_mv to next_mv1 (elab_term), the then-block to next_mv2, the
+      else-block to next_mv3 = next_mv' (both list recursions via the mutual IH).\<close>
+  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
+  from "10.prems" obtain coreCond condTy next_mv1 subst coreThen tenv next_mv2 coreElse eenv where
+    etm: "elab_term env elabEnv ghost cond next_mv = Inr (coreCond, condTy, next_mv1)" and
+    unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool = Some subst" and
+    thenE: "elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>) elabEnv ghost thenB next_mv1
+              = Inr (coreThen, tenv, next_mv2)" and
+    elseE: "elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>) elabEnv ghost elseB next_mv2
+              = Inr (coreElse, eenv, next_mv')"
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+  have m1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+  have m2: "next_mv1 \<le> next_mv2" using "10.IH"(1) etm unif thenE by simp
+  have m3: "next_mv2 \<le> next_mv'" using "10.IH"(2) etm unif thenE elseE by simp
+  from m1 m2 m3 show ?case by simp
 next
   case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
 next
@@ -2520,7 +2534,11 @@ next
   case (9 env elabEnv ghost loc tm next_mv)
   show ?case using "9.prems"(1) by (auto split: sum.splits prod.splits option.splits if_splits)
 next
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
+  \<comment> \<open>If: env' = env in every success path (the per-branch envs are discarded), so all
+      four tracked fields are trivially unchanged.\<close>
+  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
+  show ?case using "10.prems"(1)
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
 next
   case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
 next
@@ -2712,7 +2730,11 @@ next
   from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits option.splits if_splits)
   thus ?case using "9.prems"(2) by simp
 next
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
+  \<comment> \<open>If: env unchanged (the per-branch envs are discarded).\<close>
+  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
+  from "10.prems"(1) have "env' = env"
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+  thus ?case using "10.prems"(2) by simp
 next
   case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
 next
@@ -2937,7 +2959,11 @@ next
   from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits option.splits if_splits)
   thus ?case using "9.prems"(2) by simp
 next
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
+  \<comment> \<open>If: env unchanged (the per-branch envs are discarded).\<close>
+  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
+  from "10.prems"(1) have "env' = env"
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+  thus ?case using "10.prems"(2) by simp
 next
   case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
 next
@@ -3474,7 +3500,105 @@ next
     using clear_metavars_typed_in_env[OF subst_typed_bool "9.prems"(2,4)] by simp
   show ?case using init_typed by (simp add: cs_eq env'_eq)
 next
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv) thus ?case sorry  \<comment> \<open>If\<close>
+  \<comment> \<open>If: desugars to a CoreStmt_Match on the condition with a True arm (the then-block)
+      and a False arm (the else-block). env' = env (the Core Match rule discards the
+      per-arm scopes and returns the entry env). Three obligations for the Core Match
+      rule: (a) the scrutinee (cleared condition) typechecks to Bool in env under the
+      ambient ghost mode — exactly the Assume reasoning, retargeted from Ghost to the
+      ambient ghost; (b) both patterns are Bool-compatible — immediate, since the
+      scrutinee is Bool; (c) each block typechecks as a statement list under
+      armEnv = env with TE_ProofTopLevel := False (via the mutual list IH).\<close>
+  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  let ?armEnv = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
+  \<comment> \<open>Peel the elaborator's nested cases: cond elaboration, the unifier, then the two
+      block elaborations.\<close>
+  from "10.prems"(1) obtain coreCond condTy next_mv1 where
+    etm: "elab_term env elabEnv ghost cond next_mv = Inr (coreCond, condTy, next_mv1)"
+    by (cases "elab_term env elabEnv ghost cond next_mv") (auto split: prod.splits)
+  from "10.prems"(1) etm obtain subst where
+    unif: "unify ?is_flex condTy CoreTy_Bool = Some subst"
+    by (cases "unify ?is_flex condTy CoreTy_Bool") auto
+  let ?clearedCond = "clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond)"
+  from "10.prems"(1) etm unif obtain coreThen tenv next_mv2 where
+    thenE: "elab_statement_list ?armEnv elabEnv ghost thenB next_mv1
+              = Inr (coreThen, tenv, next_mv2)"
+    by (cases "elab_statement_list ?armEnv elabEnv ghost thenB next_mv1")
+       (auto simp: Let_def split: prod.splits)
+  from "10.prems"(1) etm unif thenE obtain coreElse eenv where
+    elseE: "elab_statement_list ?armEnv elabEnv ghost elseB next_mv2
+              = Inr (coreElse, eenv, next_mv')" and
+    cs_eq: "coreStmt = CoreStmt_Match ghost ?clearedCond
+                         [(CorePat_Bool True, coreThen), (CorePat_Bool False, coreElse)]" and
+    env'_eq: "env' = env"
+    by (cases "elab_statement_list ?armEnv elabEnv ghost elseB next_mv2")
+       (auto simp: Let_def split: prod.splits)
+  \<comment> \<open>(a) The cleared condition typechecks to Bool in env (Assume reasoning at ambient ghost).\<close>
+  let ?envD = "extend_env_with_tyvars env ghost next_mv next_mv1"
+  have typed_amb: "core_term_type ?envD ghost coreCond = Some condTy"
+    using elab_term_correct(1)[OF etm "10.prems"(2,3)] "10.prems"(4) by simp
+  have wfD: "tyenv_well_formed ?envD"
+    using "10.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+  have condTy_wk: "is_well_kinded ?envD condTy"
+    using core_term_type_well_kinded[OF typed_amb wfD] .
+  have condTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?envD condTy"
+    using core_term_type_notghost_runtime typed_amb wfD by auto
+  have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+    using unify_preserves_well_kinded[OF unif condTy_wk] by simp
+  have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envD ty')"
+  proof
+    assume ng: "ghost = NotGhost"
+    show "\<forall>ty' \<in> fmran' subst. is_runtime_type ?envD ty'"
+      using unify_preserves_runtime[OF unif] condTy_rt ng by simp
+  qed
+  have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+    using unify_unify_list_dom_flex(1)[OF unif] .
+  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
+    unfolding extend_env_with_tyvars_def by simp
+  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF dom_flex "10.prems"(2) envD_locals envD_ret]
+  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
+                                        \<Longrightarrow> apply_subst subst ty' = ty'"
+    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
+    by blast+
+  have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term subst coreCond)
+                       = Some (apply_subst subst condTy)"
+    using apply_subst_to_term_preserves_typing
+            [OF typed_amb wfD subst_wk subst_rt locals_unaffected ret_unaffected] .
+  have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
+    using unify_sound[OF unif] .
+  hence subst_typed_bool:
+    "core_term_type ?envD ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
+    using subst_typed by simp
+  have scrut_typed: "core_term_type env ghost ?clearedCond = Some CoreTy_Bool"
+    using clear_metavars_typed_in_env[OF subst_typed_bool "10.prems"(2,4)] by simp
+  \<comment> \<open>(c) The then-block and else-block typecheck under armEnv (the mutual list IH).
+      armEnv differs from env only in TE_ProofTopLevel, so the IH premises transfer.\<close>
+  have wf_arm: "tyenv_well_formed ?armEnv"
+    using "10.prems"(2) tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
+  have ee_arm: "elabenv_well_formed ?armEnv elabEnv"
+    using "10.prems"(3) elabenv_well_formed_cong_env[where env' = ?armEnv and env = env] by simp
+  have inv1_arm: "TE_FunctionGhost ?armEnv = Ghost \<longrightarrow> ghost = Ghost"
+    using "10.prems"(5) by simp
+  have inv2_arm: "ghost = NotGhost \<longrightarrow> TE_ProofGoal ?armEnv = None"
+    using "10.prems"(6) by simp
+  have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+  have nmv2: "next_mv1 \<le> next_mv2"
+    using elab_statement_list_next_mv_monotone(1)[OF thenE] .
+  have bound_then: "\<forall>n. n |\<in>| TE_TypeVars ?armEnv \<longrightarrow> n < next_mv1"
+    using "10.prems"(4) nmv1 by auto
+  have then_typed: "core_statement_list_type ?armEnv ghost coreThen = Some tenv"
+    using "10.IH"(1) etm unif thenE wf_arm ee_arm bound_then inv1_arm inv2_arm by simp
+  have bound_else: "\<forall>n. n |\<in>| TE_TypeVars ?armEnv \<longrightarrow> n < next_mv2"
+    using bound_then nmv2 by auto
+  have else_typed: "core_statement_list_type ?armEnv ghost coreElse = Some eenv"
+    using "10.IH"(2) etm unif thenE elseE wf_arm ee_arm bound_else inv1_arm inv2_arm by simp
+  \<comment> \<open>Assemble the Core Match rule: the scrutinee is Bool, both Bool patterns are
+      compatible, and both blocks typecheck under armEnv = env\<lparr>TE_ProofTopLevel := False\<rparr>.\<close>
+  show ?case
+    using scrut_typed then_typed else_typed
+    by (simp add: cs_eq env'_eq)
 next
   case (11 env elabEnv ghost loc cond attrs body next_mv) thus ?case sorry  \<comment> \<open>While\<close>
 next
