@@ -134,4 +134,59 @@ fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> nat set" where
 | "core_term_free_tyvars (CoreTm_Old tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Default ty) = type_tyvars ty"
 
+
+(* ========================================================================== *)
+(* Free (term) variables of a core statement                                  *)
+(* ========================================================================== *)
+
+(* Variables bound by a statement for the subsequent statements in the
+   enclosing statement list. These are exactly the statements for which
+   core_statement_type extends the local-variable environment (VarDecl,
+   VarDeclCall, Fix, Obtain). *)
+fun core_statement_bound_vars :: "CoreStatement \<Rightarrow> string fset" where
+  "core_statement_bound_vars (CoreStmt_VarDecl _ varName _ _ _) = {|varName|}"
+| "core_statement_bound_vars (CoreStmt_VarDeclCall _ varName _ _ _ _ _) = {|varName|}"
+| "core_statement_bound_vars (CoreStmt_Fix varName _) = {|varName|}"
+| "core_statement_bound_vars (CoreStmt_Obtain varName _ _) = {|varName|}"
+| "core_statement_bound_vars _ = {||}"
+
+(* Free variables of a statement, and of a statement list. In a statement
+   list, a variable bound by VarDecl/VarDeclCall/Fix/Obtain is in scope for
+   the remaining statements, so it is removed from their free variables. *)
+fun core_statement_free_vars :: "CoreStatement \<Rightarrow> string fset"
+and core_statement_list_free_vars :: "CoreStatement list \<Rightarrow> string fset" where
+  "core_statement_free_vars (CoreStmt_VarDecl _ _ _ _ initTm) = core_term_free_vars initTm"
+| "core_statement_free_vars (CoreStmt_VarDeclCall _ _ _ _ _ _ argTms) =
+    ffUnion (fset_of_list (map core_term_free_vars argTms))"
+| "core_statement_free_vars (CoreStmt_Fix _ _) = {||}"
+| "core_statement_free_vars (CoreStmt_Obtain varName _ condTm) =
+    core_term_free_vars condTm |-| {|varName|}"
+| "core_statement_free_vars (CoreStmt_Use witnessTm) = core_term_free_vars witnessTm"
+| "core_statement_free_vars (CoreStmt_Assign _ lhsTm rhsTm) =
+    core_term_free_vars lhsTm |\<union>| core_term_free_vars rhsTm"
+| "core_statement_free_vars (CoreStmt_AssignCall _ lhsTm _ _ _ argTms) =
+    core_term_free_vars lhsTm |\<union>| ffUnion (fset_of_list (map core_term_free_vars argTms))"
+| "core_statement_free_vars (CoreStmt_Swap _ lhsTm rhsTm) =
+    core_term_free_vars lhsTm |\<union>| core_term_free_vars rhsTm"
+| "core_statement_free_vars (CoreStmt_Return tm) = core_term_free_vars tm"
+| "core_statement_free_vars (CoreStmt_Assert condOpt proofBody) =
+    (case condOpt of None \<Rightarrow> {||} | Some condTm \<Rightarrow> core_term_free_vars condTm)
+    |\<union>| core_statement_list_free_vars proofBody"
+| "core_statement_free_vars (CoreStmt_Assume tm) = core_term_free_vars tm"
+| "core_statement_free_vars (CoreStmt_While _ condTm invars decrTm body) =
+    core_term_free_vars condTm
+    |\<union>| ffUnion (fset_of_list (map core_term_free_vars invars))
+    |\<union>| core_term_free_vars decrTm
+    |\<union>| core_statement_list_free_vars body"
+| "core_statement_free_vars (CoreStmt_Match _ scrut arms) =
+    core_term_free_vars scrut
+    |\<union>| ffUnion (fset_of_list (map (core_statement_list_free_vars \<circ> snd) arms))"
+| "core_statement_free_vars (CoreStmt_ShowHide _ _) = {||}"
+| "core_statement_free_vars (CoreStmt_Block body) = core_statement_list_free_vars body"
+
+| "core_statement_list_free_vars [] = {||}"
+| "core_statement_list_free_vars (stmt # stmts) =
+    core_statement_free_vars stmt
+    |\<union>| (core_statement_list_free_vars stmts |-| core_statement_bound_vars stmt)"
+
 end
