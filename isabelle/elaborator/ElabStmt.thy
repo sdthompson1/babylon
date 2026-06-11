@@ -40,23 +40,24 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
               \<or> \<not> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo))
      | _ \<Rightarrow> False)"
 
-(* Resolve the callee of an impure call. This checks that the callee is a non-void, 
+(* Resolve the callee of an impure call. This checks that the callee is a
    ghost-compatible function; resolves the type arguments (allocating fresh metavariables
    when omitted); and computes the per-argument expected types and Var/Ref markers, plus
-   the substituted return type. Returns:
+   the substituted return type. Void functions are rejected unless allowVoid is set
+   (statement-position calls allow them; their Core return type is unit). Returns:
      (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv').
    The data-constructor / arg-count checks are left to the caller. *)
 definition resolve_impure_callee ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list
       + (string \<times> CoreType list \<times> CoreType list \<times> VarOrRef list \<times> CoreType \<times> nat)" where
-  "resolve_impure_callee env elabEnv ghost callee next_mv =
+  "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv =
     (case callee of
        BabTm_Name nloc name tyArgs \<Rightarrow>
          (case fmlookup (TE_Functions env) name of
             None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound nloc name]
           | Some funInfo \<Rightarrow>
-              if name |\<in>| EE_VoidFunctions elabEnv then
+              if \<not> allowVoid \<and> name |\<in>| EE_VoidFunctions elabEnv then
                 Inl [TyErr_FunctionNoReturnType nloc name]
               else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
                 Inl [TyErr_GhostFunctionInNonGhost nloc name]
@@ -110,10 +111,10 @@ fun validate_call_args ::
    (This is a combination of the previous two helper functions.)
    Returns the elaborated call term, its return type, and the advanced counter. *)
 definition elab_impure_call_term ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> nat
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (string \<times> CoreType list \<times> CoreTerm list \<times> CoreType \<times> nat)" where
-  "elab_impure_call_term env elabEnv ghost loc callee args next_mv =
-    (case resolve_impure_callee env elabEnv ghost callee next_mv of
+  "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv =
+    (case resolve_impure_callee env elabEnv ghost allowVoid callee next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1) \<Rightarrow>
          if length args \<noteq> length expArgTypes then
@@ -237,7 +238,7 @@ definition elab_vardecl_impure ::
   "elab_vardecl_impure env elabEnv ghost loc varName tyOpt tm next_mv =
     (case tm of
        BabTm_Call rloc callee rargs \<Rightarrow>
-         (case elab_impure_call_term env elabEnv ghost rloc callee rargs next_mv of
+         (case elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv of
             Inl errs \<Rightarrow> Inl errs
           | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv') \<Rightarrow>
               (let mkCallStmt = \<lambda>varTy castOpt tyArgs argTms.
@@ -318,7 +319,7 @@ definition elab_assign_impure ::
   "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
     (case rhs of
        BabTm_Call rloc callee rargs \<Rightarrow>
-         (case elab_impure_call_term env elabEnv ghost rloc callee rargs next_mv1 of
+         (case elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv1 of
             Inl errs \<Rightarrow> Inl errs
           | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv2) \<Rightarrow>
               (case reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy of
@@ -354,6 +355,51 @@ definition elab_swap ::
                   (clear_metavars next_mv next_mv2 lhsTm)
                   (clear_metavars next_mv next_mv2 rhsTm),
                 env, next_mv2))"
+
+
+(* ----- Call branch helper ----- *)
+
+(* Call statement: call a function and discard its return value. The callee must be
+   a named function (not a data constructor or other term); it may be pure (in which
+   case the statement is a no-op) or impure, and void functions are allowed (their
+   discarded Core return value is unit). 
+
+   Since Core has no discard-call statement, this elaborates to a block containing a
+   single VarDeclCall binding the result to a synthesised call@@tmp variable that 
+   immediately falls out of scope. No freshness check is needed even if call@@tmp shadows
+   another variable: the call's arguments are evaluated before the binding takes effect,
+   the temporary is never referenced, and the block discards the binding. The call is
+   elaborated under TE_ProofTopLevel := False to match the Core Block typechecking rule
+   (this is immaterial to the call itself, which never inspects that field). The 
+   environment is unchanged. *)
+definition elab_call_statement ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
+  "elab_call_statement env elabEnv ghost loc tm next_mv =
+    (case tm of
+       BabTm_Call cloc callee args \<Rightarrow>
+         (case callee of
+            BabTm_Name nloc name calleeTyArgs \<Rightarrow>
+              if name |\<in>| fmdom (EE_DataCtorArity elabEnv)
+                 \<or> name |\<notin>| fmdom (TE_Functions env)
+              then Inl [TyErr_CalleeNotFunction nloc]
+              else
+                (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
+                 in case elab_impure_call_term bodyEnv elabEnv ghost True cloc
+                           callee args next_mv of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv') \<Rightarrow>
+                        \<comment> \<open>The temporary's declared type is the return type, which
+                            must be metavariable-free (as in the inferred VarDecl).\<close>
+                        if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)
+                        then Inl [TyErr_CannotInferType loc]
+                        else Inr (CoreStmt_Block
+                                    [CoreStmt_VarDeclCall ghost ''call@@tmp'' retTy None fnName
+                                       (map (clear_metavars_type next_mv next_mv') finalTyArgs)
+                                       (map (clear_metavars next_mv next_mv') finalArgTms)],
+                                  env, next_mv'))
+          | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])
+     | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location tm)])"
 
 
 (* ----- Fix branch helper ----- *)
@@ -772,8 +818,11 @@ where
                                 env, next_mv4)))
           | _ \<Rightarrow> Inl [TyErr_WhileNeedsOneDecreases loc]))"
 
-  (* Call an impure function, disregarding the return value. TODO (needs Core change). *)
-| "elab_statement env elabEnv ghost (BabStmt_Call loc tm) next_mv = undefined"
+  (* Call a function, disregarding the return value. Elaborates to a CoreStmt_Block
+     containing a single CoreStmt_VarDeclCall whose temporary immediately goes out
+     of scope. *)
+| "elab_statement env elabEnv ghost (BabStmt_Call loc tm) next_mv =
+    elab_call_statement env elabEnv ghost loc tm next_mv"
 
   (* Match: run the first arm whose pattern matches the scrutinee, with the
      pattern's variables in scope. Each arm creates a new variable scope.

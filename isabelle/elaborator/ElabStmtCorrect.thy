@@ -450,7 +450,7 @@ lemma resolve_type_args_next_mv:
 
 (* resolve_impure_callee only advances the counter through resolve_type_args. *)
 lemma resolve_impure_callee_next_mv:
-  "resolve_impure_callee env elabEnv ghost callee next_mv
+  "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
      = Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')
      \<Longrightarrow> next_mv \<le> next_mv'"
   by (auto simp: resolve_impure_callee_def Let_def
@@ -460,14 +460,14 @@ lemma resolve_impure_callee_next_mv:
 (* elab_impure_call_term advances the counter: resolve_impure_callee then
    elab_term_list (unify / validate_call_args do not allocate). *)
 lemma elab_impure_call_term_next_mv:
-  "elab_impure_call_term env elabEnv ghost loc callee args next_mv
+  "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
      = Inr (fnName, tyArgs, argTms, retTy, next_mv')
      \<Longrightarrow> next_mv \<le> next_mv'"
 proof -
-  assume elab: "elab_impure_call_term env elabEnv ghost loc callee args next_mv
+  assume elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
                   = Inr (fnName, tyArgs, argTms, retTy, next_mv')"
   from elab obtain name newTyArgs expArgTypes varOrRefs retType0 next_mv1 where
-    rc: "resolve_impure_callee env elabEnv ghost callee next_mv
+    rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
            = Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1)"
     by (auto simp: elab_impure_call_term_def split: sum.splits prod.splits)
   from elab rc obtain elabArgTms actualTypes next_mv2 where
@@ -493,7 +493,7 @@ qed
    and (for the substitution-composition step) the signature's tyvars are
    distinct and its component types only mention those tyvars. *)
 lemma resolve_impure_callee_correct:
-  assumes rc: "resolve_impure_callee env elabEnv ghost callee next_mv
+  assumes rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
                  = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -522,11 +522,9 @@ proof -
   from rc callee_eq obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
     by (auto simp: resolve_impure_callee_def split: option.splits if_splits sum.splits prod.splits)
-  from rc callee_eq fn_lookup have not_void: "fnName |\<notin>| EE_VoidFunctions elabEnv"
+  from rc callee_eq fn_lookup have ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     by (auto simp: resolve_impure_callee_def split: if_splits sum.splits prod.splits)
-  from rc callee_eq fn_lookup not_void have ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
-    by (auto simp: resolve_impure_callee_def split: if_splits sum.splits prod.splits)
-  from rc callee_eq fn_lookup not_void ghost_ok obtain next_mv1 where
+  from rc callee_eq fn_lookup ghost_ok obtain next_mv1 where
     resolve_eq: "resolve_type_args env elabEnv ghost nloc fnName (FI_TyArgs funInfo) tyArgs next_mv
                  = Inr (newTyArgs, next_mv1)" and
     next_mv_eq: "next_mv' = next_mv1" and
@@ -725,7 +723,7 @@ qed (simp_all)
 (* Main correctness of elab_impure_call_term: its output is accepted by
    core_impure_call_type in the env extended with the fresh tyvar interval. *)
 lemma elab_impure_call_term_correct:
-  assumes elab: "elab_impure_call_term env elabEnv ghost loc callee args next_mv
+  assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
                    = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -739,7 +737,7 @@ proof -
 
   \<comment> \<open>Extract the three sub-results of elab_impure_call_term.\<close>
   from elab obtain newTyArgs expArgTypes varOrRefs retType0 next_mv1 where
-    rc: "resolve_impure_callee env elabEnv ghost callee next_mv
+    rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
            = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1)"
     by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
   from elab rc have len_args: "length args = length expArgTypes"
@@ -1048,7 +1046,7 @@ qed
    type has no unresolved metavariables, it is well-kinded (runtime in NotGhost)
    in env itself — analogous to elab_term_inferred_type_well_kinded_runtime. *)
 lemma elab_impure_call_term_inferred_type_well_kinded_runtime:
-  assumes elab: "elab_impure_call_term env elabEnv ghost loc callee args next_mv
+  assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
                    = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -1481,7 +1479,7 @@ proof -
     tm_eq: "tm = BabTm_Call rloc callee rargs"
     by (auto simp: is_impure_call_def split: BabTerm.splits)
   from elab tm_eq obtain fnName finalTyArgs finalArgTms retTy nmv where
-    ec: "elab_impure_call_term env elabEnv ghost rloc callee rargs next_mv
+    ec: "elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv
            = Inr (fnName, finalTyArgs, finalArgTms, retTy, nmv)"
     by (auto simp: elab_vardecl_impure_def split: sum.splits prod.splits)
   show ?thesis
@@ -1536,7 +1534,7 @@ proof -
   from impure obtain rloc callee rargs where tm_eq: "tm = BabTm_Call rloc callee rargs"
     by (auto simp: is_impure_call_def split: BabTerm.splits)
   from elab tm_eq obtain fnName finalTyArgs finalArgTms retTy where
-    ec: "elab_impure_call_term env elabEnv ghost rloc callee rargs next_mv
+    ec: "elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv
            = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
     by (auto simp: elab_vardecl_impure_def reconcile_call_result_def Let_def
              split: sum.splits prod.splits option.splits if_splits)
@@ -1891,7 +1889,7 @@ proof -
   from impure obtain rloc callee rargs where rhs_eq: "rhs = BabTm_Call rloc callee rargs"
     by (auto simp: is_impure_call_def split: BabTerm.splits)
   from elab rhs_eq obtain fnName finalTyArgs finalArgTms retTy castOpt tyArgs' argTms' where
-    ec: "elab_impure_call_term env elabEnv ghost rloc callee rargs next_mv1
+    ec: "elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv1
            = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')" and
     rcr: "reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy
             = Inr (castOpt, tyArgs', argTms')" and
@@ -2042,6 +2040,89 @@ proof -
   have rhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' rhsTm)"
     using rhs_wl unfolding clear_metavars_def by simp
   show ?thesis using lhs_wl' rhs_wl' lhs_init rhs_init by (simp add: cs_eq env'_eq)
+qed
+
+
+(* ----- Call branch helper ----- *)
+
+(* The call helper advances the counter via elab_impure_call_term. *)
+lemma elab_call_statement_next_mv:
+  "elab_call_statement env elabEnv ghost loc tm next_mv = Inr (coreStmt, env', next_mv')
+     \<Longrightarrow> next_mv \<le> next_mv'"
+  by (auto simp: elab_call_statement_def Let_def
+           dest!: elab_impure_call_term_next_mv
+           split: BabTerm.splits sum.splits prod.splits if_splits)
+
+(* The call helper leaves the env unchanged (the temporary's binding is confined
+   to the emitted block). *)
+lemma elab_call_statement_env:
+  "elab_call_statement env elabEnv ghost loc tm next_mv = Inr (coreStmt, env', next_mv')
+     \<Longrightarrow> env' = env"
+  by (auto simp: elab_call_statement_def Let_def
+           split: BabTerm.splits sum.splits prod.splits if_splits)
+
+(* elab_call_statement emits a CoreStmt_Block containing a single CoreStmt_VarDeclCall
+   that typechecks in env (returning env unchanged, per the Core Block rule). The call
+   is elaborated under bodyEnv = env with TE_ProofTopLevel := False, matching the Block
+   rule's body env; the entry invariants transfer since bodyEnv only changes
+   TE_ProofTopLevel. The temporary's declared type is the call's (metavar-free) return
+   type with no cast, exactly as in the inferred branch of elab_vardecl_impure_correct. *)
+lemma elab_call_statement_correct:
+  assumes elab: "elab_call_statement env elabEnv ghost loc tm next_mv
+                   = Inr (coreStmt, env', next_mv')"
+    and wf: "tyenv_well_formed env"
+    and ee_wf: "elabenv_well_formed env elabEnv"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+  shows "core_statement_type env ghost coreStmt = Some env'"
+proof -
+  let ?bodyEnv = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
+  \<comment> \<open>Peel the elaborator's case chain: the statement's term is a call of a named
+      callee, and the embedded call elaborates successfully.\<close>
+  from elab obtain cloc callee args where
+    tm_eq: "tm = BabTm_Call cloc callee args"
+    by (cases tm) (auto simp: elab_call_statement_def)
+  from elab tm_eq obtain nloc name calleeTyArgs where
+    callee_eq: "callee = BabTm_Name nloc name calleeTyArgs"
+    by (cases callee) (auto simp: elab_call_statement_def)
+  from elab tm_eq callee_eq obtain fnName finalTyArgs finalArgTms retTy where
+    ec: "elab_impure_call_term ?bodyEnv elabEnv ghost True cloc callee args next_mv
+           = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')" and
+    no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)" and
+    cs_eq: "coreStmt = CoreStmt_Block
+                         [CoreStmt_VarDeclCall ghost ''call@@tmp'' retTy None fnName
+                            (map (clear_metavars_type next_mv next_mv') finalTyArgs)
+                            (map (clear_metavars next_mv next_mv') finalArgTms)]" and
+    env'_eq: "env' = env"
+    by (auto simp: elab_call_statement_def Let_def
+             split: sum.splits prod.splits if_splits)
+  \<comment> \<open>The entry invariants transfer to bodyEnv.\<close>
+  have wfB: "tyenv_well_formed ?bodyEnv"
+    using wf tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
+  have eeB: "elabenv_well_formed ?bodyEnv elabEnv"
+    using ee_wf elabenv_well_formed_cong_env[where env' = ?bodyEnv and env = env] by simp
+  have boundB: "\<forall>n. n |\<in>| TE_TypeVars ?bodyEnv \<longrightarrow> n < next_mv" using bound by simp
+  have no_metaB: "list_all (\<lambda>n. n |\<in>| TE_TypeVars ?bodyEnv) (type_tyvars_list retTy)"
+    using no_meta by simp
+  have rtboundB: "\<forall>n. n |\<in>| TE_RuntimeTypeVars ?bodyEnv \<longrightarrow> n < next_mv"
+    using wfB boundB unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
+  \<comment> \<open>The call typechecks in bodyEnv's tyvar extension; clear the metavars down to
+      bodyEnv itself (retTy is metavar-free, so the clearing bridge applies).\<close>
+  have ctE: "core_impure_call_type (extend_env_with_tyvars ?bodyEnv ghost next_mv next_mv')
+               ghost fnName finalTyArgs finalArgTms = Some retTy"
+    using elab_impure_call_term_correct[OF ec wfB eeB boundB] .
+  have wkrt: "is_well_kinded ?bodyEnv retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ?bodyEnv retTy)"
+    using elab_impure_call_term_inferred_type_well_kinded_runtime[OF ec wfB eeB boundB no_metaB] .
+  have retTy_below: "type_tyvars retTy \<subseteq> {n. n < next_mv}"
+    using is_well_kinded_type_tyvars_subset[OF conjunct1[OF wkrt]] boundB by auto
+  have ct: "core_impure_call_type ?bodyEnv ghost fnName
+              (map (clear_metavars_type next_mv next_mv') finalTyArgs)
+              (map (clear_metavars next_mv next_mv') finalArgTms) = Some retTy"
+    using clear_metavars_impure_call_typed_in_env[OF ctE wfB boundB rtboundB retTy_below] .
+  \<comment> \<open>Assemble: the VarDeclCall binding the temporary typechecks in bodyEnv (declared
+      type = retTy, no cast), so the block typechecks in env, discards the temporary's
+      scope, and returns env unchanged.\<close>
+  show ?thesis using wkrt ct
+    by (simp add: cs_eq env'_eq cast_result_type_def)
 qed
 
 
@@ -2605,7 +2686,11 @@ next
   have m2: "next_mv3 \<le> next_mv'" using "11.IH" attrs_ok hdr bodyE by fastforce
   from m1 m2 show ?case by simp
 next
-  case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
+  \<comment> \<open>Call: the counter advances via the embedded impure call's elaboration.\<close>
+  case (12 env elabEnv ghost loc tm next_mv)
+  from "12.prems" have "elab_call_statement env elabEnv ghost loc tm next_mv
+                          = Inr (coreStmt, env', next_mv')" by simp
+  thus ?case using elab_call_statement_next_mv by blast
 next
   \<comment> \<open>Match: chain scrutinee elaboration, pattern decoration, scrutinee
       finalization (which consumes one counter value for match@@n), and the
@@ -2830,7 +2915,12 @@ next
   show ?case using "11.prems"(1)
     by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
 next
-  case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
+  \<comment> \<open>Call: env' = env, so all four tracked fields are unchanged.\<close>
+  case (12 env elabEnv ghost loc tm next_mv)
+  from "12.prems" have "elab_call_statement env elabEnv ghost loc tm next_mv
+                          = Inr (coreStmt, env', next_mv')" by simp
+  hence "env' = env" using elab_call_statement_env by blast
+  thus ?case by simp
 next
   \<comment> \<open>Match: env' = env in every success path (arm envs are discarded), so all
       four tracked fields are trivially unchanged.\<close>
@@ -3047,7 +3137,12 @@ next
     by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
   thus ?case using "11.prems"(2) by simp
 next
-  case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
+  \<comment> \<open>Call: env unchanged.\<close>
+  case (12 env elabEnv ghost loc tm next_mv)
+  from "12.prems"(1) have "elab_call_statement env elabEnv ghost loc tm next_mv
+                             = Inr (coreStmt, env', next_mv')" by simp
+  hence "env' = env" using elab_call_statement_env by blast
+  thus ?case using "12.prems"(2) by simp
 next
   \<comment> \<open>Match: env unchanged (arm envs are discarded).\<close>
   case (13 env elabEnv ghost loc scrut arms next_mv)
@@ -3296,7 +3391,12 @@ next
     by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
   thus ?case using "11.prems"(2) by simp
 next
-  case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
+  \<comment> \<open>Call: env unchanged.\<close>
+  case (12 env elabEnv ghost loc tm next_mv)
+  from "12.prems"(1) have "elab_call_statement env elabEnv ghost loc tm next_mv
+                             = Inr (coreStmt, env', next_mv')" by simp
+  hence "env' = env" using elab_call_statement_env by blast
+  thus ?case using "12.prems"(2) by simp
 next
   \<comment> \<open>Match: env unchanged (arm envs are discarded).\<close>
   case (13 env elabEnv ghost loc scrut arms next_mv)
@@ -4458,7 +4558,12 @@ next
     using cond_bool inv_bool decr_typed decr_valid body_typed
     by (simp add: cs_eq env'_eq)
 next
-  case (12 env elabEnv ghost loc tm next_mv) thus ?case sorry  \<comment> \<open>Call\<close>
+  \<comment> \<open>Call: delegated to elab_call_statement_correct (a Block around a single
+      VarDeclCall binding the discarded result to a temporary).\<close>
+  case (12 env elabEnv ghost loc tm next_mv)
+  from "12.prems"(1) have elab: "elab_call_statement env elabEnv ghost loc tm next_mv
+                                   = Inr (coreStmt, env', next_mv')" by simp
+  show ?case using elab_call_statement_correct[OF elab "12.prems"(2,3,4)] .
 next
   \<comment> \<open>Match: the elaborated statement is a Block binding the scrutinee to the
       synthesised match@@n variable, followed by a CoreStmt_Match whose arm
