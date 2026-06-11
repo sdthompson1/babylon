@@ -305,26 +305,33 @@ section \<open>Pattern-list env extension\<close>
 
 (* Env extension corresponding to a single (vr, name, type) binding,
    mirroring exactly the env extension that CoreTm_Let /
-   CoreStmt_VarDecl(Var) perform. Pattern-bound variables are read-only
-   inside the arm body, so they land in TE_ConstLocals as well as
-   TE_LocalVars. Ghost arms put them in TE_GhostLocals. The VarOrRef
-   component is currently unused but kept so the binding triples that
-   dec_pattern_var_bindings produces can be consumed directly. *)
+   CoreStmt_VarDecl(Var) / CoreStmt_VarDecl(Ref) perform. Ghost arms put
+   the variable in TE_GhostLocals. Whether the variable is read-only
+   (lands in TE_ConstLocals) depends on the match context, so it is
+   supplied by the caller as a function of the binding's VarOrRef marker:
+     - term-context matches: every binding is const (Let semantics),
+       so constOf = (\<lambda>_. True);
+     - statement-context matches: Var bindings are mutable copies, and
+       Ref bindings are writable iff the scrutinee lvalue is writable,
+       so constOf = (\<lambda>vr. vr = Ref \<and> \<not> scrutinee-writable). *)
 definition extend_env_one_var ::
-  "GhostOrNot \<Rightarrow> (VarOrRef \<times> string \<times> CoreType) \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
-  "extend_env_one_var ghost binding env =
-    (case binding of (_, name, ty) \<Rightarrow>
+  "(VarOrRef \<Rightarrow> bool) \<Rightarrow> GhostOrNot \<Rightarrow> (VarOrRef \<times> string \<times> CoreType)
+   \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
+  "extend_env_one_var constOf ghost binding env =
+    (case binding of (vr, name, ty) \<Rightarrow>
       env \<lparr> TE_LocalVars := fmupd name ty (TE_LocalVars env),
             TE_GhostLocals := (if ghost = Ghost
                                then finsert name (TE_GhostLocals env)
                                else fminus (TE_GhostLocals env) {|name|}),
-            TE_ConstLocals := finsert name (TE_ConstLocals env) \<rparr>)"
+            TE_ConstLocals := (if constOf vr
+                               then finsert name (TE_ConstLocals env)
+                               else fminus (TE_ConstLocals env) {|name|}) \<rparr>)"
 
 (* Extend env by every (vr, name, type) DP_Var binding in a pattern list. *)
 definition extend_env_with_pattern_vars ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> DecPattern list \<Rightarrow> CoreTyEnv" where
-  "extend_env_with_pattern_vars env ghost ps =
-     foldr (extend_env_one_var ghost)
+  "CoreTyEnv \<Rightarrow> (VarOrRef \<Rightarrow> bool) \<Rightarrow> GhostOrNot \<Rightarrow> DecPattern list \<Rightarrow> CoreTyEnv" where
+  "extend_env_with_pattern_vars env constOf ghost ps =
+     foldr (extend_env_one_var constOf ghost)
            (dec_pattern_var_bindings_list ps) env"
 
 
@@ -338,48 +345,51 @@ definition check_pattern_no_duplicates ::
        Some dupName \<Rightarrow> Inl [TyErr_DuplicateVarInPattern loc dupName]
      | None \<Rightarrow> Inr ())"
 
-(* Check for errors in patterns in term context (BabTm_Match). There should
-   be no duplicate variables (check_pattern_no_duplicates) and also no `ref`
-   patterns (since these do not make sense in a term context). *)
-definition check_pattern_for_term_match ::
-  "Location \<Rightarrow> DecPattern \<Rightarrow> TypeError list + unit" where
-  "check_pattern_for_term_match loc dp =
+(* Check a single match-arm pattern. Duplicate variables are always illegal
+   (check_pattern_no_duplicates). `ref` patterns are rejected unless allowRefs
+   is set: term-context matches (BabTm_Match) forbid them (a ref makes no
+   sense in a term), while statement-context matches (BabStmt_Match) permit
+   them (provided the scrutinee is an lvalue, which the caller checks
+   separately). *)
+definition check_match_pattern ::
+  "bool \<Rightarrow> Location \<Rightarrow> DecPattern \<Rightarrow> TypeError list + unit" where
+  "check_match_pattern allowRefs loc dp =
     (case check_pattern_no_duplicates loc dp of
        Inl errs \<Rightarrow> Inl errs
      | Inr _ \<Rightarrow>
-        (case filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings dp) of
-           [] \<Rightarrow> Inr ()
-         | (_, name, _) # _ \<Rightarrow> Inl [TyErr_RefPatternInTermContext loc name]))"
+        if allowRefs then Inr ()
+        else (case filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings dp) of
+                [] \<Rightarrow> Inr ()
+              | (_, name, _) # _ \<Rightarrow> Inl [TyErr_RefPatternInTermContext loc name]))"
 
 (* Walk a list of (BabPattern, BabTerm) arms (as produced by the parser for
    BabTm_Match or BabStmt_Match), decorating each pattern against the
-   scrutinee type, running a caller-supplied post-decoration check, and
-   computing the env extended by the pattern's variables. The returned
-   list pairs each arm's decorated pattern with the env to use when
-   elaborating that arm's body, and with the original body term unchanged.
+   scrutinee type and checking it with check_match_pattern. The returned
+   list pairs each arm's decorated pattern with the original body term
+   unchanged.
 
-   The check parameter is supplied because term-context matches and
-   statement-context matches differ in what they reject (e.g. ref patterns
-   are illegal in term contexts but permitted in statement contexts). *)
+   The allowRefs flag is passed through to check_match_pattern: term-context
+   matches pass False (ref patterns illegal), statement-context matches pass
+   True. *)
 fun decorate_match_arms ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot
    \<Rightarrow> CoreType                                     \<comment> \<open>scrutinee type\<close>
-   \<Rightarrow> (Location \<Rightarrow> DecPattern \<Rightarrow> TypeError list + unit) \<comment> \<open>per-pattern check\<close>
+   \<Rightarrow> bool                                         \<comment> \<open>allow ref patterns?\<close>
    \<Rightarrow> TypeSubst \<Rightarrow> nat
    \<Rightarrow> (BabPattern \<times> 'body) list
    \<Rightarrow> TypeError list + ((DecPattern \<times> 'body) list \<times> TypeSubst \<times> nat)"
 where
-  "decorate_match_arms env elabEnv ghost scrutTy chk accSubst next_mv [] =
+  "decorate_match_arms env elabEnv ghost scrutTy allowRefs accSubst next_mv [] =
      Inr ([], accSubst, next_mv)"
 
-| "decorate_match_arms env elabEnv ghost scrutTy chk accSubst next_mv ((pat, body) # rest) =
+| "decorate_match_arms env elabEnv ghost scrutTy allowRefs accSubst next_mv ((pat, body) # rest) =
     (case decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (dp, accSubst1, next_mv1) \<Rightarrow>
-        (case chk (bab_pattern_location pat) dp of
+        (case check_match_pattern allowRefs (bab_pattern_location pat) dp of
            Inl errs \<Rightarrow> Inl errs
          | Inr _ \<Rightarrow>
-            (case decorate_match_arms env elabEnv ghost scrutTy chk
+            (case decorate_match_arms env elabEnv ghost scrutTy allowRefs
                     accSubst1 next_mv1 rest of
                Inl errs \<Rightarrow> Inl errs
              | Inr (restRows, finalSubst, finalMv) \<Rightarrow>
@@ -399,24 +409,26 @@ section \<open>Post-decoration passes\<close>
       similar restriction.) On failure, return TyErr_CannotInferType at the
       caller-supplied location.
    3. Return per-arm (substituted dp, env) pairs, where env is built by
-      extending the outer env with the substituted dp's variable bindings.
+      extending the outer env with the substituted dp's variable bindings
+      (const-ness of each binding determined by constOf — see
+      extend_env_one_var).
 
    Body-agnostic: the caller (BabTm_Match or BabStmt_Match) zips the
    resulting envs with the original body terms. Decoupling the bodies keeps
    termination of the elaborator straightforward, since the body list passed
    to elab_term_list_with_envs is syntactically derived from arms. *)
 definition finalize_match_arms ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst
+  "CoreTyEnv \<Rightarrow> (VarOrRef \<Rightarrow> bool) \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst
    \<Rightarrow> DecPattern list
    \<Rightarrow> TypeError list + (DecPattern \<times> CoreTyEnv) list" where
-  "finalize_match_arms env ghost loc accSubst dps =
+  "finalize_match_arms env constOf ghost loc accSubst dps =
     (let substDps = map (apply_subst_to_dec_pattern accSubst) dps
      in if list_ex (\<lambda>dp.
             list_ex (\<lambda>(_, _, vTy).
                        \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                     (dec_pattern_var_bindings dp)) substDps
         then Inl [TyErr_CannotInferType loc]
-        else Inr (map (\<lambda>dp. (dp, extend_env_with_pattern_vars env ghost [dp])) substDps))"
+        else Inr (map (\<lambda>dp. (dp, extend_env_with_pattern_vars env constOf ghost [dp])) substDps))"
 
 (* Strip variable binders (replaced with wildcards); preserve structure
    otherwise. Variant payload is unconditional in CorePattern, so a
@@ -431,39 +443,52 @@ fun dec_to_core_pat :: "DecPattern \<Rightarrow> CorePattern" where
 | "dec_to_core_pat (DP_Record flds) =
      CorePat_Record (map (\<lambda>(n, p). (n, dec_to_core_pat p)) flds)"
 
-(* wrap_lets_at base dp body wraps `body` in a chain of CoreTm_Lets, one
-   per DP_Var occurring in `dp`, where each Let binds the variable to a
-   projection of `base` reaching that variable's position in the
-   pattern. Binders are emitted in pattern-traversal (left-to-right)
-   order with the first binder outermost.
+(* `dec_pattern_projections base dp` pairs every (vr, name, type) DP_Var
+   binding in `dp` with the projection of `base` reaching that variable's
+   position in the pattern. Bindings are listed in pattern-traversal
+   (left-to-right) order, matching dec_pattern_var_bindings exactly.
 
-   The variant of this function used by the elaborator passes
-   `CoreTm_Var freshName` as `base`, where freshName binds the matched
-   scrutinee. The generalised form (taking an arbitrary base term)
-   simplifies the structural-induction typing proof. *)
-fun wrap_lets_at :: "CoreTerm \<Rightarrow> DecPattern \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm"
-and wrap_lets_at_record ::
-  "CoreTerm \<Rightarrow> (string \<times> DecPattern) list \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm"
+   The elaborator passes `CoreTm_Var freshName` as `base`, where freshName
+   binds the matched scrutinee. The generalised form (taking an arbitrary
+   base term) simplifies the structural-induction typing proof. *)
+fun dec_pattern_projections ::
+  "CoreTerm \<Rightarrow> DecPattern \<Rightarrow> (VarOrRef \<times> string \<times> CoreType \<times> CoreTerm) list"
+and dec_pattern_projections_record ::
+  "CoreTerm \<Rightarrow> (string \<times> DecPattern) list
+   \<Rightarrow> (VarOrRef \<times> string \<times> CoreType \<times> CoreTerm) list"
 where
-  "wrap_lets_at base (DP_Var _ name _) body = CoreTm_Let name base body"
-| "wrap_lets_at base DP_Wildcard body = body"
-| "wrap_lets_at base (DP_Bool _) body = body"
-| "wrap_lets_at base (DP_Int _) body = body"
-| "wrap_lets_at base (DP_Variant _ None) body = body"
-| "wrap_lets_at base (DP_Variant cn (Some inner)) body =
-     wrap_lets_at (CoreTm_VariantProj base cn) inner body"
-| "wrap_lets_at base (DP_Record flds) body =
-     wrap_lets_at_record base flds body"
-| "wrap_lets_at_record base [] body = body"
-| "wrap_lets_at_record base ((fn, p) # rest) body =
-     wrap_lets_at (CoreTm_RecordProj base fn) p
-       (wrap_lets_at_record base rest body)"
+  "dec_pattern_projections base (DP_Var vr name ty) = [(vr, name, ty, base)]"
+| "dec_pattern_projections base DP_Wildcard = []"
+| "dec_pattern_projections base (DP_Bool _) = []"
+| "dec_pattern_projections base (DP_Int _) = []"
+| "dec_pattern_projections base (DP_Variant _ None) = []"
+| "dec_pattern_projections base (DP_Variant cn (Some inner)) =
+     dec_pattern_projections (CoreTm_VariantProj base cn) inner"
+| "dec_pattern_projections base (DP_Record flds) =
+     dec_pattern_projections_record base flds"
+| "dec_pattern_projections_record base [] = []"
+| "dec_pattern_projections_record base ((fn, p) # rest) =
+     dec_pattern_projections (CoreTm_RecordProj base fn) p
+       @ dec_pattern_projections_record base rest"
 
 (* Wrap a body term in CoreTm_Lets, one per surface-pattern variable in dp,
    each binding the variable to the corresponding projection of
-   `CoreTm_Var scrutVar`. *)
+   `CoreTm_Var scrutVar`. Binders are emitted in pattern-traversal order
+   with the first binder outermost. *)
 definition wrap_lets ::
   "string \<Rightarrow> DecPattern \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
-  "wrap_lets scrutVar dp body = wrap_lets_at (CoreTm_Var scrutVar) dp body"
+  "wrap_lets scrutVar dp body =
+     foldr (\<lambda>(_, name, _, proj). CoreTm_Let name proj)
+           (dec_pattern_projections (CoreTm_Var scrutVar) dp) body"
+
+(* Statement analogue of wrap_lets: one CoreStmt_VarDecl per surface-pattern
+   variable in dp, each binding the variable (Var = copy, Ref = alias into
+   the scrutinee) to the corresponding projection of `CoreTm_Var scrutVar`.
+   These are emitted at the head of a match arm's statement list. *)
+definition wrap_vardecls ::
+  "GhostOrNot \<Rightarrow> string \<Rightarrow> DecPattern \<Rightarrow> CoreStatement list" where
+  "wrap_vardecls ghost scrutVar dp =
+     map (\<lambda>(vr, name, ty, proj). CoreStmt_VarDecl ghost name vr ty proj)
+         (dec_pattern_projections (CoreTm_Var scrutVar) dp)"
 
 end

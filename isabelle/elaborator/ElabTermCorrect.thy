@@ -1131,7 +1131,7 @@ lemma finalize_match_term_correct:
       and bodies_typed:
         "list_all2
            (\<lambda>dp (bodyTm, bodyTy).
-              core_term_type (extend_env_with_pattern_vars envAmbient ghost [dp]) ghost bodyTm
+              core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp]) ghost bodyTm
               = Some bodyTy
               \<and> is_well_kinded envAmbient bodyTy)
            dps (zip bodyTms bodyTys)"
@@ -1232,7 +1232,7 @@ proof -
     have all_pairs:
       "\<forall>i < length dps. case (dps ! i, (zip bodyTms bodyTys) ! i) of
                           (dp, (btm, bty)) \<Rightarrow>
-                            core_term_type (extend_env_with_pattern_vars envAmbient ghost [dp]) ghost btm
+                            core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp]) ghost btm
                               = Some bty
                             \<and> is_well_kinded envAmbient bty"
       using bodies_typed unfolding list_all2_conv_all_nth len_dps_zip[symmetric]
@@ -1375,7 +1375,7 @@ proof -
       For each i < length dps, ?dp = dps ! i, ?btm = bodyTms ! i, ?bty = bodyTys ! i:
         - dec_to_core_pat ?dp is pattern_compatible with finalScrutTy under env+freshName
         - wrap_lets freshName ?dp (substituted ?btm) has type finalBodyTy under env+freshName. \<close>
-  let ?env' = "extend_env_one_var ghost (Var, freshName, finalScrutTy) envAmbient"
+  let ?env' = "extend_env_one_var (\<lambda>_. True) ghost (Var, freshName, finalScrutTy) envAmbient"
 
   \<comment> \<open>finalScrutTy is well-kinded under envAmbient (from scrut_typed + ambient_wf + finalSubst's
       range being wk under envAmbient). \<close>
@@ -1434,21 +1434,21 @@ proof -
     using lengths(1,3) by simp
   have body_substituted_at_pat:
     "\<And>i. i < length dps \<Longrightarrow>
-       core_term_type (extend_env_with_pattern_vars envAmbient ghost [(dps ! i)]) ghost
+       core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [(dps ! i)]) ghost
                        (finalBodies ! i) = Some finalBodyTy"
   proof -
     fix i assume i_lt: "i < length dps"
     let ?dp = "dps ! i"
     let ?btm = "bodyTms ! i"
     let ?bty = "bodyTys ! i"
-    let ?env_pat = "extend_env_with_pattern_vars envAmbient ghost [?dp]"
+    let ?env_pat = "extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp]"
     have dp_in: "?dp \<in> set dps" using i_lt nth_mem by simp
     have nth_zip: "(zip bodyTms bodyTys) ! i = (?btm, ?bty)"
       using i_lt lengths(1,3) by simp
     have all_pairs:
       "\<forall>j < length dps. case (dps ! j, (zip bodyTms bodyTys) ! j) of
                           (dp, (btm, bty)) \<Rightarrow>
-                            core_term_type (extend_env_with_pattern_vars envAmbient ghost [dp]) ghost btm
+                            core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp]) ghost btm
                               = Some bty
                             \<and> is_well_kinded envAmbient bty"
       using bodies_typed unfolding list_all2_conv_all_nth len_zip_bb[symmetric]
@@ -1530,7 +1530,7 @@ proof -
     qed
 
     have foldr_ret_eq:
-      "\<And>bs e. TE_ReturnType (foldr (extend_env_one_var ghost) bs e) = TE_ReturnType e"
+      "\<And>bs e. TE_ReturnType (foldr (extend_env_one_var (\<lambda>_. True) ghost) bs e) = TE_ReturnType e"
       subgoal for bs e
         by (induction bs arbitrary: e)
            (auto simp: extend_env_one_var_def split: prod.splits)
@@ -1568,7 +1568,7 @@ proof -
     have finalBodies_at_i:
       "finalBodies ! i = apply_subst_to_term finalSubst ?btm"
       unfolding finalBodies_def using i_lt lengths(1) by simp
-    show "core_term_type (extend_env_with_pattern_vars envAmbient ghost [(dps ! i)]) ghost
+    show "core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [(dps ! i)]) ghost
                           (finalBodies ! i) = Some finalBodyTy"
       using body_substituted bty_subst_eq finalBodies_at_i by simp
   qed
@@ -1654,16 +1654,13 @@ proof -
       have dp_compat_env': "dec_pattern_compatible ?env' ?dp finalScrutTy"
         using dp_compat by (simp add: dec_pattern_compatible_extend_env_one_var)
 
+      have finalScrutTy_wk_env': "is_well_kinded ?env' finalScrutTy"
+        using core_term_type_extend_env_one_var_irrelevant core_term_type_well_kinded_and_runtime
+          env'_wf freshness_check scrut_substituted by blast
       have pat_compat: "pattern_compatible ?env' (dec_to_core_pat ?dp) finalScrutTy"
-      proof -
-        have finalScrutTy_wk_env': "is_well_kinded ?env' finalScrutTy"
-          using core_term_type_extend_env_one_var_irrelevant core_term_type_well_kinded_and_runtime
-            env'_wf freshness_check scrut_substituted by blast
-        show ?thesis
-          using dec_to_core_pat_pattern_compatible[OF dp_compat_env' finalScrutTy_wk_env' env'_wf] .
-      qed
+        using dec_to_core_pat_pattern_compatible[OF dp_compat_env' finalScrutTy_wk_env' env'_wf] .
 
-      \<comment> \<open>Body well-typed under ?env'. Apply wrap_lets_at_preserves_typing. \<close>
+      \<comment> \<open>Body well-typed under ?env'. Apply wrap_lets_preserves_typing. \<close>
       have base_var_typed:
         "core_term_type ?env' ghost (CoreTm_Var freshName) = Some finalScrutTy"
         by (simp add: extend_env_one_var_def tyenv_lookup_var_def
@@ -1708,10 +1705,10 @@ proof -
 
       \<comment> \<open>?finalBody is well-typed at finalBodyTy in env_pat(?env',?dp). \<close>
       have body_at_pat_env':
-        "core_term_type (extend_env_with_pattern_vars ?env' ghost [?dp]) ghost ?finalBody = Some finalBodyTy"
+        "core_term_type (extend_env_with_pattern_vars ?env' (\<lambda>_. True) ghost [?dp]) ghost ?finalBody = Some finalBodyTy"
       proof -
-        \<comment> \<open>From body_substituted_at_pat: typed in extend_env_with_pattern_vars envAmbient ghost [?dp]. \<close>
-        have base_typed: "core_term_type (extend_env_with_pattern_vars envAmbient ghost [?dp]) ghost ?finalBody = Some finalBodyTy"
+        \<comment> \<open>From body_substituted_at_pat: typed in extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp]. \<close>
+        have base_typed: "core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp]) ghost ?finalBody = Some finalBodyTy"
           using body_substituted_at_pat[OF i_lt'] .
         \<comment> \<open>Lift to env' by freshness: freshName isn't a free var of ?finalBody. \<close>
         have body_not_in: "freshName |\<notin>| core_term_free_vars ?finalBody"
@@ -1719,9 +1716,9 @@ proof -
           by (auto simp: list_all_length)
         \<comment> \<open>Use extend_env_with_pattern_vars_extend_env_one_var_swap to swap the order. \<close>
         have env_swap:
-          "extend_env_with_pattern_vars ?env' ghost [?dp]
-           = extend_env_one_var ghost (Var, freshName, finalScrutTy)
-                                (extend_env_with_pattern_vars envAmbient ghost [?dp])"
+          "extend_env_with_pattern_vars ?env' (\<lambda>_. True) ghost [?dp]
+           = extend_env_one_var (\<lambda>_. True) ghost (Var, freshName, finalScrutTy)
+                                (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp])"
         proof -
           have dp_names_no_fresh: "freshName |\<notin>| dec_pattern_var_names_list [?dp]"
             using fresh_not_in_dp by simp
@@ -1733,21 +1730,20 @@ proof -
           using core_term_type_extend_env_one_var_irrelevant[OF body_not_in base_typed] .
       qed
 
-      \<comment> \<open>Now apply wrap_lets_at_preserves_typing. \<close>
+      \<comment> \<open>Now apply wrap_lets_preserves_typing. \<close>
       have dp_distinct: "distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings ?dp))"
         using dps_compat dp_in
         by (auto simp: list_all_iff pattern_var_names_distinct_def)
+      have body_at_pat_env'_foldr:
+        "core_term_type
+           (foldr (extend_env_one_var (\<lambda>_. True) ghost) (dec_pattern_var_bindings ?dp) ?env')
+           ghost ?finalBody = Some finalBodyTy"
+        using body_at_pat_env' by (simp add: extend_env_with_pattern_vars_def)
       have body_wrapped:
         "core_term_type ?env' ghost (wrap_lets freshName ?dp ?finalBody) = Some finalBodyTy"
-        unfolding wrap_lets_def
-        using wrap_lets_at_preserves_typing(1)[OF dp_compat_env' base_var_typed env'_wf
-                                                  _ _ base_fresh_disjoint
-                                                  _ dp_distinct]
-              finalScrutTy_wk finalScrutTy_runtime body_at_pat_env'
-        using base_fresh_disjoint base_var_typed core_term_type_well_kinded_and_runtime
-          dp_compat_env' dp_distinct env'_wf
-          extend_env_with_pattern_vars_def
-          wrap_lets_at_preserves_typing by force
+        using wrap_lets_preserves_typing[OF dp_compat_env' base_var_typed env'_wf
+                                            finalScrutTy_wk_env' base_fresh_disjoint
+                                            body_at_pat_env'_foldr dp_distinct] .
 
       show "case (zip armPats armBodies) ! i of (p, body) \<Rightarrow>
               pattern_compatible ?env' p finalScrutTy
@@ -3374,11 +3370,11 @@ next
     by (auto split: sum.splits)
   from "16.prems"(1) arms_ne elab_scrut obtain decoratedRows accSubst mv2 where
     decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy
-                    check_pattern_for_term_match fmempty (mv1 + 1) arms
+                    False fmempty (mv1 + 1) arms
                   = Inr (decoratedRows, accSubst, mv2)"
     by (auto simp: Let_def split: sum.splits)
   from "16.prems"(1) arms_ne elab_scrut decorate_eq obtain finalizedArms where
-    finalize_arms_eq: "finalize_match_arms env ghost loc accSubst (map fst decoratedRows)
+    finalize_arms_eq: "finalize_match_arms env (\<lambda>_. True) ghost loc accSubst (map fst decoratedRows)
                        = Inr finalizedArms"
     by (auto simp: Let_def split: sum.splits)
   from "16.prems"(1) arms_ne elab_scrut decorate_eq finalize_arms_eq
@@ -3483,8 +3479,7 @@ next
   from decorate_match_arms_correct[OF decorate_eq "16.prems"(2) acc_idem_init
                                        lo_le_mv1_succ scrutTy_wk_mv1_succ
                                        acc_wk_init acc_dom_init
-                                       scrutTy_rt_mv1_succ acc_rt_init
-                                       check_pattern_for_term_match_implies_distinctness]
+                                       scrutTy_rt_mv1_succ acc_rt_init]
   have
     dma_len: "length decoratedRows = length arms" and
     dma_bodies: "map snd decoratedRows = map snd arms" and
@@ -3573,7 +3568,7 @@ next
     using not_clash
     by (force simp: list_all_iff list_ex_iff case_prod_unfold)
   have finalizedArms_eq:
-    "finalizedArms = map (\<lambda>dp. (dp, extend_env_with_pattern_vars env ghost [dp])) ?substDps"
+    "finalizedArms = map (\<lambda>dp. (dp, extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp])) ?substDps"
     using finalize_arms_eq not_clash
     unfolding finalize_match_arms_def Let_def
     by (simp split: if_splits)
@@ -3903,7 +3898,7 @@ next
       "list_all2
         (\<lambda>(dp, env_i) rawDp.
             dp = apply_subst_to_dec_pattern accSubst rawDp
-            \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
+            \<and> env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp]
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                        (dec_pattern_var_bindings dp)
@@ -3934,7 +3929,7 @@ next
       "(case finalizedArms ! i of (dp, env_i) \<Rightarrow>
           \<lambda>rawDp.
             dp = apply_subst_to_dec_pattern accSubst rawDp
-            \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
+            \<and> env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp]
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                        (dec_pattern_var_bindings dp)
@@ -3959,7 +3954,7 @@ next
       "(case finalizedArms ! i of (dp, env_i) \<Rightarrow>
           \<lambda>rawDp.
             dp = apply_subst_to_dec_pattern accSubst rawDp
-            \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
+            \<and> env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp]
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                        (dec_pattern_var_bindings dp)
@@ -3980,7 +3975,7 @@ next
       "(case finalizedArms ! i of (dp, env_i) \<Rightarrow>
           \<lambda>rawDp.
             dp = apply_subst_to_dec_pattern accSubst rawDp
-            \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
+            \<and> env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp]
             \<and> list_all (\<lambda>(_, _, vTy).
                           list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                        (dec_pattern_var_bindings dp)
@@ -3990,7 +3985,7 @@ next
       using fma_pred i_lt fma_len by (simp add: list_all2_conv_all_nth)
     let ?dp_i = "fst (finalizedArms ! i)"
     have env_i_eq:
-      "snd (finalizedArms ! i) = extend_env_with_pattern_vars env ghost [?dp_i]"
+      "snd (finalizedArms ! i) = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [?dp_i]"
       using at_i by (auto split: prod.splits)
     show "TE_TypeVars (snd (finalizedArms ! i)) = TE_TypeVars env"
       using env_i_eq by simp
@@ -4024,7 +4019,7 @@ next
   have bodies_typed:
     "list_all2
        (\<lambda>dp (bodyTm, bodyTy).
-          core_term_type (extend_env_with_pattern_vars envAmbient ghost [dp]) ghost bodyTm = Some bodyTy
+          core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp]) ghost bodyTm = Some bodyTy
           \<and> is_well_kinded envAmbient bodyTy)
        ?dps (zip bodyTms bodyTys)"
   proof -
@@ -4038,7 +4033,7 @@ next
     have "\<forall>i < length ?dps.
             (case (?dps ! i, (zip bodyTms bodyTys) ! i) of
               (dp, (bodyTm, bodyTy)) \<Rightarrow>
-                core_term_type (extend_env_with_pattern_vars envAmbient ghost [dp]) ghost bodyTm = Some bodyTy
+                core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp]) ghost bodyTm = Some bodyTy
                 \<and> is_well_kinded envAmbient bodyTy)"
     proof (intro allI impI)
       fix i assume i_lt: "i < length ?dps"
@@ -4080,13 +4075,13 @@ next
           using body_ih_at zip_at_i by (auto split: prod.splits)
       qed
 
-      \<comment> \<open>env_i = extend_env_with_pattern_vars env ghost [dp_i.] \<close>
+      \<comment> \<open>env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp_i.] \<close>
       have i_lt_raw: "i < length ?rawDps" using i_lt_finalized fma_len by simp
       have fma_at_i:
         "(case finalizedArms ! i of (dp, env_i) \<Rightarrow>
             \<lambda>rawDp.
               dp = apply_subst_to_dec_pattern accSubst rawDp
-              \<and> env_i = extend_env_with_pattern_vars env ghost [dp]
+              \<and> env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp]
               \<and> list_all (\<lambda>(_, _, vTy).
                             list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
                          (dec_pattern_var_bindings dp)
@@ -4094,14 +4089,14 @@ next
               \<and> elabenv_well_formed env_i elabEnv)
             (?rawDps ! i)"
         using fma_pred i_lt_finalized fma_len by (simp add: list_all2_conv_all_nth)
-      have env_i_eq: "?env_i = extend_env_with_pattern_vars env ghost [?dp_i]"
+      have env_i_eq: "?env_i = extend_env_with_pattern_vars env (\<lambda>_. True) ghost [?dp_i]"
         using fma_at_i by (auto split: prod.splits)
 
       \<comment> \<open>Widen from extend_env_with_tyvars _ mv2 mv3 to extend_env_with_tyvars _ next_mv (mv3+1). \<close>
       have lo_mono: "next_mv \<le> mv2" using mono_1 mono_2 by simp
       have hi_mono: "mv3 \<le> mv3 + 1" by simp
       have env_widen:
-        "core_term_type (extend_env_with_tyvars (extend_env_with_pattern_vars env ghost [?dp_i])
+        "core_term_type (extend_env_with_tyvars (extend_env_with_pattern_vars env (\<lambda>_. True) ghost [?dp_i])
                                                   ghost next_mv (mv3 + 1))
                          ghost ?bodyTm_i = Some ?bodyTy_i"
         using core_term_type_extend_env_with_tyvars_mono[OF _ lo_mono hi_mono]
@@ -4110,22 +4105,22 @@ next
       \<comment> \<open>extend_env_with_pattern_vars envAmbient = extend_env_with_tyvars (extend_env_with_pattern_vars env _) _.
           Uses extend_env_with_tyvars_extend_env_with_pattern_vars_commute. \<close>
       have target_eq:
-        "extend_env_with_pattern_vars envAmbient ghost [?dp_i]
-         = extend_env_with_tyvars (extend_env_with_pattern_vars env ghost [?dp_i]) ghost next_mv (mv3 + 1)"
+        "extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i]
+         = extend_env_with_tyvars (extend_env_with_pattern_vars env (\<lambda>_. True) ghost [?dp_i]) ghost next_mv (mv3 + 1)"
         unfolding envAmbient_def
         using extend_env_with_tyvars_extend_env_with_pattern_vars_commute by metis
 
       have body_typed:
-        "core_term_type (extend_env_with_pattern_vars envAmbient ghost [?dp_i]) ghost ?bodyTm_i
+        "core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i]) ghost ?bodyTm_i
           = Some ?bodyTy_i"
         using env_widen target_eq by simp
 
       \<comment> \<open>Body type well-kinded under envAmbient: apply core_term_type_well_kinded_and_runtime
-          on the typed body. The typing is under extend_env_with_pattern_vars envAmbient ghost [dp,]
+          on the typed body. The typing is under extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp,]
           which is well-formed (envAmbient is well-formed, extend_env_with_pattern_vars preserves
           well-formedness given dp's bindings are well-kinded ... but wait, we need that). \<close>
       have ext_envAmbient_wf:
-        "tyenv_well_formed (extend_env_with_pattern_vars envAmbient ghost [?dp_i])"
+        "tyenv_well_formed (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i])"
       proof -
         have wf_step: "tyenv_well_formed envAmbient" using envAmbient_wf .
         have dp_in_dps: "?dp_i \<in> set ?dps" using i_lt_finalized by simp
@@ -4147,14 +4142,14 @@ next
           using tyenv_well_formed_extend_env_with_pattern_vars[OF wf_step wk_list rt_list] .
       qed
       have bodyTy_wk:
-        "is_well_kinded (extend_env_with_pattern_vars envAmbient ghost [?dp_i]) ?bodyTy_i"
+        "is_well_kinded (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i]) ?bodyTy_i"
         using core_term_type_well_kinded[OF body_typed ext_envAmbient_wf] .
       have bodyTy_wk_amb: "is_well_kinded envAmbient ?bodyTy_i"
         using bodyTy_wk by simp
 
       show "(case (?dps ! i, (zip bodyTms bodyTys) ! i) of
               (dp, (bodyTm, bodyTy)) \<Rightarrow>
-                core_term_type (extend_env_with_pattern_vars envAmbient ghost [dp]) ghost bodyTm = Some bodyTy
+                core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp]) ghost bodyTm = Some bodyTy
                 \<and> is_well_kinded envAmbient bodyTy)"
         using dp_i_at zip_at_i body_typed bodyTy_wk_amb by simp
     qed
@@ -4165,7 +4160,7 @@ next
   qed
 
   \<comment> \<open>bodies_runtime: each body type is runtime under envAmbient (when ghost = NotGhost).
-      Each body is well-typed under extend_env_with_pattern_vars envAmbient ghost [dp] (which is
+      Each body is well-typed under extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [dp] (which is
       well-formed); by core_term_type_well_kinded_and_runtime, body type is runtime under
       that env; by is_runtime_type_extend_env_with_pattern_vars (simp), it's runtime under envAmbient. \<close>
   have bodies_runtime:
@@ -4195,12 +4190,12 @@ next
       have zip_at_i: "(zip bodyTms bodyTys) ! i = (?bodyTm_i, ?bodyTy_i)"
         using i_lt len_bodyTms_bodyTys by simp
       have body_typed_i:
-        "core_term_type (extend_env_with_pattern_vars envAmbient ghost [?dp_i]) ghost ?bodyTm_i = Some ?bodyTy_i"
+        "core_term_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i]) ghost ?bodyTm_i = Some ?bodyTy_i"
         using bodies_typed i_lt_dps i_lt_zip len_dps_bodyTys
         unfolding list_all2_conv_all_nth
         using zip_at_i
         by (auto split: prod.splits)
-      \<comment> \<open>Need: extend_env_with_pattern_vars envAmbient ghost [?dp_i] is well-formed.
+      \<comment> \<open>Need: extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i] is well-formed.
           envAmbient is well-formed; pattern bindings are well-kinded under envAmbient (dps_bind_wk);
           when ghost = NotGhost, also runtime (dps_bind_rt). \<close>
       have dp_in_dps: "?dp_i \<in> set ?dps"
@@ -4219,11 +4214,11 @@ next
                                 (dec_pattern_var_bindings_list [?dp_i])"
         using rt_amb by simp
       have ext_envAmbient_wf:
-        "tyenv_well_formed (extend_env_with_pattern_vars envAmbient ghost [?dp_i])"
+        "tyenv_well_formed (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i])"
         using tyenv_well_formed_extend_env_with_pattern_vars[OF envAmbient_wf wk_list rt_list] .
       \<comment> \<open>Apply core_term_type_well_kinded_and_runtime. \<close>
       have body_rt_pat:
-        "is_runtime_type (extend_env_with_pattern_vars envAmbient ghost [?dp_i]) ?bodyTy_i"
+        "is_runtime_type (extend_env_with_pattern_vars envAmbient (\<lambda>_. True) ghost [?dp_i]) ?bodyTy_i"
         using core_term_type_well_kinded_and_runtime[OF body_typed_i ext_envAmbient_wf] ng by simp
       \<comment> \<open>Use simp lemma to drop the pattern extension. \<close>
       show "is_runtime_type envAmbient ?bodyTy_i"

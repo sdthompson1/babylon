@@ -1025,12 +1025,12 @@ where
              its body type against it.\<close>
          let bodyTyVar = CoreTy_Var mv1 in
          (case decorate_match_arms env elabEnv ghost scrutTy
-                 check_pattern_for_term_match fmempty (mv1 + 1) arms of
+                 False fmempty (mv1 + 1) arms of
             Inl errs \<Rightarrow> Inl errs
           | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
               \<comment> \<open>Substitute dps with accSubst, run inference check, build per-arm envs. \<close>
               let rawDps = map fst decoratedRows in
-              (case finalize_match_arms env ghost loc accSubst rawDps of
+              (case finalize_match_arms env (\<lambda>_. True) ghost loc accSubst rawDps of
                  Inl errs \<Rightarrow> Inl errs
                | Inr finalizedArms \<Rightarrow>
                   \<comment> \<open>Build body-elaboration jobs from the per-arm envs (from finalizedArms)

@@ -72,6 +72,7 @@ datatype TypeError =
   (* Pattern errors *)
   | TyErr_DuplicateVarInPattern Location string  (* variable name bound twice in one pattern *)
   | TyErr_RefPatternInTermContext Location string  (* `ref` binding used in a term-context match *)
+  | TyErr_RefPatternNeedsLvalue Location string  (* `ref` binding in a match statement whose scrutinee is not an lvalue *)
   | TyErr_EmptyMatch Location  (* match expression with zero arms *)
   (* Internal errors *)
   | TyErr_InternalError_NameNotFound Location string  (* should have been caught by the renamer *)

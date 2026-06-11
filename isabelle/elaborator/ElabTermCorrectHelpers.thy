@@ -246,11 +246,11 @@ next
     by (auto split: sum.splits)
   from "16.prems" arms_nonempty elab_scrut obtain decoratedArms accSubst mv2 where
     decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy
-                    check_pattern_for_term_match fmempty (mv1 + 1) arms
+                    False fmempty (mv1 + 1) arms
                   = Inr (decoratedArms, accSubst, mv2)"
     by (auto simp: Let_def split: sum.splits)
   from "16.prems" arms_nonempty elab_scrut decorate_eq obtain finalizedArms where
-    finalize_eq: "finalize_match_arms env ghost loc accSubst (map fst decoratedArms)
+    finalize_eq: "finalize_match_arms env (\<lambda>_. True) ghost loc accSubst (map fst decoratedArms)
                   = Inr finalizedArms"
     by (auto simp: Let_def split: sum.splits)
   from "16.prems" arms_nonempty elab_scrut decorate_eq finalize_eq

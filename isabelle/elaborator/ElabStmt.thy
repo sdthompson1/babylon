@@ -487,6 +487,80 @@ definition elab_while_header ::
 
 
 (* ========================================================================== *)
+(* Match branch helpers *)
+(* ========================================================================== *)
+
+(* Scrutinee finalization for BabStmt_Match. 
+
+   This is passed an accumulated substitution (which came from typechecking the patterns
+   against the scrutinee; e.g. a "true" pattern might have substituted some metavar in the
+   scrutinee to Bool). We apply the accSubst to the scrutinee, then clear metavars.
+
+   Then, we create a synthetic match@@n variable and bind it to the scrutinee.
+   If the scrutinee is an lvalue, this will be a VarDecl Ref, else VarDecl Var.
+
+   "Ref" patterns are only allowed in the lvalue case.
+
+   The return values are: final scrutinee and type, binding mode, the match@@n name, 
+   the writability of the scrutinee (which determines "constness" of ref-patterns),
+   the new env with the match@@n binding, and the new counter (hi is consumed as the
+   match@@n suffix). *)
+definition elab_match_stmt_scrut ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst \<Rightarrow> nat \<Rightarrow> nat
+   \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> DecPattern list
+   \<Rightarrow> TypeError list
+      + (CoreTerm \<times> CoreType \<times> VarOrRef \<times> string \<times> bool \<times> CoreTyEnv \<times> nat)" where
+  "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps =
+    (let scrut' = clear_metavars lo hi (apply_subst_to_term accSubst scrutTm);
+         scrutTy' = clear_metavars_type lo hi (apply_subst accSubst scrutTy);
+         freshName = ''match@@'' @ nat_to_string hi;
+         writable = is_writable_lvalue env scrut'
+     in if is_lvalue scrut'
+        then Inr (scrut', scrutTy', Ref, freshName, writable,
+                  (vardecl_add_local env ghost freshName scrutTy')
+                    \<lparr> TE_ConstLocals := (if writable
+                                         then fminus (TE_ConstLocals env) {|freshName|}
+                                         else finsert freshName (TE_ConstLocals env)) \<rparr>,
+                  hi + 1)
+        else (case filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) of
+                [] \<Rightarrow> Inr (scrut', scrutTy', Var, freshName, writable,
+                           vardecl_add_local env ghost freshName scrutTy',
+                           hi + 1)
+              | (_, name, _) # _ \<Rightarrow> Inl [TyErr_RefPatternNeedsLvalue loc name]))"
+
+(* Final-stage helper for match statement elaboration. 
+   - Validates that the fresh match@@n name really is fresh (i.e. it doesn't appear free
+     in the final scrutinee or any arm body, or as a pattern variable); this should always
+     be the case, but we check anyway and report an internal error if not.
+   - On success builds the elaborated statement:
+
+       CoreStmt_Block
+         [ CoreStmt_VarDecl ghost match@@n mode scrutTy scrut,
+           CoreStmt_Match ghost (CoreTm_Var match@@n)
+             [ (corePat_i, varDecls_i @ body_i), ... ] ]
+
+     where corePat_i is the binder-free core pattern and varDecls_i binds each
+     of arm i's pattern variables to the corresponding projection of match@@n
+     (see wrap_vardecls). *)
+definition finalize_match_stmt ::
+  "GhostOrNot \<Rightarrow> Location \<Rightarrow> VarOrRef \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> CoreTerm
+   \<Rightarrow> DecPattern list \<Rightarrow> CoreStatement list list
+   \<Rightarrow> TypeError list + CoreStatement" where
+  "finalize_match_stmt ghost loc mode freshName scrutTy scrutTm dps bodies =
+    (if freshName |\<in>| core_term_free_vars scrutTm
+        \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) dps
+        \<or> list_ex (\<lambda>body. freshName |\<in>| core_statement_list_free_vars body) bodies
+     then Inl [TyErr_InternalError_FreshnameClash loc freshName]
+     else Inr (CoreStmt_Block
+                 [ CoreStmt_VarDecl ghost freshName mode scrutTy scrutTm,
+                   CoreStmt_Match ghost (CoreTm_Var freshName)
+                     (map2 (\<lambda>dp body.
+                              (dec_to_core_pat dp,
+                               wrap_vardecls ghost freshName dp @ body))
+                           dps bodies) ]))"
+
+
+(* ========================================================================== *)
 (* Main statement elaboration functions *)
 (* ========================================================================== *)
 
@@ -506,6 +580,9 @@ function (sequential)
                       \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)"
 and elab_statement_list :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabStatement list \<Rightarrow> nat
                            \<Rightarrow> TypeError list + (CoreStatement list \<times> CoreTyEnv \<times> nat)"
+and elab_statement_lists_with_envs ::
+  "(CoreTyEnv \<times> BabStatement list) list \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreStatement list list \<times> nat)"
 where
 
   (* Variable declaration: Introduce a new variable into scope. The user can supply
@@ -698,8 +775,42 @@ where
   (* Call an impure function, disregarding the return value. TODO (needs Core change). *)
 | "elab_statement env elabEnv ghost (BabStmt_Call loc tm) next_mv = undefined"
 
-  (* Match: elaborates to CoreStmt_Match. *)
-| "elab_statement env elabEnv ghost (BabStmt_Match loc scrut arms) next_mv = undefined"
+  (* Match: run the first arm whose pattern matches the scrutinee, with the
+     pattern's variables in scope. Each arm creates a new variable scope.
+     Elaborates to a CoreStmt_Block binding the scrutinee to a synthesised
+     match@@n variable (by Ref if it is an lvalue), then a CoreStmt_Match
+     whose arm bodies start with one VarDecl per pattern variable. *)
+| "elab_statement env elabEnv ghost (BabStmt_Match loc scrut arms) next_mv =
+    (if arms = [] then Inl [TyErr_EmptyMatch loc]
+     else case elab_term env elabEnv ghost scrut next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
+         (case decorate_match_arms env elabEnv ghost scrutTy True fmempty mv1 arms of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
+              let rawDps = map fst decoratedRows in
+              (case elab_match_stmt_scrut env ghost loc accSubst next_mv mv2
+                      scrutTm scrutTy rawDps of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3) \<Rightarrow>
+                   (case finalize_match_arms
+                           (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
+                           (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost loc accSubst rawDps of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr finalizedArms \<Rightarrow>
+                        \<comment> \<open>Build body-elaboration jobs from the per-arm envs (from
+                            finalizedArms) and the original bodies (from arms).
+                            Constructing the body list directly from arms keeps it
+                            syntactically derived, so termination is easy to verify
+                            (compare BabTm_Match).\<close>
+                        let bodyJobs = zip (map snd finalizedArms) (map snd arms) in
+                        (case elab_statement_lists_with_envs bodyJobs elabEnv ghost mv3 of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr (coreBodies, mv4) \<Rightarrow>
+                             (case finalize_match_stmt ghost loc mode freshName
+                                     scrutTy' scrut' (map fst finalizedArms) coreBodies of
+                                Inl errs \<Rightarrow> Inl errs
+                              | Inr coreStmt \<Rightarrow> Inr (coreStmt, env, mv4)))))))"
 
   (* ShowHide: show or hide a name from the verifier. Has no effect on typechecking.
      TODO: We should at least check that the name is in scope. *)
@@ -722,10 +833,58 @@ where
           | Inr (coreStmts, env'', next_mv2) \<Rightarrow>
               Inr (coreStmt # coreStmts, env'', next_mv2)))"
 
+  (* elab_statement_lists_with_envs - Empty list case. *)
+| "elab_statement_lists_with_envs [] _ _ next_mv = Inr ([], next_mv)"
+
+  (* elab_statement_lists_with_envs - Non-empty list case. Each statement list
+     (a match arm body) is elaborated under its own env (paired with it in the
+     input list), discarding the resulting env: arm scopes do not outlive the
+     arm. Error-collection mirrors elab_term_list_with_envs. *)
+| "elab_statement_lists_with_envs ((env, stmts) # rest) elabEnv ghost next_mv =
+    (case elab_statement_list env elabEnv ghost stmts next_mv of
+      Inl errs1 \<Rightarrow>
+        (case elab_statement_lists_with_envs rest elabEnv ghost next_mv of
+          Inl errs2 \<Rightarrow> Inl (errs1 @ errs2)
+        | Inr _ \<Rightarrow> Inl errs1)
+    | Inr (coreStmts, _, next_mv') \<Rightarrow>
+        (case elab_statement_lists_with_envs rest elabEnv ghost next_mv' of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr (coreStmtsRest, next_mv'') \<Rightarrow>
+            Inr (coreStmts # coreStmtsRest, next_mv'')))"
+
   by pat_completeness auto
-  termination
-    by (relation "measure (case_sum (\<lambda>(_, _, _, stmt, _). size stmt)
-                                     (\<lambda>(_, _, _, stmts, _). size_list size stmts))")
-       auto
+
+(* Helper for termination: the body-only size used as the measure for
+   elab_statement_lists_with_envs is bounded by the standard pair-list size
+   of the match arms. (Statement analogue of size_list_size_snd_zip_map_snd_le
+   in ElabTerm.) *)
+lemma size_list_stmts_snd_zip_map_snd_le:
+  "size_list (size_list size \<circ> snd) (zip as (map snd bs))
+     \<le> size_list (size_prod f (size_list size)) bs"
+proof -
+  have "size_list (size_list size \<circ> snd) (zip as (map snd bs))
+          \<le> size_list (size_list size) (map snd bs)"
+    by (induction as bs rule: list_induct2') (auto simp: comp_def)
+  also have "\<dots> \<le> size_list (size_prod f (size_list size)) bs"
+    by (induction bs) auto
+  finally show ?thesis .
+qed
+
+termination
+proof (relation
+        "measure (case_sum (\<lambda>(_, _, _, stmt, _). size stmt)
+                 (case_sum (\<lambda>(_, _, _, stmts, _). size_list size stmts)
+                           (\<lambda>(jobs, _, _, _). size_list (size_list size \<circ> snd) jobs)))",
+       goal_cases)
+  case (7 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba xb yb xc yc xd
+          bb xe yd xf ye xg yf xh yg xi yh xj yi bc xk)
+  \<comment> \<open>BabStmt_Match body-elaboration sub-call: bodies (taken syntactically from
+      arms, zipped with the envs from finalize_match_arms) sum to less than
+      the whole BabStmt_Match.\<close>
+  have "size_list (size_list size \<circ> snd) (zip (map snd bc) (map snd arms))
+          \<le> size_list (size_prod (\<lambda>x. 0) (size_list size)) arms"
+    by (rule size_list_stmts_snd_zip_map_snd_le)
+  with 7 show ?case by simp
+qed (simp_all add: comp_def)
 
 end
