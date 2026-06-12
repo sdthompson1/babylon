@@ -39,6 +39,7 @@ definition core_impure_call_type ::
                          | Some actualTy \<Rightarrow> actualTy = expectedTy)
                     | Ref \<Rightarrow>
                         is_writable_lvalue env tm
+                        \<and> ghost_lvalue_ok env ghost tm
                         \<and> core_term_type env ghost tm = Some expectedTy)
                   (zip tmArgs varOrRefs) expectedArgTypes
               then Some (apply_subst tySubst (FI_ReturnType funInfo))
@@ -113,6 +114,7 @@ where
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
         \<and> is_lvalue initTm
+        \<and> ghost_lvalue_ok env declGhost initTm  \<comment> \<open>Ghost code can't take refs to nonghost (even if readonly); use Var instead\<close>
         \<and> core_term_type env declGhost initTm = Some varTy
      then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := (if declGhost = Ghost
@@ -129,6 +131,7 @@ where
 | "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
+        \<and> ghost_lvalue_ok env assignGhost lhsTm
      then (case core_term_type env assignGhost lhsTm of
              Some lhsTy \<Rightarrow>
                if core_term_type env assignGhost rhsTm = Some lhsTy
@@ -143,6 +146,7 @@ where
 | "core_statement_type env ghost (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
+        \<and> ghost_lvalue_ok env assignGhost lhsTm
      then (case core_term_type env assignGhost lhsTm of
              Some lhsTy \<Rightarrow>
                (case core_impure_call_type env assignGhost fnName tyArgs argTms of
@@ -169,6 +173,8 @@ where
     (if (ghost = Ghost \<longrightarrow> swapGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
         \<and> is_writable_lvalue env rhsTm
+        \<and> ghost_lvalue_ok env swapGhost lhsTm
+        \<and> ghost_lvalue_ok env swapGhost rhsTm
      then (case core_term_type env swapGhost lhsTm of
              Some lhsTy \<Rightarrow>
                if core_term_type env swapGhost rhsTm = Some lhsTy
@@ -368,7 +374,8 @@ lemma core_impure_call_type_fn_facts:
                      (FI_TmArgs funInfo))
             \<and> (\<forall>i < length tmArgs.
                  snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i))"
+                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
+                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i))"
 proof -
   from assms have unfolded:
     "(case fmlookup (TE_Functions env) fnName of
@@ -392,6 +399,7 @@ proof -
                           | Some actualTy \<Rightarrow> actualTy = expectedTy)
                      | Ref \<Rightarrow>
                          is_writable_lvalue env tm
+                         \<and> ghost_lvalue_ok env ghost tm
                          \<and> core_term_type env ghost tm = Some expectedTy)
                    (zip tmArgs varOrRefs) expectedArgTypes
                then Some (apply_subst tySubst (FI_ReturnType fi))
@@ -419,6 +427,7 @@ proof -
                       | Some actualTy \<Rightarrow> actualTy = expectedTy)
                  | Ref \<Rightarrow>
                      is_writable_lvalue env tm
+                     \<and> ghost_lvalue_ok env ghost tm
                      \<and> core_term_type env ghost tm = Some expectedTy)
                (zip tmArgs varOrRefs) expectedArgTypes
            then Some (apply_subst tySubst (FI_ReturnType fi))
@@ -449,6 +458,7 @@ proof -
                     | Some actualTy \<Rightarrow> actualTy = expectedTy)
                | Ref \<Rightarrow>
                    is_writable_lvalue env tm
+                   \<and> ghost_lvalue_ok env ghost tm
                    \<and> core_term_type env ghost tm = Some expectedTy)
              (zip tmArgs varOrRefs) expectedArgTypes
          then Some (apply_subst tySubst (FI_ReturnType fi))
@@ -463,6 +473,7 @@ proof -
                        | Some actualTy \<Rightarrow> actualTy = expectedTy)
                   | Ref \<Rightarrow>
                       is_writable_lvalue env tm
+                      \<and> ghost_lvalue_ok env ghost tm
                       \<and> core_term_type env ghost tm = Some expectedTy)
                (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))
                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
@@ -514,6 +525,7 @@ proof -
                  actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti)
         | Ref \<Rightarrow>
             is_writable_lvalue env (tmArgs ! i)
+            \<and> ghost_lvalue_ok env ghost (tmArgs ! i)
             \<and> core_term_type env ghost (tmArgs ! i)
                 = Some (apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti))"
       using list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth
@@ -531,11 +543,13 @@ proof -
   have ng_fn: "ghost = NotGhost \<longrightarrow> FI_Ghost fi \<noteq> Ghost"
     using not_ghost_cond by blast
 
-  \<comment> \<open>Extract the Ref-position lvalue witness from the impure list_all2. \<close>
+  \<comment> \<open>Extract the Ref-position lvalue and ghost-discipline witnesses from the
+      impure list_all2. \<close>
   have ref_args_lvalues:
     "\<forall>i < length tmArgs.
        snd (snd (FI_TmArgs fi ! i)) = Ref
-         \<longrightarrow> is_writable_lvalue env (tmArgs ! i)"
+         \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
+             \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length tmArgs" and ref: "snd (snd (FI_TmArgs fi ! i)) = Ref"
     with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
@@ -554,7 +568,8 @@ proof -
           = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
       using i_lt_fi fi_arg_eq by simp
     from list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth vor_eq
-    show "is_writable_lvalue env (tmArgs ! i)" by simp
+    show "is_writable_lvalue env (tmArgs ! i) \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+      by simp
   qed
 
   from fi_lookup len_tyArgs tyArgs_wk ng_tyArgs ng_fn len_tmArgs fn_ty_eq
@@ -622,7 +637,8 @@ proof -
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length tmArgs.
                 snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                  \<longrightarrow> is_writable_lvalue env (tmArgs ! i)"
+                  \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
+                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
 
   \<comment> \<open>Transfer the embedded checks to the extended environment.\<close>
@@ -647,6 +663,7 @@ proof -
                    Var \<Rightarrow> (case core_term_type ?env' ghost tm of None \<Rightarrow> False
                             | Some actualTy \<Rightarrow> actualTy = expectedTy)
                  | Ref \<Rightarrow> is_writable_lvalue ?env' tm
+                          \<and> ghost_lvalue_ok ?env' ghost tm
                           \<and> core_term_type ?env' ghost tm = Some expectedTy"
   let ?zts = "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo))"
   let ?exps = "map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
@@ -675,11 +692,14 @@ proof -
       have "is_writable_lvalue env (tmArgs ! i)"
         using ref_lv i_lt_tm fi_arg Ref by simp
       hence writ': "is_writable_lvalue ?env' (tmArgs ! i)" by simp
+      have "ghost_lvalue_ok env ghost (tmArgs ! i)"
+        using ref_lv i_lt_tm fi_arg Ref by simp
+      hence glv': "ghost_lvalue_ok ?env' ghost (tmArgs ! i)" by simp
       from pure_i have
         "core_term_type ?env' ghost (tmArgs ! i)
            = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
         by (auto split: option.splits)
-      with Ref zip_nth exp_nth writ' show ?thesis by simp
+      with Ref zip_nth exp_nth writ' glv' show ?thesis by simp
     qed
   qed
   have l2_full': "list_all2 ?P' ?zts ?exps"
@@ -1290,6 +1310,7 @@ next
        \<and> is_well_kinded env varTy
        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
        \<and> is_lvalue initTm
+       \<and> ghost_lvalue_ok env declGhost initTm
        \<and> core_term_type env declGhost initTm = Some varTy"
     by (auto split: if_splits)
   hence wk: "is_well_kinded ?env1 varTy"
@@ -1318,6 +1339,7 @@ next
   from "4.prems" obtain lhsTy where
     wl: "is_writable_lvalue env lhsTm" and
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
+    glv: "ghost_lvalue_ok env assignGhost lhsTm" and
     lhs: "core_term_type env assignGhost lhsTm = Some lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     env'_eq: "env' = env"
@@ -1327,7 +1349,7 @@ next
     using lhs core_term_type_irrelevant_tyvar by blast
   have rhs': "core_term_type ?env1 assignGhost rhsTm = Some lhsTy"
     using rhs core_term_type_irrelevant_tyvar by blast
-  from gh wl lhs' rhs' show ?case
+  from gh wl glv lhs' rhs' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>AssignCall: env unchanged. The call check and cast both survive ?ext.\<close>
@@ -1337,9 +1359,11 @@ next
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
   let ?env1 = "?ext env"
   from "5.prems" have
-    pre: "(ghost = Ghost \<longrightarrow> assignGhost = Ghost) \<and> is_writable_lvalue env lhsTm"
+    pre: "(ghost = Ghost \<longrightarrow> assignGhost = Ghost) \<and> is_writable_lvalue env lhsTm
+            \<and> ghost_lvalue_ok env assignGhost lhsTm"
     by (simp split: if_splits)
   hence gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and wl: "is_writable_lvalue env lhsTm"
+    and glv: "ghost_lvalue_ok env assignGhost lhsTm"
     by simp_all
   from "5.prems" pre obtain lhsTy where
     lhs: "core_term_type env assignGhost lhsTm = Some lhsTy"
@@ -1357,7 +1381,7 @@ next
     using ct core_impure_call_type_irrelevant_tyvar by blast
   have cast': "cast_result_type ?env1 assignGhost retTy castOpt = Some lhsTy"
     using cast cast_result_type_irrelevant_tyvar by blast
-  from gh wl lhs' ct' cast' show ?case
+  from gh wl glv lhs' ct' cast' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>Return: env unchanged. TE_ReturnType / TE_FunctionGhost survive ?ext.\<close>
@@ -1384,6 +1408,8 @@ next
     gh: "ghost = Ghost \<longrightarrow> swapGhost = Ghost" and
     wl: "is_writable_lvalue env lhsTm" and
     wr: "is_writable_lvalue env rhsTm" and
+    glvL: "ghost_lvalue_ok env swapGhost lhsTm" and
+    glvR: "ghost_lvalue_ok env swapGhost rhsTm" and
     lhs: "core_term_type env swapGhost lhsTm = Some lhsTy" and
     rhs: "core_term_type env swapGhost rhsTm = Some lhsTy" and
     env'_eq: "env' = env"
@@ -1393,7 +1419,7 @@ next
     using lhs core_term_type_irrelevant_tyvar by blast
   have rhs': "core_term_type ?env1 swapGhost rhsTm = Some lhsTy"
     using rhs core_term_type_irrelevant_tyvar by blast
-  from gh wl wr lhs' rhs' show ?case by (simp add: env'_eq)
+  from gh wl wr glvL glvR lhs' rhs' show ?case by (simp add: env'_eq)
 next
   \<comment> \<open>Assert: env unchanged; body checked under goalEnv, which sets
       TE_ProofGoal to condTm when a condition is present, or keeps the current goal

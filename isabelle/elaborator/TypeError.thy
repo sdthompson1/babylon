@@ -14,6 +14,8 @@ datatype TypeError =
   | TyErr_GhostVariableInNonGhost Location string
   | TyErr_GhostFunctionInNonGhost Location string  (* executable code tried to call a ghost function *)
   | TyErr_GhostTypeInNonGhost Location
+  | TyErr_WriteToNonGhostFromGhost Location  (* ghost code attempting to write a non-ghost variable (assignment, swap, or ref argument) *)
+  | TyErr_GhostRefNeedsGhostVar Location string  (* a ref declared in ghost code must refer to a ghost variable; string = ref/pattern var name *)
   (* Type mismatch errors *)
   | TyErr_TypeMismatch Location CoreType CoreType  (* loc, type1, type2 *)
   | TyErr_SignedTypeRequired Location CoreType

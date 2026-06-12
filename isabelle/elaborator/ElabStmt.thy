@@ -82,11 +82,11 @@ definition resolve_impure_callee ::
        to be a writable lvalue.
    Returns the final argument terms (substitution applied). *)
 fun validate_call_args ::
-  "CoreTyEnv \<Rightarrow> Location \<Rightarrow> TypeSubst
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst
    \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> VarOrRef list
    \<Rightarrow> TypeError list + CoreTerm list" where
-  "validate_call_args env loc subst [] [] [] [] = Inr []"
-| "validate_call_args env loc subst (tm # tms) (actualTy # actualTys)
+  "validate_call_args env ghost loc subst [] [] [] [] = Inr []"
+| "validate_call_args env ghost loc subst (tm # tms) (actualTy # actualTys)
        (expectedTy # expectedTys) (vor # vors) =
     (let tm' = apply_subst_to_term subst tm;
          actualTy' = apply_subst subst actualTy;
@@ -95,16 +95,17 @@ fun validate_call_args ::
           Var \<Rightarrow>
             (let finalTm = (if actualTy' = expectedTy' then tm'
                             else CoreTm_Cast expectedTy' tm')
-             in case validate_call_args env loc subst tms actualTys expectedTys vors of
+             in case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr rest \<Rightarrow> Inr (finalTm # rest))
         | Ref \<Rightarrow>
             (if actualTy' \<noteq> expectedTy' then Inl [TyErr_TypeMismatch loc expectedTy' actualTy']
              else if \<not> is_writable_lvalue env tm' then Inl [TyErr_NotWritableLvalue loc]
-             else case validate_call_args env loc subst tms actualTys expectedTys vors of
+             else if \<not> ghost_lvalue_ok env ghost tm' then Inl [TyErr_WriteToNonGhostFromGhost loc]
+             else case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr rest \<Rightarrow> Inr (tm' # rest)))"
-| "validate_call_args env loc subst _ _ _ _ = undefined"
+| "validate_call_args env ghost loc subst _ _ _ _ = undefined"
 
 (* Elaborate an impure function call term appearing at the outermost rhs of an
    Assign or VarDecl.
@@ -128,7 +129,7 @@ definition elab_impure_call_term ::
                         0 actualTypes expArgTypes fmempty of
                    Inl errs \<Rightarrow> Inl errs
                  | Inr finalSubst \<Rightarrow>
-                     (case validate_call_args env loc finalSubst
+                     (case validate_call_args env ghost loc finalSubst
                              elabArgTms actualTypes expArgTypes varOrRefs of
                         Inl errs \<Rightarrow> Inl errs
                       | Inr finalArgTms \<Rightarrow>
@@ -264,8 +265,9 @@ definition elab_vardecl_impure ::
      | _ \<Rightarrow> undefined)"
 
 (* VarDecl(Ref). The initializer must be a metavariable-free lvalue (this rejects
-   `ref x = f();`, pure or impure, since a call result is not an lvalue). The new
-   ref is const iff its base is read-only. Emits CoreStmt_VarDecl ... Ref. *)
+   `ref x = f();`, pure or impure, since a call result is not an lvalue), and in
+   ghost code it must be rooted at a ghost variable. The new ref is const iff its
+   base is read-only. Emits CoreStmt_VarDecl ... Ref. *)
 definition elab_vardecl_ref ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabTerm option \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
@@ -277,6 +279,8 @@ definition elab_vardecl_ref ::
             Inl errs \<Rightarrow> Inl errs
           | Inr (coreTm, rhsTy, next_mv') \<Rightarrow>
               if \<not> is_lvalue coreTm then Inl [TyErr_RefDeclNeedsLvalue loc]
+              else if \<not> ghost_lvalue_ok env ghost coreTm
+              then Inl [TyErr_GhostRefNeedsGhostVar loc varName]
               else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
               then Inl [TyErr_CannotInferType loc]
               else
@@ -349,6 +353,8 @@ definition elab_swap ::
        Inl errs \<Rightarrow> Inl errs
      | Inr (rhsTm, rhsTy, next_mv2) \<Rightarrow>
          if \<not> is_writable_lvalue env rhsTm then Inl [TyErr_NotWritableLvalue loc]
+         else if \<not> ghost_lvalue_ok env ghost rhsTm
+         then Inl [TyErr_WriteToNonGhostFromGhost loc]
          else if rhsTy \<noteq> lhsTy then Inl [TyErr_TypeMismatch loc lhsTy rhsTy]
          else
            Inr (CoreStmt_Swap ghost
@@ -545,9 +551,13 @@ definition elab_while_header ::
    Then, we create a synthetic match@@n variable and bind it to the scrutinee.
    If the scrutinee is an lvalue, this will be a VarDecl Ref, else VarDecl Var.
 
-   "Ref" patterns are only allowed in the lvalue case.
+   "Ref" patterns are only allowed in the Ref-binding case.
 
-   The return values are: final scrutinee and type, binding mode, the match@@n name, 
+   (Additional rule for ghost mode: If the scrutinee is an lvalue pointing to a non-ghost
+   location, it becomes VarDecl Var, not Ref -- otherwise we would be creating a ref to a
+   non-ghost variable from ghost code, which is not allowed.)
+
+   The return values are: final scrutinee and type, binding mode, the match@@n name,
    the writability of the scrutinee (which determines "constness" of ref-patterns),
    the new env with the match@@n binding, and the new counter (hi is consumed as the
    match@@n suffix). *)
@@ -561,7 +571,7 @@ definition elab_match_stmt_scrut ::
          scrutTy' = clear_metavars_type lo hi (apply_subst accSubst scrutTy);
          freshName = ''match@@'' @ nat_to_string hi;
          writable = is_writable_lvalue env scrut'
-     in if is_lvalue scrut'
+     in if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'
         then Inr (scrut', scrutTy', Ref, freshName, writable,
                   (vardecl_add_local env ghost freshName scrutTy')
                     \<lparr> TE_ConstLocals := (if writable
@@ -572,7 +582,10 @@ definition elab_match_stmt_scrut ::
                 [] \<Rightarrow> Inr (scrut', scrutTy', Var, freshName, writable,
                            vardecl_add_local env ghost freshName scrutTy',
                            hi + 1)
-              | (_, name, _) # _ \<Rightarrow> Inl [TyErr_RefPatternNeedsLvalue loc name]))"
+              | (_, name, _) # _ \<Rightarrow>
+                  Inl [if is_lvalue scrut'
+                       then TyErr_GhostRefNeedsGhostVar loc name
+                       else TyErr_RefPatternNeedsLvalue loc name]))"
 
 (* Final-stage helper for match statement elaboration. 
    - Validates that the fresh match@@n name really is fresh (i.e. it doesn't appear free
@@ -685,8 +698,11 @@ where
     (case elab_term env elabEnv ghost lhs next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (lhsTm, lhsTy, next_mv1) \<Rightarrow>
-         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars).\<close>
+         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars),
+             and (in ghost code) that it is rooted at a ghost variable.\<close>
          if \<not> is_writable_lvalue env lhsTm then Inl [TyErr_NotWritableLvalue loc]
+         else if \<not> ghost_lvalue_ok env ghost lhsTm
+         then Inl [TyErr_WriteToNonGhostFromGhost loc]
          else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)
          then Inl [TyErr_CannotInferType loc]
          else if is_impure_call env elabEnv rhs
@@ -701,8 +717,11 @@ where
     (case elab_term env elabEnv ghost lhs next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (lhsTm, lhsTy, next_mv1) \<Rightarrow>
-         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars).\<close>
+         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars),
+             and (in ghost code) that it is rooted at a ghost variable.\<close>
          if \<not> is_writable_lvalue env lhsTm then Inl [TyErr_NotWritableLvalue loc]
+         else if \<not> ghost_lvalue_ok env ghost lhsTm
+         then Inl [TyErr_WriteToNonGhostFromGhost loc]
          else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)
          then Inl [TyErr_CannotInferType loc]
          else elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"

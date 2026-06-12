@@ -122,7 +122,8 @@ proof -
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length tmArgs.
                 snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                  \<longrightarrow> is_writable_lvalue env (tmArgs ! i)"
+                  \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
+                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
 
   \<comment> \<open>Signature facts (distinctness + tyvar containment) for substitution composition.\<close>
@@ -210,16 +211,20 @@ proof -
       using i_tm aeq by simp
   qed
 
-  \<comment> \<open>Ref positions stay writable lvalues under the term substitution.\<close>
+  \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact) under
+      the term substitution.\<close>
   have ref_lv_subst: "\<forall>i < length (map (apply_subst_to_term subst) tmArgs).
                         snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                          \<longrightarrow> is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)"
+                          \<longrightarrow> is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)
+                              \<and> ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length (map (apply_subst_to_term subst) tmArgs)"
       and ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
     hence i_tm: "i < length tmArgs" by simp
-    have "is_writable_lvalue env (tmArgs ! i)" using ref_lv i_tm ref by simp
-    thus "is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)"
+    have "is_writable_lvalue env (tmArgs ! i)" and "ghost_lvalue_ok env ghost (tmArgs ! i)"
+      using ref_lv i_tm ref by simp_all
+    thus "is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)
+            \<and> ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
       using i_tm by simp
   qed
 
@@ -228,7 +233,9 @@ proof -
                  case vor of
                    Var \<Rightarrow> (case core_term_type env ghost tm of None \<Rightarrow> False
                             | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                 | Ref \<Rightarrow> is_writable_lvalue env tm \<and> core_term_type env ghost tm = Some expectedTy"
+                 | Ref \<Rightarrow> is_writable_lvalue env tm
+                          \<and> ghost_lvalue_ok env ghost tm
+                          \<and> core_term_type env ghost tm = Some expectedTy"
   let ?zts = "zip (map (apply_subst_to_term subst) tmArgs) (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo))"
   have len_zts: "length ?zts = length ?expsS" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsS ! i)"
@@ -249,7 +256,8 @@ proof -
     next
       case Ref
       have "is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)"
-        using ref_lv_subst i_tm fi_arg Ref by simp
+        and "ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
+        using ref_lv_subst i_tm fi_arg Ref by simp_all
       moreover from pure_i have
         "core_term_type env ghost ((map (apply_subst_to_term subst) tmArgs) ! i) = Some (?expsS ! i)"
         by (auto split: option.splits)

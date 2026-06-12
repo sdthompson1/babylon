@@ -142,6 +142,12 @@ lemma is_writable_lvalue_apply_subst_to_term [simp]:
   "is_writable_lvalue env (apply_subst_to_term subst tm) = is_writable_lvalue env tm"
   by (induction tm) auto
 
+(* ghost_lvalue_ok only looks at the base variable name, which substitution
+   preserves. *)
+lemma ghost_lvalue_ok_apply_subst_to_term [simp]:
+  "ghost_lvalue_ok env ghost (apply_subst_to_term subst tm) = ghost_lvalue_ok env ghost tm"
+  by (rule ghost_lvalue_ok_base_name_cong) (rule lvalue_base_name_apply_subst_to_term)
+
 
 (* Type substitution does not change free term variables,
    since it only substitutes type variables. *)

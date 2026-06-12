@@ -234,6 +234,12 @@ next
     by (simp add: extend_env_with_tyvars_def)
 qed
 
+(* Likewise for ghost_lvalue_ok (it ignores type variables). *)
+lemma ghost_lvalue_ok_extend_env_with_tyvars [simp]:
+  "ghost_lvalue_ok (extend_env_with_tyvars env ghost' lo hi) ghost tm
+     = ghost_lvalue_ok env ghost tm"
+  by (rule ghost_lvalue_ok_cong_env) (simp_all add: extend_env_with_tyvars_def)
+
 (* Impure-call bridge: an impure call that typechecks (via core_impure_call_type)
    under env extended with the fresh interval, once its ty-args and arg-terms have
    their interval metavariables cleared, typechecks under the original env to the
@@ -270,7 +276,8 @@ proof -
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length argTms.
                 snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                  \<longrightarrow> is_writable_lvalue ?envE (argTms ! i)"
+                  \<longrightarrow> is_writable_lvalue ?envE (argTms ! i)
+                      \<and> ghost_lvalue_ok ?envE ghost (argTms ! i)"
     by blast
   have fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
     using fiE unfolding extend_env_with_tyvars_def by simp
@@ -379,16 +386,21 @@ proof -
       using i_tm aeq by simp
   qed
 
-  \<comment> \<open>Ref positions stay writable lvalues under clearing.\<close>
+  \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact)
+      under clearing.\<close>
   have ref_lv_clear: "\<forall>i < length (map ?ctm argTms).
                         snd (snd (FI_TmArgs funInfo ! i)) = Ref
-                          \<longrightarrow> is_writable_lvalue env ((map ?ctm argTms) ! i)"
+                          \<longrightarrow> is_writable_lvalue env ((map ?ctm argTms) ! i)
+                              \<and> ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length (map ?ctm argTms)" and ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
     hence i_lt_tm: "i < length argTms" by simp
-    have "is_writable_lvalue ?envE (argTms ! i)" using ref_lv i_lt_tm ref by simp
-    hence "is_writable_lvalue env (argTms ! i)" by simp
-    thus "is_writable_lvalue env ((map ?ctm argTms) ! i)"
+    have "is_writable_lvalue ?envE (argTms ! i)" and "ghost_lvalue_ok ?envE ghost (argTms ! i)"
+      using ref_lv i_lt_tm ref by simp_all
+    hence "is_writable_lvalue env (argTms ! i)" and "ghost_lvalue_ok env ghost (argTms ! i)"
+      by simp_all
+    thus "is_writable_lvalue env ((map ?ctm argTms) ! i)
+            \<and> ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
       using i_lt_tm unfolding clear_metavars_def by simp
   qed
 
@@ -398,7 +410,9 @@ proof -
                  case vor of
                    Var \<Rightarrow> (case core_term_type env ghost tm of None \<Rightarrow> False
                             | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                 | Ref \<Rightarrow> is_writable_lvalue env tm \<and> core_term_type env ghost tm = Some expectedTy"
+                 | Ref \<Rightarrow> is_writable_lvalue env tm
+                          \<and> ghost_lvalue_ok env ghost tm
+                          \<and> core_term_type env ghost tm = Some expectedTy"
   let ?zts = "zip (map ?ctm argTms) (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo))"
   have len_zts: "length ?zts = length ?expsC" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsC ! i)"
@@ -421,7 +435,8 @@ proof -
     next
       case Ref
       have "is_writable_lvalue env ((map ?ctm argTms) ! i)"
-        using ref_lv_clear i_lt_tm fi_arg Ref by simp
+        and "ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
+        using ref_lv_clear i_lt_tm fi_arg Ref by simp_all
       moreover from pure_i have
         "core_term_type env ghost ((map ?ctm argTms) ! i) = Some (?expsC ! i)"
         by (auto split: option.splits)
@@ -565,33 +580,36 @@ qed
 (* validate_call_args returns a list as long as its input term list (the four
    input lists must have equal length, else the function is undefined). *)
 lemma validate_call_args_length:
-  "validate_call_args env loc subst tms actualTys expectedTys varOrRefs = Inr finalArgTms
+  "validate_call_args env ghost loc subst tms actualTys expectedTys varOrRefs = Inr finalArgTms
      \<Longrightarrow> length tms = length actualTys \<Longrightarrow> length actualTys = length expectedTys
      \<Longrightarrow> length expectedTys = length varOrRefs
      \<Longrightarrow> length finalArgTms = length tms"
-  by (induction env loc subst tms actualTys expectedTys varOrRefs arbitrary: finalArgTms
+  by (induction env ghost loc subst tms actualTys expectedTys varOrRefs arbitrary: finalArgTms
       rule: validate_call_args.induct)
      (auto simp: Let_def split: VarOrRef.splits sum.splits if_splits)
 
-(* validate_call_args depends on env only through is_writable_lvalue (in the Ref
-   arm), which is tyvar-irrelevant, so its result is unchanged in the
-   fresh-tyvar-extended env. This lets us move the call from the un-extended
-   caller env to the extended env where the argument typing facts live. *)
+(* validate_call_args depends on env only through is_writable_lvalue and
+   ghost_lvalue_ok (in the Ref arm), which are tyvar-irrelevant, so its result
+   is unchanged in the fresh-tyvar-extended env. This lets us move the call from
+   the un-extended caller env to the extended env where the argument typing
+   facts live. *)
 lemma validate_call_args_extend_env_with_tyvars:
-  "validate_call_args (extend_env_with_tyvars env ghost lo hi)
-     loc subst tms actualTys expectedTys varOrRefs
-   = validate_call_args env loc subst tms actualTys expectedTys varOrRefs"
-  by (induction env loc subst tms actualTys expectedTys varOrRefs rule: validate_call_args.induct)
+  "validate_call_args (extend_env_with_tyvars env tvGhost lo hi)
+     ghost loc subst tms actualTys expectedTys varOrRefs
+   = validate_call_args env ghost loc subst tms actualTys expectedTys varOrRefs"
+  by (induction env ghost loc subst tms actualTys expectedTys varOrRefs
+      rule: validate_call_args.induct)
      (auto simp: Let_def split: VarOrRef.splits sum.splits)
 
 (* Correctness of validate_call_args: given that the (pre-coercion) terms type
    to their actual types, the unify substitution reconciles each actual/expected
    pair (equal after subst, or both finite integers), and the subst is harmless
    on the env, the validated terms type to the substituted expected types — and
-   Ref positions are writable lvalues. The conclusion is the per-argument shape
-   that core_impure_call_type's list_all2 check requires. *)
+   Ref positions are writable lvalues obeying the ghost-write discipline. The
+   conclusion is the per-argument shape that core_impure_call_type's list_all2
+   check requires. *)
 lemma validate_call_args_correct:
-  assumes vca: "validate_call_args env loc subst tms actualTys expectedTys varOrRefs
+  assumes vca: "validate_call_args env ghost loc subst tms actualTys expectedTys varOrRefs
                   = Inr finalArgTms"
       and ih: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) tms actualTys"
       and unified: "list_all2 (\<lambda>actualTy expectedTy.
@@ -614,16 +632,17 @@ lemma validate_call_args_correct:
              Var \<Rightarrow> (case core_term_type env ghost tm of
                        None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
            | Ref \<Rightarrow> is_writable_lvalue env tm
+                    \<and> ghost_lvalue_ok env ghost tm
                     \<and> core_term_type env ghost tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
          (map (apply_subst subst) expectedTys)"
   using assms
-proof (induction env loc subst tms actualTys expectedTys varOrRefs
+proof (induction env ghost loc subst tms actualTys expectedTys varOrRefs
        arbitrary: finalArgTms rule: validate_call_args.induct)
-  case (1 env loc subst)
+  case (1 env ghost loc subst)
   then show ?case by simp
 next
-  case (2 env loc subst tm tms actualTy actualTys expectedTy expectedTys vor vors)
+  case (2 env ghost loc subst tm tms actualTy actualTys expectedTy expectedTys vor vors)
   let ?tm' = "apply_subst_to_term subst tm"
   let ?actualTy' = "apply_subst subst actualTy"
   let ?expectedTy' = "apply_subst subst expectedTy"
@@ -657,7 +676,7 @@ next
     case Var
     \<comment> \<open>Var: validate_call_args inserts a cast iff the types differ; the tail recurses.\<close>
     from "2.prems"(1) Var obtain rest where
-      tail_vca: "validate_call_args env loc subst tms actualTys expectedTys vors = Inr rest" and
+      tail_vca: "validate_call_args env ghost loc subst tms actualTys expectedTys vors = Inr rest" and
       finalArgTms_eq: "finalArgTms
                          = (if ?actualTy' = ?expectedTy' then ?tm'
                             else CoreTm_Cast ?expectedTy' ?tm') # rest"
@@ -667,6 +686,7 @@ next
                   Var \<Rightarrow> (case core_term_type env ghost tm of
                             None \<Rightarrow> False | Some t \<Rightarrow> t = expectedTy)
                 | Ref \<Rightarrow> is_writable_lvalue env tm
+                         \<and> ghost_lvalue_ok env ghost tm
                          \<and> core_term_type env ghost tm = Some expectedTy)
               (zip rest vors) (map (apply_subst subst) expectedTys)"
       using "2.IH"(1)[OF refl refl refl Var refl tail_vca tail_typed tail_unif "2.prems"(4,5,6)
@@ -695,27 +715,31 @@ next
     show ?thesis using finalArgTms_eq head_result ih Var by simp
   next
     case Ref
-    \<comment> \<open>Ref: validate_call_args requires exact match (no cast) and a writable lvalue.\<close>
+    \<comment> \<open>Ref: validate_call_args requires exact match (no cast) and a writable lvalue
+        rooted (in ghost code) at a ghost variable.\<close>
     from "2.prems"(1) Ref obtain rest where
       eq_types: "?actualTy' = ?expectedTy'" and
       writ: "is_writable_lvalue env ?tm'" and
-      tail_vca: "validate_call_args env loc subst tms actualTys expectedTys vors = Inr rest" and
+      glv: "ghost_lvalue_ok env ghost ?tm'" and
+      tail_vca: "validate_call_args env ghost loc subst tms actualTys expectedTys vors = Inr rest" and
       finalArgTms_eq: "finalArgTms = ?tm' # rest"
       by (auto simp: Let_def split: sum.splits if_splits)
     have g1: "\<not> ?actualTy' \<noteq> ?expectedTy'" using eq_types by simp
     have g2: "\<not> \<not> is_writable_lvalue env ?tm'" using writ by simp
+    have g3: "\<not> \<not> ghost_lvalue_ok env ghost ?tm'" using glv by simp
     have ih: "list_all2 (\<lambda>(tm, vor) expectedTy.
                 case vor of
                   Var \<Rightarrow> (case core_term_type env ghost tm of
                             None \<Rightarrow> False | Some t \<Rightarrow> t = expectedTy)
                 | Ref \<Rightarrow> is_writable_lvalue env tm
+                         \<and> ghost_lvalue_ok env ghost tm
                          \<and> core_term_type env ghost tm = Some expectedTy)
               (zip rest vors) (map (apply_subst subst) expectedTys)"
-      using "2.IH"(2)[OF refl refl refl Ref g1 g2 tail_vca tail_typed tail_unif "2.prems"(4,5,6)
+      using "2.IH"(2)[OF refl refl refl Ref g1 g2 g3 tail_vca tail_typed tail_unif "2.prems"(4,5,6)
                           len_tms len_tys len_vor "2.prems"(10) "2.prems"(11)] .
     have head_typed': "core_term_type env ghost ?tm' = Some ?expectedTy'"
       using head_tm'_typed eq_types by simp
-    show ?thesis using finalArgTms_eq head_typed' writ ih Ref by simp
+    show ?thesis using finalArgTms_eq head_typed' writ glv ih Ref by simp
   qed
 qed (simp_all)
 
@@ -749,7 +773,7 @@ proof -
     unify_eq: "unify_type_lists ?is_flex ?mk_err 0 actualTypes expArgTypes fmempty = Inr finalSubst"
     by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
   from elab rc len_args el unify_eq have
-    vca: "validate_call_args env loc finalSubst elabArgTms actualTypes expArgTypes varOrRefs
+    vca: "validate_call_args env ghost loc finalSubst elabArgTms actualTypes expArgTypes varOrRefs
             = Inr finalArgTms" and
     tyargs_eq: "finalTyArgs = map (apply_subst finalSubst) newTyArgs" and
     retTy_eq: "retTy = apply_subst finalSubst retType0" and
@@ -924,7 +948,7 @@ proof -
 
   \<comment> \<open>Move the call into the extended env (validate_call_args is tyvar-irrelevant),
       so it can be combined with the extended-env typing facts.\<close>
-  have vca': "validate_call_args ?env' loc finalSubst elabArgTms actualTypes expArgTypes varOrRefs
+  have vca': "validate_call_args ?env' ghost loc finalSubst elabArgTms actualTypes expArgTypes varOrRefs
                 = Inr finalArgTms"
     using vca by (simp add: validate_call_args_extend_env_with_tyvars)
   \<comment> \<open>The validated arg terms satisfy the per-argument core_impure_call_type check.\<close>
@@ -932,7 +956,9 @@ proof -
            case vor of
              Var \<Rightarrow> (case core_term_type ?env' ghost tm of
                        None \<Rightarrow> False | Some t \<Rightarrow> t = expectedTy)
-           | Ref \<Rightarrow> is_writable_lvalue ?env' tm \<and> core_term_type ?env' ghost tm = Some expectedTy)
+           | Ref \<Rightarrow> is_writable_lvalue ?env' tm
+                    \<and> ghost_lvalue_ok ?env' ghost tm
+                    \<and> core_term_type ?env' ghost tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
          (map (apply_subst finalSubst) expArgTypes)"
     using validate_call_args_correct[OF vca' ih_args types_unified wf' finalSubst_wk finalSubst_rt
@@ -1028,7 +1054,9 @@ proof -
            case vor of
              Var \<Rightarrow> (case core_term_type ?env' ghost tm of
                        None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-           | Ref \<Rightarrow> is_writable_lvalue ?env' tm \<and> core_term_type ?env' ghost tm = Some expectedTy)
+           | Ref \<Rightarrow> is_writable_lvalue ?env' tm
+                    \<and> ghost_lvalue_ok ?env' ghost tm
+                    \<and> core_term_type ?env' ghost tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
          (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
               (FI_TmArgs funInfo))"
@@ -1716,6 +1744,7 @@ proof -
     tm_eq: "tmOpt = Some tm" and
     etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, rhsTy, next_mv')" and
     lv: "is_lvalue coreTm" and
+    glv: "ghost_lvalue_ok env ghost coreTm" and
     no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
     cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref rhsTy
                           (clear_metavars next_mv next_mv' coreTm)" and
@@ -1738,10 +1767,13 @@ proof -
     using clear_metavars_typed_in_env[OF coreTm_typed_decl wf bound rhsTy_below] .
   have lv': "is_lvalue (clear_metavars next_mv next_mv' coreTm)"
     using lv unfolding clear_metavars_def by simp
+  have glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' coreTm)"
+    using glv unfolding clear_metavars_def by simp
   have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm)
                  = is_writable_lvalue env coreTm"
     unfolding clear_metavars_def by simp
-  show ?thesis using wk rt lv' init_typed wl_eq by (simp add: cs_eq env'_eq vardecl_add_local_def)
+  show ?thesis using wk rt lv' glv' init_typed wl_eq
+    by (simp add: cs_eq env'_eq vardecl_add_local_def)
 qed
 
 
@@ -1770,6 +1802,7 @@ lemma elab_assign_pure_correct:
                    = Inr (coreStmt, env', next_mv')"
     and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     and lhs_wl: "is_writable_lvalue env lhsTm"
+    and lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
     and lhs_below: "type_tyvars lhsTy \<subseteq> {n. n < next_mv}"
     and mono_lhs: "next_mv \<le> next_mv1"
     and wf: "tyenv_well_formed env"
@@ -1796,6 +1829,8 @@ proof -
     using clear_metavars_typed_in_env[OF lhs_typedD wf bound lhs_below] .
   have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
     using lhs_wl unfolding clear_metavars_def by simp
+  have lhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' lhsTm)"
+    using lhs_glv unfolding clear_metavars_def by simp
   \<comment> \<open>rhs: typed at extend env next_mv next_mv' (widen from next_mv1), then coerced
       to lhsTy and cleared — identical to elab_vardecl_pure_correct's annotated branch.\<close>
   have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost rhsTm = Some rhsTy"
@@ -1849,7 +1884,7 @@ proof -
       using coreTm_typed_decl ints lhsTy_wkD lhsTy_rtD by auto
     thus ?thesis using clear_metavars_typed_in_env[OF cast_typed wf bound lhs_below] rhsTm'_eq by simp
   qed
-  show ?thesis using lhs_wl' lhs_init rhs_init by (simp add: cs_eq env'_eq)
+  show ?thesis using lhs_wl' lhs_glv' lhs_init rhs_init by (simp add: cs_eq env'_eq)
 qed
 
 (* The impure helper is only reached for an is_impure_call rhs (forces rhs to be
@@ -1876,6 +1911,7 @@ lemma elab_assign_impure_correct:
     and impure: "is_impure_call env elabEnv rhs"
     and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     and lhs_wl: "is_writable_lvalue env lhsTm"
+    and lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
     and lhs_below: "type_tyvars lhsTy \<subseteq> {n. n < next_mv}"
     and mono_lhs: "next_mv \<le> next_mv1"
     and wf: "tyenv_well_formed env"
@@ -1908,6 +1944,8 @@ proof -
     using clear_metavars_typed_in_env[OF lhs_typedE wf bound lhs_below] .
   have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
     using lhs_wl unfolding clear_metavars_def by simp
+  have lhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' lhsTm)"
+    using lhs_glv unfolding clear_metavars_def by simp
   \<comment> \<open>The call typechecks (extended env), via elab_impure_call_term_correct at next_mv1.\<close>
   have ec_fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1" using bound mono_lhs by fastforce
   have ctE1: "core_impure_call_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost fnName finalTyArgs finalArgTms = Some retTy"
@@ -1955,7 +1993,7 @@ proof -
                 (map (clear_metavars_type next_mv next_mv') tyArgs')
                 (map (clear_metavars next_mv next_mv') argTms') = Some lhsTy"
       using clear_metavars_impure_call_typed_in_env[OF ctE'[unfolded ret_is_lhsTy] wf bound rtbound lhs_below] .
-    show ?thesis using lhs_wl' lhs_init ct
+    show ?thesis using lhs_wl' lhs_glv' lhs_init ct
       by (simp add: cs_eq env'_eq castOpt_eq cast_result_type_def)
   next
     case None
@@ -1973,7 +2011,7 @@ proof -
       using core_term_type_notghost_runtime lhs_init local.wf by auto
     have cast_ok: "cast_result_type env ghost retTy (Some lhsTy) = Some lhsTy"
       using ints lhsTy_rt by (simp add: cast_result_type_def)
-    show ?thesis using lhs_wl' lhs_init ct cast_ok
+    show ?thesis using lhs_wl' lhs_glv' lhs_init ct cast_ok
       by (simp add: cs_eq env'_eq castOpt_eq)
   qed
 qed
@@ -2005,6 +2043,7 @@ lemma elab_swap_correct:
                    = Inr (coreStmt, env', next_mv')"
     and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     and lhs_wl: "is_writable_lvalue env lhsTm"
+    and lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
     and lhs_below: "type_tyvars lhsTy \<subseteq> {n. n < next_mv}"
     and mono_lhs: "next_mv \<le> next_mv1"
     and wf: "tyenv_well_formed env"
@@ -2015,6 +2054,7 @@ proof -
   from elab obtain rhsTm rhsTy where
     erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv')" and
     rhs_wl: "is_writable_lvalue env rhsTm" and
+    rhs_glv: "ghost_lvalue_ok env ghost rhsTm" and
     rhs_ty: "rhsTy = lhsTy" and
     cs_eq: "coreStmt = CoreStmt_Swap ghost
                           (clear_metavars next_mv next_mv' lhsTm)
@@ -2029,6 +2069,8 @@ proof -
     using clear_metavars_typed_in_env[OF lhs_typedD wf bound lhs_below] .
   have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
     using lhs_wl unfolding clear_metavars_def by simp
+  have lhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' lhsTm)"
+    using lhs_glv unfolding clear_metavars_def by simp
   \<comment> \<open>rhs: typed at extend env next_mv next_mv' (widen from next_mv1); its type is
       exactly lhsTy (metavar-free), so clearing types it to lhsTy in env.\<close>
   have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost rhsTm = Some rhsTy"
@@ -2039,7 +2081,10 @@ proof -
     using clear_metavars_typed_in_env[OF rhs_typedD wf bound lhs_below] .
   have rhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' rhsTm)"
     using rhs_wl unfolding clear_metavars_def by simp
-  show ?thesis using lhs_wl' rhs_wl' lhs_init rhs_init by (simp add: cs_eq env'_eq)
+  have rhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' rhsTm)"
+    using rhs_glv unfolding clear_metavars_def by simp
+  show ?thesis using lhs_wl' rhs_wl' lhs_glv' rhs_glv' lhs_init rhs_init
+    by (simp add: cs_eq env'_eq)
 qed
 
 
@@ -2477,7 +2522,8 @@ lemma elab_match_stmt_scrut_next_mv:
   assumes "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps
             = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)"
   shows "mvOut = hi + 1"
-proof (cases "is_lvalue (clear_metavars lo hi (apply_subst_to_term accSubst scrutTm))")
+proof (cases "is_lvalue (clear_metavars lo hi (apply_subst_to_term accSubst scrutTm))
+              \<and> ghost_lvalue_ok env ghost (clear_metavars lo hi (apply_subst_to_term accSubst scrutTm))")
   case True
   thus ?thesis using assms unfolding elab_match_stmt_scrut_def Let_def
     by (simp del: nat_to_string.simps)
@@ -3502,6 +3548,11 @@ lemma is_writable_lvalue_TE_ProofTopLevel_irrelevant [simp]:
   by (induction tm rule: is_writable_lvalue.induct)
      (auto simp: tyenv_var_writable_def)
 
+(* ghost_lvalue_ok only consults TE_LocalVars / TE_GhostLocals / TE_GhostGlobals. *)
+lemma ghost_lvalue_ok_TE_ProofTopLevel_irrelevant [simp]:
+  "ghost_lvalue_ok (env \<lparr> TE_ProofTopLevel := b \<rparr>) ghost tm = ghost_lvalue_ok env ghost tm"
+  by (rule ghost_lvalue_ok_cong_env) simp_all
+
 (* Writability of a variable is unaffected by binding a different name. *)
 lemma tyenv_var_writable_extend_env_one_var:
   assumes "f \<noteq> n"
@@ -3509,6 +3560,14 @@ lemma tyenv_var_writable_extend_env_one_var:
        = tyenv_var_writable env f"
   using assms unfolding tyenv_var_writable_def extend_env_one_var_def
   by auto
+
+(* Ghost-ness of a variable is unaffected by binding a different name. *)
+lemma tyenv_var_ghost_extend_env_one_var:
+  assumes "f \<noteq> n"
+  shows "tyenv_var_ghost (extend_env_one_var constOf ghost (vr, n, ty) env) f
+       = tyenv_var_ghost env f"
+  using assms unfolding tyenv_var_ghost_def extend_env_one_var_def
+  by (auto split: option.splits)
 
 (* Projections are lvalues iff the base is, with the base's writability. *)
 lemma dec_pattern_projections_is_lvalue:
@@ -3530,6 +3589,22 @@ and dec_pattern_projections_record_writable:
 proof (induction base dp and base flds
        rule: dec_pattern_projections_dec_pattern_projections_record.induct)
 qed auto
+
+(* Projections share the base's root variable. *)
+lemma dec_pattern_projections_base_name:
+  "(vr, n, vTy, proj) \<in> set (dec_pattern_projections base dp)
+     \<Longrightarrow> lvalue_base_name proj = lvalue_base_name base"
+and dec_pattern_projections_record_base_name:
+  "(vr, n, vTy, proj) \<in> set (dec_pattern_projections_record base flds)
+     \<Longrightarrow> lvalue_base_name proj = lvalue_base_name base"
+proof (induction base dp and base flds
+       rule: dec_pattern_projections_dec_pattern_projections_record.induct)
+qed auto
+
+lemma dec_pattern_projections_ghost_lvalue_ok:
+  "(vr, n, vTy, proj) \<in> set (dec_pattern_projections base dp)
+     \<Longrightarrow> ghost_lvalue_ok E g proj = ghost_lvalue_ok E g base"
+  by (rule ghost_lvalue_ok_base_name_cong) (rule dec_pattern_projections_base_name)
 
 (* Pattern-var env extensions agree when the two const policies agree on the
    VarOrRef markers that actually occur. *)
@@ -3576,7 +3651,7 @@ lemma elab_match_stmt_scrut_facts:
   shows "scrut' = clear_metavars lo hi (apply_subst_to_term accSubst scrutTm)"
     and "scrutTy' = clear_metavars_type lo hi (apply_subst accSubst scrutTy)"
     and "writable = is_writable_lvalue env scrut'"
-    and "mode = (if is_lvalue scrut' then Ref else Var)"
+    and "mode = (if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut' then Ref else Var)"
     and "envAfterFresh
            = (vardecl_add_local env ghost freshName scrutTy')
                \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
@@ -3584,23 +3659,33 @@ lemma elab_match_stmt_scrut_facts:
                                     else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
     and "mode = Var \<Longrightarrow>
            filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = []"
+    and "mode = Ref \<Longrightarrow> is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'"
 proof -
   let ?s = "clear_metavars lo hi (apply_subst_to_term accSubst scrutTm)"
   let ?t = "clear_metavars_type lo hi (apply_subst accSubst scrutTy)"
   let ?f = "''match@@'' @ nat_to_string hi"
   let ?w = "is_writable_lvalue env ?s"
+  let ?refOk = "is_lvalue ?s \<and> ghost_lvalue_ok env ghost ?s"
   have outcome:
     "scrut' = ?s \<and> scrutTy' = ?t \<and> freshName = ?f \<and> writable = ?w
-     \<and> mode = (if is_lvalue ?s then Ref else Var)
+     \<and> mode = (if ?refOk then Ref else Var)
      \<and> envAfterFresh
          = (vardecl_add_local env ghost ?f ?t)
-             \<lparr> TE_ConstLocals := (if is_lvalue ?s \<and> \<not> ?w
+             \<lparr> TE_ConstLocals := (if ?refOk \<and> \<not> ?w
                                   then finsert ?f (TE_ConstLocals env)
                                   else fminus (TE_ConstLocals env) {|?f|}) \<rparr>
-     \<and> (\<not> is_lvalue ?s \<longrightarrow>
+     \<and> (\<not> ?refOk \<longrightarrow>
           filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = [])"
-  proof (cases "is_lvalue ?s")
+  proof (cases ?refOk)
     case True
+    have red: "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps
+                 = Inr (?s, ?t, Ref, ?f, ?w,
+                        (vardecl_add_local env ghost ?f ?t)
+                          \<lparr> TE_ConstLocals := (if ?w then fminus (TE_ConstLocals env) {|?f|}
+                                               else finsert ?f (TE_ConstLocals env)) \<rparr>,
+                        hi + 1)"
+      using True unfolding elab_match_stmt_scrut_def Let_def
+      by (simp del: nat_to_string.simps)
     have inr_eq:
       "(scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)
          = (?s, ?t, Ref, ?f, ?w,
@@ -3608,8 +3693,7 @@ proof -
               \<lparr> TE_ConstLocals := (if ?w then fminus (TE_ConstLocals env) {|?f|}
                                    else finsert ?f (TE_ConstLocals env)) \<rparr>,
             hi + 1)"
-      using assms True unfolding elab_match_stmt_scrut_def Let_def
-      by (metis Inr_inject)
+      using assms red by (metis Inr_inject)
     show ?thesis
       using inr_eq True by (cases ?w) (auto simp del: nat_to_string.simps)
   next
@@ -3632,7 +3716,7 @@ proof -
       show ?thesis
         unfolding c1 c2 c3 c4 c5 c6
         using False Nil
-        by (simp add: vardecl_add_local_def del: nat_to_string.simps)
+        by (cases ghost) (auto simp add: vardecl_add_local_def simp del: nat_to_string.simps)
     next
       case (Cons b rest)
       thus ?thesis using assms False unfolding elab_match_stmt_scrut_def Let_def
@@ -3643,7 +3727,7 @@ proof -
     using outcome by (simp_all del: nat_to_string.simps)
   show "writable = is_writable_lvalue env scrut'"
     using outcome by (simp del: nat_to_string.simps)
-  show "mode = (if is_lvalue scrut' then Ref else Var)"
+  show "mode = (if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut' then Ref else Var)"
     using outcome by (simp del: nat_to_string.simps)
   show "envAfterFresh
           = (vardecl_add_local env ghost freshName scrutTy')
@@ -3653,6 +3737,8 @@ proof -
     using outcome by (auto split: if_splits simp del: nat_to_string.simps)
   show "mode = Var \<Longrightarrow>
           filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = []"
+    using outcome by (auto split: if_splits simp del: nat_to_string.simps)
+  show "mode = Ref \<Longrightarrow> is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'"
     using outcome by (auto split: if_splits simp del: nat_to_string.simps)
 qed
 
@@ -3692,6 +3778,9 @@ lemma vardecl_chain_types:
    \<Longrightarrow> tyenv_var_writable env baseVar = writableFlag
    \<Longrightarrow> baseVar \<notin> set (map (\<lambda>(_, m, _, _). m) projs)
    \<Longrightarrow> distinct (map (\<lambda>(_, m, _, _). m) projs)
+   \<Longrightarrow> (\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set projs
+      \<Longrightarrow> lvalue_base_name proj = Some baseVar)
+   \<Longrightarrow> (ghost = Ghost \<Longrightarrow> tyenv_var_ghost env baseVar)
    \<Longrightarrow> core_statement_list_type env ghost
          (map (\<lambda>(vr, n, ty, proj). CoreStmt_VarDecl ghost n vr ty proj) projs @ rest)
        = core_statement_list_type
@@ -3716,6 +3805,10 @@ next
     using Cons.prems(5) q_eq by auto
   have proj_wr: "\<And>E. is_writable_lvalue E proj = tyenv_var_writable E baseVar"
     using Cons.prems(6) q_eq by fastforce
+  have proj_base: "lvalue_base_name proj = Some baseVar"
+    using Cons.prems(10) q_eq by auto
+  have proj_glv: "ghost_lvalue_ok env ghost proj"
+    using proj_base Cons.prems(11) by (simp add: ghost_lvalue_ok_def)
 
   \<comment> \<open>The head VarDecl typechecks and produces exactly the extend_env_one_var env.\<close>
   have step: "core_statement_type env ghost (CoreStmt_VarDecl ghost n vr vTy proj)
@@ -3728,7 +3821,7 @@ next
     case Ref
     have wr_env: "is_writable_lvalue env proj = writableFlag"
       using proj_wr[of env] Cons.prems(7) by simp
-    show ?thesis using Ref proj_typed proj_wk proj_rt proj_lv wr_env
+    show ?thesis using Ref proj_typed proj_wk proj_rt proj_lv proj_glv wr_env
       by (cases ghost) (auto simp: extend_env_one_var_def)
   qed
 
@@ -3778,6 +3871,12 @@ next
     using Cons.prems(8) by force
   have tail_dist: "distinct (map (\<lambda>(_, m, _, _). m) projs')"
     using Cons.prems(9) q_eq by (simp add: case_prod_unfold)
+  have tail_base:
+    "\<And>vr' n' vTy' proj'. (vr', n', vTy', proj') \<in> set projs'
+       \<Longrightarrow> lvalue_base_name proj' = Some baseVar"
+    using Cons.prems(10) q_eq by auto
+  have base_gh1: "ghost = Ghost \<Longrightarrow> tyenv_var_ghost ?env1 baseVar"
+    using tyenv_var_ghost_extend_env_one_var[OF n_neq_base] Cons.prems(11) by simp
 
   have IH: "core_statement_list_type ?env1 ghost
               (map (\<lambda>(vr, n, ty, proj). CoreStmt_VarDecl ghost n vr ty proj) projs' @ rest)
@@ -3786,7 +3885,7 @@ next
                        (map (\<lambda>(vr, n, ty, _). (vr, n, ty)) projs') ?env1)
                 ghost rest"
     using Cons.IH[OF tail_typed tail_wk tail_rt tail_fv tail_lv tail_wr
-                     base_wr1 tail_nobase tail_dist] .
+                     base_wr1 tail_nobase tail_dist tail_base base_gh1] .
 
   \<comment> \<open>Push the head extension through the tail's foldr (distinct names).\<close>
   have n_not_in_tail:
@@ -3815,6 +3914,7 @@ lemma wrap_vardecls_types:
       and fresh: "scrutVar |\<notin>| dec_pattern_var_names dp"
       and dist: "distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings dp))"
       and writable_base: "tyenv_var_writable env scrutVar = writableFlag"
+      and ghost_base: "ghost = Ghost \<Longrightarrow> tyenv_var_ghost env scrutVar"
   shows "core_statement_list_type env ghost (wrap_vardecls ghost scrutVar dp @ rest)
        = core_statement_list_type
            (extend_env_with_pattern_vars env (\<lambda>vr. vr = Ref \<and> \<not> writableFlag) ghost [dp])
@@ -3877,6 +3977,10 @@ proof -
     "\<And>vr n vTy proj E. (vr, n, vTy, proj) \<in> set ?projs
        \<Longrightarrow> is_writable_lvalue E proj = tyenv_var_writable E scrutVar"
     using dec_pattern_projections_writable by fastforce
+  have projs_base:
+    "\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set ?projs
+       \<Longrightarrow> lvalue_base_name proj = Some scrutVar"
+    using dec_pattern_projections_base_name by fastforce
 
   have base_not_name: "scrutVar \<notin> set (map (\<lambda>(_, m, _, _). m) ?projs)"
     using fresh names_eq dec_pattern_var_bindings_names[of dp]
@@ -3892,7 +3996,8 @@ proof -
                 (map (\<lambda>(vr, n, ty, _). (vr, n, ty)) ?projs) env)
          ghost rest"
     using vardecl_chain_types[OF projs_typed projs_wk projs_rt projs_fv projs_lv
-                                 projs_wr writable_base base_not_name dist'] .
+                                 projs_wr writable_base base_not_name dist'
+                                 projs_base ghost_base] .
 
   show ?thesis
     using chain
@@ -4101,6 +4206,7 @@ next
   from "5.prems"(1) obtain lhsTm lhsTy next_mv1 where
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)" and
     lhs_wl: "is_writable_lvalue env lhsTm" and
+    lhs_glv: "ghost_lvalue_ok env ghost lhsTm" and
     lhs_no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)"
     by (auto split: sum.splits prod.splits if_splits)
   have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
@@ -4112,18 +4218,18 @@ next
   show ?case
   proof (cases "is_impure_call env elabEnv rhs")
     case True
-    with "5.prems"(1) lhs_elab lhs_wl lhs_no_meta
+    with "5.prems"(1) lhs_elab lhs_wl lhs_glv lhs_no_meta
     have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis
-      using elab_assign_impure_correct[OF _ True lhs_typed lhs_wl lhs_below mono_lhs "5.prems"(2,3,4)] by simp
+      using elab_assign_impure_correct[OF _ True lhs_typed lhs_wl lhs_glv lhs_below mono_lhs "5.prems"(2,3,4)] by simp
   next
     case False
-    with "5.prems"(1) lhs_elab lhs_wl lhs_no_meta
+    with "5.prems"(1) lhs_elab lhs_wl lhs_glv lhs_no_meta
     have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis
-      using elab_assign_pure_correct[OF _ lhs_typed lhs_wl lhs_below mono_lhs "5.prems"(2,3,4)] by simp
+      using elab_assign_pure_correct[OF _ lhs_typed lhs_wl lhs_glv lhs_below mono_lhs "5.prems"(2,3,4)] by simp
   qed
 next
   \<comment> \<open>Swap: elaborate the lhs (a writable lvalue of a metavar-free type) exactly as in
@@ -4133,6 +4239,7 @@ next
   from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)" and
     lhs_wl: "is_writable_lvalue env lhsTm" and
+    lhs_glv: "ghost_lvalue_ok env ghost lhsTm" and
     lhs_no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)"
     by (auto split: sum.splits prod.splits if_splits)
   have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
@@ -4141,11 +4248,11 @@ next
   have lhs_below: "type_tyvars lhsTy \<subseteq> {n. n < next_mv}"
     using lhs_no_meta "6.prems"(4)
     by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-  from "6.prems"(1) lhs_elab lhs_wl lhs_no_meta
+  from "6.prems"(1) lhs_elab lhs_wl lhs_glv lhs_no_meta
   have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
           = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
   thus ?case
-    using elab_swap_correct[OF _ lhs_typed lhs_wl lhs_below mono_lhs "6.prems"(2,3,4)] by simp
+    using elab_swap_correct[OF _ lhs_typed lhs_wl lhs_glv lhs_below mono_lhs "6.prems"(2,3,4)] by simp
 next
   \<comment> \<open>Return: env' = env. The elaborator's guard gives ghost = TE_FunctionGhost env
       (the Core rule's first obligation). In a void function the only success is a
@@ -4727,10 +4834,12 @@ next
       using typed_P wk_P rt_P Var by (cases ghost) auto
   next
     case Ref
-    have lv: "is_lvalue scrut'" using scrut_facts(4) Ref by (auto split: if_splits)
+    have lv: "is_lvalue scrut'" using scrut_facts(7)[OF Ref] by simp
+    have glv_P: "ghost_lvalue_ok ?envP ghost scrut'"
+      using scrut_facts(7)[OF Ref] by simp
     show ?thesis
       unfolding Ref env1_shape
-      using typed_P wk_P rt_P lv writable_P Ref by (cases ghost) auto
+      using typed_P wk_P rt_P lv glv_P writable_P Ref by (cases ghost) auto
   qed
 
   \<comment> \<open>?env1 invariants.\<close>
@@ -4943,6 +5052,13 @@ next
     unfolding scrut_facts(5) vardecl_add_local_def tyenv_var_writable_def
     by auto
 
+  \<comment> \<open>In Ghost mode the freshName is a ghost local of ?env1, so the binding
+      VarDecls emitted for ref patterns (refs rooted at freshName) satisfy the
+      ghost-write discipline.\<close>
+  have fresh_ghost: "ghost = Ghost \<Longrightarrow> tyenv_var_ghost ?env1 freshName"
+    unfolding scrut_facts(5) vardecl_add_local_def tyenv_var_ghost_def
+    by simp
+
   \<comment> \<open>Each emitted arm typechecks: the binding VarDecls thread ?env1 to the
       per-arm env, under which the elaborated body typechecks.\<close>
   have arm_ok:
@@ -4998,7 +5114,7 @@ next
                 (extend_env_with_pattern_vars ?env1 (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost [?dp])
                 ghost (coreBodies ! i)"
         using wrap_vardecls_types[OF compat_env1[OF dp_in] scrut_var_typed env1_wf
-                                     wk_1 rt_1 fresh_dp dist_dp flag] .
+                                     wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost] .
       show ?thesis using chain body_typed by simp
     next
       case Var
@@ -5010,7 +5126,7 @@ next
                 (extend_env_with_pattern_vars ?env1 (\<lambda>vr. vr = Ref \<and> \<not> True) ghost [?dp])
                 ghost (coreBodies ! i)"
         using wrap_vardecls_types[OF compat_env1[OF dp_in] scrut_var_typed env1_wf
-                                     wk_1 rt_1 fresh_dp dist_dp flag] .
+                                     wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost] .
       \<comment> \<open>No Ref bindings in Var mode, so the two policies build the same env.\<close>
       have no_refs_raw:
         "filter (\<lambda>(vr, _, _). vr = Ref)

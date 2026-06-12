@@ -241,6 +241,44 @@ lemma is_writable_lvalue_irrelevant_tyvar [simp]:
   by (induction tm rule: is_writable_lvalue.induct)
      (auto simp: tyenv_var_writable_def)
 
+(* Ghost-write discipline: in Ghost mode, writing to an lvalue is only allowed if
+   the lvalue points to a Ghost variable. This enforces the rule that ghost code cannot
+   write to non-ghost variables.
+   (In NotGhost mode, this function always returns True. Instead, a separate check is made in
+   the typechecker - references to Ghost vars won't even typecheck in NotGhost mode.) *)
+definition ghost_lvalue_ok :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreTerm \<Rightarrow> bool" where
+  "ghost_lvalue_ok env ghost tm =
+     (ghost = Ghost \<longrightarrow> (case lvalue_base_name tm of
+                           Some name \<Rightarrow> tyenv_var_ghost env name
+                         | None \<Rightarrow> False))"
+
+lemma ghost_lvalue_ok_NotGhost [simp]:
+  "ghost_lvalue_ok env NotGhost tm"
+  by (simp add: ghost_lvalue_ok_def)
+
+(* ghost_lvalue_ok only looks at the base variable name. *)
+lemma ghost_lvalue_ok_base_name_cong:
+  "lvalue_base_name tm1 = lvalue_base_name tm2
+     \<Longrightarrow> ghost_lvalue_ok env ghost tm1 = ghost_lvalue_ok env ghost tm2"
+  by (simp add: ghost_lvalue_ok_def)
+
+(* ghost_lvalue_ok depends on the environment only through TE_LocalVars,
+   TE_GhostLocals and TE_GhostGlobals (via tyenv_var_ghost). *)
+lemma ghost_lvalue_ok_cong_env:
+  assumes "TE_LocalVars env1 = TE_LocalVars env2"
+    and "TE_GhostLocals env1 = TE_GhostLocals env2"
+    and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
+  shows "ghost_lvalue_ok env1 ghost tm = ghost_lvalue_ok env2 ghost tm"
+  using assms
+  by (simp add: ghost_lvalue_ok_def tyenv_var_ghost_def split: option.splits)
+
+lemma ghost_lvalue_ok_irrelevant_tyvar [simp]:
+  "ghost_lvalue_ok
+     (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+            TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) ghost tm
+   = ghost_lvalue_ok env ghost tm"
+  by (rule ghost_lvalue_ok_cong_env) simp_all
+
 
 (* ========================================================================== *)
 (* Binary operator classification *)
