@@ -1782,6 +1782,19 @@ types is as follows:
       contents of non-ghost variables, but a ghost statement cannot
       modify the value of a non-ghost variable in any way.
 
+ - A ghost reference declaration (such as `ghost ref r = a[4];`, where
+   `a` is a ghost variable) creates a reference that exists only at
+   verification time. The right-hand-side lvalue must refer to a ghost
+   variable; it is a compile-time error for a ref declared in ghost
+   code to refer to a non-ghost variable. (If this were allowed, then
+   ghost code could modify a non-ghost variable through the
+   reference.) The same rule applies to any `ref` declared in a
+   context that is implicitly ghost, such as inside an `assert` proof
+   block, and to `ref` patterns in ghost `match` statements (the
+   scrutinee must be a ghost variable if any of the patterns use
+   `ref`). Note that `ref` patterns in match *expressions* are exempt
+   from this rule, because nothing can be written through them.
+
  - A ghost assignment statement is used to assign to a ghost variable.
    For example, `ghost x = 2;` sets the ghost variable `x` to 2. (This
    statement would be an error if `x` was not a ghost variable.)

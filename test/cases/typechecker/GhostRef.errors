@@ -1,0 +1,3 @@
+src/GhostRef.b:19:20: A 'ref' declared in ghost code must refer to a ghost variable
+src/GhostRef.b:23:18: A 'ref' declared in ghost code must refer to a ghost variable
+src/GhostRef.b:50:13: A 'ref' declared in ghost code must refer to a ghost variable

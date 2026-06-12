@@ -2410,14 +2410,16 @@ static void* typecheck_field_proj(void *context, struct Term *term, void *type_r
 
 static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
-                              bool scrutinee_lvalue, bool scrutinee_read_only);
+                              bool scrutinee_lvalue, bool scrutinee_read_only,
+                              bool scrutinee_ghost);
 
 static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
                                      struct Location location,
                                      struct NamePatternList *fields,
                                      struct Type *scrutinee_type,
                                      bool scrutinee_lvalue,
-                                     bool scrutinee_read_only)
+                                     bool scrutinee_read_only,
+                                     bool scrutinee_ghost)
 {
     // TODO: perhaps we could allow "punning" like in Ocaml.
 
@@ -2471,7 +2473,8 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
             tc_context->error = true;
             ok = false;
         } else if (!typecheck_pattern(tc_context, field->pattern, search->type,
-                                      scrutinee_lvalue, scrutinee_read_only)) {
+                                      scrutinee_lvalue, scrutinee_read_only,
+                                      scrutinee_ghost)) {
             ok = false;
         }
     }
@@ -2483,7 +2486,8 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
 
 static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
-                              bool scrutinee_lvalue, bool scrutinee_read_only)
+                              bool scrutinee_lvalue, bool scrutinee_read_only,
+                              bool scrutinee_ghost)
 {
     scrutinee_type = chase_univars(scrutinee_type);
     if (!scrutinee_type) {
@@ -2503,6 +2507,15 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         // for ref pattern, scrutinee must be lvalue
         if (pattern->var.ref && !scrutinee_lvalue) {
             report_cannot_take_ref(pattern->location);
+            tc_context->error = true;
+            return false;
+        }
+
+        // in ghost code, a ref pattern must not bind to a non-ghost
+        // scrutinee, as otherwise ghost writes through the ref would
+        // modify a non-ghost variable (which codegen would skip)
+        if (pattern->var.ref && !tc_context->executable && !scrutinee_ghost) {
+            report_ghost_ref_requires_ghost_lvalue(pattern->location);
             tc_context->error = true;
             return false;
         }
@@ -2558,7 +2571,8 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             return false;
         } else {
             return typecheck_record_pattern(tc_context, pattern->location, pattern->record.fields,
-                                            scrutinee_type, scrutinee_lvalue, scrutinee_read_only);
+                                            scrutinee_type, scrutinee_lvalue, scrutinee_read_only,
+                                            scrutinee_ghost);
         }
 
     case PAT_VARIANT:
@@ -2609,7 +2623,8 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
 
             if (has_payload) {
                 return typecheck_pattern(tc_context, pattern->variant.payload, payload_type,
-                                         scrutinee_lvalue, scrutinee_read_only);
+                                         scrutinee_lvalue, scrutinee_read_only,
+                                         scrutinee_ghost);
             } else {
                 // we have a pattern w/o a payload (like "Red")
                 // but in the core language (post-typechecking), all variants have a payload,
@@ -2652,8 +2667,11 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
         if (term->match.scrutinee->type) {
             bool read_only = false;
             bool lvalue = is_lvalue(context, term->match.scrutinee, NULL, &read_only);
+            // scrutinee_ghost is passed as true because in a match *term*, the
+            // arms are expressions, so nothing can be written through a ref
+            // pattern (and reading a non-ghost variable from ghost code is fine).
             if (!typecheck_pattern(context, arm->pattern, term->match.scrutinee->type,
-                                   lvalue, read_only)) {
+                                   lvalue, read_only, true)) {
                 patterns_ok = false;
             }
         }
@@ -2991,9 +3009,18 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
     if (stmt->var_decl.rhs) {
 
         // If this is a ref, the rhs must be an lvalue (either read-only or read-write)
-        if (stmt->var_decl.ref && !is_lvalue(tc_context, stmt->var_decl.rhs, NULL, &read_only)) {
-            report_cannot_take_ref(stmt->var_decl.rhs->location);
-            tc_context->error = true;
+        if (stmt->var_decl.ref) {
+            bool rhs_ghost = false;
+            if (!is_lvalue(tc_context, stmt->var_decl.rhs, &rhs_ghost, &read_only)) {
+                report_cannot_take_ref(stmt->var_decl.rhs->location);
+                tc_context->error = true;
+            } else if (!tc_context->executable && !rhs_ghost) {
+                // A ref declared in ghost code must bind a ghost lvalue.
+                // Otherwise, ghost writes through the ref would modify a
+                // non-ghost variable (which codegen would skip).
+                report_ghost_ref_requires_ghost_lvalue(stmt->var_decl.rhs->location);
+                tc_context->error = true;
+            }
         }
 
         // typecheck rhs
@@ -3405,10 +3432,11 @@ static void typecheck_match_stmt(struct TypecheckContext *tc_context,
 
         // check the pattern, add any pattern-variables into the environment
         if (stmt->match.scrutinee->type) {
+            bool ghost = false;
             bool read_only = false;
-            bool lvalue = is_lvalue(tc_context, stmt->match.scrutinee, NULL, &read_only);
+            bool lvalue = is_lvalue(tc_context, stmt->match.scrutinee, &ghost, &read_only);
             typecheck_pattern(tc_context, arm->pattern, stmt->match.scrutinee->type,
-                              lvalue, read_only);
+                              lvalue, read_only, ghost);
         }
 
         // check the rhs

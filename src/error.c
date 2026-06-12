@@ -234,6 +234,12 @@ void report_ref_ghost_requires_ghost_arg(struct Location location)
     print_error("'ref ghost' argument requires a ghost lvalue\n");
 }
 
+void report_ghost_ref_requires_ghost_lvalue(struct Location location)
+{
+    print_location(location);
+    print_error("A 'ref' declared in ghost code must refer to a ghost variable\n");
+}
+
 void report_no_ref_in_postcondition(struct Location location)
 {
     print_location(location);
