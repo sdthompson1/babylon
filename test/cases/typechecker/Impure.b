@@ -24,3 +24,11 @@ impure function f3(): i32
 
 impure ghost function f4()    // Error: impure ghost function not allowed.
 {}
+
+function nop(x: i32)
+{ }
+
+impure function f5()
+{
+    nop(foo());  // Error: impure call only allowed at top level, not in subexpression
+}

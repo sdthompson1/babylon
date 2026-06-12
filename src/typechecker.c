@@ -2123,19 +2123,37 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
 
     bool ok = true;
 
-    // Check whether we are allowed to pass ref arguments.
+    // Check whether side-effecting calls (ref args, impure functions) are
+    // allowed. These are only allowed at the top level of a statement.
     struct Statement *stmt = tc_context->statement;
-    bool allow_ref = false;
+    bool allow_side_effect = false;
     bool ignoring_ret_val = false;
     if (stmt) {
         if (stmt->tag == ST_CALL) {
-            allow_ref = ignoring_ret_val = (stmt->call.term == term);
+            allow_side_effect = ignoring_ret_val = (stmt->call.term == term);
         } else if (stmt->tag == ST_ASSIGN) {
-            allow_ref = (stmt->assign.rhs == term);
+            allow_side_effect = (stmt->assign.rhs == term);
         } else if (stmt->tag == ST_VAR_DECL) {
-            allow_ref = (stmt->var_decl.rhs == term);
+            allow_side_effect = (stmt->var_decl.rhs == term);
         } else if (stmt->tag == ST_RETURN) {
-            allow_ref = (stmt->ret.value == term);
+            allow_side_effect = (stmt->ret.value == term);
+        }
+    }
+
+    // When side effects are not allowed, the function must not be
+    // marked "impure".
+    if (!allow_side_effect) {
+        struct Term *func = term->call.func;
+        if (func->tag == TM_TYAPP) {
+            func = func->tyapp.lhs;
+        }
+        if (func->tag == TM_VAR) {
+            struct TypeEnvEntry *entry = lookup_type_info(tc_context, func->var.name);
+            if (entry && entry->impure) {
+                report_impure_call_not_allowed_in_subexpression(term);
+                tc_context->error = true;
+                ok = false;
+            }
         }
     }
 
@@ -2162,15 +2180,15 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
             }
 
             // For typechecking purposes, 'ref' arguments must be
-            // writable lvalues (and allow_ref must be true).
+            // writable lvalues (and allow_side_effect must be true).
             if (dummy_list->ref) {
 
                 bool ghost = false;
                 bool read_only = false;
                 bool lvalue = is_lvalue(tc_context, actual_list->rhs, &ghost, &read_only);
 
-                if (!allow_ref) {
-                    report_ref_arg_not_allowed(actual_list->rhs->location);
+                if (!allow_side_effect) {
+                    report_ref_arg_not_allowed_in_subexpression(actual_list->rhs->location);
                     tc_context->error = true;
                     ok = false;
                 } else if (!lvalue) {

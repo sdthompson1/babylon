@@ -222,10 +222,10 @@ void report_duplicate_field_name(struct Location location, const char *name)
     print_error("Duplicate field name '%s'\n", name);
 }
 
-void report_ref_arg_not_allowed(struct Location location)
+void report_ref_arg_not_allowed_in_subexpression(struct Location location)
 {
     print_location(location);
-    print_error("Cannot pass ref arg here\n");
+    print_error("Cannot pass ref arg here (function calls with side effects cannot be nested inside another expression)\n");
 }
 
 void report_ref_ghost_requires_ghost_arg(struct Location location)
@@ -635,6 +635,12 @@ void report_access_impure_fun_from_pure_code(struct Term *term)
 {
     print_location(term->location);
     print_error("Can't call an impure function from pure code\n");
+}
+
+void report_impure_call_not_allowed_in_subexpression(struct Term *term)
+{
+    print_location(term->location);
+    print_error("Cannot call impure function here (function calls with side effects cannot be nested inside another expression)\n");
 }
 
 void report_writing_nonghost_from_ghost_code(struct Location loc)
