@@ -2266,6 +2266,7 @@ proof -
   from elab obtain qName qVarTy bodyTm coreTm tmTy coreTm' where
     gh: "ghost = Ghost" and
     goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Exists qName qVarTy bodyTm)" and
+    top: "TE_ProofTopLevel env" and
     qVarTy_wk: "is_well_kinded env qVarTy" and
     etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, tmTy, next_mv')" and
     coerce: "coerce_term_to_type env loc coreTm tmTy qVarTy = Inr coreTm'" and
@@ -2324,7 +2325,7 @@ proof -
       using coreTm_typed ints qVarTy_wkD by auto
     thus ?thesis using clear_metavars_typed_in_env[OF cast_typed wf bound qVarTy_below] coreTm'_eq by simp
   qed
-  show ?thesis using gh goal witness_typed by (simp add: cs_eq env'_eq)
+  show ?thesis using gh goal top witness_typed by (simp add: cs_eq env'_eq)
 qed
 
 

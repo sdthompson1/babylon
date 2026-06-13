@@ -441,11 +441,12 @@ definition elab_fix ::
 (* ----- Use branch helper ----- *)
 
 (* Use supplies a witness for an enclosing existential proof goal
-   `exists x : T. P(x)`. It is only valid in Ghost mode, when there is such a goal;
-   the witness term is elaborated (pure) and coerced (unify-or-integer-cast) to the
-   bound-variable type T. The resulting env replaces the proof goal with the quantifier
-   body P (witness is NOT substituted in). The `is_well_kinded env qVarTy` guard is
-   not expected to fail in practice. *)
+   `exists x : T. P(x)`. It is only valid in Ghost mode, at the top level of a proof
+   body (TE_ProofTopLevel, as for Fix), and when there is such a goal; the witness term is
+   elaborated (pure) and coerced (unify-or-integer-cast) to the bound-variable type T.
+   The resulting env replaces the proof goal with the quantifier body P (witness is NOT
+   substituted in). The `is_well_kinded env qVarTy` guard is not expected to fail in
+   practice. *)
 definition elab_use ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
@@ -453,7 +454,8 @@ definition elab_use ::
     (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
      else case TE_ProofGoal env of
             Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
-              (if \<not> is_well_kinded env qVarTy
+              (if \<not> TE_ProofTopLevel env then Inl [TyErr_UseNotAtProofTopLevel loc]
+               else if \<not> is_well_kinded env qVarTy
                then Inl [TyErr_InternalError_IllKindedProofGoal loc]
                else case elab_term env elabEnv Ghost tm next_mv of
                       Inl errs \<Rightarrow> Inl errs

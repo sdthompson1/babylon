@@ -290,8 +290,9 @@ where
      | _ \<Rightarrow> None)"
 
   (* Use: "use e". Only valid if there is a current proof goal of the form
-     "exists x : T. P(x)". The term "e" must be of type T. Changes the goal to 
-     "P(e)".
+     "exists x : T. P(x)", and we are at the top level of the proof (not inside
+     nested match/while, as for Fix). The term "e" must be of type T. Changes the
+     goal to "P(e)".
      Note: As with Fix, we don't bother substituting in the goal - TE_ProofGoal remains
      "P(x)", which is sound for typechecking because TE_ProofGoal is only consumed
      structurally. *)
@@ -299,6 +300,7 @@ where
     (case TE_ProofGoal env of
        Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
          (if ghost = Ghost \<and> core_term_type env ghost witnessTm = Some qVarTy
+             \<and> TE_ProofTopLevel env
           then Some (env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>)
           else None)
      | _ \<Rightarrow> None)"
@@ -1611,6 +1613,7 @@ next
     goal: "TE_ProofGoal env = Some (CoreTm_Quantifier Quant_Exists qName qVarTy bodyTm)" and
     gh: "ghost = Ghost" and
     wit: "core_term_type env ghost witnessTm = Some qVarTy" and
+    topLevel: "TE_ProofTopLevel env" and
     env'_eq: "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
     by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
   let ?env1 = "?ext env"
@@ -1618,7 +1621,9 @@ next
     using goal by simp
   have wit': "core_term_type ?env1 ghost witnessTm = Some qVarTy"
     using wit core_term_type_irrelevant_tyvar by blast
-  from gh goal' wit' show ?case
+  have topLevel': "TE_ProofTopLevel ?env1"
+    using topLevel by simp
+  from gh goal' wit' topLevel' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>Block: env unchanged; body is a list checked under TE_ProofTopLevel := False.\<close>

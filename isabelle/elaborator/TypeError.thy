@@ -56,6 +56,7 @@ datatype TypeError =
   | TyErr_FixNotAtProofTopLevel Location  (* `fix x` nested inside a match/while in a proof body *)
   (* Use errors *)
   | TyErr_UseNoExistsGoal Location  (* `use e` with no enclosing existentially-quantified proof goal *)
+  | TyErr_UseNotAtProofTopLevel Location  (* `use e` nested inside a match/while in a proof body *)
   (* While errors *)
   | TyErr_InvalidWhileAttribute Location  (* a while attribute other than `invariant` or `decreases` *)
   | TyErr_WhileNeedsOneDecreases Location  (* a while loop without exactly one `decreases` attribute *)
