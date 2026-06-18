@@ -44,31 +44,33 @@ begin
    _add_ref pin the slot's storeTyping entry at apply_subst (IS_TyArgs state) ty
    when adding. *)
 definition partial_body_env_for ::
-    "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> nat \<Rightarrow> CoreTyEnv" where
-  "partial_body_env_for env funInfo k =
-    (body_env_for env funInfo) \<lparr>
+    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> nat \<Rightarrow> CoreTyEnv" where
+  "partial_body_env_for env names funInfo k =
+    (body_env_for env names funInfo) \<lparr>
       TE_LocalVars := fmap_of_list
-        (map (\<lambda>(name, ty, _). (name, ty))
-             (take k (FI_TmArgs funInfo))),
+        (take k (zip names (map fst (FI_TmArgs funInfo)))),
       TE_ConstLocals := fset_of_list
-        (map (\<lambda>(name, _, _). name)
-             (filter (\<lambda>(_, _, vor). vor = Var) (take k (FI_TmArgs funInfo))))
+        (map fst
+             (filter (\<lambda>(_, vor). vor = Var)
+                     (take k (zip names (map snd (FI_TmArgs funInfo))))))
     \<rparr>"
 
 (* When k = 0, the partial env has no locals and no const names: a body env
    whose locals/refs have been cleared. *)
 lemma partial_body_env_for_zero:
-  "TE_LocalVars (partial_body_env_for env funInfo 0) = fmempty"
-  "TE_ConstLocals (partial_body_env_for env funInfo 0) = {||}"
+  "TE_LocalVars (partial_body_env_for env names funInfo 0) = fmempty"
+  "TE_ConstLocals (partial_body_env_for env names funInfo 0) = {||}"
   by (simp_all add: partial_body_env_for_def)
 
 (* When k = length (FI_TmArgs funInfo), the partial env equals body_env_for
-   env funInfo. This is the bridge from the induction's end state to the
-   bodyEnv used in case 6. *)
+   env names funInfo. This is the bridge from the induction's end state to the
+   bodyEnv used in case 6. Needs names to be at least as long as FI_TmArgs (in
+   practice they are equal), so that the zip captures every parameter. *)
 lemma partial_body_env_for_full:
-  "partial_body_env_for env funInfo (length (FI_TmArgs funInfo))
-   = body_env_for env funInfo"
-  by (simp add: partial_body_env_for_def body_env_for_def)
+  assumes "length (FI_TmArgs funInfo) \<le> length names"
+  shows "partial_body_env_for env names funInfo (length (FI_TmArgs funInfo))
+   = body_env_for env names funInfo"
+  using assms by (simp add: partial_body_env_for_def body_env_for_def)
 
 (* partial_body_env_for is well-formed whenever env is. Strategy: each clause
    of tyenv_well_formed is established for body_env_for env funInfo by
@@ -81,21 +83,23 @@ lemma partial_body_env_for_well_formed:
   assumes wf: "tyenv_well_formed env"
       and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
       and not_ghost: "FI_Ghost funInfo = NotGhost"
-  shows "tyenv_well_formed (partial_body_env_for env funInfo k)"
+      and dist_names: "distinct names"
+  shows "tyenv_well_formed (partial_body_env_for env names funInfo k)"
 proof -
-  let ?pEnv = "partial_body_env_for env funInfo k"
-  let ?be = "body_env_for env funInfo"
+  let ?pEnv = "partial_body_env_for env names funInfo k"
+  let ?be = "body_env_for env names funInfo"
   have wf_be: "tyenv_well_formed ?be"
     using body_env_for_well_formed[OF wf fn_lookup not_ghost] .
 
   \<comment> \<open>?pEnv differs from ?be only in TE_LocalVars and TE_ConstLocals. All other
       record fields are identical. \<close>
   have lv_pEnv: "TE_LocalVars ?pEnv =
-                   fmap_of_list (map (\<lambda>(n, t, _). (n, t)) (take k (FI_TmArgs funInfo)))"
+                   fmap_of_list (take k (zip names (map fst (FI_TmArgs funInfo))))"
     by (simp add: partial_body_env_for_def)
   have cl_pEnv: "TE_ConstLocals ?pEnv =
-                   fset_of_list (map (\<lambda>(n, _, _). n)
-                     (filter (\<lambda>(_, _, vor). vor = Var) (take k (FI_TmArgs funInfo))))"
+                   fset_of_list (map fst
+                     (filter (\<lambda>(_, vor). vor = Var)
+                             (take k (zip names (map snd (FI_TmArgs funInfo))))))"
     by (simp add: partial_body_env_for_def)
   have ghost_pEnv: "TE_GhostLocals ?pEnv = {||}"
     by (simp add: partial_body_env_for_def body_env_for_def)
@@ -117,33 +121,26 @@ proof -
       ?pEnv's locals = first k of FI_TmArgs, ?be's locals = all of FI_TmArgs,
       and the param names are distinct (so map_of of a sublist agrees with
       map_of of the full list on that sublist's keys). \<close>
-  from wf fn_lookup have all_distinct: "distinct (map fst (FI_TmArgs funInfo))"
-    using wf unfolding tyenv_well_formed_def tyenv_fun_param_names_distinct_def
-    by blast
+  \<comment> \<open>The full locals list of ?be. ?pEnv's locals are a prefix (take k) of this. \<close>
+  let ?full = "zip names (map fst (FI_TmArgs funInfo))"
+  \<comment> \<open>map fst of the zip is a prefix of names, hence distinct. \<close>
+  have dist_full: "distinct (map fst ?full)"
+    using dist_names by (simp add: map_fst_zip_take)
 
   have lv_subset:
     "\<And>name ty. fmlookup (TE_LocalVars ?pEnv) name = Some ty
                  \<Longrightarrow> fmlookup (TE_LocalVars ?be) name = Some ty"
   proof -
     fix name ty assume "fmlookup (TE_LocalVars ?pEnv) name = Some ty"
-    hence "map_of (map (\<lambda>(n, t, _). (n, t)) (take k (FI_TmArgs funInfo))) name = Some ty"
+    hence "map_of (take k ?full) name = Some ty"
       using lv_pEnv by (simp add: fmap_of_list.rep_eq)
-    hence in_take: "(name, ty) \<in> set (map (\<lambda>(n, t, _). (n, t)) (take k (FI_TmArgs funInfo)))"
+    hence in_take: "(name, ty) \<in> set (take k ?full)"
       by (rule map_of_SomeD)
-    have "set (take k (FI_TmArgs funInfo)) \<subseteq> set (FI_TmArgs funInfo)"
+    have "set (take k ?full) \<subseteq> set ?full"
       by (rule set_take_subset)
-    hence "set (map (\<lambda>(n, t, _). (n, t)) (take k (FI_TmArgs funInfo)))
-            \<subseteq> set (map (\<lambda>(n, t, _). (n, t)) (FI_TmArgs funInfo))"
-      by (metis set_take_subset take_map)
-    with in_take have in_full:
-      "(name, ty) \<in> set (map (\<lambda>(n, t, _). (n, t)) (FI_TmArgs funInfo))"
-      by blast
-    \<comment> \<open>distinct map fst transferred to the projection \<close>
-    have dist_proj:
-      "distinct (map fst (map (\<lambda>(n, t, _). (n, t)) (FI_TmArgs funInfo)))"
-      using all_distinct by (simp add: case_prod_beta comp_def)
-    from in_full dist_proj have
-      "map_of (map (\<lambda>(n, t, _). (n, t)) (FI_TmArgs funInfo)) name = Some ty"
+    with in_take have in_full: "(name, ty) \<in> set ?full" by blast
+    from in_full dist_full have
+      "map_of ?full name = Some ty"
       by simp
     thus "fmlookup (TE_LocalVars ?be) name = Some ty"
       by (simp add: body_env_for_def fmap_of_list.rep_eq)
@@ -162,7 +159,6 @@ proof -
     be_ctors_by_type: "tyenv_ctors_by_type_consistent ?be" and
     be_fun_types_wk: "tyenv_fun_types_well_kinded ?be" and
     be_fun_tyvars_distinct: "tyenv_fun_tyvars_distinct ?be" and
-    be_fun_param_names_distinct: "tyenv_fun_param_names_distinct ?be" and
     be_fun_ghost: "tyenv_fun_ghost_constraint ?be" and
     be_nonghost_payloads: "tyenv_nonghost_payloads_runtime ?be" and
     be_ghost_dt_subset: "tyenv_ghost_datatypes_subset ?be" and
@@ -297,7 +293,7 @@ proof -
     hence info_lk: "fmlookup (TE_Functions ?be) funName = Some info"
       using other_eq by simp
     with be_fun_types_wk
-    have args_wk: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    have args_wk: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
                      is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty"
       and ret_wk: "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
                                   (FI_ReturnType info)"
@@ -306,7 +302,7 @@ proof -
       "\<And>t. is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) t
         = is_well_kinded (?pEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) t"
       by (rule is_well_kinded_cong_env) (simp_all add: other_eq)
-    show "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
              is_well_kinded (?pEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
           is_well_kinded (?pEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info)"
       using args_wk ret_wk wk_scope_eq by simp
@@ -315,11 +311,6 @@ proof -
   have c10: "tyenv_fun_tyvars_distinct ?pEnv"
     using be_fun_tyvars_distinct
     unfolding tyenv_fun_tyvars_distinct_def
-    by (simp add: other_eq)
-
-  have c11: "tyenv_fun_param_names_distinct ?pEnv"
-    using be_fun_param_names_distinct
-    unfolding tyenv_fun_param_names_distinct_def
     by (simp add: other_eq)
 
   have c12: "tyenv_fun_ghost_constraint ?pEnv"
@@ -332,7 +323,7 @@ proof -
       using info_lk_pEnv other_eq by simp
     from info_lk ng_info be_fun_ghost
     have inner:
-      "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+      "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
              is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
        is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
@@ -345,7 +336,7 @@ proof -
          = is_runtime_type (?pEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) t"
       by (rule is_runtime_type_cong_env) (simp_all add: other_eq)
-    show "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
               is_runtime_type (?pEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                         TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
           is_runtime_type (?pEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
@@ -394,7 +385,7 @@ proof -
     unfolding tyenv_datatypes_nonempty_def
     by (simp add: other_eq)
 
-  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
+  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by blast
 qed
 
@@ -402,30 +393,30 @@ qed
    or produces a state matching body_env_for env funInfo (the callee's static
    env), with IS_TyArgs set to the call-site type substitution. *)
 definition sound_arg_processing_result ::
-    "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> CoreType list
+    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> CoreType list
     \<Rightarrow> InterpError + 'w InterpState \<Rightarrow> bool" where
-  "sound_arg_processing_result env funInfo tySubst storeTyping result =
+  "sound_arg_processing_result env names funInfo tySubst storeTyping result =
     (case result of
       Inl err \<Rightarrow> sound_error_result err
     | Inr preCallState \<Rightarrow>
         IS_TyArgs preCallState = tySubst
         \<and> (\<exists>bodyStoreTyping.
-              state_matches_env preCallState (body_env_for env funInfo) bodyStoreTyping
+              state_matches_env preCallState (body_env_for env names funInfo) bodyStoreTyping
             \<and> storeTyping_extends storeTyping bodyStoreTyping))"
 
 (* Partial variant: after k steps, the state matches partial_body_env_for at k
    with some store typing extending the original, and IS_TyArgs is the
    call-site type substitution (preserved by process_one_arg). *)
 definition sound_partial_arg_processing_result ::
-    "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> nat \<Rightarrow> CoreType list
+    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> nat \<Rightarrow> CoreType list
     \<Rightarrow> InterpError + 'w InterpState \<Rightarrow> bool" where
-  "sound_partial_arg_processing_result env funInfo tySubst k storeTyping result =
+  "sound_partial_arg_processing_result env names funInfo tySubst k storeTyping result =
     (case result of
       Inl err \<Rightarrow> sound_error_result err
     | Inr state \<Rightarrow>
         IS_TyArgs state = tySubst
         \<and> (\<exists>partialStoreTyping.
-              state_matches_env state (partial_body_env_for env funInfo k)
+              state_matches_env state (partial_body_env_for env names funInfo k)
                 partialStoreTyping
             \<and> storeTyping_extends storeTyping partialStoreTyping))"
 
@@ -438,14 +429,13 @@ definition sound_partial_arg_processing_result ::
    body_env_for (which sets it to fset_of_list (FI_TyArgs funInfo)). Discharging
    ty_args_well_formed therefore requires the call-site assumptions that
    tyArgs are well-kinded + runtime in env and that tySubst is built as
-   fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst (IS_TyArgs state)) tyArgs)).
-
-   Body of the proof: TODO in subtask 6. *)
+   fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst (IS_TyArgs state)) tyArgs)). *)
 lemma cleared_state_matches_partial_env_zero:
   assumes sme: "state_matches_env state env storeTyping"
       and wf: "tyenv_well_formed env"
       and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
       and not_ghost: "FI_Ghost funInfo = NotGhost"
+      and dist_names: "distinct names"
       and ty_len: "length tyArgs = length (FI_TyArgs funInfo)"
       and ty_wk:  "list_all (is_well_kinded env) tyArgs"
       and ty_rt:  "list_all (is_runtime_type env) tyArgs"
@@ -458,14 +448,14 @@ lemma cleared_state_matches_partial_env_zero:
                     IS_Refs := fmempty,
                     IS_ConstLocals := {||},
                     IS_TyArgs := tySubst \<rparr>)
-           (partial_body_env_for env funInfo 0)
+           (partial_body_env_for env names funInfo 0)
            storeTyping"
 proof -
   let ?clearedState = "state \<lparr> IS_Locals := fmempty,
                                 IS_Refs := fmempty,
                                 IS_ConstLocals := {||},
                                 IS_TyArgs := tySubst \<rparr>"
-  let ?pEnv = "partial_body_env_for env funInfo 0"
+  let ?pEnv = "partial_body_env_for env names funInfo 0"
 
   \<comment> \<open>Field equations for ?pEnv at k=0. \<close>
   have pEnv_locals: "TE_LocalVars ?pEnv = fmempty"
@@ -539,7 +529,7 @@ proof -
       using rt_env is_runtime_type_ground_cong_env[OF ground, of ?pEnv env]
             pEnv_ghost_dt by simp
     have wf_pEnv: "tyenv_well_formed ?pEnv"
-      using partial_body_env_for_well_formed[OF wf fn_lookup not_ghost] .
+      using partial_body_env_for_well_formed[OF wf fn_lookup not_ghost dist_names] .
     show "value_has_type ?pEnv v t"
       using value_has_type_cong_env_wk
               [OF pEnv_dactors pEnv_datatypes pEnv_ghost_dt wf wf_pEnv
@@ -614,22 +604,26 @@ proof -
       \<comment> \<open>Step 1: the equality on non-body components. \<close>
       from fim have non_body_eqs:
         "FI_TyArgs info' = IF_TyArgs interpFun"
-        "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+        "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
                    (FI_TmArgs info') (IF_Args interpFun)"
+        "distinct (map fst (IF_Args interpFun))"
         "FI_Impure info' = IF_Impure interpFun"
         unfolding fun_info_matches_interp_fun_def by simp_all
       \<comment> \<open>Step 2: body match transfers. \<close>
       have body_match:
         "(case IF_Body interpFun of
             Inl bodyStmts \<Rightarrow>
-              core_statement_list_type (body_env_for ?pEnv info') NotGhost bodyStmts \<noteq> None
+              core_statement_list_type
+                (body_env_for ?pEnv (map fst (IF_Args interpFun)) info') NotGhost bodyStmts \<noteq> None
           | Inr externFun \<Rightarrow> extern_fun_contract ?pEnv info' externFun)"
       proof (cases "IF_Body interpFun")
         case (Inl bodyStmts)
         with fim have
-          "core_statement_list_type (body_env_for env info') NotGhost bodyStmts \<noteq> None"
+          "core_statement_list_type
+             (body_env_for env (map fst (IF_Args interpFun)) info') NotGhost bodyStmts \<noteq> None"
           unfolding fun_info_matches_interp_fun_def by simp
-        moreover have "body_env_for env info' = body_env_for ?pEnv info'"
+        moreover have "body_env_for env (map fst (IF_Args interpFun)) info'
+                       = body_env_for ?pEnv (map fst (IF_Args interpFun)) info'"
           by (rule body_env_for_cong[symmetric])
              (simp_all add: pEnv_globals pEnv_ghost_globals pEnv_funs
                             pEnv_datatypes pEnv_dactors pEnv_dactors_by_ty pEnv_ghost_dt)
@@ -642,7 +636,7 @@ proof -
         \<comment> \<open>Transfer to ?pEnv. With the strengthened contract (ground range),
             wk/rt/value_has_type are env-tyvar-invariant via ground-cong. \<close>
         have wf_pEnv: "tyenv_well_formed ?pEnv"
-          using partial_body_env_for_well_formed[OF wf fn_lookup not_ghost] .
+          using partial_body_env_for_well_formed[OF wf fn_lookup not_ghost dist_names] .
         have ext_pEnv: "extern_fun_contract ?pEnv info' externFun"
           unfolding extern_fun_contract_def
         proof (intro allI impI, elim conjE)
@@ -654,7 +648,7 @@ proof -
                               \<and> is_runtime_type ?pEnv ty'"
             and vals_typed_pEnv:
               "list_all2 (value_has_type ?pEnv) vals
-                         (map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
+                         (map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
           \<comment> \<open>Transfer the premises to env via ground-cong. \<close>
           have sub_range_env: "\<forall>ty' \<in> fmran' tySubst'.
                               type_tyvars ty' = {}
@@ -684,29 +678,29 @@ proof -
               Hence value_has_type ?pEnv = value_has_type env via cong_env_wk. \<close>
           have vals_typed_env:
             "list_all2 (value_has_type env) vals
-                       (map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
+                       (map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
           proof -
             \<comment> \<open>Each arg-type (after applying tySubst') is ground (since tySubst's
                 range is ground and paramTy's tyvars are in FI_TyArgs info' = fmdom tySubst'). \<close>
             have arg_ground:
-              "\<forall>arg_ty \<in> set (map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info')).
+              "\<forall>arg_ty \<in> set (map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info')).
                   type_tyvars arg_ty = {}"
             proof
               fix arg_ty
-              assume "arg_ty \<in> set (map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
-              then obtain n t v where in_args: "(n, t, v) \<in> set (FI_TmArgs info')"
+              assume "arg_ty \<in> set (map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
+              then obtain t v where in_args: "(t, v) \<in> set (FI_TmArgs info')"
                 and arg_eq: "arg_ty = apply_subst tySubst' t"
                 by auto
               \<comment> \<open>t's tyvars are in fset_of_list (FI_TyArgs info') = fmdom tySubst'. \<close>
               from wf fn_lookup have fg: "tyenv_fun_ghost_constraint env"
                 unfolding tyenv_well_formed_def by simp
               from fg lookup nghost have args_rt:
-                "\<forall>ty'' \<in> (fst \<circ> snd) ` set (FI_TmArgs info').
+                "\<forall>ty'' \<in> fst ` set (FI_TmArgs info').
                     is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info'),
                                            TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info') \<rparr>)
                                     ty''"
                 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
-              from in_args have "t \<in> (fst \<circ> snd) ` set (FI_TmArgs info')" by force
+              from in_args have "t \<in> fst ` set (FI_TmArgs info')" by force
               with args_rt have
                 "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info'),
                                        TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info') \<rparr>)
@@ -732,21 +726,21 @@ proof -
               by (auto dest: list_all2_lengthD)
             have vals_typed_pointwise:
               "\<forall>i < length vals. value_has_type ?pEnv (vals ! i)
-                                   ((map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info')) ! i)"
+                                   ((map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info')) ! i)"
               using vals_typed_pEnv
               by (auto simp: list_all2_conv_all_nth)
             have vals_typed_env_pointwise:
               "\<forall>i < length vals. value_has_type env (vals ! i)
-                                   ((map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info')) ! i)"
+                                   ((map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info')) ! i)"
             proof (intro allI impI)
               fix i assume i_lt: "i < length vals"
               with len_vals have i_fi: "i < length (FI_TmArgs info')" by simp
-              let ?arg_ty = "(map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info')) ! i"
+              let ?arg_ty = "(map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info')) ! i"
               from vals_typed_pointwise i_lt have vht_pEnv:
                 "value_has_type ?pEnv (vals ! i) ?arg_ty" by blast
               \<comment> \<open>?arg_ty is in the list, so ground. \<close>
               have arg_ty_in:
-                "?arg_ty \<in> set (map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
+                "?arg_ty \<in> set (map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))"
                 using i_fi by simp
               with arg_ground have arg_ty_ground: "type_tyvars ?arg_ty = {}" by blast
               \<comment> \<open>Transfer via value_has_type_cong_env_wk. \<close>
@@ -780,13 +774,13 @@ proof -
              (\<forall>ty' \<in> fmran' tySubst'.
                   type_tyvars ty' = {} \<and> is_well_kinded env ty' \<and> is_runtime_type env ty') \<and>
              list_all2 (value_has_type env) vals
-                       (map (\<lambda>(_, ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))
+                       (map (\<lambda>(ty, _). apply_subst tySubst' ty) (FI_TmArgs info'))
              \<longrightarrow> (case externFun world vals of
                     (newWorld, refUpdates, retVal) \<Rightarrow>
                       value_has_type env retVal (apply_subst tySubst' (FI_ReturnType info')) \<and>
                       list_all2 (value_has_type env) refUpdates
-                        (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                             (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info'))))"
+                        (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                             (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info'))))"
             unfolding extern_fun_contract_def by presburger
           from ext_env_inst sub_dom sub_range_env vals_typed_env
           have env_post:
@@ -794,8 +788,8 @@ proof -
                (newWorld, refUpdates, retVal) \<Rightarrow>
                  value_has_type env retVal (apply_subst tySubst' (FI_ReturnType info')) \<and>
                  list_all2 (value_has_type env) refUpdates
-                   (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                        (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+                   (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                        (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
             by simp
           \<comment> \<open>Transfer back to ?pEnv. The return type's tyvars are in FI_TyArgs info'
               = fmdom tySubst', so apply_subst tySubst' (FI_ReturnType info') is ground.
@@ -806,8 +800,8 @@ proof -
           from env_post ext_call have env_post_unfold:
             "value_has_type env retVal (apply_subst tySubst' (FI_ReturnType info')) \<and>
              list_all2 (value_has_type env) refUpdates
-               (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+               (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
             by simp
           \<comment> \<open>Now transfer retVal typing and refUpdates typing to ?pEnv. \<close>
           have ret_ground: "type_tyvars (apply_subst tySubst' (FI_ReturnType info')) = {}"
@@ -858,41 +852,41 @@ proof -
               for a Ref-position FI_TmArg's ty. Same groundness argument as for paramTy. \<close>
           from env_post_unfold have refUpdates_typed_env:
             "list_all2 (value_has_type env) refUpdates
-               (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))" by simp
+               (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))" by simp
           have refUpdates_typed_pEnv:
             "list_all2 (value_has_type ?pEnv) refUpdates
-               (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+               (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
           proof -
             from refUpdates_typed_env have len_ref:
               "length refUpdates
-                = length (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                              (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+                = length (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                              (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
               by (auto dest: list_all2_lengthD)
             \<comment> \<open>Each ref-arg-type (after apply_subst tySubst') is ground (same arg as before). \<close>
             have ref_arg_ground:
-              "\<forall>arg_ty \<in> set (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                                   (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info'))).
+              "\<forall>arg_ty \<in> set (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                                   (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info'))).
                   type_tyvars arg_ty = {}"
             proof
               fix arg_ty
-              assume "arg_ty \<in> set (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                                        (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
-              then obtain n t v where in_filter:
-                "(n, t, v) \<in> set (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info'))"
+              assume "arg_ty \<in> set (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                                        (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
+              then obtain t v where in_filter:
+                "(t, v) \<in> set (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info'))"
                 and arg_eq: "arg_ty = apply_subst tySubst' t"
                 by auto
-              from in_filter have in_args: "(n, t, v) \<in> set (FI_TmArgs info')" by auto
+              from in_filter have in_args: "(t, v) \<in> set (FI_TmArgs info')" by auto
               from wf fn_lookup have fg: "tyenv_fun_ghost_constraint env"
                 unfolding tyenv_well_formed_def by simp
               from fg lookup nghost have args_rt:
-                "\<forall>ty'' \<in> (fst \<circ> snd) ` set (FI_TmArgs info').
+                "\<forall>ty'' \<in> fst ` set (FI_TmArgs info').
                     is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info'),
                                            TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info') \<rparr>)
                                     ty''"
                 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
-              from in_args have "t \<in> (fst \<circ> snd) ` set (FI_TmArgs info')" by force
+              from in_args have "t \<in> fst ` set (FI_TmArgs info')" by force
               with args_rt have
                 "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info'),
                                        TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info') \<rparr>)
@@ -913,26 +907,26 @@ proof -
             \<comment> \<open>Pointwise transfer via value_has_type_cong_env_wk. \<close>
             from refUpdates_typed_env have vh_pointwise:
               "\<forall>i < length refUpdates. value_has_type env (refUpdates ! i)
-                  ((map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                        (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info'))) ! i)"
+                  ((map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                        (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info'))) ! i)"
               by (auto simp: list_all2_conv_all_nth)
             have vh_pEnv_pointwise:
               "\<forall>i < length refUpdates. value_has_type ?pEnv (refUpdates ! i)
-                  ((map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                        (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info'))) ! i)"
+                  ((map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                        (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info'))) ! i)"
             proof (intro allI impI)
               fix i assume i_lt: "i < length refUpdates"
               with len_ref have i_lt_map:
-                "i < length (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                                 (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+                "i < length (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                                 (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
                 by simp
-              let ?arg_ty = "(map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                                  (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info'))) ! i"
+              let ?arg_ty = "(map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                                  (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info'))) ! i"
               from vh_pointwise i_lt have vht_env:
                 "value_has_type env (refUpdates ! i) ?arg_ty" by blast
               have arg_ty_in:
-                "?arg_ty \<in> set (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+                "?arg_ty \<in> set (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
                 using i_lt_map nth_mem by blast
               with ref_arg_ground have arg_ty_ground: "type_tyvars ?arg_ty = {}" by blast
               from value_has_type_well_kinded[OF vht_env wf]
@@ -962,8 +956,8 @@ proof -
                   (newWorld, refUpdates, retVal) \<Rightarrow>
                     value_has_type ?pEnv retVal (apply_subst tySubst' (FI_ReturnType info')) \<and>
                     list_all2 (value_has_type ?pEnv) refUpdates
-                      (map (\<lambda>(_, ty, _). apply_subst tySubst' ty)
-                           (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs info')))"
+                      (map (\<lambda>(ty, _). apply_subst tySubst' ty)
+                           (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs info')))"
             using ret_typed_pEnv refUpdates_typed_pEnv ext_call by simp
         qed
         show ?thesis using Inr ext_pEnv by simp
@@ -1188,18 +1182,18 @@ qed
 (* Field equalities for partial_body_env_for: all fields except TE_LocalVars
    and TE_ConstLocals are independent of k. *)
 lemma partial_body_env_for_fields:
-  "TE_GlobalVars (partial_body_env_for env funInfo k) = TE_GlobalVars env"
-  "TE_GhostLocals (partial_body_env_for env funInfo k) = {||}"
-  "TE_GhostGlobals (partial_body_env_for env funInfo k) = TE_GhostGlobals env"
-  "TE_Functions (partial_body_env_for env funInfo k) = TE_Functions env"
-  "TE_Datatypes (partial_body_env_for env funInfo k) = TE_Datatypes env"
-  "TE_DataCtors (partial_body_env_for env funInfo k) = TE_DataCtors env"
-  "TE_DataCtorsByType (partial_body_env_for env funInfo k) = TE_DataCtorsByType env"
-  "TE_GhostDatatypes (partial_body_env_for env funInfo k) = TE_GhostDatatypes env"
-  "TE_TypeVars (partial_body_env_for env funInfo k) = fset_of_list (FI_TyArgs funInfo)"
-  "TE_RuntimeTypeVars (partial_body_env_for env funInfo k) = fset_of_list (FI_TyArgs funInfo)"
-  "TE_ReturnType (partial_body_env_for env funInfo k) = FI_ReturnType funInfo"
-  "TE_FunctionGhost (partial_body_env_for env funInfo k) = NotGhost"
+  "TE_GlobalVars (partial_body_env_for env names funInfo k) = TE_GlobalVars env"
+  "TE_GhostLocals (partial_body_env_for env names funInfo k) = {||}"
+  "TE_GhostGlobals (partial_body_env_for env names funInfo k) = TE_GhostGlobals env"
+  "TE_Functions (partial_body_env_for env names funInfo k) = TE_Functions env"
+  "TE_Datatypes (partial_body_env_for env names funInfo k) = TE_Datatypes env"
+  "TE_DataCtors (partial_body_env_for env names funInfo k) = TE_DataCtors env"
+  "TE_DataCtorsByType (partial_body_env_for env names funInfo k) = TE_DataCtorsByType env"
+  "TE_GhostDatatypes (partial_body_env_for env names funInfo k) = TE_GhostDatatypes env"
+  "TE_TypeVars (partial_body_env_for env names funInfo k) = fset_of_list (FI_TyArgs funInfo)"
+  "TE_RuntimeTypeVars (partial_body_env_for env names funInfo k) = fset_of_list (FI_TyArgs funInfo)"
+  "TE_ReturnType (partial_body_env_for env names funInfo k) = FI_ReturnType funInfo"
+  "TE_FunctionGhost (partial_body_env_for env names funInfo k) = NotGhost"
   by (simp_all add: partial_body_env_for_def body_env_for_def)
 
 (* How partial_body_env_for evolves between k and Suc k: the (k+1)-th FI_TmArg is
@@ -1216,84 +1210,88 @@ lemma partial_body_env_for_fields:
    appending the k-th entry to the fmap. *)
 lemma partial_body_env_for_step:
   assumes k_bound: "k < length (FI_TmArgs funInfo)"
-      and kth: "FI_TmArgs funInfo ! k = (paramName, paramTy, vor)"
-      and distinct: "tyenv_fun_param_names_distinct env"
-      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and k_names: "k < length names"
+      and kth: "FI_TmArgs funInfo ! k = (paramTy, vor)"
+      and paramName: "names ! k = paramName"
+      and distinct: "distinct names"
   shows
-    "partial_body_env_for env funInfo (Suc k)
-     = (partial_body_env_for env funInfo k) \<lparr>
+    "partial_body_env_for env names funInfo (Suc k)
+     = (partial_body_env_for env names funInfo k) \<lparr>
          TE_LocalVars := fmupd paramName paramTy
-           (TE_LocalVars (partial_body_env_for env funInfo k)),
+           (TE_LocalVars (partial_body_env_for env names funInfo k)),
          TE_GhostLocals := fminus
-           (TE_GhostLocals (partial_body_env_for env funInfo k)) {|paramName|},
+           (TE_GhostLocals (partial_body_env_for env names funInfo k)) {|paramName|},
          TE_ConstLocals :=
            (if vor = Var
             then finsert paramName
-                   (TE_ConstLocals (partial_body_env_for env funInfo k))
+                   (TE_ConstLocals (partial_body_env_for env names funInfo k))
             else fminus
-                   (TE_ConstLocals (partial_body_env_for env funInfo k))
+                   (TE_ConstLocals (partial_body_env_for env names funInfo k))
                    {|paramName|})
        \<rparr>"
 proof -
-  let ?args = "FI_TmArgs funInfo"
+  \<comment> \<open>The locals list: names zipped with the parameter types. The k-th entry is
+      (paramName, paramTy); the (Suc k)-prefix appends it to the k-prefix. \<close>
+  let ?lvz = "zip names (map fst (FI_TmArgs funInfo))"
+  let ?clz = "zip names (map snd (FI_TmArgs funInfo))"
+  have len_lvz: "k < length ?lvz" using k_bound k_names by simp
+  have len_clz: "k < length ?clz" using k_bound k_names by simp
+  have lvz_k: "?lvz ! k = (paramName, paramTy)"
+    using len_lvz kth paramName k_bound by simp
+  have clz_k: "?clz ! k = (paramName, vor)"
+    using len_clz kth paramName k_bound by simp
+
+  \<comment> \<open>map fst of the locals zip is a prefix of names, hence distinct. \<close>
+  have dist_lvz: "distinct (map fst ?lvz)"
+    using distinct by (simp add: map_fst_zip_take)
 
   \<comment> \<open>Standard: take (Suc k) xs = take k xs @ [xs ! k]. \<close>
-  have take_Suc: "take (Suc k) ?args = take k ?args @ [?args ! k]"
-    using k_bound by (simp add: take_Suc_conv_app_nth)
+  have take_Suc_lvz: "take (Suc k) ?lvz = take k ?lvz @ [(paramName, paramTy)]"
+    using len_lvz lvz_k by (simp add: take_Suc_conv_app_nth)
+  have take_Suc_clz: "take (Suc k) ?clz = take k ?clz @ [(paramName, vor)]"
+    using len_clz clz_k by (simp add: take_Suc_conv_app_nth)
 
-  \<comment> \<open>Locals: fmap_of_list of the (Suc k)-prefix pairs equals fmupd of the k-th
-      entry onto the k-prefix's fmap. \<close>
-  let ?pairs_k = "map (\<lambda>(name, ty, _). (name, ty)) (take k ?args)"
-  let ?pairs_Sk = "map (\<lambda>(name, ty, _). (name, ty)) (take (Suc k) ?args)"
-  have pairs_Sk_eq:
-    "?pairs_Sk = ?pairs_k @ [(paramName, paramTy)]"
-    using take_Suc kth by simp
-  \<comment> \<open>Need: paramName is not already a key in pairs_k. This follows from
-      param name distinctness on FI_TmArgs. \<close>
-  from distinct fn_lookup have all_distinct: "distinct (map fst ?args)"
-    unfolding tyenv_fun_param_names_distinct_def by blast
-  have paramName_fresh: "paramName \<notin> set (map fst ?pairs_k)"
+  \<comment> \<open>Locals: fmap_of_list of the (Suc k)-prefix equals fmupd of the k-th entry
+      onto the k-prefix's fmap. \<close>
+  have paramName_fresh: "paramName \<notin> set (map fst (take k ?lvz))"
   proof -
-    have "distinct (take (Suc k) (map fst ?args))"
-      using all_distinct by (rule distinct_take)
-    moreover have "take (Suc k) (map fst ?args)
-                 = map fst (take k ?args) @ [paramName]"
-      using k_bound kth by (simp add: take_Suc_conv_app_nth take_map)
-    ultimately have "paramName \<notin> set (map fst (take k ?args))"
-      by simp
-    thus ?thesis by (auto simp: comp_def case_prod_beta)
+    have "distinct (map fst (take (Suc k) ?lvz))"
+      using dist_lvz by (simp add: take_map[symmetric])
+    moreover have "map fst (take (Suc k) ?lvz) = map fst (take k ?lvz) @ [paramName]"
+      using take_Suc_lvz by simp
+    ultimately show ?thesis by simp
   qed
 
   have fmap_pairs_step:
-    "fmap_of_list ?pairs_Sk
-       = fmupd paramName paramTy (fmap_of_list ?pairs_k)"
+    "fmap_of_list (take (Suc k) ?lvz)
+       = fmupd paramName paramTy (fmap_of_list (take k ?lvz))"
   proof (rule fmap_ext)
     fix name
-    show "fmlookup (fmap_of_list ?pairs_Sk) name
-        = fmlookup (fmupd paramName paramTy (fmap_of_list ?pairs_k)) name"
+    show "fmlookup (fmap_of_list (take (Suc k) ?lvz)) name
+        = fmlookup (fmupd paramName paramTy (fmap_of_list (take k ?lvz))) name"
     proof (cases "name = paramName")
       case True
-      have map_of_pairs_k_none: "map_of ?pairs_k paramName = None"
-        using paramName_fresh by (auto simp add: map_of_eq_None_iff image_image)
-      have "fmlookup (fmap_of_list ?pairs_Sk) paramName
-              = map_of ?pairs_Sk paramName"
+      have map_of_k_none: "map_of (take k ?lvz) paramName = None"
+        using paramName_fresh by (simp add: map_of_eq_None_iff)
+      have "fmlookup (fmap_of_list (take (Suc k) ?lvz)) paramName
+              = map_of (take (Suc k) ?lvz) paramName"
         by (simp add: fmap_of_list.rep_eq)
-      also have "\<dots> = map_of (?pairs_k @ [(paramName, paramTy)]) paramName"
-        using pairs_Sk_eq by simp
+      also have "\<dots> = map_of (take k ?lvz @ [(paramName, paramTy)]) paramName"
+        using take_Suc_lvz by simp
       also have "\<dots> = Some paramTy"
-        using map_of_pairs_k_none by (simp add: map_add_Some_iff)
-      finally have lhs: "fmlookup (fmap_of_list ?pairs_Sk) paramName
+        using map_of_k_none by (simp add: map_add_Some_iff)
+      finally have lhs: "fmlookup (fmap_of_list (take (Suc k) ?lvz)) paramName
                            = Some paramTy" .
       from True show ?thesis by (simp add: lhs)
     next
       case False
-      have "fmlookup (fmap_of_list ?pairs_Sk) name
-              = map_of ?pairs_Sk name"
+      have "fmlookup (fmap_of_list (take (Suc k) ?lvz)) name
+              = map_of (take (Suc k) ?lvz) name"
         by (simp add: fmap_of_list.rep_eq)
-      also have "\<dots> = map_of ?pairs_k name"
-        using pairs_Sk_eq False
+      also have "\<dots> = map_of (take k ?lvz) name"
+        using take_Suc_lvz False
         by (simp add: map_add_def split: option.split)
-      also have "\<dots> = fmlookup (fmap_of_list ?pairs_k) name"
+      also have "\<dots> = fmlookup (fmap_of_list (take k ?lvz)) name"
         by (simp add: fmap_of_list.rep_eq)
       finally show ?thesis using False by simp
     qed
@@ -1301,30 +1299,40 @@ proof -
 
   \<comment> \<open>Const names: the filter of the (Suc k)-prefix for Var parameters extends
       the k-prefix filter by either [paramName] (if vor = Var) or []. \<close>
-  let ?const_k = "map (\<lambda>(name, _, _). name)
-                   (filter (\<lambda>(_, _, vor'). vor' = Var) (take k ?args))"
-  let ?const_Sk = "map (\<lambda>(name, _, _). name)
-                    (filter (\<lambda>(_, _, vor'). vor' = Var) (take (Suc k) ?args))"
+  let ?const_k = "map fst (filter (\<lambda>(_, vor'). vor' = Var) (take k ?clz))"
+  let ?const_Sk = "map fst (filter (\<lambda>(_, vor'). vor' = Var) (take (Suc k) ?clz))"
   have filter_Sk:
-    "filter (\<lambda>(_, _, vor'). vor' = Var) (take (Suc k) ?args)
-       = filter (\<lambda>(_, _, vor'). vor' = Var) (take k ?args)
-         @ (if vor = Var then [?args ! k] else [])"
-    using take_Suc kth by simp
+    "filter (\<lambda>(_, vor'). vor' = Var) (take (Suc k) ?clz)
+       = filter (\<lambda>(_, vor'). vor' = Var) (take k ?clz)
+         @ (if vor = Var then [(paramName, vor)] else [])"
+    using take_Suc_clz by simp
   have const_Sk_eq:
     "?const_Sk = (if vor = Var then ?const_k @ [paramName] else ?const_k)"
-    using filter_Sk kth by (cases "vor = Var") simp_all
-  \<comment> \<open>paramName is not in the k-prefix of params, hence not in ?const_k either.
-      This makes the fminus in the Ref branch a no-op. \<close>
+    using filter_Sk by (cases "vor = Var") simp_all
+  \<comment> \<open>paramName is not in the k-prefix of names, hence not in ?const_k either. \<close>
+  have keys_clz: "map fst (take k ?clz) = take k names"
+  proof -
+    have "map fst (take k ?clz) = take k (map fst ?clz)" by (simp add: take_map)
+    also have "map fst ?clz = take (min (length names) (length (FI_TmArgs funInfo))) names"
+      by (simp add: map_fst_zip_take)
+    also have "take k \<dots> = take k names"
+      using k_names k_bound by simp
+    finally show ?thesis .
+  qed
+  have paramName_not_in_take_k: "paramName \<notin> set (take k names)"
+  proof -
+    have "distinct (take (Suc k) names)" using distinct by (rule distinct_take)
+    moreover have "take (Suc k) names = take k names @ [paramName]"
+      using k_names paramName by (simp add: take_Suc_conv_app_nth)
+    ultimately show ?thesis by simp
+  qed
   have paramName_not_in_const_k: "paramName \<notin> set ?const_k"
   proof -
-    have "distinct (take (Suc k) (map fst ?args))"
-      using all_distinct by (rule distinct_take)
-    moreover have "take (Suc k) (map fst ?args)
-                 = map fst (take k ?args) @ [paramName]"
-      using k_bound kth by (simp add: take_Suc_conv_app_nth take_map)
-    ultimately have "paramName \<notin> set (map fst (take k ?args))"
-      by simp
-    thus ?thesis by (auto simp: comp_def case_prod_beta)
+    have "set ?const_k \<subseteq> fst ` set (take k ?clz)"
+      by (auto dest: filter_is_subset[THEN subsetD])
+    also have "\<dots> = set (map fst (take k ?clz))" by simp
+    also have "\<dots> = set (take k names)" using keys_clz by simp
+    finally show ?thesis using paramName_not_in_take_k by blast
   qed
   have paramName_not_in_const_k_fset:
     "paramName |\<notin>| fset_of_list ?const_k"
@@ -1341,8 +1349,8 @@ proof -
 
   \<comment> \<open>TE_GhostLocals is {||} at both k and (Suc k), so fminus is a no-op. \<close>
   have ghost_locals_eq:
-    "fminus (TE_GhostLocals (partial_body_env_for env funInfo k)) {|paramName|}
-       = TE_GhostLocals (partial_body_env_for env funInfo (Suc k))"
+    "fminus (TE_GhostLocals (partial_body_env_for env names funInfo k)) {|paramName|}
+       = TE_GhostLocals (partial_body_env_for env names funInfo (Suc k))"
     by (simp add: partial_body_env_for_fields(2))
 
   show ?thesis
@@ -1361,15 +1369,18 @@ lemma process_one_arg_step_sound:
       and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
       and not_ghost: "FI_Ghost funInfo = NotGhost"
       and k_bound: "k < length (FI_TmArgs funInfo)"
-      and kth_arg: "FI_TmArgs funInfo ! k = (paramName, paramTy, vor)"
+      and k_names: "k < length names"
+      and dist_names: "distinct names"
+      and kth_arg: "FI_TmArgs funInfo ! k = (paramTy, vor)"
+      and paramName_eq: "names ! k = paramName"
       and val_sound: "sound_term_result state env (apply_subst tySubst paramTy) valResult"
       and lval_sound: "vor = Ref \<Longrightarrow>
              sound_lvalue_result state env storeTyping
                (apply_subst tySubst paramTy) lvalResult"
       and partial_sound:
-            "sound_partial_arg_processing_result env funInfo tySubst k storeTyping
+            "sound_partial_arg_processing_result env names funInfo tySubst k storeTyping
                (Inr partialState)"
-  shows "sound_partial_arg_processing_result env funInfo tySubst (Suc k) storeTyping
+  shows "sound_partial_arg_processing_result env names funInfo tySubst (Suc k) storeTyping
            (process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState))"
 proof -
   \<comment> \<open>Extract the partial state invariants from partial_sound. \<close>
@@ -1377,12 +1388,12 @@ proof -
     unfolding sound_partial_arg_processing_result_def by auto
   from partial_sound obtain partialStoreTyping where
     sme_partial: "state_matches_env partialState
-                    (partial_body_env_for env funInfo k) partialStoreTyping"
+                    (partial_body_env_for env names funInfo k) partialStoreTyping"
     and ext_partial: "storeTyping_extends storeTyping partialStoreTyping"
     unfolding sound_partial_arg_processing_result_def by auto
 
-  let ?pEnv_k = "partial_body_env_for env funInfo k"
-  let ?pEnv_Sk = "partial_body_env_for env funInfo (Suc k)"
+  let ?pEnv_k = "partial_body_env_for env names funInfo k"
+  let ?pEnv_Sk = "partial_body_env_for env names funInfo (Suc k)"
 
   \<comment> \<open>partialState has ty_args_well_formed wrt ?pEnv_k. \<close>
   from sme_partial have ta_partial: "ty_args_well_formed partialState ?pEnv_k"
@@ -1403,11 +1414,11 @@ proof -
     from wf_env have fg: "tyenv_fun_ghost_constraint env"
       unfolding tyenv_well_formed_def by simp
     from fg fn_lookup not_ghost have
-      "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+      "(\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
             is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                     TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty)"
       unfolding tyenv_fun_ghost_constraint_def Let_def by blast
-    moreover have "paramTy \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    moreover have "paramTy \<in> fst ` set (FI_TmArgs funInfo)"
       using kth_arg k_bound image_iff nth_mem by fastforce
     ultimately show ?thesis by blast
   qed
@@ -1472,7 +1483,7 @@ proof -
         using value_has_type_runtime[OF val_typed_env] .
 
       have wf_pEnv_k: "tyenv_well_formed ?pEnv_k"
-        using partial_body_env_for_well_formed[OF wf_env fn_lookup not_ghost] .
+        using partial_body_env_for_well_formed[OF wf_env fn_lookup not_ghost dist_names] .
 
       have wk_pEnv_k: "is_well_kinded ?pEnv_k (apply_subst tySubst paramTy)"
         using wk_env is_well_kinded_ground_cong_env[OF apply_ground, of ?pEnv_k env]
@@ -1508,15 +1519,13 @@ proof -
         using Var Inr alloc_eq
         by (simp add: case_prod_beta)
 
-      from wf_env have distinct: "tyenv_fun_param_names_distinct env"
-        unfolding tyenv_well_formed_def by simp
       have env'_shape:
         "?pEnv_Sk = ?pEnv_k \<lparr>
              TE_LocalVars := fmupd paramName paramTy (TE_LocalVars ?pEnv_k),
              TE_GhostLocals := fminus (TE_GhostLocals ?pEnv_k) {|paramName|},
              TE_ConstLocals := finsert paramName (TE_ConstLocals ?pEnv_k)
            \<rparr>"
-        using partial_body_env_for_step[OF k_bound kth_arg distinct fn_lookup] Var
+        using partial_body_env_for_step[OF k_bound k_names kth_arg paramName_eq dist_names] Var
         by simp
 
       \<comment> \<open>Apply state_matches_env_add_const_local with rhsTy = paramTy. The resulting
@@ -1637,24 +1646,25 @@ proof -
 
         have var_fresh: "fmlookup (TE_LocalVars ?pEnv_k) paramName = None"
         proof -
-          from wf_env have all_distinct: "distinct (map fst (FI_TmArgs funInfo))"
-            using fn_lookup
-            unfolding tyenv_well_formed_def tyenv_fun_param_names_distinct_def by blast
-          have "distinct (take (Suc k) (map fst (FI_TmArgs funInfo)))"
-            using all_distinct by (rule distinct_take)
-          moreover have "take (Suc k) (map fst (FI_TmArgs funInfo))
-                       = map fst (take k (FI_TmArgs funInfo)) @ [paramName]"
-            using k_bound kth_arg
-            by (simp add: take_Suc_conv_app_nth take_map)
-          ultimately have not_in_prefix:
-            "paramName \<notin> set (map fst (take k (FI_TmArgs funInfo)))"
-            by simp
-          let ?pairs_k = "map (\<lambda>(name, ty, _). (name, ty)) (take k (FI_TmArgs funInfo))"
-          have "paramName \<notin> set (map fst ?pairs_k)"
-            using not_in_prefix by (auto simp: comp_def case_prod_beta)
-          hence "map_of ?pairs_k paramName = None"
-            by (auto simp: map_of_eq_None_iff image_image)
-          hence "fmlookup (fmap_of_list ?pairs_k) paramName = None"
+          let ?lvz = "zip names (map fst (FI_TmArgs funInfo))"
+          \<comment> \<open>paramName = names ! k is not among the first k names. \<close>
+          have "distinct (take (Suc k) names)" using dist_names by (rule distinct_take)
+          moreover have "take (Suc k) names = take k names @ [paramName]"
+            using k_names paramName_eq by (simp add: take_Suc_conv_app_nth)
+          ultimately have not_in_prefix: "paramName \<notin> set (take k names)" by simp
+          have keys_eq: "map fst (take k ?lvz) = take k names"
+          proof -
+            have "map fst (take k ?lvz) = take k (map fst ?lvz)" by (simp add: take_map)
+            also have "map fst ?lvz = take (min (length names) (length (FI_TmArgs funInfo))) names"
+              by (simp add: map_fst_zip_take)
+            also have "take k \<dots> = take k names" using k_names k_bound by simp
+            finally show ?thesis .
+          qed
+          have "paramName \<notin> set (map fst (take k ?lvz))"
+            using not_in_prefix keys_eq by simp
+          hence "map_of (take k ?lvz) paramName = None"
+            by (simp add: map_of_eq_None_iff)
+          hence "fmlookup (fmap_of_list (take k ?lvz)) paramName = None"
             by (simp add: fmap_of_list.rep_eq)
           thus ?thesis by (simp add: partial_body_env_for_def)
         qed
@@ -1662,15 +1672,13 @@ proof -
         have var_not_ghost: "paramName |\<notin>| TE_GhostLocals ?pEnv_k"
           by (simp add: partial_body_env_for_def body_env_for_def)
 
-        from wf_env have distinct: "tyenv_fun_param_names_distinct env"
-          unfolding tyenv_well_formed_def by simp
         have env'_shape:
           "?pEnv_Sk = ?pEnv_k \<lparr>
                TE_LocalVars := fmupd paramName paramTy (TE_LocalVars ?pEnv_k),
                TE_GhostLocals := fminus (TE_GhostLocals ?pEnv_k) {|paramName|},
                TE_ConstLocals := fminus (TE_ConstLocals ?pEnv_k) {|paramName|}
              \<rparr>"
-          using partial_body_env_for_step[OF k_bound kth_arg distinct fn_lookup] Ref
+          using partial_body_env_for_step[OF k_bound k_names kth_arg paramName_eq dist_names] Ref
           by simp
 
         have sme_new:
@@ -1789,8 +1797,8 @@ qed
 (* Short-circuit: if the running result is already an error, process_one_arg
    preserves it; soundness is preserved too. *)
 lemma process_one_arg_preserve_error:
-  assumes "sound_partial_arg_processing_result env funInfo tySubst k storeTyping (Inl err)"
-  shows "sound_partial_arg_processing_result env funInfo tySubst (Suc k) storeTyping
+  assumes "sound_partial_arg_processing_result env names funInfo tySubst k storeTyping (Inl err)"
+  shows "sound_partial_arg_processing_result env names funInfo tySubst (Suc k) storeTyping
            (process_one_arg tuple (Inl err))"
 proof -
   from assms have "sound_error_result err"
@@ -1818,10 +1826,14 @@ lemma fold_process_one_arg_sound_gen:
       and wf_env: "tyenv_well_formed env"
       and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
       and not_ghost: "FI_Ghost funInfo = NotGhost"
+      and dist_names: "distinct names"
+      and names_len: "length names = length (FI_TmArgs funInfo)"
       and suffix_at_k:
             "suffixFnArgs = drop k (FI_TmArgs funInfo)"
+      and suffix_names:
+            "map fst suffixIfArgs = drop k names"
       and var_ref_match:
-            "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+            "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
                        suffixFnArgs suffixIfArgs"
       and len_vals: "length suffixIfArgs = length suffixValResults"
       and len_refs: "length suffixIfArgs = length suffixRefResults"
@@ -1829,141 +1841,161 @@ lemma fold_process_one_arg_sound_gen:
       and vals_sound:
             "\<forall>i < length suffixFnArgs.
                sound_term_result state env
-                 (apply_subst tySubst (fst (snd (suffixFnArgs ! i))))
+                 (apply_subst tySubst (fst (suffixFnArgs ! i)))
                  (suffixValResults ! i)"
       and lvals_sound:
             "\<forall>i < length suffixFnArgs.
-               snd (snd (suffixFnArgs ! i)) = Ref \<longrightarrow>
+               snd (suffixFnArgs ! i) = Ref \<longrightarrow>
                  sound_lvalue_result state env storeTyping
-                   (apply_subst tySubst (fst (snd (suffixFnArgs ! i))))
+                   (apply_subst tySubst (fst (suffixFnArgs ! i)))
                    (suffixRefResults ! i)"
       and partial_sound_k:
-            "sound_partial_arg_processing_result env funInfo tySubst k storeTyping
+            "sound_partial_arg_processing_result env names funInfo tySubst k storeTyping
                partialResult"
-  shows "sound_partial_arg_processing_result env funInfo tySubst
+  shows "sound_partial_arg_processing_result env names funInfo tySubst
            (k + length suffixFnArgs) storeTyping
            (fold process_one_arg (zip suffixIfArgs (zip suffixRefResults suffixValResults))
                                  partialResult)"
-using suffix_at_k var_ref_match len_vals len_refs k_plus_len vals_sound lvals_sound
+using suffix_at_k suffix_names var_ref_match len_vals len_refs k_plus_len vals_sound lvals_sound
       partial_sound_k
 proof (induction suffixFnArgs arbitrary: k suffixIfArgs suffixValResults
                                           suffixRefResults partialResult)
   case Nil
-  from Nil.prems(1) have empty_ifArgs: "suffixIfArgs = []"
-    using Nil.prems(2) by (cases suffixIfArgs) auto
-  from Nil.prems(3) empty_ifArgs have empty_vals: "suffixValResults = []"
+  from Nil.prems(3) have empty_ifArgs: "suffixIfArgs = []"
+    by (cases suffixIfArgs) auto
+  from Nil.prems(4) empty_ifArgs have empty_vals: "suffixValResults = []"
     by (cases suffixValResults) auto
-  from Nil.prems(4) empty_ifArgs have empty_refs: "suffixRefResults = []"
+  from Nil.prems(5) empty_ifArgs have empty_refs: "suffixRefResults = []"
     by (cases suffixRefResults) auto
   have fold_eq: "fold process_one_arg
                    (zip suffixIfArgs (zip suffixRefResults suffixValResults)) partialResult
                   = partialResult"
     using empty_ifArgs empty_vals empty_refs by simp
-  show ?case using Nil.prems(8) fold_eq by simp
+  show ?case using Nil.prems(9) fold_eq by simp
 next
   case (Cons arg restArgs)
-  from Cons.prems(2) obtain ifHead ifRest where
+  from Cons.prems(3) obtain ifHead ifRest where
     ifArgs_eq: "suffixIfArgs = ifHead # ifRest" and
-    ifRest_match: "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+    ifRest_match: "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
                               restArgs ifRest"
     by (cases suffixIfArgs) auto
-  obtain paramName paramTy vor where arg_eq: "arg = (paramName, paramTy, vor)"
+  obtain paramTy vor where arg_eq: "arg = (paramTy, vor)"
     by (cases arg) auto
   obtain ifName ifVor where ifHead_eq: "ifHead = (ifName, ifVor)"
     by (cases ifHead)
-  from Cons.prems(2) ifArgs_eq arg_eq ifHead_eq
-  have head_match: "paramName = ifName" "vor = ifVor" by simp_all
-  from Cons.prems(3) ifArgs_eq obtain valHead valRest where
+  \<comment> \<open>The parameter name comes from the InterpFun arg; the Var/Ref markers match. \<close>
+  define paramName where "paramName = ifName"
+  from Cons.prems(3) ifArgs_eq arg_eq ifHead_eq
+  have head_match: "vor = ifVor" by simp
+  from Cons.prems(4) ifArgs_eq obtain valHead valRest where
     vals_eq: "suffixValResults = valHead # valRest" and
     len_vals': "length ifRest = length valRest"
     by (cases suffixValResults) auto
-  from Cons.prems(4) ifArgs_eq obtain refHead refRest where
+  from Cons.prems(5) ifArgs_eq obtain refHead refRest where
     refs_eq: "suffixRefResults = refHead # refRest" and
     len_refs': "length ifRest = length refRest"
     by (cases suffixRefResults) auto
 
   from Cons.prems(1) have k_bound: "k < length (FI_TmArgs funInfo)"
-    using Cons.prems(5)
+    using Cons.prems(6)
     by (metis drop_eq_Nil2 linorder_le_less_linear neq_Nil_conv)
+  hence k_names: "k < length names" using names_len by simp
   from Cons.prems(1) have kth: "FI_TmArgs funInfo ! k = arg"
     using k_bound nth_via_drop by metis
   from kth arg_eq
-  have kth_arg: "FI_TmArgs funInfo ! k = (paramName, paramTy, vor)" by simp
+  have kth_arg: "FI_TmArgs funInfo ! k = (paramTy, vor)" by simp
+  \<comment> \<open>names ! k is the head name of the IF-args suffix. \<close>
+  have paramName_eq: "names ! k = paramName"
+  proof -
+    have "names ! k = (drop k names) ! 0" using k_names by simp
+    also have "\<dots> = (map fst suffixIfArgs) ! 0" using Cons.prems(2) by simp
+    also have "\<dots> = ifName" using ifArgs_eq ifHead_eq by simp
+    finally show ?thesis by (simp add: paramName_def)
+  qed
 
-  from Cons.prems(6) have val_sound_head:
+  from Cons.prems(7) have val_sound_head:
     "sound_term_result state env (apply_subst tySubst paramTy) valHead"
     using arg_eq vals_eq by force
-  from Cons.prems(7) have lval_sound_head:
+  from Cons.prems(8) have lval_sound_head:
     "vor = Ref \<Longrightarrow> sound_lvalue_result state env storeTyping
                      (apply_subst tySubst paramTy) refHead"
     using arg_eq refs_eq by force
 
   let ?step = "process_one_arg ((paramName, vor), refHead, valHead) partialResult"
   have step_sound:
-    "sound_partial_arg_processing_result env funInfo tySubst (Suc k) storeTyping ?step"
+    "sound_partial_arg_processing_result env names funInfo tySubst (Suc k) storeTyping ?step"
   proof (cases partialResult)
     case (Inl err)
-    from process_one_arg_preserve_error[of env funInfo tySubst k storeTyping err
+    from process_one_arg_preserve_error[of env names funInfo tySubst k storeTyping err
                                            "((paramName, vor), refHead, valHead)"]
-         Cons.prems(8) Inl
+         Cons.prems(9) Inl
     show ?thesis by simp
   next
     case (Inr partialState)
     from process_one_arg_step_sound[OF sme_caller wf_env fn_lookup not_ghost k_bound
-                                       kth_arg val_sound_head lval_sound_head]
-         Cons.prems(8) Inr
+                                       k_names dist_names kth_arg paramName_eq
+                                       val_sound_head lval_sound_head]
+         Cons.prems(9) Inr
     show ?thesis by simp
   qed
 
   have rest_at_k1: "restArgs = drop (Suc k) (FI_TmArgs funInfo)"
     using Cons.prems(1)
     by (metis Cons_nth_drop_Suc k_bound list.inject)
+  have rest_names: "map fst ifRest = drop (Suc k) names"
+  proof -
+    have "ifName # map fst ifRest = map fst suffixIfArgs"
+      using ifArgs_eq ifHead_eq by simp
+    also have "\<dots> = drop k names" using Cons.prems(2) .
+    finally have "ifName # map fst ifRest = drop k names" .
+    thus ?thesis using k_names by (metis Cons_nth_drop_Suc list.inject)
+  qed
   have len_rest: "Suc k + length restArgs = length (FI_TmArgs funInfo)"
-    using Cons.prems(5) by simp
+    using Cons.prems(6) by simp
   have vals_sound_rest: "\<forall>i < length restArgs.
       sound_term_result state env
-        (apply_subst tySubst (fst (snd (restArgs ! i))))
+        (apply_subst tySubst (fst (restArgs ! i)))
         (valRest ! i)"
   proof (intro allI impI)
     fix i assume "i < length restArgs"
     hence "Suc i < length (arg # restArgs)" by simp
-    from Cons.prems(6)[rule_format, OF this]
+    from Cons.prems(7)[rule_format, OF this]
     have "sound_term_result state env
-            (apply_subst tySubst (fst (snd ((arg # restArgs) ! Suc i))))
+            (apply_subst tySubst (fst ((arg # restArgs) ! Suc i)))
             (suffixValResults ! Suc i)" .
     thus "sound_term_result state env
-            (apply_subst tySubst (fst (snd (restArgs ! i))))
+            (apply_subst tySubst (fst (restArgs ! i)))
             (valRest ! i)"
       by (simp add: vals_eq)
   qed
   have lvals_sound_rest: "\<forall>i < length restArgs.
-      snd (snd (restArgs ! i)) = Ref \<longrightarrow>
+      snd (restArgs ! i) = Ref \<longrightarrow>
         sound_lvalue_result state env storeTyping
-          (apply_subst tySubst (fst (snd (restArgs ! i))))
+          (apply_subst tySubst (fst (restArgs ! i)))
           (refRest ! i)"
   proof (intro allI impI)
     fix i
     assume i_lt: "i < length restArgs"
-    assume is_ref: "snd (snd (restArgs ! i)) = Ref"
+    assume is_ref: "snd (restArgs ! i) = Ref"
     from i_lt have "Suc i < length (arg # restArgs)" by simp
-    moreover from is_ref have "snd (snd ((arg # restArgs) ! Suc i)) = Ref" by simp
+    moreover from is_ref have "snd ((arg # restArgs) ! Suc i) = Ref" by simp
     ultimately have "sound_lvalue_result state env storeTyping
-                        (apply_subst tySubst (fst (snd ((arg # restArgs) ! Suc i))))
+                        (apply_subst tySubst (fst ((arg # restArgs) ! Suc i)))
                         (suffixRefResults ! Suc i)"
-      using Cons.prems(7)[rule_format] by blast
+      using Cons.prems(8)[rule_format] by blast
     thus "sound_lvalue_result state env storeTyping
-            (apply_subst tySubst (fst (snd (restArgs ! i)))) (refRest ! i)"
+            (apply_subst tySubst (fst (restArgs ! i))) (refRest ! i)"
       by (simp add: refs_eq)
   qed
 
   have fold_unfold: "fold process_one_arg
       (zip suffixIfArgs (zip suffixRefResults suffixValResults)) partialResult
     = fold process_one_arg (zip ifRest (zip refRest valRest)) ?step"
-    using ifArgs_eq vals_eq refs_eq head_match ifHead_eq by simp
+    using ifArgs_eq vals_eq refs_eq head_match ifHead_eq paramName_def by simp
 
-  from Cons.IH[OF rest_at_k1 ifRest_match len_vals' len_refs' len_rest
+  from Cons.IH[OF rest_at_k1 rest_names ifRest_match len_vals' len_refs' len_rest
                   vals_sound_rest lvals_sound_rest step_sound]
-  have "sound_partial_arg_processing_result env funInfo tySubst
+  have "sound_partial_arg_processing_result env names funInfo tySubst
           (Suc k + length restArgs) storeTyping
           (fold process_one_arg (zip ifRest (zip refRest valRest)) ?step)" .
   moreover have "k + length (arg # restArgs) = Suc k + length restArgs" by simp
@@ -2003,16 +2035,16 @@ lemma fold_process_one_arg_sound:
       and vals_sound:
             "\<forall>i < length (FI_TmArgs funInfo).
                sound_term_result state env
-                 (apply_subst outerSubst (fst (snd (FI_TmArgs funInfo ! i))))
+                 (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
                  (map (interp_term fuel state) argTms ! i)"
       and lvals_sound:
             "\<forall>i < length (FI_TmArgs funInfo).
-               snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+               snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
                  sound_lvalue_result state env storeTyping
-                   (apply_subst outerSubst (fst (snd (FI_TmArgs funInfo ! i))))
+                   (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
                    (map (interp_writable_lvalue fuel state) argTms ! i)"
       and len_argTms: "length argTms = length (FI_TmArgs funInfo)"
-  shows "sound_arg_processing_result env funInfo tySubst storeTyping
+  shows "sound_arg_processing_result env (map fst (IF_Args f)) funInfo tySubst storeTyping
            (fold process_one_arg
               (zip (IF_Args f)
                    (zip (map (interp_writable_lvalue fuel state) argTms)
@@ -2027,16 +2059,27 @@ proof -
                                 IS_TyArgs := tySubst \<rparr>"
   let ?valResults = "map (interp_term fuel state) argTms"
   let ?refResults = "map (interp_writable_lvalue fuel state) argTms"
+  let ?names = "map fst (IF_Args f)"
+
+  \<comment> \<open>From fi_match: parameter names are distinct, the Var/Ref markers align with
+      FI_TmArgs, and the arg lists have equal length. \<close>
+  from fi_match have vor_match:
+    "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
+    and dist_names: "distinct ?names"
+    unfolding fun_info_matches_interp_fun_def by simp_all
+  from vor_match have len_ifargs: "length (IF_Args f) = length (FI_TmArgs funInfo)"
+    by (simp add: list_all2_lengthD)
+  hence names_len: "length ?names = length (FI_TmArgs funInfo)" by simp
 
   \<comment> \<open>H2a: initial state is sound at k=0. \<close>
   have sme_cleared:
-    "state_matches_env ?clearedState (partial_body_env_for env funInfo 0) storeTyping"
+    "state_matches_env ?clearedState (partial_body_env_for env ?names funInfo 0) storeTyping"
     using cleared_state_matches_partial_env_zero
-            [OF sme_caller wf_env fn_lookup not_ghost ty_len ty_wk ty_rt,
+            [OF sme_caller wf_env fn_lookup not_ghost dist_names ty_len ty_wk ty_rt,
              where tySubst=tySubst]
     by (simp add: tySubst_def)
   have partial_sound_zero:
-    "sound_partial_arg_processing_result env funInfo tySubst 0 storeTyping
+    "sound_partial_arg_processing_result env ?names funInfo tySubst 0 storeTyping
        (Inr ?clearedState)"
     unfolding sound_partial_arg_processing_result_def
     using sme_cleared storeTyping_extends_refl by auto
@@ -2057,11 +2100,11 @@ proof -
   \<comment> \<open>For each i < length FI_TmArgs funInfo, apply_subst tySubst paramTy_i is ground. \<close>
   have paramTy_apply_ground:
     "\<And>i. i < length (FI_TmArgs funInfo) \<Longrightarrow>
-            type_tyvars (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i)))) = {}"
+            type_tyvars (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) = {}"
   proof -
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
-    have "?paramTy_i \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
+    have "?paramTy_i \<in> fst ` set (FI_TmArgs funInfo)"
       using i_bound by force
     from wf_env fn_lookup not_ghost have
       "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
@@ -2126,13 +2169,13 @@ proof -
       when t's tyvars are in FI_TyArgs funInfo. \<close>
   have compose_zip:
     "\<And>i. i < length (FI_TmArgs funInfo) \<Longrightarrow>
-       apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i)))
+       apply_subst tySubst (fst (FI_TmArgs funInfo ! i))
        = apply_subst (IS_TyArgs state)
-           (apply_subst outerSubst (fst (snd (FI_TmArgs funInfo ! i))))"
+           (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))"
   proof -
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
-    have "?paramTy_i \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
+    have "?paramTy_i \<in> fst ` set (FI_TmArgs funInfo)"
       using i_bound by force
     from wf_env fn_lookup not_ghost have
       "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
@@ -2153,11 +2196,11 @@ proof -
   have vals_sound_tySubst:
     "\<forall>i < length (FI_TmArgs funInfo).
        sound_term_result state env
-         (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+         (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
          (?valResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
     from vals_sound i_bound have outer_sound:
       "sound_term_result state env (apply_subst outerSubst ?paramTy_i) (?valResults ! i)"
       by blast
@@ -2191,14 +2234,14 @@ proof -
   \<comment> \<open>lvals_sound translated similarly. sound_lvalue_result also applies (IS_TyArgs state). \<close>
   have lvals_sound_tySubst:
     "\<forall>i < length (FI_TmArgs funInfo).
-       snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+       snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
          sound_lvalue_result state env storeTyping
-           (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))
+           (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
            (?refResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-      and is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
+      and is_ref: "snd (FI_TmArgs funInfo ! i) = Ref"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
     from lvals_sound i_bound is_ref have outer_sound:
       "sound_lvalue_result state env storeTyping (apply_subst outerSubst ?paramTy_i) (?refResults ! i)"
       by blast
@@ -2237,12 +2280,8 @@ proof -
     qed
   qed
 
-  \<comment> \<open>fi_match gives var_ref_match and length agreement on IF_Args. \<close>
-  from fi_match have var_ref_match:
-    "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
-               (FI_TmArgs funInfo) (IF_Args f)"
-    unfolding fun_info_matches_interp_fun_def by simp
-  from var_ref_match have len_ifArgs: "length (FI_TmArgs funInfo) = length (IF_Args f)"
+  \<comment> \<open>length agreement on IF_Args (var_ref_match = vor_match from above). \<close>
+  from vor_match have len_ifArgs: "length (FI_TmArgs funInfo) = length (IF_Args f)"
     by (rule list_all2_lengthD)
 
   have len_vals: "length (IF_Args f) = length ?valResults"
@@ -2254,20 +2293,23 @@ proof -
   have k_plus_len_zero: "(0::nat) + length (FI_TmArgs funInfo) = length (FI_TmArgs funInfo)"
     by simp
   have suffix_at_zero: "FI_TmArgs funInfo = drop 0 (FI_TmArgs funInfo)" by simp
+  have suffix_names_zero: "map fst (IF_Args f) = drop 0 ?names" by simp
   from fold_process_one_arg_sound_gen[
-      OF sme_caller wf_env fn_lookup not_ghost suffix_at_zero var_ref_match
+      OF sme_caller wf_env fn_lookup not_ghost dist_names names_len suffix_at_zero
+         suffix_names_zero vor_match
          len_vals len_refs k_plus_len_zero vals_sound_tySubst lvals_sound_tySubst
          partial_sound_zero]
   have gen_result:
-    "sound_partial_arg_processing_result env funInfo tySubst
+    "sound_partial_arg_processing_result env ?names funInfo tySubst
        (0 + length (FI_TmArgs funInfo)) storeTyping
        (fold process_one_arg
          (zip (IF_Args f) (zip ?refResults ?valResults)) (Inr ?clearedState))" .
 
   \<comment> \<open>Bridge from partial_body_env_for at length FI_TmArgs to body_env_for. \<close>
   have pbe_full:
-    "partial_body_env_for env funInfo (length (FI_TmArgs funInfo)) = body_env_for env funInfo"
-    using partial_body_env_for_full .
+    "partial_body_env_for env ?names funInfo (length (FI_TmArgs funInfo))
+       = body_env_for env ?names funInfo"
+    using partial_body_env_for_full[of funInfo ?names env] names_len by simp
 
   show ?thesis
     unfolding sound_arg_processing_result_def

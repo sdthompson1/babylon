@@ -29,8 +29,8 @@ definition core_impure_call_type ::
          else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
          else
            let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
-               expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
-               varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+               expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+               varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)
            in if list_all2 (\<lambda>(tm, vor) expectedTy.
                     case vor of
                       Var \<Rightarrow>
@@ -372,10 +372,10 @@ lemma core_impure_call_type_fn_facts:
                     None \<Rightarrow> False
                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
                 tmArgs
-                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))
             \<and> (\<forall>i < length tmArgs.
-                 snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                 snd (FI_TmArgs funInfo ! i) = Ref
                    \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
                        \<and> ghost_lvalue_ok env ghost (tmArgs ! i))"
 proof -
@@ -391,8 +391,8 @@ proof -
           else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
           else
             let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-                expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-                varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+                expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+                varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs fi)
             in if list_all2 (\<lambda>(tm, vor) expectedTy.
                      case vor of
                        Var \<Rightarrow>
@@ -419,8 +419,8 @@ proof -
       else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
       else
         let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-            expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-            varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+            expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+            varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs fi)
         in if list_all2 (\<lambda>(tm, vor) expectedTy.
                  case vor of
                    Var \<Rightarrow>
@@ -450,8 +450,8 @@ proof -
   from body len_tyArgs tyArgs_wk not_ghost_cond len_tmArgs
   have after_ifs:
     "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-          expectedArgTypes = map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-          varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)
+          expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
+          varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs fi)
       in if list_all2 (\<lambda>(tm, vor) expectedTy.
                case vor of
                  Var \<Rightarrow>
@@ -477,8 +477,8 @@ proof -
                       is_writable_lvalue env tm
                       \<and> ghost_lvalue_ok env ghost tm
                       \<and> core_term_type env ghost tm = Some expectedTy)
-               (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))
-               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+               (zip tmArgs (map (\<lambda>(_, vor). vor) (FI_TmArgs fi)))
+               (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
                     (FI_TmArgs fi))"
     by (simp add: Let_def split: if_splits)
   from after_ifs have fn_ty_eq:
@@ -494,27 +494,27 @@ proof -
                     None \<Rightarrow> False
                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
                tmArgs
-               (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+               (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
                     (FI_TmArgs fi))"
     unfolding list_all2_conv_all_nth
   proof (intro conjI allI impI)
     show "length tmArgs
-            = length (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+            = length (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
                           (FI_TmArgs fi))"
       using len_tmArgs by simp
   next
     fix i assume i_lt: "i < length tmArgs"
     with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
     have i_lt_zip:
-      "i < length (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))"
+      "i < length (zip tmArgs (map (\<lambda>(_, vor). vor) (FI_TmArgs fi)))"
       using i_lt len_tmArgs by simp
-    obtain n ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (n, ti, vor)"
+    obtain ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (ti, vor)"
       by (cases "FI_TmArgs fi ! i") auto
     have zip_nth:
-      "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
+      "zip tmArgs (map (\<lambda>(_, vor). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
       using i_lt i_lt_fi fi_arg_eq by simp
     have expected_nth:
-      "(map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+      "(map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
             (FI_TmArgs fi)) ! i
           = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
       using i_lt_fi fi_arg_eq by simp
@@ -535,7 +535,7 @@ proof -
     show "case core_term_type env ghost (tmArgs ! i) of
             None \<Rightarrow> False
           | Some actualTy \<Rightarrow>
-              actualTy = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+              actualTy = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
                              (FI_TmArgs fi) ! i"
       using nth_check expected_nth by (cases vor; auto split: option.splits)
   qed
@@ -549,23 +549,23 @@ proof -
       impure list_all2. \<close>
   have ref_args_lvalues:
     "\<forall>i < length tmArgs.
-       snd (snd (FI_TmArgs fi ! i)) = Ref
+       snd (FI_TmArgs fi ! i) = Ref
          \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
              \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
   proof (intro allI impI)
-    fix i assume i_lt: "i < length tmArgs" and ref: "snd (snd (FI_TmArgs fi ! i)) = Ref"
+    fix i assume i_lt: "i < length tmArgs" and ref: "snd (FI_TmArgs fi ! i) = Ref"
     with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
     have i_lt_zip:
-      "i < length (zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)))"
+      "i < length (zip tmArgs (map (\<lambda>(_, vor). vor) (FI_TmArgs fi)))"
       using i_lt len_tmArgs by simp
-    obtain n ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (n, ti, vor)"
+    obtain ti vor where fi_arg_eq: "FI_TmArgs fi ! i = (ti, vor)"
       by (cases "FI_TmArgs fi ! i") auto
     from ref fi_arg_eq have vor_eq: "vor = Ref" by simp
     have zip_nth:
-      "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
+      "zip tmArgs (map (\<lambda>(_, vor). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
       using i_lt i_lt_fi fi_arg_eq by simp
     have expected_nth:
-      "(map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+      "(map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
             (FI_TmArgs fi)) ! i
           = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
       using i_lt_fi fi_arg_eq by simp
@@ -600,7 +600,7 @@ proof -
                       None \<Rightarrow> False
                     | Some actualTy \<Rightarrow> actualTy = expectedTy)
                  tmArgs
-                 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
+                 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
                       (FI_TmArgs fi))"
     by blast
   have "list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
@@ -635,10 +635,10 @@ proof -
                   case core_term_type env ghost tm of None \<Rightarrow> False
                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
                 tmArgs
-                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length tmArgs.
-                snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                snd (FI_TmArgs funInfo ! i) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
@@ -653,7 +653,7 @@ proof -
                   case core_term_type ?env' ghost tm of None \<Rightarrow> False
                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
                 tmArgs
-                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))"
     using l2_pure core_term_type_irrelevant_tyvar
     by (elim list_all2_mono) (auto split: option.splits)
@@ -667,8 +667,8 @@ proof -
                  | Ref \<Rightarrow> is_writable_lvalue ?env' tm
                           \<and> ghost_lvalue_ok ?env' ghost tm
                           \<and> core_term_type ?env' ghost tm = Some expectedTy"
-  let ?zts = "zip tmArgs (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo))"
-  let ?exps = "map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+  let ?zts = "zip tmArgs (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
+  let ?exps = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                     (FI_TmArgs funInfo)"
   have len_zts: "length ?zts = length ?exps" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P' (?zts ! i) (?exps ! i)"
@@ -676,7 +676,7 @@ proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length tmArgs" using len_tm by simp
     with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain n ti vor where fi_arg: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+    obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = (tmArgs ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp

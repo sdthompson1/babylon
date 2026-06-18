@@ -422,11 +422,11 @@ definition callee_info_valid_function ::
        fmlookup (TE_Functions env) fnName = Some funInfo
      \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
      \<and> \<not> FI_Impure funInfo
-     \<and> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)
+     \<and> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)
      \<and> length tyArgs = length (FI_TyArgs funInfo)
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
-     \<and> expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+     \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                          (FI_TmArgs funInfo)
      \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                               (FI_ReturnType funInfo))"
@@ -476,11 +476,11 @@ proof (cases ci)
     "fmlookup (TE_Functions ?env1) fnName = Some funInfo"
     "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     "\<not> FI_Impure funInfo"
-    "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)"
+    "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)"
     "length tyArgs = length (FI_TyArgs funInfo)"
     "list_all (is_well_kinded ?env1) tyArgs"
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
-    "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+    "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                        (FI_TmArgs funInfo)"
     "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                             (FI_ReturnType funInfo)"
@@ -555,7 +555,7 @@ proof -
   from assms(1) fn_lookup not_void have not_impure: "\<not> FI_Impure funInfo"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
   from assms(1) fn_lookup not_void not_impure have
-    all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)"
+    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
   from assms(1) fn_lookup not_void not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
@@ -567,7 +567,7 @@ proof -
     resolve_eq: "resolve_type_args env elabEnv ghost loc name (FI_TyArgs funInfo) tyArgs next_mv
                  = Inr (newTyArgs, next_mv1)" and
     next_mv_eq: "next_mv' = next_mv1" and
-    expArg_eq: "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
+    expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
     ci_eq: "calleeInfo = CI_Function name newTyArgs
               (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo))"
@@ -596,17 +596,17 @@ proof -
   have tyargs_wk: "list_all (is_well_kinded ?env') newTyArgs" using rta by simp
   have "tyenv_fun_types_well_kinded ?env'"
     using wf' tyenv_well_formed_def by blast
-  hence fi_args_wk_inner: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+  hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
             is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_types_well_kinded_def by blast
   have len_tyargs: "length newTyArgs = length (FI_TyArgs funInfo)" using rta by simp
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
   proof -
-    have "list_all (\<lambda>(_, ty, _). is_well_kinded ?env' (apply_subst
+    have "list_all (\<lambda>(ty, _). is_well_kinded ?env' (apply_subst
             (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix n t v assume "(n, t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
+      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
+      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_wk_inner
       have "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
       thus "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
@@ -619,7 +619,7 @@ proof -
   have "tyenv_fun_ghost_constraint ?env'"
     using wf' tyenv_well_formed_def by blast
   hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
-          \<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+          \<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
             is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_ghost_constraint_def by (simp add: Let_def)
@@ -628,11 +628,11 @@ proof -
     assume ng: "ghost = NotGhost"
     hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
     have tyargs_rt: "list_all (is_runtime_type ?env') newTyArgs" using rta ng by simp
-    have "list_all (\<lambda>(_, ty, _). is_runtime_type ?env' (apply_subst
+    have "list_all (\<lambda>(ty, _). is_runtime_type ?env' (apply_subst
             (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix n t v assume "(n, t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
+      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
+      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_rt_inner[OF fg_ng]
       have "is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                        TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
@@ -899,11 +899,11 @@ proof (cases calleeInfo)
     fn_lookup: "fmlookup (TE_Functions env') fnName = Some funInfo" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     not_impure: "\<not> FI_Impure funInfo" and
-    all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
+    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and
-    expArgTypes_eq: "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+    expArgTypes_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                                        (FI_TmArgs funInfo)" and
     retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                         (FI_ReturnType funInfo)"
@@ -922,12 +922,12 @@ proof (cases calleeInfo)
   \<comment> \<open>Coerced args match Core's expected types (double substitution)\<close>
   have "tyenv_fun_types_well_kinded env'"
     using wf' tyenv_well_formed_def by blast
-  hence fi_args_wk_inner: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+  hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
             is_well_kinded (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_tyvars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
   proof
-    fix ty assume "ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    fix ty assume "ty \<in> fst ` set (FI_TmArgs funInfo)"
     with fi_args_wk_inner
     have wk: "is_well_kinded (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty" by blast
     have "type_tyvars ty \<subseteq> fset (TE_TypeVars (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
@@ -941,8 +941,8 @@ proof (cases calleeInfo)
     using fn_lookup tyenv_fun_tyvars_distinct_def by blast
 
   let ?coreTySubst = "fmap_of_list (zip (FI_TyArgs funInfo) ?finalTyArgs)"
-  let ?coreExpArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
-  let ?argTys = "map (fst \<circ> snd) (FI_TmArgs funInfo)"
+  let ?coreExpArgTypes = "map (\<lambda>(ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
+  let ?argTys = "map fst (FI_TmArgs funInfo)"
 
   have fi_args_tyvars': "\<forall>t \<in> set ?argTys. type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
     using fi_args_tyvars by auto

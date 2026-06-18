@@ -1581,14 +1581,14 @@ lemma type_soundness_function_call:
     and args_typed: "list_all2 (\<lambda>tm expectedTy.
          case core_term_type env NotGhost tm of
            None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-       argTms (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+       argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                    (FI_TmArgs funInfo))"
     and retTy_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     and ty_len: "length tyArgs = length (FI_TyArgs funInfo)"
     and ty_wk: "list_all (is_well_kinded env) tyArgs"
     and ty_rt: "list_all (is_runtime_type env) tyArgs"
     and ref_writable: "\<forall>i < length argTms.
-         (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+         (snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
           is_writable_lvalue env (argTms ! i))"
     and IH_term: "\<And>env' (state' :: 'w InterpState) storeTyping' tm' ty'.
                 state_matches_env state' env' storeTyping' \<Longrightarrow>
@@ -1624,6 +1624,9 @@ proof -
   \<comment> \<open>Length match between argTms and f's args (via fi_match + args_typed). \<close>
   from fi_match have len_fi: "length (FI_TmArgs funInfo) = length (IF_Args f)"
     unfolding fun_info_matches_interp_fun_def by (auto dest: list_all2_lengthD)
+  \<comment> \<open>Parameter names (from f's IF_Args) are distinct. The body env is built over them. \<close>
+  from fi_match have dist_names: "distinct (map fst (IF_Args f))"
+    unfolding fun_info_matches_interp_fun_def by simp
   from args_typed have len_argTms_fi: "length argTms = length (FI_TmArgs funInfo)"
     by (simp add: list_all2_lengthD)
   hence len_argTms: "length argTms = length (IF_Args f)"
@@ -1696,11 +1699,11 @@ proof -
   \<comment> \<open>For each parameter, apply_subst tySubst paramTy_i is ground. \<close>
   have paramTy_apply_ground:
     "\<And>i. i < length (FI_TmArgs funInfo) \<Longrightarrow>
-            type_tyvars (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i)))) = {}"
+            type_tyvars (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) = {}"
   proof -
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
-    have "?paramTy_i \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
+    have "?paramTy_i \<in> fst ` set (FI_TmArgs funInfo)"
       using i_bound by force
     from wf_env fn_lookup not_ghost have
       "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
@@ -1766,19 +1769,19 @@ proof -
     "\<forall>i < length (FI_TmArgs funInfo).
        sound_term_result state env
          (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
-                      (fst (snd (FI_TmArgs funInfo ! i))))
+                      (fst (FI_TmArgs funInfo ! i)))
          (?valResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
     with len_argTms_fi have i_argTms: "i < length argTms" by simp
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
     let ?expTy_i = "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ?paramTy_i"
     from args_typed have all_i:
       "\<forall>j < length argTms.
          case core_term_type env NotGhost (argTms ! j) of
            None \<Rightarrow> False
          | Some actualTy \<Rightarrow> actualTy
-             = (map (\<lambda>(_, ty, _).
+             = (map (\<lambda>(ty, _).
                        apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                    (FI_TmArgs funInfo)) ! j"
       by (simp add: list_all2_conv_all_nth)
@@ -1786,18 +1789,18 @@ proof -
       "case core_term_type env NotGhost (argTms ! i) of
          None \<Rightarrow> False
        | Some actualTy \<Rightarrow> actualTy
-            = (map (\<lambda>(_, ty, _).
+            = (map (\<lambda>(ty, _).
                      apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                   (FI_TmArgs funInfo)) ! i"
       by blast
     have map_i_eq:
-      "(map (\<lambda>(_, ty, _).
+      "(map (\<lambda>(ty, _).
                apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
             (FI_TmArgs funInfo)) ! i = ?expTy_i"
       using i_bound by (simp add: case_prod_beta)
     from raw_ty_i obtain actualTy where
       cty_i: "core_term_type env NotGhost (argTms ! i) = Some actualTy"
-      and act_eq_raw: "actualTy = (map (\<lambda>(_, ty, _).
+      and act_eq_raw: "actualTy = (map (\<lambda>(ty, _).
                      apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                   (FI_TmArgs funInfo)) ! i"
       by (cases "core_term_type env NotGhost (argTms ! i)") simp_all
@@ -1812,23 +1815,23 @@ proof -
 
   have lvals_sound:
     "\<forall>i < length (FI_TmArgs funInfo).
-       snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+       snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
          sound_lvalue_result state env storeTyping
            (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
-                        (fst (snd (FI_TmArgs funInfo ! i))))
+                        (fst (FI_TmArgs funInfo ! i)))
            (?refResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-                and is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+                and is_ref: "snd (FI_TmArgs funInfo ! i) = Ref"
     with len_argTms_fi have i_argTms: "i < length argTms" by simp
-    let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
+    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
     let ?expTy_i = "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ?paramTy_i"
     from args_typed have all_i:
       "\<forall>j < length argTms.
          case core_term_type env NotGhost (argTms ! j) of
            None \<Rightarrow> False
          | Some actualTy \<Rightarrow> actualTy
-             = (map (\<lambda>(_, ty, _).
+             = (map (\<lambda>(ty, _).
                        apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                    (FI_TmArgs funInfo)) ! j"
       by (simp add: list_all2_conv_all_nth)
@@ -1836,18 +1839,18 @@ proof -
       "case core_term_type env NotGhost (argTms ! i) of
          None \<Rightarrow> False
        | Some actualTy \<Rightarrow> actualTy
-            = (map (\<lambda>(_, ty, _).
+            = (map (\<lambda>(ty, _).
                      apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                   (FI_TmArgs funInfo)) ! i"
       by blast
     have map_i_eq:
-      "(map (\<lambda>(_, ty, _).
+      "(map (\<lambda>(ty, _).
                apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
             (FI_TmArgs funInfo)) ! i = ?expTy_i"
       using i_bound by (simp add: case_prod_beta)
     from raw_ty_i obtain actualTy where
       cty_i: "core_term_type env NotGhost (argTms ! i) = Some actualTy"
-      and act_eq_raw: "actualTy = (map (\<lambda>(_, ty, _).
+      and act_eq_raw: "actualTy = (map (\<lambda>(ty, _).
                      apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                   (FI_TmArgs funInfo)) ! i"
       by (cases "core_term_type env NotGhost (argTms ! i)") simp_all
@@ -1887,31 +1890,31 @@ proof -
     from arg_sound fold_Inr tySubst_def
     have tyargs_pre: "IS_TyArgs preCallState = tySubst"
       and pre_match: "\<exists>bodyStoreTyping.
-                        state_matches_env preCallState (body_env_for env funInfo) bodyStoreTyping
+                        state_matches_env preCallState (body_env_for env (map fst (IF_Args f)) funInfo) bodyStoreTyping
                       \<and> storeTyping_extends storeTyping bodyStoreTyping"
       unfolding sound_arg_processing_result_def by auto
     from pre_match obtain bodyStoreTyping where
-      sme_body: "state_matches_env preCallState (body_env_for env funInfo) bodyStoreTyping"
+      sme_body: "state_matches_env preCallState (body_env_for env (map fst (IF_Args f)) funInfo) bodyStoreTyping"
       and ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
       by blast
 
     \<comment> \<open>Common facts derived from sme_body. \<close>
-    have wf_bodyEnv: "tyenv_well_formed (body_env_for env funInfo)"
-      using body_env_for_well_formed[OF wf_env fn_lookup not_ghost] .
+    have wf_bodyEnv: "tyenv_well_formed (body_env_for env (map fst (IF_Args f)) funInfo)"
+      using body_env_for_well_formed fn_lookup not_ghost wf_env by auto
 
     show ?thesis
     proof (cases "IF_Body f")
       case body_babylon: (Inl bodyStmts)
       \<comment> \<open>Babylon body. The fi_match assumption certifies that bodyStmts
-          typechecks in body_env_for env funInfo. \<close>
+          typechecks in body_env_for env (map fst (IF_Args f)) funInfo. \<close>
       from fi_match body_babylon obtain bodyEnv' where
-        body_ty: "core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts
+        body_ty: "core_statement_list_type (body_env_for env (map fst (IF_Args f)) funInfo) NotGhost bodyStmts
                     = Some bodyEnv'"
         unfolding fun_info_matches_interp_fun_def by auto
 
       \<comment> \<open>Apply IH(5) to get sound_statement_result on the body. \<close>
       from IH_stmts[OF sme_body wf_bodyEnv, of bodyStmts bodyEnv'] body_ty
-      have body_sound: "sound_statement_result (body_env_for env funInfo) bodyEnv'
+      have body_sound: "sound_statement_result (body_env_for env (map fst (IF_Args f)) funInfo) bodyEnv'
                           bodyStoreTyping
                           (interp_statement_list fuel preCallState bodyStmts)"
         by simp
@@ -1940,12 +1943,12 @@ proof -
           \<comment> \<open>Main case. Extract env_mid + postStoreTyping + return value typing. \<close>
           from body_sound body_Inr Return
           have ret_typed_bodyEnv:
-            "value_has_type (body_env_for env funInfo) retVal
+            "value_has_type (body_env_for env (map fst (IF_Args f)) funInfo) retVal
                (apply_subst (IS_TyArgs postCallState)
-                            (TE_ReturnType (body_env_for env funInfo)))"
+                            (TE_ReturnType (body_env_for env (map fst (IF_Args f)) funInfo)))"
             by simp
           from body_sound body_Inr Return obtain env_mid postStoreTyping where
-            fxeq1: "tyenv_fixed_eq (body_env_for env funInfo) env_mid"
+            fxeq1: "tyenv_fixed_eq (body_env_for env (map fst (IF_Args f)) funInfo) env_mid"
             and fxeq2: "tyenv_fixed_eq env_mid bodyEnv'"
             and wf_mid: "tyenv_well_formed env_mid"
             and sme_post: "state_matches_env postCallState env_mid postStoreTyping"
@@ -1988,14 +1991,14 @@ proof -
           \<comment> \<open>tyenv_fixed_eq carries the dt-relevant field equalities. We also
               need to bridge through body_env_for, whose dt fields = env's. \<close>
           from fxeq1 have dt_eq_body_mid:
-            "TE_DataCtors (body_env_for env funInfo) = TE_DataCtors env_mid"
-            "TE_Datatypes (body_env_for env funInfo) = TE_Datatypes env_mid"
-            "TE_GhostDatatypes (body_env_for env funInfo) = TE_GhostDatatypes env_mid"
+            "TE_DataCtors (body_env_for env (map fst (IF_Args f)) funInfo) = TE_DataCtors env_mid"
+            "TE_Datatypes (body_env_for env (map fst (IF_Args f)) funInfo) = TE_Datatypes env_mid"
+            "TE_GhostDatatypes (body_env_for env (map fst (IF_Args f)) funInfo) = TE_GhostDatatypes env_mid"
             unfolding tyenv_fixed_eq_def by simp_all
           have dt_eq_env_body:
-            "TE_DataCtors env = TE_DataCtors (body_env_for env funInfo)"
-            "TE_Datatypes env = TE_Datatypes (body_env_for env funInfo)"
-            "TE_GhostDatatypes env = TE_GhostDatatypes (body_env_for env funInfo)"
+            "TE_DataCtors env = TE_DataCtors (body_env_for env (map fst (IF_Args f)) funInfo)"
+            "TE_Datatypes env = TE_Datatypes (body_env_for env (map fst (IF_Args f)) funInfo)"
+            "TE_GhostDatatypes env = TE_GhostDatatypes (body_env_for env (map fst (IF_Args f)) funInfo)"
             by (simp_all add: body_env_for_def)
           have dt_eq:
             "TE_DataCtors env = TE_DataCtors env_mid"
@@ -2032,14 +2035,14 @@ proof -
             by simp
 
           \<comment> \<open>Return type of bodyEnv is the function's return type, unsubstituted. \<close>
-          have ret_ty_eq: "TE_ReturnType (body_env_for env funInfo) = FI_ReturnType funInfo"
+          have ret_ty_eq: "TE_ReturnType (body_env_for env (map fst (IF_Args f)) funInfo) = FI_ReturnType funInfo"
             by (simp add: body_env_for_def)
 
-          \<comment> \<open>Combine: value_has_type (body_env_for env funInfo) retVal
+          \<comment> \<open>Combine: value_has_type (body_env_for env (map fst (IF_Args f)) funInfo) retVal
                 (apply_subst tySubst (FI_ReturnType funInfo)). \<close>
           from ret_typed_bodyEnv tyargs_post ret_ty_eq
           have ret_typed_body:
-            "value_has_type (body_env_for env funInfo) retVal
+            "value_has_type (body_env_for env (map fst (IF_Args f)) funInfo) retVal
                (apply_subst tySubst (FI_ReturnType funInfo))"
             by simp
 
@@ -2049,22 +2052,22 @@ proof -
           have ret_ground:
             "type_tyvars (apply_subst tySubst (FI_ReturnType funInfo)) = {}"
             using value_has_type_ground[OF ret_typed_body] .
-          have wf_bodyEnv: "tyenv_well_formed (body_env_for env funInfo)"
-            using body_env_for_well_formed[OF wf_env fn_lookup not_ghost] .
+          have wf_bodyEnv: "tyenv_well_formed (body_env_for env (map fst (IF_Args f)) funInfo)"
+            by (simp add: wf_bodyEnv)
           from value_has_type_well_kinded[OF ret_typed_body wf_bodyEnv]
-          have wk_body: "is_well_kinded (body_env_for env funInfo)
+          have wk_body: "is_well_kinded (body_env_for env (map fst (IF_Args f)) funInfo)
                             (apply_subst tySubst (FI_ReturnType funInfo))" .
           from value_has_type_runtime[OF ret_typed_body]
-          have rt_body: "is_runtime_type (body_env_for env funInfo)
+          have rt_body: "is_runtime_type (body_env_for env (map fst (IF_Args f)) funInfo)
                             (apply_subst tySubst (FI_ReturnType funInfo))" .
           \<comment> \<open>Bridge wk/rt to env via ground-cong lemmas. \<close>
           have wk_env: "is_well_kinded env (apply_subst tySubst (FI_ReturnType funInfo))"
             using wk_body
-                  is_well_kinded_ground_cong_env[OF ret_ground, of "body_env_for env funInfo" env]
+                  is_well_kinded_ground_cong_env[OF ret_ground, of "body_env_for env (map fst (IF_Args f)) funInfo" env]
             by (simp add: body_env_for_def)
           have rt_env: "is_runtime_type env (apply_subst tySubst (FI_ReturnType funInfo))"
             using rt_body
-                  is_runtime_type_ground_cong_env[OF ret_ground, of "body_env_for env funInfo" env]
+                  is_runtime_type_ground_cong_env[OF ret_ground, of "body_env_for env (map fst (IF_Args f)) funInfo" env]
             by (simp add: body_env_for_def)
           \<comment> \<open>Apply value_has_type_cong_env_wk to flip env. \<close>
           have ret_typed_env:
@@ -2077,7 +2080,7 @@ proof -
               apply_subst (IS_TyArgs state) retTy via apply_subst_compose_zip. \<close>
           from wf_env fn_lookup have ty_dist: "distinct (FI_TyArgs funInfo)"
             unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
-          \<comment> \<open>FI_ReturnType funInfo is runtime in body_env_for env funInfo (whose
+          \<comment> \<open>FI_ReturnType funInfo is runtime in body_env_for env (map fst (IF_Args f)) funInfo (whose
               TE_RuntimeTypeVars = fset_of_list (FI_TyArgs funInfo)), so its tyvars
               are \<subseteq> set (FI_TyArgs funInfo). Use tyenv_fun_ghost_constraint. \<close>
           from wf_env fn_lookup not_ghost have ret_runtime:
@@ -2171,11 +2174,11 @@ proof -
       have vals_typed:
         "\<forall>i < length argTms.
            value_has_type env (?vals ! i)
-              (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+              (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))"
       proof (intro allI impI)
         fix i assume i_lt: "i < length argTms"
         with len_argTms_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
-        let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! i))"
+        let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
         from vals_sound i_fi have outer_sound:
           "sound_term_result state env
              (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ?paramTy_i)
@@ -2189,7 +2192,7 @@ proof -
           by simp
         moreover have paramTy_subset: "type_tyvars ?paramTy_i \<subseteq> set (FI_TyArgs funInfo)"
         proof -
-          have "?paramTy_i \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+          have "?paramTy_i \<in> fst ` set (FI_TmArgs funInfo)"
             using i_fi by force
           from wf_env fn_lookup not_ghost have
             "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
@@ -2300,29 +2303,29 @@ proof -
       \<comment> \<open>vals satisfy the list_all2 typing. \<close>
       have prem_list_all2:
         "list_all2 (value_has_type env) ?vals
-           (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
+           (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
       proof -
-        have len_map: "length (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
+        have len_map: "length (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
                       = length ?vals"
           using vals_len len_argTms_fi by simp
         show ?thesis
           unfolding list_all2_conv_all_nth
         proof (intro conjI allI impI)
-          show "length ?vals = length (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
+          show "length ?vals = length (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
             using vals_len len_argTms_fi by simp
           fix i assume i_lt: "i < length ?vals"
           from i_lt vals_len have i_argTms: "i < length argTms" by simp
           from i_argTms len_argTms_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
           from vals_typed i_argTms have
-            "value_has_type env (?vals ! i) (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i))))"
+            "value_has_type env (?vals ! i) (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))"
             by blast
           moreover have
-            "(map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo)) ! i
-              = apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! i)))"
+            "(map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo)) ! i
+              = apply_subst tySubst (fst (FI_TmArgs funInfo ! i))"
             using i_fi by (simp add: case_prod_beta)
           ultimately show
             "value_has_type env (?vals ! i)
-              ((map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo)) ! i)"
+              ((map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo)) ! i)"
             by simp
         qed
       qed
@@ -2333,13 +2336,13 @@ proof -
          (\<forall>ty' \<in> fmran' tySubst.
               type_tyvars ty' = {} \<and> is_well_kinded env ty' \<and> is_runtime_type env ty') \<and>
          list_all2 (value_has_type env) ?vals
-                   (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
+                   (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
          \<longrightarrow> (case externFun (IS_World state) ?vals of
                 (newWorld, refUpdates, retVal) \<Rightarrow>
                   value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo)) \<and>
                   list_all2 (value_has_type env) refUpdates
-                    (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))))"
+                    (map (\<lambda>(ty, _). apply_subst tySubst ty)
+                         (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))))"
         unfolding extern_fun_contract_def by meson
       from ext_inst prem_dom prem_range prem_list_all2
       have contract_implies:
@@ -2347,44 +2350,44 @@ proof -
            (newWorld, refUpdates, retVal) \<Rightarrow>
              value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo)) \<and>
              list_all2 (value_has_type env) refUpdates
-               (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))"
+               (map (\<lambda>(ty, _). apply_subst tySubst ty)
+                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
         by meson
       from contract_implies ext_call
       have contract_post:
         "value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo))
          \<and> list_all2 (value_has_type env) refUpdates
-             (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                  (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))"
+             (map (\<lambda>(ty, _). apply_subst tySubst ty)
+                  (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
         by simp
       from contract_post have ret_typed_apply:
         "value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo))"
         by simp
       from contract_post have ref_updates_typed:
         "list_all2 (value_has_type env) refUpdates
-           (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))"
+           (map (\<lambda>(ty, _). apply_subst tySubst ty)
+                (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
         by simp
 
       \<comment> \<open>Now build the ref-list information for apply_ref_updates_sound. \<close>
       \<comment> \<open>FI_TmArgs and IF_Args have matching Var/Ref positions. \<close>
       from fi_match have if_args_match:
-        "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+        "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
                    (FI_TmArgs funInfo) (IF_Args f)"
         unfolding fun_info_matches_interp_fun_def by simp
       have vor_match:
         "\<forall>i < length (IF_Args f).
-             snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+             snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> snd (FI_TmArgs funInfo ! i) = Ref"
       proof (intro allI impI)
         fix i assume i_lt: "i < length (IF_Args f)"
         with len_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
-        obtain n1 t1 v1 where fi_i: "FI_TmArgs funInfo ! i = (n1, t1, v1)"
+        obtain t1 v1 where fi_i: "FI_TmArgs funInfo ! i = (t1, v1)"
           by (cases "FI_TmArgs funInfo ! i") auto
         obtain n2 v2 where if_i: "(IF_Args f) ! i = (n2, v2)"
           by (cases "(IF_Args f) ! i") auto
         from if_args_match i_lt len_fi fi_i if_i have "v1 = v2"
           by (auto simp: list_all2_conv_all_nth)
-        thus "snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+        thus "snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> snd (FI_TmArgs funInfo ! i) = Ref"
           using fi_i if_i by simp
       qed
 
@@ -2428,19 +2431,19 @@ proof -
           Strategy: both filter-lengths equal the cardinality of the Ref-positions
           among [0 ..< length FI_TmArgs funInfo] = [0 ..< length (IF_Args f)]. \<close>
       have filter_FI_len:
-        "length (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)) = length idxs"
+        "length (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)) = length idxs"
       proof -
         \<comment> \<open>Step 1: count Ref-positions in FI_TmArgs by indexing. \<close>
         have count_FI:
-          "length (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))
-            = card {i. i < length (FI_TmArgs funInfo) \<and> snd (snd (FI_TmArgs funInfo ! i)) = Ref}"
+          "length (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))
+            = card {i. i < length (FI_TmArgs funInfo) \<and> snd (FI_TmArgs funInfo ! i) = Ref}"
         proof -
-          have "length (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))
+          have "length (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))
                 = card {i. i < length (FI_TmArgs funInfo) \<and>
-                            (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo ! i)}"
+                            (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo ! i)}"
             by (simp add: length_filter_conv_card)
           also have "\<dots> = card {i. i < length (FI_TmArgs funInfo) \<and>
-                                  snd (snd (FI_TmArgs funInfo ! i)) = Ref}"
+                                  snd (FI_TmArgs funInfo ! i) = Ref}"
             by (rule arg_cong[where f=card]) (auto simp: case_prod_unfold)
           finally show ?thesis .
         qed
@@ -2460,7 +2463,7 @@ proof -
         qed
         \<comment> \<open>Step 3: the two index-sets are equal (via vor_match + len_fi). \<close>
         have sets_eq:
-          "{i. i < length (FI_TmArgs funInfo) \<and> snd (snd (FI_TmArgs funInfo ! i)) = Ref}
+          "{i. i < length (FI_TmArgs funInfo) \<and> snd (FI_TmArgs funInfo ! i) = Ref}
             = {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
           using len_fi vor_match by auto
         show ?thesis
@@ -2480,7 +2483,7 @@ proof -
         "\<forall>j < length idxs.
             (fst (?refs ! j) < length (IS_Store state) \<and>
              type_at_path env (storeTyping ! (fst (?refs ! j))) (snd (?refs ! j))
-               = Some (apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! (idxs ! j))))))"
+               = Some (apply_subst tySubst (fst (FI_TmArgs funInfo ! (idxs ! j)))))"
       proof (intro allI impI)
         fix j assume j_lt: "j < length idxs"
         let ?i = "idxs ! j"
@@ -2488,9 +2491,9 @@ proof -
         with len_fi have i_lt_fi: "?i < length (FI_TmArgs funInfo)" by simp
         with len_argTms_fi have i_lt_argTms: "?i < length argTms" by simp
         from idxs_is_ref j_lt have if_i_ref: "snd ((IF_Args f) ! ?i) = Ref" by blast
-        with vor_match i_lt_if have fi_i_ref: "snd (snd (FI_TmArgs funInfo ! ?i)) = Ref"
+        with vor_match i_lt_if have fi_i_ref: "snd (FI_TmArgs funInfo ! ?i) = Ref"
           by blast
-        let ?paramTy_i = "fst (snd (FI_TmArgs funInfo ! ?i))"
+        let ?paramTy_i = "fst (FI_TmArgs funInfo ! ?i)"
 
         \<comment> \<open>lvals_sound at index ?i (outer form). \<close>
         from lvals_sound i_lt_fi fi_i_ref have
@@ -2514,7 +2517,7 @@ proof -
             = apply_subst tySubst paramTy_i. \<close>
         have paramTy_subset: "type_tyvars ?paramTy_i \<subseteq> set (FI_TyArgs funInfo)"
         proof -
-          have "?paramTy_i \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+          have "?paramTy_i \<in> fst ` set (FI_TmArgs funInfo)"
             using i_lt_fi by force
           from wf_env fn_lookup not_ghost have
             "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
@@ -2539,8 +2542,8 @@ proof -
 
       \<comment> \<open>Define tys as the contract's expected type list for refUpdates. \<close>
       define tys :: "CoreType list" where
-        tys_def: "tys = map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                            (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))"
+        tys_def: "tys = map (\<lambda>(ty, _). apply_subst tySubst ty)
+                            (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))"
 
       have tys_len: "length tys = length idxs"
         using tys_def filter_FI_len by simp
@@ -2620,17 +2623,17 @@ proof -
       \<comment> \<open>Apply: filter (Ref-only) FI_TmArgs = map (FI_TmArgs !) idxs_FI, where
           idxs_FI = filter (\<lambda>i. snd(snd(FI_TmArgs ! i)) = Ref) [0..<len]. \<close>
       have fi_filter_indexed:
-        "filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)
+        "filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)
           = map (\<lambda>i. FI_TmArgs funInfo ! i)
-                (filter (\<lambda>i. snd (snd (FI_TmArgs funInfo ! i)) = Ref)
+                (filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
                         [0 ..< length (FI_TmArgs funInfo)])"
-        using filter_via_indices[where P = "\<lambda>(_, _, vor). vor = Ref"
+        using filter_via_indices[where P = "\<lambda>(_, vor). vor = Ref"
                                    and xs = "FI_TmArgs funInfo"]
         by (auto simp: case_prod_unfold)
 
       \<comment> \<open>idxs_FI = idxs (via vor_match + len_fi). \<close>
       have idxs_FI_eq_idxs:
-        "filter (\<lambda>i. snd (snd (FI_TmArgs funInfo ! i)) = Ref)
+        "filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
                 [0 ..< length (FI_TmArgs funInfo)]
           = idxs"
       proof -
@@ -2638,12 +2641,12 @@ proof -
           using len_fi by simp
         have pred_eq:
           "\<And>i. i < length (IF_Args f) \<Longrightarrow>
-                snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                snd (FI_TmArgs funInfo ! i) = Ref
                 \<longleftrightarrow> snd ((IF_Args f) ! i) = Ref"
           using vor_match by blast
-        have "filter (\<lambda>i. snd (snd (FI_TmArgs funInfo ! i)) = Ref)
+        have "filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
                      [0 ..< length (FI_TmArgs funInfo)]
-            = filter (\<lambda>i. snd (snd (FI_TmArgs funInfo ! i)) = Ref)
+            = filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
                      [0 ..< length (IF_Args f)]"
           using len_upt by simp
         also have "\<dots> = filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref)
@@ -2653,32 +2656,32 @@ proof -
       qed
 
       have fi_filter_eq:
-        "filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)
+        "filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)
           = map (\<lambda>i. FI_TmArgs funInfo ! i) idxs"
         using fi_filter_indexed idxs_FI_eq_idxs by simp
 
       have tys_nth:
         "\<forall>j < length idxs. tys ! j
-          = apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! (idxs ! j))))"
+          = apply_subst tySubst (fst (FI_TmArgs funInfo ! (idxs ! j)))"
       proof (intro allI impI)
         fix j assume j_lt: "j < length idxs"
         have "tys ! j
-            = ((map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                    (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+            = ((map (\<lambda>(ty, _). apply_subst tySubst ty)
+                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
           unfolding tys_def by simp
-        also have "\<dots> = ((map (\<lambda>(_, ty, _). apply_subst tySubst ty)
+        also have "\<dots> = ((map (\<lambda>(ty, _). apply_subst tySubst ty)
                               (map (\<lambda>i. FI_TmArgs funInfo ! i) idxs)) ! j)"
           using fi_filter_eq by simp
-        also have "\<dots> = (\<lambda>(_, ty, _). apply_subst tySubst ty)
+        also have "\<dots> = (\<lambda>(ty, _). apply_subst tySubst ty)
                           ((map (\<lambda>i. FI_TmArgs funInfo ! i) idxs) ! j)"
           using j_lt by simp
-        also have "\<dots> = (\<lambda>(_, ty, _). apply_subst tySubst ty)
+        also have "\<dots> = (\<lambda>(ty, _). apply_subst tySubst ty)
                           (FI_TmArgs funInfo ! (idxs ! j))"
           using j_lt by simp
-        also have "\<dots> = apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! (idxs ! j))))"
+        also have "\<dots> = apply_subst tySubst (fst (FI_TmArgs funInfo ! (idxs ! j)))"
           by (simp add: case_prod_beta)
         finally show "tys ! j
-                        = apply_subst tySubst (fst (snd (FI_TmArgs funInfo ! (idxs ! j))))" .
+                        = apply_subst tySubst (fst (FI_TmArgs funInfo ! (idxs ! j)))" .
       qed
 
       \<comment> \<open>refs_ok for apply_ref_updates_sound: each ?refs ! j has valid addr/path
@@ -2697,13 +2700,13 @@ proof -
         fix j assume j_lt: "j < length refUpdates"
         from ref_updates_typed have len_eq:
           "length refUpdates
-            = length (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                          (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))"
+            = length (map (\<lambda>(ty, _). apply_subst tySubst ty)
+                          (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
           by (auto dest: list_all2_lengthD)
         from ref_updates_typed j_lt have
           "value_has_type env (refUpdates ! j)
-             ((map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                   (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+             ((map (\<lambda>(ty, _). apply_subst tySubst ty)
+                   (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
           using list_all2_nthD by fastforce
         thus "value_has_type env (refUpdates ! j) (tys ! j)"
           unfolding tys_def by simp

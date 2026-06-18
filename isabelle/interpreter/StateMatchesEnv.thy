@@ -3,14 +3,19 @@ theory StateMatchesEnv
 begin
 
 (* This helper builds the type environment in which a function body should typecheck.
-   Used in fun_info_matches_interp_fun to check that the function body (given in 
+   Used in fun_info_matches_interp_fun to check that the function body (given in
    the InterpState) matches the function's type (given in the TypeEnv).
+
+   The parameter names are NOT part of FunInfo (they belong with the definition, not
+   the type), so they are supplied explicitly via `names`. In practice these come from
+   the matching InterpFun's IF_Args (see fun_info_matches_interp_fun).
 
    Since this is used for the interpreter (specifically, state_matches_env), only
    NotGhost functions are covered.
 
    Most fields are inherited from the surrounding env. The changes are:
-   - TE_LocalVars: replaced with the function's formal args and their types.
+   - TE_LocalVars: replaced with the function's formal args (names from `names`,
+     types from FI_TmArgs).
    - TE_GhostLocals: empty (ghost function args not yet supported).
    - TE_ConstLocals: Var args are const initially; Ref args are not.
    - TE_TypeVars: replaced with the function's type variables.
@@ -18,14 +23,14 @@ begin
    - TE_ReturnType: set to the function's declared return type.
    - TE_FunctionGhost: set to NotGhost.
 *)
-definition body_env_for :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv" where
-  "body_env_for env funInfo =
+definition body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv" where
+  "body_env_for env names funInfo =
     env \<lparr>
-      TE_LocalVars := fmap_of_list (map (\<lambda>(name, ty, _). (name, ty)) (FI_TmArgs funInfo)),
+      TE_LocalVars := fmap_of_list (zip names (map fst (FI_TmArgs funInfo))),
       TE_GhostLocals := {||},
       TE_ConstLocals := fset_of_list
-        (map (\<lambda>(name, _, _). name)
-             (filter (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo))),
+        (map fst
+             (filter (\<lambda>(_, vor). vor = Var) (zip names (map snd (FI_TmArgs funInfo))))),
       TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_ReturnType := FI_ReturnType funInfo,
@@ -36,12 +41,12 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTy
 
 (* Lemma: body_env_for does not depend on TE_ProofGoal. *)
 lemma body_env_for_input_TE_ProofGoal_irrelevant [simp]:
-  "body_env_for (env \<lparr> TE_ProofGoal := g \<rparr>) funInfo = body_env_for env funInfo"
+  "body_env_for (env \<lparr> TE_ProofGoal := g \<rparr>) names funInfo = body_env_for env names funInfo"
   by (simp add: body_env_for_def)
 
 (* Lemma: body_env_for does not depend on TE_ProofTopLevel. *)
 lemma body_env_for_input_TE_ProofTopLevel_irrelevant [simp]:
-  "body_env_for (env \<lparr> TE_ProofTopLevel := b \<rparr>) funInfo = body_env_for env funInfo"
+  "body_env_for (env \<lparr> TE_ProofTopLevel := b \<rparr>) names funInfo = body_env_for env names funInfo"
   by (simp add: body_env_for_def)
 
 
@@ -103,7 +108,7 @@ definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow>
        \<comment> \<open>Term arguments (vals) have the substituted parameter types.\<close>
        list_all2 (value_has_type env)
                  vals
-                 (map (\<lambda>(_, ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
+                 (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
        \<longrightarrow>
        (case externFun world vals of (newWorld, refUpdates, retVal) \<Rightarrow>
           \<comment> \<open>Return value has the substituted return type.\<close>
@@ -111,8 +116,8 @@ definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow>
           \<comment> \<open>One ref update per Ref parameter, in IF_Args order, at the substituted type.\<close>
           list_all2 (value_has_type env)
                     refUpdates
-                    (map (\<lambda>(_, ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, _, vor). vor = Ref) (FI_TmArgs funInfo)))))"
+                    (map (\<lambda>(ty, _). apply_subst tySubst ty)
+                         (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))))"
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed for typechecking the function body, if there is one.
@@ -121,17 +126,20 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
   "fun_info_matches_interp_fun env funInfo interpFun =
     \<comment> \<open>Type arguments match\<close>
     (FI_TyArgs funInfo = IF_TyArgs interpFun \<and>
-    \<comment> \<open>Term arguments match\<close>
-    list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+    \<comment> \<open>Term arguments match: same length, and the Var/Ref markers agree.\<close>
+    list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
+    \<comment> \<open>Parameter names are distinct.\<close>
+    distinct (map fst (IF_Args interpFun)) \<and>
     \<comment> \<open>Impure flag matches\<close>
     FI_Impure funInfo = IF_Impure interpFun \<and>
     \<comment> \<open>Body certification: for Babylon functions, the body statement list
-        typechecks in body_env_for env funInfo; for external functions, the
-        extern contract holds.\<close>
+        typechecks in an appropriate env; for external functions, the extern
+        contract holds.\<close>
     (case IF_Body interpFun of
        Inl bodyStmts \<Rightarrow>
-         core_statement_list_type (body_env_for env funInfo) NotGhost bodyStmts \<noteq> None
+         core_statement_list_type
+           (body_env_for env (map fst (IF_Args interpFun)) funInfo) NotGhost bodyStmts \<noteq> None
      | Inr externFun \<Rightarrow>
          extern_fun_contract env funInfo externFun))"
 
@@ -354,9 +362,9 @@ lemma body_env_for_well_formed:
   assumes wf: "tyenv_well_formed env"
       and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
       and not_ghost: "FI_Ghost funInfo = NotGhost"
-  shows "tyenv_well_formed (body_env_for env funInfo)"
+  shows "tyenv_well_formed (body_env_for env names funInfo)"
 proof -
-  let ?be = "body_env_for env funInfo"
+  let ?be = "body_env_for env names funInfo"
   let ?inner = "env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>"
   let ?inner_rt = "env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                           TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>"
@@ -399,7 +407,6 @@ proof -
     ctors_by_type: "tyenv_ctors_by_type_consistent env" and
     fun_types_wk: "tyenv_fun_types_well_kinded env" and
     fun_tyvars_distinct: "tyenv_fun_tyvars_distinct env" and
-    fun_param_names_distinct: "tyenv_fun_param_names_distinct env" and
     fun_ghost: "tyenv_fun_ghost_constraint env" and
     nonghost_payloads: "tyenv_nonghost_payloads_runtime env" and
     ghost_dt_subset: "tyenv_ghost_datatypes_subset env" and
@@ -409,7 +416,7 @@ proof -
 
   \<comment> \<open>FI_TmArgs types are well-kinded in ?inner. \<close>
   from fun_types_wk fn_lookup have args_wk_inner:
-    "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). is_well_kinded ?inner ty"
+    "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). is_well_kinded ?inner ty"
     unfolding tyenv_fun_types_well_kinded_def by auto
   \<comment> \<open>FI_ReturnType is well-kinded in ?inner. \<close>
   from fun_types_wk fn_lookup have ret_wk_inner:
@@ -417,7 +424,7 @@ proof -
     unfolding tyenv_fun_types_well_kinded_def by auto
   \<comment> \<open>FI_TmArgs types are runtime in ?inner_rt (using non-ghost). \<close>
   from fun_ghost fn_lookup not_ghost have args_rt_inner:
-    "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). is_runtime_type ?inner_rt ty"
+    "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). is_runtime_type ?inner_rt ty"
     unfolding tyenv_fun_ghost_constraint_def Let_def by auto
   \<comment> \<open>FI_ReturnType is runtime in ?inner_rt (using non-ghost). \<close>
   from fun_ghost fn_lookup not_ghost have ret_rt_inner:
@@ -430,9 +437,10 @@ proof -
   proof (intro conjI allI impI)
     fix name ty
     assume "fmlookup (TE_LocalVars ?be) name = Some ty"
-    hence "(name, ty) \<in> set (map (\<lambda>(n, t, _). (n, t)) (FI_TmArgs funInfo))"
+    hence "(name, ty) \<in> set (zip names (map fst (FI_TmArgs funInfo)))"
       by (auto simp: body_env_for_def fmlookup_of_list weak_map_of_SomeI dest: map_of_SomeD)
-    then obtain b where in_args: "(name, ty, b) \<in> set (FI_TmArgs funInfo)" by auto
+    hence in_args: "ty \<in> fst ` set (FI_TmArgs funInfo)"
+      using set_zip_rightD by fastforce
     have "is_well_kinded ?inner ty"
       using args_wk_inner in_args by force
     thus "is_well_kinded ?be ty" using wk_inner_eq by simp
@@ -455,9 +463,10 @@ proof -
     assume "fmlookup (TE_LocalVars ?be) name = Some ty
             \<and> name |\<notin>| TE_GhostLocals ?be"
     hence lv: "fmlookup (TE_LocalVars ?be) name = Some ty" by simp
-    from lv have "(name, ty) \<in> set (map (\<lambda>(n, t, _). (n, t)) (FI_TmArgs funInfo))"
+    from lv have "(name, ty) \<in> set (zip names (map fst (FI_TmArgs funInfo)))"
       by (auto simp: body_env_for_def fmlookup_of_list weak_map_of_SomeI dest: map_of_SomeD)
-    then obtain b where in_args: "(name, ty, b) \<in> set (FI_TmArgs funInfo)" by auto
+    hence in_args: "ty \<in> fst ` set (FI_TmArgs funInfo)"
+      using set_zip_rightD by fastforce
     have "is_runtime_type ?inner_rt ty"
       using args_rt_inner in_args by force
     thus "is_runtime_type ?be ty" using rt_inner_eq by simp
@@ -534,12 +543,12 @@ proof -
     hence info_lk: "fmlookup (TE_Functions env) funName = Some info"
       by (simp add: body_env_for_def)
     with fun_types_wk have
-      args_wk: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+      args_wk: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
                   is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty"
       and ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
                                   (FI_ReturnType info)"
       unfolding tyenv_fun_types_well_kinded_def by auto
-    show "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
               is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
           is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info)"
       using args_wk ret_wk wk_scope_eq by simp
@@ -548,11 +557,6 @@ proof -
   \<comment> \<open>(10) tyenv_fun_tyvars_distinct ?be: TE_Functions inherited. \<close>
   have c10: "tyenv_fun_tyvars_distinct ?be"
     using fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(11) tyenv_fun_param_names_distinct ?be: TE_Functions inherited. \<close>
-  have c11: "tyenv_fun_param_names_distinct ?be"
-    using fun_param_names_distinct unfolding tyenv_fun_param_names_distinct_def
     by (simp add: body_env_for_def)
 
   \<comment> \<open>(12) tyenv_fun_ghost_constraint ?be: inner override, TE_Functions inherited. \<close>
@@ -565,14 +569,14 @@ proof -
     from info_lk_be have info_lk: "fmlookup (TE_Functions env) funName = Some info"
       by (simp add: body_env_for_def)
     from fun_ghost info_lk ng_info have
-      "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+      "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
             is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                     TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
        is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
       unfolding tyenv_fun_ghost_constraint_def Let_def by auto
-    thus "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    thus "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
               is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
            is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
@@ -617,7 +621,7 @@ proof -
     using dt_nonempty unfolding tyenv_datatypes_nonempty_def
     by (simp add: body_env_for_def)
 
-  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
+  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 
@@ -634,7 +638,7 @@ lemma body_env_for_cong:
       and "TE_DataCtors env1 = TE_DataCtors env2"
       and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
       and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
-  shows "body_env_for env1 funInfo = body_env_for env2 funInfo"
+  shows "body_env_for env1 names funInfo = body_env_for env2 names funInfo"
   using assms unfolding body_env_for_def by simp
 
 (* fun_info_matches_interp_fun congruence: agreement on the global fields plus
@@ -655,7 +659,7 @@ lemma fun_info_matches_interp_fun_cong_env:
   shows "fun_info_matches_interp_fun env1 funInfo interpFun =
          fun_info_matches_interp_fun env2 funInfo interpFun"
 proof -
-  have body_eq: "body_env_for env1 funInfo = body_env_for env2 funInfo"
+  have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
     by (rule body_env_for_cong[OF gv gg fn dt dc dcbt gd])
   have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
     by (rule is_well_kinded_cong_env[OF tv dt])

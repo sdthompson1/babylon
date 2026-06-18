@@ -118,10 +118,10 @@ proof -
                   case core_term_type env ghost tm of None \<Rightarrow> False
                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
                 tmArgs
-                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length tmArgs.
-                snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                snd (FI_TmArgs funInfo ! i) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
@@ -129,14 +129,14 @@ proof -
   \<comment> \<open>Signature facts (distinctness + tyvar containment) for substitution composition.\<close>
   have distinct_tyargs: "distinct (FI_TyArgs funInfo)"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
-  have fi_args_wk: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+  have fi_args_wk: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
             is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fi_ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
   proof
-    fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    fix t assume "t \<in> fst ` set (FI_TmArgs funInfo)"
     with fi_args_wk have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
     from is_well_kinded_type_tyvars_subset[OF this]
     show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
@@ -165,19 +165,19 @@ proof -
     using ty_eq apply_subst_compose_zip[OF len_ty[symmetric] fi_ret_tyvars distinct_tyargs] by simp
 
   \<comment> \<open>The substituted expected types are the recomputation from the substituted ty-args.\<close>
-  let ?exps0 = "map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty) (FI_TmArgs funInfo)"
-  let ?expsS = "map (\<lambda>(_, ty, _). apply_subst ?subZip ty) (FI_TmArgs funInfo)"
+  let ?exps0 = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty) (FI_TmArgs funInfo)"
+  let ?expsS = "map (\<lambda>(ty, _). apply_subst ?subZip ty) (FI_TmArgs funInfo)"
   have exps_recompute: "?expsS = map (apply_subst subst) ?exps0"
   proof -
-    have "?expsS = map (\<lambda>(_, ty, _). apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
+    have "?expsS = map (\<lambda>(ty, _). apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (rule map_cong[OF refl])
       fix x assume "x \<in> set (FI_TmArgs funInfo)"
-      obtain n t v where x_eq: "x = (n, t, v)" by (cases x)
-      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+      obtain t v where x_eq: "x = (t, v)" by (cases x)
+      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> fst ` set (FI_TmArgs funInfo)"
         by (force simp: rev_image_eqI)
       with fi_args_tyvars have "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by blast
-      thus "(case x of (_, ty, _) \<Rightarrow> apply_subst ?subZip ty)
-            = (case x of (_, ty, _) \<Rightarrow> apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty))"
+      thus "(case x of (ty, _) \<Rightarrow> apply_subst ?subZip ty)
+            = (case x of (ty, _) \<Rightarrow> apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty))"
         using x_eq apply_subst_compose_zip[OF len_ty[symmetric] _ distinct_tyargs] by simp
     qed
     also have "\<dots> = map (apply_subst subst) ?exps0" by (simp add: case_prod_unfold comp_def)
@@ -214,12 +214,12 @@ proof -
   \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact) under
       the term substitution.\<close>
   have ref_lv_subst: "\<forall>i < length (map (apply_subst_to_term subst) tmArgs).
-                        snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                        snd (FI_TmArgs funInfo ! i) = Ref
                           \<longrightarrow> is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)
                               \<and> ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length (map (apply_subst_to_term subst) tmArgs)"
-      and ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+      and ref: "snd (FI_TmArgs funInfo ! i) = Ref"
     hence i_tm: "i < length tmArgs" by simp
     have "is_writable_lvalue env (tmArgs ! i)" and "ghost_lvalue_ok env ghost (tmArgs ! i)"
       using ref_lv i_tm ref by simp_all
@@ -236,14 +236,14 @@ proof -
                  | Ref \<Rightarrow> is_writable_lvalue env tm
                           \<and> ghost_lvalue_ok env ghost tm
                           \<and> core_term_type env ghost tm = Some expectedTy"
-  let ?zts = "zip (map (apply_subst_to_term subst) tmArgs) (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo))"
+  let ?zts = "zip (map (apply_subst_to_term subst) tmArgs) (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
   have len_zts: "length ?zts = length ?expsS" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsS ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_tm: "i < length tmArgs" using len_tm by simp
     with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain n ti vor where fi_arg: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+    obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = ((map (apply_subst_to_term subst) tmArgs) ! i, vor)"
       using i_tm i_lt_fi fi_arg by simp

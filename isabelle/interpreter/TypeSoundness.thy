@@ -38,14 +38,14 @@ theorem type_soundness:
        list_all2 (\<lambda>tm expectedTy.
            case core_term_type env NotGhost tm of
              None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-         argTms (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+         argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo));
        retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo);
        length tyArgs = length (FI_TyArgs funInfo);
        list_all (is_well_kinded env) tyArgs;
        list_all (is_runtime_type env) tyArgs;
        \<forall>i < length argTms.
-         (snd (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+         (snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
           is_writable_lvalue env (argTms ! i))
      \<rbrakk> \<Longrightarrow> sound_function_call_result state env storeTyping retTy (interp_function_call fuel state fnName tyArgs argTms)"
 using assms
@@ -306,14 +306,14 @@ next
           fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
           len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
           tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
-          all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
+          all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
           not_impure: "\<not> FI_Impure funInfo" and
           len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
           tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
           ghost_ok2: "FI_Ghost funInfo \<noteq> Ghost"
           by (auto simp: Let_def split: option.splits if_splits)
         let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-        let ?expectedArgTypes = "map (\<lambda>(_, ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+        let ?expectedArgTypes = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
         from typing CoreTm_FunctionCall fn_lookup len_tyargs tyargs_wk all_var not_impure
              len_tmargs tyargs_rt ghost_ok2 have
           args_check: "list_all2 (\<lambda>tm expectedTy.
@@ -325,17 +325,17 @@ next
           using ghost_ok2 by (cases "FI_Ghost funInfo") auto
         \<comment> \<open>Vacuous lvalue obligation: all args are Var. \<close>
         have ref_lvalues: "\<forall>i < length tmArgs.
-                            snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                            snd (FI_TmArgs funInfo ! i) = Ref
                               \<longrightarrow> is_writable_lvalue env (tmArgs ! i)"
         proof (intro allI impI)
           fix i assume i_lt: "i < length tmArgs"
-            and is_ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+            and is_ref: "snd (FI_TmArgs funInfo ! i) = Ref"
           with len_tmargs have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-          obtain n ti vor where fi_arg: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+          obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
             by (cases "FI_TmArgs funInfo ! i") auto
           from is_ref fi_arg have vor_eq: "vor = Ref" by simp
           from all_var i_lt_fi fi_arg
-          have "(\<lambda>(_, _, vor). vor = Var) (n, ti, vor)"
+          have "(\<lambda>(_, vor). vor = Var) (ti, vor)"
             by (metis list_all_length)
           hence "vor = Var" by simp
           with vor_eq have False by simp
@@ -350,14 +350,14 @@ next
                 list_all2 (\<lambda>tm expectedTy.
                     case core_term_type env' NotGhost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  argTms' (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
+                  argTms' (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
                                (FI_TmArgs funInfo')) \<Longrightarrow>
                 retTy' = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) (FI_ReturnType funInfo') \<Longrightarrow>
                 length tyArgs' = length (FI_TyArgs funInfo') \<Longrightarrow>
                 list_all (is_well_kinded env') tyArgs' \<Longrightarrow>
                 list_all (is_runtime_type env') tyArgs' \<Longrightarrow>
                 \<forall>i < length argTms'.
-                  (snd (snd (FI_TmArgs funInfo' ! i)) = Ref \<longrightarrow>
+                  (snd (FI_TmArgs funInfo' ! i) = Ref \<longrightarrow>
                    is_writable_lvalue env' (argTms' ! i)) \<Longrightarrow>
                 sound_function_call_result state' env' storeTyping' retTy' (interp_function_call fuel state' fnName' tyArgs' argTms')"
           using Suc.IH(6) by simp
@@ -375,7 +375,7 @@ next
             fi_match: "fun_info_matches_interp_fun env funInfo interpFun"
             unfolding state_matches_env_def funs_exist_in_state_def
             using case_optionE by blast
-          from fi_match have vor_match: "list_all2 (\<lambda>(name1, _, vor1) (name2, vor2). name1 = name2 \<and> vor1 = vor2)
+          from fi_match have vor_match: "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
                                       (FI_TmArgs funInfo) (IF_Args interpFun)"
             unfolding fun_info_matches_interp_fun_def by auto
           from vor_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
@@ -385,7 +385,7 @@ next
             have "\<And>i. i < length (IF_Args interpFun) \<Longrightarrow> snd (IF_Args interpFun ! i) = Var"
             proof -
               fix i assume i_bound: "i < length (IF_Args interpFun)"
-              obtain n a b where nab: "FI_TmArgs funInfo ! i = (n, a, b)"
+              obtain a b where nab: "FI_TmArgs funInfo ! i = (a, b)"
                 by (cases "FI_TmArgs funInfo ! i") auto
               from vor_match i_bound len_eq nab
               have "b = snd (IF_Args interpFun ! i)"
@@ -842,14 +842,14 @@ next
                 list_all2 (\<lambda>tm expectedTy.
                     case core_term_type env0 NotGhost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  argTms0 (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty)
+                  argTms0 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty)
                                (FI_TmArgs funInfo0)) \<Longrightarrow>
                 retTy0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) (FI_ReturnType funInfo0) \<Longrightarrow>
                 length tyArgs0 = length (FI_TyArgs funInfo0) \<Longrightarrow>
                 list_all (is_well_kinded env0) tyArgs0 \<Longrightarrow>
                 list_all (is_runtime_type env0) tyArgs0 \<Longrightarrow>
                 \<forall>i < length argTms0.
-                  (snd (snd (FI_TmArgs funInfo0 ! i)) = Ref \<longrightarrow>
+                  (snd (FI_TmArgs funInfo0 ! i) = Ref \<longrightarrow>
                    is_writable_lvalue env0 (argTms0 ! i)) \<Longrightarrow>
                 sound_function_call_result state0 env0 storeTyping0 retTy0 (interp_function_call fuel state0 fnName0 tyArgs0 argTms0)"
         using Suc.IH(6) by simp
@@ -1498,10 +1498,10 @@ next
                            case core_term_type env NotGhost tm of
                              None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
                          argTms
-                         (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                         (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                               (FI_TmArgs funInfo))" and
             ref_lvalues: "\<forall>i < length argTms.
-                            snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                            snd (FI_TmArgs funInfo ! i) = Ref
                               \<longrightarrow> is_writable_lvalue env (argTms ! i)"
             by blast
           have fn_not_ghost': "FI_Ghost funInfo = NotGhost"
@@ -1692,10 +1692,10 @@ next
                            case core_term_type env NotGhost tm of
                              None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
                          argTms
-                         (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                         (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                               (FI_TmArgs funInfo))" and
             ref_lvalues: "\<forall>i < length argTms.
-                            snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                            snd (FI_TmArgs funInfo ! i) = Ref
                               \<longrightarrow> is_writable_lvalue env (argTms ! i)"
             by blast
           have fn_not_ghost': "FI_Ghost funInfo = NotGhost"

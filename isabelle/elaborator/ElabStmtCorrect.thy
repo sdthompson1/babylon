@@ -272,10 +272,10 @@ proof -
                   case core_term_type ?envE ghost tm of None \<Rightarrow> False
                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
                 argTms
-                (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length argTms.
-                snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                snd (FI_TmArgs funInfo ! i) = Ref
                   \<longrightarrow> is_writable_lvalue ?envE (argTms ! i)
                       \<and> ghost_lvalue_ok ?envE ghost (argTms ! i)"
     by blast
@@ -285,14 +285,14 @@ proof -
   \<comment> \<open>Signature facts for the substitution-composition step.\<close>
   have distinct_tyargs: "distinct (FI_TyArgs funInfo)"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
-  have fi_args_wk: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+  have fi_args_wk: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
             is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fi_ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
   proof
-    fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    fix t assume "t \<in> fst ` set (FI_TmArgs funInfo)"
     with fi_args_wk have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
     from is_well_kinded_type_tyvars_subset[OF this]
     show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
@@ -336,20 +336,20 @@ proof -
   \<comment> \<open>Per-argument check survives clearing: the cleared arg term typechecks in env to
       the cleared expected type, which is the recomputed expected type from cleared
       ty-args (substitution composition).\<close>
-  let ?exps0 = "map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty) (FI_TmArgs funInfo)"
-  let ?expsC = "map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ty) (FI_TmArgs funInfo)"
+  let ?exps0 = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty) (FI_TmArgs funInfo)"
+  let ?expsC = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ty) (FI_TmArgs funInfo)"
   have exps_recompute: "?expsC = map ?ct ?exps0"
   proof -
-    have "?expsC = map (\<lambda>(_, ty, _). apply_subst ?cs
+    have "?expsC = map (\<lambda>(ty, _). apply_subst ?cs
             (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (rule map_cong[OF refl])
       fix x assume "x \<in> set (FI_TmArgs funInfo)"
-      obtain n t v where x_eq: "x = (n, t, v)" by (cases x)
-      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+      obtain t v where x_eq: "x = (t, v)" by (cases x)
+      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> fst ` set (FI_TmArgs funInfo)"
         by (force simp: rev_image_eqI)
       with fi_args_tyvars have "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by blast
-      thus "(case x of (_, ty, _) \<Rightarrow> apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ty)
-            = (case x of (_, ty, _) \<Rightarrow> apply_subst ?cs (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty))"
+      thus "(case x of (ty, _) \<Rightarrow> apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ty)
+            = (case x of (ty, _) \<Rightarrow> apply_subst ?cs (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty))"
         using x_eq apply_subst_compose_zip[OF len_ty[symmetric] _ distinct_tyargs]
         unfolding clear_metavars_type_def by simp
     qed
@@ -389,11 +389,11 @@ proof -
   \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact)
       under clearing.\<close>
   have ref_lv_clear: "\<forall>i < length (map ?ctm argTms).
-                        snd (snd (FI_TmArgs funInfo ! i)) = Ref
+                        snd (FI_TmArgs funInfo ! i) = Ref
                           \<longrightarrow> is_writable_lvalue env ((map ?ctm argTms) ! i)
                               \<and> ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
   proof (intro allI impI)
-    fix i assume i_lt: "i < length (map ?ctm argTms)" and ref: "snd (snd (FI_TmArgs funInfo ! i)) = Ref"
+    fix i assume i_lt: "i < length (map ?ctm argTms)" and ref: "snd (FI_TmArgs funInfo ! i) = Ref"
     hence i_lt_tm: "i < length argTms" by simp
     have "is_writable_lvalue ?envE (argTms ! i)" and "ghost_lvalue_ok ?envE ghost (argTms ! i)"
       using ref_lv i_lt_tm ref by simp_all
@@ -413,14 +413,14 @@ proof -
                  | Ref \<Rightarrow> is_writable_lvalue env tm
                           \<and> ghost_lvalue_ok env ghost tm
                           \<and> core_term_type env ghost tm = Some expectedTy"
-  let ?zts = "zip (map ?ctm argTms) (map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo))"
+  let ?zts = "zip (map ?ctm argTms) (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
   have len_zts: "length ?zts = length ?expsC" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsC ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length argTms" using len_tm by simp
     with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain n ti vor where fi_arg: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+    obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = ((map ?ctm argTms) ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp
@@ -520,12 +520,12 @@ lemma resolve_impure_callee_correct:
           \<and> (ghost = NotGhost \<longrightarrow>
                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
           \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
-          \<and> expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
+          \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                               (FI_TmArgs funInfo)
-          \<and> varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)
+          \<and> varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)
           \<and> retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)
           \<and> distinct (FI_TyArgs funInfo)
-          \<and> (\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo))
+          \<and> (\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo))
           \<and> type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
 proof -
   have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
@@ -543,9 +543,9 @@ proof -
     resolve_eq: "resolve_type_args env elabEnv ghost nloc fnName (FI_TyArgs funInfo) tyArgs next_mv
                  = Inr (newTyArgs, next_mv1)" and
     next_mv_eq: "next_mv' = next_mv1" and
-    expArg_eq: "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
+    expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
-    vor_eq: "varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)" and
+    vor_eq: "varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)" and
     ret_eq: "retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: resolve_impure_callee_def Let_def
              split: sum.splits prod.splits if_splits)
@@ -558,14 +558,14 @@ proof -
   \<comment> \<open>Signature tyvars are distinct and the component types only mention them.\<close>
   have distinct_tyargs: "distinct (FI_TyArgs funInfo)"
     using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
-  have fi_args_wk: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+  have fi_args_wk: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
             is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
     using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fi_ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
     using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
   proof
-    fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    fix t assume "t \<in> fst ` set (FI_TmArgs funInfo)"
     with fi_args_wk have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
     from is_well_kinded_type_tyvars_subset[OF this]
     show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
@@ -789,12 +789,12 @@ proof -
     newTyArgs_rt1: "ghost = NotGhost \<longrightarrow>
                       list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) newTyArgs" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
-    expArg_eq: "expArgTypes = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
+    expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
-    vor_eq: "varOrRefs = map (\<lambda>(_, _, vor). vor) (FI_TmArgs funInfo)" and
+    vor_eq: "varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)" and
     ret0_eq: "retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)" and
     distinct_tyargs: "distinct (FI_TyArgs funInfo)" and
-    fi_args_tyvars: "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" and
+    fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" and
     fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
     by blast
 
@@ -870,15 +870,15 @@ proof -
   \<comment> \<open>Expected types well-kinded / runtime at ?env' (each is apply_subst of a param type).\<close>
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
   proof -
-    have fi_args_wk_inner: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+    have fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
             is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
       using wf' fn_lookup unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def
       by (simp add: extend_env_with_tyvars_def)
-    have "list_all (\<lambda>(_, ty, _). is_well_kinded ?env'
+    have "list_all (\<lambda>(ty, _). is_well_kinded ?env'
             (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix n t v assume "(n, t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
+      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
+      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_wk_inner
       have "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
       thus "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
@@ -890,17 +890,17 @@ proof -
   proof
     assume ng: "ghost = NotGhost"
     hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
-    have fi_args_rt_inner: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+    have fi_args_rt_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
             is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
       using wf' fn_lookup fg_ng unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def
       by (simp add: extend_env_with_tyvars_def Let_def)
     have tyargs_rt: "list_all (is_runtime_type ?env') newTyArgs" using newTyArgs_rt ng by simp
-    have "list_all (\<lambda>(_, ty, _). is_runtime_type ?env'
+    have "list_all (\<lambda>(ty, _). is_runtime_type ?env'
             (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix n t v assume "(n, t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
+      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
+      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_rt_inner
       have "is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
@@ -970,30 +970,30 @@ proof -
                       = fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst finalSubst) newTyArgs))"
     using tyargs_eq by simp
   have exp_recompute: "map (apply_subst finalSubst) expArgTypes
-                       = map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
+                       = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
                              (FI_TmArgs funInfo)"
   proof -
     have "map (apply_subst finalSubst) expArgTypes
             = map (apply_subst finalSubst)
-                  (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
+                  (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                        (FI_TmArgs funInfo))"
       using expArg_eq by simp
-    also have "\<dots> = map (\<lambda>(_, ty, _). apply_subst finalSubst
+    also have "\<dots> = map (\<lambda>(ty, _). apply_subst finalSubst
                           (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty))
                         (FI_TmArgs funInfo)"
       by (simp add: case_prod_unfold comp_def)
-    also have "\<dots> = map (\<lambda>(_, ty, _). apply_subst
+    also have "\<dots> = map (\<lambda>(ty, _). apply_subst
                           (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst finalSubst) newTyArgs))) ty)
                         (FI_TmArgs funInfo)"
     proof (rule map_cong[OF refl])
       fix x assume "x \<in> set (FI_TmArgs funInfo)"
-      obtain n t v where x_eq: "x = (n, t, v)" by (cases x)
-      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+      obtain t v where x_eq: "x = (t, v)" by (cases x)
+      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> fst ` set (FI_TmArgs funInfo)"
         by (force simp: rev_image_eqI)
       with fi_args_tyvars have t_tyvars: "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by blast
-      show "(case x of (_, ty, _) \<Rightarrow> apply_subst finalSubst
+      show "(case x of (ty, _) \<Rightarrow> apply_subst finalSubst
                 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty))
-            = (case x of (_, ty, _) \<Rightarrow> apply_subst
+            = (case x of (ty, _) \<Rightarrow> apply_subst
                 (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst finalSubst) newTyArgs))) ty)"
         using x_eq apply_subst_compose_zip[OF len_tyargs[symmetric] t_tyvars distinct_tyargs] by simp
     qed
@@ -1058,7 +1058,7 @@ proof -
                     \<and> ghost_lvalue_ok ?env' ghost tm
                     \<and> core_term_type ?env' ghost tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
-         (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
+         (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
               (FI_TmArgs funInfo))"
     using args_checked exp_recompute by simp
 

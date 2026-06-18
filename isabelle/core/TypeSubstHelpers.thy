@@ -434,7 +434,6 @@ proof -
     callee_ctors_by_type: "tyenv_ctors_by_type_consistent calleeEnv" and
     callee_fun_types_wk: "tyenv_fun_types_well_kinded calleeEnv" and
     callee_fun_tyvars_distinct: "tyenv_fun_tyvars_distinct calleeEnv" and
-    callee_fun_param_names_distinct: "tyenv_fun_param_names_distinct calleeEnv" and
     callee_fun_ghost: "tyenv_fun_ghost_constraint calleeEnv" and
     callee_nonghost_payloads: "tyenv_nonghost_payloads_runtime calleeEnv" and
     callee_ghost_dt_subset: "tyenv_ghost_datatypes_subset calleeEnv" and
@@ -580,12 +579,12 @@ proof -
     hence info_lk: "fmlookup (TE_Functions calleeEnv) funName = Some info"
       by (simp add: apply_subst_to_callee_env_def)
     with callee_fun_types_wk have
-      args_wk: "\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+      args_wk: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
                   is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty"
       and ret_wk_inner: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
                                   (FI_ReturnType info)"
       unfolding tyenv_fun_types_well_kinded_def by auto
-    show "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
               is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
           is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info)"
       using args_wk ret_wk_inner wk_scope_eq by simp
@@ -594,11 +593,6 @@ proof -
   \<comment> \<open>(10) tyenv_fun_tyvars_distinct ?be: TE_Functions inherited. \<close>
   have c10: "tyenv_fun_tyvars_distinct ?be"
     using callee_fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(11) tyenv_fun_param_names_distinct ?be: TE_Functions inherited. \<close>
-  have c11: "tyenv_fun_param_names_distinct ?be"
-    using callee_fun_param_names_distinct unfolding tyenv_fun_param_names_distinct_def
     by (simp add: apply_subst_to_callee_env_def)
 
   \<comment> \<open>(12) tyenv_fun_ghost_constraint ?be: inner override; TE_Functions inherited. \<close>
@@ -611,14 +605,14 @@ proof -
     from info_lk_be have info_lk: "fmlookup (TE_Functions calleeEnv) funName = Some info"
       by (simp add: apply_subst_to_callee_env_def)
     from callee_fun_ghost info_lk ng_info have
-      "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+      "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
             is_runtime_type (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                           TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
        is_runtime_type (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
       unfolding tyenv_fun_ghost_constraint_def Let_def by auto
-    thus "(\<forall>ty \<in> (fst \<circ> snd) ` set (FI_TmArgs info).
+    thus "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
               is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
            is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
@@ -663,7 +657,7 @@ proof -
     using callee_dt_nonempty unfolding tyenv_datatypes_nonempty_def
     by (simp add: apply_subst_to_callee_env_def)
 
-  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16
+  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c12 c13 c14 c15 c16
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 
@@ -697,7 +691,7 @@ lemma function_call_subst_setup:
                   (map (apply_subst subst) tyArgs)"
     and "length (map (apply_subst subst) tyArgs) = length (FI_TyArgs funInfo)"
     and "distinct (FI_TyArgs funInfo)"
-    and "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+    and "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
            type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
     and "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
     and "apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
@@ -737,7 +731,7 @@ proof -
     unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
 
   have fi_args_wk:
-    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo).
+    "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
        is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
     using wf fn_lookup
     unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
@@ -747,9 +741,9 @@ proof -
     unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
 
   show fi_args_tyvars:
-    "\<forall>t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+    "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
   proof
-    fix t assume "t \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+    fix t assume "t \<in> fst ` set (FI_TmArgs funInfo)"
     with fi_args_wk
     have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
       by blast
@@ -1263,13 +1257,13 @@ next
     not_ghost_cond: "\<not> (ghost = NotGhost
                        \<and> (\<not> list_all (is_runtime_type calleeEnv) tyArgs
                           \<or> FI_Ghost funInfo = Ghost))" and
-    all_var: "list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo)" and
+    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
     args_check: "list_all2 (\<lambda>tm expectedTy.
                     case core_term_type calleeEnv ghost tm of
                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  tmArgs (map (\<lambda>(_, ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                  tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                               (FI_TmArgs funInfo))" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: Let_def split: option.splits if_splits)
@@ -1305,19 +1299,19 @@ next
                   case core_term_type ?be ghost tm of
                     None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
               (map (apply_subst_to_term subst) tmArgs)
-              (map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
+              (map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
   proof -
     \<comment> \<open>The original list_all2 says, for each tmArg, the term typechecks to the
         expected substituted-arg-type. The IH on each tmArg gives us the substituted
         version, which has the substituted-substituted type. Composition equates
         that to the substituted-with-composed-tyArgs type. \<close>
     have len_eq:
-      "length tmArgs = length (map (\<lambda>(_, ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo))"
+      "length tmArgs = length (map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo))"
       using len_tmArgs by simp
     show ?thesis
     proof (rule list_all2_all_nthI)
       show "length (map (apply_subst_to_term subst) tmArgs)
-              = length (map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
+              = length (map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
         using len_tmArgs by simp
     next
       fix i assume i_bound: "i < length (map (apply_subst_to_term subst) tmArgs)"
@@ -1328,20 +1322,20 @@ next
         "case core_term_type calleeEnv ghost (tmArgs ! i) of
            None \<Rightarrow> False
          | Some actualTy \<Rightarrow>
-             actualTy = map (\<lambda>(_, ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo) ! i"
+             actualTy = map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo) ! i"
         using i_bound' len_tmArgs
         by (simp add: list_all2_conv_all_nth)
       have args_nth:
         "case core_term_type calleeEnv ghost (tmArgs ! i) of
            None \<Rightarrow> False
          | Some actualTy \<Rightarrow> actualTy = (case FI_TmArgs funInfo ! i of
-              (_, ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
+              (ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
         using args_nth_raw i_bound_args
         by (metis nth_map)
       then obtain actualTy where
         actual_typed: "core_term_type calleeEnv ghost (tmArgs ! i) = Some actualTy" and
         actual_eq: "actualTy = (case FI_TmArgs funInfo ! i of
-                                (_, ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
+                                (ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
         by (auto split: option.splits)
       \<comment> \<open>Apply the IH to this tmArg. \<close>
       have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
@@ -1352,11 +1346,11 @@ next
            = Some (apply_subst subst actualTy)" .
       \<comment> \<open>The substituted actual type equals the substituted-with-composed
           version of the i-th FI_TmArgs type. \<close>
-      obtain n ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (n, ti, vor)"
+      obtain ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor)"
         by (cases "FI_TmArgs funInfo ! i") auto
       from actual_eq fi_arg_eq have actual_eq2: "actualTy = apply_subst ?innerSubst ti" by simp
       \<comment> \<open>ti's type variables are in FI_TyArgs (from fi_args_tyvars). \<close>
-      have ti_in: "ti \<in> (fst \<circ> snd) ` set (FI_TmArgs funInfo)"
+      have ti_in: "ti \<in> fst ` set (FI_TmArgs funInfo)"
         using i_bound_args fi_arg_eq
         by (force simp: image_iff in_set_conv_nth)
       with fi_args_tyvars have ti_tyvars: "type_tyvars ti \<subseteq> set (FI_TyArgs funInfo)" by blast
@@ -1370,7 +1364,7 @@ next
            = Some (apply_subst ?subst_innerSubst ti)" by simp
       show "case core_term_type ?be ghost (map (apply_subst_to_term subst) tmArgs ! i) of
               None \<Rightarrow> False
-            | Some actualTy \<Rightarrow> actualTy = map (\<lambda>(_, ty, _). apply_subst ?subst_innerSubst ty)
+            | Some actualTy \<Rightarrow> actualTy = map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty)
                                               (FI_TmArgs funInfo) ! i"
         using ih_result' i_bound' i_bound_args fi_arg_eq
         by simp

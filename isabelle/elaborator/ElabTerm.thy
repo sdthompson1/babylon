@@ -85,7 +85,7 @@ definition resolve_callee_function ::
           Inl [TyErr_FunctionNoReturnType loc name]
         else if FI_Impure funInfo then
           Inl [TyErr_ImpureFunctionInTermContext loc name]
-        else if \<not> list_all (\<lambda>(_, _, vor). vor = Var) (FI_TmArgs funInfo) then
+        else if \<not> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo) then
           Inl [TyErr_RefArgInTermContext loc name]
         else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
           Inl [TyErr_GhostFunctionInNonGhost loc name]
@@ -94,7 +94,7 @@ definition resolve_callee_function ::
             Inl errs \<Rightarrow> Inl errs
           | Inr (newTyArgs, next_mv') \<Rightarrow>
               let subst = fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs);
-                  expArgTypes = map (\<lambda>(_, ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
+                  expArgTypes = map (\<lambda>(ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
                   retType = apply_subst subst (FI_ReturnType funInfo)
               in Inr (name, expArgTypes, CI_Function name newTyArgs retType, next_mv'))
     | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
