@@ -6,11 +6,11 @@ begin
 (* Type substitution definition and properties. *)
 (* ========================================================================== *)
 
-(* A TypeSubst maps type variable IDs (nats) to types. *)
-type_synonym TypeSubst = "(nat, CoreType) fmap"
+(* A TypeSubst maps type variable names to types. *)
+type_synonym TypeSubst = "(string, CoreType) fmap"
 
 (* The singleton substitution: maps n to ty. *)
-definition singleton_subst :: "nat \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
+definition singleton_subst :: "string \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
   "singleton_subst n ty = fmupd n ty fmempty"
 
 (* Apply a type variable substitution to a type.
@@ -31,7 +31,7 @@ fun apply_subst :: "TypeSubst \<Rightarrow> CoreType \<Rightarrow> CoreType" whe
     | None \<Rightarrow> CoreTy_Var n)"
 
 (* Find all type variables appearing in the range of a substitution *)
-definition subst_range_tyvars :: "TypeSubst \<Rightarrow> nat set" where
+definition subst_range_tyvars :: "TypeSubst \<Rightarrow> string set" where
   "subst_range_tyvars subst = \<Union>(type_tyvars ` fmran' subst)"
 
 

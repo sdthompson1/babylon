@@ -128,7 +128,7 @@ lemma elab_term_correct_call:
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
     and td_wf: "elabenv_well_formed env elabEnv"
-    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
     \<comment> \<open>Sub-elaboration results\<close>
     and resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
                      = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
@@ -297,7 +297,7 @@ lemma elab_term_correct_array_proj:
     elab_eq: "elab_term env elabEnv ghost (BabTm_ArrayProj loc tm idxs) next_mv
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
-    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
     \<comment> \<open>Sub-elaboration results\<close>
     and elab_arr: "elab_term env elabEnv ghost tm next_mv = Inr (newArr, arrTy, next_mv1)"
     and elab_idxs: "elab_term_list env elabEnv ghost idxs next_mv1
@@ -469,7 +469,7 @@ lemma elab_term_correct_array_lit:
     elab_eq: "elab_term env elabEnv ghost (BabTm_Literal loc (BabLit_Array tms)) next_mv
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
-    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
     \<comment> \<open>Sub-elaboration result: the element list elaborates using (next_mv + 1) for
         freshness, because next_mv itself is reserved for the element-type meta.\<close>
     and elab_elems: "elab_term_list env elabEnv ghost tms (next_mv + 1)
@@ -482,7 +482,7 @@ proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?mk_err = "(\<lambda>(idx::nat) (exp::CoreType) (act::CoreType). [TyErr_TypeMismatch (bab_term_location (tms ! idx)) exp act])"
-  let ?elemTy = "CoreTy_Var next_mv"
+  let ?elemTy = "CoreTy_Var (mv_name next_mv)"
   let ?expectedTypes = "replicate (length elabTms) ?elemTy"
 
   \<comment> \<open>Length check holds (otherwise elab_eq would produce Inl)\<close>
@@ -510,10 +510,10 @@ proof -
     from elab_term_list_next_mv_monotone[OF elab_elems] have "next_mv + 1 \<le> next_mv1" .
     thus ?thesis using next_mv_eq by simp
   qed
-  have next_mv_in: "next_mv |\<in>| TE_TypeVars ?env'"
-    unfolding extend_env_with_tyvars_def using next_mv_lt by (simp add: fset_of_list_elem)
-  have next_mv_rt: "ghost = NotGhost \<Longrightarrow> next_mv |\<in>| TE_RuntimeTypeVars ?env'"
-    unfolding extend_env_with_tyvars_def using next_mv_lt by (simp add: fset_of_list_elem)
+  have next_mv_in: "mv_name next_mv |\<in>| TE_TypeVars ?env'"
+    unfolding extend_env_with_tyvars_def using next_mv_lt by auto
+  have next_mv_rt: "ghost = NotGhost \<Longrightarrow> mv_name next_mv |\<in>| TE_RuntimeTypeVars ?env'"
+    unfolding extend_env_with_tyvars_def using next_mv_lt by auto
 
   \<comment> \<open>Lengths\<close>
   have len_elabTms: "length elabTms = length actualTypes"
@@ -662,7 +662,7 @@ lemma elab_term_correct_record_update:
     elab_eq: "elab_term env elabEnv ghost (BabTm_RecordUpdate loc tm flds) next_mv
               = Inr (newTm, ty, next_mv')"
     and wf: "tyenv_well_formed env"
-    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
     \<comment> \<open>Sub-elaboration results\<close>
     and elab_parent: "elab_term env elabEnv ghost tm next_mv = Inr (parentTm, parentTy, next_mv1)"
     and elab_updates: "elab_term_list env elabEnv ghost (map snd flds) next_mv1
@@ -1139,7 +1139,7 @@ lemma finalize_match_term_correct:
         "ghost = NotGhost \<Longrightarrow>
          list_all (\<lambda>bty. is_runtime_type envAmbient bty) bodyTys"
       \<comment> \<open>Tyvar bound on envOuter (for the unify flex predicate's correctness). \<close>
-      and outer_fresh: "\<forall>n. n |\<in>| TE_TypeVars envOuter \<longrightarrow> n < nextMv"
+      and outer_fresh: "\<forall>n. n |\<in>| TE_TypeVars envOuter \<longrightarrow> tyvar_fresh_ok n nextMv"
       \<comment> \<open>Runtime constraint on scrutTy (needed when ghost = NotGhost to extend
           env with the fresh scrutinee Let). \<close>
       and scrut_runtime: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient scrutTy"
@@ -1823,13 +1823,13 @@ theorem elab_term_correct:
   "elab_term env elabEnv ghost tm next_mv = Inr (newTm, ty, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
    elabenv_well_formed env elabEnv \<Longrightarrow>
-   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
+   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv) \<Longrightarrow>
    core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newTm = Some ty"
 and elab_term_list_correct:
   "elab_term_list env elabEnv ghost tms next_mv = Inr (newTms, tys, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
    elabenv_well_formed env elabEnv \<Longrightarrow>
-   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv) \<Longrightarrow>
+   (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv) \<Longrightarrow>
    list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty) newTms tys"
 and elab_term_list_with_envs_correct:
   \<comment> \<open>For each (env_i, term_i) in the input job list, the corresponding
@@ -1839,7 +1839,7 @@ and elab_term_list_with_envs_correct:
   "elab_term_list_with_envs jobs elabEnv ghost next_mv = Inr (newTms, tys, next_mv') \<Longrightarrow>
    list_all (\<lambda>(env_i, _). tyenv_well_formed env_i) jobs \<Longrightarrow>
    list_all (\<lambda>(env_i, _). elabenv_well_formed env_i elabEnv) jobs \<Longrightarrow>
-   list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> n < next_mv) jobs \<Longrightarrow>
+   list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n next_mv) jobs \<Longrightarrow>
    list_all2
      (\<lambda>(env_i, _) (tm', ty').
         core_term_type (extend_env_with_tyvars env_i ghost next_mv next_mv') ghost tm'
@@ -1910,9 +1910,9 @@ proof (induction env elabEnv ghost tm next_mv
       elab_elems: "elab_term_list env elabEnv ghost tms (next_mv + 1)
                    = Inr (elabTms, actualTypes, next_mv1)"
       by (auto simp: Let_def split: sum.splits)
-    \<comment> \<open>Freshness carries over (next_mv + 1 is still strictly greater than existing tyvars)\<close>
-    have fresh': "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv + 1"
-      using "1.prems"(4) by auto
+    \<comment> \<open>Freshness carries over (next_mv + 1 is still above every existing tyvar)\<close>
+    have fresh': "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n (next_mv + 1)"
+      using "1.prems"(4) tyvar_fresh_ok_mono by fastforce
     \<comment> \<open>Apply IH to obtain typing of elabTms in the (next_mv + 1, next_mv1) env\<close>
     have ih_narrow: "list_all2 (\<lambda>tm ty. core_term_type
                       (extend_env_with_tyvars env ghost (next_mv + 1) next_mv1) ghost tm = Some ty)
@@ -2163,10 +2163,10 @@ next
     using elab_term_next_mv_monotone[OF elab_else] .
 
   \<comment> \<open>Freshness preconditions for each sub-call\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
-    using "4.prems"(4) mono_12 by fastforce
-  have fresh_2: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv2"
-    using "4.prems"(4) mono_12 mono_23 by fastforce
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "4.prems"(4) mono_12 tyvar_fresh_ok_mono by fastforce
+  have fresh_2: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv2"
+    using "4.prems"(4) mono_12 mono_23 tyvar_fresh_ok_mono by fastforce
 
   \<comment> \<open>IH: elaborated subterms have their claimed types in their respective sub-envs\<close>
   have ih_cond_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost newCond = Some condTy"
@@ -2193,11 +2193,11 @@ next
   \<comment> \<open>A generic helper: any substitution whose domain is disjoint from
       TE_TypeVars env leaves locals and the return type unchanged. \<close>
   have unif_id_on_env:
-    "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+    "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
               \<Longrightarrow> type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
               \<Longrightarrow> apply_subst s ty' = ty'"
   proof -
-    fix s :: "(nat, CoreType) fmap" and ty'
+    fix s :: "(string, CoreType) fmap" and ty'
     assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
     assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
     have "type_tyvars ty' \<inter> fset (fmdom s) = {}"
@@ -2205,11 +2205,11 @@ next
     thus "apply_subst s ty' = ty'" by (rule apply_subst_disjoint_id)
   qed
   have locals_unaffected_for:
-    "\<And>s name ty'. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+    "\<And>s name ty'. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
                  \<Longrightarrow> fmlookup (TE_LocalVars ?env') name = Some ty'
                  \<Longrightarrow> apply_subst s ty' = ty'"
   proof -
-    fix s :: "(nat, CoreType) fmap" and name ty'
+    fix s :: "(string, CoreType) fmap" and name ty'
     assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
     assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
     have "TE_LocalVars ?env' = TE_LocalVars env"
@@ -2225,10 +2225,10 @@ next
       using unif_id_on_env[OF dom_flex] by blast
   qed
   have ret_unaffected_for:
-    "\<And>s. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+    "\<And>s. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
          \<Longrightarrow> apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
   proof -
-    fix s :: "(nat, CoreType) fmap"
+    fix s :: "(string, CoreType) fmap"
     assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
     have ret_eq: "TE_ReturnType ?env' = TE_ReturnType env"
       unfolding extend_env_with_tyvars_def by simp
@@ -2537,8 +2537,8 @@ next
     using core_term_type_extend_env_with_tyvars_mono[OF lhs_typing_sub, where lo'=next_mv and hi'=next_mv']
           mono_1 mono_2 next_mv_eq by simp
   \<comment> \<open>Freshness carries forward through the lhs sub-call\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
-    using "6.prems"(4) mono_1 by fastforce
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "6.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
   \<comment> \<open>IH on RHS list: each rhsTm has its corresponding type in the extended env\<close>
   have rhs_typing_sub: "list_all2 (\<lambda>tm ty. core_term_type
                                       (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
@@ -2686,12 +2686,12 @@ next
     \<comment> \<open>Every type variable in rhsTy is in env.TE_TypeVars (from rhs_resolved)\<close>
     have tyvars_in_env_tv: "\<forall>n \<in> type_tyvars rhsTy. n |\<in>| TE_TypeVars env"
       using rhs_resolved by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-    \<comment> \<open>And every such type variable is < next_mv (by freshness)\<close>
-    have tyvars_lt: "\<forall>n \<in> type_tyvars rhsTy. n < next_mv"
+    \<comment> \<open>And every such type variable is fresh-ok at next_mv (by freshness)\<close>
+    have tyvars_fresh: "\<forall>n \<in> type_tyvars rhsTy. tyvar_fresh_ok n next_mv"
       using tyvars_in_env_tv "7.prems"(4) by blast
-    \<comment> \<open>In the sub-extended env, TE_RuntimeTypeVars = env.TE_RuntimeTypeVars \<union> [next_mv..<next_mv1].
-       Combined with tyvars_lt, any type variable in rhsTy that's runtime in the sub-extended env
-       is also in env.TE_RuntimeTypeVars.\<close>
+    \<comment> \<open>In the sub-extended env, TE_RuntimeTypeVars = env.TE_RuntimeTypeVars \<union> mv_fset next_mv next_mv1.
+       Combined with tyvars_fresh, any type variable in rhsTy that's runtime in the sub-extended env
+       is also in env.TE_RuntimeTypeVars (it cannot lie in the fresh interval).\<close>
     have tyvars_in_env_rtv: "type_tyvars rhsTy \<subseteq> fset (TE_RuntimeTypeVars env)"
     proof
       fix n assume n_in: "n \<in> type_tyvars rhsTy"
@@ -2701,14 +2701,13 @@ next
         using is_runtime_type_tyvars_subset[OF rhs_rt_sub] .
       from rhs_tyvars_rt n_in
       have "n |\<in>| TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1)"
-        by (auto simp: fset_of_list_elem)
-      hence n_in_ext_rtv: "n |\<in>| TE_RuntimeTypeVars env |\<union>| fset_of_list [next_mv..<next_mv1]"
+        by auto
+      hence n_in_ext_rtv: "n |\<in>| TE_RuntimeTypeVars env |\<union>| mv_fset next_mv next_mv1"
         using ng unfolding extend_env_with_tyvars_def by simp
-      from tyvars_lt n_in have "n < next_mv" by blast
-      hence "n \<notin> set [next_mv..<next_mv1]" by simp
-      hence "n |\<notin>| fset_of_list [next_mv..<next_mv1]" by (simp add: fset_of_list_elem)
+      from tyvars_fresh n_in have "tyvar_fresh_ok n next_mv" by blast
+      hence "n |\<notin>| mv_fset next_mv next_mv1" by (rule tyvar_fresh_ok_notin_mv_fset)
       with n_in_ext_rtv have "n |\<in>| TE_RuntimeTypeVars env" by blast
-      thus "n \<in> fset (TE_RuntimeTypeVars env)" by (simp add: fset_of_list_elem)
+      thus "n \<in> fset (TE_RuntimeTypeVars env)" by simp
     qed
     show "is_runtime_type env rhsTy"
       using is_runtime_type_transfer[OF rhs_rt_sub tyvars_in_env_rtv]
@@ -2742,8 +2741,8 @@ next
     by simp
 
   \<comment> \<open>Freshness carries through to next_mv1; ?body_env has same TE_TypeVars as env\<close>
-  have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> n < next_mv1"
-    using "7.prems"(4) mono_1 by fastforce
+  have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "7.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
 
   \<comment> \<open>IH on body: bodyTm has type bodyTy in extend_env_with_tyvars ?body_env ghost next_mv1 next_mv2\<close>
   have body_typing_sub: "core_term_type (extend_env_with_tyvars ?body_env ghost next_mv1 next_mv2) ghost bodyTm = Some bodyTy"
@@ -2826,7 +2825,7 @@ next
     by simp
 
   \<comment> \<open>Freshness for the body call\<close>
-  have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> n < next_mv"
+  have fresh_body: "\<forall>n. n |\<in>| TE_TypeVars ?body_env \<longrightarrow> tyvar_fresh_ok n next_mv"
     using "8.prems"(4) by simp
 
   \<comment> \<open>IH on body\<close>
@@ -2877,11 +2876,11 @@ next
 
   \<comment> \<open>Generic helper: subst with flex domain is identity on types whose tyvars are in TE_TypeVars env\<close>
   have unif_id_on_env:
-    "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (nat, CoreType) fmap) \<longrightarrow> ?is_flex n
+    "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
               \<Longrightarrow> type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
               \<Longrightarrow> apply_subst s ty' = ty'"
   proof -
-    fix s :: "(nat, CoreType) fmap" and ty'
+    fix s :: "(string, CoreType) fmap" and ty'
     assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
     assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
     have "type_tyvars ty' \<inter> fset (fmdom s) = {}"
@@ -2982,8 +2981,8 @@ next
     using resolve_callee_correct[OF resolve_eq "9.prems"(2,3)] by simp
 
   \<comment> \<open>Freshness carries through resolve_callee\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
-    using "9.prems"(4) mono_1 by fastforce
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "9.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
   \<comment> \<open>From IH on elab_term_list: elaborated args have their types in a sub-extended env\<close>
   have ih_args_sub: "list_all2 (\<lambda>tm ty. core_term_type
                                   (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
@@ -3218,8 +3217,8 @@ next
           mono_1 mono_2 next_mv_eq by simp
 
   \<comment> \<open>IH on update terms, lifted to ?env'\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
-    using "12.prems"(4) mono_1 by fastforce
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "12.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
   have ih_updates_sub: "list_all2 (\<lambda>tm ty. core_term_type
                           (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
                         newUpdateTms actualTypes"
@@ -3335,8 +3334,8 @@ next
           mono_1 mono_2 next_mv_eq by simp
 
   \<comment> \<open>IH on index terms, lifted to ?env'\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
-    using "15.prems"(4) mono_1 by fastforce
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "15.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
   have ih_idxs_sub: "list_all2 (\<lambda>tm ty. core_term_type
                        (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
                      elabIdxTms actualTypes"
@@ -3408,7 +3407,7 @@ next
   let ?dps = "map fst finalizedArms"
   let ?bodyLocs = "map (\<lambda>(_, body). bab_term_location body) arms"
   have final_term_eq:
-    "finalize_match_term env loc (CoreTy_Var mv1) scrutTm scrutTy
+    "finalize_match_term env loc (CoreTy_Var (mv_name mv1)) scrutTm scrutTy
                           ?dps bodyTms ?bodyLocs bodyTys accSubst mv3
      = Inr (newTm, ty, next_mv')"
     using "16.prems"(1) arms_ne elab_scrut decorate_eq finalize_arms_eq elab_bodies
@@ -3531,21 +3530,21 @@ next
       unfolding envAmbient_def .
   qed
 
-  have body_var_wk: "is_well_kinded envAmbient (CoreTy_Var mv1)"
+  have body_var_wk: "is_well_kinded envAmbient (CoreTy_Var (mv_name mv1))"
   proof -
-    have "mv1 |\<in>| fset_of_list [next_mv ..< mv3 + 1]"
-      using mono_1 mono_2 mono_3 by (auto simp: fset_of_list_elem)
-    hence "mv1 |\<in>| TE_TypeVars envAmbient"
+    have "mv_name mv1 |\<in>| mv_fset next_mv (mv3 + 1)"
+      using mono_1 mono_2 mono_3 by auto
+    hence "mv_name mv1 |\<in>| TE_TypeVars envAmbient"
       unfolding envAmbient_def extend_env_with_tyvars_def by simp
     thus ?thesis by simp
   qed
 
-  have body_var_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient (CoreTy_Var mv1)"
+  have body_var_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient (CoreTy_Var (mv_name mv1))"
   proof -
     assume ng: "ghost = NotGhost"
-    have "mv1 |\<in>| fset_of_list [next_mv ..< mv3 + 1]"
-      using mono_1 mono_2 mono_3 by (auto simp: fset_of_list_elem)
-    hence "mv1 |\<in>| TE_RuntimeTypeVars envAmbient"
+    have "mv_name mv1 |\<in>| mv_fset next_mv (mv3 + 1)"
+      using mono_1 mono_2 mono_3 by auto
+    hence "mv_name mv1 |\<in>| TE_RuntimeTypeVars envAmbient"
       unfolding envAmbient_def extend_env_with_tyvars_def using ng by simp
     thus ?thesis by simp
   qed
@@ -3825,7 +3824,7 @@ next
     have envAmbient_gd: "TE_GhostDatatypes envAmbient = TE_GhostDatatypes env"
       unfolding envAmbient_def extend_env_with_tyvars_def by simp
     have envAmbient_rtv:
-      "TE_RuntimeTypeVars envAmbient = TE_RuntimeTypeVars env |\<union>| fset_of_list [next_mv ..< mv3 + 1]"
+      "TE_RuntimeTypeVars envAmbient = TE_RuntimeTypeVars env |\<union>| mv_fset next_mv (mv3 + 1)"
       unfolding envAmbient_def extend_env_with_tyvars_def using ng by simp
     have "\<forall>dp \<in> set ?substDps.
             list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_var_bindings dp)"
@@ -3853,8 +3852,8 @@ next
           using rt_amb_ex binding_in by force
         have vTy_metas: "list_all (\<lambda>k. k |\<in>| TE_TypeVars env) (type_tyvars_list vTy)"
           using meta_safe_ex binding_in by force
-        \<comment> \<open>Every meta in vTy is in env's TE_TypeVars, hence < next_mv (by 16.prems(4)). \<close>
-        have vTy_metas_lt: "\<forall>k \<in> type_tyvars vTy. k < next_mv"
+        \<comment> \<open>Every meta in vTy is in env's TE_TypeVars, hence fresh-ok at next_mv (by 16.prems(4)). \<close>
+        have vTy_metas_fresh: "\<forall>k \<in> type_tyvars vTy. tyvar_fresh_ok k next_mv"
           using vTy_metas "16.prems"(4)
           by (auto simp: list_all_iff set_type_tyvars_list[symmetric])
         \<comment> \<open>vTy_rt_amb says every meta in vTy is in TE_RuntimeTypeVars envAmbient. \<close>
@@ -3868,9 +3867,9 @@ next
           fix k assume k_in: "k \<in> type_tyvars vTy"
           have k_in_amb: "k |\<in>| TE_RuntimeTypeVars envAmbient"
             using vTy_metas_in_amb k_in by simp
-          have k_lt: "k < next_mv" using vTy_metas_lt k_in by simp
-          have k_not_in_fresh: "k |\<notin>| fset_of_list [next_mv ..< mv3 + 1]"
-            using k_lt by (auto simp: fset_of_list_elem)
+          have k_fresh: "tyvar_fresh_ok k next_mv" using vTy_metas_fresh k_in by simp
+          have k_not_in_fresh: "k |\<notin>| mv_fset next_mv (mv3 + 1)"
+            using k_fresh by (rule tyvar_fresh_ok_notin_mv_fset)
           show "k |\<in>| TE_RuntimeTypeVars env"
             using k_in_amb k_not_in_fresh
             unfolding envAmbient_rtv by auto
@@ -3991,7 +3990,7 @@ next
       using env_i_eq by simp
   qed
   have jobs_envs_fresh:
-    "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> n < mv2) ?bodyJobs"
+    "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2) ?bodyJobs"
     unfolding list_all_length
   proof (intro allI impI)
     fix i assume i_lt: "i < length ?bodyJobs"
@@ -4001,8 +4000,8 @@ next
       using i_lt_arms len_finalizedArms by simp
     have tv_eq: "TE_TypeVars (snd (finalizedArms ! i)) = TE_TypeVars env"
       using env_i_tyvars i_lt_finalized by simp
-    show "case ?bodyJobs ! i of (env_i, uu_) \<Rightarrow> \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> n < mv2"
-      using tv_eq job_at_i "16.prems"(4) mono_1 mono_2 by force
+    show "case ?bodyJobs ! i of (env_i, uu_) \<Rightarrow> \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2"
+      using tv_eq job_at_i "16.prems"(4) mono_1 mono_2 tyvar_fresh_ok_mono by force
   qed
 
   \<comment> \<open>Apply 16.IH(2) (the list_with_envs leg of the mutual induction). \<close>
@@ -4228,8 +4227,8 @@ next
       by (simp add: list_all_length)
   qed
 
-  have outer_fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < mv3"
-    using "16.prems"(4) mono_1 mono_2 mono_3 by fastforce
+  have outer_fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n mv3"
+    using "16.prems"(4) mono_1 mono_2 mono_3 tyvar_fresh_ok_mono by fastforce
 
   have scrut_runtime: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient scrutTy"
   proof -
@@ -4342,8 +4341,8 @@ next
   have mono_2: "next_mv1 \<le> next_mv''"
     using elab_term_list_next_mv_monotone[OF elab_tail] .
   \<comment> \<open>Freshness carries through the head sub-call\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> n < next_mv1"
-    using "21.prems"(4) mono_1 by fastforce
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using "21.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
   \<comment> \<open>IH for head, lifted to ?env'\<close>
   have ih_head_sub: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost tm' = Some ty'"
     using "21.IH"(1) elab_head "21.prems"(2,3,4) by simp
@@ -4388,7 +4387,7 @@ next
     using elab_term_list_with_envs_next_mv_monotone[OF elab_tail] .
   from "23.prems"(2) have wf_h: "tyenv_well_formed env_h" by simp
   from "23.prems"(3) have wf_elab_h: "elabenv_well_formed env_h elabEnv" by simp
-  from "23.prems"(4) have fresh_h: "\<forall>n. n |\<in>| TE_TypeVars env_h \<longrightarrow> n < next_mv" by simp
+  from "23.prems"(4) have fresh_h: "\<forall>n. n |\<in>| TE_TypeVars env_h \<longrightarrow> tyvar_fresh_ok n next_mv" by simp
   have ih_head_sub:
     "core_term_type (extend_env_with_tyvars env_h ghost next_mv next_mv1) ghost tm' = Some ty'"
     using "23.IH"(1) elab_head wf_h wf_elab_h fresh_h by simp
@@ -4401,10 +4400,10 @@ next
   from "23.prems"(3) have rest_wf_elab: "list_all (\<lambda>(env_i, _). elabenv_well_formed env_i elabEnv) rest"
     by simp
   from "23.prems"(4) have rest_fresh_at_next_mv:
-    "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> n < next_mv) rest"
+    "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n next_mv) rest"
     by simp
-  have rest_fresh: "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> n < next_mv1) rest"
-    using rest_fresh_at_next_mv mono_1
+  have rest_fresh: "list_all (\<lambda>(env_i, _). \<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n next_mv1) rest"
+    using rest_fresh_at_next_mv mono_1 tyvar_fresh_ok_mono
     by (induction rest) (auto split: prod.splits)
   have ih_tail_sub:
     "list_all2

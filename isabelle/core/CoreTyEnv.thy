@@ -3,8 +3,8 @@ theory CoreTyEnv
 begin
 
 record FunInfo =
-  (* Type arguments: type variable numbers *)
-  FI_TyArgs :: "nat list"
+  (* Type arguments: type variable names *)
+  FI_TyArgs :: "string list"
 
   (* Term arguments: type, and whether passed by value (Var) or reference (Ref). *)
   FI_TmArgs :: "(CoreType \<times> VarOrRef) list"
@@ -40,10 +40,10 @@ record CoreTyEnv =
   TE_ConstLocals :: "string fset"
 
   (* In-scope type variables (for polymorphic functions) *)
-  TE_TypeVars :: "nat fset"
+  TE_TypeVars :: "string fset"
 
   (* Type variables that are known to be bound to runtime types - subset of TE_TypeVars *)
-  TE_RuntimeTypeVars :: "nat fset"
+  TE_RuntimeTypeVars :: "string fset"
 
   (* Expected return type of the enclosing function *)
   TE_ReturnType :: CoreType
@@ -70,7 +70,7 @@ record CoreTyEnv =
 
   (* Data constructors: maps constructor name to (datatype name, type variables, payload type) *)
   (* The number of type variables should be consistent with TE_Datatypes *)
-  TE_DataCtors :: "(string, string \<times> nat list \<times> CoreType) fmap"
+  TE_DataCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
 
   (* Reverse mapping: datatype name to list of its constructor names *)
   (* Should be consistent with TE_DataCtors *)

@@ -92,7 +92,7 @@ definition user_field_types ::
   "(string \<times> CoreType) list \<Rightarrow> (string \<times> BabPattern) list \<Rightarrow> CoreType list" where
   "user_field_types fieldTypes userFlds =
     map (\<lambda>(name, _). case map_of fieldTypes name of
-                       Some t \<Rightarrow> t | None \<Rightarrow> CoreTy_Var 0)
+                       Some t \<Rightarrow> t | None \<Rightarrow> CoreTy_Var '''')
         userFlds"
 
 (* Collect names appearing in the user's pattern that are NOT fields of
@@ -112,7 +112,7 @@ definition int_literal_default_type :: CoreType where
    EE_DataCtorArity. Returns (datatype name, type vars, payload type, arity). *)
 definition resolve_pattern_ctor ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
-   \<Rightarrow> TypeError list + (string \<times> nat list \<times> CoreType \<times> nat)" where
+   \<Rightarrow> TypeError list + (string \<times> string list \<times> CoreType \<times> nat)" where
   "resolve_pattern_ctor env elabEnv ghost loc ctorName =
     (case fmlookup (TE_DataCtors env) ctorName of
        None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc ctorName]
@@ -191,7 +191,7 @@ and decorate_pattern_list ::
 | "decorate_pattern env elabEnv ghost (BabPat_Tuple loc pats) scrutTy accSubst next_mv =
     (let n = length pats;
          names = tuple_field_names n;
-         freshFieldTys = map CoreTy_Var [next_mv ..< next_mv + n];
+         freshFieldTys = mv_block next_mv (next_mv + n);
          next_mv' = next_mv + n;
          recTy = CoreTy_Record (zip names freshFieldTys)
      in case try_unify_compose env recTy scrutTy accSubst of
@@ -235,7 +235,7 @@ and decorate_pattern_list ::
     (case resolve_pattern_ctor env elabEnv ghost loc ctorName of
        Inl errs \<Rightarrow> Inl errs
      | Inr (dtName, tyvars, payloadTy, arity) \<Rightarrow>
-         let freshTyArgs = map CoreTy_Var [next_mv ..< next_mv + length tyvars];
+         let freshTyArgs = mv_block next_mv (next_mv + length tyvars);
              next_mv' = next_mv + length tyvars;
              dtTy = CoreTy_Datatype dtName freshTyArgs
          in (case try_unify_compose env dtTy scrutTy accSubst of
@@ -257,7 +257,7 @@ and decorate_pattern_list ::
     Inr ([], accSubst, next_mv)"
 
 | "decorate_pattern_list env elabEnv ghost (p # ps) tys accSubst next_mv =
-    (let t = (case tys of [] \<Rightarrow> CoreTy_Var 0 | t # _ \<Rightarrow> t);
+    (let t = (case tys of [] \<Rightarrow> CoreTy_Var '''' | t # _ \<Rightarrow> t);
          tsRest = (case tys of [] \<Rightarrow> [] | _ # tsRest \<Rightarrow> tsRest) in
      case decorate_pattern env elabEnv ghost p t accSubst next_mv of
        Inl errs1 \<Rightarrow>

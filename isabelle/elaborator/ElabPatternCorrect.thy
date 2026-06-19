@@ -1,6 +1,6 @@
 theory ElabPatternCorrect
   imports ElabPattern
-    "../core/CoreTypecheck" "../core/ExtendEnvWithTyvars"
+    "../core/CoreTypecheck" ExtendEnvWithTyvars
 begin
 
 (* Correctness proofs for ElabPattern.thy. *)
@@ -1404,7 +1404,7 @@ next
   \<comment> \<open>BabPat_Tuple: builds an expected record type with fresh metas, unifies, recurses. \<close>
   let ?n = "length pats"
   let ?names = "tuple_field_names ?n"
-  let ?freshFieldTys = "map CoreTy_Var [next_mv ..< next_mv + ?n]"
+  let ?freshFieldTys = "mv_block next_mv (next_mv + ?n)"
   let ?next_mv_init = "next_mv + ?n"
   let ?recTy = "CoreTy_Record (zip ?names ?freshFieldTys)"
 
@@ -1427,7 +1427,7 @@ next
 
   have eq_n: "?n = length pats" by simp
   have eq_names: "?names = tuple_field_names ?n" by simp
-  have eq_fresh: "?freshFieldTys = map CoreTy_Var [next_mv ..< next_mv + ?n]" by simp
+  have eq_fresh: "?freshFieldTys = mv_block next_mv (next_mv + ?n)" by simp
   have eq_next_init: "?next_mv_init = next_mv + ?n" by simp
   have eq_recTy: "?recTy = CoreTy_Record (zip ?names ?freshFieldTys)" by simp
 
@@ -1438,22 +1438,21 @@ next
   have lo_le_next_mv: "lo \<le> next_mv" using "5.prems"(4) .
   have next_mv_le_init: "next_mv \<le> ?next_mv_init" by simp
 
-  \<comment> \<open>Each fresh tyvar is well-kinded under wkEnv_init (since it's in [lo, ?next_mv_init)). \<close>
+  \<comment> \<open>Each fresh tyvar is well-kinded under wkEnv_init (since its name is in
+      mv_fset lo ?next_mv_init, which the env extension adds to TE_TypeVars). \<close>
   have fresh_wk_init: "list_all (is_well_kinded ?wkEnv_init) ?freshFieldTys"
   proof -
     have "\<forall>k \<in> set [next_mv ..< ?next_mv_init].
-            is_well_kinded ?wkEnv_init (CoreTy_Var k)"
+            is_well_kinded ?wkEnv_init (CoreTy_Var (mv_name k))"
     proof
       fix k assume k_in: "k \<in> set [next_mv ..< ?next_mv_init]"
       hence "lo \<le> k \<and> k < ?next_mv_init" using lo_le_next_mv by auto
-      hence "k \<in> set [lo ..< ?next_mv_init]" by simp
-      hence "k |\<in>| fset_of_list [lo ..< ?next_mv_init]"
-        by (simp add: fset_of_list_elem)
-      hence "k |\<in>| TE_TypeVars ?wkEnv_init"
+      hence "mv_name k |\<in>| mv_fset lo ?next_mv_init" by auto
+      hence "mv_name k |\<in>| TE_TypeVars ?wkEnv_init"
         unfolding extend_env_with_tyvars_def by simp
-      thus "is_well_kinded ?wkEnv_init (CoreTy_Var k)" by simp
+      thus "is_well_kinded ?wkEnv_init (CoreTy_Var (mv_name k))" by simp
     qed
-    thus ?thesis by (simp add: list_all_iff)
+    thus ?thesis by (simp add: mv_block_eq_map_CoreTy_Var list_all_iff)
   qed
 
   \<comment> \<open>recTy is well-kinded under wkEnv_init: tuple_field_names produces distinct names, and
@@ -1494,18 +1493,16 @@ next
   proof -
     assume ng: "ghost = NotGhost"
     have "\<forall>k \<in> set [next_mv ..< ?next_mv_init].
-            is_runtime_type ?wkEnv_init (CoreTy_Var k)"
+            is_runtime_type ?wkEnv_init (CoreTy_Var (mv_name k))"
     proof
       fix k assume k_in: "k \<in> set [next_mv ..< ?next_mv_init]"
       hence "lo \<le> k \<and> k < ?next_mv_init" using lo_le_next_mv by auto
-      hence "k \<in> set [lo ..< ?next_mv_init]" by simp
-      hence "k |\<in>| fset_of_list [lo ..< ?next_mv_init]"
-        by (simp add: fset_of_list_elem)
-      hence "k |\<in>| TE_RuntimeTypeVars ?wkEnv_init"
+      hence "mv_name k |\<in>| mv_fset lo ?next_mv_init" by auto
+      hence "mv_name k |\<in>| TE_RuntimeTypeVars ?wkEnv_init"
         unfolding extend_env_with_tyvars_def using ng by simp
-      thus "is_runtime_type ?wkEnv_init (CoreTy_Var k)" by simp
+      thus "is_runtime_type ?wkEnv_init (CoreTy_Var (mv_name k))" by simp
     qed
-    thus ?thesis by (simp add: list_all_iff)
+    thus ?thesis by (simp add: mv_block_eq_map_CoreTy_Var list_all_iff)
   qed
   have recTy_rt_init: "ghost = NotGhost \<Longrightarrow> is_runtime_type ?wkEnv_init ?recTy"
   proof -
@@ -1986,7 +1983,7 @@ next
     rpc: "resolve_pattern_ctor env elabEnv ghost loc ctorName
             = Inr (dtName, tyvars, payloadTy, arity)"
     by (auto split: sum.splits)
-  let ?freshTyArgs = "map CoreTy_Var [next_mv ..< next_mv + length tyvars]"
+  let ?freshTyArgs = "mv_block next_mv (next_mv + length tyvars)"
   let ?next_mv_init = "next_mv + length tyvars"
   let ?dtTy = "CoreTy_Datatype dtName ?freshTyArgs"
   from "7.prems"(1) rpc obtain s where
@@ -2041,18 +2038,16 @@ next
   have fresh_wk_init: "list_all (is_well_kinded ?wkEnv_init) ?freshTyArgs"
   proof -
     have "\<forall>k \<in> set [next_mv ..< ?next_mv_init].
-            is_well_kinded ?wkEnv_init (CoreTy_Var k)"
+            is_well_kinded ?wkEnv_init (CoreTy_Var (mv_name k))"
     proof
       fix k assume k_in: "k \<in> set [next_mv ..< ?next_mv_init]"
       hence "lo \<le> k \<and> k < ?next_mv_init" using lo_le_next_mv by auto
-      hence "k \<in> set [lo ..< ?next_mv_init]" by simp
-      hence "k |\<in>| fset_of_list [lo ..< ?next_mv_init]"
-        by (simp add: fset_of_list_elem)
-      hence "k |\<in>| TE_TypeVars ?wkEnv_init"
+      hence "mv_name k |\<in>| mv_fset lo ?next_mv_init" by auto
+      hence "mv_name k |\<in>| TE_TypeVars ?wkEnv_init"
         unfolding extend_env_with_tyvars_def by simp
-      thus "is_well_kinded ?wkEnv_init (CoreTy_Var k)" by simp
+      thus "is_well_kinded ?wkEnv_init (CoreTy_Var (mv_name k))" by simp
     qed
-    thus ?thesis by (simp add: list_all_iff)
+    thus ?thesis by (simp add: mv_block_eq_map_CoreTy_Var list_all_iff)
   qed
 
   \<comment> \<open>?dtTy is well-kinded under wkEnv_init: dtName has the right arity, and freshTyArgs
@@ -2086,18 +2081,16 @@ next
   proof -
     assume ng: "ghost = NotGhost"
     have "\<forall>k \<in> set [next_mv ..< ?next_mv_init].
-            is_runtime_type ?wkEnv_init (CoreTy_Var k)"
+            is_runtime_type ?wkEnv_init (CoreTy_Var (mv_name k))"
     proof
       fix k assume k_in: "k \<in> set [next_mv ..< ?next_mv_init]"
       hence "lo \<le> k \<and> k < ?next_mv_init" using lo_le_next_mv by auto
-      hence "k \<in> set [lo ..< ?next_mv_init]" by simp
-      hence "k |\<in>| fset_of_list [lo ..< ?next_mv_init]"
-        by (simp add: fset_of_list_elem)
-      hence "k |\<in>| TE_RuntimeTypeVars ?wkEnv_init"
+      hence "mv_name k |\<in>| mv_fset lo ?next_mv_init" by auto
+      hence "mv_name k |\<in>| TE_RuntimeTypeVars ?wkEnv_init"
         unfolding extend_env_with_tyvars_def using ng by simp
-      thus "is_runtime_type ?wkEnv_init (CoreTy_Var k)" by simp
+      thus "is_runtime_type ?wkEnv_init (CoreTy_Var (mv_name k))" by simp
     qed
-    thus ?thesis by (simp add: list_all_iff)
+    thus ?thesis by (simp add: mv_block_eq_map_CoreTy_Var list_all_iff)
   qed
 
   \<comment> \<open>?dtTy is runtime under wkEnv_init: dtName is not a ghost datatype (resolve_pattern_ctor enforces),
@@ -2343,7 +2336,7 @@ next
     dps_eq: "dps = dp # dpsRest"
     by (auto simp: Let_def split: sum.splits)
 
-  let ?t_let = "case tys of [] \<Rightarrow> CoreTy_Var 0 | t # _ \<Rightarrow> t"
+  let ?t_let = "case tys of [] \<Rightarrow> CoreTy_Var '''' | t # _ \<Rightarrow> t"
   let ?tsRest_let = "case tys of [] \<Rightarrow> [] | _ # tsRest \<Rightarrow> tsRest"
   have t_let_eq: "t = ?t_let" using tys_eq by simp
   have tsRest_let_eq: "tsRest = ?tsRest_let" using tys_eq by simp

@@ -13,13 +13,13 @@ begin
    statement typecheck in the original env, with no fresh-tyvar extension. *)
 definition clear_metavars :: "nat \<Rightarrow> nat \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
   "clear_metavars lo hi tm =
-     apply_subst_to_term (fmap_of_list (map (\<lambda>n. (n, CoreTy_Record [])) [lo ..< hi])) tm"
+     apply_subst_to_term (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo ..< hi])) tm"
 
 (* The type-level analog of clear_metavars, for the (substituted) type arguments
    of an elaborated call emitted by CoreStmt_AssignCall / VarDeclCall. *)
 definition clear_metavars_type :: "nat \<Rightarrow> nat \<Rightarrow> CoreType \<Rightarrow> CoreType" where
   "clear_metavars_type lo hi ty =
-     apply_subst (fmap_of_list (map (\<lambda>n. (n, CoreTy_Record [])) [lo ..< hi])) ty"
+     apply_subst (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo ..< hi])) ty"
 
 
 (* ========================================================================== *)

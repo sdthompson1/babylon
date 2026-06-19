@@ -49,13 +49,13 @@ fun coerce_to_common_int_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> 
    Returns the elaborated type arguments and the updated next_mv counter. *)
 definition resolve_type_args ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
-   \<Rightarrow> nat list \<Rightarrow> BabType list \<Rightarrow> nat
+   \<Rightarrow> string list \<Rightarrow> BabType list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreType list \<times> nat)" where
   "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv =
     (let numTyParams = length tyvars in
      if tyArgs = [] \<and> numTyParams > 0 then
        \<comment> \<open>Generate fresh metavariables for the type arguments\<close>
-       Inr (map CoreTy_Var [next_mv..<next_mv + numTyParams], next_mv + numTyParams)
+       Inr (mv_block next_mv (next_mv + numTyParams), next_mv + numTyParams)
      else if numTyParams = length tyArgs then
        \<comment> \<open>Elaborate the user's provided type arguments\<close>
        (case elab_type_list env elabEnv ghost tyArgs of
@@ -164,7 +164,7 @@ definition build_call_result ::
    2. If unification fails but both are finite integer types, that's OK (coercion will be inserted later)
    3. If both fail, return an error via mk_err
    The nat parameter is an index counter passed to mk_err for error reporting. *)
-fun unify_type_lists :: "(nat \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
+fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
                         \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                         \<Rightarrow> TypeSubst \<Rightarrow> TypeError list + TypeSubst" where
   "unify_type_lists is_flex mk_err idx [] [] accSubst = Inr accSubst"
@@ -203,7 +203,7 @@ fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow>
 (* Combine unify_type_lists and apply_call_coercions into a single function.
    Unifies actual types with expected types (with integer coercion), then applies
    the resulting substitution to the terms and inserts casts where needed. *)
-definition unify_and_coerce :: "(nat \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list)
+definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list)
                               \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
                               \<Rightarrow> CoreType list \<Rightarrow> TypeSubst
                               \<Rightarrow> TypeError list + (CoreTerm list \<times> TypeSubst)" where
@@ -333,7 +333,7 @@ fun is_comparison_bab_binop :: "BabBinop \<Rightarrow> bool" where
 
 (* Build a substitution that maps every flexible metavariable in a type to a
    given default type. Rigid type-variable metas are skipped. *)
-definition const_subst_for :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
+definition const_subst_for :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
   "const_subst_for is_flex ty defaultTy =
      fmap_of_list (map (\<lambda>n. (n, defaultTy)) (filter is_flex (type_tyvars_list ty)))"
 
@@ -345,7 +345,7 @@ definition const_subst_for :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \
       default type for the operator.
    4. If unification fails, pass through unchanged (downstream checks will
       report the appropriate type error). *)
-fun resolve_binop_metas :: "(nat \<Rightarrow> bool) \<Rightarrow> BabBinop
+fun resolve_binop_metas :: "(string \<Rightarrow> bool) \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (CoreTerm \<times> CoreType \<times> CoreTerm \<times> CoreType)" where
   "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy =
@@ -368,7 +368,7 @@ fun resolve_binop_metas :: "(nat \<Rightarrow> bool) \<Rightarrow> BabBinop
 (* Elaborate a single binary operation on already-elaborated operands.
    Handles metavariable resolution, type coercion, and type checking.
    ImpliedBy and Iff are handled before calling this function. *)
-fun elab_single_binop :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
+fun elab_single_binop :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
   "elab_single_binop is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy =
@@ -426,7 +426,7 @@ fun elab_single_binop :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Righ
         else undefined)"  \<comment> \<open>should be exhaustive\<close>
 
 (* Elaborate a single binary operation, handling ImpliedBy and Iff specially *)
-fun elab_binop_with_special :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
+fun elab_binop_with_special :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
   "elab_binop_with_special is_flex loc ghost BabBinop_ImpliedBy lhsTm lhsTy rhsTm rhsTy =
@@ -447,7 +447,7 @@ fun elab_binop_with_special :: "(nat \<Rightarrow> bool) \<Rightarrow> Location 
    and the accumulated LHS term/type.
    Left-associates: a + b + c becomes (a + b) + c.
 *)
-fun fold_binop_left :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
+fun fold_binop_left :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
@@ -469,7 +469,7 @@ definition has_unexpected_chain_var :: "CoreTerm \<Rightarrow> string \<Rightarr
 (* Build a comparison chain: a < b < c becomes (a < b) && (b < c).
    Uses let-binding for complex middle terms to avoid duplicate evaluation.
    chainCounter is used to generate unique variable names. *)
-fun build_comparison_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> nat
+fun build_comparison_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot \<Rightarrow> nat
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + CoreTerm" where
@@ -519,7 +519,7 @@ fun build_comparison_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \
                         (CoreTm_Binop CoreBinop_And cmpTm restTm)))))"
 
 (* Right-associate an implies chain: a ==> b ==> c becomes a ==> (b ==> c) *)
-fun fold_implies_right :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
+fun fold_implies_right :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
@@ -540,7 +540,7 @@ fun fold_implies_right :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rig
    - Implies chains: all operators must be ==> or <==
    - Comparison chains: all operators must be comparisons with compatible directions
      (e.g. a < b <= c is ok, a < b > c is not) *)
-fun process_binop_chain :: "(nat \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
+fun process_binop_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
@@ -704,7 +704,7 @@ where
         if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length tms)) then
           Inl [TyErr_InvalidArrayDimension loc]
         else
-          let elemTy = CoreTy_Var next_mv in
+          let elemTy = CoreTy_Var (mv_name next_mv) in
           (case elab_term_list env elabEnv ghost tms (next_mv + 1) of
             Inl errs \<Rightarrow> Inl errs
           | Inr (elabTms, actualTys, next_mv') \<Rightarrow>
@@ -1023,7 +1023,7 @@ where
      | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
          \<comment> \<open>Allocate a fresh metavariable for the body type; each arm unifies
              its body type against it.\<close>
-         let bodyTyVar = CoreTy_Var mv1 in
+         let bodyTyVar = CoreTy_Var (mv_name mv1) in
          (case decorate_match_arms env elabEnv ghost scrutTy
                  False fmempty (mv1 + 1) arms of
             Inl errs \<Rightarrow> Inl errs

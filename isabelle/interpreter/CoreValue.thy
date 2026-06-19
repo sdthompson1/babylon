@@ -158,7 +158,7 @@ next
   fix x11 :: string
   fix x12 :: "CoreType list"
   fix x2 x y
-  fix xa :: "nat list"
+  fix xa :: "string list"
   fix ya :: CoreType
   show "((env, payload, apply_subst (fmap_of_list (zip xa x12)) ya),
          env, CV_Variant ctor payload, ty) \<in> measure (\<lambda>(env, val, ty). size val)"

@@ -393,7 +393,7 @@ qed
    or produces a state matching body_env_for env funInfo (the callee's static
    env), with IS_TyArgs set to the call-site type substitution. *)
 definition sound_arg_processing_result ::
-    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> CoreType list
+    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> (string, CoreType) fmap \<Rightarrow> CoreType list
     \<Rightarrow> InterpError + 'w InterpState \<Rightarrow> bool" where
   "sound_arg_processing_result env names funInfo tySubst storeTyping result =
     (case result of
@@ -408,7 +408,7 @@ definition sound_arg_processing_result ::
    with some store typing extending the original, and IS_TyArgs is the
    call-site type substitution (preserved by process_one_arg). *)
 definition sound_partial_arg_processing_result ::
-    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> (nat, CoreType) fmap \<Rightarrow> nat \<Rightarrow> CoreType list
+    "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> (string, CoreType) fmap \<Rightarrow> nat \<Rightarrow> CoreType list
     \<Rightarrow> InterpError + 'w InterpState \<Rightarrow> bool" where
   "sound_partial_arg_processing_result env names funInfo tySubst k storeTyping result =
     (case result of
@@ -1361,7 +1361,7 @@ qed
 lemma process_one_arg_step_sound:
   fixes env :: CoreTyEnv
     and funInfo :: FunInfo
-    and tySubst :: "(nat, CoreType) fmap"
+    and tySubst :: "(string, CoreType) fmap"
     and storeTyping :: "CoreType list"
     and k :: nat
   assumes sme_caller: "state_matches_env state env storeTyping"  \<comment> \<open>caller state (for value/lvalue soundness)\<close>
@@ -1819,7 +1819,7 @@ qed
 lemma fold_process_one_arg_sound_gen:
   fixes env :: CoreTyEnv
     and funInfo :: FunInfo
-    and tySubst :: "(nat, CoreType) fmap"
+    and tySubst :: "(string, CoreType) fmap"
     and storeTyping :: "CoreType list"
     and state :: "'w InterpState"
   assumes sme_caller: "state_matches_env state env storeTyping"

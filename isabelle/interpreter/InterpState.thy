@@ -15,7 +15,7 @@ type_synonym 'w ExternFunc = "'w \<Rightarrow> CoreValue list \<Rightarrow> 'w \
 
 (* Function info for the interpreter *)
 record 'w InterpFun =
-  IF_TyArgs :: "nat list"
+  IF_TyArgs :: "string list"
   IF_Args :: "(string \<times> VarOrRef) list"
   IF_Body :: "CoreStatement list + 'w ExternFunc"
   IF_Impure :: bool
@@ -43,13 +43,13 @@ record 'world InterpState =
   IS_ConstLocals :: "string fset"
 
   (* Runtime type-variable bindings for the current function frame.
-     Maps each type parameter (by ID) to a ground CoreType. *)
-  IS_TyArgs :: "(nat, CoreType) fmap"
+     Maps each type parameter (by name) to a ground CoreType. *)
+  IS_TyArgs :: "(string, CoreType) fmap"
 
   (* For each non-ghost datatype, a triple (firstCtorName, ctorTyvars, ctorPayloadType)
      giving the first data constructor of the datatype, used to evaluate
      CoreTm_Default at a datatype type. *)
-  IS_DefaultCtors :: "(string, string \<times> nat list \<times> CoreType) fmap"
+  IS_DefaultCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
 
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"

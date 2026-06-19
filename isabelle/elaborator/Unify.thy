@@ -12,8 +12,8 @@ begin
    Rigid metavariables (where is_flex returns False) behave like opaque type constants
    and only unify with themselves. *)
 
-function (domintros) unify :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option"
-and unify_list :: "(nat \<Rightarrow> bool) \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> TypeSubst option" where
+function (domintros) unify :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option"
+and unify_list :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> TypeSubst option" where
   "unify is_flex (CoreTy_Datatype name1 tyArgs1) ty2 =
     (case ty2 of
       CoreTy_Var n \<Rightarrow>
@@ -156,7 +156,7 @@ lemma list_tyvars_cons:
    where tag is 0 for Inl (unify) and 1 for Inr (unify_list).
    The is_flex predicate is passed unchanged to every recursive call so it
    does not affect termination — we project it out. *)
-definition unify_rel :: "(((nat \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((nat \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) rel" where
+definition unify_rel :: "(((string \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((string \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) rel" where
   "unify_rel = inv_image (less_than <*lex*> less_than <*lex*> less_than)
     (\<lambda>x. case x of
       Inl (_, ty1, ty2) \<Rightarrow> (card (type_tyvars ty1 \<union> type_tyvars ty2),
@@ -232,16 +232,16 @@ proof -
 qed
 
 (* Properties that a substitution from unify/unify_list must satisfy *)
-definition subst_props :: "nat set \<Rightarrow> TypeSubst \<Rightarrow> bool" where
+definition subst_props :: "string set \<Rightarrow> TypeSubst \<Rightarrow> bool" where
   "subst_props mvs subst \<equiv>
     fset (fmdom subst) \<subseteq> mvs \<and>
     (\<forall>n ty. fmlookup subst n = Some ty \<longrightarrow> type_tyvars ty \<subseteq> mvs) \<and>
     fset (fmdom subst) \<inter> subst_range_tyvars subst = {}"
 
-definition unify_input_mvs :: "CoreType \<Rightarrow> CoreType \<Rightarrow> nat set" where
+definition unify_input_mvs :: "CoreType \<Rightarrow> CoreType \<Rightarrow> string set" where
   "unify_input_mvs ty1 ty2 = type_tyvars ty1 \<union> type_tyvars ty2"
 
-definition unify_list_input_mvs :: "CoreType list \<Rightarrow> CoreType list \<Rightarrow> nat set" where
+definition unify_list_input_mvs :: "CoreType list \<Rightarrow> CoreType list \<Rightarrow> string set" where
   "unify_list_input_mvs tys1 tys2 = list_tyvars tys1 \<union> list_tyvars tys2"
 
 (* Empty substitution trivially satisfies the properties *)
@@ -521,7 +521,7 @@ qed
 
 (* The main inductive property: termination and props *)
 definition unify_terminates_with_props ::
-    "(((nat \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((nat \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) \<Rightarrow> bool" where
+    "(((string \<Rightarrow> bool) \<times> CoreType \<times> CoreType) + ((string \<Rightarrow> bool) \<times> CoreType list \<times> CoreType list)) \<Rightarrow> bool" where
   "unify_terminates_with_props x \<equiv>
     unify_unify_list_dom x \<and>
     (case x of

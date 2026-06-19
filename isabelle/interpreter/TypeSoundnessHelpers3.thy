@@ -1640,7 +1640,7 @@ proof -
 
   \<comment> \<open>The call-site substitution: ground because IS_TyArgs state is ground (by
       ty_args_well_formed via state_env) and tyArgs are runtime in env. \<close>
-  define tySubst :: "(nat, CoreType) fmap" where
+  define tySubst :: "(string, CoreType) fmap" where
     tySubst_def: "tySubst = fmap_of_list
                 (zip (FI_TyArgs funInfo)
                      (map (apply_subst (IS_TyArgs state)) tyArgs))"

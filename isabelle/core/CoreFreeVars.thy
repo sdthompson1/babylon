@@ -7,7 +7,7 @@ begin
 (* ========================================================================== *)
 
 (* Type variables in a type *)
-fun type_tyvars :: "CoreType \<Rightarrow> nat set" where
+fun type_tyvars :: "CoreType \<Rightarrow> string set" where
   "type_tyvars (CoreTy_Datatype _ tyargs) = \<Union>(set (map type_tyvars tyargs))"
 | "type_tyvars CoreTy_Bool = {}"
 | "type_tyvars (CoreTy_FiniteInt _ _) = {}"
@@ -18,7 +18,7 @@ fun type_tyvars :: "CoreType \<Rightarrow> nat set" where
 | "type_tyvars (CoreTy_Var n) = {n}"
 
 (* Collect all type variables in a type as a list (executable) *)
-fun type_tyvars_list :: "CoreType \<Rightarrow> nat list" where
+fun type_tyvars_list :: "CoreType \<Rightarrow> string list" where
   "type_tyvars_list (CoreTy_Datatype _ args) = concat (map type_tyvars_list args)"
 | "type_tyvars_list CoreTy_Bool = []"
 | "type_tyvars_list (CoreTy_FiniteInt _ _) = []"
@@ -29,11 +29,11 @@ fun type_tyvars_list :: "CoreType \<Rightarrow> nat list" where
 | "type_tyvars_list (CoreTy_Var n) = [n]"
 
 (* Collect all type variables in a list of types *)
-definition list_tyvars :: "CoreType list \<Rightarrow> nat set" where
+definition list_tyvars :: "CoreType list \<Rightarrow> string set" where
   "list_tyvars tys = \<Union>(set (map type_tyvars tys))"
 
 (* Check if type variable n occurs in type ty *)
-definition occurs :: "nat \<Rightarrow> CoreType \<Rightarrow> bool" where
+definition occurs :: "string \<Rightarrow> CoreType \<Rightarrow> bool" where
   "occurs n ty = (n \<in> type_tyvars ty)"
 
 (* Type variables in a type are finite *)
@@ -102,7 +102,7 @@ lemma fmember_ffUnion_fimage_fset_of_list_iff:
    Only six constructors carry an embedded type (the ones on which
    core_term_type runs is_well_kinded / is_runtime_type); the rest just
    recurse into subterms. *)
-fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> nat set" where
+fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> string set" where
   "core_term_free_tyvars (CoreTm_LitBool _) = {}"
 | "core_term_free_tyvars (CoreTm_LitInt _) = {}"
 | "core_term_free_tyvars (CoreTm_LitArray elemTy tms) =

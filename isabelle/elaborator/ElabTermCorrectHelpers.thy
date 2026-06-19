@@ -354,23 +354,28 @@ proof -
   proof (cases "tyArgs = [] \<and> ?numTyParams > 0")
     case True
     \<comment> \<open>Type args were omitted - metavariables generated\<close>
-    let ?genTyArgs = "map CoreTy_Var [next_mv..<next_mv + ?numTyParams]"
+    let ?genTyArgs = "mv_block next_mv (next_mv + ?numTyParams)"
+    let ?names = "map mv_name [next_mv..<next_mv + ?numTyParams]"
     from assms(1) True
     have results: "newTyArgs = ?genTyArgs"
                   "next_mv' = next_mv + ?numTyParams"
       by (auto simp: resolve_type_args_def Let_def)
+    have genTyArgs_eq: "?genTyArgs = map CoreTy_Var ?names"
+      by (simp add: mv_block_eq_map_CoreTy_Var)
     have len_ok: "length ?genTyArgs = ?numTyParams" by simp
     have mono: "next_mv \<le> next_mv'" using results by simp
     let ?env_ext = "extend_env_with_tyvars env ghost next_mv next_mv'"
-    have all_in_tv: "\<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_TypeVars ?env_ext"
-      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
+    \<comment> \<open>The fresh names are exactly mv_fset next_mv next_mv', which the env extension
+        adds to TE_TypeVars (and, when NotGhost, to TE_RuntimeTypeVars). \<close>
+    have all_in_tv: "\<forall>nm \<in> set ?names. nm |\<in>| TE_TypeVars ?env_ext"
+      using results by (auto simp: extend_env_with_tyvars_def mv_fset_def fset_of_list_elem)
     have wk_ok: "list_all (is_well_kinded ?env_ext) ?genTyArgs"
-      using list_all_tyvar_is_well_kinded[OF all_in_tv] .
+      unfolding genTyArgs_eq using list_all_tyvar_is_well_kinded[OF all_in_tv] .
     have all_in_rtv: "ghost = NotGhost \<Longrightarrow>
-                       \<forall>n \<in> set [next_mv..<next_mv + ?numTyParams]. n |\<in>| TE_RuntimeTypeVars ?env_ext"
-      using results by (auto simp: extend_env_with_tyvars_def fset_of_list_elem)
+                       \<forall>nm \<in> set ?names. nm |\<in>| TE_RuntimeTypeVars ?env_ext"
+      using results by (auto simp: extend_env_with_tyvars_def mv_fset_def fset_of_list_elem)
     have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
-      using all_in_rtv list_all_tyvar_is_runtime by blast
+      unfolding genTyArgs_eq using all_in_rtv list_all_tyvar_is_runtime by blast
     show ?thesis
       using results len_ok wk_ok runtime_ok mono by auto
   next

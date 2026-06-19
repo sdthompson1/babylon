@@ -1,15 +1,16 @@
 theory ExtendEnvWithTyvars
-  imports CoreStmtTypecheck
+  imports "../core/CoreStmtTypecheck" MetavarName
 begin
 
-(* Extend a type environment with a half-open range of type variables.
+(* Extend a type environment with a half-open range of type metavariables
+   (see also MetavarName.thy).
    In NotGhost mode, the new vars are assumed to represent runtime types (they are
    added to TE_RuntimeTypeVars); in Ghost mode, they can represent any type. *)
 definition extend_env_with_tyvars :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> CoreTyEnv" where
   "extend_env_with_tyvars env ghost lo hi =
-     env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list [lo..<hi],
+     env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| mv_fset lo hi,
            TE_RuntimeTypeVars := (if ghost = NotGhost
-                                   then TE_RuntimeTypeVars env |\<union>| fset_of_list [lo..<hi]
+                                   then TE_RuntimeTypeVars env |\<union>| mv_fset lo hi
                                    else TE_RuntimeTypeVars env) \<rparr>"
 
 (* Identity: when the interval is empty, the env is unchanged. *)
@@ -17,16 +18,6 @@ lemma extend_env_with_tyvars_empty [simp]:
   assumes "lo \<ge> hi"
   shows "extend_env_with_tyvars env ghost lo hi = env"
   using assms unfolding extend_env_with_tyvars_def by simp
-
-(* Splitting a contiguous interval of fresh type variables. *)
-lemma fset_of_list_upt_split:
-  assumes "lo \<le> mid" and "mid \<le> hi"
-  shows "fset_of_list [lo..<mid] |\<union>| fset_of_list [mid..<hi] = fset_of_list [lo..<hi]"
-proof -
-  have "[lo..<hi] = [lo..<mid] @ [mid..<hi]"
-    using assms le_Suc_ex upt_add_eq_append by blast
-  thus ?thesis by simp
-qed
 
 (* Helper: extend_env_with_tyvars with a wider interval can be viewed as extending
    the narrower version further. Used to lift well-kindedness / runtime facts. *)
@@ -37,10 +28,10 @@ lemma extend_env_with_tyvars_widen_eq:
              \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraTV,
                TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi) |\<union>| extraRT \<rparr>"
 proof -
-  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
-  have contained: "fset_of_list [lo..<hi] |\<subseteq>| fset_of_list [lo'..<hi']"
-    using assms by (auto simp: fset_of_list_elem)
-  have union_eq: "fset_of_list [lo..<hi] |\<union>| ?diff = fset_of_list [lo'..<hi']"
+  let ?diff = "mv_fset lo' hi' |-| mv_fset lo hi"
+  have contained: "mv_fset lo hi |\<subseteq>| mv_fset lo' hi'"
+    using assms by (rule mv_fset_mono)
+  have union_eq: "mv_fset lo hi |\<union>| ?diff = mv_fset lo' hi'"
     using contained by auto
   show ?thesis
   proof (cases "ghost = NotGhost")
@@ -101,14 +92,14 @@ lemma tyenv_well_formed_extend_env_with_tyvars:
 proof (cases "ghost = NotGhost")
   case True
   thus ?thesis
-    using assms tyenv_well_formed_extend_tyvars[where extraTV="fset_of_list [lo..<hi]"
-                                                    and extraRT="fset_of_list [lo..<hi]"]
+    using assms tyenv_well_formed_extend_tyvars[where extraTV="mv_fset lo hi"
+                                                    and extraRT="mv_fset lo hi"]
     unfolding extend_env_with_tyvars_def by simp
 next
   case False
-  have "tyenv_well_formed (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list [lo..<hi],
+  have "tyenv_well_formed (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| mv_fset lo hi,
                                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| {||} \<rparr>)"
-    using assms tyenv_well_formed_extend_tyvars[where extraTV="fset_of_list [lo..<hi]"
+    using assms tyenv_well_formed_extend_tyvars[where extraTV="mv_fset lo hi"
                                                     and extraRT="{||}"] by blast
   thus ?thesis using False unfolding extend_env_with_tyvars_def by simp
 qed
@@ -132,16 +123,16 @@ lemma extend_env_with_tyvars_widen_as_irrelevant:
   shows "extend_env_with_tyvars env ghost lo' hi' =
            (extend_env_with_tyvars env ghost lo hi)
              \<lparr> TE_TypeVars := TE_TypeVars (extend_env_with_tyvars env ghost lo hi)
-                                |\<union>| (fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]),
+                                |\<union>| (mv_fset lo' hi' |-| mv_fset lo hi),
                TE_RuntimeTypeVars := TE_RuntimeTypeVars (extend_env_with_tyvars env ghost lo hi)
                                 |\<union>| (if ghost = NotGhost
-                                     then fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]
+                                     then mv_fset lo' hi' |-| mv_fset lo hi
                                      else {||}) \<rparr>"
 proof -
-  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
-  have contained: "fset_of_list [lo..<hi] |\<subseteq>| fset_of_list [lo'..<hi']"
-    using assms by (auto simp: fset_of_list_elem)
-  have union_eq: "fset_of_list [lo..<hi] |\<union>| ?diff = fset_of_list [lo'..<hi']"
+  let ?diff = "mv_fset lo' hi' |-| mv_fset lo hi"
+  have contained: "mv_fset lo hi |\<subseteq>| mv_fset lo' hi'"
+    using assms by (rule mv_fset_mono)
+  have union_eq: "mv_fset lo hi |\<union>| ?diff = mv_fset lo' hi'"
     using contained by auto
   show ?thesis
     unfolding extend_env_with_tyvars_def
@@ -176,7 +167,7 @@ lemma core_statement_type_extend_env_with_tyvars_mono:
   shows "core_statement_type (extend_env_with_tyvars env ghost lo' hi') g stmt
            = Some (extend_env_with_tyvars env_out ghost lo' hi')"
 proof -
-  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
+  let ?diff = "mv_fset lo' hi' |-| mv_fset lo hi"
   let ?dRT = "if ghost = NotGhost then ?diff else {||}"
   \<comment> \<open>Source and target envs differ only by the extra interval, on both env and env_out.\<close>
   have src: "extend_env_with_tyvars env ghost lo' hi' =
@@ -202,7 +193,7 @@ lemma core_statement_list_type_extend_env_with_tyvars_mono:
   shows "core_statement_list_type (extend_env_with_tyvars env ghost lo' hi') g stmts
            = Some (extend_env_with_tyvars env_out ghost lo' hi')"
 proof -
-  let ?diff = "fset_of_list [lo'..<hi'] |-| fset_of_list [lo..<hi]"
+  let ?diff = "mv_fset lo' hi' |-| mv_fset lo hi"
   let ?dRT = "if ghost = NotGhost then ?diff else {||}"
   have src: "extend_env_with_tyvars env ghost lo' hi' =
                (extend_env_with_tyvars env ghost lo hi)

@@ -1,11 +1,11 @@
 theory ElabEnv
-  imports "../core/CoreKindcheck" "../core/ExtendEnvWithTyvars" 
+  imports "../core/CoreKindcheck" ExtendEnvWithTyvars
     "../util/NatToString" "HOL-Library.Finite_Map" 
 begin
 
 (* This maps a typedef name to a list of type parameters (distinct tyvars)
    and a target type *)
-type_synonym Typedefs = "(string, nat list \<times> CoreType) fmap"
+type_synonym Typedefs = "(string, string list \<times> CoreType) fmap"
 
 (* Typedefs are well-formed if:
    - All type variable lists are distinct
