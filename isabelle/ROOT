@@ -7,6 +7,7 @@ session Babylon = "HOL-Library" +
     "core"
     "core_passes"
     "elaborator"
+    "graph"
     "interpreter"
     "util"
     "front_end"

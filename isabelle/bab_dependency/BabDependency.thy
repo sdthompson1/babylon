@@ -1,5 +1,5 @@
 theory BabDependency
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "HOL-Library.Multiset" "../bab/Location" "../bab/BabSyntax" "Dependency"
+  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "HOL-Library.Multiset" "../bab/Location" "../bab/BabSyntax" "../graph/Dependency"
 begin
 
 (* Babylon-specific dependency errors *)
