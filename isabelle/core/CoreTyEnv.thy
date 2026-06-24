@@ -45,6 +45,15 @@ record CoreTyEnv =
   (* Type variables that are known to be bound to runtime types - subset of TE_TypeVars *)
   TE_RuntimeTypeVars :: "string fset"
 
+  (* Type variables representing abstract types ("type T;" in a module interface).
+     - Always a subset of TE_TypeVars.
+     - Variables in TE_AbstractTypes can be thought of as global type variables; other
+       type variables are local to the current function.
+     - In the interpreter, TE_AbstractTypes is always empty, since the interpreter only
+       runs fully-linked programs. But in other contexts, where we are separately compiling
+       individual modules, TE_AbstractTypes can be non-empty. *)
+  TE_AbstractTypes :: "string fset"
+
   (* Expected return type of the enclosing function *)
   TE_ReturnType :: CoreType
 

@@ -598,6 +598,8 @@ proof -
   moreover have "default_ctors_match state'' env'"
     using state_env state''_eq state'_eq env'_eq
     unfolding state_matches_env_def default_ctors_match_def by simp
+  moreover have "TE_AbstractTypes env' = {||}"
+    using state_env env'_eq unfolding state_matches_env_def by simp
   ultimately show ?thesis
     unfolding state_matches_env_def by auto
 qed
@@ -843,9 +845,12 @@ proof -
     using state_env state'_eq env'_eq
     unfolding state_matches_env_def default_ctors_match_def by simp
 
+  have abs_tgt: "TE_AbstractTypes env' = {||}"
+    using state_env env'_eq unfolding state_matches_env_def by simp
+
   show ?thesis
     unfolding state_matches_env_def
-    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt ta_tgt dc_tgt
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt nc_tgt cn_tgt swt_tgt ta_tgt dc_tgt abs_tgt
     by blast
 qed
 
@@ -1050,6 +1055,9 @@ proof -
     show "default_ctors_match state' env'"
       using old_sme env'_eq state'_eq
       unfolding state_matches_env_def default_ctors_match_def by simp
+  next
+    show "TE_AbstractTypes env' = {||}"
+      using old_sme env'_eq unfolding state_matches_env_def by simp
   qed
 qed
 
@@ -1905,6 +1913,9 @@ proof -
   moreover have "default_ctors_match state' env"
     using state_env state'_eq
     unfolding state_matches_env_def default_ctors_match_def by simp
+
+  moreover have "TE_AbstractTypes env = {||}"
+    using state_env unfolding state_matches_env_def by blast
 
   ultimately show ?thesis unfolding state_matches_env_def by auto
 qed

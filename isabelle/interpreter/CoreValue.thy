@@ -459,6 +459,8 @@ lemma value_has_type_cong_env_wk:
       and gd: "TE_GhostDatatypes env' = TE_GhostDatatypes env"
       and wf: "tyenv_well_formed env"
       and wf': "tyenv_well_formed env'"
+      and abs: "TE_AbstractTypes env = {||}"
+      and abs': "TE_AbstractTypes env' = {||}"
       and wk: "is_well_kinded env ty"
       and wk': "is_well_kinded env' ty"
       and rt: "is_runtime_type env ty"
@@ -581,16 +583,16 @@ next
     from wf' have payloads_rt': "tyenv_nonghost_payloads_runtime env'"
       unfolding tyenv_well_formed_def by simp
     have payload_wk_src: "is_well_kinded ?payloadSrc payloadTy"
-      using payloads_wk lookup
-      unfolding tyenv_payloads_well_kinded_def by blast
+      using payloads_wk lookup abs
+      unfolding tyenv_payloads_well_kinded_def by simp
     have payload_wk_src': "is_well_kinded ?payloadSrc' payloadTy"
-      using payloads_wk' lookup'
-      unfolding tyenv_payloads_well_kinded_def by blast
+      using payloads_wk' lookup' abs'
+      unfolding tyenv_payloads_well_kinded_def by simp
     have payload_rt_src: "is_runtime_type ?payloadSrcRt payloadTy"
-      using payloads_rt lookup not_ghost dty_eq
+      using payloads_rt lookup not_ghost dty_eq abs
       unfolding tyenv_nonghost_payloads_runtime_def by simp
     have payload_rt_src': "is_runtime_type ?payloadSrcRt' payloadTy"
-      using payloads_rt' lookup' not_ghost' dty_eq
+      using payloads_rt' lookup' not_ghost' dty_eq abs'
       unfolding tyenv_nonghost_payloads_runtime_def by simp
 
     \<comment> \<open>Each of the ctor's tyvars is mapped by ?subst to the corresponding argType. \<close>

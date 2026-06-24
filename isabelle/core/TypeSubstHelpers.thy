@@ -22,10 +22,15 @@ begin
 (* ========================================================================== *)
 
 (* If a pattern is compatible with a type, it is compatible with that type
-   after substitution. (The reverse is not true if ty is a CoreTy_Var.) *)
+   after substitution. (The reverse is not true if ty is a CoreTy_Var.)
+
+   Capture-avoidance: the substitution must not touch the module's abstract types.
+   A constructor payload may mention abstract types (outside the ctor's own type
+   parameters); if subst left those untouched the inner/outer substitutions commute. *)
 lemma pattern_compatible_apply_subst:
   assumes "tyenv_well_formed env"
       and "pattern_compatible env p ty"
+      and "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
   shows "pattern_compatible env p (apply_subst subst ty)"
   using assms
 proof (induction p ty rule: pattern_compatible.induct[case_names Wildcard Bool Int Variant Record, consumes 0])
@@ -49,30 +54,39 @@ next
       pc_payload: "pattern_compatible env payloadPat
                      (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
       by (auto split: option.splits prod.splits)
-    \<comment> \<open>The data-ctor's payload is well-kinded in an env whose tyvars are
-        exactly ctor's tyvars, hence its free vars are a subset. \<close>
-    have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+    \<comment> \<open>The data-ctor's payload is well-kinded in an env whose tyvars are the abstract
+        types together with the ctor's tyvars, hence its free vars are within that set. \<close>
+    have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
       using Variant.prems(1) ctor_lookup
       unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
     have tyvars_distinct: "distinct tyvars"
       using Variant.prems(1) ctor_lookup
       unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
-    have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
+    have payload_tyvars: "type_tyvars payloadTy \<subseteq> fset (TE_AbstractTypes env) \<union> set tyvars"
       using is_well_kinded_type_tyvars_subset[OF payload_wk]
-      by (simp add: fset_of_list.rep_eq)
+      by (simp add: fset_of_list.rep_eq sup_commute)
     \<comment> \<open>Substitution composition: apply_subst subst commutes with the inner
-        tyvar-to-tyArgs subst, since payload free vars stay within tyvars. \<close>
+        tyvar-to-tyArgs subst. Payload free vars are within the ctor's tyvars or are
+        abstract types, which subst leaves untouched. \<close>
+    have tyvars_ok: "\<And>n. n \<in> type_tyvars payloadTy \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom subst"
+    proof -
+      fix n assume "n \<in> type_tyvars payloadTy"
+      with payload_tyvars have "n |\<in>| TE_AbstractTypes env \<or> n \<in> set tyvars"
+        by (simp add: subset_iff)
+      thus "n \<in> set tyvars \<or> n |\<notin>| fmdom subst"
+        using Variant.prems(3) by (auto simp: fmdom_notI)
+    qed
     have compose:
       "apply_subst (fmap_of_list (zip tyvars (map (apply_subst subst) tyArgs))) payloadTy
          = apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-      using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst] .
+      using apply_subst_compose_zip_extra[OF len_eq[symmetric] tyvars_ok tyvars_distinct] .
     \<comment> \<open>IH on payloadPat. \<close>
     have ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
       using CoreTy_Datatype dt_eq by simp
     have payload_subst:
       "pattern_compatible env payloadPat
          (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))"
-      using Variant.IH[OF ctor_lookup refl refl ty_eq Variant.prems(1) pc_payload] .
+      using Variant.IH[OF ctor_lookup refl refl ty_eq Variant.prems(1) pc_payload Variant.prems(3)] .
     show ?thesis
       using ctor_lookup CoreTy_Datatype dt_eq len_eq payload_subst compose by simp
   qed (use Variant.prems in \<open>auto split: option.splits prod.splits\<close>)
@@ -113,7 +127,7 @@ next
         pc_p: "pattern_compatible env p fty"
         using pf_eq ft_eq lens_eq by (auto simp: list_all2_conv_all_nth)
       have ih_pc: "pattern_compatible env p (apply_subst subst fty)"
-        using Record.IH[OF CoreTy_Record pf_in ft_in pf_eq[symmetric] Record.prems(1) pc_p] .
+        using Record.IH[OF CoreTy_Record pf_in ft_in pf_eq[symmetric] Record.prems(1) pc_p Record.prems(3)] .
       have subst_nth: "?subst_fldTys ! i = (fn, apply_subst subst fty)"
         using i_lt lens_eq ft_eq by simp
       show "(case pflds ! i of (pn, p) \<Rightarrow>
@@ -233,6 +247,7 @@ lemma apply_subst_to_callee_env_TE_ProofGoal [simp]:
 lemma pattern_compatible_apply_subst_callee_env:
   assumes "tyenv_well_formed calleeEnv"
       and "pattern_compatible calleeEnv p ty"
+      and "\<And>n. n |\<in>| TE_AbstractTypes calleeEnv \<Longrightarrow> fmlookup subst n = None"
   shows "pattern_compatible (apply_subst_to_callee_env subst callerEnv calleeEnv) p
                             (apply_subst subst ty)"
 proof -
@@ -240,7 +255,7 @@ proof -
                  = TE_DataCtors calleeEnv"
     by simp
   have "pattern_compatible calleeEnv p (apply_subst subst ty)"
-    using pattern_compatible_apply_subst[OF assms] .
+    using pattern_compatible_apply_subst[OF assms(1,2)] assms(3) by blast
   thus ?thesis
     using pattern_compatible_cong_env[OF dc_eq] by simp
 qed
@@ -297,7 +312,12 @@ definition callee_env_subst_ok ::
     (\<forall>n. n |\<in>| TE_TypeVars calleeEnv \<longrightarrow>
          (case fmlookup subst n of
             Some ty' \<Rightarrow> is_well_kinded callerEnv ty'
-          | None \<Rightarrow> n |\<in>| TE_TypeVars callerEnv))"
+          | None \<Rightarrow> n |\<in>| TE_TypeVars callerEnv)) \<and>
+    \<comment> \<open>Capture-avoidance: the substitution does not touch the callee's abstract types.
+        Abstract types appearing in constructor payloads / function signatures (outside
+        the relevant own-type-parameter scope) must be left fixed for the inner/outer
+        substitutions to commute. \<close>
+    (\<forall>n. n |\<in>| TE_AbstractTypes calleeEnv \<longrightarrow> fmlookup subst n = None)"
 
 (* The runtime-tyvar condition is split out separately because it is only needed
    in NotGhost mode. Most consumers will pass it conditionally:
@@ -374,294 +394,6 @@ next
 qed
 
 
-(* Well-formedness of the callee env after substitution. This is the lemma case 6
-   of the type soundness theorem uses to discharge wf_bodyEnv: given that the
-   pre-substitution body env is well-formed and the substitution conditions hold,
-   the substituted env is also well-formed. *)
-lemma apply_subst_to_callee_env_well_formed:
-  assumes wf_callee: "tyenv_well_formed calleeEnv"
-      and wf_caller: "tyenv_well_formed callerEnv"
-      and ok: "callee_env_subst_ok subst callerEnv calleeEnv"
-      and ok_rt: "callee_env_subst_runtime_ok subst callerEnv calleeEnv"
-      and ret_wk: "is_well_kinded callerEnv (apply_subst subst (TE_ReturnType calleeEnv))"
-      and ret_rt: "TE_FunctionGhost calleeEnv = NotGhost \<Longrightarrow>
-                   is_runtime_type callerEnv (apply_subst subst (TE_ReturnType calleeEnv))"
-  shows "tyenv_well_formed (apply_subst_to_callee_env subst callerEnv calleeEnv)"
-proof -
-  let ?be = "apply_subst_to_callee_env subst callerEnv calleeEnv"
-
-  \<comment> \<open>Field-agreement facts pulled out for repeated use. \<close>
-  from ok have
-    gv_eq: "TE_GlobalVars callerEnv = TE_GlobalVars calleeEnv" and
-    gg_eq: "TE_GhostGlobals callerEnv = TE_GhostGlobals calleeEnv" and
-    fns_eq: "TE_Functions callerEnv = TE_Functions calleeEnv" and
-    dt_eq: "TE_Datatypes callerEnv = TE_Datatypes calleeEnv" and
-    dc_eq: "TE_DataCtors callerEnv = TE_DataCtors calleeEnv" and
-    dcbt_eq: "TE_DataCtorsByType callerEnv = TE_DataCtorsByType calleeEnv" and
-    gd_eq: "TE_GhostDatatypes callerEnv = TE_GhostDatatypes calleeEnv"
-    unfolding callee_env_subst_ok_def by auto
-
-  \<comment> \<open>Congruences relating ?be to callerEnv on cleared envs (for the global
-      conjuncts of vars_well_kinded and vars_runtime). \<close>
-  have wk_cleared_caller_eq:
-    "\<And>ty. is_well_kinded (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty
-        = is_well_kinded (callerEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-    by (rule is_well_kinded_cong_env) (simp_all add: dt_eq)
-  have rt_cleared_caller_eq:
-    "\<And>ty. is_runtime_type (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty
-        = is_runtime_type (callerEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-    by (rule is_runtime_type_cong_env) (simp_all add: gd_eq)
-
-  \<comment> \<open>Congruences for the inner-override conjuncts (payloads, fun types, etc.). \<close>
-  have wk_scope_eq:
-    "\<And>tvs t. is_well_kinded (?be \<lparr> TE_TypeVars := tvs \<rparr>) t
-            = is_well_kinded (calleeEnv \<lparr> TE_TypeVars := tvs \<rparr>) t"
-    by (rule is_well_kinded_cong_env) (simp_all add: apply_subst_to_callee_env_def)
-  have rt_scope_eq:
-    "\<And>tvs rtvs t.
-       is_runtime_type (?be \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t
-       = is_runtime_type (calleeEnv \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
-    by (rule is_runtime_type_cong_env) (simp_all add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>Extract conjuncts of well-formedness from both envs. \<close>
-  from wf_callee have
-    callee_vars_wk: "tyenv_vars_well_kinded calleeEnv" and
-    callee_vars_rt: "tyenv_vars_runtime calleeEnv" and
-    callee_ghost_subset: "tyenv_ghost_vars_subset calleeEnv" and
-    callee_ctors_cons: "tyenv_ctors_consistent calleeEnv" and
-    callee_payloads_wk: "tyenv_payloads_well_kinded calleeEnv" and
-    callee_ctor_tyvars_distinct: "tyenv_ctor_tyvars_distinct calleeEnv" and
-    callee_ctors_by_type: "tyenv_ctors_by_type_consistent calleeEnv" and
-    callee_fun_types_wk: "tyenv_fun_types_well_kinded calleeEnv" and
-    callee_fun_tyvars_distinct: "tyenv_fun_tyvars_distinct calleeEnv" and
-    callee_fun_ghost: "tyenv_fun_ghost_constraint calleeEnv" and
-    callee_nonghost_payloads: "tyenv_nonghost_payloads_runtime calleeEnv" and
-    callee_ghost_dt_subset: "tyenv_ghost_datatypes_subset calleeEnv" and
-    callee_rt_subset: "tyenv_runtime_tyvars_subset calleeEnv" and
-    callee_dt_nonempty: "tyenv_datatypes_nonempty calleeEnv"
-    unfolding tyenv_well_formed_def by auto
-
-  from wf_caller have
-    caller_vars_wk: "tyenv_vars_well_kinded callerEnv" and
-    caller_rt_subset: "tyenv_runtime_tyvars_subset callerEnv"
-    unfolding tyenv_well_formed_def by auto
-
-  \<comment> \<open>(1) tyenv_vars_well_kinded ?be \<close>
-  have c1: "tyenv_vars_well_kinded ?be"
-    unfolding tyenv_vars_well_kinded_def
-  proof (intro conjI allI impI)
-    fix name ty
-    assume "fmlookup (TE_LocalVars ?be) name = Some ty"
-    then obtain origTy where
-      orig_lk: "fmlookup (TE_LocalVars calleeEnv) name = Some origTy" and
-      ty_eq: "ty = apply_subst subst origTy"
-      by (auto split: option.splits)
-    from callee_vars_wk orig_lk have "is_well_kinded calleeEnv origTy"
-      unfolding tyenv_vars_well_kinded_def by blast
-    from apply_subst_preserves_well_kinded_callee[OF this ok]
-    show "is_well_kinded ?be ty" using ty_eq by simp
-  next
-    fix name ty
-    assume gv: "fmlookup (TE_GlobalVars ?be) name = Some ty"
-    \<comment> \<open>?be inherits TE_GlobalVars from calleeEnv, which agrees with callerEnv. \<close>
-    hence "fmlookup (TE_GlobalVars callerEnv) name = Some ty"
-      using gv_eq by simp
-    with caller_vars_wk
-    have "is_well_kinded (callerEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      unfolding tyenv_vars_well_kinded_def by blast
-    thus "is_well_kinded (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      using wk_cleared_caller_eq by simp
-  qed
-
-  \<comment> \<open>(2) tyenv_vars_runtime ?be \<close>
-  from wf_caller have caller_vars_rt: "tyenv_vars_runtime callerEnv"
-    unfolding tyenv_well_formed_def by auto
-  have c2: "tyenv_vars_runtime ?be"
-    unfolding tyenv_vars_runtime_def
-  proof (intro conjI allI impI)
-    fix name ty
-    assume A: "fmlookup (TE_LocalVars ?be) name = Some ty
-               \<and> name |\<notin>| TE_GhostLocals ?be"
-    from A have lv: "fmlookup (TE_LocalVars ?be) name = Some ty"
-      and ng: "name |\<notin>| TE_GhostLocals ?be" by simp_all
-    from lv obtain origTy where
-      orig_lk: "fmlookup (TE_LocalVars calleeEnv) name = Some origTy" and
-      ty_eq: "ty = apply_subst subst origTy"
-      by (auto split: option.splits)
-    from ng have ng_callee: "name |\<notin>| TE_GhostLocals calleeEnv" by simp
-    from callee_vars_rt orig_lk ng_callee
-    have "is_runtime_type calleeEnv origTy"
-      unfolding tyenv_vars_runtime_def by blast
-    from apply_subst_preserves_runtime_callee[OF this ok ok_rt]
-    show "is_runtime_type ?be ty" using ty_eq by simp
-  next
-    fix name ty
-    assume A: "fmlookup (TE_GlobalVars ?be) name = Some ty
-               \<and> name |\<notin>| TE_GhostGlobals ?be"
-    from A have gv: "fmlookup (TE_GlobalVars ?be) name = Some ty"
-      and ng: "name |\<notin>| TE_GhostGlobals ?be" by simp_all
-    from gv have gv_caller: "fmlookup (TE_GlobalVars callerEnv) name = Some ty"
-      using gv_eq by simp
-    from ng have ng_caller: "name |\<notin>| TE_GhostGlobals callerEnv"
-      using gg_eq by simp
-    from caller_vars_rt gv_caller ng_caller
-    have "is_runtime_type (callerEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      unfolding tyenv_vars_runtime_def by blast
-    thus "is_runtime_type (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      using rt_cleared_caller_eq by simp
-  qed
-
-  \<comment> \<open>(3) tyenv_ghost_vars_subset ?be: TE_GhostLocals subset of TE_LocalVars dom (preserved
-       under fmmap), TE_GhostGlobals subset of TE_GlobalVars (inherited). \<close>
-  have c3: "tyenv_ghost_vars_subset ?be"
-    using callee_ghost_subset
-    unfolding tyenv_ghost_vars_subset_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(4) tyenv_return_type_well_kinded ?be: TE_ReturnType ?be = apply_subst subst (TE_ReturnType calleeEnv);
-       given as a premise. But the predicate checks well-kindedness in ?be, not callerEnv.
-       Use congruence to bridge. \<close>
-  have wk_be_caller_eq:
-    "\<And>ty. is_well_kinded ?be ty = is_well_kinded callerEnv ty"
-    by (rule is_well_kinded_cong_env) (simp_all add: dt_eq[symmetric])
-  have c4: "tyenv_return_type_well_kinded ?be"
-    unfolding tyenv_return_type_well_kinded_def
-    using ret_wk wk_be_caller_eq by simp
-
-  \<comment> \<open>(4b) tyenv_return_type_runtime ?be: TE_FunctionGhost ?be = TE_FunctionGhost calleeEnv and
-       TE_ReturnType ?be = apply_subst subst (TE_ReturnType calleeEnv); the runtime fact is the
-       ret_rt premise, bridged from callerEnv to ?be by congruence (?be and callerEnv share
-       TE_RuntimeTypeVars and TE_GhostDatatypes — the latter via dt/gd_eq). \<close>
-  have rt_be_caller_eq:
-    "\<And>ty. is_runtime_type ?be ty = is_runtime_type callerEnv ty"
-    by (rule is_runtime_type_cong_env) (simp_all add: gd_eq[symmetric])
-  have c4b: "tyenv_return_type_runtime ?be"
-    unfolding tyenv_return_type_runtime_def
-    using ret_rt rt_be_caller_eq by simp
-
-  \<comment> \<open>(5) tyenv_ctors_consistent ?be: TE_DataCtors and TE_Datatypes inherited from calleeEnv. \<close>
-  have c5: "tyenv_ctors_consistent ?be"
-    using callee_ctors_cons unfolding tyenv_ctors_consistent_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(6) tyenv_payloads_well_kinded ?be: inner override on TE_TypeVars; TE_DataCtors,
-       TE_Datatypes inherited. \<close>
-  have c6: "tyenv_payloads_well_kinded ?be"
-    unfolding tyenv_payloads_well_kinded_def
-  proof (intro allI impI)
-    fix ctorName dtName tyVars payload
-    assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
-    hence ctor_lk: "fmlookup (TE_DataCtors calleeEnv) ctorName = Some (dtName, tyVars, payload)"
-      by (simp add: apply_subst_to_callee_env_def)
-    with callee_payloads_wk
-    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
-      unfolding tyenv_payloads_well_kinded_def by blast
-    thus "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
-      using wk_scope_eq by simp
-  qed
-
-  \<comment> \<open>(7) tyenv_ctor_tyvars_distinct ?be: TE_DataCtors inherited. \<close>
-  have c7: "tyenv_ctor_tyvars_distinct ?be"
-    using callee_ctor_tyvars_distinct unfolding tyenv_ctor_tyvars_distinct_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(8) tyenv_ctors_by_type_consistent ?be: TE_DataCtorsByType, TE_DataCtors inherited. \<close>
-  have c8: "tyenv_ctors_by_type_consistent ?be"
-    using callee_ctors_by_type unfolding tyenv_ctors_by_type_consistent_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(9) tyenv_fun_types_well_kinded ?be: inner override; TE_Functions, TE_Datatypes inherited. \<close>
-  have c9: "tyenv_fun_types_well_kinded ?be"
-    unfolding tyenv_fun_types_well_kinded_def
-  proof (intro allI impI)
-    fix funName info
-    assume "fmlookup (TE_Functions ?be) funName = Some info"
-    hence info_lk: "fmlookup (TE_Functions calleeEnv) funName = Some info"
-      by (simp add: apply_subst_to_callee_env_def)
-    with callee_fun_types_wk have
-      args_wk: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
-                  is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty"
-      and ret_wk_inner: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
-                                  (FI_ReturnType info)"
-      unfolding tyenv_fun_types_well_kinded_def by auto
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
-              is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
-          is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info)"
-      using args_wk ret_wk_inner wk_scope_eq by simp
-  qed
-
-  \<comment> \<open>(10) tyenv_fun_tyvars_distinct ?be: TE_Functions inherited. \<close>
-  have c10: "tyenv_fun_tyvars_distinct ?be"
-    using callee_fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(12) tyenv_fun_ghost_constraint ?be: inner override; TE_Functions inherited. \<close>
-  have c12: "tyenv_fun_ghost_constraint ?be"
-    unfolding tyenv_fun_ghost_constraint_def Let_def
-  proof (intro allI impI, elim conjE)
-    fix funName info
-    assume info_lk_be: "fmlookup (TE_Functions ?be) funName = Some info"
-       and ng_info: "FI_Ghost info = NotGhost"
-    from info_lk_be have info_lk: "fmlookup (TE_Functions calleeEnv) funName = Some info"
-      by (simp add: apply_subst_to_callee_env_def)
-    from callee_fun_ghost info_lk ng_info have
-      "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
-            is_runtime_type (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
-                                          TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
-       is_runtime_type (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
-                                     TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
-                       (FI_ReturnType info)"
-      unfolding tyenv_fun_ghost_constraint_def Let_def by auto
-    thus "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
-              is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
-                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
-           is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
-                                   TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
-                           (FI_ReturnType info)"
-      using rt_scope_eq by simp
-  qed
-
-  \<comment> \<open>(13) tyenv_nonghost_payloads_runtime ?be: inner override; TE_DataCtors,
-        TE_GhostDatatypes inherited. \<close>
-  have c13: "tyenv_nonghost_payloads_runtime ?be"
-    unfolding tyenv_nonghost_payloads_runtime_def
-  proof (intro allI impI)
-    fix ctorName dtName tyVars payload
-    assume ctor_lk_be: "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
-       and ng_dt: "dtName |\<notin>| TE_GhostDatatypes ?be"
-    from ctor_lk_be have ctor_lk: "fmlookup (TE_DataCtors calleeEnv) ctorName = Some (dtName, tyVars, payload)"
-      by (simp add: apply_subst_to_callee_env_def)
-    from ng_dt have ng_dt_callee: "dtName |\<notin>| TE_GhostDatatypes calleeEnv"
-      by (simp add: apply_subst_to_callee_env_def)
-    from callee_nonghost_payloads ctor_lk ng_dt_callee
-    have "is_runtime_type (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyVars,
-                                        TE_RuntimeTypeVars := fset_of_list tyVars \<rparr>) payload"
-      unfolding tyenv_nonghost_payloads_runtime_def by blast
-    thus "is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list tyVars,
-                                  TE_RuntimeTypeVars := fset_of_list tyVars \<rparr>) payload"
-      using rt_scope_eq by simp
-  qed
-
-  \<comment> \<open>(14) tyenv_ghost_datatypes_subset ?be: TE_GhostDatatypes, TE_Datatypes inherited. \<close>
-  have c14: "tyenv_ghost_datatypes_subset ?be"
-    using callee_ghost_dt_subset unfolding tyenv_ghost_datatypes_subset_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  \<comment> \<open>(15) tyenv_runtime_tyvars_subset ?be: TE_RuntimeTypeVars and TE_TypeVars
-       both come from callerEnv, so this reduces to the caller's subset clause. \<close>
-  have c15: "tyenv_runtime_tyvars_subset ?be"
-    using caller_rt_subset unfolding tyenv_runtime_tyvars_subset_def by simp
-
-  \<comment> \<open>(16) tyenv_datatypes_nonempty ?be: TE_Datatypes and TE_DataCtorsByType inherited. \<close>
-  have c16: "tyenv_datatypes_nonempty ?be"
-    using callee_dt_nonempty unfolding tyenv_datatypes_nonempty_def
-    by (simp add: apply_subst_to_callee_env_def)
-
-  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c12 c13 c14 c15 c16
-  show ?thesis unfolding tyenv_well_formed_def by simp
-qed
-
-
 (* ========================================================================== *)
 (* Shared setup for FunctionCall substitution proofs                           *)
 (* ========================================================================== *)
@@ -692,13 +424,18 @@ lemma function_call_subst_setup:
     and "length (map (apply_subst subst) tyArgs) = length (FI_TyArgs funInfo)"
     and "distinct (FI_TyArgs funInfo)"
     and "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
-           type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
-    and "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
+           \<forall>n \<in> type_tyvars t. n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+    and "\<forall>n \<in> type_tyvars (FI_ReturnType funInfo). n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
     and "apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                          (FI_ReturnType funInfo))
            = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs)))
                          (FI_ReturnType funInfo)"
 proof -
+  \<comment> \<open>The substitution leaves the callee's abstract types untouched (capture-avoidance). \<close>
+  from ok have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes calleeEnv \<Longrightarrow> fmlookup subst n = None"
+    unfolding callee_env_subst_ok_def by auto
+  have abs_sub: "TE_AbstractTypes calleeEnv |\<subseteq>| TE_TypeVars calleeEnv"
+    using wf tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
   show "fmlookup (TE_Functions (apply_subst_to_callee_env subst callerEnv calleeEnv)) fnName
           = Some funInfo"
     using fn_lookup by simp
@@ -732,36 +469,51 @@ proof -
 
   have fi_args_wk:
     "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
-       is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+       is_well_kinded (calleeEnv \<lparr> TE_TypeVars := TE_AbstractTypes calleeEnv |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
     using wf fn_lookup
     unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fi_ret_wk:
-    "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
+    "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := TE_AbstractTypes calleeEnv |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                    (FI_ReturnType funInfo)"
     using wf fn_lookup
     unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
 
+  \<comment> \<open>Each signature type's tyvars are within the abstract types together with the
+      function's own type parameters; the abstract ones are not in subst's domain. \<close>
   show fi_args_tyvars:
-    "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
-  proof
-    fix t assume "t \<in> fst ` set (FI_TmArgs funInfo)"
-    with fi_args_wk
-    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+    "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
+       \<forall>n \<in> type_tyvars t. n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+  proof (intro ballI)
+    fix t n assume t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" and n_in: "n \<in> type_tyvars t"
+    from t_in fi_args_wk
+    have "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := TE_AbstractTypes calleeEnv |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
       by blast
-    from is_well_kinded_type_tyvars_subset[OF this]
-    show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
-      by (simp add: fset_of_list.rep_eq)
+    from is_well_kinded_type_tyvars_subset[OF this] n_in
+    have "n |\<in>| TE_AbstractTypes calleeEnv \<or> n \<in> set (FI_TyArgs funInfo)"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+      using abs_no_subst by (auto simp: fmdom_notI)
   qed
 
-  show fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
-    using is_well_kinded_type_tyvars_subset[OF fi_ret_wk]
-    by (simp add: fset_of_list.rep_eq)
+  show fi_ret_tyvars:
+    "\<forall>n \<in> type_tyvars (FI_ReturnType funInfo). n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+  proof
+    fix n assume n_in: "n \<in> type_tyvars (FI_ReturnType funInfo)"
+    from is_well_kinded_type_tyvars_subset[OF fi_ret_wk] n_in
+    have "n |\<in>| TE_AbstractTypes calleeEnv \<or> n \<in> set (FI_TyArgs funInfo)"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+      using abs_no_subst by (auto simp: fmdom_notI)
+  qed
 
+  have ret_tyvars_ok: "\<And>n. n \<in> type_tyvars (FI_ReturnType funInfo)
+                            \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+    using fi_ret_tyvars by blast
   show "apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                         (FI_ReturnType funInfo))
           = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs)))
                         (FI_ReturnType funInfo)"
-    using apply_subst_compose_zip[OF len_tyArgs[symmetric] fi_ret_tyvars tyArgs_distinct, of subst]
-    by simp
+    using apply_subst_compose_zip_extra[OF len_tyArgs[symmetric] ret_tyvars_ok tyArgs_distinct] by simp
 qed
 
 
@@ -877,14 +629,30 @@ next
     case None
     with lookup have gv: "fmlookup (TE_GlobalVars calleeEnv) name = Some lookupTy"
       by (simp add: tyenv_lookup_var_def)
-    \<comment> \<open>Global's type is closed (well-formed env), so apply_subst is identity. \<close>
+    \<comment> \<open>Global's type only mentions the module's abstract types (well-formed env), which
+        the substitution leaves untouched (capture-avoidance from callee_env_subst_ok),
+        so apply_subst is the identity on it. \<close>
     from gv CoreTm_Var.prems(2) have wk_cleared:
-      "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) lookupTy"
+      "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := TE_AbstractTypes calleeEnv \<rparr>) lookupTy"
       unfolding tyenv_well_formed_def tyenv_vars_well_kinded_def by blast
-    have tyvars_empty: "type_tyvars lookupTy = {}"
+    have lookupTy_tyvars: "type_tyvars lookupTy \<subseteq> fset (TE_AbstractTypes calleeEnv)"
       using is_well_kinded_type_tyvars_subset[OF wk_cleared] by simp
+    from CoreTm_Var.prems(3) have abs_no_subst:
+      "\<And>n. n |\<in>| TE_AbstractTypes calleeEnv \<Longrightarrow> fmlookup subst n = None"
+      unfolding callee_env_subst_ok_def by auto
     have ty_closed: "apply_subst subst lookupTy = lookupTy"
-      using tyvars_empty by (simp add: apply_subst_disjoint_id)
+    proof (rule apply_subst_disjoint_id)
+      show "type_tyvars lookupTy \<inter> fset (fmdom subst) = {}"
+      proof (rule ccontr)
+        assume "type_tyvars lookupTy \<inter> fset (fmdom subst) \<noteq> {}"
+        then obtain n where n_ty: "n \<in> type_tyvars lookupTy" and n_dom: "n \<in> fset (fmdom subst)"
+          by auto
+        from n_ty lookupTy_tyvars have "n |\<in>| TE_AbstractTypes calleeEnv"
+          by auto
+        with abs_no_subst have "fmlookup subst n = None" by simp
+        with n_dom show False by auto
+      qed
+    qed
     from None have
       lookup_subst: "tyenv_lookup_var (apply_subst_to_callee_env subst callerEnv calleeEnv) name
                        = fmlookup (TE_GlobalVars calleeEnv) name"
@@ -1353,11 +1121,12 @@ next
       have ti_in: "ti \<in> fst ` set (FI_TmArgs funInfo)"
         using i_bound_args fi_arg_eq
         by (force simp: image_iff in_set_conv_nth)
-      with fi_args_tyvars have ti_tyvars: "type_tyvars ti \<subseteq> set (FI_TyArgs funInfo)" by blast
+      have ti_tyvars: "\<And>n. n \<in> type_tyvars ti \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+        using fi_args_tyvars ti_in by blast
       have actual_compose:
         "apply_subst subst actualTy = apply_subst ?subst_innerSubst ti"
         unfolding actual_eq2
-        using apply_subst_compose_zip[OF len_tyArgs[symmetric] ti_tyvars tyArgs_distinct, of subst]
+        using apply_subst_compose_zip_extra[OF len_tyArgs[symmetric] ti_tyvars tyArgs_distinct]
         by simp
       from ih_result actual_compose have ih_result':
         "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
@@ -1440,19 +1209,30 @@ next
     using CoreTm_VariantCtor.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
 
-  \<comment> \<open>payloadTy's type variables are within set tyvars. \<close>
-  have payload_wk: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+  \<comment> \<open>payloadTy's type variables are within the abstract types together with set tyvars.
+      The abstract ones are not in subst's domain (capture-avoidance). \<close>
+  have payload_wk: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := TE_AbstractTypes calleeEnv |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
     using CoreTm_VariantCtor.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
-  have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
-    using is_well_kinded_type_tyvars_subset[OF payload_wk]
-    by (simp add: fset_of_list.rep_eq)
+  from CoreTm_VariantCtor.prems(3) have abs_no_subst:
+    "\<And>n. n |\<in>| TE_AbstractTypes calleeEnv \<Longrightarrow> fmlookup subst n = None"
+    unfolding callee_env_subst_ok_def by auto
+  have payload_tyvars_ok:
+    "\<And>n. n \<in> type_tyvars payloadTy \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom subst"
+  proof -
+    fix n assume n_in: "n \<in> type_tyvars payloadTy"
+    from is_well_kinded_type_tyvars_subset[OF payload_wk] n_in
+    have "n |\<in>| TE_AbstractTypes calleeEnv \<or> n \<in> set tyvars"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set tyvars \<or> n |\<notin>| fmdom subst"
+      using abs_no_subst by (auto simp: fmdom_notI)
+  qed
 
   \<comment> \<open>Substitution composition for the payload. \<close>
   have payload_compose:
     "apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)
        = apply_subst (fmap_of_list (zip tyvars ?subst_tyArgs)) payloadTy"
-    using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst]
+    using apply_subst_compose_zip_extra[OF len_eq[symmetric] payload_tyvars_ok tyvars_distinct]
     by simp
 
   have payload_subst_compose:
@@ -1636,14 +1416,25 @@ next
     using CoreTm_VariantProj.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
 
-  \<comment> \<open>payloadTy's type variables are within set tyvars (from tyenv_payloads_well_kinded
-      via is_well_kinded_type_tyvars_subset). \<close>
-  have payload_wk: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+  \<comment> \<open>payloadTy's type variables are within the abstract types together with set tyvars
+      (from tyenv_payloads_well_kinded); the abstract ones are not in subst's domain
+      (capture-avoidance from callee_env_subst_ok). \<close>
+  have payload_wk: "is_well_kinded (calleeEnv \<lparr> TE_TypeVars := TE_AbstractTypes calleeEnv |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
     using CoreTm_VariantProj.prems(2) ctor_lookup
     unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by blast
-  have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
-    using is_well_kinded_type_tyvars_subset[OF payload_wk]
-    by (simp add: fset_of_list.rep_eq)
+  from CoreTm_VariantProj.prems(3) have abs_no_subst:
+    "\<And>n. n |\<in>| TE_AbstractTypes calleeEnv \<Longrightarrow> fmlookup subst n = None"
+    unfolding callee_env_subst_ok_def by auto
+  have payload_tyvars_ok:
+    "\<And>n. n \<in> type_tyvars payloadTy \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom subst"
+  proof -
+    fix n assume n_in: "n \<in> type_tyvars payloadTy"
+    from is_well_kinded_type_tyvars_subset[OF payload_wk] n_in
+    have "n |\<in>| TE_AbstractTypes calleeEnv \<or> n \<in> set tyvars"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set tyvars \<or> n |\<notin>| fmdom subst"
+      using abs_no_subst by (auto simp: fmdom_notI)
+  qed
 
   \<comment> \<open>Substitution composition: pushing the outer subst through the inner zip
       substitution gives the same result as composing them. \<close>
@@ -1651,7 +1442,7 @@ next
     "apply_subst subst ty
        = apply_subst (fmap_of_list (zip tyvars (map (apply_subst subst) tyArgs))) payloadTy"
     unfolding ty_eq
-    using apply_subst_compose_zip[OF len_eq[symmetric] payload_tyvars tyvars_distinct, of subst]
+    using apply_subst_compose_zip_extra[OF len_eq[symmetric] payload_tyvars_ok tyvars_distinct]
     by simp
 
   show ?case
@@ -1694,10 +1485,14 @@ next
   have pats_eq: "map fst ?subst_arms = map fst arms"
     by (induction arms) auto
 
-  \<comment> \<open>Pattern compatibility transfers to the substituted env / type. \<close>
+  \<comment> \<open>Pattern compatibility transfers to the substituted env / type. The
+      substitution leaves the callee's abstract types untouched (capture-avoidance). \<close>
+  from CoreTm_Match.prems(3) have abs_no_subst:
+    "\<And>n. n |\<in>| TE_AbstractTypes calleeEnv \<Longrightarrow> fmlookup subst n = None"
+    unfolding callee_env_subst_ok_def by auto
   have pats_compat_subst:
     "list_all (\<lambda>p. pattern_compatible ?be p (apply_subst subst scrutTy)) (map fst ?subst_arms)"
-    using pats_compat pats_eq CoreTm_Match.prems(2)
+    using pats_compat pats_eq CoreTm_Match.prems(2) abs_no_subst
     by (induction arms)
        (auto intro: pattern_compatible_apply_subst_callee_env)
 

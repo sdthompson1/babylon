@@ -220,35 +220,42 @@ qed simp_all
 
 (* Specialization lemma:
    When substituting a type runtime-valid in "env with TypeVars/RuntimeTypeVars set to the
-   type parameters" by a fully-populated zip substitution mapping each type parameter to a
-   runtime type in env, the result is runtime-valid in env. *)
+   module's abstract types together with the type parameters" by a fully-populated zip
+   substitution mapping each type parameter to a runtime type in env, the result is
+   runtime-valid in env. The abstract runtime tyvars (TE_AbstractTypes env |\<inter>|
+   TE_RuntimeTypeVars env) remain in scope after substitution because they are runtime
+   tyvars of env. *)
 lemma apply_subst_specializes_runtime:
-  assumes src_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                           TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>) ty"
+  assumes src_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
+                                           TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                                  |\<union>| fset_of_list tyvars \<rparr>) ty"
     and tys_rt: "list_all (is_runtime_type env) tys"
     and len_eq: "length tyvars = length tys"
   shows "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tys)) ty)"
 proof (rule apply_subst_preserves_runtime[OF src_rt])
   show "TE_GhostDatatypes env =
-          TE_GhostDatatypes (env \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                    TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>)" by simp
+          TE_GhostDatatypes (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
+                                    TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                           |\<union>| fset_of_list tyvars \<rparr>)" by simp
 next
-  fix n assume "n |\<in>| TE_RuntimeTypeVars (env \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                                  TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>)"
-  hence "n \<in> set tyvars" by (simp add: fset_of_list.rep_eq)
-  then obtain i where i_bound: "i < length tyvars" and nth_eq: "tyvars ! i = n"
-    by (metis in_set_conv_nth)
-  with len_eq have i_bound_tys: "i < length tys" by simp
+  fix n assume "n |\<in>| TE_RuntimeTypeVars (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
+                  TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                         |\<union>| fset_of_list tyvars \<rparr>)"
+  hence n_in: "n |\<in>| TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<or> n \<in> set tyvars"
+    by (simp add: fset_of_list.rep_eq)
   show "case fmlookup (fmap_of_list (zip tyvars tys)) n of
           Some ty' \<Rightarrow> is_runtime_type env ty'
         | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
   proof (cases "fmlookup (fmap_of_list (zip tyvars tys)) n")
     case None
+    \<comment> \<open>n is not a substituted type parameter, so it is an abstract runtime tyvar, which
+        is in TE_RuntimeTypeVars env. \<close>
     hence "n \<notin> fst ` set (zip tyvars tys)"
       by (simp add: fmap_of_list.rep_eq map_of_eq_None_iff)
-    with i_bound i_bound_tys nth_eq len_eq have False
-      by (metis in_set_conv_nth list.set_map map_fst_zip)
-    thus ?thesis ..
+    hence "n \<notin> set tyvars" using len_eq by (meson map_of_eq_None_iff map_of_zip_is_None)
+    with n_in have "n |\<in>| TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env" by simp
+    hence "n |\<in>| TE_RuntimeTypeVars env" by simp
+    thus ?thesis using None by simp
   next
     case (Some ty')
     hence "ty' \<in> set tys"
@@ -276,56 +283,113 @@ lemma fmlookup_zip_map:
   by (simp add: fmlookup_of_list)
 
 (* Applying a substitution built from (vars -> map (apply_subst s) tys) is the same
-   as first applying the (vars -> tys) substitution, then applying s. Requires that
-   all type variables of ty are in vars and that vars is distinct. *)
+   as first applying the (vars -> tys) substitution, then applying s.
+
+   This is the capture-avoiding form: the type may mention type variables outside `vars`,
+   provided `s` is the identity on them (they are not in s's domain). Concretely, a
+   payload/signature type may mention module-level abstract types (outside the function/ctor's
+   own type parameters `vars`), and as long as the outer substitution `s` does not touch those
+   abstract types, the two substitution orders still commute.
+
+   See also the specialized form, apply_subst_compose_zip, below. *)
+lemma apply_subst_compose_zip_extra:
+  assumes len_eq: "length vars = length tys"
+      and tyvars_ok: "\<And>n. n \<in> type_tyvars ty \<Longrightarrow> n \<in> set vars \<or> n |\<notin>| fmdom s"
+      and distinct_vars: "distinct vars"
+  shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
+       = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
+  using assms
+proof (induction ty)
+  case (CoreTy_Var n)
+  show ?case
+  proof (cases "n \<in> set vars")
+    case True
+    then obtain i where i_bound: "i < length vars" and vars_i: "vars ! i = n"
+      by (metis in_set_conv_nth)
+    with len_eq have i_bound_tys: "i < length tys" by simp
+    have lookup_eq: "fmlookup (fmap_of_list (zip vars tys)) n = Some (tys ! i)"
+      using i_bound i_bound_tys vars_i distinct_vars
+      by (metis fmap_of_list.rep_eq len_eq map_of_zip_nth)
+    hence "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n
+         = Some (apply_subst s (tys ! i))"
+      by (simp add: len_eq fmlookup_zip_map)
+    thus ?thesis using lookup_eq by simp
+  next
+    case False
+    \<comment> \<open>n not among vars: not in either zip's domain, and s fixes it. \<close>
+    from False have not_in_zip: "fmlookup (fmap_of_list (zip vars tys)) n = None"
+      by (simp add: fmlookup_of_list len_eq)
+    from False have not_in_zip2: "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n = None"
+      by (simp add: fmlookup_of_list len_eq)
+    from CoreTy_Var.prems(2)[of n] False have "n |\<notin>| fmdom s" by simp
+    hence "fmlookup s n = None" by (simp add: fmdom_notD)
+    thus ?thesis using not_in_zip not_in_zip2 by simp
+  qed
+next
+  case (CoreTy_Datatype name tyargs)
+  have "\<And>arg. arg \<in> set tyargs \<Longrightarrow>
+          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) arg
+        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) arg)"
+    using CoreTy_Datatype.IH CoreTy_Datatype.prems(2) distinct_vars len_eq by auto
+  thus ?case by simp
+next
+  case (CoreTy_Record flds)
+  have "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow>
+          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) t
+        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t)"
+  proof -
+    fix nm t assume mem: "(nm, t) \<in> set flds"
+    have "\<And>n. n \<in> type_tyvars t \<Longrightarrow> n \<in> set vars \<or> n |\<notin>| fmdom s"
+      using CoreTy_Record.prems(2) mem by force
+    thus "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) t
+        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t)"
+      using CoreTy_Record.IH mem distinct_vars len_eq by simp
+  qed
+  hence "map (\<lambda>(nm, t). (nm, apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) t)) flds
+       = map (\<lambda>(nm, t). (nm, apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t))) flds"
+    by (induction flds) auto
+  also have "... = map ((\<lambda>(nm, t). (nm, apply_subst s t)) \<circ>
+                        (\<lambda>(nm, t). (nm, apply_subst (fmap_of_list (zip vars tys)) t))) flds"
+    by (simp add: case_prod_unfold comp_def)
+  finally show ?case by simp
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by simp
+qed simp_all
+
+(* Corollary of apply_subst_compose_zip_extra for mapping over a list of types: each
+   type may mention variables outside `vars` provided `s` fixes them. *)
+lemma map_apply_subst_compose_zip_extra:
+  assumes len_eq: "length vars = length tys"
+      and tyvars_ok: "\<And>t n. t \<in> set ts \<Longrightarrow> n \<in> type_tyvars t \<Longrightarrow> n \<in> set vars \<or> n |\<notin>| fmdom s"
+      and distinct_vars: "distinct vars"
+  shows "map (apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys)))) ts
+       = map (apply_subst s) (map (apply_subst (fmap_of_list (zip vars tys))) ts)"
+proof -
+  have "\<And>t. t \<in> set ts \<Longrightarrow>
+          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) t
+          = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t)"
+  proof -
+    fix t assume t_in: "t \<in> set ts"
+    have "\<And>n. n \<in> type_tyvars t \<Longrightarrow> n \<in> set vars \<or> n |\<notin>| fmdom s"
+      using tyvars_ok t_in by blast
+    thus "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) t
+          = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t)"
+      using apply_subst_compose_zip_extra[OF len_eq _ distinct_vars] by blast
+  qed
+  thus ?thesis by simp
+qed
+
+(* Specialization of apply_subst_compose_zip_extra: when all type variables of ty are in vars,
+   the side condition on s's domain is trivially satisfied. *)
 lemma apply_subst_compose_zip:
   assumes "length vars = length tys"
       and "type_tyvars ty \<subseteq> set vars"
       and "distinct vars"
   shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
-  using assms
-proof (induction ty)
-  case (CoreTy_Var n)
-  from CoreTy_Var.prems(2) have "n \<in> set vars" by simp
-  then obtain i where i_bound: "i < length vars" and vars_i: "vars ! i = n"
-    by (metis in_set_conv_nth)
-  with CoreTy_Var.prems(1) have i_bound_tys: "i < length tys" by simp
-  have lookup_eq: "fmlookup (fmap_of_list (zip vars tys)) n = Some (tys ! i)"
-    using i_bound i_bound_tys vars_i CoreTy_Var.prems(1,3)
-    by (metis fmap_of_list.rep_eq map_of_zip_nth)
-  hence "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n
-       = Some (apply_subst s (tys ! i))"
-    by (simp add: CoreTy_Var.prems(1) fmlookup_zip_map)
-  thus ?case using lookup_eq by simp
-next
-  case (CoreTy_Datatype name tyargs)
-  have "\<forall>ty \<in> set tyargs. type_tyvars ty \<subseteq> set vars"
-    using CoreTy_Datatype.prems(2) by auto
-  thus ?case
-    using CoreTy_Datatype.IH CoreTy_Datatype.prems(1,3) by (induction tyargs) auto
-next
-  case (CoreTy_Record flds)
-  have flds_tyvars: "\<forall>(name, ty) \<in> set flds. type_tyvars ty \<subseteq> set vars"
-    using CoreTy_Record.prems(2) by fastforce
-  have "\<forall>(name, ty) \<in> set flds.
-          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty
-        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
-    using CoreTy_Record.IH CoreTy_Record.prems(1,3) flds_tyvars by fastforce
-  hence "map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) ty)) flds
-       = map (\<lambda>(name, ty). (name, apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
-    by (induction flds) auto
-  also have "... = map ((\<lambda>(name, ty). (name, apply_subst s ty)) \<circ>
-                        (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars tys)) ty))) flds"
-    by (simp add: case_prod_unfold comp_def)
-  also have "... = map (\<lambda>(name, ty). (name, apply_subst s ty))
-                       (map (\<lambda>(name, ty). (name, apply_subst (fmap_of_list (zip vars tys)) ty)) flds)"
-    by simp
-  finally show ?case by simp
-next
-  case (CoreTy_Array elemTy dims)
-  thus ?case by simp
-qed simp_all
+  using assms apply_subst_compose_zip_extra[where vars = vars and tys = tys and ty = ty and s = s]
+  by blast
 
 (* Corollary for mapping over a list of types *)
 lemma map_apply_subst_compose_zip:

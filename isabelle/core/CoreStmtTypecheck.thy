@@ -730,29 +730,33 @@ proof -
     ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                 (FI_ReturnType funInfo)"
     by blast
-  \<comment> \<open>Well-kinded part: the declared return type is well-kinded under the function's
-      type parameters, and the (well-kinded) type args specialize it.\<close>
+  \<comment> \<open>Well-kinded part: the declared return type is well-kinded under the module's
+      abstract types together with the function's type parameters, and the
+      (well-kinded) type args specialize it.\<close>
+  have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
+    using wf tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
   have "tyenv_fun_types_well_kinded env"
     using wf tyenv_well_formed_def by blast
-  hence ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+  hence ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
                                 (FI_ReturnType funInfo)"
     using fn_lookup tyenv_fun_types_well_kinded_def by blast
   have wk: "is_well_kinded env retTy"
-    using apply_subst_specializes_well_kinded len_tyargs ret_wk ty_eq tyargs_wk by simp
+    using apply_subst_specializes_well_kinded[OF ret_wk tyargs_wk len_tyargs[symmetric] abs_sub] ty_eq by simp
   \<comment> \<open>Runtime part (NotGhost only).\<close>
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env retTy"
   proof
     assume ng: "ghost = NotGhost"
     have "tyenv_fun_ghost_constraint env"
       using wf tyenv_well_formed_def by blast
-    hence ret_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                          TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+    hence ret_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo),
+                                          TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                                 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
                                   (FI_ReturnType funInfo)"
       using fn_lookup not_ghost_fn[rule_format, OF ng] tyenv_fun_ghost_constraint_def Let_def
       by (meson GhostOrNot.exhaust)
     show "is_runtime_type env retTy"
-      using ty_eq apply_subst_specializes_runtime
-      by (simp add: len_tyargs ret_rt tyargs_rt[rule_format, OF ng])
+      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt[rule_format, OF ng] len_tyargs[symmetric]]
+      by simp
   qed
   ultimately show ?thesis by blast
 qed

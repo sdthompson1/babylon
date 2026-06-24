@@ -320,33 +320,38 @@ next
   qed
 qed (simp_all)
 
-(* Specialization lemma: when substituting a type well-kinded in "env with TypeVars set to
-   the list of type parameters" by a fully-populated zip substitution mapping each type
-   parameter to a type well-kinded in env, the result is well-kinded in env. This is the
-   "call-site specialization" pattern for polymorphic functions and datatypes. *)
+(* Specialization lemma. Take a type that is well-kinded in env, but with its TypeVars replaced
+   by the module's abstract types together with a list of type parameters. Substitute each type
+   parameter with a type well-kinded in env (via a fully-populated zip substitution). Then the
+   result is well-kinded in env itself. This is the "call-site specialization" pattern for
+   polymorphic functions and datatypes. The abstract types (TE_AbstractTypes env) stay in scope
+   after substitution because they are already in TE_TypeVars env. *)
 lemma apply_subst_specializes_well_kinded:
-  assumes src_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) ty"
+  assumes src_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>) ty"
     and tys_wk: "list_all (is_well_kinded env) tys"
     and len_eq: "length tyvars = length tys"
+    and abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
   shows "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tys)) ty)"
 proof (rule apply_subst_preserves_well_kinded[OF src_wk])
-  show "TE_Datatypes env = TE_Datatypes (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>)" by simp
+  show "TE_Datatypes env = TE_Datatypes (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>)"
+    by simp
 next
-  fix n assume "n |\<in>| TE_TypeVars (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>)"
-  hence "n \<in> set tyvars" by (simp add: fset_of_list.rep_eq)
-  then obtain i where i_bound: "i < length tyvars" and nth_eq: "tyvars ! i = n"
-    by (metis in_set_conv_nth)
-  with len_eq have i_bound_tys: "i < length tys" by simp
+  fix n assume "n |\<in>| TE_TypeVars (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>)"
+  hence n_in: "n |\<in>| TE_AbstractTypes env \<or> n \<in> set tyvars"
+    by (simp add: fset_of_list.rep_eq)
   show "case fmlookup (fmap_of_list (zip tyvars tys)) n of
           Some ty' \<Rightarrow> is_well_kinded env ty'
         | None \<Rightarrow> n |\<in>| TE_TypeVars env"
   proof (cases "fmlookup (fmap_of_list (zip tyvars tys)) n")
     case None
+    \<comment> \<open>n is not a substituted type parameter, so it must be an abstract type, which is
+        in TE_TypeVars env. \<close>
     hence "n \<notin> fst ` set (zip tyvars tys)"
       by (simp add: fmap_of_list.rep_eq map_of_eq_None_iff)
-    with i_bound i_bound_tys nth_eq len_eq have False
-      by (metis in_set_conv_nth list.set_map map_fst_zip)
-    thus ?thesis ..
+    hence "n \<notin> set tyvars" using len_eq by (meson map_of_eq_None_iff map_of_zip_is_None)
+    with n_in have "n |\<in>| TE_AbstractTypes env" by simp
+    with abs_sub have "n |\<in>| TE_TypeVars env" by blast
+    thus ?thesis using None by simp
   next
     case (Some ty')
     hence "ty' \<in> set tys"

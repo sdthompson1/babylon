@@ -107,6 +107,7 @@ lemma resolve_binop_metas_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost lhsTm' = Some lhsTy'
        \<and> core_term_type env ghost rhsTm' = Some rhsTy'"
 proof (cases "unify is_flex lhsTy rhsTy")
@@ -177,15 +178,29 @@ next
     qed
     thus ?thesis by (rule apply_subst_disjoint_id)
   qed
+  \<comment> \<open>Abstract types are rigid, so the unifier (which only binds flex metavars)
+      leaves them untouched. \<close>
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup unifSubst n = None"
+  proof -
+    fix n assume n_abs: "n |\<in>| TE_AbstractTypes env"
+    have "n |\<notin>| fmdom unifSubst"
+    proof
+      assume "n |\<in>| fmdom unifSubst"
+      with unif_dom_flex have "is_flex n" by blast
+      moreover from abs_rigid n_abs have "\<not> is_flex n" by blast
+      ultimately show False by simp
+    qed
+    thus "fmlookup unifSubst n = None" by (simp add: fmdom_notD)
+  qed
 
   \<comment> \<open>Both terms typecheck after applying unifSubst\<close>
   have lhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst lhsTm) = Some ?unifiedTy"
     using apply_subst_to_term_preserves_typing
-            [OF lhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected]
+            [OF lhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected abs_no_subst]
     by simp
   have rhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst rhsTm) = Some ?unifiedTy"
     using apply_subst_to_term_preserves_typing
-            [OF rhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected]
+            [OF rhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected abs_no_subst]
           sound
     by simp
 
@@ -281,19 +296,31 @@ next
       qed
       thus ?thesis by (rule apply_subst_disjoint_id)
     qed
+    have abs_no_subst_full: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup ?fullSubst n = None"
+    proof -
+      fix n assume n_abs: "n |\<in>| TE_AbstractTypes env"
+      have "n |\<notin>| fmdom ?fullSubst"
+      proof
+        assume "n |\<in>| fmdom ?fullSubst"
+        with full_dom_flex have "is_flex n" by blast
+        moreover from abs_rigid n_abs have "\<not> is_flex n" by blast
+        ultimately show False by simp
+      qed
+      thus "fmlookup ?fullSubst n = None" by (simp add: fmdom_notD)
+    qed
 
     \<comment> \<open>Applying fullSubst preserves typing\<close>
     have lhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst lhsTm) =
                     Some (apply_subst ?fullSubst lhsTy)"
       using apply_subst_to_term_preserves_typing
               [OF lhs_typed wf full_range_wk full_range_rt
-                  locals_unaffected_full ret_unaffected_full]
+                  locals_unaffected_full ret_unaffected_full abs_no_subst_full]
       by simp
     have rhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst rhsTm) =
                     Some (apply_subst ?fullSubst rhsTy)"
       using apply_subst_to_term_preserves_typing
               [OF rhs_typed wf full_range_wk full_range_rt
-                  locals_unaffected_full ret_unaffected_full]
+                  locals_unaffected_full ret_unaffected_full abs_no_subst_full]
       by simp
 
     \<comment> \<open>apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy via compose_subst_correct\<close>
@@ -316,6 +343,7 @@ lemma elab_single_binop_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof -
   obtain lhsTm' lhsTy' rhsTm' rhsTy' where
@@ -323,7 +351,7 @@ proof -
     by (cases "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy") auto
   have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
     and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
-    using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid] by auto
+    using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid abs_rigid] by auto
 
   have cop: "binop_to_core babOp = Some cop" using assms(5) .
 
@@ -467,6 +495,7 @@ lemma elab_binop_with_special_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
   case True
@@ -477,7 +506,7 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
     with assms(1) have
       "elab_single_binop is_flex loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy = Inr (resultTm, resultTy)"
       by simp
-    thus ?thesis using elab_single_binop_correct[OF _ assms(3,2,4) _ locals_rigid ret_rigid]
+    thus ?thesis using elab_single_binop_correct[OF _ assms(3,2,4) _ locals_rigid ret_rigid abs_rigid]
       using binop_to_core.simps(19) by blast
   next
     assume iff: "babOp = BabBinop_Iff"
@@ -487,7 +516,7 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
       by (cases "resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy") auto
     have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
       and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
-      using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid] by auto
+      using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid abs_rigid] by auto
     from assms(1) iff resolved have
       "lhsTy' = CoreTy_Bool" "rhsTy' = CoreTy_Bool"
       "resultTm = CoreTm_Binop CoreBinop_Equal lhsTm' rhsTm'" "resultTy = CoreTy_Bool"
@@ -503,7 +532,7 @@ next
   from False obtain cop where "binop_to_core babOp = Some cop"
     by (cases babOp) auto
   with assms(1) eq show ?thesis
-    using elab_single_binop_correct assms(2,3,4) locals_rigid ret_rigid by auto
+    using elab_single_binop_correct assms(2,3,4) locals_rigid ret_rigid abs_rigid by auto
 qed
 
 (* For comparison operators (those with a comparison_direction), elab_binop_with_special
@@ -542,6 +571,7 @@ lemma fold_binop_left_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 using assms proof (induction ops arbitrary: accTm accTy)
   case Nil
@@ -556,9 +586,9 @@ next
     by (auto split: sum.splits)
   have mid_typed: "core_term_type env ghost midTm = Some midTy"
     using elab_binop_with_special_correct[OF step Cons.prems(2) _ Cons.prems(4)
-                                               Cons.prems(5) Cons.prems(6)]
+                                               Cons.prems(5) Cons.prems(6) Cons.prems(7)]
       Cons.prems(3) triple_eq by simp
-  show ?case using Cons.IH[OF rest mid_typed] Cons.prems(3,4,5,6) triple_eq by simp
+  show ?case using Cons.IH[OF rest mid_typed] Cons.prems(3,4,5,6,7) triple_eq by simp
 qed
 
 (* Correctness of fold_implies_right *)
@@ -570,6 +600,7 @@ lemma fold_implies_right_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 using assms proof (induction ops arbitrary: lhsTm lhsTy resultTm resultTy)
   case Nil
@@ -589,7 +620,7 @@ next
       by simp
     thus ?thesis
       using elab_binop_with_special_correct Cons.prems(2) rhs_typed Cons.prems(4)
-            Cons.prems(5) Cons.prems(6) by blast
+            Cons.prems(5) Cons.prems(6) Cons.prems(7) by blast
   next
     case (Cons triple2 rest2)
     \<comment> \<open>Multiple elements: recurse on right side, then combine\<close>
@@ -600,10 +631,10 @@ next
     have rest_all: "list_all (\<lambda>(op, tm, ty). core_term_type env ghost tm = Some ty) rest"
       using Cons.prems(3) triple_eq by simp
     have right_typed: "core_term_type env ghost rightTm = Some rightTy"
-      using Cons.IH[OF recurse rhs_typed rest_all Cons.prems(4) Cons.prems(5) Cons.prems(6)] .
+      using Cons.IH[OF recurse rhs_typed rest_all Cons.prems(4) Cons.prems(5) Cons.prems(6) Cons.prems(7)] .
     show ?thesis
       using elab_binop_with_special_correct[OF combine Cons.prems(2) right_typed
-                          Cons.prems(4) Cons.prems(5) Cons.prems(6)] .
+                          Cons.prems(4) Cons.prems(5) Cons.prems(6) Cons.prems(7)] .
   qed
 qed
 
@@ -815,6 +846,7 @@ lemma build_comparison_chain_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some CoreTy_Bool"
   using assms
 proof (induction ops arbitrary: chainCtr lhsTm lhsTy resultTm env dir)
@@ -839,7 +871,7 @@ next
     by (cases "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy") auto
 
   have resolvedRhs_typed: "core_term_type env ghost resolvedRhs = Some resolvedRhsTy"
-    using Cons.prems(2,4,6,7) resolve_binop_metas_correct resolved rhs_typed by blast
+    using Cons.prems(2,4,6,7,8) resolve_binop_metas_correct resolved rhs_typed by blast
 
   \<comment> \<open>Propagate chain direction check to rest\<close>
   have rest_dirs: "check_comparison_chain_directions rest
@@ -869,7 +901,7 @@ next
       and result: "resultTm = cmpTm"
       by (auto simp: Let_def split: sum.splits prod.splits)
     have "core_term_type env ghost cmpTm = Some cmpTy"
-      using Cons.prems(2,4,6,7) elab elab_binop_with_special_correct rhs_typed by auto
+      using Cons.prems(2,4,6,7,8) elab elab_binop_with_special_correct rhs_typed by auto
     moreover have "cmpTy = CoreTy_Bool"
       using elab_binop_with_special_comparison_bool[OF elab op_cmp] .
     ultimately show ?thesis using result by simp
@@ -896,11 +928,11 @@ next
       have cmpTy_bool: "cmpTy = CoreTy_Bool"
         using elab_binop_with_special_comparison_bool[OF elab op_cmp] .
       have cmp_typed: "core_term_type env ghost cmpTm = Some CoreTy_Bool"
-        using Cons.prems(2,4,6,7) cmpTy_bool elab elab_binop_with_special_correct resolvedRhs_typed
+        using Cons.prems(2,4,6,7,8) cmpTy_bool elab elab_binop_with_special_correct resolvedRhs_typed
         by blast
       have rest_typed: "core_term_type env ghost restTm = Some CoreTy_Bool"
         using Cons.IH[OF recurse resolvedRhs_typed rest_all Cons.prems(4) rest_dirs
-                         Cons.prems(6) Cons.prems(7)] .
+                         Cons.prems(6) Cons.prems(7) Cons.prems(8)] .
       show ?thesis using cmp_typed rest_typed result by simp
     next
       case not_simple: False
@@ -1038,6 +1070,8 @@ next
       qed
       have env'_ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env') \<longrightarrow> \<not> is_flex n"
         using Cons.prems(7) by (simp add: env'_def)
+      have env'_abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env' \<longrightarrow> \<not> is_flex n"
+        using Cons.prems(8) by (simp add: env'_def)
 
       \<comment> \<open>cmpTm typechecks in env'\<close>
       have cmpTy_bool: "cmpTy = CoreTy_Bool"
@@ -1047,7 +1081,7 @@ next
         using elab using vn_eq by auto
       have cmp_typed: "core_term_type env' ghost cmpTm = Some CoreTy_Bool"
         using elab_binop_with_special_correct[OF elab_vn lhs_typed' var_typed env'_wf
-                                                  env'_locals_rigid env'_ret_rigid]
+                                                  env'_locals_rigid env'_ret_rigid env'_abs_rigid]
               cmpTy_bool by simp
 
       \<comment> \<open>The ops in rest typecheck in env' by weakening\<close>
@@ -1071,7 +1105,7 @@ next
         using recurse using vn_eq by auto
       have rest_typed: "core_term_type env' ghost restTm = Some CoreTy_Bool"
         using Cons.IH[OF recurse_vn var_typed rest_all' env'_wf rest_dirs
-                         env'_locals_rigid env'_ret_rigid] .
+                         env'_locals_rigid env'_ret_rigid env'_abs_rigid] .
 
       \<comment> \<open>The body (And cmpTm restTm) typechecks in env'\<close>
       have body_typed: "core_term_type env' ghost (CoreTm_Binop CoreBinop_And cmpTm restTm)
@@ -1100,6 +1134,7 @@ lemma process_binop_chain_correct:
     and locals_rigid: "\<forall>name ty' n. fmlookup (TE_LocalVars env) name = Some ty'
                          \<longrightarrow> n \<in> type_tyvars ty' \<longrightarrow> \<not> is_flex n"
     and ret_rigid: "\<forall>n. n \<in> type_tyvars (TE_ReturnType env) \<longrightarrow> \<not> is_flex n"
+    and abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> \<not> is_flex n"
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof (cases ops)
   case Nil
@@ -1113,7 +1148,7 @@ next
     \<comment> \<open>Implies chain: right-associates (check_implies_chain must pass, else we'd get Inl)\<close>
     with assms(1) Cons have "fold_implies_right is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
       by (auto simp: Let_def split: if_splits)
-    thus ?thesis using fold_implies_right_correct assms(2,3,4) locals_rigid ret_rigid by blast
+    thus ?thesis using fold_implies_right_correct assms(2,3,4) locals_rigid ret_rigid abs_rigid by blast
   next
     case not_implies: False
     show ?thesis
@@ -1129,7 +1164,7 @@ next
         and result: "resultTm = chainTm" and rty: "resultTy = CoreTy_Bool"
         by (auto simp: Let_def split: sum.splits if_splits)
       have "core_term_type env ghost chainTm = Some CoreTy_Bool"
-        using build_comparison_chain_correct[OF chain_ok assms(2,3,4) dirs locals_rigid ret_rigid] .
+        using build_comparison_chain_correct[OF chain_ok assms(2,3,4) dirs locals_rigid ret_rigid abs_rigid] .
       thus ?thesis using result rty by simp
     next
       case False
@@ -1137,7 +1172,7 @@ next
       with assms(1) Cons not_implies have
         "fold_binop_left is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
         by (auto simp: Let_def split: if_splits)
-      thus ?thesis using fold_binop_left_correct assms(2,3,4) locals_rigid ret_rigid by blast
+      thus ?thesis using fold_binop_left_correct assms(2,3,4) locals_rigid ret_rigid abs_rigid by blast
     qed
   qed
 qed

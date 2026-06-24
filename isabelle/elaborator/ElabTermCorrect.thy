@@ -266,6 +266,10 @@ proof -
                                       \<Longrightarrow> apply_subst finalSubst ty' = ty'"
     and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
     by blast+
+  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
 
   \<comment> \<open>Coerced args typecheck with substituted expected types\<close>
   have coerce_correct: "list_all2 (\<lambda>tm expectedTy.
@@ -273,7 +277,7 @@ proof -
          finalArgTms expArgTypes"
     using apply_call_coercions_correct[OF ih_args types_unified wf'
             finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes
-            locals_unaffected ret_unaffected]
+            locals_unaffected ret_unaffected abs_no_subst]
           finalArgTms_eq finalSubst_eq by simp
 
   \<comment> \<open>env' extends env with only type variables\<close>
@@ -281,11 +285,13 @@ proof -
     unfolding extend_env_with_tyvars_def by simp
   have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
     unfolding extend_env_with_tyvars_def by simp
+  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
 
   \<comment> \<open>Apply build_call_result_correct\<close>
   show ?thesis
     using build_call_result_correct[OF build_eq civ wf' wf coerce_correct
-            finalSubst_wk finalSubst_rt finalSubst_dom_flex env'_locals env'_ret]
+            finalSubst_wk finalSubst_rt finalSubst_dom_flex env'_locals env'_ret env'_abs]
           result_eq by simp
 qed
 
@@ -413,6 +419,10 @@ proof -
                                        \<Longrightarrow> apply_subst finalSubst vty = vty"
     and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
     by blast+
+  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
 
   \<comment> \<open>Apply apply_call_coercions_correct — coerced index terms have type u64_type\<close>
   have coerced_typed: "list_all2 (\<lambda>tm expectedTy.
@@ -420,7 +430,7 @@ proof -
          coercedIdxTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_idxs types_unified wf'
             finalSubst_wk finalSubst_rt len_elabIdxTms len_actual_expected
-            locals_unaffected ret_unaffected]
+            locals_unaffected ret_unaffected abs_no_subst]
           coercedIdxTms_eq finalSubst_eq by simp
 
   \<comment> \<open>apply_subst on u64_type is identity\<close>
@@ -596,6 +606,10 @@ proof -
                                        \<Longrightarrow> apply_subst finalSubst vty = vty"
     and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
     by blast+
+  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
 
   \<comment> \<open>Apply apply_call_coercions_correct — coerced element terms type to subst(elemTy)\<close>
   let ?finalElemTy = "apply_subst finalSubst ?elemTy"
@@ -604,7 +618,7 @@ proof -
          coercedTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_elems types_unified wf'
             finalSubst_wk finalSubst_rt len_elabTms len_expected
-            locals_unaffected ret_unaffected]
+            locals_unaffected ret_unaffected abs_no_subst]
           coercedTms_eq finalSubst_eq by simp
 
   have len_coerced: "length coercedTms = length elabTms"
@@ -842,6 +856,10 @@ proof -
                                        \<Longrightarrow> apply_subst finalSubst vty = vty"
     and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
     by blast+
+  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
 
   \<comment> \<open>Apply apply_call_coercions_correct\<close>
   have coerced_typed: "list_all2 (\<lambda>tm expectedTy.
@@ -849,7 +867,7 @@ proof -
          coercedTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_updates types_unified wf'
             finalSubst_wk finalSubst_rt len_updates len_expected
-            locals_unaffected ret_unaffected]
+            locals_unaffected ret_unaffected abs_no_subst]
           coercedTms_eq finalSubst_eq by simp
 
   \<comment> \<open>Parent term after substitution\<close>
@@ -862,7 +880,7 @@ proof -
     have "core_term_type ?env' ghost ?finalParentTm
           = Some (apply_subst finalSubst (CoreTy_Record parentFields))"
       using apply_subst_to_term_preserves_typing
-              [OF ih_parent' wf' finalSubst_wk finalSubst_rt locals_unaffected ret_unaffected] .
+              [OF ih_parent' wf' finalSubst_wk finalSubst_rt locals_unaffected ret_unaffected abs_no_subst] .
     also have "apply_subst finalSubst (CoreTy_Record parentFields)
               = CoreTy_Record ?finalParentFields" by simp
     finally show ?thesis .
@@ -1090,6 +1108,7 @@ lemma finalize_match_term_correct:
           (envAmbient adds only fresh tyvars). \<close>
       and ambient_locals_eq: "TE_LocalVars envAmbient = TE_LocalVars envOuter"
       and ambient_ret_eq: "TE_ReturnType envAmbient = TE_ReturnType envOuter"
+      and ambient_abs_eq: "TE_AbstractTypes envAmbient = TE_AbstractTypes envOuter"
       \<comment> \<open>Substitution invariants on accSubst (range well-kinded/runtime, domain
           flex w.r.t. envOuter). \<close>
       and accSubst_wk: "\<forall>ty' \<in> fmran' accSubst. is_well_kinded envAmbient ty'"
@@ -1300,12 +1319,14 @@ proof -
     by auto
 
   \<comment> \<open>Step 4: Substituted scrutinee well-typed at finalScrutTy under envAmbient. \<close>
+  have ambient_abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes envAmbient \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] outer_wf ambient_abs_eq] .
   have scrut_substituted:
     "core_term_type envAmbient ghost finalScrut = Some finalScrutTy"
     unfolding finalScrut_def finalScrutTy_def
     using apply_subst_to_term_preserves_typing[OF scrut_typed ambient_wf
                                                   finalSubst_wk _ ambient_locals_unaffected
-                                                  ambient_ret_unaffected]
+                                                  ambient_ret_unaffected ambient_abs_no_subst]
           finalSubst_rt
     by simp
 
@@ -1541,13 +1562,25 @@ proof -
       "apply_subst finalSubst (TE_ReturnType ?env_pat) = TE_ReturnType ?env_pat"
       using env_pat_ret_eq ambient_ret_unaffected by simp
 
+    have foldr_abs_eq:
+      "\<And>bs e. TE_AbstractTypes (foldr (extend_env_one_var (\<lambda>_. True) ghost) bs e) = TE_AbstractTypes e"
+      subgoal for bs e
+        by (induction bs arbitrary: e)
+           (auto simp: extend_env_one_var_def split: prod.splits)
+      done
+    have env_pat_abs: "TE_AbstractTypes ?env_pat = TE_AbstractTypes envAmbient"
+      unfolding extend_env_with_pattern_vars_def by (rule foldr_abs_eq)
+    have env_pat_abs_no_subst:
+      "\<And>n. n |\<in>| TE_AbstractTypes ?env_pat \<Longrightarrow> fmlookup finalSubst n = None"
+      using ambient_abs_no_subst env_pat_abs by simp
     have body_substituted:
       "core_term_type ?env_pat ghost (apply_subst_to_term finalSubst ?btm)
          = Some (apply_subst finalSubst ?bty)"
       using apply_subst_to_term_preserves_typing[OF body_at_ambient_pat env_pat_wf
                                                     finalSubst_wk_pat finalSubst_rt_pat
                                                     env_pat_locals_unaffected
-                                                    env_pat_ret_unaffected] .
+                                                    env_pat_ret_unaffected
+                                                    env_pat_abs_no_subst] .
 
     have bty_subst_eq: "apply_subst finalSubst ?bty = finalBodyTy"
     proof -
@@ -1582,10 +1615,6 @@ proof -
     have dp_in: "?dp \<in> set dps" using i_lt nth_mem by simp
     have dp_compat_acc: "dec_pattern_compatible envAmbient ?dp (apply_subst accSubst scrutTy)"
       using dps_compat dp_in by (auto simp: list_all_iff)
-    have compat_T:
-      "dec_pattern_compatible envAmbient
-         (apply_subst_to_dec_pattern T ?dp) (apply_subst T (apply_subst accSubst scrutTy))"
-      using apply_subst_to_dec_pattern_preserves_compatibility[OF dp_compat_acc ambient_wf] .
     \<comment> \<open>T leaves ?dp's bindings alone (subset of finalSubst's domain disjoint from envOuter's tyvars). \<close>
     have T_dom_disjoint: "fmdom T |\<inter>| TE_TypeVars envOuter = {||}"
     proof -
@@ -1594,6 +1623,16 @@ proof -
       hence "fmdom T |\<subseteq>| fmdom finalSubst" by auto
       thus ?thesis using finalSubst_dom by auto
     qed
+    \<comment> \<open>T does not touch envAmbient's abstract types: they equal envOuter's, which are in
+        TE_TypeVars envOuter, disjoint from fmdom T. \<close>
+    have T_dom_flex: "\<And>n. n |\<in>| fmdom T \<Longrightarrow> n |\<notin>| TE_TypeVars envOuter"
+      using T_dom_disjoint by auto
+    have abs_no_subst_T: "\<And>n. n |\<in>| TE_AbstractTypes envAmbient \<Longrightarrow> fmlookup T n = None"
+      using flex_subst_abs_no_subst[OF T_dom_flex outer_wf ambient_abs_eq] .
+    have compat_T:
+      "dec_pattern_compatible envAmbient
+         (apply_subst_to_dec_pattern T ?dp) (apply_subst T (apply_subst accSubst scrutTy))"
+      using apply_subst_to_dec_pattern_preserves_compatibility[OF dp_compat_acc ambient_wf abs_no_subst_T] .
     have dp_meta_safe:
       "list_all (\<lambda>(_, _, vTy).
                   list_all (\<lambda>n. n |\<in>| TE_TypeVars envOuter) (type_tyvars_list vTy))
@@ -2102,12 +2141,16 @@ next
                                         \<Longrightarrow> apply_subst subst ty' = ty'"
       and ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
       by blast+
+    have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+      unfolding extend_env_with_tyvars_def by simp
+    have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup subst n = None"
+      using flex_subst_abs_no_subst[OF unif_dom_flex[rule_format] "3.prems"(2) env'_abs] .
 
     have subst_applied:
       "core_term_type ?env' ghost (apply_subst_to_term subst newOperand)
          = Some (apply_subst subst operandTy)"
       using apply_subst_to_term_preserves_typing
-              [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected] .
+              [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst] .
     also have "apply_subst subst operandTy = apply_subst subst newTargetTy"
       using unify_sound[OF Some] .
     also have "apply_subst subst newTargetTy = newTargetTy"
@@ -2243,6 +2286,18 @@ next
     thus "apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
       using ret_eq by simp
   qed
+  have abs_no_subst_for:
+    "\<And>s n. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
+         \<Longrightarrow> n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup s n = None"
+  proof -
+    fix s :: "(string, CoreType) fmap" and n
+    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
+    assume n_abs: "n |\<in>| TE_AbstractTypes ?env'"
+    have abs_eq: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+      unfolding extend_env_with_tyvars_def by simp
+    show "fmlookup s n = None"
+      using flex_subst_abs_no_subst[OF dom_flex[rule_format] "4.prems"(2) abs_eq n_abs] .
+  qed
 
   \<comment> \<open>condSubst range is well-kinded / runtime in ?env'. \<close>
   have cond_wk: "is_well_kinded ?env' condTy"
@@ -2266,6 +2321,8 @@ next
     using locals_unaffected_for[OF condSubst_dom_flex] .
   have condSubst_ret: "apply_subst condSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
     using ret_unaffected_for[OF condSubst_dom_flex] .
+  have condSubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup condSubst n = None"
+    using abs_no_subst_for[OF condSubst_dom_flex] .
 
   \<comment> \<open>Final condition has type Bool in ?env'. \<close>
   have finalCond_typed: "core_term_type ?env' ghost finalCond = Some CoreTy_Bool"
@@ -2273,7 +2330,7 @@ next
     have "core_term_type ?env' ghost (apply_subst_to_term condSubst newCond)
             = Some (apply_subst condSubst condTy)"
       using apply_subst_to_term_preserves_typing
-              [OF ih_cond wf' condSubst_wk condSubst_rt condSubst_locals condSubst_ret] .
+              [OF ih_cond wf' condSubst_wk condSubst_rt condSubst_locals condSubst_ret condSubst_abs] .
     also have "apply_subst condSubst condTy = apply_subst condSubst CoreTy_Bool"
       using unify_sound[OF cond_unify] .
     also have "apply_subst condSubst CoreTy_Bool = CoreTy_Bool" by simp
@@ -2322,13 +2379,15 @@ next
       using locals_unaffected_for[OF branchSubst_dom_flex] .
     have branchSubst_ret: "apply_subst branchSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
       using ret_unaffected_for[OF branchSubst_dom_flex] .
+    have branchSubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup branchSubst n = None"
+      using abs_no_subst_for[OF branchSubst_dom_flex] .
 
     have then'_typed: "core_term_type ?env' ghost ?newThen' = Some ?resultTy"
       using apply_subst_to_term_preserves_typing
-              [OF ih_then wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret] .
+              [OF ih_then wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret branchSubst_abs] .
     have else'_typed: "core_term_type ?env' ghost ?newElse' = Some ?resultTy"
       using apply_subst_to_term_preserves_typing
-              [OF ih_else wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret]
+              [OF ih_else wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret branchSubst_abs]
             unified by simp
 
     \<comment> \<open>The match typechecks\<close>
@@ -2447,13 +2506,17 @@ next
                                         \<Longrightarrow> apply_subst subst ty' = ty'"
       and ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
       by blast+
+    have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+      unfolding extend_env_with_tyvars_def by simp
+    have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup subst n = None"
+      using flex_subst_abs_no_subst[OF subst_dom_flex[rule_format] "5.prems"(2) env'_abs] .
 
     \<comment> \<open>After substitution, newOperand has type defaultTy in ?env'\<close>
     have operand2_typed: "core_term_type ?env' ghost ?newOperand2 = Some ?defaultTy"
     proof -
       have "core_term_type ?env' ghost ?newOperand2 = Some (apply_subst subst operandTy)"
         using apply_subst_to_term_preserves_typing
-                [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected] .
+                [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst] .
       also have "apply_subst subst operandTy = apply_subst subst ?defaultTy"
         using unify_sound[OF Some] .
       also have "apply_subst subst ?defaultTy = ?defaultTy"
@@ -2606,11 +2669,21 @@ next
     have "n \<in> fset (TE_TypeVars env)" by blast
     thus "\<not> ?is_flex n" by simp
   qed
+  have env'_abs_rigid: "\<forall>n. n |\<in>| TE_AbstractTypes ?env' \<longrightarrow> \<not> ?is_flex n"
+  proof (intro allI impI)
+    fix n assume n_abs: "n |\<in>| TE_AbstractTypes ?env'"
+    have "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+      unfolding extend_env_with_tyvars_def by simp
+    with n_abs have "n |\<in>| TE_AbstractTypes env" by simp
+    with "6.prems"(2) have "n |\<in>| TE_TypeVars env"
+      unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+    thus "\<not> ?is_flex n" by simp
+  qed
 
   \<comment> \<open>Apply process_binop_chain_correct\<close>
   have "core_term_type ?env' ghost resultTm = Some resultTy"
     using process_binop_chain_correct
-            [OF process_result lhs_typing ops_typed wf' env'_locals_rigid env'_ret_rigid] .
+            [OF process_result lhs_typing ops_typed wf' env'_locals_rigid env'_ret_rigid env'_abs_rigid] .
   thus ?case using result_eq by simp
 
 next
@@ -2933,13 +3006,18 @@ next
     thus ?thesis using ret_eq unif_id_on_env[OF bodySubst_dom_flex] by simp
   qed
 
+  have env'_body_abs: "TE_AbstractTypes ?env'_body = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have bodySubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env'_body \<Longrightarrow> fmlookup bodySubst n = None"
+    using flex_subst_abs_no_subst[OF bodySubst_dom_flex[rule_format] "8.prems"(2) env'_body_abs] .
+
   \<comment> \<open>Body substitution preserves typing\<close>
   have finalBody_typed: "core_term_type ?env'_body ghost finalBody = Some CoreTy_Bool"
   proof -
     have "core_term_type ?env'_body ghost (apply_subst_to_term bodySubst bodyTm)
             = Some (apply_subst bodySubst bodyTy)"
       using apply_subst_to_term_preserves_typing
-              [OF ih_body' wf_body' bodySubst_wk bodySubst_rt bodySubst_locals bodySubst_ret] .
+              [OF ih_body' wf_body' bodySubst_wk bodySubst_rt bodySubst_locals bodySubst_ret bodySubst_abs] .
     also have "apply_subst bodySubst bodyTy = apply_subst bodySubst CoreTy_Bool"
       using unify_sound[OF body_unify] .
     also have "apply_subst bodySubst CoreTy_Bool = CoreTy_Bool" by simp
@@ -3418,6 +3496,8 @@ next
   have ambient_locals_eq: "TE_LocalVars envAmbient = TE_LocalVars env"
     unfolding envAmbient_def extend_env_with_tyvars_def by simp
   have ambient_ret_eq: "TE_ReturnType envAmbient = TE_ReturnType env"
+    unfolding envAmbient_def extend_env_with_tyvars_def by simp
+  have ambient_abs_eq: "TE_AbstractTypes envAmbient = TE_AbstractTypes env"
     unfolding envAmbient_def extend_env_with_tyvars_def by simp
 
   \<comment> \<open>Scrutinee IH: scrutTm well-typed under env extended by [next_mv, mv1). \<close>
@@ -4247,7 +4327,7 @@ next
 
   \<comment> \<open>Apply finalize_match_term_correct. \<close>
   from finalize_match_term_correct[OF final_term_eq "16.prems"(2) envAmbient_wf envAmbient_wf_elab
-                                      ambient_locals_eq ambient_ret_eq
+                                      ambient_locals_eq ambient_ret_eq ambient_abs_eq
                                       accSubst_wk accSubst_rt accSubst_dom
                                       scrut_typed_amb body_var_wk body_var_rt
                                       lengths_dps

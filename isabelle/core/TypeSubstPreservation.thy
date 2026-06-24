@@ -6,22 +6,39 @@ begin
 (* Type preservation theorems for apply_subst_to_term. *)
 (* ========================================================================== *)
 
+(* Helper: a flex substitution (domain disjoint from the env's type variables) is the
+   identity on any type well-kinded in env, because such a type's variables are all in
+   TE_TypeVars env, which the substitution does not touch. *)
+lemma flex_subst_id_on_well_kinded:
+  assumes dom_flex: "\<And>n. n |\<in>| fmdom subst \<Longrightarrow> n |\<notin>| TE_TypeVars env"
+      and wk: "is_well_kinded env ty"
+  shows "apply_subst subst ty = ty"
+proof (rule apply_subst_disjoint_id)
+  have "type_tyvars ty \<subseteq> fset (TE_TypeVars env)"
+    using is_well_kinded_type_tyvars_subset[OF wk] .
+  thus "type_tyvars ty \<inter> fset (fmdom subst) = {}"
+    using dom_flex by auto
+qed
+
 (* If a term has type ty, then apply_subst_to_term subst tm has type
    (apply_subst subst ty), under the following conditions:
 
    - The environment is well-formed.
    - The substitution range is well-kinded in env (and runtime in NotGhost mode), so
      that types introduced by the substitution remain well-kinded.
-   - The substitution does not affect any local variable's type and does not
-     affect the return type. Without this, the lemma is false: for
-     `CoreTm_Var name` whose env type is `T`, the result type is the env's `T`
-     unchanged, not `apply_subst subst T`. Globals are closed (by the well-kinded
-     clause of tyenv_well_formed) so are unaffected by any substitution and need
-     no precondition.
+   - The substitution is the identity on the types the env has committed to: every
+     local variable's type, the return type, and (capture-avoidance) every
+     module-level abstract type. Without the first two the lemma is false (for
+     `CoreTm_Var name` of env type T the result is the env's T, not apply_subst subst
+     T); the third is what keeps an abstract type appearing in a global / signature /
+     payload fixed under substitution.
 
-     Elaborator clients can typically discharge this from their freshness
-     invariant: fresh type variables in the substitution's domain don't appear in any
-     pre-existing local-var type or return type.
+     Elaborator clients discharge all three from their freshness invariant: the
+     substitution's domain consists of fresh metavariables, none of which appears in
+     any pre-existing local-var type, return type, or abstract type. The helper
+     flex_subst_id_on_well_kinded turns that freshness into the first two; the
+     abstract-types condition follows because abstract types are a subset of a base
+     env's TE_TypeVars, which the fresh domain avoids.
 
    This lemma is a corollary of core_term_type_subst_callee_env: under these
    conditions, apply_subst_to_callee_env subst env env equals env up to
@@ -35,6 +52,7 @@ lemma apply_subst_to_term_preserves_typing:
         "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty'
                       \<Longrightarrow> apply_subst subst ty' = ty'"
       and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
+      and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
   shows "core_term_type env mode (apply_subst_to_term subst tm) = Some (apply_subst subst ty)"
 proof -
   \<comment> \<open>fmmap is the identity on TE_LocalVars (each entry's type is unchanged
@@ -54,7 +72,7 @@ proof -
   \<comment> \<open>(ii) callee_env_subst_ok holds. The global field equalities are reflexive.
       For the TE_TypeVars condition: any tyvar in scope, if it's mapped by the
       substitution, the result is well-kinded in env (from subst_wk). If it's
-      not mapped, it remains in scope. \<close>
+      not mapped, it remains in scope. The abstract-types condition is abs_no_subst. \<close>
   have ok: "callee_env_subst_ok subst env env"
     unfolding callee_env_subst_ok_def
   proof (intro conjI)
@@ -72,6 +90,9 @@ proof -
                  Some ty' \<Rightarrow> is_well_kinded env ty'
                | None \<Rightarrow> n |\<in>| TE_TypeVars env)"
       using subst_wk by (auto split: option.splits intro: fmran'I)
+  next
+    show "\<forall>n. n |\<in>| TE_AbstractTypes env \<longrightarrow> fmlookup subst n = None"
+      using abs_no_subst by blast
   qed
 
   \<comment> \<open>(iii) callee_env_subst_runtime_ok holds in NotGhost mode. \<close>
@@ -102,6 +123,7 @@ lemma apply_subst_core_impure_call_type:
     and locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty'
                                          \<Longrightarrow> apply_subst subst ty' = ty'"
     and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
+    and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
   shows "core_impure_call_type env ghost fnName
            (map (apply_subst subst) tyArgs) (map (apply_subst_to_term subst) tmArgs)
            = Some (apply_subst subst retTy)"
@@ -126,23 +148,39 @@ proof -
                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
 
-  \<comment> \<open>Signature facts (distinctness + tyvar containment) for substitution composition.\<close>
+  \<comment> \<open>Signature facts (distinctness + tyvar containment) for substitution composition.
+      Signature types' variables are within the abstract types together with the
+      function's type parameters; abstract ones are not in the substitution domain. \<close>
   have distinct_tyargs: "distinct (FI_TyArgs funInfo)"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
   have fi_args_wk: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+            is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) (FI_ReturnType funInfo)"
+  have fi_ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                                  (FI_ReturnType funInfo)"
     using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo). type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
-  proof
-    fix t assume "t \<in> fst ` set (FI_TmArgs funInfo)"
-    with fi_args_wk have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-    from is_well_kinded_type_tyvars_subset[OF this]
-    show "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by (simp add: fset_of_list.rep_eq)
+  have fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
+            \<forall>n \<in> type_tyvars t. n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+  proof (intro ballI)
+    fix t n assume t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" and n_in: "n \<in> type_tyvars t"
+    from t_in fi_args_wk have "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+      by blast
+    from is_well_kinded_type_tyvars_subset[OF this] n_in
+    have "n |\<in>| TE_AbstractTypes env \<or> n \<in> set (FI_TyArgs funInfo)"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+      using abs_no_subst by (auto simp: fmdom_notI)
   qed
-  have fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
-    using is_well_kinded_type_tyvars_subset[OF fi_ret_wk] by (simp add: fset_of_list.rep_eq)
+  have fi_ret_tyvars: "\<And>n. n \<in> type_tyvars (FI_ReturnType funInfo)
+                            \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+  proof -
+    fix n assume n_in: "n \<in> type_tyvars (FI_ReturnType funInfo)"
+    from is_well_kinded_type_tyvars_subset[OF fi_ret_wk] n_in
+    have "n |\<in>| TE_AbstractTypes env \<or> n \<in> set (FI_TyArgs funInfo)"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+      using abs_no_subst by (auto simp: fmdom_notI)
+  qed
 
   \<comment> \<open>Substituted ty-args stay well-kinded / runtime.\<close>
   have len_sty: "length (map (apply_subst subst) tyArgs) = length (FI_TyArgs funInfo)" using len_ty by simp
@@ -162,7 +200,7 @@ proof -
   \<comment> \<open>The substituted return type is the recomputation from the substituted ty-args.\<close>
   let ?subZip = "fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs))"
   have ret_recompute: "apply_subst ?subZip (FI_ReturnType funInfo) = apply_subst subst retTy"
-    using ty_eq apply_subst_compose_zip[OF len_ty[symmetric] fi_ret_tyvars distinct_tyargs] by simp
+    using ty_eq apply_subst_compose_zip_extra[OF len_ty[symmetric] fi_ret_tyvars distinct_tyargs] by simp
 
   \<comment> \<open>The substituted expected types are the recomputation from the substituted ty-args.\<close>
   let ?exps0 = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty) (FI_TmArgs funInfo)"
@@ -173,12 +211,13 @@ proof -
     proof (rule map_cong[OF refl])
       fix x assume "x \<in> set (FI_TmArgs funInfo)"
       obtain t v where x_eq: "x = (t, v)" by (cases x)
-      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have "t \<in> fst ` set (FI_TmArgs funInfo)"
+      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have t_in: "t \<in> fst ` set (FI_TmArgs funInfo)"
         by (force simp: rev_image_eqI)
-      with fi_args_tyvars have "type_tyvars t \<subseteq> set (FI_TyArgs funInfo)" by blast
+      have t_tyvars_ok: "\<And>n. n \<in> type_tyvars t \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+        using fi_args_tyvars t_in by blast
       thus "(case x of (ty, _) \<Rightarrow> apply_subst ?subZip ty)
             = (case x of (ty, _) \<Rightarrow> apply_subst subst (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty))"
-        using x_eq apply_subst_compose_zip[OF len_ty[symmetric] _ distinct_tyargs] by simp
+        using x_eq apply_subst_compose_zip_extra[OF len_ty[symmetric] t_tyvars_ok distinct_tyargs] by simp
     qed
     also have "\<dots> = map (apply_subst subst) ?exps0" by (simp add: case_prod_unfold comp_def)
     finally show ?thesis .
@@ -203,7 +242,8 @@ proof -
       tm_typed: "core_term_type env ghost (tmArgs ! i) = Some actualTy" and aeq: "actualTy = ?exps0 ! i"
       by (auto split: option.splits)
     have "core_term_type env ghost (apply_subst_to_term subst (tmArgs ! i)) = Some (apply_subst subst actualTy)"
-      using apply_subst_to_term_preserves_typing[OF tm_typed wf subst_wk subst_rt locals_unaffected ret_unaffected] .
+      using apply_subst_to_term_preserves_typing[OF tm_typed wf subst_wk subst_rt
+              locals_unaffected ret_unaffected abs_no_subst] .
     moreover have "apply_subst subst (?exps0 ! i) = ?expsS ! i"
       using exps_recompute i_tm len_pure len_tm by simp
     ultimately show "case core_term_type env ghost (map (apply_subst_to_term subst) tmArgs ! i) of

@@ -3,6 +3,30 @@ theory ElabTermCorrectHelpers
     "../core/CoreTypecheck" "../core/TypeSubstPreservation"
 begin
 
+(* A flex substitution (domain disjoint from a base env B's type variables) does not
+   touch the abstract types of any env E that shares B's abstract types. This is the
+   capture-avoidance fact apply_subst_to_term_preserves_typing /
+   apply_subst_core_impure_call_type require: abstract types are a subset of B's
+   TE_TypeVars (well-formedness), which the fresh substitution domain avoids.
+
+   In the common case E = B (no env extension); when the elaborator type-checks in an
+   env extended with fresh metavariables, B is the pre-extension env (where dom_flex
+   holds) and E the extended env (extend_env_with_tyvars leaves TE_AbstractTypes
+   unchanged, so abs_eq is by simp). *)
+lemma flex_subst_abs_no_subst:
+  assumes dom_flex: "\<And>n. n |\<in>| fmdom subst \<Longrightarrow> n |\<notin>| TE_TypeVars envB"
+      and wf: "tyenv_well_formed envB"
+      and abs_eq: "TE_AbstractTypes envE = TE_AbstractTypes envB"
+      and n_abs: "n |\<in>| TE_AbstractTypes envE"
+  shows "fmlookup subst n = None"
+proof -
+  from n_abs abs_eq have "n |\<in>| TE_AbstractTypes envB" by simp
+  with wf have "n |\<in>| TE_TypeVars envB"
+    unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+  with dom_flex have "n |\<notin>| fmdom subst" by blast
+  thus "fmlookup subst n = None" by (simp add: fmdom_notD)
+qed
+
 (* Monotonicity of next_mv: elab_term / elab_term_list / elab_term_list_with_envs only advance the counter. *)
 lemma elab_term_next_mv_monotone:
   "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
@@ -602,8 +626,10 @@ proof -
   have "tyenv_fun_types_well_kinded ?env'"
     using wf' tyenv_well_formed_def by blast
   hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+            is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_types_well_kinded_def by blast
+  have abs_sub': "TE_AbstractTypes ?env' |\<subseteq>| TE_TypeVars ?env'"
+    using wf' tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
   have len_tyargs: "length newTyArgs = length (FI_TyArgs funInfo)" using rta by simp
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
   proof -
@@ -613,9 +639,10 @@ proof -
       fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
       hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_wk_inner
-      have "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
+      have "is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
+        by blast
       thus "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-        using apply_subst_specializes_well_kinded[OF _ tyargs_wk len_tyargs[symmetric]] by simp
+        using apply_subst_specializes_well_kinded[OF _ tyargs_wk len_tyargs[symmetric] abs_sub'] by simp
     qed
     thus ?thesis using expArg_eq by (auto simp: list_all_iff)
   qed
@@ -625,8 +652,9 @@ proof -
     using wf' tyenv_well_formed_def by blast
   hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
           \<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+            is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
+                  TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+                                         |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_ghost_constraint_def by (simp add: Let_def)
   have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
   proof
@@ -639,8 +667,9 @@ proof -
       fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
       hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_rt_inner[OF fg_ng]
-      have "is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
+      have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
+                  TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+                                         |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
       thus "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
         using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
     qed
@@ -727,9 +756,11 @@ proof -
     using assms(2) tyenv_well_formed_extend_env_with_tyvars by blast
   have tyargs_wk: "list_all (is_well_kinded ?env') newTyArgs" using rta by simp
   have len_tyargs: "length newTyArgs = length tyvars" using rta by simp
+  have abs_sub': "TE_AbstractTypes ?env' |\<subseteq>| TE_TypeVars ?env'"
+    using wf' tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
   have "tyenv_payloads_well_kinded ?env'"
     using wf' tyenv_well_formed_def by blast
-  hence payload_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+  hence payload_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
     using ctor_lookup' tyenv_payloads_well_kinded_def by blast
   have "tyenv_ctor_tyvars_distinct env"
     using assms(2) tyenv_well_formed_def by blast
@@ -737,7 +768,7 @@ proof -
     using ctor_lookup tyenv_ctor_tyvars_distinct_def by blast
   let ?subst = "fmap_of_list (zip tyvars newTyArgs)"
   have payload_subst_wk: "is_well_kinded ?env' (apply_subst ?subst payloadTy)"
-    using apply_subst_specializes_well_kinded[OF payload_wk tyargs_wk len_tyargs[symmetric]] .
+    using apply_subst_specializes_well_kinded[OF payload_wk tyargs_wk len_tyargs[symmetric] abs_sub'] .
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
   proof (cases "arity = 0")
     case True thus ?thesis using expArg_eq by (simp add: Let_def)
@@ -753,10 +784,10 @@ proof -
       proof (cases payloadTy)
         case (CoreTy_Record flds)
         have "\<forall>(_, ty) \<in> set flds.
-                is_well_kinded (?env' \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) ty"
+                is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars \<rparr>) ty"
           using payload_wk CoreTy_Record by (auto simp: list_all_iff)
         hence "\<forall>(_, ty) \<in> set flds. is_well_kinded ?env' (apply_subst ?subst ty)"
-          using apply_subst_specializes_well_kinded[OF _ tyargs_wk len_tyargs[symmetric]]
+          using apply_subst_specializes_well_kinded[OF _ tyargs_wk len_tyargs[symmetric] abs_sub']
           by (auto simp: list_all_iff)
         thus ?thesis using expArg_eq False False2 CoreTy_Record
           by (auto simp: Let_def list_all_iff)
@@ -772,8 +803,9 @@ proof -
     have "tyenv_nonghost_payloads_runtime ?env'"
       using wf' tyenv_well_formed_def by blast
     hence payload_rt_inner: "dtName |\<notin>| TE_GhostDatatypes ?env' \<Longrightarrow>
-            is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                      TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+            is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars,
+                  TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+                                         |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
       using ctor_lookup' tyenv_nonghost_payloads_runtime_def by blast
     have dt_not_ghost: "dtName |\<notin>| TE_GhostDatatypes ?env'" using ghost_ok' ng by simp
     have payload_subst_rt: "is_runtime_type ?env' (apply_subst ?subst payloadTy)"
@@ -793,8 +825,9 @@ proof -
         proof (cases payloadTy)
           case (CoreTy_Record flds)
           have "\<forall>(_, ty) \<in> set flds.
-                  is_runtime_type (?env' \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                            TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>) ty"
+                  is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars,
+                        TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+                                               |\<union>| fset_of_list tyvars \<rparr>) ty"
             using payload_rt_inner[OF dt_not_ghost] CoreTy_Record by (auto simp: list_all_iff)
           hence "\<forall>(_, ty) \<in> set flds. is_runtime_type ?env' (apply_subst ?subst ty)"
             using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]]
@@ -889,6 +922,7 @@ lemma build_call_result_correct:
       and subst_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> n |\<notin>| TE_TypeVars env"
       and locals_eq: "TE_LocalVars env' = TE_LocalVars env"
       and ret_eq: "TE_ReturnType env' = TE_ReturnType env"
+      and abs_eq': "TE_AbstractTypes env' = TE_AbstractTypes env"
   shows "core_term_type env' ghost resultTm = Some resultTy"
 proof (cases calleeInfo)
   case (CI_Function fnName tyArgs retType)
@@ -924,21 +958,29 @@ proof (cases calleeInfo)
   have len_finalTyArgs: "length ?finalTyArgs = length (FI_TyArgs funInfo)"
     using len_tyargs by simp
 
+  \<comment> \<open>finalSubst leaves the abstract types untouched (capture-avoidance): they are in
+      TE_TypeVars env, disjoint from finalSubst's domain (subst_flex). \<close>
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env' \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF subst_flex[rule_format] wf abs_eq'] .
+
   \<comment> \<open>Coerced args match Core's expected types (double substitution)\<close>
   have "tyenv_fun_types_well_kinded env'"
     using wf' tyenv_well_formed_def by blast
   hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+            is_well_kinded (env' \<lparr> TE_TypeVars := TE_AbstractTypes env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
-  proof
-    fix ty assume "ty \<in> fst ` set (FI_TmArgs funInfo)"
-    with fi_args_wk_inner
-    have wk: "is_well_kinded (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty" by blast
-    have "type_tyvars ty \<subseteq> fset (TE_TypeVars (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
-      using is_well_kinded_type_tyvars_subset[OF wk] .
-    thus "type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
-      by (simp add: fset_of_list.rep_eq)
+  have fi_args_tyvars: "\<And>ty n. ty \<in> fst ` set (FI_TmArgs funInfo) \<Longrightarrow> n \<in> type_tyvars ty
+                        \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom finalSubst"
+  proof -
+    fix ty n assume ty_in: "ty \<in> fst ` set (FI_TmArgs funInfo)" and n_in: "n \<in> type_tyvars ty"
+    from ty_in fi_args_wk_inner
+    have wk: "is_well_kinded (env' \<lparr> TE_TypeVars := TE_AbstractTypes env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+      by blast
+    from is_well_kinded_type_tyvars_subset[OF wk] n_in
+    have "n |\<in>| TE_AbstractTypes env' \<or> n \<in> set (FI_TyArgs funInfo)"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom finalSubst"
+      using abs_no_subst by (auto simp: fmdom_notI)
   qed
   have "tyenv_fun_tyvars_distinct env'"
     using wf' tyenv_well_formed_def by blast
@@ -949,7 +991,8 @@ proof (cases calleeInfo)
   let ?coreExpArgTypes = "map (\<lambda>(ty, _). apply_subst ?coreTySubst ty) (FI_TmArgs funInfo)"
   let ?argTys = "map fst (FI_TmArgs funInfo)"
 
-  have fi_args_tyvars': "\<forall>t \<in> set ?argTys. type_tyvars t \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_args_tyvars': "\<And>t n. t \<in> set ?argTys \<Longrightarrow> n \<in> type_tyvars t
+                          \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom finalSubst"
     using fi_args_tyvars by auto
   have coreExpArgTypes_eq: "?coreExpArgTypes = map (apply_subst
       (fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst finalSubst) tyArgs)))) ?argTys"
@@ -958,8 +1001,9 @@ proof (cases calleeInfo)
       (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))) ?argTys"
     using expArgTypes_eq by (induction "FI_TmArgs funInfo") auto
   have core_exp_eq: "?coreExpArgTypes = map (apply_subst finalSubst) expArgTypes"
-    using len_tyargs fi_args_tyvars' fi_tyargs_distinct coreExpArgTypes_eq expArgTypes_fst
-    by (metis map_apply_subst_compose_zip)
+    using coreExpArgTypes_eq expArgTypes_fst
+      fi_args_tyvars' fi_tyargs_distinct len_tyargs map_apply_subst_compose_zip_extra
+    by presburger
 
   have args_match: "list_all2 (\<lambda>tm expectedTy.
            case core_term_type env' ghost tm of
@@ -972,21 +1016,25 @@ proof (cases calleeInfo)
     using coerce expArgTypes_eq by (simp add: list_all2_lengthD)
 
   \<comment> \<open>Return type after double substitution\<close>
-  have fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
+  have fi_ret_tyvars: "\<And>n. n \<in> type_tyvars (FI_ReturnType funInfo)
+                        \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom finalSubst"
   proof -
+    fix n assume n_in: "n \<in> type_tyvars (FI_ReturnType funInfo)"
     have "tyenv_fun_types_well_kinded env'"
       using wf' tyenv_well_formed_def by blast
-    hence wk: "is_well_kinded (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+    hence wk: "is_well_kinded (env' \<lparr> TE_TypeVars := TE_AbstractTypes env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
                               (FI_ReturnType funInfo)"
       using fn_lookup tyenv_fun_types_well_kinded_def by blast
-    have "type_tyvars (FI_ReturnType funInfo) \<subseteq>
-          fset (TE_TypeVars (env' \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>))"
-      using is_well_kinded_type_tyvars_subset[OF wk] .
-    thus ?thesis by (simp add: fset_of_list.rep_eq)
+    from is_well_kinded_type_tyvars_subset[OF wk] n_in
+    have "n |\<in>| TE_AbstractTypes env' \<or> n \<in> set (FI_TyArgs funInfo)"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom finalSubst"
+      using abs_no_subst by (auto simp: fmdom_notI)
   qed
   have ret_eq2: "resultTy = apply_subst ?coreTySubst (FI_ReturnType funInfo)"
-    using resultTy_eq retType_eq len_tyargs fi_ret_tyvars fi_tyargs_distinct
-    by (simp add: apply_subst_compose_zip)
+    using resultTy_eq retType_eq
+          apply_subst_compose_zip_extra[OF len_tyargs[symmetric] fi_ret_tyvars fi_tyargs_distinct]
+    by simp
 
   show ?thesis
     using resultTm_eq fn_lookup ghost_ok not_impure all_var
@@ -1041,16 +1089,23 @@ next
   hence tyvars_distinct: "distinct tyvars"
     using ctor_lookup tyenv_ctor_tyvars_distinct_def by blast
 
+  \<comment> \<open>finalSubst leaves the abstract types untouched (capture-avoidance). \<close>
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env' \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF subst_flex[rule_format] wf abs_eq'] .
+
   \<comment> \<open>Payload type well-kinded (for the double-substitution argument)\<close>
   have "tyenv_payloads_well_kinded env'"
     using wf' tyenv_well_formed_def by blast
-  hence payload_wk: "is_well_kinded (env' \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+  hence payload_wk: "is_well_kinded (env' \<lparr> TE_TypeVars := TE_AbstractTypes env' |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
     using ctor_lookup tyenv_payloads_well_kinded_def by blast
-  have payload_tyvars: "type_tyvars payloadTy \<subseteq> set tyvars"
+  have payload_tyvars_ok: "\<And>n. n \<in> type_tyvars payloadTy \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst"
   proof -
-    have "type_tyvars payloadTy \<subseteq> fset (TE_TypeVars (env' \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>))"
-      using is_well_kinded_type_tyvars_subset[OF payload_wk] .
-    thus ?thesis by (simp add: fset_of_list.rep_eq)
+    fix n assume n_in: "n \<in> type_tyvars payloadTy"
+    from is_well_kinded_type_tyvars_subset[OF payload_wk] n_in
+    have "n |\<in>| TE_AbstractTypes env' \<or> n \<in> set tyvars"
+      by (auto simp: fset_of_list.rep_eq)
+    thus "n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst"
+      using abs_no_subst by (auto simp: fmdom_notI)
   qed
 
   \<comment> \<open>Core type substitution = fmap_of_list (zip tyvars finalTyArgs)\<close>
@@ -1061,8 +1116,8 @@ next
      = apply_subst coreTySubst payloadTy\<close>
   have payload_double_subst:
     "apply_subst finalSubst (apply_subst ?origSubst payloadTy) = apply_subst ?coreTySubst payloadTy"
-    using len_tyargs payload_tyvars tyvars_distinct
-    by (simp add: apply_subst_compose_zip)
+    using apply_subst_compose_zip_extra[OF len_tyargs[symmetric] payload_tyvars_ok tyvars_distinct]
+    by simp
 
   \<comment> \<open>Show payload typechecks with the expected type\<close>
   have payload_typed: "core_term_type env' ghost ?payload = Some (apply_subst ?coreTySubst payloadTy)"
@@ -1096,12 +1151,25 @@ next
         by (simp add: Let_def)
 
       \<comment> \<open>Each coerced arg types to the double-substituted field type\<close>
-      have fld_tyvars: "\<forall>(_, ty) \<in> set ?flds. type_tyvars ty \<subseteq> set tyvars"
-        using payload_tyvars payload_rec by fastforce
+      \<comment> \<open>Each field type's tyvars lie within the payload's, hence are either in tyvars
+          or are abstract types untouched by finalSubst. \<close>
+      have fld_tyvars_ok: "\<And>nm ty n. (nm, ty) \<in> set ?flds \<Longrightarrow> n \<in> type_tyvars ty
+                            \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst"
+      proof -
+        fix nm ty n assume mem: "(nm, ty) \<in> set ?flds" and n_in: "n \<in> type_tyvars ty"
+        from mem payload_rec have "type_tyvars ty \<subseteq> type_tyvars payloadTy" by force
+        with n_in have "n \<in> type_tyvars payloadTy" by blast
+        thus "n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst" using payload_tyvars_ok by blast
+      qed
       have fld_double_subst: "\<forall>(_, ty) \<in> set ?flds.
               apply_subst finalSubst (apply_subst ?origSubst ty) = apply_subst ?coreTySubst ty"
-        using len_tyargs tyvars_distinct fld_tyvars
-        by (auto simp: apply_subst_compose_zip)
+      proof (intro ballI, clarify)
+        fix nm ty assume mem: "(nm, ty) \<in> set ?flds"
+        have "\<And>n. n \<in> type_tyvars ty \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst"
+          using fld_tyvars_ok mem by blast
+        thus "apply_subst finalSubst (apply_subst ?origSubst ty) = apply_subst ?coreTySubst ty"
+          by (simp add: apply_subst_compose_zip_extra len_tyargs tyvars_distinct)
+      qed
       have len_expArgTypes: "length expArgTypes = length ?flds"
         using exp_eq by simp
       have len_finalArgTms: "length finalArgTms = length expArgTypes"
@@ -1450,6 +1518,7 @@ lemma apply_call_coercions_correct:
         "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty'
                       \<Longrightarrow> apply_subst subst ty' = ty'"
       and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
+      and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
   shows "list_all2 (\<lambda>tm expectedTy.
            core_term_type env ghost tm = Some (apply_subst subst expectedTy))
          (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
@@ -1484,13 +1553,13 @@ next
   have ih: "list_all2 (\<lambda>tm expectedTy.
               core_term_type env ghost tm = Some (apply_subst subst expectedTy))
             (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
-    using "2.IH" tail_typed tail_prop "2.prems"(3,4,5,8,9) len_tms len_tys
-          locals_unaffected ret_unaffected
+    using "2.IH" tail_typed tail_prop "2.prems"(3,4,5,8,9,10) len_tms len_tys
+          locals_unaffected ret_unaffected abs_no_subst
     by simp
 
   \<comment> \<open>For the head: apply_subst_to_term preserves typing (with substituted type)\<close>
   have head_tm'_typed: "core_term_type env ghost ?tm' = Some ?actualTy'"
-    by (simp add: "2.prems"(4,5,8,9) apply_subst_to_term_preserves_typing assms(3)
+    by (simp add: "2.prems"(4,5,8,9,10) apply_subst_to_term_preserves_typing assms(3)
         head_typed)
 
   \<comment> \<open>Show the head element has the expected type\<close>

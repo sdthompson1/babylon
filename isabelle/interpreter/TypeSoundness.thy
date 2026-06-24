@@ -724,9 +724,13 @@ next
             using wf_env tyenv_well_formed_def "3.prems"(2) by simp
           have ctor_distinct: "tyenv_ctor_tyvars_distinct env"
             using wf_env tyenv_well_formed_def "3.prems"(2) by simp
+          have abs_empty: "TE_AbstractTypes env = {||}"
+            using "3.prems"(1) unfolding state_matches_env_def by blast
           from payloads_wk ctor_lookup
-          have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+          have "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
             unfolding tyenv_payloads_well_kinded_def by blast
+          hence payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+            by (simp add: abs_empty)
           have payload_tyvars_sub: "type_tyvars payloadTy \<subseteq> set tyvars"
             using is_well_kinded_type_tyvars_subset[OF payload_wk]
             by (simp add: fset_of_list.rep_eq)
@@ -1088,6 +1092,9 @@ next
               show "default_ctors_match ?state' env'"
                 using old_sme env'_eq
                 unfolding state_matches_env_def default_ctors_match_def by simp
+            next
+              show "TE_AbstractTypes env' = {||}"
+                using old_sme env'_eq unfolding state_matches_env_def by simp
             qed
             with CoreStmt_VarDecl Ref Ghost show ?thesis
               using interp_eq storeTyping_extends_refl by auto
@@ -1394,6 +1401,9 @@ next
                   show "default_ctors_match ?state' env'"
                     using old_sme env'_writable_eq
                     unfolding state_matches_env_def default_ctors_match_def by simp
+                next
+                  show "TE_AbstractTypes env' = {||}"
+                    using old_sme env'_writable_eq unfolding state_matches_env_def by simp
                 qed
                 from new_sme interp_eq CoreStmt_VarDecl Ref NotGhost
                 show ?thesis using storeTyping_extends_refl by auto
@@ -1966,6 +1976,9 @@ next
           show "default_ctors_match ?state' env'"
             using old_sme env'_eq
             unfolding state_matches_env_def default_ctors_match_def by simp
+        next
+          show "TE_AbstractTypes env' = {||}"
+            using old_sme env'_eq unfolding state_matches_env_def by simp
         qed
         with CoreStmt_Obtain show ?thesis
           using interp_eq storeTyping_extends_refl by auto

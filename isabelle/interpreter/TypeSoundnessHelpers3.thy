@@ -894,9 +894,11 @@ proof -
         payloads_wk: "tyenv_payloads_well_kinded env" and
         ctor_distinct: "tyenv_ctor_tyvars_distinct env"
         unfolding tyenv_well_formed_def by auto
-      from payloads_wk ctor_lookup
+      have abs_empty: "TE_AbstractTypes env = {||}"
+        using state_env unfolding state_matches_env_def by simp
+      from payloads_wk ctor_lookup abs_empty
       have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
-        unfolding tyenv_payloads_well_kinded_def by blast
+        unfolding tyenv_payloads_well_kinded_def by simp
       have payload_tyvars_sub: "type_tyvars payloadTy \<subseteq> set tyvars"
         using is_well_kinded_type_tyvars_subset[OF payload_wk]
         by (simp add: fset_of_list.rep_eq)
@@ -1164,6 +1166,9 @@ proof -
     dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env"
     by (auto simp: Let_def split: option.splits prod.splits if_splits)
 
+  have abs_empty: "TE_AbstractTypes env = {||}"
+    using state_env state_matches_env_def by auto
+
   define tySubst where "tySubst = fmap_of_list (zip tyvars tyArgs)"
   define payloadTyOpt where "payloadTyOpt = core_term_type env NotGhost payload"
 
@@ -1226,7 +1231,7 @@ proof -
       unfolding tyenv_well_formed_def by auto
     from payloads_wk ctor_lookup
     have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
-      unfolding tyenv_payloads_well_kinded_def by blast
+      unfolding tyenv_payloads_well_kinded_def abs_empty by simp
     have payload_tyvars_sub: "type_tyvars payloadTy \<subseteq> set tyvars"
       using is_well_kinded_type_tyvars_subset[OF payload_wk]
       by (simp add: fset_of_list.rep_eq)
@@ -1621,6 +1626,9 @@ proof -
     and fi_match: "fun_info_matches_interp_fun env funInfo f"
     by (cases "fmlookup (IS_Functions state) fnName") auto
 
+  have abs_empty: "TE_AbstractTypes env = {||}"
+    using state_env unfolding state_matches_env_def by blast
+
   \<comment> \<open>Length match between argTms and f's args (via fi_match + args_typed). \<close>
   from fi_match have len_fi: "length (FI_TmArgs funInfo) = length (IF_Args f)"
     unfolding fun_info_matches_interp_fun_def by (auto dest: list_all2_lengthD)
@@ -1710,7 +1718,8 @@ proof -
                                 TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
                         ?paramTy_i"
       unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def
-      using \<open>?paramTy_i \<in> _\<close> by blast
+      using \<open>?paramTy_i \<in> _\<close> abs_empty
+      by (metis finter_fempty_left funion_fempty_left) 
     hence paramTy_tyvars:
       "type_tyvars ?paramTy_i \<subseteq> fset (fset_of_list (FI_TyArgs funInfo))"
       using is_runtime_type_tyvars_subset by fastforce
@@ -1900,7 +1909,7 @@ proof -
 
     \<comment> \<open>Common facts derived from sme_body. \<close>
     have wf_bodyEnv: "tyenv_well_formed (body_env_for env (map fst (IF_Args f)) funInfo)"
-      using body_env_for_well_formed fn_lookup not_ghost wf_env by auto
+      using body_env_for_well_formed fn_lookup not_ghost wf_env abs_empty by auto
 
     show ?thesis
     proof (cases "IF_Body f")
@@ -2070,11 +2079,13 @@ proof -
                   is_runtime_type_ground_cong_env[OF ret_ground, of "body_env_for env (map fst (IF_Args f)) funInfo" env]
             by (simp add: body_env_for_def)
           \<comment> \<open>Apply value_has_type_cong_env_wk to flip env. \<close>
+          have abs_body: "TE_AbstractTypes (body_env_for env (map fst (IF_Args f)) funInfo) = {||}"
+            using abs_empty by (simp add: body_env_for_def)
           have ret_typed_env:
             "value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo))"
             using value_has_type_cong_env_wk
                     [OF dt_eq_env_body(1) dt_eq_env_body(2) dt_eq_env_body(3)
-                        wf_bodyEnv wf_env wk_body wk_env rt_body rt_env ret_typed_body] .
+                        wf_bodyEnv wf_env abs_body abs_empty wk_body wk_env rt_body rt_env ret_typed_body] .
 
           \<comment> \<open>Reconcile apply_subst tySubst (FI_ReturnType funInfo) with
               apply_subst (IS_TyArgs state) retTy via apply_subst_compose_zip. \<close>
@@ -2088,7 +2099,7 @@ proof -
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
                              (FI_ReturnType funInfo)"
             unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def
-            by (auto simp: Let_def)
+            by (auto simp: Let_def abs_empty)
           from is_runtime_type_tyvars_subset[OF ret_runtime]
           have ret_tyvars_sub:
             "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
@@ -2199,7 +2210,8 @@ proof -
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
                               ?paramTy_i"
             unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def
-            using \<open>?paramTy_i \<in> _\<close> by blast
+            using \<open>?paramTy_i \<in> _\<close> abs_empty
+            by (metis finter_fempty_left funion_fempty_left) 
           from is_runtime_type_tyvars_subset[OF this]
           show ?thesis by (simp add: fset_of_list.rep_eq)
         qed
@@ -2524,7 +2536,8 @@ proof -
                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
                               ?paramTy_i"
             unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def
-            using \<open>?paramTy_i \<in> _\<close> by blast
+            using \<open>?paramTy_i \<in> _\<close>
+            by (metis abs_empty finter_fempty_left funion_fempty_left)
           from is_runtime_type_tyvars_subset[OF this]
           show ?thesis by (simp add: fset_of_list.rep_eq)
         qed
@@ -2789,6 +2802,9 @@ proof -
           using state_env
           unfolding state_matches_env_def default_ctors_match_def
           by simp
+      next
+        show "TE_AbstractTypes env = {||}"
+          using state_env unfolding state_matches_env_def by blast
       qed
 
       \<comment> \<open>Apply apply_ref_updates_sound to get state_matches for the final state. \<close>
@@ -2836,7 +2852,7 @@ proof -
                                    TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
                            (FI_ReturnType funInfo)"
           unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def
-          by (auto simp: Let_def)
+          by (auto simp: Let_def abs_empty)
         from is_runtime_type_tyvars_subset[OF ret_runtime]
         have ret_tyvars_sub:
           "type_tyvars (FI_ReturnType funInfo) \<subseteq> set (FI_TyArgs funInfo)"
@@ -3157,6 +3173,10 @@ next
   \<comment> \<open>default_ctors_match gives us the IS_DefaultCtors entry. \<close>
   from "5.prems"(1) have dcm: "default_ctors_match state env"
     unfolding state_matches_env_def by simp
+  \<comment> \<open>The matched env has no unresolved abstract types, so the payload-well-kinded
+      and payload-runtime env shapes collapse to the ctor's own tyvars. \<close>
+  from "5.prems"(1) have abs_empty: "TE_AbstractTypes env = {||}"
+    unfolding state_matches_env_def by blast
   from dcm ctors_lookup ctor_lookup
   have dc_lookup: "fmlookup (IS_DefaultCtors state) dtName = Some (ctorName, tyvars, payload)"
     unfolding default_ctors_match_def by blast
@@ -3173,7 +3193,7 @@ next
     unfolding tyenv_well_formed_def by simp
   from pwk ctor_lookup
   have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payload"
-    unfolding tyenv_payloads_well_kinded_def by blast
+    unfolding tyenv_payloads_well_kinded_def by (simp add: abs_empty)
 
   \<comment> \<open>tyenv_nonghost_payloads_runtime: payload is runtime in env-with-tyvars+rttyvars. \<close>
   from wf have npr: "tyenv_nonghost_payloads_runtime env"
@@ -3181,15 +3201,16 @@ next
   from npr ctor_lookup dt_nonghost
   have payload_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list tyvars,
                                             TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>) payload"
-    unfolding tyenv_nonghost_payloads_runtime_def by blast
+    unfolding tyenv_nonghost_payloads_runtime_def using abs_empty by auto
 
   \<comment> \<open>Substituted payload is well-kinded and runtime in env. \<close>
   let ?subst = "fmap_of_list (zip tyvars tyArgs)"
   let ?substPayload = "apply_subst ?subst payload"
   have substPayload_wk: "is_well_kinded env ?substPayload"
-    using apply_subst_specializes_well_kinded[OF payload_wk args_wk len_tyvars] .
+    using abs_empty apply_subst_specializes_well_kinded args_wk len_tyvars payload_wk
+    by auto
   have substPayload_rt: "is_runtime_type env ?substPayload"
-    using apply_subst_specializes_runtime[OF payload_rt args_rt len_tyvars] .
+    by (simp add: abs_empty apply_subst_specializes_runtime args_rt len_tyvars payload_rt)
 
   \<comment> \<open>Groundness of the substituted payload: payload's free tyvars are within
       set tyvars (so dom subst covers them), and the subst's range is ground

@@ -2204,10 +2204,12 @@ next
     by (auto split: option.splits if_splits)
   have wk: "tyenv_vars_well_kinded env"
     using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
+  have abs_sub: "tyenv_abstract_types_subset env"
+    using CoreTm_Var.prems(2) tyenv_well_formed_def by blast
   \<comment> \<open>The variable might be local (well-kinded directly in env) or global
-      (well-kinded in env with TE_TypeVars / TE_RuntimeTypeVars cleared). In the
-      global case, we lift back to env via is_well_kinded_extend_tyvars: clearing
-      then extending by env's own type vars gives env back. \<close>
+      (well-kinded in env with TE_TypeVars cleared to the module's abstract types).
+      In the global case, ty's type variables are abstract types, which are in scope
+      in env (TE_AbstractTypes |\<subseteq>| TE_TypeVars), so we transfer back to env. \<close>
   have var_wk: "is_well_kinded env ty"
   proof (cases "fmlookup (TE_LocalVars env) name")
     case (Some lty)
@@ -2219,14 +2221,17 @@ next
     with lookup ty_eq have gv_lookup: "fmlookup (TE_GlobalVars env) name = Some ty"
       unfolding tyenv_lookup_var_def by (auto split: option.splits)
     from gv_lookup wk have wk_cleared:
-      "is_well_kinded (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      unfolding tyenv_vars_well_kinded_def by blast
-    \<comment> \<open>Well-kinded in the cleared env means ty has no type variables, so it is well-kinded
-        in any env with the same TE_Datatypes \<close>
-    have tyvars_empty: "type_tyvars ty = {}"
+      "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env \<rparr>) ty"
+      unfolding tyenv_vars_well_kinded_def by simp
+    \<comment> \<open>ty's type variables are a subset of the abstract types, which are in scope. \<close>
+    have "type_tyvars ty \<subseteq> fset (TE_AbstractTypes env)"
       using is_well_kinded_type_tyvars_subset[OF wk_cleared] by simp
+    moreover have "fset (TE_AbstractTypes env) \<subseteq> fset (TE_TypeVars env)"
+      using abs_sub unfolding tyenv_abstract_types_subset_def
+      by (simp add: less_eq_fset.rep_eq)
+    ultimately have tyvars_sub: "type_tyvars ty \<subseteq> fset (TE_TypeVars env)" by blast
     show ?thesis
-      using is_well_kinded_transfer[OF wk_cleared] tyvars_empty by simp
+      using is_well_kinded_transfer[OF wk_cleared tyvars_sub] by simp
   qed
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
   proof
@@ -2250,12 +2255,17 @@ next
       from not_ghost gv None have "name |\<notin>| TE_GhostGlobals env"
         unfolding tyenv_var_ghost_def by (auto split: option.splits)
       with gv rt have rt_cleared:
-        "is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
+        "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
+              TE_RuntimeTypeVars := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty"
         unfolding tyenv_vars_runtime_def by blast
-      have tyvars_empty: "type_tyvars ty = {}"
+      \<comment> \<open>ty's type variables are runtime tyvars contained in the abstract types
+          intersected with the runtime tyvars, hence are runtime tyvars of env. \<close>
+      have "type_tyvars ty \<subseteq> fset (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)"
         using is_runtime_type_tyvars_subset[OF rt_cleared] by simp
+      hence tyvars_sub: "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
+        by (auto simp: inf_fset.rep_eq)
       show ?thesis
-        using is_runtime_type_transfer[OF rt_cleared] tyvars_empty by simp
+        using is_runtime_type_transfer[OF rt_cleared tyvars_sub] by simp
     qed
   qed
   ultimately show ?case by blast
@@ -2349,13 +2359,16 @@ next
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: Let_def split: option.splits if_splits)
   \<comment> \<open>Well-kinded part\<close>
+  have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
+    using CoreTm_FunctionCall.prems(2) tyenv_well_formed_def tyenv_abstract_types_subset_def
+    by blast
   have "tyenv_fun_types_well_kinded env"
     using CoreTm_FunctionCall.prems(2) tyenv_well_formed_def by blast
-  hence ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+  hence ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
                                 (FI_ReturnType funInfo)"
     using fn_lookup tyenv_fun_types_well_kinded_def by blast
   have wk: "is_well_kinded env ty"
-    using apply_subst_specializes_well_kinded len_tyargs ret_wk ty_eq tyargs_wk
+    using apply_subst_specializes_well_kinded[OF ret_wk tyargs_wk len_tyargs[symmetric] abs_sub] ty_eq
     by simp
   \<comment> \<open>Runtime part (NotGhost only)\<close>
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
@@ -2367,13 +2380,14 @@ next
       by (auto simp: Let_def split: option.splits if_splits)
     have "tyenv_fun_ghost_constraint env"
       using CoreTm_FunctionCall.prems(2) tyenv_well_formed_def by blast
-    hence ret_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                           TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
+    hence ret_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo),
+                                           TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                                  |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
                                    (FI_ReturnType funInfo)"
       using fn_lookup not_ghost_fn tyenv_fun_ghost_constraint_def Let_def
       by (meson GhostOrNot.exhaust)
     show "is_runtime_type env ty"
-      using ty_eq apply_subst_specializes_runtime by (simp add: len_tyargs ret_rt tyargs_rt)
+      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt len_tyargs[symmetric]] by simp
   qed
   ultimately show ?case by blast
 next
@@ -2490,7 +2504,10 @@ next
     ty_eq: "ty = apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy"
     by (auto split: option.splits prod.splits if_splits)
   \<comment> \<open>Well-kinded: apply_subst preserves well-kindedness\<close>
-  have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>) payloadTy"
+  have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
+    using CoreTm_VariantProj.prems(2) tyenv_well_formed_def tyenv_abstract_types_subset_def
+    by blast
+  have payload_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
     using CoreTm_VariantProj.prems(2) ctor_lookup tyenv_well_formed_def
       tyenv_payloads_well_kinded_def by blast
   have tm_IH: "is_well_kinded env (CoreTy_Datatype dtName tyArgs) \<and>
@@ -2505,7 +2522,7 @@ next
     from tm_IH show ?thesis using dt_lookup by simp
   qed
   have wk: "is_well_kinded env ty"
-    using ty_eq apply_subst_specializes_well_kinded[OF payload_wk tyargs_wk] len_eq by simp
+    using ty_eq apply_subst_specializes_well_kinded[OF payload_wk tyargs_wk len_eq[symmetric] abs_sub] by simp
   \<comment> \<open>Runtime: from IH on scrutinee, tyenv_nonghost_payloads_runtime, and apply_subst_preserves_runtime\<close>
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
   proof
@@ -2515,12 +2532,13 @@ next
     from scrut_rt have tyargs_rt: "list_all (is_runtime_type env) tyArgs" by simp
     have "tyenv_nonghost_payloads_runtime env"
       using CoreTm_VariantProj.prems(2) tyenv_well_formed_def by blast
-    hence payload_rt: "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                               TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>)
+    hence payload_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
+                                               TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                                      |\<union>| fset_of_list tyvars \<rparr>)
                                        payloadTy"
       using ctor_lookup dt_eq dt_nonghost tyenv_nonghost_payloads_runtime_def by blast
     show "is_runtime_type env ty"
-      using ty_eq apply_subst_specializes_runtime[OF payload_rt tyargs_rt] len_eq by simp
+      using ty_eq apply_subst_specializes_runtime[OF payload_rt tyargs_rt len_eq[symmetric]] by simp
   qed
   ultimately show ?case by blast
 next
