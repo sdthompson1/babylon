@@ -64,21 +64,6 @@ lemma apply_subst_singleton_other:
   "n \<noteq> m \<Longrightarrow> apply_subst (singleton_subst n ty') (CoreTy_Var m) = CoreTy_Var m"
   by (simp add: singleton_subst_def)
 
-(* If n doesn't occur in ty, then applying singleton_subst n ty' leaves ty unchanged *)
-lemma apply_subst_singleton_no_occurs:
-  "\<not> occurs n ty \<Longrightarrow> apply_subst (singleton_subst n ty') ty = ty"
-proof (induction ty)
-  case (CoreTy_Record flds)
-  have "\<And>name ty. (name, ty) \<in> set flds \<Longrightarrow> \<not> occurs n ty \<Longrightarrow>
-        apply_subst (singleton_subst n ty') ty = ty"
-    using CoreTy_Record.IH by auto
-  moreover have "\<And>name ty. (name, ty) \<in> set flds \<Longrightarrow> \<not> occurs n ty"
-    using CoreTy_Record.prems by (auto simp: occurs_def)
-  ultimately have "map (\<lambda>(name, ty). (name, apply_subst (singleton_subst n ty') ty)) flds = flds"
-    by (induction flds) auto
-  thus ?case by simp
-qed (auto simp: occurs_def singleton_subst_def map_idI)
-
 (* The range of a singleton subst is just the given type. *)
 lemma fmran'_singleton_subst: "fmran' (singleton_subst n ty) = {ty}"
   by (auto simp: singleton_subst_def fmran'_def split: if_splits)
@@ -130,6 +115,31 @@ next
   then show ?case by (cases "fmlookup subst n"; auto simp: subst_range_tyvars_def fmran'I)
 qed (auto)
 
+(* Monotonicity: applying subst to a type variable contained in ty produces a type
+   whose type variables are all contained in the result of substituting ty. *)
+lemma type_tyvars_apply_subst_mono:
+  assumes "a \<in> type_tyvars ty"
+  shows "type_tyvars (apply_subst subst (CoreTy_Var a)) \<subseteq> type_tyvars (apply_subst subst ty)"
+  using assms
+proof (induction ty)
+  case (CoreTy_Datatype name tyargs)
+  then obtain arg where "arg \<in> set tyargs" "a \<in> type_tyvars arg" by auto
+  thus ?case using CoreTy_Datatype.IH by fastforce
+next
+  case (CoreTy_Record flds)
+  then obtain nm t where mem: "(nm, t) \<in> set flds" and a_in: "a \<in> type_tyvars t" by auto
+  have "t \<in> Basic_BNFs.snds (nm, t)" by simp
+  with mem a_in CoreTy_Record.IH
+  have sub: "type_tyvars (apply_subst subst (CoreTy_Var a)) \<subseteq> type_tyvars (apply_subst subst t)"
+    by blast
+  have "type_tyvars (apply_subst subst t) \<subseteq> type_tyvars (apply_subst subst (CoreTy_Record flds))"
+    using mem by force
+  thus ?case using sub by blast
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by auto
+qed auto
+
 (* Corollary: If n is in dom(subst) and not in range(subst), it's eliminated from result *)
 corollary apply_subst_eliminates_dom:
   assumes "n \<in> fset (fmdom subst)"
@@ -167,6 +177,58 @@ next
   case (CoreTy_Var n)
   thus ?case by (simp add: fmdom_notD)
 qed (simp_all)
+
+(* Special case: If n doesn't occur in ty, then applying singleton_subst n ty'
+   leaves ty unchanged *)
+corollary apply_subst_singleton_no_occurs:
+  "\<not> occurs n ty \<Longrightarrow> apply_subst (singleton_subst n ty') ty = ty"
+  using apply_subst_disjoint_id occurs_def singleton_subst_def by simp
+
+(* If s1 and s2 have the same *effect* on each type variable of ty - that is,
+   apply_subst s1 (Var v) = apply_subst s2 (Var v) - then they agree on ty. This is
+   the most general congruence; note it does NOT require their fmlookups to agree
+   (e.g. fmlookup None and fmlookup (Some (Var v)) differ but have the same effect). *)
+lemma apply_subst_cong_on_tyvars_val:
+  assumes "\<And>v. v \<in> type_tyvars ty \<Longrightarrow>
+                apply_subst s1 (CoreTy_Var v) = apply_subst s2 (CoreTy_Var v)"
+  shows "apply_subst s1 ty = apply_subst s2 ty"
+  using assms
+proof (induction ty)
+  case (CoreTy_Datatype name tyargs)
+  have "\<And>arg. arg \<in> set tyargs \<Longrightarrow> apply_subst s1 arg = apply_subst s2 arg"
+    using CoreTy_Datatype.IH CoreTy_Datatype.prems by auto
+  thus ?case by simp
+next
+  case (CoreTy_Record flds)
+  have "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow> apply_subst s1 t = apply_subst s2 t"
+  proof -
+    fix nm t assume mem: "(nm, t) \<in> set flds"
+    have "\<And>v. v \<in> type_tyvars t \<Longrightarrow>
+              apply_subst s1 (CoreTy_Var v) = apply_subst s2 (CoreTy_Var v)"
+      using CoreTy_Record.prems mem by force
+    thus "apply_subst s1 t = apply_subst s2 t"
+      using CoreTy_Record.IH mem by simp
+  qed
+  hence "map (\<lambda>(nm, t). (nm, apply_subst s1 t)) flds
+       = map (\<lambda>(nm, t). (nm, apply_subst s2 t)) flds"
+    by (induction flds) auto
+  thus ?case by simp
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by simp
+qed auto
+
+(* If s1 and s2 agree (as fmaps) on every type variable that occurs in ty, then
+   apply_subst s1 ty = apply_subst s2 ty. A corollary of the effect-based congruence
+   above, since equal lookups give equal effect on each Var. *)
+lemma apply_subst_cong_on_tyvars:
+  assumes "\<And>v. v \<in> type_tyvars ty \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+  shows "apply_subst s1 ty = apply_subst s2 ty"
+proof (rule apply_subst_cong_on_tyvars_val)
+  fix v assume "v \<in> type_tyvars ty"
+  thus "apply_subst s1 (CoreTy_Var v) = apply_subst s2 (CoreTy_Var v)"
+    using assms by simp
+qed
 
 (* Substituting runtime types preserves runtime-ness.
    The source env (where ty lives) and target env (where the result lives) may differ:
@@ -554,7 +616,9 @@ proof
 qed
 
 
-(* General fmap helpers about fmap_of_list and zip. *)
+(* ========================================================================== *)
+(* General fmap helpers about fmap_of_list and zip *)
+(* ========================================================================== *)
 
 lemma fmdom_fmap_of_list_zip:
   "length xs = length ys \<Longrightarrow> fset (fmdom (fmap_of_list (zip xs ys))) = set xs"
@@ -613,5 +677,61 @@ next
   finally show ?case by simp
 qed
 
+
+(* ========================================================================== *)
+(* Idempotent substitutions                                                   *)
+(*                                                                            *)
+(* We define an "idempotent" substitution as one where no domain variable     *)
+(* occurs in any range type.                                                  *)
+(*                                                                            *)
+(* This is strictly stronger than the "applying twice = applying once"        *)
+(* definition, because it also rules out a redundant mapping T \<mapsto> T.          *)
+(* ========================================================================== *)
+
+definition idempotent_subst :: "TypeSubst \<Rightarrow> bool" where
+  "idempotent_subst s \<equiv> subst_range_tyvars s \<inter> fset (fmdom s) = {}"
+
+(* fmempty is trivially idempotent (empty range). *)
+lemma idempotent_subst_empty [simp]:
+  "idempotent_subst fmempty"
+  unfolding idempotent_subst_def subst_range_tyvars_def by simp
+
+(* Applying an idempotent substitution produces a type whose type variables
+   avoid the substitution's domain. *)
+lemma apply_subst_idem_dom_free:
+  assumes "idempotent_subst s"
+  shows "type_tyvars (apply_subst s ty) \<inter> fset (fmdom s) = {}"
+proof -
+  have "type_tyvars (apply_subst s ty) \<subseteq>
+        (type_tyvars ty - fset (fmdom s)) \<union> subst_range_tyvars s"
+    by (rule apply_subst_tyvars_result)
+  moreover have "subst_range_tyvars s \<inter> fset (fmdom s) = {}"
+    using assms unfolding idempotent_subst_def .
+  ultimately show ?thesis by auto
+qed
+
+(* Applying an idempotent substitution twice is the same as applying it once.
+   (This is the "other" definition of idempotency.) *)
+lemma idempotent_subst_twice:
+  assumes "idempotent_subst s"
+  shows "apply_subst s (apply_subst s ty) = apply_subst s ty"
+  by (simp add: apply_subst_disjoint_id apply_subst_idem_dom_free assms)
+
+(* Note: the converse, "s(s(T)) = s(T) \<Longrightarrow> idempotent_subst s", is true under the
+   additional assumption that s has no "self-mappings" (s(T) = T), but the proof
+   is a bit tricky so we omit it here. *)
+
+(* Corollary of idempotent_subst_twice: if s maps T to ty, then s has no
+   further effect on ty. *)
+corollary idempotent_subst_fixes_range:
+  assumes "idempotent_subst s"
+      and "fmlookup s T = Some ty"
+    shows "apply_subst s ty = ty"
+proof -
+  have "apply_subst s (CoreTy_Var T) = ty"
+    using assms(2) by fastforce
+  then show ?thesis
+    using assms(1) idempotent_subst_twice by blast
+qed
 
 end
