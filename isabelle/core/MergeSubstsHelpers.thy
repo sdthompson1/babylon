@@ -320,187 +320,32 @@ qed
 
    The intermediate closure can sit on either operand of the outer merge, so we need
    two forms:
-   - LEFT (\<sigma> ++f w): used when the inner merge's result is the left operand. Here ++f
-     keeps w's equation on the overlap, so a *consistency* hypothesis (consistent \<sigma> w)
-     is required to know w agrees with \<sigma> there.
-   - RIGHT (p ++f \<sigma>): used when the inner result is the right operand. Here \<sigma> always
-     wins on the overlap, so NO consistency hypothesis is needed. This matters: in
-     merge_substs_assoc the right-hand grouping does not give us a consistency fact
-     strong enough to commute the operands. *)
-
-(* The (left-form) absorption identity on a single domain variable of u, proved for
-   all such variables simultaneously by wf-induction on subst_dep_rel u. The closure
-   \<tau> is a closure of the closure-substituted union \<sigma> ++f w. *)
-lemma closure_absorb_var:
-  assumes acyc: "acyclic_subst_deps u"
-      and cons: "consistent_subst \<sigma> w"
-      and cl_u: "is_subst_closure u \<sigma>"
-      and cl_\<sigma>w: "is_subst_closure (\<sigma> ++\<^sub>f w) \<tau>"
-      and v_dom: "v |\<in>| fmdom u"
-  shows "apply_subst \<tau> (apply_subst \<sigma> (CoreTy_Var v)) = apply_subst \<tau> (CoreTy_Var v)"
-proof -
-  have wf: "wf (subst_dep_rel u)" using acyc by (rule acyclic_subst_deps_wf)
-  have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
-  show ?thesis
-  using v_dom proof (induction v rule: wf_induct_rule[OF wf])
-    case (1 v)
-    then have v_domu: "v |\<in>| fmdom u" by simp
-    then obtain ty where ty_u: "fmlookup u v = Some ty"
-      by (auto simp: fmlookup_dom_iff)
-    \<comment> \<open>\<sigma> resolves v to apply_subst \<sigma> ty (\<sigma> is the closure of u). \<close>
-    have \<sigma>_v: "fmlookup \<sigma> v = Some (apply_subst \<sigma> ty)"
-      using cl_u ty_u unfolding is_subst_closure_def by blast
-    \<comment> \<open>So the goal LHS is apply_subst \<tau> (apply_subst \<sigma> ty). \<close>
-    have lhs: "apply_subst \<tau> (apply_subst \<sigma> (CoreTy_Var v))
-             = apply_subst \<tau> (apply_subst \<sigma> ty)"
-      using \<sigma>_v by simp
-    \<comment> \<open>Step 1: \<tau> absorbs \<sigma> on ty, because every domain variable x of u occurring in
-        ty is a strict dependency of v, so the IH applies at x. \<close>
-    have absorb_ty: "apply_subst \<tau> (apply_subst \<sigma> ty) = apply_subst \<tau> ty"
-    proof -
-      have pt: "\<And>x. x \<in> type_tyvars ty \<Longrightarrow>
-                  apply_subst \<tau> (apply_subst \<sigma> (CoreTy_Var x)) = apply_subst \<tau> (CoreTy_Var x)"
-      proof -
-        fix x assume x_in: "x \<in> type_tyvars ty"
-        show "apply_subst \<tau> (apply_subst \<sigma> (CoreTy_Var x)) = apply_subst \<tau> (CoreTy_Var x)"
-        proof (cases "x |\<in>| fmdom u")
-          case False
-          then have "fmlookup \<sigma> x = None" using dom_\<sigma> by (simp add: fmdom_notD)
-          then show ?thesis by simp
-        next
-          case True
-          have edge: "(x, v) \<in> subst_dep_rel u"
-            unfolding subst_dep_rel_def using v_domu True x_in ty_u by auto
-          show ?thesis using "1.IH"[OF edge True] .
-        qed
-      qed
-      \<comment> \<open>Lift the pointwise identity to ty via val-congruence: \<tau> \<circ> \<sigma> and \<tau> have the
-          same effect on every tyvar of ty. \<close>
-      have "apply_subst (compose_subst \<tau> \<sigma>) ty = apply_subst \<tau> ty"
-      proof (rule apply_subst_cong_on_tyvars_val)
-        fix x assume "x \<in> type_tyvars ty"
-        from pt[OF this]
-        show "apply_subst (compose_subst \<tau> \<sigma>) (CoreTy_Var x) = apply_subst \<tau> (CoreTy_Var x)"
-          using compose_subst_correct by presburger
-      qed
-      then show ?thesis by (simp add: compose_subst_correct)
-    qed
-    \<comment> \<open>Step 2: apply_subst \<tau> ty = \<tau>(v). In both cases \<tau> closes the (\<sigma> ++f w)-equation
-        at v, whose right-hand side is apply_subst \<sigma> ty; Step 1 then finishes. \<close>
-    have tau_v: "apply_subst \<tau> ty = apply_subst \<tau> (CoreTy_Var v)"
-    proof -
-      have look_\<sigma>w: "fmlookup (\<sigma> ++\<^sub>f w) v = Some (apply_subst \<sigma> ty)"
-      proof (cases "v |\<in>| fmdom w")
-        case False
-        \<comment> \<open>v only in \<sigma>: the union keeps \<sigma>(v) = apply_subst \<sigma> ty. \<close>
-        show ?thesis using \<sigma>_v False by simp
-      next
-        case True
-        \<comment> \<open>v shared: consistency of \<sigma>, w gives w(v) = \<sigma>(v) = apply_subst \<sigma> ty. \<close>
-        have "fmlookup w v = fmlookup \<sigma> v"
-          using cons v_domu dom_\<sigma> True unfolding consistent_subst_def by simp
-        then have "fmlookup w v = Some (apply_subst \<sigma> ty)" using \<sigma>_v by simp
-        then show ?thesis using True by simp
-      qed
-      have "fmlookup \<tau> v = Some (apply_subst \<tau> (apply_subst \<sigma> ty))"
-        using cl_\<sigma>w look_\<sigma>w unfolding is_subst_closure_def by blast
-      then show ?thesis using absorb_ty by simp
-    qed
-    show ?case using lhs absorb_ty tau_v by simp
-  qed
-qed
-
-(* Absorption lifted from variables to arbitrary types: under the union's closure
-   \<tau>, the intermediate closure \<sigma> has no further effect. *)
-lemma closure_absorb_type:
-  assumes acyc: "acyclic_subst_deps u"
-      and cons: "consistent_subst \<sigma> w"
-      and cl_u: "is_subst_closure u \<sigma>"
-      and cl_\<sigma>w: "is_subst_closure (\<sigma> ++\<^sub>f w) \<tau>"
-  shows "apply_subst \<tau> (apply_subst \<sigma> ty) = apply_subst \<tau> ty"
-proof -
-  have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
-  \<comment> \<open>\<tau> \<circ> \<sigma> and \<tau> have the same effect on every type variable of ty (val-congruence),
-      hence the same effect on ty. \<close>
-  have "apply_subst (compose_subst \<tau> \<sigma>) ty = apply_subst \<tau> ty"
-  proof (rule apply_subst_cong_on_tyvars_val)
-    fix x assume "x \<in> type_tyvars ty"
-    have "apply_subst \<tau> (apply_subst \<sigma> (CoreTy_Var x)) = apply_subst \<tau> (CoreTy_Var x)"
-    proof (cases "x |\<in>| fmdom u")
-      case False
-      then have "fmlookup \<sigma> x = None" using dom_\<sigma> by (simp add: fmdom_notD)
-      then show ?thesis by simp
-    next
-      case True
-      then show ?thesis using closure_absorb_var[OF acyc cons cl_u cl_\<sigma>w] by simp
-    qed
-    then show "apply_subst (compose_subst \<tau> \<sigma>) (CoreTy_Var x) = apply_subst \<tau> (CoreTy_Var x)"
-      using compose_subst_correct by presburger
-  qed
-  then show ?thesis by (simp add: compose_subst_correct)
-qed
-
-(* Workhorse: replacing u by its closure \<sigma> inside the union does not change the
-   closure. A closure \<tau> of the closure-substituted union \<sigma> ++f w is also a closure
-   of the raw union u ++f w. (This is the direction merge_substs_assoc needs on the
-   left side: it has the closure of \<sigma> ++f w and wants the closure of the raw union.) *)
-lemma is_subst_closure_absorb:
-  assumes acyc: "acyclic_subst_deps u"
-      and cons: "consistent_subst \<sigma> w"
-      and cl_u: "is_subst_closure u \<sigma>"
-      and cl_\<sigma>w: "is_subst_closure (\<sigma> ++\<^sub>f w) \<tau>"
-  shows "is_subst_closure (u ++\<^sub>f w) \<tau>"
-proof -
-  have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
-  have idem_\<tau>: "idempotent_subst \<tau>" using cl_\<sigma>w unfolding is_subst_closure_def by simp
-  \<comment> \<open>u ++f w and \<sigma> ++f w have the same domain, which is \<tau>'s domain. \<close>
-  have dom_\<tau>: "fmdom \<tau> = fmdom (u ++\<^sub>f w)"
-    using cl_\<sigma>w dom_\<sigma> unfolding is_subst_closure_def by simp
-  \<comment> \<open>Each equation of u ++f w is closed by \<tau>. \<close>
-  have eqs: "\<And>T ty. fmlookup (u ++\<^sub>f w) T = Some ty \<Longrightarrow> fmlookup \<tau> T = Some (apply_subst \<tau> ty)"
-  proof -
-    fix T ty assume look: "fmlookup (u ++\<^sub>f w) T = Some ty"
-    show "fmlookup \<tau> T = Some (apply_subst \<tau> ty)"
-    proof (cases "T |\<in>| fmdom w")
-      case True
-      \<comment> \<open>w wins in both unions; \<tau> closes the (shared) w-equation. \<close>
-      then have "fmlookup w T = Some ty" using look by simp
-      then have "fmlookup (\<sigma> ++\<^sub>f w) T = Some ty" using True by simp
-      then show ?thesis using cl_\<sigma>w unfolding is_subst_closure_def by blast
-    next
-      case False
-      \<comment> \<open>T \<in> dom u; u(T) = ty. \<sigma> closes u's equation: \<sigma>(T) = apply_subst \<sigma> ty, and \<tau>
-          closes that \<sigma>-equation; the extra \<sigma> is absorbed by closure_absorb_type. \<close>
-      then have u_T: "fmlookup u T = Some ty" using look by simp
-      have \<sigma>_T: "fmlookup \<sigma> T = Some (apply_subst \<sigma> ty)"
-        using cl_u u_T unfolding is_subst_closure_def by blast
-      then have "fmlookup (\<sigma> ++\<^sub>f w) T = Some (apply_subst \<sigma> ty)"
-        using False by simp
-      then have "fmlookup \<tau> T = Some (apply_subst \<tau> (apply_subst \<sigma> ty))"
-        using cl_\<sigma>w unfolding is_subst_closure_def by blast
-      then show ?thesis
-        using closure_absorb_type[OF acyc cons cl_u cl_\<sigma>w] by simp
-    qed
-  qed
-  show ?thesis
-    unfolding is_subst_closure_def using idem_\<tau> dom_\<tau> eqs by blast
-qed
+   - RIGHT (p ++f \<sigma>): the inner result is the right operand. Because ++f is right-biased,
+     \<sigma> always wins on the overlap with p, so its substituted values are never discarded
+     and NO hypothesis relating p and \<sigma> is needed. We take this as the PRIMITIVE form
+     (it carries the wf-induction).
+   - LEFT (\<sigma> ++f w): the inner result is the left operand. Under the strict semantics the
+     outer merge succeeds only when u and w are domain-disjoint, so we carry a
+     *disjointness* hypothesis (fmdom u |\<inter>| fmdom w = {||}). With disjoint domains
+     \<sigma> ++f w = w ++f \<sigma> (disjoint_subst_add_commute), so the LEFT form is just the RIGHT
+     form with p := w - a one-line corollary, no separate induction. The LEFT forms are
+     therefore proved AFTER the RIGHT forms, below. *)
 
 (* ---------------------------------------------------------------------------- *)
-(* Right-operand absorption                                                     *)
+(* Right-operand absorption (the PRIMITIVE form, carrying the wf-induction)      *)
 (*                                                                            *)
-(* The mirror of the above, for when the closure \<sigma> sits on the RIGHT of the      *)
-(* union: p ++f \<sigma>. Because ++f is right-biased, \<sigma> always wins on the overlap with  *)
-(* p, so its substituted values are never discarded - and consequently NO         *)
-(* consistency hypothesis is needed here (unlike the left form, where w could      *)
-(* override \<sigma>). This is exactly the shape merge_substs produces on the r' side,    *)
-(* where the outer merge is merge_substs s1 b with the closure b on the right and   *)
-(* the operands are NOT known to be consistent enough to commute.                  *)
+(* The closure \<sigma> sits on the RIGHT of the union: p ++f \<sigma>. Because ++f is           *)
+(* right-biased, \<sigma> always wins on the overlap with p, so its substituted values    *)
+(* are never discarded - and consequently NO hypothesis relating p and \<sigma> is needed.*)
+(* This is the shape merge_substs produces on the r' side of associativity, where   *)
+(* the outer merge is merge_substs s1 b with the closure b on the right. The LEFT    *)
+(* form (\<sigma> ++f w) is derived from this below, using domain-disjointness to commute   *)
+(* \<sigma> ++f w into w ++f \<sigma>.                                                            *)
 (* ---------------------------------------------------------------------------- *)
 
 (* Right-form absorption identity on a single domain variable of u, \<tau> a closure of
-   p ++f \<sigma>. Same wf-induction as closure_absorb_var, but Step 2 needs no case split:
-   \<sigma> wins in p ++f \<sigma> at every domain variable of u. *)
+   p ++f \<sigma>. Proved by wf-induction on subst_dep_rel u; Step 2 needs no case split,
+   since \<sigma> wins in p ++f \<sigma> at every domain variable of u. *)
 lemma closure_absorb_var_right:
   assumes acyc: "acyclic_subst_deps u"
       and cl_u: "is_subst_closure u \<sigma>"
@@ -633,6 +478,60 @@ proof -
     unfolding is_subst_closure_def using idem_\<tau> dom_\<tau> eqs by blast
 qed
 
+(* ---------------------------------------------------------------------------- *)
+(* Left-operand absorption (DERIVED from the right form via disjointness)        *)
+(*                                                                            *)
+(* When u and w are domain-disjoint, \<sigma> ++f w = w ++f \<sigma> (dom \<sigma> = dom u), so the LEFT  *)
+(* forms reduce to the RIGHT forms with p := w. No separate induction is needed.  *)
+(* ---------------------------------------------------------------------------- *)
+
+(* From disjointness of u and w, the closure-substituted union commutes:
+   \<sigma> ++f w = w ++f \<sigma>. *)
+lemma disjoint_closure_union_commute:
+  assumes disj: "fmdom u |\<inter>| fmdom w = {||}"
+      and cl_u: "is_subst_closure u \<sigma>"
+  shows "\<sigma> ++\<^sub>f w = w ++\<^sub>f \<sigma>"
+proof -
+  have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
+  have "disjoint_subst \<sigma> w" using disj dom_\<sigma> unfolding disjoint_subst_def by simp
+  thus ?thesis using disjoint_subst_add_commute by blast
+qed
+
+(* Absorption lifted from variables to arbitrary types (left form). Under the union's
+   closure \<tau>, the intermediate closure \<sigma> has no further effect. Corollary of the right
+   form: with u, w disjoint, \<sigma> ++f w = w ++f \<sigma>. *)
+lemma closure_absorb_type:
+  assumes acyc: "acyclic_subst_deps u"
+      and disj: "fmdom u |\<inter>| fmdom w = {||}"
+      and cl_u: "is_subst_closure u \<sigma>"
+      and cl_\<sigma>w: "is_subst_closure (\<sigma> ++\<^sub>f w) \<tau>"
+  shows "apply_subst \<tau> (apply_subst \<sigma> ty) = apply_subst \<tau> ty"
+proof -
+  have "is_subst_closure (w ++\<^sub>f \<sigma>) \<tau>"
+    using cl_\<sigma>w disjoint_closure_union_commute[OF disj cl_u] by simp
+  thus ?thesis using closure_absorb_type_right[OF acyc cl_u] by blast
+qed
+
+(* Workhorse (left form): a closure \<tau> of the closure-substituted union \<sigma> ++f w is also
+   a closure of the raw union u ++f w. This is the direction merge_substs_assoc needs on
+   the left side. Corollary of the right form: u ++f w = w ++f u and \<sigma> ++f w = w ++f \<sigma>. *)
+lemma is_subst_closure_absorb:
+  assumes acyc: "acyclic_subst_deps u"
+      and disj: "fmdom u |\<inter>| fmdom w = {||}"
+      and cl_u: "is_subst_closure u \<sigma>"
+      and cl_\<sigma>w: "is_subst_closure (\<sigma> ++\<^sub>f w) \<tau>"
+  shows "is_subst_closure (u ++\<^sub>f w) \<tau>"
+proof -
+  have disj': "disjoint_subst u w" using disj unfolding disjoint_subst_def by simp
+  have uw: "u ++\<^sub>f w = w ++\<^sub>f u"
+    using disjoint_subst_add_commute[OF disj'] .
+  have "is_subst_closure (w ++\<^sub>f \<sigma>) \<tau>"
+    using cl_\<sigma>w disjoint_closure_union_commute[OF disj cl_u] by simp
+  then have "is_subst_closure (w ++\<^sub>f u) \<tau>"
+    using is_subst_closure_absorb_right[OF acyc cl_u] by blast
+  thus ?thesis using uw by simp
+qed
+
 (* fmadd is associative, so the two full nestings have equal raw unions. *)
 lemma subst_union_assoc:
   "(s1 ++\<^sub>f s2) ++\<^sub>f s3 = s1 ++\<^sub>f (s2 ++\<^sub>f s3)"
@@ -682,11 +581,11 @@ proof -
 qed
 
 (* Single-step bridge: an edge of \<sigma> ++f w followed by an edge of u is again an edge
-   of \<sigma> ++f w. Consistency of \<sigma> and w is used here, at a variable shared between
-   \<sigma> and w (where ++f keeps w's value): consistency makes w's value equal \<sigma>'s, so
-   the dependency information is not lost. *)
+   of \<sigma> ++f w. The endpoints y, z of the u-edge are domain variables of u, hence (by
+   disjointness of u and w) not in w; so ++f keeps \<sigma>'s value at y and z, and no
+   dependency information is lost. *)
 lemma subst_dep_rel_bridge_step:
-  assumes cons: "consistent_subst \<sigma> w"
+  assumes disj: "fmdom u |\<inter>| fmdom w = {||}"
       and cl_u: "is_subst_closure u \<sigma>"
       and xy: "(x, y) \<in> subst_dep_rel (\<sigma> ++\<^sub>f w)"
       and yz: "(y, z) \<in> subst_dep_rel u"
@@ -695,46 +594,28 @@ proof -
   have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
   from yz have y_du: "y |\<in>| fmdom u" and z_du: "z |\<in>| fmdom u"
     unfolding subst_dep_rel_def by auto
+  \<comment> \<open>y and z, being domain variables of u, lie outside w. \<close>
+  have y_ndw: "y |\<notin>| fmdom w" using disj y_du by auto
+  have z_ndw: "z |\<notin>| fmdom w" using disj z_du by auto
   from xy have x_in: "x |\<in>| fmdom (\<sigma> ++\<^sub>f w)"
             and x_val: "x \<in> type_tyvars (the (fmlookup (\<sigma> ++\<^sub>f w) y))"
     unfolding subst_dep_rel_def by auto
   have x_in_\<sigma>y: "x \<in> type_tyvars (apply_subst \<sigma> (CoreTy_Var y))"
-  proof (cases "y |\<in>| fmdom w")
-    case False
-    then have "fmlookup (\<sigma> ++\<^sub>f w) y = fmlookup \<sigma> y" by simp
+  proof -
+    have "fmlookup (\<sigma> ++\<^sub>f w) y = fmlookup \<sigma> y" using y_ndw by simp
     with x_val have "x \<in> type_tyvars (the (fmlookup \<sigma> y))" by simp
     moreover obtain ty where "fmlookup \<sigma> y = Some ty"
       using y_du dom_\<sigma> by fastforce
     ultimately show ?thesis by simp
-  next
-    case True
-    have y_d\<sigma>: "y |\<in>| fmdom \<sigma>" using y_du dom_\<sigma> by simp
-    have eq: "fmlookup \<sigma> y = fmlookup w y"
-      using cons y_d\<sigma> True unfolding consistent_subst_def by blast
-    obtain ty where ty: "fmlookup \<sigma> y = Some ty"
-      using y_d\<sigma> by (auto simp: fmlookup_dom_iff)
-    have "x \<in> type_tyvars (the (fmlookup (\<sigma> ++\<^sub>f w) y))" using x_val .
-    then have "x \<in> type_tyvars ty" using True eq ty by auto
-    then show ?thesis using ty by simp
   qed
   have x_in_\<sigma>z: "x \<in> type_tyvars (apply_subst \<sigma> (CoreTy_Var z))"
     using x_in_\<sigma>y subst_dep_rel_sigma_mono[OF cl_u yz] by blast
   have x_in_val_z: "x \<in> type_tyvars (the (fmlookup (\<sigma> ++\<^sub>f w) z))"
-  proof (cases "z |\<in>| fmdom w")
-    case False
-    then have "fmlookup (\<sigma> ++\<^sub>f w) z = fmlookup \<sigma> z" by simp
+  proof -
+    have "fmlookup (\<sigma> ++\<^sub>f w) z = fmlookup \<sigma> z" using z_ndw by simp
     moreover obtain ty where "fmlookup \<sigma> z = Some ty"
       using z_du dom_\<sigma> by fastforce
     ultimately show ?thesis using x_in_\<sigma>z by simp
-  next
-    case True
-    have z_d\<sigma>: "z |\<in>| fmdom \<sigma>" using z_du dom_\<sigma> by simp
-    have eq: "fmlookup \<sigma> z = fmlookup w z"
-      using cons z_d\<sigma> True unfolding consistent_subst_def by blast
-    obtain ty where ty: "fmlookup \<sigma> z = Some ty"
-      using z_d\<sigma> by (auto simp: fmlookup_dom_iff)
-    have "x \<in> type_tyvars ty" using x_in_\<sigma>z ty by simp
-    then show ?thesis using True eq ty by auto
   qed
   have z_in: "z |\<in>| fmdom (\<sigma> ++\<^sub>f w)" using z_du dom_\<sigma> by simp
   show ?thesis
@@ -804,7 +685,7 @@ qed
    transfers to the raw union u ++f w. *)
 lemma acyclic_subst_deps_transfer:
   assumes acyc_u:   "acyclic_subst_deps u"
-      and cons:     "consistent_subst \<sigma> w"
+      and disj:     "fmdom u |\<inter>| fmdom w = {||}"
       and cl_u:     "is_subst_closure u \<sigma>"
       and acyc_\<sigma>w:  "acyclic_subst_deps (\<sigma> ++\<^sub>f w)"
     shows "acyclic_subst_deps (u ++\<^sub>f w)"
@@ -815,7 +696,7 @@ proof -
   have accB: "acyclic B" using acyc_u unfolding acyclic_subst_deps_def B_def .
   \<comment> \<open>The single-step bridge, packaged on the abstract relations. \<close>
   have bridge: "\<And>x y z. (x, y) \<in> A \<Longrightarrow> (y, z) \<in> B \<Longrightarrow> (x, z) \<in> A"
-    unfolding A_def B_def using subst_dep_rel_bridge_step[OF cons cl_u] by blast
+    unfolding A_def B_def using subst_dep_rel_bridge_step[OF disj cl_u] by blast
   \<comment> \<open>Lift the bridge: a nonempty A-path followed by a B-edge stays a nonempty A-path. \<close>
   have absorbB: "\<And>x z. (x, z) \<in> A\<^sup>+ O B \<Longrightarrow> (x, z) \<in> A\<^sup>+"
   proof -
@@ -925,6 +806,156 @@ proof -
     unfolding A_def B_def using subst_dep_rel_union_classify[OF cl_u] by auto
   then have "acyclic (subst_dep_rel (u ++\<^sub>f w))"
     using \<open>acyclic (A \<union> B)\<close> acyclic_subset by blast
+  then show ?thesis unfolding acyclic_subst_deps_def .
+qed
+
+
+(* Under domain-disjointness, u's own dependency edges are edges of the raw union
+   u ++f w (a dom-u variable b is outside w, so u wins at b). Hence acyclicity of the
+   union restricts to acyclicity of u. *)
+lemma subst_dep_rel_left_subset:
+  assumes disj: "fmdom u |\<inter>| fmdom w = {||}"
+  shows "subst_dep_rel u \<subseteq> subst_dep_rel (u ++\<^sub>f w)"
+proof
+  fix e assume "e \<in> subst_dep_rel u"
+  then obtain a b where e: "e = (a, b)" and a_du: "a |\<in>| fmdom u" and b_du: "b |\<in>| fmdom u"
+    and a_val: "a \<in> type_tyvars (the (fmlookup u b))"
+    unfolding subst_dep_rel_def by auto
+  have b_ndw: "b |\<notin>| fmdom w" using disj b_du by auto
+  have "fmlookup (u ++\<^sub>f w) b = fmlookup u b" using b_ndw by simp
+  with a_val have "a \<in> type_tyvars (the (fmlookup (u ++\<^sub>f w) b))" by simp
+  then show "e \<in> subst_dep_rel (u ++\<^sub>f w)"
+    unfolding subst_dep_rel_def using e a_du b_du by auto
+qed
+
+lemma acyclic_subst_deps_left:
+  assumes disj: "fmdom u |\<inter>| fmdom w = {||}"
+      and acyc_uw: "acyclic_subst_deps (u ++\<^sub>f w)"
+    shows "acyclic_subst_deps u"
+  unfolding acyclic_subst_deps_def
+  by (metis acyc_uw acyclic_subset acyclic_subst_deps_def disj
+      subst_dep_rel_left_subset)
+
+(* ========================================================================== *)
+(* Converse acyclicity transfer                                               *)
+(*                                                                            *)
+(* The other direction: acyclicity of the raw union u ++f w transfers to the   *)
+(* closure-substituted union \<sigma> ++f w. Replacing u by its closure \<sigma> only          *)
+(* COLLAPSES paths (each \<sigma>-edge corresponds to a u ++f w PATH), so no new cycle  *)
+(* can appear. Formally: subst_dep_rel (\<sigma> ++f w) \<subseteq> (subst_dep_rel (u ++f w))\<^sup>+,    *)
+(* hence the closure-union's trancl is contained in the raw union's trancl.     *)
+(* Needs domain-disjointness of u and w (so dom-u variables are absent from w). *)
+(* ========================================================================== *)
+
+(* Path lemma: every type variable c of \<sigma>(b) (for a domain variable b of u) is
+   reachable from b by a nonempty (u ++f w)-path - provided c is itself a vertex of
+   u ++f w. Proved by wf-induction on subst_dep_rel u: a c surviving directly from
+   u(b) gives a single edge; a c arising by substituting some a in u(b) gives an
+   edge (a, b) followed by the (inductively shorter) path from a. *)
+lemma sigma_tyvars_reach:
+  assumes acyc_u: "acyclic_subst_deps u"
+      and disj: "fmdom u |\<inter>| fmdom w = {||}"
+      and cl_u: "is_subst_closure u \<sigma>"
+      and b_dom: "b |\<in>| fmdom u"
+      and c_in: "c \<in> type_tyvars (apply_subst \<sigma> (CoreTy_Var b))"
+      and c_vtx: "c |\<in>| fmdom (u ++\<^sub>f w)"
+  shows "(c, b) \<in> (subst_dep_rel (u ++\<^sub>f w))\<^sup>+"
+proof -
+  have wf: "wf (subst_dep_rel u)" using acyc_u by (rule acyclic_subst_deps_wf)
+  have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
+  show ?thesis
+    using b_dom c_in proof (induction b rule: wf_induct_rule[OF wf])
+    case (1 b)
+    then have b_du: "b |\<in>| fmdom u" by simp
+    then obtain tb where tb: "fmlookup u b = Some tb"
+      by (auto simp: fmlookup_dom_iff)
+    \<comment> \<open>b is a domain variable of u, hence outside w (disjointness); so u wins in u ++f w. \<close>
+    have b_ndw: "b |\<notin>| fmdom w" using disj b_du by auto
+    have b_uw: "fmlookup (u ++\<^sub>f w) b = Some tb" using tb b_ndw by simp
+    have b_uw_dom: "b |\<in>| fmdom (u ++\<^sub>f w)" using b_du by simp
+    \<comment> \<open>\<sigma>(b) = apply_subst \<sigma> tb, so c is a tyvar of that. \<close>
+    have \<sigma>_b: "fmlookup \<sigma> b = Some (apply_subst \<sigma> tb)"
+      using cl_u tb unfolding is_subst_closure_def by blast
+    from "1.prems"(2) \<sigma>_b have c_in_tb: "c \<in> type_tyvars (apply_subst \<sigma> tb)" by simp
+    \<comment> \<open>Decompose: c either survives directly from tb, or comes from substituting some
+        domain variable a occurring in tb. \<close>
+    from type_tyvars_apply_subst_decompose[OF c_in_tb]
+    show ?case
+    proof (elim disjE conjE bexE)
+      \<comment> \<open>Case 1: c is a tyvar of tb outside dom \<sigma>; (c, b) is a single (u ++f w)-edge. \<close>
+      assume c_tb: "c \<in> type_tyvars tb" and "c |\<notin>| fmdom \<sigma>"
+      have "c \<in> type_tyvars (the (fmlookup (u ++\<^sub>f w) b))" using c_tb b_uw by simp
+      then have "(c, b) \<in> subst_dep_rel (u ++\<^sub>f w)"
+        unfolding subst_dep_rel_def using c_vtx b_uw_dom by auto
+      then show ?thesis by (rule r_into_trancl)
+    next
+      \<comment> \<open>Case 2: c arises by substituting a domain variable a occurring in tb. Then
+          (a, b) is an edge, and the path from a to b composes with the IH path c \<rightarrow> a. \<close>
+      fix a assume a_tb: "a \<in> type_tyvars tb"
+        and a_d\<sigma>: "a |\<in>| fmdom \<sigma>"
+        and c_in_\<sigma>a: "c \<in> type_tyvars (apply_subst \<sigma> (CoreTy_Var a))"
+      have a_du: "a |\<in>| fmdom u" using a_d\<sigma> dom_\<sigma> by simp
+      \<comment> \<open>(a, b) is a u-edge, hence a (u ++f w)-edge, and a is a strict predecessor of b. \<close>
+      have edge_u: "(a, b) \<in> subst_dep_rel u"
+        unfolding subst_dep_rel_def using a_du b_du a_tb tb by auto
+      have a_uw: "a |\<in>| fmdom (u ++\<^sub>f w)" using a_du by simp
+      have edge_uw: "(a, b) \<in> subst_dep_rel (u ++\<^sub>f w)"
+        unfolding subst_dep_rel_def using a_uw b_uw_dom a_tb b_uw by auto
+      \<comment> \<open>IH at a: c reaches a by a (u ++f w)-path. \<close>
+      have "(c, a) \<in> (subst_dep_rel (u ++\<^sub>f w))\<^sup>+"
+        using "1.IH"[OF edge_u a_du c_in_\<sigma>a] .
+      with edge_uw show ?thesis by (rule trancl_into_trancl[rotated])
+    qed
+  qed
+qed
+
+(* The converse transfer lemma. *)
+lemma acyclic_subst_deps_transfer_converse:
+  assumes disj:    "fmdom u |\<inter>| fmdom w = {||}"
+      and cl_u:    "is_subst_closure u \<sigma>"
+      and acyc_uw: "acyclic_subst_deps (u ++\<^sub>f w)"
+    shows "acyclic_subst_deps (\<sigma> ++\<^sub>f w)"
+proof -
+  have dom_\<sigma>: "fmdom \<sigma> = fmdom u" using cl_u unfolding is_subst_closure_def by simp
+  have dom_eq: "fmdom (\<sigma> ++\<^sub>f w) = fmdom (u ++\<^sub>f w)" using dom_\<sigma> by simp
+  have acyc_u: "acyclic_subst_deps u" using acyclic_subst_deps_left[OF disj acyc_uw] .
+  \<comment> \<open>Every \<sigma> ++f w edge is a u ++f w path. \<close>
+  have sub: "subst_dep_rel (\<sigma> ++\<^sub>f w) \<subseteq> (subst_dep_rel (u ++\<^sub>f w))\<^sup>+"
+  proof
+    fix e assume "e \<in> subst_dep_rel (\<sigma> ++\<^sub>f w)"
+    then obtain c b where e: "e = (c, b)"
+      and c_in: "c |\<in>| fmdom (\<sigma> ++\<^sub>f w)" and b_in: "b |\<in>| fmdom (\<sigma> ++\<^sub>f w)"
+      and c_val: "c \<in> type_tyvars (the (fmlookup (\<sigma> ++\<^sub>f w) b))"
+      unfolding subst_dep_rel_def by auto
+    have c_vtx: "c |\<in>| fmdom (u ++\<^sub>f w)" using c_in dom_eq by auto
+    show "e \<in> (subst_dep_rel (u ++\<^sub>f w))\<^sup>+"
+    proof (cases "b |\<in>| fmdom w")
+      case True
+      \<comment> \<open>w wins in both unions; (c, b) is an identical raw-union edge. \<close>
+      have val_eq: "the (fmlookup (\<sigma> ++\<^sub>f w) b) = the (fmlookup (u ++\<^sub>f w) b)"
+        using True by simp
+      have b_vtx: "b |\<in>| fmdom (u ++\<^sub>f w)" using b_in dom_eq by auto
+      have "(c, b) \<in> subst_dep_rel (u ++\<^sub>f w)"
+        unfolding subst_dep_rel_def using c_vtx b_vtx c_val val_eq by auto
+      then show ?thesis using e by (simp add: r_into_trancl)
+    next
+      case False
+      \<comment> \<open>b is a domain variable of \<sigma> = u; \<sigma> wins, and the path lemma applies. \<close>
+      have b_d\<sigma>: "b |\<in>| fmdom \<sigma>" using b_in False by simp
+      have b_du: "b |\<in>| fmdom u" using b_d\<sigma> dom_\<sigma> by simp
+      have "fmlookup (\<sigma> ++\<^sub>f w) b = fmlookup \<sigma> b" using False by simp
+      then have c_in_\<sigma>b: "c \<in> type_tyvars (apply_subst \<sigma> (CoreTy_Var b))"
+        using c_val b_d\<sigma> by (auto simp: fmlookup_dom_iff)
+      have "(c, b) \<in> (subst_dep_rel (u ++\<^sub>f w))\<^sup>+"
+        using sigma_tyvars_reach[OF acyc_u disj cl_u b_du c_in_\<sigma>b c_vtx] .
+      then show ?thesis using e by simp
+    qed
+  qed
+  have "acyclic ((subst_dep_rel (u ++\<^sub>f w))\<^sup>+)"
+    using acyc_uw unfolding acyclic_subst_deps_def
+    by (simp add: acyc_uw acyclic_subst_deps_wf wf_acyclic wf_trancl)
+  then have "acyclic (subst_dep_rel (\<sigma> ++\<^sub>f w))"
+    using sub acyclic_subset by blast
   then show ?thesis unfolding acyclic_subst_deps_def .
 qed
 

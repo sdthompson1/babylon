@@ -7,9 +7,7 @@ begin
 (* ========================================================================== *)
 
 datatype LinkError =
-    LinkConflict            (* two substitutions disagree on a shared abstract type *)
-  | LinkCycle               (* the abstract-type dependency relation is cyclic *)
-  | LinkDefinitionMismatch  (* a declaration/definition name resolves to
-                               non-identical entries in two modules *)
+    LinkConflict   (* multiple definition (the same name is defined in more than one module) *)
+  | LinkCycle      (* the abstract-type dependency relation is cyclic *)
 
 end

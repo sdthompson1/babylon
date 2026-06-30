@@ -118,6 +118,12 @@ next
   ultimately show ?case by simp
 qed
 
+(* Converse: if all dependencies exist, check_item_deps returns None *)
+lemma check_item_deps_None_if_all_exist:
+  assumes "\<forall>dep \<in> set deps. fmlookup item_map dep \<noteq> None"
+  shows "check_item_deps item_name deps item_map = None"
+  using assms by (induction deps) auto
+
 (* Check that all dependencies reference existing items *)
 fun check_deps_exist :: "('a \<Rightarrow> string) \<Rightarrow> ('a \<Rightarrow> string list) \<Rightarrow> 'a list \<Rightarrow> (string, 'a) fmap
                           \<Rightarrow> DependencyError option"
@@ -145,6 +151,23 @@ next
   from item_deps_ok have "\<forall>dep \<in> set (getDeps item). fmlookup item_map dep \<noteq> None"
     using check_item_deps_None_means_all_exist by simp
   moreover from rest_ok have "\<forall>i \<in> set rest. \<forall>dep \<in> set (getDeps i). fmlookup item_map dep \<noteq> None"
+    using Cons.IH by simp
+  ultimately show ?case by simp
+qed
+
+(* Converse: if all dependencies of all items exist, check_deps_exist returns None *)
+lemma check_deps_exist_None_if_all_exist:
+  assumes "\<forall>item \<in> set items. \<forall>dep \<in> set (getDeps item). fmlookup item_map dep \<noteq> None"
+  shows "check_deps_exist getName getDeps items item_map = None"
+  using assms
+proof (induction items)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons item rest)
+  from Cons.prems have "check_item_deps (getName item) (getDeps item) item_map = None"
+    using check_item_deps_None_if_all_exist by auto
+  moreover from Cons.prems have "check_deps_exist getName getDeps rest item_map = None"
     using Cons.IH by simp
   ultimately show ?case by simp
 qed
@@ -325,6 +348,31 @@ fun analyze_dependencies_generic ::
 
 
 (*-----------------------------------------------------------------------------*)
+(* Helper lemmas for property proofs *)
+(*-----------------------------------------------------------------------------*)
+
+(* Round-trip: when item names are distinct, looking a known item up by its name
+   in build_item_map returns exactly that item. Extracted from the reasoning
+   repeated in analyze_dependencies_generic_permutation and
+   analyze_dependencies_generic_topological_order. *)
+lemma build_item_map_lookup:
+  assumes "distinct (map getName items)"
+    and "item \<in> set items"
+  shows "fmlookup (build_item_map getName items) (getName item) = Some item"
+proof -
+  have pair_in: "(getName item, item) \<in> set (map (\<lambda>i. (getName i, i)) items)"
+    using assms(2) by auto
+  have "map fst (map (\<lambda>i. (getName i, i)) items) = map getName items"
+    by simp
+  then have "distinct (map fst (map (\<lambda>i. (getName i, i)) items))"
+    using assms(1) by metis
+  then show ?thesis
+    unfolding build_item_map.simps
+    by (metis fmap_of_list.rep_eq map_of_eq_Some_iff pair_in)
+qed
+
+
+(*-----------------------------------------------------------------------------*)
 (* Permutation property *)
 (*-----------------------------------------------------------------------------*)
 
@@ -489,24 +537,11 @@ proof -
       by blast
 
     (* Now show that fmlookup itemMap name = Some item *)
-    have "fmlookup itemMap name =
-          fmlookup (fmap_of_list (map (\<lambda>i. (getName i, i)) items)) name"
-      unfolding itemMap_def by simp
+    have "fmlookup itemMap name = Some item"
+      using build_item_map_lookup[OF names_distinct \<open>item \<in> set items\<close>]
+            \<open>getName item = name\<close> itemMap_def by simp
 
-    also have "... = Some item"
-    proof -
-      have pair_in: "(name, item) \<in> set (map (\<lambda>i. (getName i, i)) items)"
-        using \<open>item \<in> set items\<close> \<open>getName item = name\<close> by auto
-      have "map fst (map (\<lambda>i. (getName i, i)) items) = map getName items"
-        by simp
-      then have "distinct (map fst (map (\<lambda>i. (getName i, i)) items))"
-        using assms(1)
-        by (metis names_distinct) 
-      then show ?thesis
-        by (metis fmap_of_list.rep_eq map_of_eq_Some_iff pair_in)
-    qed
-
-    finally show "fmlookup itemMap name = Some (THE i. i \<in> set items \<and> getName i = name)"
+    then show "fmlookup itemMap name = Some (THE i. i \<in> set items \<and> getName i = name)"
       using the_eq by simp
   qed
 
@@ -588,7 +623,7 @@ qed
 (* Topological ordering property *)
 (*-----------------------------------------------------------------------------*)
 
-(* If analyze_dependencies_generic succeeds, dependencies appear before depandents.
+(* If analyze_dependencies_generic succeeds, dependencies appear before dependants.
 
    More precisely: if item1 depends on item2 (getName item2 \<in> set (getDeps item1)),
    then item2's SCC appears at an index <= item1's SCC index in the result list.
@@ -597,19 +632,14 @@ qed
    This is the crucial property for compiler use: the SCCs are topologically ordered,
    so you can process them left-to-right and all dependencies between different SCCs
    will be satisfied. Items within the same SCC (cycles) mutually depend on each other
-   and must be processed together. 
-
-   Note: we don't actually prove that items in the same SCC really do form part of 
-   a cycle; e.g. analyze_dependencies_generic could return all the items in one big
-   SCC, and it would satisfy both this property and the permutation property. However,
-   this property is good enough for our purposes for now.
+   and must be processed together.
 *)
 theorem analyze_dependencies_generic_topological_order:
   assumes result: "analyze_dependencies_generic items getName getDeps = Inr sccs"
     and item1_in: "item1 \<in> set items"
     and item2_in: "item2 \<in> set items"
     and item1_depends_on_item2: "getName item2 \<in> set (getDeps item1)"
-  shows item2_appears_first: 
+  shows item2_appears_first:
           "\<exists>i j. i \<le> j \<and>
                   i < length sccs \<and>
                   j < length sccs \<and>
@@ -781,17 +811,7 @@ proof -
     have "getName item1 \<in> set scc1_name"
       using scc1_props(2) by simp
     moreover have "fmlookup itemMap (getName item1) = Some item1"
-    proof -
-      have pair_in: "(getName item1, item1) \<in> set (map (\<lambda>i. (getName i, i)) items)"
-        using item1_in by auto
-      have "map fst (map (\<lambda>i. (getName i, i)) items) = map getName items"
-        by simp
-      then have "distinct (map fst (map (\<lambda>i. (getName i, i)) items))"
-        using names_distinct by metis
-      then show ?thesis
-        unfolding itemMap_def build_item_map.simps
-        by (metis fmap_of_list.rep_eq map_of_eq_Some_iff pair_in)
-    qed
+      using build_item_map_lookup[OF names_distinct item1_in] itemMap_def by simp
     ultimately show ?thesis
       using \<open>sccs ! idx1 = map (\<lambda>name. the (fmlookup itemMap name)) scc1_name\<close>
       by force
@@ -803,17 +823,7 @@ proof -
     have "getName item2 \<in> set scc2_name"
       using scc2_props(2) by simp
     moreover have "fmlookup itemMap (getName item2) = Some item2"
-    proof -
-      have pair_in: "(getName item2, item2) \<in> set (map (\<lambda>i. (getName i, i)) items)"
-        using item2_in by auto
-      have "map fst (map (\<lambda>i. (getName i, i)) items) = map getName items"
-        by simp
-      then have "distinct (map fst (map (\<lambda>i. (getName i, i)) items))"
-        using names_distinct by metis
-      then show ?thesis
-        unfolding itemMap_def build_item_map.simps
-        by (metis fmap_of_list.rep_eq map_of_eq_Some_iff pair_in)
-    qed
+      using build_item_map_lookup[OF names_distinct item2_in] itemMap_def by simp
     ultimately show ?thesis
       using \<open>sccs ! idx2 = map (\<lambda>name. the (fmlookup itemMap name)) scc2_name\<close>
       by force
@@ -911,6 +921,231 @@ proof -
     then have "scc_names \<noteq> []" using kos_non_empty by simp
     then show "scc \<noteq> []" using `scc = map (\<lambda>name. the (fmlookup itemMap name)) scc_names` by simp
   qed
+qed
+
+
+(*-----------------------------------------------------------------------------*)
+(* Success characterization *)
+(*-----------------------------------------------------------------------------*)
+
+(* analyze_dependencies_generic succeeds (returns Inr) whenever its two error
+   conditions are absent: item names are distinct, and every dependency of every
+   item is itself an item name. *)
+lemma analyze_dependencies_generic_Inr_if:
+  assumes dist: "distinct (map getName items)"
+    and deps_ok: "\<forall>item \<in> set items. set (getDeps item) \<subseteq> set (map getName items)"
+  shows "\<exists>sccs. analyze_dependencies_generic items getName getDeps = Inr sccs"
+proof -
+  have no_dup: "check_duplicate_names getName items = None"
+    unfolding check_duplicate_names_def
+    using first_duplicate_name_None_if_distinct[OF dist] by simp
+  have "\<forall>item \<in> set items. \<forall>dep \<in> set (getDeps item).
+          fmlookup (build_item_map getName items) dep \<noteq> None"
+  proof (intro ballI)
+    fix item dep
+    assume "item \<in> set items" "dep \<in> set (getDeps item)"
+    then have "dep \<in> set (map getName items)" using deps_ok by blast
+    then show "fmlookup (build_item_map getName items) dep \<noteq> None"
+      using build_item_map_dom by (metis fmdom_notI)
+  qed
+  then have "check_deps_exist getName getDeps items (build_item_map getName items) = None"
+    using check_deps_exist_None_if_all_exist by blast
+  then show ?thesis
+    using no_dup by (simp add: Let_def)
+qed
+
+
+(*-----------------------------------------------------------------------------*)
+(* Soundness and completeness of the SCC structure *)
+(*-----------------------------------------------------------------------------*)
+
+(* Soundness of the SCC structure: any two items returned in the same SCC are
+   genuinely in the same strongly-connected component of the dependency graph
+   (each reaches the other). *)
+theorem analyze_dependencies_generic_scc_sound:
+  assumes result: "analyze_dependencies_generic items getName getDeps = Inr sccs"
+    and scc_in: "scc \<in> set sccs"
+    and item1_in: "item1 \<in> set scc"
+    and item2_in: "item2 \<in> set scc"
+  shows "in_same_scc (build_dep_graph getName getDeps items) (getName item1) (getName item2)"
+proof -
+  define graph where "graph = build_dep_graph getName getDeps items"
+  define kos where "kos = kosaraju graph"
+  define itemMap where "itemMap = build_item_map getName items"
+
+  (* Establish preconditions (same boilerplate as the sibling theorems) *)
+  have no_dup_errors: "check_duplicate_names getName items = None"
+  proof (cases "check_duplicate_names getName items")
+    case None
+    then show ?thesis by simp
+  next
+    case (Some err)
+    then have "analyze_dependencies_generic items getName getDeps = Inl err"
+      by simp
+    thus ?thesis using assms by auto
+  qed
+
+  have deps_exist: "check_deps_exist getName getDeps items itemMap = None"
+  proof (cases "check_deps_exist getName getDeps items itemMap")
+    case None
+    then show ?thesis by simp
+  next
+    case (Some err)
+    then have "analyze_dependencies_generic items getName getDeps = Inl err"
+      using itemMap_def no_dup_errors by simp
+    thus ?thesis using assms by auto
+  qed
+
+  have names_distinct: "distinct (map getName items)"
+    using no_dup_errors no_duplicate_errors_means_distinct by blast
+
+  have graph_valid: "valid_graph graph"
+    using names_distinct deps_exist graph_def itemMap_def no_dep_errors_means_valid_graph
+    using no_dup_errors by blast
+
+  have result_eq: "sccs = map_sccs_to_items itemMap (rev kos)"
+    using assms no_dup_errors deps_exist graph_def kos_def itemMap_def by simp
+
+  (* Recover the name-level SCC underlying scc. *)
+  from scc_in have "scc \<in> set (map_sccs_to_items itemMap (rev kos))"
+    using result_eq by simp
+  then obtain scc_names where scc_names_in_rev: "scc_names \<in> set (rev kos)"
+    and scc_eq: "scc = map (\<lambda>name. the (fmlookup itemMap name)) scc_names"
+    by auto
+  have scc_names_in: "scc_names \<in> set kos" using scc_names_in_rev by simp
+
+  (* kosaraju_sound: every member of scc_names is in_same_scc with a witness v. *)
+  obtain v where v_char:
+    "\<forall>w. w \<in> set scc_names \<longleftrightarrow> (has_vertex graph w \<and> in_same_scc graph w v)"
+    using graph_valid kosaraju_sound kos_def scc_names_in by blast
+
+  (* item1, item2 come from names in scc_names. *)
+  from item1_in scc_eq obtain n1 where n1_in: "n1 \<in> set scc_names"
+    and item1_eq: "item1 = the (fmlookup itemMap n1)" by auto
+  from item2_in scc_eq obtain n2 where n2_in: "n2 \<in> set scc_names"
+    and item2_eq: "item2 = the (fmlookup itemMap n2)" by auto
+
+  (* Those names are graph vertices, hence item names (domain of itemMap). *)
+  have n1_dom: "n1 \<in> fset (fmdom itemMap)"
+    using n1_in v_char graph_valid graph_def itemMap_def
+    by (metis build_dep_graph_dom build_item_map_dom has_vertex.simps)
+  have n2_dom: "n2 \<in> fset (fmdom itemMap)"
+    using n2_in v_char graph_valid graph_def itemMap_def
+    by (metis build_dep_graph_dom build_item_map_dom has_vertex.simps)
+
+  (* So each name is the name of its looked-up item: getName item_i = n_i. *)
+  have name1: "getName item1 = n1"
+  proof -
+    from n1_dom have "n1 \<in> set (map getName items)"
+      using build_item_map_dom itemMap_def by blast
+    then obtain it where "it \<in> set items" "getName it = n1" by auto
+    then have "the (fmlookup itemMap n1) = it"
+      using build_item_map_lookup[OF names_distinct] itemMap_def by (metis option.sel)
+    thus ?thesis using item1_eq \<open>getName it = n1\<close> by simp
+  qed
+  have name2: "getName item2 = n2"
+  proof -
+    from n2_dom have "n2 \<in> set (map getName items)"
+      using build_item_map_dom itemMap_def by blast
+    then obtain it where "it \<in> set items" "getName it = n2" by auto
+    then have "the (fmlookup itemMap n2) = it"
+      using build_item_map_lookup[OF names_distinct] itemMap_def by (metis option.sel)
+    thus ?thesis using item2_eq \<open>getName it = n2\<close> by simp
+  qed
+
+  (* Both n1 and n2 are in_same_scc with v, so in_same_scc with each other. *)
+  have "in_same_scc graph n1 v" using n1_in v_char by blast
+  moreover have "in_same_scc graph n2 v" using n2_in v_char by blast
+  ultimately have "in_same_scc graph n1 n2"
+    by auto (meson reachable_trans)+
+  thus ?thesis using name1 name2 graph_def by simp
+qed
+
+(* Completeness of the SCC structure (converse of scc_sound): two items that are
+   in the same strongly-connected component of the dependency graph are returned
+   together in one SCC. Combined with scc_sound, "same returned SCC" coincides
+   exactly with "mutually reachable" - which is what lets a cycle in the
+   dependency relation be detected as a non-singleton SCC. *)
+theorem analyze_dependencies_generic_scc_complete:
+  assumes result: "analyze_dependencies_generic items getName getDeps = Inr sccs"
+    and item1_in: "item1 \<in> set items"
+    and item2_in: "item2 \<in> set items"
+    and same_scc: "in_same_scc (build_dep_graph getName getDeps items) (getName item1) (getName item2)"
+  shows "\<exists>scc \<in> set sccs. item1 \<in> set scc \<and> item2 \<in> set scc"
+proof -
+  define graph where "graph = build_dep_graph getName getDeps items"
+  define kos where "kos = kosaraju graph"
+  define itemMap where "itemMap = build_item_map getName items"
+
+  (* Establish preconditions (same boilerplate as the sibling theorems) *)
+  have no_dup_errors: "check_duplicate_names getName items = None"
+  proof (cases "check_duplicate_names getName items")
+    case None
+    then show ?thesis by simp
+  next
+    case (Some err)
+    then have "analyze_dependencies_generic items getName getDeps = Inl err"
+      by simp
+    thus ?thesis using assms by auto
+  qed
+
+  have deps_exist: "check_deps_exist getName getDeps items itemMap = None"
+  proof (cases "check_deps_exist getName getDeps items itemMap")
+    case None
+    then show ?thesis by simp
+  next
+    case (Some err)
+    then have "analyze_dependencies_generic items getName getDeps = Inl err"
+      using itemMap_def no_dup_errors by simp
+    thus ?thesis using assms by auto
+  qed
+
+  have names_distinct: "distinct (map getName items)"
+    using no_dup_errors no_duplicate_errors_means_distinct by blast
+
+  have graph_valid: "valid_graph graph"
+    using names_distinct deps_exist graph_def itemMap_def no_dep_errors_means_valid_graph
+    using no_dup_errors by blast
+
+  have result_eq: "sccs = map_sccs_to_items itemMap (rev kos)"
+    using assms no_dup_errors deps_exist graph_def kos_def itemMap_def by simp
+
+  (* getName item1 is a graph vertex, so kosaraju_complete places it in a name-SCC. *)
+  have v1_vertex: "has_vertex graph (getName item1)"
+    using item1_in graph_def graph_valid in_same_scc.simps reachable_implies_vertices(1)
+      same_scc by blast
+  obtain scc_names where scc_names_in: "scc_names \<in> set kos"
+    and n1_in: "getName item1 \<in> set scc_names"
+    using kosaraju_complete[OF graph_valid v1_vertex] kos_def by blast
+
+  (* kosaraju_sound characterizes that SCC; both names are in_same_scc with v. *)
+  obtain v where v_char:
+    "\<forall>w. w \<in> set scc_names \<longleftrightarrow> (has_vertex graph w \<and> in_same_scc graph w v)"
+    using graph_valid kosaraju_sound kos_def scc_names_in by blast
+
+  have same_scc': "in_same_scc graph (getName item1) (getName item2)"
+    using same_scc graph_def by simp
+
+  (* getName item1 is in scc_names, so in_same_scc with v; transfer to item2. *)
+  have "in_same_scc graph (getName item1) v" using n1_in v_char by blast
+  then have "in_same_scc graph (getName item2) v"
+    using same_scc' by auto (meson reachable_trans)+
+  moreover have "has_vertex graph (getName item2)"
+    using item2_in graph_def graph_valid in_same_scc.simps reachable_implies_vertices(2)
+      same_scc by blast
+  ultimately have n2_in: "getName item2 \<in> set scc_names" using v_char by blast
+
+  (* Map the name-SCC back to an item-SCC; both items appear in it. *)
+  define scc where "scc = map (\<lambda>name. the (fmlookup itemMap name)) scc_names"
+  have scc_in_sccs: "scc \<in> set sccs"
+    using result_eq scc_def scc_names_in by auto
+  have look1: "the (fmlookup itemMap (getName item1)) = item1"
+    using build_item_map_lookup[OF names_distinct item1_in] itemMap_def by simp
+  have look2: "the (fmlookup itemMap (getName item2)) = item2"
+    using build_item_map_lookup[OF names_distinct item2_in] itemMap_def by simp
+  have "item1 \<in> set scc" using n1_in look1 scc_def by force
+  moreover have "item2 \<in> set scc" using n2_in look2 scc_def by force
+  ultimately show ?thesis using scc_in_sccs by blast
 qed
 
 end

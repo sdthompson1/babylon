@@ -67,7 +67,9 @@ proof -
   thus ?thesis unfolding subst_dep_rel_def by auto
 qed
 
-corollary idempotent_subst_acyclic:
+(* It follows that an idempotent subst satisfies acyclic_subst_deps
+   (an empty relation is trivially acyclic) *)
+lemma idempotent_subst_acyclic:
   assumes "idempotent_subst s"
   shows "acyclic_subst_deps s"
   unfolding acyclic_subst_deps_def
@@ -102,36 +104,39 @@ lemma is_subst_closure_self:
 
 
 (* ========================================================================== *)
-(* Consistent substitutions *)
+(* Disjoint substitutions *)
 (* ========================================================================== *)
 
-(* Two substitutions are consistent when they agree on every shared abstract
-   type. This is the condition under which their union is well-defined (the
-   right-biased ++f order is then immaterial). *)
-definition consistent_subst :: "TypeSubst \<Rightarrow> TypeSubst \<Rightarrow> bool" where
-  "consistent_subst s1 s2 \<equiv>
-     \<forall>n. n |\<in>| fmdom s1 \<and> n |\<in>| fmdom s2 \<longrightarrow> fmlookup s1 n = fmlookup s2 n"
+(* Two substitutions are disjoint when their domains do not overlap. *)
+definition disjoint_subst :: "TypeSubst \<Rightarrow> TypeSubst \<Rightarrow> bool" where
+  "disjoint_subst s1 s2 \<equiv> fmdom s1 |\<inter>| fmdom s2 = {||}"
 
-lemma consistent_subst_sym:
-  "consistent_subst s1 s2 = consistent_subst s2 s1"
-  unfolding consistent_subst_def by auto
+lemma disjoint_subst_sym:
+  "disjoint_subst s1 s2 = disjoint_subst s2 s1"
+  unfolding disjoint_subst_def by auto
 
-lemma consistent_subst_empty [simp]:
-  "consistent_subst fmempty s"
-  "consistent_subst s fmempty"
-  unfolding consistent_subst_def by auto
+lemma disjoint_subst_empty [simp]:
+  "disjoint_subst fmempty s"
+  "disjoint_subst s fmempty"
+  unfolding disjoint_subst_def by auto
 
-(* When two substitutions are consistent, ++f is order-immaterial on the
-   overlap, so the two biasings agree. *)
-lemma consistent_subst_add_commute:
-  assumes "consistent_subst s1 s2"
+(* A shared domain variable contradicts disjointness. *)
+lemma disjoint_subst_not_both:
+  assumes "disjoint_subst s1 s2"
+      and "n |\<in>| fmdom s1"
+      and "n |\<in>| fmdom s2"
+    shows False
+  using assms unfolding disjoint_subst_def by auto
+
+(* When two substitutions are disjoint, ++f is order-immaterial (no overlap),
+   so the two biasings agree. *)
+lemma disjoint_subst_add_commute:
+  assumes "disjoint_subst s1 s2"
   shows "s1 ++\<^sub>f s2 = s2 ++\<^sub>f s1"
 proof (rule fmap_ext)
   fix n
   show "fmlookup (s1 ++\<^sub>f s2) n = fmlookup (s2 ++\<^sub>f s1) n"
-    using assms unfolding consistent_subst_def
-    by (cases "n |\<in>| fmdom s1"; cases "n |\<in>| fmdom s2";
-        auto simp: fmlookup_dom_iff)
+    using assms disjoint_subst_not_both by fastforce
 qed
 
 end

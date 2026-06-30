@@ -115,6 +115,54 @@ next
   then show ?case by (cases "fmlookup subst n"; auto simp: subst_range_tyvars_def fmran'I)
 qed (auto)
 
+(* Decomposition (converse refinement of apply_subst_tyvars_result): every type
+   variable of apply_subst subst ty either survives from ty untouched (in ty, outside
+   dom subst), or arises by substituting some domain variable a that occurs in ty. *)
+lemma type_tyvars_apply_subst_decompose:
+  assumes "c \<in> type_tyvars (apply_subst subst ty)"
+  shows "(c \<in> type_tyvars ty \<and> c |\<notin>| fmdom subst)
+       \<or> (\<exists>a \<in> type_tyvars ty. a |\<in>| fmdom subst
+              \<and> c \<in> type_tyvars (apply_subst subst (CoreTy_Var a)))"
+  using assms
+proof (induction ty)
+  case (CoreTy_Var n)
+  show ?case
+  proof (cases "n |\<in>| fmdom subst")
+    case True
+    \<comment> \<open>n itself is the domain variable; c comes from substituting it. \<close>
+    with CoreTy_Var show ?thesis by auto
+  next
+    case False
+    then have "apply_subst subst (CoreTy_Var n) = CoreTy_Var n"
+      by (simp add: fmdom_notD)
+    with CoreTy_Var False show ?thesis by simp
+  qed
+next
+  case (CoreTy_Datatype name tyargs)
+  then obtain arg where arg: "arg \<in> set tyargs"
+    and c_arg: "c \<in> type_tyvars (apply_subst subst arg)" by auto
+  from CoreTy_Datatype.IH[OF arg c_arg] arg show ?case by force
+next
+  case (CoreTy_Record flds)
+  then obtain nm t where mem: "(nm, t) \<in> set flds"
+    and c_t: "c \<in> type_tyvars (apply_subst subst t)" by auto
+  have snds: "t \<in> Basic_BNFs.snds (nm, t)" by simp
+  have sub: "type_tyvars t \<subseteq> type_tyvars (CoreTy_Record flds)"
+    using mem by auto
+  from CoreTy_Record.IH[OF mem snds c_t] show ?case
+  proof (elim disjE conjE bexE)
+    assume "c \<in> type_tyvars t" and "c |\<notin>| fmdom subst"
+    then show ?case using sub by auto
+  next
+    fix a assume "a \<in> type_tyvars t" and "a |\<in>| fmdom subst"
+      and "c \<in> type_tyvars (apply_subst subst (CoreTy_Var a))"
+    then show ?case using sub by auto
+  qed
+next
+  case (CoreTy_Array elemTy dims)
+  then show ?case by auto
+qed auto
+
 (* Monotonicity: applying subst to a type variable contained in ty produces a type
    whose type variables are all contained in the result of substituting ty. *)
 lemma type_tyvars_apply_subst_mono:
@@ -680,14 +728,12 @@ qed
 
 (* ========================================================================== *)
 (* Idempotent substitutions                                                   *)
-(*                                                                            *)
-(* We define an "idempotent" substitution as one where no domain variable     *)
-(* occurs in any range type.                                                  *)
-(*                                                                            *)
-(* This is strictly stronger than the "applying twice = applying once"        *)
-(* definition, because it also rules out a redundant mapping T \<mapsto> T.          *)
 (* ========================================================================== *)
 
+(* We define an "idempotent" substitution as one where no domain variable 
+   occurs in any range type. This is strictly stronger than the "applying
+   twice = applying once" definition, because it also rules out a redundant
+   mapping T \<mapsto> T. *)
 definition idempotent_subst :: "TypeSubst \<Rightarrow> bool" where
   "idempotent_subst s \<equiv> subst_range_tyvars s \<inter> fset (fmdom s) = {}"
 

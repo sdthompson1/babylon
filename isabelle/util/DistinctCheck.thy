@@ -6,19 +6,22 @@ begin
 
    The standard `distinct` operation is O(n^2). These functions detect duplicate
    names in O(n log n) by sorting first and then scanning for adjacent equal
-   elements.
+   elements. *)
 
-   `first_duplicate_name` takes a key function and a list of items; it returns
-   `Some name` if some pair of items share a name, or `None` if all keys are
-   distinct. *)
-
-(* Scan a sorted list for the first adjacent-equal element *)
+(* Helper: Scan a sorted list for the first adjacent-equal element. *)
 fun first_adjacent_dup :: "string list \<Rightarrow> string option" where
   "first_adjacent_dup [] = None"
 | "first_adjacent_dup [_] = None"
 | "first_adjacent_dup (x # y # rest) =
     (if x = y then Some x else first_adjacent_dup (y # rest))"
 
+(* Check for duplicate "names" in a list. Takes a list of items and a function that
+   extracts the name from each item. Returns `Some name` if a name appears more than
+   once, or None if all names are unique. *)
+definition first_duplicate_name :: "('a \<Rightarrow> string) \<Rightarrow> 'a list \<Rightarrow> string option" where
+  "first_duplicate_name getName items = first_adjacent_dup (sort (map getName items))"
+
+(* If first_adjacent_dup returns None, on sorted input, then the input was distinct *)
 lemma first_adjacent_dup_None_implies_distinct:
   assumes "first_adjacent_dup xs = None"
     and "sorted xs"
@@ -41,11 +44,17 @@ next
   qed
 qed
 
-(* Check for duplicate names in a list. Returns Some name if `name` appears
-   more than once (as a key), or None if all keys are distinct. *)
-definition first_duplicate_name :: "('a \<Rightarrow> string) \<Rightarrow> 'a list \<Rightarrow> string option" where
-  "first_duplicate_name getName items = first_adjacent_dup (sort (map getName items))"
+(* Converse: If the input is distinct, then first_adjacent_dup returns None *)
+lemma first_adjacent_dup_None_if_distinct:
+  assumes "distinct xs"
+  shows "first_adjacent_dup xs = None"
+  using assms
+proof (induction xs rule: first_adjacent_dup.induct)
+  case (3 x y rest)
+  then show ?case by auto
+qed simp_all
 
+(* If first_duplicate_name returns None, then the input was distinct *)
 lemma first_duplicate_name_None_implies_distinct:
   assumes "first_duplicate_name getName items = None"
   shows "distinct (map getName items)"
@@ -57,6 +66,17 @@ proof -
   ultimately have "distinct ?sorted"
     by (rule first_adjacent_dup_None_implies_distinct)
   thus ?thesis by simp
+qed
+
+(* Converse: if the input is distinct, then first_duplicate_name returns None *)
+lemma first_duplicate_name_None_if_distinct:
+  assumes "distinct (map getName items)"
+  shows "first_duplicate_name getName items = None"
+proof -
+  have "distinct (sort (map getName items))" using assms by simp
+  thus ?thesis
+    unfolding first_duplicate_name_def
+    by (rule first_adjacent_dup_None_if_distinct)
 qed
 
 end
