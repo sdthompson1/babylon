@@ -4,6 +4,7 @@ begin
 
 (* Preliminary definitions and lemmas for merge_all_substs (MergeAllSubsts.thy). *)
 
+
 (* ========================================================================== *)
 (* The dependency relation on a substitution, and its acyclicity              *)
 (* ========================================================================== *)
@@ -57,61 +58,6 @@ definition is_subst_closure :: "TypeSubst \<Rightarrow> TypeSubst \<Rightarrow> 
        idempotent_subst \<sigma>
      \<and> fmdom \<sigma> = fmdom u
      \<and> (\<forall>T ty. fmlookup u T = Some ty \<longrightarrow> fmlookup \<sigma> T = Some (apply_subst \<sigma> ty))"
-
-
-(* ========================================================================== *)
-(* Disjoint substitutions *)
-(* ========================================================================== *)
-
-(* Two substitutions are disjoint when their domains do not overlap. *)
-definition disjoint_subst :: "TypeSubst \<Rightarrow> TypeSubst \<Rightarrow> bool" where
-  "disjoint_subst s1 s2 \<equiv> fmdom s1 |\<inter>| fmdom s2 = {||}"
-
-lemma disjoint_subst_sym:
-  "disjoint_subst s1 s2 = disjoint_subst s2 s1"
-  unfolding disjoint_subst_def by auto
-
-lemma disjoint_subst_empty [simp]:
-  "disjoint_subst fmempty s"
-  "disjoint_subst s fmempty"
-  unfolding disjoint_subst_def by auto
-
-(* A shared domain variable contradicts disjointness. *)
-lemma disjoint_subst_not_both:
-  assumes "disjoint_subst s1 s2"
-      and "n |\<in>| fmdom s1"
-      and "n |\<in>| fmdom s2"
-    shows False
-  using assms unfolding disjoint_subst_def by auto
-
-(* When two substitutions are disjoint, ++f is order-immaterial (no overlap),
-   so the two biasings agree. *)
-lemma disjoint_subst_add_commute:
-  assumes "disjoint_subst s1 s2"
-  shows "s1 ++\<^sub>f s2 = s2 ++\<^sub>f s1"
-proof (rule fmap_ext)
-  fix n
-  show "fmlookup (s1 ++\<^sub>f s2) n = fmlookup (s2 ++\<^sub>f s1) n"
-    using assms disjoint_subst_not_both by fastforce
-qed
-
-(* Pairwise disjointness for a list of substitutions.
-   Note: this also has a code equation, in MergeAllSubsts.thy. *)
-definition disjoint_substs :: "TypeSubst list \<Rightarrow> bool" where
-  "disjoint_substs ss \<equiv>
-     \<forall>i j. i < length ss \<and> j < length ss \<and> i \<noteq> j \<longrightarrow> disjoint_subst (ss ! i) (ss ! j)"
-
-
-(* ========================================================================== *)
-(* The union of a list of substitutions *)
-(* ========================================================================== *)
-
-(* The right-biased union of a list of input substitutions.
-   Under disjoint_substs, this is a disjoint union (so the list order is immaterial).
-   Executable as written. *)
-definition subst_list_union :: "TypeSubst list \<Rightarrow> TypeSubst" where
-  "subst_list_union ss = foldr (++\<^sub>f) ss fmempty"
-
 
 
 end

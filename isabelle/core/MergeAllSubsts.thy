@@ -1,6 +1,7 @@
 theory MergeAllSubsts
-  imports LinkError SubstClosureExistsUnique 
+  imports LinkError SubstClosureExistsUnique
     "../graph/Dependency" "../graph/DependencyRel"
+    "../util/FmapDisjointUnion"
 begin
 
 (* The **merge_all_substs** function merges a list of substitutions. For example,
@@ -9,22 +10,26 @@ begin
    This is used during linking to merge together the CM_TypeSubsts of different
    modules.
 
-   merge_all_substs is **executable**. Its behaviour is specified by the following 
+   The disjointness check and the union of the input substitutions are the
+   generic finite-map operations of util/FmapDisjointUnion.thy (fmdisjoint_list,
+   fmlist_union, and the fused fmunion_disjoint_all).
+
+   merge_all_substs is **executable**. Its behaviour is specified by the following
    theorems:
- 
+
      merge_all_substs_Inr_iff:
        merge_all_substs ss = Inr \<sigma> \<longleftrightarrow>
-         disjoint_substs ss
-         \<and> acyclic_subst_deps (subst_list_union ss)
-         \<and> is_subst_closure (subst_list_union ss) \<sigma>
+         fmdisjoint_list ss
+         \<and> acyclic_subst_deps (fmlist_union ss)
+         \<and> is_subst_closure (fmlist_union ss) \<sigma>
 
      merge_all_substs_LinkConflict_iff:
        "(\<exists>names. merge_all_substs ss = Inl (LinkConflict names)) \<longleftrightarrow>
-         \<not> disjoint_substs ss"
+         \<not> fmdisjoint_list ss"
 
      merge_all_substs_LinkCycle_iff:
        "(\<exists>names. merge_all_substs ss = Inl (LinkCycle names)) \<longleftrightarrow>
-         disjoint_substs ss \<and> \<not> acyclic_subst_deps (subst_list_union ss)"
+         fmdisjoint_list ss \<and> \<not> acyclic_subst_deps (fmlist_union ss)"
 
    In other words, merge_all_substs succeeds, returning the (unique) idempotent
    closure, exactly when the input substitutions are disjoint and their dependency
@@ -36,25 +41,6 @@ begin
    insensitive to the order in which the inputs are provided (except perhaps that
    in the error case, the exact error produced might depend on the input order).
 *)
-
-
-(* ========================================================================== *)
-(* Executable version of disjoint_substs *)
-(* ========================================================================== *)
-
-(* Executable one-pass disjointness check. We accumulate the domains seen so far
-   into a single set of keys; a conflict is a key already seen. Returns Some
-   (accumulated keys) on success, None on overlap. As a side effect the success
-   result is exactly the domain of the union of all the substitutions. *)
-fun disjoint_acc :: "string fset \<Rightarrow> TypeSubst list \<Rightarrow> string fset option" where
-  "disjoint_acc acc [] = Some acc"
-| "disjoint_acc acc (s # ss) =
-     (if fmdom s |\<inter>| acc = {||}
-      then disjoint_acc (acc |\<union>| fmdom s) ss
-      else None)"
-
-definition disjoint_substs_exec :: "TypeSubst list \<Rightarrow> bool" where
-  "disjoint_substs_exec ss \<equiv> disjoint_acc {||} ss \<noteq> None"
 
 
 (* ========================================================================== *)
@@ -93,18 +79,9 @@ definition build_closure :: "TypeSubst \<Rightarrow> string list \<Rightarrow> T
 (* Error payloads: the offending type names                                   *)
 (* ========================================================================== *)
 
-(* The keys defined by more than one input substitution, for the LinkConflict
-   payload. Same one-pass seen-keys shape as disjoint_acc, but collecting the
-   repeated keys instead of failing on the first one. Purely diagnostic: no
-   theorem depends on its result (disjoint_acc, which stays boolean-valued,
-   is what feeds the conflict test). Executable as written. *)
-fun conflict_keys_acc :: "string fset \<Rightarrow> TypeSubst list \<Rightarrow> string fset" where
-  "conflict_keys_acc acc [] = {||}"
-| "conflict_keys_acc acc (s # ss) =
-     (fmdom s |\<inter>| acc) |\<union>| conflict_keys_acc (acc |\<union>| fmdom s) ss"
-
-definition conflict_keys :: "TypeSubst list \<Rightarrow> string list" where
-  "conflict_keys ss = sorted_list_of_fset (conflict_keys_acc {||} ss)"
+(* The LinkConflict payload (the multiply-defined type names) comes from
+   fmunion_disjoint_all's Inl branch (fmdup_keys, util/FmapDisjointUnion.thy).
+   Only the LinkCycle payload is computed here. *)
 
 (* The type names involved in dependency cycles, for the LinkCycle payload:
    the members of every non-singleton SCC (multi-variable cycles), together
@@ -122,16 +99,14 @@ definition cycle_names :: "TypeSubst \<Rightarrow> string list list \<Rightarrow
 
 (* Executable merge_all_substs function.
 
-   First, checks for LinkConflict (input domains not pairwise disjoint), exits
-   early if found.
+   First, we call fmunion_disjoint_all to calculate the disjoint union u of
+   the inputs (or fail with LinkConflict if inputs are not pairwise disjoint).
 
-   Then, forms the disjoint union (subst_list_union), and calls the SCC sort
-   (analyze_dependencies_generic).
+   Then, we call the SCC sort (analyze_dependencies_generic) on u's dependency
+   graph. If there is an SCC with length > 1, or a dependency from a type onto
+   itself, we fail with LinkCycle.
 
-   If there is an SCC with length > 1, or a dependency from a type onto itself,
-   returns LinkCycle.
-
-   Otherwise, calls build_closure to build the idempotent closure in dependency order.
+   Otherwise, we call build_closure to build the idempotent closure in dependency order.
 
    analyze_dependencies_generic already reverses internally so that dependencies
    precede dependents; on the no-cycle branch every SCC is a singleton, so
@@ -139,141 +114,16 @@ definition cycle_names :: "TypeSubst \<Rightarrow> string list list \<Rightarrow
 
 definition merge_all_substs :: "TypeSubst list \<Rightarrow> (LinkError, TypeSubst) sum" where
   "merge_all_substs ss =
-     (let u = subst_list_union ss in
-      if \<not> disjoint_substs ss then Inl (LinkConflict (conflict_keys ss))
-      else case analyze_dependencies_generic (subst_dom_list u) id (subst_dep_list u) of
+     (case fmunion_disjoint_all ss of
+        Inl keys \<Rightarrow> Inl (LinkConflict keys)
+      | Inr u \<Rightarrow>
+          (case analyze_dependencies_generic (subst_dom_list u) id (subst_dep_list u) of
              Inl _ \<Rightarrow> Inl (LinkCycle [])
            | Inr sccs \<Rightarrow>
                if (\<exists>c \<in> set sccs. length c > 1)
                   \<or> (\<exists>T \<in> set (subst_dom_list u). T \<in> set (subst_dep_list u T))
                then Inl (LinkCycle (cycle_names u sccs))
-               else Inr (build_closure u (concat sccs)))"
-
-
-(* ========================================================================== *)
-(* Code equation for disjoint_substs *)
-(* ========================================================================== *)
-
-(* disjoint_substs reformulated over set membership for the head element: the
-   pairwise condition splits into "s is disjoint from every later element" plus
-   "the tail is pairwise disjoint". (We keep the index form for the tail because
-   duplicate non-empty elements must register as a conflict.) *)
-lemma disjoint_substs_Cons:
-  "disjoint_substs (s # ss) \<longleftrightarrow>
-     (\<forall>t \<in> set ss. disjoint_subst s t) \<and> disjoint_substs ss"
-proof
-  assume L: "disjoint_substs (s # ss)"
-  have head: "\<forall>t \<in> set ss. disjoint_subst s t"
-  proof
-    fix t assume "t \<in> set ss"
-    then obtain j where j: "j < length ss" "ss ! j = t" by (auto simp: in_set_conv_nth)
-    have "disjoint_subst ((s # ss) ! 0) ((s # ss) ! Suc j)"
-      using L j unfolding disjoint_substs_def by fastforce
-    thus "disjoint_subst s t" using j by simp
-  qed
-  moreover have "disjoint_substs ss"
-    unfolding disjoint_substs_def
-  proof (intro allI impI)
-    fix i j assume "i < length ss \<and> j < length ss \<and> i \<noteq> j"
-    then have "disjoint_subst ((s # ss) ! Suc i) ((s # ss) ! Suc j)"
-      using L unfolding disjoint_substs_def by fastforce
-    thus "disjoint_subst (ss ! i) (ss ! j)" by simp
-  qed
-  ultimately show "(\<forall>t \<in> set ss. disjoint_subst s t) \<and> disjoint_substs ss" ..
-next
-  assume R: "(\<forall>t \<in> set ss. disjoint_subst s t) \<and> disjoint_substs ss"
-  show "disjoint_substs (s # ss)"
-    unfolding disjoint_substs_def
-  proof (intro allI impI)
-    fix i j assume ij: "i < length (s # ss) \<and> j < length (s # ss) \<and> i \<noteq> j"
-    show "disjoint_subst ((s # ss) ! i) ((s # ss) ! j)"
-    proof (cases i; cases j)
-      fix j' assume "i = 0" "j = Suc j'"
-      then show ?thesis using R ij by (auto simp: disjoint_subst_sym)
-    next
-      fix i' assume "i = Suc i'" "j = 0"
-      then show ?thesis using R ij by (auto simp: disjoint_subst_sym)
-    next
-      fix i' j' assume "i = Suc i'" "j = Suc j'"
-      then show ?thesis using R ij unfolding disjoint_substs_def by auto
-    next
-      assume "i = 0" "j = 0" then show ?thesis using ij by simp
-    qed
-  qed
-qed
-
-(* Generalized invariant for the one-pass checker: starting from an accumulator
-   set of keys acc, the check succeeds exactly when acc is disjoint from every
-   element's domain and the elements are pairwise domain-disjoint. *)
-lemma disjoint_acc_None_iff:
-  "disjoint_acc acc ss \<noteq> None \<longleftrightarrow>
-     (\<forall>s \<in> set ss. fmdom s |\<inter>| acc = {||}) \<and> disjoint_substs ss"
-proof (induction ss arbitrary: acc)
-  case Nil
-  show ?case by (simp add: disjoint_substs_def)
-next
-  case (Cons s ss)
-  show ?case
-  proof (cases "fmdom s |\<inter>| acc = {||}")
-    case overlap: True
-    have step: "disjoint_acc acc (s # ss) = disjoint_acc (acc |\<union>| fmdom s) ss"
-      using overlap by simp
-    show ?thesis
-    proof
-      assume "disjoint_acc acc (s # ss) \<noteq> None"
-      then have rec: "disjoint_acc (acc |\<union>| fmdom s) ss \<noteq> None" using step by simp
-      from Cons.IH[of "acc |\<union>| fmdom s"] rec
-      have accs_rest: "\<forall>t \<in> set ss. fmdom t |\<inter>| (acc |\<union>| fmdom s) = {||}"
-        and pair_rest: "disjoint_substs ss" by auto
-      \<comment> \<open>acc disjoint from every element of s#ss.\<close>
-      have acc_all: "\<forall>t \<in> set (s # ss). fmdom t |\<inter>| acc = {||}"
-        using accs_rest overlap by auto
-      \<comment> \<open>s disjoint from every tail element (the accumulator carried fmdom s).\<close>
-      have head: "\<forall>t \<in> set ss. disjoint_subst s t"
-        using accs_rest unfolding disjoint_subst_def
-        by (metis disjoint_subst_def disjoint_subst_sym inf_sup_distrib1 sup_eq_bot_iff)
-      have "disjoint_substs (s # ss)"
-        using head pair_rest disjoint_substs_Cons by blast
-      with acc_all show
-        "(\<forall>t \<in> set (s # ss). fmdom t |\<inter>| acc = {||}) \<and> disjoint_substs (s # ss)" by blast
-    next
-      assume rhs: "(\<forall>t \<in> set (s # ss). fmdom t |\<inter>| acc = {||}) \<and> disjoint_substs (s # ss)"
-      have acc_all: "\<forall>t \<in> set (s # ss). fmdom t |\<inter>| acc = {||}" using rhs by blast
-      have head: "\<forall>t \<in> set ss. disjoint_subst s t"
-        using rhs disjoint_substs_Cons by blast
-      have pair_rest: "disjoint_substs ss"
-        using rhs disjoint_substs_Cons by blast
-      \<comment> \<open>Establish the IH premise for acc |\<union>| fmdom s on the tail.\<close>
-      have accs_rest: "\<forall>t \<in> set ss. fmdom t |\<inter>| (acc |\<union>| fmdom s) = {||}"
-      proof
-        fix t assume t_in: "t \<in> set ss"
-        have "fmdom t |\<inter>| acc = {||}" using acc_all t_in by simp
-        moreover have "fmdom t |\<inter>| fmdom s = {||}"
-          using head t_in unfolding disjoint_subst_def by auto
-        ultimately show "fmdom t |\<inter>| (acc |\<union>| fmdom s) = {||}"
-          by (simp add: inf_sup_distrib1)
-      qed
-      from Cons.IH[of "acc |\<union>| fmdom s"] accs_rest pair_rest
-      have "disjoint_acc (acc |\<union>| fmdom s) ss \<noteq> None" by blast
-      thus "disjoint_acc acc (s # ss) \<noteq> None" using step by simp
-    qed
-  next
-    case False
-    \<comment> \<open>Head-check fails: the accumulator already overlaps s's domain.\<close>
-    have "disjoint_acc acc (s # ss) = None" using False by auto
-    moreover have "\<not> (fmdom s |\<inter>| acc = {||})" using False by simp
-    ultimately show ?thesis by auto
-  qed
-qed
-
-(* disjoint_substs is defined by a quantifier over index pairs (not executable).
-   The one-pass disjoint_acc computes the same predicate; this is registered as its
-   code equation so merge_all_substs is executable. *)
-lemma disjoint_substs_code [code]:
-  "disjoint_substs ss = disjoint_substs_exec ss"
-  unfolding disjoint_substs_exec_def
-  using disjoint_acc_None_iff[of "{||}" ss]
-  by auto
+               else Inr (build_closure u (concat sccs))))"
 
 
 (* ========================================================================== *)
@@ -877,18 +727,20 @@ qed
    closure of the disjoint union. *)
 theorem merge_all_substs_Inr_iff:
   "merge_all_substs ss = Inr \<sigma> \<longleftrightarrow>
-     disjoint_substs ss
-     \<and> acyclic_subst_deps (subst_list_union ss)
-     \<and> is_subst_closure (subst_list_union ss) \<sigma>"
+     fmdisjoint_list ss
+     \<and> acyclic_subst_deps (fmlist_union ss)
+     \<and> is_subst_closure (fmlist_union ss) \<sigma>"
 proof -
-  define u where "u = subst_list_union ss"
+  define u where "u = fmlist_union ss"
   show ?thesis
-  proof (cases "disjoint_substs ss")
+  proof (cases "fmdisjoint_list ss")
     case False
     then show ?thesis
-      unfolding merge_all_substs_def u_def[symmetric] by simp
+      unfolding merge_all_substs_def by (simp add: fmunion_disjoint_all_Inl)
   next
     case cons: True
+    have union: "fmunion_disjoint_all ss = Inr u"
+      unfolding u_def using cons by (simp add: fmunion_disjoint_all_Inr)
     show ?thesis
     proof (cases "analyze_dependencies_generic (subst_dom_list u) id (subst_dep_list u)")
       case (Inl e)
@@ -903,7 +755,7 @@ proof -
         \<comment> \<open>Cycle detected: some Inl on the left; not acyclic on the right. (Only the
            fact that the result is an Inl matters, not which LinkError it carries.)\<close>
         have lhs: "\<exists>e. merge_all_substs ss = Inl e"
-          unfolding merge_all_substs_def u_def[symmetric] using cons Inr guards by simp
+          unfolding merge_all_substs_def using union Inr guards by simp
         have "\<not> acyclic_subst_deps u"
           using guards merge_all_guards_iff_acyclic[OF Inr] by blast
         then show ?thesis using lhs unfolding u_def by auto
@@ -915,7 +767,7 @@ proof -
         have noself: "\<forall>T \<in> set (subst_dom_list u). T \<notin> set (subst_dep_list u T)"
           using guards by blast
         have lhs: "merge_all_substs ss = Inr (build_closure u (concat sccs))"
-          unfolding merge_all_substs_def u_def[symmetric] using cons Inr guards by simp
+          unfolding merge_all_substs_def using union Inr guards by simp
         have acyc: "acyclic_subst_deps u"
           using guards merge_all_guards_iff_acyclic[OF Inr] by blast
         have clos: "is_subst_closure u (build_closure u (concat sccs))"
@@ -924,12 +776,12 @@ proof -
         proof
           assume "merge_all_substs ss = Inr \<sigma>"
           then have "\<sigma> = build_closure u (concat sccs)" using lhs by simp
-          then show "disjoint_substs ss \<and> acyclic_subst_deps (subst_list_union ss)
-                     \<and> is_subst_closure (subst_list_union ss) \<sigma>"
+          then show "fmdisjoint_list ss \<and> acyclic_subst_deps (fmlist_union ss)
+                     \<and> is_subst_closure (fmlist_union ss) \<sigma>"
             using cons acyc clos unfolding u_def by simp
         next
-          assume "disjoint_substs ss \<and> acyclic_subst_deps (subst_list_union ss)
-                  \<and> is_subst_closure (subst_list_union ss) \<sigma>"
+          assume "fmdisjoint_list ss \<and> acyclic_subst_deps (fmlist_union ss)
+                  \<and> is_subst_closure (fmlist_union ss) \<sigma>"
           then have "is_subst_closure u \<sigma>" unfolding u_def by simp
           then have "\<sigma> = build_closure u (concat sccs)"
             using clos subst_closure_unique[OF acyc] by blast
@@ -944,16 +796,18 @@ qed
    pairwise disjoint (i.e. some type variable is multiply-defined). *)
 theorem merge_all_substs_LinkConflict_iff:
   "(\<exists>names. merge_all_substs ss = Inl (LinkConflict names)) \<longleftrightarrow>
-    \<not> disjoint_substs ss"
+    \<not> fmdisjoint_list ss"
 proof
   assume "\<exists>names. merge_all_substs ss = Inl (LinkConflict names)"
   then obtain names where conf: "merge_all_substs ss = Inl (LinkConflict names)" by blast
-  show "\<not> disjoint_substs ss"
+  show "\<not> fmdisjoint_list ss"
   proof
-    assume dis: "disjoint_substs ss"
+    assume dis: "fmdisjoint_list ss"
     \<comment> \<open>On the disjoint side of the definition the result is a LinkCycle or an Inr,
        never a LinkConflict.\<close>
-    define u where "u = subst_list_union ss"
+    define u where "u = fmlist_union ss"
+    have union: "fmunion_disjoint_all ss = Inr u"
+      unfolding u_def using dis by (simp add: fmunion_disjoint_all_Inr)
     obtain sccs where res: "dep_result u = Inr sccs"
       using dep_result_never_Inl by blast
     show False
@@ -961,39 +815,42 @@ proof
                    \<or> (\<exists>T \<in> set (subst_dom_list u). T \<in> set (subst_dep_list u T))")
       case True
       then have "merge_all_substs ss = Inl (LinkCycle (cycle_names u sccs))"
-        unfolding merge_all_substs_def u_def[symmetric] using dis res by simp
+        unfolding merge_all_substs_def using union res by simp
       thus False using conf by simp
     next
       case False
       then have "merge_all_substs ss = Inr (build_closure u (concat sccs))"
-        unfolding merge_all_substs_def u_def[symmetric] using dis res by simp
+        unfolding merge_all_substs_def using union res by simp
       thus False using conf by simp
     qed
   qed
 next
-  assume "\<not> disjoint_substs ss"
-  thus "\<exists>names. merge_all_substs ss = Inl (LinkConflict names)"
-    unfolding merge_all_substs_def by simp
+  assume "\<not> fmdisjoint_list ss"
+  then have "merge_all_substs ss = Inl (LinkConflict (fmdup_keys ss))"
+    unfolding merge_all_substs_def by (simp add: fmunion_disjoint_all_Inl)
+  thus "\<exists>names. merge_all_substs ss = Inl (LinkConflict names)" by blast
 qed
 
 (* merge_all_substs fails with LinkCycle exactly when there is no LinkConflict (so 
    the disjoint union can be formed), but the dependency relation contains a cycle. *)
 theorem merge_all_substs_LinkCycle_iff:
   "(\<exists>names. merge_all_substs ss = Inl (LinkCycle names)) \<longleftrightarrow>
-    disjoint_substs ss \<and> \<not> acyclic_subst_deps (subst_list_union ss)"
+    fmdisjoint_list ss \<and> \<not> acyclic_subst_deps (fmlist_union ss)"
 proof -
-  define u where "u = subst_list_union ss"
+  define u where "u = fmlist_union ss"
   show ?thesis
-  proof (cases "disjoint_substs ss")
+  proof (cases "fmdisjoint_list ss")
     case False
     \<comment> \<open>Not disjoint: the result is a LinkConflict, not a LinkCycle.\<close>
-    then have "merge_all_substs ss = Inl (LinkConflict (conflict_keys ss))"
-      unfolding merge_all_substs_def by simp
+    then have "merge_all_substs ss = Inl (LinkConflict (fmdup_keys ss))"
+      unfolding merge_all_substs_def by (simp add: fmunion_disjoint_all_Inl)
     then show ?thesis using False by simp
   next
     case dis: True
     \<comment> \<open>Disjoint: the sorter succeeds (its error branch is dead), and the cycle
        guards fire exactly when the union's dependency relation is cyclic.\<close>
+    have union: "fmunion_disjoint_all ss = Inr u"
+      unfolding u_def using dis by (simp add: fmunion_disjoint_all_Inr)
     obtain sccs where res: "dep_result u = Inr sccs"
       using dep_result_never_Inl by blast
     show ?thesis
@@ -1001,14 +858,14 @@ proof -
                    \<or> (\<exists>T \<in> set (subst_dom_list u). T \<in> set (subst_dep_list u T))")
       case guards: True
       have "merge_all_substs ss = Inl (LinkCycle (cycle_names u sccs))"
-        unfolding merge_all_substs_def u_def[symmetric] using dis res guards by simp
+        unfolding merge_all_substs_def using union res guards by simp
       moreover have "\<not> acyclic_subst_deps u"
         using guards merge_all_guards_iff_acyclic[OF res] by blast
       ultimately show ?thesis using dis unfolding u_def by auto
     next
       case guards: False
       have "merge_all_substs ss = Inr (build_closure u (concat sccs))"
-        unfolding merge_all_substs_def u_def[symmetric] using dis res guards by simp
+        unfolding merge_all_substs_def using union res guards by simp
       moreover have "acyclic_subst_deps u"
         using guards merge_all_guards_iff_acyclic[OF res] by blast
       ultimately show ?thesis unfolding u_def by auto
@@ -1023,194 +880,15 @@ qed
 
 (* -------------------------------------------------------------------------- *)
 (* Every conjunct on the right of merge_all_substs_Inr_iff depends only on    *)
-(* the *multiset* of inputs: disjoint_substs is invariant under reordering    *)
-(* (shown via a filter-counting characterization), and subst_list_union is    *)
-(* order-immaterial on pairwise-disjoint domains (each key is defined by at   *)
-(* most one element, so a lookup is determined by the *set* of elements).     *)
-(* Permutation-invariance of merge_all_substs is then immediate from the iff. *)
+(* the *multiset* of inputs: fmdisjoint_list is invariant under reordering,   *)
+(* and fmlist_union is order-immaterial on pairwise-disjoint domains (the     *)
+(* mset_cong lemmas of util/FmapDisjointUnion.thy). Permutation-invariance of *)
+(* merge_all_substs is then immediate from the iff.                           *)
 (* This is a sanity check on the definition, not machinery anything           *)
 (* downstream consumes. Note it is invariance under REORDERING, not           *)
 (* de-duplication: merge_all_substs [s, s] is a LinkConflict for non-empty s  *)
 (* (and mset [s, s] \<noteq> mset [s], so the theorem says nothing about it).        *)
 (* -------------------------------------------------------------------------- *)
-
-(* disjoint_substs, recast as counting: the domains are pairwise disjoint
-   exactly when each key k lies in the domain of at most one list element
-   (counting multiplicity - a repeated non-empty element hits twice). *)
-lemma disjoint_substs_filter_char:
-  "disjoint_substs ss \<longleftrightarrow> (\<forall>k. length (filter (\<lambda>s. k |\<in>| fmdom s) ss) \<le> 1)"
-proof -
-  have fin: "finite {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)}" for k
-    by (rule finite_subset[of _ "{..<length ss}"]) auto
-  have len_card: "length (filter (\<lambda>s. k |\<in>| fmdom s) ss)
-                    = card {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)}" for k
-    by (rule length_filter_conv_card)
-  show ?thesis
-  proof
-    assume L: "disjoint_substs ss"
-    show "\<forall>k. length (filter (\<lambda>s. k |\<in>| fmdom s) ss) \<le> 1"
-    proof
-      fix k
-      have "\<forall>i \<in> {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)}.
-            \<forall>j \<in> {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)}. i = j"
-      proof (intro ballI)
-        fix i j
-        assume i_in: "i \<in> {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)}"
-           and j_in: "j \<in> {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)}"
-        show "i = j"
-        proof (rule ccontr)
-          assume "i \<noteq> j"
-          then have "disjoint_subst (ss ! i) (ss ! j)"
-            using L i_in j_in unfolding disjoint_substs_def by auto
-          then show False
-            using disjoint_subst_not_both i_in j_in by auto
-        qed
-      qed
-      then have "card {i. i < length ss \<and> k |\<in>| fmdom (ss ! i)} \<le> Suc 0"
-        using fin[of k] by (simp add: card_le_Suc0_iff_eq)
-      then show "length (filter (\<lambda>s. k |\<in>| fmdom s) ss) \<le> 1"
-        using len_card[of k] by linarith
-    qed
-  next
-    assume R: "\<forall>k. length (filter (\<lambda>s. k |\<in>| fmdom s) ss) \<le> 1"
-    show "disjoint_substs ss"
-      unfolding disjoint_substs_def
-    proof (intro allI impI)
-      fix i j assume ij: "i < length ss \<and> j < length ss \<and> i \<noteq> j"
-      show "disjoint_subst (ss ! i) (ss ! j)"
-      proof (rule ccontr)
-        assume "\<not> disjoint_subst (ss ! i) (ss ! j)"
-        then obtain k where k: "k |\<in>| fmdom (ss ! i)" "k |\<in>| fmdom (ss ! j)"
-          unfolding disjoint_subst_def by auto
-        have sub: "{i, j} \<subseteq> {i'. i' < length ss \<and> k |\<in>| fmdom (ss ! i')}"
-          using ij k by auto
-        have "card {i, j} \<le> card {i'. i' < length ss \<and> k |\<in>| fmdom (ss ! i')}"
-          using card_mono[OF fin[of k] sub] .
-        moreover have "card {i, j} = 2" using ij by auto
-        moreover have "card {i'. i' < length ss \<and> k |\<in>| fmdom (ss ! i')} \<le> 1"
-          using R by (simp add: len_card[symmetric])
-        ultimately show False by linarith
-      qed
-    qed
-  qed
-qed
-
-(* Pairwise domain-disjointness depends only on the multiset of inputs. *)
-lemma disjoint_substs_mset_cong:
-  assumes "mset ss = mset ss'"
-  shows "disjoint_substs ss = disjoint_substs ss'"
-proof -
-  have "mset (filter (\<lambda>s. k |\<in>| fmdom s) ss) = mset (filter (\<lambda>s. k |\<in>| fmdom s) ss')" for k
-    using assms by simp
-  then have "length (filter (\<lambda>s. k |\<in>| fmdom s) ss)
-               = length (filter (\<lambda>s. k |\<in>| fmdom s) ss')" for k
-    by (metis size_mset)
-  then show ?thesis by (simp add: disjoint_substs_filter_char)
-qed
-
-(* subst_list_union of a cons is the head added onto the union of the tail. *)
-lemma subst_list_union_Cons:
-  "subst_list_union (s # ss) = s ++\<^sub>f subst_list_union ss"
-  unfolding subst_list_union_def by simp
-
-(* Under pairwise disjointness each key is defined by at most one element, so a
-   union lookup is exactly "some element defines it" - a property of the *set*
-   of elements, with no reference to their order. *)
-lemma subst_list_union_lookup:
-  assumes "disjoint_substs ss"
-  shows "fmlookup (subst_list_union ss) k = Some v \<longleftrightarrow> (\<exists>s \<in> set ss. fmlookup s k = Some v)"
-  using assms
-proof (induction ss arbitrary: v)
-  case Nil
-  show ?case by (simp add: subst_list_union_def)
-next
-  case (Cons x xs)
-  have head: "\<forall>t \<in> set xs. disjoint_subst x t"
-    and tail: "disjoint_substs xs"
-    using Cons.prems disjoint_substs_Cons by blast+
-  show ?case
-  proof (cases "k |\<in>| fmdom (subst_list_union xs)")
-    case True
-    \<comment> \<open>k is defined by the tail union, hence by some tail element, hence (by
-       disjointness) not by x: the cons lookup is the tail lookup.\<close>
-    obtain w where w: "fmlookup (subst_list_union xs) k = Some w"
-      using True by (auto simp: fmlookup_dom_iff)
-    then obtain s where s: "s \<in> set xs" "fmlookup s k = Some w"
-      using Cons.IH[OF tail] by blast
-    have k_in_s: "k |\<in>| fmdom s" using s(2) by (auto simp: fmlookup_dom_iff)
-    have x_none: "fmlookup x k = None"
-    proof (cases "fmlookup x k")
-      case None then show ?thesis .
-    next
-      case (Some a)
-      then have "k |\<in>| fmdom x" by (auto simp: fmlookup_dom_iff)
-      then have False
-        using head s(1) k_in_s disjoint_subst_not_both by blast
-      then show ?thesis ..
-    qed
-    have look: "fmlookup (subst_list_union (x # xs)) k = fmlookup (subst_list_union xs) k"
-      using True by (simp add: subst_list_union_Cons)
-    show ?thesis
-    proof
-      assume "fmlookup (subst_list_union (x # xs)) k = Some v"
-      then have "fmlookup (subst_list_union xs) k = Some v" using look by simp
-      then show "\<exists>s \<in> set (x # xs). fmlookup s k = Some v"
-        using Cons.IH[OF tail] by auto
-    next
-      assume "\<exists>s \<in> set (x # xs). fmlookup s k = Some v"
-      then obtain s' where s': "s' \<in> set (x # xs)" "fmlookup s' k = Some v" by blast
-      have "s' \<noteq> x" using s'(2) x_none by auto
-      then have "s' \<in> set xs" using s'(1) by simp
-      then have "fmlookup (subst_list_union xs) k = Some v"
-        using s'(2) Cons.IH[OF tail] by blast
-      then show "fmlookup (subst_list_union (x # xs)) k = Some v" using look by simp
-    qed
-  next
-    case False
-    then have tail_none: "fmlookup (subst_list_union xs) k = None"
-      by (simp add: fmdom_notD)
-    have look: "fmlookup (subst_list_union (x # xs)) k = fmlookup x k"
-      using False by (simp add: subst_list_union_Cons)
-    have no_tail: "\<not> (\<exists>s \<in> set xs. fmlookup s k = Some v)"
-      using Cons.IH[OF tail] tail_none by (metis option.distinct(1))
-    show ?thesis using look no_tail by auto
-  qed
-qed
-
-(* On disjoint inputs the union is determined by the SET of inputs: two
-   mset-equal lists have equal unions. *)
-lemma subst_list_union_mset_cong:
-  assumes m: "mset ss = mset ss'"
-      and disj: "disjoint_substs ss"
-  shows "subst_list_union ss = subst_list_union ss'"
-proof (intro fmap_ext)
-  fix k
-  have disj': "disjoint_substs ss'"
-    using disjoint_substs_mset_cong[OF m] disj by simp
-  have set_eq: "set ss = set ss'"
-    using m mset_eq_setD by blast
-  show "fmlookup (subst_list_union ss) k = fmlookup (subst_list_union ss') k"
-  proof (cases "fmlookup (subst_list_union ss) k")
-    case None
-    have "fmlookup (subst_list_union ss') k = None"
-    proof (cases "fmlookup (subst_list_union ss') k")
-      case (Some v)
-      then have "\<exists>s \<in> set ss. fmlookup s k = Some v"
-        using subst_list_union_lookup[OF disj'] set_eq by blast
-      then have "fmlookup (subst_list_union ss) k = Some v"
-        using subst_list_union_lookup[OF disj] by blast
-      then show ?thesis using None by simp
-    qed simp
-    then show ?thesis using None by simp
-  next
-    case (Some v)
-    then have "\<exists>s \<in> set ss'. fmlookup s k = Some v"
-      using subst_list_union_lookup[OF disj] set_eq by blast
-    then have "fmlookup (subst_list_union ss') k = Some v"
-      using subst_list_union_lookup[OF disj'] by blast
-    then show ?thesis using Some by simp
-  qed
-qed
 
 (* The headline law: merge_all_substs is invariant under permuting its input
    list, directly off the success characterization - every conjunct of
@@ -1225,16 +903,16 @@ proof -
   have one: "merge_all_substs ys = Inr \<sigma>"
     if ok: "merge_all_substs xs = Inr \<sigma>" and m: "mset xs = mset ys" for xs ys
   proof -
-    have disj: "disjoint_substs xs"
-     and acyc: "acyclic_subst_deps (subst_list_union xs)"
-     and clos: "is_subst_closure (subst_list_union xs) \<sigma>"
+    have disj: "fmdisjoint_list xs"
+     and acyc: "acyclic_subst_deps (fmlist_union xs)"
+     and clos: "is_subst_closure (fmlist_union xs) \<sigma>"
       using ok merge_all_substs_Inr_iff by auto
-    have disj': "disjoint_substs ys"
-      using disjoint_substs_mset_cong[OF m] disj by simp
-    have u_eq: "subst_list_union ys = subst_list_union xs"
-      using subst_list_union_mset_cong[OF m disj] by simp
-    have "disjoint_substs ys \<and> acyclic_subst_deps (subst_list_union ys)
-          \<and> is_subst_closure (subst_list_union ys) \<sigma>"
+    have disj': "fmdisjoint_list ys"
+      using fmdisjoint_list_mset_cong[OF m] disj by simp
+    have u_eq: "fmlist_union ys = fmlist_union xs"
+      using fmlist_union_mset_cong[OF m disj] by simp
+    have "fmdisjoint_list ys \<and> acyclic_subst_deps (fmlist_union ys)
+          \<and> is_subst_closure (fmlist_union ys) \<sigma>"
       using disj' acyc clos u_eq by simp
     then show ?thesis using merge_all_substs_Inr_iff by blast
   qed
