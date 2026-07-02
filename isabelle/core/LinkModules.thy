@@ -43,23 +43,36 @@ begin
      return type CoreTy_Record [], non-ghost). Well-typed modules carry
      exactly these values, so nothing is lost on such inputs.
 
+   Additionally, linking CHECKS capture-avoidance (LinkCapture on failure):
+   no name in any input's CM_TypeSubst domain may coincide with a bound type
+   parameter (an FI_TyArgs entry or a data constructor's type-variable list)
+   of any input. The renamer's dotted/undotted naming discipline 
+   (substitution domains are dotted abstract names, bound parameters
+   are undotted) means the check never fires in practice.
+
    link_modules is **executable**. Its behaviour on success is specified by:
 
      link_modules_Inr_iff:
        link_modules ms = Inr m \<longleftrightarrow>
          link_fields_disjoint ms
+         \<and> link_capture_ok ms
          \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>
                \<and> m = link_result ms \<sigma>)
 
    (and link_modules_Inr_iff_closure, the same statement with merge_all_substs
-   replaced by its own declarative characterization; and
-   link_modules_idempotent_subst, a successful link's CM_TypeSubst is
-   idempotent - the CoreModule invariant is preserved). We also prove
-   link_modules_perm: the result is insensitive to the order of the input list
-   (both orderings succeed with the same module, or both fail) - permutation-
-   invariance, NOT de-duplication: link_modules [m, m] is a multiple-definition
-   error for any non-empty m, and link_modules [m] = Inr m
-   (link_modules_singleton, under the standard module invariants).
+   replaced by its own declarative characterization). We also prove:
+
+    - link_modules_idempotent_subst, link_modules_capture_avoiding: a successful
+      link's result satisfies the CoreModule invariants: idempotent CM_TypeSubst
+      and capture_avoiding).
+
+    - link_modules_perm: the result is insensitive to the order of the input list
+      (both orderings succeed with the same module, or both fail) - permutation-
+      invariance, NOT de-duplication: link_modules [m, m] is a multiple-definition
+      error for any non-empty m.
+
+    - link_modules_singleton: link_modules [m] = Inr m, under the standard module 
+      invariants.
 
    Note the raw result of link_modules is generally NOT independently
    well-kinded - its types may still mention abstract names that linking has
@@ -189,6 +202,141 @@ definition link_conflict_names :: "CoreModule list \<Rightarrow> string list" wh
 
 
 (* ========================================================================== *)
+(* The capture-avoidance check                                                *)
+(* ========================================================================== *)
+
+(* Membership in the union of an fset of fsets. *)
+lemma fmember_ffUnion_iff:
+  "x |\<in>| ffUnion A \<longleftrightarrow> (\<exists>X. X |\<in>| A \<and> x |\<in>| X)"
+  by (induction A) auto
+
+(* The union's domain is the union of the domains (no disjointness needed). *)
+lemma fmdom_fmlist_union:
+  "fmdom (fmlist_union ss) = funion_list (map fmdom ss)"
+  by (induction ss) (simp_all add: fmlist_union_Cons)
+
+(* The bound type-parameter names of a module: the FI_TyArgs of every declared
+   function and the type-variable list of every data constructor. These names
+   are binders - they appear in no linked map's domain, so the
+   multiple-definition check never sees them. *)
+definition module_bound_tyvars :: "CoreModule \<Rightarrow> string fset" where
+  "module_bound_tyvars x =
+     ffUnion ((\<lambda>info. fset_of_list (FI_TyArgs info)) |`| fmran (TE_Functions (CM_TyEnv x)))
+     |\<union>| ffUnion ((\<lambda>(_, tyVars, _). fset_of_list tyVars) |`| fmran (TE_DataCtors (CM_TyEnv x)))"
+
+lemma module_bound_tyvars_fun:
+  assumes lk: "fmlookup (TE_Functions (CM_TyEnv x)) name = Some info"
+      and n_in: "n \<in> set (FI_TyArgs info)"
+  shows "n |\<in>| module_bound_tyvars x"
+proof -
+  have "info |\<in>| fmran (TE_Functions (CM_TyEnv x))"
+    using lk by (rule fmranI)
+  then have "fset_of_list (FI_TyArgs info)
+               |\<in>| (\<lambda>info. fset_of_list (FI_TyArgs info)) |`| fmran (TE_Functions (CM_TyEnv x))"
+    by (rule fimageI)
+  moreover have "n |\<in>| fset_of_list (FI_TyArgs info)"
+    using n_in by (simp add: fset_of_list_elem)
+  ultimately show ?thesis
+    unfolding module_bound_tyvars_def
+    using fmember_ffUnion_iff by force
+qed
+
+lemma module_bound_tyvars_ctor:
+  assumes lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) ctorName = Some (dtName, tyVars, payload)"
+      and n_in: "n \<in> set tyVars"
+  shows "n |\<in>| module_bound_tyvars x"
+proof -
+  have "(dtName, tyVars, payload) |\<in>| fmran (TE_DataCtors (CM_TyEnv x))"
+    using lk by (rule fmranI)
+  then have "fset_of_list tyVars
+               |\<in>| (\<lambda>(_, tyVars, _). fset_of_list tyVars) |`| fmran (TE_DataCtors (CM_TyEnv x))"
+    using fimageI[of "(dtName, tyVars, payload)" _ "\<lambda>(_, tyVars, _). fset_of_list tyVars"]
+    by simp
+  moreover have "n |\<in>| fset_of_list tyVars"
+    using n_in by (simp add: fset_of_list_elem)
+  ultimately show ?thesis
+    unfolding module_bound_tyvars_def
+    using fmember_ffUnion_iff by force
+qed
+
+(* Elimination form: a bound tyvar comes from some function's FI_TyArgs or
+   some constructor's type-variable list. *)
+lemma module_bound_tyvars_E:
+  assumes "n |\<in>| module_bound_tyvars x"
+  shows "(\<exists>name info. fmlookup (TE_Functions (CM_TyEnv x)) name = Some info
+                      \<and> n \<in> set (FI_TyArgs info))
+       \<or> (\<exists>ctorName dtName tyVars payload.
+            fmlookup (TE_DataCtors (CM_TyEnv x)) ctorName = Some (dtName, tyVars, payload)
+            \<and> n \<in> set tyVars)"
+proof -
+  from assms consider
+      (fn) "n |\<in>| ffUnion ((\<lambda>info. fset_of_list (FI_TyArgs info))
+                            |`| fmran (TE_Functions (CM_TyEnv x)))"
+    | (ct) "n |\<in>| ffUnion ((\<lambda>(_, tyVars, _). fset_of_list tyVars)
+                            |`| fmran (TE_DataCtors (CM_TyEnv x)))"
+    unfolding module_bound_tyvars_def by auto
+  then show ?thesis
+  proof cases
+    case fn
+    then obtain X where
+      X_in: "X |\<in>| (\<lambda>info. fset_of_list (FI_TyArgs info)) |`| fmran (TE_Functions (CM_TyEnv x))" and
+      n_X: "n |\<in>| X"
+      using fmember_ffUnion_iff by (metis (no_types, lifting))
+    from X_in obtain info where
+      info_ran: "info |\<in>| fmran (TE_Functions (CM_TyEnv x))" and
+      X_eq: "X = fset_of_list (FI_TyArgs info)"
+      by auto
+    from info_ran obtain name where
+      "fmlookup (TE_Functions (CM_TyEnv x)) name = Some info"
+      by (metis fmranE)
+    moreover have "n \<in> set (FI_TyArgs info)"
+      using n_X X_eq by (simp add: fset_of_list_elem)
+    ultimately show ?thesis by blast
+  next
+    case ct
+    then obtain X where
+      X_in: "X |\<in>| (\<lambda>(_, tyVars, _). fset_of_list tyVars) |`| fmran (TE_DataCtors (CM_TyEnv x))" and
+      n_X: "n |\<in>| X"
+      using fmember_ffUnion_iff by (metis (no_types, lifting))
+    from X_in obtain entry where
+      entry_ran: "entry |\<in>| fmran (TE_DataCtors (CM_TyEnv x))" and
+      X_eq: "X = (case entry of (_, tyVars, _) \<Rightarrow> fset_of_list tyVars)"
+      by auto
+    obtain dtName tyVars payload where entry_eq: "entry = (dtName, tyVars, payload)"
+      by (cases entry) auto
+    from entry_ran obtain ctorName where
+      "fmlookup (TE_DataCtors (CM_TyEnv x)) ctorName = Some (dtName, tyVars, payload)"
+      using entry_eq by (metis fmranE)
+    moreover have "n \<in> set tyVars"
+      using n_X X_eq entry_eq by (simp add: fset_of_list_elem)
+    ultimately show ?thesis by blast
+  qed
+qed
+
+(* The check: no name resolved by any input's substitution is a bound type
+   parameter of any input. Phrased over the unions, so it depends only on the
+   set of inputs. *)
+definition link_capture_ok :: "CoreModule list \<Rightarrow> bool" where
+  "link_capture_ok ms =
+     (funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)
+      |\<inter>| funion_list (map module_bound_tyvars ms) = {||})"
+
+(* The colliding names, for the LinkCapture payload. Purely diagnostic. *)
+definition link_capture_names :: "CoreModule list \<Rightarrow> string list" where
+  "link_capture_names ms =
+     sorted_list_of_fset
+       (funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)
+        |\<inter>| funion_list (map module_bound_tyvars ms))"
+
+(* The check depends only on the multiset of inputs. *)
+lemma link_capture_ok_mset_cong:
+  assumes m: "mset ms = mset ms'"
+  shows "link_capture_ok ms = link_capture_ok ms'"
+  unfolding link_capture_ok_def
+  by (simp add: funion_list_map_cong[OF m])
+
+
+(* ========================================================================== *)
 (* The linked module                                                          *)
 (* ========================================================================== *)
 
@@ -270,13 +418,16 @@ qed
 (* Executable link_modules function.
 
    First check that no name is declared/defined by two of the inputs
-   (LinkConflict otherwise, with the offending names as payload); then merge
-   the abstract-type substitutions (a LinkConflict or LinkCycle from
-   merge_all_substs propagates); on success, assemble the field-wise union. *)
+   (LinkConflict otherwise, with the offending names as payload); then check
+   capture-avoidance (LinkCapture otherwise); then merge the abstract-type
+   substitutions (a LinkConflict or LinkCycle from merge_all_substs
+   propagates); on success, assemble the field-wise union. *)
 definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule) sum" where
   "link_modules ms =
      (if \<not> link_fields_disjoint ms
       then Inl (LinkConflict (link_conflict_names ms))
+      else if \<not> link_capture_ok ms
+      then Inl (LinkCapture (link_capture_names ms))
       else case merge_all_substs (map CM_TypeSubst ms) of
              Inl e \<Rightarrow> Inl e
            | Inr \<sigma> \<Rightarrow> Inr (link_result ms \<sigma>))"
@@ -287,12 +438,13 @@ definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule
 (* ========================================================================== *)
 
 (* link_modules succeeds with result m exactly when the declaration/definition
-   families are pairwise domain-disjoint, the substitution merge succeeds
-   (with some \<sigma>), and m is the field-wise union with that \<sigma> and the
-   type-variable subtraction. *)
+   families are pairwise domain-disjoint, the capture check passes, the
+   substitution merge succeeds (with some \<sigma>), and m is the field-wise union
+   with that \<sigma> and the type-variable subtraction. *)
 theorem link_modules_Inr_iff:
   "link_modules ms = Inr m \<longleftrightarrow>
      link_fields_disjoint ms
+     \<and> link_capture_ok ms
      \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma> \<and> m = link_result ms \<sigma>)"
 proof (cases "link_fields_disjoint ms")
   case False
@@ -300,33 +452,44 @@ proof (cases "link_fields_disjoint ms")
     unfolding link_modules_def by simp
   then show ?thesis using False by simp
 next
-  case True
+  case disj: True
   show ?thesis
-  proof (cases "merge_all_substs (map CM_TypeSubst ms)")
-    case (Inl e)
-    then have "link_modules ms = Inl e"
-      unfolding link_modules_def using True by simp
-    then show ?thesis using Inl by auto
+  proof (cases "link_capture_ok ms")
+    case False
+    then have "link_modules ms = Inl (LinkCapture (link_capture_names ms))"
+      unfolding link_modules_def using disj by simp
+    then show ?thesis using False by simp
   next
-    case (Inr \<sigma>)
-    then have lhs: "link_modules ms = Inr (link_result ms \<sigma>)"
-      unfolding link_modules_def using True by simp
+    case cap: True
     show ?thesis
-    proof
-      assume "link_modules ms = Inr m"
-      then have "m = link_result ms \<sigma>" using lhs by simp
-      then show "link_fields_disjoint ms
-                 \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
-                        \<and> m = link_result ms \<sigma>')"
-        using True Inr by blast
+    proof (cases "merge_all_substs (map CM_TypeSubst ms)")
+      case (Inl e)
+      then have "link_modules ms = Inl e"
+        unfolding link_modules_def using disj cap by simp
+      then show ?thesis using Inl by auto
     next
-      assume "link_fields_disjoint ms
-              \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
-                     \<and> m = link_result ms \<sigma>')"
-      then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
-                       and "m = link_result ms \<sigma>'" by blast
-      then have "m = link_result ms \<sigma>" using Inr by simp
-      then show "link_modules ms = Inr m" using lhs by simp
+      case (Inr \<sigma>)
+      then have lhs: "link_modules ms = Inr (link_result ms \<sigma>)"
+        unfolding link_modules_def using disj cap by simp
+      show ?thesis
+      proof
+        assume "link_modules ms = Inr m"
+        then have "m = link_result ms \<sigma>" using lhs by simp
+        then show "link_fields_disjoint ms
+                   \<and> link_capture_ok ms
+                   \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                          \<and> m = link_result ms \<sigma>')"
+          using disj cap Inr by blast
+      next
+        assume "link_fields_disjoint ms
+                \<and> link_capture_ok ms
+                \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                       \<and> m = link_result ms \<sigma>')"
+        then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
+                         and "m = link_result ms \<sigma>'" by blast
+        then have "m = link_result ms \<sigma>" using Inr by simp
+        then show "link_modules ms = Inr m" using lhs by simp
+      qed
     qed
   qed
 qed
@@ -339,6 +502,7 @@ qed
 corollary link_modules_Inr_iff_closure:
   "link_modules ms = Inr m \<longleftrightarrow>
      link_fields_disjoint ms
+     \<and> link_capture_ok ms
      \<and> fmdisjoint_list (map CM_TypeSubst ms)
      \<and> acyclic_subst_deps (fmlist_union (map CM_TypeSubst ms))
      \<and> (\<exists>\<sigma>. is_subst_closure (fmlist_union (map CM_TypeSubst ms)) \<sigma>
@@ -385,17 +549,20 @@ proof -
     if ok: "link_modules xs = Inr m" and eq: "mset xs = mset ys" for xs ys
   proof -
     obtain \<sigma> where disj: "link_fields_disjoint xs"
+        and cap: "link_capture_ok xs"
         and mer: "merge_all_substs (map CM_TypeSubst xs) = Inr \<sigma>"
         and meq: "m = link_result xs \<sigma>"
       using ok link_modules_Inr_iff[of xs m] by blast
     have disj': "link_fields_disjoint ys"
       using link_fields_disjoint_mset_cong[OF eq] disj by simp
+    have cap': "link_capture_ok ys"
+      using link_capture_ok_mset_cong[OF eq] cap by simp
     have mer': "merge_all_substs (map CM_TypeSubst ys) = Inr \<sigma>"
       using merge_all_substs_perm[OF mset_map_perm_cong[OF eq]] mer by blast
     have meq': "m = link_result ys \<sigma>"
       using meq link_result_mset_cong[OF eq disj] by simp
     show ?thesis
-      using disj' mer' meq' link_modules_Inr_iff[of ys m] by blast
+      using disj' cap' mer' meq' link_modules_Inr_iff[of ys m] by blast
   qed
   show ?thesis using one[OF _ perm] one[OF _ perm[symmetric]] by blast
 qed
@@ -417,12 +584,15 @@ corollary link_modules_perm_fails:
    invariants:
    - CM_TypeSubst is idempotent (a CoreModule requirement), so merging the
      one-element substitution list returns it as-is;
+   - the module is capture-avoiding (a CoreModule requirement), so the
+     capture check passes;
    - the substitution's domain avoids the module's own type variables (a
      resolved abstract type is recorded in the substitution and removed from
      TE_TypeVars), so the type-variable subtraction is the identity;
    - the "current scope" fields hold their inert module-level values. *)
 lemma link_modules_singleton:
   assumes idem: "idempotent_subst (CM_TypeSubst m)"
+      and cap:  "capture_avoiding m"
       and tv:   "fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
       and rtv:  "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
       and abst: "TE_AbstractTypes (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
@@ -482,8 +652,167 @@ proof -
   have disj: "link_fields_disjoint [m]"
     unfolding link_fields_disjoint_def by simp
 
+  \<comment> \<open>The capture check on a single module is exactly its own capture-avoidance.\<close>
+  have cap_ok: "link_capture_ok [m]"
+  proof -
+    have "fmdom (CM_TypeSubst m) |\<inter>| module_bound_tyvars m = {||}"
+    proof (rule fset_eqI)
+      fix n
+      show "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| module_bound_tyvars m \<longleftrightarrow> n |\<in>| {||}"
+      proof
+        assume "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| module_bound_tyvars m"
+        then have nd: "n |\<in>| fmdom (CM_TypeSubst m)"
+              and nb: "n |\<in>| module_bound_tyvars m" by auto
+        from module_bound_tyvars_E[OF nb] show "n |\<in>| {||}"
+        proof
+          assume "\<exists>name info. fmlookup (TE_Functions (CM_TyEnv m)) name = Some info
+                              \<and> n \<in> set (FI_TyArgs info)"
+          then obtain name info where
+            lk: "fmlookup (TE_Functions (CM_TyEnv m)) name = Some info" and
+            n_in: "n \<in> set (FI_TyArgs info)" by blast
+          have "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
+            using cap lk unfolding capture_avoiding_def by blast
+          then show "n |\<in>| {||}"
+            using nd n_in by (auto simp: fset_of_list_elem)
+        next
+          assume "\<exists>ctorName dtName tyVars payload.
+                    fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName
+                      = Some (dtName, tyVars, payload) \<and> n \<in> set tyVars"
+          then obtain ctorName dtName tyVars payload where
+            lk: "fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload)" and
+            n_in: "n \<in> set tyVars" by blast
+          have "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
+            using cap lk unfolding capture_avoiding_def by blast
+          then show "n |\<in>| {||}"
+            using nd n_in by (auto simp: fset_of_list_elem)
+        qed
+      qed simp
+    qed
+    then show ?thesis unfolding link_capture_ok_def by simp
+  qed
+
   show ?thesis
-    using disj merge mod_eq link_modules_Inr_iff by simp
+    using disj cap_ok merge mod_eq link_modules_Inr_iff by simp
+qed
+
+
+(* ========================================================================== *)
+(* A successful link is capture-avoiding                                      *)
+(* ========================================================================== *)
+
+(* The point of the capture check: a successful link's result satisfies
+   capture_avoiding - against the MERGED substitution's whole domain, which is
+   the union of the inputs' domains. Downstream (the whole-program
+   well-typedness theorem) this discharges normalize_module's
+   capture-avoidance precondition from link success alone. *)
+theorem link_modules_capture_avoiding:
+  assumes ok: "link_modules ms = Inr m"
+  shows "capture_avoiding m"
+proof -
+  obtain \<sigma> where
+    disj: "link_fields_disjoint ms" and
+    cap: "link_capture_ok ms" and
+    clos: "is_subst_closure (fmlist_union (map CM_TypeSubst ms)) \<sigma>" and
+    meq: "m = link_result ms \<sigma>"
+    using ok link_modules_Inr_iff_closure by blast
+  have subst_eq: "CM_TypeSubst m = \<sigma>"
+    using meq by (simp add: link_result_def)
+  \<comment> \<open>The closure's domain is the union of the inputs' substitution domains.\<close>
+  have dom_\<sigma>: "fmdom \<sigma> = funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
+  proof -
+    have "fmdom \<sigma> = fmdom (fmlist_union (map CM_TypeSubst ms))"
+      using clos unfolding is_subst_closure_def by simp
+    also have "... = funion_list (map fmdom (map CM_TypeSubst ms))"
+      by (rule fmdom_fmlist_union)
+    also have "... = funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
+      by (simp add: o_def)
+    finally show ?thesis .
+  qed
+  \<comment> \<open>From the check: no bound tyvar of any input is in the merged domain.\<close>
+  have nocap: "\<And>n x. x \<in> set ms \<Longrightarrow> n |\<in>| module_bound_tyvars x \<Longrightarrow> n |\<in>| fmdom \<sigma> \<Longrightarrow> False"
+  proof -
+    fix n x assume x_in: "x \<in> set ms" and nb: "n |\<in>| module_bound_tyvars x"
+      and nd: "n |\<in>| fmdom \<sigma>"
+    have "n |\<in>| funion_list (map module_bound_tyvars ms)"
+      using x_in nb funion_list_member by fastforce
+    moreover have "n |\<in>| funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
+      using nd dom_\<sigma> by simp
+    ultimately have "n |\<in>| funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)
+                          |\<inter>| funion_list (map module_bound_tyvars ms)"
+      by simp
+    then show False using cap unfolding link_capture_ok_def by auto
+  qed
+  have djF: "fmdisjoint_list (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms)"
+    and djC: "fmdisjoint_list (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+    using disj unfolding link_fields_disjoint_def by blast+
+  show ?thesis
+    unfolding capture_avoiding_def
+  proof (rule conjI)
+    show "\<forall>funName info.
+            fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info \<longrightarrow>
+            fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
+    proof (intro allI impI)
+      fix funName info
+      assume lk: "fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info"
+      have "TE_Functions (CM_TyEnv m)
+              = fmlist_union (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms)"
+        using meq by (simp add: link_result_def)
+      with lk have "\<exists>f \<in> set (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms).
+                      fmlookup f funName = Some info"
+        using fmlist_union_lookup[OF djF] by simp
+      then obtain x where x_in: "x \<in> set ms"
+          and x_lk: "fmlookup (TE_Functions (CM_TyEnv x)) funName = Some info"
+        by auto
+      show "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
+      proof (rule fset_eqI)
+        fix n
+        show "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info)
+                \<longleftrightarrow> n |\<in>| {||}"
+        proof
+          assume "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info)"
+          then have nd: "n |\<in>| fmdom \<sigma>" and n_in: "n \<in> set (FI_TyArgs info)"
+            using subst_eq by (auto simp: fset_of_list_elem)
+          have "n |\<in>| module_bound_tyvars x"
+            using module_bound_tyvars_fun[OF x_lk n_in] .
+          then show "n |\<in>| {||}"
+            using nocap[OF x_in _ nd] by blast
+        qed simp
+      qed
+    qed
+  next
+    show "\<forall>ctorName dtName tyVars payload.
+            fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload)
+            \<longrightarrow> fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
+    proof (intro allI impI)
+      fix ctorName dtName tyVars payload
+      assume lk: "fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName
+                    = Some (dtName, tyVars, payload)"
+      have "TE_DataCtors (CM_TyEnv m)
+              = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+        using meq by (simp add: link_result_def)
+      with lk have "\<exists>f \<in> set (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms).
+                      fmlookup f ctorName = Some (dtName, tyVars, payload)"
+        using fmlist_union_lookup[OF djC] by simp
+      then obtain x where x_in: "x \<in> set ms"
+          and x_lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) ctorName
+                       = Some (dtName, tyVars, payload)"
+        by auto
+      show "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
+      proof (rule fset_eqI)
+        fix n
+        show "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars \<longleftrightarrow> n |\<in>| {||}"
+        proof
+          assume "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars"
+          then have nd: "n |\<in>| fmdom \<sigma>" and n_in: "n \<in> set tyVars"
+            using subst_eq by (auto simp: fset_of_list_elem)
+          have "n |\<in>| module_bound_tyvars x"
+            using module_bound_tyvars_ctor[OF x_lk n_in] .
+          then show "n |\<in>| {||}"
+            using nocap[OF x_in _ nd] by blast
+        qed simp
+      qed
+    qed
+  qed
 qed
 
 end

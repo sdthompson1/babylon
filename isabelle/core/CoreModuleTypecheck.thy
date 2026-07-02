@@ -180,35 +180,6 @@ definition normalized_module_well_typed :: "CoreModule \<Rightarrow> bool" where
 
 
 (* ========================================================================== *)
-(* Capture-avoidance                                                          *)
-(*                                                                            *)
-(* apply_subst is a flat rewrite over CoreTy_Var with no notion of binders,   *)
-(* so for normalize_module to be sound on function/ctor scopes the            *)
-(* substitution's domain must avoid all bound type-parameter names: applying  *)
-(* {T := tau} to a polymorphic function that uses the bare name T as one of   *)
-(* its own type parameters would wrongly specialize that parameter. The       *)
-(* dotted/undotted naming discipline discharges this automatically (domain    *)
-(* entries are dotted abstract names; bound parameters are undotted), and it  *)
-(* is preserved by linking.                                                   *)
-(* ========================================================================== *)
-
-definition capture_avoiding :: "CoreModule \<Rightarrow> bool" where
-  "capture_avoiding m =
-    ((\<forall>funName info.
-        fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info \<longrightarrow>
-        fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||})
-     \<and> (\<forall>ctorName dtName tyVars payload.
-          fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
-          fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}))"
-
-(* A module with an empty substitution is trivially capture-avoiding. *)
-lemma capture_avoiding_empty_subst:
-  assumes "CM_TypeSubst m = fmempty"
-  shows "capture_avoiding m"
-  unfolding capture_avoiding_def using assms by simp
-
-
-(* ========================================================================== *)
 (* core_module_well_typed                                                     *)
 (* ========================================================================== *)
 
