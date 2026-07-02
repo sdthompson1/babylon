@@ -99,4 +99,29 @@ lemma normalize_module_idempotent:
   shows "normalize_module (normalize_module m) = normalize_module m"
   by (simp add: normalize_module_id_when_empty normalized_module_has_empty_subst)
 
+
+(* ========================================================================== *)
+(* core_module_closed                                                         *)
+(*                                                                            *)
+(* A module is closed (fully linked) when everything declared is also         *)
+(* defined, and there are no unresolved abstract types. Extern functions      *)
+(* appear in CM_Functions with CF_Body = None, so they satisfy the function   *)
+(* clause. Note CM_TypeSubst may be non-empty in a closed module - it records *)
+(* the resolutions of abstract types that have been removed from TE_TypeVars; *)
+(* normalize_module clears it.                                                *)
+(* ========================================================================== *)
+
+definition core_module_closed :: "CoreModule \<Rightarrow> bool" where
+  "core_module_closed m =
+    (fmdom (TE_GlobalVars (CM_TyEnv m)) = fmdom (CM_GlobalVars m)
+     \<and> fmdom (TE_Functions (CM_TyEnv m)) = fmdom (CM_Functions m)
+     \<and> TE_TypeVars (CM_TyEnv m) = {||})"
+
+(* Closedness only looks at map domains and TE_TypeVars, none of which are
+   changed by substitution, so it is invariant under normalize_module. *)
+lemma core_module_closed_normalize_module [simp]:
+  "core_module_closed (normalize_module m) = core_module_closed m"
+  unfolding core_module_closed_def normalize_module_def apply_subst_to_tyenv_def
+  by simp
+
 end
