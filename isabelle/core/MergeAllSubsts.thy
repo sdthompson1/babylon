@@ -927,4 +927,27 @@ corollary merge_all_substs_perm_fails:
   shows "(\<exists>\<sigma>. merge_all_substs ss = Inr \<sigma>) \<longleftrightarrow> (\<exists>\<sigma>. merge_all_substs ss' = Inr \<sigma>)"
   using merge_all_substs_perm[OF assms] by blast
 
+
+(* ========================================================================== *)
+(* Singleton input                                                            *)
+(* ========================================================================== *)
+
+(* Merging a single idempotent substitution returns it unchanged: an idempotent
+   substitution is its own closure, and its dependency relation is empty, hence
+   acyclic. A module's CM_TypeSubst is required to be idempotent, so this is
+   the "link one module" case of link_modules (LinkModules.thy). *)
+lemma merge_all_substs_singleton:
+  assumes "idempotent_subst s"
+  shows "merge_all_substs [s] = Inr s"
+proof -
+  have u: "fmlist_union [s] = s" by simp
+  have "fmdisjoint_list [s]" by simp
+  moreover have "acyclic_subst_deps (fmlist_union [s])"
+    using idempotent_subst_acyclic[OF assms] u by simp
+  moreover have "is_subst_closure (fmlist_union [s]) s"
+    using is_subst_closure_self[OF assms] u by simp
+  ultimately show ?thesis
+    by (simp add: merge_all_substs_Inr_iff)
+qed
+
 end

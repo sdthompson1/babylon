@@ -110,6 +110,15 @@ next
   qed
 qed
 
+(* The empty list and a singleton list are trivially pairwise disjoint. *)
+lemma fmdisjoint_list_Nil [simp]:
+  "fmdisjoint_list []"
+  unfolding fmdisjoint_list_def by simp
+
+lemma fmdisjoint_list_singleton [simp]:
+  "fmdisjoint_list [s]"
+  unfolding fmdisjoint_list_def by auto
+
 (* Pairwise disjointness, recast as counting: the domains are pairwise disjoint
    exactly when each key k lies in the domain of at most one list element
    (counting multiplicity - a repeated non-empty element hits twice). *)
@@ -290,6 +299,14 @@ definition fmlist_union :: "('k, 'v) fmap list \<Rightarrow> ('k, 'v) fmap" wher
 (* fmlist_union of a cons is the head added onto the union of the tail. *)
 lemma fmlist_union_Cons:
   "fmlist_union (s # ss) = s ++\<^sub>f fmlist_union ss"
+  unfolding fmlist_union_def by simp
+
+lemma fmlist_union_Nil [simp]:
+  "fmlist_union [] = fmempty"
+  unfolding fmlist_union_def by simp
+
+lemma fmlist_union_singleton [simp]:
+  "fmlist_union [s] = s"
   unfolding fmlist_union_def by simp
 
 (* Under pairwise disjointness each key is defined by at most one element, so a
