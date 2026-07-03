@@ -185,6 +185,5 @@ datatype CoreStatement =
      of C's `{ ... }`). *)
   | CoreStmt_Block "CoreStatement list"
 
-(* TODO: Decls, etc. *)
 
 end

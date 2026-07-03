@@ -127,6 +127,54 @@ proof -
   thus ?thesis using assms by auto
 qed
 
+(* Decomposition (converse refinement of apply_subst_tyvars_result): every type
+   variable of apply_subst subst ty either survives from ty untouched (in ty, outside
+   dom subst), or arises by substituting some domain variable a that occurs in ty. *)
+lemma type_tyvars_apply_subst_decompose:
+  assumes "c \<in> type_tyvars (apply_subst subst ty)"
+  shows "(c \<in> type_tyvars ty \<and> c |\<notin>| fmdom subst)
+       \<or> (\<exists>a \<in> type_tyvars ty. a |\<in>| fmdom subst
+              \<and> c \<in> type_tyvars (apply_subst subst (CoreTy_Var a)))"
+  using assms
+proof (induction ty)
+  case (CoreTy_Var n)
+  show ?case
+  proof (cases "n |\<in>| fmdom subst")
+    case True
+    \<comment> \<open>n itself is the domain variable; c comes from substituting it. \<close>
+    with CoreTy_Var show ?thesis by auto
+  next
+    case False
+    then have "apply_subst subst (CoreTy_Var n) = CoreTy_Var n"
+      by (simp add: fmdom_notD)
+    with CoreTy_Var False show ?thesis by simp
+  qed
+next
+  case (CoreTy_Datatype name tyargs)
+  then obtain arg where arg: "arg \<in> set tyargs"
+    and c_arg: "c \<in> type_tyvars (apply_subst subst arg)" by auto
+  from CoreTy_Datatype.IH[OF arg c_arg] arg show ?case by force
+next
+  case (CoreTy_Record flds)
+  then obtain nm t where mem: "(nm, t) \<in> set flds"
+    and c_t: "c \<in> type_tyvars (apply_subst subst t)" by auto
+  have snds: "t \<in> Basic_BNFs.snds (nm, t)" by simp
+  have sub: "type_tyvars t \<subseteq> type_tyvars (CoreTy_Record flds)"
+    using mem by auto
+  from CoreTy_Record.IH[OF mem snds c_t] show ?case
+  proof (elim disjE conjE bexE)
+    assume "c \<in> type_tyvars t" and "c |\<notin>| fmdom subst"
+    then show ?case using sub by auto
+  next
+    fix a assume "a \<in> type_tyvars t" and "a |\<in>| fmdom subst"
+      and "c \<in> type_tyvars (apply_subst subst (CoreTy_Var a))"
+    then show ?case using sub by auto
+  qed
+next
+  case (CoreTy_Array elemTy dims)
+  then show ?case by auto
+qed auto
+
 (* Substitution is identity when domain is disjoint from the type's type variables *)
 lemma apply_subst_disjoint_id:
   "type_tyvars ty \<inter> fset (fmdom subst) = {} \<Longrightarrow> apply_subst subst ty = ty"
@@ -439,6 +487,65 @@ lemma map_apply_subst_compose_zip:
 
 
 (* ========================================================================== *)
+(* The names a substitution touches (executable form)                         *)
+(* ========================================================================== *)
+
+(* Membership in the union of an fset of fsets. *)
+lemma fmember_ffUnion_iff:
+  "x |\<in>| ffUnion A \<longleftrightarrow> (\<exists>X. X |\<in>| A \<and> x |\<in>| X)"
+  by (induction A) auto
+
+(* Executable fset counterpart of subst_range_tyvars. *)
+definition subst_range_tyvars_fset :: "TypeSubst \<Rightarrow> string fset" where
+  "subst_range_tyvars_fset s =
+     ffUnion ((\<lambda>ty. fset_of_list (type_tyvars_list ty)) |`| fmran s)"
+
+lemma subst_range_tyvars_fset_member:
+  "n |\<in>| subst_range_tyvars_fset s \<longleftrightarrow> n \<in> subst_range_tyvars s"
+proof
+  assume "n |\<in>| subst_range_tyvars_fset s"
+  then obtain X where "X |\<in>| (\<lambda>ty. fset_of_list (type_tyvars_list ty)) |`| fmran s"
+                  and "n |\<in>| X"
+    unfolding subst_range_tyvars_fset_def using fmember_ffUnion_iff by metis
+  then obtain ty where "ty |\<in>| fmran s" and "n |\<in>| fset_of_list (type_tyvars_list ty)"
+    by auto
+  then have "ty \<in> fmran' s" and "n \<in> type_tyvars ty"
+    by (simp_all add: fmran'_alt_def fset_of_list_elem set_type_tyvars_list)
+  then show "n \<in> subst_range_tyvars s"
+    unfolding subst_range_tyvars_def by auto
+next
+  assume "n \<in> subst_range_tyvars s"
+  then obtain ty where ty_in: "ty \<in> fmran' s" and n_in: "n \<in> type_tyvars ty"
+    unfolding subst_range_tyvars_def by auto
+  have "ty |\<in>| fmran s" using ty_in by (simp add: fmran'_alt_def)
+  then have "fset_of_list (type_tyvars_list ty)
+               |\<in>| (\<lambda>ty. fset_of_list (type_tyvars_list ty)) |`| fmran s"
+    by (rule fimageI)
+  moreover have "n |\<in>| fset_of_list (type_tyvars_list ty)"
+    using n_in by (simp add: fset_of_list_elem set_type_tyvars_list)
+  ultimately show "n |\<in>| subst_range_tyvars_fset s"
+    unfolding subst_range_tyvars_fset_def using fmember_ffUnion_iff by metis
+qed
+
+(* The names a substitution can rewrite (its domain) or introduce (the type
+   variables of its range). A capture-avoidance check must keep bound type
+   parameters away from BOTH: substituting a binder's name rewrites the
+   binder's bound occurrences, and substituting a type that MENTIONS a
+   binder's name places a free variable under that binder, where it is
+   wrongly captured. *)
+definition subst_names :: "TypeSubst \<Rightarrow> string fset" where
+  "subst_names s = fmdom s |\<union>| subst_range_tyvars_fset s"
+
+lemma subst_names_member:
+  "n |\<in>| subst_names s \<longleftrightarrow> n |\<in>| fmdom s \<or> n \<in> subst_range_tyvars s"
+  unfolding subst_names_def by (auto simp: subst_range_tyvars_fset_member)
+
+lemma subst_names_empty [simp]:
+  "subst_names fmempty = {||}"
+  unfolding subst_names_def subst_range_tyvars_fset_def by simp
+
+
+(* ========================================================================== *)
 (* Composition of substitutions *)
 (* ========================================================================== *)
 
@@ -650,6 +757,125 @@ next
   also have "... = insert y (set ys)"
     using Cons.IH distinct_xs by simp
   finally show ?case by simp
+qed
+
+
+(* ========================================================================== *)
+(* Another variant of apply_subst_compose_zip *)
+(* ========================================================================== *)
+
+(* A second capture-avoiding composition form, for types that are themselves
+   rewritten by the outer substitution: instantiating the binders `vars` with
+   the substituted type arguments, on the s-substituted type, agrees with
+   instantiating first and substituting after. Unlike
+   apply_subst_compose_zip_extra there is no condition on ty's type variables
+   at all; instead the binders must avoid s entirely - both its domain (else
+   s would rewrite a binder occurrence in ty) and its range's type variables
+   (else the instantiation would capture a variable that s introduced).
+   Used by the module-level substitution engine (TypeSubstModuleEnv.thy),
+   where function signatures and constructor payloads are themselves
+   substituted, unlike the callee-env engine (TypeSubstHelpers.thy) which
+   keeps them fixed. *)
+lemma apply_subst_compose_zip_subst:
+  assumes len_eq: "length vars = length tys"
+      and vars_dom: "\<And>n. n \<in> set vars \<Longrightarrow> n |\<notin>| fmdom s"
+      and vars_rng: "\<And>n. n \<in> set vars \<Longrightarrow> n \<notin> subst_range_tyvars s"
+      and distinct_vars: "distinct vars"
+  shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) (apply_subst s ty)
+       = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
+proof (induction ty)
+  case (CoreTy_Var n)
+  show ?case
+  proof (cases "n \<in> set vars")
+    case True
+    then obtain i where i_bound: "i < length vars" and vars_i: "vars ! i = n"
+      by (metis in_set_conv_nth)
+    with len_eq have i_bound_tys: "i < length tys" by simp
+    have lookup_eq: "fmlookup (fmap_of_list (zip vars tys)) n = Some (tys ! i)"
+      using i_bound i_bound_tys vars_i distinct_vars
+      by (metis fmap_of_list.rep_eq len_eq map_of_zip_nth)
+    hence lookup_eq2:
+      "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n
+         = Some (apply_subst s (tys ! i))"
+      by (simp add: len_eq fmlookup_zip_map)
+    from True vars_dom have "fmlookup s n = None" by (simp add: fmdom_notD)
+    thus ?thesis using lookup_eq lookup_eq2 by simp
+  next
+    case False
+    from False have not_in_zip: "fmlookup (fmap_of_list (zip vars tys)) n = None"
+      by (simp add: fmlookup_of_list len_eq)
+    from False have not_in_zip2:
+      "fmlookup (fmap_of_list (zip vars (map (apply_subst s) tys))) n = None"
+      by (simp add: fmlookup_of_list len_eq)
+    show ?thesis
+    proof (cases "fmlookup s n")
+      case None
+      thus ?thesis using not_in_zip not_in_zip2 by simp
+    next
+      case (Some sn)
+      \<comment> \<open>s rewrites n to the range type sn; sn's type variables avoid vars,
+          so the zip substitution leaves sn untouched.\<close>
+      have "sn \<in> fmran' s" using Some by (rule fmran'I)
+      hence "type_tyvars sn \<subseteq> subst_range_tyvars s"
+        unfolding subst_range_tyvars_def by auto
+      hence "type_tyvars sn \<inter> set vars = {}"
+        using vars_rng by auto
+      hence "type_tyvars sn
+               \<inter> fset (fmdom (fmap_of_list (zip vars (map (apply_subst s) tys)))) = {}"
+        using fmdom_fmap_of_list_zip[of vars "map (apply_subst s) tys"] len_eq by simp
+      hence "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) sn = sn"
+        by (rule apply_subst_disjoint_id)
+      thus ?thesis using Some not_in_zip by simp
+    qed
+  qed
+next
+  case (CoreTy_Datatype name tyargs)
+  have "\<And>arg. arg \<in> set tyargs \<Longrightarrow>
+          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) (apply_subst s arg)
+        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) arg)"
+    using CoreTy_Datatype.IH by blast
+  thus ?case by simp
+next
+  case (CoreTy_Record flds)
+  have "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow>
+          apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) (apply_subst s t)
+        = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t)"
+    using CoreTy_Record.IH by force
+  hence "map (\<lambda>(nm, t). (nm, apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys)))
+                                (apply_subst s t))) flds
+       = map (\<lambda>(nm, t). (nm, apply_subst s (apply_subst (fmap_of_list (zip vars tys)) t))) flds"
+    by (induction flds) auto
+  thus ?case by (simp add: case_prod_unfold comp_def)
+next
+  case (CoreTy_Array elemTy dims)
+  thus ?case by simp
+qed simp_all
+
+(* The workhorse form of the above, with the binder-avoidance condition
+   phrased as subst_names-disjointness - exactly the shape supplied by
+   capture_avoiding (CoreModule.thy) / link_modules_capture_avoiding
+   (LinkModules.thy). *)
+lemma subst_names_avoid_compose:
+  assumes len_eq: "length vars = length tys"
+      and avoid: "subst_names s |\<inter>| fset_of_list vars = {||}"
+      and distinct_vars: "distinct vars"
+  shows "apply_subst (fmap_of_list (zip vars (map (apply_subst s) tys))) (apply_subst s ty)
+       = apply_subst s (apply_subst (fmap_of_list (zip vars tys)) ty)"
+proof -
+  have n_avoid: "\<And>n. n \<in> set vars \<Longrightarrow> n |\<notin>| subst_names s"
+  proof -
+    fix n assume "n \<in> set vars"
+    hence "n |\<in>| fset_of_list vars" by (simp add: fset_of_list_elem)
+    thus "n |\<notin>| subst_names s" using avoid by auto
+  qed
+  show ?thesis
+  proof (rule apply_subst_compose_zip_subst[OF len_eq _ _ distinct_vars])
+    fix n assume "n \<in> set vars"
+    thus "n |\<notin>| fmdom s" using n_avoid subst_names_member by metis
+  next
+    fix n assume "n \<in> set vars"
+    thus "n \<notin> subst_range_tyvars s" using n_avoid subst_names_member by metis
+  qed
 qed
 
 

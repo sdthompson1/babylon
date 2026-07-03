@@ -48,6 +48,38 @@ definition apply_subst_to_tyenv :: "TypeSubst \<Rightarrow> CoreTyEnv \<Rightarr
 
 
 (* ========================================================================== *)
+(* Field projections                                                          *)
+(* ========================================================================== *)
+
+lemma apply_subst_to_funinfo_FI_TyArgs [simp]:
+  "FI_TyArgs (apply_subst_to_funinfo subst info) = FI_TyArgs info"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_funinfo_FI_TmArgs [simp]:
+  "FI_TmArgs (apply_subst_to_funinfo subst info)
+     = map (\<lambda>(ty, vr). (apply_subst subst ty, vr)) (FI_TmArgs info)"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_funinfo_FI_ReturnType [simp]:
+  "FI_ReturnType (apply_subst_to_funinfo subst info)
+     = apply_subst subst (FI_ReturnType info)"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_funinfo_FI_Ghost [simp]:
+  "FI_Ghost (apply_subst_to_funinfo subst info) = FI_Ghost info"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_funinfo_FI_Impure [simp]:
+  "FI_Impure (apply_subst_to_funinfo subst info) = FI_Impure info"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_datactor_simps [simp]:
+  "apply_subst_to_datactor subst (dtName, tyvars, payloadTy)
+     = (dtName, tyvars, apply_subst subst payloadTy)"
+  by (simp add: apply_subst_to_datactor_def)
+
+
+(* ========================================================================== *)
 (* Empty substitution is the identity                                         *)
 (* ========================================================================== *)
 

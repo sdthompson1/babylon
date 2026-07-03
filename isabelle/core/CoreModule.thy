@@ -2,46 +2,47 @@ theory CoreModule
   imports TypeSubstStmt TypeSubstEnv
 begin
 
+(* A CoreModule is a self-contained, separately-typecheckable fragment of a
+   program. It consists of a type environment (declarations), constant and
+   function definitions, and concrete definitions for previously-declared
+   abstract types. *)
+
+
 (* ========================================================================== *)
 (* Modules                                                                    *)
-(*                                                                            *)
-(* A CoreModule is a self-contained, separately-typecheckable fragment of a   *)
-(* program. It consists of a type environment (declarations), constant and    *)
-(* function definitions, and concrete definitions for previously-declared     *)
-(* abstract types.                                                            *)
 (* ========================================================================== *)
 
+(* CoreFunction: holds the *definition* of a function (term-parameter names
+   and body). Everything else (type parameters, argument types and VarOrRef
+   tags, return type, ghost/impure flags) is considered part of the *declaration*
+   and lives in the FunInfo in the type environment. *)
 
-(* A CoreFunction holds the parts of a function *definition* that are not      *)
-(* already present in its FunInfo (CoreTyEnv.thy): the term-parameter names    *)
-(* and the body. Everything type-level (type parameters, argument types and    *)
-(* VarOrRef tags, return type, ghost/impure flags) is read from the            *)
-(* counterpart FunInfo.                                                        *)
-(*                                                                             *)
-(* CF_Body = None marks an *extern* function: declared (it has a FunInfo) but  *)
-(* with no Core body; its implementation is supplied at InterpState-creation   *)
-(* time as an ExternFunc.                                                      *)
+(* CF_Body = None marks an *extern* function: declared (it has a FunInfo) but with
+   no Core body; its implementation is supplied at InterpState-creation time as an
+   ExternFunc. *)
+
 record CoreFunction =
   CF_Args :: "string list"                   (* term parameter names *)
   CF_Body :: "CoreStatement list option"     (* None for extern functions *)
 
 
-(* A CoreModule contains:                                                        *)
-(*  - CM_TyEnv: The types of everything this module either declares or defines.  *)
-(*      Note that TE_TypeVars represents the set of abstract types that are      *)
-(*      declared, but not defined by this module.                                *)
-(*      TE_GlobalVars and TE_Functions represent global vars and functions       *)
-(*      declared by this module; these may (or may not) also be defined in       *)
-(*      CM_GlobalVars and CM_Functions.                                          *)
-(*  - CM_TypeSubst: Provides definitions for abstract types which were declared  *)
-(*      in some previous module. Required to be idempotent. Types defined here   *)
-(*      are *not* listed in TE_TypeVars.                                         *)
-(*  - CM_GlobalVars: Global constants defined by this module, along with their   *)
-(*      initializer terms.                                                       *)
-(*  - CM_Functions: Functions defined by this module.                            *)
-(*                                                                               *)
-(* A module may *declare* more than it *defines* (that is exactly what an        *)
-(* interface is); the reverse never holds in a well-typed module.                *)
+(* CoreModule itself contains:
+    - CM_TyEnv: The types of everything this module either declares or defines.
+        Note that TE_TypeVars represents the set of abstract types that are
+        declared, but not defined by this module.
+        TE_GlobalVars and TE_Functions represent global vars and functions
+        declared by this module; these may (or may not) also be defined in
+        CM_GlobalVars and CM_Functions.
+    - CM_TypeSubst: Provides definitions for abstract types which were declared
+        in some previous module. Required to be idempotent. Types defined here
+        are *not* listed in TE_TypeVars.
+    - CM_GlobalVars: Global constants defined by this module, along with their
+        initializer terms.
+    - CM_Functions: Functions defined by this module.
+
+   A module may *declare* more than it *defines* (that is exactly what an
+   interface is); the reverse never holds in a well-typed module. *)
+
 record CoreModule =
   CM_TyEnv      :: CoreTyEnv
   CM_TypeSubst  :: TypeSubst
@@ -51,11 +52,11 @@ record CoreModule =
 
 (* ========================================================================== *)
 (* normalize_module                                                           *)
-(*                                                                            *)
-(* Resolve all abstract types into their concrete definitions: apply          *)
-(* CM_TypeSubst to every type and term in the module, then clear the          *)
-(* substitution.                                                              *)
 (* ========================================================================== *)
+
+(* This resolves all abstract types into their concrete definitions. Specifically,
+   it applies CM_TypeSubst to every type and term in the module, then clears the
+   substitution. *)
 
 definition normalize_module :: "CoreModule \<Rightarrow> CoreModule" where
   "normalize_module m =
@@ -69,11 +70,6 @@ definition normalize_module :: "CoreModule \<Rightarrow> CoreModule" where
                          (CM_Functions m),
       CM_TypeSubst  := fmempty
     \<rparr>"
-
-
-(* ========================================================================== *)
-(* Properties of normalize_module                                             *)
-(* ========================================================================== *)
 
 (* Applying the empty substitution to the CF_Body of a CoreFunction leaves that
    CoreFunction unchanged. *)
@@ -102,14 +98,14 @@ lemma normalize_module_idempotent:
 
 (* ========================================================================== *)
 (* core_module_closed                                                         *)
-(*                                                                            *)
-(* A module is closed (fully linked) when everything declared is also         *)
-(* defined, and there are no unresolved abstract types. Extern functions      *)
-(* appear in CM_Functions with CF_Body = None, so they satisfy the function   *)
-(* clause. Note CM_TypeSubst may be non-empty in a closed module - it records *)
-(* the resolutions of abstract types that have been removed from TE_TypeVars; *)
-(* normalize_module clears it.                                                *)
 (* ========================================================================== *)
+
+(* A module is closed (fully linked) when everything declared is also
+   defined, and there are no unresolved abstract types. Extern functions
+   appear in CM_Functions with CF_Body = None, so they satisfy the function
+   clause. Note CM_TypeSubst may be non-empty in a closed module - it records
+   the resolutions of abstract types that have been removed from TE_TypeVars;
+   normalize_module clears it. *)
 
 definition core_module_closed :: "CoreModule \<Rightarrow> bool" where
   "core_module_closed m =
@@ -127,31 +123,45 @@ lemma core_module_closed_normalize_module [simp]:
 
 (* ========================================================================== *)
 (* Capture-avoidance                                                          *)
-(*                                                                            *)
-(* apply_subst is a flat rewrite over CoreTy_Var with no notion of binders,   *)
-(* so for normalize_module to be sound on function/ctor scopes the            *)
-(* substitution's domain must avoid all bound type-parameter names: applying  *)
-(* {T := tau} to a polymorphic function that uses the bare name T as one of   *)
-(* its own type parameters would wrongly specialize that parameter. The       *)
-(* dotted/undotted naming discipline discharges this automatically (domain    *)
-(* entries are dotted abstract names; bound parameters are undotted), and it  *)
-(* is preserved by linking - which additionally CHECKS it (see                *)
-(* link_modules / LinkCapture, core/LinkModules.thy).                         *)
 (* ========================================================================== *)
+
+(* The type variable names mentioned in the CM_TypeSubst (in both domain and
+   range) must be distinct from the names used for type parameters of generic
+   functions or datatypes.
+
+   This property is automatically true for Babylon programs (after renaming)
+   because entries in CM_TypeSubst are global names and hence contain a dot;
+   type parameters are local names and hence undotted. At the CoreModule we
+   do not capture this dotted/undotted discipline, but we do maintain the
+   invariant that the two sets of names are distinct; this is the purpose
+   of the `capture_avoiding` predicate. *)
 
 definition capture_avoiding :: "CoreModule \<Rightarrow> bool" where
   "capture_avoiding m =
     ((\<forall>funName info.
         fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info \<longrightarrow>
-        fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||})
+        subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||})
      \<and> (\<forall>ctorName dtName tyVars payload.
           fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
-          fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}))"
+          subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}))"
 
 (* A module with an empty substitution is trivially capture-avoiding. *)
 lemma capture_avoiding_empty_subst:
   assumes "CM_TypeSubst m = fmempty"
   shows "capture_avoiding m"
   unfolding capture_avoiding_def using assms by simp
+
+
+(* ========================================================================== *)
+(* Ghost-marker sanity                                                        *)
+(* ========================================================================== *)
+
+(* A module may only mark ghost what it itself declares: TE_GhostGlobals
+   names its own global declarations, TE_GhostDatatypes its own datatypes. *)
+
+definition module_ghost_subsets_ok :: "CoreModule \<Rightarrow> bool" where
+  "module_ghost_subsets_ok m =
+    (TE_GhostGlobals (CM_TyEnv m) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv m))
+     \<and> TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m)))"
 
 end

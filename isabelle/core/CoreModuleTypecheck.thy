@@ -187,6 +187,7 @@ definition core_module_well_typed :: "CoreModule \<Rightarrow> bool" where
   "core_module_well_typed m =
     (idempotent_subst (CM_TypeSubst m)
      \<and> capture_avoiding m
+     \<and> typesubst_well_kinded (CM_TyEnv m) (CM_TypeSubst m)
      \<and> normalized_module_well_typed (normalize_module m))"
 
 
@@ -206,6 +207,8 @@ proof -
     using assms by simp
   moreover have "capture_avoiding m"
     using assms capture_avoiding_empty_subst by simp
+  moreover have "typesubst_well_kinded (CM_TyEnv m) (CM_TypeSubst m)"
+    using assms unfolding typesubst_well_kinded_def by simp
   ultimately show ?thesis
     unfolding core_module_well_typed_def by simp
 qed

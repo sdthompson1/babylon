@@ -43,12 +43,16 @@ begin
      return type CoreTy_Record [], non-ghost). Well-typed modules carry
      exactly these values, so nothing is lost on such inputs.
 
-   Additionally, linking CHECKS capture-avoidance (LinkCapture on failure):
-   no name in any input's CM_TypeSubst domain may coincide with a bound type
-   parameter (an FI_TyArgs entry or a data constructor's type-variable list)
-   of any input. The renamer's dotted/undotted naming discipline 
-   (substitution domains are dotted abstract names, bound parameters
-   are undotted) means the check never fires in practice.
+   Additionally, linking checks capture-avoidance (LinkCapture on failure):
+   no name TOUCHED by any input's CM_TypeSubst - a domain entry, or a type
+   variable occurring in a resolution (subst_names, TypeSubst.thy) - may
+   coincide with a bound type parameter (an FI_TyArgs entry or a data
+   constructor's type-variable list) of any input.
+
+   Linking also checks the runtime-resolution condition (LinkGhostResolution on
+   failure): once the merged substitution \<sigma> is known, every resolved name that
+   some input declared as a runtime abstract type (n |\<in>| TE_RuntimeTypeVars)
+   must be resolved to a runtime type.
 
    link_modules is **executable**. Its behaviour on success is specified by:
 
@@ -57,6 +61,7 @@ begin
          link_fields_disjoint ms
          \<and> link_capture_ok ms
          \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>
+               \<and> link_runtime_ok ms \<sigma>
                \<and> m = link_result ms \<sigma>)
 
    (and link_modules_Inr_iff_closure, the same statement with merge_all_substs
@@ -205,11 +210,6 @@ definition link_conflict_names :: "CoreModule list \<Rightarrow> string list" wh
 (* The capture-avoidance check                                                *)
 (* ========================================================================== *)
 
-(* Membership in the union of an fset of fsets. *)
-lemma fmember_ffUnion_iff:
-  "x |\<in>| ffUnion A \<longleftrightarrow> (\<exists>X. X |\<in>| A \<and> x |\<in>| X)"
-  by (induction A) auto
-
 (* The union's domain is the union of the domains (no disjointness needed). *)
 lemma fmdom_fmlist_union:
   "fmdom (fmlist_union ss) = funion_list (map fmdom ss)"
@@ -313,19 +313,20 @@ proof -
   qed
 qed
 
-(* The check: no name resolved by any input's substitution is a bound type
-   parameter of any input. Phrased over the unions, so it depends only on the
-   set of inputs. *)
+(* The check: no name TOUCHED by any input's substitution (resolved by it, or
+   occurring in one of its resolutions - subst_names, TypeSubst.thy) is a
+   bound type parameter of any input. Phrased over the unions, so it depends
+   only on the set of inputs. *)
 definition link_capture_ok :: "CoreModule list \<Rightarrow> bool" where
   "link_capture_ok ms =
-     (funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)
+     (funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
       |\<inter>| funion_list (map module_bound_tyvars ms) = {||})"
 
 (* The colliding names, for the LinkCapture payload. Purely diagnostic. *)
 definition link_capture_names :: "CoreModule list \<Rightarrow> string list" where
   "link_capture_names ms =
      sorted_list_of_fset
-       (funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)
+       (funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
         |\<inter>| funion_list (map module_bound_tyvars ms))"
 
 (* The check depends only on the multiset of inputs. *)
@@ -412,6 +413,47 @@ qed
 
 
 (* ========================================================================== *)
+(* The runtime-resolution check                                               *)
+(* ========================================================================== *)
+
+(* After merge_all_substs succeeds with \<sigma>, every resolved name that SOME input
+   lists in its TE_RuntimeTypeVars (i.e. declared as a runtime abstract type)
+   must be resolved to an is_runtime_type in the linked result's env. A runtime
+   abstract type resolved by a ghost type falsifies the whole-program linking
+   (Target) theorem, and the mismatch is invisible to any per-module predicate:
+   the declarer records the runtime-ness, the resolver has forgotten the name;
+   they first meet at link time. Resolving a ghost abstract type by a ghost
+   type remains legal (the check is keyed on the declarer's TE_RuntimeTypeVars).
+   Depends on both ms and \<sigma>, so it is gated inside the Inr \<sigma> branch of
+   link_modules (unlike link_capture_ok, which depends on ms alone). *)
+definition link_runtime_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> bool" where
+  "link_runtime_ok ms \<sigma> =
+     (\<forall>n. n |\<in>| fmdom \<sigma>
+             |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)
+          \<longrightarrow> is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))"
+
+(* The offending names, for the LinkGhostResolution payload. Purely
+   diagnostic. *)
+definition link_ghost_resolution_names :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> string list" where
+  "link_ghost_resolution_names ms \<sigma> =
+     sorted_list_of_fset
+       (ffilter (\<lambda>n. \<not> is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))
+          (fmdom \<sigma>
+           |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)))"
+
+(* The check depends only on the multiset of inputs (with a fixed \<sigma>): the
+   TE_RuntimeTypeVars union and the linked env are both permutation-invariant
+   (link_result_mset_cong needs the field-disjointness that a successful link
+   supplies). *)
+lemma link_runtime_ok_mset_cong:
+  assumes m: "mset ms = mset ms'"
+      and disj: "link_fields_disjoint ms"
+  shows "link_runtime_ok ms \<sigma> = link_runtime_ok ms' \<sigma>"
+  unfolding link_runtime_ok_def
+  by (simp add: funion_list_map_cong[OF m] link_result_mset_cong[OF m disj])
+
+
+(* ========================================================================== *)
 (* Definition of link_modules                                                 *)
 (* ========================================================================== *)
 
@@ -420,8 +462,10 @@ qed
    First check that no name is declared/defined by two of the inputs
    (LinkConflict otherwise, with the offending names as payload); then check
    capture-avoidance (LinkCapture otherwise); then merge the abstract-type
-   substitutions (a LinkConflict or LinkCycle from merge_all_substs
-   propagates); on success, assemble the field-wise union. *)
+   substitutions (a LinkConflict or LinkCycle from merge_all_substs propagates);
+   then, with the merged \<sigma> in hand, check that no runtime (non-ghost) abstract
+   type resolves to a ghost type (LinkGhostResolution otherwise); on success,
+   assemble the field-wise union. *)
 definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule) sum" where
   "link_modules ms =
      (if \<not> link_fields_disjoint ms
@@ -430,7 +474,10 @@ definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule
       then Inl (LinkCapture (link_capture_names ms))
       else case merge_all_substs (map CM_TypeSubst ms) of
              Inl e \<Rightarrow> Inl e
-           | Inr \<sigma> \<Rightarrow> Inr (link_result ms \<sigma>))"
+           | Inr \<sigma> \<Rightarrow>
+               if link_runtime_ok ms \<sigma>
+               then Inr (link_result ms \<sigma>)
+               else Inl (LinkGhostResolution (link_ghost_resolution_names ms \<sigma>)))"
 
 
 (* ========================================================================== *)
@@ -445,7 +492,9 @@ theorem link_modules_Inr_iff:
   "link_modules ms = Inr m \<longleftrightarrow>
      link_fields_disjoint ms
      \<and> link_capture_ok ms
-     \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma> \<and> m = link_result ms \<sigma>)"
+     \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>
+           \<and> link_runtime_ok ms \<sigma>
+           \<and> m = link_result ms \<sigma>)"
 proof (cases "link_fields_disjoint ms")
   case False
   then have "link_modules ms = Inl (LinkConflict (link_conflict_names ms))"
@@ -469,26 +518,56 @@ next
       then show ?thesis using Inl by auto
     next
       case (Inr \<sigma>)
-      then have lhs: "link_modules ms = Inr (link_result ms \<sigma>)"
-        unfolding link_modules_def using disj cap by simp
       show ?thesis
-      proof
-        assume "link_modules ms = Inr m"
-        then have "m = link_result ms \<sigma>" using lhs by simp
-        then show "link_fields_disjoint ms
-                   \<and> link_capture_ok ms
-                   \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
-                          \<and> m = link_result ms \<sigma>')"
-          using disj cap Inr by blast
+      proof (cases "link_runtime_ok ms \<sigma>")
+        case rok: True
+        then have lhs: "link_modules ms = Inr (link_result ms \<sigma>)"
+          unfolding link_modules_def using disj cap Inr by simp
+        show ?thesis
+        proof
+          assume "link_modules ms = Inr m"
+          then have "m = link_result ms \<sigma>" using lhs by simp
+          then show "link_fields_disjoint ms
+                     \<and> link_capture_ok ms
+                     \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                            \<and> link_runtime_ok ms \<sigma>'
+                            \<and> m = link_result ms \<sigma>')"
+            using disj cap Inr rok by blast
+        next
+          assume "link_fields_disjoint ms
+                  \<and> link_capture_ok ms
+                  \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                         \<and> link_runtime_ok ms \<sigma>'
+                         \<and> m = link_result ms \<sigma>')"
+          then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
+                           and "m = link_result ms \<sigma>'" by blast
+          then have "m = link_result ms \<sigma>" using Inr by simp
+          then show "link_modules ms = Inr m" using lhs by simp
+        qed
       next
-        assume "link_fields_disjoint ms
-                \<and> link_capture_ok ms
-                \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
-                       \<and> m = link_result ms \<sigma>')"
-        then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
-                         and "m = link_result ms \<sigma>'" by blast
-        then have "m = link_result ms \<sigma>" using Inr by simp
-        then show "link_modules ms = Inr m" using lhs by simp
+        case rok: False
+        then have lhs: "link_modules ms = Inl (LinkGhostResolution (link_ghost_resolution_names ms \<sigma>))"
+          unfolding link_modules_def using disj cap Inr by simp
+        show ?thesis
+        proof
+          assume "link_modules ms = Inr m"
+          then show "link_fields_disjoint ms
+                     \<and> link_capture_ok ms
+                     \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                            \<and> link_runtime_ok ms \<sigma>'
+                            \<and> m = link_result ms \<sigma>')"
+            using lhs by simp
+        next
+          assume "link_fields_disjoint ms
+                  \<and> link_capture_ok ms
+                  \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                         \<and> link_runtime_ok ms \<sigma>'
+                         \<and> m = link_result ms \<sigma>')"
+          then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
+                           and "link_runtime_ok ms \<sigma>'" by blast
+          then have "link_runtime_ok ms \<sigma>" using Inr by simp
+          with rok show "link_modules ms = Inr m" by simp
+        qed
       qed
     qed
   qed
@@ -506,6 +585,7 @@ corollary link_modules_Inr_iff_closure:
      \<and> fmdisjoint_list (map CM_TypeSubst ms)
      \<and> acyclic_subst_deps (fmlist_union (map CM_TypeSubst ms))
      \<and> (\<exists>\<sigma>. is_subst_closure (fmlist_union (map CM_TypeSubst ms)) \<sigma>
+           \<and> link_runtime_ok ms \<sigma>
            \<and> m = link_result ms \<sigma>)"
   unfolding link_modules_Inr_iff merge_all_substs_Inr_iff by blast
 
@@ -551,6 +631,7 @@ proof -
     obtain \<sigma> where disj: "link_fields_disjoint xs"
         and cap: "link_capture_ok xs"
         and mer: "merge_all_substs (map CM_TypeSubst xs) = Inr \<sigma>"
+        and rok: "link_runtime_ok xs \<sigma>"
         and meq: "m = link_result xs \<sigma>"
       using ok link_modules_Inr_iff[of xs m] by blast
     have disj': "link_fields_disjoint ys"
@@ -559,10 +640,12 @@ proof -
       using link_capture_ok_mset_cong[OF eq] cap by simp
     have mer': "merge_all_substs (map CM_TypeSubst ys) = Inr \<sigma>"
       using merge_all_substs_perm[OF mset_map_perm_cong[OF eq]] mer by blast
+    have rok': "link_runtime_ok ys \<sigma>"
+      using link_runtime_ok_mset_cong[OF eq disj] rok by simp
     have meq': "m = link_result ys \<sigma>"
       using meq link_result_mset_cong[OF eq disj] by simp
     show ?thesis
-      using disj' cap' mer' meq' link_modules_Inr_iff[of ys m] by blast
+      using disj' cap' mer' rok' meq' link_modules_Inr_iff[of ys m] by blast
   qed
   show ?thesis using one[OF _ perm] one[OF _ perm[symmetric]] by blast
 qed
@@ -655,13 +738,13 @@ proof -
   \<comment> \<open>The capture check on a single module is exactly its own capture-avoidance.\<close>
   have cap_ok: "link_capture_ok [m]"
   proof -
-    have "fmdom (CM_TypeSubst m) |\<inter>| module_bound_tyvars m = {||}"
+    have "subst_names (CM_TypeSubst m) |\<inter>| module_bound_tyvars m = {||}"
     proof (rule fset_eqI)
       fix n
-      show "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| module_bound_tyvars m \<longleftrightarrow> n |\<in>| {||}"
+      show "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| module_bound_tyvars m \<longleftrightarrow> n |\<in>| {||}"
       proof
-        assume "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| module_bound_tyvars m"
-        then have nd: "n |\<in>| fmdom (CM_TypeSubst m)"
+        assume "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| module_bound_tyvars m"
+        then have nd: "n |\<in>| subst_names (CM_TypeSubst m)"
               and nb: "n |\<in>| module_bound_tyvars m" by auto
         from module_bound_tyvars_E[OF nb] show "n |\<in>| {||}"
         proof
@@ -670,7 +753,7 @@ proof -
           then obtain name info where
             lk: "fmlookup (TE_Functions (CM_TyEnv m)) name = Some info" and
             n_in: "n \<in> set (FI_TyArgs info)" by blast
-          have "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
+          have "subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
             using cap lk unfolding capture_avoiding_def by blast
           then show "n |\<in>| {||}"
             using nd n_in by (auto simp: fset_of_list_elem)
@@ -681,7 +764,7 @@ proof -
           then obtain ctorName dtName tyVars payload where
             lk: "fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload)" and
             n_in: "n \<in> set tyVars" by blast
-          have "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
+          have "subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
             using cap lk unfolding capture_avoiding_def by blast
           then show "n |\<in>| {||}"
             using nd n_in by (auto simp: fset_of_list_elem)
@@ -691,8 +774,28 @@ proof -
     then show ?thesis unfolding link_capture_ok_def by simp
   qed
 
+  \<comment> \<open>The runtime-resolution check is vacuous on a single module: the
+     substitution's domain avoids TE_TypeVars (hypothesis tv), and
+     TE_RuntimeTypeVars is contained in TE_TypeVars (hypothesis rtv), so no
+     resolved name is a runtime type variable to begin with.\<close>
+  have runtime_ok: "link_runtime_ok [m] (CM_TypeSubst m)"
+    unfolding link_runtime_ok_def
+  proof (intro allI impI)
+    fix n
+    assume "n |\<in>| fmdom (CM_TypeSubst m)
+              |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) [m])"
+    then have nd: "n |\<in>| fmdom (CM_TypeSubst m)"
+          and nr: "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv m)" by auto
+    from nr rtv have "n |\<in>| TE_TypeVars (CM_TyEnv m)" by (auto dest: fsubsetD)
+    with nd have "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m)" by simp
+    with tv have False by simp
+    then show
+      "is_runtime_type (CM_TyEnv (link_result [m] (CM_TypeSubst m))) (the (fmlookup (CM_TypeSubst m) n))"
+      by simp
+  qed
+
   show ?thesis
-    using disj cap_ok merge mod_eq link_modules_Inr_iff by simp
+    using disj cap_ok merge runtime_ok mod_eq link_modules_Inr_iff by simp
 qed
 
 
@@ -701,8 +804,11 @@ qed
 (* ========================================================================== *)
 
 (* The point of the capture check: a successful link's result satisfies
-   capture_avoiding - against the MERGED substitution's whole domain, which is
-   the union of the inputs' domains. Downstream (the whole-program
+   capture_avoiding - against the MERGED substitution's whole name set
+   (subst_names): its domain is the union of the inputs' domains, and its
+   range's type variables are leftover names of the raw union
+   (is_subst_closure_range_tyvars, MergeSubstsPrelims.thy), so both sides are
+   covered by the input-side check. Downstream (the whole-program
    well-typedness theorem) this discharges normalize_module's
    capture-avoidance precondition from link success alone. *)
 theorem link_modules_capture_avoiding:
@@ -712,32 +818,67 @@ proof -
   obtain \<sigma> where
     disj: "link_fields_disjoint ms" and
     cap: "link_capture_ok ms" and
+    sdisj: "fmdisjoint_list (map CM_TypeSubst ms)" and
+    acyc: "acyclic_subst_deps (fmlist_union (map CM_TypeSubst ms))" and
     clos: "is_subst_closure (fmlist_union (map CM_TypeSubst ms)) \<sigma>" and
     meq: "m = link_result ms \<sigma>"
     using ok link_modules_Inr_iff_closure by blast
   have subst_eq: "CM_TypeSubst m = \<sigma>"
     using meq by (simp add: link_result_def)
-  \<comment> \<open>The closure's domain is the union of the inputs' substitution domains.\<close>
-  have dom_\<sigma>: "fmdom \<sigma> = funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
+  let ?u = "fmlist_union (map CM_TypeSubst ms)"
+  \<comment> \<open>Every name the merged substitution touches is touched by some input's
+      substitution: the closure's domain IS the union of the inputs' domains,
+      and the closure's range tyvars are leftover names of the raw union.\<close>
+  have names_sub: "\<exists>x \<in> set ms. n |\<in>| subst_names (CM_TypeSubst x)"
+    if n_in: "n |\<in>| subst_names \<sigma>" for n
   proof -
-    have "fmdom \<sigma> = fmdom (fmlist_union (map CM_TypeSubst ms))"
-      using clos unfolding is_subst_closure_def by simp
-    also have "... = funion_list (map fmdom (map CM_TypeSubst ms))"
-      by (rule fmdom_fmlist_union)
-    also have "... = funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
-      by (simp add: o_def)
-    finally show ?thesis .
+    from n_in consider (dom) "n |\<in>| fmdom \<sigma>" | (rng) "n \<in> subst_range_tyvars \<sigma>"
+      using subst_names_member by auto
+    then show ?thesis
+    proof cases
+      case dom
+      then have "n |\<in>| fmdom ?u"
+        using clos unfolding is_subst_closure_def by simp
+      then obtain ty where "fmlookup ?u n = Some ty"
+        by (auto simp: fmlookup_dom_iff)
+      then obtain s where s_in: "s \<in> set (map CM_TypeSubst ms)"
+                      and s_lk: "fmlookup s n = Some ty"
+        using fmlist_union_lookup[OF sdisj] by blast
+      have "n |\<in>| fmdom s" using s_lk by (rule fmdomI)
+      then show ?thesis
+        using s_in by (auto simp: subst_names_member)
+    next
+      case rng
+      then have "n \<in> subst_range_tyvars ?u"
+        using is_subst_closure_range_tyvars[OF acyc clos] by auto
+      then obtain ty where "ty \<in> fmran' ?u" and n_ty: "n \<in> type_tyvars ty"
+        unfolding subst_range_tyvars_def by auto
+      then obtain k where "fmlookup ?u k = Some ty"
+        by (auto simp: fmlookup_ran'_iff)
+      then obtain s where s_in: "s \<in> set (map CM_TypeSubst ms)"
+                      and s_lk: "fmlookup s k = Some ty"
+        using fmlist_union_lookup[OF sdisj] by blast
+      have "ty \<in> fmran' s" using s_lk by (rule fmran'I)
+      then have "n \<in> subst_range_tyvars s"
+        using n_ty unfolding subst_range_tyvars_def by auto
+      then show ?thesis
+        using s_in by (auto simp: subst_names_member)
+    qed
   qed
-  \<comment> \<open>From the check: no bound tyvar of any input is in the merged domain.\<close>
-  have nocap: "\<And>n x. x \<in> set ms \<Longrightarrow> n |\<in>| module_bound_tyvars x \<Longrightarrow> n |\<in>| fmdom \<sigma> \<Longrightarrow> False"
+  \<comment> \<open>From the check: no bound tyvar of any input is touched by the merged
+      substitution.\<close>
+  have nocap: "\<And>n x. x \<in> set ms \<Longrightarrow> n |\<in>| module_bound_tyvars x
+                 \<Longrightarrow> n |\<in>| subst_names \<sigma> \<Longrightarrow> False"
   proof -
     fix n x assume x_in: "x \<in> set ms" and nb: "n |\<in>| module_bound_tyvars x"
-      and nd: "n |\<in>| fmdom \<sigma>"
+      and nd: "n |\<in>| subst_names \<sigma>"
+    obtain y where y_in: "y \<in> set ms" and ny: "n |\<in>| subst_names (CM_TypeSubst y)"
+      using names_sub[OF nd] by blast
     have "n |\<in>| funion_list (map module_bound_tyvars ms)"
       using x_in nb funion_list_member by fastforce
-    moreover have "n |\<in>| funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
-      using nd dom_\<sigma> by simp
-    ultimately have "n |\<in>| funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)
+    moreover have "n |\<in>| funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)"
+      using y_in ny funion_list_member by fastforce
+    ultimately have "n |\<in>| funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
                           |\<inter>| funion_list (map module_bound_tyvars ms)"
       by simp
     then show False using cap unfolding link_capture_ok_def by auto
@@ -750,7 +891,7 @@ proof -
   proof (rule conjI)
     show "\<forall>funName info.
             fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info \<longrightarrow>
-            fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
+            subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
     proof (intro allI impI)
       fix funName info
       assume lk: "fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info"
@@ -763,14 +904,14 @@ proof -
       then obtain x where x_in: "x \<in> set ms"
           and x_lk: "fmlookup (TE_Functions (CM_TyEnv x)) funName = Some info"
         by auto
-      show "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
+      show "subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
       proof (rule fset_eqI)
         fix n
-        show "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info)
+        show "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info)
                 \<longleftrightarrow> n |\<in>| {||}"
         proof
-          assume "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info)"
-          then have nd: "n |\<in>| fmdom \<sigma>" and n_in: "n \<in> set (FI_TyArgs info)"
+          assume "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs info)"
+          then have nd: "n |\<in>| subst_names \<sigma>" and n_in: "n \<in> set (FI_TyArgs info)"
             using subst_eq by (auto simp: fset_of_list_elem)
           have "n |\<in>| module_bound_tyvars x"
             using module_bound_tyvars_fun[OF x_lk n_in] .
@@ -782,7 +923,7 @@ proof -
   next
     show "\<forall>ctorName dtName tyVars payload.
             fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload)
-            \<longrightarrow> fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
+            \<longrightarrow> subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
     proof (intro allI impI)
       fix ctorName dtName tyVars payload
       assume lk: "fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName
@@ -797,13 +938,13 @@ proof -
           and x_lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) ctorName
                        = Some (dtName, tyVars, payload)"
         by auto
-      show "fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
+      show "subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
       proof (rule fset_eqI)
         fix n
-        show "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars \<longleftrightarrow> n |\<in>| {||}"
+        show "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars \<longleftrightarrow> n |\<in>| {||}"
         proof
-          assume "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| fset_of_list tyVars"
-          then have nd: "n |\<in>| fmdom \<sigma>" and n_in: "n \<in> set tyVars"
+          assume "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars"
+          then have nd: "n |\<in>| subst_names \<sigma>" and n_in: "n \<in> set tyVars"
             using subst_eq by (auto simp: fset_of_list_elem)
           have "n |\<in>| module_bound_tyvars x"
             using module_bound_tyvars_ctor[OF x_lk n_in] .
