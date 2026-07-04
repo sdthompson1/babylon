@@ -10,10 +10,13 @@ begin
      \<forall>x \<in> set ms. module_ghost_subsets_ok x
      \<Longrightarrow> core_module_well_typed m
 
-   The first three conjuncts of core_module_well_typed m are already proved
-   (link_modules_idempotent_subst, link_modules_capture_avoiding,
-   link_modules_typesubst_well_kinded); the work in this file is
-   normalized_module_well_typed (normalize_module m). The proof route runs
+   The core_module_invariant conjunct of core_module_well_typed m follows
+   from link_modules_idempotent_subst, link_modules_capture_avoiding, the
+   linked result's field shape, and core_module_invariant_intro; the
+   typesubst_well_kinded conjunct is link_modules_typesubst_well_kinded; the
+   work in this file is normalized_module_well_typed (normalize_module m)
+   (this file also proves link_modules_invariant: linking preserves the
+   standing invariant when every input satisfies it). The proof route runs
    every A-originating definition through a MIXED intermediate environment
    link_mid_env a b m (and B-originating definitions through the symmetric
    instantiation link_mid_env b a m):
@@ -564,6 +567,121 @@ proof -
   have "is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n))"
     using rok n_dom n_rtv unfolding link_runtime_ok_def by auto
   then show ?thesis using meq \<sigma>eq lk by simp
+qed
+
+(* Linking preserves the standing module invariant: if every input satisfies
+   core_module_invariant, so does a successful link's result. Idempotence and
+   capture-avoidance are the existing link_modules_idempotent_subst /
+   link_modules_capture_avoiding; the substitution-domain/TE_TypeVars
+   disjointness and the inert scope fields are immediate from link_result's
+   construction; the ghost-marker, tyvar-subset and abstract-types-equality
+   clauses are inherited pointwise from the inputs (these are the conjuncts
+   that genuinely need the per-input hypothesis - the linker unions the ghost
+   fsets and tyvar fsets with no check of its own). *)
+theorem link_modules_invariant:
+  assumes ok: "link_modules ms = Inr m"
+      and inv: "\<forall>x \<in> set ms. core_module_invariant x"
+  shows "core_module_invariant m"
+proof -
+  note fM = link_modules_result_fields[OF ok]
+  have idem: "idempotent_subst (CM_TypeSubst m)"
+    using link_modules_idempotent_subst[OF ok] .
+  have cap: "capture_avoiding m"
+    using link_modules_capture_avoiding[OF ok] .
+  have tv: "fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
+    unfolding fM(6) by auto
+
+  \<comment> \<open>Ghost markers: every marker comes from some input, which (by its own
+     invariant) declares the name in the corresponding parent map; the union
+     of the parent maps then contains it.\<close>
+  have gg: "TE_GhostGlobals (CM_TyEnv m) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv m))"
+  proof
+    fix n assume "n |\<in>| TE_GhostGlobals (CM_TyEnv m)"
+    then have "\<exists>s \<in> set (map (\<lambda>x. TE_GhostGlobals (CM_TyEnv x)) ms). n |\<in>| s"
+      unfolding fM(4) using funion_list_member by fastforce
+    then obtain x where x_in: "x \<in> set ms"
+                    and n_gg: "n |\<in>| TE_GhostGlobals (CM_TyEnv x)"
+      by auto
+    have "n |\<in>| fmdom (TE_GlobalVars (CM_TyEnv x))"
+      using inv x_in n_gg
+      unfolding core_module_invariant_def module_ghost_subsets_ok_def
+      by (blast dest: fsubsetD)
+    then obtain ty where x_lk: "fmlookup (TE_GlobalVars (CM_TyEnv x)) n = Some ty"
+      by (auto simp: fmlookup_dom_iff)
+    have gdisj: "fmdisjoint_list (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)"
+      using link_modules_success_facts(1)[OF ok]
+      unfolding link_fields_disjoint_def by blast
+    have "fmlookup (TE_GlobalVars (CM_TyEnv m)) n = Some ty"
+      unfolding fM(2) using fmlist_union_lookup[OF gdisj] x_in x_lk by fastforce
+    then show "n |\<in>| fmdom (TE_GlobalVars (CM_TyEnv m))"
+      by (rule fmdomI)
+  qed
+  have gd: "TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m))"
+  proof
+    fix n assume "n |\<in>| TE_GhostDatatypes (CM_TyEnv m)"
+    then have "\<exists>s \<in> set (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms). n |\<in>| s"
+      unfolding fM(17) using funion_list_member by fastforce
+    then obtain x where x_in: "x \<in> set ms"
+                    and n_gd: "n |\<in>| TE_GhostDatatypes (CM_TyEnv x)"
+      by auto
+    have "n |\<in>| fmdom (TE_Datatypes (CM_TyEnv x))"
+      using inv x_in n_gd
+      unfolding core_module_invariant_def module_ghost_subsets_ok_def
+      by (blast dest: fsubsetD)
+    then obtain d where x_lk: "fmlookup (TE_Datatypes (CM_TyEnv x)) n = Some d"
+      by (auto simp: fmlookup_dom_iff)
+    have ddisj: "fmdisjoint_list (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"
+      using link_modules_success_facts(1)[OF ok]
+      unfolding link_fields_disjoint_def by blast
+    have "fmlookup (TE_Datatypes (CM_TyEnv m)) n = Some d"
+      unfolding fM(14) using fmlist_union_lookup[OF ddisj] x_in x_lk by fastforce
+    then show "n |\<in>| fmdom (TE_Datatypes (CM_TyEnv m))"
+      by (rule fmdomI)
+  qed
+  have ghost: "module_ghost_subsets_ok m"
+    unfolding module_ghost_subsets_ok_def using gg gd by blast
+
+  \<comment> \<open>Tyvar subsets: pointwise from the inputs; the same domain is subtracted
+     on both sides.\<close>
+  have rtv: "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
+  proof
+    fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv m)"
+    have "\<exists>s \<in> set (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms). n |\<in>| s"
+      using n_in unfolding fM(7) using funion_list_member by (metis fminus_iff)
+    then obtain x where x_in: "x \<in> set ms"
+                    and n_rtv: "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv x)"
+      by auto
+    have "n |\<in>| TE_TypeVars (CM_TyEnv x)"
+      using inv x_in n_rtv
+      unfolding core_module_invariant_def by (blast dest: fsubsetD)
+    then have "n |\<in>| funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms)"
+      using x_in funion_list_member by fastforce
+    moreover have "n |\<notin>| fmdom (CM_TypeSubst m)"
+      using n_in unfolding fM(7) by auto
+    ultimately show "n |\<in>| TE_TypeVars (CM_TyEnv m)"
+      unfolding fM(6) by auto
+  qed
+  \<comment> \<open>Abstract types: each input has TE_AbstractTypes = TE_TypeVars, and the
+     linker builds both fields as the same union-minus-domain, so the
+     equality carries over by congruence.\<close>
+  have abs_tv: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
+  proof -
+    have "map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms
+            = map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms"
+      using inv
+      unfolding core_module_invariant_def tyenv_module_scope_def
+      by (intro list.map_cong0) blast
+    then show ?thesis
+      unfolding fM(6) fM(8) by metis
+  qed
+
+  have scope: "tyenv_module_scope (CM_TyEnv m)"
+    unfolding tyenv_module_scope_def
+    by (simp add: fM(1) fM(3) fM(5) fM(9) fM(10) fM(11) fM(12) abs_tv)
+
+  show ?thesis
+    unfolding core_module_invariant_def
+    using idem cap ghost tv rtv scope by blast
 qed
 
 (* A sub-link resolves fewer names than the whole link. *)
@@ -1574,10 +1692,12 @@ proof -
   have wfA: "tyenv_well_formed ?envA"
     and absa0: "TE_AbstractTypes ?envA = TE_TypeVars ?envA"
     using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
     by blast+
   have wfB: "tyenv_well_formed ?envB"
     and absb0: "TE_AbstractTypes ?envB = TE_TypeVars ?envB"
     using wtB unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
     by blast+
   have absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
     using absa0 by simp
@@ -2612,11 +2732,13 @@ proof -
     and absa0: "TE_AbstractTypes (CM_TyEnv (normalize_module a))
                   = TE_TypeVars (CM_TyEnv (normalize_module a))"
     using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
     by blast+
   have wfB: "tyenv_well_formed (CM_TyEnv (normalize_module b))"
     and absb0: "TE_AbstractTypes (CM_TyEnv (normalize_module b))
                   = TE_TypeVars (CM_TyEnv (normalize_module b))"
     using wtB unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
     by blast+
   have absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
     using absa0 by simp
@@ -3131,11 +3253,13 @@ proof -
   have wfA: "tyenv_well_formed ?envA"
     and absa0: "TE_AbstractTypes ?envA = TE_TypeVars ?envA"
     using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
     by blast+
   have wfB: "tyenv_well_formed (CM_TyEnv (normalize_module b))"
     and absb0: "TE_AbstractTypes (CM_TyEnv (normalize_module b))
                   = TE_TypeVars (CM_TyEnv (normalize_module b))"
     using wtB unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
     by blast+
   have absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
     using absa0 by simp
@@ -3854,20 +3978,23 @@ proof -
   have wk: "typesubst_well_kinded (CM_TyEnv m) ?\<sigma>M"
     using link_modules_typesubst_well_kinded[OF linkA linkB linkM setMS wkA wkB] .
 
-  \<comment> \<open>Clause 1: abstract types coincide with type variables.\<close>
+  \<comment> \<open>Abstract types coincide with type variables (part of the module-scope
+     clause below, and a side condition of the wf substitution engine).\<close>
   have abs_tv: "TE_AbstractTypes ?envM = TE_TypeVars ?envM"
     using link_pair_abs_tv(1)[OF linkA wtA linkB wtB linkM setMS] by simp
 
-  \<comment> \<open>Clause 2: well-formedness, via the mid env and the wf substitution engine.\<close>
+  \<comment> \<open>Clause 1: well-formedness, via the mid env and the wf substitution engine.\<close>
   have wf: "tyenv_well_formed ?envM"
   proof -
     have absa0: "TE_AbstractTypes (CM_TyEnv (normalize_module a))
                    = TE_TypeVars (CM_TyEnv (normalize_module a))"
       using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
+                          tyenv_module_scope_def
       by blast
     have absb0: "TE_AbstractTypes (CM_TyEnv (normalize_module b))
                    = TE_TypeVars (CM_TyEnv (normalize_module b))"
       using wtB unfolding core_module_well_typed_def normalized_module_well_typed_def
+                          tyenv_module_scope_def
       by blast
     have mid_abs: "TE_AbstractTypes (link_mid_env a b m)
                      = TE_TypeVars (link_mid_env a b m)"
@@ -3886,12 +4013,12 @@ proof -
       unfolding link_mid_env_collapse[OF linkA linkB linkM setMS] .
   qed
 
-  \<comment> \<open>Clause 3: inert scope fields.\<close>
-  have inert: "module_scope_fields_inert ?envM"
-    unfolding module_scope_fields_inert_def
-    by (simp add: fM(1) fM(3) fM(5) fM(9) fM(10) fM(11) fM(12))
+  \<comment> \<open>Clause 2: module scope (inert scope fields plus Abs = TV).\<close>
+  have scope: "tyenv_module_scope ?envM"
+    unfolding tyenv_module_scope_def
+    using abs_tv fM(1,10,11,12,3,5,9) by auto
 
-  \<comment> \<open>Clause 4: globals. Each defined global comes from one input module,
+  \<comment> \<open>Clause 3: globals. Each defined global comes from one input module,
       hence from one sub-link; route through the matching contribution lemma.\<close>
   have globals: "module_globals_well_typed ?envM (CM_GlobalVars (normalize_module m))"
     unfolding module_globals_well_typed_def
@@ -3953,7 +4080,7 @@ proof -
       unfolding tm_eq using contrib .
   qed
 
-  \<comment> \<open>Clause 5: functions, likewise.\<close>
+  \<comment> \<open>Clause 4: functions, likewise.\<close>
   have funcs: "module_functions_well_typed ?envM (CM_Functions (normalize_module m))"
     unfolding module_functions_well_typed_def
   proof (intro allI impI)
@@ -4077,10 +4204,14 @@ proof -
 
   have nwt: "normalized_module_well_typed (normalize_module m)"
     unfolding normalized_module_well_typed_def
-    using abs_tv wf inert globals funcs by blast
+    using wf scope globals funcs by blast
+  have tvdisj: "fmdom ?\<sigma>M |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
+    unfolding fM(6) by auto
+  have inv: "core_module_invariant m"
+    using core_module_invariant_intro[OF idem cap tvdisj nwt] .
   show ?thesis
     unfolding core_module_well_typed_def
-    using idem cap wk nwt by blast
+    using inv wk nwt by blast
 qed
 
 end

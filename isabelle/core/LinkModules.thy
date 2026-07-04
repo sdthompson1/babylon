@@ -76,8 +76,8 @@ begin
       invariance, NOT de-duplication: link_modules [m, m] is a multiple-definition
       error for any non-empty m.
 
-    - link_modules_singleton: link_modules [m] = Inr m, under the standard module 
-      invariants.
+    - link_modules_singleton: link_modules [m] = Inr m, under the standing
+      module invariant (core_module_invariant, CoreModule.thy).
 
    Note the raw result of link_modules is generally NOT independently
    well-kinded - its types may still mention abstract names that linking has
@@ -663,23 +663,32 @@ corollary link_modules_perm_fails:
 (* Singleton input                                                            *)
 (* ========================================================================== *)
 
-(* Linking a single module returns it unchanged, under the standard module
-   invariants:
-   - CM_TypeSubst is idempotent (a CoreModule requirement), so merging the
-     one-element substitution list returns it as-is;
-   - the module is capture-avoiding (a CoreModule requirement), so the
-     capture check passes;
+(* Linking a single module returns it unchanged, under the standing module
+   invariant (core_module_invariant, CoreModule.thy):
+   - CM_TypeSubst is idempotent, so merging the one-element substitution
+     list returns it as-is;
+   - the module is capture-avoiding, so the capture check passes;
    - the substitution's domain avoids the module's own type variables (a
      resolved abstract type is recorded in the substitution and removed from
      TE_TypeVars), so the type-variable subtraction is the identity;
-   - the "current scope" fields hold their inert module-level values. *)
+   - the type env is at module scope, so the "current scope" fields hold
+     their inert module-level values.
+   The unconditional form is false: link_result pins the inert fields to
+   their conventional values and subtracts the subst domain from the tyvar
+   fields, so a module violating the invariant is not returned verbatim. *)
 lemma link_modules_singleton:
-  assumes idem: "idempotent_subst (CM_TypeSubst m)"
-      and cap:  "capture_avoiding m"
-      and tv:   "fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
-      and rtv:  "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
-      and abst: "TE_AbstractTypes (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
-      and inert:
+  assumes inv: "core_module_invariant m"
+  shows "link_modules [m] = Inr m"
+proof -
+  have idem: "idempotent_subst (CM_TypeSubst m)"
+   and cap:  "capture_avoiding m"
+   and tv:   "fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
+   and rtv:  "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
+    using inv unfolding core_module_invariant_def by blast+
+  have abst: "TE_AbstractTypes (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
+    using inv
+    unfolding core_module_invariant_def tyenv_module_scope_def by auto
+  have inert:
         "TE_LocalVars (CM_TyEnv m) = fmempty"
         "TE_GhostLocals (CM_TyEnv m) = {||}"
         "TE_ConstLocals (CM_TyEnv m) = {||}"
@@ -687,8 +696,8 @@ lemma link_modules_singleton:
         "TE_FunctionGhost (CM_TyEnv m) = NotGhost"
         "TE_ProofGoal (CM_TyEnv m) = None"
         "TE_ProofTopLevel (CM_TyEnv m) = False"
-  shows "link_modules [m] = Inr m"
-proof -
+    using inv
+    unfolding core_module_invariant_def tyenv_module_scope_def by blast+
   \<comment> \<open>Any fset of in-scope type variables is untouched by the subtraction of
      the substitution's domain.\<close>
   have notin: "x |\<notin>| fmdom (CM_TypeSubst m)" if "x |\<in>| TE_TypeVars (CM_TyEnv m)" for x

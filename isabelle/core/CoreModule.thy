@@ -12,21 +12,22 @@ begin
 (* Modules                                                                    *)
 (* ========================================================================== *)
 
-(* CoreFunction: holds the *definition* of a function (term-parameter names
-   and body). Everything else (type parameters, argument types and VarOrRef
-   tags, return type, ghost/impure flags) is considered part of the *declaration*
-   and lives in the FunInfo in the type environment. *)
+(* CoreFunction: the record, inside a CoreModule, that holds the *definition* of
+   a function (term-parameter names and body). Everything else (type parameters,
+   argument types and VarOrRef tags, return type, ghost/impure flags) is considered
+   part of the *declaration* and lives in the FunInfo in the module's type
+   environment. *)
 
-(* CF_Body = None marks an *extern* function: declared (it has a FunInfo) but with
-   no Core body; its implementation is supplied at InterpState-creation time as an
-   ExternFunc. *)
+(* Note: CF_Body = None marks an *extern* function, which is declared (it has a FunInfo)
+   but has no Core body; its implementation is supplied at InterpState-creation time
+   as an ExternFunc. *)
 
 record CoreFunction =
   CF_Args :: "string list"                   (* term parameter names *)
   CF_Body :: "CoreStatement list option"     (* None for extern functions *)
 
 
-(* CoreModule itself contains:
+(* CoreModule: the main record representing a Core program fragment. It contains:
     - CM_TyEnv: The types of everything this module either declares or defines.
         Note that TE_TypeVars represents the set of abstract types that are
         declared, but not defined by this module.
@@ -100,12 +101,17 @@ lemma normalize_module_idempotent:
 (* core_module_closed                                                         *)
 (* ========================================================================== *)
 
-(* A module is closed (fully linked) when everything declared is also
-   defined, and there are no unresolved abstract types. Extern functions
-   appear in CM_Functions with CF_Body = None, so they satisfy the function
-   clause. Note CM_TypeSubst may be non-empty in a closed module - it records
-   the resolutions of abstract types that have been removed from TE_TypeVars;
-   normalize_module clears it. *)
+(* A module is closed (fully linked) when everything declared is also defined, and
+   there are no unresolved abstract types.
+
+   Extern functions, with CF_Body = None, are allowed; these are presumed to be
+   available in the external environment, and therefore do not prevent the module
+   from being considered "closed".
+
+   Note CM_TypeSubst may be non-empty in a closed module - it records the
+   resolutions of abstract types that have been removed from TE_TypeVars;
+   normalize_module clears it.
+*)
 
 definition core_module_closed :: "CoreModule \<Rightarrow> bool" where
   "core_module_closed m =
@@ -131,7 +137,7 @@ lemma core_module_closed_normalize_module [simp]:
 
    This property is automatically true for Babylon programs (after renaming)
    because entries in CM_TypeSubst are global names and hence contain a dot;
-   type parameters are local names and hence undotted. At the CoreModule we
+   type parameters are local names and hence undotted. At the CoreModule level, we
    do not capture this dotted/undotted discipline, but we do maintain the
    invariant that the two sets of names are distinct; this is the purpose
    of the `capture_avoiding` predicate. *)
@@ -163,5 +169,65 @@ definition module_ghost_subsets_ok :: "CoreModule \<Rightarrow> bool" where
   "module_ghost_subsets_ok m =
     (TE_GhostGlobals (CM_TyEnv m) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv m))
      \<and> TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m)))"
+
+
+(* ========================================================================== *)
+(* Module-scope type environments                                             *)
+(* ========================================================================== *)
+
+(* This predicate says that a type environment is at *module scope*, i.e. not
+   inside any function or proof. Specifically: there are no local variables
+   (TE_LocalVars, TE_GhostLocals and TE_ConstLocals all empty); no enclosing function
+   (TE_ReturnType = CoreTy_Record [] and TE_FunctionGhost = NotGhost by convention);
+   no enclosing proof (TE_ProofGoal = None, TE_ProofTopLevel = False); and no
+   function-level type parameters (every in-scope type variable is a module-level
+   abstract type, i.e. TE_AbstractTypes = TE_TypeVars). *)
+definition tyenv_module_scope :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_module_scope env =
+    (TE_LocalVars env = fmempty
+     \<and> TE_GhostLocals env = {||}
+     \<and> TE_ConstLocals env = {||}
+     \<and> TE_ReturnType env = CoreTy_Record []
+     \<and> TE_FunctionGhost env = NotGhost
+     \<and> TE_ProofGoal env = None
+     \<and> TE_ProofTopLevel env = False
+     \<and> TE_AbstractTypes env = TE_TypeVars env)"
+
+(* Applying a substitution to a CoreTyEnv preserves tyenv_module_scope. *)
+lemma subst_preserves_tyenv_module_scope:
+  assumes "tyenv_module_scope env"
+  shows "tyenv_module_scope (apply_subst_to_tyenv subst env)"
+  using assms tyenv_module_scope_def apply_subst_to_tyenv_def by fastforce
+
+
+(* ========================================================================== *)
+(* core_module_invariant                                                      *)
+(* ========================================================================== *)
+
+(* All CoreModules (even non-well-typed ones) are expected to satisfy the
+   following predicate. This is true of all modules created by the elaborator,
+   and is preserved by the linker.
+
+   The conjuncts:
+   - CM_TypeSubst is idempotent and capture-avoiding;
+   - ghost markers only on the module's own declarations;
+   - a resolved abstract type is recorded in the substitution and removed
+     from TE_TypeVars, so the two are disjoint;
+   - the runtime type variables are a subset of the in-scope type variables;
+   - the type environment is at module scope. *)
+
+definition core_module_invariant :: "CoreModule \<Rightarrow> bool" where
+  "core_module_invariant m =
+    (idempotent_subst (CM_TypeSubst m)
+     \<and> capture_avoiding m
+     \<and> module_ghost_subsets_ok m
+     \<and> fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}
+     \<and> TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)
+     \<and> tyenv_module_scope (CM_TyEnv m))"
+
+(* Destructor for the conjunct that theorems most often take per input. *)
+lemma core_module_invariant_ghost_subsets_ok:
+  "core_module_invariant m \<Longrightarrow> module_ghost_subsets_ok m"
+  unfolding core_module_invariant_def by blast
 
 end
