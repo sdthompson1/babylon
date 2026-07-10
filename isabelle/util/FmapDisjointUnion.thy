@@ -180,6 +180,31 @@ proof -
   qed
 qed
 
+(* Pairwise disjointness is inherited by any sub-multiset - immediate from the
+   counting characterization, since filtering a sub-multiset hits each key no
+   more often. *)
+lemma fmdisjoint_list_submset:
+  assumes sub: "mset xs \<subseteq># mset ys"
+      and disj: "fmdisjoint_list ys"
+  shows "fmdisjoint_list xs"
+proof -
+  have "length (filter (\<lambda>s. k |\<in>| fmdom s) xs)
+          \<le> length (filter (\<lambda>s. k |\<in>| fmdom s) ys)" for k
+  proof -
+    have "filter_mset (\<lambda>s. k |\<in>| fmdom s) (mset xs)
+            \<subseteq># filter_mset (\<lambda>s. k |\<in>| fmdom s) (mset ys)"
+      using sub by (rule multiset_filter_mono)
+    then have "size (filter_mset (\<lambda>s. k |\<in>| fmdom s) (mset xs))
+                 \<le> size (filter_mset (\<lambda>s. k |\<in>| fmdom s) (mset ys))"
+      by (rule size_mset_mono)
+    then show ?thesis
+      by (metis mset_filter size_mset)
+  qed
+  then show ?thesis
+    using disj unfolding fmdisjoint_list_filter_char
+    by (meson order_trans)
+qed
+
 (* Pairwise domain-disjointness depends only on the multiset of inputs. *)
 lemma fmdisjoint_list_mset_cong:
   assumes "mset ms = mset ms'"
@@ -370,6 +395,36 @@ next
     have no_tail: "\<not> (\<exists>s \<in> set xs. fmlookup s k = Some v)"
       using Cons.IH[OF tail] tail_none by (metis option.distinct(1))
     show ?thesis using look no_tail by auto
+  qed
+qed
+
+(* Even without disjointness, a union lookup is still SOME element's lookup -
+   the right-biased fold returns the last defining element's value. Only WHICH
+   element defines the result is order-sensitive. *)
+lemma fmlist_union_lookup_some:
+  assumes "fmlookup (fmlist_union ss) k = Some v"
+  shows "\<exists>s \<in> set ss. fmlookup s k = Some v"
+  using assms
+proof (induction ss)
+  case Nil
+  then show ?case by (simp add: fmlist_union_def)
+next
+  case (Cons x xs)
+  show ?case
+  proof (cases "fmlookup (fmlist_union xs) k")
+    case None
+    then have "k |\<notin>| fmdom (fmlist_union xs)"
+      by (rule fmdom_notI)
+    then have "fmlookup x k = Some v"
+      using Cons.prems by (simp add: fmlist_union_Cons)
+    then show ?thesis by auto
+  next
+    case (Some w)
+    then have "k |\<in>| fmdom (fmlist_union xs)"
+      by (rule fmdomI)
+    then have "fmlookup (fmlist_union xs) k = Some v"
+      using Cons.prems by (simp add: fmlist_union_Cons)
+    then show ?thesis using Cons.IH by auto
   qed
 qed
 
