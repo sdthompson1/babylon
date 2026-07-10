@@ -1901,12 +1901,22 @@ proof -
     using wfA unfolding tyenv_well_formed_def tyenv_ghost_datatypes_subset_def by simp
   have gdsubB: "TE_GhostDatatypes (CM_TyEnv b) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv b))"
     using wfB unfolding tyenv_well_formed_def tyenv_ghost_datatypes_subset_def by simp
+  have dneA0: "tyenv_datatypes_nonempty ?envA"
+    using wfA unfolding tyenv_well_formed_def by blast
+  have dneB0: "tyenv_datatypes_nonempty ?envB"
+    using wfB unfolding tyenv_well_formed_def by blast
   have dneA: "\<And>dt. dt |\<in>| fmdom (TE_Datatypes ?envA) \<Longrightarrow>
                 \<exists>c cs. fmlookup (TE_DataCtorsByType ?envA) dt = Some (c # cs)"
-    using wfA unfolding tyenv_well_formed_def tyenv_datatypes_nonempty_def by force
+    using tyenv_datatypes_nonempty_first_ctor[OF dneA0] by blast
   have dneB: "\<And>dt. dt |\<in>| fmdom (TE_Datatypes ?envB) \<Longrightarrow>
                 \<exists>c cs. fmlookup (TE_DataCtorsByType ?envB) dt = Some (c # cs)"
-    using wfB unfolding tyenv_well_formed_def tyenv_datatypes_nonempty_def by force
+    using tyenv_datatypes_nonempty_first_ctor[OF dneB0] by blast
+  have dneA2: "\<And>dt ctors. fmlookup (TE_DataCtorsByType ?envA) dt = Some ctors \<Longrightarrow>
+                 ctors \<noteq> []"
+    using dneA0 unfolding tyenv_datatypes_nonempty_def by blast
+  have dneB2: "\<And>dt ctors. fmlookup (TE_DataCtorsByType ?envB) dt = Some ctors \<Longrightarrow>
+                 ctors \<noteq> []"
+    using dneB0 unfolding tyenv_datatypes_nonempty_def by blast
 
   show ?thesis
     unfolding tyenv_well_formed_def
@@ -2537,8 +2547,59 @@ proof -
         then show ?thesis by auto
       qed
     qed
+    \<comment> \<open>Every TE_DataCtorsByType entry of the linked module comes from one of
+        the member modules, hence from the a-side or the b-side, and each
+        side's entries are nonempty.\<close>
+    have H2: "\<And>dtName ctors.
+                fmlookup (TE_DataCtorsByType ?mid) dtName = Some ctors \<Longrightarrow> ctors \<noteq> []"
+    proof -
+      fix dtName ctors
+      assume lk: "fmlookup (TE_DataCtorsByType ?mid) dtName = Some ctors"
+      have dM: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"
+        using link_modules_success_facts(1)[OF linkM]
+        unfolding link_fields_disjoint_def by blast
+      from lk have "fmlookup (fmlist_union
+                       (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)) dtName
+                      = Some ctors"
+        by (simp add: fM(16))
+      then obtain x where x_in: "x \<in> set ms"
+        and x_lk: "fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dtName = Some ctors"
+        using fmlist_union_lookup[OF dM] by auto
+      from x_in setMS have "x \<in> set as \<or> x \<in> set bs" by auto
+      then show "ctors \<noteq> []"
+      proof
+        assume xA: "x \<in> set as"
+        have dA: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as)"
+          using link_modules_success_facts(1)[OF linkA]
+          unfolding link_fields_disjoint_def by blast
+        have "fmlookup (fmlist_union
+                (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as)) dtName = Some ctors"
+          using fmlist_union_lookup[OF dA] xA x_lk by auto
+        then have "fmlookup (TE_DataCtorsByType ?envA) dtName = Some ctors"
+          by (simp add: fA(16))
+        then show ?thesis using dneA2 by blast
+      next
+        assume xB: "x \<in> set bs"
+        have dB: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) bs)"
+          using link_modules_success_facts(1)[OF linkB]
+          unfolding link_fields_disjoint_def by blast
+        have "fmlookup (fmlist_union
+                (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) bs)) dtName = Some ctors"
+          using fmlist_union_lookup[OF dB] xB x_lk by auto
+        then have "fmlookup (TE_DataCtorsByType ?envB) dtName = Some ctors"
+          by (simp add: fB(16))
+        then show ?thesis using dneB2 by blast
+      qed
+    qed
     show "tyenv_datatypes_nonempty ?mid"
-      unfolding tyenv_datatypes_nonempty_def using H by auto
+      unfolding tyenv_datatypes_nonempty_def
+    proof (intro conjI)
+      show "fmdom (TE_Datatypes ?mid) |\<subseteq>| fmdom (TE_DataCtorsByType ?mid)"
+        using H by (metis fmdomI fsubsetI)
+      show "\<forall>dtName ctors.
+              fmlookup (TE_DataCtorsByType ?mid) dtName = Some ctors \<longrightarrow> ctors \<noteq> []"
+        using H2 by blast
+    qed
   qed
 qed
 
@@ -3198,15 +3259,22 @@ qed
 (* ========================================================================== *)
 
 (* Extension: normalize_module a's body env, tyvar-widened by b's fields,
-   extends into the mid env's body env (same names/info on both sides). *)
+   extends into the mid env's body env (same names/info on both sides).
+
+   The two sides' tyvar conventions (abstract types = type variables, runtime
+   type variables among the type variables) are taken as premises rather than
+   derived from well-typedness, so the lemma also applies when one side
+   satisfies only the structural module invariant. *)
 lemma link_mid_body_env_extends:
   assumes linkA: "link_modules as = Inr a"
-      and wtA: "core_module_well_typed a"
       and linkB: "link_modules bs = Inr b"
-      and wtB: "core_module_well_typed b"
       and linkM: "link_modules ms = Inr m"
       and setMS: "set ms = set as \<union> set bs"
       and ghostOK: "\<forall>x \<in> set ms. module_ghost_subsets_ok x"
+      and absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
+      and rtvA: "TE_RuntimeTypeVars (CM_TyEnv a) |\<subseteq>| TE_TypeVars (CM_TyEnv a)"
+      and absb: "TE_AbstractTypes (CM_TyEnv b) = TE_TypeVars (CM_TyEnv b)"
+      and rtvB: "TE_RuntimeTypeVars (CM_TyEnv b) |\<subseteq>| TE_TypeVars (CM_TyEnv b)"
   shows "tyenv_extends
            ((module_body_env_for (CM_TyEnv (normalize_module a)) names info)
               \<lparr> TE_TypeVars :=
@@ -3248,27 +3316,6 @@ proof -
   have gd_agr: "\<And>name. name |\<in>| fmdom (TE_Datatypes ?envA) \<Longrightarrow>
                   (name |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> name |\<in>| TE_GhostDatatypes ?envA)"
     using ext0 unfolding tyenv_extends_def by auto
-
-  \<comment> \<open>Side tyvar conventions.\<close>
-  have wfA: "tyenv_well_formed ?envA"
-    and absa0: "TE_AbstractTypes ?envA = TE_TypeVars ?envA"
-    using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
-                        tyenv_module_scope_def
-    by blast+
-  have wfB: "tyenv_well_formed (CM_TyEnv (normalize_module b))"
-    and absb0: "TE_AbstractTypes (CM_TyEnv (normalize_module b))
-                  = TE_TypeVars (CM_TyEnv (normalize_module b))"
-    using wtB unfolding core_module_well_typed_def normalized_module_well_typed_def
-                        tyenv_module_scope_def
-    by blast+
-  have absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
-    using absa0 by simp
-  have absb: "TE_AbstractTypes (CM_TyEnv b) = TE_TypeVars (CM_TyEnv b)"
-    using absb0 by simp
-  have rtvA: "TE_RuntimeTypeVars (CM_TyEnv a) |\<subseteq>| TE_TypeVars (CM_TyEnv a)"
-    using wfA unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by simp
-  have rtvB: "TE_RuntimeTypeVars (CM_TyEnv b) |\<subseteq>| TE_TypeVars (CM_TyEnv b)"
-    using wfB unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by simp
 
   show ?thesis
     unfolding tyenv_extends_def
@@ -3324,16 +3371,19 @@ qed
    function/ctor binder clauses are the mid env's (the body env leaves those
    maps untouched); the tyvar coverage adds the function's own type
    parameters, which the whole link's capture check keeps out of the
-   substitution. *)
+   substitution.
+
+   The module-level module_env_subst_ok fact and the whole link's
+   abstract-types convention are taken as premises, so this works from any
+   proof of the module-level fact (both sides well-typed, or one side carrying
+   only the structural invariant). *)
 lemma link_mid_body_env_subst_ok:
-  assumes linkA: "link_modules as = Inr a"
-      and wtA: "core_module_well_typed a"
-      and linkB: "link_modules bs = Inr b"
-      and wtB: "core_module_well_typed b"
-      and linkM: "link_modules ms = Inr m"
-      and setMS: "set ms = set as \<union> set bs"
+  assumes linkM: "link_modules ms = Inr m"
       and m_lk: "fmlookup (TE_Functions (CM_TyEnv m)) fname = Some info0"
       and tyargs: "FI_TyArgs info = FI_TyArgs info0"
+      and mid_ok: "module_env_subst_ok (CM_TypeSubst m)
+                     (CM_TyEnv (normalize_module m)) (link_mid_env a b m)"
+      and absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
   shows "module_env_subst_ok (CM_TypeSubst m)
            (module_body_env_for (CM_TyEnv (normalize_module m)) names
               (apply_subst_to_funinfo (CM_TypeSubst m) info0))
@@ -3343,7 +3393,6 @@ proof -
   let ?tb = "module_body_env_for (CM_TyEnv (normalize_module m)) names
                (apply_subst_to_funinfo (CM_TypeSubst m) info0)"
   let ?sb = "module_body_env_for ?mid names info"
-  note mid_ok = link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS]
   have mid_cov: "\<And>n. n |\<in>| TE_TypeVars ?mid \<Longrightarrow>
                    (case fmlookup (CM_TypeSubst m) n of
                       Some ty' \<Rightarrow> is_well_kinded (CM_TyEnv (normalize_module m)) ty'
@@ -3356,8 +3405,6 @@ proof -
                     fmlookup (TE_DataCtors ?mid) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
                     subst_names (CM_TypeSubst m) |\<inter>| fset_of_list tyVars = {||}"
     using mid_ok unfolding module_env_subst_ok_def by blast
-  have absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
-    using link_pair_abs_tv(1)[OF linkA wtA linkB wtB linkM setMS] .
 
   show ?thesis
     unfolding module_env_subst_ok_def
@@ -3438,17 +3485,19 @@ proof -
   qed
 qed
 
-(* module_env_subst_runtime_ok at the body level. *)
+(* module_env_subst_runtime_ok at the body level. As above, the whole link's
+   tyvar conventions are premises rather than derived from side
+   well-typedness. *)
 lemma link_mid_body_env_runtime_ok:
   assumes linkA: "link_modules as = Inr a"
-      and wtA: "core_module_well_typed a"
       and linkB: "link_modules bs = Inr b"
-      and wtB: "core_module_well_typed b"
       and linkM: "link_modules ms = Inr m"
       and setMS: "set ms = set as \<union> set bs"
       and m_lk: "fmlookup (TE_Functions (CM_TyEnv m)) fname = Some info0"
       and tyargs: "FI_TyArgs info = FI_TyArgs info0"
       and ghosteq: "FI_Ghost info = FI_Ghost info0"
+      and absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
+      and rtvM: "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
   shows "module_env_subst_runtime_ok (CM_TypeSubst m)
            (module_body_env_for (CM_TyEnv (normalize_module m)) names
               (apply_subst_to_funinfo (CM_TypeSubst m) info0))
@@ -3464,9 +3513,6 @@ proof -
                     | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars (CM_TyEnv (normalize_module m)))"
     using link_mid_env_runtime_ok[OF linkA linkB linkM setMS]
     unfolding module_env_subst_runtime_ok_def by blast
-  have absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
-    and rtvM: "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
-    using link_pair_abs_tv[OF linkA wtA linkB wtB linkM setMS] by blast+
   have ghost_m: "FI_Ghost (apply_subst_to_funinfo (CM_TypeSubst m) info0) = FI_Ghost info0"
     by (simp add: apply_subst_to_funinfo_def)
   have rtv_tb: "\<And>n. n |\<in>| TE_RuntimeTypeVars (CM_TyEnv m) \<Longrightarrow> n |\<in>| TE_RuntimeTypeVars ?tb"
@@ -3810,6 +3856,29 @@ proof -
     using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
     by blast+
 
+  \<comment> \<open>Side and whole-link tyvar conventions, feeding the body-env lemmas.\<close>
+  have absa0: "TE_AbstractTypes ?envA = TE_TypeVars ?envA"
+    using wtA unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
+    by blast
+  have absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
+    using absa0 by simp
+  have rtva: "TE_RuntimeTypeVars (CM_TyEnv a) |\<subseteq>| TE_TypeVars (CM_TyEnv a)"
+    using wfA unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by simp
+  have wfB: "tyenv_well_formed (CM_TyEnv (normalize_module b))"
+    and absb0: "TE_AbstractTypes (CM_TyEnv (normalize_module b))
+                  = TE_TypeVars (CM_TyEnv (normalize_module b))"
+    using wtB unfolding core_module_well_typed_def normalized_module_well_typed_def
+                        tyenv_module_scope_def
+    by blast+
+  have absb: "TE_AbstractTypes (CM_TyEnv b) = TE_TypeVars (CM_TyEnv b)"
+    using absb0 by simp
+  have rtvb: "TE_RuntimeTypeVars (CM_TyEnv b) |\<subseteq>| TE_TypeVars (CM_TyEnv b)"
+    using wfB unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by simp
+  have absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
+    and rtvM: "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
+    using link_pair_abs_tv[OF linkA wtA linkB wtB linkM setMS] by blast+
+
   \<comment> \<open>The a-side definition and its declared FunInfo.\<close>
   let ?fA = "f0 \<lparr> CF_Body := map_option (apply_subst_to_statement_list ?\<sigma>A)
                                         (CF_Body f0) \<rparr>"
@@ -3895,7 +3964,8 @@ proof -
     obtain envOut2 where
         t2: "core_statement_list_type ?sb (FI_Ghost infoA) ?bodyA = Some envOut2"
       using core_statement_list_type_tyenv_extends[OF t1
-              link_mid_body_env_extends[OF linkA wtA linkB wtB linkM setMS ghostOK]
+              link_mid_body_env_extends[OF linkA linkB linkM setMS ghostOK
+                                           absa rtva absb rtvb]
               cons1]
       by blast
     \<comment> \<open>Substitute with the whole link's substitution.\<close>
@@ -3912,10 +3982,11 @@ proof -
               link_mid_env_well_formed[OF linkA wtA linkB wtB linkM setMS ghostOK]
               mid_lk len0] .
     have ok_sb: "module_env_subst_ok ?\<sigma>M ?tb ?sb"
-      using link_mid_body_env_subst_ok[OF linkA wtA linkB wtB linkM setMS m_raw tyargs] .
+      using link_mid_body_env_subst_ok[OF linkM m_raw tyargs
+              link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS] absM] .
     have rt_sb: "module_env_subst_runtime_ok ?\<sigma>M ?tb ?sb"
-      using link_mid_body_env_runtime_ok[OF linkA wtA linkB wtB linkM setMS
-                                            m_raw tyargs ghostA] .
+      using link_mid_body_env_runtime_ok[OF linkA linkB linkM setMS
+                                            m_raw tyargs ghostA absM rtvM] .
     have t3: "core_statement_list_type (apply_subst_to_module_env ?\<sigma>M ?tb ?sb)
                 (FI_Ghost infoA)
                 (apply_subst_to_statement_list ?\<sigma>M ?bodyA)

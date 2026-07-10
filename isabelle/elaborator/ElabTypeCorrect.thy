@@ -37,8 +37,9 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
         by (cases typedef_entry) auto
       from "1.prems"(1) typedef_lookup
       have distinct_tyvars: "distinct tyvars"
-        and tyvars_subset: "type_tyvars targetTy \<subseteq> set tyvars"
         by (auto simp: typedefs_well_formed_def)
+      have tyvars_subset: "type_tyvars targetTy \<subseteq> set tyvars \<union> fset (TE_TypeVars env)"
+        using typedefs_well_formed_tyvars_subset[OF "1.prems"(1) typedef_lookup] .
       show ?thesis
       proof (cases "length elabTyArgs = length tyvars")
         case False
@@ -51,17 +52,19 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
           using fmdom_fmap_of_list_zip len_eq by metis
         have ran_eq: "fmran' ?subst = set elabTyArgs"
           using fmran'_fmap_of_list_zip len_eq distinct_tyvars by metis
-        (* The tyvars in the result are bounded by: (tyvars in targetTy \ dom subst) \<union> range_tyvars subst
-           Since tyvars in targetTy \<subseteq> set tyvars = dom subst, the first part is empty.
+        (* The tyvars in the result are bounded by: (tyvars in targetTy \ dom subst) \<union> range_tyvars subst.
+           Since tyvars in targetTy \<subseteq> set tyvars \<union> TE_TypeVars and set tyvars = dom subst,
+           the first part is \<subseteq> TE_TypeVars (leftover ambient/abstract tyvars).
            The range_tyvars are tyvars from elabTyArgs, which are \<subseteq> TE_TypeVars by IH. *)
         have "type_tyvars ?resultTy \<subseteq>
               (type_tyvars targetTy - fset (fmdom ?subst)) \<union> subst_range_tyvars ?subst"
           by (rule apply_subst_tyvars_result)
-        also have "... \<subseteq> subst_range_tyvars ?subst"
+        moreover have "type_tyvars targetTy - fset (fmdom ?subst) \<subseteq> fset (TE_TypeVars env)"
           using tyvars_subset dom_eq by auto
-        also have "... \<subseteq> fset (TE_TypeVars env)"
+        moreover have "subst_range_tyvars ?subst \<subseteq> fset (TE_TypeVars env)"
           using elabTyArgs_tyvars ran_eq by (auto simp: subst_range_tyvars_def fmran'_def)
-        finally have result_tyvars: "type_tyvars ?resultTy \<subseteq> fset (TE_TypeVars env)" .
+        ultimately have result_tyvars: "type_tyvars ?resultTy \<subseteq> fset (TE_TypeVars env)"
+          by blast
         show ?thesis
         proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
           case True
@@ -175,7 +178,8 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
         by (cases typedef_entry) auto
       from "1.prems"(1) typedef_lookup
       have distinct_tyvars: "distinct tyvars"
-        and targetTy_wk: "is_well_kinded env targetTy"
+        and targetTy_wk: "is_well_kinded
+              (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list tyvars \<rparr>) targetTy"
         by (auto simp: typedefs_well_formed_def)
       show ?thesis
       proof (cases "length elabTyArgs = length tyvars")
@@ -185,14 +189,38 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
         case len_eq: True
         let ?subst = "fmap_of_list (zip tyvars elabTyArgs)"
         let ?resultTy = "apply_subst ?subst targetTy"
+        let ?srcEnv = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list tyvars \<rparr>"
+        have dom_eq: "fset (fmdom ?subst) = set tyvars"
+          using fmdom_fmap_of_list_zip len_eq by metis
         have ran_eq: "fmran' ?subst = set elabTyArgs"
           using fmran'_fmap_of_list_zip[OF len_eq[symmetric] distinct_tyvars] .
         have subst_wk: "\<And>n ty. fmlookup ?subst n = Some ty \<Longrightarrow> is_well_kinded env ty"
           using elabTyArgs_wk ran_eq by (auto simp: list_all_iff dest: fmran'I)
+        (* The target is well-kinded with the entry's parameters in scope; the
+           substitution replaces exactly those parameters (dom = set tyvars) with
+           types that are well-kinded in env, and any remaining variable is an
+           ambient one, already in TE_TypeVars env. *)
         have result_wk: "is_well_kinded env ?resultTy"
-          using targetTy_wk
-          by (rule apply_subst_preserves_well_kinded[where src=env and tgt=env])
-             (auto simp: subst_wk split: option.splits)
+        proof (rule apply_subst_preserves_well_kinded[where src = "?srcEnv"])
+          show "is_well_kinded ?srcEnv targetTy" using targetTy_wk .
+          show "TE_Datatypes env = TE_Datatypes ?srcEnv" by simp
+        next
+          fix n assume "n |\<in>| TE_TypeVars ?srcEnv"
+          then have n_in: "n |\<in>| TE_TypeVars env \<or> n \<in> set tyvars"
+            by (auto simp: fset_of_list_elem)
+          show "case fmlookup ?subst n of
+                  Some ty' \<Rightarrow> is_well_kinded env ty'
+                | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+          proof (cases "fmlookup ?subst n")
+            case None
+            then have "n \<notin> set tyvars"
+              using dom_eq fmdom_notI by force
+            with n_in None show ?thesis by simp
+          next
+            case (Some ty')
+            with subst_wk show ?thesis by fastforce
+          qed
+        qed
         show ?thesis
         proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
           case True

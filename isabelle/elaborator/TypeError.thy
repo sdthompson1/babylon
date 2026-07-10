@@ -31,6 +31,7 @@ datatype TypeError =
   | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
   | TyErr_FunctionNoReturnType Location string
   | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
+  | TyErr_DataCtorNotCallable Location string  (* For payload-less constructors used with call syntax *)
   (* Binary operator errors *)
   | TyErr_BinopCannotCombineTypes Location BabBinop CoreType CoreType
   | TyErr_EqualityRequiresBoolOrNumeric Location
@@ -77,8 +78,32 @@ datatype TypeError =
   | TyErr_RefPatternInTermContext Location string  (* `ref` binding used in a term-context match *)
   | TyErr_RefPatternNeedsLvalue Location string  (* `ref` binding in a match statement whose scrutinee is not an lvalue *)
   | TyErr_EmptyMatch Location  (* match expression with zero arms *)
+
+  (* Declaration/Module level errors *)
+  | TyErr_DuplicateName Location string  (* declaration name (or constructor / type parameter) already in scope *)
+  | TyErr_AlreadyDefined Location string  (* second definition of a declared constant or function *)
+  | TyErr_ConstDeclNeedsType Location string  (* `const x;` with neither type annotation nor value *)
+  | TyErr_GhostMismatch Location string  (* a definition's ghost marker differs from its earlier declaration *)
+  | TyErr_FunctionSignatureMismatch Location string  (* a function definition's signature differs from its earlier declaration *)
+  | TyErr_NotCompileTimeConstant Location  (* a non-ghost global initializer contains a function call *)
+  | TyErr_ExternFunctionWithBody Location string  (* an extern function may not also have a body *)
+  | TyErr_InvalidFunctionAttribute Location  (* an attribute other than requires/ensures/decreases on a function *)
+  | TyErr_EmptyDatatype Location string  (* datatype with no constructors *)
+  | TyErr_TypeArgsNotAllowed Location string  (* type arguments on an abstract type declaration or realization *)
+  | TyErr_CannotRealizeImportedType Location string  (* giving a definition to an abstract type this module did not declare *)
+  | TyErr_GhostRealizationOfRuntimeType Location string  (* a non-ghost abstract type realized by a non-runtime type *)
+  | TyErr_SelfReferentialType Location string  (* a realization's target mentions the name being realized *)
+  | TyErr_TypeVarCapture Location string  (* a type parameter collides with an abstract type or type substitution *)
+  | TyErr_ExternTypeNotImplemented Location  (* `extern type` is not currently supported *)
+
+  | TyErr_DeclarationOnlyInImplementation Location string  (* a declaration without a definition in an implementation *)
+  | TyErr_DeclaredButNotDefined Location string  (* a declared constant or function that the module never defines *)
+  | TyErr_AbstractTypeNotRealized Location string  (* an abstract type the implementation never realizes *)
+  | TyErr_RecursiveDeclarations Location "string list"  (* a declaration referencing itself, or a cycle of declarations *)
+
   (* Internal errors *)
   | TyErr_InternalError_NameNotFound Location string  (* should have been caught by the renamer *)
+  | TyErr_InternalError_DependencyAnalysis Location  (* declaration dependency analysis failed; cannot happen (duplicates are pre-checked, dependencies are filtered to declared names) *)
   | TyErr_InternalError_UnexpectedChainVar Location
   | TyErr_InternalError_FreshnameClash Location string  (* synthesised match@@n name collided with a free var or pattern var *)
   | TyErr_InternalError_IllKindedProofGoal Location  (* a stored proof goal contained an ill-kinded quantifier type — impossible, as goals come from elaborated (well-typed) Asserts *)

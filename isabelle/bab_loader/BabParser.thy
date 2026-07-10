@@ -992,6 +992,10 @@ definition parse_typedef_alloc :: "(BabType option \<times> AllocLevel) Parser" 
 
 definition parse_typedef_decl :: "BabDeclaration Parser" where
   "parse_typedef_decl = with_loc (do {
+    ghost \<leftarrow> (do {
+      ghosts \<leftarrow> many (expect (KEYWORD KW_GHOST));
+      return (if ghosts = [] then NotGhost else Ghost)
+    });
     extern \<leftarrow> (do {
       externs \<leftarrow> many (expect (KEYWORD KW_EXTERN));
       return (externs \<noteq> [])
@@ -999,7 +1003,10 @@ definition parse_typedef_decl :: "BabDeclaration Parser" where
     expect (KEYWORD KW_TYPE);
     name \<leftarrow> parse_name;
     tyvars \<leftarrow> (angles (comma_list parse_name)) <|> (return []);
-    defnAlloc \<leftarrow> (if \<not>extern then parse_typedef_rhs else fail)
+    \<comment> \<open>A right-hand side is only permitted on a non-extern, non-ghost typedef
+       (a typedef with a definition takes its ghostness from the rhs, so a
+       ghost marker there would be redundant or contradictory).\<close>
+    defnAlloc \<leftarrow> (if \<not>extern \<and> ghost = NotGhost then parse_typedef_rhs else fail)
       <|> (parse_typedef_alloc)
       <|> (return (None, AllocNever));
     expect SEMICOLON;
@@ -1008,7 +1015,8 @@ definition parse_typedef_decl :: "BabDeclaration Parser" where
                                     DT_TyArgs = tyvars,
                                     DT_Definition = fst defnAlloc,
                                     DT_Extern = extern,
-                                    DT_AllocLevel = snd defnAlloc \<rparr>)
+                                    DT_AllocLevel = snd defnAlloc,
+                                    DT_Ghost = ghost \<rparr>)
   })"
 
 definition parse_decl :: "BabDeclaration Parser" where

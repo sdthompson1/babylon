@@ -2009,32 +2009,32 @@ next
       by (auto simp: resolve_type_args_def Let_def
                split: option.splits if_splits sum.splits prod.splits)
     from "2.prems"(1) None ctor_lookup have
-      arity_zero: "fmlookup (EE_DataCtorArity elabEnv) name = Some 0"
+      nullary_mem: "name |\<in>| EE_NullaryDataCtors elabEnv"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits option.splits)
-    from "2.prems"(1) None ctor_lookup arity_zero have
+    from "2.prems"(1) None ctor_lookup nullary_mem have
       ghost_ok: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
 
     \<comment> \<open>Extract resolve_type_args result\<close>
-    from "2.prems"(1) None ctor_lookup arity_zero ghost_ok
+    from "2.prems"(1) None ctor_lookup nullary_mem ghost_ok
     obtain newTyArgs next_mv1 where
       resolve_eq: "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv
                    = Inr (newTyArgs, next_mv1)"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
-    from "2.prems"(1) None ctor_lookup arity_zero ghost_ok resolve_eq have
+    from "2.prems"(1) None ctor_lookup nullary_mem ghost_ok resolve_eq have
       result_eq: "newTm = CoreTm_VariantCtor name newTyArgs (CoreTm_Record [])"
                  "ty = CoreTy_Datatype dtName newTyArgs"
                  "next_mv' = next_mv1"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
 
-    \<comment> \<open>From elabenv_well_formed + arity 0: payloadTy = CoreTy_Record []\<close>
-    from "2.prems"(3) arity_zero ctor_lookup have
+    \<comment> \<open>From elabenv_well_formed + nullary membership: payloadTy = CoreTy_Record []\<close>
+    from "2.prems"(3) nullary_mem ctor_lookup have
       payload_eq: "payloadTy = CoreTy_Record []"
-      unfolding elabenv_well_formed_def data_ctor_arity_consistent_def by force
+      unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def by force
 
     \<comment> \<open>From resolve_type_args_correct: type args are well-kinded and runtime in ?env'\<close>
     have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"

@@ -108,11 +108,12 @@ definition int_literal_default_type :: CoreType where
   "int_literal_default_type = CoreTy_FiniteInt Signed IntBits_32"
 
 (* Resolve a constructor name appearing in a pattern: look it up in
-   TE_DataCtors, check the ghost-context rule, and look up its arity in
-   EE_DataCtorArity. Returns (datatype name, type vars, payload type, arity). *)
+   TE_DataCtors and check the ghost-context rule. Returns (datatype name,
+   type vars, payload type, isNullary), where isNullary records whether the
+   constructor was declared without a payload (EE_NullaryDataCtors). *)
 definition resolve_pattern_ctor ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
-   \<Rightarrow> TypeError list + (string \<times> string list \<times> CoreType \<times> nat)" where
+   \<Rightarrow> TypeError list + (string \<times> string list \<times> CoreType \<times> bool)" where
   "resolve_pattern_ctor env elabEnv ghost loc ctorName =
     (case fmlookup (TE_DataCtors env) ctorName of
        None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc ctorName]
@@ -120,33 +121,32 @@ definition resolve_pattern_ctor ::
          if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
            Inl [TyErr_GhostVariableInNonGhost loc ctorName]
          else
-           (case fmlookup (EE_DataCtorArity elabEnv) ctorName of
-              None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc ctorName]
-            | Some arity \<Rightarrow> Inr (dtName, tyvars, payloadTy, arity)))"
+           Inr (dtName, tyvars, payloadTy, ctorName |\<in>| EE_NullaryDataCtors elabEnv))"
 
 (* Check that the user-supplied payload (Some/None) matches the
-   constructor's arity (0 or non-zero). Returns the inner pattern when
-   one is required (and provided), or None for nullary constructors. *)
-fun check_payload_arity ::
-  "Location \<Rightarrow> string \<Rightarrow> nat \<Rightarrow> BabPattern option
+   constructor's declaration (payload-less or not). Returns the inner
+   pattern when one is required (and provided), or None for payload-less
+   constructors. *)
+fun check_payload_presence ::
+  "Location \<Rightarrow> string \<Rightarrow> bool \<Rightarrow> BabPattern option
    \<Rightarrow> TypeError list + BabPattern option" where
-  "check_payload_arity loc cn 0 None = Inr None"
-| "check_payload_arity loc cn 0 (Some _) = Inl [TyErr_WrongNumberOfArgs loc cn 0 1]"
-| "check_payload_arity loc cn (Suc n) None = Inl [TyErr_WrongNumberOfArgs loc cn (Suc n) 0]"
-| "check_payload_arity loc cn (Suc n) (Some inner) = Inr (Some inner)"
+  "check_payload_presence loc cn True None = Inr None"
+| "check_payload_presence loc cn True (Some _) = Inl [TyErr_WrongNumberOfArgs loc cn 0 1]"
+| "check_payload_presence loc cn False None = Inl [TyErr_WrongNumberOfArgs loc cn 1 0]"
+| "check_payload_presence loc cn False (Some inner) = Inr (Some inner)"
 
-(* If check_payload_arity returns Inr (Some p), then the payload it
+(* If check_payload_presence returns Inr (Some p), then the payload it
    returned is exactly the original optPayload's inner pattern. Used
    in the termination proof. *)
-lemma check_payload_arity_Inr_Some:
-  "check_payload_arity loc cn arity optPayload = Inr (Some p) \<Longrightarrow> optPayload = Some p"
-  by (induction loc cn arity optPayload rule: check_payload_arity.induct) auto
+lemma check_payload_presence_Inr_Some:
+  "check_payload_presence loc cn isNullary optPayload = Inr (Some p) \<Longrightarrow> optPayload = Some p"
+  by (cases isNullary; cases optPayload) auto
 
 
 section \<open>The decorator\<close>
 
 (* Convert a BabPattern to a DecPattern, given the type of the scrutinee.
-   Requires: CoreTyEnv, ElabEnv (for data ctor arities), ghost flag, the pattern,
+   Requires: CoreTyEnv, ElabEnv (for nullary data ctors), ghost flag, the pattern,
    the scrutinee type it's matching against, substitution, and metavariable counter.
    Returns: Either an error; or decorated pattern, new subst, and new counter.  *)
 function (sequential)
@@ -229,19 +229,19 @@ and decorate_pattern_list ::
           | _ \<Rightarrow> Inl [TyErr_NotARecordType loc e]))"
 
   (* Variant: resolve the constructor, unify scrutTy with
-     CoreTy_Datatype dtName [fresh metas], check arity vs payload, and
+     CoreTy_Datatype dtName [fresh metas], check payload presence, and
      recurse on the payload (if any). *)
 | "decorate_pattern env elabEnv ghost (BabPat_Variant loc ctorName optPayload) scrutTy accSubst next_mv =
     (case resolve_pattern_ctor env elabEnv ghost loc ctorName of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (dtName, tyvars, payloadTy, arity) \<Rightarrow>
+     | Inr (dtName, tyvars, payloadTy, isNullary) \<Rightarrow>
          let freshTyArgs = mv_block next_mv (next_mv + length tyvars);
              next_mv' = next_mv + length tyvars;
              dtTy = CoreTy_Datatype dtName freshTyArgs
          in (case try_unify_compose env dtTy scrutTy accSubst of
               None \<Rightarrow> Inl [TyErr_TypeMismatch loc dtTy (apply_subst accSubst scrutTy)]
             | Some s \<Rightarrow>
-                (case check_payload_arity loc ctorName arity optPayload of
+                (case check_payload_presence loc ctorName isNullary optPayload of
                    Inl errs \<Rightarrow> Inl errs
                  | Inr None \<Rightarrow> Inr (DP_Variant ctorName None, s, next_mv')
                  | Inr (Some inner) \<Rightarrow>
@@ -279,7 +279,7 @@ termination decorate_pattern_list
         "measure (\<lambda>x. case x of
             Inl (_, _, _, p, _, _, _) \<Rightarrow> 2 * bab_pattern_size p
           | Inr (_, _, _, ps, _, _, _) \<Rightarrow> 2 * sum_list (map bab_pattern_size ps) + 1)")
-     (auto simp: bab_pattern_size_pos dest: check_payload_arity_Inr_Some)
+     (auto simp: bab_pattern_size_pos dest: check_payload_presence_Inr_Some)
 
 
 section \<open>Substitution into a decorated pattern\<close>

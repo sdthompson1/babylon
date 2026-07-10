@@ -462,26 +462,17 @@ definition callee_info_valid_function ::
 
 (* Validity predicate for a data constructor callee: the constructor exists,
    satisfies ghost constraints, type args are well-kinded/runtime,
-   and expArgTypes are consistent with the payload type and arity. *)
+   and expArgTypes is the singleton substituted payload type. *)
 definition callee_info_valid_data_ctor ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> string \<Rightarrow> nat \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> bool" where
-  "callee_info_valid_data_ctor env ghost ctorName dtName arity tyArgs expArgTypes =
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> bool" where
+  "callee_info_valid_data_ctor env ghost ctorName dtName tyArgs expArgTypes =
     (\<exists>tyvars payloadTy.
        fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)
      \<and> (ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env)
      \<and> length tyArgs = length tyvars
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
-     \<and> (arity = 0 \<longrightarrow> payloadTy = CoreTy_Record [])
-     \<and> (arity \<ge> 2 \<longrightarrow> (\<exists>fieldTys. payloadTy = CoreTy_Record (zip (tuple_field_names arity) fieldTys)
-                                 \<and> length fieldTys = arity))
-     \<and> (let subst = fmap_of_list (zip tyvars tyArgs) in
-          expArgTypes = (if arity = 0 then []
-                         else if arity = 1 then [apply_subst subst payloadTy]
-                         else case payloadTy of
-                                CoreTy_Record flds \<Rightarrow>
-                                  map (\<lambda>(_, ty). apply_subst subst ty) flds
-                              | _ \<Rightarrow> [])))"
+     \<and> expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy])"
 
 (* Combined validity predicate: dispatches to the appropriate sub-predicate. *)
 definition callee_info_valid :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CalleeInfo \<Rightarrow> CoreType list \<Rightarrow> bool" where
@@ -489,8 +480,8 @@ definition callee_info_valid :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow
     (case ci of
       CI_Function fnName tyArgs retType \<Rightarrow>
         callee_info_valid_function env ghost fnName tyArgs retType expArgTypes
-    | CI_DataCtor ctorName dtName arity tyArgs \<Rightarrow>
-        callee_info_valid_data_ctor env ghost ctorName dtName arity tyArgs expArgTypes)"
+    | CI_DataCtor ctorName dtName tyArgs \<Rightarrow>
+        callee_info_valid_data_ctor env ghost ctorName dtName tyArgs expArgTypes)"
 
 (* callee_info_valid is monotone in the type-variable interval. *)
 lemma callee_info_valid_mono:
@@ -525,7 +516,7 @@ proof (cases ci)
   show ?thesis using CI_Function fn_eq props(2,3,4,5,8,9) wk rt
     unfolding callee_info_valid_def callee_info_valid_function_def by auto
 next
-  case (CI_DataCtor ctorName dtName arity tyArgs)
+  case (CI_DataCtor ctorName dtName tyArgs)
   let ?env1 = "extend_env_with_tyvars env ghost lo hi"
   let ?env2 = "extend_env_with_tyvars env ghost lo' hi'"
   from assms(1) CI_DataCtor obtain tyvars payloadTy where props:
@@ -534,15 +525,7 @@ next
     "length tyArgs = length tyvars"
     "list_all (is_well_kinded ?env1) tyArgs"
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
-    "arity = 0 \<longrightarrow> payloadTy = CoreTy_Record []"
-    "arity \<ge> 2 \<longrightarrow> (\<exists>fieldTys. payloadTy = CoreTy_Record (zip (tuple_field_names arity) fieldTys)
-                              \<and> length fieldTys = arity)"
-    "let subst = fmap_of_list (zip tyvars tyArgs) in
-       expArgTypes = (if arity = 0 then []
-                      else if arity = 1 then [apply_subst subst payloadTy]
-                      else case payloadTy of
-                             CoreTy_Record flds \<Rightarrow> map (\<lambda>(_, ty). apply_subst subst ty) flds
-                           | _ \<Rightarrow> [])"
+    "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]"
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
   have dc_eq: "fmlookup (TE_DataCtors ?env2) ctorName = Some (dtName, tyvars, payloadTy)"
     using props(1) by (simp add: extend_env_with_tyvars_def)
@@ -554,7 +537,7 @@ next
   have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env2) tyArgs"
     using props(5) by (auto simp: list_all_iff
             intro: is_runtime_type_extend_env_with_tyvars_mono[OF _ assms(2,3)])
-  show ?thesis using CI_DataCtor dc_eq ghost_eq props(3,6,7,8) wk rt
+  show ?thesis using CI_DataCtor dc_eq ghost_eq props(3,6) wk rt
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 qed
 
@@ -684,17 +667,16 @@ qed
 (* Correctness of resolve_callee_data_ctor:
    If it succeeds, callee_info_valid_data_ctor holds in the extended env. *)
 lemma resolve_callee_data_ctor_correct:
-  assumes "resolve_callee_data_ctor env elabEnv ghost loc name arity tyArgs next_mv
+  assumes "resolve_callee_data_ctor env elabEnv ghost loc name tyArgs next_mv
            = Inr (calleeName, expArgTypes, calleeInfo, next_mv')"
       and "tyenv_well_formed env"
       and "elabenv_well_formed env elabEnv"
-      and "fmlookup (EE_DataCtorArity elabEnv) name = Some arity"
   shows "\<exists>dtName newTyArgs.
      calleeName = name
-   \<and> calleeInfo = CI_DataCtor name dtName arity newTyArgs
+   \<and> calleeInfo = CI_DataCtor name dtName newTyArgs
    \<and> next_mv \<le> next_mv'
    \<and> callee_info_valid_data_ctor (extend_env_with_tyvars env ghost next_mv next_mv')
-                                 ghost name dtName arity newTyArgs expArgTypes
+                                 ghost name dtName newTyArgs expArgTypes
    \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes
    \<and> (ghost = NotGhost \<longrightarrow>
         list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes)"
@@ -713,14 +695,10 @@ proof -
     resolve_eq: "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv
                  = Inr (newTyArgs, next_mv1)" and
     next_mv_eq: "next_mv' = next_mv1" and
-    ci_eq: "calleeInfo = CI_DataCtor name dtName arity newTyArgs" and
-    expArg_eq: "expArgTypes = (let subst = fmap_of_list (zip tyvars newTyArgs) in
-                  if arity = 0 then []
-                  else if arity = 1 then [apply_subst subst payloadTy]
-                  else case payloadTy of
-                         CoreTy_Record flds \<Rightarrow> map (\<lambda>(_, ty). apply_subst subst ty) flds
-                       | _ \<Rightarrow> [])"
-    by (auto simp: resolve_callee_data_ctor_def Let_def split: sum.splits prod.splits)
+    ci_eq: "calleeInfo = CI_DataCtor name dtName newTyArgs" and
+    expArg_eq: "expArgTypes = [apply_subst (fmap_of_list (zip tyvars newTyArgs)) payloadTy]"
+    by (auto simp: resolve_callee_data_ctor_def Let_def
+             split: if_splits sum.splits prod.splits)
 
   have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
     using assms(3) unfolding elabenv_well_formed_def by simp
@@ -737,19 +715,9 @@ proof -
   have ghost_ok': "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?env'"
     using ghost_ok by (simp add: extend_env_with_tyvars_def)
 
-  \<comment> \<open>From elabenv_well_formed: arity 0 implies payloadTy = CoreTy_Record []\<close>
-  have arity_consistent: "data_ctor_arity_consistent env name arity"
-    using assms(3,4) unfolding elabenv_well_formed_def by auto
-  have arity_zero_payload: "arity = 0 \<longrightarrow> payloadTy = CoreTy_Record []"
-    using arity_consistent ctor_lookup unfolding data_ctor_arity_consistent_def by auto
-
-  have arity_ge2_payload: "arity \<ge> 2 \<longrightarrow> (\<exists>fieldTys. payloadTy = CoreTy_Record (zip (tuple_field_names arity) fieldTys)
-                                                    \<and> length fieldTys = arity)"
-    using arity_consistent ctor_lookup unfolding data_ctor_arity_consistent_def by auto
-
-  have civ: "callee_info_valid_data_ctor ?env' ghost name dtName arity newTyArgs expArgTypes"
+  have civ: "callee_info_valid_data_ctor ?env' ghost name dtName newTyArgs expArgTypes"
     unfolding callee_info_valid_data_ctor_def
-    using ctor_lookup' ghost_ok' rta expArg_eq arity_zero_payload arity_ge2_payload by auto
+    using ctor_lookup' ghost_ok' rta expArg_eq by auto
 
   \<comment> \<open>expArgTypes well-kinded\<close>
   have wf': "tyenv_well_formed ?env'"
@@ -762,38 +730,11 @@ proof -
     using wf' tyenv_well_formed_def by blast
   hence payload_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
     using ctor_lookup' tyenv_payloads_well_kinded_def by blast
-  have "tyenv_ctor_tyvars_distinct env"
-    using assms(2) tyenv_well_formed_def by blast
-  hence tyvars_distinct: "distinct tyvars"
-    using ctor_lookup tyenv_ctor_tyvars_distinct_def by blast
   let ?subst = "fmap_of_list (zip tyvars newTyArgs)"
   have payload_subst_wk: "is_well_kinded ?env' (apply_subst ?subst payloadTy)"
     using apply_subst_specializes_well_kinded[OF payload_wk tyargs_wk len_tyargs[symmetric] abs_sub'] .
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
-  proof (cases "arity = 0")
-    case True thus ?thesis using expArg_eq by (simp add: Let_def)
-  next
-    case False
-    show ?thesis
-    proof (cases "arity = 1")
-      case True thus ?thesis using expArg_eq payload_subst_wk by (simp add: Let_def)
-    next
-      case False2: False
-      \<comment> \<open>arity >= 2: expArgTypes are substituted record field types\<close>
-      show ?thesis
-      proof (cases payloadTy)
-        case (CoreTy_Record flds)
-        have "\<forall>(_, ty) \<in> set flds.
-                is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars \<rparr>) ty"
-          using payload_wk CoreTy_Record by (auto simp: list_all_iff)
-        hence "\<forall>(_, ty) \<in> set flds. is_well_kinded ?env' (apply_subst ?subst ty)"
-          using apply_subst_specializes_well_kinded[OF _ tyargs_wk len_tyargs[symmetric] abs_sub']
-          by (auto simp: list_all_iff)
-        thus ?thesis using expArg_eq False False2 CoreTy_Record
-          by (auto simp: Let_def list_all_iff)
-      qed (use expArg_eq False False2 in \<open>simp_all add: Let_def\<close>)
-    qed
-  qed
+    using expArg_eq payload_subst_wk by simp
 
   \<comment> \<open>expArgTypes runtime\<close>
   have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
@@ -812,31 +753,7 @@ proof -
       using apply_subst_specializes_runtime[OF payload_rt_inner[OF dt_not_ghost]
               tyargs_rt len_tyargs[symmetric]] .
     show "list_all (is_runtime_type ?env') expArgTypes"
-    proof (cases "arity = 0")
-      case True thus ?thesis using expArg_eq by (simp add: Let_def)
-    next
-      case False
-      show ?thesis
-      proof (cases "arity = 1")
-        case True thus ?thesis using expArg_eq payload_subst_rt by (simp add: Let_def)
-      next
-        case False2: False
-        show ?thesis
-        proof (cases payloadTy)
-          case (CoreTy_Record flds)
-          have "\<forall>(_, ty) \<in> set flds.
-                  is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars,
-                        TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
-                                               |\<union>| fset_of_list tyvars \<rparr>) ty"
-            using payload_rt_inner[OF dt_not_ghost] CoreTy_Record by (auto simp: list_all_iff)
-          hence "\<forall>(_, ty) \<in> set flds. is_runtime_type ?env' (apply_subst ?subst ty)"
-            using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]]
-            by (auto simp: list_all_iff)
-          thus ?thesis using expArg_eq False False2 CoreTy_Record
-            by (auto simp: Let_def list_all_iff)
-        qed (use expArg_eq False False2 in \<open>simp_all add: Let_def\<close>)
-      qed
-    qed
+      using expArg_eq payload_subst_rt by simp
   qed
 
   show ?thesis
@@ -857,20 +774,20 @@ lemma resolve_callee_correct:
 proof (cases callee)
   case (BabTm_Name loc name tyArgs)
   show ?thesis
-  proof (cases "fmlookup (EE_DataCtorArity elabEnv) name")
-    case (Some arity)
+  proof (cases "fmlookup (TE_DataCtors env) name")
+    case (Some entry)
     \<comment> \<open>Data constructor path\<close>
     from assms(1) BabTm_Name Some have
-      resolve_dc: "resolve_callee_data_ctor env elabEnv ghost loc name arity tyArgs next_mv
+      resolve_dc: "resolve_callee_data_ctor env elabEnv ghost loc name tyArgs next_mv
                    = Inr (calleeName, expArgTypes, calleeInfo, next_mv')"
       by (simp add: resolve_callee_def)
-    from resolve_callee_data_ctor_correct[OF resolve_dc assms(2,3) Some]
+    from resolve_callee_data_ctor_correct[OF resolve_dc assms(2,3)]
     obtain dtName newTyArgs where props:
       "calleeName = name"
-      "calleeInfo = CI_DataCtor name dtName arity newTyArgs"
+      "calleeInfo = CI_DataCtor name dtName newTyArgs"
       "next_mv \<le> next_mv'"
       "callee_info_valid_data_ctor (extend_env_with_tyvars env ghost next_mv next_mv')
-                                   ghost name dtName arity newTyArgs expArgTypes"
+                                   ghost name dtName newTyArgs expArgTypes"
       "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes"
       "ghost = NotGhost \<longrightarrow>
          list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes"
@@ -1042,17 +959,15 @@ proof (cases calleeInfo)
           len_finalArgTms args_match ret_eq2
     by (simp add: Let_def)
 next
-  case (CI_DataCtor ctorName dtName arity tyArgs)
+  case (CI_DataCtor ctorName dtName tyArgs)
   let ?finalTyArgs = "map (apply_subst finalSubst) tyArgs"
-  let ?payload = "if arity = 0 then CoreTm_Record []
-                  else if arity = 1 then hd finalArgTms
-                  else CoreTm_Record (zip (tuple_field_names arity) finalArgTms)"
+  let ?payload = "hd finalArgTms"
 
   \<comment> \<open>Extract build_call_result outputs\<close>
   from build_eq CI_DataCtor have
     resultTm_eq: "resultTm = CoreTm_VariantCtor ctorName ?finalTyArgs ?payload" and
     resultTy_eq: "resultTy = CoreTy_Datatype dtName ?finalTyArgs"
-    by (auto simp: build_call_result_def Let_def split: if_splits)
+    by (auto simp: build_call_result_def Let_def)
 
   \<comment> \<open>Extract data ctor info from callee_info_valid\<close>
   from civ CI_DataCtor obtain tyvars payloadTy where
@@ -1061,16 +976,7 @@ next
     len_tyargs: "length tyArgs = length tyvars" and
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and
-    arity_zero_payload: "arity = 0 \<longrightarrow> payloadTy = CoreTy_Record []" and
-    arity_ge2_payload: "arity \<ge> 2 \<longrightarrow> (\<exists>fieldTys. payloadTy = CoreTy_Record (zip (tuple_field_names arity) fieldTys)
-                                                \<and> length fieldTys = arity)" and
-    expArg_eq: "let subst = fmap_of_list (zip tyvars tyArgs) in
-                  expArgTypes = (if arity = 0 then []
-                                 else if arity = 1 then [apply_subst subst payloadTy]
-                                 else case payloadTy of
-                                        CoreTy_Record flds \<Rightarrow>
-                                          map (\<lambda>(_, ty). apply_subst subst ty) flds
-                                      | _ \<Rightarrow> [])"
+    expArg_eq: "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]"
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 
   \<comment> \<open>Final type args well-kinded and runtime\<close>
@@ -1121,161 +1027,11 @@ next
 
   \<comment> \<open>Show payload typechecks with the expected type\<close>
   have payload_typed: "core_term_type env' ghost ?payload = Some (apply_subst ?coreTySubst payloadTy)"
-  proof (cases "arity = 0")
-    case True
-    hence "payloadTy = CoreTy_Record []" using arity_zero_payload by simp
-    thus ?thesis using True by simp
-  next
-    case False
-    show ?thesis
-    proof (cases "arity = 1")
-      case True
-      \<comment> \<open>Single argument: payload = hd finalArgTms\<close>
-      from expArg_eq True have exp_eq: "expArgTypes = [apply_subst ?origSubst payloadTy]"
-        by (simp add: Let_def)
-      from coerce exp_eq have "core_term_type env' ghost (hd finalArgTms)
+  proof -
+    from coerce expArg_eq have "core_term_type env' ghost (hd finalArgTms)
                                 = Some (apply_subst finalSubst (apply_subst ?origSubst payloadTy))"
-        using list.rel_cases by fastforce
-      thus ?thesis using False True payload_double_subst by simp
-    next
-      case False2: False
-      \<comment> \<open>Multiple arguments: payload = CoreTm_Record (zip (tuple_field_names arity) finalArgTms)\<close>
-      from False False2 have "arity \<ge> 2" by arith
-      with arity_ge2_payload obtain fieldTys where
-        payload_rec: "payloadTy = CoreTy_Record (zip (tuple_field_names arity) fieldTys)" and
-        len_fieldTys: "length fieldTys = arity"
-        by auto
-      let ?flds = "zip (tuple_field_names arity) fieldTys"
-      from expArg_eq False False2 payload_rec
-      have exp_eq: "expArgTypes = map (\<lambda>(_, ty). apply_subst ?origSubst ty) ?flds"
-        by (simp add: Let_def)
-
-      \<comment> \<open>Each coerced arg types to the double-substituted field type\<close>
-      \<comment> \<open>Each field type's tyvars lie within the payload's, hence are either in tyvars
-          or are abstract types untouched by finalSubst. \<close>
-      have fld_tyvars_ok: "\<And>nm ty n. (nm, ty) \<in> set ?flds \<Longrightarrow> n \<in> type_tyvars ty
-                            \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst"
-      proof -
-        fix nm ty n assume mem: "(nm, ty) \<in> set ?flds" and n_in: "n \<in> type_tyvars ty"
-        from mem payload_rec have "type_tyvars ty \<subseteq> type_tyvars payloadTy" by force
-        with n_in have "n \<in> type_tyvars payloadTy" by blast
-        thus "n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst" using payload_tyvars_ok by blast
-      qed
-      have fld_double_subst: "\<forall>(_, ty) \<in> set ?flds.
-              apply_subst finalSubst (apply_subst ?origSubst ty) = apply_subst ?coreTySubst ty"
-      proof (intro ballI, clarify)
-        fix nm ty assume mem: "(nm, ty) \<in> set ?flds"
-        have "\<And>n. n \<in> type_tyvars ty \<Longrightarrow> n \<in> set tyvars \<or> n |\<notin>| fmdom finalSubst"
-          using fld_tyvars_ok mem by blast
-        thus "apply_subst finalSubst (apply_subst ?origSubst ty) = apply_subst ?coreTySubst ty"
-          by (simp add: apply_subst_compose_zip_extra len_tyargs tyvars_distinct)
-      qed
-      have len_expArgTypes: "length expArgTypes = length ?flds"
-        using exp_eq by simp
-      have len_finalArgTms: "length finalArgTms = length expArgTypes"
-        using coerce by (simp add: list_all2_lengthD)
-
-      \<comment> \<open>Each finalArgTm types to the corresponding core field type\<close>
-      have args_typed: "\<forall>i < length ?flds.
-              core_term_type env' ghost (finalArgTms ! i)
-              = Some (apply_subst ?coreTySubst (snd (?flds ! i)))"
-      proof (intro allI impI)
-        fix i assume i_lt: "i < length ?flds"
-        have "core_term_type env' ghost (finalArgTms ! i)
-              = Some (apply_subst finalSubst (expArgTypes ! i))"
-          using coerce i_lt len_expArgTypes by (auto simp: list_all2_conv_all_nth)
-        also have "expArgTypes ! i = apply_subst ?origSubst (snd (?flds ! i))"
-          using exp_eq i_lt by auto
-        also have "apply_subst finalSubst (apply_subst ?origSubst (snd (?flds ! i)))
-                   = apply_subst ?coreTySubst (snd (?flds ! i))"
-        proof -
-          have "?flds ! i \<in> set ?flds" using i_lt nth_mem by blast
-          with fld_double_subst show ?thesis by (cases "?flds ! i") auto
-        qed
-        finally show "core_term_type env' ghost (finalArgTms ! i)
-                      = Some (apply_subst ?coreTySubst (snd (?flds ! i)))" .
-      qed
-
-      \<comment> \<open>tuple_field_names are distinct\<close>
-      have distinct_names: "distinct (tuple_field_names arity)"
-        using distinct_tuple_field_names .
-
-      \<comment> \<open>The substituted payload type\<close>
-      have subst_rec: "apply_subst ?coreTySubst payloadTy
-                       = CoreTy_Record (map (\<lambda>(n, ty). (n, apply_subst ?coreTySubst ty)) ?flds)"
-        using payload_rec by (induction ?flds) auto
-
-      \<comment> \<open>CoreTm_Record typing\<close>
-      have payload_eq: "?payload = CoreTm_Record (zip (tuple_field_names arity) finalArgTms)"
-        using False False2 by simp
-
-      \<comment> \<open>field names are tuple_field_names arity, which are distinct\<close>
-      have fst_flds: "map fst ?flds = tuple_field_names arity"
-        using len_fieldTys by simp
-
-      \<comment> \<open>The snd of each field = fieldTys ! i\<close>
-      have snd_flds: "map snd ?flds = fieldTys"
-        using len_fieldTys by (simp add: tuple_field_names_def)
-
-      \<comment> \<open>lengths match\<close>
-      have len_flds: "length ?flds = arity"
-        using len_fieldTys by simp
-      have len_args_arity: "length finalArgTms = arity"
-        using len_finalArgTms len_expArgTypes len_flds by simp
-
-      \<comment> \<open>Each arg has a definite type (simplified)\<close>
-      have each_typed: "\<forall>i < arity. core_term_type env' ghost (finalArgTms ! i)
-                        = Some (apply_subst ?coreTySubst (fieldTys ! i))"
-      proof (intro allI impI)
-        fix i assume i_lt: "i < arity"
-        hence i_lt': "i < length ?flds" using len_flds by simp
-        from args_typed i_lt' have "core_term_type env' ghost (finalArgTms ! i)
-              = Some (apply_subst ?coreTySubst (snd (?flds ! i)))" by simp
-        moreover have "snd (?flds ! i) = fieldTys ! i"
-          using i_lt len_fieldTys by (simp add: tuple_field_names_def)
-        ultimately show "core_term_type env' ghost (finalArgTms ! i)
-                         = Some (apply_subst ?coreTySubst (fieldTys ! i))" by simp
-      qed
-
-      \<comment> \<open>Build the those result\<close>
-      have len_names: "length (tuple_field_names arity) = arity"
-        by (simp add: tuple_field_names_def)
-      have those_input: "map (\<lambda>(name, tm). core_term_type env' ghost tm)
-                             (zip (tuple_field_names arity) finalArgTms)
-                         = map (\<lambda>i. Some (apply_subst ?coreTySubst (fieldTys ! i))) [0..<arity]"
-      proof (rule nth_equalityI)
-        show "length (map (\<lambda>(name, tm). core_term_type env' ghost tm)
-                          (zip (tuple_field_names arity) finalArgTms))
-              = length (map (\<lambda>i. Some (apply_subst ?coreTySubst (fieldTys ! i))) [0..<arity])"
-          using len_args_arity len_names by simp
-      next
-        fix i assume "i < length (map (\<lambda>(name, tm). core_term_type env' ghost tm)
-                                      (zip (tuple_field_names arity) finalArgTms))"
-        hence i_lt: "i < arity" using len_args_arity len_names by simp
-        show "map (\<lambda>(name, tm). core_term_type env' ghost tm)
-                  (zip (tuple_field_names arity) finalArgTms) ! i
-              = map (\<lambda>i. Some (apply_subst ?coreTySubst (fieldTys ! i))) [0..<arity] ! i"
-          using each_typed i_lt len_args_arity len_names
-          by simp
-      qed
-      have those_ok: "those (map (\<lambda>(name, tm). core_term_type env' ghost tm)
-                                 (zip (tuple_field_names arity) finalArgTms))
-                      = Some (map (\<lambda>i. apply_subst ?coreTySubst (fieldTys ! i)) [0..<arity])"
-        unfolding those_input those_eq_Some
-        by (auto simp: list_all2_conv_all_nth)
-
-      have result_tys: "map (\<lambda>i. apply_subst ?coreTySubst (fieldTys ! i)) [0..<arity]
-                        = map (apply_subst ?coreTySubst) fieldTys"
-        using len_fieldTys by (intro nth_equalityI) auto
-
-      have zip_map_eq: "zip (tuple_field_names arity) (map (apply_subst ?coreTySubst) fieldTys)
-                        = map2 (\<lambda>n ty. (n, apply_subst ?coreTySubst ty)) (tuple_field_names arity) fieldTys"
-        by (rule nth_equalityI) (auto simp: len_fieldTys tuple_field_names_def)
-
-      show ?thesis using payload_rec subst_rec payload_eq distinct_names
-            fst_flds len_args_arity those_ok result_tys zip_map_eq
-        by (simp add: Let_def tuple_field_names_def)
-    qed
+      using list.rel_cases by fastforce
+    thus ?thesis using payload_double_subst by simp
   qed
 
   show ?thesis

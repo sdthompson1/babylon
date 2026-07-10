@@ -2000,9 +2000,9 @@ next
 next
   case (7 env elabEnv ghost loc ctorName optPayload scrutTy accSubst next_mv)
   \<comment> \<open>BabPat_Variant. \<close>
-  from "7.prems"(1) obtain dtName tyvars payloadTy arity where
+  from "7.prems"(1) obtain dtName tyvars payloadTy isNullary where
     rpc: "resolve_pattern_ctor env elabEnv ghost loc ctorName
-            = Inr (dtName, tyvars, payloadTy, arity)"
+            = Inr (dtName, tyvars, payloadTy, isNullary)"
     by (auto split: sum.splits)
   let ?freshTyArgs = "mv_block next_mv (next_mv + length tyvars)"
   let ?next_mv_init = "next_mv + length tyvars"
@@ -2011,7 +2011,7 @@ next
     tuc: "try_unify_compose env ?dtTy scrutTy accSubst = Some s"
     by (auto simp: Let_def split: option.splits)
   from "7.prems"(1) rpc tuc obtain res where
-    chk: "check_payload_arity loc ctorName arity optPayload = Inr res"
+    chk: "check_payload_presence loc ctorName isNullary optPayload = Inr res"
     by (auto simp: Let_def split: sum.splits)
 
   have ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
@@ -2256,9 +2256,9 @@ next
     qed
 
     \<comment> \<open>Apply IH to the recursive call. \<close>
-    have b_eq: "(dtName, tyvars, payloadTy, arity) = (dtName, tyvars, payloadTy, arity)" by simp
-    have y_eq: "(tyvars, payloadTy, arity) = (tyvars, payloadTy, arity)" by simp
-    have ya_eq: "(payloadTy, arity) = (payloadTy, arity)" by simp
+    have b_eq: "(dtName, tyvars, payloadTy, isNullary) = (dtName, tyvars, payloadTy, isNullary)" by simp
+    have y_eq: "(tyvars, payloadTy, isNullary) = (tyvars, payloadTy, isNullary)" by simp
+    have ya_eq: "(payloadTy, isNullary) = (payloadTy, isNullary)" by simp
     from "7.IH"(1)[OF rpc b_eq y_eq ya_eq refl refl refl tuc chk Some refl refl rec
                        "7.prems"(2) s_idem
                        lo_le_init instPayloadTy_wk_init s_range_wk_init s_dom_flex

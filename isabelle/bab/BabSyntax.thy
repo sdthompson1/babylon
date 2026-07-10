@@ -139,13 +139,16 @@ record DeclDatatype =
   DD_TyArgs :: "string list"
   DD_Ctors :: "DataCtor list"
 
-record DeclTypedef = 
+record DeclTypedef =
   DT_Location :: Location
   DT_Name :: string
   DT_TyArgs :: "string list"
   DT_Definition :: "BabType option"   (* `None` for abstract or extern type *)
   DT_Extern :: bool
   DT_AllocLevel :: AllocLevel   (* Only relevant if DT_Definition is None *)
+  DT_Ghost :: GhostOrNot   (* `ghost type T;` - only allowed if DT_Definition is None
+                              (a typedef with a definition takes its ghostness from
+                              the right-hand side) *)
 
 datatype BabDeclaration = 
   BabDecl_Const DeclConst

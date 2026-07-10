@@ -122,13 +122,18 @@ definition tyenv_ghost_datatypes_subset :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_ghost_datatypes_subset env =
     (TE_GhostDatatypes env |\<subseteq>| fmdom (TE_Datatypes env))"
 
-(* Every datatype has at least one constructor. (Used to give CoreTm_Default a
-   default value for datatype types: the "first" constructor of the datatype.) *)
+(* All datatypes are inhabited (have at least one data constructor). This
+   comes in two parts:
+    (1) Every datatype listed in TE_Datatypes also has a constructor-list
+        in TE_DataCtorsByType.
+    (2) All of the constructor-lists in TE_DataCtorsByType are non-empty.
+   Note that the reverse inclusion, fmdom (TE_DataCtorsByType env) |\<subseteq>|
+   fmdom (TE_Datatypes env), is proved in tyenv_bytype_dom_subset below. *)
 definition tyenv_datatypes_nonempty :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_datatypes_nonempty env =
-    (\<forall>dtName |\<in>| fmdom (TE_Datatypes env).
-       \<exists>ctorName ctors.
-         fmlookup (TE_DataCtorsByType env) dtName = Some (ctorName # ctors))"
+    (fmdom (TE_Datatypes env) |\<subseteq>| fmdom (TE_DataCtorsByType env)
+     \<and> (\<forall>dtName ctors.
+          fmlookup (TE_DataCtorsByType env) dtName = Some ctors \<longrightarrow> ctors \<noteq> []))"
 
 (* TE_RuntimeTypeVars is a subset of TE_TypeVars: a type variable can only be a
    runtime type variable if it is in scope at all. *)
@@ -162,6 +167,47 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_runtime_tyvars_subset env \<and>
      tyenv_abstract_types_subset env \<and>
      tyenv_datatypes_nonempty env)"
+
+(* The domain of TE_DataCtorsByType is contained in the domain of TE_Datatypes:
+   an entry's constructor list is nonempty, its first constructor maps back to
+   the entry's name in TE_DataCtors, and that constructor's datatype is
+   registered in TE_Datatypes. *)
+lemma tyenv_bytype_dom_subset:
+  assumes cons: "tyenv_ctors_consistent env"
+      and btc: "tyenv_ctors_by_type_consistent env"
+      and dne: "tyenv_datatypes_nonempty env"
+  shows "fmdom (TE_DataCtorsByType env) |\<subseteq>| fmdom (TE_Datatypes env)"
+proof
+  fix dtName assume "dtName |\<in>| fmdom (TE_DataCtorsByType env)"
+  then obtain ctors where lk: "fmlookup (TE_DataCtorsByType env) dtName = Some ctors"
+    by (metis fmdomE)
+  have "ctors \<noteq> []"
+    using dne lk unfolding tyenv_datatypes_nonempty_def by blast
+  then obtain c cs where "ctors = c # cs" by (cases ctors) auto
+  then have "c \<in> set ctors" by simp
+  then obtain tyVars payload where
+    "fmlookup (TE_DataCtors env) c = Some (dtName, tyVars, payload)"
+    using btc lk unfolding tyenv_ctors_by_type_consistent_def by blast
+  then have "fmlookup (TE_Datatypes env) dtName = Some (length tyVars)"
+    using cons unfolding tyenv_ctors_consistent_def by blast
+  then show "dtName |\<in>| fmdom (TE_Datatypes env)" by (rule fmdomI)
+qed
+
+(* Every registered datatype has a "first" constructor. *)
+lemma tyenv_datatypes_nonempty_first_ctor:
+  assumes dne: "tyenv_datatypes_nonempty env"
+      and dt: "dtName |\<in>| fmdom (TE_Datatypes env)"
+  shows "\<exists>ctorName ctors.
+           fmlookup (TE_DataCtorsByType env) dtName = Some (ctorName # ctors)"
+proof -
+  from dne dt have "dtName |\<in>| fmdom (TE_DataCtorsByType env)"
+    unfolding tyenv_datatypes_nonempty_def by blast
+  then obtain ctors where lk: "fmlookup (TE_DataCtorsByType env) dtName = Some ctors"
+    by (metis fmdomE)
+  have "ctors \<noteq> []"
+    using dne lk unfolding tyenv_datatypes_nonempty_def by blast
+  then show ?thesis using lk by (cases ctors) auto
+qed
 
 (* Adding a well-kinded, runtime, non-ghost local variable preserves tyenv_well_formed. *)
 lemma tyenv_well_formed_add_var:

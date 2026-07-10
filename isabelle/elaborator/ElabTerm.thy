@@ -69,8 +69,8 @@ definition resolve_type_args ::
 datatype CalleeInfo =
   \<comment> \<open>Function call: fnName, tyArgs (pre-subst), retType (pre-subst)\<close>
   CI_Function string "CoreType list" CoreType
-  \<comment> \<open>Data constructor call: ctorName, dtName, arity, tyArgs (pre-subst)\<close>
-| CI_DataCtor string string nat "CoreType list"
+  \<comment> \<open>Data constructor call: ctorName, dtName, tyArgs (pre-subst)\<close>
+| CI_DataCtor string string "CoreType list"
 
 
 (* Resolve a function callee. Checks purity, ghost, resolves type args,
@@ -100,28 +100,26 @@ definition resolve_callee_function ::
     | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
 
 
-(* Resolve a data constructor callee. Checks ghost, resolves type args,
-   and computes expected argument types from the payload type and arity. *)
+(* Resolve a data constructor callee. Checks ghost, rejects payload-less
+   constructors (which are not callable), resolves type args, and expects
+   exactly one argument, of the payload type. *)
 definition resolve_callee_data_ctor ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> nat \<Rightarrow> BabType list \<Rightarrow> nat
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabType list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (string \<times> CoreType list \<times> CalleeInfo \<times> nat)" where
-  "resolve_callee_data_ctor env elabEnv ghost loc name arity tyArgs next_mv =
+  "resolve_callee_data_ctor env elabEnv ghost loc name tyArgs next_mv =
     (case fmlookup (TE_DataCtors env) name of
       Some (dtName, tyvars, payloadTy) \<Rightarrow>
         if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
           Inl [TyErr_GhostVariableInNonGhost loc name]
+        else if name |\<in>| EE_NullaryDataCtors elabEnv then
+          Inl [TyErr_DataCtorNotCallable loc name]
         else
           (case resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv of
             Inl errs \<Rightarrow> Inl errs
           | Inr (newTyArgs, next_mv') \<Rightarrow>
               let subst = fmap_of_list (zip tyvars newTyArgs);
-                  expArgTypes = (if arity = 0 then []
-                                 else if arity = 1 then [apply_subst subst payloadTy]
-                                 else case payloadTy of
-                                        CoreTy_Record flds \<Rightarrow>
-                                          map (\<lambda>(_, ty). apply_subst subst ty) flds
-                                      | _ \<Rightarrow> [])
-              in Inr (name, expArgTypes, CI_DataCtor name dtName arity newTyArgs, next_mv'))
+                  expArgTypes = [apply_subst subst payloadTy]
+              in Inr (name, expArgTypes, CI_DataCtor name dtName newTyArgs, next_mv'))
     | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
 
 
@@ -134,8 +132,8 @@ definition resolve_callee ::
   "resolve_callee env elabEnv ghost callee next_mv =
     (case callee of
       BabTm_Name loc name tyArgs \<Rightarrow>
-        (case fmlookup (EE_DataCtorArity elabEnv) name of
-          Some arity \<Rightarrow> resolve_callee_data_ctor env elabEnv ghost loc name arity tyArgs next_mv
+        (case fmlookup (TE_DataCtors env) name of
+          Some _ \<Rightarrow> resolve_callee_data_ctor env elabEnv ghost loc name tyArgs next_mv
         | None \<Rightarrow> resolve_callee_function env elabEnv ghost loc name tyArgs next_mv)
     | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"
 
@@ -150,12 +148,9 @@ definition build_call_result ::
         let finalTyArgs = map (apply_subst finalSubst) tyArgs;
             finalRetType = apply_subst finalSubst retType
         in (CoreTm_FunctionCall fnName finalTyArgs finalArgTms, finalRetType)
-    | CI_DataCtor ctorName dtName arity tyArgs \<Rightarrow>
-        let finalTyArgs = map (apply_subst finalSubst) tyArgs;
-            payload = (if arity = 0 then CoreTm_Record []
-                       else if arity = 1 then hd finalArgTms
-                       else CoreTm_Record (zip (tuple_field_names arity) finalArgTms))
-        in (CoreTm_VariantCtor ctorName finalTyArgs payload,
+    | CI_DataCtor ctorName dtName tyArgs \<Rightarrow>
+        let finalTyArgs = map (apply_subst finalSubst) tyArgs
+        in (CoreTm_VariantCtor ctorName finalTyArgs (hd finalArgTms),
             CoreTy_Datatype dtName finalTyArgs))"
 
 (* Unify actual types with expected types pairwise, accumulating substitutions.
@@ -741,7 +736,7 @@ where
     | None \<Rightarrow>
         (case fmlookup (TE_DataCtors env) name of
           Some (dtName, tyvars, _) \<Rightarrow>
-            if fmlookup (EE_DataCtorArity elabEnv) name \<noteq> Some 0 then
+            if name |\<notin>| EE_NullaryDataCtors elabEnv then
               Inl [TyErr_DataCtorHasPayload loc name]
             else if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
               Inl [TyErr_GhostVariableInNonGhost loc name]

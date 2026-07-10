@@ -3163,9 +3163,10 @@ next
   from "5.prems"(2) have wf: "tyenv_well_formed env" .
   from wf have dt_ne: "tyenv_datatypes_nonempty env"
     unfolding tyenv_well_formed_def by simp
-  from dt_ne dt_lookup obtain ctorName otherCtors where
+  from tyenv_datatypes_nonempty_first_ctor[OF dt_ne fmdomI[OF dt_lookup]]
+  obtain ctorName otherCtors where
     ctors_lookup: "fmlookup (TE_DataCtorsByType env) dtName = Some (ctorName # otherCtors)"
-    unfolding tyenv_datatypes_nonempty_def by force
+    by blast
   from tyenv_first_ctor_consistent[OF wf ctors_lookup] obtain tyvars payload where
     ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payload)"
     by blast

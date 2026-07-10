@@ -32,7 +32,7 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
   "is_impure_call env elabEnv rhs =
     (case rhs of
        BabTm_Call _ (BabTm_Name _ name _) _ \<Rightarrow>
-         name |\<notin>| fmdom (EE_DataCtorArity elabEnv) \<and>
+         name |\<notin>| fmdom (TE_DataCtors env) \<and>
          (case fmlookup (TE_Functions env) name of
             None \<Rightarrow> False
           | Some funInfo \<Rightarrow>
@@ -386,7 +386,7 @@ definition elab_call_statement ::
        BabTm_Call cloc callee args \<Rightarrow>
          (case callee of
             BabTm_Name nloc name calleeTyArgs \<Rightarrow>
-              if name |\<in>| fmdom (EE_DataCtorArity elabEnv)
+              if name |\<in>| fmdom (TE_DataCtors env)
                  \<or> name |\<notin>| fmdom (TE_Functions env)
               then Inl [TyErr_CalleeNotFunction nloc]
               else
