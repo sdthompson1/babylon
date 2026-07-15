@@ -1,5 +1,6 @@
 theory ElabDeclCorrect
   imports ElabDecl ElabStmtCorrect "../core/LinkPreservesWellTyped"
+          "../util/FSetExtras"
 begin
 
 (* Correctness of the declaration-list elaborator: "elaboration produces
@@ -222,14 +223,6 @@ qed
 (* ========================================================================== *)
 (* Helpers for the per-declaration preservation proof                         *)
 (* ========================================================================== *)
-
-(* Intersecting with a subset of a disjoint set. *)
-lemma empty_inter_subset:
-  fixes A B C :: "string fset"
-  assumes "A |\<inter>| C = {||}"
-      and "B |\<subseteq>| C"
-  shows "A |\<inter>| B = {||}"
-  using assms by (metis inf_mono le_bot order_refl)
 
 (* The type-variable fields of the state env, read off from its definition
    (apply_subst_to_tyenv does not touch them). *)
@@ -761,31 +754,6 @@ next
     by (rule Cons.IH[OF step]) (use Cons.prems(2) in auto)
 qed
 
-(* An fmupd contributes at most one entry's worth to a union over the range. *)
-lemma ffUnion_fmran_fmupd_member:
-  assumes "x |\<in>| ffUnion (f |`| fmran (fmupd k v m))"
-  shows "x |\<in>| f v \<or> x |\<in>| ffUnion (f |`| fmran m)"
-proof -
-  obtain e where e_ran: "e |\<in>| fmran (fmupd k v m)" and x_in: "x |\<in>| f e"
-    using assms unfolding fmember_ffUnion_iff by auto
-  obtain k' where lk: "fmlookup (fmupd k v m) k' = Some e"
-    using e_ran by (auto simp: fmlookup_ran_iff)
-  show ?thesis
-  proof (cases "k' = k")
-    case True
-    then have "e = v" using lk by simp
-    then show ?thesis using x_in by simp
-  next
-    case False
-    then have "fmlookup m k' = Some e" using lk by simp
-    then have "e |\<in>| fmran m" by (rule fmranI)
-    then have "f e |\<in>| f |`| fmran m" by simp
-    then have "x |\<in>| ffUnion (f |`| fmran m)"
-      unfolding fmember_ffUnion_iff using x_in by blast
-    then show ?thesis by simp
-  qed
-qed
-
 (* Updating one typedef entry grows scope_bound_tyvars by at most that
    entry's parameter list. *)
 lemma scope_bound_tyvars_typedefs_upd:
@@ -873,12 +841,6 @@ qed
 (* -------------------------------------------------------------------------- *)
 (* The state env absorbs the module's substitution                            *)
 (* -------------------------------------------------------------------------- *)
-
-(* Subtracting a set makes the result disjoint from it. *)
-lemma fminus_finter_disjoint:
-  fixes A B :: "string fset"
-  shows "(A |-| B) |\<inter>| B = {||}"
-  by (rule fset_eqI) auto
 
 (* The state env's type-variable fields avoid the substitution domain (they
    are built by subtracting it). *)
@@ -3486,11 +3448,25 @@ proof -
   show thesis
   proof (cases "fmlookup (TE_Functions env) (DF_Name df)")
     case (Some declInfo)
-    from ok obtain bodyOpt where
-      isdef: "DF_Extern df \<or> DF_Body df \<noteq> None" and
-      nd: "DF_Name df |\<notin>| fmdom (CM_Functions m)" and
-      fi_eq: "funInfo = declInfo" and
-      vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)" and
+    \<comment> \<open>Peel the define-branch guards one at a time as well: discharging them
+        all in one auto with if-splits blows up on this definition.\<close>
+    have isdef: "DF_Extern df \<or> DF_Body df \<noteq> None"
+      using ok unfolding elab_function_decl_def Let_def
+      by (cases "DF_Extern df \<or> DF_Body df \<noteq> None")
+         (auto simp: g1 g2 g3 g4 g4' sig Some)
+    have nd: "DF_Name df |\<notin>| fmdom (CM_Functions m)"
+      using ok isdef unfolding elab_function_decl_def Let_def
+      by (cases "DF_Name df |\<in>| fmdom (CM_Functions m)")
+         (auto simp: g1 g2 g3 g4 g4' sig Some)
+    have fi_eq: "funInfo = declInfo"
+      using ok isdef unfolding elab_function_decl_def Let_def
+      by (cases "funInfo = declInfo")
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd)
+    have vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
+      using ok isdef unfolding elab_function_decl_def Let_def
+      by (cases "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)")
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd fi_eq)
+    from ok isdef obtain bodyOpt where
       elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
       eq1: "env' = env" and
       eq2: "elabEnv' = elabEnv" and
@@ -3501,7 +3477,7 @@ proof -
                              (CM_Functions m) \<rparr>"
       unfolding elab_function_decl_def Let_def
       by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig Some split: if_splits)
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd fi_eq vd)
     have lk: "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
       using Some fi_eq by simp
     show thesis
@@ -3708,16 +3684,6 @@ qed
    exactly compose_subst of the singleton after sigma - which makes the whole
    compose-subst lemma inventory (TypeSubst.thy) available. *)
 
-(* Adding a right-biased singleton whose key is fresh is just fmupd. *)
-lemma fmadd_singleton_fresh:
-  assumes "k |\<notin>| fmdom M"
-  shows "fmupd k v fmempty ++\<^sub>f M = fmupd k v M"
-proof (rule fmap_ext)
-  fix n
-  show "fmlookup (fmupd k v fmempty ++\<^sub>f M) n = fmlookup (fmupd k v M) n"
-    using assms by (cases "n = k") auto
-qed
-
 lemma realization_subst_compose:
   assumes "name |\<notin>| fmdom \<sigma>"
   shows "fmupd name target (fmmap (apply_subst (fmupd name target fmempty)) \<sigma>)
@@ -3832,16 +3798,6 @@ qed
 (* -------------------------------------------------------------------------- *)
 (* Small helpers                                                               *)
 (* -------------------------------------------------------------------------- *)
-
-(* Monotone variant of empty_inter_subset: disjointness descends to subsets
-   on both sides. *)
-lemma empty_inter_mono:
-  fixes A B A' B' :: "string fset"
-  assumes "A |\<subseteq>| A'"
-      and "B |\<subseteq>| B'"
-      and "A' |\<inter>| B' = {||}"
-  shows "A |\<inter>| B = {||}"
-  using assms by (metis inf_mono le_bot)
 
 (* Per-entry view of the typedef summand of scope_bound_tyvars (mirror of
    scope_bound_tyvars_fun_entry / _ctor_entry). *)
@@ -5146,17 +5102,6 @@ next
       by (rule fold_ctor_upd_lookup_fresh[OF notin_cs])
     then show ?thesis using cn_eq p_eq by (simp add: c_eq)
   qed
-qed
-
-lemma fold_ctor_upd_fmdom:
-  "fmdom (fold (\<lambda>(c, p). fmupd c (dtName, tyVars, p)) ctors M)
-     = fset_of_list (map fst ctors) |\<union>| fmdom M"
-proof (induction ctors arbitrary: M)
-  case Nil
-  then show ?case by simp
-next
-  case (Cons c cs)
-  show ?case by (cases c) (simp add: Cons.IH)
 qed
 
 (* The fold lands on the right of a map union: fmupd goes pointwise through
@@ -6896,7 +6841,7 @@ lemma elab_typedef_decl_Inr_elim:
     "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
     "\<not> realization_captures env elabEnv (DT_Name dt) target"
     "apply_realization (DT_Name dt) target env elabEnv m = (env', elabEnv', m')"
-  | (NewAbstract) where
+  | (NewAbstract)
     "\<not> DT_Extern dt"
     "DT_Name dt |\<notin>| TE_TypeVars env"
     "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
@@ -6923,8 +6868,108 @@ lemma elab_typedef_decl_Inr_elim:
     "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt) (DT_TyArgs dt, target)
                                            (EE_Typedefs elabEnv) \<rparr>"
     "m' = m"
-  using ok unfolding elab_typedef_decl_def Let_def
-  by (auto split: if_splits option.splits sum.splits)
+proof -
+  \<comment> \<open>Peel the guards one at a time - a single auto with the full split set
+      does not terminate on this definition.\<close>
+  have g1: "\<not> DT_Extern dt"
+    using ok unfolding elab_typedef_decl_def Let_def
+    by (cases "DT_Extern dt") auto
+  show thesis
+  proof (cases "DT_Name dt |\<in>| TE_TypeVars env")
+    case True
+    \<comment> \<open>A realization of an abstract type in scope.\<close>
+    have own: "DT_Name dt |\<in>| ownAbstract"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_Name dt |\<in>| ownAbstract") (auto simp: g1 True)
+    from ok obtain ty where dtdef: "DT_Definition dt = Some ty"
+      unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_Definition dt") (auto simp: g1 True own)
+    have noargs: "DT_TyArgs dt = []"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_TyArgs dt = []") (auto simp: g1 True own dtdef)
+    from ok obtain target where et: "elab_type env elabEnv Ghost ty = Inr target"
+      unfolding elab_typedef_decl_def Let_def
+      by (cases "elab_type env elabEnv Ghost ty")
+         (auto simp: g1 True own dtdef noargs)
+    have noself: "DT_Name dt \<notin> type_tyvars target"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_Name dt \<in> type_tyvars target")
+         (auto simp: g1 True own dtdef noargs et)
+    have rt_ok': "\<not> (DT_Name dt |\<in>| TE_RuntimeTypeVars env
+                     \<and> \<not> is_runtime_type env target)"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_Name dt |\<in>| TE_RuntimeTypeVars env
+                 \<and> \<not> is_runtime_type env target")
+         (auto simp: g1 True own dtdef noargs et noself)
+    have nocap: "\<not> realization_captures env elabEnv (DT_Name dt) target"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "realization_captures env elabEnv (DT_Name dt) target")
+         (auto simp: g1 True own dtdef noargs et noself rt_ok')
+    have res: "apply_realization (DT_Name dt) target env elabEnv m
+                 = (env', elabEnv', m')"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (auto simp: g1 True own dtdef noargs et noself rt_ok' nocap)
+    have rt_ok: "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
+      using rt_ok' by blast
+    show thesis
+      by (rule Realize[OF g1 True own dtdef noargs et noself rt_ok nocap res])
+  next
+    case False
+    have notin: "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "type_name_in_scope env elabEnv (DT_Name dt)") (auto simp: g1 False)
+    show thesis
+    proof (cases "DT_Definition dt")
+      case None
+      \<comment> \<open>A new abstract type.\<close>
+      have noargs: "DT_TyArgs dt = []"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "DT_TyArgs dt = []") (auto simp: g1 False notin None)
+      have eq1: "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt) env"
+       and eq2: "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
+                    ([], CoreTy_Var (DT_Name dt)) (EE_Typedefs elabEnv) \<rparr>"
+       and eq3: "m' = m \<lparr> CM_TyEnv := tyenv_add_abstract_type (DT_Name dt)
+                    (DT_Ghost dt) (CM_TyEnv m) \<rparr>"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (auto simp: g1 False notin None noargs)
+      show thesis
+        by (rule NewAbstract[OF g1 False notin None noargs eq1 eq2 eq3])
+    next
+      case (Some ty)
+      \<comment> \<open>An ordinary transparent typedef.\<close>
+      have dup: "first_duplicate_name (\<lambda>x. x) (DT_TyArgs dt) = None"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "first_duplicate_name (\<lambda>x. x) (DT_TyArgs dt)")
+           (auto simp: g1 False notin Some)
+      have nocap: "\<not> binder_captures env m (DT_TyArgs dt)"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "binder_captures env m (DT_TyArgs dt)")
+           (auto simp: g1 False notin Some dup)
+      from ok obtain target where
+        et: "elab_type (env \<lparr> TE_TypeVars := TE_TypeVars env
+                                |\<union>| fset_of_list (DT_TyArgs dt) \<rparr>)
+                       (elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DT_TyArgs dt)
+                                                   (EE_Typedefs elabEnv) \<rparr>)
+                       Ghost ty = Inr target"
+        unfolding elab_typedef_decl_def Let_def
+        by (cases "elab_type (env \<lparr> TE_TypeVars := TE_TypeVars env
+                                      |\<union>| fset_of_list (DT_TyArgs dt) \<rparr>)
+                             (elabEnv \<lparr> EE_Typedefs :=
+                                          tyvar_typedef_entries (DT_TyArgs dt)
+                                            (EE_Typedefs elabEnv) \<rparr>)
+                             Ghost ty")
+           (auto simp: g1 False notin Some dup nocap)
+      have eq1: "env' = env"
+       and eq2: "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
+                    (DT_TyArgs dt, target) (EE_Typedefs elabEnv) \<rparr>"
+       and eq3: "m' = m"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (auto simp: g1 False notin Some dup nocap et)
+      show thesis
+        by (rule Transparent[OF g1 False notin Some dup nocap et eq1 eq2 eq3])
+    qed
+  qed
+qed
 
 lemma elab_typedef_decl_invariant:
   assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"

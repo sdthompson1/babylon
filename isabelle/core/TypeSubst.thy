@@ -1,5 +1,5 @@
 theory TypeSubst
-  imports CoreSyntax CoreTypeProps
+  imports CoreSyntax CoreTypeProps "../util/FSetExtras"
 begin
 
 (* ========================================================================== *)
@@ -489,11 +489,6 @@ lemma map_apply_subst_compose_zip:
 (* ========================================================================== *)
 (* The names a substitution touches (executable form)                         *)
 (* ========================================================================== *)
-
-(* Membership in the union of an fset of fsets. *)
-lemma fmember_ffUnion_iff:
-  "x |\<in>| ffUnion A \<longleftrightarrow> (\<exists>X. X |\<in>| A \<and> x |\<in>| X)"
-  by (induction A) auto
 
 (* Executable fset counterpart of subst_range_tyvars. *)
 definition subst_range_tyvars_fset :: "TypeSubst \<Rightarrow> string fset" where
