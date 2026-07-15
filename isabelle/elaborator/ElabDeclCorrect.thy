@@ -1896,6 +1896,242 @@ proof -
   then show ?thesis by simp
 qed
 
+(* The elimination rule for elab_const_decl success: one case per branch of
+   the elaborator (declaration only; definition of a previously-declared
+   constant; declare-and-define with inferred type; declare-and-define with
+   annotated type). Each case records the guards that must have passed and
+   states the defining equations of the result. The proof peels the
+   scrutinees one at a time (auto with split rules loops on this
+   definition). *)
+lemma elab_const_decl_Inr_elim:
+  assumes ok: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  obtains (DeclOnly) ty coreTy where
+    "DC_Value dc = None"
+    "\<not> term_name_in_scope env (DC_Name dc)"
+    "DC_Type dc = Some ty"
+    "elab_type env elabEnv (DC_Ghost dc) ty = Inr coreTy"
+    "env' = tyenv_add_global (DC_Name dc) coreTy (DC_Ghost dc) env"
+    "elabEnv' = elabEnv"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy (DC_Ghost dc)
+                            (CM_TyEnv m) \<rparr>"
+  | (DefineDeclared) rhs declTy finalTm where
+    "DC_Value dc = Some rhs"
+    "fmlookup (TE_GlobalVars env) (DC_Name dc) = Some declTy"
+    "DC_Name dc |\<notin>| fmdom (CM_GlobalVars m)"
+    "(DC_Name dc |\<in>| TE_GhostGlobals env) = (DC_Ghost dc = Ghost)"
+    "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
+       = Inr finalTm"
+    "env' = env"
+    "elabEnv' = elabEnv"
+    "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+  | (InferDefine) rhs finalTm declTy where
+    "DC_Value dc = Some rhs"
+    "fmlookup (TE_GlobalVars env) (DC_Name dc) = None"
+    "DC_Type dc = None"
+    "\<not> term_name_in_scope env (DC_Name dc)"
+    "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs
+       = Inr (finalTm, declTy)"
+    "env' = tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env"
+    "elabEnv' = elabEnv"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc)
+                            (CM_TyEnv m),
+              CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+  | (AnnotDefine) rhs ty declTy finalTm where
+    "DC_Value dc = Some rhs"
+    "fmlookup (TE_GlobalVars env) (DC_Name dc) = None"
+    "DC_Type dc = Some ty"
+    "\<not> term_name_in_scope env (DC_Name dc)"
+    "elab_type env elabEnv (DC_Ghost dc) ty = Inr declTy"
+    "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
+       = Inr finalTm"
+    "env' = tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env"
+    "elabEnv' = elabEnv"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc)
+                            (CM_TyEnv m),
+              CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+proof (cases "DC_Value dc")
+  case None
+  \<comment> \<open>Collapse the outer case with the known discriminator first (no
+      splitting), so that the branch extraction below only splits within
+      this one branch.\<close>
+  from ok have elabA:
+    "(if term_name_in_scope env (DC_Name dc)
+      then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
+      else case DC_Type dc of
+             None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType (DC_Location dc) (DC_Name dc)]
+           | Some ty \<Rightarrow>
+               (case elab_type env elabEnv (DC_Ghost dc) ty of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr coreTy \<Rightarrow>
+                    Inr (tyenv_add_global (DC_Name dc) coreTy (DC_Ghost dc) env,
+                         elabEnv,
+                         m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy
+                                           (DC_Ghost dc) (CM_TyEnv m) \<rparr>)))
+     = Inr (env', elabEnv', m')"
+    unfolding elab_const_decl_def Let_def by (simp add: None)
+  have notin: "\<not> term_name_in_scope env (DC_Name dc)"
+    using elabA by (cases "term_name_in_scope env (DC_Name dc)") simp_all
+  from elabA notin obtain ty where dty: "DC_Type dc = Some ty"
+    by (cases "DC_Type dc") auto
+  from elabA notin dty obtain coreTy where
+    ety: "elab_type env elabEnv (DC_Ghost dc) ty = Inr coreTy" and
+    env'_eq: "env' = tyenv_add_global (DC_Name dc) coreTy (DC_Ghost dc) env" and
+    ee'_eq: "elabEnv' = elabEnv" and
+    m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy
+                                   (DC_Ghost dc) (CM_TyEnv m) \<rparr>"
+    by (cases "elab_type env elabEnv (DC_Ghost dc) ty") auto
+  show thesis
+    by (rule DeclOnly[OF None notin dty ety env'_eq ee'_eq m'_eq])
+next
+  case (Some rhs)
+  show thesis
+  proof (cases "fmlookup (TE_GlobalVars env) (DC_Name dc)")
+    case lkSome: (Some declTy)
+    from ok have elabB:
+      "(if DC_Name dc |\<in>| fmdom (CM_GlobalVars m)
+        then Inl [TyErr_AlreadyDefined (DC_Location dc) (DC_Name dc)]
+        else if (DC_Name dc |\<in>| TE_GhostGlobals env) \<noteq> (DC_Ghost dc = Ghost)
+        then Inl [TyErr_GhostMismatch (DC_Location dc) (DC_Name dc)]
+        else
+          (case (case DC_Type dc of
+                   None \<Rightarrow> Inr declTy
+                 | Some ty \<Rightarrow>
+                     (case elab_type env elabEnv (DC_Ghost dc) ty of
+                        Inl errs \<Rightarrow> Inl errs
+                      | Inr coreTy \<Rightarrow>
+                          if coreTy \<noteq> declTy
+                          then Inl [TyErr_TypeMismatch (DC_Location dc) declTy coreTy]
+                          else Inr declTy)) of
+             Inl errs \<Rightarrow> Inl errs
+           | Inr _ \<Rightarrow>
+               (case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc)
+                       declTy rhs of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr finalTm \<Rightarrow>
+                    Inr (env, elabEnv,
+                         m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm
+                                                (CM_GlobalVars m) \<rparr>))))
+       = Inr (env', elabEnv', m')"
+      unfolding elab_const_decl_def Let_def
+      by (simp add: Some lkSome)
+    have nd: "DC_Name dc |\<notin>| fmdom (CM_GlobalVars m)"
+      using elabB by (cases "DC_Name dc |\<in>| fmdom (CM_GlobalVars m)") simp_all
+    have gm: "(DC_Name dc |\<in>| TE_GhostGlobals env) = (DC_Ghost dc = Ghost)"
+      using elabB nd
+      by (cases "(DC_Name dc |\<in>| TE_GhostGlobals env) \<noteq> (DC_Ghost dc = Ghost)")
+         simp_all
+    \<comment> \<open>Dispose of the annotation check, leaving only the rhs elaboration.\<close>
+    have elabB':
+      "(case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr finalTm \<Rightarrow>
+            Inr (env, elabEnv,
+                 m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>))
+       = Inr (env', elabEnv', m')"
+    proof (cases "DC_Type dc")
+      case None
+      with elabB nd gm show ?thesis by simp
+    next
+      case (Some ty)
+      show ?thesis
+      proof (cases "elab_type env elabEnv (DC_Ghost dc) ty")
+        case (Inl errs)
+        with elabB nd gm Some show ?thesis by simp
+      next
+        case (Inr coreTy)
+        with elabB nd gm Some show ?thesis
+          by (cases "coreTy = declTy") simp_all
+      qed
+    qed
+    from elabB' obtain finalTm where
+      rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
+                 = Inr finalTm" and
+      env'_eq: "env' = env" and
+      ee'_eq: "elabEnv' = elabEnv" and
+      m'_eq: "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+      by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
+         auto
+    show thesis
+      by (rule DefineDeclared[OF Some lkSome nd gm rhs_ok env'_eq ee'_eq m'_eq])
+  next
+    case lkNone: None
+    show thesis
+    proof (cases "DC_Type dc")
+      case tyNone: None
+      from ok tyNone have elabC:
+        "(if term_name_in_scope env (DC_Name dc)
+          then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
+          else case elab_const_rhs_infer env elabEnv (DC_Ghost dc)
+                      (DC_Location dc) rhs of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr (finalTm, declTy) \<Rightarrow>
+                   Inr (tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env,
+                        elabEnv,
+                        m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                          (DC_Ghost dc) (CM_TyEnv m),
+                            CM_GlobalVars := fmupd (DC_Name dc) finalTm
+                                               (CM_GlobalVars m) \<rparr>))
+         = Inr (env', elabEnv', m')"
+        unfolding elab_const_decl_def Let_def
+        using lkNone Some by auto
+      have notin: "\<not> term_name_in_scope env (DC_Name dc)"
+        using elabC by (cases "term_name_in_scope env (DC_Name dc)") simp_all
+      from elabC notin obtain finalTm declTy where
+        infer_ok: "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs
+                     = Inr (finalTm, declTy)" and
+        env'_eq: "env' = tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env" and
+        ee'_eq: "elabEnv' = elabEnv" and
+        m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                       (DC_Ghost dc) (CM_TyEnv m),
+                         CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+        by (cases "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs")
+           (auto split: prod.splits)
+      show thesis
+        by (rule InferDefine[OF Some lkNone tyNone notin infer_ok
+                                env'_eq ee'_eq m'_eq])
+    next
+      case tySome: (Some ty)
+      from ok tySome have elabD:
+        "(if term_name_in_scope env (DC_Name dc)
+          then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
+          else case elab_type env elabEnv (DC_Ghost dc) ty of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr declTy \<Rightarrow>
+                   (case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc)
+                           declTy rhs of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr finalTm \<Rightarrow>
+                        Inr (tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env,
+                             elabEnv,
+                             m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                               (DC_Ghost dc) (CM_TyEnv m),
+                                 CM_GlobalVars := fmupd (DC_Name dc) finalTm
+                                                    (CM_GlobalVars m) \<rparr>)))
+         = Inr (env', elabEnv', m')"
+        unfolding elab_const_decl_def Let_def
+        using lkNone Some by auto
+      have notin: "\<not> term_name_in_scope env (DC_Name dc)"
+        using elabD by (cases "term_name_in_scope env (DC_Name dc)") simp_all
+      from elabD notin obtain declTy where
+        ety: "elab_type env elabEnv (DC_Ghost dc) ty = Inr declTy"
+        by (cases "elab_type env elabEnv (DC_Ghost dc) ty") auto
+      from elabD notin ety obtain finalTm where
+        rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
+                   = Inr finalTm" and
+        env'_eq: "env' = tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env" and
+        ee'_eq: "elabEnv' = elabEnv" and
+        m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                       (DC_Ghost dc) (CM_TyEnv m),
+                         CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+        by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
+           auto
+      show thesis
+        by (rule AnnotDefine[OF Some lkNone tySome notin ety rhs_ok
+                                env'_eq ee'_eq m'_eq])
+    qed
+  qed
+qed
+
 (* The four branches of elab_const_decl, dispatched to the step lemmas. *)
 lemma elab_const_decl_invariant:
   assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
@@ -1910,228 +2146,67 @@ proof -
     using eewf unfolding elabenv_well_formed_def by blast
   have scope_env: "tyenv_module_scope env"
     using elab_decls_invariant_module_scope[OF inv] .
-  show ?thesis
-  proof (cases "DC_Value dc")
-    case None
+  from elab show ?thesis
+  proof (cases rule: elab_const_decl_Inr_elim)
+    case (DeclOnly ty coreTy)
     \<comment> \<open>Declaration without definition (requires a type annotation).\<close>
-    \<comment> \<open>Collapse the outer case with the known discriminator first (no splitting),
-        so that the branch-extraction below only splits within this one branch.\<close>
-    from elab have elabA:
-      "(if term_name_in_scope env (DC_Name dc)
-        then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
-        else case DC_Type dc of
-               None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType (DC_Location dc) (DC_Name dc)]
-             | Some ty \<Rightarrow>
-                 (case elab_type env elabEnv (DC_Ghost dc) ty of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr coreTy \<Rightarrow>
-                      Inr (tyenv_add_global (DC_Name dc) coreTy (DC_Ghost dc) env,
-                           elabEnv,
-                           m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy
-                                             (DC_Ghost dc) (CM_TyEnv m) \<rparr>)))
-       = Inr (env', elabEnv', m')"
-      unfolding elab_const_decl_def Let_def by (simp add: None)
-    \<comment> \<open>Peel the scrutinees one at a time (auto with split rules loops here).\<close>
-    have notin: "\<not> term_name_in_scope env (DC_Name dc)"
-      using elabA by (cases "term_name_in_scope env (DC_Name dc)") simp_all
-    from elabA notin obtain ty where dty: "DC_Type dc = Some ty"
-      by (cases "DC_Type dc") auto
-    from elabA notin dty obtain coreTy where
-      ety: "elab_type env elabEnv (DC_Ghost dc) ty = Inr coreTy" and
-      env'_eq: "env' = tyenv_add_global (DC_Name dc) coreTy (DC_Ghost dc) env" and
-      ee'_eq: "elabEnv' = elabEnv" and
-      m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy
-                                     (DC_Ghost dc) (CM_TyEnv m) \<rparr>"
-      by (cases "elab_type env elabEnv (DC_Ghost dc) ty") auto
+    note notin = DeclOnly(2) and ety = DeclOnly(4)
     have wk: "is_well_kinded env coreTy"
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env coreTy"
       using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
     show ?thesis
-      unfolding env'_eq ee'_eq m'_eq
+      unfolding DeclOnly(5) DeclOnly(6) DeclOnly(7)
       by (rule elab_decls_invariant_add_global[OF inv notin wk rt])
   next
-    case (Some rhs)
-    show ?thesis
-    proof (cases "fmlookup (TE_GlobalVars env) (DC_Name dc)")
-      case (Some declTy)
-      \<comment> \<open>Definition of a previously-declared constant.\<close>
-      from elab have elabB:
-        "(if DC_Name dc |\<in>| fmdom (CM_GlobalVars m)
-          then Inl [TyErr_AlreadyDefined (DC_Location dc) (DC_Name dc)]
-          else if (DC_Name dc |\<in>| TE_GhostGlobals env) \<noteq> (DC_Ghost dc = Ghost)
-          then Inl [TyErr_GhostMismatch (DC_Location dc) (DC_Name dc)]
-          else
-            (case (case DC_Type dc of
-                     None \<Rightarrow> Inr declTy
-                   | Some ty \<Rightarrow>
-                       (case elab_type env elabEnv (DC_Ghost dc) ty of
-                          Inl errs \<Rightarrow> Inl errs
-                        | Inr coreTy \<Rightarrow>
-                            if coreTy \<noteq> declTy
-                            then Inl [TyErr_TypeMismatch (DC_Location dc) declTy coreTy]
-                            else Inr declTy)) of
-               Inl errs \<Rightarrow> Inl errs
-             | Inr _ \<Rightarrow>
-                 (case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc)
-                         declTy rhs of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr finalTm \<Rightarrow>
-                      Inr (env, elabEnv,
-                           m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm
-                                                  (CM_GlobalVars m) \<rparr>))))
-         = Inr (env', elabEnv', m')"
-        unfolding elab_const_decl_def Let_def
-        by (simp add: \<open>DC_Value dc = Some rhs\<close> Some)
-      \<comment> \<open>Peel the scrutinees one at a time (auto with split rules loops here).\<close>
-      have nd: "DC_Name dc |\<notin>| fmdom (CM_GlobalVars m)"
-        using elabB by (cases "DC_Name dc |\<in>| fmdom (CM_GlobalVars m)") simp_all
-      have gm: "(DC_Name dc |\<in>| TE_GhostGlobals env) = (DC_Ghost dc = Ghost)"
-        using elabB nd
-        by (cases "(DC_Name dc |\<in>| TE_GhostGlobals env) \<noteq> (DC_Ghost dc = Ghost)")
-           simp_all
-      \<comment> \<open>Dispose of the annotation check, leaving only the rhs elaboration.\<close>
-      have elabB':
-        "(case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs of
-            Inl errs \<Rightarrow> Inl errs
-          | Inr finalTm \<Rightarrow>
-              Inr (env, elabEnv,
-                   m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>))
-         = Inr (env', elabEnv', m')"
-      proof (cases "DC_Type dc")
-        case None
-        with elabB nd gm show ?thesis by simp
-      next
-        case (Some ty)
-        show ?thesis
-        proof (cases "elab_type env elabEnv (DC_Ghost dc) ty")
-          case (Inl errs)
-          with elabB nd gm Some show ?thesis by simp
-        next
-          case (Inr coreTy)
-          with elabB nd gm Some show ?thesis
-            by (cases "coreTy = declTy") simp_all
-        qed
-      qed
-      from elabB' obtain finalTm where
-        rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
-                   = Inr finalTm" and
-        env'_eq: "env' = env" and
-        ee'_eq: "elabEnv' = elabEnv" and
-        m'_eq: "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-        by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
-           auto
-      have wk_decl: "is_well_kinded env declTy"
-        using global_decl_well_kinded_module_scope[OF wf scope_env Some] .
-      have rt_decl: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-      proof
-        assume ng: "DC_Ghost dc = NotGhost"
-        then have "DC_Name dc |\<notin>| TE_GhostGlobals env" using gm by simp
-        then show "is_runtime_type env declTy"
-          using global_decl_runtime_module_scope[OF wf scope_env Some] by blast
-      qed
-      have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-       and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-        using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk_decl rt_decl] by blast+
-      show ?thesis
-        unfolding env'_eq ee'_eq m'_eq
-        by (rule elab_decls_invariant_define_global[OF inv Some gm typed const])
-    next
-      case None
-      \<comment> \<open>Declaring and defining at once.\<close>
-      show ?thesis
-      proof (cases "DC_Type dc")
-        case none2: None
-        \<comment> \<open>No annotation: the constant's type is inferred from the rhs.\<close>
-        from elab \<open>DC_Type dc = None\<close> have elabC:
-          "(if term_name_in_scope env (DC_Name dc)
-            then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
-            else case elab_const_rhs_infer env elabEnv (DC_Ghost dc)
-                        (DC_Location dc) rhs of
-                   Inl errs \<Rightarrow> Inl errs
-                 | Inr (finalTm, declTy) \<Rightarrow>
-                     Inr (tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env,
-                          elabEnv,
-                          m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
-                                            (DC_Ghost dc) (CM_TyEnv m),
-                              CM_GlobalVars := fmupd (DC_Name dc) finalTm
-                                                 (CM_GlobalVars m) \<rparr>))
-           = Inr (env', elabEnv', m')"
-          unfolding elab_const_decl_def Let_def
-          using None Some by auto
-        \<comment> \<open>Peel the scrutinees one at a time (auto with split rules loops here).\<close>
-        have notin: "\<not> term_name_in_scope env (DC_Name dc)"
-          using elabC by (cases "term_name_in_scope env (DC_Name dc)") simp_all
-        from elabC notin obtain finalTm declTy where
-          infer_ok: "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs
-                       = Inr (finalTm, declTy)" and
-          env'_eq: "env' = tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env" and
-          ee'_eq: "elabEnv' = elabEnv" and
-          m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
-                                         (DC_Ghost dc) (CM_TyEnv m),
-                           CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-          by (cases "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs")
-             (auto split: prod.splits)
-        have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-         and wk: "is_well_kinded env declTy"
-         and rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-         and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-          using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
-        show ?thesis
-          unfolding env'_eq ee'_eq m'_eq
-          by (rule elab_decls_invariant_declare_define_global
-                     [OF inv notin wk rt typed const])
-      next
-        case some2: (Some ty)
-        \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
-        from elab \<open>DC_Type dc = Some ty\<close> have elabD:
-          "(if term_name_in_scope env (DC_Name dc)
-            then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
-            else case elab_type env elabEnv (DC_Ghost dc) ty of
-                   Inl errs \<Rightarrow> Inl errs
-                 | Inr declTy \<Rightarrow>
-                     (case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc)
-                             declTy rhs of
-                        Inl errs \<Rightarrow> Inl errs
-                      | Inr finalTm \<Rightarrow>
-                          Inr (tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env,
-                               elabEnv,
-                               m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
-                                                 (DC_Ghost dc) (CM_TyEnv m),
-                                   CM_GlobalVars := fmupd (DC_Name dc) finalTm
-                                                      (CM_GlobalVars m) \<rparr>)))
-           = Inr (env', elabEnv', m')"
-          unfolding elab_const_decl_def Let_def
-          using None Some by auto
-        \<comment> \<open>Peel the scrutinees one at a time (auto with split rules loops here).\<close>
-        have notin: "\<not> term_name_in_scope env (DC_Name dc)"
-          using elabD by (cases "term_name_in_scope env (DC_Name dc)") simp_all
-        from elabD notin obtain declTy where
-          ety: "elab_type env elabEnv (DC_Ghost dc) ty = Inr declTy"
-          by (cases "elab_type env elabEnv (DC_Ghost dc) ty") auto
-        from elabD notin ety obtain finalTm where
-          rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
-                     = Inr finalTm" and
-          env'_eq: "env' = tyenv_add_global (DC_Name dc) declTy (DC_Ghost dc) env" and
-          ee'_eq: "elabEnv' = elabEnv" and
-          m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
-                                         (DC_Ghost dc) (CM_TyEnv m),
-                           CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-          by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
-             auto
-        have wk: "is_well_kinded env declTy"
-          using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
-        have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-          using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-        have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-         and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-          using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk rt] by blast+
-        show ?thesis
-          unfolding env'_eq ee'_eq m'_eq
-          by (rule elab_decls_invariant_declare_define_global
-                     [OF inv notin wk rt typed const])
-      qed
+    case (DefineDeclared rhs declTy finalTm)
+    \<comment> \<open>Definition of a previously-declared constant.\<close>
+    note lk = DefineDeclared(2) and gm = DefineDeclared(4)
+     and rhs_ok = DefineDeclared(5)
+    have wk_decl: "is_well_kinded env declTy"
+      using global_decl_well_kinded_module_scope[OF wf scope_env lk] .
+    have rt_decl: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
+    proof
+      assume ng: "DC_Ghost dc = NotGhost"
+      then have "DC_Name dc |\<notin>| TE_GhostGlobals env" using gm by simp
+      then show "is_runtime_type env declTy"
+        using global_decl_runtime_module_scope[OF wf scope_env lk] by blast
     qed
+    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
+     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
+      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk_decl rt_decl] by blast+
+    show ?thesis
+      unfolding DefineDeclared(6) DefineDeclared(7) DefineDeclared(8)
+      by (rule elab_decls_invariant_define_global[OF inv lk gm typed const])
+  next
+    case (InferDefine rhs finalTm declTy)
+    \<comment> \<open>No annotation: the constant's type is inferred from the rhs.\<close>
+    note notin = InferDefine(4) and infer_ok = InferDefine(5)
+    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
+     and wk: "is_well_kinded env declTy"
+     and rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
+     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
+      using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
+    show ?thesis
+      unfolding InferDefine(6) InferDefine(7) InferDefine(8)
+      by (rule elab_decls_invariant_declare_define_global
+                 [OF inv notin wk rt typed const])
+  next
+    case (AnnotDefine rhs ty declTy finalTm)
+    \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
+    note notin = AnnotDefine(4) and ety = AnnotDefine(5)
+     and rhs_ok = AnnotDefine(6)
+    have wk: "is_well_kinded env declTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
+      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
+    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
+     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
+      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk rt] by blast+
+    show ?thesis
+      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9)
+      by (rule elab_decls_invariant_declare_define_global
+                 [OF inv notin wk rt typed const])
   qed
 qed
 
@@ -3330,6 +3405,140 @@ qed
 (* The function-declaration dispatcher                                        *)
 (* -------------------------------------------------------------------------- *)
 
+(* The elimination rule for elab_function_decl success: one case per shape of
+   the result (a definition of a previously-declared function, or a fresh
+   declaration - possibly with a body). Each case names the elaborated
+   signature and body, records the guards that must have passed, and states
+   the defining equations of the result. *)
+lemma elab_function_decl_Inr_elim:
+  assumes ok: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
+  obtains (Define) funInfo bodyOpt where
+    "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
+    "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
+    "\<not> binder_captures env m (DF_TyArgs df)"
+    "\<not> (DF_Extern df \<and> DF_Body df \<noteq> None)"
+    "elab_fun_signature env elabEnv df = Inr funInfo"
+    "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
+    "DF_Extern df \<or> DF_Body df \<noteq> None"
+    "DF_Name df |\<notin>| fmdom (CM_Functions m)"
+    "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
+    "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt"
+    "env' = env"
+    "elabEnv' = elabEnv"
+    "m' = m \<lparr> CM_Functions :=
+                fmupd (DF_Name df)
+                      \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
+                        CF_Body = bodyOpt \<rparr>
+                      (CM_Functions m) \<rparr>"
+  | (Declare) funInfo bodyOpt where
+    "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
+    "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
+    "\<not> binder_captures env m (DF_TyArgs df)"
+    "\<not> (DF_Extern df \<and> DF_Body df \<noteq> None)"
+    "elab_fun_signature env elabEnv df = Inr funInfo"
+    "fmlookup (TE_Functions env) (DF_Name df) = None"
+    "\<not> term_name_in_scope env (DF_Name df)"
+    "elab_fun_body_and_contracts
+       (tyenv_add_function (DF_Name df) funInfo env)
+       (if DF_ReturnType df = None
+        then elabEnv \<lparr> EE_VoidFunctions :=
+               finsert (DF_Name df) (EE_VoidFunctions elabEnv) \<rparr>
+        else elabEnv)
+       df funInfo = Inr bodyOpt"
+    "env' = tyenv_add_function (DF_Name df) funInfo env"
+    "elabEnv' = (if DF_ReturnType df = None
+                 then elabEnv \<lparr> EE_VoidFunctions :=
+                        finsert (DF_Name df) (EE_VoidFunctions elabEnv) \<rparr>
+                 else elabEnv)"
+    "m' = (if DF_Extern df \<or> DF_Body df \<noteq> None
+           then m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo (CM_TyEnv m),
+                    CM_Functions :=
+                      fmupd (DF_Name df)
+                            \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
+                              CF_Body = bodyOpt \<rparr>
+                            (CM_Functions m) \<rparr>
+           else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
+                                  (CM_TyEnv m) \<rparr>)"
+proof -
+  \<comment> \<open>Peel the guards and the signature one at a time (auto with the full
+      split set loops on this definition).\<close>
+  have g1: "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
+    using ok unfolding elab_function_decl_def Let_def
+    by (cases "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df)") auto
+  have g2: "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
+    using ok unfolding elab_function_decl_def Let_def
+    by (cases "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df)") (auto simp: g1)
+  have g3: "\<not> binder_captures env m (DF_TyArgs df)"
+    using ok unfolding elab_function_decl_def Let_def
+    by (cases "binder_captures env m (DF_TyArgs df)") (auto simp: g1 g2)
+  have g4: "\<not> (DF_Extern df \<and> DF_Body df \<noteq> None)"
+    using ok unfolding elab_function_decl_def Let_def
+    by (cases "DF_Extern df \<and> DF_Body df \<noteq> None") (auto simp: g1 g2 g3)
+  \<comment> \<open>The same guard in the simplifier's normal form for the body option
+      ("\<noteq> None" normalizes to an existential, so g4 itself does not fire as
+      a rewrite on the normalized elaborator equation).\<close>
+  have g4': "\<not> (DF_Extern df \<and> (\<exists>y. DF_Body df = Some y))"
+    using g4 by simp
+  from ok obtain funInfo where
+    sig: "elab_fun_signature env elabEnv df = Inr funInfo"
+    unfolding elab_function_decl_def Let_def
+    by (cases "elab_fun_signature env elabEnv df") (auto simp: g1 g2 g3 g4 g4')
+  show thesis
+  proof (cases "fmlookup (TE_Functions env) (DF_Name df)")
+    case (Some declInfo)
+    from ok obtain bodyOpt where
+      isdef: "DF_Extern df \<or> DF_Body df \<noteq> None" and
+      nd: "DF_Name df |\<notin>| fmdom (CM_Functions m)" and
+      fi_eq: "funInfo = declInfo" and
+      vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)" and
+      elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
+      eq1: "env' = env" and
+      eq2: "elabEnv' = elabEnv" and
+      eq3: "m' = m \<lparr> CM_Functions :=
+                       fmupd (DF_Name df)
+                             \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
+                               CF_Body = bodyOpt \<rparr>
+                             (CM_Functions m) \<rparr>"
+      unfolding elab_function_decl_def Let_def
+      by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
+         (auto simp: g1 g2 g3 g4 g4' sig Some split: if_splits)
+    have lk: "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
+      using Some fi_eq by simp
+    show thesis
+      by (rule Define[OF g1 g2 g3 g4 sig lk isdef nd vd elabB eq1 eq2 eq3])
+  next
+    case None
+    have notin: "\<not> term_name_in_scope env (DF_Name df)"
+      using ok unfolding elab_function_decl_def Let_def
+      by (cases "term_name_in_scope env (DF_Name df)")
+         (auto simp: g1 g2 g3 g4 g4' sig None)
+    let ?env1 = "tyenv_add_function (DF_Name df) funInfo env"
+    let ?ee1 = "(if DF_ReturnType df = None
+                 then elabEnv \<lparr> EE_VoidFunctions :=
+                        finsert (DF_Name df) (EE_VoidFunctions elabEnv) \<rparr>
+                 else elabEnv)"
+    from ok obtain bodyOpt where
+      elabB: "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo = Inr bodyOpt" and
+      eq1: "env' = ?env1" and
+      eq2: "elabEnv' = ?ee1" and
+      eq3: "m' = (if DF_Extern df \<or> DF_Body df \<noteq> None
+                  then m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
+                                         (CM_TyEnv m),
+                           CM_Functions :=
+                             fmupd (DF_Name df)
+                                   \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
+                                     CF_Body = bodyOpt \<rparr>
+                                   (CM_Functions m) \<rparr>
+                  else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
+                                         (CM_TyEnv m) \<rparr>)"
+      unfolding elab_function_decl_def Let_def
+      by (cases "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo")
+         (auto simp: g1 g2 g3 g4 g4' sig None notin)
+    show thesis
+      by (rule Declare[OF g1 g2 g3 g4 sig None notin elabB eq1 eq2 eq3])
+  qed
+qed
+
 (* The branches of elab_function_decl, dispatched to the step lemmas:
    declare-only, declare-and-define, and define-previously-declared. *)
 lemma elab_function_decl_invariant:
@@ -3352,28 +3561,14 @@ proof -
   have abs_rtv: "TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env
                = TE_RuntimeTypeVars env"
     unfolding abs_tv by (rule inf_absorb2[OF rtv_sub])
-  \<comment> \<open>Peel the guards and the signature.\<close>
-  have g1: "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
-    using elab unfolding elab_function_decl_def Let_def
-    by (cases "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df)") auto
-  have g2: "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
-    using elab unfolding elab_function_decl_def Let_def
-    by (cases "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df)") (auto simp: g1)
-  have g3: "\<not> binder_captures env m (DF_TyArgs df)"
-    using elab unfolding elab_function_decl_def Let_def
-    by (cases "binder_captures env m (DF_TyArgs df)") (auto simp: g1 g2)
-  have g4: "\<not> (DF_Extern df \<and> DF_Body df \<noteq> None)"
-    using elab unfolding elab_function_decl_def Let_def
-    by (cases "DF_Extern df \<and> DF_Body df \<noteq> None") (auto simp: g1 g2 g3)
-  \<comment> \<open>The same guard in the simplifier's normal form for the body option
-      ("\<noteq> None" normalizes to an existential, so g4 itself does not fire as
-      a rewrite on the normalized elaborator equation).\<close>
-  have g4': "\<not> (DF_Extern df \<and> (\<exists>y. DF_Body df = Some y))"
-    using g4 by simp
+  \<comment> \<open>The guard facts and the elaborated signature, common to both cases of
+      the elimination rule.\<close>
   from elab obtain funInfo where
+    g1: "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None" and
+    g2: "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None" and
+    g3: "\<not> binder_captures env m (DF_TyArgs df)" and
     sig: "elab_fun_signature env elabEnv df = Inr funInfo"
-    unfolding elab_function_decl_def Let_def
-    by (cases "elab_fun_signature env elabEnv df") (auto simp: g1 g2 g3 g4 g4')
+    by (cases rule: elab_function_decl_Inr_elim) blast+
   \<comment> \<open>Signature facts, and their module-scope (TE_AbstractTypes) forms.\<close>
   have td: "typedefs_well_formed env (EE_Typedefs elabEnv)"
     using eewf unfolding elabenv_well_formed_def by blast
@@ -3424,25 +3619,17 @@ proof -
       by (metis abs_rtv abs_tv ng_df sigc(1,7))
   qed
   \<comment> \<open>Dispatch on whether the function is already declared.\<close>
-  show ?thesis
-  proof (cases "fmlookup (TE_Functions env) ?name")
-    case (Some declInfo)
+  from elab show ?thesis
+  proof (cases rule: elab_function_decl_Inr_elim)
+    case (Define funInfo2 bodyOpt)
     \<comment> \<open>Definition of a previously-declared function: only CM_Functions
         changes, and the guards force the elaborated signature to coincide
         with the declared one.\<close>
-    from elab obtain bodyOpt where
-      elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
-      fi_eq: "funInfo = declInfo" and
-      eq1: "env' = env" and
-      eq2: "elabEnv' = elabEnv" and
-      eq3: "m' = m \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
-                                                    CF_Body = bodyOpt \<rparr>
-                                           (CM_Functions m) \<rparr>"
-      unfolding elab_function_decl_def Let_def
-      by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig Some split: if_splits)
+    have fi: "funInfo2 = funInfo" using Define(5) sig by simp
     have lk: "fmlookup (TE_Functions env) ?name = Some funInfo"
-      using Some fi_eq by simp
+      using Define(6) fi by simp
+    have elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt"
+      using Define(10) fi by simp
     have body_ok: "case bodyOpt of
                      None \<Rightarrow> True
                    | Some coreBody \<Rightarrow>
@@ -3456,32 +3643,21 @@ proof -
                                                 CF_Body = bodyOpt \<rparr>
                                        (CM_Functions m) \<rparr>)"
       by (rule elab_decls_invariant_define_function[OF inv lk len_pn dst_pn body_ok])
-    then show ?thesis using eq1 eq2 eq3 by simp
+    then show ?thesis using Define(11) Define(12) Define(13) by simp
   next
-    case None
+    case (Declare funInfo2 bodyOpt)
     \<comment> \<open>Fresh declaration: add the function to the state env and the module's
         own type env, then (for a definition) record the body.\<close>
-    have notin: "\<not> term_name_in_scope env ?name"
-      using elab unfolding elab_function_decl_def Let_def
-      by (cases "term_name_in_scope env ?name") (auto simp: g1 g2 g3 g4 g4' sig None)
+    have fi: "funInfo2 = funInfo" using Declare(5) sig by simp
+    note notin = Declare(7)
     let ?env1 = "tyenv_add_function ?name funInfo env"
     let ?ee1 = "(if DF_ReturnType df = None
                  then elabEnv \<lparr> EE_VoidFunctions :=
                         finsert ?name (EE_VoidFunctions elabEnv) \<rparr>
                  else elabEnv)"
     let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function ?name funInfo (CM_TyEnv m) \<rparr>"
-    from elab obtain bodyOpt where
-      elabB: "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo = Inr bodyOpt" and
-      eq1: "env' = ?env1" and
-      eq2: "elabEnv' = ?ee1" and
-      eq3: "m' = (if DF_Extern df \<or> DF_Body df \<noteq> None
-                  then ?m1 \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
-                                                            CF_Body = bodyOpt \<rparr>
-                                                   (CM_Functions ?m1) \<rparr>
-                  else ?m1)"
-      unfolding elab_function_decl_def Let_def
-      by (cases "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig None notin)
+    have elabB: "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo = Inr bodyOpt"
+      using Declare(8) fi by simp
     have inv1: "elab_decls_invariant env0 ownAbstract ?env1 elabEnv ?m1"
       by (rule elab_decls_invariant_add_function
                  [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p'])
@@ -3511,10 +3687,10 @@ proof -
                                                     CF_Body = bodyOpt \<rparr>
                                            (CM_Functions ?m1) \<rparr>)"
         by (rule elab_decls_invariant_define_function[OF inv2 lk1 len_pn dst_pn body_ok])
-      then show ?thesis using eq1 eq2 eq3 True by simp
+      then show ?thesis using Declare(9) Declare(10) Declare(11) fi True by simp
     next
       case False
-      then show ?thesis using inv2 eq1 eq2 eq3 by simp
+      then show ?thesis using inv2 Declare(9) Declare(10) Declare(11) fi by simp
     qed
   qed
 qed
@@ -6292,160 +6468,120 @@ proof -
               fresh_ctors dist_tvs nocap wk_p rt_p shape])
 qed
 
+(* The elimination rule for elab_datatype_decl success: one case per result
+   shape (a realization of one of the module's own abstract types, or a plain
+   new datatype). Each case names the elaborated constructor info and the
+   computed ghost flag, records the guards that must have passed, and states
+   the defining equation of the result. *)
+lemma elab_datatype_decl_Inr_elim:
+  assumes ok: "elab_datatype_decl env elabEnv ownAbstract m dd
+                 = Inr (env', elabEnv', m')"
+  obtains (Realize) ctorInfo isGhost where
+    "DD_Name dd |\<in>| TE_TypeVars env"
+    "DD_Name dd |\<in>| ownAbstract"
+    "DD_TyArgs dd = []"
+    "DD_Name dd |\<notin>| fmdom (TE_Datatypes env)"
+    "DD_Ctors dd \<noteq> []"
+    "first_duplicate_name (\<lambda>x. x) (DD_TyArgs dd) = None"
+    "\<not> binder_captures env m (DD_TyArgs dd)"
+    "first_duplicate_name (\<lambda>(_, n, _). n) (DD_Ctors dd) = None"
+    "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd) = None"
+    "elab_data_ctors
+       (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (DD_TyArgs dd),
+              TE_RuntimeTypeVars :=
+                (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                |\<union>| fset_of_list (DD_TyArgs dd) \<rparr>)
+       (elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DD_TyArgs dd)
+                                   (EE_Typedefs elabEnv) \<rparr>)
+       (DD_Ctors dd) = Inr ctorInfo"
+    "isGhost = (\<not> list_all
+       (\<lambda>(_, payloadTy, _).
+          is_runtime_type
+            (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                     |\<union>| fset_of_list (DD_TyArgs dd),
+                   TE_RuntimeTypeVars :=
+                     (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                     |\<union>| fset_of_list (DD_TyArgs dd) \<rparr>) payloadTy)
+       ctorInfo)"
+    "\<not> (DD_Name dd |\<in>| TE_RuntimeTypeVars env \<and> isGhost)"
+    "\<not> realization_captures env elabEnv (DD_Name dd)
+         (CoreTy_Datatype (DD_Name dd) [])"
+    "apply_realization (DD_Name dd) (CoreTy_Datatype (DD_Name dd) [])
+       (tyenv_add_datatype (DD_Name dd) (DD_TyArgs dd)
+          (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo) isGhost env)
+       (elabEnv \<lparr> EE_NullaryDataCtors :=
+                    fset_of_list
+                      (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
+                    |\<union>| EE_NullaryDataCtors elabEnv \<rparr>)
+       (m \<lparr> CM_TyEnv := tyenv_add_datatype (DD_Name dd) (DD_TyArgs dd)
+                          (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo) isGhost
+                          (CM_TyEnv m) \<rparr>)
+     = (env', elabEnv', m')"
+  | (Plain) ctorInfo isGhost where
+    "DD_Name dd |\<notin>| TE_TypeVars env"
+    "\<not> type_name_in_scope env elabEnv (DD_Name dd)"
+    "DD_Ctors dd \<noteq> []"
+    "first_duplicate_name (\<lambda>x. x) (DD_TyArgs dd) = None"
+    "\<not> binder_captures env m (DD_TyArgs dd)"
+    "first_duplicate_name (\<lambda>(_, n, _). n) (DD_Ctors dd) = None"
+    "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd) = None"
+    "elab_data_ctors
+       (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (DD_TyArgs dd),
+              TE_RuntimeTypeVars :=
+                (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                |\<union>| fset_of_list (DD_TyArgs dd) \<rparr>)
+       (elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DD_TyArgs dd)
+                                   (EE_Typedefs elabEnv) \<rparr>)
+       (DD_Ctors dd) = Inr ctorInfo"
+    "isGhost = (\<not> list_all
+       (\<lambda>(_, payloadTy, _).
+          is_runtime_type
+            (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                     |\<union>| fset_of_list (DD_TyArgs dd),
+                   TE_RuntimeTypeVars :=
+                     (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                     |\<union>| fset_of_list (DD_TyArgs dd) \<rparr>) payloadTy)
+       ctorInfo)"
+    "env' = tyenv_add_datatype (DD_Name dd) (DD_TyArgs dd)
+              (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo) isGhost env"
+    "elabEnv' = elabEnv \<lparr> EE_NullaryDataCtors :=
+                            fset_of_list
+                              (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
+                            |\<union>| EE_NullaryDataCtors elabEnv \<rparr>"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_datatype (DD_Name dd) (DD_TyArgs dd)
+                            (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo) isGhost
+                            (CM_TyEnv m) \<rparr>"
+  using ok unfolding elab_datatype_decl_def Let_def
+  by (auto split: if_splits option.splits sum.splits)
+
 lemma elab_datatype_decl_invariant:
   assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
       and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (DD_TyArgs dd)"
       and elab: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
   shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
-proof -
-  let ?loc = "DD_Location dd"
+  using elab
+proof (cases rule: elab_datatype_decl_Inr_elim)
+  case (Realize ctorInfo isGhost)
+  \<comment> \<open>A realization of one of the module's own abstract types.\<close>
+  note r = Realize(1) and own = Realize(2) and tv0 = Realize(3)
+   and fresh_dt = Realize(4) and ne_dcs = Realize(5) and dup_tvs = Realize(6)
+   and nocap = Realize(7) and dup_ctors = Realize(8) and find_ck = Realize(9)
+   and ec = Realize(10) and gdef = Realize(11) and g10 = Realize(12)
+   and g11 = Realize(13) and res = Realize(14)
   let ?name = "DD_Name dd"
   let ?tyvars = "DD_TyArgs dd"
-  let ?pEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list ?tyvars,
-                     TE_RuntimeTypeVars :=
-                       (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                       |\<union>| fset_of_list ?tyvars \<rparr>"
-  let ?pEE = "elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries ?tyvars
-                                         (EE_Typedefs elabEnv) \<rparr>"
-  show ?thesis
-  proof (cases "?name |\<in>| TE_TypeVars env")
-    case r: True
-    \<comment> \<open>A realization of one of the module's own abstract types. Peel the
-        guards one at a time: each block assumes the guard fires and derives
-        the corresponding error, contradicting the Inr result.\<close>
-    have own: "?name |\<in>| ownAbstract"
-    proof (rule ccontr)
-      assume no: "\<not> ?name |\<in>| ownAbstract"
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_CannotRealizeImportedType ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def using r no by simp
-      then show False using elab by simp
-    qed
-    have tv0: "?tyvars = []"
-    proof (rule ccontr)
-      assume ne: "?tyvars \<noteq> []"
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_TypeArgsNotAllowed ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def using r own ne by simp
-      then show False using elab by simp
-    qed
-    have fresh_dt: "?name |\<notin>| fmdom (TE_Datatypes env)"
-    proof (rule ccontr)
-      assume "\<not> ?name |\<notin>| fmdom (TE_Datatypes env)"
-      then have indom: "?name |\<in>| fmdom (TE_Datatypes env)" by simp
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def using r own tv0 indom by simp
-      then show False using elab by simp
-    qed
-    have ne_dcs: "DD_Ctors dd \<noteq> []"
-    proof (rule ccontr)
-      assume "\<not> DD_Ctors dd \<noteq> []"
-      then have e: "DD_Ctors dd = []" by simp
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_EmptyDatatype ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def using r own tv0 fresh_dt e by simp
-      then show False using elab by simp
-    qed
-    have dup_tvs: "first_duplicate_name (\<lambda>x. x) ?tyvars = None"
-    proof (cases "first_duplicate_name (\<lambda>x. x) ?tyvars")
-      case None
-      then show ?thesis .
-    next
-      case (Some dup)
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName ?loc dup]"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs Some by simp
-      then show ?thesis using elab by simp
-    qed
-    have nocap: "\<not> binder_captures env m ?tyvars"
-    proof (rule ccontr)
-      assume "\<not> \<not> binder_captures env m ?tyvars"
-      then have bc: "binder_captures env m ?tyvars" by simp
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_TypeVarCapture ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs dup_tvs bc by simp
-      then show False using elab by simp
-    qed
-    have dup_ctors: "first_duplicate_name (\<lambda>(_, n, _). n) (DD_Ctors dd) = None"
-    proof (cases "first_duplicate_name (\<lambda>(_, n, _). n) (DD_Ctors dd)")
-      case None
-      then show ?thesis .
-    next
-      case (Some dup)
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName ?loc dup]"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs dup_tvs nocap Some by simp
-      then show ?thesis using elab by simp
-    qed
-    have find_ck: "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd) = None"
-    proof (cases "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd)")
-      case None
-      then show ?thesis .
-    next
-      case (Some x)
-      obtain xl xn xp where x_eq: "x = (xl, xn, xp)" by (cases x) auto
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName xl xn]"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs dup_tvs nocap dup_ctors Some x_eq by simp
-      then show ?thesis using elab by simp
-    qed
-    have "\<exists>ci. elab_data_ctors ?pEnv ?pEE (DD_Ctors dd) = Inr ci"
-    proof (cases "elab_data_ctors ?pEnv ?pEE (DD_Ctors dd)")
-      case (Inl errs)
-      have "elab_datatype_decl env elabEnv ownAbstract m dd = Inl errs"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs dup_tvs nocap dup_ctors find_ck Inl by simp
-      then show ?thesis using elab by simp
-    next
-      case (Inr ci)
-      then show ?thesis by blast
-    qed
-    then obtain ctorInfo where
-      ec: "elab_data_ctors ?pEnv ?pEE (DD_Ctors dd) = Inr ctorInfo"
-      by blast
-    let ?g = "\<not> list_all (\<lambda>(_, payloadTy, _). is_runtime_type ?pEnv payloadTy) ctorInfo"
-    let ?ctors1 = "map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo"
-    let ?env1 = "tyenv_add_datatype ?name ?tyvars ?ctors1 ?g env"
-    let ?ee1 = "elabEnv \<lparr> EE_NullaryDataCtors :=
-                            fset_of_list
-                              (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
-                            |\<union>| EE_NullaryDataCtors elabEnv \<rparr>"
-    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_datatype ?name ?tyvars ?ctors1 ?g (CM_TyEnv m) \<rparr>"
-    have g10: "\<not> (?name |\<in>| TE_RuntimeTypeVars env \<and> ?g)"
-    proof
-      assume a: "?name |\<in>| TE_RuntimeTypeVars env \<and> ?g"
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_GhostRealizationOfRuntimeType ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs dup_tvs nocap dup_ctors find_ck ec a by simp
-      then show False using elab by simp
-    qed
-    have g11: "\<not> realization_captures env elabEnv ?name (CoreTy_Datatype ?name [])"
-    proof
-      assume rc: "realization_captures env elabEnv ?name (CoreTy_Datatype ?name [])"
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_TypeVarCapture ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def
-        using r own tv0 fresh_dt ne_dcs dup_tvs nocap dup_ctors find_ck ec g10 rc
-        by simp
-      then show False using elab by simp
-    qed
-    have "elab_datatype_decl env elabEnv ownAbstract m dd
-            = Inr (apply_realization ?name (CoreTy_Datatype ?name []) ?env1 ?ee1 ?m1)"
-      unfolding elab_datatype_decl_def Let_def
-      using r own tv0 fresh_dt ne_dcs dup_tvs nocap dup_ctors find_ck ec g10 g11
-      by simp
-    then have res: "apply_realization ?name (CoreTy_Datatype ?name []) ?env1 ?ee1 ?m1
-                      = (env', elabEnv', m')"
-      using elab by simp
-    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
-      by (rule elab_decls_invariant_datatype_step[OF inv fresh_dt ne_dcs dup_tvs nocap
-                dup_ctors find_ck ec])
+  let ?ctors1 = "map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo"
+  let ?env1 = "tyenv_add_datatype ?name ?tyvars ?ctors1 isGhost env"
+  let ?ee1 = "elabEnv \<lparr> EE_NullaryDataCtors :=
+                          fset_of_list
+                            (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
+                          |\<union>| EE_NullaryDataCtors elabEnv \<rparr>"
+  let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_datatype ?name ?tyvars ?ctors1 isGhost
+                               (CM_TyEnv m) \<rparr>"
+  have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+    unfolding gdef
+    by (rule elab_decls_invariant_datatype_step[OF inv fresh_dt ne_dcs dup_tvs nocap
+              dup_ctors find_ck ec])
     \<comment> \<open>The remaining premises of the shared realization lemma.\<close>
     have gds: "tyenv_ghost_datatypes_subset env"
       using inv unfolding elab_decls_invariant_def tyenv_well_formed_def by blast
@@ -6463,7 +6599,7 @@ proof -
       assume "?name |\<in>| TE_RuntimeTypeVars ?env1"
       then have "?name |\<in>| TE_RuntimeTypeVars env"
         by (simp add: tyenv_add_datatype_def)
-      then have ng: "\<not> ?g" using g10 by blast
+      then have ng: "\<not> isGhost" using g10 by blast
       have "TE_GhostDatatypes ?env1 = TE_GhostDatatypes env"
         using ng by (simp add: tyenv_add_datatype_def)
       then show "is_runtime_type ?env1 (CoreTy_Datatype ?name [])"
@@ -6492,110 +6628,18 @@ proof -
     qed
     show ?thesis
       by (rule apply_realization_invariant[OF inv1 own tv1 wk1 noself1 rt1 nocap1 res])
-  next
-    case nr: False
-    \<comment> \<open>An ordinary (non-realizing) datatype declaration. The realization
-        guards are all off; peel the remaining ones the same way.\<close>
-    have notin: "\<not> type_name_in_scope env elabEnv ?name"
-    proof (rule ccontr)
-      assume "\<not> \<not> type_name_in_scope env elabEnv ?name"
-      then have tis: "type_name_in_scope env elabEnv ?name" by simp
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def using nr tis by simp
-      then show False using elab by simp
-    qed
-    have fresh_dt: "?name |\<notin>| fmdom (TE_Datatypes env)"
-      using notin unfolding type_name_in_scope_def by blast
-    have ne_dcs: "DD_Ctors dd \<noteq> []"
-    proof (rule ccontr)
-      assume "\<not> DD_Ctors dd \<noteq> []"
-      then have e: "DD_Ctors dd = []" by simp
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_EmptyDatatype ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def using nr notin e by simp
-      then show False using elab by simp
-    qed
-    have dup_tvs: "first_duplicate_name (\<lambda>x. x) ?tyvars = None"
-    proof (cases "first_duplicate_name (\<lambda>x. x) ?tyvars")
-      case None
-      then show ?thesis .
-    next
-      case (Some dup)
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName ?loc dup]"
-        unfolding elab_datatype_decl_def Let_def
-        using nr notin ne_dcs Some by simp
-      then show ?thesis using elab by simp
-    qed
-    have nocap: "\<not> binder_captures env m ?tyvars"
-    proof (rule ccontr)
-      assume "\<not> \<not> binder_captures env m ?tyvars"
-      then have bc: "binder_captures env m ?tyvars" by simp
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_TypeVarCapture ?loc ?name]"
-        unfolding elab_datatype_decl_def Let_def
-        using nr notin ne_dcs dup_tvs bc by simp
-      then show False using elab by simp
-    qed
-    have dup_ctors: "first_duplicate_name (\<lambda>(_, n, _). n) (DD_Ctors dd) = None"
-    proof (cases "first_duplicate_name (\<lambda>(_, n, _). n) (DD_Ctors dd)")
-      case None
-      then show ?thesis .
-    next
-      case (Some dup)
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName ?loc dup]"
-        unfolding elab_datatype_decl_def Let_def
-        using nr notin ne_dcs dup_tvs nocap Some by simp
-      then show ?thesis using elab by simp
-    qed
-    have find_ck: "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd) = None"
-    proof (cases "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd)")
-      case None
-      then show ?thesis .
-    next
-      case (Some x)
-      obtain xl xn xp where x_eq: "x = (xl, xn, xp)" by (cases x) auto
-      have "elab_datatype_decl env elabEnv ownAbstract m dd
-              = Inl [TyErr_DuplicateName xl xn]"
-        unfolding elab_datatype_decl_def Let_def
-        using nr notin ne_dcs dup_tvs nocap dup_ctors Some x_eq by simp
-      then show ?thesis using elab by simp
-    qed
-    have "\<exists>ci. elab_data_ctors ?pEnv ?pEE (DD_Ctors dd) = Inr ci"
-    proof (cases "elab_data_ctors ?pEnv ?pEE (DD_Ctors dd)")
-      case (Inl errs)
-      have "elab_datatype_decl env elabEnv ownAbstract m dd = Inl errs"
-        unfolding elab_datatype_decl_def Let_def
-        using nr notin ne_dcs dup_tvs nocap dup_ctors find_ck Inl by simp
-      then show ?thesis using elab by simp
-    next
-      case (Inr ci)
-      then show ?thesis by blast
-    qed
-    then obtain ctorInfo where
-      ec: "elab_data_ctors ?pEnv ?pEE (DD_Ctors dd) = Inr ctorInfo"
-      by blast
-    let ?g = "\<not> list_all (\<lambda>(_, payloadTy, _). is_runtime_type ?pEnv payloadTy) ctorInfo"
-    let ?ctors1 = "map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo"
-    let ?env1 = "tyenv_add_datatype ?name ?tyvars ?ctors1 ?g env"
-    let ?ee1 = "elabEnv \<lparr> EE_NullaryDataCtors :=
-                            fset_of_list
-                              (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
-                            |\<union>| EE_NullaryDataCtors elabEnv \<rparr>"
-    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_datatype ?name ?tyvars ?ctors1 ?g (CM_TyEnv m) \<rparr>"
-    have "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (?env1, ?ee1, ?m1)"
-      unfolding elab_datatype_decl_def Let_def
-      using nr notin ne_dcs dup_tvs nocap dup_ctors find_ck ec by simp
-    then have eq1: "env' = ?env1" and eq2: "elabEnv' = ?ee1" and eq3: "m' = ?m1"
-      using elab by simp_all
-    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
-      by (rule elab_decls_invariant_datatype_step[OF inv fresh_dt ne_dcs dup_tvs nocap
-                dup_ctors find_ck ec])
-    show ?thesis
-      using inv1 eq1 eq2 eq3 by simp
-  qed
+next
+  case (Plain ctorInfo isGhost)
+  \<comment> \<open>An ordinary (non-realizing) datatype declaration.\<close>
+  note notin = Plain(2) and ne_dcs = Plain(3) and dup_tvs = Plain(4)
+   and nocap = Plain(5) and dup_ctors = Plain(6) and find_ck = Plain(7)
+   and ec = Plain(8) and gdef = Plain(9)
+  have fresh_dt: "DD_Name dd |\<notin>| fmdom (TE_Datatypes env)"
+    using notin unfolding type_name_in_scope_def by blast
+  show ?thesis
+    unfolding Plain(10) Plain(11) Plain(12) gdef
+    by (rule elab_decls_invariant_datatype_step[OF inv fresh_dt ne_dcs dup_tvs nocap
+              dup_ctors find_ck ec])
 qed
 
 (* ---- Typedefs ---- *)
@@ -6833,23 +6877,66 @@ proof -
   qed
 qed
 
+(* The elimination rule for elab_typedef_decl success: one case per branch of
+   the elaborator (a realization of one of the module's own abstract types; a
+   new abstract type; an ordinary transparent typedef). Each case records the
+   guards that must have passed and states the defining equations of the
+   result. *)
+lemma elab_typedef_decl_Inr_elim:
+  assumes ok: "elab_typedef_decl env elabEnv ownAbstract m dt
+                 = Inr (env', elabEnv', m')"
+  obtains (Realize) ty target where
+    "\<not> DT_Extern dt"
+    "DT_Name dt |\<in>| TE_TypeVars env"
+    "DT_Name dt |\<in>| ownAbstract"
+    "DT_Definition dt = Some ty"
+    "DT_TyArgs dt = []"
+    "elab_type env elabEnv Ghost ty = Inr target"
+    "DT_Name dt \<notin> type_tyvars target"
+    "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
+    "\<not> realization_captures env elabEnv (DT_Name dt) target"
+    "apply_realization (DT_Name dt) target env elabEnv m = (env', elabEnv', m')"
+  | (NewAbstract) where
+    "\<not> DT_Extern dt"
+    "DT_Name dt |\<notin>| TE_TypeVars env"
+    "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
+    "DT_Definition dt = None"
+    "DT_TyArgs dt = []"
+    "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt) env"
+    "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
+                            ([], CoreTy_Var (DT_Name dt)) (EE_Typedefs elabEnv) \<rparr>"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt)
+                            (CM_TyEnv m) \<rparr>"
+  | (Transparent) ty target where
+    "\<not> DT_Extern dt"
+    "DT_Name dt |\<notin>| TE_TypeVars env"
+    "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
+    "DT_Definition dt = Some ty"
+    "first_duplicate_name (\<lambda>x. x) (DT_TyArgs dt) = None"
+    "\<not> binder_captures env m (DT_TyArgs dt)"
+    "elab_type (env \<lparr> TE_TypeVars := TE_TypeVars env
+                        |\<union>| fset_of_list (DT_TyArgs dt) \<rparr>)
+               (elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DT_TyArgs dt)
+                                           (EE_Typedefs elabEnv) \<rparr>)
+               Ghost ty = Inr target"
+    "env' = env"
+    "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt) (DT_TyArgs dt, target)
+                                           (EE_Typedefs elabEnv) \<rparr>"
+    "m' = m"
+  using ok unfolding elab_typedef_decl_def Let_def
+  by (auto split: if_splits option.splits sum.splits)
+
 lemma elab_typedef_decl_invariant:
   assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
       and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (DT_Name dt # DT_TyArgs dt)"
       and elab: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
   shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
-proof (cases "DT_Name dt |\<in>| TE_TypeVars env")
-  case True
+  using elab
+proof (cases rule: elab_typedef_decl_Inr_elim)
+  case (Realize ty target)
   \<comment> \<open>A realization of one of the module's own abstract types.\<close>
-  from elab True obtain ty target where
-      own: "DT_Name dt |\<in>| ownAbstract" and
-      et: "elab_type env elabEnv Ghost ty = Inr target" and
-      noself: "DT_Name dt \<notin> type_tyvars target" and
-      rt_ok: "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target" and
-      nocap: "\<not> realization_captures env elabEnv (DT_Name dt) target" and
-      res: "apply_realization (DT_Name dt) target env elabEnv m = (env', elabEnv', m')"
-    unfolding elab_typedef_decl_def Let_def
-    by (auto split: if_splits option.splits sum.splits)
+  note own = Realize(3) and et = Realize(6) and noself = Realize(7)
+   and rt_ok = Realize(8) and nocap = Realize(9) and res = Realize(10)
   have wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -6858,43 +6945,19 @@ proof (cases "DT_Name dt |\<in>| TE_TypeVars env")
   have wk: "is_well_kinded env target"
     using elab_type_is_well_kinded(1)[OF td wf et] .
   show ?thesis
-    by (rule apply_realization_invariant[OF inv own True wk noself rt_ok nocap res])
+    by (rule apply_realization_invariant
+               [OF inv own Realize(2) wk noself rt_ok nocap res])
 next
-  case False
-  from elab False have notin: "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
-    unfolding elab_typedef_decl_def Let_def
-    by (auto split: if_splits option.splits sum.splits)
+  case NewAbstract
+  note notin = NewAbstract(3)
+  have fr: "tyvar_fresh_ok (DT_Name dt) 0" using fresh by simp
   show ?thesis
-  proof (cases "DT_Definition dt")
-    case None
-    from elab False None have
-        res: "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt) env"
-             "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
-                                    ([], CoreTy_Var (DT_Name dt)) (EE_Typedefs elabEnv) \<rparr>"
-             "m' = m \<lparr> CM_TyEnv := tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt)
-                                     (CM_TyEnv m) \<rparr>"
-      unfolding elab_typedef_decl_def Let_def
-      by (auto split: if_splits)
-    have fr: "tyvar_fresh_ok (DT_Name dt) 0" using fresh by simp
-    show ?thesis
-      unfolding res
-      by (rule elab_decls_invariant_add_abstract_type[OF inv notin fr])
-  next
-    case (Some ty)
-    from elab False Some obtain target where
-        dupck: "first_duplicate_name (\<lambda>x. x) (DT_TyArgs dt) = None" and
-        nocap: "\<not> binder_captures env m (DT_TyArgs dt)" and
-        et: "elab_type (env \<lparr> TE_TypeVars := TE_TypeVars env
-                                |\<union>| fset_of_list (DT_TyArgs dt) \<rparr>)
-                       (elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DT_TyArgs dt)
-                                                   (EE_Typedefs elabEnv) \<rparr>)
-                       Ghost ty = Inr target" and
-        res: "env' = env"
-             "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt) (DT_TyArgs dt, target)
-                                                    (EE_Typedefs elabEnv) \<rparr>"
-             "m' = m"
-      unfolding elab_typedef_decl_def Let_def
-      by (auto split: if_splits option.splits sum.splits)
+    unfolding NewAbstract(6) NewAbstract(7) NewAbstract(8)
+    by (rule elab_decls_invariant_add_abstract_type[OF inv notin fr])
+next
+  case (Transparent ty target)
+  note dupck = Transparent(5) and nocap = Transparent(6) and et = Transparent(7)
+   and res = Transparent(8) Transparent(9) Transparent(10)
     have dist: "distinct (DT_TyArgs dt)"
       using first_duplicate_name_None_implies_distinct[OF dupck] by simp
     have wf: "tyenv_well_formed env"
@@ -6920,7 +6983,6 @@ next
     show ?thesis
       unfolding res
       by (rule elab_decls_invariant_add_typedef[OF inv dist nocap wk])
-  qed
 qed
 
 (* ---- The dispatcher ---- *)
@@ -6981,6 +7043,684 @@ next
   show ?case
     using Cons.IH[OF rest inv1 fds] .
 qed
+
+
+(* ========================================================================== *)
+(* Runtime-soundness of the recorded realizations                             *)
+(* ========================================================================== *)
+
+(* The linker's final gate, link_runtime_ok, re-checks that no *runtime*
+   abstract type is realized by a ghost type. The links the pipeline derives
+   but never executes (LINKING.md step 8(b): the implementation module linked
+   against its interface context) need that gate discharged by proof, from
+   the checks the elaborator ran at each realization site. This section
+   carries those site checks to the end of the fold: every entry of
+   CM_TypeSubst m whose name is a runtime abstract type of the *context* maps
+   to a type that is runtime in the state env. The property is a parallel
+   fold lemma rather than a new elab_decls_invariant conjunct: it consumes
+   the invariant, but nothing in the invariant needs it.
+
+   The name's runtime-ness is judged against the context env0: the state env
+   forgets a name at the moment it is realized (apply_realization deletes it
+   from the type-variable fields), but env0 - for the implementation run, the
+   linked interface context - remembers it, and it is env0's
+   TE_RuntimeTypeVars that the link-time check is keyed on. *)
+
+definition subst_runtime_ok :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> CoreModule \<Rightarrow> bool" where
+  "subst_runtime_ok env0 env m =
+    (\<forall>n ty. fmlookup (CM_TypeSubst m) n = Some ty \<longrightarrow>
+            n |\<in>| TE_RuntimeTypeVars env0 \<longrightarrow> is_runtime_type env ty)"
+
+(* Counterpart of is_runtime_type_shrink_tyvar for a growing runtime set
+   (the new-abstract-type step). *)
+lemma is_runtime_type_grow_runtime_tyvars:
+  assumes rt: "is_runtime_type env ty"
+      and sub: "TE_RuntimeTypeVars env |\<subseteq>| TE_RuntimeTypeVars env'"
+      and gd: "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+  shows "is_runtime_type env' ty"
+proof (rule is_runtime_type_transfer[OF rt _ gd])
+  have "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
+    by (rule is_runtime_type_tyvars_subset[OF rt])
+  then show "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env')"
+    using sub by (metis less_eq_fset.rep_eq subset_trans)
+qed
+
+(* Steps that touch neither the substitution nor the two env fields
+   is_runtime_type reads (constants, functions, transparent typedefs). *)
+lemma subst_runtime_ok_env_cong:
+  assumes rtok: "subst_runtime_ok env0 env m"
+      and subst_eq: "CM_TypeSubst m' = CM_TypeSubst m"
+      and rtv: "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
+      and gd: "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+  shows "subst_runtime_ok env0 env' m'"
+  using rtok is_runtime_type_cong_env[OF gd rtv]
+  unfolding subst_runtime_ok_def subst_eq by blast
+
+(* Adding a datatype can grow TE_GhostDatatypes, but only at a name that was
+   not previously a datatype; the recorded entries are well-kinded in the old
+   env, so their datatype heads all resolve there and keep their ghost
+   status. *)
+lemma subst_runtime_ok_add_datatype:
+  assumes rtok: "subst_runtime_ok env0 env m"
+      and tswk: "typesubst_well_kinded env (CM_TypeSubst m)"
+      and fresh_dt: "name |\<notin>| fmdom (TE_Datatypes env)"
+      and env'_eq: "env' = tyenv_add_datatype name tyvars ctors isGhost env"
+      and subst_eq: "CM_TypeSubst m' = CM_TypeSubst m"
+  shows "subst_runtime_ok env0 env' m'"
+unfolding subst_runtime_ok_def proof (intro allI impI)
+  fix n ty
+  assume lk: "fmlookup (CM_TypeSubst m') n = Some ty"
+     and n0: "n |\<in>| TE_RuntimeTypeVars env0"
+  have lk0: "fmlookup (CM_TypeSubst m) n = Some ty"
+    using lk unfolding subst_eq .
+  have rt: "is_runtime_type env ty"
+    using rtok lk0 n0 unfolding subst_runtime_ok_def by blast
+  have wk: "is_well_kinded env ty"
+    using tswk lk0 unfolding typesubst_well_kinded_def by blast
+  show "is_runtime_type env' ty"
+  proof (rule is_runtime_type_transfer_mono[OF wk rt])
+    show "fset (TE_RuntimeTypeVars env) \<subseteq> fset (TE_RuntimeTypeVars env')"
+      unfolding env'_eq tyenv_add_datatype_def by simp
+  next
+    fix nn assume nn_in: "nn |\<in>| fmdom (TE_Datatypes env)"
+    then have "nn \<noteq> name" using fresh_dt by auto
+    then show "nn |\<in>| TE_GhostDatatypes env' \<longleftrightarrow> nn |\<in>| TE_GhostDatatypes env"
+      unfolding env'_eq tyenv_add_datatype_def by auto
+  qed
+qed
+
+(* The realization step. The new entry is runtime by the site check
+   (transported past the deletion of name, which it cannot mention); the old
+   entries have the singleton substitution applied, which preserves
+   runtime-ness because it replaces a runtime type variable by a runtime
+   type (apply_subst_preserves_runtime). *)
+lemma apply_realization_subst_runtime:
+  assumes rtok: "subst_runtime_ok env0 env m"
+      and bridge: "name |\<in>| TE_RuntimeTypeVars env0 \<longrightarrow> name |\<in>| TE_RuntimeTypeVars env"
+      and tgt: "name |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
+      and noself: "name \<notin> type_tyvars target"
+      and res: "apply_realization name target env elabEnv m = (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+proof -
+  let ?s = "fmupd name target fmempty"
+  have env'_eq: "env' = (apply_subst_to_tyenv ?s env)
+           \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
+             TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
+             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+   and m'_eq: "m' = m \<lparr> CM_TypeSubst := fmupd name target
+                          (fmmap (apply_subst ?s) (CM_TypeSubst m)) \<rparr>"
+    using res unfolding apply_realization_def Let_def by auto
+  have rtv': "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env |-| {|name|}"
+   and gd': "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+    unfolding env'_eq apply_subst_to_tyenv_def by simp_all
+  have tgt': "name |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env' target"
+    using tgt is_runtime_type_shrink_tyvar[OF _ noself rtv' gd'] by blast
+  show ?thesis
+  unfolding subst_runtime_ok_def proof (intro allI impI)
+    fix n ty
+    assume lk: "fmlookup (CM_TypeSubst m') n = Some ty"
+       and n0: "n |\<in>| TE_RuntimeTypeVars env0"
+    show "is_runtime_type env' ty"
+    proof (cases "n = name")
+      case True
+      then have "ty = target" using lk unfolding m'_eq by simp
+      then show ?thesis using True n0 bridge tgt' by blast
+    next
+      case False
+      then have "fmlookup (fmmap (apply_subst ?s) (CM_TypeSubst m)) n = Some ty"
+        using lk unfolding m'_eq by simp
+      then obtain ty0 where lk0: "fmlookup (CM_TypeSubst m) n = Some ty0"
+                        and ty_eq: "ty = apply_subst ?s ty0"
+        by auto
+      have rt0: "is_runtime_type env ty0"
+        using rtok lk0 n0 unfolding subst_runtime_ok_def by blast
+      have "is_runtime_type env' (apply_subst ?s ty0)"
+      proof (rule apply_subst_preserves_runtime[OF rt0 gd'])
+        fix v assume v_rt: "v |\<in>| TE_RuntimeTypeVars env"
+        show "case fmlookup ?s v of
+                Some ty' \<Rightarrow> is_runtime_type env' ty'
+              | None \<Rightarrow> v |\<in>| TE_RuntimeTypeVars env'"
+          using v_rt tgt' rtv' by (cases "v = name") auto
+      qed
+      then show ?thesis using ty_eq by simp
+    qed
+  qed
+qed
+
+(* ---- The four declaration kinds ---- *)
+
+lemma elab_const_decl_subst_runtime:
+  assumes rtok: "subst_runtime_ok env0 env m"
+      and e: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+proof -
+  have "CM_TypeSubst m' = CM_TypeSubst m
+        \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
+        \<and> TE_GhostDatatypes env' = TE_GhostDatatypes env"
+    using e unfolding elab_const_decl_def tyenv_add_global_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis
+    using subst_runtime_ok_env_cong[OF rtok] by blast
+qed
+
+lemma elab_function_decl_subst_runtime:
+  assumes rtok: "subst_runtime_ok env0 env m"
+      and e: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+proof -
+  have "CM_TypeSubst m' = CM_TypeSubst m
+        \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
+        \<and> TE_GhostDatatypes env' = TE_GhostDatatypes env"
+    using e unfolding elab_function_decl_def tyenv_add_function_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis
+    using subst_runtime_ok_env_cong[OF rtok] by blast
+qed
+
+lemma elab_datatype_decl_subst_runtime:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and rtok: "subst_runtime_ok env0 env m"
+      and e: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+proof -
+  let ?name = "DD_Name dd"
+  have env_eq: "env = module_context_env env0 m"
+   and tswk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and wf: "tyenv_well_formed env"
+    using inv unfolding elab_decls_invariant_def by blast+
+  from e show ?thesis
+  proof (cases rule: elab_datatype_decl_Inr_elim)
+    case (Plain ctorInfo isGhost)
+    \<comment> \<open>A plain datatype: the substitution is untouched, and the (possibly
+       ghost) new datatype is a fresh name.\<close>
+    have fresh_dt: "?name |\<notin>| fmdom (TE_Datatypes env)"
+      using Plain(2) unfolding type_name_in_scope_def by blast
+    show ?thesis
+      by (rule subst_runtime_ok_add_datatype[OF rtok tswk fresh_dt Plain(10)])
+         (simp add: Plain(12))
+  next
+    case (Realize ctorInfo isGhost)
+    \<comment> \<open>The ADT realization: add the datatype (fresh as a datatype name, by
+       the duplicate check), then realize name by it. If the abstract type
+       was runtime, the guard forced the datatype non-ghost.\<close>
+    note r = Realize(1) and fresh_dt = Realize(4) and res = Realize(14)
+    have rt_g: "?name |\<in>| TE_RuntimeTypeVars env \<longrightarrow> \<not> isGhost"
+      using Realize(12) by blast
+    let ?ctors1 = "map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo"
+    let ?env1 = "tyenv_add_datatype ?name (DD_TyArgs dd) ?ctors1 isGhost env"
+    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_datatype ?name (DD_TyArgs dd) ?ctors1 isGhost
+                                 (CM_TyEnv m) \<rparr>"
+    have rtok1: "subst_runtime_ok env0 ?env1 ?m1"
+      by (rule subst_runtime_ok_add_datatype[OF rtok tswk fresh_dt refl]) simp
+    have rtv1: "TE_RuntimeTypeVars ?env1 = TE_RuntimeTypeVars env"
+      unfolding tyenv_add_datatype_def by simp
+    have tv_disj: "TE_TypeVars env |\<inter>| fmdom (CM_TypeSubst m) = {||}"
+      using module_context_env_subst_disjoint(1)[of env0 m] env_eq by simp
+    have ndom: "?name |\<notin>| fmdom (CM_TypeSubst m)"
+      using r tv_disj by (metis fempty_iff finter_iff)
+    have bridge: "?name |\<in>| TE_RuntimeTypeVars env0
+                    \<longrightarrow> ?name |\<in>| TE_RuntimeTypeVars ?env1"
+      unfolding rtv1 env_eq module_context_env_tyvar_fields(2)
+      using ndom env_eq module_context_env_tyvar_fields(2) rtv1 by force
+    have ghost_sub: "TE_GhostDatatypes env |\<subseteq>| fmdom (TE_Datatypes env)"
+      using wf unfolding tyenv_well_formed_def tyenv_ghost_datatypes_subset_def by blast
+    have name_ng: "?name |\<notin>| TE_GhostDatatypes env"
+      using ghost_sub fresh_dt by blast
+    have tgt: "?name |\<in>| TE_RuntimeTypeVars ?env1
+                 \<longrightarrow> is_runtime_type ?env1 (CoreTy_Datatype ?name [])"
+      using rt_g name_ng unfolding tyenv_add_datatype_def by auto
+    have noself: "?name \<notin> type_tyvars (CoreTy_Datatype ?name [])"
+      by simp
+    show ?thesis
+      by (rule apply_realization_subst_runtime[OF rtok1 bridge tgt noself res])
+  qed
+qed
+
+lemma elab_typedef_decl_subst_runtime:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and rtok: "subst_runtime_ok env0 env m"
+      and e: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+  using e
+proof (cases rule: elab_typedef_decl_Inr_elim)
+  case (Realize ty target)
+  \<comment> \<open>A realization: the site checks are exactly the hypotheses of the
+     realization step.\<close>
+  note noself = Realize(7) and rt_ok = Realize(8) and res = Realize(10)
+  have env_eq: "env = module_context_env env0 m"
+    using inv unfolding elab_decls_invariant_def by blast
+  have tv_disj: "TE_TypeVars env |\<inter>| fmdom (CM_TypeSubst m) = {||}"
+    using module_context_env_subst_disjoint(1)[of env0 m] env_eq by simp
+  have ndom: "DT_Name dt |\<notin>| fmdom (CM_TypeSubst m)"
+    using Realize(2) tv_disj by (metis fempty_iff finter_iff)
+  have bridge: "DT_Name dt |\<in>| TE_RuntimeTypeVars env0
+                  \<longrightarrow> DT_Name dt |\<in>| TE_RuntimeTypeVars env"
+    unfolding env_eq module_context_env_tyvar_fields(2) using ndom by auto
+  show ?thesis
+    by (rule apply_realization_subst_runtime[OF rtok bridge rt_ok noself res])
+next
+  case NewAbstract
+  \<comment> \<open>A new abstract type: the runtime type variables can only grow.\<close>
+  have grow: "TE_RuntimeTypeVars env |\<subseteq>| TE_RuntimeTypeVars env'"
+   and gd: "TE_GhostDatatypes env' = TE_GhostDatatypes env"
+    unfolding NewAbstract(6) tyenv_add_abstract_type_def by auto
+  have subst_eq: "CM_TypeSubst m' = CM_TypeSubst m"
+    unfolding NewAbstract(8) by simp
+  show ?thesis
+    using rtok is_runtime_type_grow_runtime_tyvars[OF _ grow gd]
+    unfolding subst_runtime_ok_def subst_eq by blast
+next
+  case (Transparent ty target)
+  \<comment> \<open>A transparent typedef changes neither the env nor the module.\<close>
+  show ?thesis using rtok unfolding Transparent(8) Transparent(10) .
+qed
+
+(* ---- The dispatcher, the list, and the top-level fold ---- *)
+
+lemma elab_declaration_subst_runtime:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and rtok: "subst_runtime_ok env0 env m"
+      and elab: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+proof (cases d)
+  case (BabDecl_Const dc)
+  then have e: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_const_decl_subst_runtime[OF rtok e])
+next
+  case (BabDecl_Function df)
+  then have e: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_function_decl_subst_runtime[OF rtok e])
+next
+  case (BabDecl_Datatype dd)
+  then have e: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_datatype_decl_subst_runtime[OF inv rtok e])
+next
+  case (BabDecl_Typedef dt)
+  then have e: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_typedef_decl_subst_runtime[OF inv rtok e])
+qed
+
+lemma elab_declaration_list_subst_runtime:
+  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+      and "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and "subst_runtime_ok env0 env m"
+      and "list_all decl_tyvars_fresh_ok ds"
+  shows "subst_runtime_ok env0 env' m'"
+  using assms
+proof (induction ds arbitrary: env elabEnv m)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons d ds)
+  from Cons.prems(1) obtain env1 elabEnv1 m1 where
+    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    by (auto split: sum.splits prod.splits)
+  have fd: "decl_tyvars_fresh_ok d" and fds: "list_all decl_tyvars_fresh_ok ds"
+    using Cons.prems(4) by simp_all
+  have inv1: "elab_decls_invariant env0 ownAbstract env1 elabEnv1 m1"
+    using elab_declaration_invariant[OF Cons.prems(2) fd step] .
+  have rtok1: "subst_runtime_ok env0 env1 m1"
+    using elab_declaration_subst_runtime[OF Cons.prems(2) Cons.prems(3) step] .
+  show ?case
+    using Cons.IH[OF rest inv1 rtok1 fds] .
+qed
+
+(* Companion of elab_declarations_invariant (ElabModuleCorrect.thy): the same
+   final state env additionally satisfies the runtime-soundness of the
+   recorded substitution. *)
+lemma elab_declarations_subst_runtime:
+  assumes ctx: "elab_context_ok env0 ownAbstract"
+      and ee: "elabenv_well_formed env0 elabEnv0"
+      and fresh: "list_all decl_tyvars_fresh_ok decls"
+      and elab: "elab_declarations env0 elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
+  obtains envF where "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
+                 and "subst_runtime_ok env0 envF M"
+proof -
+  have init: "elab_decls_invariant env0 ownAbstract env0 elabEnv0 empty_core_module"
+    using elab_decls_invariant_init[OF ctx ee] .
+  have init_rt: "subst_runtime_ok env0 env0 empty_core_module"
+    unfolding subst_runtime_ok_def empty_core_module_def by simp
+  from elab obtain envF where
+    run: "elab_declaration_list env0 elabEnv0 ownAbstract empty_core_module decls
+            = Inr (envF, elabEnv', M)"
+    unfolding elab_declarations_def
+    by (auto split: sum.splits prod.splits)
+  have "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
+    using elab_declaration_list_invariant[OF run init fresh] .
+  moreover have "subst_runtime_ok env0 envF M"
+    using elab_declaration_list_subst_runtime[OF run init init_rt fresh] .
+  ultimately show thesis by (rule that)
+qed
+
+
+(* ========================================================================== *)
+(* Provenance of the module's own type variables                              *)
+(* ========================================================================== *)
+
+(* The abstract types a declaration list can introduce: the names of its
+   definition-less typedefs. This is what connects the produced module's
+   TE_TypeVars to the syntax - the whole-program composition (step 8) needs
+   "every abstract type of a module's interface is realized by its own
+   implementation", and check_completeness speaks about abstract typedef
+   declarations while the module's env speaks about TE_TypeVars; the fold
+   lemma below is the bridge. *)
+fun decl_abstract_names :: "BabDeclaration \<Rightarrow> string fset" where
+  "decl_abstract_names (BabDecl_Typedef dt) =
+     (if DT_Definition dt = None then {|DT_Name dt|} else {||})"
+| "decl_abstract_names _ = {||}"
+
+definition decls_abstract_names :: "BabDeclaration list \<Rightarrow> string fset" where
+  "decls_abstract_names ds = funion_list (map decl_abstract_names ds)"
+
+(* A single declaration grows the module's TE_TypeVars by at most its own
+   abstract-typedef name: only the new-abstract-type branch of
+   elab_typedef_decl touches the module's type-variable field
+   (tyenv_add_global, tyenv_add_function and tyenv_add_datatype record other
+   fields; apply_realization does not rewrite the module's own CM_TyEnv at
+   all). *)
+lemma elab_declaration_own_tyvars:
+  assumes e: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
+proof (cases d)
+  case (BabDecl_Const dc)
+  have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
+    using e unfolding BabDecl_Const elab_declaration.simps
+                      elab_const_decl_def tyenv_add_global_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Const)
+next
+  case (BabDecl_Function df)
+  have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
+    using e unfolding BabDecl_Function elab_declaration.simps
+                      elab_function_decl_def tyenv_add_function_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Function)
+next
+  case (BabDecl_Datatype dd)
+  have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
+    using e unfolding BabDecl_Datatype elab_declaration.simps
+                      elab_datatype_decl_def apply_realization_def
+                      tyenv_add_datatype_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Datatype)
+next
+  case (BabDecl_Typedef dt)
+  show ?thesis
+    using e unfolding BabDecl_Typedef elab_declaration.simps
+                      elab_typedef_decl_def apply_realization_def
+                      tyenv_add_abstract_type_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+qed
+
+(* Lifted to the declaration list. *)
+lemma elab_declaration_list_own_tyvars:
+  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+  shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decls_abstract_names ds"
+  using assms
+proof (induction ds arbitrary: env elabEnv m)
+  case Nil
+  then show ?case by (simp add: decls_abstract_names_def)
+next
+  case (Cons d ds)
+  from Cons.prems obtain env1 elabEnv1 m1 where
+    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    by (auto split: sum.splits prod.splits)
+  have s1: "TE_TypeVars (CM_TyEnv m1)
+              |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
+    using elab_declaration_own_tyvars[OF step] .
+  have s2: "TE_TypeVars (CM_TyEnv m')
+              |\<subseteq>| TE_TypeVars (CM_TyEnv m1) |\<union>| decls_abstract_names ds"
+    using Cons.IH[OF rest] .
+  show ?case
+    using s1 s2 unfolding decls_abstract_names_def by auto
+qed
+
+(* The top-level form: the produced module's type variables all name abstract
+   typedefs of the input list (the fold starts from the empty module). *)
+lemma elab_declarations_own_tyvars:
+  assumes "elab_declarations env elabEnv ownAbstract decls = Inr (M, elabEnv')"
+  shows "TE_TypeVars (CM_TyEnv M) |\<subseteq>| decls_abstract_names decls"
+proof -
+  from assms obtain envF where
+    run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
+            = Inr (envF, elabEnv', M)"
+    unfolding elab_declarations_def by (auto split: sum.splits prod.splits)
+  have "TE_TypeVars (CM_TyEnv empty_core_module) = {||}"
+    by (simp add: empty_core_module_def empty_module_tyenv_def)
+  then show ?thesis
+    using elab_declaration_list_own_tyvars[OF run] by auto
+qed
+
+(* The collected names depend only on the multiset of declarations, so they
+   survive the dependency sort. *)
+lemma decls_abstract_names_mset_cong:
+  assumes "mset ds = mset ds'"
+  shows "decls_abstract_names ds = decls_abstract_names ds'"
+  unfolding decls_abstract_names_def
+  using funion_list_map_cong[OF assms] .
+
+
+(* ========================================================================== *)
+(* Provenance of the module's declared-but-undefined names                    *)
+(* ========================================================================== *)
+
+(* The global-variable (resp. function) names a declaration list can declare
+   without defining: consts without a value, non-extern functions without a
+   body. Whole-program closedness (step 8c) needs "everything the linked
+   program declares is defined"; per module, the env speaks about the domains
+   of TE_GlobalVars/TE_Functions versus CM_GlobalVars/CM_Functions, while
+   check_completeness and check_impl_definitions speak about declarations -
+   the fold lemmas below are the bridge. *)
+fun decl_undefined_consts :: "BabDeclaration \<Rightarrow> string fset" where
+  "decl_undefined_consts (BabDecl_Const dc) =
+     (if DC_Value dc = None then {|DC_Name dc|} else {||})"
+| "decl_undefined_consts _ = {||}"
+
+fun decl_undefined_funs :: "BabDeclaration \<Rightarrow> string fset" where
+  "decl_undefined_funs (BabDecl_Function df) =
+     (if DF_Body df = None \<and> \<not> DF_Extern df then {|DF_Name df|} else {||})"
+| "decl_undefined_funs _ = {||}"
+
+definition decls_undefined_consts :: "BabDeclaration list \<Rightarrow> string fset" where
+  "decls_undefined_consts ds = funion_list (map decl_undefined_consts ds)"
+
+definition decls_undefined_funs :: "BabDeclaration list \<Rightarrow> string fset" where
+  "decls_undefined_funs ds = funion_list (map decl_undefined_funs ds)"
+
+(* A single declaration grows the module's declared-but-undefined globals
+   (the TE_GlobalVars names without a CM_GlobalVars entry) by at most its own
+   undefined-const name: elab_const_decl adds the declaration and the
+   definition together except in its no-value case, and definitions are never
+   removed; no other declaration form touches either field. *)
+lemma elab_declaration_undefined_globals:
+  assumes e: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  shows "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
+           |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
+                |\<union>| decl_undefined_consts d"
+proof (cases d)
+  case (BabDecl_Const dc)
+  show ?thesis
+    using e unfolding BabDecl_Const elab_declaration.simps
+                      elab_const_decl_def tyenv_add_global_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+next
+  case (BabDecl_Function df)
+  have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
+        \<and> CM_GlobalVars m' = CM_GlobalVars m"
+    using e unfolding BabDecl_Function elab_declaration.simps
+                      elab_function_decl_def tyenv_add_function_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Function)
+next
+  case (BabDecl_Datatype dd)
+  have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
+        \<and> CM_GlobalVars m' = CM_GlobalVars m"
+    using e unfolding BabDecl_Datatype elab_declaration.simps
+                      elab_datatype_decl_def apply_realization_def
+                      tyenv_add_datatype_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Datatype)
+next
+  case (BabDecl_Typedef dt)
+  have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
+        \<and> CM_GlobalVars m' = CM_GlobalVars m"
+    using e unfolding BabDecl_Typedef elab_declaration.simps
+                      elab_typedef_decl_def apply_realization_def
+                      tyenv_add_abstract_type_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Typedef)
+qed
+
+(* The same for functions: only elab_function_decl touches TE_Functions or
+   CM_Functions, and it withholds the CM_Functions entry exactly for a
+   bodiless non-extern function (an extern declaration IS a definition - its
+   entry carries CF_Body = None). *)
+lemma elab_declaration_undefined_funs:
+  assumes e: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  shows "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
+           |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
+                |\<union>| decl_undefined_funs d"
+proof (cases d)
+  case (BabDecl_Const dc)
+  have "TE_Functions (CM_TyEnv m') = TE_Functions (CM_TyEnv m)
+        \<and> CM_Functions m' = CM_Functions m"
+    using e unfolding BabDecl_Const elab_declaration.simps
+                      elab_const_decl_def tyenv_add_global_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Const)
+next
+  case (BabDecl_Function df)
+  show ?thesis
+    using e unfolding BabDecl_Function elab_declaration.simps
+                      elab_function_decl_def tyenv_add_function_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+next
+  case (BabDecl_Datatype dd)
+  have "TE_Functions (CM_TyEnv m') = TE_Functions (CM_TyEnv m)
+        \<and> CM_Functions m' = CM_Functions m"
+    using e unfolding BabDecl_Datatype elab_declaration.simps
+                      elab_datatype_decl_def apply_realization_def
+                      tyenv_add_datatype_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Datatype)
+next
+  case (BabDecl_Typedef dt)
+  have "TE_Functions (CM_TyEnv m') = TE_Functions (CM_TyEnv m)
+        \<and> CM_Functions m' = CM_Functions m"
+    using e unfolding BabDecl_Typedef elab_declaration.simps
+                      elab_typedef_decl_def apply_realization_def
+                      tyenv_add_abstract_type_def Let_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis by (simp add: BabDecl_Typedef)
+qed
+
+(* Lifted to the declaration list. *)
+lemma elab_declaration_list_undefined_globals:
+  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+  shows "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
+           |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
+                |\<union>| decls_undefined_consts ds"
+  using assms
+proof (induction ds arbitrary: env elabEnv m)
+  case Nil
+  then show ?case by (simp add: decls_undefined_consts_def)
+next
+  case (Cons d ds)
+  from Cons.prems obtain env1 elabEnv1 m1 where
+    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    by (auto split: sum.splits prod.splits)
+  have s1: "fmdom (TE_GlobalVars (CM_TyEnv m1)) |-| fmdom (CM_GlobalVars m1)
+              |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
+                   |\<union>| decl_undefined_consts d"
+    using elab_declaration_undefined_globals[OF step] .
+  have s2: "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
+              |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m1)) |-| fmdom (CM_GlobalVars m1))
+                   |\<union>| decls_undefined_consts ds"
+    using Cons.IH[OF rest] .
+  show ?case
+    using s1 s2 unfolding decls_undefined_consts_def by auto
+qed
+
+lemma elab_declaration_list_undefined_funs:
+  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+  shows "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
+           |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
+                |\<union>| decls_undefined_funs ds"
+  using assms
+proof (induction ds arbitrary: env elabEnv m)
+  case Nil
+  then show ?case by (simp add: decls_undefined_funs_def)
+next
+  case (Cons d ds)
+  from Cons.prems obtain env1 elabEnv1 m1 where
+    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    by (auto split: sum.splits prod.splits)
+  have s1: "fmdom (TE_Functions (CM_TyEnv m1)) |-| fmdom (CM_Functions m1)
+              |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
+                   |\<union>| decl_undefined_funs d"
+    using elab_declaration_undefined_funs[OF step] .
+  have s2: "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
+              |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m1)) |-| fmdom (CM_Functions m1))
+                   |\<union>| decls_undefined_funs ds"
+    using Cons.IH[OF rest] .
+  show ?case
+    using s1 s2 unfolding decls_undefined_funs_def by auto
+qed
+
+(* The top-level forms: the fold starts from the empty module, so every
+   declared name of the produced module is either defined by the module or
+   named by an undefined-const/-function declaration of the input list. *)
+lemma elab_declarations_undefined_globals:
+  assumes "elab_declarations env elabEnv ownAbstract decls = Inr (M, elabEnv')"
+  shows "fmdom (TE_GlobalVars (CM_TyEnv M))
+           |\<subseteq>| fmdom (CM_GlobalVars M) |\<union>| decls_undefined_consts decls"
+proof -
+  from assms obtain envF where
+    run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
+            = Inr (envF, elabEnv', M)"
+    unfolding elab_declarations_def by (auto split: sum.splits prod.splits)
+  have "fmdom (TE_GlobalVars (CM_TyEnv empty_core_module)) = {||}"
+    by (simp add: empty_core_module_def empty_module_tyenv_def)
+  then show ?thesis
+    using elab_declaration_list_undefined_globals[OF run] by auto
+qed
+
+lemma elab_declarations_undefined_funs:
+  assumes "elab_declarations env elabEnv ownAbstract decls = Inr (M, elabEnv')"
+  shows "fmdom (TE_Functions (CM_TyEnv M))
+           |\<subseteq>| fmdom (CM_Functions M) |\<union>| decls_undefined_funs decls"
+proof -
+  from assms obtain envF where
+    run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
+            = Inr (envF, elabEnv', M)"
+    unfolding elab_declarations_def by (auto split: sum.splits prod.splits)
+  have "fmdom (TE_Functions (CM_TyEnv empty_core_module)) = {||}"
+    by (simp add: empty_core_module_def empty_module_tyenv_def)
+  then show ?thesis
+    using elab_declaration_list_undefined_funs[OF run] by auto
+qed
+
+(* The collected names depend only on the multiset of declarations, so they
+   survive the dependency sort. *)
+lemma decls_undefined_consts_mset_cong:
+  assumes "mset ds = mset ds'"
+  shows "decls_undefined_consts ds = decls_undefined_consts ds'"
+  unfolding decls_undefined_consts_def
+  using funion_list_map_cong[OF assms] .
+
+lemma decls_undefined_funs_mset_cong:
+  assumes "mset ds = mset ds'"
+  shows "decls_undefined_funs ds = decls_undefined_funs ds'"
+  unfolding decls_undefined_funs_def
+  using funion_list_map_cong[OF assms] .
 
 
 (* ========================================================================== *)

@@ -710,22 +710,21 @@ proof
     using link_modules_TypeVars_superset[OF okM empty] n_x by (blast dest: fsubsetD)
 qed
 
-(* For substitution-free inputs, every sub-multiset of a linkable list itself
-   links: field disjointness restricts to sub-multisets, and the remaining
-   checks (capture, substitution merge, runtime resolution) are trivial when
-   every input's substitution is empty. This is how the derived sub-links of
-   the pipeline (the dep-only contexts, the linked interface) are known to
-   succeed from the one link elab_module actually computes. *)
+(* Every sub-multiset whose own members are substitution-free links whenever
+   the full list does: field disjointness restricts to sub-multisets, and the
+   remaining checks (capture, substitution merge, runtime resolution) are
+   trivial when every *sub-list* input's substitution is empty. Note the
+   emptiness hypothesis is on the sub-list only - the enclosing link may
+   contain non-empty-substitution members (implementation faces carrying
+   realizations), as the whole-program link does. This is how the derived
+   sub-links of the pipeline (the dep-only contexts, the linked interface)
+   are known to succeed from the one link elab_module actually computes. *)
 lemma link_modules_empty_substs_sublink:
   assumes ok: "link_modules ms = Inr m"
-      and empty: "\<forall>x \<in> set ms. CM_TypeSubst x = fmempty"
+      and empty: "\<forall>x \<in> set as. CM_TypeSubst x = fmempty"
       and sub: "mset as \<subseteq># mset ms"
   shows "\<exists>a. link_modules as = Inr a"
 proof -
-  have set_sub: "set as \<subseteq> set ms"
-    using sub by (metis set_mset_mono set_mset_mset)
-  have empty_as: "\<forall>x \<in> set as. CM_TypeSubst x = fmempty"
-    using empty set_sub by blast
   \<comment> \<open>Field disjointness restricts to the sub-multiset, family by family.\<close>
   have msub: "mset (map f as) \<subseteq># mset (map f ms)" for f :: "CoreModule \<Rightarrow> 'b"
     using sub by (metis image_mset_subseteq_mono mset_map)
@@ -737,15 +736,15 @@ proof -
     by (metis fmdisjoint_list_submset msub)
   \<comment> \<open>The capture check: substitution-free inputs touch no names at all.\<close>
   have names_empty: "funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) as) = {||}"
-    using empty_as by (induction as) auto
+    using empty by (induction as) auto
   have cap: "link_capture_ok as"
     unfolding link_capture_ok_def by (simp add: names_empty)
   \<comment> \<open>The substitution merge: the union of empty substitutions is empty, whose
      dependency relation is empty and whose closure is itself.\<close>
   have u_empty: "fmlist_union (map CM_TypeSubst as) = fmempty"
-    using empty_as by (induction as) (simp_all add: fmlist_union_Cons)
+    using empty by (induction as) (simp_all add: fmlist_union_Cons)
   have sdisj: "fmdisjoint_list (map CM_TypeSubst as)"
-    using empty_as by (induction as) (auto simp: fmdisjoint_list_Cons)
+    using empty by (induction as) (auto simp: fmdisjoint_list_Cons)
   have acyc: "acyclic_subst_deps fmempty"
     unfolding acyclic_subst_deps_def subst_dep_rel_def acyclic_def by simp
   have clos: "is_subst_closure fmempty fmempty"
@@ -758,6 +757,372 @@ proof -
     unfolding link_runtime_ok_def by simp
   show ?thesis
     using disj_as cap merge rok link_modules_Inr_iff[of as] by blast
+qed
+
+(* funion_list over a mapped list is monotone in the set of inputs. *)
+lemma funion_list_map_mono:
+  assumes sub: "set as \<subseteq> set ms"
+  shows "funion_list (map f as) |\<subseteq>| funion_list (map f ms)"
+proof
+  fix x assume "x |\<in>| funion_list (map f as)"
+  then obtain s where "s \<in> set (map f as)" and "x |\<in>| s"
+    by (metis funion_list_member)
+  then show "x |\<in>| funion_list (map f ms)"
+    using sub by (auto simp: funion_list_member)
+qed
+
+(* A sub-list's disjoint union is a sub-map of the full list's: disjointness
+   of the full list pins each key to a single input's entry, so the sub-list
+   cannot disagree. *)
+lemma fmlist_union_sublist_lookup:
+  assumes disj: "fmdisjoint_list ss"
+      and sub: "set us \<subseteq> set ss"
+      and lk: "fmlookup (fmlist_union us) k = Some v"
+  shows "fmlookup (fmlist_union ss) k = Some v"
+proof -
+  obtain s where s_in: "s \<in> set us" and s_lk: "fmlookup s k = Some v"
+    using fmlist_union_lookup_some[OF lk] by blast
+  then show ?thesis
+    using sub fmlist_union_lookup[OF disj] by blast
+qed
+
+(* Substitution-merge success restricts to sub-multisets unconditionally:
+   domain disjointness restricts; the sub-list's dependency relation is a
+   subrelation of the full one (the union substitution is a sub-map, so
+   every entry it has is the same entry), and subrelations of an acyclic
+   relation are acyclic - so the sub-list's closure exists. Note the
+   resulting \<sigma>' is NOT the restriction of the full \<sigma> in general: the
+   sub-list's closure is less resolved (a chain broken by dropping a module
+   stops earlier). *)
+lemma merge_all_substs_sublist:
+  assumes ok: "merge_all_substs ss = Inr \<sigma>"
+      and sub: "mset us \<subseteq># mset ss"
+  shows "\<exists>\<sigma>'. merge_all_substs us = Inr \<sigma>'"
+proof -
+  have disj_ss: "fmdisjoint_list ss"
+   and acyc_ss: "acyclic_subst_deps (fmlist_union ss)"
+    using ok merge_all_substs_Inr_iff[of ss \<sigma>] by blast+
+  have disj_us: "fmdisjoint_list us"
+    using fmdisjoint_list_submset[OF sub disj_ss] .
+  have set_sub: "set us \<subseteq> set ss"
+    using sub by (metis set_mset_mono set_mset_mset)
+  have lk: "fmlookup (fmlist_union ss) k = Some v"
+    if "fmlookup (fmlist_union us) k = Some v" for k v
+    using fmlist_union_sublist_lookup[OF disj_ss set_sub that] .
+  have dom_sub: "fmdom (fmlist_union us) |\<subseteq>| fmdom (fmlist_union ss)"
+  proof
+    fix k assume "k |\<in>| fmdom (fmlist_union us)"
+    then obtain v where "fmlookup (fmlist_union us) k = Some v"
+      by (metis fmlookup_dom_iff)
+    then show "k |\<in>| fmdom (fmlist_union ss)"
+      using lk by (metis fmdomI)
+  qed
+  have subrel: "subst_dep_rel (fmlist_union us) \<subseteq> subst_dep_rel (fmlist_union ss)"
+  proof
+    fix p assume "p \<in> subst_dep_rel (fmlist_union us)"
+    then obtain T T' where
+      p: "p = (T', T)" and
+      T_dom: "T |\<in>| fmdom (fmlist_union us)" and
+      T'_dom: "T' |\<in>| fmdom (fmlist_union us)" and
+      tv: "T' \<in> type_tyvars (the (fmlookup (fmlist_union us) T))"
+      unfolding subst_dep_rel_def by blast
+    obtain ty where ty: "fmlookup (fmlist_union us) T = Some ty"
+      using T_dom by (metis fmlookup_dom_iff)
+    have ty_ss: "fmlookup (fmlist_union ss) T = Some ty"
+      using lk[OF ty] .
+    show "p \<in> subst_dep_rel (fmlist_union ss)"
+      unfolding subst_dep_rel_def
+      using p tv ty ty_ss T_dom T'_dom dom_sub by (auto dest: fsubsetD)
+  qed
+  have acyc_us: "acyclic_subst_deps (fmlist_union us)"
+    using acyc_ss subrel acyclic_subset unfolding acyclic_subst_deps_def by blast
+  obtain \<sigma>' where "is_subst_closure (fmlist_union us) \<sigma>'"
+    using subst_closure_exists_unique[OF acyc_us] by blast
+  then show ?thesis
+    using disj_us merge_all_substs_Inr_iff acyc_us by auto
+qed
+
+(* The generalized sublink lemma: a sub-multiset of a successful link links
+   successfully provided its own merged substitution passes the runtime-
+   resolution check. Field disjointness, the capture check, and merge
+   success all restrict to sub-multisets unconditionally (above); the
+   runtime check does NOT - is_runtime_type is evaluated in the sub-link's
+   smaller env, where a resolution target's datatype or type variable may
+   have lost its declaring module - so it is the caller's hypothesis. The
+   whole-program composition (step 8) discharges it for dependency-closed
+   prefixes of the whole-program link, where every declaring module is
+   present. *)
+lemma link_modules_sublink:
+  assumes ok: "link_modules ms = Inr m"
+      and sub: "mset as \<subseteq># mset ms"
+      and merge: "merge_all_substs (map CM_TypeSubst as) = Inr \<sigma>"
+      and rt: "link_runtime_ok as \<sigma>"
+  shows "link_modules as = Inr (link_result as \<sigma>)"
+proof -
+  have msub: "mset (map f as) \<subseteq># mset (map f ms)" for f :: "CoreModule \<Rightarrow> 'b"
+    using sub by (metis image_mset_subseteq_mono mset_map)
+  have set_sub: "set as \<subseteq> set ms"
+    using sub by (metis set_mset_mono set_mset_mset)
+  have disj_ms: "link_fields_disjoint ms" and cap_ms: "link_capture_ok ms"
+    using ok link_modules_Inr_iff[of ms m] by blast+
+  have disj_as: "link_fields_disjoint as"
+    using disj_ms unfolding link_fields_disjoint_def
+    by (metis fmdisjoint_list_submset msub)
+  have cap_as: "link_capture_ok as"
+  proof -
+    have names_sub: "funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) as)
+                       |\<subseteq>| funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)"
+     and bound_sub: "funion_list (map module_bound_tyvars as)
+                       |\<subseteq>| funion_list (map module_bound_tyvars ms)"
+      using funion_list_map_mono[OF set_sub] by fastforce+
+    show ?thesis
+      using cap_ms names_sub bound_sub unfolding link_capture_ok_def
+      by blast
+  qed
+  show ?thesis
+    using disj_as cap_as merge rt link_modules_Inr_iff[of as "link_result as \<sigma>"]
+    by blast
+qed
+
+
+(* ========================================================================== *)
+(* Discharging the runtime check for realization-closed sub-lists             *)
+(* ========================================================================== *)
+
+(* The sub-lists the whole-program composition (step 8) needs are prefixes of
+   the whole-program link in dependency order: WHOLE modules (both faces), so
+   every abstract type mentioned anywhere in the prefix's substitutions is
+   also RESOLVED within the prefix (its declaring module is a dependency, so
+   present, and per-module completeness puts its realizing implementation
+   alongside). For such "realization-closed" sub-lists the merged closure's
+   entries are fully ground - no chain stops early - and then the runtime
+   check transfers from the full link by ghost-set monotonicity alone: a
+   ground type's runtime-ness never consults TE_RuntimeTypeVars, and a
+   datatype non-ghost in the big union is non-ghost in the smaller one. *)
+
+(* Adding a sub-map on the right is absorbed (fmadd is right-biased, and the
+   sub-map never disagrees). This lets the absorption identity
+   closure_absorb_type_raw apply with the full union in the "p ++f u" role. *)
+lemma fmadd_absorb_submap:
+  assumes sub: "\<And>k v. fmlookup n k = Some v \<Longrightarrow> fmlookup m k = Some v"
+  shows "m ++\<^sub>f n = m"
+proof (rule fmap_ext)
+  fix k
+  show "fmlookup (m ++\<^sub>f n) k = fmlookup m k"
+  proof (cases "fmlookup n k")
+    case None
+    then show ?thesis by (simp add: fmdom_notI)
+  next
+    case (Some v)
+    then show ?thesis using sub by (simp add: fmdomI)
+  qed
+qed
+
+(* A GROUND type's runtime-ness transfers to an env with FEWER ghost
+   datatypes: the CoreTy_Var clause is unreachable (so TE_RuntimeTypeVars is
+   never consulted), and every datatype head non-ghost in the larger set is
+   non-ghost in the smaller. Compare is_runtime_type_ground_cong_env
+   (CoreTypeProps.thy), which needs ghost-set equality. *)
+lemma is_runtime_type_ground_antimono:
+  assumes rt: "is_runtime_type envM ty"
+      and ghost: "TE_GhostDatatypes envA |\<subseteq>| TE_GhostDatatypes envM"
+      and ground: "type_tyvars ty = {}"
+  shows "is_runtime_type envA ty"
+  using rt ground
+proof (induction ty)
+  case (CoreTy_Datatype name argTypes)
+  from CoreTy_Datatype.prems(1) have
+    ng: "name |\<notin>| TE_GhostDatatypes envM" and
+    args_rt: "list_all (is_runtime_type envM) argTypes"
+    by auto
+  have args_ground: "\<And>t. t \<in> set argTypes \<Longrightarrow> type_tyvars t = {}"
+    using CoreTy_Datatype.prems(2) by auto
+  have ng': "name |\<notin>| TE_GhostDatatypes envA"
+    using ng ghost by (blast dest: fsubsetD)
+  have args_rt': "list_all (is_runtime_type envA) argTypes"
+    using CoreTy_Datatype.IH args_rt args_ground by (auto simp: list_all_iff)
+  show ?case using ng' args_rt' by simp
+next
+  case (CoreTy_Record flds)
+  have "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow> is_runtime_type envA t"
+  proof -
+    fix nm t assume mem: "(nm, t) \<in> set flds"
+    from mem CoreTy_Record.prems(1) have "is_runtime_type envM t"
+      by (auto simp: list_all_iff)
+    moreover from mem CoreTy_Record.prems(2) have "type_tyvars t = {}"
+      by fastforce
+    ultimately show "is_runtime_type envA t"
+      using CoreTy_Record.IH mem by auto
+  qed
+  then show ?case by (auto simp: list_all_iff)
+next
+  case (CoreTy_Array elemTy dims)
+  then show ?case by auto
+next
+  case (CoreTy_Var n)
+  then show ?case by simp
+qed auto
+
+(* If every abstract type mentioned in the inputs' substitution ranges is
+   also resolved by some input ("realization-closed"), the merged closure's
+   entries are ground: the closure's leftover range tyvars are the raw
+   union's range tyvars minus its domain, which the hypothesis empties. *)
+lemma merge_all_substs_ground_entries:
+  assumes merge: "merge_all_substs ss = Inr \<sigma>"
+      and closed: "subst_range_tyvars (fmlist_union ss)
+                     \<subseteq> fset (fmdom (fmlist_union ss))"
+      and lk: "fmlookup \<sigma> n = Some ty"
+  shows "type_tyvars ty = {}"
+proof -
+  have acyc: "acyclic_subst_deps (fmlist_union ss)"
+   and clos: "is_subst_closure (fmlist_union ss) \<sigma>"
+    using merge merge_all_substs_Inr_iff[of ss \<sigma>] by blast+
+  have "subst_range_tyvars \<sigma>
+          \<subseteq> subst_range_tyvars (fmlist_union ss) - fset (fmdom (fmlist_union ss))"
+    using is_subst_closure_range_tyvars[OF acyc clos] .
+  then have empty: "subst_range_tyvars \<sigma> = {}"
+    using closed by auto
+  have "ty \<in> fmran' \<sigma>"
+    using lk by (auto simp: fmlookup_ran'_iff)
+  then have "type_tyvars ty \<subseteq> subst_range_tyvars \<sigma>"
+    unfolding subst_range_tyvars_def by blast
+  then show ?thesis using empty by auto
+qed
+
+(* A GROUND entry of the sub-list's closure agrees with the full closure's:
+   by the absorption identity the full closure \<sigma> resolves n to
+   apply_subst \<sigma> (\<sigma>' n), and substitution is the identity on a ground type.
+   (For a non-ground entry the two genuinely differ - the full closure
+   resolves further.) *)
+lemma sub_closure_ground_entry_agrees:
+  assumes merge_ms: "merge_all_substs ss = Inr \<sigma>"
+      and merge_us: "merge_all_substs us = Inr \<sigma>'"
+      and lk_sub: "\<And>k v. fmlookup (fmlist_union us) k = Some v
+                     \<Longrightarrow> fmlookup (fmlist_union ss) k = Some v"
+      and n_dom: "n |\<in>| fmdom \<sigma>'"
+      and ground: "type_tyvars (the (fmlookup \<sigma>' n)) = {}"
+  shows "fmlookup \<sigma> n = fmlookup \<sigma>' n"
+proof -
+  have acyc_us: "acyclic_subst_deps (fmlist_union us)"
+   and clos_us: "is_subst_closure (fmlist_union us) \<sigma>'"
+    using merge_us merge_all_substs_Inr_iff[of us \<sigma>'] by blast+
+  have clos_ss: "is_subst_closure (fmlist_union ss) \<sigma>"
+    using merge_ms merge_all_substs_Inr_iff[of ss \<sigma>] by blast
+  have dom_us: "fmdom \<sigma>' = fmdom (fmlist_union us)"
+   and dom_ss: "fmdom \<sigma> = fmdom (fmlist_union ss)"
+    using clos_us clos_ss unfolding is_subst_closure_def by blast+
+  have add_eq: "fmlist_union ss ++\<^sub>f fmlist_union us = fmlist_union ss"
+    using fmadd_absorb_submap lk_sub by blast
+  have clos_add: "is_subst_closure (fmlist_union ss ++\<^sub>f fmlist_union us) \<sigma>"
+    using clos_ss add_eq by simp
+  have absorb: "apply_subst \<sigma> (apply_subst \<sigma>' (CoreTy_Var n))
+                  = apply_subst \<sigma> (CoreTy_Var n)"
+    using closure_absorb_type_raw[OF acyc_us clos_us clos_add] .
+  obtain ty' where lk': "fmlookup \<sigma>' n = Some ty'"
+    using n_dom by (metis fmlookup_dom_iff)
+  have v': "apply_subst \<sigma>' (CoreTy_Var n) = ty'"
+    using lk' by simp
+  have ground': "type_tyvars ty' = {}"
+    using ground lk' by simp
+  have gid: "apply_subst \<sigma> ty' = ty'"
+    using apply_subst_disjoint_id[of ty' \<sigma>] ground' by simp
+  have n_dom_ss: "n |\<in>| fmdom \<sigma>"
+  proof -
+    have "n |\<in>| fmdom (fmlist_union us)" using n_dom dom_us by simp
+    then obtain v where "fmlookup (fmlist_union us) n = Some v"
+      by (metis fmlookup_dom_iff)
+    then have "fmlookup (fmlist_union ss) n = Some v" by (rule lk_sub)
+    then show ?thesis using dom_ss by (metis fmdomI)
+  qed
+  obtain tyS where lkS: "fmlookup \<sigma> n = Some tyS"
+    using n_dom_ss by (metis fmlookup_dom_iff)
+  have vS: "apply_subst \<sigma> (CoreTy_Var n) = tyS"
+    using lkS by simp
+  have "tyS = ty'"
+    using absorb v' vS gid by simp
+  then show ?thesis using lkS lk' by simp
+qed
+
+(* The runtime-resolution check holds on a realization-closed sub-multiset of
+   a successful link: every checked entry is ground and agrees with the full
+   closure's, whose runtime-ness the full link's check supplies; ghost-set
+   monotonicity carries it into the smaller env. *)
+lemma link_runtime_ok_sublist_ground:
+  assumes ok: "link_modules ms = Inr m"
+      and sub: "mset as \<subseteq># mset ms"
+      and merge_as: "merge_all_substs (map CM_TypeSubst as) = Inr \<sigma>a"
+      and closed: "subst_range_tyvars (fmlist_union (map CM_TypeSubst as))
+                     \<subseteq> fset (fmdom (fmlist_union (map CM_TypeSubst as)))"
+  shows "link_runtime_ok as \<sigma>a"
+proof -
+  have set_sub: "set as \<subseteq> set ms"
+    using sub by (metis set_mset_mono set_mset_mset)
+  have set_sub_substs: "set (map CM_TypeSubst as) \<subseteq> set (map CM_TypeSubst ms)"
+    using set_sub by auto
+  obtain \<sigma> where merge_ms: "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>"
+      and rt_ms: "link_runtime_ok ms \<sigma>"
+    using ok link_modules_Inr_iff[of ms m] by blast
+  have sdisj_ms: "fmdisjoint_list (map CM_TypeSubst ms)"
+    using merge_ms merge_all_substs_Inr_iff[of "map CM_TypeSubst ms" \<sigma>] by blast
+  have lk_sub: "\<And>k v. fmlookup (fmlist_union (map CM_TypeSubst as)) k = Some v
+                  \<Longrightarrow> fmlookup (fmlist_union (map CM_TypeSubst ms)) k = Some v"
+    using fmlist_union_sublist_lookup[OF sdisj_ms set_sub_substs] .
+  show ?thesis
+    unfolding link_runtime_ok_def
+  proof (intro allI impI)
+    fix n
+    assume "n |\<in>| fmdom \<sigma>a
+              |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) as)"
+    then have n_dom: "n |\<in>| fmdom \<sigma>a"
+          and n_rt: "n |\<in>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) as)"
+      by auto
+    obtain ty where lk_a: "fmlookup \<sigma>a n = Some ty"
+      using n_dom by (metis fmlookup_dom_iff)
+    have ground: "type_tyvars ty = {}"
+      using merge_all_substs_ground_entries[OF merge_as closed lk_a] .
+    have agree: "fmlookup \<sigma> n = fmlookup \<sigma>a n"
+      using sub_closure_ground_entry_agrees[OF merge_ms merge_as lk_sub n_dom]
+            ground lk_a by simp
+    have n_dom_ms: "n |\<in>| fmdom \<sigma>"
+      using agree lk_a by (metis fmdomI)
+    have n_rt_ms: "n |\<in>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)"
+      using n_rt funion_list_map_mono[OF set_sub] by fastforce
+    have rt_full: "is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n))"
+      using rt_ms n_dom_ms n_rt_ms unfolding link_runtime_ok_def by auto
+    have rt_ty: "is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) ty"
+      using rt_full agree lk_a by simp
+    have ghost_sub: "TE_GhostDatatypes (CM_TyEnv (link_result as \<sigma>a))
+                       |\<subseteq>| TE_GhostDatatypes (CM_TyEnv (link_result ms \<sigma>))"
+      using funion_list_map_mono[OF set_sub]
+      unfolding link_result_def by simp
+    have "is_runtime_type (CM_TyEnv (link_result as \<sigma>a)) ty"
+      using is_runtime_type_ground_antimono[OF rt_ty ghost_sub ground] .
+    then show "is_runtime_type (CM_TyEnv (link_result as \<sigma>a)) (the (fmlookup \<sigma>a n))"
+      using lk_a by simp
+  qed
+qed
+
+(* The packaged form: a realization-closed sub-multiset of a successful link
+   links successfully, unconditionally. This is the workhorse for the
+   whole-program composition's prefix links (step 8b); the empty-substs form
+   above remains the right tool for interface-only sub-links. *)
+lemma link_modules_sublink_ground:
+  assumes ok: "link_modules ms = Inr m"
+      and sub: "mset as \<subseteq># mset ms"
+      and closed: "subst_range_tyvars (fmlist_union (map CM_TypeSubst as))
+                     \<subseteq> fset (fmdom (fmlist_union (map CM_TypeSubst as)))"
+  shows "\<exists>a. link_modules as = Inr a"
+proof -
+  obtain \<sigma> where merge_ms: "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>"
+    using ok link_modules_Inr_iff[of ms m] by blast
+  have msub: "mset (map CM_TypeSubst as) \<subseteq># mset (map CM_TypeSubst ms)"
+    using sub by (metis image_mset_subseteq_mono mset_map)
+  obtain \<sigma>a where merge_as: "merge_all_substs (map CM_TypeSubst as) = Inr \<sigma>a"
+    using merge_all_substs_sublist[OF merge_ms msub] by blast
+  have rt: "link_runtime_ok as \<sigma>a"
+    using link_runtime_ok_sublist_ground[OF ok sub merge_as closed] .
+  show ?thesis
+    using link_modules_sublink[OF ok sub merge_as rt] by blast
 qed
 
 (* Every function signature of a linked module is some input's signature,

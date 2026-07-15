@@ -54,6 +54,16 @@ proof (induction xs rule: first_adjacent_dup.induct)
   then show ?case by auto
 qed simp_all
 
+(* If first_adjacent_dup returns Some, the returned element is in the list *)
+lemma first_adjacent_dup_Some_implies_member:
+  assumes "first_adjacent_dup xs = Some x"
+  shows "x \<in> set xs"
+  using assms
+proof (induction xs rule: first_adjacent_dup.induct)
+  case (3 a b rest)
+  then show ?case by (cases "a = b") auto
+qed simp_all
+
 (* If first_duplicate_name returns None, then the input was distinct *)
 lemma first_duplicate_name_None_implies_distinct:
   assumes "first_duplicate_name getName items = None"
@@ -66,6 +76,21 @@ proof -
   ultimately have "distinct ?sorted"
     by (rule first_adjacent_dup_None_implies_distinct)
   thus ?thesis by simp
+qed
+
+(* If first_duplicate_name returns Some, some item in the list bears the
+   returned name, so a `find` for that name cannot fail *)
+lemma first_duplicate_name_Some_implies_find:
+  assumes "first_duplicate_name getName items = Some dup"
+  shows "\<exists>d. find (\<lambda>x. getName x = dup) items = Some d"
+proof -
+  from assms have "dup \<in> set (sort (map getName items))"
+    unfolding first_duplicate_name_def
+    by (rule first_adjacent_dup_Some_implies_member)
+  hence "\<exists>x. x \<in> set items \<and> getName x = dup" by auto
+  hence "find (\<lambda>x. getName x = dup) items \<noteq> None"
+    by (simp add: find_None_iff)
+  thus ?thesis by auto
 qed
 
 (* Converse: if the input is distinct, then first_duplicate_name returns None *)

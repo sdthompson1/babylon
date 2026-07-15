@@ -18,25 +18,24 @@ begin
    twice into the face-2 link, where the strict conflict check fails it -
    the discipline self-polices.
 
+   Both faces are compiled by the same per-face pipeline, elab_face: link
+   the dependencies' CoreModules into a typing context, union their ElabEnv
+   deltas (domain-disjoint, by global name uniqueness), sort the face's
+   declarations into dependency order, elaborate them in that context, and
+   pair the resulting unlinked CoreModule with the delta of the fold's
+   final ElabEnv against the initial union - the face's exported ElabEnv.
+
    elab_module then:
     1. runs the purely syntactic cross-face checks (unique names across the
        two faces; declaration-only forms are interface-only);
-    2. links the intDeps CoreModules into a context A, and unions their
-       ElabEnv deltas into EA (domain-disjoint, by global name uniqueness);
-    3. sorts the interface declarations into dependency order and elaborates
-       them in CM_TyEnv A with EA (an interface realizes nothing, so
-       ownAbstract is empty), giving the unlinked interface CoreModule and -
-       as the delta of the fold's final ElabEnv against EA - the interface
-       face's exported ElabEnv;
-    4. links the CoreModules of intDeps and implDeps plus the just-produced
-       unlinked interface into a context B, and unions the corresponding
-       ElabEnv deltas (including the interface face's) into EB;
-    5. sorts and elaborates the implementation declarations in CM_TyEnv B
-       with EB, with ownAbstract = the interface's abstract types, giving
-       the unlinked implementation and its delta;
-    6. checks per-module completeness (everything the module declares is
+    2. compiles the interface face against intDeps (an interface realizes
+       nothing, so ownAbstract is empty);
+    3. compiles the implementation face against intDeps and implDeps plus
+       the just-compiled interface face, with ownAbstract = the interface's
+       abstract types;
+    4. checks per-module completeness (everything the module declares is
        defined by the module itself);
-    7. returns the module's two compiled faces (each a CoreModule paired
+    5. returns the module's two compiled faces (each a CoreModule paired
        with its delta ElabEnv). *)
 
 
@@ -69,15 +68,14 @@ definition check_unique_names ::
   "check_unique_names intf impl =
      (case first_duplicate_name get_decl_name intf of
         Some dup \<Rightarrow>
-          (case find (\<lambda>d. get_decl_name d = dup) intf of
-             Some d \<Rightarrow> [TyErr_DuplicateName (bab_declaration_location d) dup]
-           | None \<Rightarrow> [])
+          \<comment> \<open>The find cannot fail (first_duplicate_name_Some_implies_find)\<close>
+          (let d = the (find (\<lambda>d. get_decl_name d = dup) intf)
+           in [TyErr_DuplicateName (bab_declaration_location d) dup])
       | None \<Rightarrow> [])
      @ (case first_duplicate_name get_decl_name impl of
           Some dup \<Rightarrow>
-            (case find (\<lambda>d. get_decl_name d = dup) impl of
-               Some d \<Rightarrow> [TyErr_DuplicateName (bab_declaration_location d) dup]
-             | None \<Rightarrow> [])
+            (let d = the (find (\<lambda>d. get_decl_name d = dup) impl)
+             in [TyErr_DuplicateName (bab_declaration_location d) dup])
         | None \<Rightarrow> [])
      @ concat (map (\<lambda>d.
           (case find (\<lambda>di. get_decl_name di = get_decl_name d) intf of
@@ -362,6 +360,25 @@ datatype ElabModuleError =
   EM_LinkError LinkError
   | EM_TypeErrors "TypeError list"
 
+(* Compile one face against its dependency set: link the deps' CoreModules
+   into a typing context, union their ElabEnv deltas, sort the face's
+   declarations into dependency order, elaborate them, and return the face's
+   unlinked CoreModule paired with its delta ElabEnv. *)
+definition elab_face ::
+  "CompiledModule list \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
+   \<Rightarrow> ElabModuleError + CompiledModule" where
+  "elab_face deps ownAbstract decls =
+     (case link_modules (map fst deps) of
+        Inl le \<Rightarrow> Inl (EM_LinkError le)
+      | Inr ctx \<Rightarrow>
+          (let e = elabenv_union (map snd deps)
+           in case sort_declarations (CM_TyEnv ctx) e decls of
+                Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
+              | Inr sortedDecls \<Rightarrow>
+                  (case elab_declarations (CM_TyEnv ctx) e ownAbstract sortedDecls of
+                     Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
+                   | Inr (m, foldEnv) \<Rightarrow> Inr (m, elabenv_delta e foldEnv))))"
+
 (* See the orchestration comment at the top of this file. The implementation
    face's delta ElabEnv currently has no consumer (implementations are never
    imported); it is returned for uniformity of the compiled representation. *)
@@ -372,37 +389,17 @@ definition elab_module ::
     (let checkErrs = check_unique_names (Mod_Interface bm) (Mod_Implementation bm)
                      @ check_impl_definitions (Mod_Implementation bm)
      in if checkErrs \<noteq> [] then Inl (EM_TypeErrors checkErrs)
-        else case link_modules (map fst intDeps) of
-               Inl le \<Rightarrow> Inl (EM_LinkError le)
-             | Inr a \<Rightarrow>
-                 (let ea = elabenv_union (map snd intDeps)
-                  in case sort_declarations (CM_TyEnv a) ea (Mod_Interface bm) of
-                       Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
-                     | Inr sortedInt \<Rightarrow>
-                         (case elab_declarations (CM_TyEnv a) ea {||} sortedInt of
-                            Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
-                          | Inr (intMod, intFoldEnv) \<Rightarrow>
-                              (let intEE = elabenv_delta ea intFoldEnv
-                               in case link_modules
-                                         (map fst intDeps @ map fst implDeps @ [intMod]) of
-                                    Inl le \<Rightarrow> Inl (EM_LinkError le)
-                                  | Inr b \<Rightarrow>
-                                      (let eb = elabenv_union
-                                                  (map snd intDeps @ map snd implDeps @ [intEE])
-                                       in case sort_declarations (CM_TyEnv b) eb
-                                                 (Mod_Implementation bm) of
-                                            Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
-                                          | Inr sortedImpl \<Rightarrow>
-                                              (case elab_declarations (CM_TyEnv b) eb
-                                                      (TE_TypeVars (CM_TyEnv intMod)) sortedImpl of
-                                                 Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
-                                               | Inr (implMod, implFoldEnv) \<Rightarrow>
-                                                   (let compErrs = check_completeness
-                                                                     (Mod_Interface bm) intMod implMod
-                                                    in if compErrs \<noteq> []
-                                                       then Inl (EM_TypeErrors compErrs)
-                                                       else Inr ((intMod, intEE),
-                                                                 (implMod,
-                                                                  elabenv_delta eb implFoldEnv)))))))))"
+        else case elab_face intDeps {||} (Mod_Interface bm) of
+               Inl err \<Rightarrow> Inl err
+             | Inr (intMod, intEE) \<Rightarrow>
+                 (case elab_face (intDeps @ implDeps @ [(intMod, intEE)])
+                         (TE_TypeVars (CM_TyEnv intMod))
+                         (Mod_Implementation bm) of
+                    Inl err \<Rightarrow> Inl err
+                  | Inr (implMod, implEE) \<Rightarrow>
+                      (let compErrs = check_completeness (Mod_Interface bm) intMod implMod
+                       in if compErrs \<noteq> []
+                          then Inl (EM_TypeErrors compErrs)
+                          else Inr ((intMod, intEE), (implMod, implEE)))))"
 
 end
