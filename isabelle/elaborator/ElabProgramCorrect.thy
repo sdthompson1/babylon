@@ -6,16 +6,16 @@ begin
 
    Highlights:
 
-    - `elab_program_well_typed` - shows that the output of elab_program + whole_program_link
+    - `elab_program_well_typed`: shows that the output of elab_program + whole_program_link
       is well-typed (on success).
 
-    - `elab_program_closed` - shows that the output of elab_program + whole_program_link
+    - `elab_program_closed`: shows that the output of elab_program + whole_program_link
       is closed (on success).
 
-    - `module_impl_link_well_typed` - shows that the output of elab_program +
-      module_impl_link is well-typed (on success). (Note that it is not in general
+    - `module_impl_link_well_typed`: shows that the output of elab_program +
+      module_impl_link is well-typed (on success). Note that it is not in general
       closed -- as the implementations of the imported interfaces have not been
-      linked in.)
+      linked in.
 *)
 
 
@@ -895,17 +895,14 @@ lemma pipeline_step_Inr_elim:
   by (auto split: sum.splits prod.splits)
 
 (* One fold step preserves the invariant. The freshness premise comes from
-   analyze_dependencies (distinct names, dependencies first), the two
-   metavariable-freshness premises from the renamer's naming discipline; the
-   extra conclusions are the bookkeeping the pipeline_fold induction carries
+   analyze_dependencies (distinct names, dependencies first); the extra
+   conclusions are the bookkeeping the pipeline_fold induction carries
    (domain growth, stability of old entries, and the new entry's dep sets
    resolving among the modules processed before it). *)
 lemma pipeline_step_preserves:
   assumes ok: "pipeline_state_ok ps"
       and step: "pipeline_step ps bm = Inr ps'"
       and fresh: "Mod_Name bm |\<notin>| fmdom ps"
-      and fresh_int: "list_all decl_tyvars_fresh_ok (Mod_Interface bm)"
-      and fresh_impl: "list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "pipeline_state_ok ps'"
     and "fmdom ps' = finsert (Mod_Name bm) (fmdom ps)"
     and "k \<noteq> Mod_Name bm \<Longrightarrow> fmlookup ps' k = fmlookup ps k"
@@ -1137,8 +1134,7 @@ proof -
       by (simp add: d_eq)
   qed
 
-  note emwt = elab_module_well_typed[OF elab' deps_ok A_wt C_wt eeA eeC
-                fresh_int fresh_impl]
+  note emwt = elab_module_well_typed[OF elab' deps_ok A_wt C_wt eeA eeC]
   note defsc = elab_module_defs_complete[OF elab']
 
   \<comment> \<open>The new entry's invariant: its state-derived context lists are exactly
@@ -1209,8 +1205,6 @@ lemma pipeline_fold_invariant:
       and "pipeline_fold ps bms = Inr ps'"
       and "\<forall>bm \<in> set bms. Mod_Name bm |\<notin>| fmdom ps"
       and "distinct (map Mod_Name bms)"
-      and "\<forall>bm \<in> set bms. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-             \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "pipeline_state_ok ps'
        \<and> fmdom ps' = fmdom ps |\<union>| fset_of_list (map Mod_Name bms)
        \<and> (\<forall>k. k |\<in>| fmdom ps \<longrightarrow> fmlookup ps' k = fmlookup ps k)
@@ -1231,10 +1225,7 @@ next
     using Cons.prems(2) by (auto split: sum.splits)
   have name_fresh: "Mod_Name bm |\<notin>| fmdom ps"
     using Cons.prems(3) by simp
-  have fi: "list_all decl_tyvars_fresh_ok (Mod_Interface bm)"
-   and fim: "list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
-    using Cons.prems(5) by simp_all
-  note sp = pipeline_step_preserves[OF Cons.prems(1) step name_fresh fi fim]
+  note sp = pipeline_step_preserves[OF Cons.prems(1) step name_fresh]
   \<comment> \<open>The step's output satisfies the induction hypothesis' premises.\<close>
   have fresh1: "\<forall>bm' \<in> set rest. Mod_Name bm' |\<notin>| fmdom ps1"
   proof
@@ -1248,10 +1239,7 @@ next
   qed
   have dist1: "distinct (map Mod_Name rest)"
     using Cons.prems(4) by simp
-  have decls1: "\<forall>bm' \<in> set rest. list_all decl_tyvars_fresh_ok (Mod_Interface bm')
-                  \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm')"
-    using Cons.prems(5) by simp
-  note IH = Cons.IH[OF sp(1) fold' fresh1 dist1 decls1]
+  note IH = Cons.IH[OF sp(1) fold' fresh1 dist1]
   have ok': "pipeline_state_ok ps'"
    and dom': "fmdom ps' = fmdom ps1 |\<union>| fset_of_list (map Mod_Name rest)"
    and stab': "\<forall>k. k |\<in>| fmdom ps1 \<longrightarrow> fmlookup ps' k = fmlookup ps1 k"
@@ -1336,8 +1324,6 @@ lemma pipeline_fold_preserves:
       and "pipeline_fold ps bms = Inr ps'"
       and "\<forall>bm \<in> set bms. Mod_Name bm |\<notin>| fmdom ps"
       and "distinct (map Mod_Name bms)"
-      and "\<forall>bm \<in> set bms. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-             \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "pipeline_state_ok ps'"
     and "fmdom ps' = fmdom ps |\<union>| fset_of_list (map Mod_Name bms)"
     and "\<forall>k. k |\<in>| fmdom ps \<longrightarrow> fmlookup ps' k = fmlookup ps k"
@@ -1362,14 +1348,10 @@ lemma elab_program_Inr_elim:
 
 (* The fold facts at elab_program's instances: starting state fmempty,
    module list sorted by analyze_dependencies (whose success supplies the
-   freshness and distinctness premises). The decl-binder freshness premise is
-   the renamer's naming discipline, over the original module list (the sorted
-   list is a permutation of it). *)
+   freshness and distinctness premises). *)
 lemma elab_program_state:
   assumes ad: "analyze_dependencies modules = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
-      and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-                    \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "pipeline_state_ok ps"
     and "fmdom ps = fset_of_list (map Mod_Name sortedMods)"
     and "\<forall>i < length sortedMods.
@@ -1381,15 +1363,10 @@ lemma elab_program_state:
 proof -
   have dist: "distinct (map Mod_Name sortedMods)"
     using analyze_dependencies_distinct_names[OF ad] .
-  have set_eq: "set sortedMods = set modules"
-    using analyze_dependencies_permutation[OF ad] by (metis mset_eq_setD)
   have fresh: "\<forall>bm \<in> set sortedMods.
                  Mod_Name bm |\<notin>| fmdom (fmempty :: PipelineState)"
     by simp
-  have decls': "\<forall>bm \<in> set sortedMods. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-                  \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
-    using decls set_eq by blast
-  note fp = pipeline_fold_preserves[OF pipeline_state_ok_empty fold fresh dist decls']
+  note fp = pipeline_fold_preserves[OF pipeline_state_ok_empty fold fresh dist]
   show "pipeline_state_ok ps"
     using fp(1) .
   show "fmdom ps = fset_of_list (map Mod_Name sortedMods)"
@@ -1684,19 +1661,17 @@ qed
 (* ========================================================================== *)
 
 (* If both elab_program and whole_program_link succeed, then the resulting `prog` is
-   well-typed, assuming freshness conditions for the input. *) 
+   well-typed. *)
 theorem elab_program_well_typed:
   assumes cp: "elab_program modules = Inr ps"
       and link: "whole_program_link ps = Inr prog"
-      and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-                    \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "core_module_well_typed prog"
 proof -
   obtain sortedMods where
       ad: "analyze_dependencies modules = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
     using cp by (rule elab_program_Inr_elim)
-  note st = elab_program_state[OF ad fold decls]
+  note st = elab_program_state[OF ad fold]
   define names where "names = map Mod_Name sortedMods"
   have dist_names: "distinct names"
     unfolding names_def using analyze_dependencies_distinct_names[OF ad] .
@@ -2061,20 +2036,18 @@ proof -
   qed
 qed
 
-(* Theorem: If both elab_program and whole_program_link succeed, then the resulting 
-   `prog` is closed, assuming freshness conditions for the input. *) 
+(* If both elab_program and whole_program_link succeed, then the resulting
+   `prog` is closed. *)
 theorem elab_program_closed:
   assumes cp: "elab_program modules = Inr ps"
       and link: "whole_program_link ps = Inr prog"
-      and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-                    \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "core_module_closed prog"
 proof -
   obtain sortedMods where
       ad: "analyze_dependencies modules = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
     using cp by (rule elab_program_Inr_elim)
-  note st = elab_program_state[OF ad fold decls]
+  note st = elab_program_state[OF ad fold]
   define names where "names = map Mod_Name sortedMods"
   have dist_names: "distinct names"
     unfolding names_def using analyze_dependencies_distinct_names[OF ad] .
@@ -2278,7 +2251,7 @@ proof -
   qed
   \<comment> \<open>...and defined implies declared, from well-typedness.\<close>
   have wt: "core_module_well_typed prog"
-    using elab_program_well_typed[OF cp link decls] .
+    using elab_program_well_typed[OF cp link] .
   have g_sub2: "fmdom (CM_GlobalVars prog) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv prog))"
     using core_module_well_typed_defined_declared(1)[OF wt] .
 
@@ -2322,12 +2295,10 @@ qed
 (* ========================================================================== *)
 
 (* If elab_program and module_impl_link both succeed, then the resulting module `m` is
-   well-typed, given freshness conditions on the input. *)
+   well-typed. *)
 theorem module_impl_link_well_typed:
   assumes cp: "elab_program modules = Inr ps"
       and link: "module_impl_link ps name = Some (Inr m)"
-      and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-                    \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "core_module_well_typed m"
 proof -
   obtain sortedMods where
@@ -2335,7 +2306,7 @@ proof -
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
     using cp by (rule elab_program_Inr_elim)
   have ok: "pipeline_state_ok ps"
-    using elab_program_state(1)[OF ad fold decls] .
+    using elab_program_state(1)[OF ad fold] .
   obtain e where lk: "fmlookup ps name = Some e"
       and linkL0: "link_modules
          (map (fst \<circ> M_CompiledInterface)

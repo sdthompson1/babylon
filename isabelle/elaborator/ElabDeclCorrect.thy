@@ -40,24 +40,49 @@ begin
 (* Metavariable freshness of declaration binders                              *)
 (* ========================================================================== *)
 
-(* The type-variable names a declaration binds: a function's or datatype's
-   type parameters; a typedef's parameters plus, for "type T;", the abstract
-   type name itself (which enters TE_TypeVars). Constants bind none. *)
-fun decl_tyvar_binders :: "BabDeclaration \<Rightarrow> string list" where
-  "decl_tyvar_binders (BabDecl_Const dc) = []"
-| "decl_tyvar_binders (BabDecl_Function df) = DF_TyArgs df"
-| "decl_tyvar_binders (BabDecl_Datatype dd) = DD_TyArgs dd"
-| "decl_tyvar_binders (BabDecl_Typedef dt) = DT_Name dt # DT_TyArgs dt"
-
 (* The statement/term elaborator requires every in-scope type variable to be
    distinct from every metavariable name (the "tyvar_fresh_ok n next_mv" entry
    invariant of elab_statement_correct); since the metavariable counter
    restarts at 0 for each declaration, we need the binders fresh at 0, i.e.
-   never of the mv_name shape at all. This is a hypothesis on the input
-   (discharged by the renamer's naming discipline), not an elaborator check -
-   matching the treatment at the statement level. *)
+   never of the mv_name shape at all. elab_declarations checks this at runtime
+   (check_decl_tyvar_names in ElabDecl.thy, a strictly stronger reject-'?'
+   check), so successful elaboration implies it - see
+   elab_declarations_decls_fresh below. *)
 definition decl_tyvars_fresh_ok :: "BabDeclaration \<Rightarrow> bool" where
   "decl_tyvars_fresh_ok d = list_all (\<lambda>n. tyvar_fresh_ok n 0) (decl_tyvar_binders d)"
+
+(* The runtime check implies the freshness predicate: a metavariable name
+   always begins with '?'. *)
+lemma check_decl_tyvar_names_fresh_ok:
+  assumes "check_decl_tyvar_names d = []"
+  shows "decl_tyvars_fresh_ok d"
+proof -
+  have no_qm: "\<forall>n \<in> set (decl_tyvar_binders d). \<not> (n \<noteq> [] \<and> hd n = CHR ''?'')"
+    using assms unfolding check_decl_tyvar_names_def
+    by (auto split: if_splits)
+  have "\<And>i. mv_name i \<noteq> [] \<and> hd (mv_name i) = CHR ''?''"
+    unfolding mv_name_def by simp
+  with no_qm have "\<forall>n \<in> set (decl_tyvar_binders d). tyvar_fresh_ok n 0"
+    unfolding tyvar_fresh_ok_def by fastforce
+  then show ?thesis
+    unfolding decl_tyvars_fresh_ok_def by (simp add: list_all_iff)
+qed
+
+(* Success of elab_declarations implies binder-freshness of its input: the
+   runtime guard checked it. This is what lets the correctness theorems state
+   freshness as a consequence of success rather than as a side condition. *)
+lemma elab_declarations_decls_fresh:
+  assumes "elab_declarations env elabEnv ownAbstract decls = Inr r"
+  shows "list_all decl_tyvars_fresh_ok decls"
+proof -
+  have "concat (map check_decl_tyvar_names decls) = []"
+    using assms unfolding elab_declarations_def Let_def
+    by (auto split: if_splits)
+  then have "\<forall>d \<in> set decls. check_decl_tyvar_names d = []"
+    by auto
+  then show ?thesis
+    using check_decl_tyvar_names_fresh_ok by (simp add: list_all_iff)
+qed
 
 
 (* ========================================================================== *)
@@ -7420,11 +7445,12 @@ qed
 lemma elab_declarations_subst_runtime:
   assumes ctx: "elab_context_ok env0 ownAbstract"
       and ee: "elabenv_well_formed env0 elabEnv0"
-      and fresh: "list_all decl_tyvars_fresh_ok decls"
       and elab: "elab_declarations env0 elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
   obtains envF where "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
                  and "subst_runtime_ok env0 envF M"
 proof -
+  have fresh: "list_all decl_tyvars_fresh_ok decls"
+    using elab_declarations_decls_fresh[OF elab] .
   have init: "elab_decls_invariant env0 ownAbstract env0 elabEnv0 empty_core_module"
     using elab_decls_invariant_init[OF ctx ee] .
   have init_rt: "subst_runtime_ok env0 env0 empty_core_module"
@@ -7432,8 +7458,8 @@ proof -
   from elab obtain envF where
     run: "elab_declaration_list env0 elabEnv0 ownAbstract empty_core_module decls
             = Inr (envF, elabEnv', M)"
-    unfolding elab_declarations_def
-    by (auto split: sum.splits prod.splits)
+    unfolding elab_declarations_def Let_def
+    by (auto split: sum.splits prod.splits if_splits)
   have "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
     using elab_declaration_list_invariant[OF run init fresh] .
   moreover have "subst_runtime_ok env0 envF M"
@@ -7534,7 +7560,8 @@ proof -
   from assms obtain envF where
     run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
             = Inr (envF, elabEnv', M)"
-    unfolding elab_declarations_def by (auto split: sum.splits prod.splits)
+    unfolding elab_declarations_def Let_def
+    by (auto split: sum.splits prod.splits if_splits)
   have "TE_TypeVars (CM_TyEnv empty_core_module) = {||}"
     by (simp add: empty_core_module_def empty_module_tyenv_def)
   then show ?thesis
@@ -7730,7 +7757,8 @@ proof -
   from assms obtain envF where
     run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
             = Inr (envF, elabEnv', M)"
-    unfolding elab_declarations_def by (auto split: sum.splits prod.splits)
+    unfolding elab_declarations_def Let_def
+    by (auto split: sum.splits prod.splits if_splits)
   have "fmdom (TE_GlobalVars (CM_TyEnv empty_core_module)) = {||}"
     by (simp add: empty_core_module_def empty_module_tyenv_def)
   then show ?thesis
@@ -7745,7 +7773,8 @@ proof -
   from assms obtain envF where
     run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
             = Inr (envF, elabEnv', M)"
-    unfolding elab_declarations_def by (auto split: sum.splits prod.splits)
+    unfolding elab_declarations_def Let_def
+    by (auto split: sum.splits prod.splits if_splits)
   have "fmdom (TE_Functions (CM_TyEnv empty_core_module)) = {||}"
     by (simp add: empty_core_module_def empty_module_tyenv_def)
   then show ?thesis
@@ -9488,7 +9517,6 @@ theorem elab_link_well_typed:
       and ctx_fresh: "\<forall>n. n |\<in>| TE_TypeVars (CM_TyEnv I) \<longrightarrow> tyvar_fresh_ok n 0"
       and fun_fresh: "\<forall>name info. fmlookup (TE_Functions (CM_TyEnv I)) name = Some info \<longrightarrow>
                         list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
-      and decl_fresh: "list_all decl_tyvars_fresh_ok decls"
       and elab: "elab_declarations (CM_TyEnv I) elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
       and link: "link_modules [I, M] = Inr L"
   shows "core_module_well_typed L"
@@ -9501,11 +9529,13 @@ proof -
   have init: "elab_decls_invariant (CM_TyEnv I) ownAbstract (CM_TyEnv I) elabEnv0
                 empty_core_module"
     using elab_decls_invariant_init[OF ctx ee_wf] .
+  have decl_fresh: "list_all decl_tyvars_fresh_ok decls"
+    using elab_declarations_decls_fresh[OF elab] .
   from elab obtain envF where
     run: "elab_declaration_list (CM_TyEnv I) elabEnv0 ownAbstract empty_core_module decls
             = Inr (envF, elabEnv', M)"
-    unfolding elab_declarations_def
-    by (auto split: sum.splits prod.splits)
+    unfolding elab_declarations_def Let_def
+    by (auto split: sum.splits prod.splits if_splits)
   have invF: "elab_decls_invariant (CM_TyEnv I) ownAbstract envF elabEnv' M"
     using elab_declaration_list_invariant[OF run init decl_fresh] .
   show ?thesis

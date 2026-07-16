@@ -27,8 +27,9 @@ begin
         declaration; or a list of TypeErrors.
 
    elab_declarations elaborates a list of BabDeclarations in dependency order.
-   It is just a fold of elab_declaration over the list. (The caller, elab_module, is
-   responsible for sorting into dependency order and rejecting cyclic dependencies.)
+   It is a fold of elab_declaration over the list (together with an extra error
+   check for illegal type variable names). The caller, elab_module, is responsible
+   for sorting into dependency order and rejecting cyclic dependencies.
 *)
 
 
@@ -746,14 +747,42 @@ fun elab_declaration_list ::
      | Inr (env', elabEnv', m') \<Rightarrow>
          elab_declaration_list env' elabEnv' ownAbstract m' ds)"
 
+(* ========================================================================== *)
+(* Type-variable binder name check                                            *)
+(* ========================================================================== *)
+
+(* The type-variable names a declaration binds: a function's or datatype's
+   type parameters; a typedef's parameters plus, for "type T;", the abstract
+   type name itself (which enters TE_TypeVars). Constants bind none. *)
+fun decl_tyvar_binders :: "BabDeclaration \<Rightarrow> string list" where
+  "decl_tyvar_binders (BabDecl_Const dc) = []"
+| "decl_tyvar_binders (BabDecl_Function df) = DF_TyArgs df"
+| "decl_tyvar_binders (BabDecl_Datatype dd) = DD_TyArgs dd"
+| "decl_tyvar_binders (BabDecl_Typedef dt) = DT_Name dt # DT_TyArgs dt"
+
+(* Reject any declaration that binds a type variable that begins with a '?'.
+   This is needed to establish `decl_tyvars_fresh_ok` in the proofs; the
+   check should never fire on "real" input, because the parser never creates
+   such names. *)
+definition check_decl_tyvar_names :: "BabDeclaration \<Rightarrow> TypeError list" where
+  "check_decl_tyvar_names d =
+     concat (map (\<lambda>n. if n \<noteq> [] \<and> hd n = CHR ''?''
+                      then [TyErr_InternalError_InvalidTypeVarName
+                              (bab_declaration_location d) n]
+                      else [])
+                 (decl_tyvar_binders d))"
+
 (* Top-level entry point: elaborate a (dependency-ordered) declaration list in
-   the given context, producing the elaborated CoreModule and the final ElabEnv. *)
+   the given context, producing the elaborated CoreModule and the final ElabEnv.
+   The type-variable names are also checked for '?' characters (check_decl_tyvar_names). *)
 definition elab_declarations ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + (CoreModule \<times> ElabEnv)" where
   "elab_declarations env elabEnv ownAbstract decls =
-    (case elab_declaration_list env elabEnv ownAbstract empty_core_module decls of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr (_, elabEnv', m) \<Rightarrow> Inr (m, elabEnv'))"
+    (let nameErrs = concat (map check_decl_tyvar_names decls)
+     in if nameErrs \<noteq> [] then Inl nameErrs
+        else case elab_declaration_list env elabEnv ownAbstract empty_core_module decls of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (_, elabEnv', m) \<Rightarrow> Inr (m, elabEnv'))"
 
 end

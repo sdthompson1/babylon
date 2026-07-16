@@ -7,9 +7,9 @@ begin
 
    Each BabModule is converted into a *pair* of CompiledModules (one for the interface
    and one for the implementation), where CompiledModule = CoreModule \<times> ElabEnv.
-   (The CoreModule contains the compiled Core code corresponding to the original Babylon
-   declarations, while the ElabEnv contains additional information that is not represented
-   in Core, e.g. typedefs, which are completely substituted out by the elaborator.)
+   (The CoreModule contains the compiled Core code corresponding to the original
+   declarations; the ElabEnv contains additional information that is not represented
+   in Core, e.g. typedefs or Babylon-level "void" functions.)
 
    Inputs to elab_module:
     - The BabModule to be elaborated.
@@ -248,18 +248,6 @@ next
   also have "\<dots> = mset decls"
     by (rule analyze_dependencies_generic_permutation[OF ana])
   finally show ?thesis .
-qed
-
-(* So any per-declaration property survives sorting. *)
-lemma sort_declarations_list_all:
-  assumes "sort_declarations env elabEnv decls = Inr sortedDecls"
-      and "list_all P decls"
-  shows "list_all P sortedDecls"
-proof -
-  have "set sortedDecls = set decls"
-    using sort_declarations_mset[OF assms(1)] by (rule mset_eq_setD)
-  then show ?thesis
-    using assms(2) by (simp add: list_all_iff)
 qed
 
 

@@ -18,15 +18,13 @@ begin
 theorem compile_program_interp_state:
   assumes cp: "elab_program modules = Inr ps"
       and link: "whole_program_link ps = Inr prog"
-      and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
-                    \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
       and externs_ok: "\<And>name info externFun.
             \<lbrakk> fmlookup (TE_Functions (CM_TyEnv (normalize_module prog))) name = Some info;
               fmlookup externs name = Some externFun \<rbrakk> \<Longrightarrow>
             extern_fun_contract (CM_TyEnv (normalize_module prog)) info externFun"
       and mk: "make_interp_state fuel world externs prog = Inr state"
   shows "state_matches_env state (CM_TyEnv (normalize_module prog)) []"
-  by (rule make_interp_state_matches_env[OF elab_program_well_typed[OF cp link decls]
-        elab_program_closed[OF cp link decls] externs_ok mk])
+  by (rule make_interp_state_matches_env[OF elab_program_well_typed[OF cp link]
+        elab_program_closed[OF cp link] externs_ok mk])
 
 end

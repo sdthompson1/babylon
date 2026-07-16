@@ -107,5 +107,6 @@ datatype TypeError =
   | TyErr_InternalError_UnexpectedChainVar Location
   | TyErr_InternalError_FreshnameClash Location string  (* synthesised match@@n name collided with a free var or pattern var *)
   | TyErr_InternalError_IllKindedProofGoal Location  (* a stored proof goal contained an ill-kinded quantifier type — impossible, as goals come from elaborated (well-typed) Asserts *)
+  | TyErr_InternalError_InvalidTypeVarName Location string  (* a declaration binds a type variable whose name begins with '?' (reserved for metavariables); the parser cannot produce such a name *)
 
 end

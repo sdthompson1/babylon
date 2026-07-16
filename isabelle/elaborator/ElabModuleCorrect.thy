@@ -5,22 +5,18 @@ begin
 (* Correctness theorems for elab_module:
 
    1) elab_module_well_typed:
-       If elab_module succeeds on inputs babMod, intDeps and implDeps,
-       and if:
-        - intDeps and implDeps satisfied the relevant invariants (compiled_module_ok,
-          core_module_well_typed after linking, elab-env-well-formed);
-        - freshness requirements are satisfied (i.e. no "?<n>" metavariables present);
-       then various properties hold:
+       If elab_module succeeds, with the input "intDeps" and "implDeps" satisfying the
+       relevant invariants (compiled_module_ok, core_module_well_typed after linking,
+       elab-env-well-formed), then:
         - the output CoreModules are well-typed after linking (assuming no link error);
         - the interface output satisfies compiled_module_ok and has a well-formed ElabEnv;
-        - and various other conditions.
+        - and various other properties hold (see theorem statement for details).
 
-      Note: compiled_module_ok is defined below; it basically means that
-      core_module_invariant is true, the CM_TypeSubst is empty, and certain other things.
+      Note: compiled_module_ok is defined below; it says (inter alia) that
+      core_module_invariant is true, and the CM_TypeSubst is empty.
 
-      The input assumptions are all things that are maintained by the compilation pipeline
-      while it is running, and the output properties help prove the correctness of
-      the pipeline. See also PipelineCorrect.thy, EndToEnd.thy.
+      This theorem is used in proving the correctness of the pipeline as a whole -- see
+      also ElabProgramCorrect.thy, EndToEnd.thy.
 
    2) elab_module_defs_complete:
        If elab_module succeeds, then the resulting module is closed, in the sense
@@ -82,17 +78,18 @@ qed
 lemma elab_declarations_invariant:
   assumes ctx: "elab_context_ok env0 ownAbstract"
       and ee: "elabenv_well_formed env0 elabEnv0"
-      and fresh: "list_all decl_tyvars_fresh_ok decls"
       and elab: "elab_declarations env0 elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
   obtains envF where "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
 proof -
+  have fresh: "list_all decl_tyvars_fresh_ok decls"
+    using elab_declarations_decls_fresh[OF elab] .
   have init: "elab_decls_invariant env0 ownAbstract env0 elabEnv0 empty_core_module"
     using elab_decls_invariant_init[OF ctx ee] .
   from elab obtain envF where
     run: "elab_declaration_list env0 elabEnv0 ownAbstract empty_core_module decls
             = Inr (envF, elabEnv', M)"
-    unfolding elab_declarations_def
-    by (auto split: sum.splits prod.splits)
+    unfolding elab_declarations_def Let_def
+    by (auto split: sum.splits prod.splits if_splits)
   have "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
     using elab_declaration_list_invariant[OF run init fresh] .
   then show thesis using that by blast
@@ -549,11 +546,12 @@ lemma elab_module_Inr_elim:
    elab_module's success both fire, the pipeline discharges them by composing
    the deps' conclusion-(i) facts via link_preserves_well_typed, which is
    also why they are irreducible here: a sub-link of a well-typed link need
-   not be well-typed, so neither follows from the other); well-formedness of
-   each dep's ElabEnv delta over those links' envs (from the deps'
-   conclusion-(iii) facts plus elabenv_well_formed_link_mono); and
-   metavariable-freshness of the declaration binders (the renamer's naming
-   discipline).
+   not be well-typed, so neither follows from the other); and well-formedness
+   of each dep's ElabEnv delta over those links' envs (from the deps'
+   conclusion-(iii) facts plus elabenv_well_formed_link_mono).
+   Metavariable-freshness of the declaration binders needs no premise:
+   elab_declarations checks it at runtime, so it follows from elab_module's
+   success (elab_declarations_decls_fresh).
 
    Conclusions (i)-(iii) are about links elab_module does NOT itself compute
    and which may fail, hence conditional: (i) the derived linked interface is
@@ -607,8 +605,6 @@ theorem elab_module_well_typed:
       and eeC: "\<And>c. link_modules (map fst intDeps @ map fst implDeps) = Inr c
                   \<Longrightarrow> \<forall>d \<in> set (intDeps @ implDeps).
                         elabenv_well_formed (CM_TyEnv c) (snd d)"
-      and fresh_int: "list_all decl_tyvars_fresh_ok (Mod_Interface bm)"
-      and fresh_impl: "list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "link_modules (map fst intDeps @ [intMod]) = Inr L
            \<Longrightarrow> core_module_well_typed L"                                     \<comment> \<open>(i)\<close>
     and "link_modules (map fst intDeps @ map fst implDeps @ [intMod, implMod]) = Inr P
@@ -677,8 +673,6 @@ proof -
     using a_fresh unfolding module_tyvars_fresh_ok_def by blast+
   have own0: "{||} |\<subseteq>| TE_TypeVars (CM_TyEnv a)"
     by auto
-  have sortedInt_fresh: "list_all decl_tyvars_fresh_ok sortedInt"
-    using sort_declarations_list_all[OF sortInt fresh_int] .
 
   \<comment> \<open>Face 1's fold invariant, and the housekeeping facts read off it.\<close>
   have a_nwt: "normalized_module_well_typed a"
@@ -687,7 +681,7 @@ proof -
     using a_nwt own0 ctx_freshA fun_freshA
     unfolding elab_context_ok_def normalized_module_well_typed_def by blast
   obtain envF where invF: "elab_decls_invariant (CM_TyEnv a) {||} envF intFoldEnv intMod"
-    using ctxA ea_wf sortedInt_fresh elabInt by (rule elab_declarations_invariant)
+    using ctxA ea_wf elabInt by (rule elab_declarations_invariant)
   have intMod_subst: "CM_TypeSubst intMod = fmempty"
     using elab_decls_invariant_empty_subst[OF invF] .
   have intMod_inv: "core_module_invariant intMod"
@@ -711,7 +705,7 @@ proof -
       using link_modules_collapse[OF linkA linkL] .
     show ?thesis
       using elab_link_well_typed[OF a_wt a_subst ea_wf own0 ctx_freshA fun_freshA
-              sortedInt_fresh elabInt pair] .
+              elabInt pair] .
   qed
 
   \<comment> \<open>Conclusion (iii): the fold's final state env IS the linked interface's
@@ -834,8 +828,6 @@ proof -
     using b_fresh unfolding module_tyvars_fresh_ok_def by blast+
   have ownB: "TE_TypeVars (CM_TyEnv intMod) |\<subseteq>| TE_TypeVars (CM_TyEnv b)"
     by (rule link_modules_TypeVars_superset[OF linkB b_inputs_subst]) simp
-  have sortedImpl_fresh: "list_all decl_tyvars_fresh_ok sortedImpl"
-    using sort_declarations_list_all[OF sortImpl fresh_impl] .
 
   \<comment> \<open>Face 2's fold invariant, and conclusion (v) read off it: the
      implementation face satisfies the structural invariant, and its
@@ -850,7 +842,7 @@ proof -
   obtain envG where invG: "elab_decls_invariant (CM_TyEnv b)
                              (TE_TypeVars (CM_TyEnv intMod)) envG implFoldEnv implMod"
                 and rtokG: "subst_runtime_ok (CM_TyEnv b) envG implMod"
-    using ctxB eb_wf sortedImpl_fresh elabImpl
+    using ctxB eb_wf elabImpl
     by (rule elab_declarations_subst_runtime)
   have concl_v: "core_module_invariant implMod
                    \<and> fmdom (CM_TypeSubst implMod) |\<subseteq>| TE_TypeVars (CM_TyEnv intMod)"
@@ -945,7 +937,7 @@ proof -
       using link_modules_collapse[OF linkB linkP'] .
     show ?thesis
       using elab_link_well_typed[OF b_wt b_subst eb_wf ownB ctx_freshB fun_freshB
-              sortedImpl_fresh elabImpl pairP] .
+              elabImpl pairP] .
   qed
 
   \<comment> \<open>Conclusion (vi): the runtime gate of the derived implementation link.
