@@ -1,27 +1,22 @@
-theory PipelineCorrect
-  imports Pipeline ElabModuleCorrect
+theory ElabProgramCorrect
+  imports ElabProgram ElabModuleCorrect
 begin
 
-(* Correctness infrastructure for the compilation pipeline (LINKING.md
-   step 8b). This theory supplies what the pipeline_fold induction consumes:
+(* Correctness proofs for the whole-program elaborator.
 
-    - the properties of analyze_dependencies in the form the pipeline uses
-      (module names are distinct; every import names some module of the
-      program - together with the strict topological order, each fold step
-      therefore finds its imports already in the state, at names distinct
-      from its own);
-    - a characterization of lookup_entries: success is exactly domain
-      membership, the result is the pointwise lookup, and lookups are
-      undisturbed by updates at fresh names;
-    - the PipelineState invariant: per entry, the housekeeping, groundness
-      and conditional-link facts of elab_module_well_typed (step 6b),
-      phrased over context lists derived from the state, together with
-      dep-set closure - plus the lemmas showing the invariant is stable
-      when a fresh module is added.
+   Highlights:
 
-   The invariant re-proves nothing about elaboration or linking; it only
-   shuttles the step-6b conclusions from each pipeline_step to the final
-   composition (compile_program_well_typed). *)
+    - `elab_program_well_typed` - shows that the output of elab_program + whole_program_link
+      is well-typed (on success).
+
+    - `elab_program_closed` - shows that the output of elab_program + whole_program_link
+      is closed (on success).
+
+    - `module_impl_link_well_typed` - shows that the output of elab_program +
+      module_impl_link is well-typed (on success). (Note that it is not in general
+      closed -- as the implementations of the imported interfaces have not been
+      linked in.)
+*)
 
 
 (* ========================================================================== *)
@@ -1354,24 +1349,23 @@ lemma pipeline_fold_preserves:
 
 
 (* ========================================================================== *)
-(* Unpacking a successful compile_program run                                 *)
+(* Unpacking a successful elab_program run                                    *)
 (* ========================================================================== *)
 
-lemma compile_program_Inr_elim:
-  assumes ok: "compile_program modules = Inr (ps, prog)"
+lemma elab_program_Inr_elim:
+  assumes ok: "elab_program modules = Inr ps"
   obtains sortedMods where
     "analyze_dependencies modules = Inr sortedMods"
     "pipeline_fold fmempty sortedMods = Inr ps"
-    "whole_program_link ps sortedMods = Inr prog"
-  using assms unfolding compile_program_def
+  using assms unfolding elab_program_def
   by (auto split: sum.splits)
 
-(* The fold facts at compile_program's instances: starting state fmempty,
+(* The fold facts at elab_program's instances: starting state fmempty,
    module list sorted by analyze_dependencies (whose success supplies the
    freshness and distinctness premises). The decl-binder freshness premise is
    the renamer's naming discipline, over the original module list (the sorted
    list is a permutation of it). *)
-lemma compile_program_state:
+lemma elab_program_state:
   assumes ad: "analyze_dependencies modules = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
       and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
@@ -1548,6 +1542,20 @@ next
   then show ?case using Cons by simp
 qed
 
+(* face_keys respects multiset equality of the name lists: each name
+   contributes exactly its two keys, regardless of position. This is the
+   bridge from whole_program_link's sorted-name link order to the
+   dependency order of the prefix induction (via link_modules_perm). *)
+lemma mset_face_keys:
+  "mset (face_keys ns) = image_mset (\<lambda>n. (n, False)) (mset ns)
+                         + image_mset (\<lambda>n. (n, True)) (mset ns)"
+  by (induction ns) auto
+
+lemma face_keys_mset_cong:
+  assumes "mset ns = mset ns'"
+  shows "mset (face_keys ns) = mset (face_keys ns')"
+  by (simp add: mset_face_keys assms)
+
 (* The list whole_program_link hands to link_modules, re-expressed over the
    face keys. *)
 lemma whole_faces_eq:
@@ -1557,9 +1565,9 @@ lemma whole_faces_eq:
   by (induction ns) (simp_all add: face_module_def state_iface_def state_impl_def)
 
 lemma whole_program_link_Inr_elim:
-  assumes ok: "whole_program_link ps mods = Inr prog"
+  assumes ok: "whole_program_link ps = Inr prog"
   obtains entries where
-    "lookup_entries ps (map Mod_Name mods) = Inr entries"
+    "entries = map (the \<circ> fmlookup ps) (sorted_list_of_fset (fmdom ps))"
     "link_modules (concat (map (\<lambda>e. [fst (M_CompiledInterface e),
        fst (M_CompiledImplementation e)]) entries)) = Inr prog"
   using assms unfolding whole_program_link_def
@@ -1672,21 +1680,14 @@ qed
 
 
 (* ========================================================================== *)
-(* The capstone: compile_program produces a well-typed program               *)
+(* Theorem: elab_program + whole_program_link result is well-typed *)
 (* ========================================================================== *)
 
-(* LINKING.md step 8(b). Induction over the number of modules whose faces
-   enter the whole-program link: each prefix links successfully (its faces
-   are a realization-closed sub-multiset of the successful whole link, so
-   link_modules_sublink_ground applies) and is well-typed (the previous
-   prefix by induction; the new module's derived implementation link by its
-   stored conclusion (ii), its link success via link_modules_sublink with
-   the runtime gate discharged by conclusion (vi); glued by the set-union
-   form of link_preserves_well_typed, whose set equation holds because the
-   new module's deps all lie among the earlier modules' interfaces - the
-   fold's processing-order facts). *)
-theorem compile_program_well_typed:
-  assumes cp: "compile_program modules = Inr (ps, prog)"
+(* If both elab_program and whole_program_link succeed, then the resulting `prog` is
+   well-typed, assuming freshness conditions for the input. *) 
+theorem elab_program_well_typed:
+  assumes cp: "elab_program modules = Inr ps"
+      and link: "whole_program_link ps = Inr prog"
       and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
                     \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "core_module_well_typed prog"
@@ -1694,9 +1695,8 @@ proof -
   obtain sortedMods where
       ad: "analyze_dependencies modules = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
-      and wpl: "whole_program_link ps sortedMods = Inr prog"
-    using cp by (rule compile_program_Inr_elim)
-  note st = compile_program_state[OF ad fold decls]
+    using cp by (rule elab_program_Inr_elim)
+  note st = elab_program_state[OF ad fold decls]
   define names where "names = map Mod_Name sortedMods"
   have dist_names: "distinct names"
     unfolding names_def using analyze_dependencies_distinct_names[OF ad] .
@@ -1705,15 +1705,31 @@ proof -
   have dom_eq: "fmdom ps = fset_of_list names"
     using st(2) unfolding names_def .
 
-  \<comment> \<open>The whole-program link, over the face keys.\<close>
-  obtain entries where lkE: "lookup_entries ps (map Mod_Name sortedMods) = Inr entries"
+  \<comment> \<open>The whole-program link, over the face keys: whole_program_link links the
+     faces in sorted-name order; names is a permutation of the sorted domain
+     list, so link_modules_perm carries the link over to dependency order.\<close>
+  define sortedNames where "sortedNames = sorted_list_of_fset (fmdom ps)"
+  obtain entries where
+      entries_eq0: "entries = map (the \<circ> fmlookup ps) (sorted_list_of_fset (fmdom ps))"
       and linkW0: "link_modules (concat (map (\<lambda>e. [fst (M_CompiledInterface e),
             fst (M_CompiledImplementation e)]) entries)) = Inr prog"
-    using wpl by (rule whole_program_link_Inr_elim)
-  have entries_eq: "entries = map (\<lambda>n. the (fmlookup ps n)) names"
-    using lookup_entries_eq[OF lkE] unfolding names_def .
-  have linkW: "link_modules (map (face_module ps) (face_keys names)) = Inr prog"
+    using link by (rule whole_program_link_Inr_elim)
+  have entries_eq: "entries = map (\<lambda>n. the (fmlookup ps n)) sortedNames"
+    using entries_eq0 unfolding sortedNames_def by (simp add: comp_def)
+  have linkS: "link_modules (map (face_module ps) (face_keys sortedNames)) = Inr prog"
     using linkW0 unfolding entries_eq whole_faces_eq .
+  have dist_sn: "distinct sortedNames"
+    unfolding sortedNames_def by (rule distinct_sorted_list_of_fset)
+  have set_sn: "set sortedNames = set names"
+    unfolding sortedNames_def dom_eq
+    by (simp add: sorted_list_of_fset.rep_eq fset_of_list.rep_eq)
+  have mset_sn: "mset sortedNames = mset names"
+    using set_eq_iff_mset_eq_distinct[OF dist_sn dist_names] set_sn by blast
+  have mset_faces: "mset (map (face_module ps) (face_keys sortedNames))
+                      = mset (map (face_module ps) (face_keys names))"
+    using face_keys_mset_cong[OF mset_sn] by (metis mset_map)
+  have linkW: "link_modules (map (face_module ps) (face_keys names)) = Inr prog"
+    using link_modules_perm[OF mset_faces] linkS by blast
   obtain \<sigma>W where mergeW: "merge_all_substs
       (map CM_TypeSubst (map (face_module ps) (face_keys names))) = Inr \<sigma>W"
     using linkW link_modules_Inr_iff[of "map (face_module ps) (face_keys names)" prog]
@@ -1984,12 +2000,11 @@ proof -
     using wtN by simp
 qed
 
-
 (* ========================================================================== *)
-(* The capstone: compile_program produces a closed program                    *)
+(* Theorem: elab_program + whole_program_link output is closed *)
 (* ========================================================================== *)
 
-(* A well-typed module defines only what it declares: each CM_GlobalVars /
+(* Helper: A well-typed module defines only what it declares: each CM_GlobalVars /
    CM_Functions entry has a matching declaration (module_globals_well_typed /
    module_functions_well_typed of the normalized module, whose domains equal
    the original's - normalization only rewrites types and terms). This is the
@@ -2046,25 +2061,11 @@ proof -
   qed
 qed
 
-(* LINKING.md step 8(c). The linked program is closed: everything declared is
-   defined and no abstract types remain.
-
-    - Globals/functions: the linked domains are the unions of the per-face
-      domains (link_result); "declared implies defined" is the invariant's
-      definedness facts (each face's declarations are defined by faces of
-      the SAME module, all present in the whole-program list); "defined
-      implies declared" is per-definition typechecking of the linked
-      program, which (b) provides.
-    - Type variables: the linked TE_TypeVars is the union of the per-face
-      TypeVars minus the merged substitution's domain - and these are the
-      SAME set: interfaces contribute exactly their TypeVars (implementations
-      have none, stored conclusion (viii)), the merged domain is the union of
-      the per-face substitution domains (merge_all_substs is a closure), and
-      per module the implementation's substitution domain equals its own
-      interface's TypeVars (stored conclusions (v)+(vii)) - with both faces
-      always present together. *)
-theorem compile_program_closed:
-  assumes cp: "compile_program modules = Inr (ps, prog)"
+(* Theorem: If both elab_program and whole_program_link succeed, then the resulting 
+   `prog` is closed, assuming freshness conditions for the input. *) 
+theorem elab_program_closed:
+  assumes cp: "elab_program modules = Inr ps"
+      and link: "whole_program_link ps = Inr prog"
       and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
                     \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
   shows "core_module_closed prog"
@@ -2072,23 +2073,40 @@ proof -
   obtain sortedMods where
       ad: "analyze_dependencies modules = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
-      and wpl: "whole_program_link ps sortedMods = Inr prog"
-    using cp by (rule compile_program_Inr_elim)
-  note st = compile_program_state[OF ad fold decls]
+    using cp by (rule elab_program_Inr_elim)
+  note st = elab_program_state[OF ad fold decls]
   define names where "names = map Mod_Name sortedMods"
+  have dist_names: "distinct names"
+    unfolding names_def using analyze_dependencies_distinct_names[OF ad] .
   have dom_eq: "fmdom ps = fset_of_list names"
     using st(2) unfolding names_def .
 
-  \<comment> \<open>The whole-program link, over the face keys.\<close>
-  obtain entries where lkE: "lookup_entries ps (map Mod_Name sortedMods) = Inr entries"
+  \<comment> \<open>The whole-program link, over the face keys (carried from sorted-name
+     order to module order with link_modules_perm, as in the previous
+     theorem).\<close>
+  define sortedNames where "sortedNames = sorted_list_of_fset (fmdom ps)"
+  obtain entries where
+      entries_eq0: "entries = map (the \<circ> fmlookup ps) (sorted_list_of_fset (fmdom ps))"
       and linkW0: "link_modules (concat (map (\<lambda>e. [fst (M_CompiledInterface e),
             fst (M_CompiledImplementation e)]) entries)) = Inr prog"
-    using wpl by (rule whole_program_link_Inr_elim)
-  have entries_eq: "entries = map (\<lambda>n. the (fmlookup ps n)) names"
-    using lookup_entries_eq[OF lkE] unfolding names_def .
+    using link by (rule whole_program_link_Inr_elim)
+  have entries_eq: "entries = map (\<lambda>n. the (fmlookup ps n)) sortedNames"
+    using entries_eq0 unfolding sortedNames_def by (simp add: comp_def)
+  have linkS: "link_modules (map (face_module ps) (face_keys sortedNames)) = Inr prog"
+    using linkW0 unfolding entries_eq whole_faces_eq .
+  have dist_sn: "distinct sortedNames"
+    unfolding sortedNames_def by (rule distinct_sorted_list_of_fset)
+  have set_sn: "set sortedNames = set names"
+    unfolding sortedNames_def dom_eq
+    by (simp add: sorted_list_of_fset.rep_eq fset_of_list.rep_eq)
+  have mset_sn: "mset sortedNames = mset names"
+    using set_eq_iff_mset_eq_distinct[OF dist_sn dist_names] set_sn by blast
+  have mset_faces: "mset (map (face_module ps) (face_keys sortedNames))
+                      = mset (map (face_module ps) (face_keys names))"
+    using face_keys_mset_cong[OF mset_sn] by (metis mset_map)
   define faces where "faces = map (face_module ps) (face_keys names)"
   have linkW: "link_modules faces = Inr prog"
-    using linkW0 unfolding entries_eq whole_faces_eq faces_def[symmetric] .
+    using link_modules_perm[OF mset_faces] linkS unfolding faces_def by blast
   obtain \<sigma> where merge: "merge_all_substs (map CM_TypeSubst faces) = Inr \<sigma>"
       and prog_eq: "prog = link_result faces \<sigma>"
     using linkW link_modules_Inr_iff[of faces prog] by blast
@@ -2260,7 +2278,7 @@ proof -
   qed
   \<comment> \<open>...and defined implies declared, from well-typedness.\<close>
   have wt: "core_module_well_typed prog"
-    using compile_program_well_typed[OF cp decls] .
+    using elab_program_well_typed[OF cp link decls] .
   have g_sub2: "fmdom (CM_GlobalVars prog) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv prog))"
     using core_module_well_typed_defined_declared(1)[OF wt] .
 
@@ -2296,6 +2314,86 @@ proof -
     unfolding core_module_closed_def
     using fsubset_antisym[OF g_sub1 g_sub2] fsubset_antisym[OF f_sub1 f_sub2] tv_empty
     by blast
+qed
+
+
+(* ========================================================================== *)
+(* Theorem: elab_program + module_impl_link result is well-typed *)
+(* ========================================================================== *)
+
+(* If elab_program and module_impl_link both succeed, then the resulting module `m` is
+   well-typed, given freshness conditions on the input. *)
+theorem module_impl_link_well_typed:
+  assumes cp: "elab_program modules = Inr ps"
+      and link: "module_impl_link ps name = Some (Inr m)"
+      and decls: "\<forall>bm \<in> set modules. list_all decl_tyvars_fresh_ok (Mod_Interface bm)
+                    \<and> list_all decl_tyvars_fresh_ok (Mod_Implementation bm)"
+  shows "core_module_well_typed m"
+proof -
+  obtain sortedMods where
+      ad: "analyze_dependencies modules = Inr sortedMods"
+      and fold: "pipeline_fold fmempty sortedMods = Inr ps"
+    using cp by (rule elab_program_Inr_elim)
+  have ok: "pipeline_state_ok ps"
+    using elab_program_state(1)[OF ad fold decls] .
+  obtain e where lk: "fmlookup ps name = Some e"
+      and linkL0: "link_modules
+         (map (fst \<circ> M_CompiledInterface)
+              (map (the \<circ> fmlookup ps) (sorted_list_of_fset (M_ImplDeps e)))
+          @ [fst (M_CompiledImplementation e)]) = Inr m"
+    using link unfolding module_impl_link_def Let_def
+    by (auto split: option.splits)
+  note eok = pipeline_state_okD(1)[OF ok lk]
+  have iface_eq: "map (fst \<circ> M_CompiledInterface)
+        (map (the \<circ> fmlookup ps) (sorted_list_of_fset (M_ImplDeps e)))
+      = map (state_iface ps) (sorted_list_of_fset (M_ImplDeps e))"
+    unfolding state_iface_def by simp
+  have linkL: "link_modules
+         (map (state_iface ps) (sorted_list_of_fset (M_ImplDeps e))
+          @ [fst (M_CompiledImplementation e)]) = Inr m"
+    using linkL0 unfolding iface_eq .
+  \<comment> \<open>The invariant's B-list, as the image of a second enumeration of
+     M_ImplDeps.\<close>
+  define bnames where "bnames = sorted_list_of_fset (M_IntDeps e)
+      @ sorted_list_of_fset (M_ImplDeps e |-| M_IntDeps e |-| {|name|}) @ [name]"
+  have B_eq: "map fst (entry_int_ctx ps e) @ map fst (entry_impl_ctx ps name e)
+                @ [fst (M_CompiledInterface e), fst (M_CompiledImplementation e)]
+              = map (state_iface ps) bnames @ [fst (M_CompiledImplementation e)]"
+    unfolding bnames_def entry_int_ctx_ifaces entry_impl_ctx_ifaces
+    by (simp add: state_iface_def lk)
+  \<comment> \<open>Both name lists are distinct enumerations of M_ImplDeps: name is in
+     M_ImplDeps but not M_IntDeps, and M_IntDeps is contained in M_ImplDeps.\<close>
+  have name_notin: "name |\<notin>| M_IntDeps e"
+    using pipeline_entry_okD(3)[OF eok] .
+  have name_in: "name |\<in>| M_ImplDeps e"
+    using pipeline_entry_okD(4)[OF eok] .
+  have int_sub: "M_IntDeps e |\<subseteq>| M_ImplDeps e"
+    using pipeline_entry_okD(5)[OF eok] .
+  have dist_b: "distinct bnames"
+    unfolding bnames_def
+    using name_notin by (auto simp: distinct_sorted_list_of_fset)
+  have set_b: "a \<in> set bnames \<longleftrightarrow> a |\<in>| M_ImplDeps e" for a
+    unfolding bnames_def
+    using name_in int_sub by (auto dest: fsubsetD)
+  have mset_names: "mset (sorted_list_of_fset (M_ImplDeps e)) = mset bnames"
+  proof -
+    have "set (sorted_list_of_fset (M_ImplDeps e)) = set bnames"
+      using set_b by auto
+    then show ?thesis
+      using set_eq_iff_mset_eq_distinct[OF distinct_sorted_list_of_fset dist_b]
+      by blast
+  qed
+  have mset_faces: "mset (map (state_iface ps) (sorted_list_of_fset (M_ImplDeps e))
+                      @ [fst (M_CompiledImplementation e)])
+        = mset (map (state_iface ps) bnames @ [fst (M_CompiledImplementation e)])"
+    using mset_names by (metis mset_append mset_map)
+  have linkB: "link_modules
+      (map fst (entry_int_ctx ps e) @ map fst (entry_impl_ctx ps name e)
+       @ [fst (M_CompiledInterface e), fst (M_CompiledImplementation e)]) = Inr m"
+    unfolding B_eq
+    using link_modules_perm[OF mset_faces] linkL by blast
+  show ?thesis
+    using pipeline_entry_okD(13)[OF eok linkB] .
 qed
 
 end

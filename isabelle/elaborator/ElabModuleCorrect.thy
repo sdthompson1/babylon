@@ -2,27 +2,32 @@ theory ElabModuleCorrect
   imports ElabModule ElabDeclCorrect "../core/LinkCollapse"
 begin                          
 
-(* Correctness of the per-module orchestrator (step 6b of LINKING.md).
+(* Correctness theorems for elab_module:
 
-   The target theorem is elab_module_well_typed: from a successful
-   elab_module run, plus the facts the pipeline fold can supply about the
-   two compiled dependency lists, conclude well-typedness of the module's
-   derived linked faces (stated over FLAT links of original modules, the
-   form the pipeline composes via link_preserves_well_typed), the
-   well-formedness of the interface face's exported ElabEnv delta, and the
-   per-module housekeeping facts that feed downstream modules' premises.
+   1) elab_module_well_typed:
+       If elab_module succeeds on inputs babMod, intDeps and implDeps,
+       and if:
+        - intDeps and implDeps satisfied the relevant invariants (compiled_module_ok,
+          core_module_well_typed after linking, elab-env-well-formed);
+        - freshness requirements are satisfied (i.e. no "?<n>" metavariables present);
+       then various properties hold:
+        - the output CoreModules are well-typed after linking (assuming no link error);
+        - the interface output satisfies compiled_module_ok and has a well-formed ElabEnv;
+        - and various other conditions.
 
-   The proof shape, per face: link the compiled deps into a context (the
-   same link elab_module computes), establish elab_link_well_typed's
-   premises about that context, and bridge its two-module conclusion to the
-   flat link via the collapse lemma (core/LinkCollapse.thy).
+      Note: compiled_module_ok is defined below; it basically means that
+      core_module_invariant is true, the CM_TypeSubst is empty, and certain other things.
 
-   The theorem is elab_module_well_typed, at the end of this theory; the
-   sections before it are its transfer plumbing: metavariable-freshness of
-   type-variable names across links, the fold-invariant exports for
-   elab_declarations, well-formedness of ElabEnv combination, the
-   compiled-module contract, and the elimination rule for elab_module
-   success. *)
+      The input assumptions are all things that are maintained by the compilation pipeline
+      while it is running, and the output properties help prove the correctness of
+      the pipeline. See also PipelineCorrect.thy, EndToEnd.thy.
+
+   2) elab_module_defs_complete:
+       If elab_module succeeds, then the resulting module is closed, in the sense
+       that every function or constant declared in the type environment has a
+       corresponding definition (either in the interface or implementation, as 
+       appropriate).
+*)
 
 
 (* ========================================================================== *)
@@ -1177,7 +1182,7 @@ qed
    the linked program's TE_GlobalVars/TE_Functions domains are the unions of
    these per-face domains, so the facts below make "declared implies defined"
    hold of the whole program. *)
-lemma elab_module_defs_complete:
+theorem elab_module_defs_complete:
   assumes elab: "elab_module bm intDeps implDeps
                    = Inr ((intMod, intEE), (implMod, implEE))"
   shows "fmdom (TE_GlobalVars (CM_TyEnv intMod))

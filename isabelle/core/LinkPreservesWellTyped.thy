@@ -10,6 +10,8 @@ begin
      \<forall>x \<in> set ms. module_ghost_subsets_ok x
      \<Longrightarrow> core_module_well_typed m
 
+   Proof outline:
+
    The core_module_invariant conjunct of core_module_well_typed m follows
    from link_modules_idempotent_subst, link_modules_capture_avoiding, the
    linked result's field shape, and core_module_invariant_intro; the

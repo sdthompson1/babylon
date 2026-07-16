@@ -2,44 +2,41 @@ theory ElabDecl
   imports ElabStmt "../core/CoreModuleTypecheck"
 begin
 
-(* The declaration-list elaborator: turns a list of BabDeclarations into a
-   CoreModule.
+(* Declaration elaborator.
 
-   Declarations are elaborated one by one, folding over a state triple
-   (CoreTyEnv, ElabEnv, CoreModule):
+   elab_declaration elaborates a single BabDeclaration:
+     Inputs:
+      - CoreTyEnv, containing the imported declarations, plus the types of
+        everything declared so far in this module. Abstract type realizations
+        are already substituted through.
+  
+      - ElabEnv, containing elaborator-only data (typedefs, etc).
+         - Abstract types are represented here, as entries "name \<mapsto> ([], CoreTy_Var name)",
+           which allows elab_type to resolve them.
 
-    - The CoreTyEnv is the *resolved view* of everything in scope: the imported
-      context supplied by the caller, plus everything declared so far, with
-      every realization of an abstract type already substituted through.
-    - The ElabEnv carries the elaborator-only data (typedefs, nullary data
-      constructors, void function names). Type variables in scope (module-level
-      abstract types, and - locally - type parameters) are registered in
-      EE_Typedefs as entries "name \<mapsto> ([], CoreTy_Var name)"; this is how
-      elab_type resolves type-variable names.
-    - The CoreModule accumulates this module's own declarations (CM_TyEnv) and
-      definitions (CM_GlobalVars, CM_Functions, CM_TypeSubst). Unlike the state
-      env, it is *not* rewritten when an abstract type is realized: it keeps
-      the original (unresolved) types together with the recorded substitution,
-      and the two views only meet again in normalize_module. Entries added
-      after a realization are "born resolved", which is fine (resolved types
-      are fixpoints of the substitution).
+      - ownAbstract, the set of abstract types that are allowed to be resolved here
+        (empty when elaborating the interface, and when elaborating the implementation,
+        contains the abstract types declared in the interface).
 
-   The caller passes ownAbstract: the set of abstract types this module itself
-   declared (empty when elaborating an interface; the interface's abstract
-   types when elaborating an implementation). Only those may be realized here.
+      - A CoreModule, containing the module's own declarations and definitions so far.
+        Unlike the above CoreTyEnv, abstract types are *not* necessarily fully substituted
+        here; instead, they are resolved lazily by normalize_module.
 
-   The input list is assumed to be already in dependency order. Sorting the
-   declarations - including rejecting self-referential declarations such as
-   "datatype Foo = Foo1(Foo)" or a datatype whose payload mentions the abstract
-   type it realizes - and the module-level checks that span both faces of a
-   module are the caller's (elab_module's) job. *)
+     Outputs:
+      - The updated CoreTyEnv, ElabEnv and CoreModule, containing the new elaborated
+        declaration; or a list of TypeErrors.
+
+   elab_declarations elaborates a list of BabDeclarations in dependency order.
+   It is just a fold of elab_declaration over the list. (The caller, elab_module, is
+   responsible for sorting into dependency order and rejecting cyclic dependencies.)
+*)
 
 
 (* ========================================================================== *)
 (* Empty environments                                                         *)
 (* ========================================================================== *)
 
-(* The empty module-scope type environment (satisfies tyenv_module_scope). *)
+(* The empty type environment (satisfies tyenv_module_scope). *)
 definition empty_module_tyenv :: CoreTyEnv where
   "empty_module_tyenv =
      \<lparr> TE_LocalVars = fmempty,
@@ -60,7 +57,7 @@ definition empty_module_tyenv :: CoreTyEnv where
        TE_DataCtorsByType = fmempty,
        TE_GhostDatatypes = {||} \<rparr>"
 
-(* The empty module: what elaboration of an empty declaration list produces. *)
+(* The empty module. *)
 definition empty_core_module :: CoreModule where
   "empty_core_module =
      \<lparr> CM_TyEnv = empty_module_tyenv,
@@ -70,25 +67,17 @@ definition empty_core_module :: CoreModule where
 
 
 (* ========================================================================== *)
-(* Namespace checks                                                           *)
+(* Term and type namespaces                                                   *)
 (* ========================================================================== *)
 
-(* The term namespace: global constants, functions and data constructors live
-   in three different maps, but a name in more than one of them would make
-   term-level name resolution ambiguous, so declarations must check the whole
-   namespace, not just the map they insert into. *)
+(* The term namespace: global constants, functions, and data constructors. *)
 definition term_name_in_scope :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> bool" where
   "term_name_in_scope env name =
      (name |\<in>| fmdom (TE_GlobalVars env)
       \<or> name |\<in>| fmdom (TE_Functions env)
       \<or> name |\<in>| fmdom (TE_DataCtors env))"
 
-(* The type namespace: typedefs, datatypes and abstract types (type variables).
-   Note fmdom (EE_Typedefs elabEnv) includes the in-scope type variables (see
-   the EE_Typedefs convention above) and also any already-realized abstract
-   types - which is what rejects a *second* realization of the same name (it
-   is no longer in TE_TypeVars, so it looks like a plain typedef, and clashes
-   here). *)
+(* The type namespace: typedefs, datatypes, and abstract types (type variables). *)
 definition type_name_in_scope :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string \<Rightarrow> bool" where
   "type_name_in_scope env elabEnv name =
      (name |\<in>| fmdom (EE_Typedefs elabEnv)
@@ -102,33 +91,25 @@ definition type_name_in_scope :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> 
 
 (* Core type substitution (apply_subst) is a flat, binder-blind rewrite, so
    the module's accumulated type substitution must never touch a name that is
-   used as a bound type parameter. After renaming this holds automatically
-   (abstract types are dotted, type parameters are undotted), but the
-   elaborator checks it explicitly, so that hand-constructed input fails with
-   a well-located error instead of producing an ill-formed module. The check
-   runs in both directions, since realizations and type-parameter binders may
-   arrive in either order. *)
+   used as a bound type parameter. The renamer ensures this automatically
+   (abstract types are dotted, type parameters are undotted), but we nevertheless
+   check it explicitly in the elaborator ("belt and braces" approach). *)
 
-(* A new binder (type-parameter list of a function, datatype or typedef) must
-   avoid the abstract types in scope (the body env unions the parameters in,
-   so a collision would silently alias the abstract type) and the names of the
-   module's accumulated substitution. *)
+(* This checks if a new local type variable (type-parameter of a function,
+   datatype or typedef) would be captured. *)
 definition binder_captures :: "CoreTyEnv \<Rightarrow> CoreModule \<Rightarrow> string list \<Rightarrow> bool" where
   "binder_captures env m tyvars =
      (fset_of_list tyvars |\<inter>| (TE_TypeVars env |\<union>| subst_names (CM_TypeSubst m)) \<noteq> {||})"
 
 (* All type-parameter names bound anywhere in scope: function type parameters,
-   datatype constructor type parameters, and typedef parameters (typedef
-   ranges are rewritten when a realization is applied, so their parameters can
-   be captured too). *)
+   datatype constructor type parameters, and typedef parameters. *)
 definition scope_bound_tyvars :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset" where
   "scope_bound_tyvars env elabEnv =
      ffUnion ((\<lambda>info. fset_of_list (FI_TyArgs info)) |`| fmran (TE_Functions env))
      |\<union>| ffUnion ((\<lambda>(_, tyVars, _). fset_of_list tyVars) |`| fmran (TE_DataCtors env))
      |\<union>| ffUnion ((\<lambda>(tyVars, _). fset_of_list tyVars) |`| fmran (EE_Typedefs elabEnv))"
 
-(* A new realization "name \<mapsto> target" must keep both its domain and the type
-   variables of its range away from every bound type parameter in scope. *)
+(* This checks if a new type realization "name \<mapsto> target" would be captured. *)
 definition realization_captures :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> bool" where
   "realization_captures env elabEnv name target =
      (finsert name (fset_of_list (type_tyvars_list target))
@@ -139,25 +120,26 @@ definition realization_captures :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow
 (* Environment-extension helpers                                              *)
 (* ========================================================================== *)
 
-(* Register a list of type parameters in the typedef table: each maps to its
-   own CoreTy_Var. Parameters shadow any existing entry of the same name (but
-   the capture checks reject such collisions anyway). *)
+(* Register a list of type parameters in the Typedefs table: each maps to its
+   own CoreTy_Var. *)
 definition tyvar_typedef_entries :: "string list \<Rightarrow> Typedefs \<Rightarrow> Typedefs" where
   "tyvar_typedef_entries tyvars tds =
      fold (\<lambda>v. fmupd v ([], CoreTy_Var v)) tyvars tds"
 
+(* Add a new global variable ("const" declaration) to the CoreTyEnv. *)
 definition tyenv_add_global :: "string \<Rightarrow> CoreType \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "tyenv_add_global name ty ghost env =
      env \<lparr> TE_GlobalVars := fmupd name ty (TE_GlobalVars env),
            TE_GhostGlobals := (if ghost = Ghost then finsert name (TE_GhostGlobals env)
                                else TE_GhostGlobals env) \<rparr>"
 
+(* Add a new function (and its FunInfo) to the CoreTyEnv. *)
 definition tyenv_add_function :: "string \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "tyenv_add_function name info env =
      env \<lparr> TE_Functions := fmupd name info (TE_Functions env) \<rparr>"
 
-(* A module-level abstract type is a top-level type variable; it is a runtime
-   type variable exactly when it was declared without `ghost`. *)
+(* Add a new abstract type ("type T;") to the CoreTyEnv. Abstract types are added
+   to TE_TypeVars and TE_AbstractTypes, and also to TE_RuntimeTypeVars if NotGhost. *)
 definition tyenv_add_abstract_type :: "string \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "tyenv_add_abstract_type name ghost env =
      env \<lparr> TE_TypeVars := finsert name (TE_TypeVars env),
@@ -166,8 +148,8 @@ definition tyenv_add_abstract_type :: "string \<Rightarrow> GhostOrNot \<Rightar
                                   else TE_RuntimeTypeVars env),
            TE_AbstractTypes := finsert name (TE_AbstractTypes env) \<rparr>"
 
-(* Add a datatype: its arity, its constructors (with the given payload types),
-   the by-type constructor list, and (if computed ghost) the ghost marker. *)
+(* Add a datatype to the CoreTyEnv, updating all relevant fields (TE_Datatypes,
+   TE_DataCtors, TE_DataCtorsByType, TE_GhostDatatypes) accordingly. *)
 definition tyenv_add_datatype ::
   "string \<Rightarrow> string list \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> bool \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "tyenv_add_datatype name tyvars ctors isGhost env =
@@ -183,25 +165,32 @@ definition tyenv_add_datatype ::
 (* Applying a realization                                                     *)
 (* ========================================================================== *)
 
-(* Record a realization "name \<mapsto> target" of an abstract type, and make it
-   visible to all later declarations. Later declarations must see through the
-   realization (e.g. after "type T = i32;", a use of a previously-declared
-   "x: T" must agree with freshly-elaborated occurrences of i32), so:
+(* A realization is a typedef "type T = Foo;" in the implementation section of a
+   module, following a previous "type T;" in the interface.
 
-    - the module's substitution gains the new entry, with the new binding
-      first substituted through the existing ranges (this keeps chains
-      working and keeps the substitution idempotent by construction);
-    - the typedef table likewise: the entry for name (previously
-      ([], CoreTy_Var name)) is replaced by ([], target), so later occurrences
-      of name elaborate directly to target, and existing ranges are rewritten;
-    - the state env drops name from its type-variable fields (it is no longer
-      abstract, as far as this elaboration is concerned) and has the
-      substitution applied to all recorded signatures.
+   The function `apply_realization` (below) updates the current CoreTyEnv, ElabEnv and
+   CoreModule to add a new realization. The realization becomes visible to all later
+   declarations in the same module (e.g. after "type T = Foo;", all future typechecking
+   must treat T and Foo as equivalent).
 
-   The module's own CM_TyEnv is deliberately NOT rewritten (and, the caller
-   having checked ownAbstract, name is not in its TE_TypeVars, which belongs
-   to the interface that declared it): the module keeps unresolved types plus
-   the substitution, and normalize_module applies it. *)
+   The specific changes are:
+    - The substitution T := Foo is recorded in the module's CM_TypeSubst.
+       - We also apply [T:=Foo] to all existing right-hand-side entries in the subst
+         (this keeps the substitution idempotent).
+
+    - EE_Typedefs is updated: the previous entry T \<mapsto> CoreTy_Var "T" is replaced
+      with T \<mapsto> Foo, so that later occurrences of T elaborate directly to Foo.
+       - Again, we also apply [T:=Foo] to any existing entries in EE_Typedefs.
+
+    - The name "T" is no longer an abstract type, so it is removed from TE_TypeVars
+      and related sets.
+       - We also apply [T:=Foo] to the type env itself (this updates the types of
+         global vars, functions and data ctors to mention Foo instead of T everywhere).
+
+   The CoreModule itself doesn't get rewritten (other than the changes to its CM_TypeSubst);
+   the module continues to mention "T", with [T:=Foo] being applied lazily when needed, by
+   normalize_module.
+*)
 definition apply_realization ::
   "string \<Rightarrow> CoreType \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule
    \<Rightarrow> CoreTyEnv \<times> ElabEnv \<times> CoreModule" where
@@ -221,14 +210,13 @@ definition apply_realization ::
 
 
 (* ========================================================================== *)
-(* Constants                                                                  *)
+(* Global Constants ("const" decls)                                           *)
 (* ========================================================================== *)
 
-(* Elaborate a global-constant initializer against a known declared type:
-   coerce the rhs to the declared type, clear leftover metavariables, and
-   check the compile-time-constant restriction on non-ghost initializers
-   (ghost initializers are never evaluated, so they may be arbitrary ghost
-   terms). *)
+(* Elaborate a global-constant initializer against a known declared type: 
+   elaborate the rhs, coerce it to the declared type, clear leftover metavariables,
+   and check the compile-time-constant restriction (non-ghost initializers must
+   be a compile-time constant; ghost initializers can be any term). *)
 definition elab_const_rhs ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreType \<Rightarrow> BabTerm
    \<Rightarrow> TypeError list + CoreTerm" where
@@ -265,14 +253,17 @@ definition elab_const_rhs_infer ::
                else Inr (finalTm, rhsTy)))"
 
 (* Elaborate a `const` declaration. Three cases:
-    - no value: a declaration without a definition (the interface case) - the
-      type annotation is then required;
-    - a value for a name already declared (in scope): a definition of a
-      previously-declared constant - only CM_GlobalVars gains an entry (the
-      declaration lives in the module that declared it; re-declaring it here
-      would make linking the two a conflict), and the ghost marker and any
-      type annotation must match the declaration;
-    - a value for a fresh name: declaring and defining at once. *)
+
+    - Declaration without a definition (the interface case): a type annotation is
+      required. The new constant is added to the type environment.
+
+    - Definition of a previously-declared constant: The ghost marker, and type
+      annotation (if any), must match the previous declaration. The new constant is 
+      added to CM_GlobalVars.
+
+    - Definition without previous declaration: The new entry is added to both the
+      type environment and to CM_GlobalVars.
+*)
 definition elab_const_decl ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> DeclConst
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
@@ -280,6 +271,7 @@ definition elab_const_decl ::
     (let loc = DC_Location dc; name = DC_Name dc; ghost = DC_Ghost dc
      in case DC_Value dc of
           None \<Rightarrow>
+            \<comment> \<open>Declaration without a definition (interface case).\<close>
             (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
              else case DC_Type dc of
                     None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType loc name]
@@ -347,10 +339,8 @@ definition elab_const_decl ::
 (* Elaborate a function's signature to a FunInfo. The argument and return
    types are elaborated with the function's type parameters in scope; for a
    non-ghost function they are elaborated in NotGhost mode with the type
-   parameters as runtime type variables, which enforces that all argument and
-   return types are runtime types (the tyenv_fun_ghost_constraint and
-   tyenv_return_type_runtime conditions). A missing return type means the
-   function was declared void; its Core return type is unit. *)
+   parameters as runtime type variables (which enforces that all arguments
+   and the return value have runtime types). *)
 definition elab_fun_signature ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DeclFun \<Rightarrow> TypeError list + FunInfo" where
   "elab_fun_signature env elabEnv df =
@@ -377,8 +367,8 @@ definition elab_fun_signature ::
 
 (* Typecheck a function's contract attributes and drop the results: FunInfo
    and CoreFunction have no contract fields yet, so this exists purely to flag
-   type errors (verification is out of scope for now). Requires and decreases
-   terms are elaborated in preEnv (the body env); ensures terms in postEnv
+   type errors (verification is out of scope for now). `requires` and `decreases`
+   terms are elaborated in preEnv (the body env); `ensures` terms in postEnv
    (the body env plus the `return` binding, for non-void functions). All are
    elaborated in Ghost mode. An `invariant` attribute is not valid on a
    function. *)
@@ -411,13 +401,13 @@ fun elab_fun_contracts ::
          else elab_fun_contracts preEnv postEnv elabEnv rest next_mv')"
 
 (* Typecheck a function's contracts and (if present) its body, returning the
-   elaborated body for CF_Body. env must already contain the function's own
-   declaration. The body env is module_body_env_for - the same env in which
-   module-level typechecking will re-check the recorded body. *)
+   elaborated body as a CoreStatement list. *)
 definition elab_fun_body_and_contracts ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DeclFun \<Rightarrow> FunInfo
    \<Rightarrow> TypeError list + CoreStatement list option" where
   "elab_fun_body_and_contracts env elabEnv df funInfo =
+    \<comment> \<open>Construct envs for typechecking the body (and a separate env for `ensures`,
+       with the `return` variable)\<close>
     (let paramNames = map (\<lambda>(n, _, _). n) (DF_TmArgs df);
          bodyEnv = module_body_env_for env paramNames funInfo;
          bodyElabEnv = elabEnv
@@ -425,50 +415,59 @@ definition elab_fun_body_and_contracts ::
              EE_CurrentFunctionVoid := (DF_ReturnType df = None) \<rparr>;
          postEnv = (if DF_ReturnType df = None then bodyEnv
                     else vardecl_add_local bodyEnv Ghost ''return'' (FI_ReturnType funInfo))
+     \<comment> \<open>Elaborate the contracts\<close>
      in case elab_fun_contracts bodyEnv postEnv bodyElabEnv (DF_Attributes df) 0 of
           Inl errs \<Rightarrow> Inl errs
         | Inr _ \<Rightarrow>
             (case DF_Body df of
                None \<Rightarrow> Inr None
              | Some body \<Rightarrow>
+                 \<comment> \<open>Elaborate the body\<close>
                  (case elab_statement_list bodyEnv bodyElabEnv (DF_Ghost df) body 0 of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (coreBody, _, _) \<Rightarrow> Inr (Some coreBody))))"
 
-(* Elaborate a function declaration. A function with a body, or marked extern,
-   is a *definition* (an extern function's CF_Body is None; its implementation
-   arrives when an interpreter state is built); a bodiless non-extern function
-   is a declaration only. Defining a previously-declared function requires the
-   FunInfo to match the declaration *literally* - including the type-parameter
-   names (alpha-renaming is not accepted) and the ghost/impure flags - plus
-   agreement on Babylon-level voidness, which is not recoverable from the Core
-   return type. As with constants, such a definition adds no new declaration
-   to the module's own type env. *)
+(* Elaborate a function declaration. 
+
+   A function with a body, or marked extern, is a *definition* (an extern
+   function's CF_Body is None; its implementation arrives when an interpreter
+   state is built); a bodiless non-extern function is a declaration only.
+
+   Defining a previously-declared function requires the FunInfo to match the
+   declaration *literally* - including the type-parameter names (alpha-renaming
+   is not accepted) and the ghost/impure flags - plus agreement on Babylon-level
+   voidness, which is not recoverable from the Core return type. *)
 definition elab_function_decl ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> DeclFun
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
   "elab_function_decl env elabEnv m df =
-    (let loc = DF_Location df; name = DF_Name df;
+    \<comment> \<open>Gather function info\<close>
+    (let loc = DF_Location df; 
+         name = DF_Name df;
          paramNames = map (\<lambda>(n, _, _). n) (DF_TmArgs df);
          isDefinition = (DF_Extern df \<or> DF_Body df \<noteq> None);
          isVoid = (DF_ReturnType df = None)
+     \<comment> \<open>Check for duplicate type or term arg names\<close>
      in case first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) of
           Some dup \<Rightarrow> Inl [TyErr_DuplicateName loc dup]
         | None \<Rightarrow>
         (case first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) of
            Some dup \<Rightarrow> Inl [TyErr_DuplicateName loc dup]
          | None \<Rightarrow>
+           \<comment> \<open>Check for variable captures, or extern function with body\<close>
            if binder_captures env m (DF_TyArgs df)
            then Inl [TyErr_TypeVarCapture loc name]
            else if DF_Extern df \<and> DF_Body df \<noteq> None
            then Inl [TyErr_ExternFunctionWithBody loc name]
            else
+             \<comment> \<open>Elaborate the signature, create FunInfo\<close>
              (case elab_fun_signature env elabEnv df of
                 Inl errs \<Rightarrow> Inl errs
               | Inr funInfo \<Rightarrow>
                   (case fmlookup (TE_Functions env) name of
                      Some declInfo \<Rightarrow>
-                       \<comment> \<open>Already declared: this must be a matching definition.\<close>
+                       \<comment> \<open>Already declared: this must be a matching definition (and must
+                          not be overwriting an earlier definition).\<close>
                        (if \<not> isDefinition then Inl [TyErr_DuplicateName loc name]
                         else if name |\<in>| fmdom (CM_Functions m)
                         then Inl [TyErr_AlreadyDefined loc name]
@@ -477,6 +476,7 @@ definition elab_function_decl ::
                         else if (name |\<in>| EE_VoidFunctions elabEnv) \<noteq> isVoid
                         then Inl [TyErr_FunctionSignatureMismatch loc name]
                         else
+                          \<comment> \<open>Elaborate body and contracts; add to CM_Functions.\<close>
                           (case elab_fun_body_and_contracts env elabEnv df funInfo of
                              Inl errs \<Rightarrow> Inl errs
                            | Inr bodyOpt \<Rightarrow>
@@ -485,17 +485,29 @@ definition elab_function_decl ::
                                           fmupd name \<lparr> CF_Args = paramNames, CF_Body = bodyOpt \<rparr>
                                                 (CM_Functions m) \<rparr>)))
                    | None \<Rightarrow>
+                       \<comment> \<open>Not previously declared. This is either a declaration only, or
+                          a simultaneous declaration+definition. First, check that it isn't
+                          a duplicate name.\<close>
                        (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
                         else
+                          \<comment> \<open>Add the function to the env before elaborating the body.
+                             (Note: since recursion is not supported yet, this is not strictly
+                             necessary - we could equally well wait until after elaborating
+                             the body, before creating env' - but here we choose to do it
+                             before.)\<close>
                           (let env' = tyenv_add_function name funInfo env;
                                elabEnv' = (if isVoid
                                            then elabEnv \<lparr> EE_VoidFunctions :=
                                                   finsert name (EE_VoidFunctions elabEnv) \<rparr>
                                            else elabEnv);
                                m' = m \<lparr> CM_TyEnv := tyenv_add_function name funInfo (CM_TyEnv m) \<rparr>
+                           \<comment> \<open>Now elaborate the body and contracts, in this new env.\<close>
                            in case elab_fun_body_and_contracts env' elabEnv' df funInfo of
                                 Inl errs \<Rightarrow> Inl errs
                               | Inr bodyOpt \<Rightarrow>
+                                  \<comment> \<open>If isDefinition, this is a simultaneous declaration +
+                                     definition: update both env and CM_Functions. Otherwise,
+                                     update the env only.\<close>
                                   Inr (env', elabEnv',
                                        (if isDefinition
                                         then m' \<lparr> CM_Functions :=
@@ -509,13 +521,9 @@ definition elab_function_decl ::
 (* Datatypes                                                                  *)
 (* ========================================================================== *)
 
-(* Elaborate a datatype's constructors: per constructor, its name, Core
-   payload type, and whether it was declared without a payload ("nullary").
-   Payload types are elaborated in Ghost mode - a non-runtime payload is
-   not an error, it just makes the datatype ghost (computed below). A
-   missing payload is unit. Note that `C` and `C{}` both get a unit
-   payload type, but only the former is nullary: `C` is used bare, while
-   `C{}` must be applied to an (empty-record) argument. *)
+(* Elaborate a list of data constructors.
+   Returns, for each ctor, a tuple of: name, Core payload type, nullary flag.
+   (For nullary ctors, the Core payload type is unit.) *)
 fun elab_data_ctors ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DataCtor list
    \<Rightarrow> TypeError list + (string \<times> CoreType \<times> bool) list" where
@@ -530,28 +538,18 @@ fun elab_data_ctors ::
             Inl errs \<Rightarrow> Inl errs
           | Inr rest' \<Rightarrow> Inr ((cname, payloadTy, payloadOpt = None) # rest')))"
 
-(* Elaborate a datatype declaration.
-
-   Ghost status is computed, not declared: the payloads are elaborated with
-   the datatype's own type parameters added to both TE_TypeVars and
-   TE_RuntimeTypeVars (exactly the env in which tyenv_nonghost_payloads_runtime
-   checks them), and the datatype is ghost iff some payload is not a runtime
-   type there. No fixpoint is needed: declarations arrive in dependency order,
-   so every datatype mentioned in a payload already has its ghost status
-   settled in the state env.
-
-   If the datatype's name is an abstract type in scope, the declaration also
-   *realizes* it (the ADT pattern: interface "type Stack;", implementation
-   "datatype Stack = ..."), recording name \<mapsto> CoreTy_Datatype name []. Such a
-   datatype must have no type parameters (abstract types are zero-arity), and
-   if the abstract type was declared non-ghost, the datatype must compute
-   non-ghost. *)
+(* Elaborate a datatype declaration. *)
 definition elab_datatype_decl ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> CoreModule \<Rightarrow> DeclDatatype
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
   "elab_datatype_decl env elabEnv ownAbstract m dd =
-    (let loc = DD_Location dd; name = DD_Name dd; tyvars = DD_TyArgs dd;
+    (let loc = DD_Location dd;
+         name = DD_Name dd;
+         tyvars = DD_TyArgs dd;
          isRealization = (name |\<in>| TE_TypeVars env)
+     \<comment> \<open>Basic error checks: can't realize imported type (not possible in renamer output),
+        realizations can't have type variables, can't define the same name more than once,
+        can't have an empty datatype.\<close>
      in if isRealization \<and> name |\<notin>| ownAbstract
         then Inl [TyErr_CannotRealizeImportedType loc name]
         else if isRealization \<and> tyvars \<noteq> []
@@ -562,6 +560,8 @@ definition elab_datatype_decl ::
         then Inl [TyErr_DuplicateName loc name]
         else if DD_Ctors dd = [] then Inl [TyErr_EmptyDatatype loc name]
         else
+          \<comment> \<open>Type variables and data ctor names can't have duplicates, variable capture not
+             allowed, data ctor names can't duplicate existing term names.\<close>
           (case first_duplicate_name (\<lambda>x. x) tyvars of
              Some dup \<Rightarrow> Inl [TyErr_DuplicateName loc dup]
            | None \<Rightarrow>
@@ -573,6 +573,11 @@ definition elab_datatype_decl ::
                   (case find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd) of
                      Some (cloc, cname, _) \<Rightarrow> Inl [TyErr_DuplicateName cloc cname]
                    | None \<Rightarrow>
+                       \<comment> \<open>Elaborate data ctors in a temporary env where the datatype's type
+                          variables are runtime. (This is valid, because the runtime-ness
+                          of the type variables doesn't affect whether kind-checking of the
+                          payload types will succeed; it only affects the payload types'
+                          runtime-ness. See elab_type_TE_RuntimeTypeVars_irrelevant.)\<close>
                        (let payloadEnv = env
                               \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
                                 TE_RuntimeTypeVars :=
@@ -584,16 +589,23 @@ definition elab_datatype_decl ::
                         in case elab_data_ctors payloadEnv payloadElabEnv (DD_Ctors dd) of
                              Inl errs \<Rightarrow> Inl errs
                            | Inr ctorInfo \<Rightarrow>
+                               \<comment> \<open>If, in payloadEnv, all payloads have runtime type, then the
+                                  datatype itself is runtime; otherwise, it is considered a
+                                  ghost datatype.\<close>
                                (let isGhost = \<not> list_all
                                        (\<lambda>(_, payloadTy, _). is_runtime_type payloadEnv payloadTy)
                                        ctorInfo
+                                \<comment> \<open>A runtime abstract type can't be realized by a ghost datatype.\<close>
                                 in if isRealization \<and> name |\<in>| TE_RuntimeTypeVars env \<and> isGhost
                                    then Inl [TyErr_GhostRealizationOfRuntimeType loc name]
+                                   \<comment> \<open>Another variable capture check.\<close>
                                    else if isRealization \<and>
                                         realization_captures env elabEnv name
                                           (CoreTy_Datatype name [])
                                    then Inl [TyErr_TypeVarCapture loc name]
                                    else
+                                     \<comment> \<open>Success: update the env and module with the new datatype
+                                        (and realization if applicable).\<close>
                                      (let ctors = map (\<lambda>(cn, payload, _). (cn, payload)) ctorInfo;
                                           env1 = tyenv_add_datatype name tyvars ctors isGhost env;
                                           elabEnv1 = elabEnv
@@ -614,51 +626,65 @@ definition elab_datatype_decl ::
 (* Typedefs                                                                   *)
 (* ========================================================================== *)
 
-(* Elaborate a typedef declaration. Four cases:
-    - extern types are not currently supported;
-    - the name is an abstract type in scope: this is a *realization* - legal
-      only for the module's own abstract types, with no type arguments. If the
-      abstract type was declared non-ghost, the target must be a runtime type
-      (realizing a *ghost* abstract type by a runtime type is a sound
-      weakening and is allowed). A target that mentions the name being
-      realized is a cyclic definition (e.g. "type T = U; type U = T;" - the
-      second target elaborates to a type mentioning U itself);
-    - no definition: a new abstract type ("type T;" / "ghost type T;"),
-      necessarily zero-arity;
-    - otherwise: an ordinary transparent typedef, resolved entirely on the
-      elaborator side (it enters EE_Typedefs and never reaches the
-      CoreModule). *)
+(* Elaborate a typedef declaration. Cases:
+    - Extern types are not currently supported.
+
+    - Realization - `type T = Foo;` after a previous `type T;` (or `ghost type T;`).
+      Type variables are not allowed. If the type T was declared runtime (non-ghost), then
+      `Foo` must also be runtime. Cyclic definitions are not allowed.
+
+    - A new abstract type - `type T;` or `ghost type T;`.
+
+    - An ordinary typedef - `type T = Foo;` where T was not previously declared.
+      This is resolved entirely on the elaborator side (it is added to EE_Typedefs
+      and never reaches Core).
+*)
 definition elab_typedef_decl ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> CoreModule \<Rightarrow> DeclTypedef
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
   "elab_typedef_decl env elabEnv ownAbstract m dt =
-    (let loc = DT_Location dt; name = DT_Name dt; tyvars = DT_TyArgs dt
-     in if DT_Extern dt then Inl [TyErr_ExternTypeNotImplemented loc]
+    (let loc = DT_Location dt;
+         name = DT_Name dt;
+         tyvars = DT_TyArgs dt
+     in if DT_Extern dt then Inl [TyErr_ExternTypeNotImplemented loc] \<comment> \<open>Not yet implemented\<close>
         else if name |\<in>| TE_TypeVars env then
-          \<comment> \<open>The name is an abstract type in scope: this must be a realization.\<close>
+          \<comment> \<open>Realization of an abstract type.\<close>
+          \<comment> \<open>Check errors: realizing an imported type (not possible in renamer output),
+             duplicate names, unexpected type arguments).\<close>
           (if name |\<notin>| ownAbstract then Inl [TyErr_CannotRealizeImportedType loc name]
            else case DT_Definition dt of
                   None \<Rightarrow> Inl [TyErr_DuplicateName loc name]
                 | Some ty \<Rightarrow>
                     if tyvars \<noteq> [] then Inl [TyErr_TypeArgsNotAllowed loc name]
                     else
+                      \<comment> \<open>Elaborate the provided RHS type.\<close>
                       (case elab_type env elabEnv Ghost ty of
                          Inl errs \<Rightarrow> Inl errs
                        | Inr target \<Rightarrow>
+                           \<comment> \<open>If the target mentions the name being defined, this is circular
+                              and not allowed (this should have been ruled out by earlier
+                              checks, but it doesn't hurt to check it again).\<close>
                            if name \<in> type_tyvars target
                            then Inl [TyErr_SelfReferentialType loc name]
+                           \<comment> \<open>Runtime abstract types must be realized by runtime types.\<close>
                            else if name |\<in>| TE_RuntimeTypeVars env
                                 \<and> \<not> is_runtime_type env target
                            then Inl [TyErr_GhostRealizationOfRuntimeType loc name]
+                           \<comment> \<open>Variable capture check.\<close>
                            else if realization_captures env elabEnv name target
                            then Inl [TyErr_TypeVarCapture loc name]
+                           \<comment> \<open>Success: apply the realization.\<close>
                            else Inr (apply_realization name target env elabEnv m)))
+        \<comment> \<open>Declaration of new abstract type, or a new ordinary typedef.
+           Check for duplicate names.\<close>
         else if type_name_in_scope env elabEnv name then Inl [TyErr_DuplicateName loc name]
         else case DT_Definition dt of
                None \<Rightarrow>
                  \<comment> \<open>A new abstract type.\<close>
+                 \<comment> \<open>Abstract types currently cannot have type variables.\<close>
                  (if tyvars \<noteq> [] then Inl [TyErr_TypeArgsNotAllowed loc name]
                   else
+                    \<comment> \<open>Add the new abstract type to the env and module.\<close>
                     Inr (tyenv_add_abstract_type name (DT_Ghost dt) env,
                          elabEnv \<lparr> EE_Typedefs :=
                              fmupd name ([], CoreTy_Var name) (EE_Typedefs elabEnv) \<rparr>,
@@ -666,12 +692,17 @@ definition elab_typedef_decl ::
                                tyenv_add_abstract_type name (DT_Ghost dt) (CM_TyEnv m) \<rparr>))
              | Some ty \<Rightarrow>
                  \<comment> \<open>An ordinary transparent typedef.\<close>
+                 \<comment> \<open>Type variables allowed, so long as they are distinct.\<close>
                  (case first_duplicate_name (\<lambda>x. x) tyvars of
                     Some dup \<Rightarrow> Inl [TyErr_DuplicateName loc dup]
                   | None \<Rightarrow>
+                      \<comment> \<open>Check variable capture.\<close>
                       if binder_captures env m tyvars
                       then Inl [TyErr_TypeVarCapture loc name]
                       else
+                        \<comment> \<open>Elaborate the rhs type, in a suitable env, and in Ghost mode. Note
+                           it doesn't matter whether the type vars are runtime or not here
+                           (see elab_type_TE_RuntimeTypeVars_irrelevant).\<close>
                         (let tdEnv = env \<lparr> TE_TypeVars :=
                                              TE_TypeVars env |\<union>| fset_of_list tyvars \<rparr>;
                              tdElabEnv = elabEnv \<lparr> EE_Typedefs :=
@@ -679,6 +710,7 @@ definition elab_typedef_decl ::
                          in case elab_type tdEnv tdElabEnv Ghost ty of
                               Inl errs \<Rightarrow> Inl errs
                             | Inr target \<Rightarrow>
+                                \<comment> \<open>Elaboration successful: add typedef to ElabEnv.\<close>
                                 Inr (env,
                                      elabEnv \<lparr> EE_Typedefs :=
                                          fmupd name (tyvars, target) (EE_Typedefs elabEnv) \<rparr>,
@@ -689,6 +721,7 @@ definition elab_typedef_decl ::
 (* The main fold                                                              *)
 (* ========================================================================== *)
 
+(* Elaborate a single declaration: dispatches to one of the above functions. *)
 fun elab_declaration ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> CoreModule \<Rightarrow> BabDeclaration
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
@@ -714,8 +747,7 @@ fun elab_declaration_list ::
          elab_declaration_list env' elabEnv' ownAbstract m' ds)"
 
 (* Top-level entry point: elaborate a (dependency-ordered) declaration list in
-   the given context, producing the elaborated CoreModule and the final
-   ElabEnv (from which the module's exported elaborator-level data is read). *)
+   the given context, producing the elaborated CoreModule and the final ElabEnv. *)
 definition elab_declarations ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + (CoreModule \<times> ElabEnv)" where

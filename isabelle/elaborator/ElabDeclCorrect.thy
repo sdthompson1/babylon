@@ -8,10 +8,9 @@ begin
 
    Elaboration does not on its own produce a well-typed CoreModule: a module
    elaborated in isolation refers to types/constants/functions it does not
-   itself declare (it is elaborated against a non-empty CoreTyEnv describing
-   exactly those external names), so its raw output has dangling references.
-   Well-typedness is established the moment it is linked with a module
-   supplying those references:
+   itself declare (i.e. its imports), so its raw output has dangling references.
+   Well-typedness is established when it is linked with a module supplying
+   those references:
 
      If I is a well-typed CoreModule with an empty substitution, and
      elaborating some declarations in CM_TyEnv I produces M, and
@@ -7096,7 +7095,7 @@ qed
 
 (* The linker's final gate, link_runtime_ok, re-checks that no *runtime*
    abstract type is realized by a ghost type. The links the pipeline derives
-   but never executes (LINKING.md step 8(b): the implementation module linked
+   but never executes (the implementation module linked
    against its interface context) need that gate discharged by proof, from
    the checks the elaborator ran at each realization site. This section
    carries those site checks to the end of the fold: every entry of

@@ -2,7 +2,7 @@ theory LinkCollapse
   imports LinkModules SubstAbsorption
 begin
 
-(* The **collapse lemma** (step 6b of LINKING.md):
+(* The **collapse lemma**:
 
      link_modules as = Inr a \<Longrightarrow> link_modules (as @ [m]) = Inr L
        \<Longrightarrow> link_modules [a, m] = Inr L

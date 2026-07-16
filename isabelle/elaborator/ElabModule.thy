@@ -2,52 +2,38 @@ theory ElabModule
   imports ElabDecl "../bab/BabNames" "../core/LinkModules" "../graph/Dependency"
 begin
 
-(* Per-module orchestration: elaborate the two faces of a BabModule.
+(* Module elaborator. This typechecks a BabModule and converts it into the Core
+   representation.
 
-   The caller (the pipeline) supplies two lists of *compiled* imports
-   (CompiledModule = CoreModule \<times> ElabEnv: an import's unlinked interface
-   CoreModule, paired with its exported ElabEnv delta):
-    - intDeps: the module's interface-dependency set;
-    - implDeps: the *additional* modules visible only to the implementation
-      face (its implementation-dependency set minus the interface-dependency
-      set and itself).
-   Each original module appears at most once across both lists (linked
-   results never compose under the strict conflict rule, so the caller
-   always supplies original unlinked modules). Disjointness of the two
-   lists is not a stated precondition: an overlap would put the same module
-   twice into the face-2 link, where the strict conflict check fails it -
-   the discipline self-polices.
+   Each BabModule is converted into a *pair* of CompiledModules (one for the interface
+   and one for the implementation), where CompiledModule = CoreModule \<times> ElabEnv.
+   (The CoreModule contains the compiled Core code corresponding to the original Babylon
+   declarations, while the ElabEnv contains additional information that is not represented
+   in Core, e.g. typedefs, which are completely substituted out by the elaborator.)
 
-   Both faces are compiled by the same per-face pipeline, elab_face: link
-   the dependencies' CoreModules into a typing context, union their ElabEnv
-   deltas (domain-disjoint, by global name uniqueness), sort the face's
-   declarations into dependency order, elaborate them in that context, and
-   pair the resulting unlinked CoreModule with the delta of the fold's
-   final ElabEnv against the initial union - the face's exported ElabEnv.
+   Inputs to elab_module:
+    - The BabModule to be elaborated.
+    - A list of CompiledModules representing the *interfaces* of this BabModule's
+      *interface* imports.
+    - A list of CompiledModules representing the *interfaces* of this BabModule's
+      *implementation* imports.
 
-   elab_module then:
-    1. runs the purely syntactic cross-face checks (unique names across the
-       two faces; declaration-only forms are interface-only);
-    2. compiles the interface face against intDeps (an interface realizes
-       nothing, so ownAbstract is empty);
-    3. compiles the implementation face against intDeps and implDeps plus
-       the just-compiled interface face, with ownAbstract = the interface's
-       abstract types;
-    4. checks per-module completeness (everything the module declares is
-       defined by the module itself);
-    5. returns the module's two compiled faces (each a CoreModule paired
-       with its delta ElabEnv). *)
+   The outputs are either the pair of CompiledModules representing the successfully
+   compiled interface and implementation of this module; or an error.
+
+   If module elaboration succeeds and linking also succeeds, then the resulting linked
+   CoreModule is guaranteed to be well-typed at the Core level (under certain mild
+   assumptions), so a separate Core typechecking pass is not needed. See
+   ElabModuleCorrect.thy for the details.
+*)
 
 
 (* ========================================================================== *)
 (* Declaration classification                                                 *)
 (* ========================================================================== *)
 
-(* A declaration without a definition: a const without a value, a non-extern
-   function without a body, or a typedef without a right-hand side (an
-   abstract type). These are only allowed in an interface. Everything else -
-   including an extern function (whose implementation arrives at interpreter-
-   state creation) and a datatype - is a definition. *)
+(* True if a BabDeclaration is a declaration only, not a definition (e.g.: const
+   without a right-hand-side, non-extern function without a body). *)
 fun is_decl_only :: "BabDeclaration \<Rightarrow> bool" where
   "is_decl_only (BabDecl_Const dc) = (DC_Value dc = None)"
 | "is_decl_only (BabDecl_Function df) = (DF_Body df = None \<and> \<not> DF_Extern df)"
@@ -56,13 +42,13 @@ fun is_decl_only :: "BabDeclaration \<Rightarrow> bool" where
 
 
 (* ========================================================================== *)
-(* Syntactic cross-face checks                                                *)
+(* Module error checks                                                        *)
 (* ========================================================================== *)
 
-(* Names must be unique within each face. Across the two faces the same name
-   may appear once in each, provided the interface occurrence is a
-   declaration (no rhs/body) and the implementation occurrence a definition -
-   the declare-then-define idiom. Anything else is a duplicate. *)
+(* Names must be unique within each face (interface or implementation).
+   Across the two faces, the same name may appear once in each, so long as it's a
+   declaration in the interface and definition in the implementation (declare-then-define
+   pattern). *)
 definition check_unique_names ::
   "BabDeclaration list \<Rightarrow> BabDeclaration list \<Rightarrow> TypeError list" where
   "check_unique_names intf impl =
@@ -85,10 +71,7 @@ definition check_unique_names ::
                else [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)]))
           impl)"
 
-(* Declaration-only forms may not appear in an implementation: such a
-   declaration is always dead (a later same-face definition would be a
-   duplicate name, and no other module may define this module's names), so it
-   is rejected outright, for a well-located error. *)
+(* The implementation must contain only definitions, not declarations *)
 definition check_impl_definitions :: "BabDeclaration list \<Rightarrow> TypeError list" where
   "check_impl_definitions impl =
      concat (map (\<lambda>d. if is_decl_only d
@@ -96,6 +79,33 @@ definition check_impl_definitions :: "BabDeclaration list \<Rightarrow> TypeErro
                               (bab_declaration_location d) (get_decl_name d)]
                       else [])
                  impl)"
+
+(* Every declaration in the interface must have a corresponding definition in the
+   implementation *)
+definition check_completeness ::
+  "BabDeclaration list \<Rightarrow> CoreModule \<Rightarrow> CoreModule \<Rightarrow> TypeError list" where
+  "check_completeness intf intMod implMod =
+     concat (map (\<lambda>d.
+       case d of
+         BabDecl_Const dc \<Rightarrow>
+           (if DC_Value dc = None
+               \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
+               \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod)
+            then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
+            else [])
+       | BabDecl_Function df \<Rightarrow>
+           (if DF_Body df = None \<and> \<not> DF_Extern df
+               \<and> DF_Name df |\<notin>| fmdom (CM_Functions intMod)
+               \<and> DF_Name df |\<notin>| fmdom (CM_Functions implMod)
+            then [TyErr_DeclaredButNotDefined (DF_Location df) (DF_Name df)]
+            else [])
+       | BabDecl_Datatype dd \<Rightarrow> []
+       | BabDecl_Typedef dt \<Rightarrow>
+           (if DT_Definition dt = None
+               \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
+            then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
+            else []))
+       intf)"
 
 
 (* ========================================================================== *)
@@ -150,11 +160,10 @@ definition decl_deps ::
               (concat (map (ctx_declared_type_tyvars env elabEnv) (get_decl_name d # refs)))
       in filter (\<lambda>n. n |\<in>| declNames) (refs @ realizationDeps))"
 
-(* Split the sorter's output: a non-singleton SCC is a mutual-recursion
-   error; a singleton whose own dependency list contains its own name is a
-   self-recursion error (a self-loop is a singleton SCC, which the
-   non-singleton check cannot catch); otherwise concatenate in topological
-   order. *)
+(* This goes through the SCCs (from Kosaraju) and fishes out the declarations in
+   dependency order. Errors are checked for:
+    - A non-singleton SCC is always an error (mutual recursion).
+    - A singleton SCC is an error if the name depends upon itself (self-recursion). *)
 fun check_sccs ::
   "(BabDeclaration \<Rightarrow> string list) \<Rightarrow> BabDeclaration list list
    \<Rightarrow> TypeError list + BabDeclaration list" where
@@ -170,12 +179,10 @@ fun check_sccs ::
     Inl [TyErr_RecursiveDeclarations (bab_declaration_location (hd scc))
            (map get_decl_name scc)]"
 
-(* Sort a face's declarations into dependency order. Cyclic dependencies are
-   errors: the language supports no recursion (this is also what lets every
-   datatype be laid out as a finite fixed-size block). The underlying
-   dependency analysis cannot itself fail here: duplicate names are checked
-   before sorting, and dependencies are filtered to names present in the
-   list. *)
+(* The main function to sort the BabDeclarations into dependency order.
+   Calls analyze_dependencies_generic (which itself calls Kosaraju) to find SCCs, then
+   uses check_sccs to rule out dependency cycles (recursive declarations are not currently
+   permitted). *)
 definition sort_declarations ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + BabDeclaration list" where
@@ -257,46 +264,6 @@ qed
 
 
 (* ========================================================================== *)
-(* Per-module completeness                                                    *)
-(* ========================================================================== *)
-
-(* Everything a module declares must be defined by the module itself: every
-   declared constant/function must be defined in one of the two faces (an
-   extern function counts - its CM_Functions entry has CF_Body = None), and
-   every abstract type must be realized by the implementation. This is
-   necessarily the module's own error and this is the only place it can be
-   reported well-located: the strict link makes even re-declaring the name in
-   another module a conflict, and a definition requires its own declaration,
-   so no other module can ever supply the missing definition. Only interface
-   declarations need checking: declaration-only forms in the implementation
-   were already rejected. *)
-definition check_completeness ::
-  "BabDeclaration list \<Rightarrow> CoreModule \<Rightarrow> CoreModule \<Rightarrow> TypeError list" where
-  "check_completeness intf intMod implMod =
-     concat (map (\<lambda>d.
-       case d of
-         BabDecl_Const dc \<Rightarrow>
-           (if DC_Value dc = None
-               \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
-               \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod)
-            then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
-            else [])
-       | BabDecl_Function df \<Rightarrow>
-           (if DF_Body df = None \<and> \<not> DF_Extern df
-               \<and> DF_Name df |\<notin>| fmdom (CM_Functions intMod)
-               \<and> DF_Name df |\<notin>| fmdom (CM_Functions implMod)
-            then [TyErr_DeclaredButNotDefined (DF_Location df) (DF_Name df)]
-            else [])
-       | BabDecl_Datatype dd \<Rightarrow> []
-       | BabDecl_Typedef dt \<Rightarrow>
-           (if DT_Definition dt = None
-               \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
-            then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
-            else []))
-       intf)"
-
-
-(* ========================================================================== *)
 (* Compiled modules and ElabEnv combination                                   *)
 (* ========================================================================== *)
 
@@ -305,14 +272,13 @@ definition check_completeness ::
    (typedefs, nullary-data-ctor names, void-function names - data that is
    not recoverable from a CoreModule), and the two travel together.
 
-   The ElabEnv half is a *delta*: the face's own contributions only, not the
-   accumulated fold state (which also contains the imports' entries). Deltas
-   of distinct modules are domain-disjoint - each entry is keyed by a name
-   its module declares, and top-level names are globally unique - so
-   combining imports is a plain field-wise union. *)
+   The CoreModule's type env contains only newly declared items; it does not
+   contain "repeat" entries for imported items. Similarly, the ElabEnv only contains
+   new items (e.g. new typedefs) created by this module; it doesn't repeat typedefs
+   (or other items) that only came in through the imports. *)
 type_synonym CompiledModule = "CoreModule \<times> ElabEnv"
 
-(* Field-wise union of a list of (domain-disjoint) ElabEnv deltas.
+(* Field-wise union of a list of (domain-disjoint) ElabEnvs.
    EE_CurrentFunctionVoid is per-function scratch state, not module data, so
    the union resets it to its neutral value. *)
 definition elabenv_union :: "ElabEnv list \<Rightarrow> ElabEnv" where
@@ -356,14 +322,18 @@ lemma elabenv_delta_fields [simp]:
 (* elab_module                                                                *)
 (* ========================================================================== *)
 
+(* Errors: elab_module needs to link together all the import modules (to create a unified
+   import environment) and therefore, theoretically, can generate link errors. However,
+   link errors are not expected to occur in normal use, so this can be considered an
+   "internal compiler error". Type errors, by contrast, are normal and expected. *)
 datatype ElabModuleError =
   EM_LinkError LinkError
   | EM_TypeErrors "TypeError list"
 
 (* Compile one face against its dependency set: link the deps' CoreModules
    into a typing context, union their ElabEnv deltas, sort the face's
-   declarations into dependency order, elaborate them, and return the face's
-   unlinked CoreModule paired with its delta ElabEnv. *)
+   declarations into dependency order, elaborate them (see ElabDecl.thy),
+   and return the face's unlinked CoreModule paired with its delta ElabEnv. *)
 definition elab_face ::
   "CompiledModule list \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
    \<Rightarrow> ElabModuleError + CompiledModule" where
@@ -379,9 +349,7 @@ definition elab_face ::
                      Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
                    | Inr (m, foldEnv) \<Rightarrow> Inr (m, elabenv_delta e foldEnv))))"
 
-(* See the orchestration comment at the top of this file. The implementation
-   face's delta ElabEnv currently has no consumer (implementations are never
-   imported); it is returned for uniformity of the compiled representation. *)
+(* The main elab_module function. *)
 definition elab_module ::
   "BabModule \<Rightarrow> CompiledModule list \<Rightarrow> CompiledModule list
    \<Rightarrow> ElabModuleError + (CompiledModule \<times> CompiledModule)" where

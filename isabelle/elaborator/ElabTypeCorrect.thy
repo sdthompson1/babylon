@@ -8,6 +8,8 @@ begin
       - its type variables are a subset of TE_TypeVars env
       - in NotGhost mode, it is a runtime type
    - The result of elab_type_list has the same length as the input.
+   - In Ghost mode, the result (including success or failure) does not
+     depend on TE_RuntimeTypeVars.
 *)
 
 (* Type variables in types returned by elab_type are a subset of TE_TypeVars env *)
@@ -400,6 +402,48 @@ next
 next
   case (10 env elabEnv ty tys)
   then show ?case by (auto simp: list_all_iff split: sum.splits)
+qed
+
+
+(* In Ghost mode, elab_type never consults TE_RuntimeTypeVars: the only
+   reads of runtime-ness information (the is_runtime_type checks and the
+   TE_GhostDatatypes check) are guarded by ghost = NotGhost. *)
+lemma elab_type_TE_RuntimeTypeVars_irrelevant:
+  "elab_type (env \<lparr> TE_RuntimeTypeVars := R \<rparr>) elabEnv Ghost ty
+     = elab_type env elabEnv Ghost ty"
+  "elab_type_list (env \<lparr> TE_RuntimeTypeVars := R \<rparr>) elabEnv Ghost tys
+     = elab_type_list env elabEnv Ghost tys"
+proof (induction env elabEnv Ghost ty and env elabEnv Ghost tys
+       rule: elab_type_elab_type_list.induct)
+  case (1 env elabEnv loc name tyargs)
+  then show ?case by (simp split: sum.splits option.splits)
+next
+  case (2 env elabEnv loc)
+  then show ?case by simp
+next
+  case (3 env elabEnv loc sign bits)
+  then show ?case by simp
+next
+  case (4 env elabEnv loc)
+  then show ?case by simp
+next
+  case (5 env elabEnv loc)
+  then show ?case by simp
+next
+  case (6 env elabEnv loc types)
+  then show ?case by (simp split: sum.splits)
+next
+  case (7 env elabEnv loc flds)
+  then show ?case by (simp split: sum.splits option.splits)
+next
+  case (8 env elabEnv loc elemTy dims)
+  then show ?case by (simp split: sum.splits)
+next
+  case (9 env elabEnv)
+  then show ?case by simp
+next
+  case (10 env elabEnv ty tys)
+  then show ?case by (simp split: sum.splits)
 qed
 
 end

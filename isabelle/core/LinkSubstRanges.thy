@@ -224,9 +224,7 @@ qed
    reachable from b by a nonempty (u ++f w)-path - provided c is itself a vertex of
    u ++f w. Proved by wf-induction on subst_dep_rel u: a c surviving directly from
    u(b) gives a single edge; a c arising by substituting some a in u(b) gives an
-   edge (a, b) followed by the (inductively shorter) path from a.
-   (Recovered verbatim from the binary-era core/MergeSubstsHelpers.thy, deleted
-   2026-07-01 with the binary layer; see LINKING.md sequencing step 4.) *)
+   edge (a, b) followed by the (inductively shorter) path from a. *)
 lemma sigma_tyvars_reach:
   assumes acyc_u: "acyclic_subst_deps u"
       and disj: "fmdom u |\<inter>| fmdom w = {||}"
