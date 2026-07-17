@@ -639,7 +639,6 @@ lemma core_term_type_cong_env:
   assumes "TE_LocalVars env1 = TE_LocalVars env2"
     and "TE_GlobalVars env1 = TE_GlobalVars env2"
     and "TE_GhostLocals env1 = TE_GhostLocals env2"
-    and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
     and "TE_TypeVars env1 = TE_TypeVars env2"
     and "TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
     and "TE_Functions env1 = TE_Functions env2"
@@ -2252,9 +2251,7 @@ next
       case None
       with lookup ty_eq have gv: "fmlookup (TE_GlobalVars env) name = Some ty"
         unfolding tyenv_lookup_var_def by (auto split: option.splits)
-      from not_ghost gv None have "name |\<notin>| TE_GhostGlobals env"
-        unfolding tyenv_var_ghost_def by (auto split: option.splits)
-      with gv rt have rt_cleared:
+      with rt have rt_cleared:
         "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
               TE_RuntimeTypeVars := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty"
         unfolding tyenv_vars_runtime_def by blast

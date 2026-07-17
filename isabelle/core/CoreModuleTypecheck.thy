@@ -120,10 +120,9 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
 
 (* Typechecking of global variables:
 
-   Every defined global is declared in TE_GlobalVars, and its initializer
-   typechecks with the declared type. A non-ghost global's initializer must
-   additionally be a compile-time constant. (A ghost global's initializer is
-   never evaluated, so it may be an arbitrary ghost term.)
+   Every defined global is declared in TE_GlobalVars, and its initializer is
+   a compile-time constant term that typechecks with the declared type (in
+   NotGhost mode - globals are never ghost in Core).
 
    Note that it is allowed for a global to be declared in TE_GlobalVars, but
    not defined - this is exactly what an interface is. *)
@@ -131,10 +130,8 @@ definition module_globals_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreTe
   "module_globals_well_typed env globals =
     (\<forall>name tm. fmlookup globals name = Some tm \<longrightarrow>
        (\<exists>declTy. fmlookup (TE_GlobalVars env) name = Some declTy \<and>
-          (if name |\<in>| TE_GhostGlobals env
-           then core_term_type env Ghost tm = Some declTy
-           else is_constant_term tm \<and>
-                core_term_type env NotGhost tm = Some declTy)))"
+          is_constant_term tm \<and>
+          core_term_type env NotGhost tm = Some declTy))"
 
 (* Typechecking of functions:
 

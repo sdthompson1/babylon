@@ -262,12 +262,11 @@ lemma ghost_lvalue_ok_base_name_cong:
      \<Longrightarrow> ghost_lvalue_ok env ghost tm1 = ghost_lvalue_ok env ghost tm2"
   by (simp add: ghost_lvalue_ok_def)
 
-(* ghost_lvalue_ok depends on the environment only through TE_LocalVars,
-   TE_GhostLocals and TE_GhostGlobals (via tyenv_var_ghost). *)
+(* ghost_lvalue_ok depends on the environment only through TE_LocalVars
+   and TE_GhostLocals (via tyenv_var_ghost). *)
 lemma ghost_lvalue_ok_cong_env:
   assumes "TE_LocalVars env1 = TE_LocalVars env2"
     and "TE_GhostLocals env1 = TE_GhostLocals env2"
-    and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
   shows "ghost_lvalue_ok env1 ghost tm = ghost_lvalue_ok env2 ghost tm"
   using assms
   by (simp add: ghost_lvalue_ok_def tyenv_var_ghost_def split: option.splits)

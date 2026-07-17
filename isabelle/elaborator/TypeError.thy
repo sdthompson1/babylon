@@ -83,7 +83,6 @@ datatype TypeError =
   | TyErr_DuplicateName Location string  (* declaration name (or constructor / type parameter) already in scope *)
   | TyErr_AlreadyDefined Location string  (* second definition of a declared constant or function *)
   | TyErr_ConstDeclNeedsType Location string  (* `const x;` with neither type annotation nor value *)
-  | TyErr_GhostMismatch Location string  (* a definition's ghost marker differs from its earlier declaration *)
   | TyErr_FunctionSignatureMismatch Location string  (* a function definition's signature differs from its earlier declaration *)
   | TyErr_NotCompileTimeConstant Location  (* a non-ghost global initializer contains a function call *)
   | TyErr_ExternFunctionWithBody Location string  (* an extern function may not also have a body *)

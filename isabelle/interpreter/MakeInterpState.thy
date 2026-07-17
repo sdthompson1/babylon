@@ -289,16 +289,14 @@ definition make_interp_state ::
     (let m' = normalize_module m;
          env = CM_TyEnv m';
          baseState = base_interp_state env world;
-         nonGhostGlobals =
-           filter (\<lambda>(name, _). name |\<notin>| TE_GhostGlobals env)
-             (sorted_list_of_fmap (CM_GlobalVars m'))
+         globals = sorted_list_of_fmap (CM_GlobalVars m')
      in (case build_interp_funs externs env (sorted_list_of_fmap (CM_Functions m')) of
           Inl err \<Rightarrow> Inl err
         | Inr funs \<Rightarrow>
-       (case compute_global_defaults fuel baseState env nonGhostGlobals of
+       (case compute_global_defaults fuel baseState env globals of
           Inl err \<Rightarrow> Inl err
         | Inr defaults \<Rightarrow>
-       (case sort_globals nonGhostGlobals of
+       (case sort_globals globals of
           Inl err \<Rightarrow> Inl err
         | Inr sortedGlobals \<Rightarrow>
        eval_globals fuel

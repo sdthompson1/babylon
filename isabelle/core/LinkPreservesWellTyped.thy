@@ -57,7 +57,6 @@ lemma apply_subst_to_tyenv_simps [simp]:
   "TE_GlobalVars (apply_subst_to_tyenv subst env)
      = fmmap (apply_subst subst) (TE_GlobalVars env)"
   "TE_GhostLocals (apply_subst_to_tyenv subst env) = TE_GhostLocals env"
-  "TE_GhostGlobals (apply_subst_to_tyenv subst env) = TE_GhostGlobals env"
   "TE_ConstLocals (apply_subst_to_tyenv subst env) = TE_ConstLocals env"
   "TE_TypeVars (apply_subst_to_tyenv subst env) = TE_TypeVars env"
   "TE_RuntimeTypeVars (apply_subst_to_tyenv subst env) = TE_RuntimeTypeVars env"
@@ -452,34 +451,32 @@ lemma link_modules_result_fields:
     and "TE_GlobalVars (CM_TyEnv m)
            = fmlist_union (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)"               \<comment> \<open>(2)\<close>
     and "TE_GhostLocals (CM_TyEnv m) = {||}"                                        \<comment> \<open>(3)\<close>
-    and "TE_GhostGlobals (CM_TyEnv m)
-           = funion_list (map (\<lambda>x. TE_GhostGlobals (CM_TyEnv x)) ms)"              \<comment> \<open>(4)\<close>
-    and "TE_ConstLocals (CM_TyEnv m) = {||}"                                        \<comment> \<open>(5)\<close>
+    and "TE_ConstLocals (CM_TyEnv m) = {||}"                                        \<comment> \<open>(4)\<close>
     and "TE_TypeVars (CM_TyEnv m)
            = funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms)
-             |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(6)\<close>
+             |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(5)\<close>
     and "TE_RuntimeTypeVars (CM_TyEnv m)
            = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)
-             |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(7)\<close>
+             |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(6)\<close>
     and "TE_AbstractTypes (CM_TyEnv m)
            = funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms)
-             |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(8)\<close>
-    and "TE_ReturnType (CM_TyEnv m) = CoreTy_Record []"                             \<comment> \<open>(9)\<close>
-    and "TE_FunctionGhost (CM_TyEnv m) = NotGhost"                                  \<comment> \<open>(10)\<close>
-    and "TE_ProofGoal (CM_TyEnv m) = None"                                          \<comment> \<open>(11)\<close>
-    and "TE_ProofTopLevel (CM_TyEnv m) = False"                                     \<comment> \<open>(12)\<close>
+             |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(7)\<close>
+    and "TE_ReturnType (CM_TyEnv m) = CoreTy_Record []"                             \<comment> \<open>(8)\<close>
+    and "TE_FunctionGhost (CM_TyEnv m) = NotGhost"                                  \<comment> \<open>(9)\<close>
+    and "TE_ProofGoal (CM_TyEnv m) = None"                                          \<comment> \<open>(10)\<close>
+    and "TE_ProofTopLevel (CM_TyEnv m) = False"                                     \<comment> \<open>(11)\<close>
     and "TE_Functions (CM_TyEnv m)
-           = fmlist_union (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms)"                \<comment> \<open>(13)\<close>
+           = fmlist_union (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms)"                \<comment> \<open>(12)\<close>
     and "TE_Datatypes (CM_TyEnv m)
-           = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"                \<comment> \<open>(14)\<close>
+           = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"                \<comment> \<open>(13)\<close>
     and "TE_DataCtors (CM_TyEnv m)
-           = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"                \<comment> \<open>(15)\<close>
+           = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"                \<comment> \<open>(14)\<close>
     and "TE_DataCtorsByType (CM_TyEnv m)
-           = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"          \<comment> \<open>(16)\<close>
+           = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"          \<comment> \<open>(15)\<close>
     and "TE_GhostDatatypes (CM_TyEnv m)
-           = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms)"            \<comment> \<open>(17)\<close>
-    and "CM_GlobalVars m = fmlist_union (map CM_GlobalVars ms)"                     \<comment> \<open>(18)\<close>
-    and "CM_Functions m = fmlist_union (map CM_Functions ms)"                       \<comment> \<open>(19)\<close>
+           = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms)"            \<comment> \<open>(16)\<close>
+    and "CM_GlobalVars m = fmlist_union (map CM_GlobalVars ms)"                     \<comment> \<open>(17)\<close>
+    and "CM_Functions m = fmlist_union (map CM_Functions ms)"                       \<comment> \<open>(18)\<close>
 proof -
   obtain \<sigma> where meq: "m = link_result ms \<sigma>"
     using ok link_modules_Inr_iff by blast
@@ -487,8 +484,6 @@ proof -
     and "TE_GlobalVars (CM_TyEnv m)
            = fmlist_union (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)"
     and "TE_GhostLocals (CM_TyEnv m) = {||}"
-    and "TE_GhostGlobals (CM_TyEnv m)
-           = funion_list (map (\<lambda>x. TE_GhostGlobals (CM_TyEnv x)) ms)"
     and "TE_ConstLocals (CM_TyEnv m) = {||}"
     and "TE_TypeVars (CM_TyEnv m)
            = funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms)
@@ -591,38 +586,16 @@ proof -
   have cap: "capture_avoiding m"
     using link_modules_capture_avoiding[OF ok] .
   have tv: "fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
-    unfolding fM(6) by auto
+    unfolding fM(5) by auto
 
   \<comment> \<open>Ghost markers: every marker comes from some input, which (by its own
      invariant) declares the name in the corresponding parent map; the union
      of the parent maps then contains it.\<close>
-  have gg: "TE_GhostGlobals (CM_TyEnv m) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv m))"
-  proof
-    fix n assume "n |\<in>| TE_GhostGlobals (CM_TyEnv m)"
-    then have "\<exists>s \<in> set (map (\<lambda>x. TE_GhostGlobals (CM_TyEnv x)) ms). n |\<in>| s"
-      unfolding fM(4) using funion_list_member by fastforce
-    then obtain x where x_in: "x \<in> set ms"
-                    and n_gg: "n |\<in>| TE_GhostGlobals (CM_TyEnv x)"
-      by auto
-    have "n |\<in>| fmdom (TE_GlobalVars (CM_TyEnv x))"
-      using inv x_in n_gg
-      unfolding core_module_invariant_def module_ghost_subsets_ok_def
-      by (blast dest: fsubsetD)
-    then obtain ty where x_lk: "fmlookup (TE_GlobalVars (CM_TyEnv x)) n = Some ty"
-      by (auto simp: fmlookup_dom_iff)
-    have gdisj: "fmdisjoint_list (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)"
-      using link_modules_success_facts(1)[OF ok]
-      unfolding link_fields_disjoint_def by blast
-    have "fmlookup (TE_GlobalVars (CM_TyEnv m)) n = Some ty"
-      unfolding fM(2) using fmlist_union_lookup[OF gdisj] x_in x_lk by fastforce
-    then show "n |\<in>| fmdom (TE_GlobalVars (CM_TyEnv m))"
-      by (rule fmdomI)
-  qed
   have gd: "TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m))"
   proof
     fix n assume "n |\<in>| TE_GhostDatatypes (CM_TyEnv m)"
     then have "\<exists>s \<in> set (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms). n |\<in>| s"
-      unfolding fM(17) using funion_list_member by fastforce
+      unfolding fM(16) using funion_list_member by fastforce
     then obtain x where x_in: "x \<in> set ms"
                     and n_gd: "n |\<in>| TE_GhostDatatypes (CM_TyEnv x)"
       by auto
@@ -636,12 +609,12 @@ proof -
       using link_modules_success_facts(1)[OF ok]
       unfolding link_fields_disjoint_def by blast
     have "fmlookup (TE_Datatypes (CM_TyEnv m)) n = Some d"
-      unfolding fM(14) using fmlist_union_lookup[OF ddisj] x_in x_lk by fastforce
+      unfolding fM(13) using fmlist_union_lookup[OF ddisj] x_in x_lk by fastforce
     then show "n |\<in>| fmdom (TE_Datatypes (CM_TyEnv m))"
       by (rule fmdomI)
   qed
   have ghost: "module_ghost_subsets_ok m"
-    unfolding module_ghost_subsets_ok_def using gg gd by blast
+    unfolding module_ghost_subsets_ok_def using gd by blast
 
   \<comment> \<open>Tyvar subsets: pointwise from the inputs; the same domain is subtracted
      on both sides.\<close>
@@ -649,7 +622,7 @@ proof -
   proof
     fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv m)"
     have "\<exists>s \<in> set (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms). n |\<in>| s"
-      using n_in unfolding fM(7) using funion_list_member by (metis fminus_iff)
+      using n_in unfolding fM(6) using funion_list_member by (metis fminus_iff)
     then obtain x where x_in: "x \<in> set ms"
                     and n_rtv: "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv x)"
       by auto
@@ -659,9 +632,9 @@ proof -
     then have "n |\<in>| funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms)"
       using x_in funion_list_member by fastforce
     moreover have "n |\<notin>| fmdom (CM_TypeSubst m)"
-      using n_in unfolding fM(7) by auto
+      using n_in unfolding fM(6) by auto
     ultimately show "n |\<in>| TE_TypeVars (CM_TyEnv m)"
-      unfolding fM(6) by auto
+      unfolding fM(5) by auto
   qed
   \<comment> \<open>Abstract types: each input has TE_AbstractTypes = TE_TypeVars, and the
      linker builds both fields as the same union-minus-domain, so the
@@ -674,12 +647,12 @@ proof -
       unfolding core_module_invariant_def tyenv_module_scope_def
       by (intro list.map_cong0) blast
     then show ?thesis
-      unfolding fM(6) fM(8) by metis
+      unfolding fM(5) fM(7) by metis
   qed
 
   have scope: "tyenv_module_scope (CM_TyEnv m)"
     unfolding tyenv_module_scope_def
-    by (simp add: fM(1) fM(3) fM(5) fM(9) fM(10) fM(11) fM(12) abs_tv)
+    by (simp add: fM(1) fM(3) fM(4) fM(8) fM(9) fM(10) fM(11) abs_tv)
 
   show ?thesis
     unfolding core_module_invariant_def
@@ -756,27 +729,27 @@ proof -
     using step dA dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_Functions (CM_TyEnv a)) k2 = Some v2
           \<Longrightarrow> fmlookup (TE_Functions (CM_TyEnv m)) k2 = Some v2"
-    unfolding fA(13) fM(13)
+    unfolding fA(12) fM(12)
     using step dA dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_Datatypes (CM_TyEnv a)) k3 = Some v3
           \<Longrightarrow> fmlookup (TE_Datatypes (CM_TyEnv m)) k3 = Some v3"
-    unfolding fA(14) fM(14)
+    unfolding fA(13) fM(13)
     using step dA dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_DataCtors (CM_TyEnv a)) k4 = Some v4
           \<Longrightarrow> fmlookup (TE_DataCtors (CM_TyEnv m)) k4 = Some v4"
-    unfolding fA(15) fM(15)
+    unfolding fA(14) fM(14)
     using step dA dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_DataCtorsByType (CM_TyEnv a)) k5 = Some v5
           \<Longrightarrow> fmlookup (TE_DataCtorsByType (CM_TyEnv m)) k5 = Some v5"
-    unfolding fA(16) fM(16)
+    unfolding fA(15) fM(15)
     using step dA dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (CM_GlobalVars a) k6 = Some v6
           \<Longrightarrow> fmlookup (CM_GlobalVars m) k6 = Some v6"
-    unfolding fA(18) fM(18)
+    unfolding fA(17) fM(17)
     using step dA dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (CM_Functions a) k7 = Some v7
           \<Longrightarrow> fmlookup (CM_Functions m) k7 = Some v7"
-    unfolding fA(19) fM(19)
+    unfolding fA(18) fM(18)
     using step dA dM unfolding link_fields_disjoint_def by fastforce
 qed
 
@@ -790,50 +763,6 @@ qed
 (* which the sub-link contains.                                               *)
 (* ========================================================================== *)
 
-lemma link_ghost_globals_agree:
-  assumes linkA: "link_modules as = Inr a"
-      and linkM: "link_modules ms = Inr m"
-      and sub: "set as \<subseteq> set ms"
-      and ghostOK: "\<forall>x \<in> set ms. module_ghost_subsets_ok x"
-      and dom: "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv a))"
-  shows "name |\<in>| TE_GhostGlobals (CM_TyEnv m) \<longleftrightarrow> name |\<in>| TE_GhostGlobals (CM_TyEnv a)"
-proof
-  note fA = link_modules_result_fields[OF linkA]
-  note fM = link_modules_result_fields[OF linkM]
-  \<comment> \<open>The declaring module inside as.\<close>
-  have "name |\<in>| funion_list (map (\<lambda>x. fmdom (TE_GlobalVars (CM_TyEnv x))) as)"
-    using dom unfolding fA(2) fmdom_fmlist_union by (simp add: o_def)
-  then obtain x where x_in: "x \<in> set as"
-                  and x_dom: "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv x))"
-    by (auto simp: funion_list_member)
-  assume "name |\<in>| TE_GhostGlobals (CM_TyEnv m)"
-  then have "name |\<in>| funion_list (map (\<lambda>x. TE_GhostGlobals (CM_TyEnv x)) ms)"
-    using fM(4) by simp
-  then obtain z where z_in: "z \<in> set ms"
-                  and z_gg: "name |\<in>| TE_GhostGlobals (CM_TyEnv z)"
-    by (auto simp: funion_list_member)
-  have z_dom: "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv z))"
-    using ghostOK z_in z_gg unfolding module_ghost_subsets_ok_def
-    by auto
-  have gv_disj: "fmdisjoint_list (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)"
-    using link_modules_success_facts(1)[OF linkM]
-    unfolding link_fields_disjoint_def by blast
-  have "z = x"
-    using fmdisjoint_list_unique_witness[OF gv_disj z_in _ z_dom x_dom]
-          x_in sub by auto
-  then have "name |\<in>| TE_GhostGlobals (CM_TyEnv x)" using z_gg by simp
-  then show "name |\<in>| TE_GhostGlobals (CM_TyEnv a)"
-    unfolding fA(4) using x_in by (auto simp: funion_list_member)
-next
-  note fA = link_modules_result_fields[OF linkA]
-  note fM = link_modules_result_fields[OF linkM]
-  assume "name |\<in>| TE_GhostGlobals (CM_TyEnv a)"
-  then obtain x where "x \<in> set as" and "name |\<in>| TE_GhostGlobals (CM_TyEnv x)"
-    unfolding fA(4) by (auto simp: funion_list_member)
-  then show "name |\<in>| TE_GhostGlobals (CM_TyEnv m)"
-    unfolding fM(4) using sub by (auto simp: funion_list_member)
-qed
-
 lemma link_ghost_datatypes_agree:
   assumes linkA: "link_modules as = Inr a"
       and linkM: "link_modules ms = Inr m"
@@ -845,13 +774,13 @@ proof
   note fA = link_modules_result_fields[OF linkA]
   note fM = link_modules_result_fields[OF linkM]
   have "name |\<in>| funion_list (map (\<lambda>x. fmdom (TE_Datatypes (CM_TyEnv x))) as)"
-    using dom unfolding fA(14) fmdom_fmlist_union by (simp add: o_def)
+    using dom unfolding fA(13) fmdom_fmlist_union by (simp add: o_def)
   then obtain x where x_in: "x \<in> set as"
                   and x_dom: "name |\<in>| fmdom (TE_Datatypes (CM_TyEnv x))"
     by (auto simp: funion_list_member)
   assume "name |\<in>| TE_GhostDatatypes (CM_TyEnv m)"
   then have "name |\<in>| funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms)"
-    using fM(17) by simp
+    using fM(16) by simp
   then obtain z where z_in: "z \<in> set ms"
                   and z_gd: "name |\<in>| TE_GhostDatatypes (CM_TyEnv z)"
     by (auto simp: funion_list_member)
@@ -866,15 +795,15 @@ proof
           x_in sub by auto
   then have "name |\<in>| TE_GhostDatatypes (CM_TyEnv x)" using z_gd by simp
   then show "name |\<in>| TE_GhostDatatypes (CM_TyEnv a)"
-    unfolding fA(17) using x_in by (auto simp: funion_list_member)
+    unfolding fA(16) using x_in by (auto simp: funion_list_member)
 next
   note fA = link_modules_result_fields[OF linkA]
   note fM = link_modules_result_fields[OF linkM]
   assume "name |\<in>| TE_GhostDatatypes (CM_TyEnv a)"
   then obtain x where "x \<in> set as" and "name |\<in>| TE_GhostDatatypes (CM_TyEnv x)"
-    unfolding fA(17) by (auto simp: funion_list_member)
+    unfolding fA(16) by (auto simp: funion_list_member)
   then show "name |\<in>| TE_GhostDatatypes (CM_TyEnv m)"
-    unfolding fM(17) using sub by (auto simp: funion_list_member)
+    unfolding fM(16) using sub by (auto simp: funion_list_member)
 qed
 
 
@@ -883,7 +812,7 @@ qed
 (* ========================================================================== *)
 
 (* Reference order: (1) TE_TypeVars, (2) TE_RuntimeTypeVars,
-   (3) TE_AbstractTypes, (4) TE_GhostGlobals, (5) TE_GhostDatatypes. *)
+   (3) TE_AbstractTypes, (4) TE_GhostDatatypes. *)
 lemma link_pair_tyvar_split:
   assumes linkA: "link_modules as = Inr a"
       and linkB: "link_modules bs = Inr b"
@@ -898,8 +827,6 @@ lemma link_pair_tyvar_split:
     and "TE_AbstractTypes (CM_TyEnv m)
            = (TE_AbstractTypes (CM_TyEnv a) |-| fmdom (CM_TypeSubst m))
              |\<union>| (TE_AbstractTypes (CM_TyEnv b) |-| fmdom (CM_TypeSubst m))"
-    and "TE_GhostGlobals (CM_TyEnv m)
-           = TE_GhostGlobals (CM_TyEnv a) |\<union>| TE_GhostGlobals (CM_TyEnv b)"
     and "TE_GhostDatatypes (CM_TyEnv m)
            = TE_GhostDatatypes (CM_TyEnv a) |\<union>| TE_GhostDatatypes (CM_TyEnv b)"
 proof -
@@ -931,21 +858,18 @@ proof -
   show "TE_TypeVars (CM_TyEnv m)
           = (TE_TypeVars (CM_TyEnv a) |-| fmdom (CM_TypeSubst m))
             |\<union>| (TE_TypeVars (CM_TyEnv b) |-| fmdom (CM_TypeSubst m))"
-    unfolding fM(6) fA(6) fB(6) by (rule gen)
+    unfolding fM(5) fA(5) fB(5) by (rule gen)
   show "TE_RuntimeTypeVars (CM_TyEnv m)
           = (TE_RuntimeTypeVars (CM_TyEnv a) |-| fmdom (CM_TypeSubst m))
             |\<union>| (TE_RuntimeTypeVars (CM_TyEnv b) |-| fmdom (CM_TypeSubst m))"
-    unfolding fM(7) fA(7) fB(7) by (rule gen)
+    unfolding fM(6) fA(6) fB(6) by (rule gen)
   show "TE_AbstractTypes (CM_TyEnv m)
           = (TE_AbstractTypes (CM_TyEnv a) |-| fmdom (CM_TypeSubst m))
             |\<union>| (TE_AbstractTypes (CM_TyEnv b) |-| fmdom (CM_TypeSubst m))"
-    unfolding fM(8) fA(8) fB(8) by (rule gen)
-  show "TE_GhostGlobals (CM_TyEnv m)
-          = TE_GhostGlobals (CM_TyEnv a) |\<union>| TE_GhostGlobals (CM_TyEnv b)"
-    unfolding fM(4) fA(4) fB(4) by (rule funion_list_split[OF setMS])
+    unfolding fM(7) fA(7) fB(7) by (rule gen)
   show "TE_GhostDatatypes (CM_TyEnv m)
           = TE_GhostDatatypes (CM_TyEnv a) |\<union>| TE_GhostDatatypes (CM_TyEnv b)"
-    unfolding fM(17) fA(17) fB(17) by (rule funion_list_split[OF setMS])
+    unfolding fM(16) fA(16) fB(16) by (rule funion_list_split[OF setMS])
 qed
 
 
@@ -994,7 +918,6 @@ lemma link_mid_env_simps [simp]:
        ++\<^sub>f fmdrop_fset (fmdom (TE_GlobalVars (CM_TyEnv (normalize_module a))))
                         (TE_GlobalVars (CM_TyEnv (normalize_module b)))"
   "TE_GhostLocals (link_mid_env a b m) = TE_GhostLocals (CM_TyEnv m)"
-  "TE_GhostGlobals (link_mid_env a b m) = TE_GhostGlobals (CM_TyEnv m)"
   "TE_ConstLocals (link_mid_env a b m) = TE_ConstLocals (CM_TyEnv m)"
   "TE_TypeVars (link_mid_env a b m)
      = TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars (CM_TyEnv b)"
@@ -1142,13 +1065,13 @@ proof -
   show "fmmap (apply_subst_to_funinfo (CM_TypeSubst m)) (TE_Functions (link_mid_env a b m))
           = fmmap (apply_subst_to_funinfo (CM_TypeSubst m)) (TE_Functions (CM_TyEnv m))"
     unfolding link_mid_env_simps normalize_module_simps apply_subst_to_tyenv_simps
-              fA(13) fB(13) fM(13)
+              fA(12) fB(12) fM(12)
     by (metis (no_types, lifting) absA absB fdA fdB fdM fmmap_mid_collapse link_fields_disjoint_def
         setMS subst_absorb_funinfo)
   show "fmmap (apply_subst_to_datactor (CM_TypeSubst m)) (TE_DataCtors (link_mid_env a b m))
           = fmmap (apply_subst_to_datactor (CM_TypeSubst m)) (TE_DataCtors (CM_TyEnv m))"
     unfolding link_mid_env_simps normalize_module_simps apply_subst_to_tyenv_simps
-              fA(15) fB(15) fM(15)
+              fA(14) fB(14) fM(14)
     by (metis (no_types, lifting) absA absB fdA fdB fdM fmmap_mid_collapse link_fields_disjoint_def
         setMS subst_absorb_datactor)
 qed
@@ -1187,10 +1110,6 @@ proof -
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_GhostLocals (CM_TyEnv (normalize_module m))"
       by simp
-    show "TE_GhostGlobals (apply_subst_to_module_env (CM_TypeSubst m)
-            (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
-            = TE_GhostGlobals (CM_TyEnv (normalize_module m))"
-      by simp
     show "TE_ConstLocals (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_ConstLocals (CM_TyEnv (normalize_module m))"
@@ -1210,7 +1129,7 @@ proof -
     show "TE_ReturnType (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_ReturnType (CM_TyEnv (normalize_module m))"
-      by (simp add: fM(9))
+      by (simp add: fM(8))
     show "TE_FunctionGhost (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_FunctionGhost (CM_TyEnv (normalize_module m))"
@@ -1218,7 +1137,7 @@ proof -
     show "TE_ProofGoal (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_ProofGoal (CM_TyEnv (normalize_module m))"
-      by (simp add: fM(11))
+      by (simp add: fM(10))
     show "TE_ProofTopLevel (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_ProofTopLevel (CM_TyEnv (normalize_module m))"
@@ -1376,7 +1295,7 @@ proof -
     then have "fmlookup (fmmap (apply_subst_to_datactor (CM_TypeSubst b)) ?dcB) ctorName
                  = Some (dtName, tyVars, payload)"
       using lk
-      by (metis apply_subst_to_tyenv_simps(15) fmadd_drop_lookup link_mid_env_simps(15)
+      by (metis apply_subst_to_tyenv_simps(14) fmadd_drop_lookup link_mid_env_simps(14)
           normalize_module_simps(1))
     then obtain entry0 where b_lk: "fmlookup ?dcB ctorName = Some entry0"
         and entry_eq: "(dtName, tyVars, payload) = apply_subst_to_datactor (CM_TypeSubst b) entry0"
@@ -1454,18 +1373,18 @@ next
       proof
         assume "n |\<in>| TE_TypeVars (CM_TyEnv a)"
         then have "n |\<in>| funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) as)"
-          using fA(6) by auto
+          using fA(5) by auto
         then show ?thesis
           unfolding funion_list_split[OF setMS] by auto
       next
         assume "n |\<in>| TE_TypeVars (CM_TyEnv b)"
         then have "n |\<in>| funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) bs)"
-          using fB(6) by auto
+          using fB(5) by auto
         then show ?thesis
           unfolding funion_list_split[OF setMS] by auto
       qed
       then have "n |\<in>| TE_TypeVars (CM_TyEnv m)"
-        using fM(6) n_notdom by simp
+        using fM(5) n_notdom by simp
       then show ?thesis using None by simp
     qed
   qed
@@ -1530,12 +1449,12 @@ proof (intro allI impI)
     proof
       assume "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv a)"
       then have "n |\<in>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) as)"
-        using fA(7) by auto
+        using fA(6) by auto
       then show ?thesis unfolding funion_list_split[OF setMS] by auto
     next
       assume "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv b)"
       then have "n |\<in>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) bs)"
-        using fB(7) by auto
+        using fB(6) by auto
       then show ?thesis unfolding funion_list_split[OF setMS] by auto
     qed
   qed
@@ -1555,7 +1474,7 @@ proof (intro allI impI)
     have "n |\<notin>| fmdom (CM_TypeSubst m)"
       using None by (simp add: fmdom_notI)
     then have "n |\<in>| TE_RuntimeTypeVars (CM_TyEnv m)"
-      using fM(7) n_union by simp
+      using fM(6) n_union by simp
     then show ?thesis using None by simp
   qed
 qed
@@ -1662,7 +1581,7 @@ proof -
                = funion_list (map (\<lambda>x. fmdom (TE_Datatypes (CM_TyEnv x))) zs)"
     unfolding fmdom_fmlist_union map_map by (simp add: o_def)
   show ?thesis
-    unfolding fM(14) fA(14) fB(14) gen
+    unfolding fM(13) fA(13) fB(13) gen
     by (rule funion_list_split[OF setMS])
 qed
 
@@ -1711,14 +1630,6 @@ proof -
     using wfB unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by simp
 
   \<comment> \<open>Ghost-marker agreement, raw form.\<close>
-  have ggA: "\<And>name. name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv a)) \<Longrightarrow>
-               (name |\<in>| TE_GhostGlobals (CM_TyEnv m)
-                  \<longleftrightarrow> name |\<in>| TE_GhostGlobals (CM_TyEnv a))"
-    using link_ghost_globals_agree[OF linkA linkM subA ghostOK] by blast
-  have ggB: "\<And>name. name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv b)) \<Longrightarrow>
-               (name |\<in>| TE_GhostGlobals (CM_TyEnv m)
-                  \<longleftrightarrow> name |\<in>| TE_GhostGlobals (CM_TyEnv b))"
-    using link_ghost_globals_agree[OF linkB linkM subB ghostOK] by blast
   have gdA: "\<And>name. name |\<in>| fmdom (TE_Datatypes (CM_TyEnv a)) \<Longrightarrow>
                (name |\<in>| TE_GhostDatatypes (CM_TyEnv m)
                   \<longleftrightarrow> name |\<in>| TE_GhostDatatypes (CM_TyEnv a))"
@@ -1764,21 +1675,15 @@ proof -
                  is_well_kinded (?envB \<lparr> TE_TypeVars := TE_AbstractTypes ?envB \<rparr>) ty"
     using wfB unfolding tyenv_well_formed_def tyenv_vars_well_kinded_def by blast
   have gvrtA: "\<And>name ty. fmlookup (TE_GlobalVars ?envA) name = Some ty \<Longrightarrow>
-                 name |\<notin>| TE_GhostGlobals ?envA \<Longrightarrow>
                  is_runtime_type (?envA \<lparr> TE_TypeVars := TE_AbstractTypes ?envA,
                                           TE_RuntimeTypeVars :=
                                             TE_AbstractTypes ?envA |\<inter>| TE_RuntimeTypeVars ?envA \<rparr>) ty"
     using wfA unfolding tyenv_well_formed_def tyenv_vars_runtime_def by blast
   have gvrtB: "\<And>name ty. fmlookup (TE_GlobalVars ?envB) name = Some ty \<Longrightarrow>
-                 name |\<notin>| TE_GhostGlobals ?envB \<Longrightarrow>
                  is_runtime_type (?envB \<lparr> TE_TypeVars := TE_AbstractTypes ?envB,
                                           TE_RuntimeTypeVars :=
                                             TE_AbstractTypes ?envB |\<inter>| TE_RuntimeTypeVars ?envB \<rparr>) ty"
     using wfB unfolding tyenv_well_formed_def tyenv_vars_runtime_def by blast
-  have ggsubA: "TE_GhostGlobals (CM_TyEnv a) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv a))"
-    using wfA unfolding tyenv_well_formed_def tyenv_ghost_vars_subset_def by simp
-  have ggsubB: "TE_GhostGlobals (CM_TyEnv b) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv b))"
-    using wfB unfolding tyenv_well_formed_def tyenv_ghost_vars_subset_def by simp
   have ccA: "\<And>ctorName dtName tyVars payload.
                fmlookup (TE_DataCtors ?envA) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
                fmlookup (TE_Datatypes ?envA) dtName = Some (length tyVars)"
@@ -1954,11 +1859,7 @@ proof -
       then show "is_runtime_type ?mid ty" by (simp add: fM(1))
     next
       fix name ty
-      assume asm: "fmlookup (TE_GlobalVars ?mid) name = Some ty
-                     \<and> name |\<notin>| TE_GhostGlobals ?mid"
-      then have lk: "fmlookup (TE_GlobalVars ?mid) name = Some ty"
-            and ng: "name |\<notin>| TE_GhostGlobals (CM_TyEnv m)"
-        by simp_all
+      assume lk: "fmlookup (TE_GlobalVars ?mid) name = Some ty"
       from gv_cases[OF lk]
       show "is_runtime_type
               (?mid \<lparr> TE_TypeVars := TE_AbstractTypes ?mid,
@@ -1966,15 +1867,11 @@ proof -
                         TE_AbstractTypes ?mid |\<inter>| TE_RuntimeTypeVars ?mid \<rparr>) ty"
       proof
         assume lkA: "fmlookup (TE_GlobalVars ?envA) name = Some ty"
-        have "name |\<in>| fmdom (TE_GlobalVars ?envA)" using lkA by (rule fmdomI)
-        then have "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv a))" by simp
-        then have ngA: "name |\<notin>| TE_GhostGlobals ?envA"
-          using ggA ng by simp
         have rt1: "is_runtime_type
                      (?envA \<lparr> TE_TypeVars := TE_AbstractTypes ?envA,
                               TE_RuntimeTypeVars :=
                                 TE_AbstractTypes ?envA |\<inter>| TE_RuntimeTypeVars ?envA \<rparr>) ty"
-          using gvrtA[OF lkA ngA] .
+          using gvrtA[OF lkA] .
         have "is_well_kinded
                 (?envA \<lparr> TE_TypeVars := TE_AbstractTypes ?envA,
                          TE_RuntimeTypeVars :=
@@ -1991,15 +1888,11 @@ proof -
              (auto simp: absa absb)
       next
         assume lkB: "fmlookup (TE_GlobalVars ?envB) name = Some ty"
-        have "name |\<in>| fmdom (TE_GlobalVars ?envB)" using lkB by (rule fmdomI)
-        then have "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv b))" by simp
-        then have ngB: "name |\<notin>| TE_GhostGlobals ?envB"
-          using ggB ng by simp
         have rt1: "is_runtime_type
                      (?envB \<lparr> TE_TypeVars := TE_AbstractTypes ?envB,
                               TE_RuntimeTypeVars :=
                                 TE_AbstractTypes ?envB |\<inter>| TE_RuntimeTypeVars ?envB \<rparr>) ty"
-          using gvrtB[OF lkB ngB] .
+          using gvrtB[OF lkB] .
         have "is_well_kinded
                 (?envB \<lparr> TE_TypeVars := TE_AbstractTypes ?envB,
                          TE_RuntimeTypeVars :=
@@ -2019,28 +1912,13 @@ proof -
   next
     show "tyenv_ghost_vars_subset ?mid"
       unfolding tyenv_ghost_vars_subset_def
-    proof (intro conjI)
-      show "TE_GhostLocals ?mid |\<subseteq>| fmdom (TE_LocalVars ?mid)"
-        by (simp add: fM(3))
-      show "TE_GhostGlobals ?mid |\<subseteq>| fmdom (TE_GlobalVars ?mid)"
-      proof
-        fix name assume "name |\<in>| TE_GhostGlobals ?mid"
-        then have "name |\<in>| TE_GhostGlobals (CM_TyEnv a)
-                     \<or> name |\<in>| TE_GhostGlobals (CM_TyEnv b)"
-          using gsplit(4) by auto
-        then have "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv a))
-                     \<or> name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv b))"
-          using ggsubA ggsubB by (auto dest: fsubsetD)
-        then show "name |\<in>| fmdom (TE_GlobalVars ?mid)"
-          by (auto simp: fmadd_drop_dom)
-      qed
-    qed
+      by (simp add: fM(3))
   next
     show "tyenv_return_type_well_kinded ?mid"
-      unfolding tyenv_return_type_well_kinded_def by (simp add: fM(9))
+      unfolding tyenv_return_type_well_kinded_def by (simp add: fM(8))
   next
     show "tyenv_return_type_runtime ?mid"
-      unfolding tyenv_return_type_runtime_def by (simp add: fM(9))
+      unfolding tyenv_return_type_runtime_def by (simp add: fM(8))
   next
     show "tyenv_ctors_consistent ?mid"
       unfolding tyenv_ctors_consistent_def
@@ -2110,14 +1988,14 @@ proof -
         assume mem: "ctorName \<in> set ctors"
         obtain z where z_in: "z \<in> set ms"
                    and z_bt: "fmlookup (TE_DataCtorsByType (CM_TyEnv z)) dtName = Some ctors"
-          using fmlist_union_lookup[OF btdisjM] btM[unfolded fM(16)] by auto
+          using fmlist_union_lookup[OF btdisjM] btM[unfolded fM(15)] by auto
         from z_in setMS have "z \<in> set as \<or> z \<in> set bs" by auto
         then show "\<exists>tyVars payload.
                      fmlookup (TE_DataCtors ?mid) ctorName = Some (dtName, tyVars, payload)"
         proof
           assume z_as: "z \<in> set as"
           have btA': "fmlookup (TE_DataCtorsByType ?envA) dtName = Some ctors"
-            using fmlist_union_lookup[OF btdisjA] z_as z_bt by (auto simp: fA(16))
+            using fmlist_union_lookup[OF btdisjA] z_as z_bt by (auto simp: fA(15))
           obtain tyVars payload where
               lkA: "fmlookup (TE_DataCtors ?envA) ctorName = Some (dtName, tyVars, payload)"
             using btcA[OF btA'] mem by blast
@@ -2127,7 +2005,7 @@ proof -
         next
           assume z_bs: "z \<in> set bs"
           have btB': "fmlookup (TE_DataCtorsByType ?envB) dtName = Some ctors"
-            using fmlist_union_lookup[OF btdisjB] z_bs z_bt by (auto simp: fB(16))
+            using fmlist_union_lookup[OF btdisjB] z_bs z_bt by (auto simp: fB(15))
           obtain tyVarsB payloadB where
               lkB: "fmlookup (TE_DataCtors ?envB) ctorName = Some (dtName, tyVarsB, payloadB)"
             using btcB[OF btB'] mem by blast
@@ -2154,7 +2032,7 @@ proof -
               using lkB by (cases "fmlookup (TE_DataCtors (CM_TyEnv b)) ctorName") auto
             have e_eq: "eA0 = eB0"
               by (rule link_pair_shared_lookup[OF dcdisjA dcdisjB dcdisjM setMS
-                        rawA[unfolded fA(15)] rawB[unfolded fB(15)]])
+                        rawA[unfolded fA(14)] rawB[unfolded fB(14)]])
             obtain dt0 tv0 pl0 where e0shape: "eB0 = (dt0, tv0, pl0)"
               by (cases eB0) auto
             have "dt0 = dtName"
@@ -2498,7 +2376,7 @@ proof -
       fix name assume "name |\<in>| TE_GhostDatatypes ?mid"
       then have "name |\<in>| TE_GhostDatatypes (CM_TyEnv a)
                    \<or> name |\<in>| TE_GhostDatatypes (CM_TyEnv b)"
-        using gsplit(5) by auto
+        using gsplit(4) by auto
       then have "name |\<in>| fmdom (TE_Datatypes (CM_TyEnv a))
                    \<or> name |\<in>| fmdom (TE_Datatypes (CM_TyEnv b))"
         using gdsubA gdsubB by (auto dest: fsubsetD)
@@ -2563,7 +2441,7 @@ proof -
       from lk have "fmlookup (fmlist_union
                        (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)) dtName
                       = Some ctors"
-        by (simp add: fM(16))
+        by (simp add: fM(15))
       then obtain x where x_in: "x \<in> set ms"
         and x_lk: "fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dtName = Some ctors"
         using fmlist_union_lookup[OF dM] by auto
@@ -2578,7 +2456,7 @@ proof -
                 (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as)) dtName = Some ctors"
           using fmlist_union_lookup[OF dA] xA x_lk by auto
         then have "fmlookup (TE_DataCtorsByType ?envA) dtName = Some ctors"
-          by (simp add: fA(16))
+          by (simp add: fA(15))
         then show ?thesis using dneA2 by blast
       next
         assume xB: "x \<in> set bs"
@@ -2589,7 +2467,7 @@ proof -
                 (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) bs)) dtName = Some ctors"
           using fmlist_union_lookup[OF dB] xB x_lk by auto
         then have "fmlookup (TE_DataCtorsByType ?envB) dtName = Some ctors"
-          by (simp add: fB(16))
+          by (simp add: fB(15))
         then show ?thesis using dneB2 by blast
       qed
     qed
@@ -2693,18 +2571,6 @@ proof -
   qed
 
   \<comment> \<open>Ghost markers agree on a-declared names.\<close>
-  have gg_agree: "\<And>name. name |\<in>| fmdom (TE_GlobalVars ?envA)
-                    \<Longrightarrow> (name |\<in>| TE_GhostGlobals ?mid \<longleftrightarrow> name |\<in>| TE_GhostGlobals ?envA)"
-  proof -
-    fix name assume "name |\<in>| fmdom (TE_GlobalVars ?envA)"
-    then have "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv a))"
-      by (simp add: fmdom_fmmap)
-    then have "name |\<in>| TE_GhostGlobals (CM_TyEnv m)
-                 \<longleftrightarrow> name |\<in>| TE_GhostGlobals (CM_TyEnv a)"
-      using link_ghost_globals_agree[OF linkA linkM subA ghostOK] by blast
-    then show "name |\<in>| TE_GhostGlobals ?mid \<longleftrightarrow> name |\<in>| TE_GhostGlobals ?envA"
-      by simp
-  qed
   have gd_agree: "\<And>name. name |\<in>| fmdom (TE_Datatypes ?envA)
                     \<Longrightarrow> (name |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> name |\<in>| TE_GhostDatatypes ?envA)"
   proof -
@@ -2725,17 +2591,17 @@ proof -
     show "TE_GhostLocals ?mid = TE_GhostLocals ?envA"
       by (simp add: fA(3) fM(3))
     show "TE_ConstLocals ?mid = TE_ConstLocals ?envA"
-      by (simp add: fA(5) fM(5))
+      by (simp add: fA(4) fM(4))
     show "TE_TypeVars ?mid = TE_TypeVars ?envA" by simp
     show "TE_RuntimeTypeVars ?mid = TE_RuntimeTypeVars ?envA" by simp
     show "TE_ReturnType ?mid = TE_ReturnType ?envA"
-      by (simp add: fA(9) fM(9))
+      by (simp add: fA(8) fM(8))
     show "TE_FunctionGhost ?mid = TE_FunctionGhost ?envA"
-      by (simp add: fA(10) fM(10))
+      by (simp add: fA(9) fM(9))
     show "TE_ProofGoal ?mid = TE_ProofGoal ?envA"
-      by (simp add: fA(11) fM(11))
+      by (simp add: fA(10) fM(10))
     show "TE_ProofTopLevel ?mid = TE_ProofTopLevel ?envA"
-      by (simp add: fA(12) fM(12))
+      by (simp add: fA(11) fM(11))
     show "\<forall>name ty. fmlookup (TE_GlobalVars ?envA) name = Some ty \<longrightarrow>
             fmlookup (TE_GlobalVars ?mid) name = Some ty"
       using gv_pres by blast
@@ -2751,9 +2617,6 @@ proof -
     show "\<forall>name ctors. fmlookup (TE_DataCtorsByType ?envA) name = Some ctors \<longrightarrow>
             fmlookup (TE_DataCtorsByType ?mid) name = Some ctors"
       using bt_pres by blast
-    show "\<forall>name. name |\<in>| fmdom (TE_GlobalVars ?envA) \<longrightarrow>
-            (name |\<in>| TE_GhostGlobals ?mid \<longleftrightarrow> name |\<in>| TE_GhostGlobals ?envA)"
-      using gg_agree by blast
     show "\<forall>name. name |\<in>| fmdom (TE_Datatypes ?envA) \<longrightarrow>
             (name |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> name |\<in>| TE_GhostDatatypes ?envA)"
       using gd_agree by blast
@@ -2891,13 +2754,10 @@ proof -
                 is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env \<rparr>) ty"
     using wf unfolding tyenv_well_formed_def tyenv_vars_well_kinded_def by blast
   have gvrt: "\<And>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<Longrightarrow>
-                name |\<notin>| TE_GhostGlobals env \<Longrightarrow>
                 is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
                                        TE_RuntimeTypeVars :=
                                          TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty"
     using wf unfolding tyenv_well_formed_def tyenv_vars_runtime_def by blast
-  have ggsub: "TE_GhostGlobals env |\<subseteq>| fmdom (TE_GlobalVars env)"
-    using wf unfolding tyenv_well_formed_def tyenv_ghost_vars_subset_def by blast
   have pwk: "\<And>ctorName dtName tyVars payload.
                fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
                is_well_kinded (env \<lparr> TE_TypeVars :=
@@ -3009,15 +2869,13 @@ proof -
       qed
     next
       fix name ty
-      assume asm: "fmlookup (TE_GlobalVars ?be) name = Some ty
-                     \<and> name |\<notin>| TE_GhostGlobals ?be"
+      assume asm: "fmlookup (TE_GlobalVars ?be) name = Some ty"
       then have lk_g: "fmlookup (TE_GlobalVars env) name = Some ty"
-            and ng_g: "name |\<notin>| TE_GhostGlobals env"
-        by (simp_all add: module_body_env_for_def)
+        by (simp add: module_body_env_for_def)
       have rt0: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
                                         TE_RuntimeTypeVars :=
                                           TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty"
-        using gvrt[OF lk_g ng_g] .
+        using gvrt[OF lk_g] .
       show "is_runtime_type (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be,
                                    TE_RuntimeTypeVars :=
                                      TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be \<rparr>) ty"
@@ -3044,7 +2902,7 @@ proof -
     qed
   next
     show "tyenv_ghost_vars_subset ?be"
-      using ggsub unfolding tyenv_ghost_vars_subset_def
+      unfolding tyenv_ghost_vars_subset_def
       by (simp add: module_body_env_for_def names_eq)
   next
     show "tyenv_return_type_well_kinded ?be"
@@ -3312,9 +3170,6 @@ proof -
   have bt_pres: "\<And>name cs. fmlookup (TE_DataCtorsByType ?envA) name = Some cs \<Longrightarrow>
                    fmlookup (TE_DataCtorsByType ?mid) name = Some cs"
     using ext0 unfolding tyenv_extends_def by auto
-  have gg_agr: "\<And>name. name |\<in>| fmdom (TE_GlobalVars ?envA) \<Longrightarrow>
-                  (name |\<in>| TE_GhostGlobals ?mid \<longleftrightarrow> name |\<in>| TE_GhostGlobals ?envA)"
-    using ext0 unfolding tyenv_extends_def by auto
   have gd_agr: "\<And>name. name |\<in>| fmdom (TE_Datatypes ?envA) \<Longrightarrow>
                   (name |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> name |\<in>| TE_GhostDatatypes ?envA)"
     using ext0 unfolding tyenv_extends_def by auto
@@ -3360,9 +3215,6 @@ proof -
     show "\<forall>name cs. fmlookup (TE_DataCtorsByType ?e1) name = Some cs \<longrightarrow>
             fmlookup (TE_DataCtorsByType ?be2) name = Some cs"
       using bt_pres by (auto simp: module_body_env_for_def)
-    show "\<forall>name. name |\<in>| fmdom (TE_GlobalVars ?e1) \<longrightarrow>
-            (name |\<in>| TE_GhostGlobals ?be2 \<longleftrightarrow> name |\<in>| TE_GhostGlobals ?e1)"
-      using gg_agr by (auto simp: module_body_env_for_def)
     show "\<forall>name. name |\<in>| fmdom (TE_Datatypes ?e1) \<longrightarrow>
             (name |\<in>| TE_GhostDatatypes ?be2 \<longleftrightarrow> name |\<in>| TE_GhostDatatypes ?e1)"
       using gd_agr by (auto simp: module_body_env_for_def)
@@ -3638,8 +3490,6 @@ proof -
       using fam(1) by (simp add: module_body_env_for_def)
     show "TE_GhostLocals ?lhs = TE_GhostLocals ?tb"
       by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def)
-    show "TE_GhostGlobals ?lhs = TE_GhostGlobals ?tb"
-      by (simp add: module_body_env_for_def)
     show "TE_ConstLocals ?lhs = TE_ConstLocals ?tb"
       using snds by (simp add: module_body_env_for_def compS)
     show "TE_TypeVars ?lhs = TE_TypeVars ?tb"
@@ -3701,12 +3551,9 @@ lemma link_mid_globals_contribution:
       and a_def: "fmlookup (CM_GlobalVars a) name = Some tm0"
   shows "\<exists>declTy.
            fmlookup (TE_GlobalVars (CM_TyEnv (normalize_module m))) name = Some declTy \<and>
-           (if name |\<in>| TE_GhostGlobals (CM_TyEnv (normalize_module m))
-            then core_term_type (CM_TyEnv (normalize_module m)) Ghost
-                   (apply_subst_to_term (CM_TypeSubst m) tm0) = Some declTy
-            else is_constant_term (apply_subst_to_term (CM_TypeSubst m) tm0) \<and>
-                 core_term_type (CM_TyEnv (normalize_module m)) NotGhost
-                   (apply_subst_to_term (CM_TypeSubst m) tm0) = Some declTy)"
+           is_constant_term (apply_subst_to_term (CM_TypeSubst m) tm0) \<and>
+           core_term_type (CM_TyEnv (normalize_module m)) NotGhost
+             (apply_subst_to_term (CM_TypeSubst m) tm0) = Some declTy"
 proof -
   let ?\<sigma>A = "CM_TypeSubst a"
   let ?\<sigma>M = "CM_TypeSubst m"
@@ -3731,12 +3578,9 @@ proof -
     using a_def by simp
   obtain declTy0 where
       a_decl: "fmlookup (TE_GlobalVars ?envA) name = Some declTy0" and
-      a_typing: "if name |\<in>| TE_GhostGlobals ?envA
-                 then core_term_type ?envA Ghost (apply_subst_to_term ?\<sigma>A tm0)
-                        = Some declTy0
-                 else is_constant_term (apply_subst_to_term ?\<sigma>A tm0) \<and>
-                      core_term_type ?envA NotGhost (apply_subst_to_term ?\<sigma>A tm0)
-                        = Some declTy0"
+      a_const: "is_constant_term (apply_subst_to_term ?\<sigma>A tm0)" and
+      a_typing: "core_term_type ?envA NotGhost (apply_subst_to_term ?\<sigma>A tm0)
+                   = Some declTy0"
     using gwtA a_def' unfolding module_globals_well_typed_def by blast
 
   \<comment> \<open>Underneath: the raw whole-link declaration.\<close>
@@ -3754,14 +3598,7 @@ proof -
   have declTy_abs: "apply_subst ?\<sigma>M declTy0 = apply_subst ?\<sigma>M declTy00"
     using declTy0_eq absA by simp
 
-  \<comment> \<open>Ghost status agrees between the two links on this a-declared name.\<close>
-  have a_dom: "name |\<in>| fmdom (TE_GlobalVars (CM_TyEnv a))"
-    using a_raw by (rule fmdomI)
-  have ghost_agree: "name |\<in>| TE_GhostGlobals (CM_TyEnv m)
-                       \<longleftrightarrow> name |\<in>| TE_GhostGlobals (CM_TyEnv a)"
-    using link_ghost_globals_agree[OF linkA linkM subA ghostOK a_dom] .
-
-  \<comment> \<open>The four-stage typing chain, in whichever ghost mode applies.\<close>
+  \<comment> \<open>The four-stage typing chain.\<close>
   have chain: "\<And>gh. core_term_type ?envA gh (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0
                  \<Longrightarrow> core_term_type ?envM gh (apply_subst_to_term ?\<sigma>M tm0)
                        = Some (apply_subst ?\<sigma>M declTy00)"
@@ -3797,30 +3634,12 @@ proof -
                 subst_absorb_term[OF absA] declTy_abs .
   qed
 
-  show ?thesis
-  proof (cases "name |\<in>| TE_GhostGlobals (CM_TyEnv a)")
-    case True
-    then have gm: "name |\<in>| TE_GhostGlobals ?envM"
-      using ghost_agree by simp
-    have "core_term_type ?envA Ghost (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0"
-      using a_typing True by simp
-    then have t: "core_term_type ?envM Ghost (apply_subst_to_term ?\<sigma>M tm0)
-                    = Some (apply_subst ?\<sigma>M declTy00)"
-      by (rule chain)
-    show ?thesis using m_decl gm t by auto
-  next
-    case False
-    then have gm: "name |\<notin>| TE_GhostGlobals ?envM"
-      using ghost_agree by simp
-    have const: "is_constant_term (apply_subst_to_term ?\<sigma>M tm0)"
-      using a_typing False by simp
-    have "core_term_type ?envA NotGhost (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0"
-      using a_typing False by simp
-    then have t: "core_term_type ?envM NotGhost (apply_subst_to_term ?\<sigma>M tm0)
-                    = Some (apply_subst ?\<sigma>M declTy00)"
-      by (rule chain)
-    show ?thesis using m_decl gm const t by auto
-  qed
+  have const: "is_constant_term (apply_subst_to_term ?\<sigma>M tm0)"
+    using a_const by simp
+  have t: "core_term_type ?envM NotGhost (apply_subst_to_term ?\<sigma>M tm0)
+             = Some (apply_subst ?\<sigma>M declTy00)"
+    using chain[OF a_typing] .
+  show ?thesis using m_decl const t by auto
 qed
 
 
@@ -4089,7 +3908,7 @@ proof -
   \<comment> \<open>Clause 2: module scope (inert scope fields plus Abs = TV).\<close>
   have scope: "tyenv_module_scope ?envM"
     unfolding tyenv_module_scope_def
-    using abs_tv fM(1,10,11,12,3,5,9) by auto
+    using abs_tv fM(1,9,10,11,3,4,8) by auto
 
   \<comment> \<open>Clause 3: globals. Each defined global comes from one input module,
       hence from one sub-link; route through the matching contribution lemma.\<close>
@@ -4109,25 +3928,23 @@ proof -
       using link_modules_success_facts(1)[OF linkM]
       unfolding link_fields_disjoint_def by blast
     have "\<exists>s \<in> set (map CM_GlobalVars ms). fmlookup s name = Some tm0"
-      using m_lk unfolding fM(18) using fmlist_union_lookup[OF gdisj] by blast
+      using m_lk unfolding fM(17) using fmlist_union_lookup[OF gdisj] by blast
     then obtain z where z_in: "z \<in> set ms"
                     and z_lk: "fmlookup (CM_GlobalVars z) name = Some tm0"
       by auto
     from z_in setMS have "z \<in> set as \<or> z \<in> set bs" by auto
     then have contrib: "\<exists>declTy.
         fmlookup (TE_GlobalVars ?envM) name = Some declTy \<and>
-        (if name |\<in>| TE_GhostGlobals ?envM
-         then core_term_type ?envM Ghost (apply_subst_to_term ?\<sigma>M tm0) = Some declTy
-         else is_constant_term (apply_subst_to_term ?\<sigma>M tm0) \<and>
-              core_term_type ?envM NotGhost (apply_subst_to_term ?\<sigma>M tm0)
-                = Some declTy)"
+        is_constant_term (apply_subst_to_term ?\<sigma>M tm0) \<and>
+        core_term_type ?envM NotGhost (apply_subst_to_term ?\<sigma>M tm0)
+          = Some declTy"
     proof (elim disjE)
       assume zA: "z \<in> set as"
       have adisj: "fmdisjoint_list (map CM_GlobalVars as)"
         using link_modules_success_facts(1)[OF linkA]
         unfolding link_fields_disjoint_def by blast
       have a_lk: "fmlookup (CM_GlobalVars a) name = Some tm0"
-        unfolding link_modules_result_fields(18)[OF linkA]
+        unfolding link_modules_result_fields(17)[OF linkA]
         using fmlist_union_lookup[OF adisj] zA z_lk by fastforce
       show ?thesis
         using link_mid_globals_contribution[OF linkA wtA linkB wtB linkM setMS
@@ -4138,7 +3955,7 @@ proof -
         using link_modules_success_facts(1)[OF linkB]
         unfolding link_fields_disjoint_def by blast
       have b_lk: "fmlookup (CM_GlobalVars b) name = Some tm0"
-        unfolding link_modules_result_fields(18)[OF linkB]
+        unfolding link_modules_result_fields(17)[OF linkB]
         using fmlist_union_lookup[OF bdisj] zB z_lk by fastforce
       show ?thesis
         using link_mid_globals_contribution[OF linkB wtB linkA wtA linkM setMS'
@@ -4146,10 +3963,8 @@ proof -
     qed
     show "\<exists>declTy.
         fmlookup (TE_GlobalVars ?envM) name = Some declTy \<and>
-        (if name |\<in>| TE_GhostGlobals ?envM
-         then core_term_type ?envM Ghost tm = Some declTy
-         else is_constant_term tm \<and>
-              core_term_type ?envM NotGhost tm = Some declTy)"
+        is_constant_term tm \<and>
+        core_term_type ?envM NotGhost tm = Some declTy"
       unfolding tm_eq using contrib .
   qed
 
@@ -4172,7 +3987,7 @@ proof -
       using link_modules_success_facts(1)[OF linkM]
       unfolding link_fields_disjoint_def by blast
     have "\<exists>s \<in> set (map CM_Functions ms). fmlookup s name = Some f0"
-      using m_lk unfolding fM(19) using fmlist_union_lookup[OF fdisj] by blast
+      using m_lk unfolding fM(18) using fmlist_union_lookup[OF fdisj] by blast
     then obtain z where z_in: "z \<in> set ms"
                     and z_lk: "fmlookup (CM_Functions z) name = Some f0"
       by auto
@@ -4194,7 +4009,7 @@ proof -
         using link_modules_success_facts(1)[OF linkA]
         unfolding link_fields_disjoint_def by blast
       have a_lk: "fmlookup (CM_Functions a) name = Some f0"
-        unfolding link_modules_result_fields(19)[OF linkA]
+        unfolding link_modules_result_fields(18)[OF linkA]
         using fmlist_union_lookup[OF adisj] zA z_lk by fastforce
       show ?thesis
         using link_mid_functions_contribution[OF linkA wtA linkB wtB linkM setMS
@@ -4205,7 +4020,7 @@ proof -
         using link_modules_success_facts(1)[OF linkB]
         unfolding link_fields_disjoint_def by blast
       have b_lk: "fmlookup (CM_Functions b) name = Some f0"
-        unfolding link_modules_result_fields(19)[OF linkB]
+        unfolding link_modules_result_fields(18)[OF linkB]
         using fmlist_union_lookup[OF bdisj] zB z_lk by fastforce
       show ?thesis
         using link_mid_functions_contribution[OF linkB wtB linkA wtA linkM setMS'
@@ -4279,7 +4094,7 @@ proof -
     unfolding normalized_module_well_typed_def
     using wf scope globals funcs by blast
   have tvdisj: "fmdom ?\<sigma>M |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
-    unfolding fM(6) by auto
+    unfolding fM(5) by auto
   have inv: "core_module_invariant m"
     using core_module_invariant_intro[OF idem cap tvdisj nwt] .
   show ?thesis

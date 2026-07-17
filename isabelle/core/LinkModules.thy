@@ -26,10 +26,9 @@ begin
      fmlist_union, util/FmapDisjointUnion.thy), failing with LinkConflict on
      a shared key.
 
-   - The ghost fsets (TE_GhostGlobals, TE_GhostDatatypes) are combined by
-     plain union: each is a subset of its parent map's keys (TE_GlobalVars /
-     TE_Datatypes) in a well-formed env, so their disjointness is implied by
-     the parent check.
+   - The ghost fset (TE_GhostDatatypes) is combined by plain union: it is a
+     subset of its parent map's keys (TE_Datatypes) in a well-formed env, so
+     its disjointness is implied by the parent check.
 
    - The type-variable fields (TE_TypeVars, TE_RuntimeTypeVars,
      TE_AbstractTypes) are combined by union, minus the domain of the merged
@@ -169,9 +168,9 @@ lemma funion_list_map_cong:
    of the module itself. A name in two inputs' domains is a multiple-definition
    error, decided on names alone.
 
-   (The ghost fsets TE_GhostGlobals / TE_GhostDatatypes are not checked: each
-   is a subset of the keys of its parent map in a well-formed env, so their
-   disjointness is implied by the parent's.) *)
+   (The ghost fset TE_GhostDatatypes is not checked: it is a subset of the
+   keys of its parent map in a well-formed env, so its disjointness is
+   implied by the parent's.) *)
 definition link_fields_disjoint :: "CoreModule list \<Rightarrow> bool" where
   "link_fields_disjoint ms \<equiv>
        fmdisjoint_list (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)
@@ -365,7 +364,6 @@ definition link_result :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow>
          \<lparr> TE_LocalVars = fmempty,
            TE_GlobalVars = fmlist_union (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms),
            TE_GhostLocals = {||},
-           TE_GhostGlobals = funion_list (map (\<lambda>x. TE_GhostGlobals (CM_TyEnv x)) ms),
            TE_ConstLocals = {||},
            TE_TypeVars =
              funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms) |-| fmdom \<sigma>,

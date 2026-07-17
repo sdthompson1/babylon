@@ -38,14 +38,12 @@ begin
 definition strip_module_env :: "CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "strip_module_env env =
      env \<lparr> TE_GlobalVars := fmempty,
-           TE_GhostGlobals := {||},
            TE_Functions := fmempty \<rparr>"
 
 lemma strip_module_env_simps [simp]:
   "TE_LocalVars (strip_module_env env) = TE_LocalVars env"
   "TE_GlobalVars (strip_module_env env) = fmempty"
   "TE_GhostLocals (strip_module_env env) = TE_GhostLocals env"
-  "TE_GhostGlobals (strip_module_env env) = {||}"
   "TE_ConstLocals (strip_module_env env) = TE_ConstLocals env"
   "TE_TypeVars (strip_module_env env) = TE_TypeVars env"
   "TE_RuntimeTypeVars (strip_module_env env) = TE_RuntimeTypeVars env"
@@ -457,7 +455,6 @@ qed
 lemma state_matches_env_update_global:
   assumes sm: "state_matches_env state env storeTyping"
       and decl: "fmlookup (TE_GlobalVars env) name = Some declTy"
-      and ng: "name |\<notin>| TE_GhostGlobals env"
       and vt: "value_has_type env v declTy"
   shows "state_matches_env
            (state \<lparr> IS_Globals := fmupd name v (IS_Globals state) \<rparr>)
@@ -482,7 +479,7 @@ proof -
     unfolding global_vars_exist_in_state_def
   proof (intro allI impI)
     fix n ty
-    assume a: "fmlookup (TE_GlobalVars env) n = Some ty \<and> n |\<notin>| TE_GhostGlobals env"
+    assume a: "fmlookup (TE_GlobalVars env) n = Some ty"
     show "global_var_in_state_with_type ?st env n ty"
     proof (cases "n = name")
       case True
@@ -502,8 +499,8 @@ proof -
     unfolding no_extra_global_vars_def
   proof (intro allI impI)
     fix n
-    assume a: "fmlookup (TE_GlobalVars env) n = None \<or> n |\<in>| TE_GhostGlobals env"
-    have n_ne: "n \<noteq> name" using a decl ng by auto
+    assume a: "fmlookup (TE_GlobalVars env) n = None"
+    have n_ne: "n \<noteq> name" using a decl by auto
     have "fmlookup (IS_Globals state) n = None"
       using neg a unfolding no_extra_global_vars_def by blast
     with n_ne show "fmlookup (IS_Globals ?st) n = None" by simp
@@ -544,7 +541,7 @@ lemma eval_globals_preserves_match:
       and rtv: "TE_RuntimeTypeVars env = {||}"
       and gwt: "module_globals_well_typed env globals"
       and pairs_ok: "\<forall>p \<in> set pairs.
-            fmlookup globals (fst p) = Some (snd p) \<and> fst p |\<notin>| TE_GhostGlobals env"
+            fmlookup globals (fst p) = Some (snd p)"
       and sm: "state_matches_env (state :: 'w InterpState) env storeTyping"
       and ok: "eval_globals fuel state pairs = Inr state'"
   shows "state_matches_env state' env storeTyping"
@@ -562,13 +559,12 @@ next
               = Inr state'"
     by (auto split: sum.splits)
   from Cons.prems(1) p_eq have
-    glk: "fmlookup globals name = Some tm" and
-    ng: "name |\<notin>| TE_GhostGlobals env"
+    glk: "fmlookup globals name = Some tm"
     by auto
-  from gwt glk ng obtain declTy where
+  from gwt glk obtain declTy where
     decl: "fmlookup (TE_GlobalVars env) name = Some declTy" and
     typing: "core_term_type env NotGhost tm = Some declTy"
-    unfolding module_globals_well_typed_def by (auto split: if_splits)
+    unfolding module_globals_well_typed_def by auto
   have tyargs: "IS_TyArgs state = fmempty"
     by (rule state_matches_env_tyargs_empty[OF Cons.prems(2) rtv])
   have "sound_term_result state env declTy (interp_term fuel state tm)"
@@ -578,7 +574,7 @@ next
   have sm': "state_matches_env
                (state \<lparr> IS_Globals := fmupd name v (IS_Globals state) \<rparr>)
                env storeTyping"
-    by (rule state_matches_env_update_global[OF Cons.prems(2) decl ng vt])
+    by (rule state_matches_env_update_global[OF Cons.prems(2) decl vt])
   show ?case
     using Cons.IH[OF _ sm' rest_ok] Cons.prems(1) by simp
 qed
@@ -628,7 +624,6 @@ lemma global_default_value_typed:
       and tv: "TE_TypeVars env = {||}"
       and rtv: "TE_RuntimeTypeVars env = {||}"
       and decl: "fmlookup (TE_GlobalVars env) name = Some declTy"
-      and ng: "name |\<notin>| TE_GhostGlobals env"
       and dv: "default_value fuel (base_interp_state env world) declTy = Inr v"
   shows "value_has_type env v declTy"
 proof -
@@ -653,7 +648,7 @@ proof -
                       TE_RuntimeTypeVars :=
                         TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>)
                declTy"
-    using wf decl ng
+    using wf decl
     unfolding tyenv_well_formed_def tyenv_vars_runtime_def by blast
   have rt_eq: "is_runtime_type
                  (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
@@ -702,8 +697,7 @@ lemma assembled_state_matches:
       and fdom: "fmdom (TE_Functions env) = fmdom funDefs"
       and fwt: "module_functions_well_typed env funDefs"
       and defaults_ok: "compute_global_defaults fuel (base_interp_state env world) env
-                          (filter (\<lambda>(name, _). name |\<notin>| TE_GhostGlobals env)
-                             (sorted_list_of_fmap globals)) = Inr defaults"
+                          (sorted_list_of_fmap globals) = Inr defaults"
       and funs_ok: "build_interp_funs externs env (sorted_list_of_fmap funDefs) = Inr funs"
       and externs_ok: "\<And>name info externFun.
             \<lbrakk> fmlookup (TE_Functions env) name = Some info;
@@ -714,8 +708,7 @@ lemma assembled_state_matches:
            env []"
 proof -
   let ?st = "base_interp_state env world \<lparr> IS_Globals := defaults, IS_Functions := funs \<rparr>"
-  let ?ngPairs = "filter (\<lambda>(name, _). name |\<notin>| TE_GhostGlobals env)
-                    (sorted_list_of_fmap globals)"
+  let ?gPairs = "sorted_list_of_fmap globals"
 
   from scope have locals: "TE_LocalVars env = fmempty"
     and ghostlocals: "TE_GhostLocals env = {||}"
@@ -735,26 +728,24 @@ proof -
     "IS_Functions ?st = funs"
     by (simp_all add: base_interp_state_def)
 
-  have defaults_dom: "fmdom defaults = fset_of_list (map fst ?ngPairs)"
+  have defaults_dom: "fmdom defaults = fset_of_list (map fst ?gPairs)"
     by (rule compute_global_defaults_dom[OF defaults_ok])
 
-  \<comment> \<open>Membership in the filtered global list is lookup plus non-ghostness.\<close>
-  have ng_mem: "\<And>n tm. ((n, tm) \<in> set ?ngPairs)
-                  = (fmlookup globals n = Some tm \<and> n |\<notin>| TE_GhostGlobals env)"
+  \<comment> \<open>Membership in the global list is map lookup.\<close>
+  have g_mem: "\<And>n tm. ((n, tm) \<in> set ?gPairs)
+                  = (fmlookup globals n = Some tm)"
     by (auto simp add: sorted_list_of_fmap_mem_iff)
 
-  \<comment> \<open>Conjunct: declared non-ghost globals exist with their declared types.\<close>
+  \<comment> \<open>Conjunct: declared globals exist with their declared types.\<close>
   have gv: "global_vars_exist_in_state ?st env"
     unfolding global_vars_exist_in_state_def
   proof (intro allI impI)
     fix n ty
-    assume a: "fmlookup (TE_GlobalVars env) n = Some ty \<and> n |\<notin>| TE_GhostGlobals env"
-    hence decl: "fmlookup (TE_GlobalVars env) n = Some ty"
-      and ng: "n |\<notin>| TE_GhostGlobals env" by auto
+    assume decl: "fmlookup (TE_GlobalVars env) n = Some ty"
     have "n |\<in>| fmdom globals" using fmdomI[OF decl] gdom by simp
     then obtain tm where "fmlookup globals n = Some tm"
       by (auto simp add: fmlookup_dom_iff)
-    hence "(n, tm) \<in> set ?ngPairs" using ng ng_mem by presburger
+    hence "(n, tm) \<in> set ?gPairs" using g_mem by presburger
     hence "n |\<in>| fmdom defaults"
       unfolding defaults_dom by (force simp add: fset_of_list_elem)
     then obtain v where v_lk: "fmlookup defaults n = Some v"
@@ -765,30 +756,29 @@ proof -
       using compute_global_defaults_typing[OF defaults_ok v_lk] by auto
     have "declTy = ty" using decl decl' by simp
     hence vt: "value_has_type env v ty"
-      using global_default_value_typed[OF wf scope tv rtv decl' ng dv] by simp
+      using global_default_value_typed[OF wf scope tv rtv decl' dv] by simp
     show "global_var_in_state_with_type ?st env n ty"
       unfolding global_var_in_state_with_type_def
       by (simp add: st_sel v_lk vt)
   qed
 
-  \<comment> \<open>Conjunct: no globals beyond the declared non-ghost ones.\<close>
+  \<comment> \<open>Conjunct: no globals beyond the declared ones.\<close>
   have neg: "no_extra_global_vars ?st env"
     unfolding no_extra_global_vars_def
   proof (intro allI impI)
     fix n
-    assume a: "fmlookup (TE_GlobalVars env) n = None \<or> n |\<in>| TE_GhostGlobals env"
+    assume a: "fmlookup (TE_GlobalVars env) n = None"
     have "n |\<notin>| fmdom defaults"
     proof (rule notI)
       assume "n |\<in>| fmdom defaults"
-      then obtain tm where "(n, tm) \<in> set ?ngPairs"
+      then obtain tm where "(n, tm) \<in> set ?gPairs"
         unfolding defaults_dom by (force simp add: fset_of_list_elem)
       hence lk: "fmlookup globals n = Some tm"
-        and ng: "n |\<notin>| TE_GhostGlobals env"
-        by (simp_all add: sorted_list_of_fmap_mem_iff)
+        by (simp add: sorted_list_of_fmap_mem_iff)
       have "n |\<in>| fmdom (TE_GlobalVars env)" using fmdomI[OF lk] gdom by simp
       hence "fmlookup (TE_GlobalVars env) n \<noteq> None"
         by (auto simp add: fmlookup_dom_iff)
-      with a ng show False by auto
+      with a show False by auto
     qed
     thus "fmlookup (IS_Globals ?st) n = None"
       using fmdom_notD by (simp add: st_sel)
@@ -971,9 +961,8 @@ proof -
   define m' where "m' = normalize_module m"
   define env where "env = CM_TyEnv m'"
   define baseState where "baseState = base_interp_state env world"
-  define ngPairs where
-    "ngPairs = filter (\<lambda>(name, _). name |\<notin>| TE_GhostGlobals env)
-                 (sorted_list_of_fmap (CM_GlobalVars m'))"
+  define gPairs where
+    "gPairs = sorted_list_of_fmap (CM_GlobalVars m')"
   define funPairs where "funPairs = sorted_list_of_fmap (CM_Functions m')"
 
   \<comment> \<open>Facts about the normalized module.\<close>
@@ -1006,14 +995,14 @@ proof -
   \<comment> \<open>Decompose the construction.\<close>
   from ok obtain funs defaults sortedGlobals where
     funs_ok: "build_interp_funs externs env funPairs = Inr funs" and
-    defaults_ok: "compute_global_defaults fuel baseState env ngPairs = Inr defaults" and
-    sorted_ok: "sort_globals ngPairs = Inr sortedGlobals" and
+    defaults_ok: "compute_global_defaults fuel baseState env gPairs = Inr defaults" and
+    sorted_ok: "sort_globals gPairs = Inr sortedGlobals" and
     eval_ok: "eval_globals fuel
                 (baseState \<lparr> IS_Globals := defaults, IS_Functions := funs \<rparr>)
                 sortedGlobals = Inr state"
     unfolding make_interp_state_def Let_def
               m'_def[symmetric] env_def[symmetric] baseState_def[symmetric]
-              ngPairs_def[symmetric] funPairs_def[symmetric]
+              gPairs_def[symmetric] funPairs_def[symmetric]
     by (auto split: sum.splits)
 
   \<comment> \<open>The state before initializer evaluation matches env.\<close>
@@ -1021,27 +1010,24 @@ proof -
                   (baseState \<lparr> IS_Globals := defaults, IS_Functions := funs \<rparr>) env []"
     unfolding baseState_def
     by (rule assembled_state_matches[OF wf scope tv rtv gdom fdom fwt
-          defaults_ok[unfolded baseState_def ngPairs_def]
+          defaults_ok[unfolded baseState_def gPairs_def]
           funs_ok[unfolded funPairs_def]
           externs_ok'])
 
-  \<comment> \<open>Every evaluated pair is a declared non-ghost global's initializer.\<close>
+  \<comment> \<open>Every evaluated pair is a declared global's initializer.\<close>
   have pairs_ok: "\<forall>p \<in> set sortedGlobals.
-        fmlookup (CM_GlobalVars m') (fst p) = Some (snd p)
-        \<and> fst p |\<notin>| TE_GhostGlobals env"
+        fmlookup (CM_GlobalVars m') (fst p) = Some (snd p)"
   proof
     fix p assume "p \<in> set sortedGlobals"
-    hence "p \<in> set ngPairs"
+    hence "p \<in> set gPairs"
       using mset_eq_setD[OF sort_globals_mset[OF sorted_ok]] by simp
     then obtain n tm where p_eq: "p = (n, tm)" and
-      mem: "(n, tm) \<in> set (sorted_list_of_fmap (CM_GlobalVars m'))" and
-      ng: "n |\<notin>| TE_GhostGlobals env"
-      unfolding ngPairs_def by auto
+      mem: "(n, tm) \<in> set (sorted_list_of_fmap (CM_GlobalVars m'))"
+      unfolding gPairs_def by (metis prod.exhaust)
     have "fmlookup (CM_GlobalVars m') n = Some tm"
       using mem by (simp add: sorted_list_of_fmap_mem_iff)
-    thus "fmlookup (CM_GlobalVars m') (fst p) = Some (snd p)
-          \<and> fst p |\<notin>| TE_GhostGlobals env"
-      using p_eq ng by simp
+    thus "fmlookup (CM_GlobalVars m') (fst p) = Some (snd p)"
+      using p_eq by simp
   qed
 
   show ?thesis

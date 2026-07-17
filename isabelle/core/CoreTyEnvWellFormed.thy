@@ -25,16 +25,13 @@ definition tyenv_vars_runtime :: "CoreTyEnv \<Rightarrow> bool" where
                \<and> name |\<notin>| TE_GhostLocals env
                \<longrightarrow> is_runtime_type env ty) \<and>
      (\<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty
-               \<and> name |\<notin>| TE_GhostGlobals env
                \<longrightarrow> is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
                                           TE_RuntimeTypeVars := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty))"
 
-(* Ghost locals are a subset of local variable names;
-   ghost globals are a subset of global variable names *)
+(* Ghost locals are a subset of local variable names *)
 definition tyenv_ghost_vars_subset :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_ghost_vars_subset env =
-    (TE_GhostLocals env |\<subseteq>| fmdom (TE_LocalVars env) \<and>
-     TE_GhostGlobals env |\<subseteq>| fmdom (TE_GlobalVars env))"
+    (TE_GhostLocals env |\<subseteq>| fmdom (TE_LocalVars env))"
 
 (* The return type is well-kinded *)
 definition tyenv_return_type_well_kinded :: "CoreTyEnv \<Rightarrow> bool" where
@@ -622,8 +619,8 @@ proof -
     thus "is_runtime_type ?env' ty'" using is_runtime_type_extend_runtime_tyvars by simp
   next
     fix name ty'
-    assume "fmlookup (TE_GlobalVars ?env') name = Some ty' \<and> name |\<notin>| TE_GhostGlobals ?env'"
-    hence "fmlookup (TE_GlobalVars env) name = Some ty' \<and> name |\<notin>| TE_GhostGlobals env" by simp
+    assume "fmlookup (TE_GlobalVars ?env') name = Some ty'"
+    hence "fmlookup (TE_GlobalVars env) name = Some ty'" by simp
     with vars_rt have "is_runtime_type ?e1 ty'"
       unfolding tyenv_vars_runtime_def by blast
     hence "is_runtime_type ?e2 ty'" using rt_cleared by simp

@@ -43,7 +43,6 @@ definition empty_module_tyenv :: CoreTyEnv where
      \<lparr> TE_LocalVars = fmempty,
        TE_GlobalVars = fmempty,
        TE_GhostLocals = {||},
-       TE_GhostGlobals = {||},
        TE_ConstLocals = {||},
        TE_TypeVars = {||},
        TE_RuntimeTypeVars = {||},
@@ -128,11 +127,9 @@ definition tyvar_typedef_entries :: "string list \<Rightarrow> Typedefs \<Righta
      fold (\<lambda>v. fmupd v ([], CoreTy_Var v)) tyvars tds"
 
 (* Add a new global variable ("const" declaration) to the CoreTyEnv. *)
-definition tyenv_add_global :: "string \<Rightarrow> CoreType \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
-  "tyenv_add_global name ty ghost env =
-     env \<lparr> TE_GlobalVars := fmupd name ty (TE_GlobalVars env),
-           TE_GhostGlobals := (if ghost = Ghost then finsert name (TE_GhostGlobals env)
-                               else TE_GhostGlobals env) \<rparr>"
+definition tyenv_add_global :: "string \<Rightarrow> CoreType \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
+  "tyenv_add_global name ty env =
+     env \<lparr> TE_GlobalVars := fmupd name ty (TE_GlobalVars env) \<rparr>"
 
 (* Add a new function (and its FunInfo) to the CoreTyEnv. *)
 definition tyenv_add_function :: "string \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
@@ -394,17 +391,15 @@ definition elab_const_decl ::
                       (case elab_type env elabEnv ghost ty of
                          Inl errs \<Rightarrow> Inl errs
                        | Inr coreTy \<Rightarrow>
-                           Inr (tyenv_add_global name coreTy ghost env,
+                           Inr (tyenv_add_global name coreTy env,
                                 elabEnv,
-                                m \<lparr> CM_TyEnv := tyenv_add_global name coreTy ghost (CM_TyEnv m) \<rparr>)))
+                                m \<lparr> CM_TyEnv := tyenv_add_global name coreTy (CM_TyEnv m) \<rparr>)))
         | Some rhs \<Rightarrow>
             (case fmlookup (TE_GlobalVars env) name of
                Some declTy \<Rightarrow>
                  \<comment> \<open>Definition of a previously-declared constant.\<close>
                  (if name |\<in>| fmdom (CM_GlobalVars m)
                   then Inl [TyErr_AlreadyDefined loc name]
-                  else if (name |\<in>| TE_GhostGlobals env) \<noteq> (ghost = Ghost)
-                  then Inl [TyErr_GhostMismatch loc name]
                   else
                     (case (case DC_Type dc of
                              None \<Rightarrow> Inr declTy
@@ -430,9 +425,9 @@ definition elab_const_decl ::
                            (case elab_const_rhs_infer env elabEnv ghost loc rhs of
                               Inl errs \<Rightarrow> Inl errs
                             | Inr (finalTm, declTy) \<Rightarrow>
-                                Inr (tyenv_add_global name declTy ghost env,
+                                Inr (tyenv_add_global name declTy env,
                                      elabEnv,
-                                     m \<lparr> CM_TyEnv := tyenv_add_global name declTy ghost (CM_TyEnv m),
+                                     m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
                                          CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>))
                        | Some ty \<Rightarrow>
                            (case elab_type env elabEnv ghost ty of
@@ -441,9 +436,9 @@ definition elab_const_decl ::
                                 (case elab_const_rhs env elabEnv ghost loc declTy rhs of
                                    Inl errs \<Rightarrow> Inl errs
                                  | Inr finalTm \<Rightarrow>
-                                     Inr (tyenv_add_global name declTy ghost env,
+                                     Inr (tyenv_add_global name declTy env,
                                           elabEnv,
-                                          m \<lparr> CM_TyEnv := tyenv_add_global name declTy ghost (CM_TyEnv m),
+                                          m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
                                               CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>))))))"
 
 

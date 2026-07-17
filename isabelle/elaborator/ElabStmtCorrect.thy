@@ -3668,7 +3668,7 @@ lemma is_writable_lvalue_TE_ProofTopLevel_irrelevant [simp]:
   by (induction tm rule: is_writable_lvalue.induct)
      (auto simp: tyenv_var_writable_def)
 
-(* ghost_lvalue_ok only consults TE_LocalVars / TE_GhostLocals / TE_GhostGlobals. *)
+(* ghost_lvalue_ok only consults TE_LocalVars / TE_GhostLocals. *)
 lemma ghost_lvalue_ok_TE_ProofTopLevel_irrelevant [simp]:
   "ghost_lvalue_ok (env \<lparr> TE_ProofTopLevel := b \<rparr>) ghost tm = ghost_lvalue_ok env ghost tm"
   by (rule ghost_lvalue_ok_cong_env) simp_all

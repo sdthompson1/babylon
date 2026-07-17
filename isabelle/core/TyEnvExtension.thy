@@ -53,8 +53,6 @@ definition tyenv_extends :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> boo
    \<and> (\<forall>name ctors. fmlookup (TE_DataCtorsByType env) name = Some ctors \<longrightarrow>
         fmlookup (TE_DataCtorsByType env') name = Some ctors)
      \<comment> \<open>Ghost markers: unchanged on the old domains.\<close>
-   \<and> (\<forall>name. name |\<in>| fmdom (TE_GlobalVars env) \<longrightarrow>
-        (name |\<in>| TE_GhostGlobals env' \<longleftrightarrow> name |\<in>| TE_GhostGlobals env))
    \<and> (\<forall>name. name |\<in>| fmdom (TE_Datatypes env) \<longrightarrow>
         (name |\<in>| TE_GhostDatatypes env' \<longleftrightarrow> name |\<in>| TE_GhostDatatypes env)))"
 
@@ -90,31 +88,16 @@ proof -
   qed
 qed
 
-(* The ghost status of a successfully-looked-up variable is unchanged: for a
-   local hit the ghost-locals set is equal; for a global hit the name is in
-   the old global domain, where ghost status is preserved by definition. *)
+(* The ghost status of a variable is unchanged: tyenv_var_ghost only reads
+   TE_LocalVars and TE_GhostLocals, both pinned equal by the extension. *)
 lemma tyenv_extends_var_ghost:
   assumes ext: "tyenv_extends env env'"
-    and lk: "tyenv_lookup_var env name = Some ty"
   shows "tyenv_var_ghost env' name = tyenv_var_ghost env name"
 proof -
   have leq: "TE_LocalVars env' = TE_LocalVars env"
     and geq: "TE_GhostLocals env' = TE_GhostLocals env"
     using ext unfolding tyenv_extends_def by blast+
-  show ?thesis
-  proof (cases "fmlookup (TE_LocalVars env) name")
-    case (Some lty)
-    then show ?thesis using leq geq unfolding tyenv_var_ghost_def by simp
-  next
-    case None
-    then have "fmlookup (TE_GlobalVars env) name = Some ty"
-      using lk unfolding tyenv_lookup_var_def by simp
-    then have dom: "name |\<in>| fmdom (TE_GlobalVars env)"
-      by (simp add: fmdomI)
-    have "name |\<in>| TE_GhostGlobals env' \<longleftrightarrow> name |\<in>| TE_GhostGlobals env"
-      using ext dom unfolding tyenv_extends_def by blast
-    then show ?thesis using None leq unfolding tyenv_var_ghost_def by simp
-  qed
+  show ?thesis unfolding tyenv_var_ghost_def by (simp add: leq geq)
 qed
 
 
@@ -341,7 +324,7 @@ next
   have lk': "tyenv_lookup_var env' name = Some vty"
     using tyenv_extends_lookup_var[OF CoreTm_Var.prems(1) lk] .
   have gh': "tyenv_var_ghost env' name = tyenv_var_ghost env name"
-    using tyenv_extends_var_ghost[OF CoreTm_Var.prems(1) lk] .
+    using tyenv_extends_var_ghost[OF CoreTm_Var.prems(1)] .
   show ?case using lk' gh gh' ty_eq by simp
 next
   case (CoreTm_Cast targetTy tm)
@@ -727,49 +710,10 @@ proof -
     by (induction tm) (auto simp: tyenv_var_writable_def lv cl)
 qed
 
-(* The base variable of a well-typed lvalue is bound: typing an lvalue
-   ultimately types its base CoreTm_Var, whose rule performs the lookup. *)
-lemma lvalue_base_name_lookup:
-  assumes "lvalue_base_name tm = Some name"
-    and "core_term_type env ghost tm = Some ty"
-  shows "\<exists>vty. tyenv_lookup_var env name = Some vty"
-  using assms
-proof (induction tm arbitrary: ty)
-  case (CoreTm_Var n)
-  then show ?case by (auto split: option.splits if_splits)
-next
-  case (CoreTm_RecordProj tm fld)
-  have base: "lvalue_base_name tm = Some name"
-    using CoreTm_RecordProj.prems(1) by simp
-  from CoreTm_RecordProj.prems(2) obtain fieldTypes where
-    t: "core_term_type env ghost tm = Some (CoreTy_Record fieldTypes)"
-    by (auto split: option.splits CoreType.splits)
-  show ?case using CoreTm_RecordProj.IH[OF base t] .
-next
-  case (CoreTm_VariantProj tm ctorName)
-  have base: "lvalue_base_name tm = Some name"
-    using CoreTm_VariantProj.prems(1) by simp
-  from CoreTm_VariantProj.prems(2) obtain tmTy where
-    t: "core_term_type env ghost tm = Some tmTy"
-    by (auto split: option.splits)
-  show ?case using CoreTm_VariantProj.IH[OF base t] .
-next
-  case (CoreTm_ArrayProj arr idxTms)
-  have base: "lvalue_base_name arr = Some name"
-    using CoreTm_ArrayProj.prems(1) by simp
-  from CoreTm_ArrayProj.prems(2) obtain arrTy where
-    t: "core_term_type env ghost arr = Some arrTy"
-    by (auto split: option.splits)
-  show ?case using CoreTm_ArrayProj.IH(1)[OF base t] .
-qed simp_all
-
-(* The ghost-write discipline is preserved for lvalues that typecheck: the
-   typing pins the base variable into the old environment, where its ghost
-   status is unchanged. (Without the typing hypothesis this would be false:
-   an unbound base name could be a ghost global of the extension.) *)
+(* The ghost-write discipline is preserved: the base variable's ghost status
+   only depends on the local-variable fields, which are pinned equal. *)
 lemma ghost_lvalue_ok_tyenv_extends:
   assumes ext: "tyenv_extends env env'"
-    and tm_ty: "core_term_type env ghost0 tm = Some ty"
     and ok: "ghost_lvalue_ok env ghost tm"
   shows "ghost_lvalue_ok env' ghost tm"
 proof (cases ghost)
@@ -785,10 +729,8 @@ next
     case (Some name)
     with Ghost ok have vg: "tyenv_var_ghost env name"
       unfolding ghost_lvalue_ok_def by simp
-    obtain vty where lk: "tyenv_lookup_var env name = Some vty"
-      using lvalue_base_name_lookup[OF Some tm_ty] by blast
     have "tyenv_var_ghost env' name = tyenv_var_ghost env name"
-      using tyenv_extends_var_ghost[OF ext lk] .
+      using tyenv_extends_var_ghost[OF ext] .
     with vg Some Ghost show ?thesis unfolding ghost_lvalue_ok_def by simp
   qed
 qed
@@ -910,7 +852,7 @@ proof -
       have "ghost_lvalue_ok env ghost (tmArgs ! i)"
         using ref_lv i_lt_tm fi_arg Ref by simp
       hence glv': "ghost_lvalue_ok env' ghost (tmArgs ! i)"
-        using ghost_lvalue_ok_tyenv_extends[OF ext typed_env] by blast
+        using ghost_lvalue_ok_tyenv_extends[OF ext] by blast
       from pure_i have
         "core_term_type env' ghost (tmArgs ! i)
            = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
@@ -1057,7 +999,7 @@ next
   have rt2: "declGhost = NotGhost \<longrightarrow> is_runtime_type env2 varTy"
     using rt is_runtime_type_tyenv_extends[OF ext wk] by blast
   have glv2: "ghost_lvalue_ok env2 declGhost initTm"
-    using ghost_lvalue_ok_tyenv_extends[OF ext init glv] .
+    using ghost_lvalue_ok_tyenv_extends[OF ext glv] .
   have init2: "core_term_type env2 declGhost initTm = Some varTy"
     using core_term_type_tyenv_extends[OF ext cons init] .
   have wl_eq: "is_writable_lvalue env2 initTm = is_writable_lvalue env initTm"
@@ -1090,7 +1032,7 @@ next
   have wl2: "is_writable_lvalue env2 lhsTm"
     using wl is_writable_lvalue_tyenv_extends[OF ext] by simp
   have glv2: "ghost_lvalue_ok env2 assignGhost lhsTm"
-    using ghost_lvalue_ok_tyenv_extends[OF ext lhs glv] .
+    using ghost_lvalue_ok_tyenv_extends[OF ext glv] .
   have lhs2: "core_term_type env2 assignGhost lhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons lhs] .
   have rhs2: "core_term_type env2 assignGhost rhsTm = Some lhsTy"
@@ -1122,7 +1064,7 @@ next
   have wl2: "is_writable_lvalue env2 lhsTm"
     using wl is_writable_lvalue_tyenv_extends[OF ext] by simp
   have glv2: "ghost_lvalue_ok env2 assignGhost lhsTm"
-    using ghost_lvalue_ok_tyenv_extends[OF ext lhs glv] .
+    using ghost_lvalue_ok_tyenv_extends[OF ext glv] .
   have lhs2: "core_term_type env2 assignGhost lhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons lhs] .
   have ct2: "core_impure_call_type env2 assignGhost fnName tyArgs argTms = Some retTy"
@@ -1169,9 +1111,9 @@ next
   have wr2: "is_writable_lvalue env2 rhsTm"
     using wr is_writable_lvalue_tyenv_extends[OF ext] by simp
   have glvL2: "ghost_lvalue_ok env2 swapGhost lhsTm"
-    using ghost_lvalue_ok_tyenv_extends[OF ext lhs glvL] .
+    using ghost_lvalue_ok_tyenv_extends[OF ext glvL] .
   have glvR2: "ghost_lvalue_ok env2 swapGhost rhsTm"
-    using ghost_lvalue_ok_tyenv_extends[OF ext rhs glvR] .
+    using ghost_lvalue_ok_tyenv_extends[OF ext glvR] .
   have lhs2: "core_term_type env2 swapGhost lhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons lhs] .
   have rhs2: "core_term_type env2 swapGhost rhsTm = Some lhsTy"

@@ -32,9 +32,6 @@ record CoreTyEnv =
   (* Ghost local variables - subset of TE_LocalVars keys *)
   TE_GhostLocals :: "string fset"
 
-  (* Ghost global variables - subset of TE_GlobalVars keys *)
-  TE_GhostGlobals :: "string fset"
-
   (* Constant local names - subset of TE_LocalVars keys; these are not assignable.
      Globals are implicitly constant and do not need to appear here. *)
   TE_ConstLocals :: "string fset"
@@ -92,14 +89,13 @@ record CoreTyEnv =
   TE_GhostDatatypes :: "string fset"
 
 
-(* Is a variable ghost? For locals, check TE_GhostLocals; for globals, TE_GhostGlobals.
-   Locals shadow globals, so if a name is in both TE_LocalVars and TE_GlobalVars,
-   only the local ghost status matters. *)
+(* Is a variable ghost? For locals, check TE_GhostLocals; globals are never
+   ghost (in Core).
+   Note that locals shadow globals, so if a name is both local and global, the
+   TE_GhostLocals status wins. *)
 definition tyenv_var_ghost :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> bool" where
   "tyenv_var_ghost env name =
-    (case fmlookup (TE_LocalVars env) name of
-      Some _ \<Rightarrow> name |\<in>| TE_GhostLocals env
-    | None \<Rightarrow> name |\<in>| TE_GhostGlobals env)"
+    (fmlookup (TE_LocalVars env) name \<noteq> None \<and> name |\<in>| TE_GhostLocals env)"
 
 (* Look up a term variable: locals shadow globals *)
 definition tyenv_lookup_var :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType option" where
@@ -116,13 +112,12 @@ definition tyenv_var_writable :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> b
 
 (* tyenv_fixed_eq env1 env2: the "fixed" fields of env1 and env2 are identical.
    These are the fields that do not change during statement execution:
-   globals, ghost globals, return type, function ghost-ness, functions, datatypes, etc.
+   globals, return type, function ghost-ness, functions, datatypes, etc.
    This is used in the Return case of sound_statement_result to transfer
    value_has_type and TE_ReturnType across environments. *)
 definition tyenv_fixed_eq :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "tyenv_fixed_eq env1 env2 \<equiv>
     TE_GlobalVars env1 = TE_GlobalVars env2 \<and>
-    TE_GhostGlobals env1 = TE_GhostGlobals env2 \<and>
     TE_ReturnType env1 = TE_ReturnType env2 \<and>
     TE_FunctionGhost env1 = TE_FunctionGhost env2 \<and>
     TE_Functions env1 = TE_Functions env2 \<and>

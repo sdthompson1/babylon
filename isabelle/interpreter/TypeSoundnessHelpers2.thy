@@ -114,7 +114,6 @@ proof -
     by (simp add: partial_body_env_for_def body_env_for_def)
   have other_eq:
     "TE_GlobalVars ?pEnv = TE_GlobalVars ?be"
-    "TE_GhostGlobals ?pEnv = TE_GhostGlobals ?be"
     "TE_Functions ?pEnv = TE_Functions ?be"
     "TE_Datatypes ?pEnv = TE_Datatypes ?be"
     "TE_DataCtors ?pEnv = TE_DataCtors ?be"
@@ -227,12 +226,10 @@ proof -
     thus "is_runtime_type ?pEnv ty" using rt_self_eq by simp
   next
     fix name ty
-    assume A: "fmlookup (TE_GlobalVars ?pEnv) name = Some ty
-                \<and> name |\<notin>| TE_GhostGlobals ?pEnv"
+    assume A: "fmlookup (TE_GlobalVars ?pEnv) name = Some ty"
     hence gv: "fmlookup (TE_GlobalVars ?be) name = Some ty"
-      and ng: "name |\<notin>| TE_GhostGlobals ?be"
-      using other_eq by simp_all
-    from gv ng be_vars_rt
+      using other_eq by simp
+    from gv be_vars_rt
     have "is_runtime_type (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
       unfolding tyenv_vars_runtime_def using abs_be by simp
     hence "is_runtime_type (?pEnv \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
@@ -257,14 +254,12 @@ proof -
        wk/rt with the appropriate cong. \<close>
 
   have c4: "tyenv_return_type_well_kinded ?pEnv"
-    using be_ret_wk wk_self_eq other_eq(10)
-    unfolding tyenv_return_type_well_kinded_def by simp
+    using be_ret_wk other_eq(9) tyenv_return_type_well_kinded_def wk_self_eq by auto
 
   have fg_eq: "TE_FunctionGhost ?pEnv = TE_FunctionGhost ?be"
     by (simp add: partial_body_env_for_def body_env_for_def)
   have c4b: "tyenv_return_type_runtime ?pEnv"
-    using be_ret_rt rt_self_eq other_eq(10) fg_eq
-    unfolding tyenv_return_type_runtime_def by simp
+    using be_ret_rt fg_eq other_eq(9) rt_self_eq tyenv_return_type_runtime_def by auto
 
   have c5: "tyenv_ctors_consistent ?pEnv"
     using be_ctors_cons unfolding tyenv_ctors_consistent_def
@@ -483,8 +478,6 @@ proof -
     by (simp add: partial_body_env_for_def body_env_for_def)
   have pEnv_globals: "TE_GlobalVars ?pEnv = TE_GlobalVars env"
     by (simp add: partial_body_env_for_def body_env_for_def)
-  have pEnv_ghost_globals: "TE_GhostGlobals ?pEnv = TE_GhostGlobals env"
-    by (simp add: partial_body_env_for_def body_env_for_def)
   have pEnv_funs: "TE_Functions ?pEnv = TE_Functions env"
     by (simp add: partial_body_env_for_def body_env_for_def)
   have pEnv_datatypes: "TE_Datatypes ?pEnv = TE_Datatypes env"
@@ -567,15 +560,12 @@ proof -
 
   have gv_tgt: "global_vars_exist_in_state ?clearedState ?pEnv"
     unfolding global_vars_exist_in_state_def
-  proof (intro allI impI, elim conjE)
+  proof (intro allI impI)
     fix name ty
     assume lk_pEnv: "fmlookup (TE_GlobalVars ?pEnv) name = Some ty"
-       and ng_pEnv: "name |\<notin>| TE_GhostGlobals ?pEnv"
     from lk_pEnv have lk_env: "fmlookup (TE_GlobalVars env) name = Some ty"
       by (simp add: pEnv_globals)
-    from ng_pEnv have ng_env: "name |\<notin>| TE_GhostGlobals env"
-      by (simp add: pEnv_ghost_globals)
-    from gv_src lk_env ng_env have gvst:
+    from gv_src lk_env have gvst:
       "global_var_in_state_with_type state env name ty"
       unfolding global_vars_exist_in_state_def by blast
     from gvst obtain val where
@@ -592,7 +582,7 @@ proof -
     unfolding no_extra_local_vars_def by simp
 
   have no_gv_tgt: "no_extra_global_vars ?clearedState ?pEnv"
-    using no_gv_src pEnv_globals pEnv_ghost_globals
+    using no_gv_src pEnv_globals
     unfolding no_extra_global_vars_def
     by simp
 
@@ -649,7 +639,7 @@ proof -
         moreover have "body_env_for env (map fst (IF_Args interpFun)) info'
                        = body_env_for ?pEnv (map fst (IF_Args interpFun)) info'"
           by (metis abs_empty abs_pEnv body_env_for_cong pEnv_dactors pEnv_dactors_by_ty pEnv_datatypes
-              pEnv_funs pEnv_ghost_dt pEnv_ghost_globals pEnv_globals)
+              pEnv_funs pEnv_ghost_dt pEnv_globals)
         ultimately show ?thesis using Inl by simp
       next
         case (Inr externFun)
@@ -1210,7 +1200,6 @@ qed
 lemma partial_body_env_for_fields:
   "TE_GlobalVars (partial_body_env_for env names funInfo k) = TE_GlobalVars env"
   "TE_GhostLocals (partial_body_env_for env names funInfo k) = {||}"
-  "TE_GhostGlobals (partial_body_env_for env names funInfo k) = TE_GhostGlobals env"
   "TE_Functions (partial_body_env_for env names funInfo k) = TE_Functions env"
   "TE_Datatypes (partial_body_env_for env names funInfo k) = TE_Datatypes env"
   "TE_DataCtors (partial_body_env_for env names funInfo k) = TE_DataCtors env"
@@ -1664,7 +1653,7 @@ proof -
           also have "type_at_path env = type_at_path ?pEnv_k"
             using type_at_path_cong_env
                     [where env=env and env'="?pEnv_k"]
-            using partial_body_env_for_fields(6) by auto
+            using partial_body_env_for_fields(5) by auto
           finally show ?thesis by simp
         qed
 

@@ -82,11 +82,6 @@ lemma apply_subst_to_module_env_TE_GhostLocals [simp]:
      = TE_GhostLocals env"
   by (simp add: apply_subst_to_module_env_def)
 
-lemma apply_subst_to_module_env_TE_GhostGlobals [simp]:
-  "TE_GhostGlobals (apply_subst_to_module_env subst targetEnv env)
-     = TE_GhostGlobals env"
-  by (simp add: apply_subst_to_module_env_def)
-
 lemma apply_subst_to_module_env_TE_ConstLocals [simp]:
   "TE_ConstLocals (apply_subst_to_module_env subst targetEnv env)
      = TE_ConstLocals env"
@@ -2605,15 +2600,14 @@ proof -
       unfolding ty_eq by (rule apply_subst_preserves_runtime_module[OF _ ok ok_rt])
   next
     fix name ty
-    assume a: "fmlookup (TE_GlobalVars ?me) name = Some ty \<and> name |\<notin>| TE_GhostGlobals ?me"
+    assume a: "fmlookup (TE_GlobalVars ?me) name = Some ty"
     then obtain ty0 where g0: "fmlookup (TE_GlobalVars env) name = Some ty0"
                       and ty_eq: "ty = apply_subst subst ty0"
       by (cases "fmlookup (TE_GlobalVars env) name") auto
-    from a have ng: "name |\<notin>| TE_GhostGlobals env" by simp
     have rt_abs: "is_runtime_type
                     (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
                            TE_RuntimeTypeVars := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty0"
-      using wf_vars_rt g0 ng unfolding tyenv_vars_runtime_def by blast
+      using wf_vars_rt g0 unfolding tyenv_vars_runtime_def by blast
     have "is_runtime_type
             (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
                    TE_RuntimeTypeVars := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>) ty0

@@ -77,7 +77,6 @@ proof -
     unfolding callee_env_subst_ok_def
   proof (intro conjI)
     show "TE_GlobalVars env = TE_GlobalVars env"
-      "TE_GhostGlobals env = TE_GhostGlobals env"
       "TE_Functions env = TE_Functions env"
       "TE_Datatypes env = TE_Datatypes env"
       "TE_DataCtors env = TE_DataCtors env"

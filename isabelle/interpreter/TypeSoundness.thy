@@ -999,15 +999,12 @@ next
                 from old_sme have old_gv: "global_vars_exist_in_state state env"
                   unfolding state_matches_env_def by simp
                 have gv_eq: "TE_GlobalVars env' = TE_GlobalVars env" using env'_eq by simp
-                have gg_eq: "TE_GhostGlobals env' = TE_GhostGlobals env" using env'_eq by simp
                 show ?thesis unfolding global_vars_exist_in_state_def
-                proof (intro allI impI, elim conjE)
+                proof (intro allI impI)
                   fix name ty
                   assume lk: "fmlookup (TE_GlobalVars env') name = Some ty"
-                    and ng: "name |\<notin>| TE_GhostGlobals env'"
                   from lk gv_eq have "fmlookup (TE_GlobalVars env) name = Some ty" by simp
-                  moreover from ng gg_eq have "name |\<notin>| TE_GhostGlobals env" by simp
-                  ultimately have "global_var_in_state_with_type state env name ty"
+                  then have "global_var_in_state_with_type state env name ty"
                     using old_gv unfolding global_vars_exist_in_state_def by blast
                   thus "global_var_in_state_with_type ?state' env' name ty"
                     using vht_eq unfolding global_var_in_state_with_type_def
@@ -1305,15 +1302,12 @@ next
                     from old_sme have old_gv: "global_vars_exist_in_state state env"
                       unfolding state_matches_env_def by simp
                     have gv_eq: "TE_GlobalVars env' = TE_GlobalVars env" using env'_writable_eq by simp
-                    have gg_eq: "TE_GhostGlobals env' = TE_GhostGlobals env" using env'_writable_eq by simp
                     show ?thesis unfolding global_vars_exist_in_state_def
-                    proof (intro allI impI, elim conjE)
+                    proof (intro allI impI)
                       fix name ty
                       assume "fmlookup (TE_GlobalVars env') name = Some ty"
-                        and "name |\<notin>| TE_GhostGlobals env'"
                       hence "fmlookup (TE_GlobalVars env) name = Some ty"
-                        and "name |\<notin>| TE_GhostGlobals env"
-                        using gv_eq gg_eq by simp_all
+                        using gv_eq by simp
                       hence "global_var_in_state_with_type state env name ty"
                         using old_gv unfolding global_vars_exist_in_state_def by blast
                       thus "global_var_in_state_with_type ?state' env' name ty"
@@ -1884,15 +1878,12 @@ next
             from old_sme have old_gv: "global_vars_exist_in_state state env"
               unfolding state_matches_env_def by simp
             have gv_eq: "TE_GlobalVars env' = TE_GlobalVars env" using env'_eq by simp
-            have gg_eq: "TE_GhostGlobals env' = TE_GhostGlobals env" using env'_eq by simp
             show ?thesis unfolding global_vars_exist_in_state_def
-            proof (intro allI impI, elim conjE)
+            proof (intro allI impI)
               fix name ty
               assume lk: "fmlookup (TE_GlobalVars env') name = Some ty"
-                and ng: "name |\<notin>| TE_GhostGlobals env'"
               from lk gv_eq have "fmlookup (TE_GlobalVars env) name = Some ty" by simp
-              moreover from ng gg_eq have "name |\<notin>| TE_GhostGlobals env" by simp
-              ultimately have "global_var_in_state_with_type state env name ty"
+              then have "global_var_in_state_with_type state env name ty"
                 using old_gv unfolding global_vars_exist_in_state_def by blast
               thus "global_var_in_state_with_type ?state' env' name ty"
                 using vht_eq unfolding global_var_in_state_with_type_def

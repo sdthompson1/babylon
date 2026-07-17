@@ -180,11 +180,6 @@ lemma apply_subst_to_callee_env_TE_GhostLocals [simp]:
      = TE_GhostLocals calleeEnv"
   by (simp add: apply_subst_to_callee_env_def)
 
-lemma apply_subst_to_callee_env_TE_GhostGlobals [simp]:
-  "TE_GhostGlobals (apply_subst_to_callee_env subst callerEnv calleeEnv)
-     = TE_GhostGlobals calleeEnv"
-  by (simp add: apply_subst_to_callee_env_def)
-
 lemma apply_subst_to_callee_env_TE_ConstLocals [simp]:
   "TE_ConstLocals (apply_subst_to_callee_env subst callerEnv calleeEnv)
      = TE_ConstLocals calleeEnv"
@@ -268,7 +263,7 @@ lemma tyenv_var_writable_apply_subst_to_callee_env [simp]:
   by (simp add: tyenv_var_writable_def apply_subst_to_callee_env_def)
 
 (* Ghost-ness of a variable is determined by TE_LocalVars's domain (not types),
-   TE_GhostLocals, and TE_GhostGlobals. All preserved under substitution. *)
+   and TE_GhostLocals. All preserved under substitution. *)
 lemma tyenv_var_ghost_apply_subst_to_callee_env [simp]:
   "tyenv_var_ghost (apply_subst_to_callee_env subst callerEnv calleeEnv) name
      = tyenv_var_ghost calleeEnv name"
@@ -301,7 +296,6 @@ definition callee_env_subst_ok ::
   "callee_env_subst_ok subst callerEnv calleeEnv \<equiv>
     \<comment> \<open>Caller and callee agree on the global-ish fields. \<close>
     TE_GlobalVars callerEnv = TE_GlobalVars calleeEnv \<and>
-    TE_GhostGlobals callerEnv = TE_GhostGlobals calleeEnv \<and>
     TE_Functions callerEnv = TE_Functions calleeEnv \<and>
     TE_Datatypes callerEnv = TE_Datatypes calleeEnv \<and>
     TE_DataCtors callerEnv = TE_DataCtors calleeEnv \<and>

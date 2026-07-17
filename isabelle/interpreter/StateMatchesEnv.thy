@@ -193,11 +193,11 @@ definition local_vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv 
     \<forall>name ty. fmlookup (TE_LocalVars env) name = Some ty \<and> name |\<notin>| TE_GhostLocals env \<longrightarrow>
       local_var_in_state_with_type state env storeTyping name ty"
 
-(* All non-ghost global variables in the type env
+(* All global variables in the type env
    also exist in the state with the correct type. *)
 definition global_vars_exist_in_state :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "global_vars_exist_in_state state env \<equiv>
-    \<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<and> name |\<notin>| TE_GhostGlobals env \<longrightarrow>
+    \<forall>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<longrightarrow>
       global_var_in_state_with_type state env name ty"
 
 (* Converse for locals: if a variable is not in TE_LocalVars (or is ghost local),
@@ -208,11 +208,11 @@ definition no_extra_local_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
       fmlookup (IS_Locals state) name = None \<and>
       fmlookup (IS_Refs state) name = None"
 
-(* Converse for globals: if a variable is not in TE_GlobalVars (or is ghost global),
+(* Converse for globals: if a variable is not in TE_GlobalVars,
    then it is not in IS_Globals. *)
 definition no_extra_global_vars :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "no_extra_global_vars state env \<equiv>
-    \<forall>name. fmlookup (TE_GlobalVars env) name = None \<or> name |\<in>| TE_GhostGlobals env \<longrightarrow>
+    \<forall>name. fmlookup (TE_GlobalVars env) name = None \<longrightarrow>
       fmlookup (IS_Globals state) name = None"
 
 (* All NotGhost functions in the type environment also exist in the state
@@ -483,15 +483,10 @@ proof -
     thus "is_runtime_type ?be ty" using rt_inner_eq by simp
   next
     fix name ty
-    assume A: "fmlookup (TE_GlobalVars ?be) name = Some ty
-               \<and> name |\<notin>| TE_GhostGlobals ?be"
-    from A have gv: "fmlookup (TE_GlobalVars ?be) name = Some ty"
-      and ng: "name |\<notin>| TE_GhostGlobals ?be" by simp_all
-    from gv have lk: "fmlookup (TE_GlobalVars env) name = Some ty"
+    assume A: "fmlookup (TE_GlobalVars ?be) name = Some ty"
+    from A have lk: "fmlookup (TE_GlobalVars env) name = Some ty"
       by (simp add: body_env_for_def)
-    from ng have "name |\<notin>| TE_GhostGlobals env"
-      by (simp add: body_env_for_def)
-    with lk have "is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
+    then have "is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
       using vars_rt unfolding tyenv_vars_runtime_def using abs_empty by auto
     hence "is_runtime_type (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
       using rt_cleared_eq by simp
@@ -654,13 +649,12 @@ proof -
 qed
 
 (* body_env_for only depends on the "global" fields of env (TE_GlobalVars,
-   TE_GhostGlobals, TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType,
+   TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType,
    TE_GhostDatatypes); the "local" fields it sets are all overwritten from
    funInfo. So if two envs agree on the global fields, body_env_for produces
    the same env. *)
 lemma body_env_for_cong:
   assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
-      and "TE_GhostGlobals env1 = TE_GhostGlobals env2"
       and "TE_Functions env1 = TE_Functions env2"
       and "TE_Datatypes env1 = TE_Datatypes env2"
       and "TE_DataCtors env1 = TE_DataCtors env2"
@@ -677,7 +671,6 @@ lemma body_env_for_cong:
    (extern) case reads them directly via extern_fun_contract. *)
 lemma fun_info_matches_interp_fun_cong_env:
   assumes gv: "TE_GlobalVars env1 = TE_GlobalVars env2"
-      and gg: "TE_GhostGlobals env1 = TE_GhostGlobals env2"
       and fn: "TE_Functions env1 = TE_Functions env2"
       and dt: "TE_Datatypes env1 = TE_Datatypes env2"
       and dc: "TE_DataCtors env1 = TE_DataCtors env2"
@@ -690,7 +683,7 @@ lemma fun_info_matches_interp_fun_cong_env:
          fun_info_matches_interp_fun env2 funInfo interpFun"
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
-    by (rule body_env_for_cong[OF gv gg fn dt dc dcbt gd abs])
+    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
   have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
     by (rule is_well_kinded_cong_env[OF tv dt])
   have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"

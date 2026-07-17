@@ -162,13 +162,12 @@ lemma capture_avoiding_empty_subst:
 (* Ghost-marker sanity                                                        *)
 (* ========================================================================== *)
 
-(* A module may only mark ghost what it itself declares: TE_GhostGlobals
-   names its own global declarations, TE_GhostDatatypes its own datatypes. *)
+(* A module may only mark ghost what it itself declares: TE_GhostDatatypes
+   names its own datatypes. *)
 
 definition module_ghost_subsets_ok :: "CoreModule \<Rightarrow> bool" where
   "module_ghost_subsets_ok m =
-    (TE_GhostGlobals (CM_TyEnv m) |\<subseteq>| fmdom (TE_GlobalVars (CM_TyEnv m))
-     \<and> TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m)))"
+    (TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m)))"
 
 
 (* ========================================================================== *)

@@ -964,7 +964,7 @@ proof -
     have tv_b: "TE_TypeVars (CM_TyEnv b)
                   = funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x))
                        (map fst intDeps @ map fst implDeps @ [intMod]))"
-      using bF(6) unfolding b_subst by simp
+      using bF(5) unfolding b_subst by simp
     have "TE_TypeVars envG
             |\<subseteq>| funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x))
                     (map fst intDeps @ map fst implDeps @ [intMod]))"
@@ -1023,10 +1023,10 @@ proof -
     \<comment> \<open>The two runtime-relevant env fields of link_result agree with envG.\<close>
     have rtv_b: "TE_RuntimeTypeVars (CM_TyEnv b)
                    = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Bs)"
-      using bF(7) unfolding b_subst by simp
+      using bF(6) unfolding b_subst by simp
     have gd_b: "TE_GhostDatatypes (CM_TyEnv b)
                   = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ?Bs)"
-      using bF(17) .
+      using bF(16) .
     have splitRT: "funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Ps)
                      = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Bs)
                        |\<union>| TE_RuntimeTypeVars (CM_TyEnv implMod)"
