@@ -2003,28 +2003,51 @@ next
     show ?thesis using Some ghost_ok newTm_eq ty_eq next_mv_eq by simp
   next
     case None
+    show ?thesis
+    proof (cases "name |\<in>| EE_GhostConstants elabEnv")
+      case True
+      \<comment> \<open>Ghost constant: the reference elaborates to a nullary ghost call.\<close>
+      from "2.prems"(1) None True obtain funInfo where
+        fn_lookup: "fmlookup (TE_Functions env) name = Some funInfo" and
+        ghost_eq: "ghost = Ghost" and
+        result_eq: "newTm = CoreTm_FunctionCall name [] []"
+                   "ty = FI_ReturnType funInfo"
+                   "next_mv' = next_mv"
+        by (cases ghost) (auto split: option.splits if_splits)
+      \<comment> \<open>From elabenv_well_formed: the desugared FunInfo is nullary, ghost, pure.\<close>
+      from "2.prems"(3) True fn_lookup obtain retTy where
+        info_eq: "funInfo = \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                              FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+        unfolding elabenv_well_formed_def ghost_constants_consistent_def by force
+      have fn_lookup': "fmlookup (TE_Functions (extend_env_with_tyvars env ghost next_mv next_mv'))
+                          name = Some funInfo"
+        using fn_lookup by (simp add: extend_env_with_tyvars_def)
+      show ?thesis
+        using result_eq ghost_eq fn_lookup' info_eq by simp
+    next
+      case gcFalse: False
     \<comment> \<open>Constructor case\<close>
-    from "2.prems"(1) None obtain dtName tyvars payloadTy where
+    from "2.prems"(1) None gcFalse obtain dtName tyvars payloadTy where
       ctor_lookup: "fmlookup (TE_DataCtors env) name = Some (dtName, tyvars, payloadTy)"
       by (auto simp: resolve_type_args_def Let_def
                split: option.splits if_splits sum.splits prod.splits)
-    from "2.prems"(1) None ctor_lookup have
+    from "2.prems"(1) None gcFalse ctor_lookup have
       nullary_mem: "name |\<in>| EE_NullaryDataCtors elabEnv"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits option.splits)
-    from "2.prems"(1) None ctor_lookup nullary_mem have
+    from "2.prems"(1) None gcFalse ctor_lookup nullary_mem have
       ghost_ok: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
 
     \<comment> \<open>Extract resolve_type_args result\<close>
-    from "2.prems"(1) None ctor_lookup nullary_mem ghost_ok
+    from "2.prems"(1) None gcFalse ctor_lookup nullary_mem ghost_ok
     obtain newTyArgs next_mv1 where
       resolve_eq: "resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv
                    = Inr (newTyArgs, next_mv1)"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
-    from "2.prems"(1) None ctor_lookup nullary_mem ghost_ok resolve_eq have
+    from "2.prems"(1) None gcFalse ctor_lookup nullary_mem ghost_ok resolve_eq have
       result_eq: "newTm = CoreTm_VariantCtor name newTyArgs (CoreTm_Record [])"
                  "ty = CoreTy_Datatype dtName newTyArgs"
                  "next_mv' = next_mv1"
@@ -2061,6 +2084,7 @@ next
     show ?thesis
       using result_eq ctor_lookup' rta ghost_ok' payload_eq payload_match
       by simp
+    qed
   qed
 
 next

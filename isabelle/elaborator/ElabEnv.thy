@@ -27,13 +27,20 @@ type_synonym Typedefs = "(string, string list \<times> CoreType) fmap"
      but in the Babylon syntax, they cannot be called in term position, only statement
      position.)
 
+   - The set of names that were declared `ghost const` at the Babylon level.
+     (In Core, these are represented as nullary ghost functions; references `c`
+     are elaborated to calls `c()`. But in the Babylon syntax they are constants,
+     not functions: they cannot be called, and a reference `c` must resolve to
+     the desugared call.)
+
    - Whether the function currently being elaborated was declared void at the
-     Babylon level. (Used to decide whether a bare `return;` is legal.) 
+     Babylon level. (Used to decide whether a bare `return;` is legal.)
 *)
 record ElabEnv =
   EE_Typedefs :: Typedefs
   EE_NullaryDataCtors :: "string fset"
   EE_VoidFunctions :: "string fset"
+  EE_GhostConstants :: "string fset"
   EE_CurrentFunctionVoid :: bool
 
 
@@ -61,14 +68,25 @@ definition nullary_data_ctors_consistent :: "CoreTyEnv \<Rightarrow> ElabEnv \<R
        (\<exists>dtName tyvars.
           fmlookup (TE_DataCtors env) name = Some (dtName, tyvars, CoreTy_Record [])))"
 
+(* EE_GhostConstants is consistent if: every ghost constant has a nullary, ghost,
+   pure FunInfo in TE_Functions. *)
+definition ghost_constants_consistent :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> bool" where
+  "ghost_constants_consistent env ee =
+    (\<forall>name. name |\<in>| EE_GhostConstants ee \<longrightarrow>
+       (\<exists>retTy. fmlookup (TE_Functions env) name =
+          Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                 FI_Ghost = Ghost, FI_Impure = False \<rparr>))"
+
 (* Well-formedness of the elaborator environment:
    - Typedefs are well-formed
    - Every nullary data constructor has a unit payload type in TE_DataCtors
+   - Every ghost constant has a nullary ghost pure FunInfo in TE_Functions
    - If the current function is void then its Core return type is unit *)
 definition elabenv_well_formed :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> bool" where
   "elabenv_well_formed env ee =
     (typedefs_well_formed env (EE_Typedefs ee)
    \<and> nullary_data_ctors_consistent env ee
+   \<and> ghost_constants_consistent env ee
    \<and> (EE_CurrentFunctionVoid ee \<longrightarrow> TE_ReturnType env = CoreTy_Record []))"
 
 
@@ -92,16 +110,18 @@ qed
 
 (* elabenv_well_formed depends on env only through TE_TypeVars, TE_Datatypes,
    TE_DataCtors (the first two via is_well_kinded in typedefs_well_formed, the third
-   in nullary_data_ctors_consistent) and TE_ReturnType (in the void clause). Any two
-   envs agreeing on those four fields are equally well-formed. In particular the
+   in nullary_data_ctors_consistent), TE_Functions (in ghost_constants_consistent)
+   and TE_ReturnType (in the void clause). Any two
+   envs agreeing on those five fields are equally well-formed. In particular the
    local-variable / proof-field updates that statement elaboration performs
    (TE_LocalVars / TE_GhostLocals / TE_ConstLocals / TE_ProofGoal / TE_ProofTopLevel)
-   leave all four fields - hence elabenv_well_formed - unchanged. *)
+   leave all five fields - hence elabenv_well_formed - unchanged. *)
 lemma elabenv_well_formed_cong_env:
   assumes "TE_TypeVars env' = TE_TypeVars env"
     and "TE_Datatypes env' = TE_Datatypes env"
     and "TE_DataCtors env' = TE_DataCtors env"
     and "TE_ReturnType env' = TE_ReturnType env"
+    and "TE_Functions env' = TE_Functions env"
   shows "elabenv_well_formed env' elabEnv = elabenv_well_formed env elabEnv"
 proof -
   have wk_cong: "\<And>tvs ty. is_well_kinded (env' \<lparr> TE_TypeVars := tvs \<rparr>) ty
@@ -109,8 +129,79 @@ proof -
     by (rule is_well_kinded_cong_env) (simp_all add: assms(2))
   show ?thesis
     unfolding elabenv_well_formed_def typedefs_well_formed_def
-              nullary_data_ctors_consistent_def
-    using wk_cong assms(1,3,4) by simp
+              nullary_data_ctors_consistent_def ghost_constants_consistent_def
+    using wk_cong assms(1,3,4,5) by simp
+qed
+
+(* ghost_constants_consistent reads only EE_GhostConstants from the ElabEnv, so
+   updates to the other ElabEnv fields do not disturb it. *)
+lemma ghost_constants_consistent_typedefs_upd [simp]:
+  "ghost_constants_consistent env (ee \<lparr> EE_Typedefs := td \<rparr>)
+     = ghost_constants_consistent env ee"
+  unfolding ghost_constants_consistent_def by simp
+
+lemma ghost_constants_consistent_nullary_upd [simp]:
+  "ghost_constants_consistent env (ee \<lparr> EE_NullaryDataCtors := s \<rparr>)
+     = ghost_constants_consistent env ee"
+  unfolding ghost_constants_consistent_def by simp
+
+lemma ghost_constants_consistent_void_fns_upd [simp]:
+  "ghost_constants_consistent env (ee \<lparr> EE_VoidFunctions := s \<rparr>)
+     = ghost_constants_consistent env ee"
+  unfolding ghost_constants_consistent_def by simp
+
+lemma ghost_constants_consistent_cur_void_upd [simp]:
+  "ghost_constants_consistent env (ee \<lparr> EE_CurrentFunctionVoid := b \<rparr>)
+     = ghost_constants_consistent env ee"
+  unfolding ghost_constants_consistent_def by simp
+
+(* A ghost constant always has a TE_Functions entry, so a name that is fresh in
+   TE_Functions cannot be a ghost constant. *)
+lemma ghost_constants_consistent_fresh_not_member:
+  assumes "ghost_constants_consistent env ee"
+      and "name |\<notin>| fmdom (TE_Functions env)"
+  shows "name |\<notin>| EE_GhostConstants ee"
+  using assms unfolding ghost_constants_consistent_def
+  by (metis fmdomI fmdom_notD)
+
+(* Adding a *fresh* function entry preserves ghost_constants_consistent: the
+   fresh name is not a ghost constant (previous lemma), and the ghost
+   constants' own entries are untouched. *)
+lemma ghost_constants_consistent_add_fresh_function:
+  assumes gc: "ghost_constants_consistent env ee"
+      and fresh: "name |\<notin>| fmdom (TE_Functions env)"
+  shows "ghost_constants_consistent
+           (env \<lparr> TE_Functions := fmupd name info (TE_Functions env) \<rparr>) ee"
+proof -
+  have notgc: "name |\<notin>| EE_GhostConstants ee"
+    using ghost_constants_consistent_fresh_not_member[OF gc fresh] .
+  show ?thesis
+    using gc notgc unfolding ghost_constants_consistent_def
+    by fastforce
+qed
+
+(* Hence adding a fresh function entry (and nothing else) preserves
+   elabenv_well_formed: the other clauses do not read TE_Functions. *)
+lemma elabenv_well_formed_add_fresh_function:
+  assumes wf: "elabenv_well_formed env ee"
+      and fresh: "name |\<notin>| fmdom (TE_Functions env)"
+  shows "elabenv_well_formed
+           (env \<lparr> TE_Functions := fmupd name info (TE_Functions env) \<rparr>) ee"
+proof -
+  let ?env' = "env \<lparr> TE_Functions := fmupd name info (TE_Functions env) \<rparr>"
+  have wk_cong: "\<And>tvs ty. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) ty
+                         = is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) ty"
+    by (rule is_well_kinded_cong_env) simp_all
+  have td: "typedefs_well_formed ?env' (EE_Typedefs ee)"
+    using wf wk_cong
+    unfolding elabenv_well_formed_def typedefs_well_formed_def by simp
+  have nc: "nullary_data_ctors_consistent ?env' ee"
+    using wf unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def by simp
+  have gc: "ghost_constants_consistent ?env' ee"
+    using wf fresh ghost_constants_consistent_add_fresh_function
+    unfolding elabenv_well_formed_def by blast
+  show ?thesis
+    using wf td nc gc unfolding elabenv_well_formed_def by simp
 qed
 
 (* elabenv_well_formed is preserved under extend_env_with_tyvars: it depends on env
@@ -124,6 +215,8 @@ proof -
   have td_eq: "TE_Datatypes ?env' = TE_Datatypes env"
     unfolding extend_env_with_tyvars_def by simp
   have dc_eq: "TE_DataCtors ?env' = TE_DataCtors env"
+    unfolding extend_env_with_tyvars_def by simp
+  have fn_eq: "TE_Functions ?env' = TE_Functions env"
     unfolding extend_env_with_tyvars_def by simp
   have rt_eq: "TE_ReturnType ?env' = TE_ReturnType env"
     unfolding extend_env_with_tyvars_def by simp
@@ -184,9 +277,12 @@ proof -
   have nullary_ctors: "nullary_data_ctors_consistent ?env' elabEnv"
     using assms dc_eq
     unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def by simp
+  have ghost_consts: "ghost_constants_consistent ?env' elabEnv"
+    using assms fn_eq
+    unfolding elabenv_well_formed_def ghost_constants_consistent_def by simp
   show ?thesis
     unfolding elabenv_well_formed_def
-    using td_wf nullary_ctors void_clause by simp
+    using td_wf nullary_ctors ghost_consts void_clause by simp
 qed
 
 end

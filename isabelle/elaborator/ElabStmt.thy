@@ -57,7 +57,11 @@ definition resolve_impure_callee ::
          (case fmlookup (TE_Functions env) name of
             None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound nloc name]
           | Some funInfo \<Rightarrow>
-              if \<not> allowVoid \<and> name |\<in>| EE_VoidFunctions elabEnv then
+              \<comment> \<open>A desugared ghost constant is not callable (`c` is a constant,
+                  not a function).\<close>
+              if name |\<in>| EE_GhostConstants elabEnv then
+                Inl [TyErr_CalleeNotFunction nloc]
+              else if \<not> allowVoid \<and> name |\<in>| EE_VoidFunctions elabEnv then
                 Inl [TyErr_FunctionNoReturnType nloc name]
               else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
                 Inl [TyErr_GhostFunctionInNonGhost nloc name]

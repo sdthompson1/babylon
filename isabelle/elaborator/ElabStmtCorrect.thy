@@ -1283,7 +1283,7 @@ lemma elab_vardecl_pure_cong_fields:
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
        \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
-       \<and> TE_ReturnType env' = TE_ReturnType env"
+       \<and> TE_ReturnType env' = TE_ReturnType env \<and> TE_Functions env' = TE_Functions env"
   by (auto simp: elab_vardecl_pure_def coerce_term_to_type_def vardecl_add_local_def
            split: sum.splits prod.splits option.splits if_splits)
 
@@ -1292,7 +1292,7 @@ lemma elab_vardecl_ref_cong_fields:
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
        \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
-       \<and> TE_ReturnType env' = TE_ReturnType env"
+       \<and> TE_ReturnType env' = TE_ReturnType env \<and> TE_Functions env' = TE_Functions env"
   by (auto simp: elab_vardecl_ref_def vardecl_add_local_def
            split: sum.splits prod.splits option.splits if_splits)
 
@@ -1304,7 +1304,7 @@ lemma elab_vardecl_impure_cong_fields:
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
        \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
-       \<and> TE_ReturnType env' = TE_ReturnType env"
+       \<and> TE_ReturnType env' = TE_ReturnType env \<and> TE_Functions env' = TE_Functions env"
   by (auto simp: elab_vardecl_impure_def is_impure_call_def reconcile_call_result_def Let_def
                  vardecl_add_local_def
            split: BabTerm.splits sum.splits prod.splits option.splits if_splits)
@@ -2303,6 +2303,7 @@ lemma elab_fix_cong_fields:
   shows "TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_Datatypes env' = TE_Datatypes env
        \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+       \<and> TE_Functions env' = TE_Functions env
        \<and> TE_ProofGoal env \<noteq> None"
   using assms
   by (auto simp: elab_fix_def
@@ -2358,6 +2359,7 @@ lemma elab_use_cong_fields:
   shows "TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_Datatypes env' = TE_Datatypes env
        \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+       \<and> TE_Functions env' = TE_Functions env
        \<and> TE_ProofGoal env \<noteq> None"
   using assms
   by (auto simp: elab_use_def coerce_term_to_type_def
@@ -3141,9 +3143,9 @@ qed
 
 (* Elaboration preserves elabenv_well_formed. This needs no hypotheses about env
    beyond elabenv_well_formed itself: every statement form leaves TE_TypeVars,
-   TE_Datatypes, TE_DataCtors and TE_ReturnType unchanged (it only touches
-   local-variable fields and TE_ProofGoal), and those four fields are all that
-   elabenv_well_formed depends on (elabenv_well_formed_cong_env). *)
+   TE_Datatypes, TE_DataCtors, TE_ReturnType and TE_Functions unchanged (it only
+   touches local-variable fields and TE_ProofGoal), and those five fields are all
+   that elabenv_well_formed depends on (elabenv_well_formed_cong_env). *)
 lemma elab_statement_preserves_elabenv_well_formed:
   "elab_statement env elabEnv ghost stmt next_mv = Inr (coreStmt, env', next_mv')
      \<Longrightarrow> elabenv_well_formed env elabEnv \<Longrightarrow> elabenv_well_formed env' elabEnv"
@@ -3163,7 +3165,8 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       unchanged (cong-fields lemmas), so elabenv_well_formed is preserved by congruence.\<close>
   case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
   have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
-                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+                \<and> TE_Functions env' = TE_Functions env"
   proof (cases vorf)
     case Var
     consider (none) "tyOpt = None \<and> tmOpt = None"
@@ -3198,10 +3201,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
     thus ?thesis using "1.prems"(1) elab_vardecl_ref_cong_fields by auto
   qed
   show ?case
-    using "1.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
-            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
-    by simp
+    using "1.prems"(2) flds elabenv_well_formed_cong_env by metis
 next
   \<comment> \<open>Fix: elab_fix leaves TE_TypeVars / TE_Datatypes / TE_DataCtors / TE_ReturnType
       unchanged, so elabenv_well_formed is preserved by congruence.\<close>
@@ -3209,28 +3209,24 @@ next
   from "2.prems"(1) have elab: "elab_fix env elabEnv ghost loc varName ty next_mv
                                   = Inr (coreStmt, env', next_mv')" by simp
   have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
-                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+                \<and> TE_Functions env' = TE_Functions env"
     using elab_fix_cong_fields[OF elab] by simp
   show ?case
-    using "2.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
-            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
-    by simp
+    using "2.prems"(2) flds elabenv_well_formed_cong_env by metis
 next
   \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy leaves TE_TypeVars /
       TE_Datatypes / TE_DataCtors / TE_ReturnType unchanged, so elabenv_well_formed
       is preserved.\<close>
   case (3 env elabEnv ghost loc varName ty tm next_mv)
   have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
-                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+                \<and> TE_Functions env' = TE_Functions env"
     using "3.prems"(1)
     by (auto simp: Let_def vardecl_add_local_def
              split: sum.splits prod.splits option.splits if_splits)
   show ?case
-    using "3.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
-            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
-    by simp
+    using "3.prems"(2) flds elabenv_well_formed_cong_env by metis
 next
   \<comment> \<open>Use: like Fix — elab_use leaves TE_TypeVars / TE_Datatypes / TE_DataCtors /
       TE_ReturnType unchanged, so elabenv_well_formed is preserved by congruence.\<close>
@@ -3238,13 +3234,11 @@ next
   from "4.prems"(1) have elab: "elab_use env elabEnv ghost loc tm next_mv
                                   = Inr (coreStmt, env', next_mv')" by simp
   have flds: "TE_TypeVars env' = TE_TypeVars env \<and> TE_Datatypes env' = TE_Datatypes env
-                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env"
+                \<and> TE_DataCtors env' = TE_DataCtors env \<and> TE_ReturnType env' = TE_ReturnType env
+                \<and> TE_Functions env' = TE_Functions env"
     using elab_use_cong_fields[OF elab] by simp
   show ?case
-    using "4.prems"(2) elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
-            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]]
-    by simp
+    using "4.prems"(2) flds elabenv_well_formed_cong_env by metis
 next
   \<comment> \<open>Assign: env unchanged.\<close>
   case (5 env elabEnv ghost loc lhs rhs next_mv)
@@ -4267,15 +4261,13 @@ next
       the local-var fields, so it is well-formed, tyvar-bounded, and elabenv-compatible.\<close>
   let ?eo = "vardecl_add_local env Ghost varName coreTy"
   have flds: "TE_TypeVars ?eo = TE_TypeVars env \<and> TE_Datatypes ?eo = TE_Datatypes env
-                \<and> TE_DataCtors ?eo = TE_DataCtors env \<and> TE_ReturnType ?eo = TE_ReturnType env"
+                \<and> TE_DataCtors ?eo = TE_DataCtors env \<and> TE_ReturnType ?eo = TE_ReturnType env
+                \<and> TE_Functions ?eo = TE_Functions env"
     by (simp add: vardecl_add_local_def)
   have wf_obtain: "tyenv_well_formed ?eo"
     using tyenv_well_formed_vardecl_add_local[OF "3.prems"(2) wk] by simp
   have ee_obtain: "elabenv_well_formed ?eo elabEnv"
-    using "3.prems"(3)
-          elabenv_well_formed_cong_env[OF conjunct1[OF flds]
-            conjunct1[OF conjunct2[OF flds]] conjunct1[OF conjunct2[OF conjunct2[OF flds]]]
-            conjunct2[OF conjunct2[OF conjunct2[OF flds]]]] by simp
+    using "3.prems"(3) flds elabenv_well_formed_cong_env by metis
   have bound_obtain: "\<forall>n. n |\<in>| TE_TypeVars ?eo \<longrightarrow> tyvar_fresh_ok n next_mv"
     using "3.prems"(4) conjunct1[OF flds] by simp
   \<comment> \<open>From here, the Assume reasoning over env_obtain.\<close>
@@ -5042,8 +5034,11 @@ next
     unfolding scrut_facts(5) vardecl_add_local_def by simp
   have env1_pg: "TE_ProofGoal ?env1 = TE_ProofGoal env"
     unfolding scrut_facts(5) vardecl_add_local_def by simp
+  have env1_fn: "TE_Functions ?env1 = TE_Functions env"
+    unfolding scrut_facts(5) vardecl_add_local_def by simp
   have env1_ee: "elabenv_well_formed ?env1 elabEnv"
-    using "13.prems"(3) elabenv_well_formed_cong_env[OF env1_tv env1_dt env1_dc env1_ret]
+    using "13.prems"(3)
+          elabenv_well_formed_cong_env[OF env1_tv env1_dt env1_dc env1_ret env1_fn]
     by simp
   have wk_1: "is_well_kinded ?env1 scrutTy'"
     using scrutTy'_wk is_well_kinded_cong_env[of ?env1 env scrutTy'] env1_tv env1_dt by simp

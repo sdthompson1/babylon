@@ -834,14 +834,17 @@ proof -
                      TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
   have td: "typedefs_well_formed env (EE_Typedefs elabEnv)"
    and vd: "nullary_data_ctors_consistent env elabEnv"
+   and gc: "ghost_constants_consistent env elabEnv"
    and void: "EE_CurrentFunctionVoid elabEnv \<longrightarrow> TE_ReturnType env = CoreTy_Record []"
     using ee unfolding elabenv_well_formed_def by blast+
   have td': "typedefs_well_formed ?env' (EE_Typedefs elabEnv)"
     by (rule typedefs_well_formed_mono[OF td]) auto
   have vd': "nullary_data_ctors_consistent ?env' elabEnv"
     using vd unfolding nullary_data_ctors_consistent_def by simp
+  have gc': "ghost_constants_consistent ?env' elabEnv"
+    using gc unfolding ghost_constants_consistent_def by simp
   show ?thesis
-    unfolding elabenv_well_formed_def using td' vd' void by simp
+    unfolding elabenv_well_formed_def using td' vd' gc' void by simp
 qed
 
 (* typesubst_well_kinded is monotone in the env's type variables. *)
@@ -1882,7 +1885,9 @@ proof -
   then show ?thesis by simp
 qed
 
-(* The elimination rule for elab_const_decl success: one case per branch of
+(* The elimination rule for elab_const_decl success on a NON-GHOST constant
+   (a ghost constant dispatches to elab_ghost_const_decl, which has its own
+   elimination rule below): one case per branch of
    the elaborator (declaration only; definition of a previously-declared
    constant; declare-and-define with inferred type; declare-and-define with
    annotated type). Each case records the guards that must have passed and
@@ -1891,6 +1896,7 @@ qed
    definition). *)
 lemma elab_const_decl_Inr_elim:
   assumes ok: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+      and ng: "DC_Ghost dc = NotGhost"
   obtains (DeclOnly) ty coreTy where
     "DC_Value dc = None"
     "\<not> term_name_in_scope env (DC_Name dc)"
@@ -1954,7 +1960,7 @@ proof (cases "DC_Value dc")
                          m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy
                                            (DC_Ghost dc) (CM_TyEnv m) \<rparr>)))
      = Inr (env', elabEnv', m')"
-    unfolding elab_const_decl_def Let_def by (simp add: None)
+    unfolding elab_const_decl_def Let_def by (simp add: None ng)
   have notin: "\<not> term_name_in_scope env (DC_Name dc)"
     using elabA by (cases "term_name_in_scope env (DC_Name dc)") simp_all
   from elabA notin obtain ty where dty: "DC_Type dc = Some ty"
@@ -1999,7 +2005,7 @@ next
                                                 (CM_GlobalVars m) \<rparr>))))
        = Inr (env', elabEnv', m')"
       unfolding elab_const_decl_def Let_def
-      by (simp add: Some lkSome)
+      by (simp add: Some lkSome ng)
     have nd: "DC_Name dc |\<notin>| fmdom (CM_GlobalVars m)"
       using elabB by (cases "DC_Name dc |\<in>| fmdom (CM_GlobalVars m)") simp_all
     have gm: "(DC_Name dc |\<in>| TE_GhostGlobals env) = (DC_Ghost dc = Ghost)"
@@ -2059,7 +2065,7 @@ next
                                                (CM_GlobalVars m) \<rparr>))
          = Inr (env', elabEnv', m')"
         unfolding elab_const_decl_def Let_def
-        using lkNone Some by auto
+        using lkNone Some ng by auto
       have notin: "\<not> term_name_in_scope env (DC_Name dc)"
         using elabC by (cases "term_name_in_scope env (DC_Name dc)") simp_all
       from elabC notin obtain finalTm declTy where
@@ -2095,7 +2101,7 @@ next
                                                     (CM_GlobalVars m) \<rparr>)))
          = Inr (env', elabEnv', m')"
         unfolding elab_const_decl_def Let_def
-        using lkNone Some by auto
+        using lkNone Some ng by auto
       have notin: "\<not> term_name_in_scope env (DC_Name dc)"
         using elabD by (cases "term_name_in_scope env (DC_Name dc)") simp_all
       from elabD notin obtain declTy where
@@ -2118,83 +2124,10 @@ next
   qed
 qed
 
-(* The four branches of elab_const_decl, dispatched to the step lemmas. *)
-lemma elab_const_decl_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
-      and elab: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
-proof -
-  have wf: "tyenv_well_formed env"
-   and eewf: "elabenv_well_formed env elabEnv"
-   and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
-    using inv unfolding elab_decls_invariant_def by blast+
-  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
-    using eewf unfolding elabenv_well_formed_def by blast
-  have scope_env: "tyenv_module_scope env"
-    using elab_decls_invariant_module_scope[OF inv] .
-  from elab show ?thesis
-  proof (cases rule: elab_const_decl_Inr_elim)
-    case (DeclOnly ty coreTy)
-    \<comment> \<open>Declaration without definition (requires a type annotation).\<close>
-    note notin = DeclOnly(2) and ety = DeclOnly(4)
-    have wk: "is_well_kinded env coreTy"
-      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
-    have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env coreTy"
-      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-    show ?thesis
-      unfolding DeclOnly(5) DeclOnly(6) DeclOnly(7)
-      by (rule elab_decls_invariant_add_global[OF inv notin wk rt])
-  next
-    case (DefineDeclared rhs declTy finalTm)
-    \<comment> \<open>Definition of a previously-declared constant.\<close>
-    note lk = DefineDeclared(2) and gm = DefineDeclared(4)
-     and rhs_ok = DefineDeclared(5)
-    have wk_decl: "is_well_kinded env declTy"
-      using global_decl_well_kinded_module_scope[OF wf scope_env lk] .
-    have rt_decl: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-    proof
-      assume ng: "DC_Ghost dc = NotGhost"
-      then have "DC_Name dc |\<notin>| TE_GhostGlobals env" using gm by simp
-      then show "is_runtime_type env declTy"
-        using global_decl_runtime_module_scope[OF wf scope_env lk] by blast
-    qed
-    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk_decl rt_decl] by blast+
-    show ?thesis
-      unfolding DefineDeclared(6) DefineDeclared(7) DefineDeclared(8)
-      by (rule elab_decls_invariant_define_global[OF inv lk gm typed const])
-  next
-    case (InferDefine rhs finalTm declTy)
-    \<comment> \<open>No annotation: the constant's type is inferred from the rhs.\<close>
-    note notin = InferDefine(4) and infer_ok = InferDefine(5)
-    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-     and wk: "is_well_kinded env declTy"
-     and rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-      using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
-    show ?thesis
-      unfolding InferDefine(6) InferDefine(7) InferDefine(8)
-      by (rule elab_decls_invariant_declare_define_global
-                 [OF inv notin wk rt typed const])
-  next
-    case (AnnotDefine rhs ty declTy finalTm)
-    \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
-    note notin = AnnotDefine(4) and ety = AnnotDefine(5)
-     and rhs_ok = AnnotDefine(6)
-    have wk: "is_well_kinded env declTy"
-      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
-    have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk rt] by blast+
-    show ?thesis
-      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9)
-      by (rule elab_decls_invariant_declare_define_global
-                 [OF inv notin wk rt typed const])
-  qed
-qed
+(* NOTE: elab_const_decl_invariant (the per-branch dispatch) now lives AFTER
+   the function section: ghost constants are desugared to nullary ghost
+   functions, so their invariant steps reuse the function-side machinery
+   (elab_decls_invariant_add_function / elab_decls_invariant_define_function). *)
 
 (* ---- Functions ---- *)
 
@@ -2520,13 +2453,15 @@ lemma elab_decls_invariant_ee_cong:
       and td_eq: "EE_Typedefs elabEnv' = EE_Typedefs elabEnv"
       and vd_ctor_eq: "EE_NullaryDataCtors elabEnv' = EE_NullaryDataCtors elabEnv"
       and vd_eq: "EE_CurrentFunctionVoid elabEnv' = EE_CurrentFunctionVoid elabEnv"
+      and gc_eq: "EE_GhostConstants elabEnv' = EE_GhostConstants elabEnv"
   shows "elab_decls_invariant env0 ownAbstract env elabEnv' m"
 proof -
   have sbt_eq: "scope_bound_tyvars env elabEnv' = scope_bound_tyvars env elabEnv"
     unfolding scope_bound_tyvars_def by (simp add: td_eq)
   have ee_eq: "elabenv_well_formed env elabEnv' = elabenv_well_formed env elabEnv"
     unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def
-    by (simp add: td_eq vd_ctor_eq vd_eq)
+              ghost_constants_consistent_def
+    by (simp add: td_eq vd_ctor_eq vd_eq gc_eq)
   show ?thesis
     using inv unfolding elab_decls_invariant_def
     using ee_eq sbt_eq td_eq by auto
@@ -2818,10 +2753,11 @@ proof -
     using own_disj by (simp add: tyenv_add_function_def)
   have wf': "tyenv_well_formed ?env'"
     using tyenv_well_formed_add_function[OF wf dist_fi wk_args wk_ret rt_p] .
-  have cong_ee: "elabenv_well_formed ?env' elabEnv = elabenv_well_formed env elabEnv"
-    by (rule elabenv_well_formed_cong_env) (simp_all add: tyenv_add_function_def)
+  \<comment> \<open>The new entry is fresh, so it cannot be a ghost constant, and
+      elabenv_well_formed survives the TE_Functions update.\<close>
   have eewf': "elabenv_well_formed ?env' elabEnv"
-    using eewf cong_ee by simp
+    using elabenv_well_formed_add_fresh_function[OF eewf fresh_fn]
+    by (simp add: tyenv_add_function_def)
   have swk_env': "typesubst_well_kinded ?env' (CM_TypeSubst m)"
     by (rule typesubst_well_kinded_mono[OF swk])
        (simp_all add: tyenv_add_function_def)
@@ -3175,6 +3111,12 @@ proof -
       unfolding nullary_data_ctors_consistent_def
       by (simp add: module_body_env_for_def)
   next
+    have "ghost_constants_consistent env elabEnv"
+      using eewf unfolding elabenv_well_formed_def by blast
+    then show "ghost_constants_consistent ?be ?bodyEE"
+      unfolding ghost_constants_consistent_def
+      by (simp add: module_body_env_for_def)
+  next
     assume "EE_CurrentFunctionVoid ?bodyEE"
     then have "DF_ReturnType df = None" by simp
     then show "TE_ReturnType ?be = CoreTy_Record []"
@@ -3482,14 +3424,18 @@ proof -
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "DF_Name df |\<in>| fmdom (CM_Functions m)")
          (auto simp: g1 g2 g3 g4 g4' sig Some)
+    have ngc: "DF_Name df |\<notin>| EE_GhostConstants elabEnv"
+      using ok isdef unfolding elab_function_decl_def Let_def
+      by (cases "DF_Name df |\<in>| EE_GhostConstants elabEnv")
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd)
     have fi_eq: "funInfo = declInfo"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "funInfo = declInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd)
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd ngc)
     have vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd fi_eq)
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd ngc fi_eq)
     from ok isdef obtain bodyOpt where
       elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
       eq1: "env' = env" and
@@ -3501,7 +3447,7 @@ proof -
                              (CM_Functions m) \<rparr>"
       unfolding elab_function_decl_def Let_def
       by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd fi_eq vd)
+         (auto simp: g1 g2 g3 g4 g4' sig Some nd ngc fi_eq vd)
     have lk: "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
       using Some fi_eq by simp
     show thesis
@@ -3667,8 +3613,10 @@ proof -
       by (cases "DF_ReturnType df = None") simp_all
     have ee_vd: "EE_CurrentFunctionVoid ?ee1 = EE_CurrentFunctionVoid elabEnv"
       by (cases "DF_ReturnType df = None") simp_all
+    have ee_gc: "EE_GhostConstants ?ee1 = EE_GhostConstants elabEnv"
+      by (cases "DF_ReturnType df = None") simp_all
     have inv2: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
-      by (rule elab_decls_invariant_ee_cong[OF inv1 ee_td ee_vc ee_vd])
+      by (rule elab_decls_invariant_ee_cong[OF inv1 ee_td ee_vc ee_vd ee_gc])
     have lk1: "fmlookup (TE_Functions ?env1) ?name = Some funInfo"
       by (simp add: tyenv_add_function_def)
     have body_ok: "case bodyOpt of
@@ -3692,6 +3640,703 @@ proof -
       case False
       then show ?thesis using inv2 Declare(9) Declare(10) Declare(11) fi by simp
     qed
+  qed
+qed
+
+(* ---- Ghost constants (desugared to nullary ghost functions) ---- *)
+
+(* The elimination rule for elab_ghost_const_decl success: one case per branch
+   (declaration only; definition of a previously-declared ghost constant;
+   declare-and-define with inferred type; declare-and-define with annotated
+   type). Mirrors elab_const_decl_Inr_elim; the "previously declared" test is
+   EE_GhostConstants membership. *)
+lemma elab_ghost_const_decl_Inr_elim:
+  assumes ok: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  obtains (DeclOnly) ty coreTy where
+    "DC_Value dc = None"
+    "\<not> term_name_in_scope env (DC_Name dc)"
+    "DC_Type dc = Some ty"
+    "elab_type env elabEnv Ghost ty = Inr coreTy"
+    "env' = tyenv_add_function (DC_Name dc) (ghost_const_fun_info coreTy) env"
+    "elabEnv' = elabEnv \<lparr> EE_GhostConstants :=
+                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                            (ghost_const_fun_info coreTy) (CM_TyEnv m) \<rparr>"
+  | (DefineDeclared) rhs declInfo finalTm where
+    "DC_Value dc = Some rhs"
+    "DC_Name dc |\<in>| EE_GhostConstants elabEnv"
+    "fmlookup (TE_Functions env) (DC_Name dc) = Some declInfo"
+    "DC_Name dc |\<notin>| fmdom (CM_Functions m)"
+    "elab_const_rhs env elabEnv Ghost (DC_Location dc) (FI_ReturnType declInfo) rhs
+       = Inr finalTm"
+    "env' = env"
+    "elabEnv' = elabEnv"
+    "m' = m \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                    (CM_Functions m) \<rparr>"
+  | (InferDefine) rhs finalTm declTy where
+    "DC_Value dc = Some rhs"
+    "DC_Name dc |\<notin>| EE_GhostConstants elabEnv"
+    "DC_Type dc = None"
+    "\<not> term_name_in_scope env (DC_Name dc)"
+    "elab_const_rhs_infer env elabEnv Ghost (DC_Location dc) rhs
+       = Inr (finalTm, declTy)"
+    "env' = tyenv_add_function (DC_Name dc) (ghost_const_fun_info declTy) env"
+    "elabEnv' = elabEnv \<lparr> EE_GhostConstants :=
+                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                            (ghost_const_fun_info declTy) (CM_TyEnv m),
+              CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                    (CM_Functions m) \<rparr>"
+  | (AnnotDefine) rhs ty declTy finalTm where
+    "DC_Value dc = Some rhs"
+    "DC_Name dc |\<notin>| EE_GhostConstants elabEnv"
+    "DC_Type dc = Some ty"
+    "\<not> term_name_in_scope env (DC_Name dc)"
+    "elab_type env elabEnv Ghost ty = Inr declTy"
+    "elab_const_rhs env elabEnv Ghost (DC_Location dc) declTy rhs = Inr finalTm"
+    "env' = tyenv_add_function (DC_Name dc) (ghost_const_fun_info declTy) env"
+    "elabEnv' = elabEnv \<lparr> EE_GhostConstants :=
+                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
+    "m' = m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                            (ghost_const_fun_info declTy) (CM_TyEnv m),
+              CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                    (CM_Functions m) \<rparr>"
+proof (cases "DC_Value dc")
+  case None
+  from ok have elabA:
+    "(if term_name_in_scope env (DC_Name dc)
+      then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
+      else case DC_Type dc of
+             None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType (DC_Location dc) (DC_Name dc)]
+           | Some ty \<Rightarrow>
+               (case elab_type env elabEnv Ghost ty of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr coreTy \<Rightarrow>
+                    (let funInfo = ghost_const_fun_info coreTy
+                     in Inr (tyenv_add_function (DC_Name dc) funInfo env,
+                             elabEnv \<lparr> EE_GhostConstants :=
+                                 finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>,
+                             m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc) funInfo
+                                               (CM_TyEnv m) \<rparr>))))
+     = Inr (env', elabEnv', m')"
+    unfolding elab_ghost_const_decl_def Let_def by (simp add: None)
+  have notin: "\<not> term_name_in_scope env (DC_Name dc)"
+    using elabA by (cases "term_name_in_scope env (DC_Name dc)") simp_all
+  from elabA notin obtain ty where dty: "DC_Type dc = Some ty"
+    by (cases "DC_Type dc") auto
+  from elabA notin dty obtain coreTy where
+    ety: "elab_type env elabEnv Ghost ty = Inr coreTy" and
+    env'_eq: "env' = tyenv_add_function (DC_Name dc) (ghost_const_fun_info coreTy) env" and
+    ee'_eq: "elabEnv' = elabEnv \<lparr> EE_GhostConstants :=
+                            finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>" and
+    m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                                   (ghost_const_fun_info coreTy) (CM_TyEnv m) \<rparr>"
+    by (cases "elab_type env elabEnv Ghost ty") (auto simp: Let_def)
+  show thesis
+    by (rule DeclOnly[OF None notin dty ety env'_eq ee'_eq m'_eq])
+next
+  case (Some rhs)
+  show thesis
+  proof (cases "DC_Name dc |\<in>| EE_GhostConstants elabEnv")
+    case True
+    from ok have elabB:
+      "(case fmlookup (TE_Functions env) (DC_Name dc) of
+          None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound (DC_Location dc) (DC_Name dc)]
+        | Some declInfo \<Rightarrow>
+            if DC_Name dc |\<in>| fmdom (CM_Functions m)
+            then Inl [TyErr_AlreadyDefined (DC_Location dc) (DC_Name dc)]
+            else
+              (let declTy = FI_ReturnType declInfo
+               in case (case DC_Type dc of
+                          None \<Rightarrow> Inr declTy
+                        | Some ty \<Rightarrow>
+                            (case elab_type env elabEnv Ghost ty of
+                               Inl errs \<Rightarrow> Inl errs
+                             | Inr coreTy \<Rightarrow>
+                                 if coreTy \<noteq> declTy
+                                 then Inl [TyErr_TypeMismatch (DC_Location dc) declTy coreTy]
+                                 else Inr declTy)) of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr _ \<Rightarrow>
+                      (case elab_const_rhs env elabEnv Ghost (DC_Location dc) declTy rhs of
+                         Inl errs \<Rightarrow> Inl errs
+                       | Inr finalTm \<Rightarrow>
+                           Inr (env, elabEnv,
+                                m \<lparr> CM_Functions := fmupd (DC_Name dc)
+                                      (ghost_const_fun finalTm) (CM_Functions m) \<rparr>))))
+       = Inr (env', elabEnv', m')"
+      unfolding elab_ghost_const_decl_def Let_def by (simp add: Some True)
+    from elabB obtain declInfo where
+      lk: "fmlookup (TE_Functions env) (DC_Name dc) = Some declInfo"
+      by (cases "fmlookup (TE_Functions env) (DC_Name dc)") auto
+    have nd: "DC_Name dc |\<notin>| fmdom (CM_Functions m)"
+      using elabB lk by (cases "DC_Name dc |\<in>| fmdom (CM_Functions m)") auto
+    \<comment> \<open>Dispose of the annotation check, leaving only the rhs elaboration.\<close>
+    have elabB':
+      "(case elab_const_rhs env elabEnv Ghost (DC_Location dc)
+               (FI_ReturnType declInfo) rhs of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr finalTm \<Rightarrow>
+            Inr (env, elabEnv,
+                 m \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                           (CM_Functions m) \<rparr>))
+       = Inr (env', elabEnv', m')"
+    proof (cases "DC_Type dc")
+      case None
+      with elabB lk nd show ?thesis by (simp add: Let_def)
+    next
+      case (Some ty)
+      show ?thesis
+      proof (cases "elab_type env elabEnv Ghost ty")
+        case (Inl errs)
+        with elabB lk nd Some show ?thesis by (simp add: Let_def)
+      next
+        case (Inr coreTy)
+        with elabB lk nd Some show ?thesis
+          by (cases "coreTy = FI_ReturnType declInfo") (simp_all add: Let_def)
+      qed
+    qed
+    from elabB' obtain finalTm where
+      rhs_ok: "elab_const_rhs env elabEnv Ghost (DC_Location dc)
+                 (FI_ReturnType declInfo) rhs = Inr finalTm" and
+      env'_eq: "env' = env" and
+      ee'_eq: "elabEnv' = elabEnv" and
+      m'_eq: "m' = m \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                             (CM_Functions m) \<rparr>"
+      by (cases "elab_const_rhs env elabEnv Ghost (DC_Location dc)
+                   (FI_ReturnType declInfo) rhs") auto
+    show thesis
+      by (rule DefineDeclared[OF Some True lk nd rhs_ok env'_eq ee'_eq m'_eq])
+  next
+    case False
+    show thesis
+    proof (cases "DC_Type dc")
+      case tyNone: None
+      from ok tyNone False have elabC:
+        "(if term_name_in_scope env (DC_Name dc)
+          then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
+          else case elab_const_rhs_infer env elabEnv Ghost (DC_Location dc) rhs of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr (finalTm, declTy) \<Rightarrow>
+                   (let funInfo = ghost_const_fun_info declTy
+                    in Inr (tyenv_add_function (DC_Name dc) funInfo env,
+                            elabEnv \<lparr> EE_GhostConstants :=
+                                finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>,
+                            m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc) funInfo
+                                              (CM_TyEnv m),
+                                CM_Functions := fmupd (DC_Name dc)
+                                  (ghost_const_fun finalTm) (CM_Functions m) \<rparr>)))
+         = Inr (env', elabEnv', m')"
+        unfolding elab_ghost_const_decl_def Let_def
+        using Some by auto
+      have notin: "\<not> term_name_in_scope env (DC_Name dc)"
+        using elabC by (cases "term_name_in_scope env (DC_Name dc)") simp_all
+      from elabC notin obtain finalTm declTy where
+        infer_ok: "elab_const_rhs_infer env elabEnv Ghost (DC_Location dc) rhs
+                     = Inr (finalTm, declTy)" and
+        env'_eq: "env' = tyenv_add_function (DC_Name dc)
+                           (ghost_const_fun_info declTy) env" and
+        ee'_eq: "elabEnv' = elabEnv \<lparr> EE_GhostConstants :=
+                                finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>" and
+        m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                                       (ghost_const_fun_info declTy) (CM_TyEnv m),
+                         CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                               (CM_Functions m) \<rparr>"
+        by (cases "elab_const_rhs_infer env elabEnv Ghost (DC_Location dc) rhs")
+           (auto simp: Let_def split: prod.splits)
+      show thesis
+        by (rule InferDefine[OF Some False tyNone notin infer_ok
+                                env'_eq ee'_eq m'_eq])
+    next
+      case tySome: (Some ty)
+      from ok tySome False have elabD:
+        "(if term_name_in_scope env (DC_Name dc)
+          then Inl [TyErr_DuplicateName (DC_Location dc) (DC_Name dc)]
+          else case elab_type env elabEnv Ghost ty of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr declTy \<Rightarrow>
+                   (case elab_const_rhs env elabEnv Ghost (DC_Location dc)
+                           declTy rhs of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr finalTm \<Rightarrow>
+                        (let funInfo = ghost_const_fun_info declTy
+                         in Inr (tyenv_add_function (DC_Name dc) funInfo env,
+                                 elabEnv \<lparr> EE_GhostConstants :=
+                                     finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>,
+                                 m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc) funInfo
+                                                   (CM_TyEnv m),
+                                     CM_Functions := fmupd (DC_Name dc)
+                                       (ghost_const_fun finalTm) (CM_Functions m) \<rparr>))))
+         = Inr (env', elabEnv', m')"
+        unfolding elab_ghost_const_decl_def Let_def
+        using Some by auto
+      have notin: "\<not> term_name_in_scope env (DC_Name dc)"
+        using elabD by (cases "term_name_in_scope env (DC_Name dc)") simp_all
+      from elabD notin obtain declTy where
+        ety: "elab_type env elabEnv Ghost ty = Inr declTy"
+        by (cases "elab_type env elabEnv Ghost ty") auto
+      from elabD notin ety obtain finalTm where
+        rhs_ok: "elab_const_rhs env elabEnv Ghost (DC_Location dc) declTy rhs
+                   = Inr finalTm" and
+        env'_eq: "env' = tyenv_add_function (DC_Name dc)
+                           (ghost_const_fun_info declTy) env" and
+        ee'_eq: "elabEnv' = elabEnv \<lparr> EE_GhostConstants :=
+                                finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>" and
+        m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                                       (ghost_const_fun_info declTy) (CM_TyEnv m),
+                         CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                               (CM_Functions m) \<rparr>"
+        by (cases "elab_const_rhs env elabEnv Ghost (DC_Location dc) declTy rhs")
+           (auto simp: Let_def)
+      show thesis
+        by (rule AnnotDefine[OF Some False tySome notin ety rhs_ok
+                                env'_eq ee'_eq m'_eq])
+    qed
+  qed
+qed
+
+(* The desugared ghost constant's body typechecks: `return tm` in the nullary
+   ghost body env. At module scope, that body env agrees with env on every
+   field core_term_type reads (the locals it clears are already empty), so the
+   initializer's typing transfers directly and the Return rule closes the
+   statement. This is the "functions obligation" that replaces the old
+   ghost-globals obligation. *)
+lemma ghost_const_body_typechecks:
+  assumes wf: "tyenv_well_formed env"
+      and scope: "tyenv_module_scope env"
+      and typed: "core_term_type env Ghost tm = Some ty"
+  shows "core_statement_list_type
+           (module_body_env_for env [] (ghost_const_fun_info ty))
+           Ghost [CoreStmt_Return tm] \<noteq> None"
+proof -
+  let ?be = "module_body_env_for env [] (ghost_const_fun_info ty)"
+  have rtv_sub: "TE_RuntimeTypeVars env |\<subseteq>| TE_TypeVars env"
+    using wf unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
+  have abs_tv: "TE_AbstractTypes env = TE_TypeVars env"
+    using scope unfolding tyenv_module_scope_def by blast
+  have rtv_eq: "TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env
+                  = TE_RuntimeTypeVars env"
+    unfolding abs_tv by (rule inf_absorb2[OF rtv_sub])
+  have typed_be: "core_term_type ?be Ghost tm = Some ty"
+  proof -
+    have "core_term_type ?be Ghost tm = core_term_type env Ghost tm"
+      by (rule core_term_type_cong_env)
+         (use scope rtv_eq abs_tv
+          in \<open>simp_all add: module_body_env_for_def ghost_const_fun_info_def
+                            tyenv_module_scope_def funion_fempty_right\<close>)
+    then show ?thesis using typed by simp
+  qed
+  \<comment> \<open>Discharge the Return rule's guard via the body env's field values (fed to
+     simp as oriented field facts - a whole-statement equation would have its
+     own left-hand side rewritten away by the Return equation first).\<close>
+  have fg: "TE_FunctionGhost ?be = Ghost"
+    by (simp add: module_body_env_for_def ghost_const_fun_info_def)
+  have rt: "TE_ReturnType ?be = ty"
+    by (simp add: module_body_env_for_def ghost_const_fun_info_def)
+  show ?thesis
+    by (simp add: fg rt typed_be)
+qed
+
+(* Inserting a name into EE_GhostConstants preserves the invariant, provided
+   the name has the desugared-ghost-constant FunInfo in the state env (which
+   is exactly what the new consistency conjunct demands). Nothing else in the
+   invariant reads EE_GhostConstants. *)
+lemma elab_decls_invariant_insert_ghost_constant:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and lk: "fmlookup (TE_Functions env) name = Some (ghost_const_fun_info retTy)"
+  shows "elab_decls_invariant env0 ownAbstract env
+           (elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>) m"
+proof -
+  let ?ee' = "elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>"
+  have eewf: "elabenv_well_formed env elabEnv"
+    using inv unfolding elab_decls_invariant_def by blast
+  have gc': "ghost_constants_consistent env ?ee'"
+  proof -
+    have gc: "ghost_constants_consistent env elabEnv"
+      using eewf unfolding elabenv_well_formed_def by blast
+    show ?thesis
+      using gc lk
+      unfolding ghost_constants_consistent_def ghost_const_fun_info_def
+      by auto
+  qed
+  have eewf': "elabenv_well_formed env ?ee'"
+    using eewf gc'
+    unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def
+              typedefs_well_formed_def
+    by simp
+  have sbt_eq: "scope_bound_tyvars env ?ee' = scope_bound_tyvars env elabEnv"
+    unfolding scope_bound_tyvars_def by simp
+  have ctx: "elab_context_ok env0 ownAbstract"
+   and env_eq: "env = module_context_env env0 m"
+   and minv: "core_module_invariant m"
+   and own_disj: "ownAbstract |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
+   and wf: "tyenv_well_formed env"
+   and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
+   and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
+   and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
+   and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
+   and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
+                 list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
+   and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
+    using inv unfolding elab_decls_invariant_def by blast+
+  show ?thesis
+    unfolding elab_decls_invariant_def
+  proof (intro conjI)
+    show "elab_context_ok env0 ownAbstract" using ctx .
+    show "env = module_context_env env0 m" using env_eq .
+    show "core_module_invariant m" using minv .
+    show "ownAbstract |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}" using own_disj .
+    show "tyenv_well_formed env" using wf .
+    show "elabenv_well_formed env ?ee'" using eewf' .
+    show "typesubst_well_kinded env (CM_TypeSubst m)" using swk .
+    show "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract" using dom_own .
+    show "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs ?ee')" using dom_td by simp
+    show "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env ?ee' = {||}"
+      using cap_env sbt_eq by simp
+    show "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv .
+    show "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
+            list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn .
+    show "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
+      using gwt .
+    show "module_functions_well_typed env (CM_Functions (normalize_module m))"
+      using fwt .
+  qed
+qed
+
+(* Step 1 for ghost constants: declaring a fresh ghost constant - i.e. adding
+   its nullary ghost FunInfo to the state env and the module's own env, and
+   recording the name in EE_GhostConstants. Specializes
+   elab_decls_invariant_add_function (all the type-parameter side conditions
+   are trivial for a nullary signature). *)
+lemma elab_decls_invariant_add_ghost_const:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and notin: "\<not> term_name_in_scope env name"
+      and wk: "is_well_kinded env coreTy"
+  shows "elab_decls_invariant env0 ownAbstract
+           (tyenv_add_function name (ghost_const_fun_info coreTy) env)
+           (elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>)
+           (m \<lparr> CM_TyEnv := tyenv_add_function name (ghost_const_fun_info coreTy)
+                              (CM_TyEnv m) \<rparr>)"
+proof -
+  let ?info = "ghost_const_fun_info coreTy"
+  have scope_env: "tyenv_module_scope env"
+    using elab_decls_invariant_module_scope[OF inv] .
+  have abs_tv: "TE_AbstractTypes env = TE_TypeVars env"
+    using scope_env unfolding tyenv_module_scope_def by blast
+  have fi_cap: "subst_names (CM_TypeSubst m) |\<inter>| fset_of_list (FI_TyArgs ?info) = {||}"
+    by (simp add: ghost_const_fun_info_def)
+  have fi_fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs ?info)"
+    by (simp add: ghost_const_fun_info_def)
+  have dist_fi: "distinct (FI_TyArgs ?info)"
+    by (simp add: ghost_const_fun_info_def)
+  have wk_args: "\<forall>ty \<in> fst ` set (FI_TmArgs ?info).
+                   is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                           |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>) ty"
+    by (simp add: ghost_const_fun_info_def)
+  have tv_eq: "TE_TypeVars (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                    |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>)
+                 = TE_TypeVars env"
+    by (simp add: ghost_const_fun_info_def abs_tv funion_fempty_right)
+  have wk_ret: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                        |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>)
+                  (FI_ReturnType ?info)"
+  proof -
+    have "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                  |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>) coreTy
+            = is_well_kinded env coreTy"
+      by (rule is_well_kinded_cong_env) (simp_all add: tv_eq)
+    then show ?thesis using wk by (simp add: ghost_const_fun_info_def)
+  qed
+  have rt_p: "FI_Ghost ?info = NotGhost \<Longrightarrow>
+                (\<forall>ty \<in> fst ` set (FI_TmArgs ?info).
+                   is_runtime_type
+                     (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                              |\<union>| fset_of_list (FI_TyArgs ?info),
+                            TE_RuntimeTypeVars :=
+                              (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                              |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>) ty)
+                \<and> is_runtime_type
+                    (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                             |\<union>| fset_of_list (FI_TyArgs ?info),
+                           TE_RuntimeTypeVars :=
+                             (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                             |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>)
+                    (FI_ReturnType ?info)"
+    by (simp add: ghost_const_fun_info_def)
+  have inv1: "elab_decls_invariant env0 ownAbstract
+                (tyenv_add_function name ?info env) elabEnv
+                (m \<lparr> CM_TyEnv := tyenv_add_function name ?info (CM_TyEnv m) \<rparr>)"
+    by (rule elab_decls_invariant_add_function
+               [OF inv notin fi_cap fi_fresh dist_fi wk_args wk_ret rt_p])
+  have lk1: "fmlookup (TE_Functions (tyenv_add_function name ?info env)) name
+               = Some ?info"
+    by (simp add: tyenv_add_function_def)
+  show ?thesis
+    by (rule elab_decls_invariant_insert_ghost_constant[OF inv1 lk1])
+qed
+
+(* Step 2 for ghost constants: recording the desugared definition (a nullary
+   CoreFunction whose body returns the initializer) for an already-declared
+   ghost constant. Wraps elab_decls_invariant_define_function; the body
+   obligation is ghost_const_body_typechecks. *)
+lemma elab_decls_invariant_define_ghost_const:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and lk: "fmlookup (TE_Functions env) name = Some (ghost_const_fun_info declTy)"
+      and typed: "core_term_type env Ghost finalTm = Some declTy"
+  shows "elab_decls_invariant env0 ownAbstract env elabEnv
+           (m \<lparr> CM_Functions := fmupd name (ghost_const_fun finalTm)
+                                      (CM_Functions m) \<rparr>)"
+proof -
+  have wf: "tyenv_well_formed env"
+    using inv unfolding elab_decls_invariant_def by blast
+  have scope_env: "tyenv_module_scope env"
+    using elab_decls_invariant_module_scope[OF inv] .
+  have len: "length ([] :: string list)
+               = length (FI_TmArgs (ghost_const_fun_info declTy))"
+    by (simp add: ghost_const_fun_info_def)
+  have dst: "distinct ([] :: string list)" by simp
+  have body_ok: "case Some [CoreStmt_Return finalTm] of
+                   None \<Rightarrow> True
+                 | Some coreBody \<Rightarrow>
+                     core_statement_list_type
+                       (module_body_env_for env [] (ghost_const_fun_info declTy))
+                       (FI_Ghost (ghost_const_fun_info declTy)) coreBody \<noteq> None"
+    using ghost_const_body_typechecks[OF wf scope_env typed]
+    by (simp add: ghost_const_fun_info_def)
+  show ?thesis
+    using elab_decls_invariant_define_function[OF inv lk len dst body_ok]
+    by (simp add: ghost_const_fun_def)
+qed
+
+(* The four branches of elab_ghost_const_decl, dispatched to the step lemmas.
+   The DefineDeclared branch recovers the declared FunInfo's shape from the
+   ghost-constants consistency conjunct of the invariant. *)
+lemma elab_ghost_const_decl_invariant:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and elab: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+proof -
+  have wf: "tyenv_well_formed env"
+   and eewf: "elabenv_well_formed env elabEnv"
+   and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
+    using inv unfolding elab_decls_invariant_def by blast+
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using eewf unfolding elabenv_well_formed_def by blast
+  from elab show ?thesis
+  proof (cases rule: elab_ghost_const_decl_Inr_elim)
+    case (DeclOnly ty coreTy)
+    \<comment> \<open>Declaration without definition (requires a type annotation).\<close>
+    note notin = DeclOnly(2) and ety = DeclOnly(4)
+    have wk: "is_well_kinded env coreTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    show ?thesis
+      unfolding DeclOnly(5) DeclOnly(6) DeclOnly(7)
+      by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
+  next
+    case (DefineDeclared rhs declInfo finalTm)
+    \<comment> \<open>Definition of a previously-declared ghost constant.\<close>
+    note mem = DefineDeclared(2) and lk = DefineDeclared(3)
+     and rhs_ok = DefineDeclared(5)
+    \<comment> \<open>The declared FunInfo has the desugared shape (consistency conjunct).\<close>
+    have gc: "ghost_constants_consistent env elabEnv"
+      using eewf unfolding elabenv_well_formed_def by blast
+    obtain retTy where declInfo_eq: "declInfo = ghost_const_fun_info retTy"
+      using gc mem lk
+      unfolding ghost_constants_consistent_def ghost_const_fun_info_def
+      by fastforce
+    have ret_eq: "FI_ReturnType declInfo = retTy"
+      by (simp add: declInfo_eq ghost_const_fun_info_def)
+    \<comment> \<open>The declared return type is well-kinded (function-signature clause of
+       tyenv_well_formed, with no type parameters, at module scope).\<close>
+    have scope_env: "tyenv_module_scope env"
+      using elab_decls_invariant_module_scope[OF inv] .
+    have abs_tv: "TE_AbstractTypes env = TE_TypeVars env"
+      using scope_env unfolding tyenv_module_scope_def by blast
+    have wk_decl: "is_well_kinded env retTy"
+    proof -
+      have wk0: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                        |\<union>| fset_of_list (FI_TyArgs declInfo) \<rparr>)
+                   (FI_ReturnType declInfo)"
+        using wf lk
+        unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
+      have tv_eq: "TE_TypeVars (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                       |\<union>| fset_of_list (FI_TyArgs declInfo) \<rparr>)
+                     = TE_TypeVars env"
+        by (simp add: declInfo_eq ghost_const_fun_info_def abs_tv funion_fempty_right)
+      have "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                    |\<union>| fset_of_list (FI_TyArgs declInfo) \<rparr>)
+              (FI_ReturnType declInfo)
+              = is_well_kinded env (FI_ReturnType declInfo)"
+        by (rule is_well_kinded_cong_env) (simp_all add: tv_eq)
+      then show ?thesis using wk0 ret_eq by simp
+    qed
+    have rt_decl: "Ghost = NotGhost \<longrightarrow> is_runtime_type env retTy" by simp
+    have rhs_ok': "elab_const_rhs env elabEnv Ghost (DC_Location dc) retTy rhs
+                     = Inr finalTm"
+      using rhs_ok ret_eq by simp
+    have typed: "core_term_type env Ghost finalTm = Some retTy"
+      using elab_const_rhs_correct(1)[OF rhs_ok' wf eewf mv_tv wk_decl rt_decl] .
+    have lk': "fmlookup (TE_Functions env) (DC_Name dc)
+                 = Some (ghost_const_fun_info retTy)"
+      using lk declInfo_eq by simp
+    show ?thesis
+      unfolding DefineDeclared(6) DefineDeclared(7) DefineDeclared(8)
+      by (rule elab_decls_invariant_define_ghost_const[OF inv lk' typed])
+  next
+    case (InferDefine rhs finalTm declTy)
+    \<comment> \<open>No annotation: the constant's type is inferred from the rhs.\<close>
+    note notin = InferDefine(4) and infer_ok = InferDefine(5)
+    have typed: "core_term_type env Ghost finalTm = Some declTy"
+     and wk: "is_well_kinded env declTy"
+      using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
+    let ?env1 = "tyenv_add_function (DC_Name dc) (ghost_const_fun_info declTy) env"
+    let ?ee1 = "elabEnv \<lparr> EE_GhostConstants :=
+                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
+    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                                 (ghost_const_fun_info declTy) (CM_TyEnv m) \<rparr>"
+    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+      by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
+    have fresh_fn: "DC_Name dc |\<notin>| fmdom (TE_Functions env)"
+      using notin unfolding term_name_in_scope_def by blast
+    have ext: "tyenv_extends env ?env1"
+      using tyenv_extends_add_function[OF fresh_fn] .
+    have cons: "tyenv_ctors_consistent env"
+      using wf unfolding tyenv_well_formed_def by blast
+    have typed1: "core_term_type ?env1 Ghost finalTm = Some declTy"
+      using core_term_type_tyenv_extends[OF ext cons typed] .
+    have lk1: "fmlookup (TE_Functions ?env1) (DC_Name dc)
+                 = Some (ghost_const_fun_info declTy)"
+      by (simp add: tyenv_add_function_def)
+    have "elab_decls_invariant env0 ownAbstract ?env1 ?ee1
+            (?m1 \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                         (CM_Functions ?m1) \<rparr>)"
+      by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
+    then show ?thesis
+      unfolding InferDefine(6) InferDefine(7) InferDefine(8) by simp
+  next
+    case (AnnotDefine rhs ty declTy finalTm)
+    \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
+    note notin = AnnotDefine(4) and ety = AnnotDefine(5)
+     and rhs_ok = AnnotDefine(6)
+    have wk: "is_well_kinded env declTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    have rt_decl: "Ghost = NotGhost \<longrightarrow> is_runtime_type env declTy" by simp
+    have typed: "core_term_type env Ghost finalTm = Some declTy"
+      using elab_const_rhs_correct(1)[OF rhs_ok wf eewf mv_tv wk rt_decl] .
+    let ?env1 = "tyenv_add_function (DC_Name dc) (ghost_const_fun_info declTy) env"
+    let ?ee1 = "elabEnv \<lparr> EE_GhostConstants :=
+                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
+    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
+                                 (ghost_const_fun_info declTy) (CM_TyEnv m) \<rparr>"
+    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+      by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
+    have fresh_fn: "DC_Name dc |\<notin>| fmdom (TE_Functions env)"
+      using notin unfolding term_name_in_scope_def by blast
+    have ext: "tyenv_extends env ?env1"
+      using tyenv_extends_add_function[OF fresh_fn] .
+    have cons: "tyenv_ctors_consistent env"
+      using wf unfolding tyenv_well_formed_def by blast
+    have typed1: "core_term_type ?env1 Ghost finalTm = Some declTy"
+      using core_term_type_tyenv_extends[OF ext cons typed] .
+    have lk1: "fmlookup (TE_Functions ?env1) (DC_Name dc)
+                 = Some (ghost_const_fun_info declTy)"
+      by (simp add: tyenv_add_function_def)
+    have "elab_decls_invariant env0 ownAbstract ?env1 ?ee1
+            (?m1 \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
+                                         (CM_Functions ?m1) \<rparr>)"
+      by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
+    then show ?thesis
+      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9) by simp
+  qed
+qed
+
+(* ---- The combined constant dispatch ---- *)
+
+(* elab_const_decl preserves the invariant: ghost constants go through the
+   desugaring path above; non-ghost constants through the globals path. *)
+lemma elab_const_decl_invariant:
+  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+      and elab: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+proof (cases "DC_Ghost dc")
+  case Ghost
+  have elab_g: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+    using elab Ghost unfolding elab_const_decl_def Let_def by simp
+  show ?thesis
+    by (rule elab_ghost_const_decl_invariant[OF inv elab_g])
+next
+  case NotGhost
+  have wf: "tyenv_well_formed env"
+   and eewf: "elabenv_well_formed env elabEnv"
+   and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
+    using inv unfolding elab_decls_invariant_def by blast+
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using eewf unfolding elabenv_well_formed_def by blast
+  have scope_env: "tyenv_module_scope env"
+    using elab_decls_invariant_module_scope[OF inv] .
+  from elab NotGhost show ?thesis
+  proof (cases rule: elab_const_decl_Inr_elim)
+    case (DeclOnly ty coreTy)
+    \<comment> \<open>Declaration without definition (requires a type annotation).\<close>
+    note notin = DeclOnly(2) and ety = DeclOnly(4)
+    have wk: "is_well_kinded env coreTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env coreTy"
+      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
+    show ?thesis
+      unfolding DeclOnly(5) DeclOnly(6) DeclOnly(7)
+      by (rule elab_decls_invariant_add_global[OF inv notin wk rt])
+  next
+    case (DefineDeclared rhs declTy finalTm)
+    \<comment> \<open>Definition of a previously-declared constant.\<close>
+    note lk = DefineDeclared(2) and gm = DefineDeclared(4)
+     and rhs_ok = DefineDeclared(5)
+    have wk_decl: "is_well_kinded env declTy"
+      using global_decl_well_kinded_module_scope[OF wf scope_env lk] .
+    have rt_decl: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
+    proof
+      assume ng: "DC_Ghost dc = NotGhost"
+      then have "DC_Name dc |\<notin>| TE_GhostGlobals env" using gm by simp
+      then show "is_runtime_type env declTy"
+        using global_decl_runtime_module_scope[OF wf scope_env lk] by blast
+    qed
+    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
+     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
+      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk_decl rt_decl] by blast+
+    show ?thesis
+      unfolding DefineDeclared(6) DefineDeclared(7) DefineDeclared(8)
+      by (rule elab_decls_invariant_define_global[OF inv lk gm typed const])
+  next
+    case (InferDefine rhs finalTm declTy)
+    \<comment> \<open>No annotation: the constant's type is inferred from the rhs.\<close>
+    note notin = InferDefine(4) and infer_ok = InferDefine(5)
+    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
+     and wk: "is_well_kinded env declTy"
+     and rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
+     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
+      using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
+    show ?thesis
+      unfolding InferDefine(6) InferDefine(7) InferDefine(8)
+      by (rule elab_decls_invariant_declare_define_global
+                 [OF inv notin wk rt typed const])
+  next
+    case (AnnotDefine rhs ty declTy finalTm)
+    \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
+    note notin = AnnotDefine(4) and ety = AnnotDefine(5)
+     and rhs_ok = AnnotDefine(6)
+    have wk: "is_well_kinded env declTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    have rt: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
+      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
+    have typed: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
+     and const: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
+      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk rt] by blast+
+    show ?thesis
+      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9)
+      by (rule elab_decls_invariant_declare_define_global
+                 [OF inv notin wk rt typed const])
   qed
 qed
 
@@ -4398,6 +5043,41 @@ proof -
   qed
 qed
 
+(* A ghost constant's FunInfo keeps its nullary/ghost/pure shape under
+   substitution (only the return type is rewritten), so realization preserves
+   ghost-constant consistency. *)
+lemma apply_realization_ghost_constants:
+  assumes gc: "ghost_constants_consistent env elabEnv"
+      and env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
+           \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
+             TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
+             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+      and ee'_eq: "EE_GhostConstants elabEnv' = EE_GhostConstants elabEnv"
+  shows "ghost_constants_consistent env' elabEnv'"
+proof -
+  let ?s = "fmupd name target fmempty"
+  show ?thesis
+    unfolding ghost_constants_consistent_def
+  proof (intro allI impI)
+    fix gname assume "gname |\<in>| EE_GhostConstants elabEnv'"
+    then have "gname |\<in>| EE_GhostConstants elabEnv" using ee'_eq by simp
+    then obtain retTy where
+      lk: "fmlookup (TE_Functions env) gname =
+             Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                    FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+      using gc unfolding ghost_constants_consistent_def by blast
+    have lk': "fmlookup (TE_Functions env') gname =
+                 Some \<lparr> FI_TyArgs = [], FI_TmArgs = [],
+                        FI_ReturnType = apply_subst ?s retTy,
+                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+      unfolding env'_eq apply_subst_to_tyenv_def
+      by (simp add: lk apply_subst_to_funinfo_def)
+    then show "\<exists>retTy. fmlookup (TE_Functions env') gname =
+                 Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                        FI_Ghost = Ghost, FI_Impure = False \<rparr>" by blast
+  qed
+qed
+
 (* -------------------------------------------------------------------------- *)
 (* Body envs under the realization                                             *)
 (* -------------------------------------------------------------------------- *)
@@ -4721,6 +5401,7 @@ proof -
   proof -
     have td0: "typedefs_well_formed env (EE_Typedefs elabEnv)"
      and vd_ctor0: "nullary_data_ctors_consistent env elabEnv"
+     and gc0: "ghost_constants_consistent env elabEnv"
      and vd0: "EE_CurrentFunctionVoid elabEnv \<longrightarrow> TE_ReturnType env = CoreTy_Record []"
       using eewf unfolding elabenv_well_formed_def by blast+
     have td': "typedefs_well_formed env' (EE_Typedefs elabEnv')"
@@ -4729,10 +5410,13 @@ proof -
     have vd_ctor': "nullary_data_ctors_consistent env' elabEnv'"
       by (rule apply_realization_nullary_ctors[OF vd_ctor0 env'_eq])
          (simp add: ee'_eq)
+    have gc': "ghost_constants_consistent env' elabEnv'"
+      by (rule apply_realization_ghost_constants[OF gc0 env'_eq])
+         (simp add: ee'_eq)
     have vd': "EE_CurrentFunctionVoid elabEnv' \<longrightarrow> TE_ReturnType env' = CoreTy_Record []"
       using vd0 rty_env' unfolding ee'_eq by simp
     show ?thesis
-      unfolding elabenv_well_formed_def using td' vd_ctor' vd' by simp
+      unfolding elabenv_well_formed_def using td' vd_ctor' gc' vd' by simp
   qed
 
   \<comment> \<open>Conjunct 7: the extended substitution's ranges are well-kinded.\<close>
@@ -6237,9 +6921,14 @@ proof -
       then show ?thesis by blast
     qed
   qed
+  have gc0: "ghost_constants_consistent env elabEnv"
+    using eewf unfolding elabenv_well_formed_def by blast
+  have gc': "ghost_constants_consistent ?env' ?ee'"
+    using gc0 unfolding ghost_constants_consistent_def
+    by (simp add: tyenv_add_datatype_def)
   have eewf': "elabenv_well_formed ?env' ?ee'"
     unfolding elabenv_well_formed_def
-    using td' nullary' void_old ret_proj by simp
+    using td' nullary' gc' void_old ret_proj by simp
   \<comment> \<open>Substitution facts.\<close>
   have swk': "typesubst_well_kinded ?env' (CM_TypeSubst m)"
     by (rule typesubst_well_kinded_grow_datatypes[OF swk tv_proj dt_grow])
@@ -7266,8 +7955,19 @@ proof -
   have "CM_TypeSubst m' = CM_TypeSubst m
         \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
         \<and> TE_GhostDatatypes env' = TE_GhostDatatypes env"
-    using e unfolding elab_const_decl_def tyenv_add_global_def Let_def
-    by (auto split: option.splits sum.splits if_splits)
+  proof (cases "DC_Ghost dc")
+    case Ghost
+    then have eg: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+      using e unfolding elab_const_decl_def Let_def by simp
+    from eg show ?thesis
+      by (cases rule: elab_ghost_const_decl_Inr_elim)
+         (simp_all add: tyenv_add_function_def)
+  next
+    case NotGhost
+    then show ?thesis
+      using e unfolding elab_const_decl_def tyenv_add_global_def Let_def
+      by (auto split: option.splits sum.splits if_splits)
+  qed
   then show ?thesis
     using subst_runtime_ok_env_cong[OF rtok] by blast
 qed
@@ -7498,10 +8198,22 @@ lemma elab_declaration_own_tyvars:
   shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
 proof (cases d)
   case (BabDecl_Const dc)
+  have e2: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+    using e by (simp add: BabDecl_Const)
   have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
-    using e unfolding BabDecl_Const elab_declaration.simps
-                      elab_const_decl_def tyenv_add_global_def Let_def
-    by (auto split: option.splits sum.splits if_splits)
+  proof (cases "DC_Ghost dc")
+    case Ghost
+    then have eg: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+      using e2 unfolding elab_const_decl_def Let_def by simp
+    from eg show ?thesis
+      by (cases rule: elab_ghost_const_decl_Inr_elim)
+         (simp_all add: tyenv_add_function_def)
+  next
+    case NotGhost
+    then show ?thesis
+      using e2 unfolding elab_const_decl_def tyenv_add_global_def Let_def
+      by (auto split: option.splits sum.splits if_splits)
+  qed
   then show ?thesis by (simp add: BabDecl_Const)
 next
   case (BabDecl_Function df)
@@ -7590,12 +8302,17 @@ lemma decls_abstract_names_mset_cong:
    the fold lemmas below are the bridge. *)
 fun decl_undefined_consts :: "BabDeclaration \<Rightarrow> string fset" where
   "decl_undefined_consts (BabDecl_Const dc) =
-     (if DC_Value dc = None then {|DC_Name dc|} else {||})"
+     (if DC_Value dc = None \<and> DC_Ghost dc = NotGhost then {|DC_Name dc|} else {||})"
 | "decl_undefined_consts _ = {||}"
 
+(* A declaration-only ghost constant is a declared-but-undefined *function*:
+   its desugared FunInfo enters TE_Functions and the definition would enter
+   CM_Functions. *)
 fun decl_undefined_funs :: "BabDeclaration \<Rightarrow> string fset" where
   "decl_undefined_funs (BabDecl_Function df) =
      (if DF_Body df = None \<and> \<not> DF_Extern df then {|DF_Name df|} else {||})"
+| "decl_undefined_funs (BabDecl_Const dc) =
+     (if DC_Value dc = None \<and> DC_Ghost dc = Ghost then {|DC_Name dc|} else {||})"
 | "decl_undefined_funs _ = {||}"
 
 definition decls_undefined_consts :: "BabDeclaration list \<Rightarrow> string fset" where
@@ -7616,10 +8333,26 @@ lemma elab_declaration_undefined_globals:
                 |\<union>| decl_undefined_consts d"
 proof (cases d)
   case (BabDecl_Const dc)
+  have e2: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+    using e by (simp add: BabDecl_Const)
   show ?thesis
-    using e unfolding BabDecl_Const elab_declaration.simps
-                      elab_const_decl_def tyenv_add_global_def Let_def
-    by (auto split: option.splits sum.splits if_splits)
+  proof (cases "DC_Ghost dc")
+    case Ghost
+    then have eg: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+      using e2 unfolding elab_const_decl_def Let_def by simp
+    \<comment> \<open>The ghost path touches neither TE_GlobalVars nor CM_GlobalVars.\<close>
+    from eg have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
+                  \<and> CM_GlobalVars m' = CM_GlobalVars m"
+      by (cases rule: elab_ghost_const_decl_Inr_elim)
+         (simp_all add: tyenv_add_function_def)
+    then show ?thesis by auto
+  next
+    case NotGhost
+    then show ?thesis
+      using e2 unfolding BabDecl_Const elab_const_decl_def
+                         tyenv_add_global_def Let_def
+      by (auto split: option.splits sum.splits if_splits)
+  qed
 next
   case (BabDecl_Function df)
   have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
@@ -7659,12 +8392,26 @@ lemma elab_declaration_undefined_funs:
                 |\<union>| decl_undefined_funs d"
 proof (cases d)
   case (BabDecl_Const dc)
-  have "TE_Functions (CM_TyEnv m') = TE_Functions (CM_TyEnv m)
-        \<and> CM_Functions m' = CM_Functions m"
-    using e unfolding BabDecl_Const elab_declaration.simps
-                      elab_const_decl_def tyenv_add_global_def Let_def
-    by (auto split: option.splits sum.splits if_splits)
-  then show ?thesis by (simp add: BabDecl_Const)
+  \<comment> \<open>A non-ghost constant touches neither field; a ghost constant adds its
+     desugared FunInfo (and, unless declaration-only, its CM_Functions entry),
+     mirroring the function case.\<close>
+  have e2: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+    using e by (simp add: BabDecl_Const)
+  show ?thesis
+  proof (cases "DC_Ghost dc")
+    case Ghost
+    then have eg: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+      using e2 unfolding elab_const_decl_def Let_def by simp
+    from eg show ?thesis
+      by (cases rule: elab_ghost_const_decl_Inr_elim)
+         (auto simp: BabDecl_Const Ghost tyenv_add_function_def)
+  next
+    case NotGhost
+    then show ?thesis
+      using e2 unfolding BabDecl_Const elab_const_decl_def
+                         tyenv_add_global_def Let_def
+      by (auto split: option.splits sum.splits if_splits)
+  qed
 next
   case (BabDecl_Function df)
   show ?thesis

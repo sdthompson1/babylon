@@ -40,6 +40,18 @@ fun is_decl_only :: "BabDeclaration \<Rightarrow> bool" where
 | "is_decl_only (BabDecl_Datatype dd) = False"
 | "is_decl_only (BabDecl_Typedef dt) = (DT_Definition dt = None)"
 
+(* True if two BabDeclarations are of the same kind: the same constructor, and
+   for constants also the same ghost marker. Used by check_unique_names to
+   require that an interface declaration is defined by the same *kind* of
+   declaration in the implementation (a `ghost const` must be defined by a
+   `ghost const`, not by a function or a non-ghost const, and so on). *)
+fun same_decl_kind :: "BabDeclaration \<Rightarrow> BabDeclaration \<Rightarrow> bool" where
+  "same_decl_kind (BabDecl_Const dc1) (BabDecl_Const dc2) = (DC_Ghost dc1 = DC_Ghost dc2)"
+| "same_decl_kind (BabDecl_Function _) (BabDecl_Function _) = True"
+| "same_decl_kind (BabDecl_Datatype _) (BabDecl_Datatype _) = True"
+| "same_decl_kind (BabDecl_Typedef _) (BabDecl_Typedef _) = True"
+| "same_decl_kind _ _ = False"
+
 
 (* ========================================================================== *)
 (* Module error checks                                                        *)
@@ -48,7 +60,7 @@ fun is_decl_only :: "BabDeclaration \<Rightarrow> bool" where
 (* Names must be unique within each face (interface or implementation).
    Across the two faces, the same name may appear once in each, so long as it's a
    declaration in the interface and definition in the implementation (declare-then-define
-   pattern). *)
+   pattern), and both declarations are of the same kind (same_decl_kind). *)
 definition check_unique_names ::
   "BabDeclaration list \<Rightarrow> BabDeclaration list \<Rightarrow> TypeError list" where
   "check_unique_names intf impl =
@@ -67,7 +79,7 @@ definition check_unique_names ::
           (case find (\<lambda>di. get_decl_name di = get_decl_name d) intf of
              None \<Rightarrow> []
            | Some di \<Rightarrow>
-               if is_decl_only di \<and> \<not> is_decl_only d then []
+               if is_decl_only di \<and> \<not> is_decl_only d \<and> same_decl_kind di d then []
                else [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)]))
           impl)"
 
@@ -88,9 +100,14 @@ definition check_completeness ::
      concat (map (\<lambda>d.
        case d of
          BabDecl_Const dc \<Rightarrow>
+           \<comment> \<open>A ghost constant is desugared to a nullary ghost function, so its
+              definition lands in CM_Functions, not CM_GlobalVars.\<close>
            (if DC_Value dc = None
-               \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
-               \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod)
+               \<and> (if DC_Ghost dc = Ghost
+                  then DC_Name dc |\<notin>| fmdom (CM_Functions intMod)
+                       \<and> DC_Name dc |\<notin>| fmdom (CM_Functions implMod)
+                  else DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
+                       \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod))
             then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
             else [])
        | BabDecl_Function df \<Rightarrow>
@@ -274,6 +291,7 @@ definition elabenv_union :: "ElabEnv list \<Rightarrow> ElabEnv" where
      \<lparr> EE_Typedefs = fmlist_union (map EE_Typedefs es),
        EE_NullaryDataCtors = funion_list (map EE_NullaryDataCtors es),
        EE_VoidFunctions = funion_list (map EE_VoidFunctions es),
+       EE_GhostConstants = funion_list (map EE_GhostConstants es),
        EE_CurrentFunctionVoid = False \<rparr>"
 
 (* The delta of a fold's final ElabEnv against its initial one: the entries
@@ -286,12 +304,14 @@ definition elabenv_delta :: "ElabEnv \<Rightarrow> ElabEnv \<Rightarrow> ElabEnv
      \<lparr> EE_Typedefs = fmdrop_fset (fmdom (EE_Typedefs initial)) (EE_Typedefs final),
        EE_NullaryDataCtors = EE_NullaryDataCtors final |-| EE_NullaryDataCtors initial,
        EE_VoidFunctions = EE_VoidFunctions final |-| EE_VoidFunctions initial,
+       EE_GhostConstants = EE_GhostConstants final |-| EE_GhostConstants initial,
        EE_CurrentFunctionVoid = False \<rparr>"
 
 lemma elabenv_union_fields [simp]:
   "EE_Typedefs (elabenv_union es) = fmlist_union (map EE_Typedefs es)"
   "EE_NullaryDataCtors (elabenv_union es) = funion_list (map EE_NullaryDataCtors es)"
   "EE_VoidFunctions (elabenv_union es) = funion_list (map EE_VoidFunctions es)"
+  "EE_GhostConstants (elabenv_union es) = funion_list (map EE_GhostConstants es)"
   "EE_CurrentFunctionVoid (elabenv_union es) = False"
   by (simp_all add: elabenv_union_def)
 
@@ -302,6 +322,8 @@ lemma elabenv_delta_fields [simp]:
      = EE_NullaryDataCtors final |-| EE_NullaryDataCtors initial"
   "EE_VoidFunctions (elabenv_delta initial final)
      = EE_VoidFunctions final |-| EE_VoidFunctions initial"
+  "EE_GhostConstants (elabenv_delta initial final)
+     = EE_GhostConstants final |-| EE_GhostConstants initial"
   "EE_CurrentFunctionVoid (elabenv_delta initial final) = False"
   by (simp_all add: elabenv_delta_def)
 

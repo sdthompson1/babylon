@@ -180,6 +180,8 @@ lemma elabenv_well_formed_mono:
                  \<Longrightarrow> fmlookup (TE_Datatypes env2) n = Some v"
       and dc: "\<And>n v. fmlookup (TE_DataCtors env1) n = Some v
                  \<Longrightarrow> fmlookup (TE_DataCtors env2) n = Some v"
+      and fn: "\<And>n v. fmlookup (TE_Functions env1) n = Some v
+                 \<Longrightarrow> fmlookup (TE_Functions env2) n = Some v"
       and nv: "\<not> EE_CurrentFunctionVoid ee"
   shows "elabenv_well_formed env2 ee"
 proof -
@@ -235,9 +237,24 @@ proof -
                  fmlookup (TE_DataCtors env2) name = Some (dtName, tyvars, CoreTy_Record [])"
       using dc by blast
   qed
+  have gc: "ghost_constants_consistent env2 ee"
+    unfolding ghost_constants_consistent_def
+  proof (intro allI impI)
+    fix name assume "name |\<in>| EE_GhostConstants ee"
+    then obtain retTy where
+      "fmlookup (TE_Functions env1) name =
+         Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+      using wf
+      unfolding elabenv_well_formed_def ghost_constants_consistent_def by blast
+    then show "\<exists>retTy. fmlookup (TE_Functions env2) name =
+                 Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+      using fn by blast
+  qed
   show ?thesis
     unfolding elabenv_well_formed_def
-    using td nc nv by blast
+    using td nc gc nv by blast
 qed
 
 (* A union of well-formed ElabEnv deltas is well-formed (over the same env):
@@ -282,9 +299,24 @@ proof -
       using each
       unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def by blast
   qed
+  have gc: "ghost_constants_consistent env (elabenv_union es)"
+    unfolding ghost_constants_consistent_def
+  proof (intro allI impI)
+    fix name assume "name |\<in>| EE_GhostConstants (elabenv_union es)"
+    then have "name |\<in>| funion_list (map EE_GhostConstants es)"
+      by simp
+    then obtain e where e_in: "e \<in> set es"
+        and e_mem: "name |\<in>| EE_GhostConstants e"
+      by (auto simp: funion_list_member)
+    then show "\<exists>retTy. fmlookup (TE_Functions env) name =
+                 Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+      using each
+      unfolding elabenv_well_formed_def ghost_constants_consistent_def by blast
+  qed
   show ?thesis
     unfolding elabenv_well_formed_def
-    using td nc by simp
+    using td nc gc by simp
 qed
 
 (* A delta of a well-formed ElabEnv is well-formed (over the same env): the
@@ -319,9 +351,21 @@ proof -
       using wf
       unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def by blast
   qed
+  have gc: "ghost_constants_consistent env (elabenv_delta initial final)"
+    unfolding ghost_constants_consistent_def
+  proof (intro allI impI)
+    fix name assume "name |\<in>| EE_GhostConstants (elabenv_delta initial final)"
+    then have "name |\<in>| EE_GhostConstants final"
+      by auto
+    then show "\<exists>retTy. fmlookup (TE_Functions env) name =
+                 Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+      using wf
+      unfolding elabenv_well_formed_def ghost_constants_consistent_def by blast
+  qed
   show ?thesis
     unfolding elabenv_well_formed_def
-    using td nc by simp
+    using td nc gc by simp
 qed
 
 (* A delta's typedef domain avoids its initial env's: the restriction removes
@@ -351,7 +395,7 @@ lemma elabenv_well_formed_link_mono:
       and wf: "elabenv_well_formed (CM_TyEnv a) ee"
       and nv: "\<not> EE_CurrentFunctionVoid ee"
   shows "elabenv_well_formed (CM_TyEnv m) ee"
-proof (rule elabenv_well_formed_mono[OF wf _ _ _ nv])
+proof (rule elabenv_well_formed_mono[OF wf _ _ _ _ nv])
   show "TE_TypeVars (CM_TyEnv a) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
     using link_modules_TypeVars_mono[OF okA okM empty sub] .
 next
@@ -362,6 +406,10 @@ next
   fix n v assume "fmlookup (TE_DataCtors (CM_TyEnv a)) n = Some v"
   then show "fmlookup (TE_DataCtors (CM_TyEnv m)) n = Some v"
     using link_modules_decl_submaps(4)[OF okA okM sub] by blast
+next
+  fix n v assume "fmlookup (TE_Functions (CM_TyEnv a)) n = Some v"
+  then show "fmlookup (TE_Functions (CM_TyEnv m)) n = Some v"
+    using link_modules_decl_submaps(2)[OF okA okM sub] by blast
 qed
 
 
@@ -461,8 +509,11 @@ proof
      (case d of
         BabDecl_Const dc \<Rightarrow>
           (if DC_Value dc = None
-              \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
-              \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod)
+              \<and> (if DC_Ghost dc = Ghost
+                 then DC_Name dc |\<notin>| fmdom (CM_Functions intMod)
+                      \<and> DC_Name dc |\<notin>| fmdom (CM_Functions implMod)
+                 else DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
+                      \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod))
            then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
            else [])
       | BabDecl_Function df \<Rightarrow>
@@ -1076,7 +1127,8 @@ qed
 (* ========================================================================== *)
 
 (* A clean check_completeness certifies that every declared-but-undefined
-   const (resp. non-extern bodiless function) of the interface is defined by
+   const (resp. non-extern bodiless function or declaration-only ghost const)
+   of the interface is defined by
    one of the two faces. Composed with the provenance fold lemmas
    (elab_declarations_undefined_globals/_funs), this yields the env-level
    definedness facts whole-program closedness (step 8c) needs. *)
@@ -1091,8 +1143,11 @@ proof -
      (case d of
         BabDecl_Const dc \<Rightarrow>
           (if DC_Value dc = None
-              \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
-              \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod)
+              \<and> (if DC_Ghost dc = Ghost
+                 then DC_Name dc |\<notin>| fmdom (CM_Functions intMod)
+                      \<and> DC_Name dc |\<notin>| fmdom (CM_Functions implMod)
+                 else DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
+                      \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod))
            then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
            else [])
       | BabDecl_Function df \<Rightarrow>
@@ -1116,11 +1171,12 @@ proof -
       unfolding decls_undefined_consts_def by (auto simp: funion_list_member)
     from n_d obtain dc where d_eq: "d = BabDecl_Const dc"
         and noval: "DC_Value dc = None"
+        and ng: "DC_Ghost dc = NotGhost"
         and n_eq: "n = DC_Name dc"
       by (cases d) (auto split: if_splits)
     from bspec[OF all_nil d_in]
     show "n |\<in>| fmdom (CM_GlobalVars intMod) |\<union>| fmdom (CM_GlobalVars implMod)"
-      unfolding d_eq using noval n_eq by (auto split: if_splits)
+      unfolding d_eq using noval ng n_eq by (auto split: if_splits)
   qed
   show "decls_undefined_funs intf
           |\<subseteq>| fmdom (CM_Functions intMod) |\<union>| fmdom (CM_Functions implMod)"
@@ -1128,13 +1184,28 @@ proof -
     fix n assume "n |\<in>| decls_undefined_funs intf"
     then obtain d where d_in: "d \<in> set intf" and n_d: "n |\<in>| decl_undefined_funs d"
       unfolding decls_undefined_funs_def by (auto simp: funion_list_member)
-    from n_d obtain df where d_eq: "d = BabDecl_Function df"
+    \<comment> \<open>Either a bodiless non-extern function, or a declaration-only ghost
+       constant (whose desugared definition also lands in CM_Functions).\<close>
+    from n_d have
+      "(\<exists>df. d = BabDecl_Function df \<and> DF_Body df = None \<and> \<not> DF_Extern df
+             \<and> n = DF_Name df)
+       \<or> (\<exists>dc. d = BabDecl_Const dc \<and> DC_Value dc = None \<and> DC_Ghost dc = Ghost
+               \<and> n = DC_Name dc)"
+      by (cases d) (auto split: if_splits)
+    then show "n |\<in>| fmdom (CM_Functions intMod) |\<union>| fmdom (CM_Functions implMod)"
+    proof (elim disjE exE conjE)
+      fix df assume d_eq: "d = BabDecl_Function df"
         and nobody: "DF_Body df = None" and noext: "\<not> DF_Extern df"
         and n_eq: "n = DF_Name df"
-      by (cases d) (auto split: if_splits)
-    from bspec[OF all_nil d_in]
-    show "n |\<in>| fmdom (CM_Functions intMod) |\<union>| fmdom (CM_Functions implMod)"
-      unfolding d_eq using nobody noext n_eq by (auto split: if_splits)
+      from bspec[OF all_nil d_in] show ?thesis
+        unfolding d_eq using nobody noext n_eq by (auto split: if_splits)
+    next
+      fix dc assume d_eq: "d = BabDecl_Const dc"
+        and noval: "DC_Value dc = None" and gh: "DC_Ghost dc = Ghost"
+        and n_eq: "n = DC_Name dc"
+      from bspec[OF all_nil d_in] show ?thesis
+        unfolding d_eq using noval gh n_eq by (auto split: if_splits)
+    qed
   qed
 qed
 

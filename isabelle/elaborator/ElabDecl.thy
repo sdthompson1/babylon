@@ -253,13 +253,126 @@ definition elab_const_rhs_infer ::
                then Inl [TyErr_NotCompileTimeConstant loc]
                else Inr (finalTm, rhsTy)))"
 
-(* Elaborate a `const` declaration. Three cases:
+(* Return a FunInfo to represent a ghost constant. *)
+definition ghost_const_fun_info :: "CoreType \<Rightarrow> FunInfo" where
+  "ghost_const_fun_info retTy =
+     \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
+       FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+
+(* Return a CoreFunction to represent a ghost constant. *)
+definition ghost_const_fun :: "CoreTerm \<Rightarrow> CoreFunction" where
+  "ghost_const_fun tm = \<lparr> CF_Args = [], CF_Body = Some [CoreStmt_Return tm] \<rparr>"
+
+(* The elaborator converts ghost const declarations to nullary ghost functions:
+   `ghost const c: T = e;` becomes `ghost function c(): T { return e; }`.
+   (Later references to `c` are rewritten to `c()` by elab_term.)
+   This allows ghost constants to be initialized by general terms, unlike normal constants,
+   which can only be initialized by compile-time constant terms.
+
+   There are 3 cases, mirroring elab_const_decl (below) and elab_function_decl:
+
+    - Declaration without a definition (the interface case): a type annotation
+      is required. The FunInfo is entered into the type environment (with no
+      CM_Functions entry - the isDefinition = False path of a function), and
+      the name is recorded in EE_GhostConstants.
+
+    - Definition of a previously-declared ghost constant: the type annotation
+      (if any) must match the return type in the type env. The new CoreFunction
+      is added to CM_Functions.
+
+    - Definition without previous declaration: both of the above at once. *)
+definition elab_ghost_const_decl ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> DeclConst
+   \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
+  "elab_ghost_const_decl env elabEnv m dc =
+    (let loc = DC_Location dc;
+         name = DC_Name dc
+     in case DC_Value dc of
+          None \<Rightarrow>
+            \<comment> \<open>Declaration without a definition (interface case). Type annotation required.\<close>
+            (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
+             else case DC_Type dc of
+                    None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType loc name]
+                  | Some ty \<Rightarrow>
+                      (case elab_type env elabEnv Ghost ty of
+                         Inl errs \<Rightarrow> Inl errs
+                       | Inr coreTy \<Rightarrow>
+                           (let funInfo = ghost_const_fun_info coreTy
+                            in Inr (tyenv_add_function name funInfo env,
+                                    elabEnv \<lparr> EE_GhostConstants :=
+                                        finsert name (EE_GhostConstants elabEnv) \<rparr>,
+                                    m \<lparr> CM_TyEnv :=
+                                          tyenv_add_function name funInfo (CM_TyEnv m) \<rparr>))))
+        | Some rhs \<Rightarrow>
+            if name |\<in>| EE_GhostConstants elabEnv then
+              \<comment> \<open>Definition of a previously-declared ghost constant.\<close>
+              (case fmlookup (TE_Functions env) name of
+                 None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name]
+               | Some declInfo \<Rightarrow>
+                   if name |\<in>| fmdom (CM_Functions m)
+                   then Inl [TyErr_AlreadyDefined loc name]
+                   else
+                     (let declTy = FI_ReturnType declInfo
+                      in case (case DC_Type dc of
+                                 None \<Rightarrow> Inr declTy
+                               | Some ty \<Rightarrow>
+                                   (case elab_type env elabEnv Ghost ty of
+                                      Inl errs \<Rightarrow> Inl errs
+                                    | Inr coreTy \<Rightarrow>
+                                        if coreTy \<noteq> declTy
+                                        then Inl [TyErr_TypeMismatch loc declTy coreTy]
+                                        else Inr declTy)) of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr _ \<Rightarrow>
+                             (case elab_const_rhs env elabEnv Ghost loc declTy rhs of
+                                Inl errs \<Rightarrow> Inl errs
+                              | Inr finalTm \<Rightarrow>
+                                  Inr (env, elabEnv,
+                                       m \<lparr> CM_Functions :=
+                                             fmupd name (ghost_const_fun finalTm)
+                                                   (CM_Functions m) \<rparr>))))
+            else
+              \<comment> \<open>Declaring and defining at once.\<close>
+              (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
+               else case DC_Type dc of
+                      None \<Rightarrow>
+                        (case elab_const_rhs_infer env elabEnv Ghost loc rhs of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr (finalTm, declTy) \<Rightarrow>
+                             (let funInfo = ghost_const_fun_info declTy
+                              in Inr (tyenv_add_function name funInfo env,
+                                      elabEnv \<lparr> EE_GhostConstants :=
+                                          finsert name (EE_GhostConstants elabEnv) \<rparr>,
+                                      m \<lparr> CM_TyEnv :=
+                                            tyenv_add_function name funInfo (CM_TyEnv m),
+                                          CM_Functions :=
+                                            fmupd name (ghost_const_fun finalTm)
+                                                  (CM_Functions m) \<rparr>)))
+                    | Some ty \<Rightarrow>
+                        (case elab_type env elabEnv Ghost ty of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr declTy \<Rightarrow>
+                             (case elab_const_rhs env elabEnv Ghost loc declTy rhs of
+                                Inl errs \<Rightarrow> Inl errs
+                              | Inr finalTm \<Rightarrow>
+                                  (let funInfo = ghost_const_fun_info declTy
+                                   in Inr (tyenv_add_function name funInfo env,
+                                           elabEnv \<lparr> EE_GhostConstants :=
+                                               finsert name (EE_GhostConstants elabEnv) \<rparr>,
+                                           m \<lparr> CM_TyEnv :=
+                                                 tyenv_add_function name funInfo (CM_TyEnv m),
+                                               CM_Functions :=
+                                                 fmupd name (ghost_const_fun finalTm)
+                                                       (CM_Functions m) \<rparr>))))))"
+
+(* Elaborate a `const` declaration. Ghost constants are passed to elab_ghost_const_decl
+   (above). For non-ghost constants, there are 3 cases:
 
     - Declaration without a definition (the interface case): a type annotation is
       required. The new constant is added to the type environment.
 
-    - Definition of a previously-declared constant: The ghost marker, and type
-      annotation (if any), must match the previous declaration. The new constant is 
+    - Definition of a previously-declared constant: The type annotation (if any)
+      must match the previous declaration. The new constant is
       added to CM_GlobalVars.
 
     - Definition without previous declaration: The new entry is added to both the
@@ -270,7 +383,8 @@ definition elab_const_decl ::
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
   "elab_const_decl env elabEnv m dc =
     (let loc = DC_Location dc; name = DC_Name dc; ghost = DC_Ghost dc
-     in case DC_Value dc of
+     in if ghost = Ghost then elab_ghost_const_decl env elabEnv m dc
+        else case DC_Value dc of
           None \<Rightarrow>
             \<comment> \<open>Declaration without a definition (interface case).\<close>
             (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
@@ -472,6 +586,11 @@ definition elab_function_decl ::
                        (if \<not> isDefinition then Inl [TyErr_DuplicateName loc name]
                         else if name |\<in>| fmdom (CM_Functions m)
                         then Inl [TyErr_AlreadyDefined loc name]
+                        \<comment> \<open>A name declared as a ghost constant cannot be defined by a
+                           function definition (even though its desugared FunInfo may
+                           match): a ghost const must be defined by a ghost const.\<close>
+                        else if name |\<in>| EE_GhostConstants elabEnv
+                        then Inl [TyErr_DuplicateName loc name]
                         else if funInfo \<noteq> declInfo
                         then Inl [TyErr_FunctionSignatureMismatch loc name]
                         else if (name |\<in>| EE_VoidFunctions elabEnv) \<noteq> isVoid

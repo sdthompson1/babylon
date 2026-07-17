@@ -81,7 +81,11 @@ definition resolve_callee_function ::
   "resolve_callee_function env elabEnv ghost loc name tyArgs next_mv =
     (case fmlookup (TE_Functions env) name of
       Some funInfo \<Rightarrow>
-        if name |\<in>| EE_VoidFunctions elabEnv then
+        \<comment> \<open>A desugared ghost constant is not callable: `c` is a constant, not a
+            function (the same error as \"calling\" a local variable).\<close>
+        if name |\<in>| EE_GhostConstants elabEnv then
+          Inl [TyErr_CalleeNotFunction loc]
+        else if name |\<in>| EE_VoidFunctions elabEnv then
           Inl [TyErr_FunctionNoReturnType loc name]
         else if FI_Impure funInfo then
           Inl [TyErr_ImpureFunctionInTermContext loc name]
@@ -734,6 +738,17 @@ where
              then Inl [TyErr_GhostVariableInNonGhost loc name]
         else Inr (CoreTm_Var name, ty, next_mv)
     | None \<Rightarrow>
+        \<comment> \<open>Ghost constants are desugared to nullary ghost functions, so a
+            reference to one becomes a call. (This is checked after the
+            variable lookup, so local shadowing behaves as for any global.)\<close>
+        if name |\<in>| EE_GhostConstants elabEnv then
+          (case fmlookup (TE_Functions env) name of
+             Some funInfo \<Rightarrow>
+               if tyArgs \<noteq> [] then Inl [TyErr_WrongNumberOfTypeArgs loc name 0 (length tyArgs)]
+               else if ghost = NotGhost then Inl [TyErr_GhostVariableInNonGhost loc name]
+               else Inr (CoreTm_FunctionCall name [] [], FI_ReturnType funInfo, next_mv)
+           | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])
+        else
         (case fmlookup (TE_DataCtors env) name of
           Some (dtName, tyvars, _) \<Rightarrow>
             if name |\<notin>| EE_NullaryDataCtors elabEnv then

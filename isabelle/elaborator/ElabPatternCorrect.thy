@@ -84,6 +84,19 @@ lemma extend_env_with_pattern_vars_TE_ReturnType [simp]:
   "TE_ReturnType (extend_env_with_pattern_vars env constOf ghost ps) = TE_ReturnType env"
   unfolding extend_env_with_pattern_vars_def by simp
 
+(* extend_env_one_var preserves TE_Functions. *)
+lemma extend_env_one_var_TE_Functions [simp]:
+  "TE_Functions (extend_env_one_var constOf ghost b env) = TE_Functions env"
+  by (cases b) (simp add: extend_env_one_var_def)
+
+lemma foldr_extend_env_one_var_TE_Functions [simp]:
+  "TE_Functions (foldr (extend_env_one_var constOf ghost) bs env) = TE_Functions env"
+  by (induction bs) simp_all
+
+lemma extend_env_with_pattern_vars_TE_Functions [simp]:
+  "TE_Functions (extend_env_with_pattern_vars env constOf ghost ps) = TE_Functions env"
+  unfolding extend_env_with_pattern_vars_def by simp
+
 (* extend_env_one_var commutes (in observable env state) when the two
    bindings use distinct names. Quantified over the VarOrRef components
    vr1, vr2 so the lemma survives any future use of that field. *)
@@ -425,8 +438,9 @@ proof -
     unfolding extend_env_with_pattern_vars_def by simp
   have dc_eq: "TE_DataCtors ?env' = TE_DataCtors env" by simp
   have rt_eq: "TE_ReturnType ?env' = TE_ReturnType env" by simp
+  have fn_eq: "TE_Functions ?env' = TE_Functions env" by simp
   show ?thesis
-    using assms elabenv_well_formed_cong_env[OF tv_eq dt_eq dc_eq rt_eq] by simp
+    using assms elabenv_well_formed_cong_env[OF tv_eq dt_eq dc_eq rt_eq fn_eq] by simp
 qed
 
 

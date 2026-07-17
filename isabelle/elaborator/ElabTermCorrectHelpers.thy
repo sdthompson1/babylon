@@ -562,18 +562,20 @@ proof -
     fn_lookup: "fmlookup (TE_Functions env) name = Some funInfo"
     by (auto simp: resolve_callee_function_def resolve_type_args_def Let_def
              split: option.splits if_splits sum.splits)
-  from assms(1) fn_lookup have not_void: "name |\<notin>| EE_VoidFunctions elabEnv"
+  from assms(1) fn_lookup have not_gc: "name |\<notin>| EE_GhostConstants elabEnv"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
-  from assms(1) fn_lookup not_void have not_impure: "\<not> FI_Impure funInfo"
+  from assms(1) fn_lookup not_gc have not_void: "name |\<notin>| EE_VoidFunctions elabEnv"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
-  from assms(1) fn_lookup not_void not_impure have
+  from assms(1) fn_lookup not_gc not_void have not_impure: "\<not> FI_Impure funInfo"
+    by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
+  from assms(1) fn_lookup not_gc not_void not_impure have
     all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
-  from assms(1) fn_lookup not_void not_impure all_var have
+  from assms(1) fn_lookup not_gc not_void not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
 
-  from assms(1) fn_lookup not_void not_impure all_var ghost_ok
+  from assms(1) fn_lookup not_gc not_void not_impure all_var ghost_ok
   obtain newTyArgs next_mv1 where
     name_eq: "calleeName = name" and
     resolve_eq: "resolve_type_args env elabEnv ghost loc name (FI_TyArgs funInfo) tyArgs next_mv
