@@ -78,19 +78,20 @@ qed
 lemma elab_declarations_invariant:
   assumes ctx: "elab_context_ok env0 ownAbstract"
       and ee: "elabenv_well_formed env0 elabEnv0"
-      and elab: "elab_declarations env0 elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
-  obtains envF where "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
+      and gv: "module_globals_well_typed env0 ctxGlobals"
+      and elab: "elab_declarations env0 elabEnv0 ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
+  obtains envF where "elab_decls_invariant env0 ownAbstract ctxGlobals envF elabEnv' M"
 proof -
   have fresh: "list_all decl_tyvars_fresh_ok decls"
     using elab_declarations_decls_fresh[OF elab] .
-  have init: "elab_decls_invariant env0 ownAbstract env0 elabEnv0 empty_core_module"
-    using elab_decls_invariant_init[OF ctx ee] .
+  have init: "elab_decls_invariant env0 ownAbstract ctxGlobals env0 elabEnv0 empty_core_module"
+    using elab_decls_invariant_init[OF ctx ee gv] .
   from elab obtain envF where
-    run: "elab_declaration_list env0 elabEnv0 ownAbstract empty_core_module decls
+    run: "elab_declaration_list env0 elabEnv0 ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
     unfolding elab_declarations_def Let_def
     by (auto split: sum.splits prod.splits if_splits)
-  have "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
+  have "elab_decls_invariant env0 ownAbstract ctxGlobals envF elabEnv' M"
     using elab_declaration_list_invariant[OF run init fresh] .
   then show thesis using that by blast
 qed
@@ -101,7 +102,7 @@ qed
    elab_link_well_typed's context premise requires of its downstream
    users. *)
 lemma elab_decls_invariant_empty_subst:
-  assumes inv: "elab_decls_invariant env0 {||} env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 {||} ctxGlobals env elabEnv m"
   shows "CM_TypeSubst m = fmempty"
 proof -
   have "fmdom (CM_TypeSubst m) |\<subseteq>| {||}"
@@ -118,7 +119,7 @@ qed
    (the state env's function table right-biased-includes the module's, and
    apply_subst_to_funinfo preserves FI_TyArgs). *)
 lemma elab_decls_invariant_module_fresh:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
   shows "module_tyvars_fresh_ok m"
 proof -
   have env_eq: "env = module_context_env env0 m"
@@ -548,7 +549,7 @@ lemma elab_face_Inr_elim:
     "sort_declarations (CM_TyEnv ctx) (elabenv_union (map snd deps)) decls
        = Inr sortedDecls"
     "elab_declarations (CM_TyEnv ctx) (elabenv_union (map snd deps))
-       ownAbstract sortedDecls = Inr (m, foldEnv)"
+       ownAbstract (CM_GlobalVars ctx) sortedDecls = Inr (m, foldEnv)"
     "ee = elabenv_delta (elabenv_union (map snd deps)) foldEnv"
   using ok unfolding elab_face_def Let_def
   by (auto split: sum.splits prod.splits)
@@ -567,8 +568,8 @@ lemma elab_module_Inr_elim:
     "link_modules (map fst intDeps) = Inr a"
     "sort_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps)) (Mod_Interface bm)
        = Inr sortedInt"
-    "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps)) {||} sortedInt
-       = Inr (intMod, intFoldEnv)"
+    "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps)) {||}
+       (CM_GlobalVars a) sortedInt = Inr (intMod, intFoldEnv)"
     "intEE = elabenv_delta (elabenv_union (map snd intDeps)) intFoldEnv"
     "link_modules (map fst intDeps @ map fst implDeps @ [intMod]) = Inr b"
     "sort_declarations (CM_TyEnv b)
@@ -576,7 +577,8 @@ lemma elab_module_Inr_elim:
        (Mod_Implementation bm) = Inr sortedImpl"
     "elab_declarations (CM_TyEnv b)
        (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
-       (TE_TypeVars (CM_TyEnv intMod)) sortedImpl = Inr (implMod, implFoldEnv)"
+       (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b) sortedImpl
+       = Inr (implMod, implFoldEnv)"
     "implEE = elabenv_delta
        (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE])) implFoldEnv"
   using ok unfolding elab_module_def elab_face_def Let_def
@@ -683,7 +685,7 @@ proof -
     sortInt: "sort_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
                 (Mod_Interface bm) = Inr sortedInt" and
     elabInt: "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
-                {||} sortedInt = Inr (intMod, intFoldEnv)" and
+                {||} (CM_GlobalVars a) sortedInt = Inr (intMod, intFoldEnv)" and
     intEE_eq: "intEE = elabenv_delta (elabenv_union (map snd intDeps)) intFoldEnv" and
     linkB: "link_modules (map fst intDeps @ map fst implDeps @ [intMod]) = Inr b" and
     sortImpl: "sort_declarations (CM_TyEnv b)
@@ -691,7 +693,7 @@ proof -
                  (Mod_Implementation bm) = Inr sortedImpl" and
     elabImpl: "elab_declarations (CM_TyEnv b)
                  (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
-                 (TE_TypeVars (CM_TyEnv intMod)) sortedImpl
+                 (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b) sortedImpl
                  = Inr (implMod, implFoldEnv)" and
     implEE_eq: "implEE = elabenv_delta
                   (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
@@ -731,8 +733,11 @@ proof -
   have ctxA: "elab_context_ok (CM_TyEnv a) {||}"
     using a_nwt own0 ctx_freshA fun_freshA
     unfolding elab_context_ok_def normalized_module_well_typed_def by blast
-  obtain envF where invF: "elab_decls_invariant (CM_TyEnv a) {||} envF intFoldEnv intMod"
-    using ctxA ea_wf elabInt by (rule elab_declarations_invariant)
+  have gvA: "module_globals_well_typed (CM_TyEnv a) (CM_GlobalVars a)"
+    using a_nwt unfolding normalized_module_well_typed_def by blast
+  obtain envF where invF: "elab_decls_invariant (CM_TyEnv a) {||} (CM_GlobalVars a)
+                             envF intFoldEnv intMod"
+    using ctxA ea_wf gvA elabInt by (rule elab_declarations_invariant)
   have intMod_subst: "CM_TypeSubst intMod = fmempty"
     using elab_decls_invariant_empty_subst[OF invF] .
   have intMod_inv: "core_module_invariant intMod"
@@ -756,7 +761,7 @@ proof -
       using link_modules_collapse[OF linkA linkL] .
     show ?thesis
       using elab_link_well_typed[OF a_wt a_subst ea_wf own0 ctx_freshA fun_freshA
-              elabInt pair] .
+              gvA elabInt pair] .
   qed
 
   \<comment> \<open>Conclusion (iii): the fold's final state env IS the linked interface's
@@ -890,10 +895,13 @@ proof -
   have ctxB: "elab_context_ok (CM_TyEnv b) (TE_TypeVars (CM_TyEnv intMod))"
     using b_nwt ownB ctx_freshB fun_freshB
     unfolding elab_context_ok_def normalized_module_well_typed_def by blast
+  have gvB: "module_globals_well_typed (CM_TyEnv b) (CM_GlobalVars b)"
+    using b_nwt unfolding normalized_module_well_typed_def by blast
   obtain envG where invG: "elab_decls_invariant (CM_TyEnv b)
-                             (TE_TypeVars (CM_TyEnv intMod)) envG implFoldEnv implMod"
+                             (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b)
+                             envG implFoldEnv implMod"
                 and rtokG: "subst_runtime_ok (CM_TyEnv b) envG implMod"
-    using ctxB eb_wf elabImpl
+    using ctxB eb_wf gvB elabImpl
     by (rule elab_declarations_subst_runtime)
   have concl_v: "core_module_invariant implMod
                    \<and> fmdom (CM_TypeSubst implMod) |\<subseteq>| TE_TypeVars (CM_TyEnv intMod)"
@@ -988,7 +996,7 @@ proof -
       using link_modules_collapse[OF linkB linkP'] .
     show ?thesis
       using elab_link_well_typed[OF b_wt b_subst eb_wf ownB ctx_freshB fun_freshB
-              elabImpl pairP] .
+              gvB elabImpl pairP] .
   qed
 
   \<comment> \<open>Conclusion (vi): the runtime gate of the derived implementation link.
@@ -1262,7 +1270,7 @@ proof -
     sortInt: "sort_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
                 (Mod_Interface bm) = Inr sortedInt" and
     elabInt: "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
-                {||} sortedInt = Inr (intMod, intFoldEnv)" and
+                {||} (CM_GlobalVars a) sortedInt = Inr (intMod, intFoldEnv)" and
     intEE_eq: "intEE = elabenv_delta (elabenv_union (map snd intDeps)) intFoldEnv" and
     linkB: "link_modules (map fst intDeps @ map fst implDeps @ [intMod]) = Inr b" and
     sortImpl: "sort_declarations (CM_TyEnv b)
@@ -1270,7 +1278,7 @@ proof -
                  (Mod_Implementation bm) = Inr sortedImpl" and
     elabImpl: "elab_declarations (CM_TyEnv b)
                  (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
-                 (TE_TypeVars (CM_TyEnv intMod)) sortedImpl
+                 (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b) sortedImpl
                  = Inr (implMod, implFoldEnv)" and
     implEE_eq: "implEE = elabenv_delta
                   (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))

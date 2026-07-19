@@ -1,5 +1,6 @@
 theory TypeError
   imports "../bab/Location" "../bab/BabSyntax" "../core/CoreSyntax"
+    "../interpreter/CoreInterp"  (* for InterpError *)
 begin
 
 (* Possible errors returned by the elaborator *)
@@ -85,6 +86,9 @@ datatype TypeError =
   | TyErr_ConstDeclNeedsType Location string  (* `const x;` with neither type annotation nor value *)
   | TyErr_FunctionSignatureMismatch Location string  (* a function definition's signature differs from its earlier declaration *)
   | TyErr_NotCompileTimeConstant Location  (* a non-ghost global initializer contains a function call *)
+  | TyErr_ConstValueNotVisible Location string  (* a constant initializer references a constant with no visible value (e.g. an opaque imported constant) *)
+  | TyErr_ConstEvalError Location InterpError  (* compile-time evaluation of a constant initializer failed (e.g. overflow, match failure, array index out of bounds) *)
+  | TyErr_ConstAbstractType Location  (* a constant initializer mentions an abstract (unrealized) type, so it cannot be evaluated at compile time (e.g. an empty array literal at an opaque imported element type) *)
   | TyErr_ExternFunctionWithBody Location string  (* an extern function may not also have a body *)
   | TyErr_InvalidFunctionAttribute Location  (* an attribute other than requires/ensures/decreases on a function *)
   | TyErr_EmptyDatatype Location string  (* datatype with no constructors *)

@@ -186,6 +186,10 @@ fun find_matching_arm :: "CoreValue \<Rightarrow> (CorePattern \<times> 'a) list
     (if pattern_matches val pat then Inr rhs
     else find_matching_arm val rest)"
 
+(* A matching arm returned by find_matching_arm is one of the arms. *)
+lemma find_matching_arm_in_arms:
+  "find_matching_arm v arms = Inr rhs \<Longrightarrow> rhs \<in> snd ` set arms"
+  by (induction v arms rule: find_matching_arm.induct) (auto split: if_splits)
 
 (* ========================================================================== *)
 (* Lvalue path operations *)

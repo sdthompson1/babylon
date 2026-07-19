@@ -1,6 +1,5 @@
 theory CoreValue
-  imports "../core/CoreTyEnv" "../core/CoreKindcheck" "../core/TypeSubst"
-          "../core/CoreTyEnvWellFormed"
+  imports CoreTyEnv CoreKindcheck TypeSubst CoreTyEnvWellFormed
 begin
 
 (* This file defines CoreValue and provides some helpers e.g. type calculations. *)

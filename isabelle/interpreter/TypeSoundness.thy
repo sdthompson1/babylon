@@ -2463,7 +2463,7 @@ next
             next
               case (Inr armBody)
               note match_eq = Inr
-              from find_matching_arm_in_set[OF match_eq]
+              from find_matching_arm_in_arms[OF match_eq]
               obtain pat where arm_in: "(pat, armBody) \<in> set arms" by auto
               from arm_in have body_in: "armBody \<in> set (map snd arms)" by force
               from bodies_typed body_in obtain bodyEnv' where

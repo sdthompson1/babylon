@@ -355,7 +355,8 @@ definition elab_face ::
            in case sort_declarations (CM_TyEnv ctx) e decls of
                 Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
               | Inr sortedDecls \<Rightarrow>
-                  (case elab_declarations (CM_TyEnv ctx) e ownAbstract sortedDecls of
+                  (case elab_declarations (CM_TyEnv ctx) e ownAbstract
+                                          (CM_GlobalVars ctx) sortedDecls of
                      Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
                    | Inr (m, foldEnv) \<Rightarrow> Inr (m, elabenv_delta e foldEnv))))"
 

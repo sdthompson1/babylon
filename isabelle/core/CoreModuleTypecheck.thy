@@ -26,46 +26,10 @@ begin
 *)
 
 (* Note: well-typedness is checked *after* substitution, e.g. if the substitution
-   maps "T" to "i32", then it's legal to have a global constant of type "T" and
-   initializer "100"; the initializer's type is checked only after T has been resolved
+   maps "T" to "i32", then it's legal to have a global constant of type "T" whose
+   value is an i32; the value's type is checked only after T has been resolved
    to its definition (i32). *)
 
-
-
-(* ========================================================================== *)
-(* Compile-time constant terms                                                *)
-(* ========================================================================== *)
-
-(* Global-variable initializers must be computable at compile time without
-   evaluating function calls, so we require them to contain no
-   CoreTm_FunctionCall anywhere. This is checked by the following predicate. *)
-
-fun is_constant_term :: "CoreTerm \<Rightarrow> bool" where
-  "is_constant_term (CoreTm_LitBool _) = True"
-| "is_constant_term (CoreTm_LitInt _) = True"
-| "is_constant_term (CoreTm_LitArray _ tms) = list_all is_constant_term tms"
-| "is_constant_term (CoreTm_Var _) = True"
-| "is_constant_term (CoreTm_Cast _ tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Unop _ tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Binop _ lhs rhs) =
-    (is_constant_term lhs \<and> is_constant_term rhs)"
-| "is_constant_term (CoreTm_Let _ rhs body) =
-    (is_constant_term rhs \<and> is_constant_term body)"
-| "is_constant_term (CoreTm_Quantifier _ _ _ body) = is_constant_term body"
-| "is_constant_term (CoreTm_FunctionCall _ _ _) = False"
-| "is_constant_term (CoreTm_VariantCtor _ _ payload) = is_constant_term payload"
-| "is_constant_term (CoreTm_Record flds) =
-    list_all (is_constant_term \<circ> snd) flds"
-| "is_constant_term (CoreTm_RecordProj tm _) = is_constant_term tm"
-| "is_constant_term (CoreTm_VariantProj tm _) = is_constant_term tm"
-| "is_constant_term (CoreTm_ArrayProj arr idxs) =
-    (is_constant_term arr \<and> list_all is_constant_term idxs)"
-| "is_constant_term (CoreTm_Match scrut arms) =
-    (is_constant_term scrut \<and> list_all (is_constant_term \<circ> snd) arms)"
-| "is_constant_term (CoreTm_Sizeof tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Allocated tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Old tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Default _) = True"
 
 
 (* ========================================================================== *)
@@ -120,18 +84,17 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
 
 (* Typechecking of global variables:
 
-   Every defined global is declared in TE_GlobalVars, and its initializer is
-   a compile-time constant term that typechecks with the declared type (in
-   NotGhost mode - globals are never ghost in Core).
+   Every defined global is declared in TE_GlobalVars, and its value has the
+   declared type. (The elaborator evaluates constant initializers at compile
+   time, so CM_GlobalVars holds ground CoreValues - not CoreTerms.)
 
    Note that it is allowed for a global to be declared in TE_GlobalVars, but
    not defined - this is exactly what an interface is. *)
-definition module_globals_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreTerm) fmap \<Rightarrow> bool" where
+definition module_globals_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> bool" where
   "module_globals_well_typed env globals =
-    (\<forall>name tm. fmlookup globals name = Some tm \<longrightarrow>
+    (\<forall>name v. fmlookup globals name = Some v \<longrightarrow>
        (\<exists>declTy. fmlookup (TE_GlobalVars env) name = Some declTy \<and>
-          is_constant_term tm \<and>
-          core_term_type env NotGhost tm = Some declTy))"
+          value_has_type env v declTy))"
 
 (* Typechecking of functions:
 

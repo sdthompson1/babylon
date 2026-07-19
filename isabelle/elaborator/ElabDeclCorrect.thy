@@ -1,5 +1,5 @@
 theory ElabDeclCorrect
-  imports ElabDecl ElabStmtCorrect "../core/LinkPreservesWellTyped"
+  imports ElabDecl ElabStmtCorrect ConstFoldCorrect "../core/LinkPreservesWellTyped"
           "../util/FSetExtras"
 begin
 
@@ -72,7 +72,7 @@ qed
    runtime guard checked it. This is what lets the correctness theorems state
    freshness as a consequence of success rather than as a side condition. *)
 lemma elab_declarations_decls_fresh:
-  assumes "elab_declarations env elabEnv ownAbstract decls = Inr r"
+  assumes "elab_declarations env elabEnv ownAbstract ctxGlobals decls = Inr r"
   shows "list_all decl_tyvars_fresh_ok decls"
 proof -
   have "concat (map check_decl_tyvar_names decls) = []"
@@ -184,10 +184,20 @@ definition elab_context_ok :: "CoreTyEnv \<Rightarrow> string fset \<Rightarrow>
      ones). Entries recorded before a realization are re-established by the
      substitution-preservation engine when the realization rewrites env;
      entries recorded after are born resolved (their types avoid the
-     substitution domain, so applying it is the identity). *)
+     substitution domain, so applying it is the identity);
+   - the context's global-constant values (ctxGlobals, fixed throughout the
+     fold) remain well typed in the state env. Together with the module's own
+     globals conjunct this is exactly the premise fold_const_type_preservation needs when
+     a constant initializer is evaluated against
+     ctxGlobals ++f CM_GlobalVars m. The conjunct is stated over the evolving
+     env (not env0) because value_has_type reads the datatype tables, which
+     grow and get rewritten as declarations are elaborated; it survives each
+     step by the same extension/substitution transfer lemmas as the module's
+     own globals conjunct. *)
 definition elab_decls_invariant ::
-  "CoreTyEnv \<Rightarrow> string fset \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> bool" where
-  "elab_decls_invariant env0 ownAbstract env elabEnv m =
+  "CoreTyEnv \<Rightarrow> string fset \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv
+   \<Rightarrow> CoreModule \<Rightarrow> bool" where
+  "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m =
     (elab_context_ok env0 ownAbstract
      \<and> env = module_context_env env0 m
      \<and> core_module_invariant m
@@ -201,6 +211,7 @@ definition elab_decls_invariant ::
      \<and> (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0)
      \<and> (\<forall>name info. fmlookup (TE_Functions env) name = Some info \<longrightarrow>
           list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info))
+     \<and> module_globals_well_typed env ctxGlobals
      \<and> module_globals_well_typed env (CM_GlobalVars (normalize_module m))
      \<and> module_functions_well_typed env (CM_Functions (normalize_module m)))"
 
@@ -215,7 +226,8 @@ definition elab_decls_invariant ::
 lemma elab_decls_invariant_init:
   assumes ctx: "elab_context_ok env0 ownAbstract"
       and ee: "elabenv_well_formed env0 elabEnv0"
-  shows "elab_decls_invariant env0 ownAbstract env0 elabEnv0 empty_core_module"
+      and gv: "module_globals_well_typed env0 ctxGlobals"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env0 elabEnv0 empty_core_module"
 proof -
   have env_eq: "module_context_env env0 empty_core_module = env0"
     unfolding module_context_env_def empty_core_module_def empty_module_tyenv_def
@@ -236,7 +248,7 @@ proof -
     by (simp_all add: empty_core_module_def empty_module_tyenv_def)
   show ?thesis
     unfolding elab_decls_invariant_def
-    using ctx ee inv
+    using ctx ee inv gv
     by (simp add: env_eq norm proj elab_context_ok_def
                   typesubst_well_kinded_def
                   module_globals_well_typed_def module_functions_well_typed_def)
@@ -263,7 +275,7 @@ lemma module_context_env_tyvar_fields:
    context's TE_TypeVars, and the state env only subtracts realized
    (substitution-domain) names from that. *)
 lemma elab_decls_invariant_ownAbstract_cover:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
   shows "ownAbstract |\<subseteq>| TE_TypeVars env |\<union>| fmdom (CM_TypeSubst m)"
 proof -
   have ctx: "elab_context_ok env0 ownAbstract"
@@ -552,10 +564,8 @@ lemma tyenv_well_formed_add_abstract_type:
   unfolding tyenv_add_abstract_type_as_grow
   by (rule tyenv_well_formed_grow_tyvar_fields[OF wf]) (auto split: if_splits)
 
-(* Recorded globals stay well-typed when the tyvar fields grow: the
-   TE_TypeVars / TE_RuntimeTypeVars growth is the irrelevant-tyvar weakening,
-   and the TE_AbstractTypes change is invisible to the typechecker (it is not
-   pinned by tyenv_extends). *)
+(* Recorded global values stay well-typed when the tyvar fields grow:
+   value_has_type only reads the datatype tables, which are untouched. *)
 lemma module_globals_well_typed_grow_tyvar_fields:
   assumes gwt: "module_globals_well_typed env globals"
       and cons: "tyenv_ctors_consistent env"
@@ -564,33 +574,24 @@ lemma module_globals_well_typed_grow_tyvar_fields:
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
                   TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>) globals"
 proof -
-  let ?mid = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
-                    TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT \<rparr>"
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
                      TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
-  have ext: "tyenv_extends ?mid ?env'"
-    unfolding tyenv_extends_def by simp
-  have cons_mid: "tyenv_ctors_consistent ?mid"
-    using cons unfolding tyenv_ctors_consistent_def by simp
   show ?thesis
     unfolding module_globals_well_typed_def
   proof (intro allI impI)
-    fix name tm
-    assume "fmlookup globals name = Some tm"
+    fix name v
+    assume "fmlookup globals name = Some v"
     then obtain declTy where
         decl: "fmlookup (TE_GlobalVars env) name = Some declTy" and
-        c: "is_constant_term tm" and
-        t: "core_term_type env NotGhost tm = Some declTy"
+        t: "value_has_type env v declTy"
       using gwt unfolding module_globals_well_typed_def by blast
     have decl': "fmlookup (TE_GlobalVars ?env') name = Some declTy" using decl by simp
-    have "core_term_type ?mid NotGhost tm = Some declTy"
-      using t by (rule core_term_type_irrelevant_tyvar)
-    then have t': "core_term_type ?env' NotGhost tm = Some declTy"
-      using core_term_type_tyenv_extends[OF ext cons_mid] by blast
+    have t': "value_has_type ?env' v declTy"
+      by (rule value_has_type_env_mono[OF _ _ _ cons t]) simp_all
     show "\<exists>declTy. fmlookup (TE_GlobalVars ?env') name = Some declTy \<and>
-            is_constant_term tm \<and> core_term_type ?env' NotGhost tm = Some declTy"
-      using decl' c t' by blast
+            value_has_type ?env' v declTy"
+      using decl' t' by blast
   qed
 qed
 
@@ -883,7 +884,7 @@ lemma module_context_env_module_scope:
 
 (* ... and hence so does the invariant's state env. *)
 lemma elab_decls_invariant_module_scope:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
   shows "tyenv_module_scope env"
 proof -
   have ctx: "elab_context_ok env0 ownAbstract"
@@ -941,7 +942,7 @@ qed
    (so the tyvar-coverage clauses reduce to their None branches), and the
    capture clauses are per-entry views of the invariant's capture conjunct. *)
 lemma elab_decls_invariant_module_env_subst_ok:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
   shows "module_env_subst_ok (CM_TypeSubst m) env env"
     and "module_env_subst_runtime_ok (CM_TypeSubst m) env env"
 proof -
@@ -1068,7 +1069,7 @@ qed
    applied to it - which is exactly what normalize_module does to recorded
    initializers. *)
 lemma elab_decls_invariant_subst_typing:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and typed: "core_term_type env ghost tm = Some ty"
       and wk: "is_well_kinded env ty"
   shows "core_term_type env ghost (apply_subst_to_term (CM_TypeSubst m) tm) = Some ty"
@@ -1330,19 +1331,18 @@ lemma module_globals_well_typed_tyenv_extends:
   shows "module_globals_well_typed env' G"
   unfolding module_globals_well_typed_def
 proof (intro allI impI)
-  fix name tm assume lk: "fmlookup G name = Some tm"
+  fix name v assume lk: "fmlookup G name = Some v"
   from gwt lk obtain declTy where
     d: "fmlookup (TE_GlobalVars env) name = Some declTy" and
-    c: "is_constant_term tm" and
-    t: "core_term_type env NotGhost tm = Some declTy"
+    t: "value_has_type env v declTy"
     unfolding module_globals_well_typed_def by blast
   have d': "fmlookup (TE_GlobalVars env') name = Some declTy"
     using ext d unfolding tyenv_extends_def by blast
-  have "core_term_type env' NotGhost tm = Some declTy"
-    using core_term_type_tyenv_extends[OF ext cons t] .
+  have "value_has_type env' v declTy"
+    using value_has_type_tyenv_extends[OF ext cons t] .
   then show "\<exists>declTy. fmlookup (TE_GlobalVars env') name = Some declTy \<and>
-          is_constant_term tm \<and> core_term_type env' NotGhost tm = Some declTy"
-    using d' c by blast
+          value_has_type env' v declTy"
+    using d' by blast
 qed
 
 lemma module_functions_well_typed_tyenv_extends:
@@ -1590,11 +1590,11 @@ qed
 (* Step 1: declaring a fresh global (in both the state env and the module's
    CM_TyEnv) preserves the invariant. *)
 lemma elab_decls_invariant_add_global:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and notin: "\<not> term_name_in_scope env name"
       and wk: "is_well_kinded env ty"
       and rt: "is_runtime_type env ty"
-  shows "elab_decls_invariant env0 ownAbstract
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_global name ty env) elabEnv
            (m \<lparr> CM_TyEnv := tyenv_add_global name ty (CM_TyEnv m) \<rparr>)"
 proof -
@@ -1613,6 +1613,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -1657,6 +1658,8 @@ proof -
     by (simp add: normalize_module_def)
   have fns_same: "CM_Functions (normalize_module ?m') = CM_Functions (normalize_module m)"
     by (simp add: normalize_module_def)
+  have cgwt': "module_globals_well_typed ?env' ctxGlobals"
+    by (rule module_globals_well_typed_tyenv_extends[OF cgwt ext cons])
   have gwt': "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
     unfolding glb_same
     by (rule module_globals_well_typed_tyenv_extends[OF gwt ext cons])
@@ -1681,6 +1684,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars ?env' \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv' .
     show "\<forall>fname info. fmlookup (TE_Functions ?env') fname = Some info \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn' .
+    show "module_globals_well_typed ?env' ctxGlobals" using cgwt' .
     show "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
       using gwt' .
     show "module_functions_well_typed ?env' (CM_Functions (normalize_module ?m'))"
@@ -1688,19 +1692,18 @@ proof -
   qed
 qed
 
-(* Step 2: recording an initializer for an already-declared global (only
-   CM_GlobalVars changes). The recorded term is "born resolved": applying the
-   module's substitution to it (as normalize_module does) leaves it typed at
-   the declared type, by elab_decls_invariant_subst_typing. *)
+(* Step 2: recording an initializer's value for an already-declared global
+   (only CM_GlobalVars changes; the env is untouched). The value is supplied
+   already typed at the declared type - the caller obtains it from
+   fold_const_type_preservation. *)
 lemma elab_decls_invariant_define_global:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and decl: "fmlookup (TE_GlobalVars env) name = Some declTy"
-      and typed: "core_term_type env NotGhost finalTm = Some declTy"
-      and const: "is_constant_term finalTm"
-  shows "elab_decls_invariant env0 ownAbstract env elabEnv
-           (m \<lparr> CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>)"
+      and vht: "value_has_type env v declTy"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
+           (m \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)"
 proof -
-  let ?m' = "m \<lparr> CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>"
+  let ?m' = "m \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>"
   have ctx: "elab_context_ok env0 ownAbstract"
    and env_eq: "env = module_context_env env0 m"
    and minv: "core_module_invariant m"
@@ -1714,11 +1717,10 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
-  have scope_env: "tyenv_module_scope env"
-    using elab_decls_invariant_module_scope[OF inv] .
   have mce_same: "module_context_env env0 ?m' = module_context_env env0 m"
     unfolding module_context_env_def by simp
   have minv': "core_module_invariant ?m'"
@@ -1726,34 +1728,25 @@ proof -
     unfolding core_module_invariant_def capture_avoiding_def
               module_ghost_subsets_ok_def tyenv_module_scope_def
     by simp
-  \<comment> \<open>The new normalized globals map: the substituted initializer joins the
-      old normalized entries.\<close>
+  \<comment> \<open>Values are untouched by normalization: the new entry simply joins the
+      old ones.\<close>
   have norm_glb: "CM_GlobalVars (normalize_module ?m')
-                = fmupd name (apply_subst_to_term (CM_TypeSubst m) finalTm)
-                        (CM_GlobalVars (normalize_module m))"
-    by (simp add: normalize_module_def fmmap_fmupd)
-  have wk_decl: "is_well_kinded env declTy"
-    using global_decl_well_kinded_module_scope[OF wf scope_env decl] .
-  have typed_subst: "core_term_type env NotGhost
-                       (apply_subst_to_term (CM_TypeSubst m) finalTm) = Some declTy"
-    using elab_decls_invariant_subst_typing[OF inv typed wk_decl] .
+                = fmupd name v (CM_GlobalVars (normalize_module m))"
+    by (simp add: normalize_module_def)
   have gwt': "module_globals_well_typed env (CM_GlobalVars (normalize_module ?m'))"
     unfolding norm_glb module_globals_well_typed_def
   proof (intro allI impI)
-    fix n tm
-    assume lk: "fmlookup (fmupd name (apply_subst_to_term (CM_TypeSubst m) finalTm)
-                                (CM_GlobalVars (normalize_module m))) n = Some tm"
+    fix n v'
+    assume lk: "fmlookup (fmupd name v (CM_GlobalVars (normalize_module m))) n = Some v'"
     show "\<exists>dTy. fmlookup (TE_GlobalVars env) n = Some dTy \<and>
-            is_constant_term tm \<and> core_term_type env NotGhost tm = Some dTy"
+            value_has_type env v' dTy"
     proof (cases "n = name")
       case True
-      then have tm_eq: "tm = apply_subst_to_term (CM_TypeSubst m) finalTm"
-        using lk by simp
-      have "is_constant_term tm" using const tm_eq by simp
-      then show ?thesis using decl typed_subst True tm_eq by auto
+      then have "v' = v" using lk by simp
+      then show ?thesis using decl vht True by auto
     next
       case False
-      then have "fmlookup (CM_GlobalVars (normalize_module m)) n = Some tm"
+      then have "fmlookup (CM_GlobalVars (normalize_module m)) n = Some v'"
         using lk by simp
       then show ?thesis using gwt unfolding module_globals_well_typed_def by blast
     qed
@@ -1777,6 +1770,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv .
     show "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn .
+    show "module_globals_well_typed env ctxGlobals" using cgwt .
     show "module_globals_well_typed env (CM_GlobalVars (normalize_module ?m'))"
       using gwt' .
     show "module_functions_well_typed env (CM_Functions (normalize_module ?m'))"
@@ -1786,22 +1780,21 @@ qed
 
 (* Steps 1+2 composed: declaring and defining a fresh global at once. *)
 lemma elab_decls_invariant_declare_define_global:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and notin: "\<not> term_name_in_scope env name"
       and wk: "is_well_kinded env ty"
       and rt: "is_runtime_type env ty"
-      and typed: "core_term_type env NotGhost finalTm = Some ty"
-      and const: "is_constant_term finalTm"
-  shows "elab_decls_invariant env0 ownAbstract
+      and vht: "value_has_type env v ty"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_global name ty env) elabEnv
            (m \<lparr> CM_TyEnv := tyenv_add_global name ty (CM_TyEnv m),
-                CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>)"
+                CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)"
 proof -
   let ?env1 = "tyenv_add_global name ty env"
   let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_global name ty (CM_TyEnv m) \<rparr>"
   have wf: "tyenv_well_formed env"
     using inv unfolding elab_decls_invariant_def by blast
-  have inv1: "elab_decls_invariant env0 ownAbstract ?env1 elabEnv ?m1"
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv ?m1"
     by (rule elab_decls_invariant_add_global[OF inv notin wk rt])
   have fresh_g: "name |\<notin>| fmdom (TE_GlobalVars env)"
     using notin unfolding term_name_in_scope_def by blast
@@ -1811,11 +1804,11 @@ proof -
     using tyenv_extends_add_global[OF fresh_g] .
   have cons: "tyenv_ctors_consistent env"
     using wf unfolding tyenv_well_formed_def by blast
-  have typed1: "core_term_type ?env1 NotGhost finalTm = Some ty"
-    using core_term_type_tyenv_extends[OF ext cons typed] .
-  have "elab_decls_invariant env0 ownAbstract ?env1 elabEnv
-          (?m1 \<lparr> CM_GlobalVars := fmupd name finalTm (CM_GlobalVars ?m1) \<rparr>)"
-    by (rule elab_decls_invariant_define_global[OF inv1 lk1 typed1 const])
+  have vht1: "value_has_type ?env1 v ty"
+    using value_has_type_tyenv_extends[OF ext cons vht] .
+  have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv
+          (?m1 \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars ?m1) \<rparr>)"
+    by (rule elab_decls_invariant_define_global[OF inv1 lk1 vht1])
   then show ?thesis by simp
 qed
 
@@ -1829,7 +1822,7 @@ qed
    scrutinees one at a time (auto with split rules loops on this
    definition). *)
 lemma elab_const_decl_Inr_elim:
-  assumes ok: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  assumes ok: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
       and ng: "DC_Ghost dc = NotGhost"
   obtains (DeclOnly) ty coreTy where
     "DC_Value dc = None"
@@ -1839,27 +1832,29 @@ lemma elab_const_decl_Inr_elim:
     "env' = tyenv_add_global (DC_Name dc) coreTy env"
     "elabEnv' = elabEnv"
     "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) coreTy (CM_TyEnv m) \<rparr>"
-  | (DefineDeclared) rhs declTy finalTm where
+  | (DefineDeclared) rhs declTy finalTm v where
     "DC_Value dc = Some rhs"
     "fmlookup (TE_GlobalVars env) (DC_Name dc) = Some declTy"
     "DC_Name dc |\<notin>| fmdom (CM_GlobalVars m)"
     "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
        = Inr finalTm"
+    "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm = Inr v"
     "env' = env"
     "elabEnv' = elabEnv"
-    "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-  | (InferDefine) rhs finalTm declTy where
+    "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>"
+  | (InferDefine) rhs finalTm declTy v where
     "DC_Value dc = Some rhs"
     "fmlookup (TE_GlobalVars env) (DC_Name dc) = None"
     "DC_Type dc = None"
     "\<not> term_name_in_scope env (DC_Name dc)"
     "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs
        = Inr (finalTm, declTy)"
+    "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm = Inr v"
     "env' = tyenv_add_global (DC_Name dc) declTy env"
     "elabEnv' = elabEnv"
     "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy (CM_TyEnv m),
-              CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-  | (AnnotDefine) rhs ty declTy finalTm where
+              CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>"
+  | (AnnotDefine) rhs ty declTy finalTm v where
     "DC_Value dc = Some rhs"
     "fmlookup (TE_GlobalVars env) (DC_Name dc) = None"
     "DC_Type dc = Some ty"
@@ -1867,10 +1862,11 @@ lemma elab_const_decl_Inr_elim:
     "elab_type env elabEnv (DC_Ghost dc) ty = Inr declTy"
     "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
        = Inr finalTm"
+    "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm = Inr v"
     "env' = tyenv_add_global (DC_Name dc) declTy env"
     "elabEnv' = elabEnv"
     "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy (CM_TyEnv m),
-              CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+              CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>"
 proof (cases "DC_Value dc")
   case None
   \<comment> \<open>Collapse the outer case with the known discriminator first (no
@@ -1927,9 +1923,13 @@ next
                        declTy rhs of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr finalTm \<Rightarrow>
-                    Inr (env, elabEnv,
-                         m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm
-                                                (CM_GlobalVars m) \<rparr>))))
+                    (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                            (DC_Location dc) finalTm of
+                       Inl errs \<Rightarrow> Inl errs
+                     | Inr v \<Rightarrow>
+                         Inr (env, elabEnv,
+                              m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) v
+                                                     (CM_GlobalVars m) \<rparr>)))))
        = Inr (env', elabEnv', m')"
       unfolding elab_const_decl_def Let_def
       by (simp add: Some lkSome ng)
@@ -1940,8 +1940,12 @@ next
       "(case elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs of
           Inl errs \<Rightarrow> Inl errs
         | Inr finalTm \<Rightarrow>
-            Inr (env, elabEnv,
-                 m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>))
+            (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                    (DC_Location dc) finalTm of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr v \<Rightarrow>
+                 Inr (env, elabEnv,
+                      m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>)))
        = Inr (env', elabEnv', m')"
     proof (cases "DC_Type dc")
       case None
@@ -1961,13 +1965,25 @@ next
     from elabB' obtain finalTm where
       rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
                  = Inr finalTm" and
-      env'_eq: "env' = env" and
-      ee'_eq: "elabEnv' = elabEnv" and
-      m'_eq: "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
+      elabB'': "(case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                        (DC_Location dc) finalTm of
+                   Inl errs \<Rightarrow> Inl errs
+                 | Inr v \<Rightarrow>
+                     Inr (env, elabEnv,
+                          m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>))
+                = Inr (env', elabEnv', m')"
       by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
          auto
+    from elabB'' obtain v where
+      fold_ok: "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm
+                  = Inr v" and
+      env'_eq: "env' = env" and
+      ee'_eq: "elabEnv' = elabEnv" and
+      m'_eq: "m' = m \<lparr> CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>"
+      by (cases "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm")
+         auto
     show thesis
-      by (rule DefineDeclared[OF Some lkSome nd rhs_ok env'_eq ee'_eq m'_eq])
+      by (rule DefineDeclared[OF Some lkSome nd rhs_ok fold_ok env'_eq ee'_eq m'_eq])
   next
     case lkNone: None
     show thesis
@@ -1980,12 +1996,16 @@ next
                       (DC_Location dc) rhs of
                  Inl errs \<Rightarrow> Inl errs
                | Inr (finalTm, declTy) \<Rightarrow>
-                   Inr (tyenv_add_global (DC_Name dc) declTy env,
-                        elabEnv,
-                        m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
-                                          (CM_TyEnv m),
-                            CM_GlobalVars := fmupd (DC_Name dc) finalTm
-                                               (CM_GlobalVars m) \<rparr>))
+                   (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                           (DC_Location dc) finalTm of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr v \<Rightarrow>
+                        Inr (tyenv_add_global (DC_Name dc) declTy env,
+                             elabEnv,
+                             m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                               (CM_TyEnv m),
+                                 CM_GlobalVars := fmupd (DC_Name dc) v
+                                                    (CM_GlobalVars m) \<rparr>)))
          = Inr (env', elabEnv', m')"
         unfolding elab_const_decl_def Let_def
         using lkNone Some ng by auto
@@ -1994,15 +2014,31 @@ next
       from elabC notin obtain finalTm declTy where
         infer_ok: "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs
                      = Inr (finalTm, declTy)" and
+        elabC': "(case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                         (DC_Location dc) finalTm of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr v \<Rightarrow>
+                      Inr (tyenv_add_global (DC_Name dc) declTy env,
+                           elabEnv,
+                           m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                             (CM_TyEnv m),
+                               CM_GlobalVars := fmupd (DC_Name dc) v
+                                                  (CM_GlobalVars m) \<rparr>))
+                 = Inr (env', elabEnv', m')"
+        by (cases "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs")
+           (auto split: prod.splits)
+      from elabC' obtain v where
+        fold_ok: "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm
+                    = Inr v" and
         env'_eq: "env' = tyenv_add_global (DC_Name dc) declTy env" and
         ee'_eq: "elabEnv' = elabEnv" and
         m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
                                        (CM_TyEnv m),
-                         CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-        by (cases "elab_const_rhs_infer env elabEnv (DC_Ghost dc) (DC_Location dc) rhs")
-           (auto split: prod.splits)
+                         CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>"
+        by (cases "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm")
+           auto
       show thesis
-        by (rule InferDefine[OF Some lkNone tyNone notin infer_ok
+        by (rule InferDefine[OF Some lkNone tyNone notin infer_ok fold_ok
                                 env'_eq ee'_eq m'_eq])
     next
       case tySome: (Some ty)
@@ -2016,12 +2052,16 @@ next
                            declTy rhs of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr finalTm \<Rightarrow>
-                        Inr (tyenv_add_global (DC_Name dc) declTy env,
-                             elabEnv,
-                             m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
-                                               (CM_TyEnv m),
-                                 CM_GlobalVars := fmupd (DC_Name dc) finalTm
-                                                    (CM_GlobalVars m) \<rparr>)))
+                        (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                                (DC_Location dc) finalTm of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr v \<Rightarrow>
+                             Inr (tyenv_add_global (DC_Name dc) declTy env,
+                                  elabEnv,
+                                  m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                                    (CM_TyEnv m),
+                                      CM_GlobalVars := fmupd (DC_Name dc) v
+                                                         (CM_GlobalVars m) \<rparr>))))
          = Inr (env', elabEnv', m')"
         unfolding elab_const_decl_def Let_def
         using lkNone Some ng by auto
@@ -2033,15 +2073,31 @@ next
       from elabD notin ety obtain finalTm where
         rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
                    = Inr finalTm" and
+        elabD': "(case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m)
+                         (DC_Location dc) finalTm of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr v \<Rightarrow>
+                      Inr (tyenv_add_global (DC_Name dc) declTy env,
+                           elabEnv,
+                           m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
+                                             (CM_TyEnv m),
+                               CM_GlobalVars := fmupd (DC_Name dc) v
+                                                  (CM_GlobalVars m) \<rparr>))
+                 = Inr (env', elabEnv', m')"
+        by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
+           auto
+      from elabD' obtain v where
+        fold_ok: "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm
+                    = Inr v" and
         env'_eq: "env' = tyenv_add_global (DC_Name dc) declTy env" and
         ee'_eq: "elabEnv' = elabEnv" and
         m'_eq: "m' = m \<lparr> CM_TyEnv := tyenv_add_global (DC_Name dc) declTy
                                        (CM_TyEnv m),
-                         CM_GlobalVars := fmupd (DC_Name dc) finalTm (CM_GlobalVars m) \<rparr>"
-        by (cases "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs")
+                         CM_GlobalVars := fmupd (DC_Name dc) v (CM_GlobalVars m) \<rparr>"
+        by (cases "fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) (DC_Location dc) finalTm")
            auto
       show thesis
-        by (rule AnnotDefine[OF Some lkNone tySome notin ety rhs_ok
+        by (rule AnnotDefine[OF Some lkNone tySome notin ety rhs_ok fold_ok
                                 env'_eq ee'_eq m'_eq])
     qed
   qed
@@ -2371,12 +2427,12 @@ qed
    nullary data-constructor set and the void flag); changing any other field - the
    void-functions set, in particular - preserves it. *)
 lemma elab_decls_invariant_ee_cong:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and td_eq: "EE_Typedefs elabEnv' = EE_Typedefs elabEnv"
       and vd_ctor_eq: "EE_NullaryDataCtors elabEnv' = EE_NullaryDataCtors elabEnv"
       and vd_eq: "EE_CurrentFunctionVoid elabEnv' = EE_CurrentFunctionVoid elabEnv"
       and gc_eq: "EE_GhostConstants elabEnv' = EE_GhostConstants elabEnv"
-  shows "elab_decls_invariant env0 ownAbstract env elabEnv' m"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv' m"
 proof -
   have sbt_eq: "scope_bound_tyvars env elabEnv' = scope_bound_tyvars env elabEnv"
     unfolding scope_bound_tyvars_def by (simp add: td_eq)
@@ -2560,7 +2616,7 @@ qed
    elaborator's void-functions update is invisible to the invariant
    (elab_decls_invariant_ee_cong). *)
 lemma elab_decls_invariant_add_function:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and notin: "\<not> term_name_in_scope env name"
       and fi_cap: "subst_names (CM_TypeSubst m)
                      |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
@@ -2587,7 +2643,7 @@ lemma elab_decls_invariant_add_function:
                                 (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
-  shows "elab_decls_invariant env0 ownAbstract
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_function name info env) elabEnv
            (m \<lparr> CM_TyEnv := tyenv_add_function name info (CM_TyEnv m) \<rparr>)"
 proof -
@@ -2606,6 +2662,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname inf. fmlookup (TE_Functions env) fname = Some inf \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -2714,6 +2771,8 @@ proof -
   have fns_same: "CM_Functions (normalize_module ?m')
                 = CM_Functions (normalize_module m)"
     by (simp add: normalize_module_def)
+  have cgwt': "module_globals_well_typed ?env' ctxGlobals"
+    by (rule module_globals_well_typed_tyenv_extends[OF cgwt ext cons])
   have gwt': "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
     unfolding glb_same
     by (rule module_globals_well_typed_tyenv_extends[OF gwt ext cons])
@@ -2738,6 +2797,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars ?env' \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv' .
     show "\<forall>fname inf. fmlookup (TE_Functions ?env') fname = Some inf \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)" using mv_fn' .
+    show "module_globals_well_typed ?env' ctxGlobals" using cgwt' .
     show "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
       using gwt' .
     show "module_functions_well_typed ?env' (CM_Functions (normalize_module ?m'))"
@@ -2756,7 +2816,7 @@ qed
    well-formedness and the capture conjunct - and its type-variable fields
    are supplied by the target env, which is the body env itself. *)
 lemma elab_decls_invariant_body_env_absorb:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) fname = Some info"
   shows "apply_subst_to_module_env (CM_TypeSubst m)
            (module_body_env_for env names info)
@@ -2848,7 +2908,7 @@ qed
    avoid the substitution domain, and its declaration tables are the state
    env's, so the capture clauses are the same per-entry views. *)
 lemma elab_decls_invariant_body_env_subst_ok:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) fname = Some info"
   shows "module_env_subst_ok (CM_TypeSubst m)
            (module_body_env_for env names info)
@@ -2934,7 +2994,7 @@ qed
    typed after the module's substitution is applied to it - which is exactly
    what normalize_module does to recorded bodies. *)
 lemma elab_decls_invariant_body_subst_typing:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) fname = Some info"
       and len: "length names = length (FI_TmArgs info)"
       and typed: "core_statement_list_type (module_body_env_for env names info)
@@ -2976,7 +3036,7 @@ qed
    counter restarts at 0), and the ghost/proof-goal fields are set directly
    by module_body_env_for. *)
 lemma elab_fun_body_and_contracts_correct:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) fname = Some funInfo"
       and tyargs: "FI_TyArgs funInfo = DF_TyArgs df"
       and ghost_eq: "FI_Ghost funInfo = DF_Ghost df"
@@ -3096,7 +3156,7 @@ qed
    applies the substitution to it, and the body-env substitution engine shows
    the substituted body still typechecks. *)
 lemma elab_decls_invariant_define_function:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) name = Some funInfo"
       and len: "length paramNames = length (FI_TmArgs funInfo)"
       and dst: "distinct paramNames"
@@ -3106,7 +3166,7 @@ lemma elab_decls_invariant_define_function:
                         core_statement_list_type
                           (module_body_env_for env paramNames funInfo)
                           (FI_Ghost funInfo) coreBody \<noteq> None"
-  shows "elab_decls_invariant env0 ownAbstract env elabEnv
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
            (m \<lparr> CM_Functions := fmupd name \<lparr> CF_Args = paramNames,
                                              CF_Body = bodyOpt \<rparr>
                                       (CM_Functions m) \<rparr>)"
@@ -3127,6 +3187,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname inf. fmlookup (TE_Functions env) fname = Some inf \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -3243,6 +3304,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv .
     show "\<forall>fname inf. fmlookup (TE_Functions env) fname = Some inf \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)" using mv_fn .
+    show "module_globals_well_typed env ctxGlobals" using cgwt .
     show "module_globals_well_typed env (CM_GlobalVars (normalize_module ?m'))"
       using gwt unfolding glb_same .
     show "module_functions_well_typed env (CM_Functions (normalize_module ?m'))"
@@ -3410,10 +3472,10 @@ qed
 (* The branches of elab_function_decl, dispatched to the step lemmas:
    declare-only, declare-and-define, and define-previously-declared. *)
 lemma elab_function_decl_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (DF_TyArgs df)"
       and elab: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof -
   let ?name = "DF_Name df"
   let ?paramNames = "map (\<lambda>(n, _, _). n) (DF_TmArgs df)"
@@ -3506,7 +3568,7 @@ proof -
                          (FI_Ghost funInfo) coreBody \<noteq> None"
       by (rule elab_fun_body_and_contracts_correct
                  [OF inv lk sigc(1) sigc(2) len_pn sigc(8) elabB])
-    have "elab_decls_invariant env0 ownAbstract env elabEnv
+    have "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
             (m \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
                                                 CF_Body = bodyOpt \<rparr>
                                        (CM_Functions m) \<rparr>)"
@@ -3526,7 +3588,7 @@ proof -
     let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function ?name funInfo (CM_TyEnv m) \<rparr>"
     have elabB: "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo = Inr bodyOpt"
       using Declare(8) fi by simp
-    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 elabEnv ?m1"
+    have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv ?m1"
       by (rule elab_decls_invariant_add_function
                  [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p'])
     have ee_td: "EE_Typedefs ?ee1 = EE_Typedefs elabEnv"
@@ -3537,7 +3599,7 @@ proof -
       by (cases "DF_ReturnType df = None") simp_all
     have ee_gc: "EE_GhostConstants ?ee1 = EE_GhostConstants elabEnv"
       by (cases "DF_ReturnType df = None") simp_all
-    have inv2: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+    have inv2: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
       by (rule elab_decls_invariant_ee_cong[OF inv1 ee_td ee_vc ee_vd ee_gc])
     have lk1: "fmlookup (TE_Functions ?env1) ?name = Some funInfo"
       by (simp add: tyenv_add_function_def)
@@ -3552,7 +3614,7 @@ proof -
     show ?thesis
     proof (cases "DF_Extern df \<or> DF_Body df \<noteq> None")
       case True
-      have "elab_decls_invariant env0 ownAbstract ?env1 ?ee1
+      have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
               (?m1 \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
                                                     CF_Body = bodyOpt \<rparr>
                                            (CM_Functions ?m1) \<rparr>)"
@@ -3864,9 +3926,9 @@ qed
    is exactly what the new consistency conjunct demands). Nothing else in the
    invariant reads EE_GhostConstants. *)
 lemma elab_decls_invariant_insert_ghost_constant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) name = Some (ghost_const_fun_info retTy)"
-  shows "elab_decls_invariant env0 ownAbstract env
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env
            (elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>) m"
 proof -
   let ?ee' = "elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>"
@@ -3900,6 +3962,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -3920,6 +3983,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv .
     show "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn .
+    show "module_globals_well_typed env ctxGlobals" using cgwt .
     show "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
       using gwt .
     show "module_functions_well_typed env (CM_Functions (normalize_module m))"
@@ -3933,10 +3997,10 @@ qed
    elab_decls_invariant_add_function (all the type-parameter side conditions
    are trivial for a nullary signature). *)
 lemma elab_decls_invariant_add_ghost_const:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and notin: "\<not> term_name_in_scope env name"
       and wk: "is_well_kinded env coreTy"
-  shows "elab_decls_invariant env0 ownAbstract
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_function name (ghost_const_fun_info coreTy) env)
            (elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>)
            (m \<lparr> CM_TyEnv := tyenv_add_function name (ghost_const_fun_info coreTy)
@@ -3987,7 +4051,7 @@ proof -
                              |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>)
                     (FI_ReturnType ?info)"
     by (simp add: ghost_const_fun_info_def)
-  have inv1: "elab_decls_invariant env0 ownAbstract
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals
                 (tyenv_add_function name ?info env) elabEnv
                 (m \<lparr> CM_TyEnv := tyenv_add_function name ?info (CM_TyEnv m) \<rparr>)"
     by (rule elab_decls_invariant_add_function
@@ -4004,10 +4068,10 @@ qed
    ghost constant. Wraps elab_decls_invariant_define_function; the body
    obligation is ghost_const_body_typechecks. *)
 lemma elab_decls_invariant_define_ghost_const:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and lk: "fmlookup (TE_Functions env) name = Some (ghost_const_fun_info declTy)"
       and typed: "core_term_type env Ghost finalTm = Some declTy"
-  shows "elab_decls_invariant env0 ownAbstract env elabEnv
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
            (m \<lparr> CM_Functions := fmupd name (ghost_const_fun finalTm)
                                       (CM_Functions m) \<rparr>)"
 proof -
@@ -4036,9 +4100,9 @@ qed
    The DefineDeclared branch recovers the declared FunInfo's shape from the
    ghost-constants consistency conjunct of the invariant. *)
 lemma elab_ghost_const_decl_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and elab: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof -
   have wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
@@ -4118,7 +4182,7 @@ proof -
                     finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
     let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
                                  (ghost_const_fun_info declTy) (CM_TyEnv m) \<rparr>"
-    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+    have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
       by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
     have fresh_fn: "DC_Name dc |\<notin>| fmdom (TE_Functions env)"
       using notin unfolding term_name_in_scope_def by blast
@@ -4131,7 +4195,7 @@ proof -
     have lk1: "fmlookup (TE_Functions ?env1) (DC_Name dc)
                  = Some (ghost_const_fun_info declTy)"
       by (simp add: tyenv_add_function_def)
-    have "elab_decls_invariant env0 ownAbstract ?env1 ?ee1
+    have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
             (?m1 \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
                                          (CM_Functions ?m1) \<rparr>)"
       by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
@@ -4152,7 +4216,7 @@ proof -
                     finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
     let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
                                  (ghost_const_fun_info declTy) (CM_TyEnv m) \<rparr>"
-    have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+    have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
       by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
     have fresh_fn: "DC_Name dc |\<notin>| fmdom (TE_Functions env)"
       using notin unfolding term_name_in_scope_def by blast
@@ -4165,7 +4229,7 @@ proof -
     have lk1: "fmlookup (TE_Functions ?env1) (DC_Name dc)
                  = Some (ghost_const_fun_info declTy)"
       by (simp add: tyenv_add_function_def)
-    have "elab_decls_invariant env0 ownAbstract ?env1 ?ee1
+    have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
             (?m1 \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
                                          (CM_Functions ?m1) \<rparr>)"
       by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
@@ -4179,9 +4243,9 @@ qed
 (* elab_const_decl preserves the invariant: ghost constants go through the
    desugaring path above; non-ghost constants through the globals path. *)
 lemma elab_const_decl_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
-      and elab: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and elab: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof (cases "DC_Ghost dc")
   case Ghost
   have elab_g: "elab_ghost_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
@@ -4193,11 +4257,22 @@ next
   have wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
+   and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
   have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
     using eewf unfolding elabenv_well_formed_def by blast
   have scope_env: "tyenv_module_scope env"
     using elab_decls_invariant_module_scope[OF inv] .
+  \<comment> \<open>The facts fold_const_type_preservation consumes: module scope means no locals, and
+      the evaluation environment (context values overlaid with the module's
+      own) is well typed in the state env.\<close>
+  have locals: "TE_LocalVars env = fmempty"
+    using scope_env unfolding tyenv_module_scope_def by blast
+  have gwt_m: "module_globals_well_typed env (CM_GlobalVars m)"
+    using gwt by (simp add: normalize_module_def)
+  have combined: "module_globals_well_typed env (ctxGlobals ++\<^sub>f CM_GlobalVars m)"
+    by (rule module_globals_well_typed_fmadd[OF cgwt gwt_m])
   from elab NotGhost show ?thesis
   proof (cases rule: elab_const_decl_Inr_elim)
     case (DeclOnly ty coreTy)
@@ -4211,9 +4286,10 @@ next
       unfolding DeclOnly(5) DeclOnly(6) DeclOnly(7)
       by (rule elab_decls_invariant_add_global[OF inv notin wk rt])
   next
-    case (DefineDeclared rhs declTy finalTm)
+    case (DefineDeclared rhs declTy finalTm v)
     \<comment> \<open>Definition of a previously-declared constant.\<close>
     note lk = DefineDeclared(2) and rhs_ok = DefineDeclared(4)
+     and fold_ok = DefineDeclared(5)
     have wk_decl: "is_well_kinded env declTy"
       using global_decl_well_kinded_module_scope[OF wf scope_env lk] .
     have rt_decl0: "is_runtime_type env declTy"
@@ -4221,37 +4297,37 @@ next
     have rt_decl: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
       using rt_decl0 by simp
     have typed0: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-     and const0: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk_decl rt_decl] by blast+
+      using elab_const_rhs_correct(1)[OF rhs_ok wf eewf mv_tv wk_decl rt_decl] .
     have typed: "core_term_type env NotGhost finalTm = Some declTy"
       using typed0 NotGhost by simp
-    have const: "is_constant_term finalTm"
-      using const0 NotGhost by simp
+    have vht: "value_has_type env v declTy"
+      using fold_const_type_preservation[OF fold_ok typed locals combined] .
     show ?thesis
-      unfolding DefineDeclared(5) DefineDeclared(6) DefineDeclared(7)
-      by (rule elab_decls_invariant_define_global[OF inv lk typed const])
+      unfolding DefineDeclared(6) DefineDeclared(7) DefineDeclared(8)
+      by (rule elab_decls_invariant_define_global[OF inv lk vht])
   next
-    case (InferDefine rhs finalTm declTy)
+    case (InferDefine rhs finalTm declTy v)
     \<comment> \<open>No annotation: the constant's type is inferred from the rhs.\<close>
     note notin = InferDefine(4) and infer_ok = InferDefine(5)
+     and fold_ok = InferDefine(6)
     have typed0: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
      and wk: "is_well_kinded env declTy"
      and rt0: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
-     and const0: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
       using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
     have typed: "core_term_type env NotGhost finalTm = Some declTy"
      and rt: "is_runtime_type env declTy"
-     and const: "is_constant_term finalTm"
-      using typed0 rt0 const0 NotGhost by simp_all
+      using typed0 rt0 NotGhost by simp_all
+    have vht: "value_has_type env v declTy"
+      using fold_const_type_preservation[OF fold_ok typed locals combined] .
     show ?thesis
-      unfolding InferDefine(6) InferDefine(7) InferDefine(8)
+      unfolding InferDefine(7) InferDefine(8) InferDefine(9)
       by (rule elab_decls_invariant_declare_define_global
-                 [OF inv notin wk rt typed const])
+                 [OF inv notin wk rt vht])
   next
-    case (AnnotDefine rhs ty declTy finalTm)
+    case (AnnotDefine rhs ty declTy finalTm v)
     \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
     note notin = AnnotDefine(4) and ety = AnnotDefine(5)
-     and rhs_ok = AnnotDefine(6)
+     and rhs_ok = AnnotDefine(6) and fold_ok = AnnotDefine(7)
     have wk: "is_well_kinded env declTy"
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "is_runtime_type env declTy"
@@ -4259,15 +4335,15 @@ next
     have rt_impl: "DC_Ghost dc = NotGhost \<longrightarrow> is_runtime_type env declTy"
       using rt by simp
     have typed0: "core_term_type env (DC_Ghost dc) finalTm = Some declTy"
-     and const0: "DC_Ghost dc = NotGhost \<longrightarrow> is_constant_term finalTm"
-      using elab_const_rhs_correct[OF rhs_ok wf eewf mv_tv wk rt_impl] by blast+
+      using elab_const_rhs_correct(1)[OF rhs_ok wf eewf mv_tv wk rt_impl] .
     have typed: "core_term_type env NotGhost finalTm = Some declTy"
-     and const: "is_constant_term finalTm"
-      using typed0 const0 NotGhost by simp_all
+      using typed0 NotGhost by simp
+    have vht: "value_has_type env v declTy"
+      using fold_const_type_preservation[OF fold_ok typed locals combined] .
     show ?thesis
-      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9)
+      unfolding AnnotDefine(8) AnnotDefine(9) AnnotDefine(10)
       by (rule elab_decls_invariant_declare_define_global
-                 [OF inv notin wk rt typed const])
+                 [OF inv notin wk rt vht])
   qed
 qed
 
@@ -5204,7 +5280,7 @@ qed
    non-ghost, and neither the name nor the target's type variables collide
    with any bound type parameter in scope. *)
 lemma apply_realization_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and own: "name |\<in>| ownAbstract"
       and tv: "name |\<in>| TE_TypeVars env"
       and wk: "is_well_kinded env target"
@@ -5212,7 +5288,7 @@ lemma apply_realization_invariant:
       and rt_ok: "name |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
       and nocap: "\<not> realization_captures env elabEnv name target"
       and res: "apply_realization name target env elabEnv m = (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof -
   let ?s = "fmupd name target fmempty"
   let ?\<sigma> = "CM_TypeSubst m"
@@ -5244,6 +5320,7 @@ proof -
    and fresh_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and fresh_fn: "\<forall>fname inf. fmlookup (TE_Functions env) fname = Some inf \<longrightarrow>
                     list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)"
+   and cglb: "module_globals_well_typed env ctxGlobals"
    and glb: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fnw: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -5421,58 +5498,44 @@ proof -
       unfolding i_eq by simp
   qed
 
-  \<comment> \<open>Conjunct 13: recorded globals re-typecheck through the singleton pass.\<close>
-  have glb': "module_globals_well_typed env' (CM_GlobalVars (normalize_module m'))"
+  \<comment> \<open>Conjunct 13 (and the context-globals conjunct): recorded global VALUES
+      survive the singleton pass. The values themselves are untouched (they
+      contain no types); their declared types move through the value-side
+      substitution engine.\<close>
+  have glb_transfer: "\<And>G. module_globals_well_typed env G
+                        \<Longrightarrow> module_globals_well_typed env' G"
   proof -
-    have norm': "CM_GlobalVars (normalize_module m')
-                   = fmmap (apply_subst_to_term ?\<sigma>') (CM_GlobalVars m)"
-      unfolding m'_eq normalize_module_def by simp
-    have norm0: "CM_GlobalVars (normalize_module m)
-                   = fmmap (apply_subst_to_term ?\<sigma>) (CM_GlobalVars m)"
-      unfolding normalize_module_def by simp
-    have tm_comp: "\<And>tm. apply_subst_to_term ?\<sigma>' tm
-                     = apply_subst_to_term ?s (apply_subst_to_term ?\<sigma> tm)"
-      unfolding apply_subst_to_term_compose comp by (rule refl)
-    show ?thesis
+    fix G assume gG: "module_globals_well_typed env G"
+    show "module_globals_well_typed env' G"
       unfolding module_globals_well_typed_def
     proof (intro allI impI)
-      fix gname tm'
-      assume "fmlookup (CM_GlobalVars (normalize_module m')) gname = Some tm'"
-      then obtain tm0 where lk0: "fmlookup (CM_GlobalVars m) gname = Some tm0"
-                        and tm_eq: "tm' = apply_subst_to_term ?\<sigma>' tm0"
-        unfolding norm' by (cases "fmlookup (CM_GlobalVars m) gname") auto
-      have lkn: "fmlookup (CM_GlobalVars (normalize_module m)) gname
-                   = Some (apply_subst_to_term ?\<sigma> tm0)"
-        unfolding norm0 by (simp add: lk0)
-      from glb lkn obtain declTy
+      fix gname v
+      assume "fmlookup G gname = Some v"
+      with gG obtain declTy
         where dlk: "fmlookup (TE_GlobalVars env) gname = Some declTy"
-          and c: "is_constant_term (apply_subst_to_term ?\<sigma> tm0)"
-          and t: "core_term_type env NotGhost (apply_subst_to_term ?\<sigma> tm0)
-                    = Some declTy"
+          and vt: "value_has_type env v declTy"
         unfolding module_globals_well_typed_def by blast
       have dlk': "fmlookup (TE_GlobalVars env') gname = Some (apply_subst ?s declTy)"
         unfolding gv_env' by (simp add: dlk)
-      have typed': "core_term_type env' NotGhost (apply_subst_to_term ?\<sigma>' tm0)
-                      = Some (apply_subst ?s declTy)"
-      proof -
-        have "core_term_type (apply_subst_to_module_env ?s env' env) NotGhost
-                (apply_subst_to_term ?s (apply_subst_to_term ?\<sigma> tm0))
-              = Some (apply_subst ?s declTy)"
-          using core_term_type_subst_module_env[OF t wf ok] ok_rt by blast
-        then show ?thesis unfolding absorb tm_comp .
-      qed
+      have "value_has_type (apply_subst_to_module_env ?s env' env) v
+              (apply_subst ?s declTy)"
+        by (rule value_has_type_subst_module_env[OF vt wf ok])
+      then have vt': "value_has_type env' v (apply_subst ?s declTy)"
+        unfolding absorb .
       show "\<exists>declTy'. fmlookup (TE_GlobalVars env') gname = Some declTy' \<and>
-              is_constant_term tm' \<and>
-              core_term_type env' NotGhost tm' = Some declTy'"
-      proof (intro exI[of _ "apply_subst ?s declTy"] conjI)
-        show "fmlookup (TE_GlobalVars env') gname = Some (apply_subst ?s declTy)"
-          by (rule dlk')
-        show "is_constant_term tm'"
-          using c tm_eq by simp
-        show "core_term_type env' NotGhost tm' = Some (apply_subst ?s declTy)"
-          using typed' tm_eq by simp
-      qed
+              value_has_type env' v declTy'"
+        using dlk' vt' by blast
     qed
+  qed
+  have cglb': "module_globals_well_typed env' ctxGlobals"
+    by (rule glb_transfer[OF cglb])
+  have glb': "module_globals_well_typed env' (CM_GlobalVars (normalize_module m'))"
+  proof -
+    have glb_norm: "CM_GlobalVars (normalize_module m')
+                      = CM_GlobalVars (normalize_module m)"
+      unfolding m'_eq normalize_module_def by simp
+    show ?thesis
+      unfolding glb_norm by (rule glb_transfer[OF glb])
   qed
 
   \<comment> \<open>Conjunct 14: recorded function bodies re-typecheck at the realized
@@ -5635,6 +5698,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars env' \<longrightarrow> tyvar_fresh_ok n 0" by (rule fresh_tv')
     show "\<forall>fname inf. fmlookup (TE_Functions env') fname = Some inf \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)" by (rule fresh_fn')
+    show "module_globals_well_typed env' ctxGlobals" by (rule cglb')
     show "module_globals_well_typed env' (CM_GlobalVars (normalize_module m'))"
       by (rule glb')
     show "module_functions_well_typed env' (CM_Functions (normalize_module m'))"
@@ -6590,7 +6654,7 @@ qed
    the conclusion is phrased with the projection map and the nullary-name set
    exactly as the elaborator writes them. *)
 lemma elab_decls_invariant_add_datatype:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh_dt: "name |\<notin>| fmdom (TE_Datatypes env)"
       and nonempty: "ctorInfo \<noteq> []"
       and dist_names: "distinct (map fst ctorInfo)"
@@ -6607,7 +6671,7 @@ lemma elab_decls_invariant_add_datatype:
                                             (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                             |\<union>| fset_of_list tyvars \<rparr>) pay"
       and shape: "\<And>cn pay. (cn, pay, True) \<in> set ctorInfo \<Longrightarrow> pay = CoreTy_Record []"
-  shows "elab_decls_invariant env0 ownAbstract
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_datatype name tyvars (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo)
               isGhost env)
            (elabEnv \<lparr> EE_NullaryDataCtors :=
@@ -6638,6 +6702,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -6864,6 +6929,8 @@ proof -
     by (simp add: normalize_module_def)
   have fns_same: "CM_Functions (normalize_module ?m') = CM_Functions (normalize_module m)"
     by (simp add: normalize_module_def)
+  have cgwt': "module_globals_well_typed ?env' ctxGlobals"
+    by (rule module_globals_well_typed_tyenv_extends[OF cgwt ext cons])
   have gwt': "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
     unfolding glb_same
     by (rule module_globals_well_typed_tyenv_extends[OF gwt ext cons])
@@ -6888,6 +6955,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars ?env' \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv' .
     show "\<forall>fname info. fmlookup (TE_Functions ?env') fname = Some info \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn' .
+    show "module_globals_well_typed ?env' ctxGlobals" using cgwt' .
     show "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
       using gwt' .
     show "module_functions_well_typed ?env' (CM_Functions (normalize_module ?m'))"
@@ -6901,7 +6969,7 @@ qed
    computes ghost status). The ghost flag in the conclusion is spelled out as
    the elaborator computes it. *)
 lemma elab_decls_invariant_datatype_step:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh_dt: "name |\<notin>| fmdom (TE_Datatypes env)"
       and ne_dcs: "dcs \<noteq> []"
       and dup_tvs: "first_duplicate_name (\<lambda>x. x) tyvars = None"
@@ -6916,7 +6984,7 @@ lemma elab_decls_invariant_datatype_step:
                  (elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries tyvars
                                              (EE_Typedefs elabEnv) \<rparr>)
                  dcs = Inr ctorInfo"
-  shows "elab_decls_invariant env0 ownAbstract
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_datatype name tyvars (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo)
               (\<not> list_all (\<lambda>(_, payloadTy, _).
                     is_runtime_type
@@ -7121,10 +7189,10 @@ lemma elab_datatype_decl_Inr_elim:
   by (auto split: if_splits option.splits sum.splits)
 
 lemma elab_datatype_decl_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (DD_TyArgs dd)"
       and elab: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
   using elab
 proof (cases rule: elab_datatype_decl_Inr_elim)
   case (Realize ctorInfo isGhost)
@@ -7144,7 +7212,7 @@ proof (cases rule: elab_datatype_decl_Inr_elim)
                           |\<union>| EE_NullaryDataCtors elabEnv \<rparr>"
   let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_datatype ?name ?tyvars ?ctors1 isGhost
                                (CM_TyEnv m) \<rparr>"
-  have inv1: "elab_decls_invariant env0 ownAbstract ?env1 ?ee1 ?m1"
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
     unfolding gdef
     by (rule elab_decls_invariant_datatype_step[OF inv fresh_dt ne_dcs dup_tvs nocap
               dup_ctors find_ck ec])
@@ -7212,12 +7280,12 @@ qed
 
 (* Recording a transparent typedef: only EE_Typedefs changes. *)
 lemma elab_decls_invariant_add_typedef:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and dist: "distinct tyvars"
       and nocap: "\<not> binder_captures env m tyvars"
       and wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env
                                        |\<union>| fset_of_list tyvars \<rparr>) target"
-  shows "elab_decls_invariant env0 ownAbstract env
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env
            (elabEnv \<lparr> EE_Typedefs := fmupd name (tyvars, target) (EE_Typedefs elabEnv) \<rparr>) m"
 proof -
   let ?ee' = "elabEnv \<lparr> EE_Typedefs := fmupd name (tyvars, target) (EE_Typedefs elabEnv) \<rparr>"
@@ -7234,6 +7302,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -7290,6 +7359,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv .
     show "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn .
+    show "module_globals_well_typed env ctxGlobals" using cgwt .
     show "module_globals_well_typed env (CM_GlobalVars (normalize_module m))" using gwt .
     show "module_functions_well_typed env (CM_Functions (normalize_module m))" using fwt .
   qed
@@ -7298,10 +7368,10 @@ qed
 (* Recording a new abstract type ("type T;"): env, elabEnv and the module all
    gain the name. *)
 lemma elab_decls_invariant_add_abstract_type:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and notin: "\<not> type_name_in_scope env elabEnv name"
       and fresh: "tyvar_fresh_ok name 0"
-  shows "elab_decls_invariant env0 ownAbstract
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_abstract_type name ghost env)
            (elabEnv \<lparr> EE_Typedefs := fmupd name ([], CoreTy_Var name)
                                            (EE_Typedefs elabEnv) \<rparr>)
@@ -7324,6 +7394,7 @@ proof -
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
    and mv_fn: "\<forall>fname info. fmlookup (TE_Functions env) fname = Some info \<longrightarrow>
                  list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+   and cgwt: "module_globals_well_typed env ctxGlobals"
    and gwt: "module_globals_well_typed env (CM_GlobalVars (normalize_module m))"
    and fwt: "module_functions_well_typed env (CM_Functions (normalize_module m))"
     using inv unfolding elab_decls_invariant_def by blast+
@@ -7408,6 +7479,9 @@ proof -
     by (simp add: normalize_module_def)
   have fns_same: "CM_Functions (normalize_module ?m') = CM_Functions (normalize_module m)"
     by (simp add: normalize_module_def)
+  have cgwt': "module_globals_well_typed ?env' ctxGlobals"
+    unfolding tyenv_add_abstract_type_as_grow
+    by (rule module_globals_well_typed_grow_tyvar_fields[OF cgwt cons])
   have gwt0: "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module m))"
     unfolding tyenv_add_abstract_type_as_grow
     by (rule module_globals_well_typed_grow_tyvar_fields[OF gwt cons])
@@ -7436,6 +7510,7 @@ proof -
     show "\<forall>n. n |\<in>| TE_TypeVars ?env' \<longrightarrow> tyvar_fresh_ok n 0" using mv_tv' .
     show "\<forall>fname info. fmlookup (TE_Functions ?env') fname = Some info \<longrightarrow>
             list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)" using mv_fn' .
+    show "module_globals_well_typed ?env' ctxGlobals" using cgwt' .
     show "module_globals_well_typed ?env' (CM_GlobalVars (normalize_module ?m'))"
       using gwt' .
     show "module_functions_well_typed ?env' (CM_Functions (normalize_module ?m'))"
@@ -7593,10 +7668,10 @@ proof -
 qed
 
 lemma elab_typedef_decl_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (DT_Name dt # DT_TyArgs dt)"
       and elab: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
   using elab
 proof (cases rule: elab_typedef_decl_Inr_elim)
   case (Realize ty target)
@@ -7654,13 +7729,13 @@ qed
 (* ---- The dispatcher ---- *)
 
 lemma elab_declaration_invariant:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh: "decl_tyvars_fresh_ok d"
-      and elab: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof (cases d)
   case (BabDecl_Const dc)
-  then have e: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  then have e: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
     using elab by simp
   show ?thesis by (rule elab_const_decl_invariant[OF inv e])
 next
@@ -7688,10 +7763,10 @@ qed
 
 (* Lifted to the declaration list. *)
 lemma elab_declaration_list_invariant:
-  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
-      and "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes "elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds = Inr (env', elabEnv', m')"
+      and "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and "list_all decl_tyvars_fresh_ok ds"
-  shows "elab_decls_invariant env0 ownAbstract env' elabEnv' m'"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
   using assms
 proof (induction ds arbitrary: env elabEnv m)
   case Nil
@@ -7699,12 +7774,12 @@ proof (induction ds arbitrary: env elabEnv m)
 next
   case (Cons d ds)
   from Cons.prems(1) obtain env1 elabEnv1 m1 where
-    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
-    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    step: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract ctxGlobals m1 ds = Inr (env', elabEnv', m')"
     by (auto split: sum.splits prod.splits)
   have fd: "decl_tyvars_fresh_ok d" and fds: "list_all decl_tyvars_fresh_ok ds"
     using Cons.prems(3) by simp_all
-  have inv1: "elab_decls_invariant env0 ownAbstract env1 elabEnv1 m1"
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals env1 elabEnv1 m1"
     using elab_declaration_invariant[OF Cons.prems(2) fd step] .
   show ?case
     using Cons.IH[OF rest inv1 fds] .
@@ -7857,7 +7932,7 @@ qed
 
 lemma elab_const_decl_subst_runtime:
   assumes rtok: "subst_runtime_ok env0 env m"
-      and e: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+      and e: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
   shows "subst_runtime_ok env0 env' m'"
 proof -
   have "CM_TypeSubst m' = CM_TypeSubst m
@@ -7895,7 +7970,7 @@ proof -
 qed
 
 lemma elab_datatype_decl_subst_runtime:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and rtok: "subst_runtime_ok env0 env m"
       and e: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
   shows "subst_runtime_ok env0 env' m'"
@@ -7954,7 +8029,7 @@ proof -
 qed
 
 lemma elab_typedef_decl_subst_runtime:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and rtok: "subst_runtime_ok env0 env m"
       and e: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
   shows "subst_runtime_ok env0 env' m'"
@@ -7995,13 +8070,13 @@ qed
 (* ---- The dispatcher, the list, and the top-level fold ---- *)
 
 lemma elab_declaration_subst_runtime:
-  assumes inv: "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and rtok: "subst_runtime_ok env0 env m"
-      and elab: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "subst_runtime_ok env0 env' m'"
 proof (cases d)
   case (BabDecl_Const dc)
-  then have e: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  then have e: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
     using elab by simp
   show ?thesis by (rule elab_const_decl_subst_runtime[OF rtok e])
 next
@@ -8022,8 +8097,8 @@ next
 qed
 
 lemma elab_declaration_list_subst_runtime:
-  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
-      and "elab_decls_invariant env0 ownAbstract env elabEnv m"
+  assumes "elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds = Inr (env', elabEnv', m')"
+      and "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and "subst_runtime_ok env0 env m"
       and "list_all decl_tyvars_fresh_ok ds"
   shows "subst_runtime_ok env0 env' m'"
@@ -8034,12 +8109,12 @@ proof (induction ds arbitrary: env elabEnv m)
 next
   case (Cons d ds)
   from Cons.prems(1) obtain env1 elabEnv1 m1 where
-    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
-    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    step: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract ctxGlobals m1 ds = Inr (env', elabEnv', m')"
     by (auto split: sum.splits prod.splits)
   have fd: "decl_tyvars_fresh_ok d" and fds: "list_all decl_tyvars_fresh_ok ds"
     using Cons.prems(4) by simp_all
-  have inv1: "elab_decls_invariant env0 ownAbstract env1 elabEnv1 m1"
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals env1 elabEnv1 m1"
     using elab_declaration_invariant[OF Cons.prems(2) fd step] .
   have rtok1: "subst_runtime_ok env0 env1 m1"
     using elab_declaration_subst_runtime[OF Cons.prems(2) Cons.prems(3) step] .
@@ -8053,22 +8128,23 @@ qed
 lemma elab_declarations_subst_runtime:
   assumes ctx: "elab_context_ok env0 ownAbstract"
       and ee: "elabenv_well_formed env0 elabEnv0"
-      and elab: "elab_declarations env0 elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
-  obtains envF where "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
+      and gv: "module_globals_well_typed env0 ctxGlobals"
+      and elab: "elab_declarations env0 elabEnv0 ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
+  obtains envF where "elab_decls_invariant env0 ownAbstract ctxGlobals envF elabEnv' M"
                  and "subst_runtime_ok env0 envF M"
 proof -
   have fresh: "list_all decl_tyvars_fresh_ok decls"
     using elab_declarations_decls_fresh[OF elab] .
-  have init: "elab_decls_invariant env0 ownAbstract env0 elabEnv0 empty_core_module"
-    using elab_decls_invariant_init[OF ctx ee] .
+  have init: "elab_decls_invariant env0 ownAbstract ctxGlobals env0 elabEnv0 empty_core_module"
+    using elab_decls_invariant_init[OF ctx ee gv] .
   have init_rt: "subst_runtime_ok env0 env0 empty_core_module"
     unfolding subst_runtime_ok_def empty_core_module_def by simp
   from elab obtain envF where
-    run: "elab_declaration_list env0 elabEnv0 ownAbstract empty_core_module decls
+    run: "elab_declaration_list env0 elabEnv0 ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
     unfolding elab_declarations_def Let_def
     by (auto split: sum.splits prod.splits if_splits)
-  have "elab_decls_invariant env0 ownAbstract envF elabEnv' M"
+  have "elab_decls_invariant env0 ownAbstract ctxGlobals envF elabEnv' M"
     using elab_declaration_list_invariant[OF run init fresh] .
   moreover have "subst_runtime_ok env0 envF M"
     using elab_declaration_list_subst_runtime[OF run init init_rt fresh] .
@@ -8102,11 +8178,11 @@ definition decls_abstract_names :: "BabDeclaration list \<Rightarrow> string fse
    fields; apply_realization does not rewrite the module's own CM_TyEnv at
    all). *)
 lemma elab_declaration_own_tyvars:
-  assumes e: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
 proof (cases d)
   case (BabDecl_Const dc)
-  have e2: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  have e2: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
     using e by (simp add: BabDecl_Const)
   have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
   proof (cases "DC_Ghost dc")
@@ -8149,7 +8225,7 @@ qed
 
 (* Lifted to the declaration list. *)
 lemma elab_declaration_list_own_tyvars:
-  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+  assumes "elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds = Inr (env', elabEnv', m')"
   shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decls_abstract_names ds"
   using assms
 proof (induction ds arbitrary: env elabEnv m)
@@ -8158,8 +8234,8 @@ proof (induction ds arbitrary: env elabEnv m)
 next
   case (Cons d ds)
   from Cons.prems obtain env1 elabEnv1 m1 where
-    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
-    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    step: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract ctxGlobals m1 ds = Inr (env', elabEnv', m')"
     by (auto split: sum.splits prod.splits)
   have s1: "TE_TypeVars (CM_TyEnv m1)
               |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
@@ -8174,11 +8250,11 @@ qed
 (* The top-level form: the produced module's type variables all name abstract
    typedefs of the input list (the fold starts from the empty module). *)
 lemma elab_declarations_own_tyvars:
-  assumes "elab_declarations env elabEnv ownAbstract decls = Inr (M, elabEnv')"
+  assumes "elab_declarations env elabEnv ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
   shows "TE_TypeVars (CM_TyEnv M) |\<subseteq>| decls_abstract_names decls"
 proof -
   from assms obtain envF where
-    run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
+    run: "elab_declaration_list env elabEnv ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
     unfolding elab_declarations_def Let_def
     by (auto split: sum.splits prod.splits if_splits)
@@ -8235,13 +8311,13 @@ definition decls_undefined_funs :: "BabDeclaration list \<Rightarrow> string fse
    definition together except in its no-value case, and definitions are never
    removed; no other declaration form touches either field. *)
 lemma elab_declaration_undefined_globals:
-  assumes e: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
            |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
                 |\<union>| decl_undefined_consts d"
 proof (cases d)
   case (BabDecl_Const dc)
-  have e2: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  have e2: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
     using e by (simp add: BabDecl_Const)
   show ?thesis
   proof (cases "DC_Ghost dc")
@@ -8294,7 +8370,7 @@ qed
    bodiless non-extern function (an extern declaration IS a definition - its
    entry carries CF_Body = None). *)
 lemma elab_declaration_undefined_funs:
-  assumes e: "elab_declaration env elabEnv ownAbstract m d = Inr (env', elabEnv', m')"
+  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
            |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
                 |\<union>| decl_undefined_funs d"
@@ -8303,7 +8379,7 @@ proof (cases d)
   \<comment> \<open>A non-ghost constant touches neither field; a ghost constant adds its
      desugared FunInfo (and, unless declaration-only, its CM_Functions entry),
      mirroring the function case.\<close>
-  have e2: "elab_const_decl env elabEnv m dc = Inr (env', elabEnv', m')"
+  have e2: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
     using e by (simp add: BabDecl_Const)
   show ?thesis
   proof (cases "DC_Ghost dc")
@@ -8348,7 +8424,7 @@ qed
 
 (* Lifted to the declaration list. *)
 lemma elab_declaration_list_undefined_globals:
-  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+  assumes "elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds = Inr (env', elabEnv', m')"
   shows "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
            |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
                 |\<union>| decls_undefined_consts ds"
@@ -8359,8 +8435,8 @@ proof (induction ds arbitrary: env elabEnv m)
 next
   case (Cons d ds)
   from Cons.prems obtain env1 elabEnv1 m1 where
-    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
-    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    step: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract ctxGlobals m1 ds = Inr (env', elabEnv', m')"
     by (auto split: sum.splits prod.splits)
   have s1: "fmdom (TE_GlobalVars (CM_TyEnv m1)) |-| fmdom (CM_GlobalVars m1)
               |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
@@ -8375,7 +8451,7 @@ next
 qed
 
 lemma elab_declaration_list_undefined_funs:
-  assumes "elab_declaration_list env elabEnv ownAbstract m ds = Inr (env', elabEnv', m')"
+  assumes "elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds = Inr (env', elabEnv', m')"
   shows "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
            |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
                 |\<union>| decls_undefined_funs ds"
@@ -8386,8 +8462,8 @@ proof (induction ds arbitrary: env elabEnv m)
 next
   case (Cons d ds)
   from Cons.prems obtain env1 elabEnv1 m1 where
-    step: "elab_declaration env elabEnv ownAbstract m d = Inr (env1, elabEnv1, m1)" and
-    rest: "elab_declaration_list env1 elabEnv1 ownAbstract m1 ds = Inr (env', elabEnv', m')"
+    step: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract ctxGlobals m1 ds = Inr (env', elabEnv', m')"
     by (auto split: sum.splits prod.splits)
   have s1: "fmdom (TE_Functions (CM_TyEnv m1)) |-| fmdom (CM_Functions m1)
               |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
@@ -8405,12 +8481,12 @@ qed
    declared name of the produced module is either defined by the module or
    named by an undefined-const/-function declaration of the input list. *)
 lemma elab_declarations_undefined_globals:
-  assumes "elab_declarations env elabEnv ownAbstract decls = Inr (M, elabEnv')"
+  assumes "elab_declarations env elabEnv ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
   shows "fmdom (TE_GlobalVars (CM_TyEnv M))
            |\<subseteq>| fmdom (CM_GlobalVars M) |\<union>| decls_undefined_consts decls"
 proof -
   from assms obtain envF where
-    run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
+    run: "elab_declaration_list env elabEnv ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
     unfolding elab_declarations_def Let_def
     by (auto split: sum.splits prod.splits if_splits)
@@ -8421,12 +8497,12 @@ proof -
 qed
 
 lemma elab_declarations_undefined_funs:
-  assumes "elab_declarations env elabEnv ownAbstract decls = Inr (M, elabEnv')"
+  assumes "elab_declarations env elabEnv ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
   shows "fmdom (TE_Functions (CM_TyEnv M))
            |\<subseteq>| fmdom (CM_Functions M) |\<union>| decls_undefined_funs decls"
 proof -
   from assms obtain envF where
-    run: "elab_declaration_list env elabEnv ownAbstract empty_core_module decls
+    run: "elab_declaration_list env elabEnv ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
     unfolding elab_declarations_def Let_def
     by (auto split: sum.splits prod.splits if_splits)
@@ -8577,7 +8653,7 @@ qed
 lemma elab_link_mid_env_well_formed:
   assumes I_wt: "core_module_well_typed I"
       and I_norm: "CM_TypeSubst I = fmempty"
-      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract env elabEnv M"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
       and link: "link_modules [I, M] = Inr L"
   shows "tyenv_well_formed (link_mid_env I M L)"
 proof -
@@ -9447,7 +9523,7 @@ qed
 lemma elab_link_mid_env_subst_ok:
   assumes I_wt: "core_module_well_typed I"
       and I_norm: "CM_TypeSubst I = fmempty"
-      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract env elabEnv M"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
       and link: "link_modules [I, M] = Inr L"
   shows "module_env_subst_ok (CM_TypeSubst L) (CM_TyEnv (normalize_module L))
                              (link_mid_env I M L)"
@@ -9603,7 +9679,7 @@ qed
 lemma elab_link_term_transfer:
   assumes I_wt: "core_module_well_typed I"
       and I_norm: "CM_TypeSubst I = fmempty"
-      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract env elabEnv M"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
       and link: "link_modules [I, M] = Inr L"
       and t0: "core_term_type (CM_TyEnv I) ghost tm = Some ty"
   shows "core_term_type (CM_TyEnv (normalize_module L)) ghost
@@ -9671,10 +9747,86 @@ proof -
       subst_eq by auto
 qed
 
+(* Value analogue of elab_link_term_transfer: an I-side value judgment moves
+   to the normalized linked env. Values contain no types, so the tyvar-widening
+   step of the term chain is unnecessary (value_has_type ignores the tyvar
+   fields); one env_mono application along the declaration axis, then the
+   value-side substitution engine, then the collapse equation. *)
+lemma elab_link_value_transfer:
+  assumes I_wt: "core_module_well_typed I"
+      and I_norm: "CM_TypeSubst I = fmempty"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
+      and link: "link_modules [I, M] = Inr L"
+      and v0: "value_has_type (CM_TyEnv I) v ty"
+  shows "value_has_type (CM_TyEnv (normalize_module L)) v (apply_subst (CM_TypeSubst M) ty)"
+proof -
+  have invM: "core_module_invariant M"
+    using inv unfolding elab_decls_invariant_def by blast
+  have idemM: "idempotent_subst (CM_TypeSubst M)"
+    using invM unfolding core_module_invariant_def by blast
+  have I_nwt: "normalized_module_well_typed I"
+    using core_module_well_typed_on_normalized[OF I_norm] I_wt by blast
+  have wfI: "tyenv_well_formed (CM_TyEnv I)"
+    using I_nwt unfolding normalized_module_well_typed_def by blast
+  have invI: "core_module_invariant I"
+    using core_module_well_typed_invariant[OF I_wt] .
+  have subst_eq: "CM_TypeSubst L = CM_TypeSubst M"
+    using link_pair_subst[OF link I_norm idemM] .
+  have normI: "normalize_module I = I"
+    using normalize_module_id_when_empty[OF I_norm] .
+  have linkI: "link_modules [I] = Inr I"
+    using link_modules_singleton[OF invI] .
+  have linkM1: "link_modules [M] = Inr M"
+    using link_modules_singleton[OF invM] .
+  have setMS: "set [I, M] = set [I] \<union> set [M]" by auto
+  have ghostOK: "\<forall>x \<in> set [I, M]. module_ghost_subsets_ok x"
+    by (simp add: core_module_invariant_ghost_subsets_ok[OF invI]
+                  core_module_invariant_ghost_subsets_ok[OF invM])
+  let ?e1 = "(CM_TyEnv I)
+               \<lparr> TE_TypeVars := TE_TypeVars (CM_TyEnv I) |\<union>| TE_TypeVars (CM_TyEnv M),
+                 TE_RuntimeTypeVars :=
+                   TE_RuntimeTypeVars (CM_TyEnv I)
+                   |\<union>| TE_RuntimeTypeVars (CM_TyEnv M) \<rparr>"
+  have ext: "tyenv_extends ?e1 (link_mid_env I M L)"
+    using link_mid_env_extends[OF linkI linkM1 link setMS ghostOK]
+    unfolding normI .
+  have consI: "tyenv_ctors_consistent (CM_TyEnv I)"
+    using wfI unfolding tyenv_well_formed_def by blast
+  \<comment> \<open>One extension step: ?e1's datatype fields are exactly CM_TyEnv I's.\<close>
+  have v_mid: "value_has_type (link_mid_env I M L) v ty"
+  proof (rule value_has_type_env_mono[OF _ _ _ consI v0])
+    fix c e assume "fmlookup (TE_DataCtors (CM_TyEnv I)) c = Some e"
+    then have "fmlookup (TE_DataCtors ?e1) c = Some e" by simp
+    then show "fmlookup (TE_DataCtors (link_mid_env I M L)) c = Some e"
+      using ext unfolding tyenv_extends_def by blast
+  next
+    fix d n assume "fmlookup (TE_Datatypes (CM_TyEnv I)) d = Some n"
+    then have "fmlookup (TE_Datatypes ?e1) d = Some n" by simp
+    then show "fmlookup (TE_Datatypes (link_mid_env I M L)) d = Some n"
+      using ext unfolding tyenv_extends_def by blast
+  next
+    fix d assume "d |\<in>| fmdom (TE_Datatypes (CM_TyEnv I))"
+    then have "d |\<in>| fmdom (TE_Datatypes ?e1)" by simp
+    then show "d |\<in>| TE_GhostDatatypes (link_mid_env I M L)
+                 \<longleftrightarrow> d |\<in>| TE_GhostDatatypes (CM_TyEnv I)"
+      using ext unfolding tyenv_extends_def by auto
+  qed
+  \<comment> \<open>Substitute with the link's substitution, then collapse the env.\<close>
+  have v_subst: "value_has_type
+                   (apply_subst_to_module_env (CM_TypeSubst L)
+                      (CM_TyEnv (normalize_module L)) (link_mid_env I M L))
+                   v (apply_subst (CM_TypeSubst L) ty)"
+    by (rule value_has_type_subst_module_env[OF v_mid
+              elab_link_mid_env_well_formed[OF I_wt I_norm inv link]
+              elab_link_mid_env_subst_ok[OF I_wt I_norm inv link]])
+  show ?thesis
+    using v_subst link_mid_env_collapse[OF linkI linkM1 link setMS] subst_eq by simp
+qed
+
 lemma elab_link_globals:
   assumes I_wt: "core_module_well_typed I"
       and I_norm: "CM_TypeSubst I = fmempty"
-      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract env elabEnv M"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
       and link: "link_modules [I, M] = Inr L"
   shows "module_globals_well_typed (CM_TyEnv (normalize_module L))
                                    (CM_GlobalVars (normalize_module L))"
@@ -9712,46 +9864,40 @@ proof -
   show ?thesis
     unfolding module_globals_well_typed_def
   proof (intro allI impI)
-    fix name tm'
-    assume look': "fmlookup (CM_GlobalVars (normalize_module L)) name = Some tm'"
+    fix name v
+    assume look': "fmlookup (CM_GlobalVars (normalize_module L)) name = Some v"
     have gvL: "CM_GlobalVars L = CM_GlobalVars I ++\<^sub>f CM_GlobalVars M"
       by (simp add: fL(17) fmlist_union_def)
-    from look' obtain tm where
-      raw: "fmlookup (CM_GlobalVars L) name = Some tm" and
-      tm'_eq: "tm' = apply_subst_to_term ?\<sigma> tm"
-      by (auto simp: subst_eq)
+    from look' have raw: "fmlookup (CM_GlobalVars L) name = Some v"
+      by (simp add: normalize_module_def)
     show "\<exists>declTy.
             fmlookup (TE_GlobalVars (CM_TyEnv (normalize_module L))) name = Some declTy \<and>
-            is_constant_term tm' \<and>
-            core_term_type (CM_TyEnv (normalize_module L)) NotGhost tm' = Some declTy"
+            value_has_type (CM_TyEnv (normalize_module L)) v declTy"
     proof (cases "fmlookup (CM_GlobalVars M) name")
-      case (Some tmM)
-      \<comment> \<open>M-side entry: the fold invariant's typechecking clause is already a
+      case (Some vM)
+      \<comment> \<open>M-side entry: the fold invariant's globals clause is already a
           statement about the normalized linked env.\<close>
       have inM: "name |\<in>| fmdom (CM_GlobalVars M)"
         using Some by (auto simp: fmlookup_dom_iff)
-      have tm_eq: "tm = tmM"
+      have v_eq: "v = vM"
         using raw Some inM unfolding gvL by simp
-      have "fmlookup (CM_GlobalVars (normalize_module M)) name
-              = Some (apply_subst_to_term ?\<sigma> tm)"
-        using Some tm_eq by simp
+      have "fmlookup (CM_GlobalVars (normalize_module M)) name = Some v"
+        using Some v_eq by (simp add: normalize_module_def)
       then obtain declTy where
         declM: "fmlookup (TE_GlobalVars env) name = Some declTy" and
-        typingM: "is_constant_term (apply_subst_to_term ?\<sigma> tm) \<and>
-                  core_term_type env NotGhost (apply_subst_to_term ?\<sigma> tm) = Some declTy"
+        vhtM: "value_has_type env v declTy"
         using gwtM unfolding module_globals_well_typed_def by blast
       show ?thesis
-        using declM typingM unfolding env_eq tm'_eq by blast
+        using declM vhtM unfolding env_eq by blast
     next
       case None
-      \<comment> \<open>I-side entry: transfer I's own typing across the substitution and the
-          env extension.\<close>
-      have inI: "fmlookup (CM_GlobalVars I) name = Some tm"
+      \<comment> \<open>I-side entry: transfer I's own value judgment across the
+          declaration extension and the substitution.\<close>
+      have inI: "fmlookup (CM_GlobalVars I) name = Some v"
         using raw None unfolding gvL by (auto simp: fmlookup_dom_iff split: if_splits)
       obtain declTy0 where
         declI: "fmlookup (TE_GlobalVars (CM_TyEnv I)) name = Some declTy0" and
-        constI: "is_constant_term tm" and
-        typingI: "core_term_type (CM_TyEnv I) NotGhost tm = Some declTy0"
+        vhtI: "value_has_type (CM_TyEnv I) v declTy0"
         using gwtI inI unfolding module_globals_well_typed_def by blast
       \<comment> \<open>The declared type in the state env, via the I side of the union.\<close>
       have notinM: "name |\<notin>| fmdom (TE_GlobalVars (CM_TyEnv M))"
@@ -9759,11 +9905,10 @@ proof -
       have declEnv: "fmlookup (TE_GlobalVars env) name = Some (apply_subst ?\<sigma> declTy0)"
         unfolding env_def module_context_env_def
         using declI notinM by simp
-      have "core_term_type (CM_TyEnv (normalize_module L)) NotGhost
-              (apply_subst_to_term ?\<sigma> tm) = Some (apply_subst ?\<sigma> declTy0)"
-        using elab_link_term_transfer[OF I_wt I_norm inv link] typingI by blast
+      have "value_has_type (CM_TyEnv (normalize_module L)) v (apply_subst ?\<sigma> declTy0)"
+        using elab_link_value_transfer[OF I_wt I_norm inv link vhtI] .
       then show ?thesis
-        using declEnv constI unfolding env_eq tm'_eq by auto
+        using declEnv unfolding env_eq by blast
     qed
   qed
 qed
@@ -9779,7 +9924,7 @@ qed
 lemma elab_link_functions:
   assumes I_wt: "core_module_well_typed I"
       and I_norm: "CM_TypeSubst I = fmempty"
-      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract env elabEnv M"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
       and link: "link_modules [I, M] = Inr L"
   shows "module_functions_well_typed (CM_TyEnv (normalize_module L))
                                      (CM_Functions (normalize_module L))"
@@ -10023,7 +10168,7 @@ qed
 lemma elab_decls_invariant_link:
   assumes I_wt: "core_module_well_typed I"
       and I_norm: "CM_TypeSubst I = fmempty"
-      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract env elabEnv M"
+      and inv: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals env elabEnv M"
       and link: "link_modules [I, M] = Inr L"
   shows "core_module_well_typed L"
 proof -
@@ -10108,7 +10253,8 @@ theorem elab_link_well_typed:
       and ctx_fresh: "\<forall>n. n |\<in>| TE_TypeVars (CM_TyEnv I) \<longrightarrow> tyvar_fresh_ok n 0"
       and fun_fresh: "\<forall>name info. fmlookup (TE_Functions (CM_TyEnv I)) name = Some info \<longrightarrow>
                         list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
-      and elab: "elab_declarations (CM_TyEnv I) elabEnv0 ownAbstract decls = Inr (M, elabEnv')"
+      and ctx_gv: "module_globals_well_typed (CM_TyEnv I) ctxGlobals"
+      and elab: "elab_declarations (CM_TyEnv I) elabEnv0 ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
       and link: "link_modules [I, M] = Inr L"
   shows "core_module_well_typed L"
 proof -
@@ -10117,17 +10263,17 @@ proof -
   have ctx: "elab_context_ok (CM_TyEnv I) ownAbstract"
     using I_nwt own ctx_fresh fun_fresh
     unfolding elab_context_ok_def normalized_module_well_typed_def by blast
-  have init: "elab_decls_invariant (CM_TyEnv I) ownAbstract (CM_TyEnv I) elabEnv0
+  have init: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals (CM_TyEnv I) elabEnv0
                 empty_core_module"
-    using elab_decls_invariant_init[OF ctx ee_wf] .
+    using elab_decls_invariant_init[OF ctx ee_wf ctx_gv] .
   have decl_fresh: "list_all decl_tyvars_fresh_ok decls"
     using elab_declarations_decls_fresh[OF elab] .
   from elab obtain envF where
-    run: "elab_declaration_list (CM_TyEnv I) elabEnv0 ownAbstract empty_core_module decls
+    run: "elab_declaration_list (CM_TyEnv I) elabEnv0 ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
     unfolding elab_declarations_def Let_def
     by (auto split: sum.splits prod.splits if_splits)
-  have invF: "elab_decls_invariant (CM_TyEnv I) ownAbstract envF elabEnv' M"
+  have invF: "elab_decls_invariant (CM_TyEnv I) ownAbstract ctxGlobals envF elabEnv' M"
     using elab_declaration_list_invariant[OF run init decl_fresh] .
   show ?thesis
     using elab_decls_invariant_link[OF I_wt I_norm invF link] .

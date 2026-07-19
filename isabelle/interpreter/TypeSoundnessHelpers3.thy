@@ -71,6 +71,99 @@ proof -
   qed
 qed
 
+(* Soundness of eval_unop, phrased purely over values: applying a unary
+   operator to a well-typed operand value either succeeds with a value of the
+   result type, or fails with a sound error (never TypeError). The state is
+   arbitrary: a unop's result type is always Bool or a finite-int type, on
+   which the state's IS_TyArgs substitution is a no-op. Shared by
+   type_soundness_unop below and ConstFoldCorrect's eval_unop_sound_values. *)
+lemma eval_unop_sound:
+  assumes typing: "core_term_type env NotGhost (CoreTm_Unop unop operand) = Some ty"
+    and operand_typing: "core_term_type env NotGhost operand = Some operandTy"
+    and operand_typed: "value_has_type env operandVal operandTy"
+  shows "sound_term_result (state :: 'w InterpState) env ty (eval_unop unop operandVal)"
+proof (cases unop)
+  case CoreUnop_Negate
+  (* Extract facts from typing *)
+  from typing operand_typing CoreUnop_Negate have
+    ty_eq: "operandTy = ty"
+    and signed_numeric: "is_signed_numeric_type ty"
+    by (auto split: option.splits if_splits)
+  from operand_typed ty_eq have operand_ty_typed: "value_has_type env operandVal ty" by simp
+
+  (* Since ty is signed_numeric and runtime (from value_has_type),
+     it must be CoreTy_FiniteInt Signed bits for some bits *)
+  from value_has_type_runtime[OF operand_ty_typed]
+  have ty_runtime: "is_runtime_type env ty" .
+
+  (* is_signed_numeric_type + is_runtime_type => CoreTy_FiniteInt Signed _ *)
+  from signed_numeric ty_runtime obtain bits where
+    ty_def: "ty = CoreTy_FiniteInt Signed bits"
+    using is_runtime_type.simps(4,5) is_signed_numeric_type.elims(2) by blast
+
+  (* So the value must be CV_FiniteInt Signed bits i *)
+  from operand_ty_typed ty_def obtain i where
+    operand_val_def: "operandVal = CV_FiniteInt Signed bits i"
+    using value_has_type_FiniteInt by blast
+
+  (* Now evaluate the negation *)
+  show ?thesis
+  proof (cases "int_fits Signed bits (-i)")
+    case True
+    (* Negation succeeds *)
+    have "eval_unop unop operandVal = Inr (CV_FiniteInt Signed bits (-i))"
+      using operand_val_def True CoreUnop_Negate by simp
+    with ty_def True show ?thesis by simp
+  next
+    case False
+    (* Negation overflows - RuntimeError *)
+    have "eval_unop unop operandVal = Inl RuntimeError"
+      using operand_val_def False CoreUnop_Negate by simp
+    then show ?thesis by simp
+  qed
+next
+  case CoreUnop_Complement
+  (* Extract facts from typing *)
+  from typing operand_typing CoreUnop_Complement have
+    ty_eq: "operandTy = ty"
+    and finite_int: "is_finite_integer_type ty"
+    by (auto split: option.splits if_splits)
+  from operand_typed ty_eq have operand_ty_typed: "value_has_type env operandVal ty" by simp
+
+  (* is_finite_integer_type ty => ty = CoreTy_FiniteInt sign bits *)
+  from finite_int obtain sign bits where
+    ty_def: "ty = CoreTy_FiniteInt sign bits"
+    by (cases ty) auto
+
+  (* So the value must be CV_FiniteInt sign bits i *)
+  from operand_ty_typed ty_def obtain i where
+    operand_val_def: "operandVal = CV_FiniteInt sign bits i"
+    and i_fits: "int_fits sign bits i"
+    using value_has_type_FiniteInt by blast
+
+  (* Complement always succeeds *)
+  have "eval_unop unop operandVal = Inr (CV_FiniteInt sign bits (int_complement sign bits i))"
+    using operand_val_def CoreUnop_Complement by simp
+  with ty_def int_complement_fits[OF i_fits] show ?thesis by simp
+next
+  case CoreUnop_Not
+  (* Extract facts from typing *)
+  from typing operand_typing CoreUnop_Not have
+    operandTy_bool: "operandTy = CoreTy_Bool"
+    and ty_eq: "ty = CoreTy_Bool"
+    by (auto split: option.splits if_splits)
+
+  (* Value must be CV_Bool b *)
+  from operand_typed operandTy_bool obtain b where
+    operand_val_def: "operandVal = CV_Bool b"
+    using value_has_type_Bool by blast
+
+  (* Not always succeeds *)
+  have "eval_unop unop operandVal = Inr (CV_Bool (\<not>b))"
+    using operand_val_def CoreUnop_Not by simp
+  with ty_eq show ?thesis by simp
+qed
+
 (* Type soundness for unary operators *)
 lemma type_soundness_unop:
   assumes state_env: "state_matches_env state env storeTyping"
@@ -79,147 +172,33 @@ lemma type_soundness_unop:
                         sound_term_result state env ty' (interp_term fuel state tm')"
     and typing: "core_term_type env NotGhost (CoreTm_Unop unop operand) = Some ty"
   shows "sound_term_result state env ty (interp_term (Suc fuel) state (CoreTm_Unop unop operand))"
-proof (cases unop)
-  case CoreUnop_Negate
-  (* Extract facts from typing *)
-  from typing CoreUnop_Negate have
-    operand_typing: "core_term_type env NotGhost operand = Some ty"
-    and signed_numeric: "is_signed_numeric_type ty"
-    by (auto split: option.splits if_splits)
+proof -
+  (* The operand typechecks *)
+  from typing obtain operandTy where
+    operand_typing: "core_term_type env NotGhost operand = Some operandTy"
+    by (auto split: option.splits)
 
   (* Apply IH to operand *)
   from IH[OF operand_typing]
-  have operand_sound: "sound_term_result state env ty (interp_term fuel state operand)"
-    by simp
+  have operand_sound: "sound_term_result state env operandTy (interp_term fuel state operand)" .
 
-  (* Case split on operand result *)
   show ?thesis
   proof (cases "interp_term fuel state operand")
     case (Inl err)
     (* Operand failed - propagate the sound error *)
     then show ?thesis using operand_sound by auto
   next
-    case (Inr operand_val)
-    (* Operand succeeded - extract type information *)
-    from operand_sound Inr signed_numeric
-    have operand_typed: "value_has_type env operand_val ty"
-      by (simp add: is_signed_numeric_type_apply_subst)
+    case (Inr operandVal)
+    (* Operand succeeded; its type is subst-invariant, so the value has
+       operandTy itself *)
+    from operand_sound Inr unop_type_apply_subst(1)[OF typing operand_typing]
+    have operand_typed: "value_has_type env operandVal operandTy" by simp
 
-    (* Since ty is signed_numeric and runtime (from value_has_type),
-       it must be CoreTy_FiniteInt Signed bits for some bits *)
-    from value_has_type_runtime[OF operand_typed]
-    have ty_runtime: "is_runtime_type env ty" .
-
-    (* is_signed_numeric_type + is_runtime_type => CoreTy_FiniteInt Signed _ *)
-    from signed_numeric ty_runtime obtain bits where
-      ty_def: "ty = CoreTy_FiniteInt Signed bits"
-      using is_runtime_type.simps(4,5) is_signed_numeric_type.elims(2) by blast
-
-    (* So the value must be CV_FiniteInt Signed bits i *)
-    from operand_typed ty_def obtain i where
-      operand_val_def: "operand_val = CV_FiniteInt Signed bits i"
-      and i_fits: "int_fits Signed bits i"
-      using value_has_type_FiniteInt by blast
-
-    (* Now evaluate the negation *)
-    show ?thesis
-    proof (cases "int_fits Signed bits (-i)")
-      case True
-      (* Negation succeeds *)
-      have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Negate operand) =
-                    Inr (CV_FiniteInt Signed bits (-i))"
-        using Inr operand_val_def True CoreUnop_Negate by simp
-      have result_typed: "value_has_type env (CV_FiniteInt Signed bits (-i)) ty"
-        using ty_def True by simp
-      show ?thesis using result result_typed CoreUnop_Negate by simp
-    next
-      case False
-      (* Negation overflows - RuntimeError *)
-      have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Negate operand) =
-                    Inl RuntimeError"
-        using Inr operand_val_def False CoreUnop_Negate by simp
-      show ?thesis using result CoreUnop_Negate by simp
-    qed
-  qed
-next
-  case CoreUnop_Complement
-  (* Extract facts from typing *)
-  from typing CoreUnop_Complement have
-    operand_typing: "core_term_type env NotGhost operand = Some ty"
-    and finite_int: "is_finite_integer_type ty"
-    by (auto split: option.splits if_splits)
-
-  (* Apply IH to operand *)
-  from IH[OF operand_typing]
-  have operand_sound: "sound_term_result state env ty (interp_term fuel state operand)"
-    by simp
-
-  (* Case split on operand result *)
-  show ?thesis
-  proof (cases "interp_term fuel state operand")
-    case (Inl err)
-    then show ?thesis using operand_sound by auto
-  next
-    case (Inr operand_val)
-    from operand_sound Inr finite_int
-    have operand_typed: "value_has_type env operand_val ty"
-      by (simp add: is_finite_integer_type_apply_subst)
-
-    (* is_finite_integer_type ty => ty = CoreTy_FiniteInt sign bits *)
-    from finite_int obtain sign bits where
-      ty_def: "ty = CoreTy_FiniteInt sign bits"
-      by (cases ty) auto
-
-    (* So the value must be CV_FiniteInt sign bits i *)
-    from operand_typed ty_def obtain i where
-      operand_val_def: "operand_val = CV_FiniteInt sign bits i"
-      and i_fits: "int_fits sign bits i"
-      using value_has_type_FiniteInt by blast
-
-    (* Complement always succeeds *)
-    have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Complement operand) =
-                  Inr (CV_FiniteInt sign bits (int_complement sign bits i))"
-      using Inr operand_val_def CoreUnop_Complement by simp
-    have result_typed: "value_has_type env (CV_FiniteInt sign bits (int_complement sign bits i)) ty"
-      using ty_def int_complement_fits[OF i_fits] by simp
-    show ?thesis using result result_typed CoreUnop_Complement by simp
-  qed
-next
-  case CoreUnop_Not
-  (* Extract facts from typing *)
-  from typing CoreUnop_Not have
-    operand_typing: "core_term_type env NotGhost operand = Some CoreTy_Bool"
-    and ty_eq: "ty = CoreTy_Bool"
-    by (auto split: option.splits if_splits)
-
-  (* Apply IH to operand *)
-  from IH[OF operand_typing]
-  have operand_sound: "sound_term_result state env CoreTy_Bool (interp_term fuel state operand)"
-    by simp
-
-  (* Case split on operand result *)
-  show ?thesis
-  proof (cases "interp_term fuel state operand")
-    case (Inl err)
-    then show ?thesis using operand_sound ty_eq by auto
-  next
-    case (Inr operand_val)
-    from operand_sound Inr
-    have operand_typed: "value_has_type env operand_val CoreTy_Bool"
-      by simp
-
-    (* Value must be CV_Bool b *)
-    from operand_typed obtain b where
-      operand_val_def: "operand_val = CV_Bool b"
-      using value_has_type_Bool by blast
-
-    (* Not always succeeds *)
-    have result: "interp_term (Suc fuel) state (CoreTm_Unop CoreUnop_Not operand) =
-                  Inr (CV_Bool (\<not>b))"
-      using Inr operand_val_def CoreUnop_Not by simp
-    have result_typed: "value_has_type env (CV_Bool (\<not>b)) ty"
-      using ty_eq by simp
-    show ?thesis using result result_typed CoreUnop_Not by simp
+    (* Defer to eval_unop soundness *)
+    have "interp_term (Suc fuel) state (CoreTm_Unop unop operand) = eval_unop unop operandVal"
+      using Inr by simp
+    with eval_unop_sound[OF typing operand_typing operand_typed]
+    show ?thesis by simp
   qed
 qed
 
@@ -277,6 +256,350 @@ proof -
   then show ?thesis by simp
 qed
 
+(* Soundness of eval_binop, phrased purely over values: applying a binary
+   operator to well-typed operand values either succeeds with a value of the
+   result type, or fails with a sound error (never TypeError). The state is
+   arbitrary: a binop's result type is always Bool or a finite-int type, on
+   which the state's IS_TyArgs substitution is a no-op. Shared by
+   type_soundness_binop below and ConstFoldCorrect's eval_binop_sound_values. *)
+lemma eval_binop_sound:
+  assumes typing: "core_term_type env NotGhost (CoreTm_Binop op lhs rhs) = Some ty"
+    and lhs_typing: "core_term_type env NotGhost lhs = Some lhsTy"
+    and rhs_typing: "core_term_type env NotGhost rhs = Some rhsTy"
+    and lhs_typed: "value_has_type env lhsVal lhsTy"
+    and rhs_typed: "value_has_type env rhsVal rhsTy"
+  shows "sound_term_result (state :: 'w InterpState) env ty (eval_binop op lhsVal rhsVal)"
+proof -
+  (* From the value typings, the operand types must be runtime types *)
+  from value_has_type_runtime[OF lhs_typed] have lhsTy_rt: "is_runtime_type env lhsTy" .
+  from value_has_type_runtime[OF rhs_typed] have rhsTy_rt: "is_runtime_type env rhsTy" .
+
+  (* Simplify typing using the extracted lhsTy and rhsTy *)
+  from typing lhs_typing rhs_typing have typing':
+    "(if is_arithmetic_binop op
+      then if is_numeric_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
+      else if is_modulo_binop op
+           then if is_integer_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
+           else if is_bitwise_binop op \<or> is_shift_binop op
+                then if is_finite_integer_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
+                else if is_ordering_binop op
+                     then if is_numeric_type lhsTy \<and> lhsTy = rhsTy then Some CoreTy_Bool else None
+                     else if is_eq_neq_binop op
+                          then if lhsTy = rhsTy \<and> (NotGhost = Ghost \<or> lhsTy = CoreTy_Bool \<or> is_numeric_type lhsTy)
+                               then Some CoreTy_Bool else None
+                          else if is_logical_binop op
+                               then if lhsTy = CoreTy_Bool \<and> rhsTy = CoreTy_Bool then Some CoreTy_Bool else None
+                               else None) = Some ty"
+    by simp
+
+  show ?thesis
+  proof (cases "is_arithmetic_binop op")
+    case True
+    (* Arithmetic: +, -, *, / *)
+    from typing' True have
+      numeric: "is_numeric_type lhsTy" and
+      types_eq: "lhsTy = rhsTy" and
+      ty_eq: "ty = lhsTy"
+      by (auto split: if_splits)
+    (* lhsTy is numeric and runtime, so must be FiniteInt *)
+    from numeric lhsTy_rt obtain sign bits where
+      lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
+      by (cases lhsTy) auto
+    from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
+    from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
+    from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
+
+    show ?thesis
+    proof (cases op)
+      case CoreBinop_Add
+      have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. x + y) lhsVal rhsVal"
+        using CoreBinop_Add by simp
+      with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+      show ?thesis by simp
+    next
+      case CoreBinop_Subtract
+      have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. x - y) lhsVal rhsVal"
+        using CoreBinop_Subtract by simp
+      with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+      show ?thesis by simp
+    next
+      case CoreBinop_Multiply
+      have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. x * y) lhsVal rhsVal"
+        using CoreBinop_Multiply by simp
+      with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+      show ?thesis by simp
+    next
+      case CoreBinop_Divide
+      show ?thesis
+      proof (cases "is_zero rhsVal")
+        case True
+        then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
+          using CoreBinop_Divide by simp
+        then show ?thesis by simp
+      next
+        case False
+        then have "eval_binop op lhsVal rhsVal = generic_int_binop tdiv lhsVal rhsVal"
+          using CoreBinop_Divide by simp
+        with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+        show ?thesis by simp
+      qed
+    qed (use True in auto)  (* other cases contradicted by is_arithmetic_binop *)
+  next
+    case False
+    note not_arith = False
+    show ?thesis
+    proof (cases "is_modulo_binop op")
+      case True
+      (* Modulo *)
+      from typing' not_arith True have
+        integer: "is_integer_type lhsTy" and
+        types_eq: "lhsTy = rhsTy" and
+        ty_eq: "ty = lhsTy"
+        by (auto split: if_splits)
+      from integer lhsTy_rt obtain sign bits where
+        lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
+        by (cases lhsTy) auto
+      from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
+      from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
+      from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
+
+      from True have op_eq: "op = CoreBinop_Modulo" by (cases op) auto
+      show ?thesis
+      proof (cases "is_zero rhsVal")
+        case True
+        then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
+          using op_eq by simp
+        then show ?thesis by simp
+      next
+        case False
+        then have "eval_binop op lhsVal rhsVal = generic_int_binop tmod lhsVal rhsVal"
+          using op_eq by simp
+        with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+        show ?thesis by simp
+      qed
+    next
+      case False
+      note not_modulo = False
+      show ?thesis
+      proof (cases "is_bitwise_binop op \<or> is_shift_binop op")
+        case True
+        (* Bitwise or shift *)
+        from typing' not_arith not_modulo True have
+          finite_int: "is_finite_integer_type lhsTy" and
+          types_eq: "lhsTy = rhsTy" and
+          ty_eq: "ty = lhsTy"
+          by (auto split: if_splits)
+        from finite_int obtain sign bits where
+          lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
+          by (cases lhsTy) auto
+        from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
+        from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
+        from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
+
+        show ?thesis
+        proof (cases op)
+          case CoreBinop_BitAnd
+          have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. and x y) lhsVal rhsVal"
+            using CoreBinop_BitAnd by simp
+          with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+          show ?thesis by simp
+        next
+          case CoreBinop_BitOr
+          have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. or x y) lhsVal rhsVal"
+            using CoreBinop_BitOr by simp
+          with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+          show ?thesis by simp
+        next
+          case CoreBinop_BitXor
+          have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. xor x y) lhsVal rhsVal"
+            using CoreBinop_BitXor by simp
+          with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+          show ?thesis by simp
+        next
+          case CoreBinop_ShiftLeft
+          show ?thesis
+          proof (cases "is_valid_shift lhsVal rhsVal")
+            case False
+            then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
+              using CoreBinop_ShiftLeft by simp
+            then show ?thesis by simp
+          next
+            case True
+            then have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. push_bit (nat y) x) lhsVal rhsVal"
+              using CoreBinop_ShiftLeft by simp
+            with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+            show ?thesis by simp
+          qed
+        next
+          case CoreBinop_ShiftRight
+          show ?thesis
+          proof (cases "is_valid_shift lhsVal rhsVal")
+            case False
+            then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
+              using CoreBinop_ShiftRight by simp
+            then show ?thesis by simp
+          next
+            case True
+            then have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. drop_bit (nat y) x) lhsVal rhsVal"
+              using CoreBinop_ShiftRight by simp
+            with ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
+            show ?thesis by simp
+          qed
+        qed (use True in auto)  (* other cases contradicted *)
+      next
+        case False
+        note not_bitwise_shift = False
+        show ?thesis
+        proof (cases "is_ordering_binop op")
+          case True
+          (* Ordering: <, <=, >, >= *)
+          from typing' not_arith not_modulo not_bitwise_shift True have
+            numeric: "is_numeric_type lhsTy" and
+            types_eq: "lhsTy = rhsTy" and
+            ty_eq: "ty = CoreTy_Bool"
+            by (auto split: if_splits)
+          from numeric lhsTy_rt obtain sign bits where
+            lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
+            by (cases lhsTy) auto
+          from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
+          from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
+          from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
+
+          show ?thesis
+          proof (cases op)
+            case CoreBinop_Less
+            have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x < y) lhsVal rhsVal"
+              using CoreBinop_Less by simp
+            with ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
+            show ?thesis by simp
+          next
+            case CoreBinop_LessEqual
+            have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x \<le> y) lhsVal rhsVal"
+              using CoreBinop_LessEqual by simp
+            with ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
+            show ?thesis by simp
+          next
+            case CoreBinop_Greater
+            have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x > y) lhsVal rhsVal"
+              using CoreBinop_Greater by simp
+            with ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
+            show ?thesis by simp
+          next
+            case CoreBinop_GreaterEqual
+            have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x \<ge> y) lhsVal rhsVal"
+              using CoreBinop_GreaterEqual by simp
+            with ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
+            show ?thesis by simp
+          qed (use True in auto)
+        next
+          case False
+          note not_ordering = False
+          show ?thesis
+          proof (cases "is_eq_neq_binop op")
+            case True
+            (* Equality/inequality *)
+            from typing' not_arith not_modulo not_bitwise_shift not_ordering True have
+              types_eq: "lhsTy = rhsTy" and
+              ty_eq: "ty = CoreTy_Bool" and
+              type_constraint: "lhsTy = CoreTy_Bool \<or> is_numeric_type lhsTy"
+              by (auto split: if_splits)
+
+            from True have op_cases: "op = CoreBinop_Equal \<or> op = CoreBinop_NotEqual"
+              by (cases op) auto
+
+            show ?thesis
+            proof (cases "lhsTy = CoreTy_Bool")
+              case True
+              (* Bool equality *)
+              from True types_eq have rhsTy_bool: "rhsTy = CoreTy_Bool" by simp
+              from lhs_typed True obtain b1 where lhsVal_def: "lhsVal = CV_Bool b1"
+                using value_has_type_Bool by blast
+              from rhs_typed rhsTy_bool obtain b2 where rhsVal_def: "rhsVal = CV_Bool b2"
+                using value_has_type_Bool by blast
+
+              from op_cases show ?thesis
+              proof
+                assume "op = CoreBinop_Equal"
+                then have "eval_binop op lhsVal rhsVal = Inr (CV_Bool (b1 = b2))"
+                  using lhsVal_def rhsVal_def by simp
+                with ty_eq show ?thesis by simp
+              next
+                assume "op = CoreBinop_NotEqual"
+                then have "eval_binop op lhsVal rhsVal = Inr (CV_Bool (b1 \<noteq> b2))"
+                  using lhsVal_def rhsVal_def by simp
+                with ty_eq show ?thesis by simp
+              qed
+            next
+              case False
+              (* Numeric equality *)
+              from False type_constraint have numeric: "is_numeric_type lhsTy" by simp
+              from numeric lhsTy_rt obtain sign bits where
+                lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
+                by (cases lhsTy) auto
+              from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
+              from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
+              from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
+
+              from lhs_int obtain i1 where lhsVal_def: "lhsVal = CV_FiniteInt sign bits i1"
+                using value_has_type_FiniteInt by blast
+              from rhs_int obtain i2 where rhsVal_def: "rhsVal = CV_FiniteInt sign bits i2"
+                using value_has_type_FiniteInt by blast
+
+              from op_cases show ?thesis
+              proof
+                assume "op = CoreBinop_Equal"
+                then have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x = y) lhsVal rhsVal"
+                  using lhsVal_def rhsVal_def by simp
+                with ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
+                show ?thesis by simp
+              next
+                assume "op = CoreBinop_NotEqual"
+                then have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x \<noteq> y) lhsVal rhsVal"
+                  using lhsVal_def rhsVal_def by simp
+                with ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
+                show ?thesis by simp
+              qed
+            qed
+          next
+            case False
+            note not_eq_neq = False
+            (* Must be logical *)
+            from typing' not_arith not_modulo not_bitwise_shift not_ordering not_eq_neq have
+              logical: "is_logical_binop op" and
+              lhs_bool: "lhsTy = CoreTy_Bool" and
+              rhs_bool: "rhsTy = CoreTy_Bool" and
+              ty_eq: "ty = CoreTy_Bool"
+              by (auto split: if_splits)
+            from lhs_typed lhs_bool have lhs_bool_typed: "value_has_type env lhsVal CoreTy_Bool" by simp
+            from rhs_typed rhs_bool have rhs_bool_typed: "value_has_type env rhsVal CoreTy_Bool" by simp
+
+            show ?thesis
+            proof (cases op)
+              case CoreBinop_And
+              have "eval_binop op lhsVal rhsVal = generic_bool_binop (\<lambda>x y. x \<and> y) lhsVal rhsVal"
+                using CoreBinop_And by simp
+              with ty_eq generic_bool_binop_sound[OF lhs_bool_typed rhs_bool_typed]
+              show ?thesis by simp
+            next
+              case CoreBinop_Or
+              have "eval_binop op lhsVal rhsVal = generic_bool_binop (\<lambda>x y. x \<or> y) lhsVal rhsVal"
+                using CoreBinop_Or by simp
+              with ty_eq generic_bool_binop_sound[OF lhs_bool_typed rhs_bool_typed]
+              show ?thesis by simp
+            next
+              case CoreBinop_Implies
+              have "eval_binop op lhsVal rhsVal = generic_bool_binop (\<lambda>x y. x \<longrightarrow> y) lhsVal rhsVal"
+                using CoreBinop_Implies by simp
+              with ty_eq generic_bool_binop_sound[OF lhs_bool_typed rhs_bool_typed]
+              show ?thesis by simp
+            qed (use logical in auto)
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
 (* Type soundness for binary operators *)
 lemma type_soundness_binop:
   assumes state_env: "state_matches_env state env storeTyping"
@@ -321,338 +644,11 @@ proof -
       from rhs_sound Inr binop_operand_apply_subst(2)[OF typing lhs_typing rhs_typing]
       have rhs_typed: "value_has_type env rhsVal rhsTy" by simp
 
-      (* Both operands succeeded - now case split on operator category *)
-      have interp_eq: "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = eval_binop op lhsVal rhsVal"
+      (* Both operands succeeded - defer to eval_binop soundness *)
+      have "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = eval_binop op lhsVal rhsVal"
         using \<open>interp_term fuel state lhs = Inr lhsVal\<close> Inr by simp
-
-      (* From typing and runtime type constraint, lhsTy must be runtime *)
-      from value_has_type_runtime[OF lhs_typed] have lhsTy_rt: "is_runtime_type env lhsTy" .
-      from value_has_type_runtime[OF rhs_typed] have rhsTy_rt: "is_runtime_type env rhsTy" .
-
-      (* Simplify typing using the extracted lhsTy and rhsTy *)
-      from typing lhs_typing rhs_typing have typing':
-        "(if is_arithmetic_binop op
-          then if is_numeric_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
-          else if is_modulo_binop op
-               then if is_integer_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
-               else if is_bitwise_binop op \<or> is_shift_binop op
-                    then if is_finite_integer_type lhsTy \<and> lhsTy = rhsTy then Some lhsTy else None
-                    else if is_ordering_binop op
-                         then if is_numeric_type lhsTy \<and> lhsTy = rhsTy then Some CoreTy_Bool else None
-                         else if is_eq_neq_binop op
-                              then if lhsTy = rhsTy \<and> (NotGhost = Ghost \<or> lhsTy = CoreTy_Bool \<or> is_numeric_type lhsTy)
-                                   then Some CoreTy_Bool else None
-                              else if is_logical_binop op
-                                   then if lhsTy = CoreTy_Bool \<and> rhsTy = CoreTy_Bool then Some CoreTy_Bool else None
-                                   else None) = Some ty"
-        by simp
-
-      show ?thesis
-      proof (cases "is_arithmetic_binop op")
-        case True
-        (* Arithmetic: +, -, *, / *)
-        from typing' True have
-          numeric: "is_numeric_type lhsTy" and
-          types_eq: "lhsTy = rhsTy" and
-          ty_eq: "ty = lhsTy"
-          by (auto split: if_splits)
-        (* lhsTy is numeric and runtime, so must be FiniteInt *)
-        from numeric lhsTy_rt obtain sign bits where
-          lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
-          by (cases lhsTy) auto
-        from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
-        from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
-        from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
-
-        show ?thesis
-        proof (cases op)
-          case CoreBinop_Add
-          have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. x + y) lhsVal rhsVal"
-            using CoreBinop_Add by simp
-          with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-          show ?thesis by simp
-        next
-          case CoreBinop_Subtract
-          have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. x - y) lhsVal rhsVal"
-            using CoreBinop_Subtract by simp
-          with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-          show ?thesis by simp
-        next
-          case CoreBinop_Multiply
-          have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. x * y) lhsVal rhsVal"
-            using CoreBinop_Multiply by simp
-          with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-          show ?thesis by simp
-        next
-          case CoreBinop_Divide
-          show ?thesis
-          proof (cases "is_zero rhsVal")
-            case True
-            then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
-              using CoreBinop_Divide by simp
-            with interp_eq show ?thesis by simp
-          next
-            case False
-            then have "eval_binop op lhsVal rhsVal = generic_int_binop tdiv lhsVal rhsVal"
-              using CoreBinop_Divide by simp
-            with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-            show ?thesis by simp
-          qed
-        qed (use True in auto)  (* other cases contradicted by is_arithmetic_binop *)
-      next
-        case False
-        note not_arith = False
-        show ?thesis
-        proof (cases "is_modulo_binop op")
-          case True
-          (* Modulo *)
-          from typing' not_arith True have
-            integer: "is_integer_type lhsTy" and
-            types_eq: "lhsTy = rhsTy" and
-            ty_eq: "ty = lhsTy"
-            by (auto split: if_splits)
-          from integer lhsTy_rt obtain sign bits where
-            lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
-            by (cases lhsTy) auto
-          from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
-          from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
-          from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
-
-          from True have op_eq: "op = CoreBinop_Modulo" by (cases op) auto
-          show ?thesis
-          proof (cases "is_zero rhsVal")
-            case True
-            then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
-              using op_eq by simp
-            with interp_eq show ?thesis by simp
-          next
-            case False
-            then have "eval_binop op lhsVal rhsVal = generic_int_binop tmod lhsVal rhsVal"
-              using op_eq by simp
-            with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-            show ?thesis by simp
-          qed
-        next
-          case False
-          note not_modulo = False
-          show ?thesis
-          proof (cases "is_bitwise_binop op \<or> is_shift_binop op")
-            case True
-            (* Bitwise or shift *)
-            from typing' not_arith not_modulo True have
-              finite_int: "is_finite_integer_type lhsTy" and
-              types_eq: "lhsTy = rhsTy" and
-              ty_eq: "ty = lhsTy"
-              by (auto split: if_splits)
-            from finite_int obtain sign bits where
-              lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
-              by (cases lhsTy) auto
-            from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
-            from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
-            from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
-
-            show ?thesis
-            proof (cases op)
-              case CoreBinop_BitAnd
-              have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. and x y) lhsVal rhsVal"
-                using CoreBinop_BitAnd by simp
-              with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-              show ?thesis by simp
-            next
-              case CoreBinop_BitOr
-              have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. or x y) lhsVal rhsVal"
-                using CoreBinop_BitOr by simp
-              with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-              show ?thesis by simp
-            next
-              case CoreBinop_BitXor
-              have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. xor x y) lhsVal rhsVal"
-                using CoreBinop_BitXor by simp
-              with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-              show ?thesis by simp
-            next
-              case CoreBinop_ShiftLeft
-              show ?thesis
-              proof (cases "is_valid_shift lhsVal rhsVal")
-                case False
-                then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
-                  using CoreBinop_ShiftLeft by simp
-                with interp_eq show ?thesis by simp
-              next
-                case True
-                then have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. push_bit (nat y) x) lhsVal rhsVal"
-                  using CoreBinop_ShiftLeft by simp
-                with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-                show ?thesis by simp
-              qed
-            next
-              case CoreBinop_ShiftRight
-              show ?thesis
-              proof (cases "is_valid_shift lhsVal rhsVal")
-                case False
-                then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
-                  using CoreBinop_ShiftRight by simp
-                with interp_eq show ?thesis by simp
-              next
-                case True
-                then have "eval_binop op lhsVal rhsVal = generic_int_binop (\<lambda>x y. drop_bit (nat y) x) lhsVal rhsVal"
-                  using CoreBinop_ShiftRight by simp
-                with interp_eq ty_eq lhsTy_def generic_int_binop_sound[OF lhs_int rhs_int]
-                show ?thesis by simp
-              qed
-            qed (use True in auto)  (* other cases contradicted *)
-          next
-            case False
-            note not_bitwise_shift = False
-            show ?thesis
-            proof (cases "is_ordering_binop op")
-              case True
-              (* Ordering: <, <=, >, >= *)
-              from typing' not_arith not_modulo not_bitwise_shift True have
-                numeric: "is_numeric_type lhsTy" and
-                types_eq: "lhsTy = rhsTy" and
-                ty_eq: "ty = CoreTy_Bool"
-                by (auto split: if_splits)
-              from numeric lhsTy_rt obtain sign bits where
-                lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
-                by (cases lhsTy) auto
-              from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
-              from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
-              from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
-
-              show ?thesis
-              proof (cases op)
-                case CoreBinop_Less
-                have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x < y) lhsVal rhsVal"
-                  using CoreBinop_Less by simp
-                with interp_eq ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
-                show ?thesis by simp
-              next
-                case CoreBinop_LessEqual
-                have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x \<le> y) lhsVal rhsVal"
-                  using CoreBinop_LessEqual by simp
-                with interp_eq ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
-                show ?thesis by simp
-              next
-                case CoreBinop_Greater
-                have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x > y) lhsVal rhsVal"
-                  using CoreBinop_Greater by simp
-                with interp_eq ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
-                show ?thesis by simp
-              next
-                case CoreBinop_GreaterEqual
-                have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x \<ge> y) lhsVal rhsVal"
-                  using CoreBinop_GreaterEqual by simp
-                with interp_eq ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
-                show ?thesis by simp
-              qed (use True in auto)
-            next
-              case False
-              note not_ordering = False
-              show ?thesis
-              proof (cases "is_eq_neq_binop op")
-                case True
-                (* Equality/inequality *)
-                from typing' not_arith not_modulo not_bitwise_shift not_ordering True have
-                  types_eq: "lhsTy = rhsTy" and
-                  ty_eq: "ty = CoreTy_Bool" and
-                  type_constraint: "lhsTy = CoreTy_Bool \<or> is_numeric_type lhsTy"
-                  by (auto split: if_splits)
-
-                from True have op_cases: "op = CoreBinop_Equal \<or> op = CoreBinop_NotEqual"
-                  by (cases op) auto
-
-                show ?thesis
-                proof (cases "lhsTy = CoreTy_Bool")
-                  case True
-                  (* Bool equality *)
-                  from True types_eq have rhsTy_bool: "rhsTy = CoreTy_Bool" by simp
-                  from lhs_typed True obtain b1 where lhsVal_def: "lhsVal = CV_Bool b1"
-                    using value_has_type_Bool by blast
-                  from rhs_typed rhsTy_bool obtain b2 where rhsVal_def: "rhsVal = CV_Bool b2"
-                    using value_has_type_Bool by blast
-
-                  from op_cases show ?thesis
-                  proof
-                    assume "op = CoreBinop_Equal"
-                    then have "eval_binop op lhsVal rhsVal = Inr (CV_Bool (b1 = b2))"
-                      using lhsVal_def rhsVal_def by simp
-                    with interp_eq ty_eq show ?thesis by simp
-                  next
-                    assume "op = CoreBinop_NotEqual"
-                    then have "eval_binop op lhsVal rhsVal = Inr (CV_Bool (b1 \<noteq> b2))"
-                      using lhsVal_def rhsVal_def by simp
-                    with interp_eq ty_eq show ?thesis by simp
-                  qed
-                next
-                  case False
-                  (* Numeric equality *)
-                  from False type_constraint have numeric: "is_numeric_type lhsTy" by simp
-                  from numeric lhsTy_rt obtain sign bits where
-                    lhsTy_def: "lhsTy = CoreTy_FiniteInt sign bits"
-                    by (cases lhsTy) auto
-                  from types_eq lhsTy_def have rhsTy_def: "rhsTy = CoreTy_FiniteInt sign bits" by simp
-                  from lhs_typed lhsTy_def have lhs_int: "value_has_type env lhsVal (CoreTy_FiniteInt sign bits)" by simp
-                  from rhs_typed rhsTy_def have rhs_int: "value_has_type env rhsVal (CoreTy_FiniteInt sign bits)" by simp
-
-                  from lhs_int obtain i1 where lhsVal_def: "lhsVal = CV_FiniteInt sign bits i1"
-                    using value_has_type_FiniteInt by blast
-                  from rhs_int obtain i2 where rhsVal_def: "rhsVal = CV_FiniteInt sign bits i2"
-                    using value_has_type_FiniteInt by blast
-
-                  from op_cases show ?thesis
-                  proof
-                    assume "op = CoreBinop_Equal"
-                    then have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x = y) lhsVal rhsVal"
-                      using lhsVal_def rhsVal_def by simp
-                    with interp_eq ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
-                    show ?thesis by simp
-                  next
-                    assume "op = CoreBinop_NotEqual"
-                    then have "eval_binop op lhsVal rhsVal = generic_int_cmp_binop (\<lambda>x y. x \<noteq> y) lhsVal rhsVal"
-                      using lhsVal_def rhsVal_def by simp
-                    with interp_eq ty_eq generic_int_cmp_binop_sound[OF lhs_int rhs_int]
-                    show ?thesis by simp
-                  qed
-                qed
-              next
-                case False
-                note not_eq_neq = False
-                (* Must be logical *)
-                from typing' not_arith not_modulo not_bitwise_shift not_ordering not_eq_neq have
-                  logical: "is_logical_binop op" and
-                  lhs_bool: "lhsTy = CoreTy_Bool" and
-                  rhs_bool: "rhsTy = CoreTy_Bool" and
-                  ty_eq: "ty = CoreTy_Bool"
-                  by (auto split: if_splits)
-                from lhs_typed lhs_bool have lhs_bool_typed: "value_has_type env lhsVal CoreTy_Bool" by simp
-                from rhs_typed rhs_bool have rhs_bool_typed: "value_has_type env rhsVal CoreTy_Bool" by simp
-
-                show ?thesis
-                proof (cases op)
-                  case CoreBinop_And
-                  have "eval_binop op lhsVal rhsVal = generic_bool_binop (\<lambda>x y. x \<and> y) lhsVal rhsVal"
-                    using CoreBinop_And by simp
-                  with interp_eq ty_eq generic_bool_binop_sound[OF lhs_bool_typed rhs_bool_typed]
-                  show ?thesis by simp
-                next
-                  case CoreBinop_Or
-                  have "eval_binop op lhsVal rhsVal = generic_bool_binop (\<lambda>x y. x \<or> y) lhsVal rhsVal"
-                    using CoreBinop_Or by simp
-                  with interp_eq ty_eq generic_bool_binop_sound[OF lhs_bool_typed rhs_bool_typed]
-                  show ?thesis by simp
-                next
-                  case CoreBinop_Implies
-                  have "eval_binop op lhsVal rhsVal = generic_bool_binop (\<lambda>x y. x \<longrightarrow> y) lhsVal rhsVal"
-                    using CoreBinop_Implies by simp
-                  with interp_eq ty_eq generic_bool_binop_sound[OF lhs_bool_typed rhs_bool_typed]
-                  show ?thesis by simp
-                qed (use logical in auto)
-              qed
-            qed
-          qed
-        qed
-      qed
+      with eval_binop_sound[OF typing lhs_typing rhs_typing lhs_typed rhs_typed]
+      show ?thesis by simp
     qed
   qed
 qed
@@ -1123,24 +1119,11 @@ proof -
     have len_vals: "length vals = length flds"
       using vals_typed' len_eq by (auto dest: list_all2_lengthD)
 
-    have "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
-            (zip (map fst flds) vals) (zip (map fst flds) ?subTys)"
-    proof (rule list_all2_all_nthI)
-      show "length (zip (map fst flds) vals) = length (zip (map fst flds) ?subTys)"
-        using len_vals len_eq by simp
-    next
-      fix i assume i_bound: "i < length (zip (map fst flds) vals)"
-      hence i_flds: "i < length flds" using len_vals by simp
-      from vals_typed' i_flds len_eq have "value_has_type env (vals ! i) (?subTys ! i)"
-        by (auto simp: list_all2_conv_all_nth)
-      thus "(case zip (map fst flds) vals ! i of
-              (name1, fldVal) \<Rightarrow> \<lambda>(name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
-             (zip (map fst flds) ?subTys ! i)"
-        using i_flds len_vals len_eq by simp
-    qed
-    hence "value_has_type env (CV_Record (zip (map fst flds) vals))
-                              (CoreTy_Record (zip (map fst flds) ?subTys))"
-      using distinct_names len_eq by simp
+    have len_names: "length (map fst flds) = length vals"
+      using len_vals by simp
+    have "value_has_type env (CV_Record (zip (map fst flds) vals))
+            (CoreTy_Record (zip (map fst flds) ?subTys))"
+      by (rule cv_record_typed[OF vals_typed' distinct_names len_names])
 
     moreover have "apply_subst ?s ty = CoreTy_Record (zip (map fst flds) ?subTys)"
       using ty_eq len_eq by (simp add: zip_map2)
@@ -1330,23 +1313,6 @@ proof -
     tl_typing: "list_all (\<lambda>body. core_term_type env NotGhost body = Some resultTy) (tl (map snd arms))"
     by (simp split: if_splits)
 
-  (* All arm bodies have type resultTy *)
-  have all_arms_typed: "\<forall>arm \<in> set arms. core_term_type env NotGhost (snd arm) = Some resultTy"
-  proof
-    fix arm assume arm_in: "arm \<in> set arms"
-    from arms_nonempty obtain a rest where arms_eq: "arms = a # rest" by (cases arms) auto
-    show "core_term_type env NotGhost (snd arm) = Some resultTy"
-    proof (cases "arm = a")
-      case True then show ?thesis using hd_typing arms_eq by simp
-    next
-      case False
-      from arm_in False arms_eq have "arm \<in> set rest" by simp
-      hence "snd arm \<in> set (map snd rest)" by auto
-      hence "snd arm \<in> set (tl (map snd arms))" using arms_eq by simp
-      with tl_typing show ?thesis by (simp add: list_all_iff)
-    qed
-  qed
-
   (* IH on scrutinee *)
   from IH[OF scrut_typing]
   have scrut_sound: "sound_term_result state env scrutTy (interp_term fuel state scrut)" .
@@ -1375,12 +1341,12 @@ proof -
       then have match_eq: "find_matching_arm scrutVal arms = Inr armBody" .
 
       (* armBody is the body of some arm in the list *)
-      from find_matching_arm_in_set[OF match_eq]
+      from find_matching_arm_in_arms[OF match_eq]
       obtain pat where arm_in: "(pat, armBody) \<in> set arms" by auto
 
       (* armBody typechecks to resultTy *)
       have arm_typed: "core_term_type env NotGhost armBody = Some resultTy"
-        using all_arms_typed arm_in by force
+        by (rule match_arm_body_typed[OF arms_nonempty hd_typing tl_typing arm_in])
 
       (* IH on arm body *)
       from IH[OF arm_typed]
@@ -1497,78 +1463,24 @@ proof -
           Inr (make_1d_array vals)"
       using Inr by simp
 
-    (* Show make_1d_array vals has the right type *)
-    define n where "n = int (length vals)"
-    define fm where "fm = fmap_of_list (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals)"
-
-    have make_eq: "make_1d_array vals = CV_Array [n] fm"
-      by (simp add: n_def fm_def)
-
-    (* sizes_valid *)
-    have n_nonneg: "n \<ge> 0" by (simp add: n_def)
-    have n_fits: "n \<le> snd (int_range Unsigned IntBits_64)"
-      using len_ok len_vals by (simp add: n_def)
-    have sv: "sizes_valid [n]"
-      using n_nonneg n_fits by (simp add: sizes_valid_def)
-
-    (* fmap_matches_sizes *)
-    have fm_dom: "fmdom fm = fset_of_list (all_indices [n])"
-    proof -
-      have keys: "map (\<lambda>i. [int i]) [0..<length vals] = all_indices [n]"
-      proof -
-        have "all_indices [n] = concat (map (\<lambda>i. [[i]]) (map int [0..<nat n]))"
-          by (simp add: Let_def)
-        also have "... = map (\<lambda>i. [i]) (map int [0..<nat n])"
-          by (metis concat_map_singleton)
-        also have "... = map (\<lambda>i. [int i]) [0..<nat n]" by (simp add: comp_def)
-        also have "[0..<nat n] = [0..<length vals]" using n_nonneg by (simp add: n_def)
-        finally show ?thesis by simp
-      qed
-      have "fmdom fm = fset_of_list (map fst (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals))"
-        unfolding fm_def by simp
-      also have "... = fset_of_list (map (\<lambda>i. [int i]) [0..<length vals])"
-        by (simp add: map_fst_zip_take len_vals)
-      also have "... = fset_of_list (all_indices [n])"
-        using keys by simp
-      finally show ?thesis .
-    qed
-    have fms: "fmap_matches_sizes [n] fm"
-      by (simp add: fmap_matches_sizes_def sv fm_dom)
-
-    (* sizes_match_dims *)
-    have smd: "sizes_match_dims [n] [CoreDim_Fixed (int (length tms))]"
-      by (simp add: n_def len_vals)
-
-    (* array_dims_well_kinded *)
-    have adwk: "array_dims_well_kinded [CoreDim_Fixed (int (length tms))]"
-      using len_ok by (simp add: array_dims_well_kinded_def)
-
-    (* All values in fmap have type ?subElemTy *)
-    have fm_vals_typed: "\<forall>idx val. fmlookup fm idx = Some val \<longrightarrow> value_has_type env val ?subElemTy"
-    proof (intro allI impI)
-      fix idx val assume lkup: "fmlookup fm idx = Some val"
-      hence "map_of (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals) idx = Some val"
-        unfolding fm_def by (simp add: fmlookup_of_list)
-      hence "(idx, val) \<in> set (zip (map (\<lambda>i. [int i]) [0..<length vals]) vals)"
-        by (rule map_of_SomeD)
-      hence "val \<in> set vals" by (auto simp: set_zip)
-      then obtain i where "i < length vals" and "val = vals ! i"
-        by (auto simp: in_set_conv_nth)
-      thus "value_has_type env val ?subElemTy"
-        using vals_elem_typed by simp
-    qed
-
+    (* Show make_1d_array vals has the right type, via the shared lemma *)
     from wk state_env wf_env have wk_sub: "is_well_kinded env ?subElemTy"
       using is_well_kinded_apply_IS_TyArgs by blast
     from rt state_env have rt_sub: "is_runtime_type env ?subElemTy"
       using is_runtime_type_apply_IS_TyArgs by blast
     from rt state_env have ground_sub: "type_tyvars ?subElemTy = {}"
       using is_runtime_type_apply_IS_TyArgs_ground by blast
-    have "value_has_type env (CV_Array [n] fm)
-            (CoreTy_Array ?subElemTy [CoreDim_Fixed (int (length tms))])"
-      using wk_sub rt_sub ground_sub fm_vals_typed adwk fms smd by simp
+    have len_ok': "int_in_range (int_range Unsigned IntBits_64) (int (length vals))"
+      using len_ok len_vals by simp
 
-    with interp_eq make_eq ty_eq show ?thesis
+    have "value_has_type env (make_1d_array vals)
+            (CoreTy_Array ?subElemTy [CoreDim_Fixed (int (length vals))])"
+      using make_1d_array_typed[OF wk_sub rt_sub ground_sub vals_elem_typed len_ok'] .
+    hence "value_has_type env (make_1d_array vals)
+            (CoreTy_Array ?subElemTy [CoreDim_Fixed (int (length tms))])"
+      using len_vals by simp
+
+    with interp_eq ty_eq show ?thesis
       using sound_term_result.simps(2) by auto
   qed
 qed

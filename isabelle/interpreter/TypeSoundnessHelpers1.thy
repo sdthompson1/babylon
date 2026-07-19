@@ -1054,6 +1054,39 @@ proof -
 qed
 
 
+(* If a list of values is typed pointwise against a list of types, the
+   corresponding record value is typed at the corresponding record type.
+   Shared by type_soundness_record and ConstFoldCorrect's CoreTm_Record case. *)
+lemma cv_record_typed:
+  assumes vs_typed: "list_all2 (value_has_type env) vs tys"
+      and dn: "distinct names"
+      and len_names: "length names = length vs"
+  shows "value_has_type env (CV_Record (zip names vs)) (CoreTy_Record (zip names tys))"
+proof -
+  have len_tys: "length vs = length tys"
+    using vs_typed by (rule list_all2_lengthD)
+  have "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+          (zip names vs) (zip names tys)"
+  proof (rule list_all2_all_nthI)
+    show "length (zip names vs) = length (zip names tys)"
+      using len_names len_tys by simp
+  next
+    fix i assume "i < length (zip names vs)"
+    hence i_names: "i < length names" and i_vs: "i < length vs" and i_tys: "i < length tys"
+      using len_names len_tys by auto
+    from vs_typed i_vs i_tys have "value_has_type env (vs ! i) (tys ! i)"
+      by (auto simp: list_all2_conv_all_nth)
+    thus "(case zip names vs ! i of (name1, fldVal) \<Rightarrow>
+            \<lambda>(name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+           (zip names tys ! i)"
+      using i_names i_vs i_tys by simp
+  qed
+  moreover have "map fst (zip names tys) = names"
+    using len_names len_tys by (simp add: map_fst_zip_take)
+  ultimately show ?thesis using dn by simp
+qed
+
+
 (* If two association lists are related by list_all2 with matching keys,
    then map_of on the first succeeds whenever map_of on the second does *)
 lemma map_of_list_all2:
@@ -2263,12 +2296,6 @@ lemma rights_filter_zip_refs_chars:
   using rights_filter_zip_refs_chars_aux[OF len_eq ref_inrs]
   unfolding mapped_def idxs_def by blast
 
-(* If find_matching_arm succeeds, the result is the body of some arm in the list *)
-lemma find_matching_arm_in_set:
-  assumes "find_matching_arm val arms = Inr rhs"
-  shows "\<exists>pat. (pat, rhs) \<in> set arms"
-  using assms by (induction arms) (auto split: if_splits)
-
 (* find_matching_arm only ever fails with RuntimeError (no matching arm found).
    This is the key fact that makes non-exhaustive matches sound: a failed match
    at runtime is a runtime error, not a type error. *)
@@ -2276,6 +2303,106 @@ lemma find_matching_arm_error:
   assumes "find_matching_arm val arms = Inl err"
   shows "err = RuntimeError"
   using assms by (induction arms) (auto split: if_splits)
+
+(* If all the arm bodies of a CoreTm_Match are typed at ty (in the hd/tl form
+   used by the typing rule), then any arm body drawn from the arm list is
+   typed at ty. Shared by type_soundness_match and ConstFoldCorrect. *)
+lemma match_arm_body_typed:
+  assumes nonempty: "arms \<noteq> []"
+      and hd_typing: "core_term_type env ghost (snd (hd arms)) = Some ty"
+      and tl_typing: "list_all (\<lambda>body. core_term_type env ghost body = Some ty)
+                        (tl (map snd arms))"
+      and mem: "(pat, armTm) \<in> set arms"
+  shows "core_term_type env ghost armTm = Some ty"
+proof -
+  obtain a rest where arms_eq: "arms = a # rest"
+    using nonempty by (cases arms) auto
+  from mem arms_eq have "armTm = snd a \<or> armTm \<in> set (map snd rest)" by force
+  then show ?thesis
+  proof
+    assume "armTm = snd a"
+    then show ?thesis using hd_typing arms_eq by simp
+  next
+    assume "armTm \<in> set (map snd rest)"
+    then show ?thesis using tl_typing arms_eq by (auto simp: list_all_iff)
+  qed
+qed
+
+(* make_1d_array of well-typed elements is a well-typed 1-D array.
+   Shared by type_soundness_lit_array and ConstFoldCorrect's CoreTm_LitArray
+   case. *)
+lemma make_1d_array_typed:
+  assumes wk: "is_well_kinded env elemTy"
+      and rt: "is_runtime_type env elemTy"
+      and ground: "type_tyvars elemTy = {}"
+      and elems_typed: "\<And>i. i < length vs \<Longrightarrow> value_has_type env (vs ! i) elemTy"
+      and len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length vs))"
+  shows "value_has_type env (make_1d_array vs)
+           (CoreTy_Array elemTy [CoreDim_Fixed (int (length vs))])"
+proof -
+  define n where "n = int (length vs)"
+  define fm where "fm = fmap_of_list (zip (map (\<lambda>i. [int i]) [0..<length vs]) vs)"
+  have make_eq: "make_1d_array vs = CV_Array [n] fm"
+    by (simp add: n_def fm_def)
+
+  (* sizes_valid *)
+  have n_nonneg: "n \<ge> 0" by (simp add: n_def)
+  have n_fits: "n \<le> snd (int_range Unsigned IntBits_64)"
+    using len_ok by (simp add: n_def)
+  have sv: "sizes_valid [n]"
+    using n_nonneg n_fits by (simp add: sizes_valid_def)
+
+  (* fmap_matches_sizes *)
+  have fm_dom: "fmdom fm = fset_of_list (all_indices [n])"
+  proof -
+    have keys: "map (\<lambda>i. [int i]) [0..<length vs] = all_indices [n]"
+    proof -
+      have "all_indices [n] = concat (map (\<lambda>i. [[i]]) (map int [0..<nat n]))"
+        by (simp add: Let_def)
+      also have "... = map (\<lambda>i. [i]) (map int [0..<nat n])"
+        by (metis concat_map_singleton)
+      also have "... = map (\<lambda>i. [int i]) [0..<nat n]" by (simp add: comp_def)
+      also have "[0..<nat n] = [0..<length vs]" using n_nonneg by (simp add: n_def)
+      finally show ?thesis by simp
+    qed
+    have "fmdom fm = fset_of_list (map fst (zip (map (\<lambda>i. [int i]) [0..<length vs]) vs))"
+      unfolding fm_def by simp
+    also have "... = fset_of_list (map (\<lambda>i. [int i]) [0..<length vs])"
+      by (simp add: map_fst_zip_take)
+    also have "... = fset_of_list (all_indices [n])"
+      using keys by simp
+    finally show ?thesis .
+  qed
+  have fms: "fmap_matches_sizes [n] fm"
+    by (simp add: fmap_matches_sizes_def sv fm_dom)
+
+  (* sizes_match_dims / array_dims_well_kinded *)
+  have smd: "sizes_match_dims [n] [CoreDim_Fixed (int (length vs))]"
+    by (simp add: n_def)
+  have adwk: "array_dims_well_kinded [CoreDim_Fixed (int (length vs))]"
+    using len_ok by (simp add: array_dims_well_kinded_def)
+
+  (* All values in the fmap are typed at elemTy *)
+  have fm_vals_typed: "\<forall>idx val. fmlookup fm idx = Some val
+                          \<longrightarrow> value_has_type env val elemTy"
+  proof (intro allI impI)
+    fix idx val assume lkup: "fmlookup fm idx = Some val"
+    hence "map_of (zip (map (\<lambda>i. [int i]) [0..<length vs]) vs) idx = Some val"
+      unfolding fm_def by (simp add: fmlookup_of_list)
+    hence "(idx, val) \<in> set (zip (map (\<lambda>i. [int i]) [0..<length vs]) vs)"
+      by (rule map_of_SomeD)
+    hence "val \<in> set vs" by (auto simp: set_zip)
+    then obtain i where "i < length vs" and "val = vs ! i"
+      by (auto simp: in_set_conv_nth)
+    thus "value_has_type env val elemTy"
+      using elems_typed by simp
+  qed
+
+  have "value_has_type env (CV_Array [n] fm)
+          (CoreTy_Array elemTy [CoreDim_Fixed (int (length vs))])"
+    using wk rt ground fm_vals_typed adwk fms smd by simp
+  then show ?thesis using make_eq by auto
+qed
 
 (* Helper: sizes_match_dims implies equal length *)
 lemma sizes_match_dims_length:

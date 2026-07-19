@@ -1,5 +1,5 @@
 theory CoreModule
-  imports TypeSubstStmt TypeSubstEnv
+  imports TypeSubstStmt TypeSubstEnv CoreValue
 begin
 
 (* A CoreModule is a self-contained, separately-typecheckable fragment of a
@@ -38,7 +38,8 @@ record CoreFunction =
         in some previous module. Required to be idempotent. Types defined here
         are *not* listed in TE_TypeVars.
     - CM_GlobalVars: Global constants defined by this module, along with their
-        initializer terms.
+        values. (The elaborator evaluates constant initializers at compile
+        time, so a Core module carries ground CoreValues, not terms.)
     - CM_Functions: Functions defined by this module.
 
    A module may *declare* more than it *defines* (that is exactly what an
@@ -47,7 +48,7 @@ record CoreFunction =
 record CoreModule =
   CM_TyEnv      :: CoreTyEnv
   CM_TypeSubst  :: TypeSubst
-  CM_GlobalVars :: "(string, CoreTerm) fmap"
+  CM_GlobalVars :: "(string, CoreValue) fmap"
   CM_Functions  :: "(string, CoreFunction) fmap"
 
 
@@ -57,13 +58,13 @@ record CoreModule =
 
 (* This resolves all abstract types into their concrete definitions. Specifically,
    it applies CM_TypeSubst to every type and term in the module, then clears the
-   substitution. *)
+   substitution. (CM_GlobalVars holds CoreValues, which contain no types, so
+   globals are untouched.) *)
 
 definition normalize_module :: "CoreModule \<Rightarrow> CoreModule" where
   "normalize_module m =
     m \<lparr>
       CM_TyEnv      := apply_subst_to_tyenv (CM_TypeSubst m) (CM_TyEnv m),
-      CM_GlobalVars := fmmap (apply_subst_to_term (CM_TypeSubst m)) (CM_GlobalVars m),
       CM_Functions  := fmmap
                          (\<lambda>f. f \<lparr> CF_Body :=
                                   map_option (apply_subst_to_statement_list (CM_TypeSubst m))

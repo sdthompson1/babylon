@@ -1,5 +1,5 @@
 theory MatchCompileSemantics
-  imports MatchCompileTyping "../interpreter/CoreValue"
+  imports MatchCompileTyping "../core/CoreValue"
 begin
 
 (* Semantic preservation for the Core-to-Core match-compilation pass

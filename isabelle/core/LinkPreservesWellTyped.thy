@@ -1,5 +1,6 @@
 theory LinkPreservesWellTyped
   imports LinkSubstRanges TypeSubstModuleEnv TyEnvExtension CoreModuleTypecheck
+          CoreValueTransfer
 begin
 
 (* The whole-program "linking preserves well-typedness" theorem:
@@ -76,8 +77,7 @@ lemma apply_subst_to_tyenv_simps [simp]:
 
 lemma normalize_module_simps [simp]:
   "CM_TyEnv (normalize_module x) = apply_subst_to_tyenv (CM_TypeSubst x) (CM_TyEnv x)"
-  "CM_GlobalVars (normalize_module x)
-     = fmmap (apply_subst_to_term (CM_TypeSubst x)) (CM_GlobalVars x)"
+  "CM_GlobalVars (normalize_module x) = CM_GlobalVars x"
   "CM_Functions (normalize_module x)
      = fmmap (\<lambda>f. f \<lparr> CF_Body := map_option (apply_subst_to_statement_list (CM_TypeSubst x))
                                              (CF_Body f) \<rparr>)
@@ -161,36 +161,6 @@ lemma fminus_absorb_subset:
   assumes "D1 |\<subseteq>| D2"
   shows "(A |-| D1) |-| D2 = A |-| D2"
   by (rule fset_eqI) (use assms in auto)
-
-
-(* ========================================================================== *)
-(* is_constant_term is invariant under type substitution                      *)
-(*                                                                            *)
-(* Substitution rewrites types embedded in a term but introduces no           *)
-(* CoreTm_FunctionCall, so the compile-time-constant check is unchanged.      *)
-(* ========================================================================== *)
-
-lemma is_constant_term_apply_subst [simp]:
-  "is_constant_term (apply_subst_to_term subst tm) = is_constant_term tm"
-proof (induction tm)
-  case (CoreTm_LitArray elemTy tms)
-  then show ?case by (fastforce simp: list_all_iff)
-next
-  case (CoreTm_Record flds)
-  have "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow>
-          is_constant_term (apply_subst_to_term subst t) = is_constant_term t"
-    using CoreTm_Record.IH by auto
-  then show ?case by (fastforce simp: list_all_iff)
-next
-  case (CoreTm_ArrayProj arr idxs)
-  then show ?case by (fastforce simp: list_all_iff)
-next
-  case (CoreTm_Match scrut arms)
-  have "\<And>p t. (p, t) \<in> set arms \<Longrightarrow>
-          is_constant_term (apply_subst_to_term subst t) = is_constant_term t"
-    using CoreTm_Match.IH by auto
-  then show ?case using CoreTm_Match.IH by (fastforce simp: list_all_iff)
-qed simp_all
 
 
 (* ========================================================================== *)
@@ -3548,12 +3518,10 @@ lemma link_mid_globals_contribution:
       and linkM: "link_modules ms = Inr m"
       and setMS: "set ms = set as \<union> set bs"
       and ghostOK: "\<forall>x \<in> set ms. module_ghost_subsets_ok x"
-      and a_def: "fmlookup (CM_GlobalVars a) name = Some tm0"
+      and a_def: "fmlookup (CM_GlobalVars a) name = Some v"
   shows "\<exists>declTy.
            fmlookup (TE_GlobalVars (CM_TyEnv (normalize_module m))) name = Some declTy \<and>
-           is_constant_term (apply_subst_to_term (CM_TypeSubst m) tm0) \<and>
-           core_term_type (CM_TyEnv (normalize_module m)) NotGhost
-             (apply_subst_to_term (CM_TypeSubst m) tm0) = Some declTy"
+           value_has_type (CM_TyEnv (normalize_module m)) v declTy"
 proof -
   let ?\<sigma>A = "CM_TypeSubst a"
   let ?\<sigma>M = "CM_TypeSubst m"
@@ -3573,14 +3541,11 @@ proof -
     by blast+
 
   \<comment> \<open>The a-side entry and its declared type.\<close>
-  have a_def': "fmlookup (CM_GlobalVars (normalize_module a)) name
-                  = Some (apply_subst_to_term ?\<sigma>A tm0)"
+  have a_def': "fmlookup (CM_GlobalVars (normalize_module a)) name = Some v"
     using a_def by simp
   obtain declTy0 where
       a_decl: "fmlookup (TE_GlobalVars ?envA) name = Some declTy0" and
-      a_const: "is_constant_term (apply_subst_to_term ?\<sigma>A tm0)" and
-      a_typing: "core_term_type ?envA NotGhost (apply_subst_to_term ?\<sigma>A tm0)
-                   = Some declTy0"
+      a_vht: "value_has_type ?envA v declTy0"
     using gwtA a_def' unfolding module_globals_well_typed_def by blast
 
   \<comment> \<open>Underneath: the raw whole-link declaration.\<close>
@@ -3598,48 +3563,44 @@ proof -
   have declTy_abs: "apply_subst ?\<sigma>M declTy0 = apply_subst ?\<sigma>M declTy00"
     using declTy0_eq absA by simp
 
-  \<comment> \<open>The four-stage typing chain.\<close>
-  have chain: "\<And>gh. core_term_type ?envA gh (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0
-                 \<Longrightarrow> core_term_type ?envM gh (apply_subst_to_term ?\<sigma>M tm0)
-                       = Some (apply_subst ?\<sigma>M declTy00)"
-  proof -
-    fix gh
-    assume t0: "core_term_type ?envA gh (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0"
-    \<comment> \<open>Widen the tyvar fields by the b-side's.\<close>
-    have t1: "core_term_type ?e1 gh (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0"
-      using core_term_type_irrelevant_tyvar[OF t0,
-              where extraTV = "TE_TypeVars (CM_TyEnv b)"
-                and extraRT = "TE_RuntimeTypeVars (CM_TyEnv b)"]
-      by simp
-    \<comment> \<open>Extend along the declaration axis into the mid env.\<close>
-    have cons1: "tyenv_ctors_consistent ?e1"
-      using wfA unfolding tyenv_well_formed_def tyenv_ctors_consistent_def by simp
-    have t2: "core_term_type ?mid gh (apply_subst_to_term ?\<sigma>A tm0) = Some declTy0"
-      using core_term_type_tyenv_extends[OF
-              link_mid_env_extends[OF linkA linkB linkM setMS ghostOK] cons1 t1] .
-    \<comment> \<open>Substitute with the whole link's substitution.\<close>
-    have t3: "core_term_type (apply_subst_to_module_env ?\<sigma>M ?envM ?mid) gh
-                (apply_subst_to_term ?\<sigma>M (apply_subst_to_term ?\<sigma>A tm0))
-                = Some (apply_subst ?\<sigma>M declTy0)"
-      using core_term_type_subst_module_env[OF t2
-              link_mid_env_well_formed[OF linkA wtA linkB wtB linkM setMS ghostOK]
-              link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS]]
-            link_mid_env_runtime_ok[OF linkA linkB linkM setMS]
-      by blast
-    \<comment> \<open>Collapse the env and absorb the a-side substitution.\<close>
-    show "core_term_type ?envM gh (apply_subst_to_term ?\<sigma>M tm0)
-            = Some (apply_subst ?\<sigma>M declTy00)"
-      using t3
-      unfolding link_mid_env_collapse[OF linkA linkB linkM setMS]
-                subst_absorb_term[OF absA] declTy_abs .
+  \<comment> \<open>The value-typing chain, mirroring the term chain - but the value itself
+      never moves, only the environment does. The tyvar-widening step of the
+      term chain is unnecessary: value_has_type ignores the tyvar fields, so
+      one value_has_type_env_mono application reaches the mid env directly.\<close>
+  have cons_envA: "tyenv_ctors_consistent ?envA"
+    using wfA unfolding tyenv_well_formed_def by blast
+  have ext: "tyenv_extends ?e1 ?mid"
+    using link_mid_env_extends[OF linkA linkB linkM setMS ghostOK] .
+  have v_mid: "value_has_type ?mid v declTy0"
+  proof (rule value_has_type_env_mono[OF _ _ _ cons_envA a_vht])
+    fix c e assume "fmlookup (TE_DataCtors ?envA) c = Some e"
+    hence "fmlookup (TE_DataCtors ?e1) c = Some e" by simp
+    thus "fmlookup (TE_DataCtors ?mid) c = Some e"
+      using ext unfolding tyenv_extends_def by blast
+  next
+    fix d n assume "fmlookup (TE_Datatypes ?envA) d = Some n"
+    hence "fmlookup (TE_Datatypes ?e1) d = Some n" by simp
+    thus "fmlookup (TE_Datatypes ?mid) d = Some n"
+      using ext unfolding tyenv_extends_def by blast
+  next
+    fix d assume "d |\<in>| fmdom (TE_Datatypes ?envA)"
+    hence d_e1: "d |\<in>| fmdom (TE_Datatypes ?e1)" by simp
+    have gd_e1: "TE_GhostDatatypes ?e1 = TE_GhostDatatypes ?envA" by simp
+    from ext d_e1 have "d |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> d |\<in>| TE_GhostDatatypes ?e1"
+      unfolding tyenv_extends_def by blast
+    thus "d |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> d |\<in>| TE_GhostDatatypes ?envA"
+      using gd_e1 by simp
   qed
-
-  have const: "is_constant_term (apply_subst_to_term ?\<sigma>M tm0)"
-    using a_const by simp
-  have t: "core_term_type ?envM NotGhost (apply_subst_to_term ?\<sigma>M tm0)
-             = Some (apply_subst ?\<sigma>M declTy00)"
-    using chain[OF a_typing] .
-  show ?thesis using m_decl const t by auto
+  \<comment> \<open>Substitute with the whole link's substitution, then collapse the env.\<close>
+  have v_subst: "value_has_type (apply_subst_to_module_env ?\<sigma>M ?envM ?mid) v
+                   (apply_subst ?\<sigma>M declTy0)"
+    using value_has_type_subst_module_env[OF v_mid
+            link_mid_env_well_formed[OF linkA wtA linkB wtB linkM setMS ghostOK]
+            link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS]] .
+  have v_final: "value_has_type ?envM v (apply_subst ?\<sigma>M declTy00)"
+    using v_subst
+    unfolding link_mid_env_collapse[OF linkA linkB linkM setMS] declTy_abs .
+  show ?thesis using m_decl v_final by auto
 qed
 
 
@@ -3915,35 +3876,28 @@ proof -
   have globals: "module_globals_well_typed ?envM (CM_GlobalVars (normalize_module m))"
     unfolding module_globals_well_typed_def
   proof (intro allI impI)
-    fix name tm
-    assume "fmlookup (CM_GlobalVars (normalize_module m)) name = Some tm"
-    then have "fmlookup (fmmap (apply_subst_to_term ?\<sigma>M) (CM_GlobalVars m)) name
-                 = Some tm"
+    fix name v
+    assume "fmlookup (CM_GlobalVars (normalize_module m)) name = Some v"
+    then have m_lk: "fmlookup (CM_GlobalVars m) name = Some v"
       by simp
-    then obtain tm0 where
-        m_lk: "fmlookup (CM_GlobalVars m) name = Some tm0" and
-        tm_eq: "tm = apply_subst_to_term ?\<sigma>M tm0"
-      by (cases "fmlookup (CM_GlobalVars m) name") auto
     have gdisj: "fmdisjoint_list (map CM_GlobalVars ms)"
       using link_modules_success_facts(1)[OF linkM]
       unfolding link_fields_disjoint_def by blast
-    have "\<exists>s \<in> set (map CM_GlobalVars ms). fmlookup s name = Some tm0"
+    have "\<exists>s \<in> set (map CM_GlobalVars ms). fmlookup s name = Some v"
       using m_lk unfolding fM(17) using fmlist_union_lookup[OF gdisj] by blast
     then obtain z where z_in: "z \<in> set ms"
-                    and z_lk: "fmlookup (CM_GlobalVars z) name = Some tm0"
+                    and z_lk: "fmlookup (CM_GlobalVars z) name = Some v"
       by auto
     from z_in setMS have "z \<in> set as \<or> z \<in> set bs" by auto
-    then have contrib: "\<exists>declTy.
+    then show "\<exists>declTy.
         fmlookup (TE_GlobalVars ?envM) name = Some declTy \<and>
-        is_constant_term (apply_subst_to_term ?\<sigma>M tm0) \<and>
-        core_term_type ?envM NotGhost (apply_subst_to_term ?\<sigma>M tm0)
-          = Some declTy"
+        value_has_type ?envM v declTy"
     proof (elim disjE)
       assume zA: "z \<in> set as"
       have adisj: "fmdisjoint_list (map CM_GlobalVars as)"
         using link_modules_success_facts(1)[OF linkA]
         unfolding link_fields_disjoint_def by blast
-      have a_lk: "fmlookup (CM_GlobalVars a) name = Some tm0"
+      have a_lk: "fmlookup (CM_GlobalVars a) name = Some v"
         unfolding link_modules_result_fields(17)[OF linkA]
         using fmlist_union_lookup[OF adisj] zA z_lk by fastforce
       show ?thesis
@@ -3954,18 +3908,13 @@ proof -
       have bdisj: "fmdisjoint_list (map CM_GlobalVars bs)"
         using link_modules_success_facts(1)[OF linkB]
         unfolding link_fields_disjoint_def by blast
-      have b_lk: "fmlookup (CM_GlobalVars b) name = Some tm0"
+      have b_lk: "fmlookup (CM_GlobalVars b) name = Some v"
         unfolding link_modules_result_fields(17)[OF linkB]
         using fmlist_union_lookup[OF bdisj] zB z_lk by fastforce
       show ?thesis
         using link_mid_globals_contribution[OF linkB wtB linkA wtA linkM setMS'
                                                ghostOK b_lk] .
     qed
-    show "\<exists>declTy.
-        fmlookup (TE_GlobalVars ?envM) name = Some declTy \<and>
-        is_constant_term tm \<and>
-        core_term_type ?envM NotGhost tm = Some declTy"
-      unfolding tm_eq using contrib .
   qed
 
   \<comment> \<open>Clause 4: functions, likewise.\<close>

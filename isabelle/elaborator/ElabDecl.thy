@@ -1,5 +1,5 @@
 theory ElabDecl
-  imports ElabStmt "../core/CoreModuleTypecheck"
+  imports ElabStmt ConstFold "../core/CoreModuleTypecheck"
 begin
 
 (* Declaration elaborator.
@@ -263,7 +263,7 @@ definition ghost_const_fun :: "CoreTerm \<Rightarrow> CoreFunction" where
 (* The elaborator converts ghost const declarations to nullary ghost functions:
    `ghost const c: T = e;` becomes `ghost function c(): T { return e; }`.
    (Later references to `c` are rewritten to `c()` by elab_term.)
-   This allows ghost constants to be initialized by general terms, unlike normal constants,
+   This allows ghost constants to be initialized by general terms, unlike NotGhost constants,
    which can only be initialized by compile-time constant terms.
 
    There are 3 cases, mirroring elab_const_decl (below) and elab_function_decl:
@@ -369,16 +369,20 @@ definition elab_ghost_const_decl ::
       required. The new constant is added to the type environment.
 
     - Definition of a previously-declared constant: The type annotation (if any)
-      must match the previous declaration. The new constant is
-      added to CM_GlobalVars.
+      must match the previous declaration. The initializer is evaluated at
+      compile time (fold_const) and the resulting value is added to
+      CM_GlobalVars.
 
-    - Definition without previous declaration: The new entry is added to both the
-      type environment and to CM_GlobalVars.
-*)
+    - Definition without previous declaration: as above, but the new entry is
+      also added to the type environment.
+
+   ctxGlobals holds constants that have been brought in via imports; together with the
+   CM_GlobalVars of the module under construction, it forms the environment in which
+   initializers are evaluated. *)
 definition elab_const_decl ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> DeclConst
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreModule \<Rightarrow> DeclConst
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
-  "elab_const_decl env elabEnv m dc =
+  "elab_const_decl env elabEnv ctxGlobals m dc =
     (let loc = DC_Location dc; name = DC_Name dc; ghost = DC_Ghost dc
      in if ghost = Ghost then elab_ghost_const_decl env elabEnv m dc
         else case DC_Value dc of
@@ -415,8 +419,11 @@ definition elab_const_decl ::
                          (case elab_const_rhs env elabEnv ghost loc declTy rhs of
                             Inl errs \<Rightarrow> Inl errs
                           | Inr finalTm \<Rightarrow>
-                              Inr (env, elabEnv,
-                                   m \<lparr> CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>))))
+                              (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc finalTm of
+                                 Inl errs \<Rightarrow> Inl errs
+                               | Inr v \<Rightarrow>
+                                   Inr (env, elabEnv,
+                                        m \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)))))
              | None \<Rightarrow>
                  \<comment> \<open>Declaring and defining at once.\<close>
                  (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
@@ -425,10 +432,13 @@ definition elab_const_decl ::
                            (case elab_const_rhs_infer env elabEnv ghost loc rhs of
                               Inl errs \<Rightarrow> Inl errs
                             | Inr (finalTm, declTy) \<Rightarrow>
-                                Inr (tyenv_add_global name declTy env,
-                                     elabEnv,
-                                     m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
-                                         CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>))
+                                (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc finalTm of
+                                   Inl errs \<Rightarrow> Inl errs
+                                 | Inr v \<Rightarrow>
+                                     Inr (tyenv_add_global name declTy env,
+                                          elabEnv,
+                                          m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
+                                              CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)))
                        | Some ty \<Rightarrow>
                            (case elab_type env elabEnv ghost ty of
                               Inl errs \<Rightarrow> Inl errs
@@ -436,10 +446,13 @@ definition elab_const_decl ::
                                 (case elab_const_rhs env elabEnv ghost loc declTy rhs of
                                    Inl errs \<Rightarrow> Inl errs
                                  | Inr finalTm \<Rightarrow>
-                                     Inr (tyenv_add_global name declTy env,
-                                          elabEnv,
-                                          m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
-                                              CM_GlobalVars := fmupd name finalTm (CM_GlobalVars m) \<rparr>))))))"
+                                     (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc finalTm of
+                                        Inl errs \<Rightarrow> Inl errs
+                                      | Inr v \<Rightarrow>
+                                          Inr (tyenv_add_global name declTy env,
+                                               elabEnv,
+                                               m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
+                                                   CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)))))))"
 
 
 (* ========================================================================== *)
@@ -836,30 +849,34 @@ definition elab_typedef_decl ::
 (* The main fold                                                              *)
 (* ========================================================================== *)
 
-(* Elaborate a single declaration: dispatches to one of the above functions. *)
+(* Elaborate a single declaration: dispatches to one of the above functions.
+   ctxGlobals (the dependency context's global-constant values) is only
+   needed by the const case, for compile-time initializer evaluation. *)
 fun elab_declaration ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> CoreModule \<Rightarrow> BabDeclaration
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreModule
+   \<Rightarrow> BabDeclaration
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
-  "elab_declaration env elabEnv ownAbstract m (BabDecl_Const dc) =
-     elab_const_decl env elabEnv m dc"
-| "elab_declaration env elabEnv ownAbstract m (BabDecl_Function df) =
+  "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Const dc) =
+     elab_const_decl env elabEnv ctxGlobals m dc"
+| "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Function df) =
      elab_function_decl env elabEnv m df"
-| "elab_declaration env elabEnv ownAbstract m (BabDecl_Datatype dd) =
+| "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Datatype dd) =
      elab_datatype_decl env elabEnv ownAbstract m dd"
-| "elab_declaration env elabEnv ownAbstract m (BabDecl_Typedef dt) =
+| "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Typedef dt) =
      elab_typedef_decl env elabEnv ownAbstract m dt"
 
 (* Elaborate a declaration list, threading the state triple and stopping at
    the first failing declaration. *)
 fun elab_declaration_list ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> CoreModule \<Rightarrow> BabDeclaration list
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreModule
+   \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
-  "elab_declaration_list env elabEnv ownAbstract m [] = Inr (env, elabEnv, m)"
-| "elab_declaration_list env elabEnv ownAbstract m (d # ds) =
-    (case elab_declaration env elabEnv ownAbstract m d of
+  "elab_declaration_list env elabEnv ownAbstract ctxGlobals m [] = Inr (env, elabEnv, m)"
+| "elab_declaration_list env elabEnv ownAbstract ctxGlobals m (d # ds) =
+    (case elab_declaration env elabEnv ownAbstract ctxGlobals m d of
        Inl errs \<Rightarrow> Inl errs
      | Inr (env', elabEnv', m') \<Rightarrow>
-         elab_declaration_list env' elabEnv' ownAbstract m' ds)"
+         elab_declaration_list env' elabEnv' ownAbstract ctxGlobals m' ds)"
 
 (* ========================================================================== *)
 (* Type-variable binder name check                                            *)
@@ -890,12 +907,13 @@ definition check_decl_tyvar_names :: "BabDeclaration \<Rightarrow> TypeError lis
    the given context, producing the elaborated CoreModule and the final ElabEnv.
    The type-variable names are also checked for '?' characters (check_decl_tyvar_names). *)
 definition elab_declarations ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + (CoreModule \<times> ElabEnv)" where
-  "elab_declarations env elabEnv ownAbstract decls =
+  "elab_declarations env elabEnv ownAbstract ctxGlobals decls =
     (let nameErrs = concat (map check_decl_tyvar_names decls)
      in if nameErrs \<noteq> [] then Inl nameErrs
-        else case elab_declaration_list env elabEnv ownAbstract empty_core_module decls of
+        else case elab_declaration_list env elabEnv ownAbstract ctxGlobals
+                                        empty_core_module decls of
                Inl errs \<Rightarrow> Inl errs
              | Inr (_, elabEnv', m) \<Rightarrow> Inr (m, elabEnv'))"
 

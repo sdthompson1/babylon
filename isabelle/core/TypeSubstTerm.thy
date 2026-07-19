@@ -312,6 +312,35 @@ lemma binop_operand_apply_subst:
   using binop_operand_type_bool_or_numeric[OF assms] is_numeric_type_apply_subst
   by auto
 
+(* Similarly, applying a subst to the operand or result type of a valid
+   CoreTm_Unop is a no-op. *)
+lemma unop_type_apply_subst:
+  assumes "core_term_type env NotGhost (CoreTm_Unop unop operand) = Some ty"
+      and "core_term_type env NotGhost operand = Some operandTy"
+  shows "apply_subst subst operandTy = operandTy"
+    and "apply_subst subst ty = ty"
+proof -
+  from assms have "(operandTy = CoreTy_Bool \<or> is_signed_numeric_type operandTy \<or>
+                    is_finite_integer_type operandTy) \<and> (ty = operandTy \<or> ty = CoreTy_Bool)"
+    by (cases unop) (auto split: option.splits if_splits)
+  then show "apply_subst subst operandTy = operandTy" and "apply_subst subst ty = ty"
+    using is_signed_numeric_type_apply_subst is_finite_integer_type_apply_subst by auto
+qed
+
+(* And to the result type of a valid (NotGhost) CoreTm_Binop: it is always
+   CoreTy_Bool or the lhs operand type (itself Bool or numeric). *)
+lemma binop_result_apply_subst:
+  assumes "core_term_type env NotGhost (CoreTm_Binop op lhs rhs) = Some ty"
+      and "core_term_type env NotGhost lhs = Some lhsTy"
+      and "core_term_type env NotGhost rhs = Some rhsTy"
+  shows "apply_subst subst ty = ty"
+proof -
+  from assms have "ty = lhsTy \<or> ty = CoreTy_Bool"
+    by (auto split: if_splits)
+  with binop_operand_type_bool_or_numeric(1)[OF assms] show ?thesis
+    using is_numeric_type_apply_subst by auto
+qed
+
 (* Valid decreases-types are fully concrete (Bool, integers, or records of
    valid decreases-types), so substitution is a no-op. *)
 lemma is_valid_decreases_type_apply_subst:

@@ -1,5 +1,5 @@
 theory InterpState
-  imports CoreValue
+  imports "../core/CoreValue"
 begin
 
 (* Lvalue path component *)
