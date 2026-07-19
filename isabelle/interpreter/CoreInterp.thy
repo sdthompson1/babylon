@@ -580,6 +580,7 @@ where
                 | None \<Rightarrow> Inl RuntimeError)  \<comment> \<open>array index out of bounds\<close>
             | Inl err \<Rightarrow> Inl err)  \<comment> \<open>index terms not of type u64\<close>
         | Inl err \<Rightarrow> Inl err)  \<comment> \<open>error evaluating index terms\<close>
+    | Inr _ \<Rightarrow> Inl TypeError  \<comment> \<open>not an array value\<close>
     | Inl err \<Rightarrow> Inl err)"  \<comment> \<open>error evaluating array term\<close>
 
   (* Pattern match *)
