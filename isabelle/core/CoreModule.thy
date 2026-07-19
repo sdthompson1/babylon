@@ -38,8 +38,8 @@ record CoreFunction =
         in some previous module. Required to be idempotent. Types defined here
         are *not* listed in TE_TypeVars.
     - CM_GlobalVars: Global constants defined by this module, along with their
-        values. (The elaborator evaluates constant initializers at compile
-        time, so a Core module carries ground CoreValues, not terms.)
+        values. Always considered NotGhost (Ghost global variables are not supported;
+        use a nullary Ghost function instead.)
     - CM_Functions: Functions defined by this module.
 
    A module may *declare* more than it *defines* (that is exactly what an

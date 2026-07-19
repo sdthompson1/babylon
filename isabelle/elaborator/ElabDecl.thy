@@ -18,6 +18,9 @@ begin
         (empty when elaborating the interface, and when elaborating the implementation,
         contains the abstract types declared in the interface).
 
+      - ctxGlobals, the values of globals imported from other modules (if visible) - this
+        is needed for compile-time constant evaluation.
+
       - A CoreModule, containing the module's own declarations and definitions so far.
         Unlike the above CoreTyEnv, abstract types are *not* necessarily fully substituted
         here; instead, they are resolved lazily by normalize_module.
@@ -211,7 +214,7 @@ definition apply_realization ::
 (* Global Constants ("const" decls)                                           *)
 (* ========================================================================== *)
 
-(* Elaborate a global-constant initializer against a known declared type: 
+(* Elaborate a "const" initializer against a known declared type: 
    elaborate the rhs, coerce it to the declared type, clear leftover metavariables,
    and check the compile-time-constant restriction (non-ghost initializers must
    be a compile-time constant; ghost initializers can be any term). *)
@@ -250,6 +253,39 @@ definition elab_const_rhs_infer ::
                then Inl [TyErr_NotCompileTimeConstant loc]
                else Inr (finalTm, rhsTy)))"
 
+(* Elaborate a constant initializer against an optional type annotation:
+   calls either elab_const_rhs_infer, or elab_type + elab_const_rhs, as applicable.
+   Returns the final term together with the constant's type. *)
+definition elab_const_rhs_annot ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabType option \<Rightarrow> BabTerm
+   \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "elab_const_rhs_annot env elabEnv ghost loc optTy rhs =
+    (case optTy of
+       None \<Rightarrow> elab_const_rhs_infer env elabEnv ghost loc rhs
+     | Some ty \<Rightarrow>
+         (case elab_type env elabEnv ghost ty of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr declTy \<Rightarrow>
+              (case elab_const_rhs env elabEnv ghost loc declTy rhs of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr finalTm \<Rightarrow> Inr (finalTm, declTy))))"
+
+(* Check that an optional type annotation, if present, elaborates to exactly
+   the previously declared type. *)
+definition check_const_type_annot ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreType \<Rightarrow> BabType option
+   \<Rightarrow> TypeError list + unit" where
+  "check_const_type_annot env elabEnv ghost loc declTy optTy =
+    (case optTy of
+       None \<Rightarrow> Inr ()
+     | Some ty \<Rightarrow>
+         (case elab_type env elabEnv ghost ty of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr coreTy \<Rightarrow>
+              if coreTy \<noteq> declTy
+              then Inl [TyErr_TypeMismatch loc declTy coreTy]
+              else Inr ()))"
+
 (* Return a FunInfo to represent a ghost constant. *)
 definition ghost_const_fun_info :: "CoreType \<Rightarrow> FunInfo" where
   "ghost_const_fun_info retTy =
@@ -260,199 +296,154 @@ definition ghost_const_fun_info :: "CoreType \<Rightarrow> FunInfo" where
 definition ghost_const_fun :: "CoreTerm \<Rightarrow> CoreFunction" where
   "ghost_const_fun tm = \<lparr> CF_Args = [], CF_Body = Some [CoreStmt_Return tm] \<rparr>"
 
-(* The elaborator converts ghost const declarations to nullary ghost functions:
-   `ghost const c: T = e;` becomes `ghost function c(): T { return e; }`.
-   (Later references to `c` are rewritten to `c()` by elab_term.)
-   This allows ghost constants to be initialized by general terms, unlike NotGhost constants,
-   which can only be initialized by compile-time constant terms.
+(* Ghost and non-ghost constants share the same elaboration logic, differing
+   only in how the constant is represented:
 
-   There are 3 cases, mirroring elab_const_decl (below) and elab_function_decl:
+    - A NotGhost constant elaborates directly to a Core global variable:
+      declarations in TE_GlobalVars, definitions in CM_GlobalVars. The initializer
+      term is evaluated directly at elaboration-time (by calling fold_const).
 
-    - Declaration without a definition (the interface case): a type annotation
-      is required. The FunInfo is entered into the type environment (with no
-      CM_Functions entry - the isDefinition = False path of a function), and
-      the name is recorded in EE_GhostConstants.
+    - A Ghost constant elaborates to a Core nullary ghost function:
+      `ghost const c: T = e;` becomes `ghost function c(): T { return e; }`.
+      (Later references to `c` are rewritten to `c()` by elab_term.)
+      Declarations go in TE_Functions (with the name recorded in EE_GhostConstants),
+      and definitions in CM_Functions.
+   
+   The four points of difference are packaged in a ConstElabOps record:
 
-    - Definition of a previously-declared ghost constant: the type annotation
-      (if any) must match the return type in the type env. The new CoreFunction
-      is added to CM_Functions.
+    - CEO_LookupDecl: look up a prior declaration of the name, returning its
+        declared type (Inr None if not previously declared).
+    - CEO_AlreadyDefined: has the (previously-declared) name already been given
+        a definition?
+    - CEO_Declare: record a new declaration of the name with a given type
+        (in the type env, elab env and module). Cannot fail.
+    - CEO_Define: add a definition (an elaborated initializer term) to the
+        module. May fail (compile-time evaluation of the initializer).
 
-    - Definition without previous declaration: both of the above at once. *)
-definition elab_ghost_const_decl ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> DeclConst
+   elab_const_decl (below) contains the shared logic: it creates a suitable
+   ConstElapOps (depending on ghostness) and then dispatches to one of three
+   cases: declaration without a definition, definition of a previously-declared
+   constant, or declaring and defining at once. *)
+
+record ConstElabOps =
+  CEO_LookupDecl :: "Location \<Rightarrow> string \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv
+                     \<Rightarrow> TypeError list + CoreType option"
+  CEO_AlreadyDefined :: "string \<Rightarrow> CoreModule \<Rightarrow> bool"
+  CEO_Declare :: "string \<Rightarrow> CoreType \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule
+                  \<Rightarrow> CoreTyEnv \<times> ElabEnv \<times> CoreModule"
+  CEO_Define :: "Location \<Rightarrow> string \<Rightarrow> CoreTerm \<Rightarrow> CoreModule
+                 \<Rightarrow> TypeError list + CoreModule"
+
+(* ConstElabOps for Ghost constants *)
+definition ghost_const_ops :: ConstElabOps where
+  "ghost_const_ops =
+     \<lparr> CEO_LookupDecl = (\<lambda>loc name env elabEnv.
+          if name |\<in>| EE_GhostConstants elabEnv
+          then (case fmlookup (TE_Functions env) name of
+                  None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name]  \<comment> \<open>shouldn't happen\<close>
+                | Some declInfo \<Rightarrow> Inr (Some (FI_ReturnType declInfo)))
+          else Inr None),
+       CEO_AlreadyDefined = (\<lambda>name m. name |\<in>| fmdom (CM_Functions m)),
+       CEO_Declare = (\<lambda>name ty env elabEnv m.
+          let funInfo = ghost_const_fun_info ty
+          in (tyenv_add_function name funInfo env,
+              elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>,
+              m \<lparr> CM_TyEnv := tyenv_add_function name funInfo (CM_TyEnv m) \<rparr>)),
+       CEO_Define = (\<lambda>loc name tm m.
+          Inr (m \<lparr> CM_Functions := fmupd name (ghost_const_fun tm)
+                                         (CM_Functions m) \<rparr>)) \<rparr>"
+
+(* ConstElabOps for NotGhost constants *)
+(* ctxGlobals holds constants that have been brought in via imports; together
+   with the CM_GlobalVars of the module under construction, it forms the
+   environment in which initializers are evaluated. *)
+definition global_const_ops :: "(string, CoreValue) fmap \<Rightarrow> ConstElabOps" where
+  "global_const_ops ctxGlobals =
+     \<lparr> CEO_LookupDecl = (\<lambda>loc name env elabEnv.
+          Inr (fmlookup (TE_GlobalVars env) name)),
+       CEO_AlreadyDefined = (\<lambda>name m. name |\<in>| fmdom (CM_GlobalVars m)),
+       CEO_Declare = (\<lambda>name ty env elabEnv m.
+          (tyenv_add_global name ty env,
+           elabEnv,
+           m \<lparr> CM_TyEnv := tyenv_add_global name ty (CM_TyEnv m) \<rparr>)),
+       CEO_Define = (\<lambda>loc name tm m.
+          case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc tm of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr v \<Rightarrow> Inr (m \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)) \<rparr>"
+
+(* Declaration without a definition (the interface case): a type annotation is
+   required; the constant is declared but no definition is added. *)
+definition elab_const_declare_only ::
+  "ConstElabOps \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule
+   \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabType option
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
-  "elab_ghost_const_decl env elabEnv m dc =
-    (let loc = DC_Location dc;
-         name = DC_Name dc
-     in case DC_Value dc of
-          None \<Rightarrow>
-            \<comment> \<open>Declaration without a definition (interface case). Type annotation required.\<close>
-            (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
-             else case DC_Type dc of
-                    None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType loc name]
-                  | Some ty \<Rightarrow>
-                      (case elab_type env elabEnv Ghost ty of
-                         Inl errs \<Rightarrow> Inl errs
-                       | Inr coreTy \<Rightarrow>
-                           (let funInfo = ghost_const_fun_info coreTy
-                            in Inr (tyenv_add_function name funInfo env,
-                                    elabEnv \<lparr> EE_GhostConstants :=
-                                        finsert name (EE_GhostConstants elabEnv) \<rparr>,
-                                    m \<lparr> CM_TyEnv :=
-                                          tyenv_add_function name funInfo (CM_TyEnv m) \<rparr>))))
-        | Some rhs \<Rightarrow>
-            if name |\<in>| EE_GhostConstants elabEnv then
-              \<comment> \<open>Definition of a previously-declared ghost constant.\<close>
-              (case fmlookup (TE_Functions env) name of
-                 None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name]
-               | Some declInfo \<Rightarrow>
-                   if name |\<in>| fmdom (CM_Functions m)
-                   then Inl [TyErr_AlreadyDefined loc name]
-                   else
-                     (let declTy = FI_ReturnType declInfo
-                      in case (case DC_Type dc of
-                                 None \<Rightarrow> Inr declTy
-                               | Some ty \<Rightarrow>
-                                   (case elab_type env elabEnv Ghost ty of
-                                      Inl errs \<Rightarrow> Inl errs
-                                    | Inr coreTy \<Rightarrow>
-                                        if coreTy \<noteq> declTy
-                                        then Inl [TyErr_TypeMismatch loc declTy coreTy]
-                                        else Inr declTy)) of
-                           Inl errs \<Rightarrow> Inl errs
-                         | Inr _ \<Rightarrow>
-                             (case elab_const_rhs env elabEnv Ghost loc declTy rhs of
-                                Inl errs \<Rightarrow> Inl errs
-                              | Inr finalTm \<Rightarrow>
-                                  Inr (env, elabEnv,
-                                       m \<lparr> CM_Functions :=
-                                             fmupd name (ghost_const_fun finalTm)
-                                                   (CM_Functions m) \<rparr>))))
-            else
-              \<comment> \<open>Declaring and defining at once.\<close>
-              (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
-               else case DC_Type dc of
-                      None \<Rightarrow>
-                        (case elab_const_rhs_infer env elabEnv Ghost loc rhs of
-                           Inl errs \<Rightarrow> Inl errs
-                         | Inr (finalTm, declTy) \<Rightarrow>
-                             (let funInfo = ghost_const_fun_info declTy
-                              in Inr (tyenv_add_function name funInfo env,
-                                      elabEnv \<lparr> EE_GhostConstants :=
-                                          finsert name (EE_GhostConstants elabEnv) \<rparr>,
-                                      m \<lparr> CM_TyEnv :=
-                                            tyenv_add_function name funInfo (CM_TyEnv m),
-                                          CM_Functions :=
-                                            fmupd name (ghost_const_fun finalTm)
-                                                  (CM_Functions m) \<rparr>)))
-                    | Some ty \<Rightarrow>
-                        (case elab_type env elabEnv Ghost ty of
-                           Inl errs \<Rightarrow> Inl errs
-                         | Inr declTy \<Rightarrow>
-                             (case elab_const_rhs env elabEnv Ghost loc declTy rhs of
-                                Inl errs \<Rightarrow> Inl errs
-                              | Inr finalTm \<Rightarrow>
-                                  (let funInfo = ghost_const_fun_info declTy
-                                   in Inr (tyenv_add_function name funInfo env,
-                                           elabEnv \<lparr> EE_GhostConstants :=
-                                               finsert name (EE_GhostConstants elabEnv) \<rparr>,
-                                           m \<lparr> CM_TyEnv :=
-                                                 tyenv_add_function name funInfo (CM_TyEnv m),
-                                               CM_Functions :=
-                                                 fmupd name (ghost_const_fun finalTm)
-                                                       (CM_Functions m) \<rparr>))))))"
+  "elab_const_declare_only ops ghost env elabEnv m loc name optTy =
+    (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
+     else case optTy of
+            None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType loc name]
+          | Some ty \<Rightarrow>
+              (case elab_type env elabEnv ghost ty of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr coreTy \<Rightarrow> Inr (CEO_Declare ops name coreTy env elabEnv m)))"
 
-(* Elaborate a `const` declaration. Ghost constants are passed to elab_ghost_const_decl
-   (above). For non-ghost constants, there are 3 cases:
+(* Definition of a constant previously declared with type declTy: check that
+   it is not already defined and that the annotation (if any) matches the
+   declared type, then elaborate the initializer and add the definition. *)
+definition elab_const_define_declared ::
+  "ConstElabOps \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule
+   \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> BabType option \<Rightarrow> BabTerm
+   \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
+  "elab_const_define_declared ops ghost env elabEnv m loc name declTy optTy rhs =
+    (if CEO_AlreadyDefined ops name m then Inl [TyErr_AlreadyDefined loc name]
+     else case check_const_type_annot env elabEnv ghost loc declTy optTy of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr _ \<Rightarrow>
+              (case elab_const_rhs env elabEnv ghost loc declTy rhs of
+                 Inl errs \<Rightarrow> Inl errs
+               | Inr finalTm \<Rightarrow>
+                   (case CEO_Define ops loc name finalTm m of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr m2 \<Rightarrow> Inr (env, elabEnv, m2))))"
 
-    - Declaration without a definition (the interface case): a type annotation is
-      required. The new constant is added to the type environment.
+(* Declaring and defining at once: elaborate the initializer (against the
+   annotation if present, otherwise inferring the constant's type), then
+   declare the constant and add its definition. *)
+definition elab_const_declare_and_define ::
+  "ConstElabOps \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule
+   \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabType option \<Rightarrow> BabTerm
+   \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
+  "elab_const_declare_and_define ops ghost env elabEnv m loc name optTy rhs =
+    (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
+     else case elab_const_rhs_annot env elabEnv ghost loc optTy rhs of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (finalTm, declTy) \<Rightarrow>
+              (let (env2, elabEnv2, m2) = CEO_Declare ops name declTy env elabEnv m
+               in case CEO_Define ops loc name finalTm m2 of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr m3 \<Rightarrow> Inr (env2, elabEnv2, m3)))"
 
-    - Definition of a previously-declared constant: The type annotation (if any)
-      must match the previous declaration. The initializer is evaluated at
-      compile time (fold_const) and the resulting value is added to
-      CM_GlobalVars.
-
-    - Definition without previous declaration: as above, but the new entry is
-      also added to the type environment.
-
-   ctxGlobals holds constants that have been brought in via imports; together with the
-   CM_GlobalVars of the module under construction, it forms the environment in which
-   initializers are evaluated. *)
+(* Elaborate a `const` declaration: create appropriate ConstElabOps (depending on
+   ghostness), then dispatch on whether the declaration has an initializer and whether
+   the name was previously declared. *)
 definition elab_const_decl ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreModule \<Rightarrow> DeclConst
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
   "elab_const_decl env elabEnv ctxGlobals m dc =
-    (let loc = DC_Location dc; name = DC_Name dc; ghost = DC_Ghost dc
-     in if ghost = Ghost then elab_ghost_const_decl env elabEnv m dc
-        else case DC_Value dc of
-          None \<Rightarrow>
-            \<comment> \<open>Declaration without a definition (interface case).\<close>
-            (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
-             else case DC_Type dc of
-                    None \<Rightarrow> Inl [TyErr_ConstDeclNeedsType loc name]
-                  | Some ty \<Rightarrow>
-                      (case elab_type env elabEnv ghost ty of
-                         Inl errs \<Rightarrow> Inl errs
-                       | Inr coreTy \<Rightarrow>
-                           Inr (tyenv_add_global name coreTy env,
-                                elabEnv,
-                                m \<lparr> CM_TyEnv := tyenv_add_global name coreTy (CM_TyEnv m) \<rparr>)))
+    (let ghost = DC_Ghost dc;
+         ops = (if ghost = Ghost then ghost_const_ops else global_const_ops ctxGlobals);
+         loc = DC_Location dc;
+         name = DC_Name dc
+     in case DC_Value dc of
+          None \<Rightarrow> elab_const_declare_only ops ghost env elabEnv m loc name (DC_Type dc)
         | Some rhs \<Rightarrow>
-            (case fmlookup (TE_GlobalVars env) name of
-               Some declTy \<Rightarrow>
-                 \<comment> \<open>Definition of a previously-declared constant.\<close>
-                 (if name |\<in>| fmdom (CM_GlobalVars m)
-                  then Inl [TyErr_AlreadyDefined loc name]
-                  else
-                    (case (case DC_Type dc of
-                             None \<Rightarrow> Inr declTy
-                           | Some ty \<Rightarrow>
-                               (case elab_type env elabEnv ghost ty of
-                                  Inl errs \<Rightarrow> Inl errs
-                                | Inr coreTy \<Rightarrow>
-                                    if coreTy \<noteq> declTy
-                                    then Inl [TyErr_TypeMismatch loc declTy coreTy]
-                                    else Inr declTy)) of
-                       Inl errs \<Rightarrow> Inl errs
-                     | Inr _ \<Rightarrow>
-                         (case elab_const_rhs env elabEnv ghost loc declTy rhs of
-                            Inl errs \<Rightarrow> Inl errs
-                          | Inr finalTm \<Rightarrow>
-                              (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc finalTm of
-                                 Inl errs \<Rightarrow> Inl errs
-                               | Inr v \<Rightarrow>
-                                   Inr (env, elabEnv,
-                                        m \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)))))
-             | None \<Rightarrow>
-                 \<comment> \<open>Declaring and defining at once.\<close>
-                 (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
-                  else case DC_Type dc of
-                         None \<Rightarrow>
-                           (case elab_const_rhs_infer env elabEnv ghost loc rhs of
-                              Inl errs \<Rightarrow> Inl errs
-                            | Inr (finalTm, declTy) \<Rightarrow>
-                                (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc finalTm of
-                                   Inl errs \<Rightarrow> Inl errs
-                                 | Inr v \<Rightarrow>
-                                     Inr (tyenv_add_global name declTy env,
-                                          elabEnv,
-                                          m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
-                                              CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)))
-                       | Some ty \<Rightarrow>
-                           (case elab_type env elabEnv ghost ty of
-                              Inl errs \<Rightarrow> Inl errs
-                            | Inr declTy \<Rightarrow>
-                                (case elab_const_rhs env elabEnv ghost loc declTy rhs of
-                                   Inl errs \<Rightarrow> Inl errs
-                                 | Inr finalTm \<Rightarrow>
-                                     (case fold_const (ctxGlobals ++\<^sub>f CM_GlobalVars m) loc finalTm of
-                                        Inl errs \<Rightarrow> Inl errs
-                                      | Inr v \<Rightarrow>
-                                          Inr (tyenv_add_global name declTy env,
-                                               elabEnv,
-                                               m \<lparr> CM_TyEnv := tyenv_add_global name declTy (CM_TyEnv m),
-                                                   CM_GlobalVars := fmupd name v (CM_GlobalVars m) \<rparr>)))))))"
+            (case CEO_LookupDecl ops loc name env elabEnv of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (Some declTy) \<Rightarrow>
+                 elab_const_define_declared ops ghost env elabEnv m loc name declTy
+                                            (DC_Type dc) rhs
+             | Inr None \<Rightarrow>
+                 elab_const_declare_and_define ops ghost env elabEnv m loc name
+                                               (DC_Type dc) rhs))"
 
 
 (* ========================================================================== *)
