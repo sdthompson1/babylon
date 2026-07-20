@@ -2015,6 +2015,10 @@ proof (cases "DC_Value dc")
     by (rule DeclOnly[OF None notin dty ety env'_eq ee'_eq m'_eq])
 next
   case (Some rhs)
+  \<comment> \<open>The ghostness-agreement guard must have passed\<close>
+  have notGC: "DC_Name dc |\<notin>| EE_GhostConstants elabEnv"
+    using ok unfolding elab_const_decl_def Let_def
+    by (auto simp: Some ng split: if_splits)
   show thesis
   proof (cases "fmlookup (TE_GlobalVars env) (DC_Name dc)")
     case lkSome: (Some declTy)
@@ -2023,7 +2027,7 @@ next
          env elabEnv m (DC_Location dc) (DC_Name dc) declTy (DC_Type dc) rhs
        = Inr (env', elabEnv', m')"
       unfolding elab_const_decl_def Let_def
-      by (simp add: Some ng lkSome global_const_ops_def)
+      by (simp add: Some ng lkSome notGC global_const_ops_def)
     from C obtain finalTm m2 where
       ndef: "\<not> CEO_AlreadyDefined (global_const_ops ctxGlobals) (DC_Name dc) m" and
       rhs_ok: "elab_const_rhs env elabEnv (DC_Ghost dc) (DC_Location dc) declTy rhs
@@ -2051,7 +2055,7 @@ next
          env elabEnv m (DC_Location dc) (DC_Name dc) (DC_Type dc) rhs
        = Inr (env', elabEnv', m')"
       unfolding elab_const_decl_def Let_def
-      by (simp add: Some ng lkNone global_const_ops_def)
+      by (simp add: Some ng lkNone notGC global_const_ops_def)
     from D obtain finalTm declTy env1 elabEnv1 m1 m2 where
       notin: "\<not> term_name_in_scope env (DC_Name dc)" and
       annot_ok: "elab_const_rhs_annot env elabEnv (DC_Ghost dc) (DC_Location dc)
@@ -3720,6 +3724,10 @@ proof (cases "DC_Value dc")
     by (rule DeclOnly[OF None notin dty ety env'_eq ee'_eq m'_eq])
 next
   case (Some rhs)
+  \<comment> \<open>The ghostness-agreement guard must have passed\<close>
+  have notGV: "DC_Name dc |\<notin>| fmdom (TE_GlobalVars env)"
+    using ok unfolding elab_const_decl_def Let_def
+    by (auto simp: Some g split: if_splits)
   show thesis
   proof (cases "DC_Name dc |\<in>| EE_GhostConstants elabEnv")
     case memb: True
@@ -3728,7 +3736,7 @@ next
       case lkNone: None
       have False
         using ok unfolding elab_const_decl_def Let_def
-        by (simp add: Some g memb lkNone ghost_const_ops_def)
+        by (simp add: Some g memb lkNone notGV ghost_const_ops_def)
       then show thesis ..
     next
       case lkSome: (Some declInfo)
@@ -3737,7 +3745,7 @@ next
            (DC_Location dc) (DC_Name dc) (FI_ReturnType declInfo) (DC_Type dc) rhs
          = Inr (env', elabEnv', m')"
         unfolding elab_const_decl_def Let_def
-        by (simp add: Some g memb lkSome ghost_const_ops_def)
+        by (simp add: Some g memb lkSome notGV ghost_const_ops_def)
       from C obtain finalTm m2 where
         ndef: "\<not> CEO_AlreadyDefined ghost_const_ops (DC_Name dc) m" and
         rhs_ok: "elab_const_rhs env elabEnv Ghost (DC_Location dc)
@@ -3760,7 +3768,7 @@ next
       "elab_const_declare_and_define ghost_const_ops Ghost env elabEnv m
          (DC_Location dc) (DC_Name dc) (DC_Type dc) rhs = Inr (env', elabEnv', m')"
       unfolding elab_const_decl_def Let_def
-      by (simp add: Some g nmemb ghost_const_ops_def)
+      by (simp add: Some g nmemb notGV ghost_const_ops_def)
     from D obtain finalTm declTy env1 elabEnv1 m1 m2 where
       notin: "\<not> term_name_in_scope env (DC_Name dc)" and
       annot_ok: "elab_const_rhs_annot env elabEnv Ghost (DC_Location dc)

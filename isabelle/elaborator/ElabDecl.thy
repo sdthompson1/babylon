@@ -436,7 +436,17 @@ definition elab_const_decl ::
      in case DC_Value dc of
           None \<Rightarrow> elab_const_declare_only ops ghost env elabEnv m loc name (DC_Type dc)
         | Some rhs \<Rightarrow>
-            (case CEO_LookupDecl ops loc name env elabEnv of
+            \<comment> \<open>Check that ghostness agrees with any previous declaration of this
+               name. Without this check the mismatch would still be rejected -
+               the kind-specific CEO_LookupDecl below misses (ghost constants
+               live in TE_Functions, non-ghost in TE_GlobalVars), so the code
+               falls into elab_const_declare_and_define, whose duplicate-name
+               check fires - but with a misleading 'duplicate name' error
+               rather than a ghostness-mismatch error.\<close>
+            if (ghost = Ghost \<and> name |\<in>| fmdom (TE_GlobalVars env))
+               \<or> (ghost = NotGhost \<and> name |\<in>| EE_GhostConstants elabEnv)
+            then Inl [TyErr_ConstGhostnessMismatch loc name]
+            else (case CEO_LookupDecl ops loc name env elabEnv of
                Inl errs \<Rightarrow> Inl errs
              | Inr (Some declTy) \<Rightarrow>
                  elab_const_define_declared ops ghost env elabEnv m loc name declTy
@@ -746,7 +756,7 @@ definition elab_datatype_decl ::
 (* ========================================================================== *)
 
 (* Elaborate a typedef declaration. Cases:
-    - Extern types are not currently supported.
+    - An extern type - `extern type T;` - this is not currently supported.
 
     - Realization - `type T = Foo;` after a previous `type T;` (or `ghost type T;`).
       Type variables are not allowed. If the type T was declared runtime (non-ghost), then

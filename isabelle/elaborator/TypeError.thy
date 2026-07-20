@@ -93,10 +93,14 @@ datatype TypeError =
   | TyErr_ConstAbstractType Location  (* a constant initializer mentions an abstract (unrealized) type, so it cannot be evaluated at compile time (e.g. an empty array literal at an opaque imported element type) *)
   | TyErr_InvalidFunctionAttribute Location  (* an attribute other than requires/ensures/decreases on a function *)
   | TyErr_FunctionSignatureMismatch Location string  (* a function definition's signature differs from its earlier declaration *)
+  | TyErr_ConstGhostnessMismatch Location string  (* a const definition's ghostness differs from an earlier declaration of the same name *)
   | TyErr_ExternFunctionWithBody Location string  (* an extern function may not also have a body *)
   | TyErr_EmptyDatatype Location string  (* datatype with no constructors *)
   | TyErr_TypeArgsNotAllowed Location string  (* type arguments on an abstract type declaration or realization *)
-  | TyErr_CannotRealizeImportedType Location string  (* giving a definition to an abstract type this module did not declare (impossible on renamer output) *)
+  | TyErr_CannotRealizeImportedType Location string  (* giving a definition to an abstract type
+        not declared by this module face's own interface: either an imported type (impossible on
+        renamer output) or, reachably, an interface realizing its own abstract type (realizations
+        belong in the implementation) *)
   | TyErr_GhostRealizationOfRuntimeType Location string  (* a non-ghost abstract type realized by a ghost-only type *)
   | TyErr_SelfReferentialType Location string  (* a realization's target mentions the name being realized *)
   | TyErr_TypeVarCapture Location string  (* a type parameter collides with an abstract type or type substitution (impossible in renamer output) *)

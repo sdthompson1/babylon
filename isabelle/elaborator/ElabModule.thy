@@ -40,48 +40,46 @@ fun is_decl_only :: "BabDeclaration \<Rightarrow> bool" where
 | "is_decl_only (BabDecl_Datatype dd) = False"
 | "is_decl_only (BabDecl_Typedef dt) = (DT_Definition dt = None)"
 
-(* True if two BabDeclarations are of the same kind: the same constructor, and
-   for constants also the same ghost marker. Used by check_unique_names to
-   require that an interface declaration is defined by the same *kind* of
-   declaration in the implementation (a `ghost const` must be defined by a
-   `ghost const`, not by a function or a non-ghost const, and so on). *)
-fun same_decl_kind :: "BabDeclaration \<Rightarrow> BabDeclaration \<Rightarrow> bool" where
-  "same_decl_kind (BabDecl_Const dc1) (BabDecl_Const dc2) = (DC_Ghost dc1 = DC_Ghost dc2)"
-| "same_decl_kind (BabDecl_Function _) (BabDecl_Function _) = True"
-| "same_decl_kind (BabDecl_Datatype _) (BabDecl_Datatype _) = True"
-| "same_decl_kind (BabDecl_Typedef _) (BabDecl_Typedef _) = True"
-| "same_decl_kind _ _ = False"
+(* True if a BabDeclaration declares a term-namespace name (a constant or a
+   function), as opposed to a type-namespace name (a datatype or typedef). *)
+fun is_term_decl :: "BabDeclaration \<Rightarrow> bool" where
+  "is_term_decl (BabDecl_Const _) = True"
+| "is_term_decl (BabDecl_Function _) = True"
+| "is_term_decl (BabDecl_Datatype _) = False"
+| "is_term_decl (BabDecl_Typedef _) = False"
 
 
 (* ========================================================================== *)
 (* Module error checks                                                        *)
 (* ========================================================================== *)
 
-(* Names must be unique within each face (interface or implementation).
-   Across the two faces, the same name may appear once in each, so long as it's a
-   declaration in the interface and definition in the implementation (declare-then-define
-   pattern), and both declarations are of the same kind (same_decl_kind). *)
-definition check_unique_names ::
+(* A term-namespace name (constant or function) *defined* in the interface must
+   not be declared again in the implementation. This must be checked at module
+   level: ElabDecl works on flat declaration lists and records definedness only
+   in the face-local CoreModule, so when elaborating the implementation it
+   cannot distinguish a name the interface merely declared - where a definition
+   is legitimate (the declare-then-define pattern) - from a name the interface
+   already defined. Only the term namespace is affected: type-namespace
+   definitions are fully visible in the typing env, so ElabDecl rejects their
+   cross-face duplicates itself.
+
+   The other face-structure rules need no check here: declaration-only forms in
+   the implementation are rejected by check_impl_definitions, and two
+   declarations of the same name within one face (including a declaration plus
+   a definition) are rejected by sort_declarations' duplicate-name check.
+
+   Names are compared without regard to const-vs-function kind or ghostness:
+   the mismatched pairs are caught by ElabDecl anyway (via term_name_in_scope);
+   this check merely fires earlier with the same error. *)
+definition check_cross_face_duplicates ::
   "BabDeclaration list \<Rightarrow> BabDeclaration list \<Rightarrow> TypeError list" where
-  "check_unique_names intf impl =
-     (case first_duplicate_name get_decl_name intf of
-        Some dup \<Rightarrow>
-          \<comment> \<open>The find cannot fail (first_duplicate_name_Some_implies_find)\<close>
-          (let d = the (find (\<lambda>d. get_decl_name d = dup) intf)
-           in [TyErr_DuplicateName (bab_declaration_location d) dup])
-      | None \<Rightarrow> [])
-     @ (case first_duplicate_name get_decl_name impl of
-          Some dup \<Rightarrow>
-            (let d = the (find (\<lambda>d. get_decl_name d = dup) impl)
-             in [TyErr_DuplicateName (bab_declaration_location d) dup])
-        | None \<Rightarrow> [])
-     @ concat (map (\<lambda>d.
-          (case find (\<lambda>di. get_decl_name di = get_decl_name d) intf of
-             None \<Rightarrow> []
-           | Some di \<Rightarrow>
-               if is_decl_only di \<and> \<not> is_decl_only d \<and> same_decl_kind di d then []
-               else [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)]))
-          impl)"
+  "check_cross_face_duplicates intf impl =
+     (let intfDefs = filter (\<lambda>d. is_term_decl d \<and> \<not> is_decl_only d) intf
+      in concat (map (\<lambda>d.
+           if is_term_decl d
+              \<and> find (\<lambda>di. get_decl_name di = get_decl_name d) intfDefs \<noteq> None
+           then [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)]
+           else []) impl))"
 
 (* The implementation must contain only definitions, not declarations *)
 definition check_impl_definitions :: "BabDeclaration list \<Rightarrow> TypeError list" where
@@ -199,7 +197,15 @@ fun check_sccs ::
 (* The main function to sort the BabDeclarations into dependency order.
    Calls analyze_dependencies_generic (which itself calls Kosaraju) to find SCCs, then
    uses check_sccs to rule out dependency cycles (recursive declarations are not currently
-   permitted). *)
+   permitted).
+
+   This is also where duplicate names within a face are detected: the dependency
+   graph is keyed by declaration name, so analyze_dependencies_generic reports
+   DepErr_DuplicateName for any name declared twice in the list. Note this is
+   namespace-blind: it also rejects a term and a type of the same name in one
+   face (e.g. "datatype X" + "const X"), which ought to be legal since terms and
+   types live in different namespaces. Lifting that restriction would require
+   namespace-tagged graph keys. *)
 definition sort_declarations ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + BabDeclaration list" where
@@ -210,8 +216,12 @@ definition sort_declarations ::
           (let declNames = fset_of_list (map get_decl_name decls);
                deps = decl_deps env elabEnv declNames
            in case analyze_dependencies_generic decls get_decl_name deps of
-                Inl _ \<Rightarrow>
-                  \<comment> \<open>Shouldn't happen, input to analyze_dependencies is valid by construction\<close>
+                Inl (DepErr_DuplicateName dup) \<Rightarrow>
+                  \<comment> \<open>The find cannot fail: the duplicate name reported comes from decls itself\<close>
+                  (let d = the (find (\<lambda>d. get_decl_name d = dup) decls)
+                   in Inl [TyErr_DuplicateName (bab_declaration_location d) dup])
+              | Inl (DepErr_DependencyNotFound _ _) \<Rightarrow>
+                  \<comment> \<open>Shouldn't happen: decl_deps filters its result to declNames\<close>
                   Inl [TyErr_DependencyAnalysisUnexpectedFailure (bab_declaration_location d0)]
               | Inr sccs \<Rightarrow> check_sccs deps sccs))"
 
@@ -260,7 +270,7 @@ next
     ana: "analyze_dependencies_generic decls get_decl_name ?deps = Inr sccs" and
     chk: "check_sccs ?deps sccs = Inr sortedDecls"
     using ok unfolding sort_declarations_def Let_def
-    by (auto simp: Cons split: sum.splits)
+    by (auto simp: Cons split: sum.splits DependencyError.splits)
   have "mset sortedDecls = mset (concat sccs)"
     by (rule check_sccs_mset[OF chk])
   also have "\<dots> = mset decls"
@@ -366,7 +376,7 @@ definition elab_module ::
   "BabModule \<Rightarrow> CompiledModule list \<Rightarrow> CompiledModule list
    \<Rightarrow> ElabModuleError + (CompiledModule \<times> CompiledModule)" where
   "elab_module bm intDeps implDeps =
-    (let checkErrs = check_unique_names (Mod_Interface bm) (Mod_Implementation bm)
+    (let checkErrs = check_cross_face_duplicates (Mod_Interface bm) (Mod_Implementation bm)
                      @ check_impl_definitions (Mod_Implementation bm)
      in if checkErrs \<noteq> [] then Inl (EM_TypeErrors checkErrs)
         else case elab_face intDeps {||} (Mod_Interface bm) of
