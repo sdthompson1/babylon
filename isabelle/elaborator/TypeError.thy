@@ -5,7 +5,7 @@ begin
 
 (* Possible errors returned by the elaborator *)
 
-datatype TypeError =
+datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   (* Out of fuel *)
   TyErr_OutOfFuel Location
 
