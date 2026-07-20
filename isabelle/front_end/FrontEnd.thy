@@ -3,7 +3,7 @@
   
    The input to the FrontEnd is a list of RawPackages (essentially unparsed Babylon
    code strings), and the output is a list of parsed and renamed BabModules, ready to
-   be interpreted by BabInterpreter (TODO) or compiled into C code (TODO).
+   be consumed by later stages.
 *)
 
 theory FrontEnd

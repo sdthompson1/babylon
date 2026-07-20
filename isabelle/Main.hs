@@ -3,13 +3,12 @@ module Main where
 import CodeExport
 import Str
 import Data.Bits
-import System.IO
 import System.Environment
 import System.Exit
-import qualified Data.ByteString as BS
-import Data.Word
-import Data.Binary.Get
-import Control.Exception
+import System.IO
+
+-- Convert between Haskell Chars and the Isabelle-generated Str.Char
+-- (which represents a character as 8 booleans, least significant bit first).
 
 makeChar :: Prelude.Char -> Str.Char
 makeChar ch =
@@ -23,48 +22,39 @@ makeChar ch =
      ((i .&. 64) /= 0)
      ((i .&. 128) /= 0)
 
-readLength :: IO (Maybe Word32)
-readLength = do
-  result <- try $ BS.hGet stdin 4
-  case result of
-    Left (_ :: IOException) -> return Nothing
-    Right bs -> if BS.length bs == 4
-                then return $ Just $ runGet getWord32le (BS.fromStrict bs)
-                else return Nothing
+unmakeChar :: Str.Char -> Prelude.Char
+unmakeChar (Char b0 b1 b2 b3 b4 b5 b6 b7) =
+  toEnum $ sum [ if b then n else 0
+               | (b, n) <- zip [b0, b1, b2, b3, b4, b5, b6, b7]
+                               [1, 2, 4, 8, 16, 32, 64, 128] ]
 
-readContent :: Word32 -> IO (Maybe String)
-readContent len = do
-  result <- try $ BS.hGet stdin (fromIntegral len)
-  case result of
-    Left (_ :: IOException) -> return Nothing
-    Right bs -> if BS.length bs == fromIntegral len
-                then return $ Just $ map (toEnum . fromIntegral) $ BS.unpack bs
-                else return Nothing
+toIsabelleString :: Prelude.String -> [Str.Char]
+toIsabelleString = map makeChar
 
-processFile :: String -> IO ()
-processFile contents = do
-  let str = map makeChar contents
-  case run_compiler str of
-    CR_Success -> BS.hPut stdout (BS.singleton 0)
-    CR_LexError -> BS.hPut stdout (BS.singleton 1)
-    CR_ParseError -> BS.hPut stdout (BS.singleton 2)
-    CR_RenameError -> BS.hPut stdout (BS.singleton 3)
-  hFlush stdout
+fromIsabelleString :: [Str.Char] -> Prelude.String
+fromIsabelleString = map unmakeChar
 
-mainLoop :: IO ()
-mainLoop = do
-  maybeLen <- readLength
-  case maybeLen of
-    Nothing -> return ()
-    Just len -> do
-      maybeContent <- readContent len
-      case maybeContent of
-        Nothing -> return ()
-        Just content -> do
-          processFile content
-          mainLoop
+-- Convert a filename to a Babylon module name: strip any leading directory
+-- components, then strip any suffix (e.g. "dir/Foo.b" becomes "Foo").
+moduleName :: FilePath -> Prelude.String
+moduleName path =
+  let base = reverse (takeWhile (\c -> c /= '/' && c /= '\\') (reverse path))
+  in takeWhile (/= '.') base
 
+main :: IO ()
 main = do
-  hSetBinaryMode stdin True
-  hSetBinaryMode stdout True
-  mainLoop
+  args <- getArgs
+  case args of
+    [] -> do
+      hPutStrLn stderr "Usage: Main <RootModule.b> [<OtherModule.b> ...]"
+      exitWith (ExitFailure 2)
+    files -> do
+      contents <- mapM readFile files
+      let modules = zipWith (\f c -> (toIsabelleString (moduleName f),
+                                      toIsabelleString c))
+                            files contents
+      case run_compiler modules of
+        CR_Success -> putStrLn "Success"
+        CR_Errors errs -> do
+          mapM_ (hPutStrLn stderr . fromIsabelleString) errs
+          exitWith (ExitFailure 1)

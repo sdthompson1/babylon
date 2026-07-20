@@ -430,6 +430,15 @@ definition link_runtime_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightar
              |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)
           \<longrightarrow> is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))"
 
+(* Executable form of the above (needed for code generation: the definition
+   quantifies over all strings, which the code generator cannot handle, so we
+   restate it as a bounded quantification over a finite set). *)
+lemma link_runtime_ok_code [code]:
+  "link_runtime_ok ms \<sigma> =
+     fBall (fmdom \<sigma> |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms))
+           (\<lambda>n. is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))"
+  unfolding link_runtime_ok_def by auto
+
 (* The offending names, for the LinkGhostResolution payload. Purely
    diagnostic. *)
 definition link_ghost_resolution_names :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> string list" where

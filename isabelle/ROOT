@@ -12,4 +12,126 @@ session Babylon = "HOL-Library" +
     "util"
     "front_end"
   theories
+    (* Note: every theory is listed explicitly (not just the "leaves"), so that
+       everything gets checked even if it is not imported by any other theory. *)
+
+    (* bab *)
+    "bab/BabNames"
+    "bab/BabSyntax"
+    "bab/Location"
+
+    (* bab_loader *)
+    "bab_loader/BabLexer"
+    "bab_loader/BabLoader"
+    "bab_loader/BabParser"
+    "bab_loader/BabToken"
+    "bab_loader/BasicParser"
+
+    (* bab_renamer *)
+    "bab_renamer/BabRenamer"
+
+    (* bab_dependency *)
+    "bab_dependency/BabDependency"
+
+    (* core *)
+    "core/CoreFreeVars"
+    "core/CoreKindcheck"
+    "core/CoreModule"
+    "core/CoreModuleTypecheck"
+    "core/CoreStmtTypecheck"
+    "core/CoreSyntax"
+    "core/CoreTyEnv"
+    "core/CoreTyEnvWellFormed"
+    "core/CoreTypeProps"
+    "core/CoreTypecheck"
+    "core/CoreValue"
+    "core/CoreValueTransfer"
+    "core/LinkCollapse"
+    "core/LinkError"
+    "core/LinkModules"
+    "core/LinkPreservesWellTyped"
+    "core/LinkSubstRanges"
+    "core/MergeAllSubsts"
+    "core/MergeSubstsPrelims"
+    "core/SubstAbsorption"
+    "core/SubstClosureExistsUnique"
+    "core/TyEnvExtension"
+    "core/TypeSubst"
+    "core/TypeSubstEnv"
+    "core/TypeSubstHelpers"
+    "core/TypeSubstModuleEnv"
+    "core/TypeSubstPreservation"
+    "core/TypeSubstStmt"
+    "core/TypeSubstTerm"
+
+    (* core_passes *)
+    "core_passes/MatchCompile"
+    "core_passes/MatchCompileFlat"
+    "core_passes/MatchCompileSemantics"
+    "core_passes/MatchCompileTyping"
+
+    (* elaborator *)
+    "elaborator/ConstFold"
+    "elaborator/ConstFoldCorrect"
+    "elaborator/ElabDecl"
+    "elaborator/ElabDeclCorrect"
+    "elaborator/ElabEnv"
+    "elaborator/ElabModule"
+    "elaborator/ElabModuleCorrect"
+    "elaborator/ElabPattern"
+    "elaborator/ElabPatternCorrect"
+    "elaborator/ElabProgram"
+    "elaborator/ElabProgramCorrect"
+    "elaborator/ElabStmt"
+    "elaborator/ElabStmtCorrect"
+    "elaborator/ElabTerm"
+    "elaborator/ElabTermCorrect"
+    "elaborator/ElabTermCorrectBinop"
+    "elaborator/ElabTermCorrectHelpers"
+    "elaborator/ElabType"
+    "elaborator/ElabTypeCorrect"
+    "elaborator/EndToEnd"
+    "elaborator/ExtendEnvWithTyvars"
+    "elaborator/MetavarName"
+    "elaborator/TypeError"
+    "elaborator/Unify"
+    "elaborator/Unify2"
+    "elaborator/Unify3"
+    "elaborator/UnifyCompose"
+
+    (* graph *)
+    "graph/Dependency"
+    "graph/DependencyRel"
+    "graph/Graphs"
+    "graph/Kosaraju1"
+    "graph/Kosaraju2"
+    "graph/Kosaraju3"
+    "graph/Kosaraju4"
+    "graph/Kosaraju5"
+    "graph/KosarajuMain"
+
+    (* interpreter *)
+    "interpreter/CoreInterp"
+    "interpreter/CoreInterpFuelMono"
+    "interpreter/CoreInterpPreservation"
+    "interpreter/InterpState"
+    "interpreter/MakeInterpState"
+    "interpreter/MakeInterpStateCorrect"
+    "interpreter/StateMatchesEnv"
+    "interpreter/TypeSoundness"
+    "interpreter/TypeSoundnessHelpers1"
+    "interpreter/TypeSoundnessHelpers2"
+    "interpreter/TypeSoundnessHelpers3"
+
+    (* util *)
+    "util/DistinctCheck"
+    "util/FSetExtras"
+    "util/FmapDisjointUnion"
+    "util/IntRange"
+    "util/NatToString"
+    "util/Quantifier"
+
+    (* front_end *)
+    "front_end/FrontEnd"
+    "front_end/ShowError"
     "front_end/CodeExport"

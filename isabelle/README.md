@@ -1,9 +1,8 @@
 This directory contains Isabelle code for a (very early version of) a
-verified Babylon compiler. For now, it only implements a lexer and
-(some of) a parser, nothing else.
-
-The main use of this is for fuzz testing: see
-[fuzzing/README.md](../fuzzing/README.md) for details.
+verified Babylon compiler. Currently it implements the compiler "front
+end" (lexer, parser, module loader and renamer) together with an
+elaborator which converts the input program into a typechecked "Core"
+language.
 
 To build this, you can use the following Isabelle command:
 
@@ -24,6 +23,19 @@ directory and run
 ghc -O Main.hs
 ```
 
-This will create an executable named `Main`, suitable for use as an
-"oracle" with the `bab fuzz` command (see the [fuzzing
-README](../fuzzing/README.md) for details).
+This will create an executable named `Main`, which can be run as
+follows:
+
+```
+./Main Foo.b Bar.b ...
+```
+
+Each filename given on the command line is read as the source code of
+one Babylon module. The first module on the command line is the root
+module for the compilation. Each module's name (in the source text)
+must correspond to the filename, e.g. `dir/Foo.b` must is the module
+`Foo`.
+
+The program runs the front end and elaborator on the given modules. If
+everything succeeds it prints `Success`; otherwise the error messages
+are printed to stderr and the exit code is nonzero.
