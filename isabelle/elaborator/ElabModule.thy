@@ -210,8 +210,9 @@ definition sort_declarations ::
           (let declNames = fset_of_list (map get_decl_name decls);
                deps = decl_deps env elabEnv declNames
            in case analyze_dependencies_generic decls get_decl_name deps of
-                Inl _ \<Rightarrow> Inl [TyErr_InternalError_DependencyAnalysis
-                                (bab_declaration_location d0)]
+                Inl _ \<Rightarrow>
+                  \<comment> \<open>Shouldn't happen, input to analyze_dependencies is valid by construction\<close>
+                  Inl [TyErr_DependencyAnalysisUnexpectedFailure (bab_declaration_location d0)]
               | Inr sccs \<Rightarrow> check_sccs deps sccs))"
 
 (* check_sccs returns exactly the declarations of its SCC list, concatenated

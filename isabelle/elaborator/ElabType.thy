@@ -62,7 +62,7 @@ where
                   Inr (CoreTy_Datatype name elabTyArgs))
             | None \<Rightarrow>
                 \<comment> \<open>Unknown type name\<close>
-                Inl [TyErr_InternalError_NameNotFound loc name])))"
+                Inl [TyErr_NameNotFound loc name])))"
 
 | "elab_type env elabEnv ghost (BabTy_Bool loc) =
     Inr CoreTy_Bool"

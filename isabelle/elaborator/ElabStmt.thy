@@ -55,7 +55,7 @@ definition resolve_impure_callee ::
     (case callee of
        BabTm_Name nloc name tyArgs \<Rightarrow>
          (case fmlookup (TE_Functions env) name of
-            None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound nloc name]
+            None \<Rightarrow> Inl [TyErr_NameNotFound nloc name]
           | Some funInfo \<Rightarrow>
               \<comment> \<open>A desugared ghost constant is not callable (`c` is a constant,
                   not a function).\<close>
@@ -460,7 +460,7 @@ definition elab_use ::
             Some (CoreTm_Quantifier Quant_Exists _ qVarTy bodyTm) \<Rightarrow>
               (if \<not> TE_ProofTopLevel env then Inl [TyErr_UseNotAtProofTopLevel loc]
                else if \<not> is_well_kinded env qVarTy
-               then Inl [TyErr_InternalError_IllKindedProofGoal loc]
+               then Inl [TyErr_IllKindedProofGoal loc]
                else case elab_term env elabEnv Ghost tm next_mv of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr (coreTm, tmTy, next_mv') \<Rightarrow>
@@ -615,7 +615,7 @@ definition finalize_match_stmt ::
     (if freshName |\<in>| core_term_free_vars scrutTm
         \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) dps
         \<or> list_ex (\<lambda>body. freshName |\<in>| core_statement_list_free_vars body) bodies
-     then Inl [TyErr_InternalError_FreshnameClash loc freshName]
+     then Inl [TyErr_UnexpectedNameClash loc]
      else Inr (CoreStmt_Block
                  [ CoreStmt_VarDecl ghost freshName mode scrutTy scrutTm,
                    CoreStmt_Match ghost (CoreTm_Var freshName)

@@ -101,7 +101,7 @@ definition resolve_callee_function ::
                   expArgTypes = map (\<lambda>(ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
                   retType = apply_subst subst (FI_ReturnType funInfo)
               in Inr (name, expArgTypes, CI_Function name newTyArgs retType, next_mv'))
-    | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
+    | None \<Rightarrow> Inl [TyErr_NameNotFound loc name])"
 
 
 (* Resolve a data constructor callee. Checks ghost, rejects payload-less
@@ -124,7 +124,7 @@ definition resolve_callee_data_ctor ::
               let subst = fmap_of_list (zip tyvars newTyArgs);
                   expArgTypes = [apply_subst subst payloadTy]
               in Inr (name, expArgTypes, CI_DataCtor name dtName newTyArgs, next_mv'))
-    | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])"
+    | None \<Rightarrow> Inl [TyErr_NameNotFound loc name])"
 
 
 (* Resolve the callee of a call expression.
@@ -477,7 +477,8 @@ fun build_comparison_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Locatio
     (let lhsAllowed = (if chainCtr = 0 then '''' else ''chain@@'' @ nat_to_string (chainCtr - 1))
      in if has_unexpected_chain_var lhsTm lhsAllowed
             \<or> has_unexpected_chain_var rhsTm '''' then
-       Inl [TyErr_InternalError_UnexpectedChainVar loc]
+       \<comment> \<open>This should be impossible on normal input (parser doesn't allow @@ in names)\<close>
+       Inl [TyErr_UnexpectedNameClash loc]
      else
      case rest of
       [] \<Rightarrow>
@@ -661,7 +662,7 @@ definition finalize_match_term ::
          in if freshName |\<in>| core_term_free_vars finalScrut
                \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) finalDps
                \<or> list_ex (\<lambda>body. freshName |\<in>| core_term_free_vars body) finalBodies
-            then Inl [TyErr_InternalError_FreshnameClash loc freshName]
+            then Inl [TyErr_UnexpectedNameClash loc]
             else
               let armPats = map dec_to_core_pat finalDps;
                   armBodies = map (\<lambda>(dp, body). wrap_lets freshName dp body)
@@ -747,7 +748,7 @@ where
                if tyArgs \<noteq> [] then Inl [TyErr_WrongNumberOfTypeArgs loc name 0 (length tyArgs)]
                else if ghost = NotGhost then Inl [TyErr_GhostVariableInNonGhost loc name]
                else Inr (CoreTm_FunctionCall name [] [], FI_ReturnType funInfo, next_mv)
-           | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name])
+           | None \<Rightarrow> Inl [TyErr_NameNotFound loc name])
         else
         (case fmlookup (TE_DataCtors env) name of
           Some (dtName, tyvars, _) \<Rightarrow>
@@ -761,7 +762,7 @@ where
               | Inr (newTyArgs, next_mv') \<Rightarrow>
                     Inr (CoreTm_VariantCtor name newTyArgs (CoreTm_Record []),
                          CoreTy_Datatype dtName newTyArgs, next_mv'))
-        | None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name]))"
+        | None \<Rightarrow> Inl [TyErr_NameNotFound loc name]))"
 
   (* Casts *)
 | "elab_term env elabEnv ghost (BabTm_Cast loc targetTy operand) next_mv = 

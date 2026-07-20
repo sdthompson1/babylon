@@ -340,7 +340,7 @@ definition ghost_const_ops :: ConstElabOps where
      \<lparr> CEO_LookupDecl = (\<lambda>loc name env elabEnv.
           if name |\<in>| EE_GhostConstants elabEnv
           then (case fmlookup (TE_Functions env) name of
-                  None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc name]  \<comment> \<open>shouldn't happen\<close>
+                  None \<Rightarrow> Inl [TyErr_NameNotFound loc name]  \<comment> \<open>shouldn't happen\<close>
                 | Some declInfo \<Rightarrow> Inr (Some (FI_ReturnType declInfo)))
           else Inr None),
        CEO_AlreadyDefined = (\<lambda>name m. name |\<in>| fmdom (CM_Functions m)),
@@ -394,7 +394,7 @@ definition elab_const_define_declared ::
    \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> BabType option \<Rightarrow> BabTerm
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
   "elab_const_define_declared ops ghost env elabEnv m loc name declTy optTy rhs =
-    (if CEO_AlreadyDefined ops name m then Inl [TyErr_AlreadyDefined loc name]
+    (if CEO_AlreadyDefined ops name m then Inl [TyErr_DuplicateName loc name]
      else case check_const_type_annot env elabEnv ghost loc declTy optTy of
             Inl errs \<Rightarrow> Inl errs
           | Inr _ \<Rightarrow>
@@ -584,7 +584,7 @@ definition elab_function_decl ::
                           not be overwriting an earlier definition).\<close>
                        (if \<not> isDefinition then Inl [TyErr_DuplicateName loc name]
                         else if name |\<in>| fmdom (CM_Functions m)
-                        then Inl [TyErr_AlreadyDefined loc name]
+                        then Inl [TyErr_DuplicateName loc name]
                         \<comment> \<open>A name declared as a ghost constant cannot be defined by a
                            function definition (even though its desugared FunInfo may
                            match): a ghost const must be defined by a ghost const.\<close>
@@ -889,8 +889,7 @@ fun decl_tyvar_binders :: "BabDeclaration \<Rightarrow> string list" where
 definition check_decl_tyvar_names :: "BabDeclaration \<Rightarrow> TypeError list" where
   "check_decl_tyvar_names d =
      concat (map (\<lambda>n. if n \<noteq> [] \<and> hd n = CHR ''?''
-                      then [TyErr_InternalError_InvalidTypeVarName
-                              (bab_declaration_location d) n]
+                      then [TyErr_UnexpectedNameClash (bab_declaration_location d)]
                       else [])
                  (decl_tyvar_binders d))"
 

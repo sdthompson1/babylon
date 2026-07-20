@@ -683,7 +683,7 @@ next
     assume "has_unexpected_chain_var lhsTm ?lhsAllowed
             \<or> has_unexpected_chain_var rhsTm ''''"
     hence "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest)
-           = Inl [TyErr_InternalError_UnexpectedChainVar loc]"
+           = Inl [TyErr_UnexpectedNameClash loc]"
       using triple_eq by (simp add: Let_def)
     with Cons.prems show False by simp
   qed
@@ -886,7 +886,7 @@ next
     assume "has_unexpected_chain_var lhsTm ?lhsAllowed
             \<or> has_unexpected_chain_var rhsTm ''''"
     hence "build_comparison_chain is_flex loc ghost chainCtr lhsTm lhsTy (triple # rest)
-           = Inl [TyErr_InternalError_UnexpectedChainVar loc]"
+           = Inl [TyErr_UnexpectedNameClash loc]"
       using triple_eq by (simp add: Let_def)
     with Cons.prems(1) show False by simp
   qed

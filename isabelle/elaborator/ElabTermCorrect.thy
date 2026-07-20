@@ -1192,7 +1192,7 @@ proof -
      = (if freshName |\<in>| core_term_free_vars finalScrut
            \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) finalDps
            \<or> list_ex (\<lambda>body. freshName |\<in>| core_term_free_vars body) finalBodies
-        then Inl [TyErr_InternalError_FreshnameClash loc freshName]
+        then Inl [TyErr_UnexpectedNameClash loc]
         else Inr (CoreTm_Let freshName finalScrut
                     (CoreTm_Match (CoreTm_Var freshName) (zip armPats armBodies)),
                   apply_subst finalSubst bodyTyVar, nextMv + 1))"
@@ -1205,7 +1205,7 @@ proof -
     "(if freshName |\<in>| core_term_free_vars finalScrut
         \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) finalDps
         \<or> list_ex (\<lambda>body. freshName |\<in>| core_term_free_vars body) finalBodies
-      then Inl [TyErr_InternalError_FreshnameClash loc freshName]
+      then Inl [TyErr_UnexpectedNameClash loc]
       else Inr (CoreTm_Let freshName finalScrut
                   (CoreTm_Match (CoreTm_Var freshName) (zip armPats armBodies)),
                 apply_subst finalSubst bodyTyVar, nextMv + 1))

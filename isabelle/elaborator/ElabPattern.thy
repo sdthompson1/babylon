@@ -116,7 +116,7 @@ definition resolve_pattern_ctor ::
    \<Rightarrow> TypeError list + (string \<times> string list \<times> CoreType \<times> bool)" where
   "resolve_pattern_ctor env elabEnv ghost loc ctorName =
     (case fmlookup (TE_DataCtors env) ctorName of
-       None \<Rightarrow> Inl [TyErr_InternalError_NameNotFound loc ctorName]
+       None \<Rightarrow> Inl [TyErr_NameNotFound loc ctorName]
      | Some (dtName, tyvars, payloadTy) \<Rightarrow>
          if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
            Inl [TyErr_GhostVariableInNonGhost loc ctorName]
