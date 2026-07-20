@@ -1,4 +1,0 @@
-module Main
-interface {}
-
-ghost

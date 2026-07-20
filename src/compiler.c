@@ -95,10 +95,6 @@ struct LoadDetails {
     struct NameList *libs;
     bool run_c_compiler;
     bool print_c_compiler_commands;
-
-    const char *main_filename_override;
-    const unsigned char *main_file_buf;
-    size_t main_file_len;
 };
 
 
@@ -448,16 +444,7 @@ static enum CompileResult load_module_from_disk(struct LoadDetails *details,
     // Load from filesystem
     FILE *file = NULL;
     if (info) {
-        // Check if this filename matches main_filename_override and we have buffer data
-        if (details->main_filename_override != NULL
-            && details->main_file_buf != NULL
-            && strcmp(info->b_filename, details->main_filename_override) == 0) {
-            // Use memory buffer instead of filesystem
-            file = fmemopen((void*)details->main_file_buf, details->main_file_len, "rb");
-        } else {
-            // Normal filesystem access
-            file = fopen(info->b_filename, "rb");
-        }
+        file = fopen(info->b_filename, "rb");
     }
     if (file) {
         found = true;
@@ -740,30 +727,12 @@ static enum CompileResult load_module_from_disk(struct LoadDetails *details,
     return CR_SUCCESS;
 }
 
-static struct ModulePathInfo * find_module_with_override(struct LoadDetails *details)
-{
-    // This function implements the "main_filename_override" feature if it is in use,
-    // or defers to find_module (from package.c) otherwise
-
-    if (details->main_filename_override != NULL
-    && strcmp(details->importer_package_name, details->root_package_name) == 0
-    && strcmp(details->module_name, "Main") == 0) {
-        static struct ModulePathInfo info;
-        info.package_name = details->root_package_name;
-        info.b_filename = details->main_filename_override;
-        info.c_filename = NULL;
-        return &info;
-    }
-
-    return find_module(details->package_loader,
-                       details->importer_package_name,
-                       details->module_name);
-}
-
 static enum CompileResult load_module_recursive(struct LoadDetails *details)
 {
     // Check if we have already seen this module...
-    struct ModulePathInfo *info = find_module_with_override(details);
+    struct ModulePathInfo *info = find_module(details->package_loader,
+                                              details->importer_package_name,
+                                              details->module_name);
     char *full_module_name =
         info ? copy_string_3(info->package_name, "/", details->module_name) : NULL;
 
@@ -884,10 +853,6 @@ enum CompileResult compile(struct CompileOptions *options)
     details.libs = options->libs;
     details.run_c_compiler = options->run_c_compiler;
     details.print_c_compiler_commands = options->print_c_compiler_commands;
-
-    details.main_filename_override = options->main_filename_override;
-    details.main_file_buf = options->main_file_buf;
-    details.main_file_len = options->main_file_len;
 
     enum CompileResult compile_result = CR_SUCCESS;
     if (options->requested_modules == NULL) {
