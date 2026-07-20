@@ -15,20 +15,28 @@ begin
    dotted, local names are undotted), so on renamer output the collected
    names are exactly the referenced top-level names. *)
 
-fun bab_pattern_names :: "BabPattern \<Rightarrow> string list" where
+(* A name reference classified by namespace. Babylon has separate term and
+   type namespaces (a datatype and a constant may legally share a name), so
+   each collected reference records which namespace it belongs to - each
+   syntactic position determines the namespace of the name it mentions. *)
+datatype NsRef =
+  NsRef_Term string   (* a constant, function or data-constructor name *)
+| NsRef_Type string   (* a datatype, typedef or abstract-type name *)
+
+fun bab_pattern_names :: "BabPattern \<Rightarrow> NsRef list" where
   "bab_pattern_names (BabPat_Var _ _ _) = []"
 | "bab_pattern_names (BabPat_Bool _ _) = []"
 | "bab_pattern_names (BabPat_Int _ _) = []"
 | "bab_pattern_names (BabPat_Tuple _ pats) = concat (map bab_pattern_names pats)"
 | "bab_pattern_names (BabPat_Record _ flds) = concat (map (bab_pattern_names \<circ> snd) flds)"
-| "bab_pattern_names (BabPat_Variant _ ctor (Some pat)) = ctor # bab_pattern_names pat"
-| "bab_pattern_names (BabPat_Variant _ ctor None) = [ctor]"
+| "bab_pattern_names (BabPat_Variant _ ctor (Some pat)) = NsRef_Term ctor # bab_pattern_names pat"
+| "bab_pattern_names (BabPat_Variant _ ctor None) = [NsRef_Term ctor]"
 | "bab_pattern_names (BabPat_Wildcard _) = []"
 
-fun bab_literal_names :: "BabLiteral \<Rightarrow> string list"
-  and bab_dimension_names :: "BabDimension \<Rightarrow> string list"
-  and bab_type_names :: "BabType \<Rightarrow> string list"
-  and bab_term_names :: "BabTerm \<Rightarrow> string list"
+fun bab_literal_names :: "BabLiteral \<Rightarrow> NsRef list"
+  and bab_dimension_names :: "BabDimension \<Rightarrow> NsRef list"
+  and bab_type_names :: "BabType \<Rightarrow> NsRef list"
+  and bab_term_names :: "BabTerm \<Rightarrow> NsRef list"
 where
   "bab_literal_names (BabLit_Bool _) = []"
 | "bab_literal_names (BabLit_Int _) = []"
@@ -39,7 +47,7 @@ where
 | "bab_dimension_names BabDim_Allocatable = []"
 | "bab_dimension_names (BabDim_Fixed tm) = bab_term_names tm"
 
-| "bab_type_names (BabTy_Name _ name tyargs) = name # concat (map bab_type_names tyargs)"
+| "bab_type_names (BabTy_Name _ name tyargs) = NsRef_Type name # concat (map bab_type_names tyargs)"
 | "bab_type_names (BabTy_Bool _) = []"
 | "bab_type_names (BabTy_FiniteInt _ _ _) = []"
 | "bab_type_names (BabTy_MathInt _) = []"
@@ -50,7 +58,7 @@ where
      bab_type_names elemTy @ concat (map bab_dimension_names dims)"
 
 | "bab_term_names (BabTm_Literal _ lit) = bab_literal_names lit"
-| "bab_term_names (BabTm_Name _ name tyargs) = name # concat (map bab_type_names tyargs)"
+| "bab_term_names (BabTm_Name _ name tyargs) = NsRef_Term name # concat (map bab_type_names tyargs)"
 | "bab_term_names (BabTm_Cast _ ty tm) = bab_type_names ty @ bab_term_names tm"
 | "bab_term_names (BabTm_If _ tm1 tm2 tm3) =
      bab_term_names tm1 @ bab_term_names tm2 @ bab_term_names tm3"
@@ -78,15 +86,15 @@ where
 | "bab_term_names (BabTm_Allocated _ tm) = bab_term_names tm"
 | "bab_term_names (BabTm_Old _ tm) = bab_term_names tm"
 
-fun bab_attribute_names :: "BabAttribute \<Rightarrow> string list" where
+fun bab_attribute_names :: "BabAttribute \<Rightarrow> NsRef list" where
   "bab_attribute_names (BabAttr_Requires _ tm) = bab_term_names tm"
 | "bab_attribute_names (BabAttr_Ensures _ tm) = bab_term_names tm"
 | "bab_attribute_names (BabAttr_Invariant _ tm) = bab_term_names tm"
 | "bab_attribute_names (BabAttr_Decreases _ tm) = bab_term_names tm"
 
 (* Note BabStmt_ShowHide references a name (the function being shown/hidden). *)
-fun bab_statement_names :: "BabStatement \<Rightarrow> string list"
-  and bab_statement_list_names :: "BabStatement list \<Rightarrow> string list"
+fun bab_statement_names :: "BabStatement \<Rightarrow> NsRef list"
+  and bab_statement_list_names :: "BabStatement list \<Rightarrow> NsRef list"
 where
   "bab_statement_names (BabStmt_VarDecl _ _ _ tyOpt rhsOpt) =
      (case tyOpt of None \<Rightarrow> [] | Some ty \<Rightarrow> bab_type_names ty)
@@ -116,7 +124,7 @@ where
      bab_term_names scrut
      @ concat (map (bab_pattern_names \<circ> fst) arms)
      @ concat (map (bab_statement_list_names \<circ> snd) arms)"
-| "bab_statement_names (BabStmt_ShowHide _ _ name) = [name]"
+| "bab_statement_names (BabStmt_ShowHide _ _ name) = [NsRef_Term name]"
 | "bab_statement_names (BabStmt_Ghost _ stmt) = bab_statement_names stmt"
 
 | "bab_statement_list_names [] = []"
@@ -126,7 +134,7 @@ where
 (* The names referenced by a declaration. A declaration's own binders (its
    type parameters and, for a function, its term parameters) are not
    references; nor is the declaration's own name. *)
-fun bab_declaration_names :: "BabDeclaration \<Rightarrow> string list" where
+fun bab_declaration_names :: "BabDeclaration \<Rightarrow> NsRef list" where
   "bab_declaration_names (BabDecl_Const dc) =
      (case DC_Type dc of None \<Rightarrow> [] | Some ty \<Rightarrow> bab_type_names ty)
      @ (case DC_Value dc of None \<Rightarrow> [] | Some tm \<Rightarrow> bab_term_names tm)"

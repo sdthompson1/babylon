@@ -65,8 +65,9 @@ fun is_term_decl :: "BabDeclaration \<Rightarrow> bool" where
 
    The other face-structure rules need no check here: declaration-only forms in
    the implementation are rejected by check_impl_definitions, and two
-   declarations of the same name within one face (including a declaration plus
-   a definition) are rejected by sort_declarations' duplicate-name check.
+   declarations of the same name in the same namespace within one face
+   (including a declaration plus a definition) are rejected by
+   sort_declarations' duplicate-name check.
 
    Names are compared without regard to const-vs-function kind or ghostness:
    the mismatched pairs are caught by ElabDecl anyway (via term_name_in_scope);
@@ -127,22 +128,46 @@ definition check_completeness ::
 (* Declaration dependency sorting                                             *)
 (* ========================================================================== *)
 
-(* The type variables occurring in the context-declared type(s) of a name:
-   the declared type of a global, the argument/return types of a function,
-   the payload type of a data constructor, or the target of a typedef. These
-   are the abstract types a use of the name depends on. *)
-definition ctx_declared_type_tyvars :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string \<Rightarrow> string list" where
-  "ctx_declared_type_tyvars env elabEnv n =
-     (case fmlookup (TE_GlobalVars env) n of
-        Some ty \<Rightarrow> type_tyvars_list ty | None \<Rightarrow> [])
-     @ (case fmlookup (TE_Functions env) n of
-          Some info \<Rightarrow> concat (map (type_tyvars_list \<circ> fst) (FI_TmArgs info))
-                       @ type_tyvars_list (FI_ReturnType info)
-        | None \<Rightarrow> [])
-     @ (case fmlookup (TE_DataCtors env) n of
-          Some (_, _, payload) \<Rightarrow> type_tyvars_list payload | None \<Rightarrow> [])
-     @ (case fmlookup (EE_Typedefs elabEnv) n of
-          Some (_, target) \<Rightarrow> type_tyvars_list target | None \<Rightarrow> [])"
+(* The dependency graph (analyze_dependencies_generic) is keyed by plain
+   strings, but Babylon names live in two namespaces, and a term and a type
+   of the same name must get distinct graph nodes. So NsRefs are flattened
+   to graph keys by prefixing a fixed-length namespace tag. The tagging is
+   injective: two equal tagged names have the same first character, hence
+   the same tag, hence the same namespace and the same underlying name. *)
+fun tag_ref :: "NsRef \<Rightarrow> string" where
+  "tag_ref (NsRef_Term n) = ''V:'' @ n"
+| "tag_ref (NsRef_Type n) = ''T:'' @ n"
+
+(* The namespace-classified name that a declaration defines. *)
+definition decl_ref :: "BabDeclaration \<Rightarrow> NsRef" where
+  "decl_ref d = (if is_term_decl d then NsRef_Term (get_decl_name d)
+                 else NsRef_Type (get_decl_name d))"
+
+(* The tagged dependency-graph key of a declaration. *)
+definition tagged_decl_name :: "BabDeclaration \<Rightarrow> string" where
+  "tagged_decl_name d = tag_ref (decl_ref d)"
+
+(* The type variables occurring in the context-declared type(s) of a
+   referenced name: for a term-namespace reference, the declared type of a
+   global, the argument/return types of a function, or the payload type of
+   a data constructor; for a type-namespace reference, the target of a
+   typedef. These are the abstract types a use of the name depends on.
+   Returns bare (untagged) type names; the caller tags them. *)
+definition ctx_declared_type_tyvars :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> NsRef \<Rightarrow> string list" where
+  "ctx_declared_type_tyvars env elabEnv r =
+     (case r of
+        NsRef_Term n \<Rightarrow>
+          (case fmlookup (TE_GlobalVars env) n of
+             Some ty \<Rightarrow> type_tyvars_list ty | None \<Rightarrow> [])
+          @ (case fmlookup (TE_Functions env) n of
+               Some info \<Rightarrow> concat (map (type_tyvars_list \<circ> fst) (FI_TmArgs info))
+                            @ type_tyvars_list (FI_ReturnType info)
+             | None \<Rightarrow> [])
+          @ (case fmlookup (TE_DataCtors env) n of
+               Some (_, _, payload) \<Rightarrow> type_tyvars_list payload | None \<Rightarrow> [])
+      | NsRef_Type n \<Rightarrow>
+          (case fmlookup (EE_Typedefs elabEnv) n of
+             Some (_, target) \<Rightarrow> type_tyvars_list target | None \<Rightarrow> []))"
 
 (* The dependencies of a declaration, filtered to the names declared in the
    same list (declNames): the names it syntactically references, plus the
@@ -159,21 +184,26 @@ definition ctx_declared_type_tyvars :: "CoreTyEnv \<Rightarrow> ElabEnv \<Righta
    list the context lookups return nothing, and ordinary reference edges plus
    transitivity cover the same ground.
 
-   The declaration's own name is excluded from the realization-visibility
+   The declaration's own graph key is excluded from the realization-visibility
    edges: for a realization "type T = ...", the context lookup of T itself
    finds T's own typedef entry ([], CoreTy_Var T), whose type variable is T -
    a spurious self-edge that would make every realization look recursive.
-   Genuine self-recursion is still detected, through the *syntactic*
-   references (a self-referential declaration necessarily mentions its own
-   name). *)
+   (The exclusion compares tagged keys, so a *term* declaration X genuinely
+   depending on an abstract *type* X keeps its edge.) Genuine self-recursion
+   is still detected, through the *syntactic* references (a self-referential
+   declaration necessarily mentions its own name).
+
+   The result is a list of tagged graph keys (see tag_ref); the
+   realization-visibility edges are all type-namespace. *)
 definition decl_deps ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> BabDeclaration \<Rightarrow> string list" where
   "decl_deps env elabEnv declNames d =
      (let refs = bab_declaration_names d;
           realizationDeps =
-            filter (\<lambda>n. n \<noteq> get_decl_name d)
-              (concat (map (ctx_declared_type_tyvars env elabEnv) (get_decl_name d # refs)))
-      in filter (\<lambda>n. n |\<in>| declNames) (refs @ realizationDeps))"
+            filter (\<lambda>t. t \<noteq> tagged_decl_name d)
+              (map (tag_ref \<circ> NsRef_Type)
+                (concat (map (ctx_declared_type_tyvars env elabEnv) (decl_ref d # refs))))
+      in filter (\<lambda>n. n |\<in>| declNames) (map tag_ref refs @ realizationDeps))"
 
 (* This goes through the SCCs (from Kosaraju) and fishes out the declarations in
    dependency order. Errors are checked for:
@@ -185,7 +215,7 @@ fun check_sccs ::
   "check_sccs deps [] = Inr []"
 | "check_sccs deps ([] # rest) = check_sccs deps rest"
 | "check_sccs deps ([d] # rest) =
-    (if get_decl_name d \<in> set (deps d)
+    (if tagged_decl_name d \<in> set (deps d)
      then Inl [TyErr_RecursiveDeclarations (bab_declaration_location d) [get_decl_name d]]
      else (case check_sccs deps rest of
              Inl errs \<Rightarrow> Inl errs
@@ -200,12 +230,11 @@ fun check_sccs ::
    permitted).
 
    This is also where duplicate names within a face are detected: the dependency
-   graph is keyed by declaration name, so analyze_dependencies_generic reports
-   DepErr_DuplicateName for any name declared twice in the list. Note this is
-   namespace-blind: it also rejects a term and a type of the same name in one
-   face (e.g. "datatype X" + "const X"), which ought to be legal since terms and
-   types live in different namespaces. Lifting that restriction would require
-   namespace-tagged graph keys. *)
+   graph is keyed by namespace-tagged declaration name (tagged_decl_name), so
+   analyze_dependencies_generic reports DepErr_DuplicateName for any name
+   declared twice in the same namespace in the list. A term and a type of the
+   same name (e.g. "datatype X" + "const X") get distinct graph keys and are
+   accepted. *)
 definition sort_declarations ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabDeclaration list
    \<Rightarrow> TypeError list + BabDeclaration list" where
@@ -213,13 +242,14 @@ definition sort_declarations ::
      (case decls of
         [] \<Rightarrow> Inr []
       | d0 # _ \<Rightarrow>
-          (let declNames = fset_of_list (map get_decl_name decls);
+          (let declNames = fset_of_list (map tagged_decl_name decls);
                deps = decl_deps env elabEnv declNames
-           in case analyze_dependencies_generic decls get_decl_name deps of
+           in case analyze_dependencies_generic decls tagged_decl_name deps of
                 Inl (DepErr_DuplicateName dup) \<Rightarrow>
-                  \<comment> \<open>The find cannot fail: the duplicate name reported comes from decls itself\<close>
-                  (let d = the (find (\<lambda>d. get_decl_name d = dup) decls)
-                   in Inl [TyErr_DuplicateName (bab_declaration_location d) dup])
+                  \<comment> \<open>The find cannot fail: the duplicate (tagged) name comes from decls itself.
+                     The error reports the untagged name.\<close>
+                  (let d = the (find (\<lambda>d. tagged_decl_name d = dup) decls)
+                   in Inl [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)])
               | Inl (DepErr_DependencyNotFound _ _) \<Rightarrow>
                   \<comment> \<open>Shouldn't happen: decl_deps filters its result to declNames\<close>
                   Inl [TyErr_DependencyAnalysisUnexpectedFailure (bab_declaration_location d0)]
@@ -239,7 +269,7 @@ next
   then show ?case by simp
 next
   case (3 deps d rest)
-  from "3.prems" have cond: "get_decl_name d \<notin> set (deps d)"
+  from "3.prems" have cond: "tagged_decl_name d \<notin> set (deps d)"
     by (auto split: if_splits)
   from "3.prems" cond obtain ds' where
     rest_ok: "check_sccs deps rest = Inr ds'" and ds_eq: "ds = d # ds'"
@@ -265,9 +295,9 @@ proof (cases decls)
   then show ?thesis using Nil by simp
 next
   case (Cons d ds)
-  let ?deps = "decl_deps env elabEnv (fset_of_list (map get_decl_name decls))"
+  let ?deps = "decl_deps env elabEnv (fset_of_list (map tagged_decl_name decls))"
   obtain sccs where
-    ana: "analyze_dependencies_generic decls get_decl_name ?deps = Inr sccs" and
+    ana: "analyze_dependencies_generic decls tagged_decl_name ?deps = Inr sccs" and
     chk: "check_sccs ?deps sccs = Inr sortedDecls"
     using ok unfolding sort_declarations_def Let_def
     by (auto simp: Cons split: sum.splits DependencyError.splits)
