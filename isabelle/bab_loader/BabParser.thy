@@ -310,16 +310,20 @@ definition parse_unop :: "BabUnop Parser" where
   }"
 
 (* helper to make unop term *)
-(* note: '-' followed by an int literal is combined into a single
+(* note: '-' followed by an int literal in [0, 2^63] is combined into a single
    int literal. This avoids problems with the most negative integer.
-   (If the resulting negative integer would be out of range, this returns None.) *)
-fun make_unop_term :: "Location \<times> BabUnop \<Rightarrow> BabTerm option \<Rightarrow> BabTerm option" where
-  "make_unop_term _ None = None"
-| "make_unop_term (loc1, BabUnop_Negate) (Some (BabTm_Literal loc2 (BabLit_Int i)))
-    = (if i \<le> 2 ^ 63 then Some (BabTm_Literal (merge_locations loc1 loc2) (BabLit_Int (-i)))
-       else None)"
-| "make_unop_term (loc, op) (Some tm)
-    = Some (BabTm_Unop (merge_locations loc (bab_term_location tm)) op tm)"
+   In all other cases (already-negative literal, or literal above 2^63) a real
+   unop node is built, and the elaborator reports the error where there is
+   one: overflow in a double negation is caught by const-eval, and negating
+   a u64-sized literal fails with a "signed type required" error. *)
+fun make_unop_term :: "Location \<times> BabUnop \<Rightarrow> BabTerm \<Rightarrow> BabTerm" where
+  "make_unop_term (loc1, BabUnop_Negate) (BabTm_Literal loc2 (BabLit_Int i))
+    = (if 0 \<le> i \<and> i \<le> 2 ^ 63
+       then BabTm_Literal (merge_locations loc1 loc2) (BabLit_Int (-i))
+       else BabTm_Unop (merge_locations loc1 loc2) BabUnop_Negate
+              (BabTm_Literal loc2 (BabLit_Int i)))"
+| "make_unop_term (loc, op) tm
+    = BabTm_Unop (merge_locations loc (bab_term_location tm)) op tm"
 
 
 (* Build a single BabTm_Binop node from a left operand and a run of
@@ -483,10 +487,7 @@ where
 | "parse_unop_expr (Suc fuel) restrict = do {
     ops \<leftarrow> many (located parse_unop);
     tm \<leftarrow> parse_call_or_proj_expr fuel restrict;
-    let maybeResult = foldr make_unop_term ops (Some tm);
-    case maybeResult of
-      None \<Rightarrow> fail
-      | Some result \<Rightarrow> return result
+    return (foldr make_unop_term ops tm)
   }"
 
 (* Parse function call, field projection or array projection *)
