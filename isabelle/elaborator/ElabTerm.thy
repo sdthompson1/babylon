@@ -324,7 +324,8 @@ fun check_comparison_chain_directions :: "(BabBinop \<times> 'a \<times> 'b) lis
 fun check_implies_chain :: "(BabBinop \<times> 'a \<times> 'b) list \<Rightarrow> bool" where
   "check_implies_chain [] = True"
 | "check_implies_chain ((op, _, _) # rest) =
-    ((op = BabBinop_Implies \<or> op = BabBinop_ImpliedBy) \<and> check_implies_chain rest)"
+    ((op = BabBinop_Implies \<or> op = BabBinop_ImpliedBy)
+     \<and> list_all (\<lambda>(op2, _, _). op2 = op) rest)"
 
 (* Is this a comparison BabBinop? (not implies/implied-by) *)
 fun is_comparison_bab_binop :: "BabBinop \<Rightarrow> bool" where
