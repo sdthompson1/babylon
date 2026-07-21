@@ -173,17 +173,25 @@ and decorate_pattern_list ::
        Some s \<Rightarrow> Inr (DP_Bool b, s, next_mv)
      | None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool (apply_subst accSubst scrutTy)])"
 
-  (* Int literal: if scrutTy is FiniteInt or MathInt, accept it immediately; otherwise,
-     try to unify with i32 (will succeed only if it is an unbound metavariable). *)
+  (* Int literal: the scrutinee must have a finite integer type, and the literal
+     must be in range of that type (matching an int literal against a MathInt
+     scrutinee is rejected for now; only wildcard/variable patterns can match a
+     MathInt). If the scrutinee type is not already a FiniteInt, try to unify with i32
+     (will succeed only if it is an unbound metavariable) and range-check against i32. *)
 | "decorate_pattern env elabEnv ghost (BabPat_Int loc i) scrutTy accSubst next_mv =
     (let e = apply_subst accSubst scrutTy in
      case e of
-       CoreTy_FiniteInt _ _ \<Rightarrow> Inr (DP_Int i, accSubst, next_mv)
-     | CoreTy_MathInt \<Rightarrow> Inr (DP_Int i, accSubst, next_mv)
+       CoreTy_FiniteInt sign bits \<Rightarrow>
+         (if int_in_range (int_range sign bits) i
+          then Inr (DP_Int i, accSubst, next_mv)
+          else Inl [TyErr_IntPatternOutOfRange loc e])
      | _ \<Rightarrow>
        (case try_unify_compose env int_literal_default_type scrutTy accSubst of
-          Some s \<Rightarrow> Inr (DP_Int i, s, next_mv)
-        | None \<Rightarrow> Inl [TyErr_IntegerTypeRequired loc e]))"
+          Some s \<Rightarrow>
+            (if int_in_range (int_range Signed IntBits_32) i
+             then Inr (DP_Int i, s, next_mv)
+             else Inl [TyErr_IntPatternOutOfRange loc int_literal_default_type])
+        | None \<Rightarrow> Inl [TyErr_FiniteIntegerTypeRequired loc e]))"
 
   (* Tuple: desugars to a record pattern with synthetic field names.
      This builds an expected record type with fresh metavars for the field types,

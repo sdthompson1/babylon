@@ -1827,7 +1827,8 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
         \<comment> \<open>Column is integer-typed; v_c is CV_FiniteInt sign bits i for some i.\<close>
         from col_type_int[OF rows_inv _ c_lt]
         have col_c_int_when:
-          "\<And>h. h \<in> set (distinct_int_heads ?col_pats) \<Longrightarrow> is_integer_type (colTys ! c)"
+          "\<And>h. h \<in> set (distinct_int_heads ?col_pats) \<Longrightarrow>
+             pattern_compatible env (CorePat_Int h) (colTys ! c)"
           by blast
         obtain i0 where ps0_c_int: "ps0 ! c = CorePat_Int i0"
           using ps0_at_c_kind HK_Int by (cases "ps0 ! c") auto
@@ -1835,7 +1836,8 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
           using rows_eq r0_eq by (simp add: case_prod_unfold)
         have i0_in: "i0 \<in> set (distinct_int_heads ?col_pats)"
           unfolding col_pats_eq ps0_c_int by simp
-        have col_c_int: "is_integer_type (colTys ! c)" using col_c_int_when[OF i0_in] .
+        have col_c_int: "is_integer_type (colTys ! c)"
+          using col_c_int_when[OF i0_in] by (cases "colTys ! c") auto
         from v_c_ty col_c_int obtain sign bits i where v_c_eq: "v_c = CV_FiniteInt sign bits i"
           by (cases v_c; cases "colTys ! c") auto
         have eval_at_c: "eval_match_scrut \<rho> (scruts ! c) = Some (CV_FiniteInt sign bits i)"

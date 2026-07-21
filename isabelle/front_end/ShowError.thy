@@ -355,6 +355,8 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
           @ '' requires the matched value to be an lvalue''
     | TyErr_EmptyMatch loc \<Rightarrow>
         loc_prefix loc @ ''match must have at least one arm''
+    | TyErr_IntPatternOutOfRange loc ty \<Rightarrow>
+        loc_prefix loc @ ''integer pattern is out of range for type '' @ quote_type ty
     | TyErr_DuplicateName loc name \<Rightarrow>
         loc_prefix loc @ ''duplicate definition of '' @ quote name
     | TyErr_ConstDeclNeedsType loc name \<Rightarrow>

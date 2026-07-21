@@ -473,7 +473,7 @@ next
   case (4 env elabEnv ghost loc i scrutTy accSubst next_mv)
   \<comment> \<open>BabPat_Int: next_mv unchanged\<close>
   from "4.prems" show ?case
-    by (auto simp: Let_def split: CoreType.splits option.splits)
+    by (auto simp: Let_def split: CoreType.splits option.splits if_splits)
 next
   case (5 env elabEnv ghost loc pats scrutTy accSubst next_mv)
   \<comment> \<open>BabPat_Tuple: bumps next_mv by length pats, then recurses on the list\<close>
@@ -542,7 +542,10 @@ where
   "dec_pattern_compatible env (DP_Var _ _ vTy) ty = (vTy = ty)"
 | "dec_pattern_compatible env DP_Wildcard _ = True"
 | "dec_pattern_compatible env (DP_Bool _) ty = (ty = CoreTy_Bool)"
-| "dec_pattern_compatible env (DP_Int _) ty = is_integer_type ty"
+| "dec_pattern_compatible env (DP_Int i) ty =
+    (case ty of
+       CoreTy_FiniteInt sign bits \<Rightarrow> int_in_range (int_range sign bits) i
+     | _ \<Rightarrow> False)"
 | "dec_pattern_compatible env (DP_Variant ctorName payload_opt) ty =
     (case fmlookup (TE_DataCtors env) ctorName of
        None \<Rightarrow> False
@@ -976,10 +979,7 @@ next
   thus ?case by simp
 next
   case (4 env i t)
-  from "4" have t_int: "is_integer_type t" by simp
-  hence "is_integer_type (apply_subst subst t)"
-    by (cases t) auto
-  thus ?case by simp
+  then show ?case by (cases t) auto
 next
   case (5 env ctorName payload_opt t)
   show ?case
@@ -1302,10 +1302,12 @@ next
   \<comment> \<open>Helper for the "fall-through" cases that go through try_unify_compose. \<close>
   have fallthrough:
     "\<And>s. try_unify_compose env int_literal_default_type scrutTy accSubst = Some s
+          \<Longrightarrow> int_in_range (int_range Signed IntBits_32) i
           \<Longrightarrow> dp = DP_Int i \<Longrightarrow> accSubst' = s \<Longrightarrow> next_mv' = next_mv
           \<Longrightarrow> ?case"
   proof -
     fix s assume tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s"
+       and rng: "int_in_range (int_range Signed IntBits_32) i"
        and eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
     have "apply_subst s int_literal_default_type = apply_subst s scrutTy"
       using try_unify_compose_makes_equal[OF tuc] .
@@ -1313,7 +1315,7 @@ next
       by (simp add: int_literal_default_type_def)
     hence compat: "dec_pattern_compatible env (apply_subst_to_dec_pattern accSubst' dp)
                                               (apply_subst accSubst' scrutTy)"
-      using eq by simp
+      using eq rng by simp
     have refine: "\<exists>T. accSubst' = compose_subst T accSubst"
       using try_unify_compose_compose_shape[OF tuc] eq by simp
     have factors_acc: "subst_factors_through accSubst' accSubst"
@@ -1347,19 +1349,20 @@ next
       by simp
   qed
 
-  \<comment> \<open>Helper for the "no unification" cases (FiniteInt, MathInt).
-      apply_subst accSubst' scrutTy already has integer shape; substituted dp = dp. \<close>
+  \<comment> \<open>Helper for the "no unification" case (FiniteInt scrutinee, literal in range).
+      apply_subst accSubst' scrutTy is already a finite int type; substituted dp = dp. \<close>
   have noop:
-    "\<And>shape. accSubst' = accSubst \<Longrightarrow> dp = DP_Int i \<Longrightarrow> next_mv' = next_mv
-        \<Longrightarrow> apply_subst accSubst' scrutTy = shape \<Longrightarrow> is_integer_type shape \<Longrightarrow> ?case"
+    "\<And>sign bits. accSubst' = accSubst \<Longrightarrow> dp = DP_Int i \<Longrightarrow> next_mv' = next_mv
+        \<Longrightarrow> apply_subst accSubst' scrutTy = CoreTy_FiniteInt sign bits
+        \<Longrightarrow> int_in_range (int_range sign bits) i \<Longrightarrow> ?case"
   proof -
-    fix shape
+    fix sign bits
     assume eq: "accSubst' = accSubst" "dp = DP_Int i" "next_mv' = next_mv"
-       and shape_eq: "apply_subst accSubst' scrutTy = shape"
-       and shape_int: "is_integer_type shape"
+       and shape_eq: "apply_subst accSubst' scrutTy = CoreTy_FiniteInt sign bits"
+       and shape_rng: "int_in_range (int_range sign bits) i"
     have compat: "dec_pattern_compatible env (apply_subst_to_dec_pattern accSubst' dp)
                                               (apply_subst accSubst' scrutTy)"
-      using eq shape_eq shape_int by simp
+      using eq shape_eq shape_rng by simp
     have refine: "\<exists>T. accSubst' = compose_subst T accSubst"
       by (metis compose_subst_empty_left eq(1))
     have range_wk: "\<forall>ty \<in> fmran' accSubst'.
@@ -1379,60 +1382,67 @@ next
     case (CoreTy_FiniteInt sign bits)
     from "4.prems" CoreTy_FiniteInt have eq:
       "dp = DP_Int i" "accSubst' = accSubst" "next_mv' = next_mv"
-      by (auto simp: Let_def)
+      and rng: "int_in_range (int_range sign bits) i"
+      by (auto simp: Let_def split: if_splits)
     have shape: "apply_subst accSubst' scrutTy = CoreTy_FiniteInt sign bits"
       using eq CoreTy_FiniteInt by simp
-    show ?thesis using noop[OF eq(2) eq(1) eq(3) shape] by simp
+    show ?thesis using noop[OF eq(2) eq(1) eq(3) shape rng] by simp
   next
     case CoreTy_MathInt
-    from "4.prems" CoreTy_MathInt have eq:
-      "dp = DP_Int i" "accSubst' = accSubst" "next_mv' = next_mv"
-      by (auto simp: Let_def)
-    have shape: "apply_subst accSubst' scrutTy = CoreTy_MathInt"
-      using eq CoreTy_MathInt by simp
-    show ?thesis using noop[OF eq(2) eq(1) eq(3) shape] by simp
+    from "4.prems" CoreTy_MathInt obtain s where
+      tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
+      eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   next
     case (CoreTy_Var n)
     from "4.prems" CoreTy_Var obtain s where
       tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
       eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
-      by (auto simp: Let_def split: option.splits)
-    show ?thesis using fallthrough[OF tuc eq(1) eq(2) eq(3)] .
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   next
     case (CoreTy_Datatype name tyArgs)
     from "4.prems" CoreTy_Datatype obtain s where
       tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
       eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
-      by (auto simp: Let_def split: option.splits)
-    show ?thesis using fallthrough[OF tuc eq(1) eq(2) eq(3)] .
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   next
     case CoreTy_Bool
     from "4.prems" CoreTy_Bool obtain s where
       tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
       eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
-      by (auto simp: Let_def split: option.splits)
-    show ?thesis using fallthrough[OF tuc eq(1) eq(2) eq(3)] .
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   next
     case CoreTy_MathReal
     from "4.prems" CoreTy_MathReal obtain s where
       tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
       eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
-      by (auto simp: Let_def split: option.splits)
-    show ?thesis using fallthrough[OF tuc eq(1) eq(2) eq(3)] .
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   next
     case (CoreTy_Record flds)
     from "4.prems" CoreTy_Record obtain s where
       tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
       eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
-      by (auto simp: Let_def split: option.splits)
-    show ?thesis using fallthrough[OF tuc eq(1) eq(2) eq(3)] .
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   next
     case (CoreTy_Array elemTy dims)
     from "4.prems" CoreTy_Array obtain s where
       tuc: "try_unify_compose env int_literal_default_type scrutTy accSubst = Some s" and
+      rng: "int_in_range (int_range Signed IntBits_32) i" and
       eq: "dp = DP_Int i" "accSubst' = s" "next_mv' = next_mv"
-      by (auto simp: Let_def split: option.splits)
-    show ?thesis using fallthrough[OF tuc eq(1) eq(2) eq(3)] .
+      by (auto simp: Let_def split: option.splits if_splits)
+    show ?thesis using fallthrough[OF tuc rng eq(1) eq(2) eq(3)] .
   qed
 next
   case (5 env elabEnv ghost loc pats scrutTy accSubst next_mv)

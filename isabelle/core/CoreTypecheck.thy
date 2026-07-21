@@ -36,7 +36,14 @@ fun sizeof_type :: "CoreDimension list \<Rightarrow> CoreType" where
 fun pattern_compatible :: "CoreTyEnv \<Rightarrow> CorePattern \<Rightarrow> CoreType \<Rightarrow> bool" where
   "pattern_compatible env CorePat_Wildcard _ = True"
 | "pattern_compatible env (CorePat_Bool _) ty = (ty = CoreTy_Bool)"
-| "pattern_compatible env (CorePat_Int _) ty = is_integer_type ty"
+| "pattern_compatible env (CorePat_Int i) ty =
+    (case ty of
+      \<comment> \<open>For now, CorePat_Int can only match against finite integer scrutinees.
+         MathInt scrutinees can only match against CorePat_Wildcard. 
+         This might be changed in the future - allowing a MathInt scrutinee to
+         match a CorePat_Int pattern might be useful for ghost code.\<close>
+       CoreTy_FiniteInt sign bits \<Rightarrow> int_in_range (int_range sign bits) i
+     | _ \<Rightarrow> False)"
 | "pattern_compatible env (CorePat_Variant ctorName payloadPat) ty =
     (case fmlookup (TE_DataCtors env) ctorName of
       None \<Rightarrow> False

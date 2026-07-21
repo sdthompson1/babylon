@@ -511,7 +511,7 @@ lemma col_type_int:
             \<and> list_all2 (pattern_compatible env) ps colTys) rows"
   assumes "h \<in> set (distinct_int_heads (map (\<lambda>(ps, _). ps ! c) rows))"
   assumes "c < length colTys"
-  shows   "is_integer_type (colTys ! c)"
+  shows   "pattern_compatible env (CorePat_Int h) (colTys ! c)"
 proof -
   from assms(2) distinct_int_heads_subset
     have "CorePat_Int h \<in> set (map (\<lambda>(ps, _). ps ! c) rows)" by blast
@@ -1263,7 +1263,8 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
       next
         case HK_Int
         from col_type_int[OF rows_inv _ c_lt]
-        have col_c_int: "\<And>h. h \<in> set (distinct_int_heads ?col_pats) \<Longrightarrow> is_integer_type (colTys ! c)"
+        have col_c_int: "\<And>h. h \<in> set (distinct_int_heads ?col_pats) \<Longrightarrow>
+                            pattern_compatible env (CorePat_Int h) (colTys ! c)"
           by blast
         have IH_heads:
           "\<And>h. h \<in> set (distinct_int_heads ?col_pats) \<Longrightarrow>

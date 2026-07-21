@@ -83,6 +83,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_RefPatternInTermContext Location string  (* `ref` binding used in a term-context match *)
   | TyErr_RefPatternNeedsLvalue Location string  (* `ref` binding in a match statement whose scrutinee is not an lvalue *)
   | TyErr_EmptyMatch Location  (* match expression with zero arms *)
+  | TyErr_IntPatternOutOfRange Location CoreType  (* integer literal pattern out of range for the (finite integer) scrutinee type *)
 
   (* Declaration/Module level errors *)
   | TyErr_DuplicateName Location string  (* a constant, function, constructor, parameter, etc., was defined twice *)
