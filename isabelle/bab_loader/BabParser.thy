@@ -322,6 +322,36 @@ fun make_unop_term :: "Location \<times> BabUnop \<Rightarrow> BabTerm option \<
     = Some (BabTm_Unop (merge_locations loc (bab_term_location tm)) op tm)"
 
 
+(* Build a single BabTm_Binop node from a left operand and a run of
+   operator-term pairs (all of the same precedence). *)
+fun close_binop_run :: "BabTerm \<Rightarrow> (BabBinop \<times> BabTerm) list \<Rightarrow> BabTerm" where
+  "close_binop_run left [] = left"
+| "close_binop_run left ops =
+    BabTm_Binop (merge_locations (bab_term_location left)
+                                 (bab_term_location (snd (last ops))))
+                left ops"
+
+(* Group a flat operator-term list (as produced by the operator parsing loop) into
+   BabTm_Binop nodes, one for each run of equal-precedence operators.
+
+   This is needed because the parser produces mixed-precedence lists such
+   as [(5, <, b), (5, <, c), (4, &&, d)], but a single BabTm_Binop node is only
+   allowed to contain operators of equal precedence, so this example must be
+   grouped into two nodes, as in (a < b < c) && (d).
+*)
+fun group_binops_aux :: "BabTerm \<Rightarrow> nat \<Rightarrow> (BabBinop \<times> BabTerm) list
+                         \<Rightarrow> (nat \<times> BabBinop \<times> BabTerm) list \<Rightarrow> BabTerm" where
+  "group_binops_aux left p run [] = close_binop_run left run"
+| "group_binops_aux left p run ((q, op, tm) # rest) =
+    (if q = p
+     then group_binops_aux left p (run @ [(op, tm)]) rest
+     else group_binops_aux (close_binop_run left run) q [(op, tm)] rest)"
+
+fun group_binops :: "BabTerm \<Rightarrow> (nat \<times> BabBinop \<times> BabTerm) list \<Rightarrow> BabTerm" where
+  "group_binops left [] = left"
+| "group_binops left ((q, op, tm) # rest) = group_binops_aux left q [(op, tm)] rest"
+
+
 (* Helper for making tuple or record terms *)
 fun make_tuple_or_record :: "BabTerm option \<Rightarrow> (string \<times> BabTerm) list \<Rightarrow> BabTerm list
                              \<Rightarrow> (Location \<Rightarrow> BabTerm) Parser" where
@@ -358,7 +388,7 @@ function parse_type_fuelled :: "nat \<Rightarrow> BabType Parser"
   and parse_array_suffix :: "nat \<Rightarrow> BabDimension list Parser"
   and parse_array_dimension :: "nat \<Rightarrow> BabDimension Parser"
   and parse_term_min :: "nat \<Rightarrow> nat \<Rightarrow> Restrict \<Rightarrow> BabTerm Parser"
-  and parse_operator_and_term :: "nat \<Rightarrow> nat \<Rightarrow> Restrict \<Rightarrow> (BabBinop \<times> BabTerm) Parser"
+  and parse_operator_and_term :: "nat \<Rightarrow> nat \<Rightarrow> Restrict \<Rightarrow> (nat \<times> BabBinop \<times> BabTerm) Parser"
   and parse_unop_expr :: "nat \<Rightarrow> Restrict \<Rightarrow> BabTerm Parser"
   and parse_call_or_proj_expr :: "nat \<Rightarrow> Restrict \<Rightarrow> BabTerm Parser"
   and parse_call_or_proj_suffix :: "nat \<Rightarrow> Restrict \<Rightarrow> (BabTerm \<Rightarrow> BabTerm) Parser"
@@ -429,21 +459,23 @@ where
     <|> (delay (\<lambda>_. parse_term_min fuel 0 Unrestricted) \<bind> (return \<circ> BabDim_Fixed))
     <|> (return BabDim_Unknown)"
 
-(* Parse a term, followed by zero or more operator-term pairs at given precedence or higher *)
+(* Parse a term, followed by zero or more operator-term pairs at given precedence
+   or higher. *)
 | "parse_term_min 0 _ _ = undefined"   (* out of fuel *)
-| "parse_term_min (Suc fuel) min_prec restrict = with_loc (do {
+| "parse_term_min (Suc fuel) min_prec restrict = do {
     left \<leftarrow> parse_unop_expr fuel restrict;
     others \<leftarrow> many (parse_operator_and_term fuel min_prec restrict);
-    return (if others = [] then (\<lambda>_. left) else (\<lambda>loc. BabTm_Binop loc left others))
-  })"
+    return (group_binops left others)
+  }"
 
-(* Parse operator-term pair at given precedence or higher *)
+(* Parse operator-term pair at given precedence or higher.
+   Returns the operator's precedence along with the operator and term. *)
 | "parse_operator_and_term 0 _ _ = undefined"
 | "parse_operator_and_term (Suc fuel) min_prec restrict =
     do {
       p \<leftarrow> binop_of_at_least_prec min_prec;
       term \<leftarrow> parse_term_min fuel (Suc (fst p)) restrict;
-      return (snd p, term)
+      return (fst p, snd p, term)
     }"
 
 (* Parse unary operator expression *)
@@ -1070,8 +1102,18 @@ definition run_parser :: "'a Parser \<Rightarrow> string \<Rightarrow> (Location
 
 (* POST-PARSING CHECKS *)
 
-(* For historical reasons, the following are considered parsing errors (rather than,
-   say, typechecking errors). The distinction is important for fuzz testing. *)
+(* This step checks for additional errors such as mixed array dimensions, "old" used in
+   the wrong place, etc. Arguably, some of these should be type errors (and therefore checked
+   in the elaborator), but, we have chosen to check for them here, in a "post-parsing" step,
+   instead.
+
+   The original reason for this choice was that we wanted to test the Isabelle parser by
+   comparing it against the original C implementation (e.g., by fuzz testing). Therefore,
+   both sides had to report exactly the same set of errors, and since the original C parser
+   checked for these conditions, the Isabelle parser had to as well.
+
+   Now that we are no longer doing this kind of testing so much, maybe this decision could
+   be revisited, but for now it is left as it is. *)
 
 datatype PostParseError = 
   PPE_MixedArrayDimension
