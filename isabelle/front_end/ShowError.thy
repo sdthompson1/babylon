@@ -1,9 +1,7 @@
 (* ShowError converts the various compiler error types into human-readable strings.
 
    This is used by CodeExport.thy to report errors back to the driver program
-   (Main.hs). The exact message wording is unimportant (and in particular does not
-   have to match the C implementation of the compiler); the messages just need to
-   be reasonable for a human to read.
+   (Main.hs).
 *)
 
 theory ShowError
