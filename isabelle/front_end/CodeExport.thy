@@ -2,8 +2,11 @@ theory CodeExport
   imports
     ShowError
     "HOL-Library.Code_Binary_Nat"
-    (* Note: HOL-Library.RBT_Set can't currently be used, as we use fsets/fmaps of
-       non-linordered types in some places. Perhaps this should be fixed at some point. *)
+
+    (* TODO: maybe explore other performance options, e.g. Code_Target_Numeral, or
+       red-black tree implementations of fmaps. Deferred for now, as setting these
+       kinds of things up might be difficult, and performance is not a priority
+       right now anyway. *)
 
 begin
 
