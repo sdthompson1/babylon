@@ -207,9 +207,13 @@ static void resolve_group(struct Graph *graph, struct DeclGroup **group, bool im
         struct Decl *decl_list = NULL;
         struct Decl **decl_tail_ptr = &decl_list;
 
+        // Count number of vertices in this component
+        int num_vertices = 0;
+
         struct ComponentVertex *cv = component->first_vertex;
         while (cv) {
             const char *name = (const char*)(cv->vertex_data);
+            ++num_vertices;
 
             struct Decl *decl = NULL;
             if (impl) {
@@ -236,7 +240,9 @@ static void resolve_group(struct Graph *graph, struct DeclGroup **group, bool im
             *group_tail_ptr = new_group;
             group_tail_ptr = &(new_group->next);
 
-            if (decl_list->next) {
+            // If num_vertices > 1, this is a group of mutually recursive
+            // decls; mark them as such.
+            if (num_vertices > 1) {
                 for (struct Decl *decl = decl_list; decl; decl = decl->next) {
                     decl->recursive = true;
                 }

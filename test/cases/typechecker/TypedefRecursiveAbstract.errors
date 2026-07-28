@@ -1,0 +1,2 @@
+src/TypedefRecursiveAbstract.b:13:1: Illegal recursive definition of 'test-binary:TypedefRecursiveAbstract.T'
+src/TypedefRecursiveAbstract.b:17:1: Illegal recursive definition of 'test-binary:TypedefRecursiveAbstract.U'
