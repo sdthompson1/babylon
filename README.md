@@ -1,58 +1,51 @@
 
 # The "Babylon" programming language
 
-**Babylon** is a new, low-level, C- or Rust-like programming language
-with support for formal verification.
-  
-Design goals:
+**Babylon** is a new programming language with support for formal
+verification. It is an imperative, low-level language, with C-like
+syntax and semantics, and without garbage collection, but with support
+for `requires`, `ensures` and other verification features (checked by
+SMT solvers).
 
- - Formal verification primitives (e.g. preconditions, postconditions).
- - Well-defined semantics (no "undefined behaviour" like C).
- - Keep it simple (no overly complex language features).
- - Minimal runtime system requirements (e.g. no garbage collection).
- - Interoperability with other languages such as C.
+Compared to other similar languages (such as SPARK, Verus, Dafny, and
+others), Babylon's main design goal is to keep the language as small
+and simple as possible. Advanced features, such as typeclasses/traits,
+object orientation, or exceptions, are deliberately omitted. The idea
+is that it should be possible to write down a formal semantics for the
+language in only a few pages, and it should be feasible for one person
+to write a formally verified compiler based on that semantics (using
+AI assistance to help write the proofs). The author is currently
+working on such a compiler, written in Isabelle.
 
-Current status:
 
- - Version 0.1 of the compiler (supporting both compilation and
-   verification of Babylon programs), along with
-   [documentation](docs), is now available.
+# Current Status
 
-    - Compilation is done by translating the Babylon program to C,
-      then using an external C compiler to produce an executable.
+ - An initial prototype implementation, written in C, has been
+   completed. Preliminary [documentation](docs) is also available.
 
-    - Verification is done using external [SMT
-      solvers](https://en.wikipedia.org/wiki/Satisfiability_modulo_theories).
-      Any solver supporting the SMT-LIB interface can be used; I have
-      personally had good results with
-      [z3](https://github.com/Z3Prover/z3),
-      [cvc5](https://cvc5.github.io/) and
-      [vampire](https://vprover.github.io/).
+    - This is enough to act as a proof of concept for the language,
+      although it is not ready for production use yet. For example,
+      some important features (such as recursion) are not yet
+      implemented; bugs may be present; and the author reserves the
+      right to change the language definition in
+      non-backwards-compatible ways. Users are therefore advised to
+      wait until v1.0 before doing any serious work with the language.
 
- - The compiler is now reasonably complete, and working well; it is
-   possible to write and verify medium-sized programs using it.
-   However, as the "0.1" version number implies, it is currently just
-   a prototype, so while people are welcome to "try out" the language,
-   it would be advisable to wait for the 1.0 release before starting
-   any serious projects using it.
+ - The planned next step is to write a formally verified
+   implementation in Isabelle. This will include a formalization of
+   the static and dynamic semantics of the language, a type soundness
+   theorem, a code generator (along with a proof that the compiled
+   code has the same semantics as the original program), and a
+   verifier (along with a proof that if all generated verification
+   conditions are met, then the program is sound, in some precise sense).
 
-Future goals include:
-
- - New language features (currently some important features are
-   missing, e.g. recursion).
- - A formally defined semantics for the language, together with a
-   verified implementation in Isabelle (this would increase
-   confidence that the language is well-defined and the compiler
-   is correct).
- - Resource consumption limits (e.g. provide ways for users to
-   prove bounds on memory allocation or number of CPU operations
-   carried out by their programs).
- - Miscellaneous other improvements.
+    - Work on this is currently underway, and will be completed
+      perhaps some time in 2028--9.
 
 
 # Examples
 
-Here is a simple example Babylon program:
+Here is a simple example of a Babylon program:
 
     module Prime
 
@@ -122,53 +115,10 @@ rules of chess are correctly implemented -- but perhaps that could be
 a future project!*
 
 
-# Roadmap
-
-The current development plan is as follows:
-
- 1. Finish the "typechecker" and "interpreter" sections of the
-    Isabelle implementation. This will rigorously define the semantics
-    of the language (as it currently exists).
-    
- 2. Make an executable version of the Isabelle interpreter and run it
-    on the existing Babylon test suite. This will highlight
-    differences between the C and Isabelle implementations.
-    Investigate any differences found, and decide whether to modify
-    the C implementation to bring it into line with the Isabelle, or
-    vice versa.
-
- 3. Write up a formal language definition document based on the
-    Isabelle elaborator, typechecker and interpreter implementations.
-    Also update the "language reference" document to be consistent
-    with the formal definition (and to be better-written in general).
-
- 4. Add a C code generator backend to the Isabelle implementation.
-    Ideally, prove its correctness against a reference C semantics of
-    some sort.
-
- 5. Add a verifier to the Isabelle implementation. Given a Babylon
-    program, this would generate a set of SMT problems to solve.
-    Ideally, we would prove a theorem along the lines of: if all of
-    the SMT problems are unsatisfiable, then the program cannot fail
-    with a "RuntimeError".
-
- 6. Further testing, e.g. write a "babsmith" tool (similar to the
-    "Csmith" program) to generate random Babylon programs, and use
-    that to look for inconsistencies between the C and Isabelle
-    implementations.
-
- 7. Add additional language features (e.g. recursion is not currently
-    supported in Babylon, but clearly it should be present in a
-    serious language).
-
- 8. Finish everything up and release a "1.0" version.
-
-The above will probably take several years to complete.
-
-
 # Building/Installing
 
-This section describes how to build the Babylon compiler.
+This section describes how to build the current C implementation of
+the Babylon compiler.
 
 A Linux machine, with the `gcc` and `make` commands and the
 `libsqlite3` library, is required.
@@ -194,8 +144,7 @@ required SMT solvers before running `bab` for the first time. You can
 also edit the config file manually, and/or run `bab check-config` to
 verify that the config is correct.
 
-You can also run `make check` to run a suite of compiler self-tests,
-if you wish.
+You can also run `make check` to run a suite of compiler self-tests.
 
 For instructions on how to use the compiler, check the [docs](docs)
 folder, and/or look at the `example` directories under

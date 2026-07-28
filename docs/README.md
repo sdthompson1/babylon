@@ -1,5 +1,11 @@
 
-This folder contains documentation for the language and compiler.
+This folder contains documentation for the current version of the
+Babylon language, and its prototype compiler (written in C).
+
+Note that the language specification is still evolving and will very
+likely change, in non-backwards-compatible ways, in the future. Users
+are advised to wait until "v1.0" before doing any serious work with
+the language.
 
  - [compiler.md](compiler.md) is the manual for the compiler.
 
