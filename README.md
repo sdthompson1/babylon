@@ -24,23 +24,28 @@ working on such a compiler, written in Isabelle.
    completed. Preliminary [documentation](docs) is also available.
 
     - This is enough to act as a proof of concept for the language,
-      although it is not ready for production use yet. For example,
-      some important features (such as recursion) are not yet
-      implemented; bugs may be present; and the author reserves the
-      right to change the language definition in
-      non-backwards-compatible ways. Users are therefore advised to
-      wait until v1.0 before doing any serious work with the language.
+      although it is not ready for production use yet. For example:
+       - some important features (such as recursion) are not yet
+         implemented;
+       - bugs may be present;
+       - the author reserves the right to change the language definition
+         in non-backwards-compatible ways.
+
+      Users are therefore advised to wait until v1.0 before doing any
+      serious work with the language.
 
  - The planned next step is to write a formally verified
-   implementation in Isabelle. This will include a formalization of
-   the static and dynamic semantics of the language, a type soundness
-   theorem, a code generator (along with a proof that the compiled
-   code has the same semantics as the original program), and a
-   verifier (along with a proof that if all generated verification
-   conditions are met, then the program is sound, in some precise sense).
+   implementation in Isabelle. This will include:
+    - a formalization of the static and dynamic semantics of the language;
+    - a type soundness theorem;
+    - a code generator (along with a proof that the compiled
+      code has the same semantics as the original program);
+    - a verifier (along with a proof that if all generated verification
+      conditions are met, then the program is sound, in some precise
+      sense).
 
-    - Work on this is currently underway, and will be completed
-      perhaps some time in 2028--9.
+   Work on this is currently underway, and will be completed perhaps
+   some time in 2028--9.
 
 
 # Examples
