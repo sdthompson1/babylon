@@ -1,3 +1,4 @@
 src/Main.b:11:1: Type 'test-binary:Foo.Ghost' is 'ghost' and cannot be used in executable code
 src/Main.b:24:12: Type 'test-binary:Foo.Ghost' is 'ghost' and cannot be used in executable code
 src/Main.b:27:20: Type 'test-binary:Foo.Ghost' is 'ghost' and cannot be used in executable code
+src/Main.b:43:19: Type 'test-binary:Foo.Ghost' is 'ghost' and cannot be used in executable code

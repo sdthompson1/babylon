@@ -33,3 +33,13 @@ function test4()
 {
     ghost var g: Ghost = make_ghost(1);  // Should pass, this is a ghost variable
 }
+
+// Should pass, a ghost argument is erased before codegen, so it is
+// allowed to have a ghost type
+function test5(ghost g: Ghost, ghost ref h: {Ghost, i32})
+{
+}
+
+function test6(g: Ghost)  // Should fail, non-ghost argument with ghost type
+{
+}

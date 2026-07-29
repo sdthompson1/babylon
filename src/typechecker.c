@@ -3743,7 +3743,17 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
                         ALLOC_UNKNOWN);
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
-        if (kindcheck_type(tc_context, &arg->type)) {
+        // Kind-check the declared type of the argument.
+        // For "ghost" arguments, override tc_context->executable
+        // (ghost args do not have to have runtime types).
+        bool old_exec = tc_context->executable;
+        if (arg->ghost) {
+            tc_context->executable = false;
+        }
+        bool arg_kind_ok = kindcheck_type(tc_context, &arg->type);
+        tc_context->executable = old_exec;
+
+        if (arg_kind_ok) {
             add_to_type_env(tc_context->type_env,   // local env
                             arg->name,
                             copy_type(arg->type),   // handover

@@ -2227,6 +2227,38 @@ ghost function collatz(x: int): int
 This uses the infinite `int` type (which would not be permitted within
 non-ghost code).
 
+Individual function arguments can also be marked `ghost`. As with
+`ref`, the word `ghost` can be written either just before the argument
+name, or just after the colon (and it can be combined with `ref`, in
+either order). A ghost argument exists only for verification purposes:
+it is not passed at runtime, and the corresponding actual argument at
+the call site is not evaluated at runtime, so that argument is allowed
+to use ghost constructs (such as quantifier expressions or references
+to ghost variables). Within the function body, a ghost argument
+behaves as a ghost variable, i.e. it can only be read from ghost code.
+If a `ghost ref` argument is used, then the caller must pass a ghost
+lvalue for it. Note also that the `ghost` marking of each argument
+must be the same between an interface declaration and its
+corresponding implementation declaration.
+
+Because a ghost argument does not exist at runtime, its declared type
+does not have to be a runtime type -- it can be `int`, `real`, a type
+containing those, or a "ghost abstract type" (see "Abstract types"
+above) -- even if the function itself is not `ghost`. For example:
+
+```
+function add(x: i32, y: i32, ghost sum: int): i32
+    requires sum == int(x) + int(y);
+    requires int(I32_MIN) <= sum <= int(I32_MAX);
+    ensures int(return) == sum;
+{
+    return x + y;
+}
+```
+
+Here `sum` is a "witness" argument, used only to state the
+specification; the compiled code for `add` takes just `x` and `y`.
+
 Finally, note that functions can be "generic". This is done by adding
 one or more type variable names, enclosed in `< >`, after the function
 name. For example:
@@ -2241,7 +2273,7 @@ function make_tuple<U, V>(x: U, y: V): {U, V}
 ```
 
 In this case, the "type variables" `U` and `V` can stand for any valid
-type.
+(runtime) type.
 
 When calling a generic function, the compiler will (in most cases)
 automatically infer the required type parameters based on the types of
@@ -2259,6 +2291,12 @@ problem. That is why the precondition is required -- effectively we
 are shifting the burden onto the caller to prove that non-allocated
 values are being passed for `x` and `y`. As long as this condition is
 true, then the `return {x, y};` statement will be valid.
+
+Note also that type parameters supplied at a call site must be runtime
+types, whenever the call itself appears in executable code. This
+applies, even if the type parameter is not actually used anywhere --
+for example, given `function f<T>()`, the call `f<int>()` is only
+allowed in ghost code.
 
 
 ### Extern functions
