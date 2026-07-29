@@ -530,6 +530,17 @@ static void substitute_type_in_decls(const char *name,
         if (entry && entry->type) {
             substitute_type_in_place(name, replacement, &entry->type);
         }
+
+        // Data constructors (for datatypes) have their own, separate
+        // type env entries.
+        if (decl->tag == DECL_DATATYPE) {
+            for (struct DataCtor *ctor = decl->datatype_data.ctors; ctor; ctor = ctor->next) {
+                struct TypeEnvEntry *ctor_entry = type_env_lookup(type_env, ctor->name);
+                if (ctor_entry && ctor_entry->type) {
+                    substitute_type_in_place(name, replacement, &ctor_entry->type);
+                }
+            }
+        }
     }
 }
 
