@@ -282,6 +282,10 @@ compiler will offer alternative ways of representing abstract types,
 e.g. as a `void *` pointer or something similar, but at present there
 are no plans to implement anything like that.)
 
+A "ghost abstract type" (declared `ghost type Foo;`) has no C
+representation at all, because such a type can never appear in
+executable code, and therefore never reaches the code generator.
+
 
 # Calling C Functions from Babylon
 

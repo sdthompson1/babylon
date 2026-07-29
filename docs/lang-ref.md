@@ -1915,6 +1915,18 @@ or `(allocated_always)`. If the abstract type is declared
 `(allocated_always)`. If the abstract type is `(allocated_always)`
 then the concrete type can be any type whatsoever.
 
+By default, abstract types are assumed to be runtime-compatible types
+(i.e., not `int` or `real` nor anything containing those types). Thus,
+if you have declared `type T;`, then you cannot later implement T
+using `type T = real;` (for example). However, "ghost abstract types"
+can also be created, using the syntax `ghost type T;`. This means that
+T can no longer be used in any runtime context, but in return, it can
+be implemented with a non-runtime type (e.g. `type T = real;`). Note
+that in this case, one still writes `type T = real;`, not `ghost type
+T = real;`. The `ghost` keyword can never be used with a typedef or an
+extern type (`ghost type T = some_rhs;`, or `ghost extern type T;`,
+are both illegal).
+
 Note that abstract types may not be "generic" (in the current version
 of the language). For example, `type Pair<a,b>;` (in the module
 interface) is illegal, even though `type Pair<a,b> = {a,b};` (in the

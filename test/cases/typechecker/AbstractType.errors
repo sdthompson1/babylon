@@ -1,8 +1,13 @@
-src/AbstractType.b:62:12: Type mismatch
-src/AbstractType.b:76:1: Abstract type declarations must be in the module interface, not implementation
-src/AbstractType.b:79:1: Can't use an incomplete array type here
-src/AbstractType.b:81:1: Type might be allocated, but this was not declared in the interface
-src/AbstractType.b:84:1: Type might be allocated, but this was not declared in the interface
-src/AbstractType.b:89:1: Can't use an incomplete array type here
-src/AbstractType.b:91:1: Type might be allocated, but this was not declared in the interface
-src/AbstractType.b:95:8: Type might be allocated, but this was not declared in the interface
+src/AbstractType.b:71:12: Type mismatch
+src/AbstractType.b:85:1: Abstract type declarations must be in the module interface, not implementation
+src/AbstractType.b:88:1: Can't use an incomplete array type here
+src/AbstractType.b:90:1: Type might be allocated, but this was not declared in the interface
+src/AbstractType.b:93:1: Type might be allocated, but this was not declared in the interface
+src/AbstractType.b:98:1: Can't use an incomplete array type here
+src/AbstractType.b:100:1: Type might be allocated, but this was not declared in the interface
+src/AbstractType.b:104:8: Type might be allocated, but this was not declared in the interface
+src/AbstractType.b:106:1: 'int' or 'real' types not allowed in executable code
+src/AbstractType.b:108:1: 'int' or 'real' types not allowed in executable code
+src/AbstractType.b:110:1: 'int' or 'real' types not allowed in executable code
+src/AbstractType.b:117:7: 'ghost type' can only be used for abstract type declarations ('ghost type T;')
+src/AbstractType.b:119:14: 'ghost type' can only be used for abstract type declarations ('ghost type T;')

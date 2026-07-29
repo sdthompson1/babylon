@@ -2492,9 +2492,11 @@ static struct Decl * parse_decl(struct ParserState *state)
         return NULL;
     }
 
-    // 'ghost' is not allowed with types
-    if (ghost && (state->token->type == TOK_KW_TYPE || state->token->type == TOK_KW_DATATYPE)) {
-        report_error(state, state->token->location, "'ghost' cannot be used with 'type' or 'datatype'");
+    // 'ghost' is not allowed with datatypes.
+    // (It is allowed with 'type', but only for abstract types; this rule
+    // is checked by the typechecker.)
+    if (ghost && state->token->type == TOK_KW_DATATYPE) {
+        report_error(state, state->token->location, "'ghost' cannot be used with 'datatype'");
         return NULL;
     }
 

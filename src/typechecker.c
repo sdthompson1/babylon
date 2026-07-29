@@ -573,6 +573,19 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
         return true;
 
     case TY_VAR:
+        // If the type variable is marked 'ghost' in the env, then it
+        // is a ghost abstract type ("ghost type T;") and must not be
+        // used in an executable context.
+        if (node->must_be_executable) {
+            struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
+            if (entry && entry->ghost) {
+                report_ghost_type_not_allowed(type->var_data.name, *loc);
+                tc_context->error = true;
+                return false;
+            }
+        }
+        return true;
+
     case TY_BOOL:
     case TY_FINITE_INT:
         return true;
@@ -3871,10 +3884,13 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
                 return false;
             }
 
-            // The new type must not be incomplete.
+            // The new type must not be incomplete. Also, unless the
+            // abstract type was marked "ghost", the new type must be
+            // a runtime type.
             struct UnivarNode node;
             node.must_be_complete = true;
-            node.must_be_executable = node.must_be_valid_decreases = false;
+            node.must_be_executable = !prev_entry->ghost;
+            node.must_be_valid_decreases = false;
             if (!ensure_type_meets_flags(tc_context, &node, new_type, &decl->location)) {
                 return false;
             }
@@ -4065,6 +4081,14 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         return;
     }
 
+    // 'ghost' can only be used with abstract type declarations,
+    // i.e. not with "type Foo = RHS;" or "extern type Foo;".
+    if (decl->ghost && (decl->typedef_data.rhs != NULL || decl->typedef_data.is_extern)) {
+        report_ghost_type_must_be_abstract(decl->location);
+        tc_context->error = true;
+        return;
+    }
+
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->typedef_data.tyvars; tyvar; tyvar = tyvar->next) {
@@ -4114,7 +4138,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         add_to_type_env(tc_context->type_env->base,    // global env
                         decl->name,
                         ty,
-                        false,   // ghost
+                        decl->ghost,
                         true,    // read_only
                         false,   // constructor
                         false,   // impure

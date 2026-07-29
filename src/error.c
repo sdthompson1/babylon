@@ -333,6 +333,14 @@ void report_int_real_not_allowed(struct Location location)
     print_error("'int' or 'real' types not allowed in executable code\n");
 }
 
+void report_ghost_type_not_allowed(const char *name, struct Location location)
+{
+    print_location(location);
+    char *new_name = sanitise_name(name);
+    print_error("Type '%s' is 'ghost' and cannot be used in executable code\n", new_name);
+    free(new_name);
+}
+
 void report_can_only_show_hide_functions(struct Location location)
 {
     print_location(location);
@@ -479,6 +487,12 @@ void report_abstract_type_in_impl(struct Location location)
 {
     print_location(location);
     print_error("Abstract type declarations must be in the module interface, not implementation\n");
+}
+
+void report_ghost_type_must_be_abstract(struct Location location)
+{
+    print_location(location);
+    print_error("'ghost type' can only be used for abstract type declarations ('ghost type T;')\n");
 }
 
 void report_cannot_assign(struct Term *term)

@@ -45,9 +45,18 @@ interface {
     type Abs7 (allocated);
     type Abs8;
 
+    type Abs9;
+    type Abs10;
+    type Abs11;
 
+    ghost type GhostAbs1;
+    ghost type GhostAbs2;
 
-
+    ghost function ghost_test(x: GhostAbs1): GhostAbs1
+    {
+        var y: GhostAbs1 = x;   // fine, this is ghost code
+        return y;
+    }
 }
 
 type Type1 = i32;
@@ -93,3 +102,18 @@ datatype Abs6 = Abs6Ctor((bool[*])[10]);   // Error, this is allocated_if_not_de
 datatype Abs7 = Abs7Ctor((bool[*])[10]);   // This is ok.
 
 extern type Abs8 (allocated);    // Error, interface does not say it is allocated.
+
+type Abs9 = int;   // Error, a non-ghost abstract type cannot be implemented with 'int'.
+
+type Abs10 = {i32, real};   // Error, same, but with 'real' hidden inside a tuple.
+
+datatype Abs11 = Abs11Ctor(int);   // Error, same, but hidden inside a data-constructor.
+
+type GhostAbs1 = int;   // This is fine, GhostAbs1 was declared 'ghost'.
+
+type GhostAbs2 = i32;   // Also fine, a ghost type doesn't have to be implemented by a
+                        // non-runtime type.
+
+ghost type GhostTypedef = i32;   // Error, 'ghost' is only allowed on abstract types.
+
+ghost extern type GhostExtern;   // Error, 'ghost' is only allowed on abstract types.
