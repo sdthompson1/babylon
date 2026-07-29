@@ -14,7 +14,8 @@ interface {
     impure function get_millisecond_count(): i64
         ensures return >= 0;
     {
-        return get_nanosecond_count() / 1000000;
+        var n = get_nanosecond_count();
+        return n / 1000000;
     }
 
     // Sleep for a given number of nanoseconds (or milliseconds).
