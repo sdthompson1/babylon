@@ -34,6 +34,7 @@ struct TypeEnvEntry {
     bool read_only;
     bool constructor;
     bool impure;
+    bool extern_tyvar;
 
     enum AllocLevel alloc_level;  // for tyvars
 };
@@ -53,15 +54,12 @@ TypeEnv * pop_type_env(TypeEnv *env);
 // ("env" is itself freed, but the layer below is returned.)
 TypeEnv * collapse_type_env(TypeEnv *env);
 
-// Adds a name to the top "layer" of the hash table.
-void add_to_type_env(TypeEnv *env,
-                     const char *name,    // copied
-                     struct Type *type,   // handed over
-                     bool ghost,
-                     bool read_only,
-                     bool constructor,
-                     bool impure,
-                     enum AllocLevel alloc_level); // only relevant for abstract or extern types
+// Adds a name to the top "layer" of the hash table. Returns the new entry.
+// The boolean flags - ghost, read_only, etc. - are initialized to false,
+// and alloc_level to ALLOC_UNKNOWN. Caller should overwrite these if needed.
+struct TypeEnvEntry * add_to_type_env(TypeEnv *env,
+                                      const char *name,     // copied
+                                      struct Type *type);   // handed over
 
 // Lookup an entry in a type env.
 struct TypeEnvEntry * type_env_lookup(const TypeEnv *env, const char *name);

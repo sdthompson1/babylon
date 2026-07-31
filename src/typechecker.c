@@ -91,28 +91,26 @@ static void remove_from_type_env_hash_table(struct HashTable *table, const char 
     }
 }
 
-void add_to_type_env(TypeEnv *env,
-                     const char *name,    // copied
-                     struct Type *type,   // handed over
-                     bool ghost,
-                     bool read_only,
-                     bool constructor,
-                     bool impure,
-                     enum AllocLevel alloc_level)
+struct TypeEnvEntry * add_to_type_env(TypeEnv *env,
+                                      const char *name,    // copied
+                                      struct Type *type)   // handed over
 {
     remove_from_type_env_hash_table(env->table, name);   // just in case there is an existing entry
 
     struct TypeEnvEntry *entry = alloc(sizeof(struct TypeEnvEntry));
     entry->type = type;
     entry->value = NULL;
-    entry->ghost = ghost;
-    entry->read_only = read_only;
-    entry->constructor = constructor;
-    entry->impure = impure;
-    entry->alloc_level = alloc_level;
+    entry->ghost = false;
+    entry->read_only = false;
+    entry->constructor = false;
+    entry->impure = false;
+    entry->extern_tyvar = false;
+    entry->alloc_level = ALLOC_UNKNOWN;
 
     // add to the topmost HashTable in the stack
     hash_table_insert(env->table, copy_string(name), entry);
+
+    return entry;
 }
 
 static void free_type_env_key_and_value(void *context, const char *key, void *value)
@@ -2034,14 +2032,12 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
         return NULL;
     }
 
-    add_to_type_env(tc_context->type_env,
-                    term->let.name,
-                    copy_type(term->let.rhs->type),   // handover
-                    !tc_context->executable,   // ghost
-                    true,                      // read-only
-                    false,                     // constructor
-                    false,                     // impure
-                    ALLOC_UNKNOWN);
+    struct TypeEnvEntry *entry =
+        add_to_type_env(tc_context->type_env,
+                        term->let.name,
+                        copy_type(term->let.rhs->type));   // handover
+    entry->ghost = !tc_context->executable;
+    entry->read_only = true;
 
     transform_term(tr, context, term->let.body);
 
@@ -2065,14 +2061,12 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
         return NULL;
     }
 
-    add_to_type_env(tc_context->type_env,
-                    term->quant.name,
-                    copy_type(term->quant.type),     // handover
-                    true,    // ghost
-                    true,    // read-only
-                    false,   // constructor
-                    false,   // impure
-                    ALLOC_UNKNOWN);
+    struct TypeEnvEntry *entry =
+        add_to_type_env(tc_context->type_env,
+                        term->quant.name,
+                        copy_type(term->quant.type));     // handover
+    entry->ghost = true;
+    entry->read_only = true;
 
     transform_term(tr, context, term->quant.body);
 
@@ -2542,14 +2536,12 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             pat_read_only = false;
         }
 
-        add_to_type_env(tc_context->type_env,
-                        pattern->var.name,
-                        copy_type(scrutinee_type),
-                        !tc_context->executable,   // ghost
-                        pat_read_only,             // read-only
-                        false,                     // constructor
-                        false,                     // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,
+                            pattern->var.name,
+                            copy_type(scrutinee_type));
+        entry->ghost = !tc_context->executable;
+        entry->read_only = pat_read_only;
         return true;
 
     case PAT_BOOL:
@@ -3084,14 +3076,12 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
     // Add the new variable to the env (if typechecking was successful).
     if (stmt->var_decl.type) {
-        add_to_type_env(tc_context->type_env,
-                        stmt->var_decl.name,
-                        copy_type(stmt->var_decl.type),    // handover
-                        !tc_context->executable,  // ghost
-                        read_only,                // read_only
-                        false,                    // constructor
-                        false,                    // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,
+                            stmt->var_decl.name,
+                            copy_type(stmt->var_decl.type));    // handover
+        entry->ghost = !tc_context->executable;
+        entry->read_only = read_only;
     }
 }
 
@@ -3125,14 +3115,12 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
         // Move down one level inside the term (in case there is another "fix" later on!)
         tc_context->assert_term = assert_term->quant.body;
 
-        add_to_type_env(tc_context->type_env,
-                        stmt->fix.name,
-                        copy_type(stmt->fix.type),    // handover
-                        true,      // ghost
-                        true,      // read_only
-                        false,     // constructor
-                        false,     // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,
+                            stmt->fix.name,
+                            copy_type(stmt->fix.type));    // handover
+        entry->ghost = true;
+        entry->read_only = true;
     }
 }
 
@@ -3147,14 +3135,11 @@ static void typecheck_obtain_stmt(struct TypecheckContext *tc_context,
 
     // for "obtain", the name is in scope within the condition-term
     // (as well as afterwards)
-    add_to_type_env(tc_context->type_env,
-                    stmt->obtain.name,
-                    copy_type(stmt->obtain.type),   // handover
-                    true,    // ghost
-                    false,   // read_only
-                    false,   // constructor
-                    false,   // impure
-                    ALLOC_UNKNOWN);
+    struct TypeEnvEntry *entry =
+        add_to_type_env(tc_context->type_env,
+                        stmt->obtain.name,
+                        copy_type(stmt->obtain.type));   // handover
+    entry->ghost = true;
 
     // the condition is not executable
     bool old_exec = tc_context->executable;
@@ -3630,14 +3615,12 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        add_to_type_env(tc_context->type_env->base,    // global env
-                        decl->name,
-                        copy_type(decl->const_data.type),     // handover
-                        decl->ghost,
-                        true,    // read_only
-                        false,   // constructor
-                        false,   // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env->base,    // global env
+                            decl->name,
+                            copy_type(decl->const_data.type));     // handover
+        entry->ghost = decl->ghost;
+        entry->read_only = true;
     }
 }
 
@@ -3733,14 +3716,11 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     bool kinds_ok = true;
 
     for (struct TyVarList *tv = decl->function_data.tyvars; tv; tv = tv->next) {
-        add_to_type_env(tc_context->type_env,   // local env
-                        tv->name,
-                        NULL,   // type (NULL for tyvars)
-                        false,  // ghost
-                        true,   // read_only
-                        false,  // constructor
-                        false,  // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,   // local env
+                            tv->name,
+                            NULL);   // type (NULL for tyvars)
+        entry->read_only = true;
     }
     for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
         // Kind-check the declared type of the argument.
@@ -3754,14 +3734,12 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         tc_context->executable = old_exec;
 
         if (arg_kind_ok) {
-            add_to_type_env(tc_context->type_env,   // local env
-                            arg->name,
-                            copy_type(arg->type),   // handover
-                            decl->ghost || arg->ghost,
-                            !arg->ref,      // read_only
-                            false,          // constructor
-                            false,          // impure
-                            ALLOC_UNKNOWN);
+            struct TypeEnvEntry *entry =
+                add_to_type_env(tc_context->type_env,   // local env
+                                arg->name,
+                                copy_type(arg->type));   // handover
+            entry->ghost = (decl->ghost || arg->ghost);
+            entry->read_only = !arg->ref;
         } else {
             kinds_ok = false;
         }
@@ -3794,14 +3772,11 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         }
     }
     if (ret_type_ok) {
-        add_to_type_env(tc_context->type_env,   // local env
-                        "return",
-                        copy_type(ret_type),   // handover
-                        decl->ghost,
-                        false,    // read_only
-                        false,    // constructor
-                        false,    // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,   // local env
+                            "return",
+                            copy_type(ret_type));   // handover
+        entry->ghost = decl->ghost;
     }
 
     // attributes are considered non-executable
@@ -3863,14 +3838,13 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        add_to_type_env(tc_context->type_env->base,   // global env
-                        decl->name,
-                        type,    // handover
-                        decl->ghost,
-                        true,    // read_only
-                        false,   // constructor
-                        decl->function_data.impure,
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env->base,   // global env
+                            decl->name,
+                            type);    // handover
+        entry->ghost = decl->ghost;
+        entry->read_only = true;
+        entry->impure = decl->function_data.impure;
     }
 }
 
@@ -3952,14 +3926,11 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->datatype_data.tyvars; tyvar; tyvar = tyvar->next) {
-        add_to_type_env(tc_context->type_env,   // local env
-                        tyvar->name,
-                        NULL,
-                        false,  // ghost
-                        true,   // read_only
-                        false,  // constructor
-                        false,  // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,   // local env
+                            tyvar->name,
+                            NULL);
+        entry->read_only = true;
     }
 
     // kindcheck the payload types
@@ -4017,14 +3988,11 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
             lambda_type->lambda_data.type = datatype;
             datatype = lambda_type;
         }
-        add_to_type_env(tc_context->type_env->base,    // global env
-                        decl->name,
-                        datatype,      // handover
-                        false,    // ghost
-                        true,     // read_only
-                        false,    // constructor
-                        false,    // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env->base,    // global env
+                            decl->name,
+                            datatype);      // handover
+        entry->read_only = true;
 
         // Now add each constructor. We have to wrap the variant_type
         // in a function from the appropriate payload type (unless
@@ -4053,14 +4021,12 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
                 ctor_type = forall_type;
             }
 
-            add_to_type_env(tc_context->type_env->base,    // global env
-                            ctor->name,
-                            ctor_type,     // handover
-                            false,   // ghost
-                            true,    // read_only
-                            true,    // constructor
-                            false,   // impure
-                            ALLOC_UNKNOWN);
+            struct TypeEnvEntry *entry =
+                add_to_type_env(tc_context->type_env->base,    // global env
+                                ctor->name,
+                                ctor_type);     // handover
+            entry->read_only = true;
+            entry->constructor = true;
 
             ctor = ctor->next;
         }
@@ -4102,14 +4068,11 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
     bool kinds_ok = true;
 
     for (struct TyVarList *tyvar = decl->typedef_data.tyvars; tyvar; tyvar = tyvar->next) {
-        add_to_type_env(tc_context->type_env,   // local env
-                        tyvar->name,
-                        NULL,
-                        false,  // ghost
-                        true,   // read_only
-                        false,  // constructor
-                        false,  // impure
-                        ALLOC_UNKNOWN);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env,   // local env
+                            tyvar->name,
+                            NULL);
+        entry->read_only = true;
     }
 
     // kindcheck the rhs type (if applicable)
@@ -4145,14 +4108,14 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         }
 
         // Add this typedef (or abstract/extern type) to the type env.
-        add_to_type_env(tc_context->type_env->base,    // global env
-                        decl->name,
-                        ty,
-                        decl->ghost,
-                        true,    // read_only
-                        false,   // constructor
-                        false,   // impure
-                        decl->typedef_data.alloc_level);
+        struct TypeEnvEntry *entry =
+            add_to_type_env(tc_context->type_env->base,    // global env
+                            decl->name,
+                            ty);
+        entry->ghost = decl->ghost;
+        entry->read_only = true;
+        entry->extern_tyvar = decl->typedef_data.is_extern;
+        entry->alloc_level = decl->typedef_data.alloc_level;
 
     } else {
         tc_context->error = true;
