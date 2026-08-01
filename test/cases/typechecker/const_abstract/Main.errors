@@ -1,0 +1,4 @@
+src/Main.b:16:26: Const initializer uses abstract type 'test-binary:Abstr.Abstr'
+src/Main.b:17:12: Const initializer uses abstract type 'test-binary:Abstr.Abstr'
+src/Main.b:19:17: Const initializer uses abstract type 'test-binary:Abstr.Abstr'
+src/Main.b:27:26: Const initializer uses abstract type 'test-binary:Abstr.Abstr'

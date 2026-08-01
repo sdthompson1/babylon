@@ -3561,6 +3561,64 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
 
 // ----------------------------------------------------------------------------------------------------
 
+// Helper for the "const abstract type in term" error
+
+struct ConstAbstractTypeContext {
+    struct TypecheckContext *tc_context;
+    struct Location *const_loc;
+    bool error_found;
+};
+
+static void* const_abstract_type_callback(void *cxt, struct Type *type_var)
+{
+    // Tyvars encountered are either:
+    //  - An abstract type. This is what we are looking for; if we find
+    //    one, we'll report an error, and set the error flags.
+    //  - An extern type. These have entry->extern_tyvar == true. We
+    //    filter these out, because we're looking for abstract types,
+    //    not extern types.
+    //  - A type variable of the current decl. Not possible, because
+    //    consts can't be polymorphic.
+    //  - A type variable of a TY_FORALL. Not possible, because these
+    //    won't have a TypeEnvEntry.
+
+    struct ConstAbstractTypeContext *context = cxt;
+    struct TypeEnvEntry *entry = lookup_type_info(context->tc_context,
+                                                  type_var->var_data.name);
+    if (entry && !entry->extern_tyvar && !context->error_found) {
+        report_const_uses_abstract_type(type_var->var_data.name, *context->const_loc);
+        context->tc_context->error = true;
+        context->error_found = true;
+    }
+
+    return NULL;
+}
+
+// Look for the "const uses abstract type" error. If found, print the
+// error and return true; otherwise, return false.
+static bool find_const_abstract_type_error(struct TypecheckContext *tc_context,
+                                           struct Decl *const_decl)
+{
+    if (!const_decl->ghost && const_decl->const_data.rhs) {
+        struct TermTransform tr = {0};
+        tr.type_transform.transform_var = &const_abstract_type_callback;
+
+        struct ConstAbstractTypeContext cxt;
+        cxt.tc_context = tc_context;
+        cxt.const_loc = &const_decl->const_data.rhs->location;
+        cxt.error_found = false;
+
+        transform_term(&tr, &cxt, const_decl->const_data.rhs);
+
+        return cxt.error_found;
+    }
+
+    return false;
+}
+
+
+// ----------------------------------------------------------------------------------------------------
+
 //
 // Decl typechecking
 //
@@ -3615,12 +3673,19 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         remove_univars_from_decl(decl);
 
-        struct TypeEnvEntry *entry =
-            add_to_type_env(tc_context->type_env->base,    // global env
-                            decl->name,
-                            copy_type(decl->const_data.type));     // handover
-        entry->ghost = decl->ghost;
-        entry->read_only = true;
+        // Final check, for non-ghost constants:
+        // The constant's initializer ("rhs" term) must not mention or
+        // contain any abstract type.
+        if (!find_const_abstract_type_error(tc_context, decl)) {
+
+            // Add the const to the type env.
+            struct TypeEnvEntry *entry =
+                add_to_type_env(tc_context->type_env->base,    // global env
+                                decl->name,
+                                copy_type(decl->const_data.type));     // handover
+            entry->ghost = decl->ghost;
+            entry->read_only = true;
+        }
     }
 }
 

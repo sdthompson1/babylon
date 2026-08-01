@@ -121,6 +121,7 @@ void report_impure_cannot_be_ghost(struct Decl *decl);
 void report_extern_cannot_be_ghost(struct Decl *decl);
 void report_invalid_extern_name(struct Decl *decl);
 void report_non_compile_time_constant(struct Location location);
+void report_const_uses_abstract_type(const char *type_name, struct Location location);
 void report_compile_time_overflow(struct Location location);
 void report_compile_time_division_by_zero(struct Location location);
 void report_compile_time_invalid_shift_amount(struct Location location);

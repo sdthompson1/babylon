@@ -303,6 +303,14 @@ void report_non_compile_time_constant(struct Location location)
     print_error("Value is not a compile-time constant\n");
 }
 
+void report_const_uses_abstract_type(const char *type_name, struct Location location)
+{
+    print_location(location);
+    char *new_name = sanitise_name(type_name);
+    print_error("Const initializer uses abstract type '%s'\n", new_name);
+    free(new_name);
+}
+
 void report_compile_time_overflow(struct Location location)
 {
     print_location(location);
