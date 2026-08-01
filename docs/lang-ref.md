@@ -2068,8 +2068,19 @@ from this one exception, it is never permissible for two `const` or
 `function` declarations at different places within the same module to
 share the same name.
 
-Note that "ghost constants" are not allowed currently. Also, generic
-constants (e.g. something like `const foo<a> = ...`) are not allowed.
+Note that generic constants (e.g. something like `const foo<a> = ...`)
+are not allowed.
+
+Constants may be marked "ghost".
+
+It is not allowed to create (non-ghost) constants of an abstract type,
+or where the initializer term depends on an abstract type in some way.
+(See "Abstract types" above.) For example, given `datatype Maybe<T> =
+Nothing | Just(T)`, and an abstract type `Abstr`, you cannot define
+`const c = Nothing<Abstr>`. This is because the compiler would not
+know how many bytes to reserve for such a constant (without looking at
+the definition of the abstract type).
+
 
 
 ## Function declarations
