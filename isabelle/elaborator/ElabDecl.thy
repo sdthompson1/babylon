@@ -875,7 +875,10 @@ fun elab_declaration_list ::
   "elab_declaration_list env elabEnv ownAbstract ctxGlobals m [] = Inr (env, elabEnv, m)"
 | "elab_declaration_list env elabEnv ownAbstract ctxGlobals m (d # ds) =
     (case elab_declaration env elabEnv ownAbstract ctxGlobals m d of
-       Inl errs \<Rightarrow> Inl errs
+       Inl errs1 \<Rightarrow>
+         (case elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds of
+            Inl errs2 \<Rightarrow> Inl (errs1 @ errs2)
+          | Inr _ \<Rightarrow> Inl errs1)
      | Inr (env', elabEnv', m') \<Rightarrow>
          elab_declaration_list env' elabEnv' ownAbstract ctxGlobals m' ds)"
 

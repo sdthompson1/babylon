@@ -2922,7 +2922,7 @@ next
   \<comment> \<open>Cons: chain head and tail.\<close>
   case (17 env elabEnv ghost stmt stmts next_mv)
   show ?case
-    using "17.prems" "17.IH"(1) "17.IH"(2)
+    using "17.prems" "17.IH"
     by (fastforce split: sum.splits prod.splits dest: order_trans)
 next
   \<comment> \<open>Empty job list.\<close>
@@ -3131,7 +3131,7 @@ next
   moreover have "TE_TypeVars env' = TE_TypeVars env1 \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env1
                   \<and> TE_FunctionGhost env' = TE_FunctionGhost env1
                   \<and> (TE_ProofGoal env1 = None \<longrightarrow> TE_ProofGoal env' = None)"
-    using "17.IH"(2) head tail by blast
+    using "17.IH"(3) head tail by blast
   ultimately show ?case by simp
 next
   case (18 elabEnv ghost next_mv)
@@ -3340,7 +3340,7 @@ next
              = Inr (coreStmts1, env', next_mv')"
     by (auto split: sum.splits prod.splits)
   have ee1: "elabenv_well_formed env1 elabEnv" using "17.IH"(1)[OF head "17.prems"(2)] .
-  show ?case using "17.IH"(2) head tail ee1 by simp
+  show ?case using "17.IH"(3) head tail ee1 by simp
 next
   case (18 elabEnv ghost next_mv)
   show ?case by simp
@@ -3604,7 +3604,7 @@ next
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env1 \<longrightarrow> tyvar_fresh_ok n next_mv1"
     using "17.prems"(4) tv1 nmv1 tyvar_fresh_ok_mono by blast
   show ?case
-    using "17.IH"(2) head tail wf1 ee1 bound1 by simp
+    using "17.IH"(3) head tail wf1 ee1 bound1 by simp
 next
   case (18 elabEnv ghost next_mv)
   show ?case by simp
@@ -5419,7 +5419,7 @@ next
   have head_typed: "core_statement_type env ghost coreStmt1 = Some env1"
     using "17.IH"(1)[OF head "17.prems"(2,3,4,5,6)] .
   have tail_typed: "core_statement_list_type env1 ghost coreStmts1 = Some env'"
-    using "17.IH"(2) head tail wf1 ee1 bound1 fg1 pg1 by simp
+    using "17.IH"(3) head tail wf1 ee1 bound1 fg1 pg1 by simp
   show ?case using head_typed tail_typed by (simp add: cs_eq)
 next
   \<comment> \<open>Empty job list.\<close>

@@ -422,6 +422,21 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
 (* Pipeline (whole-program elaboration) errors *)
 (*-----------------------------------------------------------------------------*)
 
+fun is_name_not_found_error :: "TypeError \<Rightarrow> bool" where
+  "is_name_not_found_error (TyErr_NameNotFound _ _) = True"
+| "is_name_not_found_error _ = False"
+
+(* Genuine not-in-scope errors are caught by the renamer, so a TyErr_NameNotFound
+   from the elaborator is almost certainly a cascade artifact of continuing after
+   an earlier error (a failed statement or declaration whose binding is then
+   missing downstream). If any other error kind is present, suppress the
+   NameNotFound errors; if NameNotFound is all we have, something unexpected has
+   happened (e.g. a renamer bug), so show everything. *)
+definition filter_spurious_name_errors :: "TypeError list \<Rightarrow> TypeError list" where
+  "filter_spurious_name_errors errs =
+     (if list_all is_name_not_found_error errs then errs
+      else filter (\<lambda>e. \<not> is_name_not_found_error e) errs)"
+
 (* An ElabModuleError may contain several type errors, so this returns a list of
    strings (one per error). The module name is included in the link-error case,
    because link errors carry no location. *)
@@ -429,7 +444,7 @@ fun elab_module_error_to_strings :: "string \<Rightarrow> ElabModuleError \<Righ
   "elab_module_error_to_strings modName (EM_LinkError err) =
      [''module '' @ quote modName @ '': internal link error: '' @ link_error_to_string err]"
 | "elab_module_error_to_strings modName (EM_TypeErrors errs) =
-     map type_error_to_string errs"
+     map type_error_to_string (filter_spurious_name_errors errs)"
 
 fun pipeline_error_to_strings :: "PipelineError \<Rightarrow> string list" where
   "pipeline_error_to_strings (PE_DependencyError err) =

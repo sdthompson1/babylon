@@ -900,7 +900,10 @@ where
 | "elab_statement_list env elabEnv ghost [] next_mv = Inr ([], env, next_mv)"
 | "elab_statement_list env elabEnv ghost (stmt # stmts) next_mv =
     (case elab_statement env elabEnv ghost stmt next_mv of
-       Inl errs \<Rightarrow> Inl errs
+       Inl errs1 \<Rightarrow>
+         (case elab_statement_list env elabEnv ghost stmts next_mv of
+            Inl errs2 \<Rightarrow> Inl (errs1 @ errs2)
+          | Inr _ \<Rightarrow> Inl errs1)
      | Inr (coreStmt, env', next_mv1) \<Rightarrow>
          (case elab_statement_list env' elabEnv ghost stmts next_mv1 of
             Inl errs \<Rightarrow> Inl errs
