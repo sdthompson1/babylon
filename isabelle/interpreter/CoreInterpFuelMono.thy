@@ -718,13 +718,21 @@ next
       thus ?thesis using Inl f'_eq by simp
     next
       case (Inr lhsVal)
-      hence rhs_noFuel: "interp_term fuel state rhsTm \<noteq> Inl InsufficientFuel"
-        using noFuel by (auto split: sum.splits)
-      hence IH_rhs: "\<forall>f'\<ge>fuel. interp_term f' state rhsTm = interp_term fuel state rhsTm"
-        using "8.IH"(2) Inr by blast
-      have "interp_term f'' state lhsTm = Inr lhsVal" using IH_lhs Inr f''_ge by auto
-      moreover have "interp_term f'' state rhsTm = interp_term fuel state rhsTm" using IH_rhs f''_ge by metis
-      ultimately show ?thesis using f'_eq Inr by simp
+      have lhs_f'': "interp_term f'' state lhsTm = Inr lhsVal" using IH_lhs Inr f''_ge by auto
+      show ?thesis
+      proof (cases "short_circuit op lhsVal")
+        case (Some result)
+        (* Short-circuit: the rhs is not evaluated, so the result is fuel-independent *)
+        then show ?thesis using Inr lhs_f'' f'_eq by simp
+      next
+        case None
+        hence rhs_noFuel: "interp_term fuel state rhsTm \<noteq> Inl InsufficientFuel"
+          using noFuel Inr by (auto split: sum.splits)
+        hence IH_rhs: "\<forall>f'\<ge>fuel. interp_term f' state rhsTm = interp_term fuel state rhsTm"
+          using "8.IH"(2) Inr None by blast
+        have "interp_term f'' state rhsTm = interp_term fuel state rhsTm" using IH_rhs f''_ge by metis
+        then show ?thesis using f'_eq Inr None lhs_f'' by simp
+      qed
     qed
   qed
 next

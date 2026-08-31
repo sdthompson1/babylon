@@ -132,6 +132,14 @@ fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<R
 | "eval_binop CoreBinop_Or v1 v2 = generic_bool_binop (\<lambda>x y. x \<or> y) v1 v2"
 | "eval_binop CoreBinop_Implies v1 v2 = generic_bool_binop (\<lambda>x y. x \<longrightarrow> y) v1 v2"
 
+(* Short-circuit evaluation for the logical binops: if the lhs value alone
+   determines the result, the rhs is not evaluated. *)
+fun short_circuit :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue option" where
+  "short_circuit CoreBinop_And v = (if v = CV_Bool False then Some (CV_Bool False) else None)"
+| "short_circuit CoreBinop_Or v = (if v = CV_Bool True then Some (CV_Bool True) else None)"
+| "short_circuit CoreBinop_Implies v = (if v = CV_Bool False then Some (CV_Bool True) else None)"
+| "short_circuit _ _ = None"
+
 
 (* ========================================================================== *)
 (* Array helpers *)
@@ -516,9 +524,12 @@ where
     (case interp_term fuel state lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsVal \<Rightarrow>
-        (case interp_term fuel state rhsTm of
-          Inl err \<Rightarrow> Inl err
-        | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal))"
+        (case short_circuit op lhsVal of
+          Some result \<Rightarrow> Inr result
+        | None \<Rightarrow>
+            (case interp_term fuel state rhsTm of
+              Inl err \<Rightarrow> Inl err
+            | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal)))"
 
   (* Let *)
 | "interp_term (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =

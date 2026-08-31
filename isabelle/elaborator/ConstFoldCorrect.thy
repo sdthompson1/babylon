@@ -229,20 +229,36 @@ next
     lhs_typing: "core_term_type env NotGhost lhs = Some lhsTy" and
     rhs_typing: "core_term_type env NotGhost rhs = Some rhsTy"
     by (auto split: option.splits prod.splits)
-  from CoreTm_Binop.prems(4) obtain lhsVal rhsVal where
-    ev_lhs: "eval_const vals lhs = Inr lhsVal" and
-    ev_rhs: "eval_const vals rhs = Inr rhsVal" and
-    ev_op: "eval_binop op lhsVal rhsVal = Inr v"
+  from CoreTm_Binop.prems(4) obtain lhsVal where
+    ev_lhs: "eval_const vals lhs = Inr lhsVal"
     by (auto split: sum.splits)
   from CoreTm_Binop.prems(2) have
     g_lhs: "term_types_ground lhs" and g_rhs: "term_types_ground rhs" by simp_all
   have lhs_typed: "value_has_type env lhsVal lhsTy"
     using CoreTm_Binop.IH(1)[OF lhs_typing g_lhs CoreTm_Binop.prems(3) ev_lhs] .
-  have rhs_typed: "value_has_type env rhsVal rhsTy"
-    using CoreTm_Binop.IH(2)[OF rhs_typing g_rhs CoreTm_Binop.prems(3) ev_rhs] .
   show ?case
-    by (rule eval_binop_sound_values[OF CoreTm_Binop.prems(1) lhs_typing rhs_typing
-          lhs_typed rhs_typed ev_op])
+  proof (cases "short_circuit op lhsVal")
+    case (Some result)
+    (* Short-circuit: the result is a bool, and the binop's type is Bool *)
+    have v_eq: "v = result"
+      using CoreTm_Binop.prems(4) ev_lhs Some by simp
+    obtain b where result_eq: "result = CV_Bool b"
+      using short_circuit_bool[OF Some] by blast
+    have ty_eq: "ty = CoreTy_Bool"
+      using short_circuit_type_bool[OF Some CoreTm_Binop.prems(1)] .
+    show ?thesis using v_eq result_eq ty_eq by simp
+  next
+    case None
+    from CoreTm_Binop.prems(4) ev_lhs None obtain rhsVal where
+      ev_rhs: "eval_const vals rhs = Inr rhsVal" and
+      ev_op: "eval_binop op lhsVal rhsVal = Inr v"
+      by (auto split: sum.splits)
+    have rhs_typed: "value_has_type env rhsVal rhsTy"
+      using CoreTm_Binop.IH(2)[OF rhs_typing g_rhs CoreTm_Binop.prems(3) ev_rhs] .
+    show ?thesis
+      by (rule eval_binop_sound_values[OF CoreTm_Binop.prems(1) lhs_typing rhs_typing
+            lhs_typed rhs_typed ev_op])
+  qed
 next
   case (CoreTm_Let var rhs body)
   from CoreTm_Let.prems(1) obtain rhsTy where
@@ -899,7 +915,7 @@ next
              and h2: "interp_term f st rhs = eval_const vals rhs"
     show "interp_term (Suc f) st (CoreTm_Binop op lhs rhs)
             = eval_const vals (CoreTm_Binop op lhs rhs)"
-      by (simp add: h1 h2 split: sum.split)
+      by (simp add: h1 h2 split: sum.split option.split)
   qed
 next
   case (CoreTm_Let var rhs body)

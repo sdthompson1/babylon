@@ -200,9 +200,12 @@ where
     (case eval_const vals lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsVal \<Rightarrow>
-        (case eval_const vals rhsTm of
-          Inl err \<Rightarrow> Inl err
-        | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal))"
+        (case short_circuit op lhsVal of
+          Some result \<Rightarrow> Inr result
+        | None \<Rightarrow>
+            (case eval_const vals rhsTm of
+              Inl err \<Rightarrow> Inl err
+            | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal)))"
 
   (* Let *)
 | "eval_const vals (CoreTm_Let varName rhsTm bodyTm) =

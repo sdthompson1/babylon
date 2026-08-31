@@ -600,6 +600,17 @@ proof -
   qed
 qed
 
+(* Facts about short-circuit evaluation of logical binops *)
+lemma short_circuit_bool:
+  "short_circuit op v = Some v' \<Longrightarrow> \<exists>b. v' = CV_Bool b"
+  by (auto elim!: short_circuit.elims split: if_splits)
+
+lemma short_circuit_type_bool:
+  assumes "short_circuit op v = Some v'"
+    and "core_term_type env ghost (CoreTm_Binop op lhs rhs) = Some ty"
+  shows "ty = CoreTy_Bool"
+  using assms by (auto elim!: short_circuit.elims split: option.splits prod.splits if_splits)
+
 (* Type soundness for binary operators *)
 lemma type_soundness_binop:
   assumes state_env: "state_matches_env state env storeTyping"
@@ -631,24 +642,38 @@ proof -
     from lhs_sound Inr binop_operand_apply_subst(1)[OF typing lhs_typing rhs_typing]
     have lhs_typed: "value_has_type env lhsVal lhsTy" by simp
 
-    (* Case split on rhs evaluation *)
+    (* Case split on short-circuit evaluation *)
     show ?thesis
-    proof (cases "interp_term fuel state rhs")
-      case (Inl err)
-      (* RHS failed - propagate error *)
-      then have "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = Inl err"
-        using Inr by simp
-      with rhs_sound Inl show ?thesis by auto
+    proof (cases "short_circuit op lhsVal")
+      case (Some result)
+      (* Short-circuit: result determined by lhs alone; it is a bool of type Bool *)
+      from short_circuit_bool[OF Some] obtain b where result_eq: "result = CV_Bool b" by blast
+      have ty_bool: "ty = CoreTy_Bool" using short_circuit_type_bool[OF Some typing] .
+      have "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = Inr result"
+        using Inr Some by simp
+      then show ?thesis using result_eq ty_bool by simp
     next
-      case (Inr rhsVal)
-      from rhs_sound Inr binop_operand_apply_subst(2)[OF typing lhs_typing rhs_typing]
-      have rhs_typed: "value_has_type env rhsVal rhsTy" by simp
+      case None
 
-      (* Both operands succeeded - defer to eval_binop soundness *)
-      have "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = eval_binop op lhsVal rhsVal"
-        using \<open>interp_term fuel state lhs = Inr lhsVal\<close> Inr by simp
-      with eval_binop_sound[OF typing lhs_typing rhs_typing lhs_typed rhs_typed]
-      show ?thesis by simp
+      (* Case split on rhs evaluation *)
+      show ?thesis
+      proof (cases "interp_term fuel state rhs")
+        case (Inl err)
+        (* RHS failed - propagate error *)
+        then have "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = Inl err"
+          using Inr None by simp
+        with rhs_sound Inl show ?thesis by auto
+      next
+        case (Inr rhsVal)
+        from rhs_sound Inr binop_operand_apply_subst(2)[OF typing lhs_typing rhs_typing]
+        have rhs_typed: "value_has_type env rhsVal rhsTy" by simp
+
+        (* Both operands succeeded - defer to eval_binop soundness *)
+        have "interp_term (Suc fuel) state (CoreTm_Binop op lhs rhs) = eval_binop op lhsVal rhsVal"
+          using \<open>interp_term fuel state lhs = Inr lhsVal\<close> Inr None by simp
+        with eval_binop_sound[OF typing lhs_typing rhs_typing lhs_typed rhs_typed]
+        show ?thesis by simp
+      qed
     qed
   qed
 qed
