@@ -1382,13 +1382,13 @@ proof (cases ty1)
     case (CoreTy_FiniteInt sign2 bits2)
     from assms(1) CoreTy_FiniteInt \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close>
     obtain commonSign commonBits where
-      combine: "combine_int_types sign1 bits1 sign2 bits2 = Some (commonSign, commonBits)"
+      combine: "combine_int_types_u64 sign1 bits1 sign2 bits2 = (commonSign, commonBits)"
       and commonTy_eq: "commonTy = CoreTy_FiniteInt commonSign commonBits"
       and newTm1_eq: "newTm1 = (if sign1 = commonSign \<and> bits1 = commonBits then tm1
                                 else CoreTm_Cast (CoreTy_FiniteInt commonSign commonBits) tm1)"
       and newTm2_eq: "newTm2 = (if sign2 = commonSign \<and> bits2 = commonBits then tm2
                                 else CoreTm_Cast (CoreTy_FiniteInt commonSign commonBits) tm2)"
-      by (auto simp: Let_def split: option.splits)
+      by (auto simp: Let_def split: option.splits prod.splits)
 
     have ty1_int: "is_integer_type ty1" using \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> by simp
     have ty2_int: "is_integer_type ty2" using CoreTy_FiniteInt by simp

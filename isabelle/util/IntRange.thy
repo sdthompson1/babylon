@@ -63,6 +63,14 @@ fun combine_int_types :: "Signedness \<Rightarrow> IntBits \<Rightarrow> Signedn
     | Some ub_promoted \<Rightarrow> Some (Signed, max_bits ub_promoted sb)
   )"
 
+(* Like combine_int_types, but falls back to u64 when no single type can hold
+   both ranges. *)
+fun combine_int_types_u64 :: "Signedness \<Rightarrow> IntBits \<Rightarrow> Signedness \<Rightarrow> IntBits \<Rightarrow> (Signedness \<times> IntBits)" where
+  "combine_int_types_u64 sign1 b1 sign2 b2 =
+    (case combine_int_types sign1 b1 sign2 b2 of
+      None \<Rightarrow> (Unsigned, IntBits_64)
+    | Some res \<Rightarrow> res)"
+
 (* Determine the bits and signedness of an integer literal. *)
 (* Int literals use i32, u32, i64, u64 in that order of preference. *)
 (* Integer literals have type i32, u32, i64, u64 in that order of preference *)

@@ -47,7 +47,7 @@ next
   have typed: "core_term_type env ghost newLhs = Some commonTy"
               "core_term_type env ghost newRhs = Some commonTy" by auto
   from coerce obtain s b where "commonTy = CoreTy_FiniteInt s b"
-    by (cases lhsTy; cases rhsTy) (auto split: option.splits simp: Let_def)
+    by (cases lhsTy; cases rhsTy) (auto split: option.splits prod.splits simp: Let_def)
   hence "type_pred commonTy" using assms(5) by simp
   with typed tm_eq ty_eq show ?thesis
     by (intro exI[of _ newLhs] exI[of _ newRhs] exI[of _ commonTy]) auto
@@ -471,7 +471,7 @@ proof -
       have typed: "core_term_type env ghost newLhs = Some commonTy"
                   "core_term_type env ghost newRhs = Some commonTy" by auto
       from coerce have "is_finite_integer_type commonTy"
-        by (cases lhsTy'; cases rhsTy') (auto split: option.splits simp: Let_def)
+        by (cases lhsTy'; cases rhsTy') (auto split: option.splits prod.splits simp: Let_def)
       hence "is_numeric_type commonTy" by (cases commonTy) auto
       with typed eq_neq tm_eq ty_eq show ?thesis by auto
     qed

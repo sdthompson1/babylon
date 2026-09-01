@@ -23,15 +23,14 @@ lemma default_type_for_unop_is_well_kinded: "is_well_kinded env (default_type_fo
 
 
 (* Coerce two terms to a common integer type by inserting implicit casts if needed.
-   Used for if/then/else or match terms.
-   Only applies when both types are CoreTy_FiniteInt. Returns None if no common type exists. *)
+   Used for binops and for if/then/else terms.
+   Only applies when both types are CoreTy_FiniteInt (returns None otherwise). *)
 fun coerce_to_common_int_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
                                   \<Rightarrow> (CoreTerm \<times> CoreTerm \<times> CoreType) option" where
   "coerce_to_common_int_type tm1 (CoreTy_FiniteInt sign1 bits1)
                              tm2 (CoreTy_FiniteInt sign2 bits2) =
-    (case combine_int_types sign1 bits1 sign2 bits2 of
-      None \<Rightarrow> None
-    | Some (commonSign, commonBits) \<Rightarrow>
+    (case combine_int_types_u64 sign1 bits1 sign2 bits2 of
+      (commonSign, commonBits) \<Rightarrow>
         let commonTy1 = CoreTy_FiniteInt commonSign commonBits;
             commonTy2 = CoreTy_FiniteInt commonSign commonBits;
             \<comment> \<open>Only wrap in cast if type differs from common type\<close>
