@@ -476,10 +476,10 @@ type conversion is applied as follows:
    `i16` and `u32` values.)
 
  - Alternatively, if the previous step is not possible (which happens
-   when the input types are `i64` and `u64`), then both inputs are
-   implicitly cast to `u64`. (In this case, the verifier will check
-   that the `i64` input is non-negative; if this cannot be proved,
-   then a verifier error results.)
+   when one input type is signed and the other is `u64`), then both
+   inputs are implicitly cast to `u64`. (In this case, the verifier
+   will check that the signed input is non-negative; if this cannot be
+   proved, then a verifier error results.)
 
 The result of the operation will then have the same type as the two
 input operands (which now both have the same type, following the above
