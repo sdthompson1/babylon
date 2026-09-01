@@ -94,8 +94,8 @@ function stmt_test_2(): i32
     match (Z) {
     case _ =>
         match (Z) {
-        case S{} => return 333;
-        case _   => return 999;
+        case S{_} => return 333;
+        case _    => return 999;
         }
     }
 }

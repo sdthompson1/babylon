@@ -972,7 +972,7 @@ static struct Type * update_binop_type(struct Term *term, struct Type *type)
         // necessarily guarantee that the *result* fits into that
         // size, but that will be checked separately by the verifier.)
 
-        // The exception is when you have one i64 input and one u64;
+        // The exception is when you have one signed input and one u64;
         // then no type can accommodate the full range of both i64 and
         // u64. In that case we use u64 and hope for the best.
 
@@ -2428,9 +2428,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
                                      bool scrutinee_read_only,
                                      bool scrutinee_ghost)
 {
-    // TODO: perhaps we could allow "punning" like in Ocaml.
-
-    // first pass: number the positional fields
+    // First pass: number the positional fields
     int field_num = 0;
     for (struct NamePatternList *field = fields; field; field = field->next) {
         if (field->name == NULL) {
@@ -2438,8 +2436,14 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
         }
     }
 
-    // also in the case of numbered fields, check we have the correct number
-    if (field_num != 0) {
+    // Determine whether the scrutinee_type is a tuple (numbered fields)
+    bool scrutinee_is_tuple =
+        (scrutinee_type->record_data.fields
+         && scrutinee_type->record_data.fields->name[0] == '0');
+
+    // If either the scrutinee type, or the pattern, are tuples (numbered fields),
+    // then the number of fields must match exactly.
+    if (field_num != 0 || scrutinee_is_tuple) {
         int num_expected_fields = 0;
         for (struct NameTypeList *x = scrutinee_type->record_data.fields; x; x = x->next) {
             ++num_expected_fields;
@@ -2451,7 +2455,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
         }
     }
 
-    // second pass: check the patterns, and check for duplicate fieldnames
+    // Second pass: check the patterns, and check for duplicate fieldnames
     bool ok = true;
 
     struct HashTable *found_field_names = new_hash_table();

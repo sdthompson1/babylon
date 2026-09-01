@@ -53,10 +53,10 @@ const test7: bool =
     case E{} => false  // Type mismatch
   };
 
-
-
-
-
+const test8: bool =
+  match {1} {
+    case {} => true    // Empty pattern can't match a tuple
+  };
 
 const test9: i32 =
   match (false) {
