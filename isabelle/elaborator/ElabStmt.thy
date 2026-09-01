@@ -412,6 +412,36 @@ definition elab_call_statement ::
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location tm)])"
 
 
+(* ----- Return branch helper ----- *)
+
+(* This is called for BabStmt_Return statements whose argument is an impure
+   BabTm_Call. Elaborates to a CoreStmt_Block containing a CoreStmt_VarDeclCall,
+   writing the result to 'return@@tmp', followed by a CoreStmt_Return returning
+   that temporary variable. *)
+definition elab_return_impure ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
+  "elab_return_impure env elabEnv ghost loc tm next_mv =
+    (case tm of
+       BabTm_Call rloc callee rargs \<Rightarrow>
+         (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
+          in case elab_impure_call_term bodyEnv elabEnv ghost False rloc callee rargs next_mv of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv') \<Rightarrow>
+                 (case reconcile_call_result env loc finalTyArgs finalArgTms retTy
+                         (TE_ReturnType env) of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr (castOpt, tyArgs', argTms') \<Rightarrow>
+                      Inr (CoreStmt_Block
+                             [CoreStmt_VarDeclCall ghost ''return@@tmp''
+                                (TE_ReturnType env) castOpt fnName
+                                (map (clear_metavars_type next_mv next_mv') tyArgs')
+                                (map (clear_metavars next_mv next_mv') argTms'),
+                              CoreStmt_Return (CoreTm_Var ''return@@tmp'')],
+                           env, next_mv')))
+     | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location tm)])"
+
+
 (* ----- Fix branch helper ----- *)
 
 (* Fix introduces a ghost local `varName : ty` corresponding to an enclosing
@@ -732,8 +762,9 @@ where
          then Inl [TyErr_CannotInferType loc]
          else elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"
 
-  (* Return from current function. The term must be pure and must match the current
-     function's return type (or be absent if the current function is void). *)
+  (* Return from current function. The term can be either pure or impure, and must
+     match the current function's return type (or be absent if the current function
+     is void). *)
 | "elab_statement env elabEnv ghost (BabStmt_Return loc tmOpt) next_mv =
     (if ghost \<noteq> TE_FunctionGhost env then Inl [TyErr_ReturnInGhostContext loc]
      else if EE_CurrentFunctionVoid elabEnv then
@@ -742,10 +773,15 @@ where
           None \<Rightarrow> Inr (CoreStmt_Return (CoreTm_Record []), env, next_mv)
         | Some _ \<Rightarrow> Inl [TyErr_VoidReturnWithValue loc])
      else
-       \<comment> \<open>Non-void function: a value is required; coerce it to the return type.\<close>
+       \<comment> \<open>Non-void function: a value is required; coerce it to the return type.
+           An impure-call value elaborates via elab_return_impure (a block binding
+           the call result to a temporary and returning it).\<close>
        (case tmOpt of
           None \<Rightarrow> Inl [TyErr_NonVoidReturnNeedsValue loc]
         | Some tm \<Rightarrow>
+            if is_impure_call env elabEnv tm
+            then elab_return_impure env elabEnv ghost loc tm next_mv
+            else
             (case elab_term env elabEnv ghost tm next_mv of
                Inl errs \<Rightarrow> Inl errs
              | Inr (coreTm, tmTy, next_mv') \<Rightarrow>
