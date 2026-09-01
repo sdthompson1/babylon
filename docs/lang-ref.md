@@ -599,11 +599,6 @@ as `function f(ref x: i32)`, then evaluation of the expression `f(a[3])`
 would (potentially) cause the array element `a[3]` to be modified as a
 side-effect.
 
-Note that for simplicity, the language does not allow side-effecting
-expressions to appear in any position other than at the "top level" of
-a function call *statement*. This rule is explained in more detail
-under "Function call statements" below.
-
 There is also a rule that `ref` arguments are not allowed to "alias"
 any other argument. For example, if a function `g` has one ref
 argument followed by two non-ref arguments, then the call `g(x, x, 0)`
@@ -666,6 +661,39 @@ out the round brackets. This is only available if the parameter is a
 literal tuple or record expression (see below); if the parameter is
 merely e.g. a variable of record or tuple type, then the round
 brackets are still (of course) needed.
+
+
+### Restriction on side-effecting function calls
+
+For simplicity, the language only allows function calls with side
+effects at the "top level" of their respective expression; not nested
+within some other expression. For example, if `f` has one ref
+parameter and returns an integer, then the following calls would be
+valid:
+
+```
+v = f(b[3]);   // OK: modifies b[3]; assigns to v
+
+var x = f(y);  // OK: modifies y; declares a new variable x
+
+return f(z);   // OK: modifies z; returns f's return value
+```
+
+However, the following would be invalid:
+
+```
+foo(f(x));     // Bad: f has side-effects, can't nest inside another call
+
+v = f(x) + 1;  // Bad: f has side-effects, can't nest inside another expression
+
+var y = (if 1<2 then f(x) else 3);  // Bad: can't nest side-effecting call
+
+return b[f(x)];   // Bad: can't nest side-effecting call
+```
+
+For these purposes, a "side-effecting call" is a call to any function
+that has at least one `ref` parameter, and/or is explicitly marked
+`impure` in its definition.
 
 
 ## Tuple and record expressions
@@ -1216,29 +1244,10 @@ type in the sense that implicit casts between numeric types may
 occur). If the function being called does not return a value, then the
 second form must instead be used.
 
-As was mentioned above (in the description of function call
-expressions), the only place in the language where a function with
-"ref" arguments can be called is at the "top level" of a function call
-statement. For example, if `f` is declared as:
-
-```
-function f(ref x: i32): i32
-{
-    x = 1;
-    return 2;
-}
-```
-
-then the call `v = f(b[3]);` would be valid (assuming the array `b`
-has at least four elements); this would set `b[3]` to 1 (since this is
-what the function `f` does to its ref argument) and it would also set
-`v` to 2 (because this is what `f` returns). But statements like
-`foo(f(b[3]));` (which is trying to pass the return value from `f` to
-another function `foo`), or `v = f(b[3]) + 1;` (which is trying to add
-1 to the return value before assigning it to `v`), would be rejected,
-because in these cases the function with the ref parameter is not
-appearing at the "top level" of the function call statement, but
-nested within some other expression.
+As was noted above (under "Function call expressions"), side-effecting
+function calls are only allowed at the "top level" of an expression.
+For example, if `f` has side effects (and returns void), then the
+statement `f(x);` is valid, but the statement `foo(f(x));` is not.
 
 
 ## Swapping two values
