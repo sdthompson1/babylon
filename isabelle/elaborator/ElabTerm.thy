@@ -721,8 +721,7 @@ where
                           next_mv')))
     | BabLit_String chars \<Rightarrow>
         \<comment> \<open>String literal: array of u8 containing the bytes of the string plus a
-            final zero ("NUL terminator"), so "hello" has type u8[6]. Each byte
-            is emitted as a cast from i32 to u8.\<close>
+            null terminator. Each byte is emitted as a cast from i32 to u8.\<close>
         if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length chars + 1)) then
           Inl [TyErr_InvalidArrayDimension loc]
         else
