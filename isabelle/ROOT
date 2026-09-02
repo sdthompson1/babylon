@@ -3,6 +3,7 @@ session Babylon = "HOL-Library" +
     "bab"
     "bab_loader"
     "bab_renamer"
+    "bab_string_hoist"
     "bab_dependency"
     "core"
     "core_passes"
@@ -29,6 +30,9 @@ session Babylon = "HOL-Library" +
 
     (* bab_renamer *)
     "bab_renamer/BabRenamer"
+
+    (* bab_string_hoist *)
+    "bab_string_hoist/BabStringHoist"
 
     (* bab_dependency *)
     "bab_dependency/BabDependency"

@@ -1910,13 +1910,14 @@ proof (induction env elabEnv ghost tm next_mv
   next
     case (BabLit_String chars)
     let ?u8_ty = "CoreTy_FiniteInt Unsigned IntBits_8"
-    let ?elemTms = "map (\<lambda>c. CoreTm_Cast ?u8_ty (CoreTm_LitInt (int (of_char c)))) chars"
+    let ?bytes = "chars @ [CHR 0x00]"
+    let ?elemTms = "map (\<lambda>c. CoreTm_Cast ?u8_ty (CoreTm_LitInt (int (of_char c)))) ?bytes"
     from "1.prems"(1) BabLit_String have
-      len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length chars))"
+      len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length chars + 1))"
       by (auto split: if_splits)
     from "1.prems"(1) BabLit_String len_ok have
       newTm_eq: "newTm = CoreTm_LitArray ?u8_ty ?elemTms" and
-      ty_eq: "ty = CoreTy_Array ?u8_ty [CoreDim_Fixed (int (length chars))]"
+      ty_eq: "ty = CoreTy_Array ?u8_ty [CoreDim_Fixed (int (length ?bytes))]"
       by (auto simp: Let_def)
     let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
     \<comment> \<open>Each char's int literal is in i32 range (since of_char c < 256)\<close>
@@ -1936,7 +1937,7 @@ proof (induction env elabEnv ghost tm next_mv
         using fits_i32 by simp
     qed
     have elem_typed: "list_all (\<lambda>tm. core_term_type ?env' ghost tm = Some ?u8_ty) ?elemTms"
-      using each_char by (induction chars) auto
+      using each_char by (auto simp: list_all_iff)
     show ?thesis
       using newTm_eq ty_eq elem_typed len_ok by simp
   next

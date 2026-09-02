@@ -720,14 +720,17 @@ where
                                        [CoreDim_Fixed (int (length coercedTms))],
                           next_mv')))
     | BabLit_String chars \<Rightarrow>
-        \<comment> \<open>String literal: array of u8. Each char is emitted as a cast from i32 to u8.\<close>
-        if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length chars)) then
+        \<comment> \<open>String literal: array of u8 containing the bytes of the string plus a
+            final zero ("NUL terminator"), so "hello" has type u8[6]. Each byte
+            is emitted as a cast from i32 to u8.\<close>
+        if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length chars + 1)) then
           Inl [TyErr_InvalidArrayDimension loc]
         else
           let u8_ty = CoreTy_FiniteInt Unsigned IntBits_8;
-              elemTms = map (\<lambda>c. CoreTm_Cast u8_ty (CoreTm_LitInt (int (of_char c)))) chars
+              bytes = chars @ [CHR 0x00];
+              elemTms = map (\<lambda>c. CoreTm_Cast u8_ty (CoreTm_LitInt (int (of_char c)))) bytes
           in Inr (CoreTm_LitArray u8_ty elemTms,
-                  CoreTy_Array u8_ty [CoreDim_Fixed (int (length chars))],
+                  CoreTy_Array u8_ty [CoreDim_Fixed (int (length bytes))],
                   next_mv))"
 
   (* Variables and data constructors *)

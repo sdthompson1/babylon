@@ -43,8 +43,8 @@ proof (induction env elabEnv ghost tm next_mv
        and tms' tys' next_mv'
        rule: elab_term_elab_term_list_elab_term_list_with_envs.induct)
   case (1 env elabEnv ghost loc lit next_mv)
-  \<comment> \<open>Literal: Bool/Int leave next_mv unchanged; Array allocates one meta and threads
-       through elab_term_list; String is undefined (TODO)\<close>
+  \<comment> \<open>Literal: Bool/Int/String leave next_mv unchanged; Array allocates one meta and
+       threads through elab_term_list\<close>
   show ?case
   proof (cases lit)
     case (BabLit_Bool b)
