@@ -394,13 +394,15 @@ ASCII codes of the letters in "hello", plus a final zero).
 
 Array literals are also supported. An array literal is a
 comma-separated list of expressions, enclosed in square brackets. For
-example, `[1, 2, 3]` is an array literal. The expressions must be
-constant (i.e. their value must be known at compile time) and all of
-the same type. The array literal then has type `T[N]` where `T` is the
-type of each of the expressions, and `N` is the number of such
-expressions listed. For example, `[1, 2, 3]` has type `i32[3]`.
-Similarly to string literals, array literals refer to a statically
-allocated, read-only piece of memory, containing the relevant array.
+example, `[1, 2, 3]` is an array literal. The expressions need not be
+constant; e.g. `[x+y]` (where the values of `x` and `y` are known only
+at runtime) is a valid array literal. The array literal then has type
+`T[N]` where `T` is the type of each of the expressions, and `N` is
+the number of such expressions listed. For example, `[1, 2, 3]` has
+type `i32[3]`.
+
+Note that string literals are considered "lvalues", whereas array
+literals are not (see also "Reference declarations" below).
 
 
 ## Unary operators
@@ -1182,8 +1184,9 @@ either `ref <name> = <expression>;` or `ref <name>: <type> =
 <expression>;` are valid.
 
 The `<expression>` in a ref statement must be an "lvalue"; that is to
-say, either a variable name, or a field projection or array projection
-expression in which the left-hand side is itself an lvalue.
+say, either a variable name, a string literal, or a field projection
+or array projection expression in which the left-hand side is itself
+an lvalue.
 
 A ref statement creates a "reference" to the right-hand-side
 expression; effectively, the right-hand-side expression is substituted
@@ -1196,6 +1199,11 @@ r = r + 1;
 ```
 
 the last statement is actually equivalent to `x[4] = x[4] + 1;`.
+
+Some lvalues are considered read-only (specifically: string literals,
+global constants, and non-ref formal parameters of the current
+function). It is possible to create a `ref` pointing to such a value,
+but attempting to write to it will be a compile-time error.
 
 There is also a rule (currently) that it is illegal to create a
 reference to an element of an allocatable array. This is to prevent a
@@ -1493,10 +1501,9 @@ the variable is a full copy of that part of the original scrutinee.
 
 A restriction is that if any variable pattern in any of the cases is
 being matched by reference (i.e. is marked `ref`), then the scrutinee
-must be an lvalue (i.e. either a variable, or a field or array
-projection applied to another lvalue). However, it does not have to be
-a *writable* lvalue; e.g. it could be a (read-only) function parameter
-variable.
+must be an lvalue (see "Reference declarations", above, for the
+definition of an lvalue). However, it does not have to be a *writable*
+lvalue; e.g. it could be a (read-only) function parameter variable.
 
 A further restriction is that if a non-`ref` variable pattern is used,
 then the part of the scrutinee that is matched into that variable must
