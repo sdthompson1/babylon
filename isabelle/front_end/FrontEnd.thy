@@ -8,8 +8,8 @@
 *)
 
 theory FrontEnd
-  imports Main "../bab_loader/BabLoader" "../bab_renamer/BabRenamer"
-          "../bab_string_hoist/BabStringHoist"
+  imports Main "../bab_loader/BabLoader" "../bab_passes/BabRenamer"
+          "../bab_passes/BabStringHoist"
 begin
 
 (* Combined error type for the front end *)

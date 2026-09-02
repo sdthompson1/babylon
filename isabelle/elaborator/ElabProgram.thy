@@ -1,5 +1,5 @@
 theory ElabProgram
-  imports "../bab_dependency/BabDependency" ElabModule
+  imports "../bab_passes/BabDependency" ElabModule
 begin
 
 (* Whole-program elaborator.

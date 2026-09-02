@@ -2,9 +2,7 @@ session Babylon = "HOL-Library" +
   directories
     "bab"
     "bab_loader"
-    "bab_renamer"
-    "bab_string_hoist"
-    "bab_dependency"
+    "bab_passes"
     "core"
     "core_passes"
     "elaborator"
@@ -28,14 +26,10 @@ session Babylon = "HOL-Library" +
     "bab_loader/BabToken"
     "bab_loader/BasicParser"
 
-    (* bab_renamer *)
-    "bab_renamer/BabRenamer"
-
-    (* bab_string_hoist *)
-    "bab_string_hoist/BabStringHoist"
-
-    (* bab_dependency *)
-    "bab_dependency/BabDependency"
+    (* bab_passes *)
+    "bab_passes/BabDependency"
+    "bab_passes/BabRenamer"
+    "bab_passes/BabStringHoist"
 
     (* core *)
     "core/CoreFreeVars"
