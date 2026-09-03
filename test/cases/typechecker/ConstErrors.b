@@ -48,11 +48,11 @@ const c25 = i64(-9223372036855) * i64(1000001);  // i64 * overflow
 const c26 = u64(18446744073709552) * u64(1000);  // u64 * overflow
 const c27 = -1 >> 64;  // invalid shift count
 
-// These next examples are valid shift counts (the constant-evaluation code
-// can shift upto 63 places, even if the type is less than 64-bits) but the
-// first one produces an overflow.
-const c28 = 1 << 33;  // overflow
-const c29 = 1 >> 33;  // valid, produces 0
+
+
+// Compile-time shift errors (32-bit signed shifts)
+const c28 = 4 << 31;  // overflow
+const c29 = 1 >> 33;  // invalid shift count for 32-bits
 
 // Pattern match failure at compile-time
 const c30 =

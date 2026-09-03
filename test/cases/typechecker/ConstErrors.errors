@@ -25,4 +25,5 @@ src/ConstErrors.b:47:13: Overflow in compile-time constant
 src/ConstErrors.b:48:13: Overflow in compile-time constant
 src/ConstErrors.b:49:13: Invalid shift amount in compile-time constant
 src/ConstErrors.b:54:13: Overflow in compile-time constant
+src/ConstErrors.b:55:13: Invalid shift amount in compile-time constant
 src/ConstErrors.b:59:5: Pattern match failure in compile-time constant

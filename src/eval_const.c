@@ -441,6 +441,19 @@ bool compute_binop(struct Location location,
     fatal_error("bad binop");
 }
 
+static bool bad_shift_count(struct Type *type, enum BinOp op, uint64_t shift_count)
+{
+    if (op == BINOP_SHIFTLEFT || op == BINOP_SHIFTRIGHT) {
+        if (type->tag == TY_FINITE_INT) {
+            return shift_count >= (uint64_t)(type->int_data.num_bits);
+        } else {
+            return true;
+        }
+    } else {
+        return false;
+    }
+}
+
 static struct Term * eval_binop(TypeEnv *env, struct Term *term)
 {
     if (term->binop.list->next) {
@@ -481,11 +494,17 @@ static struct Term * eval_binop(TypeEnv *env, struct Term *term)
                             &lhs_value,
                             rhs_value);
     if (ok) {
-        if (is_value_in_range_for_type(term->type, lhs_value)) {
-            return make_literal_of_type(term->type, lhs_value);
-        } else {
+        // compute_binop does a 64-bit calculation, so it won't catch
+        // overflow or "bad shift count" errors at narrower types.
+        // Check for those separately here.
+        if (bad_shift_count(term->type, op, rhs_value)) {
+            report_compile_time_invalid_shift_amount(term->location);
+            return NULL;
+        } else if (!is_value_in_range_for_type(term->type, lhs_value)) {
             report_compile_time_overflow(term->location);
             return NULL;
+        } else {
+            return make_literal_of_type(term->type, lhs_value);
         }
     } else {
         return NULL;
