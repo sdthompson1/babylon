@@ -201,14 +201,23 @@ next
   with lk show ?case by simp
 next
   case (CoreTm_Cast targetTy operand)
-  from CoreTm_Cast.prems(1) have ty_eq: "ty = targetTy"
+  from CoreTm_Cast.prems(1) obtain operandTy where
+    op_typing: "core_term_type env NotGhost operand = Some operandTy" and
+    co: "cast_ok env operandTy targetTy" and
+    ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
-  from CoreTm_Cast.prems(4) obtain i sign bits where
-    tgt: "targetTy = CoreTy_FiniteInt sign bits" and
-    fits: "int_fits sign bits i" and
-    v_eq: "v = CV_FiniteInt sign bits i"
-    by (auto split: sum.splits CoreValue.splits CoreType.splits if_splits)
-  show ?case using ty_eq tgt fits v_eq by simp
+  from CoreTm_Cast.prems(4) obtain opVal where
+    ev_op: "eval_const vals operand = Inr opVal" and
+    cast: "cast_value targetTy opVal = Inr v"
+    by (auto split: sum.splits)
+  have op_ground: "term_types_ground operand"
+    using CoreTm_Cast.prems(2) by simp
+  have op_typed: "value_has_type env opVal operandTy"
+    using CoreTm_Cast.IH[OF op_typing op_ground CoreTm_Cast.prems(3) ev_op] .
+  \<comment> \<open>The value-level cast lemma, with the empty substitution.\<close>
+  have "value_has_type env v (apply_subst fmempty targetTy)"
+    using cast_value_sound[where subst = fmempty, OF cast co] op_typed by simp
+  thus ?case using ty_eq by simp
 next
   case (CoreTm_Unop op operand)
   from CoreTm_Unop.prems(1) obtain operandTy where

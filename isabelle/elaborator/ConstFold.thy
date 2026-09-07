@@ -176,18 +176,11 @@ where
       Some v \<Rightarrow> Inr v
     | None \<Rightarrow> Inl TypeError)"  \<comment> \<open>name not in scope\<close>
 
-  (* Cast *)
+  (* Cast (integer or array; cast_value is shared with interp_term) *)
 | "eval_const vals (CoreTm_Cast targetTy tm) =
     (case eval_const vals tm of
-      Inr (CV_FiniteInt _ _ i) \<Rightarrow>
-        (case targetTy of
-          CoreTy_FiniteInt sign bits \<Rightarrow>
-            if int_fits sign bits i
-            then Inr (CV_FiniteInt sign bits i)
-            else Inl RuntimeError  \<comment> \<open>overflow\<close>
-        | _ \<Rightarrow> Inl TypeError)  \<comment> \<open>cast to non-finite-integer type\<close>
-    | Inr _ \<Rightarrow> Inl TypeError   \<comment> \<open>cast from non-finite-integer type\<close>
-    | Inl err \<Rightarrow> Inl err)"
+      Inl err \<Rightarrow> Inl err
+    | Inr v \<Rightarrow> cast_value targetTy v)"
 
   (* Unary operator *)
 | "eval_const vals (CoreTm_Unop op tm) =

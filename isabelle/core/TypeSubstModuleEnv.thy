@@ -599,8 +599,7 @@ next
   case (CoreTm_Cast targetTy operand)
   from CoreTm_Cast.prems(1) obtain operandTy where
     op_typed: "core_term_type env ghost operand = Some operandTy" and
-    op_int: "is_integer_type operandTy" and
-    tgt_int: "is_integer_type targetTy" and
+    co: "cast_ok env operandTy targetTy" and
     tgt_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
@@ -609,10 +608,15 @@ next
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst operand)
        = Some (apply_subst subst operandTy)" .
-  have op_ty_eq: "apply_subst subst operandTy = operandTy"
-    using op_int is_integer_type_apply_subst by simp
-  have tgt_ty_eq: "apply_subst subst targetTy = targetTy"
-    using tgt_int is_integer_type_apply_subst by simp
+  have co_subst:
+    "cast_ok (apply_subst_to_module_env subst targetEnv env)
+             (apply_subst subst operandTy) (apply_subst subst targetTy)"
+  proof (rule cast_ok_apply_subst[OF co])
+    assume "is_well_kinded env targetTy"
+    thus "is_well_kinded (apply_subst_to_module_env subst targetEnv env)
+                         (apply_subst subst targetTy)"
+      using apply_subst_preserves_well_kinded_module[OF _ CoreTm_Cast.prems(3)] by blast
+  qed
   have tgt_rt_subst:
     "ghost = NotGhost \<longrightarrow>
        is_runtime_type (apply_subst_to_module_env subst targetEnv env)
@@ -627,7 +631,7 @@ next
                           (apply_subst subst targetTy)" .
   qed
   show ?case
-    using op_subst op_int op_ty_eq tgt_int tgt_ty_eq tgt_rt_subst ty_eq
+    using op_subst co_subst tgt_rt_subst ty_eq
     by auto
 next
   case (CoreTm_Unop op operand)
@@ -1505,8 +1509,8 @@ lemma is_valid_decreases_type_apply_subst:
   by (intro apply_subst_disjoint_id) simp
 
 (* The cast on an impure call's return value transfers to the substituted
-   env: integer types are closed under substitution, and runtime-ness of the
-   cast target transfers via the module conditions. *)
+   env: the cast condition is closed under substitution, and runtime-ness of
+   the cast target transfers via the module conditions. *)
 lemma cast_result_type_subst_module_env:
   assumes ct: "cast_result_type env ghost retTy castOpt = Some ty"
       and ok: "module_env_subst_ok subst targetEnv env"
@@ -1521,22 +1525,26 @@ proof (cases castOpt)
 next
   case (Some t)
   with ct have
-    ret_int: "is_integer_type retTy" and
-    t_int: "is_integer_type t" and
+    co: "cast_ok env retTy t" and
     t_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env t" and
     ty_eq: "ty = t"
     by (auto simp: cast_result_type_def split: if_splits)
-  have ret_id: "apply_subst subst retTy = retTy"
-    using ret_int is_integer_type_apply_subst by simp
-  have t_id: "apply_subst subst t = t"
-    using t_int is_integer_type_apply_subst by simp
+  have co_subst:
+    "cast_ok (apply_subst_to_module_env subst targetEnv env)
+             (apply_subst subst retTy) (apply_subst subst t)"
+  proof (rule cast_ok_apply_subst[OF co])
+    assume "is_well_kinded env t"
+    thus "is_well_kinded (apply_subst_to_module_env subst targetEnv env)
+                         (apply_subst subst t)"
+      using apply_subst_preserves_well_kinded_module[OF _ ok] by blast
+  qed
   have t_rt_subst:
     "ghost = NotGhost \<longrightarrow>
        is_runtime_type (apply_subst_to_module_env subst targetEnv env)
                        (apply_subst subst t)"
     using apply_subst_preserves_runtime_module_cond[OF t_rt ok ok_rt] .
   show ?thesis
-    using Some ret_int t_int ret_id t_id t_rt_subst ty_eq
+    using Some co_subst t_rt_subst ty_eq
     by (simp add: cast_result_type_def)
 qed
 

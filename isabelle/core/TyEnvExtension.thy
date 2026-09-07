@@ -285,6 +285,14 @@ qed auto
 (* application env is well-formed, so this hypothesis is freely available.    *)
 (* ========================================================================== *)
 
+(* The static cast condition transfers to an extended env (it depends on the
+   env only through well-kindedness of the target). *)
+lemma cast_ok_tyenv_extends:
+  assumes ext: "tyenv_extends env env'"
+    and co: "cast_ok env srcTy tgtTy"
+  shows "cast_ok env' srcTy tgtTy"
+  using co is_well_kinded_tyenv_extends[OF ext] unfolding cast_ok_def by blast
+
 lemma core_term_type_tyenv_extends:
   assumes "tyenv_extends env env'"
     and "tyenv_ctors_consistent env"
@@ -331,18 +339,19 @@ next
   note ext = CoreTm_Cast.prems(1) and cons = CoreTm_Cast.prems(2)
   from CoreTm_Cast.prems(3) obtain operandTy where
     operand_ty: "core_term_type env ghost tm = Some operandTy" and
-    operand_int: "is_integer_type operandTy" and
-    target_int: "is_integer_type targetTy" and
+    co: "cast_ok env operandTy targetTy" and
     targetTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
   have operand_ty': "core_term_type env' ghost tm = Some operandTy"
     using CoreTm_Cast.IH[OF ext cons operand_ty] .
+  have co': "cast_ok env' operandTy targetTy"
+    using cast_ok_tyenv_extends[OF ext co] .
   have targetTy_wk: "is_well_kinded env targetTy"
-    using target_int is_integer_type_well_kinded by blast
+    using cast_ok_well_kinded[OF co] .
   have targetTy_rt': "ghost = NotGhost \<longrightarrow> is_runtime_type env' targetTy"
     using targetTy_rt is_runtime_type_tyenv_extends[OF ext targetTy_wk] by blast
-  show ?case using operand_ty' operand_int target_int targetTy_rt' ty_eq by simp
+  show ?case using operand_ty' co' targetTy_rt' ty_eq by simp
 next
   case (CoreTm_Unop op operand)
   from CoreTm_Unop.prems(3) obtain operandTy where
@@ -740,9 +749,9 @@ qed
 (* Impure calls and casts under extension                                     *)
 (* ========================================================================== *)
 
-(* Casts only check integer-ness (env-free) and, in NotGhost mode, that the
-   target type is runtime - and an integer type's runtime-ness transfers
-   because integer types are well-kinded in any env. *)
+(* Casts check cast_ok (which transfers) and, in NotGhost mode, that the
+   target type is runtime - which transfers because the target of an
+   admissible cast is well-kinded. *)
 lemma cast_result_type_tyenv_extends:
   assumes ext: "tyenv_extends env env'"
     and c: "cast_result_type env ghost retTy castOpt = Some ty"
@@ -752,13 +761,15 @@ proof (cases castOpt)
   with c show ?thesis by (simp add: cast_result_type_def)
 next
   case (Some t)
-  with c have int_ret: "is_integer_type retTy" and int_t: "is_integer_type t"
+  with c have co: "cast_ok env retTy t"
     and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env t" and ty_eq: "ty = t"
     unfolding cast_result_type_def by (auto split: if_splits)
+  have co': "cast_ok env' retTy t"
+    using cast_ok_tyenv_extends[OF ext co] .
   have rt': "ghost = NotGhost \<longrightarrow> is_runtime_type env' t"
-    using rt is_runtime_type_tyenv_extends[OF ext is_integer_type_well_kinded[OF int_t]]
+    using rt is_runtime_type_tyenv_extends[OF ext cast_ok_well_kinded[OF co]]
     by blast
-  show ?thesis using Some int_ret int_t rt' ty_eq
+  show ?thesis using Some co' rt' ty_eq
     unfolding cast_result_type_def by simp
 qed
 

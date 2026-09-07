@@ -387,7 +387,7 @@ fun apply_ref_updates :: "'w InterpState \<Rightarrow> (nat \<times> LValuePath 
 
 
 (* ========================================================================== *)
-(* Default values                                                              *)
+(* Default values *)
 (* ========================================================================== *)
 
 (* Extract the size of each Fixed dimension as an int list. If the input
@@ -451,16 +451,30 @@ where
 termination by lexicographic_order
 
 
-(* Apply an optional integer cast to a value (used for the return value of an
-   impure call on the rhs of VarDeclCall / AssignCall). None passes the value
-   through; Some t narrows a finite-int value to the finite-int type t, matching
-   the CoreTm_Cast interpretation. *)
-fun apply_cast_opt :: "CoreType option \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
-  "apply_cast_opt None v = Inr v"
-| "apply_cast_opt (Some (CoreTy_FiniteInt sign bits)) (CV_FiniteInt _ _ i) =
+(* ========================================================================== *)
+(* Casting *)
+(* ========================================================================== *)
+
+(* Apply a cast to a value.
+    - RuntimeError if the cast fails (overflow for integer casts; array's runtime size
+      doesn't match for array casts to CoreDim_Fixed).
+    - TypeError if the cast itself is invalid (only array or integer targets are allowed).
+    - Otherwise: successful cast, returns the new value. *)
+fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "cast_value (CoreTy_FiniteInt sign bits) (CV_FiniteInt _ _ i) =
      (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
       else Inl RuntimeError)"
-| "apply_cast_opt _ _ = Inl TypeError"
+| "cast_value (CoreTy_Array _ dims) (CV_Array sizes elems) =
+     (if sizes_match_dims sizes dims then Inr (CV_Array sizes elems)
+      else Inl RuntimeError)"
+| "cast_value _ _ = Inl TypeError"
+
+(* Apply an optional cast to a value (used for the return value of an
+   impure call on the rhs of VarDeclCall / AssignCall). None passes the value
+   through; Some t casts to t as for CoreTm_Cast. *)
+fun apply_cast_opt :: "CoreType option \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "apply_cast_opt None v = Inr v"
+| "apply_cast_opt (Some t) v = cast_value t v"
 
 
 (* ========================================================================== *)
@@ -500,18 +514,11 @@ where
           Some val \<Rightarrow> Inr val
         | None \<Rightarrow> Inl TypeError)))"  \<comment> \<open>name not in scope\<close>
 
-  (* Cast *)
+  (* Cast (delegates to cast_value) *)
 | "interp_term (Suc fuel) state (CoreTm_Cast targetTy tm) =
     (case interp_term fuel state tm of
-      Inr (CV_FiniteInt _ _ i) \<Rightarrow>
-        (case targetTy of
-          CoreTy_FiniteInt sign bits \<Rightarrow>
-            if int_fits sign bits i
-            then Inr (CV_FiniteInt sign bits i)
-            else Inl RuntimeError  \<comment> \<open>overflow\<close>
-        | _ \<Rightarrow> Inl TypeError)  \<comment> \<open>cast to non-finite-integer type\<close>
-    | Inr _ \<Rightarrow> Inl TypeError   \<comment> \<open>cast from non-finite-integer type\<close>
-    | Inl err \<Rightarrow> Inl err)"
+      Inl err \<Rightarrow> Inl err
+    | Inr v \<Rightarrow> cast_value targetTy v)"
 
   (* Unary operator *)
 | "interp_term (Suc fuel) state (CoreTm_Unop op tm) =

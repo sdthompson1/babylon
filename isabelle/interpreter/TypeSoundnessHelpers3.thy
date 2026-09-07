@@ -6,6 +6,75 @@ begin
 (* Type soundness for terms *)
 (*-----------------------------------------------------------------------------*)
 
+(* Value-level soundness of cast_value: a successful cast of a value well-typed
+   at the (substituted) source type yields a value well-typed at the
+   (substituted) target type, provided the static cast condition (cast_ok)
+   holds. Integer case: the value is a CV_FiniteInt and the only target
+   cast_value accepts for it is a finite-int type. Array case: the value is
+   unchanged, the element type is shared, and the runtime size check is
+   exactly the sizes_match_dims conjunct of value_has_type at the target. *)
+lemma cast_value_sound:
+  assumes cast: "cast_value tgtTy v = Inr v'"
+      and co: "cast_ok env srcTy tgtTy"
+      and v_typed: "value_has_type env v (apply_subst subst srcTy)"
+  shows "value_has_type env v' (apply_subst subst tgtTy)"
+using co proof (cases rule: cast_ok_cases)
+  case Int
+  have "is_integer_type (apply_subst subst srcTy)"
+    using Int(1) by (simp add: is_integer_type_apply_subst)
+  then obtain sign bits i where v_eq: "v = CV_FiniteInt sign bits i"
+    using v_typed by (cases v; cases "apply_subst subst srcTy"; simp)
+  from cast v_eq obtain tsign tbits where
+    tgt_eq: "tgtTy = CoreTy_FiniteInt tsign tbits" and
+    v'_eq: "v' = CV_FiniteInt tsign tbits i" and
+    fits: "int_fits tsign tbits i"
+    by (cases tgtTy) (auto split: if_splits)
+  show ?thesis using tgt_eq v'_eq fits by simp
+next
+  case (Array elemTy dims dims')
+  have src_subst: "apply_subst subst srcTy = CoreTy_Array (apply_subst subst elemTy) dims"
+    using Array(1) by simp
+  from value_has_type_Array[OF v_typed[unfolded src_subst]]
+  obtain sizes elems where v_eq: "v = CV_Array sizes elems" by blast
+  from cast Array(2) v_eq have
+    v'_eq: "v' = CV_Array sizes elems" and
+    smd: "sizes_match_dims sizes dims'"
+    by (auto split: if_splits)
+  have dims'_wk: "array_dims_well_kinded dims'"
+    using Array(2,4) by simp
+  show ?thesis
+    using v_typed src_subst v_eq v'_eq smd dims'_wk Array(2) by simp
+qed
+
+(* A failed cast_value on a well-typed value is a RuntimeError, never a
+   TypeError, provided the target type is runtime: then an integer target is
+   a finite-int type (MathInt is not runtime), so the value (a CV_FiniteInt)
+   meets a finite-int target and the only failure is overflow; and an array
+   value meets an array target, where the only failure is the size check. *)
+lemma cast_value_error_is_runtime:
+  assumes cast: "cast_value tgtTy v = Inl err"
+      and co: "cast_ok env srcTy tgtTy"
+      and rt: "is_runtime_type env tgtTy"
+      and v_typed: "value_has_type env v (apply_subst subst srcTy)"
+  shows "err = RuntimeError"
+using co proof (cases rule: cast_ok_cases)
+  case Int
+  from Int(2) rt obtain tsign tbits where tgt_eq: "tgtTy = CoreTy_FiniteInt tsign tbits"
+    by (cases tgtTy) auto
+  have "is_integer_type (apply_subst subst srcTy)"
+    using Int(1) by (simp add: is_integer_type_apply_subst)
+  then obtain sign bits i where v_eq: "v = CV_FiniteInt sign bits i"
+    using v_typed by (cases v; cases "apply_subst subst srcTy"; simp)
+  from cast tgt_eq v_eq show ?thesis by (auto split: if_splits)
+next
+  case (Array elemTy dims dims')
+  have src_subst: "apply_subst subst srcTy = CoreTy_Array (apply_subst subst elemTy) dims"
+    using Array(1) by simp
+  from value_has_type_Array[OF v_typed[unfolded src_subst]]
+  obtain sizes elems where v_eq: "v = CV_Array sizes elems" by blast
+  from cast Array(2) v_eq show ?thesis by (auto split: if_splits)
+qed
+
 (* Type soundness for Cast *)
 lemma type_soundness_cast:
   assumes state_env: "state_matches_env state env storeTyping"
@@ -18,8 +87,8 @@ proof -
   (* Extract facts from typing *)
   from typing obtain operand_ty where
     operand_typing: "core_term_type env NotGhost operand = Some operand_ty"
-    and operand_is_int: "is_integer_type operand_ty"
-    and target_is_int: "is_integer_type target_ty"
+    and co: "cast_ok env operand_ty target_ty"
+    and target_rt: "is_runtime_type env target_ty"
     and ty_eq: "ty = target_ty"
     by (auto split: option.splits if_splits)
 
@@ -32,38 +101,25 @@ proof -
   show ?thesis
   proof (cases "interp_term fuel state operand")
     case (Inr operand_val)
-    (* Operand succeeded - extract type information *)
-    from operand_sound Inr operand_is_int
-    have operand_typed: "value_has_type env operand_val operand_ty"
-      by (simp add: is_integer_type_apply_subst)
-
-    (* Operand must be a finite integer type *)
-    obtain src_sign src_bits i where
-      operand_val_def: "operand_val = CV_FiniteInt src_sign src_bits i"
-      using value_has_type_FiniteInt
-      by (metis is_integer_type.elims(2) is_runtime_type.simps(4) operand_is_int operand_typed
-          value_has_type_runtime)
-
-    (* Target type must be a finite integer type (from is_integer_type + runtime type check) *)
-    from target_is_int obtain tgt_sign tgt_bits where
-      target_ty_def: "target_ty = CoreTy_FiniteInt tgt_sign tgt_bits"
-        using Inr is_integer_type.elims(2) operand_typing typing by fastforce
-
-    (* Case split on whether cast succeeds *)
+    (* Operand succeeded - it is well-typed at the substituted operand type *)
+    from operand_sound Inr
+    have operand_typed: "value_has_type env operand_val (apply_subst (IS_TyArgs state) operand_ty)"
+      by simp
+    have interp_eq: "interp_term (Suc fuel) state (CoreTm_Cast target_ty operand)
+                       = cast_value target_ty operand_val"
+      using Inr by simp
+    (* Case split on whether the cast succeeds *)
     show ?thesis
-    proof (cases "int_fits tgt_sign tgt_bits i")
-      case True
-      (* Cast succeeds - value has correct type *)
-      have "interp_term (Suc fuel) state (CoreTm_Cast target_ty operand) =
-            Inr (CV_FiniteInt tgt_sign tgt_bits i)"
-        using Inr target_ty_def True operand_val_def by simp        
-      with ty_eq target_ty_def True show ?thesis by auto
+    proof (cases "cast_value target_ty operand_val")
+      case (Inl err)
+      have "err = RuntimeError"
+        by (rule cast_value_error_is_runtime[OF Inl co target_rt operand_typed])
+      thus ?thesis using interp_eq Inl by simp
     next
-      case False
-      (* Cast fails with RuntimeError *)
-      have "interp_term (Suc fuel) state (CoreTm_Cast target_ty operand) = Inl RuntimeError"
-        using Inr target_ty_def False operand_val_def by simp
-      thus ?thesis by simp
+      case (Inr castVal)
+      have "value_has_type env castVal (apply_subst (IS_TyArgs state) target_ty)"
+        by (rule cast_value_sound[OF Inr co operand_typed])
+      thus ?thesis using interp_eq Inr ty_eq by simp
     qed
   next
     case (Inl err)
@@ -3364,14 +3420,12 @@ proof -
 qed
 
 
-(* Soundness of apply_cast_opt: the optional integer cast applied to an impure
-   call's return value (CoreStmt_AssignCall / CoreStmt_VarDeclCall). If the call
+(* Soundness of apply_cast_opt: the optional cast applied to an impure call's
+   return value (CoreStmt_AssignCall / CoreStmt_VarDeclCall). If the call
    return value is well-typed at the (substituted) return type, and the typecheck
    accepted the cast (cast_result_type ... = Some resTy), then a successful cast
-   yields a value well-typed at the (substituted) result type. The cast target
-   in the Some case is a ground finite-int type, so the substitution is the
-   identity on it. (A failed cast gives RuntimeError, ruled out by the Inr
-   hypothesis.) *)
+   yields a value well-typed at the (substituted) result type. A corollary of
+   cast_value_sound. *)
 lemma apply_cast_opt_sound:
   assumes cast: "apply_cast_opt castOpt retVal = Inr castVal"
       and rt_ct: "cast_result_type env ghost retTy castOpt = Some resTy"
@@ -3384,33 +3438,17 @@ proof (cases castOpt)
   ultimately show ?thesis using retVal_typed by simp
 next
   case (Some t)
-  \<comment> \<open>cast_result_type accepted: retTy and t are integers, resTy = t.\<close>
-  from Some rt_ct have
-    ret_int: "is_integer_type retTy" and
-    t_int: "is_integer_type t" and
-    resTy_eq: "resTy = t"
+  from Some rt_ct have co: "cast_ok env retTy t" and resTy_eq: "resTy = t"
     by (auto simp: cast_result_type_def split: if_splits)
-  \<comment> \<open>t is a (ground) finite-int type, so substitution is the identity on it.\<close>
-  from t_int obtain tsign tbits where t_eq: "t = CoreTy_FiniteInt tsign tbits"
-    by (metis Inr_not_Inl Some apply_cast_opt.simps(5) cast is_integer_type_cases)
-  \<comment> \<open>The substituted return type is an integer type, so retVal is a CV_FiniteInt.\<close>
-  have "is_integer_type (apply_subst subst retTy)"
-    using ret_int by (simp add: is_integer_type_apply_subst)
-  then obtain rsign rbits i where retVal_eq: "retVal = CV_FiniteInt rsign rbits i"
-    using retVal_typed by (cases retVal; cases "apply_subst subst retTy"; simp)
-  \<comment> \<open>The successful cast value fits the target finite-int type.\<close>
-  from cast Some t_eq retVal_eq have
-    castVal_eq: "castVal = CV_FiniteInt tsign tbits i" and
-    fits: "int_fits tsign tbits i"
-    by (auto split: if_splits)
-  show ?thesis using castVal_eq fits resTy_eq t_eq by simp
+  from cast Some have cv: "cast_value t retVal = Inr castVal" by simp
+  from cast_value_sound[OF cv co retVal_typed] show ?thesis
+    using resTy_eq by simp
 qed
 
-(* A failed apply_cast_opt on a well-typed (integer) call return value is a
-   RuntimeError, never a TypeError: in NotGhost mode the typecheck
-   (cast_result_type = Some) forces a runtime integer (hence finite-int) cast
-   target, so the value is a CV_FiniteInt against a finite-int target, and the
-   only Inl branch of apply_cast_opt there is overflow (RuntimeError). *)
+(* A failed apply_cast_opt on a well-typed call return value is a
+   RuntimeError, never a TypeError: a corollary of cast_value_error_is_runtime,
+   using that in NotGhost mode the typecheck (cast_result_type = Some) forces
+   a runtime cast target. *)
 lemma apply_cast_opt_error_is_runtime:
   assumes cast: "apply_cast_opt castOpt retVal = Inl err"
       and rt_ct: "cast_result_type env NotGhost retTy castOpt = Some resTy"
@@ -3421,19 +3459,10 @@ proof (cases castOpt)
   with cast show ?thesis by simp
 next
   case (Some t)
-  from Some rt_ct have
-    ret_int: "is_integer_type retTy" and t_int: "is_integer_type t"
-    and t_rt: "is_runtime_type env t"
+  from Some rt_ct have co: "cast_ok env retTy t" and t_rt: "is_runtime_type env t"
     by (auto simp: cast_result_type_def split: if_splits)
-  \<comment> \<open>An integer, runtime type is a finite-int type (MathInt is not runtime).\<close>
-  from t_int t_rt obtain tsign tbits where t_eq: "t = CoreTy_FiniteInt tsign tbits"
-    by (cases t) auto
-  have "is_integer_type (apply_subst subst retTy)"
-    using ret_int by (simp add: is_integer_type_apply_subst)
-  then obtain rsign rbits i where retVal_eq: "retVal = CV_FiniteInt rsign rbits i"
-    using retVal_typed by (cases retVal; cases "apply_subst subst retTy"; simp)
-  from cast Some t_eq retVal_eq show ?thesis
-    by (auto split: if_splits)
+  from cast Some have cv: "cast_value t retVal = Inl err" by simp
+  from cast_value_error_is_runtime[OF cv co t_rt retVal_typed] show ?thesis .
 qed
 
 end

@@ -656,14 +656,12 @@ next
   qed
 next
   case (CoreTm_Cast targetTy operand)
-  \<comment> \<open>Cast: operand has some integer type; result is targetTy (also integer).
-      Substitution leaves integer types unchanged, so after substitution the
-      operand's type is still an integer (the same one), the target is still
-      an integer (and unchanged). \<close>
+  \<comment> \<open>Cast: the cast condition (cast_ok) is closed under substitution, given
+      that well-kindedness of the target transfers; the result type is the
+      substituted target. \<close>
   from CoreTm_Cast.prems(1) obtain operandTy where
     op_typed: "core_term_type calleeEnv ghost operand = Some operandTy" and
-    op_int: "is_integer_type operandTy" and
-    tgt_int: "is_integer_type targetTy" and
+    co: "cast_ok calleeEnv operandTy targetTy" and
     tgt_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type calleeEnv targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
@@ -672,12 +670,16 @@ next
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst operand)
        = Some (apply_subst subst operandTy)" .
-  have op_ty_eq: "apply_subst subst operandTy = operandTy"
-    using op_int is_integer_type_apply_subst by simp
-  have tgt_ty_eq: "apply_subst subst targetTy = targetTy"
-    using tgt_int is_integer_type_apply_subst by simp
-  \<comment> \<open>The substituted targetTy, for the runtime check, stays runtime since it's
-      closed (integer types have no type variables). \<close>
+  have co_subst:
+    "cast_ok (apply_subst_to_callee_env subst callerEnv calleeEnv)
+             (apply_subst subst operandTy) (apply_subst subst targetTy)"
+  proof (rule cast_ok_apply_subst[OF co])
+    assume "is_well_kinded calleeEnv targetTy"
+    thus "is_well_kinded (apply_subst_to_callee_env subst callerEnv calleeEnv)
+                         (apply_subst subst targetTy)"
+      using apply_subst_preserves_well_kinded_callee[OF _ CoreTm_Cast.prems(3)] by blast
+  qed
+  \<comment> \<open>The substituted targetTy stays runtime. \<close>
   have tgt_rt_subst:
     "ghost = NotGhost \<longrightarrow>
        is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv)
@@ -692,7 +694,7 @@ next
                           (apply_subst subst targetTy)" .
   qed
   show ?case
-    using op_subst op_int op_ty_eq tgt_int tgt_ty_eq tgt_rt_subst ty_eq
+    using op_subst co_subst tgt_rt_subst ty_eq
     by auto
 next
   case (CoreTm_Unop op operand)

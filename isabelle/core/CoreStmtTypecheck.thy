@@ -46,16 +46,15 @@ definition core_impure_call_type ::
               else None)"
 
 (* The type produced by the optional cast applied to an impure call's return value.
-   None: no cast; the result type is the call's return type.
-   Some t: cast the return value to t; valid only as an integer cast (mirroring
-   core_term_type's CoreTm_Cast rule), with t runtime in NotGhost mode. *)
+   Returns `Some ty` if the function returns `ty` (after the cast), or `None` if the
+   attempted cast was invalid. *)
 definition cast_result_type ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreType \<Rightarrow> CoreType option \<Rightarrow> CoreType option" where
   "cast_result_type env ghost retTy castOpt =
     (case castOpt of
        None \<Rightarrow> Some retTy
      | Some t \<Rightarrow>
-         if is_integer_type retTy \<and> is_integer_type t
+         if cast_ok env retTy t
             \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
          then Some t else None)"
 
@@ -763,7 +762,7 @@ qed
 
 
 (* cast_result_type is preserved under adding type variables to the environment:
-   it depends on env only through is_runtime_type, which is monotone. *)
+   it depends on env only through cast_ok and is_runtime_type, both monotone. *)
 lemma cast_result_type_irrelevant_tyvar:
   assumes "cast_result_type env ghost retTy castOpt = Some ty"
   shows "cast_result_type
@@ -771,7 +770,8 @@ lemma cast_result_type_irrelevant_tyvar:
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
            ghost retTy castOpt = Some ty"
   using assms unfolding cast_result_type_def
-  by (cases castOpt) (auto split: if_splits simp: is_runtime_type_extend_runtime_tyvars)
+  by (cases castOpt)
+     (auto split: if_splits simp: is_runtime_type_extend_runtime_tyvars cast_ok_extend_tyvars)
 
 
 (* ========================================================================== *)

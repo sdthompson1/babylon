@@ -97,6 +97,151 @@ proof (induction ty rule: is_valid_decreases_type.induct)
   thus ?case by auto
 qed auto
 
+
+(* ========================================================================== *)
+(* Typechecking rules for casts *)
+(* ========================================================================== *)
+
+(* Valid array casts:
+    - Widening: T[n] or T[*] \<longrightarrow> T[]
+    - Narrowing: T[*] or T[] \<longrightarrow> T[n]  (well-typed, but creates a separate verifier
+        obligation: the array must provably have size n at runtime)
+    - Casting any array type to itself is also considered valid (but this isn't used
+        by the elaborator).  *)
+fun dim_cast_ok :: "CoreDimension \<Rightarrow> CoreDimension \<Rightarrow> bool" where
+  "dim_cast_ok (CoreDim_Fixed _)      CoreDim_Unknown   = True"     (* widen *)
+| "dim_cast_ok CoreDim_Allocatable    CoreDim_Unknown   = True"     (* widen *)
+| "dim_cast_ok CoreDim_Unknown        (CoreDim_Fixed _) = True"     (* narrow, checked *)
+| "dim_cast_ok CoreDim_Allocatable    (CoreDim_Fixed _) = True"     (* narrow, checked *)
+| "dim_cast_ok (CoreDim_Fixed n)      (CoreDim_Fixed m) = (n = m)"  (* identity *)
+| "dim_cast_ok CoreDim_Allocatable    CoreDim_Allocatable = True"   (* identity *)
+| "dim_cast_ok CoreDim_Unknown        CoreDim_Unknown   = True"     (* identity *)
+| "dim_cast_ok CoreDim_Unknown        CoreDim_Allocatable = False"  (* rejected *)
+| "dim_cast_ok (CoreDim_Fixed _)      CoreDim_Allocatable = False"  (* rejected *)
+
+(* An array cast is valid if elemTy is unchanged, and the dimension change
+   satisfies dim_cast_ok.
+   The well-kindedness of the target type is checked separately (see cast_ok). *)
+fun array_cast_ok :: "CoreType \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "array_cast_ok (CoreTy_Array elemTy dims) (CoreTy_Array elemTy' dims') =
+     (elemTy = elemTy' \<and> list_all2 dim_cast_ok dims dims')"
+| "array_cast_ok _ _ = False"
+
+lemma array_cast_ok_cases:
+  assumes "array_cast_ok srcTy tgtTy"
+  obtains elemTy dims dims' where
+    "srcTy = CoreTy_Array elemTy dims"
+    "tgtTy = CoreTy_Array elemTy dims'"
+    "list_all2 dim_cast_ok dims dims'"
+  using assms by (cases srcTy; cases tgtTy) auto
+
+(* An array cast never involves an integer type on either side. *)
+lemma array_cast_ok_not_integer:
+  "array_cast_ok srcTy tgtTy \<Longrightarrow> \<not> is_integer_type srcTy \<and> \<not> is_integer_type tgtTy"
+  by (cases srcTy; cases tgtTy) auto
+
+(* Substitution acts identically on both sides of an array cast (it rewrites
+   the shared element type and leaves dimensions alone). *)
+lemma array_cast_ok_apply_subst:
+  "array_cast_ok srcTy tgtTy
+   \<Longrightarrow> array_cast_ok (apply_subst subst srcTy) (apply_subst subst tgtTy)"
+  by (cases srcTy; cases tgtTy) auto
+
+(* Both sides of an array cast have the same type variables. *)
+lemma array_cast_ok_type_tyvars:
+  "array_cast_ok srcTy tgtTy \<Longrightarrow> type_tyvars tgtTy = type_tyvars srcTy"
+  by (cases srcTy; cases tgtTy) auto
+
+
+(* A general cast can either be an array cast (as described above), or an integer
+   cast (converting any integer type to another). *)
+definition cast_ok :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "cast_ok env srcTy tgtTy \<equiv>
+     is_integer_type srcTy \<and> is_integer_type tgtTy
+     \<or> array_cast_ok srcTy tgtTy \<and> is_well_kinded env tgtTy"
+
+lemma cast_ok_int [simp]:
+  "is_integer_type srcTy \<Longrightarrow> is_integer_type tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
+  by (simp add: cast_ok_def)
+
+lemma cast_ok_array:
+  "array_cast_ok srcTy tgtTy \<Longrightarrow> is_well_kinded env tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
+  by (simp add: cast_ok_def)
+
+lemma cast_ok_cases:
+  assumes "cast_ok env srcTy tgtTy"
+  obtains (Int) "is_integer_type srcTy" "is_integer_type tgtTy"
+        | (Array) elemTy dims dims' where
+            "srcTy = CoreTy_Array elemTy dims"
+            "tgtTy = CoreTy_Array elemTy dims'"
+            "list_all2 dim_cast_ok dims dims'"
+            "is_well_kinded env tgtTy"
+proof -
+  from assms consider (I) "is_integer_type srcTy" "is_integer_type tgtTy"
+    | (A) "array_cast_ok srcTy tgtTy" "is_well_kinded env tgtTy"
+    unfolding cast_ok_def by blast
+  then show ?thesis
+  proof cases
+    case I
+    then show ?thesis by (rule Int)
+  next
+    case A
+    from A(1) obtain elemTy dims dims' where
+      "srcTy = CoreTy_Array elemTy dims"
+      "tgtTy = CoreTy_Array elemTy dims'"
+      "list_all2 dim_cast_ok dims dims'"
+      by (rule array_cast_ok_cases)
+    then show ?thesis using A(2) by (rule Array)
+  qed
+qed
+
+(* The target of an admissible cast is well-kinded. *)
+lemma cast_ok_well_kinded:
+  "cast_ok env srcTy tgtTy \<Longrightarrow> is_well_kinded env tgtTy"
+  unfolding cast_ok_def using is_integer_type_well_kinded by blast
+
+(* Both kinds of cast condition are closed under substitution, provided
+   well-kindedness of the target transfers to the new env. *)
+lemma cast_ok_apply_subst:
+  assumes co: "cast_ok env srcTy tgtTy"
+    and wk: "is_well_kinded env tgtTy \<Longrightarrow> is_well_kinded env' (apply_subst subst tgtTy)"
+  shows "cast_ok env' (apply_subst subst srcTy) (apply_subst subst tgtTy)"
+using co proof (cases rule: cast_ok_cases)
+  case Int
+  then show ?thesis by (simp add: is_integer_type_apply_subst)
+next
+  case (Array elemTy dims dims')
+  have "array_cast_ok srcTy tgtTy" using Array(1,2,3) by simp
+  hence "array_cast_ok (apply_subst subst srcTy) (apply_subst subst tgtTy)"
+    by (rule array_cast_ok_apply_subst)
+  moreover have "is_well_kinded env' (apply_subst subst tgtTy)"
+    using wk[OF Array(4)] .
+  ultimately show ?thesis by (rule cast_ok_array)
+qed
+
+(* cast_ok depends on the env only through is_well_kinded, so it inherits the
+   env-transfer lemmas. *)
+lemma cast_ok_cong_env:
+  assumes "TE_TypeVars env' = TE_TypeVars env"
+    and "TE_Datatypes env' = TE_Datatypes env"
+  shows "cast_ok env' srcTy tgtTy = cast_ok env srcTy tgtTy"
+  unfolding cast_ok_def using is_well_kinded_cong_env[OF assms] by simp
+
+lemma cast_ok_extend_tyvars:
+  "cast_ok env srcTy tgtTy \<Longrightarrow>
+   cast_ok (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>)
+           srcTy tgtTy"
+  unfolding cast_ok_def using is_well_kinded_extend_tyvars by blast
+
+lemma cast_ok_transfer:
+  assumes "cast_ok env1 srcTy tgtTy"
+    and "type_tyvars tgtTy \<subseteq> fset (TE_TypeVars env2)"
+    and "TE_Datatypes env2 = TE_Datatypes env1"
+  shows "cast_ok env2 srcTy tgtTy"
+  using assms is_well_kinded_transfer unfolding cast_ok_def by blast
+
+
 (* ========================================================================== *)
 (* Main type-checking function *)
 (* ========================================================================== *)
@@ -129,13 +274,13 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
       Some ty \<Rightarrow> if (ghost = NotGhost \<longrightarrow> \<not> tyenv_var_ghost env name) then Some ty else None
     | None \<Rightarrow> None)"
 
-  (* Casts - only integer-to-integer for now *)
+  (* Casts - must satisfy cast_ok, and in NotGhost mode, the target type must
+     additionally be runtime. *)
 | "core_term_type env ghost (CoreTm_Cast targetTy operand) =
     (case core_term_type env ghost operand of
       None \<Rightarrow> None
-    | Some operandTy \<Rightarrow> 
-        if is_integer_type operandTy
-        \<and> is_integer_type targetTy
+    | Some operandTy \<Rightarrow>
+        if cast_ok env operandTy targetTy
         \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy) then
           Some targetTy
         else
@@ -818,10 +963,12 @@ proof -
     case (CoreTm_Cast targetTy tm)
     have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
       using is_runtime_type_cong_env CoreTm_Cast.prems by metis
+    have co_eq: "\<And>a b. cast_ok env1 a b = cast_ok env2 a b"
+      using cast_ok_cong_env CoreTm_Cast.prems by metis
     have tm_eq: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
       using CoreTm_Cast.IH CoreTm_Cast.prems by blast
     show ?case
-      by (simp only: core_term_type.simps tm_eq rt_eq)
+      by (simp only: core_term_type.simps tm_eq rt_eq co_eq)
   next
     case (CoreTm_VariantProj tm ctorName)
     have tm_eq: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
@@ -1078,7 +1225,9 @@ next
                        TE_GhostLocals := gv' \<rparr>"
   have rt_eq: "\<And>t. is_runtime_type ?env_x t = is_runtime_type env t"
     using is_runtime_type_cong_env[of ?env_x env] by simp
-  from CoreTm_Cast show ?case by (auto simp: rt_eq split: option.splits if_splits)
+  have co_eq: "\<And>a b. cast_ok ?env_x a b = cast_ok env a b"
+    using cast_ok_cong_env[of ?env_x env] by simp
+  from CoreTm_Cast show ?case by (auto simp: rt_eq co_eq split: option.splits if_splits)
 next
   case (CoreTm_Unop op tm)
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
@@ -1338,16 +1487,17 @@ next
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
   from CoreTm_Cast.prems obtain operandTy where
     operand_ty: "core_term_type env ghost tm = Some operandTy" and
-    operand_int: "is_integer_type operandTy" and
-    target_int: "is_integer_type targetTy" and
+    co: "cast_ok env operandTy targetTy" and
     targetTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
   have operand_ty': "core_term_type ?env' ghost tm = Some operandTy"
     using CoreTm_Cast.IH operand_ty by blast
+  have co': "cast_ok ?env' operandTy targetTy"
+    using cast_ok_extend_tyvars[OF co] .
   have targetTy_rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' targetTy"
     using targetTy_rt is_runtime_type_extend_runtime_tyvars by fastforce
-  show ?case using operand_ty' operand_int target_int targetTy_rt' ty_eq by simp
+  show ?case using operand_ty' co' targetTy_rt' ty_eq by simp
 next
   case (CoreTm_Let var rhs body)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1727,8 +1877,7 @@ next
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
   from CoreTm_Cast.prems(1) obtain operandTy where
     operand_ty': "core_term_type ?env' ghost tm = Some operandTy" and
-    operand_int: "is_integer_type operandTy" and
-    target_int: "is_integer_type targetTy" and
+    co': "cast_ok ?env' operandTy targetTy" and
     targetTy_rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
@@ -1736,6 +1885,13 @@ next
     using CoreTm_Cast.prems(3) by auto
   have operand_ty: "core_term_type env ghost tm = Some operandTy"
     by (rule CoreTm_Cast.IH[OF operand_ty' CoreTm_Cast.prems(2) tm_disj])
+  have targetTy_disj: "type_tyvars targetTy \<inter> fset extraTV = {}"
+    using CoreTm_Cast.prems(3) by auto
+  have targetTy_tv: "type_tyvars targetTy \<subseteq> fset (TE_TypeVars env)"
+    using is_well_kinded_type_tyvars_subset[OF cast_ok_well_kinded[OF co']] targetTy_disj
+    by auto
+  have co: "cast_ok env operandTy targetTy"
+    using cast_ok_transfer[OF co' targetTy_tv] by simp
   have targetTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy"
   proof
     assume ng: "ghost = NotGhost"
@@ -1747,7 +1903,7 @@ next
       by (auto simp: less_eq_fset.rep_eq)
     thus "is_runtime_type env targetTy" using is_runtime_type_transfer[OF rt'] by simp
   qed
-  show ?case using operand_ty operand_int target_int targetTy_rt ty_eq by simp
+  show ?case using operand_ty co targetTy_rt ty_eq by simp
 next
   case (CoreTm_Let var rhs body)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -2276,7 +2432,7 @@ next
 next
   case (CoreTm_Cast targetTy operand)
   then show ?case
-    by (auto simp: is_integer_type_well_kinded split: option.splits if_splits)
+    by (auto split: option.splits if_splits dest: cast_ok_well_kinded)
 next
   case (CoreTm_Unop op operand)
   then obtain operandTy where
