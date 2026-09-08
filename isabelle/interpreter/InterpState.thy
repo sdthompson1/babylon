@@ -7,6 +7,7 @@ datatype LValuePath =
   LVPath_RecordProj string
   | LVPath_VariantProj string
   | LVPath_ArrayProj "int list"
+  | LVPath_ArrayCast "CoreDimension list"
 
 (* Externally defined functions *)
 (* The function is passed a "world" and the arguments, and returns new world, new

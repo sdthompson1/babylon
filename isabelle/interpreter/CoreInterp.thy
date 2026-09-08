@@ -217,6 +217,9 @@ fun get_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarrow> 
     (case fmlookup elementMap indices of
       Some val \<Rightarrow> get_value_at_path val rest
     | None \<Rightarrow> Inl RuntimeError)"    (* array index out of bounds *)
+| "get_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayCast dims # rest) =
+    (if sizes_match_dims sizes dims then get_value_at_path (CV_Array sizes elementMap) rest
+     else Inl RuntimeError)"    (* array's runtime sizes don't match the cast's dims *)
 | "get_value_at_path _ _ = Inl TypeError"   (* wrong kind of projection for value *)
 
 (* Update a specific path within a value *)
@@ -242,6 +245,21 @@ fun update_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarro
           Inr updated_val \<Rightarrow> Inr (CV_Array sizes (fmupd indices updated_val elementMap))
         | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl RuntimeError)"  (* array index out of bounds *)
+| "update_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayCast dims # rest) new_val =
+    \<comment> \<open>The runtime array size must match the cast's dims, as for reads.
+        In addition, writing through an LVPath_ArrayCast is not allowed to change the
+        runtime size of the array (e.g., if you have a `T[]` ref to a size-3 array, you
+        are not allowed to overwrite it with a size-5 array, because the original array
+        might not have been resizable).\<close>
+    (if sizes_match_dims sizes dims then
+      (case update_value_at_path (CV_Array sizes elementMap) rest new_val of
+        Inr updated_val \<Rightarrow>
+          (case updated_val of
+            CV_Array sizes' elementMap' \<Rightarrow>
+              if sizes' = sizes then Inr (CV_Array sizes' elementMap') else Inl RuntimeError
+          | _ \<Rightarrow> Inl TypeError)   \<comment> \<open>non-array written through an array cast\<close>
+      | Inl err \<Rightarrow> Inl err)
+     else Inl RuntimeError)"
 | "update_value_at_path _ _ _ = Inl TypeError"  (* path didn't match the found value *)
 
 (* Given a type and an lvalue path, compute the type of the sub-value at that path.
@@ -262,6 +280,14 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     | None \<Rightarrow> None)"
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
     type_at_path env elemTy rest"
+  \<comment> \<open>An array cast step retypes the array at the cast's dims (same element
+      type). The dims must be well-kinded so that the value is well-typed at
+      the new type. (Whether the cast direction is admissible, dim_cast_ok, isn't
+      checked here; we rely on the typechecker for that.)\<close>
+| "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayCast dims' # rest) =
+    (if array_dims_well_kinded dims'
+     then type_at_path env (CoreTy_Array elemTy dims') rest
+     else None)"
 | "type_at_path _ _ (_ # _) = None"
 
 (* Lemma: type_at_path does not depend on TE_ProofGoal. *)
@@ -666,6 +692,15 @@ where
                 | Inl err \<Rightarrow> Inl err)
             | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
+    | CoreTm_Cast targetTy tm \<Rightarrow>
+        \<comment> \<open>An array cast of an lvalue is an lvalue (a view of the same storage);
+            record the cast as a path step. Casts to other types are not lvalues.\<close>
+        (case targetTy of
+          CoreTy_Array _ dims \<Rightarrow>
+            (case interp_writable_lvalue fuel state tm of
+              Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_ArrayCast dims])
+            | Inl err \<Rightarrow> Inl err)
+        | _ \<Rightarrow> Inl TypeError)
     | _ \<Rightarrow> Inl TypeError)"
 
   (* Interpret a list of terms *)

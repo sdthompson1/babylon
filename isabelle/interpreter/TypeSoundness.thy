@@ -217,13 +217,8 @@ next
             next
               case (Inr v)
               \<comment> \<open>Live ref: by get_value_at_path_type, value has the (substituted) ref type.\<close>
-              from get_value_at_path_type[OF slot_typed Inr] obtain pathTy where
-                pathTy_eq: "type_at_path env (storeTyping ! addr) path = Some pathTy"
-                and v_typed: "value_has_type env v pathTy"
-                by auto
-              from pathTy_eq path_ty
-              have "value_has_type env v (apply_subst (IS_TyArgs state) localTy')"
-                using v_typed by simp
+              from get_value_at_path_type[OF slot_typed path_ty Inr]
+              have "value_has_type env v (apply_subst (IS_TyArgs state) localTy')" .
               have interp_result: "interp_term (Suc fuel) state (CoreTm_Var varName) = Inr v"
                 using CoreTm_Var None Some addrPath_eq Inr by simp
               then show ?thesis
@@ -819,6 +814,63 @@ next
             with interp_eq addr_valid show ?thesis by simp
           qed
         qed
+      next
+        (* CoreTm_Cast: an array cast of a writable lvalue; extend the path with an
+           array-cast step. The cast's typing (cast_ok) gives that the inner term
+           is an array with the same element type and that the target dims are
+           well-kinded, which is what type_at_path's cast step requires. *)
+        case (CoreTm_Cast targetTy innerTm)
+        from writable CoreTm_Cast have
+          tgt_array: "is_array_type targetTy" and
+          inner_writable: "is_writable_lvalue env innerTm" by simp_all
+        from typing CoreTm_Cast obtain innerTy where
+          inner_typing: "core_term_type env NotGhost innerTm = Some innerTy" and
+          co: "cast_ok env innerTy targetTy" and
+          ty_eq: "ty = targetTy"
+          by (auto split: option.splits if_splits)
+        have arr: "\<exists>elemTy dims dims'. innerTy = CoreTy_Array elemTy dims
+                     \<and> targetTy = CoreTy_Array elemTy dims' \<and> array_dims_well_kinded dims'"
+        using co proof (cases rule: cast_ok_cases)
+          case Int
+          with tgt_array show ?thesis by (cases targetTy) auto
+        next
+          case (Array elemTy dims dims')
+          hence "array_dims_well_kinded dims'" by simp
+          with Array(1,2) show ?thesis by blast
+        qed
+        then obtain elemTy dims dims' where
+          innerTy_eq: "innerTy = CoreTy_Array elemTy dims" and
+          tgt_eq: "targetTy = CoreTy_Array elemTy dims'" and
+          dims'_wk: "array_dims_well_kinded dims'"
+          by blast
+        from IH_lvalue[OF "3.prems"(1,2)] inner_writable inner_typing innerTy_eq
+        have inner_sound: "sound_lvalue_result state env storeTyping (CoreTy_Array elemTy dims)
+                             (interp_writable_lvalue fuel state innerTm)"
+          by simp
+        show ?thesis
+        proof (cases "interp_writable_lvalue fuel state innerTm")
+          case (Inl err)
+          then have "interp_writable_lvalue (Suc fuel) state tm = Inl err"
+            using CoreTm_Cast tgt_eq by simp
+          with inner_sound Inl show ?thesis by auto
+        next
+          case (Inr addrPath)
+          obtain addr path where ap_eq: "addrPath = (addr, path)" by (cases addrPath) auto
+          let ?s = "IS_TyArgs state"
+          from inner_sound Inr ap_eq have
+            addr_valid: "addr < length (IS_Store state)" and
+            inner_path_ty: "type_at_path env (storeTyping ! addr) path
+                            = Some (CoreTy_Array (apply_subst ?s elemTy) dims)"
+            by auto
+          have interp_eq: "interp_writable_lvalue (Suc fuel) state tm =
+              Inr (addr, path @ [LVPath_ArrayCast dims'])"
+            using CoreTm_Cast tgt_eq Inr ap_eq by simp
+          (* Append the cast step to the path: the array is retyped at dims' *)
+          have "type_at_path env (storeTyping ! addr)
+                  (path @ [LVPath_ArrayCast dims']) = Some (apply_subst ?s ty)"
+            using type_at_path_append[OF inner_path_ty] dims'_wk ty_eq tgt_eq by simp
+          with interp_eq addr_valid show ?thesis by simp
+        qed
       (* Non-lvalue cases are contradictions since is_writable_lvalue returns False *)
       qed (use writable in \<open>simp_all\<close>)
     qed
@@ -1120,7 +1172,7 @@ next
             \<comment> \<open>is_writable_lvalue reduces to tyenv_var_writable on the base. \<close>
             from init_lvalue base_eq have
               wl_iff: "is_writable_lvalue env initTm = tyenv_var_writable env baseName"
-              by (induction initTm) (auto simp: is_lvalue_def)
+              by (induction initTm) (auto simp: is_lvalue_def split: if_splits)
             \<comment> \<open>From core_term_type env NotGhost initTm = Some varTy, derive that the
                 lvalue base is non-ghost. We generalise the type in the induction. \<close>
             have base_not_ghost_aux:
@@ -1630,7 +1682,7 @@ next
               show ?thesis
               proof (cases "update_value_at_path (IS_Store state ! addr) path rhsVal")
                 case (Inl err)
-                from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl]
+                from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl rhs_typed]
                 have err_eq: "err = RuntimeError" .
                 have interp_err: "interp_statement (Suc fuel) state
                     (CoreStmt_Assign NotGhost lhsTm rhsTm) = Inl RuntimeError"
@@ -1788,7 +1840,7 @@ next
                 show ?thesis
                 proof (cases "update_value_at_path (IS_Store newState ! addr) path rhsVal")
                   case (Inl err)
-                  from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty_new Inl]
+                  from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty_new Inl rhs_typed']
                   have err_eq: "err = RuntimeError" .
                   have interp_err: "interp_statement (Suc fuel) state
                       (CoreStmt_AssignCall NotGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
@@ -2051,13 +2103,8 @@ next
                 with CoreStmt_Swap NotGhost show ?thesis by simp
               next
                 case Inr_get1: (Inr val1)
-                from get_value_at_path_type[OF slot1_typed Inr_get1] obtain pathTy1 where
-                  pathTy1_eq: "type_at_path env (storeTyping ! addr1) path1 = Some pathTy1" and
-                  val1_typed: "value_has_type env val1 pathTy1"
-                  by auto
-                with path1_ty
-                have val1_typed_lhsTy: "value_has_type env val1 (apply_subst (IS_TyArgs state) lhsTy)"
-                  by simp
+                from get_value_at_path_type[OF slot1_typed path1_ty Inr_get1]
+                have val1_typed_lhsTy: "value_has_type env val1 (apply_subst (IS_TyArgs state) lhsTy)" .
                 show ?thesis
                 proof (cases "get_value_at_path (IS_Store state ! addr2) path2")
                   case (Inl err2)
@@ -2069,18 +2116,13 @@ next
                   with CoreStmt_Swap NotGhost show ?thesis by simp
                 next
                   case Inr_get2: (Inr val2)
-                  from get_value_at_path_type[OF slot2_typed Inr_get2] obtain pathTy2 where
-                    pathTy2_eq: "type_at_path env (storeTyping ! addr2) path2 = Some pathTy2" and
-                    val2_typed: "value_has_type env val2 pathTy2"
-                    by auto
-                  with path2_ty
-                  have val2_typed_lhsTy: "value_has_type env val2 (apply_subst (IS_TyArgs state) lhsTy)"
-                    by simp
+                  from get_value_at_path_type[OF slot2_typed path2_ty Inr_get2]
+                  have val2_typed_lhsTy: "value_has_type env val2 (apply_subst (IS_TyArgs state) lhsTy)" .
                   \<comment> \<open>First update: put val2 into slot1 at path1.\<close>
                   show ?thesis
                   proof (cases "update_value_at_path (IS_Store state ! addr1) path1 val2")
                     case (Inl err)
-                    from update_value_at_path_error_is_runtime[OF slot1_typed path1_ty Inl]
+                    from update_value_at_path_error_is_runtime[OF slot1_typed path1_ty Inl val2_typed_lhsTy]
                     have "err = RuntimeError" .
                     then have interp_err: "interp_statement (Suc fuel) state
                         (CoreStmt_Swap NotGhost lhsTm rhsTm) = Inl RuntimeError"
@@ -2106,7 +2148,7 @@ next
                     show ?thesis
                     proof (cases "update_value_at_path (?store1 ! addr2) path2 val1")
                       case (Inl err)
-                      from update_value_at_path_error_is_runtime[OF slot2_store1_typed path2_ty Inl]
+                      from update_value_at_path_error_is_runtime[OF slot2_store1_typed path2_ty Inl val1_typed_lhsTy]
                       have "err = RuntimeError" .
                       then have interp_err: "interp_statement (Suc fuel) state
                           (CoreStmt_Swap NotGhost lhsTm rhsTm) = Inl RuntimeError"

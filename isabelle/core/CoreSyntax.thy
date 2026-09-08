@@ -93,15 +93,24 @@ datatype CoreTerm =
   | CoreTm_Old CoreTerm  (* in postcondition, returns "old" value of term; elsewhere, just returns the term *)
   | CoreTm_Default CoreType  (* default value of the given (well-kinded) type *)
 
-(* Extract the base variable name from a syntactic lvalue *)
+(* Is this an array type? *)
+fun is_array_type :: "CoreType \<Rightarrow> bool" where
+  "is_array_type (CoreTy_Array _ _) = True"
+| "is_array_type _ = False"
+
+(* Extract the base variable name from a syntactic lvalue, or return None
+   for non-lvalues. *)
 fun lvalue_base_name :: "CoreTerm \<Rightarrow> string option" where
   "lvalue_base_name (CoreTm_Var name) = Some name"
 | "lvalue_base_name (CoreTm_RecordProj tm _) = lvalue_base_name tm"
 | "lvalue_base_name (CoreTm_VariantProj tm _) = lvalue_base_name tm"
 | "lvalue_base_name (CoreTm_ArrayProj tm _) = lvalue_base_name tm"
+| "lvalue_base_name (CoreTm_Cast ty tm) =
+    \<comment> \<open>Array casts are lvalues; other types of casts are not.\<close>
+    (if is_array_type ty then lvalue_base_name tm else None)"
 | "lvalue_base_name _ = None"
 
-(* A term is a syntactic lvalue if it has a base variable name *)
+(* A term is a syntactic lvalue iff it has a base variable name. *)
 definition is_lvalue :: "CoreTerm \<Rightarrow> bool" where
   "is_lvalue tm = (lvalue_base_name tm \<noteq> None)"
 
@@ -120,7 +129,7 @@ lemma is_lvalue_simps [simp]:
   "is_lvalue (CoreTm_VariantCtor cn tys arg) = False"
   "is_lvalue (CoreTm_Record flds) = False"
   "is_lvalue (CoreTm_Match scrut arms) = False"
-  "is_lvalue (CoreTm_Cast ty tm) = False"
+  "is_lvalue (CoreTm_Cast ty tm) = (is_array_type ty \<and> is_lvalue tm)"
   "is_lvalue (CoreTm_Quantifier q v ty body) = False"
   "is_lvalue (CoreTm_Allocated tm) = False"
   "is_lvalue (CoreTm_Old tm) = False"

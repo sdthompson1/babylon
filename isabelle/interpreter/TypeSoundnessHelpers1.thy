@@ -255,7 +255,7 @@ next
   next
     case (CoreTy_Array elemTy dims)
     with Cons.prems show ?thesis
-      by (cases step) (auto intro: Cons.IH)
+      by (cases step) (auto split: if_splits intro: Cons.IH)
   next
     case CoreTy_Bool with Cons.prems show ?thesis by (cases step) simp_all
   next
@@ -1160,6 +1160,9 @@ next
     next
       case (LVPath_ArrayProj x3)
       then show ?thesis using CV_Record by simp
+    next
+      case (LVPath_ArrayCast x4)
+      then show ?thesis using CV_Record by simp
     qed
   next
     case (CV_Variant ctor payload)
@@ -1172,6 +1175,9 @@ next
       then show ?thesis using CV_Variant Cons.IH by simp
     next
       case (LVPath_ArrayProj x3)
+      then show ?thesis using CV_Variant by simp
+    next
+      case (LVPath_ArrayCast x4)
       then show ?thesis using CV_Variant by simp
     qed
   next
@@ -1187,6 +1193,9 @@ next
       case (LVPath_ArrayProj indices)
       then show ?thesis using CV_Array Cons.IH
         by (simp split: option.splits)
+    next
+      case (LVPath_ArrayCast dims)
+      then show ?thesis using CV_Array Cons.IH by simp
     qed
   next
     case (CV_Bool x)
@@ -1365,6 +1374,9 @@ next
     next
       case (LVPath_ArrayProj x)
       with CV_Record Cons.prems show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x)
+      with CV_Record Cons.prems show ?thesis by simp
     qed
   next
     case (CV_Variant ctor payload)
@@ -1403,6 +1415,9 @@ next
           args_ground dt_nonghost by simp
     next
       case (LVPath_ArrayProj x)
+      with CV_Variant Cons.prems show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x)
       with CV_Variant Cons.prems show ?thesis by simp
     qed
   next
@@ -1468,6 +1483,37 @@ next
       ultimately show ?thesis using updatedVal_eq ty_eq elem_wk elem_rt elem_ground
           dims_wk dims_match
         by simp
+    next
+      case (LVPath_ArrayCast dims')
+      (* Extract array type *)
+      from Cons.prems(1) CV_Array obtain elemTy dims where
+        ty_eq: "ty = CoreTy_Array elemTy dims" and
+        dims_wk: "array_dims_well_kinded dims" and
+        dims_match: "sizes_match_dims sizes dims"
+        by (cases ty) auto
+      from Cons.prems(3) ty_eq LVPath_ArrayCast have
+        dims'_wk: "array_dims_well_kinded dims'" and
+        path_ty_rest: "type_at_path env (CoreTy_Array elemTy dims') rest = Some pathTy"
+        by (auto split: if_splits)
+      (* Extract from update_value_at_path: the size check passed, the update
+         below the cast produced an array with the same sizes, and that is the
+         result. *)
+      from Cons.prems(2) CV_Array LVPath_ArrayCast obtain elementMap' where
+        smd: "sizes_match_dims sizes dims'" and
+        update_rest: "update_value_at_path (CV_Array sizes elementMap) rest newVal
+                        = Inr (CV_Array sizes elementMap')" and
+        updatedVal_eq: "updatedVal = CV_Array sizes elementMap'"
+        by (auto split: if_splits sum.splits CoreValue.splits)
+      (* The old array is typed at the retyped array type *)
+      have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+        using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array ty_eq] smd dims'_wk] .
+      (* By IH the updated array is typed at the retyped array type; since its
+         sizes are unchanged it is also typed at the original type. *)
+      have "value_has_type env (CV_Array sizes elementMap') (CoreTy_Array elemTy dims')"
+        using Cons.IH[OF typed_tgt update_rest path_ty_rest Cons.prems(4)] .
+      hence "value_has_type env (CV_Array sizes elementMap') (CoreTy_Array elemTy dims)"
+        using dims_wk dims_match by simp
+      then show ?thesis using updatedVal_eq ty_eq by simp
     qed
   next
     case (CV_Bool x)
@@ -1478,12 +1524,15 @@ next
   qed
 qed
 
-(* Bridging lemma: if get_value_at_path succeeds on a well-typed value, the result is
-   well-typed and its type is computable by type_at_path. *)
+(* Bridging lemma: if get_value_at_path succeeds on a well-typed value, along a
+   path that type_at_path accepts, the result has the type type_at_path
+   computes. (The type_at_path premise is needed: an LVPath_ArrayCast step's
+   runtime size check says nothing about the well-kindedness of its dims.) *)
 lemma get_value_at_path_type:
   assumes "value_has_type env root ty"
+    and "type_at_path env ty path = Some pathTy"
     and "get_value_at_path root path = Inr v"
-  shows "\<exists>pathTy. type_at_path env ty path = Some pathTy \<and> value_has_type env v pathTy"
+  shows "value_has_type env v pathTy"
 using assms proof (induction path arbitrary: root ty)
   case Nil
   then show ?case by simp
@@ -1492,97 +1541,100 @@ next
   show ?case
   proof (cases root)
     case (CV_Record flds)
+    from Cons.prems(1) CV_Record obtain fieldTypes where
+      ty_eq: "ty = CoreTy_Record fieldTypes" and
+      all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t) flds fieldTypes"
+      by (cases ty) auto
     show ?thesis proof (cases step)
       case (LVPath_RecordProj field)
-      from Cons.prems(1) CV_Record obtain fieldTypes where
-        ty_eq: "ty = CoreTy_Record fieldTypes" and
-        distinct_names: "distinct (map fst fieldTypes)" and
-        all2: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t) flds fieldTypes"
-        by (cases ty) auto
-      from Cons.prems(2) CV_Record LVPath_RecordProj obtain fieldVal where
-        fld_lookup: "map_of flds field = Some fieldVal" and
-        get_rest: "get_value_at_path fieldVal rest = Inr v"
-        by (auto split: option.splits)
-      from list_all2_map_of_transfer[OF all2 fld_lookup] obtain fieldTy where
+      from Cons.prems(2) ty_eq LVPath_RecordProj obtain fieldTy where
         fty_lookup: "map_of fieldTypes field = Some fieldTy" and
+        rest_ty: "type_at_path env fieldTy rest = Some pathTy"
+        by (auto split: option.splits)
+      from list_all2_map_of_transfer_rev[OF all2 fty_lookup] obtain fieldVal where
+        fld_lookup: "map_of flds field = Some fieldVal" and
         fld_typed: "value_has_type env fieldVal fieldTy"
         by auto
-      from Cons.IH[OF fld_typed get_rest] obtain pathTy where
-        rest_ty: "type_at_path env fieldTy rest = Some pathTy" and
-        v_typed: "value_has_type env v pathTy"
-        by auto
-      have "type_at_path env ty (step # rest) = Some pathTy"
-        using ty_eq LVPath_RecordProj fty_lookup rest_ty by simp
-      with v_typed show ?thesis by blast
+      from Cons.prems(3) CV_Record LVPath_RecordProj fld_lookup
+      have get_rest: "get_value_at_path fieldVal rest = Inr v" by (auto split: option.splits)
+      from Cons.IH[OF fld_typed rest_ty get_rest] show ?thesis .
     next
-      case (LVPath_VariantProj x)
-      with CV_Record Cons.prems show ?thesis by simp
+      case (LVPath_VariantProj x) with CV_Record Cons.prems ty_eq show ?thesis by simp
     next
-      case (LVPath_ArrayProj x)
-      with CV_Record Cons.prems show ?thesis by simp
+      case (LVPath_ArrayProj x) with CV_Record Cons.prems ty_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x) with CV_Record Cons.prems ty_eq show ?thesis by simp
     qed
   next
     case (CV_Variant ctor payload)
+    from Cons.prems(1) CV_Variant obtain dtName argTypes tyvars payloadTy where
+      ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
+      ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
+      payload_typed: "value_has_type env payload
+                        (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
+      by (cases ty) (auto split: option.splits)
     show ?thesis proof (cases step)
-      case (LVPath_RecordProj x)
-      with CV_Variant Cons.prems show ?thesis by simp
+      case (LVPath_RecordProj x) with CV_Variant Cons.prems ty_eq show ?thesis by simp
     next
       case (LVPath_VariantProj expectedCtor)
-      from Cons.prems(1) CV_Variant obtain dtName argTypes tyvars payloadTy where
-        ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-        ctor_lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
-        payload_typed: "value_has_type env payload
-                          (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
-        by (cases ty) (auto split: option.splits)
-      from Cons.prems(2) CV_Variant LVPath_VariantProj have ctor_match: "ctor = expectedCtor"
+      from Cons.prems(3) CV_Variant LVPath_VariantProj have ctor_match: "ctor = expectedCtor"
         and get_rest: "get_value_at_path payload rest = Inr v"
         by (auto split: if_splits)
-      let ?subPayloadTy = "apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy"
-      from Cons.IH[OF payload_typed get_rest] obtain pathTy where
-        rest_ty: "type_at_path env ?subPayloadTy rest = Some pathTy" and
-        v_typed: "value_has_type env v pathTy"
-        by auto
-      have "type_at_path env ty (step # rest) = Some pathTy"
-        using ty_eq LVPath_VariantProj ctor_match ctor_lookup rest_ty by simp
-      with v_typed show ?thesis by blast
+      from Cons.prems(2) ty_eq LVPath_VariantProj ctor_match ctor_lookup
+      have rest_ty: "type_at_path env
+                       (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy) rest
+                     = Some pathTy"
+        by simp
+      from Cons.IH[OF payload_typed rest_ty get_rest] show ?thesis .
     next
-      case (LVPath_ArrayProj x)
-      with CV_Variant Cons.prems show ?thesis by simp
+      case (LVPath_ArrayProj x) with CV_Variant Cons.prems ty_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x) with CV_Variant Cons.prems ty_eq show ?thesis by simp
     qed
   next
     case (CV_Array sizes elementMap)
+    from Cons.prems(1) CV_Array obtain elemTy dims where
+      ty_eq: "ty = CoreTy_Array elemTy dims" and
+      elems_typed: "\<forall>idx val. fmlookup elementMap idx = Some val \<longrightarrow>
+                      value_has_type env val elemTy"
+      by (cases ty) auto
     show ?thesis proof (cases step)
-      case (LVPath_RecordProj x)
-      with CV_Array Cons.prems show ?thesis by simp
+      case (LVPath_RecordProj x) with CV_Array Cons.prems ty_eq show ?thesis by simp
     next
-      case (LVPath_VariantProj x)
-      with CV_Array Cons.prems show ?thesis by simp
+      case (LVPath_VariantProj x) with CV_Array Cons.prems ty_eq show ?thesis by simp
     next
       case (LVPath_ArrayProj indices)
-      from Cons.prems(1) CV_Array obtain elemTy dims where
-        ty_eq: "ty = CoreTy_Array elemTy dims" and
-        elems_typed: "\<forall>idx val. fmlookup elementMap idx = Some val \<longrightarrow>
-                        value_has_type env val elemTy"
-        by (cases ty) auto
-      from Cons.prems(2) CV_Array LVPath_ArrayProj obtain elemVal where
+      from Cons.prems(2) ty_eq LVPath_ArrayProj
+      have rest_ty: "type_at_path env elemTy rest = Some pathTy" by simp
+      from Cons.prems(3) CV_Array LVPath_ArrayProj obtain elemVal where
         elem_lookup: "fmlookup elementMap indices = Some elemVal" and
         get_rest: "get_value_at_path elemVal rest = Inr v"
         by (auto split: option.splits)
       from elems_typed elem_lookup have elem_typed: "value_has_type env elemVal elemTy" by simp
-      from Cons.IH[OF elem_typed get_rest] obtain pathTy where
-        rest_ty: "type_at_path env elemTy rest = Some pathTy" and
-        v_typed: "value_has_type env v pathTy"
-        by auto
-      have "type_at_path env ty (step # rest) = Some pathTy"
-        using ty_eq LVPath_ArrayProj rest_ty by simp
-      with v_typed show ?thesis by blast
+      from Cons.IH[OF elem_typed rest_ty get_rest] show ?thesis .
+    next
+      case (LVPath_ArrayCast dims')
+      \<comment> \<open>The cast step retypes the (unchanged) array at dims'. The runtime size
+          check together with the well-kindedness of dims' (from type_at_path)
+          gives value_has_type at the retyped array (value_has_type_array_redim).\<close>
+      from Cons.prems(2) ty_eq LVPath_ArrayCast have
+        dims'_wk: "array_dims_well_kinded dims'" and
+        rest_ty: "type_at_path env (CoreTy_Array elemTy dims') rest = Some pathTy"
+        by (auto split: if_splits)
+      from Cons.prems(3) CV_Array LVPath_ArrayCast have
+        smd: "sizes_match_dims sizes dims'" and
+        get_rest: "get_value_at_path (CV_Array sizes elementMap) rest = Inr v"
+        by (auto split: if_splits)
+      have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+        using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array ty_eq] smd dims'_wk] .
+      from Cons.IH[OF typed_tgt rest_ty get_rest] show ?thesis .
     qed
   next
     case (CV_Bool x)
-    with Cons.prems show ?thesis by (cases step) auto
+    with Cons.prems show ?thesis by (cases ty) auto
   next
     case (CV_FiniteInt x1 x2 x3)
-    with Cons.prems show ?thesis by (cases step) auto
+    with Cons.prems show ?thesis by (cases ty) auto
   qed
 qed
 
@@ -1626,6 +1678,8 @@ next
       case (LVPath_VariantProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
     next
       case (LVPath_ArrayProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
     qed
   next
     case (CV_Variant ctor payload)
@@ -1660,6 +1714,8 @@ next
       qed
     next
       case (LVPath_ArrayProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
     qed
   next
     case (CV_Array sizes elementMap)
@@ -1689,6 +1745,27 @@ next
         have "get_value_at_path elemVal rest = Inl err" by (auto split: option.splits)
         from Cons.IH[OF \<open>value_has_type env elemVal elemTy\<close> rest_ty this] show ?thesis .
       qed
+    next
+      case (LVPath_ArrayCast dims')
+      from Cons.prems(2) slotTy_eq LVPath_ArrayCast have
+        dims'_wk: "array_dims_well_kinded dims'" and
+        rest_ty: "type_at_path env (CoreTy_Array elemTy dims') rest = Some ty"
+        by (auto split: if_splits)
+      show ?thesis
+      proof (cases "sizes_match_dims sizes dims'")
+        case False
+        \<comment> \<open>Size check failed: RuntimeError directly.\<close>
+        from Cons.prems(3) CV_Array LVPath_ArrayCast False
+        have "err = RuntimeError" by simp
+        then show ?thesis .
+      next
+        case True
+        have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+          using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array slotTy_eq] True dims'_wk] .
+        from Cons.prems(3) CV_Array LVPath_ArrayCast True
+        have "get_value_at_path (CV_Array sizes elementMap) rest = Inl err" by simp
+        from Cons.IH[OF typed_tgt rest_ty this] show ?thesis .
+      qed
     qed
   next
     case (CV_Bool x) with Cons.prems show ?thesis by (cases slotTy) auto
@@ -1698,13 +1775,16 @@ next
 qed
 
 
-(* If the path is structurally compatible with a typed value (type_at_path succeeds),
-   then update_value_at_path can only fail with RuntimeError, never TypeError.
-   Dual to get_value_at_path_error_is_runtime. *)
+(* If the path is structurally compatible with a typed value (type_at_path succeeds)
+   and the new value has the path's type, then update_value_at_path can only fail
+   with RuntimeError, never TypeError. Dual to get_value_at_path_error_is_runtime.
+   (The new value's typing is needed for the LVPath_ArrayCast step, which
+   raises TypeError if the update below it yields a non-array.) *)
 lemma update_value_at_path_error_is_runtime:
   assumes typed: "value_has_type env val slotTy"
     and path_ty: "type_at_path env slotTy path = Some ty"
     and fails: "update_value_at_path val path newVal = Inl err"
+    and new_typed: "value_has_type env newVal ty"
   shows "err = RuntimeError"
 using assms proof (induction path arbitrary: val slotTy)
   case Nil
@@ -1734,7 +1814,7 @@ next
         with Cons.prems(3) CV_Record LVPath_RecordProj fld_lookup
         have err_eq: "err = err2" by simp
         show ?thesis
-          using Cons.IH Inl err_eq fv_typed rest_ty by auto
+          using Cons.IH Inl err_eq fv_typed rest_ty Cons.prems(4) by auto
       next
         case (Inr updated_val)
         with Cons.prems(3) CV_Record LVPath_RecordProj fld_lookup show ?thesis by simp
@@ -1743,6 +1823,8 @@ next
       case (LVPath_VariantProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
     next
       case (LVPath_ArrayProj x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x) with CV_Record Cons.prems slotTy_eq show ?thesis by simp
     qed
   next
     case (CV_Variant ctor payload)
@@ -1769,7 +1851,7 @@ next
           case (Inl err2)
           with Cons.prems(3) CV_Variant LVPath_VariantProj True
           have err_eq: "err = err2" by simp
-          show ?thesis using Cons.IH payload_typed rest_ty Inl err_eq by simp
+          show ?thesis using Cons.IH payload_typed rest_ty Inl err_eq Cons.prems(4) by simp
         next
           case (Inr updated_val)
           with Cons.prems(3) CV_Variant LVPath_VariantProj True show ?thesis by simp
@@ -1783,6 +1865,8 @@ next
       qed
     next
       case (LVPath_ArrayProj x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
+    next
+      case (LVPath_ArrayCast x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
     qed
   next
     case (CV_Array sizes elementMap)
@@ -1812,10 +1896,45 @@ next
         proof (cases "update_value_at_path elemVal rest newVal")
           case (Inl err2)
           with Cons.prems(3) CV_Array LVPath_ArrayProj Some have err_eq: "err = err2" by simp
-          show ?thesis using Cons.IH elem_typed rest_ty Inl err_eq by simp
+          show ?thesis using Cons.IH elem_typed rest_ty Inl err_eq Cons.prems(4) by simp
         next
           case (Inr updated_val)
           with Cons.prems(3) CV_Array LVPath_ArrayProj Some show ?thesis by simp
+        qed
+      qed
+    next
+      case (LVPath_ArrayCast dims')
+      from Cons.prems(2) slotTy_eq LVPath_ArrayCast have
+        dims'_wk: "array_dims_well_kinded dims'" and
+        rest_ty: "type_at_path env (CoreTy_Array elemTy dims') rest = Some ty"
+        by (auto split: if_splits)
+      show ?thesis
+      proof (cases "sizes_match_dims sizes dims'")
+        case False
+        \<comment> \<open>Size check failed: RuntimeError directly.\<close>
+        from Cons.prems(3) CV_Array LVPath_ArrayCast False
+        have "err = RuntimeError" by simp
+        then show ?thesis .
+      next
+        case True
+        have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+          using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array slotTy_eq] True dims'_wk] .
+        show ?thesis
+        proof (cases "update_value_at_path (CV_Array sizes elementMap) rest newVal")
+          case (Inl err2)
+          with Cons.prems(3) CV_Array LVPath_ArrayCast True have err_eq: "err = err2" by simp
+          show ?thesis using Cons.IH Inl err_eq new_typed rest_ty typed_tgt by blast 
+        next
+          case (Inr updated_val)
+          \<comment> \<open>The update below the cast yields an array (it is typed at the retyped
+              array type), so the only remaining failure is the sizes-unchanged
+              check, which is a RuntimeError.\<close>
+          from update_value_at_path_preserves_type[OF typed_tgt Inr rest_ty Cons.prems(4)]
+          have "value_has_type env updated_val (CoreTy_Array elemTy dims')" .
+          then obtain sizes' elementMap' where upd_eq: "updated_val = CV_Array sizes' elementMap'"
+            using value_has_type_Array by blast
+          from Cons.prems(3) CV_Array LVPath_ArrayCast True Inr upd_eq
+          show ?thesis by (auto split: if_splits)
         qed
       qed
     qed
@@ -1999,7 +2118,7 @@ next
   show ?case
   proof (cases "update_value_at_path (IS_Store state ! addr) path newVal")
     case (Inl err)
-    from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl]
+    from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl head_typed]
     have "err = RuntimeError" .
     with Inl show ?thesis by simp
   next

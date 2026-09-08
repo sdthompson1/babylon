@@ -1559,8 +1559,11 @@ next
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst tm)
        = Some (CoreTy_Array (apply_subst subst elemTy) dims)" by simp
-  have lvalue_eq: "is_lvalue (apply_subst_to_term subst tm) = is_lvalue tm" by simp
-  show ?case using inner_subst cond_ok ty_eq lvalue_eq by simp
+  have cond_ok_subst:
+    "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims
+         \<and> \<not> is_lvalue (apply_subst_to_term subst tm) \<and> ghost = NotGhost)"
+    using cond_ok is_lvalue_apply_subst_to_term[of tm subst] by blast
+  show ?case using inner_subst cond_ok_subst ty_eq by simp
 next
   case (CoreTm_Allocated tm)
   \<comment> \<open>Allocated is ghost-only and always returns Bool. The NotGhost equation reduces

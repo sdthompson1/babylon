@@ -1876,6 +1876,7 @@ proof -
     using glv unfolding clear_metavars_def by simp
   have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm)
                  = is_writable_lvalue env coreTm"
+    using is_writable_lvalue_apply_subst_to_term_eq[OF lv]
     unfolding clear_metavars_def by simp
   show ?thesis using wk rt lv' glv' init_typed wl_eq
     by (simp add: cs_eq env'_eq vardecl_add_local_def)

@@ -737,4 +737,13 @@ lemma value_has_type_Array:
     (\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy)"
   using assms by (cases val; auto split: CoreType.splits)
 
+(* An array value typed at dims is also typed at any well-kinded dims' that its
+   sizes match. *)
+lemma value_has_type_array_redim:
+  assumes "value_has_type env (CV_Array sizes elems) (CoreTy_Array elemTy dims)"
+    and "sizes_match_dims sizes dims'"
+    and "array_dims_well_kinded dims'"
+  shows "value_has_type env (CV_Array sizes elems) (CoreTy_Array elemTy dims')"
+  using assms by simp
+
 end

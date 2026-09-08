@@ -126,27 +126,56 @@ next
 qed (simp_all add: compose_subst_correct)
 
 
-(* lvalue-ness only depends on the top-level term shape, which substitution preserves. *)
+(* Substitution preserves array types (it only rewrites the element type). *)
+lemma is_array_type_apply_subst [simp]:
+  "is_array_type ty \<Longrightarrow> is_array_type (apply_subst subst ty)"
+  by (cases ty) auto
+
+(* Substitution doesn't change an lvalue into a non-lvalue, nor does it 
+   change the base-name of an lvalue. *)
+lemma lvalue_base_name_apply_subst_to_term_Some:
+  "lvalue_base_name tm = Some n
+   \<Longrightarrow> lvalue_base_name (apply_subst_to_term subst tm) = Some n"
+  by (induction tm) (auto split: if_splits)
+
 lemma lvalue_base_name_apply_subst_to_term:
-  "lvalue_base_name (apply_subst_to_term subst tm) = lvalue_base_name tm"
-  by (induction tm) auto
+  "is_lvalue tm
+   \<Longrightarrow> lvalue_base_name (apply_subst_to_term subst tm) = lvalue_base_name tm"
+  unfolding is_lvalue_def
+  by (cases "lvalue_base_name tm") (auto simp: lvalue_base_name_apply_subst_to_term_Some)
 
 lemma is_lvalue_apply_subst_to_term [simp]:
-  "is_lvalue (apply_subst_to_term subst tm) = is_lvalue tm"
-  by (simp add: is_lvalue_def lvalue_base_name_apply_subst_to_term)
+  "is_lvalue tm \<Longrightarrow> is_lvalue (apply_subst_to_term subst tm)"
+  unfolding is_lvalue_def
+  by (cases "lvalue_base_name tm") (auto simp: lvalue_base_name_apply_subst_to_term_Some)
 
-(* is_writable_lvalue recurses through RecordProj / VariantProj / ArrayProj to the
-   base CoreTm_Var. apply_subst_to_term preserves these forms, so writability is
-   preserved. *)
+(* Similarly, if a term is a *writable* lvalue then it remains one after substitution. *)
 lemma is_writable_lvalue_apply_subst_to_term [simp]:
-  "is_writable_lvalue env (apply_subst_to_term subst tm) = is_writable_lvalue env tm"
+  "is_writable_lvalue env tm \<Longrightarrow> is_writable_lvalue env (apply_subst_to_term subst tm)"
   by (induction tm) auto
 
-(* ghost_lvalue_ok only looks at the base variable name, which substitution
-   preserves. *)
+(* If applying a substitution to an lvalue makes it a writable lvalue, then the original
+   lvalue must have been writable as well. *)
+lemma is_writable_lvalue_apply_subst_to_term_eq:
+  "is_lvalue tm
+   \<Longrightarrow> is_writable_lvalue env (apply_subst_to_term subst tm) = is_writable_lvalue env tm"
+  by (induction tm) auto
+
+(* ghost_lvalue_ok remains true after a substitution. *)
 lemma ghost_lvalue_ok_apply_subst_to_term [simp]:
-  "ghost_lvalue_ok env ghost (apply_subst_to_term subst tm) = ghost_lvalue_ok env ghost tm"
-  by (rule ghost_lvalue_ok_base_name_cong) (rule lvalue_base_name_apply_subst_to_term)
+  assumes "ghost_lvalue_ok env ghost tm"
+  shows "ghost_lvalue_ok env ghost (apply_subst_to_term subst tm)"
+proof (cases ghost)
+  case NotGhost
+  then show ?thesis by simp
+next
+  case Ghost
+  with assms obtain n where "lvalue_base_name tm = Some n" and "tyenv_var_ghost env n"
+    unfolding ghost_lvalue_ok_def by (auto split: option.splits)
+  then show ?thesis
+    using Ghost lvalue_base_name_apply_subst_to_term_Some[of tm n subst]
+    unfolding ghost_lvalue_ok_def by simp
+qed
 
 
 (* Type substitution does not change free term variables,

@@ -1032,7 +1032,7 @@ next
       hence sub_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
-        using "23.IH"(1) CoreTm_RecordProj by blast
+        using "23.IH"(2) CoreTm_RecordProj by blast
       from IH f''_ge have "interp_writable_lvalue f'' state tm' = interp_writable_lvalue fuel state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_RecordProj by simp
@@ -1041,7 +1041,7 @@ next
       hence sub_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
-        using "23.IH"(2) CoreTm_VariantProj by blast
+        using "23.IH"(3) CoreTm_VariantProj by blast
       from IH f''_ge have "interp_writable_lvalue f'' state tm' = interp_writable_lvalue fuel state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_VariantProj by simp
@@ -1050,7 +1050,7 @@ next
       hence lv_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH_lv: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
-        using "23.IH"(3) CoreTm_ArrayProj by blast
+        using "23.IH"(4) CoreTm_ArrayProj by blast
       show ?thesis
       proof (cases "interp_writable_lvalue fuel state tm'")
         case (Inl err)
@@ -1061,7 +1061,7 @@ next
         hence idx_noFuel: "interp_term_list fuel state indexTms \<noteq> Inl InsufficientFuel"
           using noFuel CoreTm_ArrayProj by (auto split: sum.splits)
         hence IH_idx: "\<forall>f'\<ge>fuel. interp_term_list f' state indexTms = interp_term_list fuel state indexTms"
-          using "23.IH"(4) CoreTm_ArrayProj Inr
+          using "23.IH"(5) CoreTm_ArrayProj Inr
           by (metis prod.exhaust)
         have "interp_writable_lvalue f'' state tm' = Inr addrPath" using IH_lv Inr f''_ge by metis
         moreover have "interp_term_list f'' state indexTms = interp_term_list fuel state indexTms"
@@ -1078,8 +1078,18 @@ next
       case (CoreTm_LitArray x1 x2)
       thus ?thesis using f'_eq by simp
     next
-      case (CoreTm_Cast x1 x2)
-      thus ?thesis using f'_eq by simp
+      case (CoreTm_Cast targetTy tm')
+      show ?thesis
+      proof (cases targetTy)
+        case (CoreTy_Array elemTy dims)
+        hence lv_noFuel: "interp_writable_lvalue fuel state tm' \<noteq> Inl InsufficientFuel"
+          using noFuel CoreTm_Cast by (auto split: sum.splits)
+        hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue f' state tm' = interp_writable_lvalue fuel state tm'"
+          using "23.IH"(1) CoreTm_Cast CoreTy_Array by blast
+        from IH f''_ge have "interp_writable_lvalue f'' state tm' = interp_writable_lvalue fuel state tm'"
+          by metis
+        thus ?thesis using f'_eq CoreTm_Cast CoreTy_Array by simp
+      qed (simp_all add: f'_eq CoreTm_Cast)
     next
       case (CoreTm_Unop x1 x2)
       thus ?thesis using f'_eq by simp

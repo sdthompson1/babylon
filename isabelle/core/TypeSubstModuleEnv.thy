@@ -1375,8 +1375,11 @@ next
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst tm)
        = Some (CoreTy_Array (apply_subst subst elemTy) dims)" by simp
-  have lvalue_eq: "is_lvalue (apply_subst_to_term subst tm) = is_lvalue tm" by simp
-  show ?case using inner_subst cond_ok ty_eq lvalue_eq by simp
+  have cond_ok_subst:
+    "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims
+         \<and> \<not> is_lvalue (apply_subst_to_term subst tm) \<and> ghost = NotGhost)"
+    using cond_ok is_lvalue_apply_subst_to_term[of tm subst] by blast
+  show ?case using inner_subst cond_ok_subst ty_eq by simp
 next
   case (CoreTm_Allocated tm)
   show ?case
@@ -1858,8 +1861,11 @@ next
                                  then fminus (TE_ConstLocals ?me) {|varName|}
                                  else finsert varName (TE_ConstLocals ?me)) \<rparr>"
     unfolding out_eq apply_subst_to_module_env_def by (simp add: fmmap_fmupd)
+  have wl_eq: "is_writable_lvalue env (apply_subst_to_term subst initTm)
+                 = is_writable_lvalue env initTm"
+    using is_writable_lvalue_apply_subst_to_term_eq[OF lv] .
   show ?case
-    using gh wk_subst rt_subst lv glv init_subst out_subst_eq by simp
+    using gh wk_subst rt_subst lv glv init_subst out_subst_eq wl_eq by simp
 next
   \<comment> \<open>Assign: env unchanged.\<close>
   case (4 env ghost assignGhost lhsTm rhsTm)

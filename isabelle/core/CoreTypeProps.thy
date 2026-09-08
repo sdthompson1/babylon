@@ -222,12 +222,13 @@ qed simp_all
 (* ========================================================================== *)
 
 (* Like is_lvalue, but also checks that the base variable is writable.
-   A variable is writable if it is a non-const local. Globals are always read-only. *)
+   A variable is writable iff it is a non-const local. (Globals are always read-only.) *)
 fun is_writable_lvalue :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
   "is_writable_lvalue env (CoreTm_Var name) = tyenv_var_writable env name"
 | "is_writable_lvalue env (CoreTm_RecordProj tm _) = is_writable_lvalue env tm"
 | "is_writable_lvalue env (CoreTm_VariantProj tm _) = is_writable_lvalue env tm"
 | "is_writable_lvalue env (CoreTm_ArrayProj tm _) = is_writable_lvalue env tm"
+| "is_writable_lvalue env (CoreTm_Cast ty tm) = (is_array_type ty \<and> is_writable_lvalue env tm)"
 | "is_writable_lvalue _ _ = False"
 
 (* is_writable_lvalue depends on the environment only through TE_LocalVars and
