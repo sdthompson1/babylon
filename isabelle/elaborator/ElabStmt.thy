@@ -263,14 +263,26 @@ definition elab_vardecl_impure ::
                                  mkCallStmt coreTy castOpt tyArgs' argTms')))))
      | _ \<Rightarrow> undefined)"
 
-(* VarDecl(Ref). The initializer must be a metavariable-free lvalue (this rejects
-   `ref x = f();`, pure or impure, since a call result is not an lvalue), and in
-   ghost code it must be rooted at a ghost variable. The new ref is const iff its
-   base is read-only. Emits CoreStmt_VarDecl ... Ref. *)
+(* VarDecl(Ref). The initializer must be an lvalue (this rejects `ref x = f();`,
+   pure or impure, since a call result is not an lvalue), and in ghost code it
+   must be rooted at a ghost variable.
+
+   With no annotation the recorded type is the initializer type, which must be
+   metavariable-free.
+
+   With an annotation the initializer is coerced to the annotation type and that type is
+   recorded. A ref must match its annotation exactly (up to unification), so the coerced
+   term must still be an lvalue. An inserted cast destroys lvalue-ness exactly when its
+   target is not an array type, so this check rejects integer coercions (`ref r: i64 =
+   some_i32_variable`) while an array cast (`ref a: T[] = someTn`) passes, giving `a` a
+   borrowed view of the fixed-size array. The new ref is const iff its base is read-only.
+
+   Emits CoreStmt_VarDecl ... Ref. *)
 definition elab_vardecl_ref ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabTerm option \<Rightarrow> nat
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
+   \<Rightarrow> BabType option \<Rightarrow> BabTerm option \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
-  "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv =
+  "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv =
     (case tmOpt of
        None \<Rightarrow> Inl [TyErr_RefDeclNeedsValue loc]
      | Some tm \<Rightarrow>
@@ -280,16 +292,33 @@ definition elab_vardecl_ref ::
               if \<not> is_lvalue coreTm then Inl [TyErr_RefDeclNeedsLvalue loc]
               else if \<not> ghost_lvalue_ok env ghost coreTm
               then Inl [TyErr_GhostRefNeedsGhostVar loc varName]
-              else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
-              then Inl [TyErr_CannotInferType loc]
               else
-                Inr (CoreStmt_VarDecl ghost varName Ref rhsTy
-                        (clear_metavars next_mv next_mv' coreTm),
-                     (vardecl_add_local env ghost varName rhsTy)
-                       \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
-                                            then fminus (TE_ConstLocals env) {|varName|}
-                                            else finsert varName (TE_ConstLocals env)) \<rparr>,
-                     next_mv')))"
+                (let mkRefStmt = \<lambda>varTy initTm.
+                         Inr (CoreStmt_VarDecl ghost varName Ref varTy
+                                (clear_metavars next_mv next_mv' initTm),
+                              (vardecl_add_local env ghost varName varTy)
+                                \<lparr> TE_ConstLocals := (if is_writable_lvalue env initTm
+                                                     then fminus (TE_ConstLocals env) {|varName|}
+                                                     else finsert varName (TE_ConstLocals env)) \<rparr>,
+                              next_mv')
+                 in (case tyOpt of
+                       None \<Rightarrow>
+                         \<comment> \<open>Inferred type from the initializer; reject unresolved metavars.\<close>
+                         if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
+                         then Inl [TyErr_CannotInferType loc]
+                         else mkRefStmt rhsTy coreTm
+                     | Some ty \<Rightarrow>
+                         \<comment> \<open>Annotated: coerce the initializer to the annotation type; the
+                             result must still be an lvalue.\<close>
+                         (case elab_type env elabEnv ghost ty of
+                            Inl errs \<Rightarrow> Inl errs
+                          | Inr coreTy \<Rightarrow>
+                              (case coerce_term_to_type env loc coreTm rhsTy coreTy of
+                                 Inl errs \<Rightarrow> Inl errs
+                               | Inr coreTm' \<Rightarrow>
+                                   if \<not> is_lvalue coreTm'
+                                   then Inl [TyErr_TypeMismatch loc coreTy rhsTy]
+                                   else mkRefStmt coreTy coreTm'))))))"
 
 (* ----- Assign branch helpers ----- *)
 
@@ -695,7 +724,7 @@ where
               if is_impure_call env elabEnv tm
               then elab_vardecl_impure env elabEnv ghost loc varName tyOpt tm next_mv
               else elab_vardecl_pure   env elabEnv ghost loc varName tyOpt tm next_mv)
-     | Ref \<Rightarrow> elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv)"
+     | Ref \<Rightarrow> elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv)"
 
   (* Fix: Introduce a ghost local corresponding to an enclosing universal TE_ProofGoal. *)
 | "elab_statement env elabEnv ghost (BabStmt_Fix loc varName ty) next_mv =

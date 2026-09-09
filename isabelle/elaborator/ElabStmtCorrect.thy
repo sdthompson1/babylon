@@ -1408,12 +1408,12 @@ lemma elab_vardecl_pure_cong_fields:
            split: sum.splits prod.splits option.splits if_splits)
 
 lemma elab_vardecl_ref_cong_fields:
-  "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv = Inr (coreStmt, env', next_mv')
+  "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv = Inr (coreStmt, env', next_mv')
      \<Longrightarrow> TE_TypeVars env' = TE_TypeVars env \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
        \<and> TE_FunctionGhost env' = TE_FunctionGhost env \<and> TE_ProofGoal env' = TE_ProofGoal env
        \<and> TE_Datatypes env' = TE_Datatypes env \<and> TE_DataCtors env' = TE_DataCtors env
        \<and> TE_ReturnType env' = TE_ReturnType env \<and> TE_Functions env' = TE_Functions env"
-  by (auto simp: elab_vardecl_ref_def vardecl_add_local_def
+  by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
            split: sum.splits prod.splits option.splits if_splits)
 
 (* The impure helper is only reached for an is_impure_call rhs, which forces tm to
@@ -1832,16 +1832,16 @@ qed
 (* ----- elab_vardecl_ref ----- *)
 
 lemma elab_vardecl_ref_next_mv:
-  "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv
+  "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
-  by (auto simp: elab_vardecl_ref_def
+  by (auto simp: elab_vardecl_ref_def Let_def
            dest!: elab_term_next_mv_monotone
            split: sum.splits prod.splits option.splits if_splits)
 
 (* On success the ref helper returns env' = (vardecl_add_local \<dots>) with the const
    field overridden — still of the well-formed-preserving shape. *)
 lemma elab_vardecl_ref_env:
-  assumes elab: "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv
+  assumes elab: "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
                    = Inr (coreStmt, env', next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -1850,65 +1850,148 @@ lemma elab_vardecl_ref_env:
                  \<and> is_well_kinded env varTy
                  \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env varTy)"
 proof -
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using ee_wf unfolding elabenv_well_formed_def by simp
   from elab obtain tm coreTm rhsTy nmv where
     tm_eq: "tmOpt = Some tm" and
-    etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, rhsTy, nmv)" and
-    no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
-    env'_eq: "env' = (vardecl_add_local env ghost varName rhsTy)
-                       \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
-                                            then fminus (TE_ConstLocals env) {|varName|}
-                                            else finsert varName (TE_ConstLocals env)) \<rparr>"
-    by (auto simp: elab_vardecl_ref_def vardecl_add_local_def
+    etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, rhsTy, nmv)"
+    by (auto simp: elab_vardecl_ref_def Let_def
              split: sum.splits prod.splits option.splits if_splits)
-  have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-    using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
-  show ?thesis using env'_eq wkrt by blast
+  show ?thesis
+  proof (cases tyOpt)
+    case None
+    \<comment> \<open>Inferred type = rhsTy; the no-metavar check makes it well-kinded / runtime.\<close>
+    from elab tm_eq etm None have
+      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
+      env'_eq: "env' = (vardecl_add_local env ghost varName rhsTy)
+                         \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
+                                              then fminus (TE_ConstLocals env) {|varName|}
+                                              else finsert varName (TE_ConstLocals env)) \<rparr>"
+      by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
+               split: sum.splits prod.splits if_splits)
+    have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
+      using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
+    show ?thesis using env'_eq wkrt by blast
+  next
+    case (Some ty)
+    \<comment> \<open>Annotated: recorded type = elaborated annotation, which is well-kinded / runtime.\<close>
+    from elab tm_eq etm Some obtain coreTy where
+      ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
+      env'_eq: "\<exists>c. env' = (vardecl_add_local env ghost varName coreTy) \<lparr> TE_ConstLocals := c \<rparr>"
+      by (auto simp: elab_vardecl_ref_def Let_def
+               split: sum.splits prod.splits option.splits if_splits)
+    have wk: "is_well_kinded env coreTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
+      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
+    show ?thesis using env'_eq wk rt by blast
+  qed
 qed
 
 (* elab_vardecl_ref emits a CoreStmt_VarDecl(Ref) that typechecks in env. *)
 lemma elab_vardecl_ref_correct:
-  assumes elab: "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv
+  assumes elab: "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
                    = Inr (coreStmt, env', next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
   shows "core_statement_type env ghost coreStmt = Some env'"
 proof -
+  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
+    using ee_wf unfolding elabenv_well_formed_def by simp
   from elab obtain tm coreTm rhsTy where
     tm_eq: "tmOpt = Some tm" and
     etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, rhsTy, next_mv')" and
     lv: "is_lvalue coreTm" and
-    glv: "ghost_lvalue_ok env ghost coreTm" and
-    no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
-    cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref rhsTy
-                          (clear_metavars next_mv next_mv' coreTm)" and
-    env'_eq: "env' = (vardecl_add_local env ghost varName rhsTy)
-                       \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
-                                            then fminus (TE_ConstLocals env) {|varName|}
-                                            else finsert varName (TE_ConstLocals env)) \<rparr>"
-    by (auto simp: elab_vardecl_ref_def vardecl_add_local_def
+    glv: "ghost_lvalue_ok env ghost coreTm"
+    by (auto simp: elab_vardecl_ref_def Let_def
              split: sum.splits prod.splits option.splits if_splits)
-  have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-    using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
-  have wk: "is_well_kinded env rhsTy" using wkrt by simp
-  have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy" using wkrt by auto
-  have rhsTy_below: "type_tyvars rhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
   have coreTm_typed_decl:
     "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost coreTm = Some rhsTy"
     using elab_term_correct(1)[OF etm wf ee_wf] bound by simp
-  have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm) = Some rhsTy"
-    using clear_metavars_typed_in_env[OF coreTm_typed_decl wf bound rhsTy_below] .
-  have lv': "is_lvalue (clear_metavars next_mv next_mv' coreTm)"
-    using lv unfolding clear_metavars_def by simp
-  have glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' coreTm)"
-    using glv unfolding clear_metavars_def by simp
-  have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm)
-                 = is_writable_lvalue env coreTm"
-    using is_writable_lvalue_apply_subst_to_term_eq[OF lv]
-    unfolding clear_metavars_def by simp
-  show ?thesis using wk rt lv' glv' init_typed wl_eq
-    by (simp add: cs_eq env'_eq vardecl_add_local_def)
+  show ?thesis
+  proof (cases tyOpt)
+    case None
+    \<comment> \<open>Inferred: varTy = rhsTy (metavar-free), initTm = clear_metavars coreTm.\<close>
+    from elab tm_eq etm None have
+      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref rhsTy
+                            (clear_metavars next_mv next_mv' coreTm)" and
+      env'_eq: "env' = (vardecl_add_local env ghost varName rhsTy)
+                         \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
+                                              then fminus (TE_ConstLocals env) {|varName|}
+                                              else finsert varName (TE_ConstLocals env)) \<rparr>"
+      by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
+               split: sum.splits prod.splits if_splits)
+    have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
+      using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
+    have wk: "is_well_kinded env rhsTy" using wkrt by simp
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy" using wkrt by auto
+    have rhsTy_below: "type_tyvars rhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
+      using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
+    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm) = Some rhsTy"
+      using clear_metavars_typed_in_env[OF coreTm_typed_decl wf bound rhsTy_below] .
+    have lv': "is_lvalue (clear_metavars next_mv next_mv' coreTm)"
+      using lv unfolding clear_metavars_def by simp
+    have glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' coreTm)"
+      using glv unfolding clear_metavars_def by simp
+    have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm)
+                   = is_writable_lvalue env coreTm"
+      using is_writable_lvalue_apply_subst_to_term_eq[OF lv]
+      unfolding clear_metavars_def by simp
+    show ?thesis using wk rt lv' glv' init_typed wl_eq
+      by (simp add: cs_eq env'_eq vardecl_add_local_def)
+  next
+    case (Some ty)
+    \<comment> \<open>Annotated: varTy = elaborated annotation; the initializer is coerced to it
+        (unify or cast) and the coerced term is checked to still be an lvalue.\<close>
+    from elab tm_eq etm Some obtain coreTy coreTm' where
+      ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
+      coerce: "coerce_term_to_type env loc coreTm rhsTy coreTy = Inr coreTm'" and
+      lv': "is_lvalue coreTm'" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref coreTy
+                            (clear_metavars next_mv next_mv' coreTm')" and
+      env'_eq: "env' = (vardecl_add_local env ghost varName coreTy)
+                         \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm'
+                                              then fminus (TE_ConstLocals env) {|varName|}
+                                              else finsert varName (TE_ConstLocals env)) \<rparr>"
+      by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
+               split: sum.splits prod.splits option.splits if_splits)
+    have wk: "is_well_kinded env coreTy"
+      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
+      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
+    \<comment> \<open>The coerced+cleared initializer typechecks to coreTy in env.\<close>
+    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some coreTy"
+      using coerce_clear_typed_in_env[OF coreTm_typed_decl coerce wf bound wk rt] .
+    \<comment> \<open>Coercion preserves the lvalue's base variable: a substitution does not touch
+        it, and an inserted cast that leaves the term an lvalue is an array cast,
+        which lvalue_base_name looks through. Hence the ghost check transfers.\<close>
+    have base_eq: "lvalue_base_name coreTm' = lvalue_base_name coreTm"
+    proof (cases "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) rhsTy coreTy")
+      case (Some subst)
+      then have "coreTm' = apply_subst_to_term subst coreTm"
+        using coerce unfolding coerce_term_to_type_unfold by simp
+      thus ?thesis using lvalue_base_name_apply_subst_to_term[OF lv] by simp
+    next
+      case None
+      then have "coreTm' = insert_cast rhsTy coreTy coreTm"
+        using coerce unfolding coerce_term_to_type_unfold by (simp split: if_splits)
+      thus ?thesis using lv' by (cases "rhsTy = coreTy") (auto simp: insert_cast_def)
+    qed
+    have glv': "ghost_lvalue_ok env ghost coreTm'"
+      using glv base_eq unfolding ghost_lvalue_ok_def by simp
+    have lv'': "is_lvalue (clear_metavars next_mv next_mv' coreTm')"
+      using lv' unfolding clear_metavars_def by simp
+    have glv'': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' coreTm')"
+      using glv' unfolding clear_metavars_def by simp
+    have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm')
+                   = is_writable_lvalue env coreTm'"
+      using is_writable_lvalue_apply_subst_to_term_eq[OF lv']
+      unfolding clear_metavars_def by simp
+    show ?thesis using wk rt lv'' glv'' init_typed wl_eq
+      by (simp add: cs_eq env'_eq vardecl_add_local_def)
+  qed
 qed
 
 
@@ -3145,7 +3228,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
     case Ref
     \<comment> \<open>Ref: env' = (vardecl_add_local \<dots>) with TE_ConstLocals overridden.\<close>
     from "1.prems"(1) Ref
-    have "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv
+    have "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
             = Inr (coreStmt, env', next_mv')" by simp
     thus ?thesis using elab_vardecl_ref_cong_fields by simp
   qed
@@ -3573,7 +3656,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
     \<comment> \<open>Ref: env' = (vardecl_add_local \<dots>) with TE_ConstLocals overridden — the shape
         tyenv_well_formed_vardecl_result covers directly.\<close>
     from "1.prems"(1) Ref
-    have rf: "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv
+    have rf: "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
                 = Inr (coreStmt, env', next_mv')" by simp
     obtain varTy c where
       env'_eq: "env' = (vardecl_add_local env ghost varName varTy) \<lparr> TE_ConstLocals := c \<rparr>" and
@@ -4370,7 +4453,7 @@ case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
   next
     case Ref
     from "1.prems"(1) Ref
-    have "elab_vardecl_ref env elabEnv ghost loc varName tmOpt next_mv
+    have "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
             = Inr (coreStmt, env', next_mv')" by simp
     thus ?thesis using elab_vardecl_ref_correct[OF _ "1.prems"(2,3,4)] by simp
   qed
