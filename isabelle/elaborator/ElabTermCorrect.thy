@@ -237,8 +237,7 @@ proof -
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes expArgTypes
        \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)"
     using unify_type_lists_correct[OF unify_types wf' len_actualTypes
@@ -250,8 +249,7 @@ proof -
     finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)" and
     types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes expArgTypes" and
     finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
     by blast+
@@ -388,8 +386,7 @@ proof -
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst unifySubst actualTy)
-              \<and> is_finite_integer_type (apply_subst unifySubst expectedTy)))
+           \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
          actualTypes ?expectedTypes
        \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
     using unify_type_lists_correct[OF unify_types
@@ -404,8 +401,7 @@ proof -
     using unify_correct finalSubst_eq by simp
   have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes ?expectedTypes"
     using unify_correct finalSubst_eq by simp
 
@@ -575,8 +571,7 @@ proof -
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst unifySubst actualTy)
-              \<and> is_finite_integer_type (apply_subst unifySubst expectedTy)))
+           \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
          actualTypes ?expectedTypes
        \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
     using unify_type_lists_correct[OF unify_types
@@ -591,8 +586,7 @@ proof -
     using unify_correct finalSubst_eq by simp
   have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes ?expectedTypes"
     using unify_correct finalSubst_eq by simp
 
@@ -825,8 +819,7 @@ proof -
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst unifySubst actualTy)
-              \<and> is_finite_integer_type (apply_subst unifySubst expectedTy)))
+           \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
          actualTypes ?expectedTypes
        \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
     using unify_type_lists_correct[OF unify_types
@@ -841,8 +834,7 @@ proof -
     using unify_correct finalSubst_eq by simp
   have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes ?expectedTypes"
     using unify_correct finalSubst_eq by simp
 

@@ -1047,10 +1047,59 @@ qed
 (* Correctness of type unification/coercion *)
 (* ============================================================================== *)
 
+(* A coercible pair consists of two finite integer types; in particular both
+   are ground, so any substitution leaves them unchanged. *)
+lemma coercible_finite:
+  "coercible actualTy expectedTy
+     \<Longrightarrow> is_finite_integer_type actualTy \<and> is_finite_integer_type expectedTy"
+  by (simp add: coercible_def)
+
+lemma coercible_no_tyvars:
+  "coercible actualTy expectedTy
+     \<Longrightarrow> type_tyvars actualTy = {} \<and> type_tyvars expectedTy = {}"
+  using coercible_finite finite_integer_type_is_integer_type integer_type_no_tyvars by blast
+
+lemma coercible_apply_subst:
+  assumes "coercible actualTy expectedTy"
+  shows "apply_subst s actualTy = actualTy" and "apply_subst s expectedTy = expectedTy"
+proof -
+  have "type_tyvars actualTy = {}" "type_tyvars expectedTy = {}"
+    using coercible_no_tyvars[OF assms] by simp_all
+  thus "apply_subst s actualTy = actualTy" "apply_subst s expectedTy = expectedTy"
+    by (simp_all add: apply_subst_disjoint_id)
+qed
+
+(* The one typing fact about elaborator-inserted casts: if `tm` has type
+   actualTy, and either the types agree or the pair is coercible, then
+   insert_cast retypes it at expectedTy. Every site that inserts a coercion
+   (apply_call_coercions, validate_call_args, coerce_term_to_type) proves its
+   typing through this lemma, so a new kind of coercion needs a new case here
+   and nowhere else. *)
+lemma insert_cast_typed:
+  assumes typed: "core_term_type env ghost tm = Some actualTy"
+      and ok: "actualTy = expectedTy \<or> coercible actualTy expectedTy"
+  shows "core_term_type env ghost (insert_cast actualTy expectedTy tm) = Some expectedTy"
+proof (cases "actualTy = expectedTy")
+  case True
+  thus ?thesis using typed by (simp add: insert_cast_def)
+next
+  case False
+  with ok have fin: "is_finite_integer_type actualTy" "is_finite_integer_type expectedTy"
+    using coercible_finite by blast+
+  have actual_int: "is_integer_type actualTy"
+    using fin(1) finite_integer_type_is_integer_type by blast
+  have expected_int: "is_integer_type expectedTy"
+    using fin(2) finite_integer_type_is_integer_type by blast
+  have expected_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy"
+    using fin(2) by (cases expectedTy) auto
+  show ?thesis using typed actual_int expected_int expected_rt False
+    by (auto simp: insert_cast_def split: option.splits)
+qed
+
 (* Correctness of unify_type_lists (Phase 1):
    If it succeeds, the substitution is well-kinded and runtime-preserving,
    finalSubst extends accSubst (via composition with some theta),
-   and for each pair of types, either they unify or both are finite integers. *)
+   and for each pair of types, either they unify or the pair is coercible. *)
 lemma unify_type_lists_correct:
   assumes "unify_type_lists is_flex mk_err idx actualTys expectedTys accSubst = Inr finalSubst"
       and "tyenv_well_formed env"
@@ -1067,8 +1116,7 @@ lemma unify_type_lists_correct:
        \<and> (\<exists>theta. finalSubst = compose_subst theta accSubst)
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-              \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTys expectedTys
        \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
   using assms
@@ -1166,8 +1214,7 @@ next
             \<and> (\<exists>theta. finalSubst = compose_subst theta ?composedSubst)
             \<and> list_all2 (\<lambda>actualTy expectedTy.
                 apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-                \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-                   \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+                \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
               actualTys expectedTys
             \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
       using "2.IH"(2) Some len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt composed_wk
@@ -1201,7 +1248,7 @@ next
   next
     case None
     from "2.prems"(1) None have
-      is_int: "is_finite_integer_type ?actualTy' \<and> is_finite_integer_type ?expectedTy'"
+      coer: "coercible ?actualTy' ?expectedTy'"
       and recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys accSubst = Inr finalSubst"
       by (simp_all add: Let_def split: if_splits)
 
@@ -1210,11 +1257,10 @@ next
             \<and> (\<exists>theta. finalSubst = compose_subst theta accSubst)
             \<and> list_all2 (\<lambda>actualTy expectedTy.
                 apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-                \<or> (is_finite_integer_type (apply_subst finalSubst actualTy)
-                   \<and> is_finite_integer_type (apply_subst finalSubst expectedTy)))
+                \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
               actualTys expectedTys
             \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
-      using "2.IH"(1) None is_int len_tl recurse "2.prems"(2) actualTys_wk expectedTys_wk
+      using "2.IH"(1) None coer len_tl recurse "2.prems"(2) actualTys_wk expectedTys_wk
                        "2.prems"(6) actualTys_rt expectedTys_rt "2.prems"(9) "2.prems"(10)
       by simp
 
@@ -1222,31 +1268,24 @@ next
     from ih obtain theta where finalSubst_eq: "finalSubst = compose_subst theta accSubst"
       by blast
 
-    \<comment> \<open>Finite integer types have no type variables, so applying any substitution is identity\<close>
-    have actualTy'_no_tyvars: "type_tyvars ?actualTy' = {}"
-      using is_int finite_integer_type_is_integer_type integer_type_no_tyvars by blast
-    have expectedTy'_no_tyvars: "type_tyvars ?expectedTy' = {}"
-      using is_int finite_integer_type_is_integer_type integer_type_no_tyvars by blast
-
     \<comment> \<open>apply_subst finalSubst actualTy = apply_subst theta (apply_subst accSubst actualTy)
-       = apply_subst theta ?actualTy'. Since ?actualTy' has no type variables, this equals ?actualTy'.\<close>
+       = apply_subst theta ?actualTy'. A coercible pair is ground, so this is ?actualTy'.\<close>
     have "apply_subst finalSubst actualTy = apply_subst theta ?actualTy'"
       using finalSubst_eq by (simp add: compose_subst_correct)
     also have "... = ?actualTy'"
-      using actualTy'_no_tyvars apply_subst_disjoint_id by simp
+      using coercible_apply_subst(1)[OF coer] .
     finally have actual_eq: "apply_subst finalSubst actualTy = ?actualTy'" .
-    hence actual_finite: "is_finite_integer_type (apply_subst finalSubst actualTy)"
-      using is_int by simp
 
     have "apply_subst finalSubst expectedTy = apply_subst theta ?expectedTy'"
       using finalSubst_eq by (simp add: compose_subst_correct)
     also have "... = ?expectedTy'"
-      using expectedTy'_no_tyvars apply_subst_disjoint_id by simp
+      using coercible_apply_subst(2)[OF coer] .
     finally have expected_eq: "apply_subst finalSubst expectedTy = ?expectedTy'" .
-    hence expected_finite: "is_finite_integer_type (apply_subst finalSubst expectedTy)"
-      using is_int by simp
 
-    show ?thesis using ih actual_finite expected_finite by simp
+    have head_coer: "coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy)"
+      using coer actual_eq expected_eq by simp
+
+    show ?thesis using ih head_coer by simp
   qed
 next
   case ("3_1" uu uv uw v va uz)
@@ -1258,14 +1297,13 @@ qed
 
 (* Correctness of apply_call_coercions (Phase 2):
    If input terms have the actual types, and the type unification property holds
-   (types equal after substitution or both finite integers), then output terms
+   (types equal after substitution or coercible), then output terms
    have the expected types after substitution. *)
 lemma apply_call_coercions_correct:
   assumes "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) tms actualTys"
       and "list_all2 (\<lambda>actualTy expectedTy.
              apply_subst subst actualTy = apply_subst subst expectedTy
-             \<or> (is_finite_integer_type (apply_subst subst actualTy)
-                \<and> is_finite_integer_type (apply_subst subst expectedTy)))
+             \<or> coercible (apply_subst subst actualTy) (apply_subst subst expectedTy))
            actualTys expectedTys"
       and "tyenv_well_formed env"
       and "\<forall>ty \<in> fmran' subst. is_well_kinded env ty"
@@ -1295,11 +1333,10 @@ next
     tail_typed: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) tms actualTys"
     by simp_all
   from "2.prems"(2) have
-    head_prop: "?actualTy' = ?expectedTy' \<or> (is_finite_integer_type ?actualTy' \<and> is_finite_integer_type ?expectedTy')" and
+    head_prop: "?actualTy' = ?expectedTy' \<or> coercible ?actualTy' ?expectedTy'" and
     tail_prop: "list_all2 (\<lambda>actualTy expectedTy.
                   apply_subst subst actualTy = apply_subst subst expectedTy
-                  \<or> (is_finite_integer_type (apply_subst subst actualTy)
-                     \<and> is_finite_integer_type (apply_subst subst expectedTy)))
+                  \<or> coercible (apply_subst subst actualTy) (apply_subst subst expectedTy))
                 actualTys expectedTys"
     by simp_all
   from "2.prems"(6,7) have
@@ -1321,31 +1358,11 @@ next
         head_typed)
 
   \<comment> \<open>Show the head element has the expected type\<close>
-  have head_result: "core_term_type env ghost
-                       (if ?actualTy' = ?expectedTy' then ?tm' else CoreTm_Cast ?expectedTy' ?tm')
+  have head_result: "core_term_type env ghost (insert_cast ?actualTy' ?expectedTy' ?tm')
                      = Some ?expectedTy'"
-  proof (cases "?actualTy' = ?expectedTy'")
-    case True
-    then show ?thesis using head_tm'_typed by simp
-  next
-    case False
-    \<comment> \<open>Types differ, so both must be finite integer types\<close>
-    from head_prop False have
-      actual_finite: "is_finite_integer_type ?actualTy'" and
-      expected_finite: "is_finite_integer_type ?expectedTy'"
-      by simp_all
-    \<comment> \<open>Cast typechecks: operand has integer type, target has integer type, both runtime if NotGhost\<close>
-    have actual_int: "is_integer_type ?actualTy'"
-      using actual_finite finite_integer_type_is_integer_type by blast
-    have expected_int: "is_integer_type ?expectedTy'"
-      using expected_finite finite_integer_type_is_integer_type by blast
-    have expected_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
-      using expected_finite by (cases ?expectedTy') auto
-    show ?thesis using head_tm'_typed actual_int expected_int expected_rt False
-      by (auto split: option.splits)
-  qed
+    using insert_cast_typed[OF head_tm'_typed head_prop] .
 
-  show ?case using head_result ih by (simp add: Let_def)
+  show ?case using head_result ih by simp
 next
   case ("3_1" subst v va vb)
   then show ?case by simp

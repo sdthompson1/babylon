@@ -156,10 +156,29 @@ definition build_call_result ::
         in (CoreTm_VariantCtor ctorName finalTyArgs (hd finalArgTms),
             CoreTy_Datatype dtName finalTyArgs))"
 
+(* When type unification fails, the elaborator may still bridge the gap with an
+   inserted cast. The following predicate defines when such a cast is allowed.
+
+   Currently, these implicit conversions are only allowed between finite integer
+   types (example: `var x: i16 = some_i32_value`). The `int` type is excluded; an
+   `int` is never implicitly cast to or from a finite-integer type.
+*)
+definition coercible :: "CoreType \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "coercible actualTy expectedTy =
+    (is_finite_integer_type actualTy \<and> is_finite_integer_type expectedTy)"
+
+(* Convert `tm`, of type actualTy, to expectedTy. Returns the term itself if the two
+   types already agree, otherwise a CoreTm_Cast to expectedTy. Only meaningful when
+   actualTy = expectedTy \<or> coercible actualTy expectedTy. *)
+definition insert_cast :: "CoreType \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
+  "insert_cast actualTy expectedTy tm =
+    (if actualTy = expectedTy then tm else CoreTm_Cast expectedTy tm)"
+
 (* Unify actual types with expected types pairwise, accumulating substitutions.
    For each pair of types:
    1. Try unification - if it succeeds, accumulate the substitution
-   2. If unification fails but both are finite integer types, that's OK (coercion will be inserted later)
+   2. If unification fails but the pair is coercible, that's OK (a cast will be
+      inserted later by apply_call_coercions)
    3. If both fail, return an error via mk_err
    The nat parameter is an index counter passed to mk_err for error reporting. *)
 fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
@@ -174,8 +193,8 @@ fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Righta
          let composedSubst = compose_subst newSubst accSubst
          in unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys composedSubst
      | None \<Rightarrow>
-         (if is_finite_integer_type actualTy' \<and> is_finite_integer_type expectedTy' then
-            \<comment> \<open>Both are finite integers - coercion will be inserted later\<close>
+         (if coercible actualTy' expectedTy' then
+            \<comment> \<open>A cast will be inserted later\<close>
             unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys accSubst
           else
             Inl (mk_err idx expectedTy' actualTy')))"
@@ -184,23 +203,20 @@ fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Righta
 (* Phase 2 of function call argument typechecking:
    Apply substitution to terms and insert coercions where needed.
    For each term, apply the substitution. If the resulting actual type differs from
-   the expected type (both must be finite integers at this point), insert a cast. *)
+   the expected type (the pair must be coercible at this point), insert a cast. *)
 fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                             \<Rightarrow> CoreTerm list" where
   "apply_call_coercions subst [] [] [] = []"
 | "apply_call_coercions subst (tm # tms) (actualTy # actualTys) (expectedTy # expectedTys) =
-    (let tm' = apply_subst_to_term subst tm;
-         actualTy' = apply_subst subst actualTy;
-         expectedTy' = apply_subst subst expectedTy;
-         \<comment> \<open>Insert cast if types differ (must be compatible integers at this point)\<close>
-         finalTm = (if actualTy' = expectedTy' then tm'
-                    else CoreTm_Cast expectedTy' tm')
-     in finalTm # apply_call_coercions subst tms actualTys expectedTys)"
+    (insert_cast (apply_subst subst actualTy) (apply_subst subst expectedTy)
+                 (apply_subst_to_term subst tm)
+     # apply_call_coercions subst tms actualTys expectedTys)"
 | "apply_call_coercions _ _ _ _ = undefined"
 
 (* Combine unify_type_lists and apply_call_coercions into a single function.
-   Unifies actual types with expected types (with integer coercion), then applies
-   the resulting substitution to the terms and inserts casts where needed. *)
+   Unifies actual types with expected types (allowing coercible pairs), then
+   applies the resulting substitution to the terms and inserts casts where
+   needed. *)
 definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list)
                               \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
                               \<Rightarrow> CoreType list \<Rightarrow> TypeSubst

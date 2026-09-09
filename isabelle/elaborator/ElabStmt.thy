@@ -79,10 +79,9 @@ definition resolve_impure_callee ::
 
 (* Elaborate function call arguments, given the substitution that unify_type_lists
    produced. For each (term, actualTy, expectedTy, Var/Ref):
-     - Var: insert an integer cast if the actual and expected types differ
-       (they must both be finite integers at that point, guaranteed by
-       unify_type_lists's success).
-     - Ref: require the actual and expected types to be equal and the term
+     - Var: insert a cast if the actual and expected types differ (they must be coercible
+       at this point, guaranteed by unify_type_lists's success).
+     - Ref: require the actual and expected types to be equal, and the term
        to be a writable lvalue.
    Returns the final argument terms (substitution applied). *)
 fun validate_call_args ::
@@ -97,11 +96,9 @@ fun validate_call_args ::
          expectedTy' = apply_subst subst expectedTy
      in case vor of
           Var \<Rightarrow>
-            (let finalTm = (if actualTy' = expectedTy' then tm'
-                            else CoreTm_Cast expectedTy' tm')
-             in case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
-                  Inl errs \<Rightarrow> Inl errs
-                | Inr rest \<Rightarrow> Inr (finalTm # rest))
+            (case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr rest \<Rightarrow> Inr (insert_cast actualTy' expectedTy' tm' # rest))
         | Ref \<Rightarrow>
             (if actualTy' \<noteq> expectedTy' then Inl [TyErr_TypeMismatch loc expectedTy' actualTy']
              else if \<not> is_writable_lvalue env tm' then Inl [TyErr_NotWritableLvalue loc]
@@ -150,25 +147,23 @@ definition elab_impure_call_term ::
 
 (* Coerce an elaborated (pure) term `tm` of type `srcTy` to the target type
    `tgtTy`: try to unify (binding flexible metavariables, then applying the
-   substitution to the term); failing that, insert an integer cast when both
-   types are integers (e.g. `var x: i16 = 10;`); otherwise a type mismatch.
-   The caller chooses which type to *record* (annotated VarDecl keeps the
-   annotation type, which is already metavariable-free). *)
+   substitution to the term); failing that, insert a cast when the pair is
+   coercible (e.g. `var x: i16 = someI32;`); otherwise a type mismatch.
+   (This is a special case of unify_and_coerce, for a single term argument.) *)
 definition coerce_term_to_type ::
   "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreType
    \<Rightarrow> TypeError list + CoreTerm" where
   "coerce_term_to_type env loc tm srcTy tgtTy =
-    (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) srcTy tgtTy of
-       Some subst \<Rightarrow> Inr (apply_subst_to_term subst tm)
-     | None \<Rightarrow>
-         if is_integer_type srcTy \<and> is_integer_type tgtTy
-         then Inr (CoreTm_Cast tgtTy tm)
-         else Inl [TyErr_TypeMismatch loc tgtTy srcTy])"
+    (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+            (\<lambda>_ exp act. [TyErr_TypeMismatch loc exp act])
+            [tm] [srcTy] [tgtTy] fmempty of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (tms, _) \<Rightarrow> Inr (hd tms))"
 
 (* Reconcile an impure call's return type `retTy` with the target type `tgtTy`,
    choosing the castOpt for CoreStmt_VarDeclCall / AssignCall. On exact match
    (unify) returns (None, tyArgs, argTms) with the unifying substitution applied
-   to the ty-args and arg terms; on an integer mismatch returns
+   to the ty-args and arg terms; on a coercible mismatch returns
    (Some tgtTy, tyArgs, argTms) with no further substitution (unify failed, so
    there is no substitution to apply); otherwise a type mismatch. *)
 definition reconcile_call_result ::
@@ -181,7 +176,7 @@ definition reconcile_call_result ::
               map (apply_subst subst) tyArgs,
               map (apply_subst_to_term subst) argTms)
      | None \<Rightarrow>
-         if is_integer_type retTy \<and> is_integer_type tgtTy
+         if coercible retTy tgtTy
          then Inr (Some tgtTy, tyArgs, argTms)
          else Inl [TyErr_TypeMismatch loc tgtTy retTy])"
 
