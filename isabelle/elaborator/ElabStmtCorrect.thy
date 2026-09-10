@@ -732,7 +732,7 @@ lemma resolve_impure_callee_next_mv:
            split: BabTerm.splits option.splits sum.splits prod.splits if_splits)
 
 (* elab_impure_call_term advances the counter: resolve_impure_callee then
-   elab_term_list (unify / validate_call_args do not allocate). *)
+   elab_term_list (unify_and_coerce / check_ref_args do not allocate). *)
 lemma elab_impure_call_term_next_mv:
   "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
      = Inr (fnName, tyArgs, argTms, retTy, next_mv')
@@ -840,58 +840,32 @@ proof -
     by blast
 qed
 
-(* validate_call_args returns a list as long as its input term list (the four
-   input lists must have equal length, else the function is undefined). *)
-lemma validate_call_args_length:
-  "validate_call_args env ghost loc subst tms actualTys expectedTys varOrRefs = Inr finalArgTms
-     \<Longrightarrow> length tms = length actualTys \<Longrightarrow> length actualTys = length expectedTys
-     \<Longrightarrow> length expectedTys = length varOrRefs
-     \<Longrightarrow> length finalArgTms = length tms"
-  by (induction env ghost loc subst tms actualTys expectedTys varOrRefs arbitrary: finalArgTms
-      rule: validate_call_args.induct)
-     (auto simp: Let_def split: VarOrRef.splits sum.splits if_splits)
-
-(* validate_call_args depends on env only through is_writable_lvalue and
+(* check_ref_args depends on env only through is_writable_lvalue and
    ghost_lvalue_ok (in the Ref arm), which are tyvar-irrelevant, so its result
    is unchanged in the fresh-tyvar-extended env. This lets us move the call from
    the un-extended caller env to the extended env where the argument typing
    facts live. *)
-lemma validate_call_args_extend_env_with_tyvars:
-  "validate_call_args (extend_env_with_tyvars env tvGhost lo hi)
-     ghost loc subst tms actualTys expectedTys varOrRefs
-   = validate_call_args env ghost loc subst tms actualTys expectedTys varOrRefs"
-  by (induction env ghost loc subst tms actualTys expectedTys varOrRefs
-      rule: validate_call_args.induct)
-     (auto simp: Let_def split: VarOrRef.splits sum.splits)
+lemma check_ref_args_extend_env_with_tyvars:
+  "check_ref_args (extend_env_with_tyvars env tvGhost lo hi)
+     ghost locOf idx tms actualTys expectedTys varOrRefs
+   = check_ref_args env ghost locOf idx tms actualTys expectedTys varOrRefs"
+  by (induction env ghost locOf idx tms actualTys expectedTys varOrRefs
+      rule: check_ref_args.induct)
+     (auto split: VarOrRef.splits)
 
-(* Correctness of validate_call_args: given that the (pre-coercion) terms type
-   to their actual types, the unify substitution reconciles each actual/expected
-   pair (equal after subst, or coercible), and the subst is harmless
-   on the env, the validated terms type to the substituted expected types — and
-   Ref positions are writable lvalues obeying the ghost-write discipline. The
-   conclusion is the per-argument shape that core_impure_call_type's list_all2
-   check requires. *)
-lemma validate_call_args_correct:
-  assumes vca: "validate_call_args env ghost loc subst tms actualTys expectedTys varOrRefs
-                  = Inr finalArgTms"
-      and ih: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) tms actualTys"
-      and unified: "list_all2 (\<lambda>actualTy expectedTy.
-             apply_subst subst actualTy = apply_subst subst expectedTy
-             \<or> coercible (apply_subst subst actualTy) (apply_subst subst expectedTy))
-           actualTys expectedTys"
-      and wf: "tyenv_well_formed env"
-      and subst_wk: "\<forall>ty \<in> fmran' subst. is_well_kinded env ty"
-      and subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' subst. is_runtime_type env ty)"
+(* Correctness of check_ref_args: given that the (already coerced) terms type to
+   the expected types, a successful check yields the per-argument shape that
+   core_impure_call_type's list_all2 check requires — Var positions just carry
+   the typing, Ref positions are additionally writable lvalues obeying the
+   ghost-write discipline. The actual-type list only feeds the Ref type check,
+   so nothing is assumed about it beyond its length. *)
+lemma check_ref_args_correct:
+  assumes cra: "check_ref_args env ghost locOf idx tms actualTys expectedTys varOrRefs = Inr ()"
+      and typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env ghost tm = Some expectedTy)
+                    tms expectedTys"
       and len1: "length tms = length actualTys"
       and len2: "length actualTys = length expectedTys"
       and len3: "length expectedTys = length varOrRefs"
-      and locals_unaffected:
-        "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty'
-                      \<Longrightarrow> apply_subst subst ty' = ty'"
-      and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
-      and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
-      and expectedTys_wk: "list_all (is_well_kinded env) expectedTys"
-      and expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
   shows "list_all2 (\<lambda>(tm, vor) expectedTy.
            case vor of
              Var \<Rightarrow> (case core_term_type env ghost tm of
@@ -899,63 +873,30 @@ lemma validate_call_args_correct:
            | Ref \<Rightarrow> is_writable_lvalue env tm
                     \<and> ghost_lvalue_ok env ghost tm
                     \<and> core_term_type env ghost tm = Some expectedTy)
-         (zip finalArgTms varOrRefs)
-         (map (apply_subst subst) expectedTys)"
+         (zip tms varOrRefs) expectedTys"
   using assms
-proof (induction env ghost loc subst tms actualTys expectedTys varOrRefs
-       arbitrary: finalArgTms rule: validate_call_args.induct)
-  case (1 env ghost loc subst)
+proof (induction env ghost locOf idx tms actualTys expectedTys varOrRefs
+       rule: check_ref_args.induct)
+  case (1 env ghost locOf idx)
   then show ?case by simp
 next
-  case (2 env ghost loc subst tm tms actualTy actualTys expectedTy expectedTys vor vors)
-  let ?tm' = "apply_subst_to_term subst tm"
-  let ?actualTy' = "apply_subst subst actualTy"
-  let ?expectedTy' = "apply_subst subst expectedTy"
-
+  case (2 env ghost locOf idx tm tms actualTy actualTys expectedTy expectedTys vor vors)
   from "2.prems"(2) have
-    head_typed: "core_term_type env ghost tm = Some actualTy" and
-    tail_typed: "list_all2 (\<lambda>tm ty. core_term_type env ghost tm = Some ty) tms actualTys"
+    head_typed: "core_term_type env ghost tm = Some expectedTy" and
+    tail_typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env ghost tm = Some expectedTy)
+                   tms expectedTys"
     by simp_all
-  from "2.prems"(3) have
-    head_unif: "?actualTy' = ?expectedTy'
-                \<or> coercible ?actualTy' ?expectedTy'" and
-    tail_unif: "list_all2 (\<lambda>actualTy expectedTy.
-                  apply_subst subst actualTy = apply_subst subst expectedTy
-                  \<or> coercible (apply_subst subst actualTy) (apply_subst subst expectedTy))
-                actualTys expectedTys"
-    by simp_all
-  from "2.prems"(7,8,9) have
+  from "2.prems"(3,4,5) have
     len_tms: "length tms = length actualTys" and
     len_tys: "length actualTys = length expectedTys" and
     len_vor: "length expectedTys = length vors"
     by simp_all
-  from "2.prems"(13) have
-    expectedTy_wk: "is_well_kinded env expectedTy" and
-    expectedTys_wk: "list_all (is_well_kinded env) expectedTys"
-    by simp_all
-  from "2.prems"(14) have
-    expectedTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy" and
-    expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
-    by simp_all
-
-  \<comment> \<open>The head term, substitution applied, typechecks at the substituted actual type.\<close>
-  have head_tm'_typed: "core_term_type env ghost ?tm' = Some ?actualTy'"
-    using apply_subst_to_term_preserves_typing[OF head_typed "2.prems"(4,5,6)
-            "2.prems"(10) "2.prems"(11) "2.prems"(12)] .
-  \<comment> \<open>The substituted expected type (the cast target, if any) is well-kinded / runtime.\<close>
-  have expectedTy'_wk: "is_well_kinded env ?expectedTy'"
-    using apply_subst_preserves_well_kinded_same_env[OF expectedTy_wk "2.prems"(5)] .
-  have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
-    using expectedTy_rt "2.prems"(6) apply_subst_preserves_runtime_same_env by blast
-
   show ?case
   proof (cases vor)
     case Var
-    \<comment> \<open>Var: validate_call_args inserts a cast iff the types differ; the tail recurses.\<close>
-    from "2.prems"(1) Var obtain rest where
-      tail_vca: "validate_call_args env ghost loc subst tms actualTys expectedTys vors = Inr rest" and
-      finalArgTms_eq: "finalArgTms = insert_cast ?actualTy' ?expectedTy' ?tm' # rest"
-      by (auto simp: Let_def split: sum.splits)
+    from "2.prems"(1) Var have
+      tail_cra: "check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors = Inr ()"
+      by simp
     have ih: "list_all2 (\<lambda>(tm, vor) expectedTy.
                 case vor of
                   Var \<Rightarrow> (case core_term_type env ghost tm of
@@ -963,31 +904,21 @@ next
                 | Ref \<Rightarrow> is_writable_lvalue env tm
                          \<and> ghost_lvalue_ok env ghost tm
                          \<and> core_term_type env ghost tm = Some expectedTy)
-              (zip rest vors) (map (apply_subst subst) expectedTys)"
-      using "2.IH"(1)[OF refl refl refl Var tail_vca tail_typed tail_unif "2.prems"(4,5,6)
-                          len_tms len_tys len_vor "2.prems"(10) "2.prems"(11) "2.prems"(12)
-                          expectedTys_wk expectedTys_rt] .
-    \<comment> \<open>The head (cast or not) typechecks to the substituted expected type.\<close>
-    have head_result: "core_term_type env ghost (insert_cast ?actualTy' ?expectedTy' ?tm')
-                       = Some ?expectedTy'"
-      using insert_cast_typed[OF head_tm'_typed head_unif expectedTy'_wk expectedTy'_rt] .
-    show ?thesis using finalArgTms_eq head_result ih Var by simp
+              (zip tms vors) expectedTys"
+      using "2.IH"(1)[OF Var tail_cra tail_typed len_tms len_tys len_vor] .
+    show ?thesis using head_typed ih Var by simp
   next
     case Ref
-    \<comment> \<open>Ref: validate_call_args requires the types to match exactly or up to an array
-        cast, and a writable lvalue rooted (in ghost code) at a ghost variable; the
-        head is the (possibly cast) lvalue.\<close>
-    from "2.prems"(1) Ref obtain rest where
-      ok: "?actualTy' = ?expectedTy' \<or> array_cast_ok ?actualTy' ?expectedTy'" and
-      writ: "is_writable_lvalue env ?tm'" and
-      glv: "ghost_lvalue_ok env ghost ?tm'" and
-      tail_vca: "validate_call_args env ghost loc subst tms actualTys expectedTys vors = Inr rest" and
-      finalArgTms_eq: "finalArgTms = insert_cast ?actualTy' ?expectedTy' ?tm' # rest"
-      by (auto simp: Let_def split: sum.splits if_splits)
-    have g1: "\<not> (?actualTy' \<noteq> ?expectedTy' \<and> \<not> array_cast_ok ?actualTy' ?expectedTy')"
+    from "2.prems"(1) Ref have
+      ok: "actualTy = expectedTy \<or> array_cast_ok actualTy expectedTy" and
+      writ: "is_writable_lvalue env tm" and
+      glv: "ghost_lvalue_ok env ghost tm" and
+      tail_cra: "check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors = Inr ()"
+      by (auto split: if_splits)
+    have g1: "\<not> (actualTy \<noteq> expectedTy \<and> \<not> array_cast_ok actualTy expectedTy)"
       using ok by simp
-    have g2: "\<not> \<not> is_writable_lvalue env ?tm'" using writ by simp
-    have g3: "\<not> \<not> ghost_lvalue_ok env ghost ?tm'" using glv by simp
+    have g2: "\<not> \<not> is_writable_lvalue env tm" using writ by simp
+    have g3: "\<not> \<not> ghost_lvalue_ok env ghost tm" using glv by simp
     have ih: "list_all2 (\<lambda>(tm, vor) expectedTy.
                 case vor of
                   Var \<Rightarrow> (case core_term_type env ghost tm of
@@ -995,35 +926,9 @@ next
                 | Ref \<Rightarrow> is_writable_lvalue env tm
                          \<and> ghost_lvalue_ok env ghost tm
                          \<and> core_term_type env ghost tm = Some expectedTy)
-              (zip rest vors) (map (apply_subst subst) expectedTys)"
-      using "2.IH"(2)[OF refl refl refl Ref g1 g2 g3 tail_vca tail_typed tail_unif "2.prems"(4,5,6)
-                          len_tms len_tys len_vor "2.prems"(10) "2.prems"(11) "2.prems"(12)
-                          expectedTys_wk expectedTys_rt] .
-    \<comment> \<open>The head typechecks to the substituted expected type.\<close>
-    have head_ok: "?actualTy' = ?expectedTy' \<or> coercible ?actualTy' ?expectedTy'"
-      using ok by (auto simp: coercible_def)
-    have head_result: "core_term_type env ghost (insert_cast ?actualTy' ?expectedTy' ?tm')
-                       = Some ?expectedTy'"
-      using insert_cast_typed[OF head_tm'_typed head_ok expectedTy'_wk expectedTy'_rt] .
-    \<comment> \<open>An inserted cast is an array cast, which writability and the ghost check look
-        through.\<close>
-    have head_lv: "is_writable_lvalue env (insert_cast ?actualTy' ?expectedTy' ?tm')
-                   \<and> ghost_lvalue_ok env ghost (insert_cast ?actualTy' ?expectedTy' ?tm')"
-    proof (cases "?actualTy' = ?expectedTy'")
-      case True
-      thus ?thesis using writ glv by (simp add: insert_cast_def)
-    next
-      case False
-      with ok have "array_cast_ok ?actualTy' ?expectedTy'" by simp
-      then obtain elemTy dims dims' where
-        "?actualTy' = CoreTy_Array elemTy dims"
-        "?expectedTy' = CoreTy_Array elemTy dims'"
-        "list_all2 dim_cast_ok dims dims'"
-        by (rule array_cast_ok_cases)
-      thus ?thesis using writ glv False
-        by (simp add: insert_cast_def ghost_lvalue_ok_def)
-    qed
-    show ?thesis using finalArgTms_eq head_result head_lv ih Ref by simp
+              (zip tms vors) expectedTys"
+      using "2.IH"(2)[OF Ref g1 g2 g3 tail_cra tail_typed len_tms len_tys len_vor] .
+    show ?thesis using head_typed writ glv ih Ref by simp
   qed
 qed (simp_all)
 
@@ -1041,9 +946,10 @@ lemma elab_impure_call_term_correct:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  let ?locOf = "(\<lambda>idx. bab_term_location (args ! idx))"
   let ?mk_err = "(\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])"
 
-  \<comment> \<open>Extract the three sub-results of elab_impure_call_term.\<close>
+  \<comment> \<open>Extract the sub-results of elab_impure_call_term.\<close>
   from elab obtain newTyArgs expArgTypes varOrRefs retType0 next_mv1 where
     rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
            = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1)"
@@ -1055,14 +961,18 @@ proof -
     by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
   from elab rc len_args el obtain finalSubst where
     unify_eq: "unify_type_lists ?is_flex ?mk_err 0 actualTypes expArgTypes fmempty = Inr finalSubst"
-    by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
+    by (auto simp: elab_impure_call_term_def unify_and_coerce_def
+             split: if_splits sum.splits prod.splits)
   from elab rc len_args el unify_eq have
-    vca: "validate_call_args env ghost loc finalSubst elabArgTms actualTypes expArgTypes varOrRefs
-            = Inr finalArgTms" and
+    finalArgTms_eq: "finalArgTms = apply_call_coercions finalSubst elabArgTms actualTypes expArgTypes" and
+    cra: "check_ref_args env ghost ?locOf 0 finalArgTms
+            (map (apply_subst finalSubst) actualTypes) (map (apply_subst finalSubst) expArgTypes)
+            varOrRefs = Inr ()" and
     tyargs_eq: "finalTyArgs = map (apply_subst finalSubst) newTyArgs" and
     retTy_eq: "retTy = apply_subst finalSubst retType0" and
     next_mv2_eq: "next_mv' = next_mv2"
-    by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
+    by (auto simp: elab_impure_call_term_def unify_and_coerce_def
+             split: if_splits sum.splits prod.splits)
 
   \<comment> \<open>Facts from resolve_impure_callee_correct (at next_mv1).\<close>
   from resolve_impure_callee_correct[OF rc wf ee_wf] obtain funInfo where
@@ -1240,12 +1150,35 @@ proof -
   have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
     using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
 
-  \<comment> \<open>Move the call into the extended env (validate_call_args is tyvar-irrelevant),
+  \<comment> \<open>The coerced arg terms type to the substituted expected types (at ?env'),
+      exactly as for a pure call.\<close>
+  have args_typed: "list_all2 (\<lambda>tm expectedTy.
+           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
+         finalArgTms expArgTypes"
+    unfolding finalArgTms_eq
+    using apply_call_coercions_correct[OF ih_args types_unified wf' finalSubst_wk finalSubst_rt
+            len_elab len_actual_exp locals_unaffected ret_unaffected abs_no_subst
+            expArgTypes_wk expArgTypes_rt] .
+  have args_typed': "list_all2 (\<lambda>tm expectedTy. core_term_type ?env' ghost tm = Some expectedTy)
+         finalArgTms (map (apply_subst finalSubst) expArgTypes)"
+    using args_typed by (simp add: list_all2_map2)
+  have len_final_exp: "length finalArgTms = length expArgTypes"
+    using list_all2_lengthD[OF args_typed] .
+  have len_final_actual': "length finalArgTms = length (map (apply_subst finalSubst) actualTypes)"
+    using len_final_exp len_actual_exp by simp
+  have len_actual_exp': "length (map (apply_subst finalSubst) actualTypes)
+                         = length (map (apply_subst finalSubst) expArgTypes)"
+    using len_actual_exp by simp
+  have len_exp_vor': "length (map (apply_subst finalSubst) expArgTypes) = length varOrRefs"
+    using len_exp_vor by simp
+
+  \<comment> \<open>Move the Ref check into the extended env (check_ref_args is tyvar-irrelevant),
       so it can be combined with the extended-env typing facts.\<close>
-  have vca': "validate_call_args ?env' ghost loc finalSubst elabArgTms actualTypes expArgTypes varOrRefs
-                = Inr finalArgTms"
-    using vca by (simp add: validate_call_args_extend_env_with_tyvars)
-  \<comment> \<open>The validated arg terms satisfy the per-argument core_impure_call_type check.\<close>
+  have cra': "check_ref_args ?env' ghost ?locOf 0 finalArgTms
+                (map (apply_subst finalSubst) actualTypes) (map (apply_subst finalSubst) expArgTypes)
+                varOrRefs = Inr ()"
+    using cra by (simp add: check_ref_args_extend_env_with_tyvars)
+  \<comment> \<open>The coerced arg terms satisfy the per-argument core_impure_call_type check.\<close>
   have args_checked: "list_all2 (\<lambda>(tm, vor) expectedTy.
            case vor of
              Var \<Rightarrow> (case core_term_type ?env' ghost tm of
@@ -1255,9 +1188,7 @@ proof -
                     \<and> core_term_type ?env' ghost tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
          (map (apply_subst finalSubst) expArgTypes)"
-    using validate_call_args_correct[OF vca' ih_args types_unified wf' finalSubst_wk finalSubst_rt
-            len_elab len_actual_exp len_exp_vor locals_unaffected ret_unaffected abs_no_subst
-            expArgTypes_wk expArgTypes_rt] .
+    using check_ref_args_correct[OF cra' args_typed' len_final_actual' len_actual_exp' len_exp_vor'] .
 
   \<comment> \<open>The substituted expected types coincide with core_impure_call_type's recomputation
       from finalTyArgs (substitution composition).\<close>
@@ -1362,11 +1293,7 @@ proof -
   have len_finalTyArgs: "length finalTyArgs = length (FI_TyArgs funInfo)"
     using tyargs_eq len_tyargs by simp
   have len_finalArgTms: "length finalArgTms = length (FI_TmArgs funInfo)"
-  proof -
-    have "length finalArgTms = length elabArgTms"
-      using validate_call_args_length[OF vca len_elab len_actual_exp len_exp_vor] .
-    thus ?thesis using len_elab len_actual_exp vor_eq expArg_eq by simp
-  qed
+    using len_final_exp expArg_eq by simp
   have fn_lookup': "fmlookup (TE_Functions ?env') fnName = Some funInfo"
     using fn_lookup by (simp add: extend_env_with_tyvars_def)
 

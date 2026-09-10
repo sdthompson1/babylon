@@ -77,41 +77,35 @@ definition resolve_impure_callee ::
                      in Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')))
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"
 
-(* Elaborate function call arguments, given the substitution that unify_type_lists
-   produced. For each (term, actualTy, expectedTy, Var/Ref):
-     - Var: insert a cast if the actual and expected types differ (they must be coercible
-       at this point, guaranteed by unify_type_lists's success).
-     - Ref: require the actual and expected types to be equal (or related by an
-       array cast) and the term to be a writable lvalue.
-   Returns the final argument terms (substitution applied). *)
-fun validate_call_args ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst
+(* Check the Ref-argument discipline of an impure call. This runs after unify_and_coerce
+   has substituted and coerced the argument terms; the two type lists are the actual and
+   expected argument types with the final substitution applied. For each Ref position:
+     - the actual and expected types must be equal, or related by an array cast (the
+       finite-integer coercion that Var arguments enjoy is not permitted for Ref);
+     - the (coerced) term must be a writable lvalue obeying the ghost-write discipline.
+   Var positions need no further checks. Errors are reported at the location of the
+   offending argument: locOf maps an argument index to its location, and idx is the
+   index of the first argument in the lists. *)
+fun check_ref_args ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> (nat \<Rightarrow> Location) \<Rightarrow> nat
    \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> VarOrRef list
-   \<Rightarrow> TypeError list + CoreTerm list" where
-  "validate_call_args env ghost loc subst [] [] [] [] = Inr []"
-| "validate_call_args env ghost loc subst (tm # tms) (actualTy # actualTys)
+   \<Rightarrow> TypeError list + unit" where
+  "check_ref_args env ghost locOf idx [] [] [] [] = Inr ()"
+| "check_ref_args env ghost locOf idx (tm # tms) (actualTy # actualTys)
        (expectedTy # expectedTys) (vor # vors) =
-    (let tm' = apply_subst_to_term subst tm;
-         actualTy' = apply_subst subst actualTy;
-         expectedTy' = apply_subst subst expectedTy
-     in case vor of
-          Var \<Rightarrow>
-            (case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
-               Inl errs \<Rightarrow> Inl errs
-             | Inr rest \<Rightarrow> Inr (insert_cast actualTy' expectedTy' tm' # rest))
-        | Ref \<Rightarrow>
-            (if actualTy' \<noteq> expectedTy' \<and> \<not> array_cast_ok actualTy' expectedTy'
-             then Inl [TyErr_TypeMismatch loc expectedTy' actualTy']
-             else if \<not> is_writable_lvalue env tm' then Inl [TyErr_NotWritableLvalue loc]
-             else if \<not> ghost_lvalue_ok env ghost tm' then Inl [TyErr_WriteToNonGhostFromGhost loc]
-             else case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr rest \<Rightarrow> Inr (insert_cast actualTy' expectedTy' tm' # rest)))"
-| "validate_call_args env ghost loc subst _ _ _ _ = undefined"
+    (case vor of
+       Var \<Rightarrow> check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors
+     | Ref \<Rightarrow>
+         (if actualTy \<noteq> expectedTy \<and> \<not> array_cast_ok actualTy expectedTy
+          then Inl [TyErr_TypeMismatch (locOf idx) expectedTy actualTy]
+          else if \<not> is_writable_lvalue env tm then Inl [TyErr_NotWritableLvalue (locOf idx)]
+          else if \<not> ghost_lvalue_ok env ghost tm then Inl [TyErr_WriteToNonGhostFromGhost (locOf idx)]
+          else check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors))"
+| "check_ref_args env ghost locOf idx _ _ _ _ = undefined"
 
 (* Elaborate an impure function call term appearing at the outermost rhs of an
-   Assign or VarDecl.
-   (This is a combination of the previous two helper functions.)
+   Assign or VarDecl. The arguments are unified and coerced exactly as for a pure
+   call (unify_and_coerce); the only impure-specific step is check_ref_args.
    Returns the elaborated call term, its return type, and the advanced counter. *)
 definition elab_impure_call_term ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> nat
@@ -126,15 +120,18 @@ definition elab_impure_call_term ::
            (case elab_term_list env elabEnv ghost args next_mv1 of
               Inl errs \<Rightarrow> Inl errs
             | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
-                (case unify_type_lists (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
                         (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])
-                        0 actualTypes expArgTypes fmempty of
+                        elabArgTms actualTypes expArgTypes fmempty of
                    Inl errs \<Rightarrow> Inl errs
-                 | Inr finalSubst \<Rightarrow>
-                     (case validate_call_args env ghost loc finalSubst
-                             elabArgTms actualTypes expArgTypes varOrRefs of
+                 | Inr (finalArgTms, finalSubst) \<Rightarrow>
+                     (case check_ref_args env ghost (\<lambda>idx. bab_term_location (args ! idx)) 0
+                             finalArgTms
+                             (map (apply_subst finalSubst) actualTypes)
+                             (map (apply_subst finalSubst) expArgTypes)
+                             varOrRefs of
                         Inl errs \<Rightarrow> Inl errs
-                      | Inr finalArgTms \<Rightarrow>
+                      | Inr _ \<Rightarrow>
                           Inr (name,
                                map (apply_subst finalSubst) newTyArgs,
                                finalArgTms,

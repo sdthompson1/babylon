@@ -1409,8 +1409,8 @@ qed
    coercible to expectedTy, then insert_cast retypes `tm` at expectedTy.
 
    The target must be well-kinded and (in NotGhost mode) runtime; the integer case would
-   get both for free, the array case needs them. Every site that inserts a coercion
-   (apply_call_coercions, validate_call_args, coerce_term_to_type) proves its typing
+   get both for free, the array case needs them. Every coercion the elaborator inserts
+   goes through apply_call_coercions (via unify_and_coerce), whose typing is proved
    through this lemma, so a new kind of coercion needs a new case here and nowhere else. *)
 lemma insert_cast_typed:
   assumes typed: "core_term_type env ghost tm = Some actualTy"
