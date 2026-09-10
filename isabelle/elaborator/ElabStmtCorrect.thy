@@ -245,13 +245,13 @@ qed
 (* ========================================================================== *)
 
 (* coerce_term_to_type is the single-argument case of unify_and_coerce. This
-   spells out what that amounts to: if unify_or_coerce finds a substitution
+   spells out what that amounts to: if unify_upto_coercion finds a substitution
    under which the pair is equal or coercible, apply it to the term and insert
    a cast where the types still differ; otherwise fail. The proofs below use
    this form rather than coerce_term_to_type_def. *)
 lemma coerce_term_to_type_unfold:
   "coerce_term_to_type env loc tm srcTy tgtTy =
-    (case unify_or_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env) srcTy tgtTy of
+    (case unify_upto_coercion (\<lambda>n. n |\<notin>| TE_TypeVars env) srcTy tgtTy of
        Some subst \<Rightarrow>
          Inr (insert_cast (apply_subst subst srcTy) (apply_subst subst tgtTy)
                 (apply_subst_to_term subst tm))
@@ -290,20 +290,20 @@ proof -
     using core_term_type_notghost_runtime typed wfD by auto
   have tgt_tvs: "type_tyvars tgtTy \<subseteq> fset (TE_TypeVars env)"
     using is_well_kinded_type_tyvars_subset[OF wk] .
-  \<comment> \<open>Coercion succeeded, so unify_or_coerce found a substitution subst under which
+  \<comment> \<open>Coercion succeeded, so unify_upto_coercion found a substitution subst under which
       the pair is equal or coercible, and coreTm' is the substituted term with a
       cast inserted where the types still differ.\<close>
   from coerce obtain subst where
-    uoc: "unify_or_coerce ?is_flex rhsTy tgtTy = Some subst" and
+    uoc: "unify_upto_coercion ?is_flex rhsTy tgtTy = Some subst" and
     tm'_eq: "coreTm' = insert_cast (apply_subst subst rhsTy) (apply_subst subst tgtTy)
                          (apply_subst_to_term subst coreTm)"
     unfolding coerce_term_to_type_unfold by (auto split: option.splits)
   have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
-    using unify_or_coerce_preserves_well_kinded[OF uoc rhsTy_wk tgtTy_wkD] .
+    using unify_upto_coercion_preserves_well_kinded[OF uoc rhsTy_wk tgtTy_wkD] .
   have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envD ty')"
-    using unify_or_coerce_preserves_runtime[OF uoc] rhsTy_rt tgtTy_rtD by blast
+    using unify_upto_coercion_preserves_runtime[OF uoc] rhsTy_rt tgtTy_rtD by blast
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
-    using unify_or_coerce_dom_flex[OF uoc] .
+    using unify_upto_coercion_dom_flex[OF uoc] .
   \<comment> \<open>A flex-only substitution with a well-kinded / runtime range keeps coreTm
       well-typed (at the substituted rhs type) and leaves tgtTy alone.\<close>
   have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
@@ -331,7 +331,7 @@ proof -
   \<comment> \<open>The substituted rhs type is tgtTy or coercible to it, so the inserted cast
       (if any) retypes the term at tgtTy.\<close>
   have ok: "apply_subst subst rhsTy = tgtTy \<or> coercible (apply_subst subst rhsTy) tgtTy"
-    using unify_or_coerce_sound[OF uoc] unfolding tgt_id .
+    using unify_upto_coercion_sound[OF uoc] unfolding tgt_id .
   have cast_typed: "core_term_type ?envD ghost
                       (insert_cast (apply_subst subst rhsTy) tgtTy (apply_subst_to_term subst coreTm))
                     = Some tgtTy"
@@ -646,22 +646,22 @@ proof -
     using core_impure_call_type_well_kinded_and_runtime[OF ctE wfE] by simp
   have retTy_rtE: "ghost = NotGhost \<longrightarrow> is_runtime_type ?envE retTy"
     using core_impure_call_type_well_kinded_and_runtime[OF ctE wfE] by simp
-  \<comment> \<open>Reconciliation succeeded, so unify_or_coerce found a substitution subst under
+  \<comment> \<open>Reconciliation succeeded, so unify_upto_coercion found a substitution subst under
       which the pair is equal or coercible; the ty-args and arg terms carry it, and
       castOpt is None or Some of the substituted target accordingly.\<close>
   from rcr obtain subst where
-    uoc: "unify_or_coerce ?is_flex retTy tgtTy = Some subst" and
+    uoc: "unify_upto_coercion ?is_flex retTy tgtTy = Some subst" and
     castOpt_eq: "castOpt = (if apply_subst subst retTy = apply_subst subst tgtTy
                             then None else Some (apply_subst subst tgtTy))" and
     tyArgs'_eq: "tyArgs' = map (apply_subst subst) tyArgs" and
     argTms'_eq: "argTms' = map (apply_subst_to_term subst) argTms"
     by (auto simp: reconcile_call_result_def Let_def split: option.splits)
   have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envE ty'"
-    using unify_or_coerce_preserves_well_kinded[OF uoc retTy_wkE tgtTy_wkE] .
+    using unify_upto_coercion_preserves_well_kinded[OF uoc retTy_wkE tgtTy_wkE] .
   have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envE ty')"
-    using unify_or_coerce_preserves_runtime[OF uoc] retTy_rtE tgtTy_rtE by blast
+    using unify_upto_coercion_preserves_runtime[OF uoc] retTy_rtE tgtTy_rtE by blast
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
-    using unify_or_coerce_dom_flex[OF uoc] .
+    using unify_upto_coercion_dom_flex[OF uoc] .
   \<comment> \<open>A flex-only substitution with a well-kinded / runtime range keeps the call
       well-typed (at the substituted return type) and leaves tgtTy alone.\<close>
   have envE_locals: "TE_LocalVars ?envE = TE_LocalVars env"
@@ -689,7 +689,7 @@ proof -
   \<comment> \<open>The substituted return type is tgtTy or coercible to it; either way it has
       tgtTy's type variables, hence is metavar-free, so the clearing bridge applies.\<close>
   have ok: "apply_subst subst retTy = tgtTy \<or> coercible (apply_subst subst retTy) tgtTy"
-    using unify_or_coerce_sound[OF uoc] unfolding tgt_id .
+    using unify_upto_coercion_sound[OF uoc] unfolding tgt_id .
   have retTy'_tvs: "type_tyvars (apply_subst subst retTy) = type_tyvars tgtTy"
     using ok coercible_type_tyvars by blast
   have retTy'_below: "type_tyvars (apply_subst subst retTy) \<subseteq> {n. tyvar_fresh_ok n next_mv}"

@@ -1157,23 +1157,23 @@ next
   thus ?thesis using unify_preserves_runtime[OF Array(3)] by blast
 qed
 
-(* unify_or_coerce returns either the identity substitution or a successful
+(* unify_upto_coercion returns either the identity substitution or a successful
    unify_modulo_array_dims. *)
-lemma unify_or_coerce_cases:
-  assumes "unify_or_coerce is_flex actualTy expectedTy = Some s"
+lemma unify_upto_coercion_cases:
+  assumes "unify_upto_coercion is_flex actualTy expectedTy = Some s"
   obtains (Identity) "s = fmempty"
         | (Unify) "unify_modulo_array_dims is_flex actualTy expectedTy = Some s"
 proof -
   have "s = (case unify_modulo_array_dims is_flex actualTy expectedTy of
                Some s' \<Rightarrow> s' | None \<Rightarrow> fmempty)"
-    using assms by (auto simp: unify_or_coerce_def Let_def split: if_splits)
+    using assms by (auto simp: unify_upto_coercion_def Let_def split: if_splits)
   thus ?thesis using that by (auto split: option.splits)
 qed
 
-(* Under the substitution returned by unify_or_coerce, the pair is equal or
-   coercible: this is exactly the check unify_or_coerce performs. *)
-lemma unify_or_coerce_sound:
-  assumes "unify_or_coerce is_flex actualTy expectedTy = Some s"
+(* Under the substitution returned by unify_upto_coercion, the pair is equal or
+   coercible. *)
+theorem unify_upto_coercion_sound:
+  assumes "unify_upto_coercion is_flex actualTy expectedTy = Some s"
   shows "apply_subst s actualTy = apply_subst s expectedTy
          \<or> coercible (apply_subst s actualTy) (apply_subst s expectedTy)"
 proof -
@@ -1182,17 +1182,17 @@ proof -
   have s_eq: "s = ?subst"
     and ok: "apply_subst ?subst actualTy = apply_subst ?subst expectedTy
              \<or> coercible (apply_subst ?subst actualTy) (apply_subst ?subst expectedTy)"
-    using assms by (auto simp: unify_or_coerce_def Let_def split: if_splits)
+    using assms by (auto simp: unify_upto_coercion_def Let_def split: if_splits)
   show ?thesis using ok unfolding s_eq .
 qed
 
-(* unify_or_coerce only binds flexible variables, and its range is well-kinded
+(* unify_upto_coercion only binds flexible variables, and its range is well-kinded
    (resp. runtime) when both input types are. *)
-lemma unify_or_coerce_dom_flex:
-  assumes "unify_or_coerce is_flex actualTy expectedTy = Some s"
+lemma unify_upto_coercion_dom_flex:
+  assumes "unify_upto_coercion is_flex actualTy expectedTy = Some s"
   shows "\<forall>n. n |\<in>| fmdom s \<longrightarrow> is_flex n"
   using assms
-proof (cases rule: unify_or_coerce_cases)
+proof (cases rule: unify_upto_coercion_cases)
   case Identity
   thus ?thesis by simp
 next
@@ -1200,13 +1200,13 @@ next
   thus ?thesis by (rule unify_modulo_array_dims_dom_flex)
 qed
 
-lemma unify_or_coerce_preserves_well_kinded:
-  assumes uoc: "unify_or_coerce is_flex actualTy expectedTy = Some s"
+lemma unify_upto_coercion_preserves_well_kinded:
+  assumes uoc: "unify_upto_coercion is_flex actualTy expectedTy = Some s"
       and wk1: "is_well_kinded env actualTy"
       and wk2: "is_well_kinded env expectedTy"
   shows "\<forall>ty \<in> fmran' s. is_well_kinded env ty"
   using uoc
-proof (cases rule: unify_or_coerce_cases)
+proof (cases rule: unify_upto_coercion_cases)
   case Identity
   thus ?thesis by (simp add: fmran'_def)
 next
@@ -1214,13 +1214,13 @@ next
   thus ?thesis using wk1 wk2 by (rule unify_modulo_array_dims_preserves_well_kinded)
 qed
 
-lemma unify_or_coerce_preserves_runtime:
-  assumes uoc: "unify_or_coerce is_flex actualTy expectedTy = Some s"
+lemma unify_upto_coercion_preserves_runtime:
+  assumes uoc: "unify_upto_coercion is_flex actualTy expectedTy = Some s"
       and rt1: "is_runtime_type env actualTy"
       and rt2: "is_runtime_type env expectedTy"
   shows "\<forall>ty \<in> fmran' s. is_runtime_type env ty"
   using uoc
-proof (cases rule: unify_or_coerce_cases)
+proof (cases rule: unify_upto_coercion_cases)
   case Identity
   thus ?thesis by (simp add: fmran'_def)
 next
@@ -1228,13 +1228,190 @@ next
   thus ?thesis using rt1 rt2 by (rule unify_modulo_array_dims_preserves_runtime)
 qed
 
-(* The one typing fact about elaborator-inserted casts: if `tm` has type
-   actualTy, and either the types agree or the pair is coercible, then
-   insert_cast retypes it at expectedTy. The target must be well-kinded and (in
-   NotGhost mode) runtime; the integer case would get both for free, the array
-   case needs them. Every site that inserts a coercion (apply_call_coercions,
-   validate_call_args, coerce_term_to_type) proves its typing through this
-   lemma, so a new kind of coercion needs a new case here and nowhere else. *)
+
+(* ------------------------------------------------------------------------------ *)
+
+(* Completeness of unify_upto_coercion *)
+
+(* A coercion never changes the size of a type: integer types are both of size 1,
+   and an array cast keeps the element type and only alters the dimensions, which
+   core_type_size ignores. This is what lets the occurs check reject coercion
+   witnesses as well as equality witnesses. *)
+lemma coercible_same_size:
+  assumes "coercible actualTy expectedTy"
+  shows "core_type_size actualTy = core_type_size expectedTy"
+  using assms by (cases actualTy; cases expectedTy) (auto simp: coercible_def)
+
+(* The occurs check rules out coercion witnesses too, not just unifiers: if n occurs
+   in ty (properly), then no substitution can make CoreTy_Var n coercible to ty, in
+   either direction, because the two sides would have to have the same size. *)
+lemma occurs_check_no_coercion:
+  assumes occ: "occurs n ty"
+      and neq: "ty \<noteq> CoreTy_Var n"
+  shows "\<not> coercible (apply_subst \<sigma> (CoreTy_Var n)) (apply_subst \<sigma> ty)"
+    and "\<not> coercible (apply_subst \<sigma> ty) (apply_subst \<sigma> (CoreTy_Var n))"
+proof -
+  have "core_type_size (apply_subst \<sigma> (CoreTy_Var n)) < core_type_size (apply_subst \<sigma> ty)"
+    by (rule occurs_implies_larger_size[OF occ neq])
+  thus "\<not> coercible (apply_subst \<sigma> (CoreTy_Var n)) (apply_subst \<sigma> ty)"
+   and "\<not> coercible (apply_subst \<sigma> ty) (apply_subst \<sigma> (CoreTy_Var n))"
+    using coercible_same_size by fastforce+
+qed
+
+(* A variable whose image under a flexible-domain substitution is coercible with
+   anything must itself be bound by that substitution, hence flexible: an unbound
+   variable maps to itself, and a variable is coercible with nothing. *)
+lemma coercible_var_flex:
+  assumes "\<forall>n. n |\<in>| fmdom \<theta> \<longrightarrow> is_flex n"
+  shows "coercible (apply_subst \<theta> (CoreTy_Var n)) ty \<Longrightarrow> is_flex n"
+    and "coercible ty (apply_subst \<theta> (CoreTy_Var n)) \<Longrightarrow> is_flex n"
+  using assms by (cases "fmlookup \<theta> n"; auto simp: coercible_def dest: fmdomI)+
+
+(* Completeness of unify_modulo_array_dims, relaxed to allow a coercion witness
+   rather than a strict unifier.
+
+   Two things stop this from being a plain "then unification succeeds" statement,
+   and each corresponds to one of unify_upto_coercion's two escape hatches:
+
+    - Two arrays differing only in their dimensions are coercible but not
+      unifiable. That is why the statement is about unify_modulo_array_dims:
+      stripping the dimensions is what turns the remaining problem back into a
+      unification problem.
+
+    - Two different finite integer types are coercible but not unifiable, and no
+      amount of dimension-stripping helps. Here the conclusion is instead that the
+      types are already coercible as they stand, which is what makes
+      unify_upto_coercion's fallback to the empty substitution work. *)
+lemma unify_modulo_array_dims_complete_upto_coercion:
+  assumes dom_flex: "\<forall>n. n |\<in>| fmdom \<theta> \<longrightarrow> is_flex n"
+      and wit: "apply_subst \<theta> ty1 = apply_subst \<theta> ty2
+                \<or> coercible (apply_subst \<theta> ty1) (apply_subst \<theta> ty2)"
+  shows "(\<exists>s. unify_modulo_array_dims is_flex ty1 ty2 = Some s) \<or> coercible ty1 ty2"
+proof -
+  have dom_set: "fset (fmdom \<theta>) \<subseteq> {n. is_flex n}" using dom_flex by auto
+  show ?thesis
+  proof (cases "\<exists>e1 d1 e2 d2. ty1 = CoreTy_Array e1 d1 \<and> ty2 = CoreTy_Array e2 d2")
+    case True
+    \<comment> \<open>Both arrays: unify_modulo_array_dims unifies the element types, and the
+        witness makes those equal (directly, or via the array cast, which keeps the
+        element type fixed).\<close>
+    then obtain e1 d1 e2 d2
+      where arrs: "ty1 = CoreTy_Array e1 d1" "ty2 = CoreTy_Array e2 d2" by blast
+    have "apply_subst \<theta> e1 = apply_subst \<theta> e2"
+      using wit arrs by (auto simp: coercible_def)
+    then obtain s where "unify is_flex e1 e2 = Some s"
+      using unify_complete dom_set by blast
+    hence "unify_modulo_array_dims is_flex ty1 ty2 = Some s" using arrs by simp
+    thus ?thesis by blast
+  next
+    case False
+    \<comment> \<open>Not both arrays: unify_modulo_array_dims is plain unify.\<close>
+    have umad: "unify_modulo_array_dims is_flex ty1 ty2 = unify is_flex ty1 ty2"
+      using False by (cases ty1; cases ty2; simp)
+    show ?thesis
+    proof (cases "apply_subst \<theta> ty1 = apply_subst \<theta> ty2")
+      case True
+      obtain s where "unify is_flex ty1 ty2 = Some s"
+        using unify_complete[OF True] dom_set by blast
+      thus ?thesis using umad by auto
+    next
+      case neq: False
+      hence coer: "coercible (apply_subst \<theta> ty1) (apply_subst \<theta> ty2)" using wit by blast
+      consider (Var1) n where "ty1 = CoreTy_Var n"
+             | (Var2) n where "ty2 = CoreTy_Var n" "\<nexists>m. ty1 = CoreTy_Var m"
+             | (NoVar) "\<nexists>m. ty1 = CoreTy_Var m" "\<nexists>m. ty2 = CoreTy_Var m" by blast
+      then show ?thesis
+      proof cases
+        case (Var1 n)
+        \<comment> \<open>ty1 is a flexible variable, so unify binds it --- unless the occurs check
+            fires, and occurs_check_no_coercion rules that out.\<close>
+        have "is_flex n" using coercible_var_flex(1)[OF dom_flex] coer Var1 by simp
+        moreover have "\<not> (occurs n ty2 \<and> ty2 \<noteq> CoreTy_Var n)"
+          using coer Var1 occurs_check_no_coercion(1) by blast
+        ultimately have "\<exists>s. unify is_flex ty1 ty2 = Some s" using Var1 by auto
+        thus ?thesis using umad by auto
+      next
+        case (Var2 n)
+        \<comment> \<open>Symmetrically, ty2 is a flexible variable bound by unify's right-variable
+            clauses, again subject to the occurs check.\<close>
+        have "is_flex n" using coercible_var_flex(2)[OF dom_flex] coer Var2 by simp
+        moreover have "\<not> occurs n ty1" using coer Var2 occurs_check_no_coercion(2) by blast
+        ultimately have "\<exists>s. unify is_flex ty1 ty2 = Some s" using Var2 by (cases ty1) auto
+        thus ?thesis using umad by auto
+      next
+        case NoVar
+        \<comment> \<open>Substitution preserves both head constructors, so a coercible pair that is
+            not two arrays is two finite integer types, coercible as they stand. (They
+            need not unify --- the integer types may differ --- which is why the
+            conclusion allows this second disjunct.)\<close>
+        have "coercible ty1 ty2"
+          using coer NoVar False by (cases ty1; cases ty2) (auto simp: coercible_def)
+        thus ?thesis by blast
+      qed
+    qed
+  qed
+qed
+
+(* Completeness of unify_upto_coercion: the converse of unify_upto_coercion_sound.
+   If ANY substitution over flexible variables makes the pair equal or coercible,
+   then unify_upto_coercion succeeds --- though not necessarily with that
+   substitution (it returns the most general one).
+
+   Together with unify_upto_coercion_sound this pins the function down: it returns
+   Some exactly when a coercion witness exists.
+*)
+theorem unify_upto_coercion_complete:
+  assumes dom_flex: "\<forall>n. n |\<in>| fmdom \<theta> \<longrightarrow> is_flex n"
+      and wit: "apply_subst \<theta> actualTy = apply_subst \<theta> expectedTy
+                \<or> coercible (apply_subst \<theta> actualTy) (apply_subst \<theta> expectedTy)"
+  shows "\<exists>s. unify_upto_coercion is_flex actualTy expectedTy = Some s"
+proof -
+  let ?subst = "(case unify_modulo_array_dims is_flex actualTy expectedTy of
+                   Some s' \<Rightarrow> s' | None \<Rightarrow> fmempty)"
+  \<comment> \<open>It suffices to show that unify_upto_coercion's own check passes on ?subst,
+      which is the substitution it would return.\<close>
+  have "apply_subst ?subst actualTy = apply_subst ?subst expectedTy
+        \<or> coercible (apply_subst ?subst actualTy) (apply_subst ?subst expectedTy)"
+  proof (cases "unify_modulo_array_dims is_flex actualTy expectedTy")
+    case None
+    \<comment> \<open>Unification failed, so ?subst is the identity. The only way that can happen
+        with a witness present is the mismatched-integer case, where the types are
+        coercible untouched.\<close>
+    hence "coercible actualTy expectedTy"
+      using unify_modulo_array_dims_complete_upto_coercion[OF dom_flex wit] by simp
+    thus ?thesis using None by simp
+  next
+    case (Some s)
+    have "apply_subst s actualTy = apply_subst s expectedTy
+          \<or> coercible (apply_subst s actualTy) (apply_subst s expectedTy)"
+      using Some
+    proof (cases rule: unify_modulo_array_dims_cases)
+      case Unify
+      \<comment> \<open>Plain unification: s makes the two types equal outright.\<close>
+      show ?thesis using unify_sound[OF Unify] by blast
+    next
+      case (Array elemTy dims elemTy' dims')
+      \<comment> \<open>Two arrays: s unifies the element types, so under s the pair can differ only
+          in its dimensions. Dimensions are untouched by substitution, so the witness
+          already tells us they are equal or castable, and that is exactly what
+          decides between the two disjuncts here.\<close>
+      thus ?thesis using wit unify_sound[OF Array(3)] by (auto simp: coercible_def)
+    qed
+    thus ?thesis using Some by simp
+  qed
+  thus ?thesis by (simp add: unify_upto_coercion_def Let_def)
+qed
+
+(* ------------------------------------------------------------------------------ *)
+
+
+(* Key property of insert_cast: if `tm` has type actualTy, which is either equal to or
+   coercible to expectedTy, then insert_cast retypes `tm` at expectedTy.
+
+   The target must be well-kinded and (in NotGhost mode) runtime; the integer case would
+   get both for free, the array case needs them. Every site that inserts a coercion
+   (apply_call_coercions, validate_call_args, coerce_term_to_type) proves its typing
+   through this lemma, so a new kind of coercion needs a new case here and nowhere else. *)
 lemma insert_cast_typed:
   assumes typed: "core_term_type env ghost tm = Some actualTy"
       and ok: "actualTy = expectedTy \<or> coercible actualTy expectedTy"
@@ -1310,21 +1487,21 @@ next
   have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
     using expectedTy_rt "2.prems"(9) apply_subst_preserves_runtime_same_env by blast
 
-  \<comment> \<open>Success means unify_or_coerce produced newSubst for the head pair and the
+  \<comment> \<open>Success means unify_upto_coercion produced newSubst for the head pair and the
       recursion continued with compose_subst newSubst accSubst.\<close>
   from "2.prems"(1) obtain newSubst where
-    uoc: "unify_or_coerce is_flex ?actualTy' ?expectedTy' = Some newSubst" and
+    uoc: "unify_upto_coercion is_flex ?actualTy' ?expectedTy' = Some newSubst" and
     recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys
                 (compose_subst newSubst accSubst) = Inr finalSubst"
     by (auto simp: Let_def split: option.splits)
   let ?composedSubst = "compose_subst newSubst accSubst"
 
   have newSubst_wk: "\<forall>ty \<in> fmran' newSubst. is_well_kinded env ty"
-    using unify_or_coerce_preserves_well_kinded[OF uoc actualTy'_wk expectedTy'_wk] .
+    using unify_upto_coercion_preserves_well_kinded[OF uoc actualTy'_wk expectedTy'_wk] .
   have newSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' newSubst. is_runtime_type env ty)"
-    using unify_or_coerce_preserves_runtime[OF uoc] actualTy'_rt expectedTy'_rt by blast
+    using unify_upto_coercion_preserves_runtime[OF uoc] actualTy'_rt expectedTy'_rt by blast
   have newSubst_dom_flex: "\<forall>n. n |\<in>| fmdom newSubst \<longrightarrow> is_flex n"
-    using unify_or_coerce_dom_flex[OF uoc] .
+    using unify_upto_coercion_dom_flex[OF uoc] .
 
   have composed_wk: "\<forall>ty \<in> fmran' ?composedSubst. is_well_kinded env ty"
     using newSubst_wk "2.prems"(6) compose_subst_preserves_well_kinded by blast
@@ -1358,11 +1535,11 @@ next
     using finalSubst_eq by (simp add: compose_subst_correct)
   have expected_eq: "apply_subst finalSubst expectedTy = apply_subst theta (apply_subst newSubst ?expectedTy')"
     using finalSubst_eq by (simp add: compose_subst_correct)
-  \<comment> \<open>The head pair is equal or coercible under newSubst (unify_or_coerce checked
+  \<comment> \<open>The head pair is equal or coercible under newSubst (unify_upto_coercion checked
       exactly that), and the property survives the further substitution theta.\<close>
   have head_prop: "apply_subst newSubst ?actualTy' = apply_subst newSubst ?expectedTy'
       \<or> coercible (apply_subst newSubst ?actualTy') (apply_subst newSubst ?expectedTy')"
-    using unify_or_coerce_sound[OF uoc] .
+    using unify_upto_coercion_sound[OF uoc] .
   from head_prop have head: "apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
       \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy)"
   proof

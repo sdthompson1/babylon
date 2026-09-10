@@ -167,7 +167,7 @@ definition reconcile_call_result ::
   "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType \<Rightarrow> CoreType
    \<Rightarrow> TypeError list + (CoreType option \<times> CoreType list \<times> CoreTerm list)" where
   "reconcile_call_result env loc tyArgs argTms retTy tgtTy =
-    (case unify_or_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env) retTy tgtTy of
+    (case unify_upto_coercion (\<lambda>n. n |\<notin>| TE_TypeVars env) retTy tgtTy of
        Some subst \<Rightarrow>
          let retTy' = apply_subst subst retTy;
              tgtTy' = apply_subst subst tgtTy

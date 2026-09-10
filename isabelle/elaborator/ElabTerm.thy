@@ -159,19 +159,20 @@ definition insert_cast :: "CoreType \<Rightarrow> CoreType \<Rightarrow> CoreTer
   "insert_cast actualTy expectedTy tm =
     (if actualTy = expectedTy then tm else CoreTm_Cast expectedTy tm)"
 
-(* Unify two types, ignoring the dimensions of a top-level array type on each
-   side. This is "unification upto a possible array cast". *)
+(* Unify two types, ignoring the dimensions of a top-level array type on each side.
+   Used in the implementation of unify_upto_coercion. *)
 fun unify_modulo_array_dims :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option" where
   "unify_modulo_array_dims is_flex (CoreTy_Array elemTy1 dims1) (CoreTy_Array elemTy2 dims2) =
      unify is_flex elemTy1 elemTy2"
 | "unify_modulo_array_dims is_flex ty1 ty2 = unify is_flex ty1 ty2"
 
-(* Decide whether a term of type actualTy can be used where expectedTy is
-   wanted, by unification and/or an implicit cast.
-   If successful, returns a substitution which can be applied to both types, to make
-   them either equal or coercible. Otherwise, returns None. *)
-definition unify_or_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option" where
-  "unify_or_coerce is_flex actualTy expectedTy =
+(* Unify two types, up to a possible implicit coercion between them.
+   If a substitution \<theta> exists such that \<theta>(actualTy) and \<theta>(expectedTy) are either equal or
+   coercible, then return it; otherwise, return None.
+   (See also theorems unify_upto_coercion_sound and unify_upto_coercion_complete
+   in ElabTermCorrectHelpers.thy.) *)
+definition unify_upto_coercion :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option" where
+  "unify_upto_coercion is_flex actualTy expectedTy =
     (let subst = (case unify_modulo_array_dims is_flex actualTy expectedTy of
                     Some s \<Rightarrow> s
                   | None \<Rightarrow> fmempty)
@@ -181,8 +182,8 @@ definition unify_or_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> CoreTyp
         else None)"
 
 (* Unify a list of actual types with expected types, pairwise.
-   For each pair, unify_or_coerce is called, and the substitution is accumulated.
-   (Casts will be inserted later by apply_call_coercions if needed.)
+   For each pair, calls unify_upto_coercion, accumulating the substitution.
+   (Casts can be inserted later by apply_call_coercions if needed.)
    On failure, an error is returned via mk_err.
    The nat parameter is an index counter passed to mk_err for error reporting. *)
 fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
@@ -192,7 +193,7 @@ fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Righta
 | "unify_type_lists is_flex mk_err idx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
     (let actualTy' = apply_subst accSubst actualTy;
          expectedTy' = apply_subst accSubst expectedTy
-     in case unify_or_coerce is_flex actualTy' expectedTy' of
+     in case unify_upto_coercion is_flex actualTy' expectedTy' of
        Some newSubst \<Rightarrow>
          unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys
            (compose_subst newSubst accSubst)
