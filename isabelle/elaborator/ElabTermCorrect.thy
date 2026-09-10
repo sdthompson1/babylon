@@ -275,7 +275,7 @@ proof -
          finalArgTms expArgTypes"
     using apply_call_coercions_correct[OF ih_args types_unified wf'
             finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes
-            locals_unaffected ret_unaffected abs_no_subst]
+            locals_unaffected ret_unaffected abs_no_subst expArgTypes_wk expArgTypes_rt]
           finalArgTms_eq finalSubst_eq by simp
 
   \<comment> \<open>env' extends env with only type variables\<close>
@@ -426,7 +426,7 @@ proof -
          coercedIdxTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_idxs types_unified wf'
             finalSubst_wk finalSubst_rt len_elabIdxTms len_actual_expected
-            locals_unaffected ret_unaffected abs_no_subst]
+            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt]
           coercedIdxTms_eq finalSubst_eq by simp
 
   \<comment> \<open>apply_subst on u64_type is identity\<close>
@@ -612,7 +612,7 @@ proof -
          coercedTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_elems types_unified wf'
             finalSubst_wk finalSubst_rt len_elabTms len_expected
-            locals_unaffected ret_unaffected abs_no_subst]
+            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt]
           coercedTms_eq finalSubst_eq by simp
 
   have len_coerced: "length coercedTms = length elabTms"
@@ -859,7 +859,7 @@ proof -
          coercedTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_updates types_unified wf'
             finalSubst_wk finalSubst_rt len_updates len_expected
-            locals_unaffected ret_unaffected abs_no_subst]
+            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt]
           coercedTms_eq finalSubst_eq by simp
 
   \<comment> \<open>Parent term after substitution\<close>

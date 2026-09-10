@@ -22,26 +22,6 @@ lemma default_type_for_unop_is_well_kinded: "is_well_kinded env (default_type_fo
   by (cases op) simp_all
 
 
-(* Coerce two terms to a common integer type by inserting implicit casts if needed.
-   Used for binops and for if/then/else terms.
-   Only applies when both types are CoreTy_FiniteInt (returns None otherwise). *)
-fun coerce_to_common_int_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
-                                  \<Rightarrow> (CoreTerm \<times> CoreTerm \<times> CoreType) option" where
-  "coerce_to_common_int_type tm1 (CoreTy_FiniteInt sign1 bits1)
-                             tm2 (CoreTy_FiniteInt sign2 bits2) =
-    (case combine_int_types_u64 sign1 bits1 sign2 bits2 of
-      (commonSign, commonBits) \<Rightarrow>
-        let commonTy1 = CoreTy_FiniteInt commonSign commonBits;
-            commonTy2 = CoreTy_FiniteInt commonSign commonBits;
-            \<comment> \<open>Only wrap in cast if type differs from common type\<close>
-            newTm1 = (if sign1 = commonSign \<and> bits1 = commonBits then tm1
-                      else CoreTm_Cast commonTy1 tm1);
-            newTm2 = (if sign2 = commonSign \<and> bits2 = commonBits then tm2
-                      else CoreTm_Cast commonTy2 tm2)
-        in Some (newTm1, newTm2, commonTy1))"
-| "coerce_to_common_int_type _ _ _ _ = None"
-
-
 (* Resolve type arguments for a polymorphic entity (function or data constructor).
    If the user omitted type arguments and there are type parameters, generate fresh metavariables.
    If the user provided type arguments, elaborate them and check the arity.
@@ -156,16 +136,21 @@ definition build_call_result ::
         in (CoreTm_VariantCtor ctorName finalTyArgs (hd finalArgTms),
             CoreTy_Datatype dtName finalTyArgs))"
 
-(* When type unification fails, the elaborator may still bridge the gap with an
-   inserted cast. The following predicate defines when such a cast is allowed.
 
-   Currently, these implicit conversions are only allowed between finite integer
-   types (example: `var x: i16 = some_i32_value`). The `int` type is excluded; an
-   `int` is never implicitly cast to or from a finite-integer type.
+(* ========================================================================== *)
+(* Type checking (unification and implicit coercions) *)
+(* ========================================================================== *)
+
+(* When type unification fails, the elaborator may still bridge the gap with an
+   inserted cast. The following predicate defines when this is allowed.
+   Currently includes:
+    - conversions from one finite integer type to another;
+    - conversions between array types (see `array_cast_ok`).
 *)
 definition coercible :: "CoreType \<Rightarrow> CoreType \<Rightarrow> bool" where
   "coercible actualTy expectedTy =
-    (is_finite_integer_type actualTy \<and> is_finite_integer_type expectedTy)"
+    (is_finite_integer_type actualTy \<and> is_finite_integer_type expectedTy
+     \<or> array_cast_ok actualTy expectedTy)"
 
 (* Convert `tm`, of type actualTy, to expectedTy. Returns the term itself if the two
    types already agree, otherwise a CoreTm_Cast to expectedTy. Only meaningful when
@@ -174,12 +159,31 @@ definition insert_cast :: "CoreType \<Rightarrow> CoreType \<Rightarrow> CoreTer
   "insert_cast actualTy expectedTy tm =
     (if actualTy = expectedTy then tm else CoreTm_Cast expectedTy tm)"
 
-(* Unify actual types with expected types pairwise, accumulating substitutions.
-   For each pair of types:
-   1. Try unification - if it succeeds, accumulate the substitution
-   2. If unification fails but the pair is coercible, that's OK (a cast will be
-      inserted later by apply_call_coercions)
-   3. If both fail, return an error via mk_err
+(* Unify two types, ignoring the dimensions of a top-level array type on each
+   side. This is "unification upto a possible array cast". *)
+fun unify_modulo_array_dims :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option" where
+  "unify_modulo_array_dims is_flex (CoreTy_Array elemTy1 dims1) (CoreTy_Array elemTy2 dims2) =
+     unify is_flex elemTy1 elemTy2"
+| "unify_modulo_array_dims is_flex ty1 ty2 = unify is_flex ty1 ty2"
+
+(* Decide whether a term of type actualTy can be used where expectedTy is
+   wanted, by unification and/or an implicit cast.
+   If successful, returns a substitution which can be applied to both types, to make
+   them either equal or coercible. Otherwise, returns None. *)
+definition unify_or_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst option" where
+  "unify_or_coerce is_flex actualTy expectedTy =
+    (let subst = (case unify_modulo_array_dims is_flex actualTy expectedTy of
+                    Some s \<Rightarrow> s
+                  | None \<Rightarrow> fmempty)
+     in if apply_subst subst actualTy = apply_subst subst expectedTy
+           \<or> coercible (apply_subst subst actualTy) (apply_subst subst expectedTy)
+        then Some subst
+        else None)"
+
+(* Unify a list of actual types with expected types, pairwise.
+   For each pair, unify_or_coerce is called, and the substitution is accumulated.
+   (Casts will be inserted later by apply_call_coercions if needed.)
+   On failure, an error is returned via mk_err.
    The nat parameter is an index counter passed to mk_err for error reporting. *)
 fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
                         \<Rightarrow> CoreType list \<Rightarrow> CoreType list
@@ -188,22 +192,15 @@ fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Righta
 | "unify_type_lists is_flex mk_err idx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
     (let actualTy' = apply_subst accSubst actualTy;
          expectedTy' = apply_subst accSubst expectedTy
-     in case unify is_flex actualTy' expectedTy' of
+     in case unify_or_coerce is_flex actualTy' expectedTy' of
        Some newSubst \<Rightarrow>
-         let composedSubst = compose_subst newSubst accSubst
-         in unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys composedSubst
-     | None \<Rightarrow>
-         (if coercible actualTy' expectedTy' then
-            \<comment> \<open>A cast will be inserted later\<close>
-            unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys accSubst
-          else
-            Inl (mk_err idx expectedTy' actualTy')))"
+         unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys
+           (compose_subst newSubst accSubst)
+     | None \<Rightarrow> Inl (mk_err idx expectedTy' actualTy'))"
 | "unify_type_lists _ _ _ _ _ _ = undefined"
 
-(* Phase 2 of function call argument typechecking:
-   Apply substitution to terms and insert coercions where needed.
-   For each term, apply the substitution. If the resulting actual type differs from
-   the expected type (the pair must be coercible at this point), insert a cast. *)
+(* After a successful call to unify_type_lists, this applies the substitution
+   to each term, and inserts casts if required. *)
 fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                             \<Rightarrow> CoreTerm list" where
   "apply_call_coercions subst [] [] [] = []"
@@ -214,9 +211,12 @@ fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow>
 | "apply_call_coercions _ _ _ _ = undefined"
 
 (* Combine unify_type_lists and apply_call_coercions into a single function.
-   Unifies actual types with expected types (allowing coercible pairs), then
-   applies the resulting substitution to the terms and inserts casts where
-   needed. *)
+   This is the main entry point for type checking.
+   Given a list of terms and their actual types, along with the expected types, this
+   applies both unification and implicit casting to make the terms match the expected
+   types.
+   On success, returns the new terms (with type substitutions and/or implicit casts applied),
+   and the final substitution. On failure, returns a list of type errors. *)
 definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list)
                               \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
                               \<Rightarrow> CoreType list \<Rightarrow> TypeSubst
@@ -230,6 +230,25 @@ definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \
 (* ========================================================================== *)
 (* Binary operator helpers *)
 (* ========================================================================== *)
+
+(* Coerce two terms to a common integer type by inserting implicit casts if needed.
+   Used for binops and for if/then/else terms.
+   Only applies when both types are CoreTy_FiniteInt (returns None otherwise). *)
+fun coerce_to_common_int_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+                                  \<Rightarrow> (CoreTerm \<times> CoreTerm \<times> CoreType) option" where
+  "coerce_to_common_int_type tm1 (CoreTy_FiniteInt sign1 bits1)
+                             tm2 (CoreTy_FiniteInt sign2 bits2) =
+    (case combine_int_types_u64 sign1 bits1 sign2 bits2 of
+      (commonSign, commonBits) \<Rightarrow>
+        let commonTy1 = CoreTy_FiniteInt commonSign commonBits;
+            commonTy2 = CoreTy_FiniteInt commonSign commonBits;
+            \<comment> \<open>Only wrap in cast if type differs from common type\<close>
+            newTm1 = (if sign1 = commonSign \<and> bits1 = commonBits then tm1
+                      else CoreTm_Cast commonTy1 tm1);
+            newTm2 = (if sign2 = commonSign \<and> bits2 = commonBits then tm2
+                      else CoreTm_Cast commonTy2 tm2)
+        in Some (newTm1, newTm2, commonTy1))"
+| "coerce_to_common_int_type _ _ _ _ = None"
 
 (* Helper for binary operator elaboration: check that both operands satisfy a type predicate,
    then either use them directly (if same type) or try coercion to a common int type.

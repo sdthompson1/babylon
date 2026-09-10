@@ -81,8 +81,8 @@ definition resolve_impure_callee ::
    produced. For each (term, actualTy, expectedTy, Var/Ref):
      - Var: insert a cast if the actual and expected types differ (they must be coercible
        at this point, guaranteed by unify_type_lists's success).
-     - Ref: require the actual and expected types to be equal, and the term
-       to be a writable lvalue.
+     - Ref: require the actual and expected types to be equal (or related by an
+       array cast) and the term to be a writable lvalue.
    Returns the final argument terms (substitution applied). *)
 fun validate_call_args ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst
@@ -100,12 +100,13 @@ fun validate_call_args ::
                Inl errs \<Rightarrow> Inl errs
              | Inr rest \<Rightarrow> Inr (insert_cast actualTy' expectedTy' tm' # rest))
         | Ref \<Rightarrow>
-            (if actualTy' \<noteq> expectedTy' then Inl [TyErr_TypeMismatch loc expectedTy' actualTy']
+            (if actualTy' \<noteq> expectedTy' \<and> \<not> array_cast_ok actualTy' expectedTy'
+             then Inl [TyErr_TypeMismatch loc expectedTy' actualTy']
              else if \<not> is_writable_lvalue env tm' then Inl [TyErr_NotWritableLvalue loc]
              else if \<not> ghost_lvalue_ok env ghost tm' then Inl [TyErr_WriteToNonGhostFromGhost loc]
              else case validate_call_args env ghost loc subst tms actualTys expectedTys vors of
                     Inl errs \<Rightarrow> Inl errs
-                  | Inr rest \<Rightarrow> Inr (tm' # rest)))"
+                  | Inr rest \<Rightarrow> Inr (insert_cast actualTy' expectedTy' tm' # rest)))"
 | "validate_call_args env ghost loc subst _ _ _ _ = undefined"
 
 (* Elaborate an impure function call term appearing at the outermost rhs of an
@@ -145,11 +146,8 @@ definition elab_impure_call_term ::
 (* Helpers for VarDecl, Assign, etc. *)
 (* ========================================================================== *)
 
-(* Coerce an elaborated (pure) term `tm` of type `srcTy` to the target type
-   `tgtTy`: try to unify (binding flexible metavariables, then applying the
-   substitution to the term); failing that, insert a cast when the pair is
-   coercible (e.g. `var x: i16 = someI32;`); otherwise a type mismatch.
-   (This is a special case of unify_and_coerce, for a single term argument.) *)
+(* Coerce an elaborated (pure) term `tm` of type `srcTy` to the target type `tgtTy`.
+   This is like a one-argument version of unify_and_coerce. *)
 definition coerce_term_to_type ::
   "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreType
    \<Rightarrow> TypeError list + CoreTerm" where
@@ -160,25 +158,23 @@ definition coerce_term_to_type ::
        Inl errs \<Rightarrow> Inl errs
      | Inr (tms, _) \<Rightarrow> Inr (hd tms))"
 
-(* Reconcile an impure call's return type `retTy` with the target type `tgtTy`,
-   choosing the castOpt for CoreStmt_VarDeclCall / AssignCall. On exact match
-   (unify) returns (None, tyArgs, argTms) with the unifying substitution applied
-   to the ty-args and arg terms; on a coercible mismatch returns
-   (Some tgtTy, tyArgs, argTms) with no further substitution (unify failed, so
-   there is no substitution to apply); otherwise a type mismatch. *)
+(* Reconcile an impure call's return type `retTy` with the target type `tgtTy`.
+   This is like unify_and_coerce, but adapted for impure function returns - instead of
+   wrapping the call itself in a CoreTm_Cast, we must compute a `castOpt` to
+   be used with the CoreStmt_VarDeclCall / AssignCall (and also apply the new substitution
+   to the ty-args and term-args, if applicable). *)
 definition reconcile_call_result ::
   "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType \<Rightarrow> CoreType
    \<Rightarrow> TypeError list + (CoreType option \<times> CoreType list \<times> CoreTerm list)" where
   "reconcile_call_result env loc tyArgs argTms retTy tgtTy =
-    (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) retTy tgtTy of
+    (case unify_or_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env) retTy tgtTy of
        Some subst \<Rightarrow>
-         Inr (None,
-              map (apply_subst subst) tyArgs,
-              map (apply_subst_to_term subst) argTms)
-     | None \<Rightarrow>
-         if coercible retTy tgtTy
-         then Inr (Some tgtTy, tyArgs, argTms)
-         else Inl [TyErr_TypeMismatch loc tgtTy retTy])"
+         let retTy' = apply_subst subst retTy;
+             tgtTy' = apply_subst subst tgtTy
+         in Inr (if retTy' = tgtTy' then None else Some tgtTy',
+                 map (apply_subst subst) tyArgs,
+                 map (apply_subst_to_term subst) argTms)
+     | None \<Rightarrow> Inl [TyErr_TypeMismatch loc tgtTy retTy])"
 
 (* ----- VarDecl branch helpers ----- *)
 

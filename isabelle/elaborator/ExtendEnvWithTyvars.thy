@@ -85,6 +85,34 @@ proof -
     using assms(1) is_runtime_type_extend_runtime_tyvars by (simp add: env_eq)
 qed
 
+(* A type that is well-kinded (resp. runtime) in env stays so in the extended
+   env: the extension only adds type variables and keeps the datatypes. *)
+lemma is_well_kinded_extend_env_with_tyvars:
+  assumes "is_well_kinded env ty"
+  shows "is_well_kinded (extend_env_with_tyvars env ghost lo hi) ty"
+proof -
+  have "type_tyvars ty \<subseteq> fset (TE_TypeVars (extend_env_with_tyvars env ghost lo hi))"
+    using is_well_kinded_type_tyvars_subset[OF assms]
+    unfolding extend_env_with_tyvars_def by auto
+  moreover have "TE_Datatypes (extend_env_with_tyvars env ghost lo hi) = TE_Datatypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  ultimately show ?thesis using is_well_kinded_transfer[OF assms] by blast
+qed
+
+lemma is_runtime_type_extend_env_with_tyvars:
+  assumes "is_runtime_type env ty"
+  shows "is_runtime_type (extend_env_with_tyvars env ghost lo hi) ty"
+proof (cases "ghost = NotGhost")
+  case True
+  thus ?thesis using is_runtime_type_extend_runtime_tyvars[OF assms]
+    unfolding extend_env_with_tyvars_def by simp
+next
+  case False
+  thus ?thesis
+    using is_runtime_type_extend_runtime_tyvars[OF assms, where extraTV = "mv_fset lo hi" and extraRT = "{||}"]
+    unfolding extend_env_with_tyvars_def by simp
+qed
+
 (* Well-formedness is preserved under extend_env_with_tyvars. *)
 lemma tyenv_well_formed_extend_env_with_tyvars:
   assumes "tyenv_well_formed env"

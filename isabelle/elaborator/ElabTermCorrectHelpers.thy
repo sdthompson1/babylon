@@ -1047,53 +1047,208 @@ qed
 (* Correctness of type unification/coercion *)
 (* ============================================================================== *)
 
-(* A coercible pair consists of two finite integer types; in particular both
-   are ground, so any substitution leaves them unchanged. *)
-lemma coercible_finite:
-  "coercible actualTy expectedTy
-     \<Longrightarrow> is_finite_integer_type actualTy \<and> is_finite_integer_type expectedTy"
-  by (simp add: coercible_def)
+(* A coercible pair is either two finite integer types or an array cast. *)
+lemma coercible_cases:
+  assumes "coercible actualTy expectedTy"
+  obtains (Int) "is_finite_integer_type actualTy" "is_finite_integer_type expectedTy"
+        | (Array) "array_cast_ok actualTy expectedTy"
+  using assms by (auto simp: coercible_def)
 
-lemma coercible_no_tyvars:
-  "coercible actualTy expectedTy
-     \<Longrightarrow> type_tyvars actualTy = {} \<and> type_tyvars expectedTy = {}"
-  using coercible_finite finite_integer_type_is_integer_type integer_type_no_tyvars by blast
+(* Both sides of a coercible pair have the same type variables: integer types
+   have none, and an array cast leaves the element type alone. *)
+lemma coercible_type_tyvars:
+  assumes "coercible actualTy expectedTy"
+  shows "type_tyvars actualTy = type_tyvars expectedTy"
+  using assms
+proof (cases rule: coercible_cases)
+  case Int
+  thus ?thesis using finite_integer_type_is_integer_type integer_type_no_tyvars by metis
+next
+  case Array
+  thus ?thesis using array_cast_ok_type_tyvars by simp
+qed
 
+(* Coercibility is stable under substitution. *)
 lemma coercible_apply_subst:
   assumes "coercible actualTy expectedTy"
-  shows "apply_subst s actualTy = actualTy" and "apply_subst s expectedTy = expectedTy"
-proof -
-  have "type_tyvars actualTy = {}" "type_tyvars expectedTy = {}"
-    using coercible_no_tyvars[OF assms] by simp_all
-  thus "apply_subst s actualTy = actualTy" "apply_subst s expectedTy = expectedTy"
+  shows "coercible (apply_subst s actualTy) (apply_subst s expectedTy)"
+  using assms
+proof (cases rule: coercible_cases)
+  case Int
+  hence "type_tyvars actualTy = {}" "type_tyvars expectedTy = {}"
+    using finite_integer_type_is_integer_type integer_type_no_tyvars by blast+
+  hence "apply_subst s actualTy = actualTy" "apply_subst s expectedTy = expectedTy"
     by (simp_all add: apply_subst_disjoint_id)
+  thus ?thesis using assms by simp
+next
+  case Array
+  thus ?thesis using array_cast_ok_apply_subst by (simp add: coercible_def)
+qed
+
+(* A coercible pair with a well-kinded target is an admissible Core cast. *)
+lemma coercible_cast_ok:
+  assumes coer: "coercible actualTy expectedTy"
+      and wk: "is_well_kinded env expectedTy"
+  shows "cast_ok env actualTy expectedTy"
+  using coer
+proof (cases rule: coercible_cases)
+  case Int
+  thus ?thesis using finite_integer_type_is_integer_type cast_ok_int by blast
+next
+  case Array
+  thus ?thesis using wk by (rule cast_ok_array)
+qed
+
+(* The two ways unify_modulo_array_dims can succeed: as a plain unification, or
+   by unifying the element types of two arrays. *)
+lemma unify_modulo_array_dims_cases:
+  assumes "unify_modulo_array_dims is_flex actualTy expectedTy = Some s"
+  obtains (Unify) "unify is_flex actualTy expectedTy = Some s"
+        | (Array) elemTy dims elemTy' dims' where
+            "actualTy = CoreTy_Array elemTy dims"
+            "expectedTy = CoreTy_Array elemTy' dims'"
+            "unify is_flex elemTy elemTy' = Some s"
+  using assms by (cases actualTy; cases expectedTy; auto)
+
+(* unify_modulo_array_dims inherits unify's properties: it only binds flexible
+   variables, and its range is well-kinded (resp. runtime) when both input types
+   are, since the element types of an array inherit both properties from it. *)
+lemma unify_modulo_array_dims_dom_flex:
+  assumes "unify_modulo_array_dims is_flex actualTy expectedTy = Some s"
+  shows "\<forall>n. n |\<in>| fmdom s \<longrightarrow> is_flex n"
+  using assms
+proof (cases rule: unify_modulo_array_dims_cases)
+  case Unify
+  show ?thesis using unify_unify_list_dom_flex(1)[OF Unify] .
+next
+  case (Array elemTy dims elemTy' dims')
+  show ?thesis using unify_unify_list_dom_flex(1)[OF Array(3)] .
+qed
+
+lemma unify_modulo_array_dims_preserves_well_kinded:
+  assumes u: "unify_modulo_array_dims is_flex actualTy expectedTy = Some s"
+      and wk1: "is_well_kinded env actualTy"
+      and wk2: "is_well_kinded env expectedTy"
+  shows "\<forall>ty \<in> fmran' s. is_well_kinded env ty"
+  using u
+proof (cases rule: unify_modulo_array_dims_cases)
+  case Unify
+  show ?thesis using unify_preserves_well_kinded[OF Unify wk1 wk2] .
+next
+  case (Array elemTy dims elemTy' dims')
+  have "is_well_kinded env elemTy" "is_well_kinded env elemTy'"
+    using wk1 wk2 Array(1,2) by simp_all
+  thus ?thesis using unify_preserves_well_kinded[OF Array(3)] by blast
+qed
+
+lemma unify_modulo_array_dims_preserves_runtime:
+  assumes u: "unify_modulo_array_dims is_flex actualTy expectedTy = Some s"
+      and rt1: "is_runtime_type env actualTy"
+      and rt2: "is_runtime_type env expectedTy"
+  shows "\<forall>ty \<in> fmran' s. is_runtime_type env ty"
+  using u
+proof (cases rule: unify_modulo_array_dims_cases)
+  case Unify
+  show ?thesis using unify_preserves_runtime[OF Unify rt1 rt2] .
+next
+  case (Array elemTy dims elemTy' dims')
+  have "is_runtime_type env elemTy" "is_runtime_type env elemTy'"
+    using rt1 rt2 Array(1,2) by simp_all
+  thus ?thesis using unify_preserves_runtime[OF Array(3)] by blast
+qed
+
+(* unify_or_coerce returns either the identity substitution or a successful
+   unify_modulo_array_dims. *)
+lemma unify_or_coerce_cases:
+  assumes "unify_or_coerce is_flex actualTy expectedTy = Some s"
+  obtains (Identity) "s = fmempty"
+        | (Unify) "unify_modulo_array_dims is_flex actualTy expectedTy = Some s"
+proof -
+  have "s = (case unify_modulo_array_dims is_flex actualTy expectedTy of
+               Some s' \<Rightarrow> s' | None \<Rightarrow> fmempty)"
+    using assms by (auto simp: unify_or_coerce_def Let_def split: if_splits)
+  thus ?thesis using that by (auto split: option.splits)
+qed
+
+(* Under the substitution returned by unify_or_coerce, the pair is equal or
+   coercible: this is exactly the check unify_or_coerce performs. *)
+lemma unify_or_coerce_sound:
+  assumes "unify_or_coerce is_flex actualTy expectedTy = Some s"
+  shows "apply_subst s actualTy = apply_subst s expectedTy
+         \<or> coercible (apply_subst s actualTy) (apply_subst s expectedTy)"
+proof -
+  let ?subst = "(case unify_modulo_array_dims is_flex actualTy expectedTy of
+                   Some s' \<Rightarrow> s' | None \<Rightarrow> fmempty)"
+  have s_eq: "s = ?subst"
+    and ok: "apply_subst ?subst actualTy = apply_subst ?subst expectedTy
+             \<or> coercible (apply_subst ?subst actualTy) (apply_subst ?subst expectedTy)"
+    using assms by (auto simp: unify_or_coerce_def Let_def split: if_splits)
+  show ?thesis using ok unfolding s_eq .
+qed
+
+(* unify_or_coerce only binds flexible variables, and its range is well-kinded
+   (resp. runtime) when both input types are. *)
+lemma unify_or_coerce_dom_flex:
+  assumes "unify_or_coerce is_flex actualTy expectedTy = Some s"
+  shows "\<forall>n. n |\<in>| fmdom s \<longrightarrow> is_flex n"
+  using assms
+proof (cases rule: unify_or_coerce_cases)
+  case Identity
+  thus ?thesis by simp
+next
+  case Unify
+  thus ?thesis by (rule unify_modulo_array_dims_dom_flex)
+qed
+
+lemma unify_or_coerce_preserves_well_kinded:
+  assumes uoc: "unify_or_coerce is_flex actualTy expectedTy = Some s"
+      and wk1: "is_well_kinded env actualTy"
+      and wk2: "is_well_kinded env expectedTy"
+  shows "\<forall>ty \<in> fmran' s. is_well_kinded env ty"
+  using uoc
+proof (cases rule: unify_or_coerce_cases)
+  case Identity
+  thus ?thesis by (simp add: fmran'_def)
+next
+  case Unify
+  thus ?thesis using wk1 wk2 by (rule unify_modulo_array_dims_preserves_well_kinded)
+qed
+
+lemma unify_or_coerce_preserves_runtime:
+  assumes uoc: "unify_or_coerce is_flex actualTy expectedTy = Some s"
+      and rt1: "is_runtime_type env actualTy"
+      and rt2: "is_runtime_type env expectedTy"
+  shows "\<forall>ty \<in> fmran' s. is_runtime_type env ty"
+  using uoc
+proof (cases rule: unify_or_coerce_cases)
+  case Identity
+  thus ?thesis by (simp add: fmran'_def)
+next
+  case Unify
+  thus ?thesis using rt1 rt2 by (rule unify_modulo_array_dims_preserves_runtime)
 qed
 
 (* The one typing fact about elaborator-inserted casts: if `tm` has type
    actualTy, and either the types agree or the pair is coercible, then
-   insert_cast retypes it at expectedTy. Every site that inserts a coercion
-   (apply_call_coercions, validate_call_args, coerce_term_to_type) proves its
-   typing through this lemma, so a new kind of coercion needs a new case here
-   and nowhere else. *)
+   insert_cast retypes it at expectedTy. The target must be well-kinded and (in
+   NotGhost mode) runtime; the integer case would get both for free, the array
+   case needs them. Every site that inserts a coercion (apply_call_coercions,
+   validate_call_args, coerce_term_to_type) proves its typing through this
+   lemma, so a new kind of coercion needs a new case here and nowhere else. *)
 lemma insert_cast_typed:
   assumes typed: "core_term_type env ghost tm = Some actualTy"
       and ok: "actualTy = expectedTy \<or> coercible actualTy expectedTy"
+      and wk: "is_well_kinded env expectedTy"
+      and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy"
   shows "core_term_type env ghost (insert_cast actualTy expectedTy tm) = Some expectedTy"
 proof (cases "actualTy = expectedTy")
   case True
   thus ?thesis using typed by (simp add: insert_cast_def)
 next
   case False
-  with ok have fin: "is_finite_integer_type actualTy" "is_finite_integer_type expectedTy"
-    using coercible_finite by blast+
-  have actual_int: "is_integer_type actualTy"
-    using fin(1) finite_integer_type_is_integer_type by blast
-  have expected_int: "is_integer_type expectedTy"
-    using fin(2) finite_integer_type_is_integer_type by blast
-  have expected_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy"
-    using fin(2) by (cases expectedTy) auto
-  show ?thesis using typed actual_int expected_int expected_rt False
-    by (auto simp: insert_cast_def split: option.splits)
+  with ok have "coercible actualTy expectedTy" by simp
+  hence "cast_ok env actualTy expectedTy" using wk by (rule coercible_cast_ok)
+  thus ?thesis using typed rt False by (simp add: insert_cast_def)
 qed
 
 (* Correctness of unify_type_lists (Phase 1):
@@ -1144,149 +1299,80 @@ next
   from "2.prems"(8) have expectedTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy"
     and expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys" by simp_all
 
-  show ?case
-  proof (cases "unify is_flex ?actualTy' ?expectedTy'")
-    case (Some newSubst)
-    let ?composedSubst = "compose_subst newSubst accSubst"
+  \<comment> \<open>The substituted head types stay well-kinded / runtime (src = tgt = env, so this
+      reduces to accSubst having a well-kinded / runtime range).\<close>
+  have actualTy'_wk: "is_well_kinded env ?actualTy'"
+    using apply_subst_preserves_well_kinded_same_env[OF actualTy_wk "2.prems"(6)] .
+  have expectedTy'_wk: "is_well_kinded env ?expectedTy'"
+    using apply_subst_preserves_well_kinded_same_env[OF expectedTy_wk "2.prems"(6)] .
+  have actualTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?actualTy'"
+    using actualTy_rt "2.prems"(9) apply_subst_preserves_runtime_same_env by blast
+  have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
+    using expectedTy_rt "2.prems"(9) apply_subst_preserves_runtime_same_env by blast
 
-    from "2.prems"(1) Some have
-      recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys ?composedSubst = Inr finalSubst"
-      by (simp add: Let_def)
+  \<comment> \<open>Success means unify_or_coerce produced newSubst for the head pair and the
+      recursion continued with compose_subst newSubst accSubst.\<close>
+  from "2.prems"(1) obtain newSubst where
+    uoc: "unify_or_coerce is_flex ?actualTy' ?expectedTy' = Some newSubst" and
+    recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys
+                (compose_subst newSubst accSubst) = Inr finalSubst"
+    by (auto simp: Let_def split: option.splits)
+  let ?composedSubst = "compose_subst newSubst accSubst"
 
-    \<comment> \<open>Simple case: src = tgt = env, so kind/runtime preservation reduces to
-        checking that each bound meta in accSubst yields a well-kinded/runtime type.\<close>
-    have wk_case: "\<And>t. is_well_kinded env t \<Longrightarrow> is_well_kinded env (apply_subst accSubst t)"
-    proof -
-      fix t assume t_wk: "is_well_kinded env t"
-      show "is_well_kinded env (apply_subst accSubst t)"
-      proof (rule apply_subst_preserves_well_kinded[OF t_wk])
-        show "TE_Datatypes env = TE_Datatypes env" by simp
-      next
-        fix n assume n_in: "n |\<in>| TE_TypeVars env"
-        show "case fmlookup accSubst n of
-                Some ty' \<Rightarrow> is_well_kinded env ty'
-              | None \<Rightarrow> n |\<in>| TE_TypeVars env"
-          using n_in "2.prems"(6) by (auto simp: fmran'I split: option.splits)
-      qed
-    qed
-    have rt_case: "\<And>t. ghost = NotGhost \<Longrightarrow> is_runtime_type env t \<Longrightarrow>
-                       is_runtime_type env (apply_subst accSubst t)"
-    proof -
-      fix t assume ng: "ghost = NotGhost" and t_rt: "is_runtime_type env t"
-      show "is_runtime_type env (apply_subst accSubst t)"
-      proof (rule apply_subst_preserves_runtime[OF t_rt])
-        show "TE_GhostDatatypes env = TE_GhostDatatypes env" by simp
-      next
-        fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
-        show "case fmlookup accSubst n of
-                Some ty' \<Rightarrow> is_runtime_type env ty'
-              | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
-          using n_in "2.prems"(9) ng by (auto simp: fmran'I split: option.splits)
-      qed
-    qed
-    have actualTy'_wk: "is_well_kinded env ?actualTy'"
-      using actualTy_wk wk_case by blast
-    have expectedTy'_wk: "is_well_kinded env ?expectedTy'"
-      using expectedTy_wk wk_case by blast
-    have actualTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?actualTy'"
-      using actualTy_rt rt_case by blast
-    have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
-      using expectedTy_rt rt_case by blast
+  have newSubst_wk: "\<forall>ty \<in> fmran' newSubst. is_well_kinded env ty"
+    using unify_or_coerce_preserves_well_kinded[OF uoc actualTy'_wk expectedTy'_wk] .
+  have newSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' newSubst. is_runtime_type env ty)"
+    using unify_or_coerce_preserves_runtime[OF uoc] actualTy'_rt expectedTy'_rt by blast
+  have newSubst_dom_flex: "\<forall>n. n |\<in>| fmdom newSubst \<longrightarrow> is_flex n"
+    using unify_or_coerce_dom_flex[OF uoc] .
 
-    have newSubst_wk: "\<forall>ty \<in> fmran' newSubst. is_well_kinded env ty"
-      using Some actualTy'_wk expectedTy'_wk unify_preserves_well_kinded by blast
-    have newSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' newSubst. is_runtime_type env ty)"
-      using Some actualTy'_rt expectedTy'_rt unify_preserves_runtime by blast
+  have composed_wk: "\<forall>ty \<in> fmran' ?composedSubst. is_well_kinded env ty"
+    using newSubst_wk "2.prems"(6) compose_subst_preserves_well_kinded by blast
+  have composed_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?composedSubst. is_runtime_type env ty)"
+    using newSubst_rt "2.prems"(9) compose_subst_preserves_runtime by blast
+  have composed_dom_flex: "\<forall>n. n |\<in>| fmdom ?composedSubst \<longrightarrow> is_flex n"
+    using newSubst_dom_flex "2.prems"(10)
+    by (auto simp: compose_subst_def)
 
-    have composed_wk: "\<forall>ty \<in> fmran' ?composedSubst. is_well_kinded env ty"
-      using newSubst_wk "2.prems"(6) compose_subst_preserves_well_kinded by blast
-    have composed_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' ?composedSubst. is_runtime_type env ty)"
-      using newSubst_rt "2.prems"(9) compose_subst_preserves_runtime by blast
+  have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
+          \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
+          \<and> (\<exists>theta. finalSubst = compose_subst theta ?composedSubst)
+          \<and> list_all2 (\<lambda>actualTy expectedTy.
+              apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
+              \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
+            actualTys expectedTys
+          \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
+    using "2.IH" uoc len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt composed_wk
+      expectedTys_rt expectedTys_wk recurse composed_dom_flex by simp
 
-    have newSubst_dom_flex: "\<forall>n. n |\<in>| fmdom newSubst \<longrightarrow> is_flex n"
-      using unify_unify_list_dom_flex(1)[OF Some] .
-    have composed_dom_flex: "\<forall>n. n |\<in>| fmdom ?composedSubst \<longrightarrow> is_flex n"
-      using newSubst_dom_flex "2.prems"(10)
-      by (auto simp: compose_subst_def)
-
-    have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-            \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
-            \<and> (\<exists>theta. finalSubst = compose_subst theta ?composedSubst)
-            \<and> list_all2 (\<lambda>actualTy expectedTy.
-                apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-                \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-              actualTys expectedTys
-            \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
-      using "2.IH"(2) Some len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt composed_wk
-        expectedTys_rt expectedTys_wk recurse composed_dom_flex by simp
-
-    \<comment> \<open>From unify_sound, after applying newSubst the types are equal\<close>
-    from unify_sound[OF Some]
-    have "apply_subst newSubst ?actualTy' = apply_subst newSubst ?expectedTy'" .
-    hence head_eq: "apply_subst ?composedSubst actualTy = apply_subst ?composedSubst expectedTy"
-      by (simp add: compose_subst_correct)
-
-    \<comment> \<open>From IH, finalSubst = compose_subst theta composedSubst for some theta\<close>
-    from ih obtain theta where finalSubst_eq: "finalSubst = compose_subst theta ?composedSubst"
-      by blast
-    \<comment> \<open>So finalSubst = compose_subst theta (compose_subst newSubst accSubst)
-         = compose_subst (compose_subst theta newSubst) accSubst\<close>
-    have finalSubst_ext: "finalSubst = compose_subst (compose_subst theta newSubst) accSubst"
-      using finalSubst_eq by (simp add: compose_subst_assoc)
-    hence extends_acc: "\<exists>theta'. finalSubst = compose_subst theta' accSubst" by blast
-
-    \<comment> \<open>Use compose_subst_correct: apply_subst finalSubst t = apply_subst theta (apply_subst composedSubst t)\<close>
-    have "apply_subst finalSubst actualTy = apply_subst theta (apply_subst ?composedSubst actualTy)"
-      using finalSubst_eq by (simp add: compose_subst_correct)
-    also have "... = apply_subst theta (apply_subst ?composedSubst expectedTy)"
-      using head_eq by simp
-    also have "... = apply_subst finalSubst expectedTy"
-      using finalSubst_eq by (simp add: compose_subst_correct)
-    finally have head_unified: "apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy" .
-
-    show ?thesis using ih extends_acc head_unified by auto
+  \<comment> \<open>From IH, finalSubst = compose_subst theta (compose_subst newSubst accSubst) for some theta\<close>
+  from ih obtain theta where
+    finalSubst_eq: "finalSubst = compose_subst theta (compose_subst newSubst accSubst)"
+    by blast
+  \<comment> \<open>So finalSubst = compose_subst (compose_subst theta newSubst) accSubst\<close>
+  have finalSubst_ext: "finalSubst = compose_subst (compose_subst theta newSubst) accSubst"
+    using finalSubst_eq by (simp add: compose_subst_assoc)
+  hence extends_acc: "\<exists>theta'. finalSubst = compose_subst theta' accSubst" by blast
+  \<comment> \<open>apply_subst finalSubst t = apply_subst theta (apply_subst newSubst (apply_subst accSubst t))\<close>
+  have actual_eq: "apply_subst finalSubst actualTy = apply_subst theta (apply_subst newSubst ?actualTy')"
+    using finalSubst_eq by (simp add: compose_subst_correct)
+  have expected_eq: "apply_subst finalSubst expectedTy = apply_subst theta (apply_subst newSubst ?expectedTy')"
+    using finalSubst_eq by (simp add: compose_subst_correct)
+  \<comment> \<open>The head pair is equal or coercible under newSubst (unify_or_coerce checked
+      exactly that), and the property survives the further substitution theta.\<close>
+  have head_prop: "apply_subst newSubst ?actualTy' = apply_subst newSubst ?expectedTy'
+      \<or> coercible (apply_subst newSubst ?actualTy') (apply_subst newSubst ?expectedTy')"
+    using unify_or_coerce_sound[OF uoc] .
+  from head_prop have head: "apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
+      \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy)"
+  proof
+    assume "apply_subst newSubst ?actualTy' = apply_subst newSubst ?expectedTy'"
+    thus ?thesis by (simp add: actual_eq expected_eq)
   next
-    case None
-    from "2.prems"(1) None have
-      coer: "coercible ?actualTy' ?expectedTy'"
-      and recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys accSubst = Inr finalSubst"
-      by (simp_all add: Let_def split: if_splits)
-
-    have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
-            \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
-            \<and> (\<exists>theta. finalSubst = compose_subst theta accSubst)
-            \<and> list_all2 (\<lambda>actualTy expectedTy.
-                apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-                \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-              actualTys expectedTys
-            \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
-      using "2.IH"(1) None coer len_tl recurse "2.prems"(2) actualTys_wk expectedTys_wk
-                       "2.prems"(6) actualTys_rt expectedTys_rt "2.prems"(9) "2.prems"(10)
-      by simp
-
-    \<comment> \<open>From IH, finalSubst = compose_subst theta accSubst for some theta\<close>
-    from ih obtain theta where finalSubst_eq: "finalSubst = compose_subst theta accSubst"
-      by blast
-
-    \<comment> \<open>apply_subst finalSubst actualTy = apply_subst theta (apply_subst accSubst actualTy)
-       = apply_subst theta ?actualTy'. A coercible pair is ground, so this is ?actualTy'.\<close>
-    have "apply_subst finalSubst actualTy = apply_subst theta ?actualTy'"
-      using finalSubst_eq by (simp add: compose_subst_correct)
-    also have "... = ?actualTy'"
-      using coercible_apply_subst(1)[OF coer] .
-    finally have actual_eq: "apply_subst finalSubst actualTy = ?actualTy'" .
-
-    have "apply_subst finalSubst expectedTy = apply_subst theta ?expectedTy'"
-      using finalSubst_eq by (simp add: compose_subst_correct)
-    also have "... = ?expectedTy'"
-      using coercible_apply_subst(2)[OF coer] .
-    finally have expected_eq: "apply_subst finalSubst expectedTy = ?expectedTy'" .
-
-    have head_coer: "coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy)"
-      using coer actual_eq expected_eq by simp
-
-    show ?thesis using ih head_coer by simp
+    assume "coercible (apply_subst newSubst ?actualTy') (apply_subst newSubst ?expectedTy')"
+    thus ?thesis using coercible_apply_subst[of _ _ theta] by (simp add: actual_eq expected_eq)
   qed
+  show ?case using ih extends_acc head by auto
 next
   case ("3_1" uu uv uw v va uz)
   then show ?case by simp
@@ -1315,6 +1401,8 @@ lemma apply_call_coercions_correct:
                       \<Longrightarrow> apply_subst subst ty' = ty'"
       and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
       and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
+      and "list_all (is_well_kinded env) expectedTys"
+      and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
   shows "list_all2 (\<lambda>tm expectedTy.
            core_term_type env ghost tm = Some (apply_subst subst expectedTy))
          (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
@@ -1343,13 +1431,21 @@ next
     len_tms: "length tms = length actualTys" and
     len_tys: "length actualTys = length expectedTys"
     by simp_all
+  from "2.prems"(11) have
+    expectedTy_wk: "is_well_kinded env expectedTy" and
+    expectedTys_wk: "list_all (is_well_kinded env) expectedTys"
+    by simp_all
+  from "2.prems"(12) have
+    expectedTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env expectedTy" and
+    expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
+    by simp_all
 
   \<comment> \<open>IH for tail\<close>
   have ih: "list_all2 (\<lambda>tm expectedTy.
               core_term_type env ghost tm = Some (apply_subst subst expectedTy))
             (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
     using "2.IH" tail_typed tail_prop "2.prems"(3,4,5,8,9,10) len_tms len_tys
-          locals_unaffected ret_unaffected abs_no_subst
+          locals_unaffected ret_unaffected abs_no_subst expectedTys_wk expectedTys_rt
     by simp
 
   \<comment> \<open>For the head: apply_subst_to_term preserves typing (with substituted type)\<close>
@@ -1357,10 +1453,16 @@ next
     by (simp add: "2.prems"(4,5,8,9,10) apply_subst_to_term_preserves_typing assms(3)
         head_typed)
 
+  \<comment> \<open>The substituted expected type is well-kinded / runtime (the cast target).\<close>
+  have expectedTy'_wk: "is_well_kinded env ?expectedTy'"
+    using apply_subst_preserves_well_kinded_same_env[OF expectedTy_wk "2.prems"(4)] .
+  have expectedTy'_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ?expectedTy'"
+    using expectedTy_rt "2.prems"(5) apply_subst_preserves_runtime_same_env by blast
+
   \<comment> \<open>Show the head element has the expected type\<close>
   have head_result: "core_term_type env ghost (insert_cast ?actualTy' ?expectedTy' ?tm')
                      = Some ?expectedTy'"
-    using insert_cast_typed[OF head_tm'_typed head_prop] .
+    using insert_cast_typed[OF head_tm'_typed head_prop expectedTy'_wk expectedTy'_rt] .
 
   show ?case using head_result ih by simp
 next
