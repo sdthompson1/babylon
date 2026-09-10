@@ -426,6 +426,7 @@ void validate_ref_chain(struct VContext *context,
     case RT_ARRAY_CAST:
         // Nothing to check here.
         validate_ref_chain(context, ref->base, location);
+        break;
 
     case RT_SEXPR:
         // We assume RT_SEXPR is only used in cases where the
