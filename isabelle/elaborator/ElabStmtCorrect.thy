@@ -1343,7 +1343,8 @@ proof -
     qed
   qed
 
-  \<comment> \<open>finalTyArgs complete: newTyArgs are (Rule D) and finalSubst's range is (Rule C).\<close>
+  \<comment> \<open>finalTyArgs complete: the resolved type arguments are complete, and so is
+       the range of finalSubst, so substitution preserves completeness.\<close>
   have finalTyArgs_cp: "list_all is_complete_type finalTyArgs"
     unfolding tyargs_eq using map_apply_subst_preserves_complete[OF newTyArgs_cp finalSubst_cp] .
 
