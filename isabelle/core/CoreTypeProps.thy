@@ -22,6 +22,25 @@ fun is_runtime_type :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" whe
 | "is_runtime_type env (CoreTy_Array elemTy dims) = is_runtime_type env elemTy"
 | "is_runtime_type env (CoreTy_Var n) = (n |\<in>| TE_RuntimeTypeVars env)"
 
+(* Check if a type is complete. An incomplete type is one that mentions an array with
+   a dimension of unknown size (T[]): values of such a type only exist as views onto
+   storage owned by someone else, so they cannot be stored, assigned or swapped in
+   executable code.
+   An allocatable dimension (T[*]) is complete: the variable itself owns the storage.
+   A type variable is complete because a type argument is always required to be a
+   complete type, so a type variable can only ever stand for one. This makes the
+   predicate purely syntactic (no env needed). *)
+fun is_complete_type :: "CoreType \<Rightarrow> bool" where
+  "is_complete_type (CoreTy_Datatype _ tyargs) = list_all is_complete_type tyargs"
+| "is_complete_type CoreTy_Bool = True"
+| "is_complete_type (CoreTy_FiniteInt _ _) = True"
+| "is_complete_type CoreTy_MathInt = True"
+| "is_complete_type CoreTy_MathReal = True"
+| "is_complete_type (CoreTy_Record flds) = list_all is_complete_type (map snd flds)"
+| "is_complete_type (CoreTy_Array elemTy dims) =
+     (list_all (\<lambda>d. d \<noteq> CoreDim_Unknown) dims \<and> is_complete_type elemTy)"
+| "is_complete_type (CoreTy_Var _) = True"
+
 (* Check if a type is a numeric type *)
 fun is_numeric_type :: "CoreType \<Rightarrow> bool" where
   "is_numeric_type (CoreTy_FiniteInt _ _) = True"
@@ -85,6 +104,16 @@ lemma list_all_tyvar_is_runtime:
   assumes "\<forall>n \<in> set ns. n |\<in>| TE_RuntimeTypeVars env"
   shows "list_all (is_runtime_type env) (map CoreTy_Var ns)"
   using assms by (induction ns) auto
+
+(* Numeric types are complete *)
+lemma numeric_type_is_complete:
+  "is_numeric_type ty \<Longrightarrow> is_complete_type ty"
+  by (cases ty) auto
+
+(* A list of type variables (as types) is always complete *)
+lemma list_all_tyvar_is_complete [simp]:
+  "list_all is_complete_type (map CoreTy_Var ns)"
+  by (induction ns) auto
 
 (* is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars *)
 lemma is_runtime_type_cong_env:

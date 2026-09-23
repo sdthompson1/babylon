@@ -532,6 +532,182 @@ next
 qed
 
 
+section \<open>Range completeness of the accumulated substitution\<close>
+
+(* The substitution accumulated by pattern decoration has a *complete* range
+   (in the sense of `is_complete_type`) whenever the incoming one does:
+   every binding it adds comes from try_unify_compose, which checks exactly
+   this (a metavariable is never bound to an incomplete type).
+   This is what lets the substituted scrutinee and arm bodies stay well-typed
+   under Core's completeness conditions. *)
+lemma decorate_pattern_range_complete:
+  "decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv = Inr (dp, accSubst', next_mv')
+   \<Longrightarrow> \<forall>ty \<in> fmran' accSubst. is_complete_type ty
+   \<Longrightarrow> \<forall>ty \<in> fmran' accSubst'. is_complete_type ty"
+and decorate_pattern_list_range_complete:
+  "decorate_pattern_list env elabEnv ghost pats tys accSubst next_mv = Inr (dps, accSubst', next_mv')
+   \<Longrightarrow> \<forall>ty \<in> fmran' accSubst. is_complete_type ty
+   \<Longrightarrow> \<forall>ty \<in> fmran' accSubst'. is_complete_type ty"
+proof (induction env elabEnv ghost pat scrutTy accSubst next_mv
+       and env elabEnv ghost pats tys accSubst next_mv
+       arbitrary: dp accSubst' next_mv'
+       and dps accSubst' next_mv'
+       rule: decorate_pattern_decorate_pattern_list.induct)
+  case (1 env elabEnv ghost loc vr name scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Var: substitution unchanged\<close>
+  from "1.prems" show ?case by simp
+next
+  case (2 env elabEnv ghost loc scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Wildcard: substitution unchanged\<close>
+  from "2.prems" show ?case by simp
+next
+  case (3 env elabEnv ghost loc b scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Bool: the result is a try_unify_compose result\<close>
+  from "3.prems"(1) show ?case
+    by (auto split: option.splits dest: try_unify_compose_range_complete)
+next
+  case (4 env elabEnv ghost loc i scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Int: either unchanged or a try_unify_compose result\<close>
+  from "4.prems" show ?case
+    by (auto simp: Let_def split: CoreType.splits option.splits if_splits
+             dest: try_unify_compose_range_complete)
+next
+  case (5 env elabEnv ghost loc pats scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Tuple: try_unify_compose, then the list recursion from its result\<close>
+  let ?n = "length pats"
+  let ?names = "tuple_field_names ?n"
+  let ?freshFieldTys = "mv_block next_mv (next_mv + ?n)"
+  let ?next_mv_init = "next_mv + ?n"
+  let ?recTy = "CoreTy_Record (zip ?names ?freshFieldTys)"
+  from "5.prems"(1) obtain s where
+    tuc: "try_unify_compose env ?recTy scrutTy accSubst = Some s"
+    by (auto simp: Let_def split: option.splits)
+  from "5.prems"(1) tuc obtain decPats where
+    rec: "decorate_pattern_list env elabEnv ghost pats ?freshFieldTys s ?next_mv_init
+            = Inr (decPats, accSubst', next_mv')"
+    by (auto simp: Let_def split: sum.splits)
+  have s_cp: "\<forall>ty \<in> fmran' s. is_complete_type ty"
+    using try_unify_compose_range_complete[OF tuc] .
+  have eq_n: "?n = length pats" by simp
+  have eq_names: "?names = tuple_field_names ?n" by simp
+  have eq_fresh: "?freshFieldTys = mv_block next_mv (next_mv + ?n)" by simp
+  have eq_next_init: "?next_mv_init = next_mv + ?n" by simp
+  have eq_recTy: "?recTy = CoreTy_Record (zip ?names ?freshFieldTys)" by simp
+  show ?case
+    using "5.IH"[OF eq_n eq_names eq_fresh eq_next_init eq_recTy tuc rec s_cp] .
+next
+  case (6 env elabEnv ghost loc userFlds scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Record: the list recursion from the unchanged substitution\<close>
+  from "6.prems"(1) have no_dup: "first_duplicate_name fst userFlds = None"
+    by (auto split: option.splits)
+  let ?e = "apply_subst accSubst scrutTy"
+  from "6.prems"(1) no_dup obtain fieldTypes where
+    e_record: "?e = CoreTy_Record fieldTypes"
+    by (auto simp: Let_def split: CoreType.splits)
+  from "6.prems"(1) no_dup e_record have
+    no_unknown: "unknown_field_names fieldTypes userFlds = []"
+    by (auto simp: Let_def split: list.splits)
+  from "6.prems"(1) no_dup e_record no_unknown obtain decPats where
+    rec: "decorate_pattern_list env elabEnv ghost (map snd userFlds)
+            (user_field_types fieldTypes userFlds) accSubst next_mv
+            = Inr (decPats, accSubst', next_mv')"
+    by (auto simp: Let_def split: sum.splits)
+  have e_let: "?e = ?e" by simp
+  show ?case
+    using "6.IH"[OF no_dup e_let e_record no_unknown rec "6.prems"(2)] .
+next
+  case (7 env elabEnv ghost loc ctorName optPayload scrutTy accSubst next_mv)
+  \<comment> \<open>BabPat_Variant: try_unify_compose, then (maybe) the payload recursion from its result\<close>
+  from "7.prems"(1) obtain dtName tyvars payloadTy isNullary where
+    rpc: "resolve_pattern_ctor env elabEnv ghost loc ctorName
+            = Inr (dtName, tyvars, payloadTy, isNullary)"
+    by (auto split: sum.splits)
+  let ?freshTyArgs = "mv_block next_mv (next_mv + length tyvars)"
+  let ?next_mv_init = "next_mv + length tyvars"
+  let ?dtTy = "CoreTy_Datatype dtName ?freshTyArgs"
+  from "7.prems"(1) rpc obtain s where
+    tuc: "try_unify_compose env ?dtTy scrutTy accSubst = Some s"
+    by (auto simp: Let_def split: option.splits)
+  from "7.prems"(1) rpc tuc obtain res where
+    chk: "check_payload_presence loc ctorName isNullary optPayload = Inr res"
+    by (auto simp: Let_def split: sum.splits)
+  have s_cp: "\<forall>ty \<in> fmran' s. is_complete_type ty"
+    using try_unify_compose_range_complete[OF tuc] .
+  show ?case
+  proof (cases res)
+    case None
+    from "7.prems"(1) rpc tuc chk None have "accSubst' = s"
+      by (auto simp: Let_def)
+    thus ?thesis using s_cp by simp
+  next
+    case (Some inner_pat)
+    let ?tyvarSubst = "fmap_of_list (zip tyvars ?freshTyArgs)"
+    let ?instPayloadTy = "apply_subst ?tyvarSubst payloadTy"
+    from "7.prems"(1) rpc tuc chk Some obtain dp_inner where
+      rec: "decorate_pattern env elabEnv ghost inner_pat ?instPayloadTy s ?next_mv_init
+              = Inr (dp_inner, accSubst', next_mv')"
+      by (auto simp: Let_def split: sum.splits)
+    have b_eq: "(dtName, tyvars, payloadTy, isNullary) = (dtName, tyvars, payloadTy, isNullary)" by simp
+    have y_eq: "(tyvars, payloadTy, isNullary) = (tyvars, payloadTy, isNullary)" by simp
+    have ya_eq: "(payloadTy, isNullary) = (payloadTy, isNullary)" by simp
+    show ?thesis
+      using "7.IH"(1)[OF rpc b_eq y_eq ya_eq refl refl refl tuc chk Some refl refl rec s_cp] .
+  qed
+next
+  case (8 env elabEnv ghost tys accSubst next_mv)
+  \<comment> \<open>decorate_pattern_list: empty\<close>
+  from "8.prems" show ?case by simp
+next
+  case (9 env elabEnv ghost p ps tys accSubst next_mv)
+  \<comment> \<open>decorate_pattern_list: cons; chain the head and the rest\<close>
+  let ?t_let = "case tys of [] \<Rightarrow> CoreTy_Var '''' | t # _ \<Rightarrow> t"
+  let ?tsRest_let = "case tys of [] \<Rightarrow> [] | _ # tsRest \<Rightarrow> tsRest"
+  from "9.prems"(1) obtain dp s mv where
+    dec_head: "decorate_pattern env elabEnv ghost p ?t_let accSubst next_mv = Inr (dp, s, mv)"
+    by (auto simp: Let_def split: sum.splits)
+  from "9.prems"(1) dec_head obtain dpsRest where
+    dec_rest: "decorate_pattern_list env elabEnv ghost ps ?tsRest_let s mv
+                = Inr (dpsRest, accSubst', next_mv')"
+    by (auto simp: Let_def split: sum.splits)
+  have t_let_eq: "?t_let = ?t_let" by simp
+  have tsRest_let_eq: "?tsRest_let = ?tsRest_let" by simp
+  have pair1: "(dp, s, mv) = (dp, s, mv)" by simp
+  have pair2: "(s, mv) = (s, mv)" by simp
+  have s_cp: "\<forall>ty \<in> fmran' s. is_complete_type ty"
+    using "9.IH"(1)[OF t_let_eq tsRest_let_eq dec_head "9.prems"(2)] .
+  show ?case
+    using "9.IH"(3)[OF t_let_eq tsRest_let_eq dec_head pair1 pair2 dec_rest s_cp] .
+qed
+
+(* Likewise for decorate_match_arms. *)
+lemma decorate_match_arms_range_complete:
+  "decorate_match_arms env elabEnv ghost scrutTy allowRefs accSubst next_mv arms
+     = Inr (decoratedArms, accSubst', next_mv')
+   \<Longrightarrow> \<forall>ty \<in> fmran' accSubst. is_complete_type ty
+   \<Longrightarrow> \<forall>ty \<in> fmran' accSubst'. is_complete_type ty"
+proof (induction arms arbitrary: accSubst next_mv decoratedArms accSubst' next_mv')
+  case Nil
+  thus ?case by simp
+next
+  case (Cons hd rest)
+  obtain pat body where hd_eq: "hd = (pat, body)" by (cases hd) auto
+  from Cons.prems(1) hd_eq obtain dp accSubst1 next_mv1 where
+    dec: "decorate_pattern env elabEnv ghost pat scrutTy accSubst next_mv
+          = Inr (dp, accSubst1, next_mv1)"
+    by (auto split: sum.splits)
+  from Cons.prems(1) hd_eq dec obtain check_res where
+    chk_eq: "check_match_pattern allowRefs (bab_pattern_location pat) dp = Inr check_res"
+    by (auto split: sum.splits)
+  from Cons.prems(1) hd_eq dec chk_eq obtain restRows where
+    rec: "decorate_match_arms env elabEnv ghost scrutTy allowRefs accSubst1 next_mv1 rest
+          = Inr (restRows, accSubst', next_mv')"
+    by (auto simp: Let_def split: sum.splits)
+  have "\<forall>ty \<in> fmran' accSubst1. is_complete_type ty"
+    using decorate_pattern_range_complete[OF dec Cons.prems(2)] .
+  thus ?case using Cons.IH[OF rec] by simp
+qed
+
+
 section \<open>DecPattern type compatibility\<close>
 
 (* Definition: Compatibility of a DecPattern with a CoreType under env. Mirrors

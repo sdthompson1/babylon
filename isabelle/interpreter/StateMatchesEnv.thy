@@ -416,6 +416,7 @@ proof -
     fun_types_wk: "tyenv_fun_types_well_kinded env" and
     fun_tyvars_distinct: "tyenv_fun_tyvars_distinct env" and
     fun_ghost: "tyenv_fun_ghost_constraint env" and
+    fun_ret_cp: "tyenv_fun_return_types_complete env" and
     nonghost_payloads: "tyenv_nonghost_payloads_runtime env" and
     ghost_dt_subset: "tyenv_ghost_datatypes_subset env" and
     rt_subset: "tyenv_runtime_tyvars_subset env" and
@@ -513,6 +514,13 @@ proof -
     unfolding tyenv_return_type_runtime_def
     using ret_rt_inner rt_inner_eq by (simp add: body_env_for_def)
 
+  \<comment> \<open>(4c) tyenv_return_type_complete ?be: TE_ReturnType ?be = FI_ReturnType,
+       complete by the function-table clause (the function is non-ghost). \<close>
+  have c4c: "tyenv_return_type_complete ?be"
+    unfolding tyenv_return_type_complete_def
+    using fun_ret_cp fn_lookup not_ghost
+    unfolding tyenv_fun_return_types_complete_def by (simp add: body_env_for_def)
+
   \<comment> \<open>(5) tyenv_ctors_consistent ?be: TE_DataCtors and TE_Datatypes inherited. \<close>
   have c5: "tyenv_ctors_consistent ?be"
     using ctors_cons unfolding tyenv_ctors_consistent_def
@@ -599,6 +607,12 @@ proof -
       using rt_scope_eq by (simp add: abs_be)
   qed
 
+  \<comment> \<open>(12c) tyenv_fun_return_types_complete ?be: TE_Functions inherited, and the
+        predicate is env-free. \<close>
+  have c12c: "tyenv_fun_return_types_complete ?be"
+    using fun_ret_cp unfolding tyenv_fun_return_types_complete_def
+    by (simp add: body_env_for_def)
+
   \<comment> \<open>(13) tyenv_nonghost_payloads_runtime ?be: inner override, TE_DataCtors,
         TE_GhostDatatypes inherited. \<close>
   have c13: "tyenv_nonghost_payloads_runtime ?be"
@@ -644,7 +658,7 @@ proof -
   have c17: "tyenv_abstract_types_subset ?be"
     unfolding tyenv_abstract_types_subset_def by (simp add: abs_be)
 
-  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c12 c13 c14 c15 c16 c17
+  from c1 c2 c3 c4 c4b c4c c5 c6 c7 c8 c9 c10 c12 c12c c13 c14 c15 c16 c17
   show ?thesis unfolding tyenv_well_formed_def by simp
 qed
 

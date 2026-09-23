@@ -303,6 +303,92 @@ next
   qed
 qed simp_all
 
+(* Substituting complete types into a complete type gives a complete type.
+   No env is involved, since is_complete_type is purely syntactic. *)
+lemma apply_subst_preserves_complete:
+  assumes "is_complete_type ty"
+    and "\<forall>t \<in> fmran' subst. is_complete_type t"
+  shows "is_complete_type (apply_subst subst ty)"
+using assms(1) proof (induction ty)
+  case (CoreTy_Datatype name tyArgs)
+  have "list_all is_complete_type tyArgs"
+    using CoreTy_Datatype.prems by simp
+  hence "list_all is_complete_type (map (apply_subst subst) tyArgs)"
+    using CoreTy_Datatype.IH by (simp add: list_all_iff)
+  thus ?case by simp
+next
+  case (CoreTy_Record flds)
+  have IH: "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow> is_complete_type t \<Longrightarrow>
+                    is_complete_type (apply_subst subst t)"
+    using CoreTy_Record.IH by auto
+  have "\<forall>(nm, t) \<in> set flds. is_complete_type t"
+    using CoreTy_Record.prems by (auto simp: list_all_iff)
+  thus ?case using IH by (auto simp: list_all_iff)
+next
+  case (CoreTy_Var n)
+  show ?case
+  proof (cases "fmlookup subst n")
+    case None
+    thus ?thesis by simp
+  next
+    case (Some ty')
+    hence "ty' \<in> fmran' subst" by (rule fmran'I)
+    with assms(2) have "is_complete_type ty'" by blast
+    thus ?thesis using Some by simp
+  qed
+qed simp_all
+
+lemma map_apply_subst_preserves_complete:
+  assumes "list_all is_complete_type tys"
+    and "\<forall>t \<in> fmran' subst. is_complete_type t"
+  shows "list_all is_complete_type (map (apply_subst subst) tys)"
+  using assms apply_subst_preserves_complete by (auto simp: list_all_iff)
+
+(* Local form of apply_subst_preserves_complete: only the bindings of the type
+   variables actually occurring in ty need to be complete. Follows from the global
+   form by restricting the substitution to type_tyvars ty, which does not change
+   the result (apply_subst_cong_on_tyvars). *)
+lemma apply_subst_preserves_complete_local:
+  assumes cp: "is_complete_type ty"
+    and bindings: "\<And>n t. n \<in> type_tyvars ty \<Longrightarrow> fmlookup subst n = Some t \<Longrightarrow> is_complete_type t"
+  shows "is_complete_type (apply_subst subst ty)"
+proof -
+  let ?s = "fmrestrict_set (type_tyvars ty) subst"
+  have same: "apply_subst subst ty = apply_subst ?s ty"
+    by (rule apply_subst_cong_on_tyvars) simp
+  have "\<forall>t \<in> fmran' ?s. is_complete_type t"
+  proof
+    fix t assume "t \<in> fmran' ?s"
+    then obtain n where "fmlookup ?s n = Some t" by (auto simp: fmran'_def)
+    hence "n \<in> type_tyvars ty" and "fmlookup subst n = Some t"
+      by (auto split: if_splits)
+    thus "is_complete_type t" by (rule bindings)
+  qed
+  from apply_subst_preserves_complete[OF cp this] show ?thesis
+    unfolding same .
+qed
+
+(* Conversely, a substitution never makes an incomplete type complete, because it
+   never removes an unknown array dimension. *)
+lemma apply_subst_reflects_complete:
+  "is_complete_type (apply_subst subst ty) \<Longrightarrow> is_complete_type ty"
+proof (induction ty)
+  case (CoreTy_Datatype name tyArgs)
+  have "\<forall>t \<in> set tyArgs. is_complete_type (apply_subst subst t)"
+    using CoreTy_Datatype.prems by (simp add: list_all_iff)
+  hence "\<forall>t \<in> set tyArgs. is_complete_type t"
+    using CoreTy_Datatype.IH by blast
+  thus ?case by (simp add: list_all_iff)
+next
+  case (CoreTy_Record flds)
+  have IH: "\<And>nm t. (nm, t) \<in> set flds \<Longrightarrow> is_complete_type (apply_subst subst t) \<Longrightarrow>
+                    is_complete_type t"
+    using CoreTy_Record.IH by auto
+  have "\<forall>(nm, t) \<in> set flds. is_complete_type (apply_subst subst t)"
+    using CoreTy_Record.prems by (auto simp: list_all_iff)
+  thus ?case using IH by (auto simp: list_all_iff)
+qed simp_all
+
 (* Specialization lemma:
    When substituting a type runtime-valid in "env with TypeVars/RuntimeTypeVars set to the
    module's abstract types together with the type parameters" by a fully-populated zip
@@ -692,6 +778,25 @@ proof
   qed
 qed
 
+(* Composition of substitutions preserves completeness of the range *)
+lemma compose_subst_preserves_complete:
+  assumes "\<forall>ty \<in> fmran' s1. is_complete_type ty"
+      and "\<forall>ty \<in> fmran' s2. is_complete_type ty"
+    shows "\<forall>ty \<in> fmran' (compose_subst s2 s1). is_complete_type ty"
+proof
+  fix ty assume "ty \<in> fmran' (compose_subst s2 s1)"
+  from compose_subst_range[OF this] show "is_complete_type ty"
+  proof
+    assume "ty \<in> fmran' s2"
+    thus ?thesis using assms(2) by blast
+  next
+    assume "\<exists>ty1 \<in> fmran' s1. ty = apply_subst s2 ty1"
+    then obtain ty1 where ty1_in: "ty1 \<in> fmran' s1" and eq: "ty = apply_subst s2 ty1" by auto
+    from ty1_in assms(1) have "is_complete_type ty1" by blast
+    thus ?thesis using eq apply_subst_preserves_complete[OF _ assms(2)] by simp
+  qed
+qed
+
 
 (* ========================================================================== *)
 (* General fmap helpers about fmap_of_list and zip *)
@@ -752,6 +857,20 @@ next
   also have "... = insert y (set ys)"
     using Cons.IH distinct_xs by simp
   finally show ?case by simp
+qed
+
+(* A zip-built substitution over complete types has a complete range. No length or
+   distinctness condition is needed, since the range is always a subset of the list. *)
+lemma fmran'_fmap_of_list_zip_complete:
+  assumes "list_all is_complete_type tys"
+  shows "\<forall>t \<in> fmran' (fmap_of_list (zip tyvars tys)). is_complete_type t"
+proof
+  fix t assume "t \<in> fmran' (fmap_of_list (zip tyvars tys))"
+  then obtain n where "fmlookup (fmap_of_list (zip tyvars tys)) n = Some t"
+    by (auto simp: fmran'_def)
+  hence "t \<in> set tys"
+    using fmap_of_list_SomeD by (metis in_set_zipE)
+  with assms show "is_complete_type t" by (simp add: list_all_iff)
 qed
 
 

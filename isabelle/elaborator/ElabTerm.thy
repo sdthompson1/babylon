@@ -39,7 +39,11 @@ definition resolve_type_args ::
        \<comment> \<open>Elaborate the user's provided type arguments\<close>
        (case elab_type_list env elabEnv ghost tyArgs of
            Inl errs \<Rightarrow> Inl errs
-         | Inr newTyArgs \<Rightarrow> Inr (newTyArgs, next_mv))
+         | Inr newTyArgs \<Rightarrow>
+             \<comment> \<open>Type arguments may only be instantiated at complete types\<close>
+             if \<not> list_all is_complete_type newTyArgs
+             then Inl [TyErr_IncompleteTypeArgument loc]
+             else Inr (newTyArgs, next_mv))
      else
        Inl [TyErr_WrongNumberOfTypeArgs loc name numTyParams (length tyArgs)])"
 
@@ -184,20 +188,28 @@ definition unify_upto_coercion :: "(string \<Rightarrow> bool) \<Rightarrow> Cor
 (* Unify a list of actual types with expected types, pairwise.
    For each pair, calls unify_upto_coercion, accumulating the substitution.
    (Casts can be inserted later by apply_call_coercions if needed.)
-   On failure, an error is returned via mk_err.
-   The nat parameter is an index counter passed to mk_err for error reporting. *)
-fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list) \<Rightarrow> nat
+
+   Errors are reported at the location of the offending pair: locOf maps a
+   pair's index to its source location, and the nat parameter is the index of
+   the first pair in the lists.
+
+   A metavariable is never bound to an incomplete type. Violations of this
+   rule are reported as TyErr_IncompleteTypeArgument. *)
+fun unify_type_lists :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> Location) \<Rightarrow> nat
                         \<Rightarrow> CoreType list \<Rightarrow> CoreType list
                         \<Rightarrow> TypeSubst \<Rightarrow> TypeError list + TypeSubst" where
-  "unify_type_lists is_flex mk_err idx [] [] accSubst = Inr accSubst"
-| "unify_type_lists is_flex mk_err idx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
+  "unify_type_lists is_flex locOf idx [] [] accSubst = Inr accSubst"
+| "unify_type_lists is_flex locOf idx (actualTy # actualTys) (expectedTy # expectedTys) accSubst =
     (let actualTy' = apply_subst accSubst actualTy;
          expectedTy' = apply_subst accSubst expectedTy
      in case unify_upto_coercion is_flex actualTy' expectedTy' of
        Some newSubst \<Rightarrow>
-         unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys
-           (compose_subst newSubst accSubst)
-     | None \<Rightarrow> Inl (mk_err idx expectedTy' actualTy'))"
+         \<comment> \<open>Ensure that unification didn't bind a metavar to an incomplete type\<close>
+         if \<not> typesubst_complete newSubst
+         then Inl [TyErr_IncompleteTypeArgument (locOf idx)]
+         else unify_type_lists is_flex locOf (idx + 1) actualTys expectedTys
+                (compose_subst newSubst accSubst)
+     | None \<Rightarrow> Inl [TyErr_TypeMismatch (locOf idx) expectedTy' actualTy'])"
 | "unify_type_lists _ _ _ _ _ _ = undefined"
 
 (* After a successful call to unify_type_lists, this applies the substitution
@@ -218,12 +230,12 @@ fun apply_call_coercions :: "TypeSubst \<Rightarrow> CoreTerm list \<Rightarrow>
    types.
    On success, returns the new terms (with type substitutions and/or implicit casts applied),
    and the final substitution. On failure, returns a list of type errors. *)
-definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeError list)
+definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \<Rightarrow> Location)
                               \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list
                               \<Rightarrow> CoreType list \<Rightarrow> TypeSubst
                               \<Rightarrow> TypeError list + (CoreTerm list \<times> TypeSubst)" where
-  "unify_and_coerce is_flex mk_err tms actualTys expectedTys accSubst =
-    (case unify_type_lists is_flex mk_err 0 actualTys expectedTys accSubst of
+  "unify_and_coerce is_flex locOf tms actualTys expectedTys accSubst =
+    (case unify_type_lists is_flex locOf 0 actualTys expectedTys accSubst of
        Inl errs \<Rightarrow> Inl errs
      | Inr finalSubst \<Rightarrow> Inr (apply_call_coercions finalSubst tms actualTys expectedTys, finalSubst))"
 
@@ -379,13 +391,17 @@ definition const_subst_for :: "(string \<Rightarrow> bool) \<Rightarrow> CoreTyp
    3. If unification succeeds but metavariables remain, fill them with the
       default type for the operator.
    4. If unification fails, pass through unchanged (downstream checks will
-      report the appropriate type error). *)
+      report the appropriate type error). A unifier that would bind a
+      metavariable to an incomplete array type is treated as a failure too
+      (a metavariable is never bound to an incomplete type). *)
 fun resolve_binop_metas :: "(string \<Rightarrow> bool) \<Rightarrow> BabBinop
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (CoreTerm \<times> CoreType \<times> CoreTerm \<times> CoreType)" where
   "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy =
     (case unify is_flex lhsTy rhsTy of
        Some unifSubst \<Rightarrow>
+         if \<not> typesubst_complete unifSubst then (lhsTm, lhsTy, rhsTm, rhsTy)
+         else
          let unifiedTy = apply_subst unifSubst lhsTy
          in if list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list unifiedTy) then
               (apply_subst_to_term unifSubst lhsTm, unifiedTy,
@@ -662,11 +678,12 @@ where
 
 (* Final-stage helper for term-context match elaboration. Takes the per-arm
    results (as four parallel lists: dps, body terms, body locations, body
-   types) plus the elaborated scrutinee + body-type metavariable + the
-   running accSubst, and produces the elaborated match term.
+   types) plus the elaborated scrutinee + the expected body type (the first
+   arm's body type; see BabTm_Match) + the running accSubst, and produces the
+   elaborated match term.
 
    Steps:
-   1. Unify each body type with bodyTyVar, threading accSubst \<rightarrow> finalSubst.
+   1. Unify each body type with expBodyTy, threading accSubst \<rightarrow> finalSubst.
    2. Apply finalSubst to scrutinee, dps, and body terms.
    3. Mint a fresh scrutinee binding name (match@@<n>) and validate that it
       doesn't clash with any free var of the substituted scrutinee or any
@@ -685,15 +702,15 @@ definition finalize_match_term ::
    \<Rightarrow> DecPattern list \<Rightarrow> CoreTerm list \<Rightarrow> Location list \<Rightarrow> CoreType list
    \<Rightarrow> TypeSubst \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType \<times> nat)" where
-  "finalize_match_term env loc bodyTyVar scrutTm scrutTy dps bodyTms bodyLocs bodyTys
+  "finalize_match_term env loc expBodyTy scrutTm scrutTy dps bodyTms bodyLocs bodyTys
                        accSubst nextMv =
-    (case unify_arm_body_types env bodyTyVar (zip bodyLocs bodyTys) accSubst of
+    (case unify_arm_body_types env expBodyTy (zip bodyLocs bodyTys) accSubst of
        Inl errs \<Rightarrow> Inl errs
      | Inr finalSubst \<Rightarrow>
          let finalScrut = apply_subst_to_term finalSubst scrutTm;
              finalDps = map (apply_subst_to_dec_pattern finalSubst) dps;
              finalBodies = map (apply_subst_to_term finalSubst) bodyTms;
-             finalBodyTy = apply_subst finalSubst bodyTyVar;
+             finalBodyTy = apply_subst finalSubst expBodyTy;
              freshName = ''match@@'' @ nat_to_string nextMv
          in if freshName |\<in>| core_term_free_vars finalScrut
                \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) finalDps
@@ -746,7 +763,7 @@ where
           | Inr (elabTms, actualTys, next_mv') \<Rightarrow>
               let expectedTys = replicate (length elabTms) elemTy in
               (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                      (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (tms ! idx)) exp act])
+                      (\<lambda>idx. bab_term_location (tms ! idx))
                       elabTms actualTys expectedTys fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (coercedTms, finalSubst) \<Rightarrow>
@@ -844,6 +861,10 @@ where
                 \<comment> \<open>Try to unify branch types\<close>
                 (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) thenTy elseTy of
                   Some branchSubst \<Rightarrow>
+                    \<comment> \<open>A metavariable may not be bound to an incomplete array type.\<close>
+                    if \<not> typesubst_complete branchSubst
+                    then Inl [TyErr_IncompleteTypeArgument loc]
+                    else
                     let resultTy = apply_subst branchSubst thenTy;
                         newThen' = apply_subst_to_term branchSubst newThen;
                         newElse' = apply_subst_to_term branchSubst newElse;
@@ -956,7 +977,7 @@ where
             Inl errs \<Rightarrow> Inl errs
           | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
               (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                      (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])
+                      (\<lambda>idx. bab_term_location (args ! idx))
                       elabArgTms actualTypes expArgTypes fmempty of
                 Inl errs \<Rightarrow> Inl errs
               | Inr (finalArgTms, finalSubst) \<Rightarrow>
@@ -1004,7 +1025,7 @@ where
                   | Inr (newUpdateTms, actualTypes, next_mv2) \<Rightarrow>
                       let expectedTypes = map (\<lambda>(name, _). the (map_of parentFields name)) flds
                       in (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                                  (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (snd (flds ! idx))) exp act])
+                                  (\<lambda>idx. bab_term_location (snd (flds ! idx)))
                                   newUpdateTms actualTypes expectedTypes fmempty of
                         Inl errs \<Rightarrow> Inl errs
                       | Inr (coercedTms, finalSubst) \<Rightarrow>
@@ -1052,7 +1073,7 @@ where
                 Inl errs \<Rightarrow> Inl errs
               | Inr (elabIdxTms, actualTypes, next_mv2) \<Rightarrow>
                   (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                          (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (idxs ! idx)) exp act])
+                          (\<lambda>idx. bab_term_location (idxs ! idx))
                           elabIdxTms actualTypes (replicate (length dims) u64_type) fmempty of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (coercedIdxTms, _) \<Rightarrow>
@@ -1061,7 +1082,7 @@ where
 
   (* Match: elaborate the scrutinee, decorate every arm's pattern, elaborate
      every arm's body under the env extended with that arm's pattern variables,
-     unify all body types against a fresh body-type metavariable, then apply
+     unify every arm's body type against the first arm's body type, then apply
      the final substitution to the scrutinee, every DP_Var, and every arm body,
      and hand the result off to finalize_match_term (which translates
      DecPatterns to CorePatterns and emits the binder-projection Lets). *)
@@ -1070,11 +1091,8 @@ where
      else case elab_term env elabEnv ghost scrut next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
-         \<comment> \<open>Allocate a fresh metavariable for the body type; each arm unifies
-             its body type against it.\<close>
-         let bodyTyVar = CoreTy_Var (mv_name mv1) in
          (case decorate_match_arms env elabEnv ghost scrutTy
-                 False fmempty (mv1 + 1) arms of
+                 False fmempty mv1 arms of
             Inl errs \<Rightarrow> Inl errs
           | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
               \<comment> \<open>Substitute dps with accSubst, run inference check, build per-arm envs. \<close>
@@ -1092,7 +1110,7 @@ where
                    | Inr (bodyTms, bodyTys, mv3) \<Rightarrow>
                        let dps = map fst finalizedArms;
                            bodyLocs = map (\<lambda>(_, body). bab_term_location body) arms
-                       in finalize_match_term env loc bodyTyVar scrutTm scrutTy
+                       in finalize_match_term env loc (hd bodyTys) scrutTm scrutTy
                                               dps bodyTms bodyLocs bodyTys
                                               accSubst mv3))))"
 
@@ -1197,7 +1215,7 @@ next
   show ?case
     using size_list_size_snd_le_size_prod[where xs=flds and f="\<lambda>_. 0"] by simp
 next
-  case (23 env elabEnv ghost loc scrut arms next_mv b x y xa ya xb ba xc yb xd yc xe bb xca)
+  case (23 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba xc yb xd yc xe bb xca)
   \<comment> \<open>BabTm_Match body-elaboration sub-call: bodies (taken syntactically from arms,
       zipped with the envs from finalize_match_arms) sum to less than the whole
       BabTm_Match. \<close>

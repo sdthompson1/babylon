@@ -118,6 +118,19 @@ proof (cases "unify is_flex lhsTy rhsTy")
   thus ?thesis using lhs_typed rhs_typed by simp
 next
   case (Some unifSubst)
+  show ?thesis
+  proof (cases "typesubst_complete unifSubst")
+    case False
+    \<comment> \<open>A unifier binding a metavariable to an incomplete type is rejected:
+        pass through unchanged, as for a failed unification.\<close>
+    from resolved Some False have "lhsTm' = lhsTm" "lhsTy' = lhsTy" "rhsTm' = rhsTm" "rhsTy' = rhsTy"
+      by simp_all
+    thus ?thesis using lhs_typed rhs_typed by simp
+  next
+    case True
+  note cp_fact = True
+  have unif_range_cp: "\<forall>ty' \<in> fmran' unifSubst. is_complete_type ty'"
+    using cp_fact unfolding typesubst_complete_def .
   let ?unifiedTy = "apply_subst unifSubst lhsTy"
   have sound: "apply_subst unifSubst lhsTy = apply_subst unifSubst rhsTy"
     using unify_sound[OF Some] .
@@ -196,11 +209,13 @@ next
   \<comment> \<open>Both terms typecheck after applying unifSubst\<close>
   have lhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst lhsTm) = Some ?unifiedTy"
     using apply_subst_to_term_preserves_typing
-            [OF lhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected abs_no_subst]
+            [OF lhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected abs_no_subst
+                unif_range_cp]
     by simp
   have rhs_unif: "core_term_type env ghost (apply_subst_to_term unifSubst rhsTm) = Some ?unifiedTy"
     using apply_subst_to_term_preserves_typing
-            [OF rhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected abs_no_subst]
+            [OF rhs_typed wf unif_range_wk unif_range_rt locals_unaffected ret_unaffected abs_no_subst
+                unif_range_cp]
           sound
     by simp
 
@@ -208,7 +223,7 @@ next
   proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list ?unifiedTy)")
     case True
     \<comment> \<open>Resolved: directly use unified type\<close>
-    from resolved Some True have
+    from resolved Some cp_fact True have
       eqs: "lhsTm' = apply_subst_to_term unifSubst lhsTm"
            "lhsTy' = ?unifiedTy"
            "rhsTm' = apply_subst_to_term unifSubst rhsTm"
@@ -221,28 +236,34 @@ next
     let ?defaultTy = "default_type_for_binop babOp"
     let ?fillSubst = "const_subst_for is_flex ?unifiedTy ?defaultTy"
     let ?fullSubst = "compose_subst ?fillSubst unifSubst"
-    from resolved Some not_resolved have
+    from resolved Some cp_fact not_resolved have
       eqs: "lhsTm' = apply_subst_to_term ?fullSubst lhsTm"
            "lhsTy' = apply_subst ?fillSubst ?unifiedTy"
            "rhsTm' = apply_subst_to_term ?fullSubst rhsTm"
            "rhsTy' = apply_subst ?fillSubst ?unifiedTy"
       by (auto simp: Let_def)
 
-    \<comment> \<open>The default type is well-kinded and runtime\<close>
+    \<comment> \<open>The default type is well-kinded, runtime and complete\<close>
     have default_wk: "is_well_kinded env ?defaultTy"
       by (auto simp: default_type_for_binop_def split: option.splits)
     have default_rt: "is_runtime_type env ?defaultTy"
       by (auto simp: default_type_for_binop_def split: option.splits)
+    have default_cp: "is_complete_type ?defaultTy"
+      by (auto simp: default_type_for_binop_def split: option.splits)
 
-    \<comment> \<open>The fill substitution range is well-kinded and runtime\<close>
+    \<comment> \<open>The fill substitution range is well-kinded, runtime and complete\<close>
     have fill_range_wk: "\<forall>ty' \<in> fmran' ?fillSubst. is_well_kinded env ty'"
       using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_wk by metis
     have fill_range_rt: "\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'"
       using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_rt by metis
+    have fill_range_cp: "\<forall>ty' \<in> fmran' ?fillSubst. is_complete_type ty'"
+      using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_cp by metis
 
-    \<comment> \<open>Full substitution range is well-kinded and runtime\<close>
+    \<comment> \<open>Full substitution range is well-kinded, runtime and complete\<close>
     have full_range_wk: "\<forall>ty' \<in> fmran' ?fullSubst. is_well_kinded env ty'"
       using compose_subst_preserves_well_kinded fill_range_wk unif_range_wk by blast
+    have full_range_cp: "\<forall>ty' \<in> fmran' ?fullSubst. is_complete_type ty'"
+      using compose_subst_preserves_complete[OF unif_range_cp fill_range_cp] .
     have full_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty')"
     proof
       assume ng: "ghost = NotGhost"
@@ -314,13 +335,13 @@ next
                     Some (apply_subst ?fullSubst lhsTy)"
       using apply_subst_to_term_preserves_typing
               [OF lhs_typed wf full_range_wk full_range_rt
-                  locals_unaffected_full ret_unaffected_full abs_no_subst_full]
+                  locals_unaffected_full ret_unaffected_full abs_no_subst_full full_range_cp]
       by simp
     have rhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst rhsTm) =
                     Some (apply_subst ?fullSubst rhsTy)"
       using apply_subst_to_term_preserves_typing
               [OF rhs_typed wf full_range_wk full_range_rt
-                  locals_unaffected_full ret_unaffected_full abs_no_subst_full]
+                  locals_unaffected_full ret_unaffected_full abs_no_subst_full full_range_cp]
       by simp
 
     \<comment> \<open>apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy via compose_subst_correct\<close>
@@ -330,6 +351,7 @@ next
       using sound by (simp add: compose_subst_correct)
 
     show ?thesis using lhs_full rhs_full lhs_eq rhs_eq eqs by simp
+  qed
   qed
 qed
 

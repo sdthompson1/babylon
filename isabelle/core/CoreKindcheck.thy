@@ -101,9 +101,8 @@ next
   thus ?case by force
 qed simp_all
 
-(* Adding type variables to the environment preserves well-kindedness. Type variables
-   are nat-keyed and datatypes are string-keyed, so no shadowing is possible. The
-   TE_RuntimeTypeVars field may also be extended at the same time; is_well_kinded
+(* Adding type variables to the environment preserves well-kindedness.
+   The TE_RuntimeTypeVars field may also be extended at the same time; is_well_kinded
    doesn't depend on it, but the combined form is convenient for callers. *)
 lemma is_well_kinded_extend_tyvars:
   assumes "is_well_kinded env ty"
@@ -266,6 +265,18 @@ proof (intro allI impI)
   thus "is_well_kinded env ty"
     using assms by (simp add: list_all_iff)
 qed
+
+(* This predicate says that all types in the range of a TypeSubst are complete. *)
+definition typesubst_complete :: "TypeSubst \<Rightarrow> bool" where
+  "typesubst_complete subst = (\<forall>ty \<in> fmran' subst. is_complete_type ty)"
+
+lemma typesubst_complete_empty [simp]:
+  "typesubst_complete fmempty"
+  unfolding typesubst_complete_def by auto
+
+lemma typesubst_complete_lookup:
+  "typesubst_complete subst \<Longrightarrow> fmlookup subst n = Some ty \<Longrightarrow> is_complete_type ty"
+  unfolding typesubst_complete_def by (auto intro: fmran'I)
 
 (* Substitution of well-kinded types preserves well-kindedness.
    The source env (where ty lives) and target env (where the result lives) may differ:

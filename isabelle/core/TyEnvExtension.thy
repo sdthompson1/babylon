@@ -475,6 +475,7 @@ next
   from CoreTm_VariantCtor.prems(3) ctor_lk have
     len_eq: "length tyArgs = length tyvars" and
     wk_args: "list_all (is_well_kinded env) tyArgs" and
+    cp_args: "list_all is_complete_type tyArgs" and
     ng_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
     ng_dt: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env" and
     payload_ty: "core_term_type env ghost payload
@@ -497,7 +498,7 @@ next
   have payload_ty': "core_term_type env' ghost payload
                        = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
     using CoreTm_VariantCtor.IH[OF ext cons payload_ty] .
-  show ?case using ctor_lk' len_eq wk_args' ng_fail' payload_ty' ty_eq
+  show ?case using ctor_lk' len_eq wk_args' cp_args ng_fail' payload_ty' ty_eq
     by (simp add: Let_def)
 next
   case (CoreTm_Record flds)
@@ -787,6 +788,7 @@ proof -
     fi: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
     wk: "list_all (is_well_kinded env) tyArgs" and
+    cp: "list_all is_complete_type tyArgs" and
     rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
@@ -876,7 +878,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi' wk' rt' fn_ng len_ty len_tm l2_full' ty_eq
+    using fi' wk' cp rt' fn_ng len_ty len_tm l2_full' ty_eq
     by (auto simp: Let_def)
 qed
 
@@ -923,6 +925,7 @@ proof (induction env ghost stmt and env ghost stmts
     gh: "ghost = Ghost \<longrightarrow> declGhost = Ghost" and
     wk: "is_well_kinded env varTy" and
     rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    cp: "declGhost = NotGhost \<longrightarrow> is_complete_type varTy" and
     init: "core_term_type env declGhost initTm = Some varTy" and
     out_eq: "envOut = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                   TE_GhostLocals := (if declGhost = Ghost
@@ -943,7 +946,7 @@ proof (induction env ghost stmt and env ghost stmts
                   TE_ConstLocals := fminus (TE_ConstLocals env2) {|varName|} \<rparr>"
   have res: "core_statement_type env2 ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm)
                = Some ?out2"
-    using gh wk2 rt2 init2 by simp
+    using gh wk2 rt2 cp init2 by simp
   have ext_out: "tyenv_extends envOut ?out2"
     using ext unfolding out_eq tyenv_extends_def by simp
   from res ext_out show ?case by blast
@@ -955,6 +958,7 @@ next
     gh: "ghost = Ghost \<longrightarrow> declGhost = Ghost" and
     wk: "is_well_kinded env varTy" and
     rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    cp: "declGhost = NotGhost \<longrightarrow> is_complete_type varTy" and
     ct: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
     cast: "cast_result_type env declGhost retTy castOpt = Some varTy" and
     out_eq:
@@ -980,7 +984,7 @@ next
   have res: "core_statement_type env2 ghost
                (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
                = Some ?out2"
-    using gh wk2 rt2 ct2 cast2 by simp
+    using gh wk2 rt2 cp ct2 cast2 by simp
   have ext_out: "tyenv_extends envOut ?out2"
     using ext unfolding out_eq tyenv_extends_def by simp
   from res ext_out show ?case by blast
@@ -1037,6 +1041,7 @@ next
     wl: "is_writable_lvalue env lhsTm" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
     lhs: "core_term_type env assignGhost lhsTm = Some lhsTy" and
+    cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
     by (auto split: if_splits option.splits)
@@ -1049,7 +1054,7 @@ next
   have rhs2: "core_term_type env2 assignGhost rhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons rhs] .
   have res: "core_statement_type env2 ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) = Some env2"
-    using gh wl2 glv2 lhs2 rhs2 by simp
+    using gh wl2 glv2 lhs2 cp rhs2 by simp
   from res ext show ?case using out_eq by blast
 next
   \<comment> \<open>AssignCall: env unchanged.\<close>
@@ -1069,6 +1074,7 @@ next
     ct: "core_impure_call_type env assignGhost fnName tyArgs argTms = Some retTy"
     by (simp split: option.splits)
   from "5.prems"(1) pre lhs ct have
+    cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     cast: "cast_result_type env assignGhost retTy castOpt = Some lhsTy" and
     out_eq: "envOut = env"
     by (simp split: if_splits)+
@@ -1084,7 +1090,7 @@ next
     using cast_result_type_tyenv_extends[OF ext cast] .
   have res: "core_statement_type env2 ghost
                (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Some env2"
-    using gh wl2 glv2 lhs2 ct2 cast2 by simp
+    using gh wl2 glv2 lhs2 cp ct2 cast2 by simp
   from res ext show ?case using out_eq by blast
 next
   \<comment> \<open>Return: TE_ReturnType and TE_FunctionGhost are pinned equal.\<close>
@@ -1114,6 +1120,7 @@ next
     glvL: "ghost_lvalue_ok env swapGhost lhsTm" and
     glvR: "ghost_lvalue_ok env swapGhost rhsTm" and
     lhs: "core_term_type env swapGhost lhsTm = Some lhsTy" and
+    cp: "swapGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env swapGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
     by (auto split: if_splits option.splits)
@@ -1130,7 +1137,7 @@ next
   have rhs2: "core_term_type env2 swapGhost rhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons rhs] .
   have res: "core_statement_type env2 ghost (CoreStmt_Swap swapGhost lhsTm rhsTm) = Some env2"
-    using gh wl2 wr2 glvL2 glvR2 lhs2 rhs2 by simp
+    using gh wl2 wr2 glvL2 glvR2 lhs2 cp rhs2 by simp
   from res ext show ?case using out_eq by blast
 next
   \<comment> \<open>Assert: the goal env applies the same update on both sides (TE_ProofGoal

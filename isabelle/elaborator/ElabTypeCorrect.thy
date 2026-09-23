@@ -70,10 +70,11 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
         show ?thesis
         proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
           case True
-          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by (auto split: if_splits)
         next
           case False
-          then show ?thesis using "1.prems" Inr typedef_lookup len_eq result_tyvars by auto
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq result_tyvars
+            by (auto split: if_splits)
         qed
       qed
     next
@@ -226,10 +227,11 @@ proof (induction env elabEnv ghost ty and env elabEnv ghost tys
         show ?thesis
         proof (cases "ghost = NotGhost \<and> \<not> is_runtime_type env ?resultTy")
           case True
-          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by (auto split: if_splits)
         next
           case False
-          then show ?thesis using "1.prems" Inr typedef_lookup len_eq result_wk by auto
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq result_wk
+            by (auto split: if_splits)
         qed
       qed
     next
@@ -350,11 +352,11 @@ proof (induction env elabEnv NotGhost ty and env elabEnv NotGhost tys
         proof (cases "is_runtime_type env ?resultTy")
           case False
           (* If not runtime, we return Inl, so premise is false *)
-          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by (auto split: if_splits)
         next
           case True
           (* If runtime, we return Inr resultTy, and is_runtime_type holds *)
-          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by auto
+          then show ?thesis using "1.prems" Inr typedef_lookup len_eq by (auto split: if_splits)
         qed
       qed
     next

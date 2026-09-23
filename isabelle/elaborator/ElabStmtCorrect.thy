@@ -36,6 +36,43 @@ lemma clear_metavars_subst_range_tyvars:
   using clear_metavars_subst_ran[of lo hi]
   by (auto simp: subst_range_tyvars_def)
 
+(* The clearing substitution's range (the unit type) is complete, so clearing
+   preserves completeness of a type. *)
+lemma clear_metavars_subst_range_complete:
+  "\<forall>ty \<in> fmran' (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])).
+     is_complete_type ty"
+  using clear_metavars_subst_ran[of lo hi] by auto
+
+lemma clear_metavars_type_complete:
+  "is_complete_type ty \<Longrightarrow> is_complete_type (clear_metavars_type lo hi ty)"
+  unfolding clear_metavars_type_def
+  using apply_subst_preserves_complete[OF _ clear_metavars_subst_range_complete] .
+
+(* In NotGhost mode the return type of a well-typed impure call is complete: the
+   callee is a non-ghost function, whose declared return type is complete, and the
+   type arguments are complete, so the instantiated return type is too. *)
+lemma core_impure_call_type_notghost_complete:
+  assumes ct: "core_impure_call_type env NotGhost fnName tyArgs tmArgs = Some retTy"
+      and wf: "tyenv_well_formed env"
+  shows "is_complete_type retTy"
+proof -
+  from core_impure_call_type_fn_facts[OF ct] obtain funInfo where
+    fi: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+    cp: "list_all is_complete_type tyArgs" and
+    ng: "FI_Ghost funInfo \<noteq> Ghost" and
+    ret_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                 (FI_ReturnType funInfo)"
+    by blast
+  have fg: "FI_Ghost funInfo = NotGhost" using ng by (cases "FI_Ghost funInfo") auto
+  have "tyenv_fun_return_types_complete env"
+    using wf unfolding tyenv_well_formed_def by blast
+  hence ret_cp: "is_complete_type (FI_ReturnType funInfo)"
+    using fi fg unfolding tyenv_fun_return_types_complete_def by blast
+  show ?thesis
+    unfolding ret_eq
+    using apply_subst_preserves_complete[OF ret_cp fmran'_fmap_of_list_zip_complete[OF cp]] .
+qed
+
 (* CoreTy_Record [] is well-kinded and a runtime type in any env. *)
 lemma is_well_kinded_empty_record [simp]: "is_well_kinded env (CoreTy_Record [])"
   by simp
@@ -131,7 +168,8 @@ proof -
   have cleared_typedE: "core_term_type ?envE ghost (clear_metavars next_mv next_mv' coreTm)
                           = Some (clear_metavars_type next_mv next_mv' ty)"
     using apply_subst_to_term_preserves_typing
-            [OF typed wfE subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst]
+            [OF typed wfE subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst
+                clear_metavars_subst_range_complete]
     unfolding clear_metavars_def clear_metavars_type_def by simp
   \<comment> \<open>The cleared term has no interval tyvars, so the interval can be dropped.\<close>
   have free_gone: "core_term_free_tyvars (clear_metavars next_mv next_mv' coreTm)
@@ -253,8 +291,9 @@ lemma coerce_term_to_type_unfold:
   "coerce_term_to_type env loc tm srcTy tgtTy =
     (case unify_upto_coercion (\<lambda>n. n |\<notin>| TE_TypeVars env) srcTy tgtTy of
        Some subst \<Rightarrow>
-         Inr (insert_cast (apply_subst subst srcTy) (apply_subst subst tgtTy)
-                (apply_subst_to_term subst tm))
+         if \<not> typesubst_complete subst then Inl [TyErr_IncompleteTypeArgument loc]
+         else Inr (insert_cast (apply_subst subst srcTy) (apply_subst subst tgtTy)
+                     (apply_subst_to_term subst tm))
      | None \<Rightarrow> Inl [TyErr_TypeMismatch loc tgtTy srcTy])"
   by (simp add: coerce_term_to_type_def unify_and_coerce_def Let_def split: option.splits)
 
@@ -295,9 +334,12 @@ proof -
       cast inserted where the types still differ.\<close>
   from coerce obtain subst where
     uoc: "unify_upto_coercion ?is_flex rhsTy tgtTy = Some subst" and
+    subst_complete: "typesubst_complete subst" and
     tm'_eq: "coreTm' = insert_cast (apply_subst subst rhsTy) (apply_subst subst tgtTy)
                          (apply_subst_to_term subst coreTm)"
-    unfolding coerce_term_to_type_unfold by (auto split: option.splits)
+    unfolding coerce_term_to_type_unfold by (auto split: option.splits if_splits)
+  have subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
+    using subst_complete unfolding typesubst_complete_def .
   have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
     using unify_upto_coercion_preserves_well_kinded[OF uoc rhsTy_wk tgtTy_wkD] .
   have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envD ty')"
@@ -323,7 +365,7 @@ proof -
                        = Some (apply_subst subst rhsTy)"
     using apply_subst_to_term_preserves_typing
             [OF typed wfD subst_wk subst_rt locals_unaffected ret_unaffected
-                abs_no_subst] .
+                abs_no_subst subst_cp] .
   have dom_disj: "type_tyvars tgtTy \<inter> fset (fmdom subst) = {}"
     using dom_flex tgt_tvs by auto
   have tgt_id: "apply_subst subst tgtTy = tgtTy"
@@ -389,6 +431,7 @@ proof -
     fiE: "fmlookup (TE_Functions ?envE) fnName = Some funInfo" and
     len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
     wk: "list_all (is_well_kinded ?envE) tyArgs" and
+    cp: "list_all is_complete_type tyArgs" and
     rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?envE) tyArgs" and
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length argTms = length (FI_TmArgs funInfo)" and
@@ -451,10 +494,12 @@ proof -
     thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom ?cs0" using abs_no_cs by blast
   qed
 
-  \<comment> \<open>Cleared ty-args are well-kinded / runtime in env.\<close>
+  \<comment> \<open>Cleared ty-args are well-kinded / runtime / complete in env.\<close>
   have len_cty: "length (map ?ct tyArgs) = length (FI_TyArgs funInfo)" using len_ty by simp
   have cty_wk: "list_all (is_well_kinded env) (map ?ct tyArgs)"
     using wk clear_metavars_type_well_kinded[OF _ wf bound] by (auto simp: list_all_iff)
+  have cty_cp: "list_all is_complete_type (map ?ct tyArgs)"
+    using cp clear_metavars_type_complete by (auto simp: list_all_iff)
   have cty_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) (map ?ct tyArgs)"
   proof
     assume ng: "ghost = NotGhost"
@@ -600,7 +645,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi cty_wk cty_rt fn_ng len_cty len_tm l2_full ret_recompute
+    using fi cty_wk cty_cp cty_rt fn_ng len_cty len_tm l2_full ret_recompute
     by (auto simp: Let_def)
 qed
 
@@ -651,11 +696,14 @@ proof -
       castOpt is None or Some of the substituted target accordingly.\<close>
   from rcr obtain subst where
     uoc: "unify_upto_coercion ?is_flex retTy tgtTy = Some subst" and
+    subst_complete: "typesubst_complete subst" and
     castOpt_eq: "castOpt = (if apply_subst subst retTy = apply_subst subst tgtTy
                             then None else Some (apply_subst subst tgtTy))" and
     tyArgs'_eq: "tyArgs' = map (apply_subst subst) tyArgs" and
     argTms'_eq: "argTms' = map (apply_subst_to_term subst) argTms"
-    by (auto simp: reconcile_call_result_def Let_def split: option.splits)
+    by (auto simp: reconcile_call_result_def Let_def split: option.splits if_splits)
+  have subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
+    using subst_complete unfolding typesubst_complete_def .
   have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envE ty'"
     using unify_upto_coercion_preserves_well_kinded[OF uoc retTy_wkE tgtTy_wkE] .
   have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type ?envE ty')"
@@ -680,7 +728,7 @@ proof -
   have ctE': "core_impure_call_type ?envE ghost fnName tyArgs' argTms'
                 = Some (apply_subst subst retTy)"
     using apply_subst_core_impure_call_type
-            [OF ctE wfE subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst]
+            [OF ctE wfE subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst subst_cp]
     unfolding tyArgs'_eq argTms'_eq .
   have dom_disj: "type_tyvars tgtTy \<inter> fset (fmdom subst) = {}"
     using dom_flex tgt_tvs by auto
@@ -778,6 +826,7 @@ lemma resolve_impure_callee_correct:
           \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
           \<and> (ghost = NotGhost \<longrightarrow>
                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
+          \<and> list_all is_complete_type newTyArgs
           \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
           \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                               (FI_TmArgs funInfo)
@@ -813,7 +862,8 @@ proof -
            \<and> length newTyArgs = length (FI_TyArgs funInfo)
            \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
            \<and> (ghost = NotGhost \<longrightarrow>
-                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)"
+                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
+           \<and> list_all is_complete_type newTyArgs"
     using resolve_type_args_correct[OF resolve_eq wf td_wf] next_mv_eq by simp
   \<comment> \<open>Signature tyvars are distinct and the component types only mention them.\<close>
   have distinct_tyargs: "distinct (FI_TyArgs funInfo)"
@@ -947,7 +997,6 @@ proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?locOf = "(\<lambda>idx. bab_term_location (args ! idx))"
-  let ?mk_err = "(\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])"
 
   \<comment> \<open>Extract the sub-results of elab_impure_call_term.\<close>
   from elab obtain newTyArgs expArgTypes varOrRefs retType0 next_mv1 where
@@ -960,7 +1009,7 @@ proof -
     el: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
     by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
   from elab rc len_args el obtain finalSubst where
-    unify_eq: "unify_type_lists ?is_flex ?mk_err 0 actualTypes expArgTypes fmempty = Inr finalSubst"
+    unify_eq: "unify_type_lists ?is_flex ?locOf 0 actualTypes expArgTypes fmempty = Inr finalSubst"
     by (auto simp: elab_impure_call_term_def unify_and_coerce_def
              split: if_splits sum.splits prod.splits)
   from elab rc len_args el unify_eq have
@@ -982,6 +1031,7 @@ proof -
     newTyArgs_wk1: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) newTyArgs" and
     newTyArgs_rt1: "ghost = NotGhost \<longrightarrow>
                       list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) newTyArgs" and
+    newTyArgs_cp: "list_all is_complete_type newTyArgs" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
@@ -1117,6 +1167,8 @@ proof -
   have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
     by (simp add: fmran'_def)
   have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
   have unify_correct:
     "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty)
      \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
@@ -1124,9 +1176,10 @@ proof -
          apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
          \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
        actualTypes expArgTypes
-     \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)"
+     \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)
+     \<and> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty)"
     using unify_type_lists_correct[OF unify_eq wf' len_actual_exp actualTypes_wk expArgTypes_wk
-            empty_wk actualTypes_rt expArgTypes_rt empty_rt empty_dom] by blast
+            empty_wk actualTypes_rt expArgTypes_rt empty_rt empty_dom] empty_cp by blast
   from unify_correct have
     finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty" and
     finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)" and
@@ -1134,7 +1187,8 @@ proof -
          apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
          \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
        actualTypes expArgTypes" and
-    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
+    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n" and
+    finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
     by blast+
 
   \<comment> \<open>finalSubst is identity on locals / return type of ?env'.\<close>
@@ -1158,7 +1212,7 @@ proof -
     unfolding finalArgTms_eq
     using apply_call_coercions_correct[OF ih_args types_unified wf' finalSubst_wk finalSubst_rt
             len_elab len_actual_exp locals_unaffected ret_unaffected abs_no_subst
-            expArgTypes_wk expArgTypes_rt] .
+            expArgTypes_wk expArgTypes_rt finalSubst_cp] .
   have args_typed': "list_all2 (\<lambda>tm expectedTy. core_term_type ?env' ghost tm = Some expectedTy)
          finalArgTms (map (apply_subst finalSubst) expArgTypes)"
     using args_typed by (simp add: list_all2_map2)
@@ -1289,6 +1343,10 @@ proof -
     qed
   qed
 
+  \<comment> \<open>finalTyArgs complete: newTyArgs are (Rule D) and finalSubst's range is (Rule C).\<close>
+  have finalTyArgs_cp: "list_all is_complete_type finalTyArgs"
+    unfolding tyargs_eq using map_apply_subst_preserves_complete[OF newTyArgs_cp finalSubst_cp] .
+
   \<comment> \<open>Lengths needed by core_impure_call_type.\<close>
   have len_finalTyArgs: "length finalTyArgs = length (FI_TyArgs funInfo)"
     using tyargs_eq len_tyargs by simp
@@ -1312,8 +1370,8 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fn_lookup' len_finalTyArgs finalTyArgs_wk finalTyArgs_rt ghost_ok len_finalArgTms
-          vor_eq check_l2 ret_recompute
+    using fn_lookup' len_finalTyArgs finalTyArgs_wk finalTyArgs_rt finalTyArgs_cp ghost_ok
+          len_finalArgTms vor_eq check_l2 ret_recompute
     by (auto simp: Let_def split: if_splits)
 qed
 
@@ -1607,6 +1665,7 @@ proof -
     \<comment> \<open>Inferred: coreTy = rhsTy (metavar-free), initTm = clear_metavars coreTm.\<close>
     from elab None etm have
       no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
+      cp: "ghost = NotGhost \<longrightarrow> is_complete_type rhsTy" and
       cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var rhsTy
                             (clear_metavars next_mv next_mv' coreTm)" and
       env'_eq: "env' = vardecl_add_local env ghost varName rhsTy"
@@ -1619,17 +1678,18 @@ proof -
       using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
     have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm) = Some rhsTy"
       using clear_metavars_typed_in_env[OF coreTm_typed_decl wf bound rhsTy_below] .
-    show ?thesis using wk rt init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
+    show ?thesis using wk rt cp init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
   next
     case (Some ty)
     \<comment> \<open>Annotated: coreTy = elaborated annotation; rhs coerced to it (unify or cast).\<close>
     from elab Some etm obtain coreTy coreTm' where
       ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
+      cp: "ghost = NotGhost \<longrightarrow> is_complete_type coreTy" and
       coerce: "coerce_term_to_type env loc coreTm rhsTy coreTy = Inr coreTm'" and
       cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var coreTy
                             (clear_metavars next_mv next_mv' coreTm')" and
       env'_eq: "env' = vardecl_add_local env ghost varName coreTy"
-      by (auto simp: elab_vardecl_pure_def split: sum.splits prod.splits option.splits)
+      by (auto simp: elab_vardecl_pure_def split: sum.splits prod.splits option.splits if_splits)
     have wk: "is_well_kinded env coreTy"
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
@@ -1637,7 +1697,7 @@ proof -
     \<comment> \<open>The coerced+cleared initializer typechecks to coreTy in env.\<close>
     have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some coreTy"
       using coerce_clear_typed_in_env[OF coreTm_typed_decl coerce wf bound wk rt] .
-    show ?thesis using wk rt init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
+    show ?thesis using wk rt cp init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
   qed
 qed
 
@@ -1738,6 +1798,7 @@ proof -
     \<comment> \<open>Inferred: varTy = retTy (metavar-free), castOpt = None, args as-is.\<close>
     from elab tm_eq ec None have
       no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)" and
+      cp: "ghost = NotGhost \<longrightarrow> is_complete_type retTy" and
       cs_eq: "coreStmt = CoreStmt_VarDeclCall ghost varName retTy None fnName
                             (map (clear_metavars_type next_mv next_mv') finalTyArgs)
                             (map (clear_metavars next_mv next_mv') finalArgTms)" and
@@ -1751,20 +1812,22 @@ proof -
                 (map (clear_metavars_type next_mv next_mv') finalTyArgs)
                 (map (clear_metavars next_mv next_mv') finalArgTms) = Some retTy"
       using clear_metavars_impure_call_typed_in_env[OF ctE wf bound rtbound retTy_below] .
-    show ?thesis using wkrt ct
+    show ?thesis using wkrt cp ct
       by (simp add: cs_eq env'_eq vardecl_add_local_def cast_result_type_def)
   next
     case (Some ty)
     \<comment> \<open>Annotated: varTy = elaborated annotation; reconcile_call_result picks the cast.\<close>
     from elab tm_eq ec Some obtain coreTy castOpt tyArgs' argTms' where
       ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
+      cp: "ghost = NotGhost \<longrightarrow> is_complete_type coreTy" and
       rcr: "reconcile_call_result env loc finalTyArgs finalArgTms retTy coreTy
               = Inr (castOpt, tyArgs', argTms')" and
       cs_eq: "coreStmt = CoreStmt_VarDeclCall ghost varName coreTy castOpt fnName
                             (map (clear_metavars_type next_mv next_mv') tyArgs')
                             (map (clear_metavars next_mv next_mv') argTms')" and
       env'_eq: "env' = vardecl_add_local env ghost varName coreTy"
-      by (auto simp: elab_vardecl_impure_def Let_def split: sum.splits prod.splits option.splits)
+      by (auto simp: elab_vardecl_impure_def Let_def
+               split: sum.splits prod.splits option.splits if_splits)
     have wk: "is_well_kinded env coreTy"
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
@@ -1776,7 +1839,7 @@ proof -
              (map (clear_metavars_type next_mv next_mv') tyArgs')
              (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy" and
       cast_ok: "cast_result_type env ghost callRetTy castOpt = Some coreTy" by blast
-    show ?thesis using wk rt ct cast_ok
+    show ?thesis using wk rt cp ct cast_ok
       by (simp add: cs_eq env'_eq vardecl_add_local_def)
   qed
 qed
@@ -1925,7 +1988,7 @@ proof -
       from coerce obtain subst where
         tm'_eq: "coreTm' = insert_cast (apply_subst subst rhsTy) (apply_subst subst coreTy)
                              (apply_subst_to_term subst coreTm)"
-        unfolding coerce_term_to_type_unfold by (auto split: option.splits)
+        unfolding coerce_term_to_type_unfold by (auto split: option.splits if_splits)
       show ?thesis using tm'_eq lv' lvalue_base_name_apply_subst_to_term[OF lv]
         by (cases "apply_subst subst rhsTy = apply_subst subst coreTy") (auto simp: insert_cast_def)
     qed
@@ -1979,13 +2042,14 @@ lemma elab_assign_pure_correct:
   shows "core_statement_type env ghost coreStmt = Some env'"
 proof -
   from elab obtain rhsTm rhsTy rhsTm' where
+    lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv')" and
     coerce: "coerce_term_to_type env loc rhsTm rhsTy lhsTy = Inr rhsTm'" and
     cs_eq: "coreStmt = CoreStmt_Assign ghost
                           (clear_metavars next_mv next_mv' lhsTm)
                           (clear_metavars next_mv next_mv' rhsTm')" and
     env'_eq: "env' = env"
-    by (auto simp: elab_assign_pure_def split: sum.splits prod.splits)
+    by (auto simp: elab_assign_pure_def split: sum.splits prod.splits if_splits)
   let ?envD = "extend_env_with_tyvars env ghost next_mv next_mv'"
   have mono_rhs: "next_mv1 \<le> next_mv'" using elab_term_next_mv_monotone[OF erhs] .
   \<comment> \<open>lhs: widen to next_mv', clear (lhsTy metavar-free), preserve writability.\<close>
@@ -2010,7 +2074,7 @@ proof -
     using core_term_type_notghost_runtime lhs_init wf by auto
   have rhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' rhsTm') = Some lhsTy"
     using coerce_clear_typed_in_env[OF rhs_typedD coerce wf bound lhsTy_wk lhsTy_rt] .
-  show ?thesis using lhs_wl' lhs_glv' lhs_init rhs_init by (simp add: cs_eq env'_eq)
+  show ?thesis using lhs_wl' lhs_glv' lhs_init rhs_init lhs_cp by (simp add: cs_eq env'_eq)
 qed
 
 (* The impure helper is only reached for an is_impure_call rhs (forces rhs to be
@@ -2048,6 +2112,7 @@ proof -
   from impure obtain rloc callee rargs where rhs_eq: "rhs = BabTm_Call rloc callee rargs"
     by (auto simp: is_impure_call_def split: BabTerm.splits)
   from elab rhs_eq obtain fnName finalTyArgs finalArgTms retTy castOpt tyArgs' argTms' where
+    lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     ec: "elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv1
            = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')" and
     rcr: "reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy
@@ -2056,7 +2121,7 @@ proof -
                           (map (clear_metavars_type next_mv next_mv') tyArgs')
                           (map (clear_metavars next_mv next_mv') argTms')" and
     env'_eq: "env' = env"
-    by (auto simp: elab_assign_impure_def split: sum.splits prod.splits)
+    by (auto simp: elab_assign_impure_def split: sum.splits prod.splits if_splits)
   let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
   have mono_rhs: "next_mv1 \<le> next_mv'" using elab_impure_call_term_next_mv[OF ec] .
   \<comment> \<open>lhs: widen to next_mv', clear, preserve writability + typing to lhsTy.\<close>
@@ -2086,7 +2151,7 @@ proof -
            (map (clear_metavars_type next_mv next_mv') tyArgs')
            (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy" and
     cast_ok: "cast_result_type env ghost callRetTy castOpt = Some lhsTy" by blast
-  show ?thesis using lhs_wl' lhs_glv' lhs_init ct cast_ok
+  show ?thesis using lhs_wl' lhs_glv' lhs_init ct cast_ok lhs_cp
     by (simp add: cs_eq env'_eq)
 qed
 
@@ -2126,6 +2191,7 @@ lemma elab_swap_correct:
   shows "core_statement_type env ghost coreStmt = Some env'"
 proof -
   from elab obtain rhsTm rhsTy where
+    lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv')" and
     rhs_wl: "is_writable_lvalue env rhsTm" and
     rhs_glv: "ghost_lvalue_ok env ghost rhsTm" and
@@ -2157,7 +2223,7 @@ proof -
     using rhs_wl unfolding clear_metavars_def by simp
   have rhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' rhsTm)"
     using rhs_glv unfolding clear_metavars_def by simp
-  show ?thesis using lhs_wl' rhs_wl' lhs_glv' rhs_glv' lhs_init rhs_init
+  show ?thesis using lhs_wl' rhs_wl' lhs_glv' rhs_glv' lhs_init rhs_init lhs_cp
     by (simp add: cs_eq env'_eq)
 qed
 
@@ -2237,10 +2303,19 @@ proof -
               (map (clear_metavars_type next_mv next_mv') finalTyArgs)
               (map (clear_metavars next_mv next_mv') finalArgTms) = Some retTy"
     using clear_metavars_impure_call_typed_in_env[OF ctE wfB boundB rtboundB retTy_below] .
+  \<comment> \<open>In NotGhost mode the temporary's type (the callee's return type) is complete.\<close>
+  have retTy_cp: "ghost = NotGhost \<longrightarrow> is_complete_type retTy"
+  proof
+    assume ng: "ghost = NotGhost"
+    have wfE: "tyenv_well_formed (extend_env_with_tyvars ?bodyEnv ghost next_mv next_mv')"
+      using wfB tyenv_well_formed_extend_env_with_tyvars by blast
+    show "is_complete_type retTy"
+      using core_impure_call_type_notghost_complete[OF ctE[unfolded ng] wfE[unfolded ng]] .
+  qed
   \<comment> \<open>Assemble: the VarDeclCall binding the temporary typechecks in bodyEnv (declared
       type = retTy, no cast), so the block typechecks in env, discards the temporary's
       scope, and returns env unchanged.\<close>
-  show ?thesis using wkrt ct
+  show ?thesis using wkrt ct retTy_cp
     by (simp add: cs_eq env'_eq cast_result_type_def)
 qed
 
@@ -2342,6 +2417,9 @@ proof -
     using wf gh unfolding tyenv_well_formed_def tyenv_return_type_runtime_def by auto
   have rtB: "ghost = NotGhost \<longrightarrow> is_runtime_type ?bodyEnv ?retTy"
     using retTy_rt is_runtime_type_cong_env[of ?bodyEnv env] by simp
+  \<comment> \<open>In NotGhost mode the return type is complete (tyenv_return_type_complete, via gh).\<close>
+  have retTy_cp: "ghost = NotGhost \<longrightarrow> is_complete_type ?retTy"
+    using wf gh unfolding tyenv_well_formed_def tyenv_return_type_complete_def by auto
   \<comment> \<open>reconcile_call_result depends on the env only through TE_TypeVars, which
       bodyEnv shares with env.\<close>
   have rcrB: "reconcile_call_result ?bodyEnv loc finalTyArgs finalArgTms retTy ?retTy
@@ -2364,7 +2442,7 @@ proof -
       of the temporary then matches the (unchanged) return type, under the (unchanged)
       function-ghost flag = ghost; the block discards the temporary's scope and
       returns env unchanged.\<close>
-  show ?thesis using wkB rtB ct cast_ok gh
+  show ?thesis using wkB rtB retTy_cp ct cast_ok gh
     by (cases ghost)
        (auto simp add: cs_eq env'_eq tyenv_lookup_var_def tyenv_var_ghost_def)
 qed
@@ -2556,7 +2634,8 @@ next
   have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreInv)
                        = Some (apply_subst subst invTy)"
     using apply_subst_to_term_preserves_typing
-            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst] by simp
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst
+                unify_bool_range_complete[OF unif]] by simp
   have "apply_subst subst invTy = apply_subst subst CoreTy_Bool"
     using unify_sound[OF unif] .
   hence subst_typed_bool:
@@ -2646,7 +2725,8 @@ proof -
   have subst_typed: "core_term_type ?envC ghost (apply_subst_to_term subst coreCond)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
-            [OF cond_typed wfC subst_wk subst_rt c_locals c_ret c_abs] .
+            [OF cond_typed wfC subst_wk subst_rt c_locals c_ret c_abs
+                unify_bool_range_complete[OF unif]] .
   have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
     using unify_sound[OF unif] .
   hence subst_typed_bool:
@@ -2735,7 +2815,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
     proof cases
       case none thus ?thesis using "1.prems" Var by simp
     next
-      case default thus ?thesis using "1.prems" Var by (auto split: sum.splits)
+      case default thus ?thesis using "1.prems" Var by (auto split: sum.splits if_splits)
     next
       case init
       show ?thesis
@@ -3016,7 +3096,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       case default
       \<comment> \<open>Default-init: env' = vardecl_add_local env ghost varName coreTy.\<close>
       thus ?thesis using "1.prems"(1) Var
-        by (auto simp: vardecl_add_local_def split: sum.splits)
+        by (auto simp: vardecl_add_local_def split: sum.splits if_splits)
     next
       case init
       \<comment> \<open>Initializer present: routed to the pure or impure helper (cong-fields lemmas).\<close>
@@ -3218,7 +3298,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       case none thus ?thesis using "1.prems"(1) Var by simp
     next
       case default thus ?thesis using "1.prems"(1) Var
-        by (auto simp: vardecl_add_local_def split: sum.splits)
+        by (auto simp: vardecl_add_local_def split: sum.splits if_splits)
     next
       case init
       show ?thesis
@@ -3433,7 +3513,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       from "1.prems"(1) Var default obtain coreTy where
         ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
         env'_eq: "env' = vardecl_add_local env ghost varName coreTy"
-        by (auto simp: vardecl_add_local_def split: sum.splits)
+        by (auto simp: vardecl_add_local_def split: sum.splits if_splits)
       have wk: "is_well_kinded env coreTy"
         using elab_type_is_well_kinded(1)[OF td_wf "1.prems"(2) ety] .
       have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
@@ -3918,8 +3998,11 @@ lemma finalize_match_stmt_facts:
                                      wrap_vardecls ghost freshName dp @ body))
                          dps bodies) ]"
     and "\<And>dp. dp \<in> set dps \<Longrightarrow> freshName |\<notin>| dec_pattern_var_names dp"
+    and "ghost = NotGhost \<Longrightarrow> mode = Var \<Longrightarrow> is_complete_type scrutTy"
+    and "\<And>dp vr n ty. dp \<in> set dps \<Longrightarrow> (vr, n, ty) \<in> set (dec_pattern_var_bindings dp)
+           \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type ty"
   using assms unfolding finalize_match_stmt_def
-  by (auto split: if_splits simp: list_ex_iff)
+  by (auto split: if_splits simp: list_ex_iff case_prod_unfold) (fastforce+)
 
 (* Typing a chain of binding VarDecls (one per projection): the env threads
    from the arm entry env to the foldr of extend_env_one_var, after which the
@@ -3943,6 +4026,8 @@ lemma vardecl_chain_types:
    \<Longrightarrow> (\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set projs
       \<Longrightarrow> lvalue_base_name proj = Some baseVar)
    \<Longrightarrow> (ghost = Ghost \<Longrightarrow> tyenv_var_ghost env baseVar)
+   \<Longrightarrow> (\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set projs
+      \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type vTy)
    \<Longrightarrow> core_statement_list_type env ghost
          (map (\<lambda>(vr, n, ty, proj). CoreStmt_VarDecl ghost n vr ty proj) projs @ rest)
        = core_statement_list_type
@@ -3963,6 +4048,8 @@ next
     using Cons.prems(2) q_eq by auto
   have proj_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type env vTy"
     using Cons.prems(3) q_eq by auto
+  have proj_cp: "ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type vTy"
+    using Cons.prems(12) q_eq by auto
   have proj_lv: "is_lvalue proj"
     using Cons.prems(5) q_eq by auto
   have proj_wr: "\<And>E. is_writable_lvalue E proj = tyenv_var_writable E baseVar"
@@ -3977,7 +4064,7 @@ next
                 = Some ?env1"
   proof (cases vr)
     case Var
-    thus ?thesis using proj_typed proj_wk proj_rt
+    thus ?thesis using proj_typed proj_wk proj_rt proj_cp
       by (cases ghost) (auto simp: extend_env_one_var_def)
   next
     case Ref
@@ -4039,6 +4126,10 @@ next
     using Cons.prems(10) q_eq by auto
   have base_gh1: "ghost = Ghost \<Longrightarrow> tyenv_var_ghost ?env1 baseVar"
     using tyenv_var_ghost_extend_env_one_var[OF n_neq_base] Cons.prems(11) by simp
+  have tail_cp:
+    "\<And>vr' n' vTy' proj'. (vr', n', vTy', proj') \<in> set projs'
+       \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr' = Var \<Longrightarrow> is_complete_type vTy'"
+    using Cons.prems(12) q_eq by auto
 
   have IH: "core_statement_list_type ?env1 ghost
               (map (\<lambda>(vr, n, ty, proj). CoreStmt_VarDecl ghost n vr ty proj) projs' @ rest)
@@ -4047,7 +4138,7 @@ next
                        (map (\<lambda>(vr, n, ty, _). (vr, n, ty)) projs') ?env1)
                 ghost rest"
     using Cons.IH[OF tail_typed tail_wk tail_rt tail_fv tail_lv tail_wr
-                     base_wr1 tail_nobase tail_dist tail_base base_gh1] .
+                     base_wr1 tail_nobase tail_dist tail_base base_gh1 tail_cp] .
 
   \<comment> \<open>Push the head extension through the tail's foldr (distinct names).\<close>
   have n_not_in_tail:
@@ -4077,6 +4168,8 @@ lemma wrap_vardecls_types:
       and dist: "distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings dp))"
       and writable_base: "tyenv_var_writable env scrutVar = writableFlag"
       and ghost_base: "ghost = Ghost \<Longrightarrow> tyenv_var_ghost env scrutVar"
+      and bind_cp: "\<And>vr n vTy. (vr, n, vTy) \<in> set (dec_pattern_var_bindings dp)
+                      \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type vTy"
   shows "core_statement_list_type env ghost (wrap_vardecls ghost scrutVar dp @ rest)
        = core_statement_list_type
            (extend_env_with_pattern_vars env (\<lambda>vr. vr = Ref \<and> \<not> writableFlag) ghost [dp])
@@ -4127,6 +4220,10 @@ proof -
     "\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set ?projs
        \<Longrightarrow> ghost = NotGhost \<Longrightarrow> is_runtime_type env vTy"
     using triple_in bindings_rt by (fastforce simp: list_all_iff)
+  have projs_cp:
+    "\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set ?projs
+       \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type vTy"
+    using triple_in bind_cp by blast
 
   have projs_fv:
     "\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set ?projs
@@ -4159,7 +4256,7 @@ proof -
          ghost rest"
     using vardecl_chain_types[OF projs_typed projs_wk projs_rt projs_fv projs_lv
                                  projs_wr writable_base base_not_name dist'
-                                 projs_base ghost_base] .
+                                 projs_base ghost_base projs_cp] .
 
   show ?thesis
     using chain
@@ -4232,16 +4329,17 @@ case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
         using "1.prems"(3) unfolding elabenv_well_formed_def by simp
       from "1.prems"(1) Var default obtain coreTy where
         ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
+        cp: "ghost = NotGhost \<longrightarrow> is_complete_type coreTy" and
         cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var coreTy (CoreTm_Default coreTy)" and
         env'_eq: "env' = vardecl_add_local env ghost varName coreTy"
-        by (auto simp: vardecl_add_local_def split: sum.splits)
+        by (auto simp: vardecl_add_local_def split: sum.splits if_splits)
       have wk: "is_well_kinded env coreTy"
         using elab_type_is_well_kinded(1)[OF td_wf "1.prems"(2) ety] .
       have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
         using elab_type_notghost_is_runtime(1)[OF td_wf "1.prems"(2)] ety by auto
       have init_typed: "core_term_type env ghost (CoreTm_Default coreTy) = Some coreTy"
         using wk rt by simp
-      show ?thesis using wk rt init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
+      show ?thesis using wk rt cp init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
     next
       case init
       show ?thesis
@@ -4341,7 +4439,8 @@ next
   have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
-            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst] by simp
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst
+                unify_bool_range_complete[OF unif]] by simp
   have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
     using unify_sound[OF unif] .
   hence subst_typed_bool:
@@ -4571,7 +4670,8 @@ next
     have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreCond)
                          = Some (apply_subst subst condTy)"
       using apply_subst_to_term_preserves_typing
-              [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst] by simp
+              [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst
+                unify_bool_range_complete[OF unif]] by simp
     have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
       using unify_sound[OF unif] .
     hence subst_typed_bool:
@@ -4635,7 +4735,8 @@ next
   have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
-            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst] by simp
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst
+                unify_bool_range_complete[OF unif]] by simp
   \<comment> \<open>apply_subst subst condTy = apply_subst subst Bool = Bool (Bool is ground).\<close>
   have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
     using unify_sound[OF unif] .
@@ -4717,7 +4818,8 @@ next
   have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term subst coreCond)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
-            [OF typed_amb wfD subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst] .
+            [OF typed_amb wfD subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst
+                unify_bool_range_complete[OF unif]] .
   have "apply_subst subst condTy = apply_subst subst CoreTy_Bool"
     using unify_sound[OF unif] .
   hence subst_typed_bool:
@@ -4898,9 +5000,15 @@ next
    and dma_range_rt: "ghost = NotGhost \<longrightarrow>
           (\<forall>ty \<in> fmran' accSubst. is_runtime_type ?envD ty)"
     by simp_all
+  \<comment> \<open>accSubst's range is complete (it is built from fmempty by try_unify_compose steps).\<close>
+  have acc_cp_init: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
+  have dma_range_cp: "\<forall>ty \<in> fmran' accSubst. is_complete_type ty"
+    using decorate_match_arms_range_complete[OF dec_eq acc_cp_init] .
 
   \<comment> \<open>Scrutinee finalization facts.\<close>
   note scrut_facts = elab_match_stmt_scrut_facts[OF scrut_fin]
+  note fin_facts = finalize_match_stmt_facts[OF fin_stmt]
 
   \<comment> \<open>The substituted-and-cleared scrutinee typechecks in the plain env.\<close>
   have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term accSubst scrutTm)
@@ -4922,7 +5030,8 @@ next
       using flex_subst_abs_no_subst[OF dom_flex[rule_format] "13.prems"(2) envD_abs] .
     show ?thesis
       using apply_subst_to_term_preserves_typing
-              [OF typed_D wfD dma_range_wk dma_range_rt locals_unaffected ret_unaffected abs_no_subst] .
+              [OF typed_D wfD dma_range_wk dma_range_rt locals_unaffected ret_unaffected abs_no_subst
+                  dma_range_cp] .
   qed
   have cleared_typed: "core_term_type env ghost scrut' = Some scrutTy'"
     unfolding scrut_facts(1) scrut_facts(2)
@@ -4973,9 +5082,13 @@ next
        = Some ?env1"
   proof (cases mode)
     case Var
+    \<comment> \<open>A by-value scrutinee binding needs a complete type in NotGhost mode; the
+        elaborator checked this in finalize_match_stmt.\<close>
+    have cp_P: "ghost = NotGhost \<Longrightarrow> is_complete_type scrutTy'"
+      using fin_facts(3) Var by blast
     show ?thesis
       unfolding Var env1_shape
-      using typed_P wk_P rt_P Var by (cases ghost) auto
+      using typed_P wk_P rt_P cp_P Var by (cases ghost) auto
   next
     case Ref
     have lv: "is_lvalue scrut'" using scrut_facts(7)[OF Ref] by simp
@@ -5261,6 +5374,14 @@ next
         using bodies_typed_l2 i_lt len_fin
         by (fastforce simp: list_all2_conv_all_nth case_prod_unfold)
     qed
+    \<comment> \<open>By-value pattern variables have complete types in NotGhost mode (checked by
+        finalize_match_stmt).\<close>
+    have dp_in_fin: "?dp \<in> set (map fst finalizedArms)"
+      using i_lt by (metis length_map nth_mem)
+    have bind_cp_dp:
+      "\<And>vr n vTy. (vr, n, vTy) \<in> set (dec_pattern_var_bindings ?dp)
+         \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type vTy"
+      using fin_facts(4)[OF dp_in_fin] by blast
     \<comment> \<open>Choose the writableFlag for the chain by mode; in Var mode there are no
         Ref bindings, so the two const policies agree on the bindings.\<close>
     show "core_statement_list_type ?env1 ghost
@@ -5275,7 +5396,7 @@ next
                 (extend_env_with_pattern_vars ?env1 (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost [?dp])
                 ghost (coreBodies ! i)"
         using wrap_vardecls_types[OF compat_env1[OF dp_in] scrut_var_typed env1_wf
-                                     wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost] .
+                                     wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost bind_cp_dp] .
       show ?thesis using chain body_typed by simp
     next
       case Var
@@ -5287,7 +5408,7 @@ next
                 (extend_env_with_pattern_vars ?env1 (\<lambda>vr. vr = Ref \<and> \<not> True) ghost [?dp])
                 ghost (coreBodies ! i)"
         using wrap_vardecls_types[OF compat_env1[OF dp_in] scrut_var_typed env1_wf
-                                     wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost] .
+                                     wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost bind_cp_dp] .
       \<comment> \<open>No Ref bindings in Var mode, so the two policies build the same env.\<close>
       have no_refs_raw:
         "filter (\<lambda>(vr, _, _). vr = Ref)

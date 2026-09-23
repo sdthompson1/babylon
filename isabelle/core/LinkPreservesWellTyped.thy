@@ -16,7 +16,8 @@ begin
    The core_module_invariant conjunct of core_module_well_typed m follows
    from link_modules_idempotent_subst, link_modules_capture_avoiding, the
    linked result's field shape, and core_module_invariant_intro; the
-   typesubst_well_kinded conjunct is link_modules_typesubst_well_kinded; the
+   typesubst_well_kinded conjunct is link_modules_typesubst_well_kinded and
+   the typesubst_complete conjunct is link_modules_typesubst_complete; the
    work in this file is normalized_module_well_typed (normalize_module m)
    (this file also proves link_modules_invariant: linking preserves the
    standing invariant when every input satisfies it). The proof route runs
@@ -1718,6 +1719,12 @@ proof -
   have ftdB: "\<And>funName info. fmlookup (TE_Functions ?envB) funName = Some info \<Longrightarrow>
                 distinct (FI_TyArgs info)"
     using wfB unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
+  have frcA: "\<And>funName info. fmlookup (TE_Functions ?envA) funName = Some info \<Longrightarrow>
+                FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+    using wfA unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
+  have frcB: "\<And>funName info. fmlookup (TE_Functions ?envB) funName = Some info \<Longrightarrow>
+                FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+    using wfB unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
   have fgcA: "\<And>funName info. fmlookup (TE_Functions ?envA) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
                 (\<forall>ty \<in> fst ` set (FI_TmArgs info).
@@ -1889,6 +1896,9 @@ proof -
   next
     show "tyenv_return_type_runtime ?mid"
       unfolding tyenv_return_type_runtime_def by (simp add: fM(8))
+  next
+    show "tyenv_return_type_complete ?mid"
+      unfolding tyenv_return_type_complete_def by (simp add: fM(8))
   next
     show "tyenv_ctors_consistent ?mid"
       unfolding tyenv_ctors_consistent_def
@@ -2258,6 +2268,19 @@ proof -
         qed
         show ?thesis using fgcB[OF lkB ng] ftwkB[OF lkB] step by blast
       qed
+    qed
+  next
+    show "tyenv_fun_return_types_complete ?mid"
+      unfolding tyenv_fun_return_types_complete_def
+    proof (intro allI impI)
+      fix funName info
+      assume asm: "fmlookup (TE_Functions ?mid) funName = Some info
+                     \<and> FI_Ghost info = NotGhost"
+      then have lk: "fmlookup (TE_Functions ?mid) funName = Some info"
+            and ng: "FI_Ghost info = NotGhost"
+        by simp_all
+      show "is_complete_type (FI_ReturnType info)"
+        using fn_cases[OF lk] frcA frcB ng by blast
     qed
   next
     show "tyenv_nonghost_payloads_runtime ?mid"
@@ -2761,6 +2784,10 @@ proof -
                    (FI_ReturnType info')"
     using wf
     unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
+  have frc: "\<And>funName info'. fmlookup (TE_Functions env) funName = Some info' \<Longrightarrow>
+               FI_Ghost info' = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info')"
+    using wf
+    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
   have npr: "\<And>ctorName dtName tyVars payload.
                fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
                dtName |\<notin>| TE_GhostDatatypes env \<Longrightarrow>
@@ -2919,6 +2946,16 @@ proof -
         by (simp add: module_body_env_for_def)
     qed
   next
+    show "tyenv_return_type_complete ?be"
+      unfolding tyenv_return_type_complete_def
+    proof (intro impI)
+      assume "TE_FunctionGhost ?be = NotGhost"
+      then have ng: "FI_Ghost info = NotGhost"
+        by (simp add: module_body_env_for_def)
+      show "is_complete_type (TE_ReturnType ?be)"
+        using frc[OF lk ng] by (simp add: module_body_env_for_def)
+    qed
+  next
     show "tyenv_ctors_consistent ?be"
       using wf unfolding tyenv_well_formed_def tyenv_ctors_consistent_def
       by (simp add: module_body_env_for_def)
@@ -3030,6 +3067,18 @@ proof -
                          |\<union>| fset_of_list (FI_TyArgs info') \<rparr>)
                 (FI_ReturnType info')"
         using fgc[OF lk' ng'] step by blast
+    qed
+  next
+    show "tyenv_fun_return_types_complete ?be"
+      unfolding tyenv_fun_return_types_complete_def
+    proof (intro allI impI)
+      fix funName info'
+      assume "fmlookup (TE_Functions ?be) funName = Some info' \<and> FI_Ghost info' = NotGhost"
+      then have lk': "fmlookup (TE_Functions env) funName = Some info'"
+            and ng': "FI_Ghost info' = NotGhost"
+        by (simp_all add: module_body_env_for_def)
+      show "is_complete_type (FI_ReturnType info')"
+        using frc[OF lk' ng'] .
     qed
   next
     show "tyenv_nonghost_payloads_runtime ?be"
@@ -3660,6 +3709,9 @@ proof -
   have absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
     and rtvM: "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
     using link_pair_abs_tv[OF linkA wtA linkB wtB linkM setMS] by blast+
+  have cpA: "typesubst_complete (CM_TypeSubst a)"
+    and cpB: "typesubst_complete (CM_TypeSubst b)"
+    using wtA wtB unfolding core_module_well_typed_def by blast+
 
   \<comment> \<open>The a-side definition and its declared FunInfo.\<close>
   let ?fA = "f0 \<lparr> CF_Body := map_option (apply_subst_to_statement_list ?\<sigma>A)
@@ -3769,11 +3821,14 @@ proof -
     have rt_sb: "module_env_subst_runtime_ok ?\<sigma>M ?tb ?sb"
       using link_mid_body_env_runtime_ok[OF linkA linkB linkM setMS
                                             m_raw tyargs ghostA absM rtvM] .
+    have cp_sb: "\<forall>ty' \<in> fmran' ?\<sigma>M. is_complete_type ty'"
+      using link_modules_typesubst_complete[OF linkA linkB linkM setMS cpA cpB]
+      unfolding typesubst_complete_def .
     have t3: "core_statement_list_type (apply_subst_to_module_env ?\<sigma>M ?tb ?sb)
                 (FI_Ghost infoA)
                 (apply_subst_to_statement_list ?\<sigma>M ?bodyA)
                 = Some (apply_subst_to_module_env ?\<sigma>M ?tb envOut2)"
-      using core_statement_list_type_subst_module_env[OF t2 wf_sb ok_sb] rt_sb
+      using core_statement_list_type_subst_module_env[OF cp_sb t2 wf_sb ok_sb] rt_sb
       by blast
     \<comment> \<open>Collapse the env and absorb the a-side substitution in the body.\<close>
     have t4: "core_statement_list_type ?tb (FI_Ghost infoA)
@@ -3830,6 +3885,13 @@ proof -
     using wtA wtB unfolding core_module_well_typed_def by blast+
   have wk: "typesubst_well_kinded (CM_TyEnv m) ?\<sigma>M"
     using link_modules_typesubst_well_kinded[OF linkA linkB linkM setMS wkA wkB] .
+  have cpA: "typesubst_complete (CM_TypeSubst a)"
+    and cpB: "typesubst_complete (CM_TypeSubst b)"
+    using wtA wtB unfolding core_module_well_typed_def by blast+
+  have cp: "typesubst_complete ?\<sigma>M"
+    using link_modules_typesubst_complete[OF linkA linkB linkM setMS cpA cpB] .
+  have cp': "\<forall>ty' \<in> fmran' ?\<sigma>M. is_complete_type ty'"
+    using cp unfolding typesubst_complete_def .
 
   \<comment> \<open>Abstract types coincide with type variables (part of the module-scope
      clause below, and a side condition of the wf substitution engine).\<close>
@@ -3861,7 +3923,7 @@ proof -
               link_mid_env_well_formed[OF linkA wtA linkB wtB linkM setMS ghostOK]
               link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS]
               link_mid_env_runtime_ok[OF linkA linkB linkM setMS]
-              mid_abs abs_target rtv_target] .
+              cp' mid_abs abs_target rtv_target] .
     then show ?thesis
       unfolding link_mid_env_collapse[OF linkA linkB linkM setMS] .
   qed
@@ -4048,7 +4110,7 @@ proof -
     using core_module_invariant_intro[OF idem cap tvdisj nwt] .
   show ?thesis
     unfolding core_module_well_typed_def
-    using inv wk nwt by blast
+    using inv wk cp nwt by blast
 qed
 
 end

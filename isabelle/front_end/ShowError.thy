@@ -295,6 +295,11 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
         loc_prefix loc @ ''integer literal out of range''
     | TyErr_InvalidCast loc \<Rightarrow>
         loc_prefix loc @ ''invalid cast''
+    | TyErr_IncompleteArrayType loc \<Rightarrow>
+        loc_prefix loc @ ''an incomplete array type cannot be used here''
+    | TyErr_IncompleteTypeArgument loc \<Rightarrow>
+        loc_prefix loc @ ''a type argument must be a complete type''
+          @ '' (an incomplete array type was given or inferred)''
     | TyErr_CannotInferType loc \<Rightarrow>
         loc_prefix loc @ ''unable to infer type''
     | TyErr_RequiresGhostContext loc \<Rightarrow>

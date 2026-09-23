@@ -121,7 +121,7 @@ definition elab_impure_call_term ::
               Inl errs \<Rightarrow> Inl errs
             | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
                 (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                        (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])
+                        (\<lambda>idx. bab_term_location (args ! idx))
                         elabArgTms actualTypes expArgTypes fmempty of
                    Inl errs \<Rightarrow> Inl errs
                  | Inr (finalArgTms, finalSubst) \<Rightarrow>
@@ -149,8 +149,7 @@ definition coerce_term_to_type ::
   "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreType
    \<Rightarrow> TypeError list + CoreTerm" where
   "coerce_term_to_type env loc tm srcTy tgtTy =
-    (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-            (\<lambda>_ exp act. [TyErr_TypeMismatch loc exp act])
+    (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env) (\<lambda>_. loc)
             [tm] [srcTy] [tgtTy] fmempty of
        Inl errs \<Rightarrow> Inl errs
      | Inr (tms, _) \<Rightarrow> Inr (hd tms))"
@@ -166,6 +165,9 @@ definition reconcile_call_result ::
   "reconcile_call_result env loc tyArgs argTms retTy tgtTy =
     (case unify_upto_coercion (\<lambda>n. n |\<notin>| TE_TypeVars env) retTy tgtTy of
        Some subst \<Rightarrow>
+         \<comment> \<open>Metavars are not allowed to be bound to incomplete types\<close>
+         if \<not> typesubst_complete subst then Inl [TyErr_IncompleteTypeArgument loc]
+         else
          let retTy' = apply_subst subst retTy;
              tgtTy' = apply_subst subst tgtTy
          in Inr (if retTy' = tgtTy' then None else Some tgtTy',
@@ -189,7 +191,8 @@ definition vardecl_add_local ::
 
 (* VarDecl(Var) with a pure initializer. With no annotation the declared type is
    the inferred rhs type (which must be metavariable-free); with an annotation the
-   rhs is coerced to it and the annotation type is recorded. Emits CoreStmt_VarDecl. *)
+   rhs is coerced to it and the annotation type is recorded. In executable code the
+   new variable must have a complete type. Emits CoreStmt_VarDecl. *)
 definition elab_vardecl_pure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
    \<Rightarrow> BabType option \<Rightarrow> BabTerm \<Rightarrow> nat
@@ -203,6 +206,8 @@ definition elab_vardecl_pure ::
               \<comment> \<open>Inferred type from the initializer; reject unresolved metavars.\<close>
               if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
               then Inl [TyErr_CannotInferType loc]
+              else if ghost = NotGhost \<and> \<not> is_complete_type rhsTy
+              then Inl [TyErr_IncompleteArrayType loc]
               else Inr (CoreStmt_VarDecl ghost varName Var rhsTy
                           (clear_metavars next_mv next_mv' coreTm),
                         vardecl_add_local env ghost varName rhsTy, next_mv')
@@ -211,6 +216,9 @@ definition elab_vardecl_pure ::
               (case elab_type env elabEnv ghost ty of
                  Inl errs \<Rightarrow> Inl errs
                | Inr coreTy \<Rightarrow>
+                   if ghost = NotGhost \<and> \<not> is_complete_type coreTy
+                   then Inl [TyErr_IncompleteArrayType loc]
+                   else
                    (case coerce_term_to_type env loc coreTm rhsTy coreTy of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr coreTm' \<Rightarrow>
@@ -222,8 +230,8 @@ definition elab_vardecl_pure ::
    pattern-matches BabTm_Call internally (undefined otherwise; callers guard on
    is_impure_call). With no annotation the declared type is the (metavar-free)
    call return type and no cast is applied; with an annotation the declared type
-   is the annotation and reconcile_call_result chooses the cast. Emits
-   CoreStmt_VarDeclCall. *)
+   is the annotation and reconcile_call_result chooses the cast. In executable code
+   the new variable must have a complete type. Emits CoreStmt_VarDeclCall. *)
 definition elab_vardecl_impure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
    \<Rightarrow> BabType option \<Rightarrow> BabTerm \<Rightarrow> nat
@@ -235,6 +243,9 @@ definition elab_vardecl_impure ::
             Inl errs \<Rightarrow> Inl errs
           | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv') \<Rightarrow>
               (let mkCallStmt = \<lambda>varTy castOpt tyArgs argTms.
+                         if ghost = NotGhost \<and> \<not> is_complete_type varTy
+                         then Inl [TyErr_IncompleteArrayType loc]
+                         else
                          Inr (CoreStmt_VarDeclCall ghost varName varTy castOpt fnName
                                 (map (clear_metavars_type next_mv next_mv') tyArgs)
                                 (map (clear_metavars next_mv next_mv') argTms),
@@ -316,13 +327,15 @@ definition elab_vardecl_ref ::
 (* ----- Assign branch helpers ----- *)
 
 (* Assignment with a pure rhs: coerce the rhs to the lhs type (unify or integer
-   cast). The environment is unchanged. Emits CoreStmt_Assign. *)
+   cast). In executable code the lhs type must be complete. The environment is
+   unchanged. Emits CoreStmt_Assign. *)
 definition elab_assign_pure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
    \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
   "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
-    (case elab_term env elabEnv ghost rhs next_mv1 of
+    (if ghost = NotGhost \<and> \<not> is_complete_type lhsTy then Inl [TyErr_IncompleteArrayType loc]
+     else case elab_term env elabEnv ghost rhs next_mv1 of
        Inl errs \<Rightarrow> Inl errs
      | Inr (rhsTm, rhsTy, next_mv2) \<Rightarrow>
          (case coerce_term_to_type env loc rhsTm rhsTy lhsTy of
@@ -335,8 +348,8 @@ definition elab_assign_pure ::
 
 (* Assignment with an impure-call rhs. Takes the whole rhs term and pattern-matches
    BabTm_Call internally (undefined otherwise; callers guard on is_impure_call).
-   reconcile_call_result chooses the cast against the lhs type. The environment is
-   unchanged. Emits CoreStmt_AssignCall. *)
+   reconcile_call_result chooses the cast against the lhs type. In executable code the
+   lhs type must be complete. The environment is unchanged. Emits CoreStmt_AssignCall. *)
 definition elab_assign_impure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
    \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
@@ -344,6 +357,8 @@ definition elab_assign_impure ::
   "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
     (case rhs of
        BabTm_Call rloc callee rargs \<Rightarrow>
+         if ghost = NotGhost \<and> \<not> is_complete_type lhsTy then Inl [TyErr_IncompleteArrayType loc]
+         else
          (case elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv1 of
             Inl errs \<Rightarrow> Inl errs
           | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv2) \<Rightarrow>
@@ -364,13 +379,15 @@ definition elab_assign_impure ::
    (giving lhsTm of type lhsTy, a writable lvalue of a metavariable-free type,
    counter advanced to next_mv1). This elaborates the rhs (pure), requires it to be
    a writable lvalue whose type is EXACTLY lhsTy (no coercion, unlike Assign), and
-   emits CoreStmt_Swap. The environment is unchanged. *)
+   emits CoreStmt_Swap. In executable code the (common) type must be complete. The
+   environment is unchanged. *)
 definition elab_swap ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
    \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
   "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
-    (case elab_term env elabEnv ghost rhs next_mv1 of
+    (if ghost = NotGhost \<and> \<not> is_complete_type lhsTy then Inl [TyErr_IncompleteArrayType loc]
+     else case elab_term env elabEnv ghost rhs next_mv1 of
        Inl errs \<Rightarrow> Inl errs
      | Inr (rhsTm, rhsTy, next_mv2) \<Rightarrow>
          if \<not> is_writable_lvalue env rhsTm then Inl [TyErr_NotWritableLvalue loc]
@@ -640,10 +657,15 @@ definition elab_match_stmt_scrut ::
                        then TyErr_GhostRefNeedsGhostVar loc name
                        else TyErr_RefPatternNeedsLvalue loc name]))"
 
-(* Final-stage helper for match statement elaboration. 
+(* Final-stage helper for match statement elaboration.
    - Validates that the fresh match@@n name really is fresh (i.e. it doesn't appear free
      in the final scrutinee or any arm body, or as a pattern variable); this should always
      be the case, but we check anyway and report an internal error if not.
+   - In executable code, checks the storage rule for the variables the statement
+     introduces: a scrutinee bound by value (mode = Var, i.e. it is not an lvalue)
+     must have a complete type, and so must every pattern variable bound by value
+     (a `ref` pattern variable is an alias into the scrutinee and may have an
+     incomplete array type, like any ref).
    - On success builds the elaborated statement:
 
        CoreStmt_Block
@@ -663,6 +685,12 @@ definition finalize_match_stmt ::
         \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) dps
         \<or> list_ex (\<lambda>body. freshName |\<in>| core_statement_list_free_vars body) bodies
      then Inl [TyErr_UnexpectedNameClash loc]
+     else if ghost = NotGhost \<and> mode = Var \<and> \<not> is_complete_type scrutTy
+     then Inl [TyErr_IncompleteArrayType loc]
+     else if ghost = NotGhost
+             \<and> list_ex (\<lambda>dp. list_ex (\<lambda>(vr, _, ty). vr = Var \<and> \<not> is_complete_type ty)
+                                    (dec_pattern_var_bindings dp)) dps
+     then Inl [TyErr_IncompleteArrayType loc]
      else Inr (CoreStmt_Block
                  [ CoreStmt_VarDecl ghost freshName mode scrutTy scrutTm,
                    CoreStmt_Match ghost (CoreTm_Var freshName)
@@ -707,10 +735,14 @@ where
          (case (tyOpt, tmOpt) of
             (None, None) \<Rightarrow> Inl [TyErr_VarDeclNeedsTypeOrValue loc]
           | (Some ty, None) \<Rightarrow>
-              \<comment> \<open>Default-initialized: use the annotation type.\<close>
+              \<comment> \<open>Default-initialized: use the annotation type (which, in executable
+                  code, must be a complete type).\<close>
               (case elab_type env elabEnv ghost ty of
                  Inl errs \<Rightarrow> Inl errs
                | Inr coreTy \<Rightarrow>
+                   if ghost = NotGhost \<and> \<not> is_complete_type coreTy
+                   then Inl [TyErr_IncompleteArrayType loc]
+                   else
                    Inr (CoreStmt_VarDecl ghost varName Var coreTy (CoreTm_Default coreTy),
                         vardecl_add_local env ghost varName coreTy, next_mv))
           | (_, Some tm) \<Rightarrow>

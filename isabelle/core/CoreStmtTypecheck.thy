@@ -8,8 +8,8 @@ begin
 
 (* Typecheck an impure call (e.g. one occurring in CoreStmt_VarDeclCall or
    CoreStmt_AssignCall). The fnName must exist in the env, and the numbers of
-   tyArgs and tmArgs must be correct. The tyArgs must be well-kinded and (in
-   NotGhost mode) runtime types. For each argument:
+   tyArgs and tmArgs must be correct. The tyArgs must be well-kinded, complete,
+   and (in NotGhost mode) runtime types. For each argument:
      - Ref parameter: argument must be a writable lvalue of the expected
        (substituted) type.
      - Var parameter: argument is typechecked via core_term_type, so nested
@@ -23,6 +23,7 @@ definition core_impure_call_type ::
      | Some funInfo \<Rightarrow>
          if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
          else if \<not> list_all (is_well_kinded env) tyArgs then None
+         else if \<not> list_all is_complete_type tyArgs then None
          else if ghost = NotGhost
                  \<and> (\<not> list_all (is_runtime_type env) tyArgs
                     \<or> FI_Ghost funInfo = Ghost) then None
@@ -72,12 +73,14 @@ and core_statement_list_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow
 where
 
   (* Variable declaration (Var).
-     The initializer is an ordinary (pure) term. Impure function-call
-     initializers use CoreStmt_VarDeclCall instead. *)
+     The initializer is an ordinary (pure) term. Impure function-call initializers
+     use CoreStmt_VarDeclCall instead.
+     In executable code (NotGhost), the new variable must have complete type. *)
   "core_statement_type env ghost (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
     (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+        \<and> (declGhost = NotGhost \<longrightarrow> is_complete_type varTy)
         \<and> core_term_type env declGhost initTm = Some varTy
      then Some (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                       TE_GhostLocals := (if declGhost = Ghost
@@ -88,11 +91,13 @@ where
 
   (* Variable declaration initialized from an impure function call.
      The call is typechecked by core_impure_call_type, and the (optionally cast) return
-     type must equal the declared variable type. *)
+     type must equal the declared variable type. As for CoreStmt_VarDecl (Var), a
+     non-ghost variable must have a complete type. *)
 | "core_statement_type env ghost (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms) =
     (if (ghost = Ghost \<longrightarrow> declGhost = Ghost)
         \<and> is_well_kinded env varTy
         \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+        \<and> (declGhost = NotGhost \<longrightarrow> is_complete_type varTy)
      then (case core_impure_call_type env declGhost fnName tyArgs argTms of
              Some retTy \<Rightarrow>
                if cast_result_type env declGhost retTy castOpt = Some varTy
@@ -126,14 +131,16 @@ where
 
   (* Assignment.
      The rhs is an ordinary (pure) term. Impure function-call rhs's use
-     CoreStmt_AssignCall instead. *)
+     CoreStmt_AssignCall instead.
+     A non-ghost assignment must be at a complete type. *)
 | "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
         \<and> ghost_lvalue_ok env assignGhost lhsTm
      then (case core_term_type env assignGhost lhsTm of
              Some lhsTy \<Rightarrow>
-               if core_term_type env assignGhost rhsTm = Some lhsTy
+               if (assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy)
+                  \<and> core_term_type env assignGhost rhsTm = Some lhsTy
                then Some env
                else None
            | None \<Rightarrow> None)
@@ -141,7 +148,8 @@ where
 
   (* Assignment whose rhs is an impure function call.
      The lhs must be a writable lvalue; the call's (optionally cast) return type
-     must equal the lhs type. *)
+     must equal the lhs type. As for CoreStmt_Assign, a non-ghost assignment must
+     be at a complete type. *)
 | "core_statement_type env ghost (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
@@ -150,7 +158,8 @@ where
              Some lhsTy \<Rightarrow>
                (case core_impure_call_type env assignGhost fnName tyArgs argTms of
                   Some retTy \<Rightarrow>
-                    if cast_result_type env assignGhost retTy castOpt = Some lhsTy
+                    if (assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy)
+                       \<and> cast_result_type env assignGhost retTy castOpt = Some lhsTy
                     then Some env else None
                 | None \<Rightarrow> None)
            | None \<Rightarrow> None)
@@ -167,7 +176,8 @@ where
      then Some env
      else None)"
 
-  (* Swap: both sides must be writable lvalues of the same type. *)
+  (* Swap: both sides must be writable lvalues of the same type. A non-ghost
+     swap must be at a complete type (as for CoreStmt_Assign). *)
 | "core_statement_type env ghost (CoreStmt_Swap swapGhost lhsTm rhsTm) =
     (if (ghost = Ghost \<longrightarrow> swapGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
@@ -176,7 +186,8 @@ where
         \<and> ghost_lvalue_ok env swapGhost rhsTm
      then (case core_term_type env swapGhost lhsTm of
              Some lhsTy \<Rightarrow>
-               if core_term_type env swapGhost rhsTm = Some lhsTy
+               if (swapGhost = NotGhost \<longrightarrow> is_complete_type lhsTy)
+                  \<and> core_term_type env swapGhost rhsTm = Some lhsTy
                then Some env
                else None
            | None \<Rightarrow> None)
@@ -361,6 +372,7 @@ lemma core_impure_call_type_fn_facts:
             fmlookup (TE_Functions env) fnName = Some funInfo
             \<and> length tyArgs = length (FI_TyArgs funInfo)
             \<and> list_all (is_well_kinded env) tyArgs
+            \<and> list_all is_complete_type tyArgs
             \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
             \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
             \<and> length tmArgs = length (FI_TmArgs funInfo)
@@ -384,6 +396,7 @@ proof -
       | Some fi \<Rightarrow>
           if length tyArgs \<noteq> length (FI_TyArgs fi) then None
           else if \<not> list_all (is_well_kinded env) tyArgs then None
+          else if \<not> list_all is_complete_type tyArgs then None
           else if ghost = NotGhost
                   \<and> (\<not> list_all (is_runtime_type env) tyArgs
                      \<or> FI_Ghost fi = Ghost) then None
@@ -412,6 +425,7 @@ proof -
   from unfolded fi_lookup have body:
     "(if length tyArgs \<noteq> length (FI_TyArgs fi) then None
       else if \<not> list_all (is_well_kinded env) tyArgs then None
+      else if \<not> list_all is_complete_type tyArgs then None
       else if ghost = NotGhost
               \<and> (\<not> list_all (is_runtime_type env) tyArgs
                  \<or> FI_Ghost fi = Ghost) then None
@@ -438,15 +452,17 @@ proof -
     using body by (metis option.distinct(1))
   from body len_tyArgs have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
     by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk have not_ghost_cond:
+  from body len_tyArgs tyArgs_wk have tyArgs_cp: "list_all is_complete_type tyArgs"
+    by (metis option.distinct(1))
+  from body len_tyArgs tyArgs_wk tyArgs_cp have not_ghost_cond:
     "\<not> (ghost = NotGhost
         \<and> (\<not> list_all (is_runtime_type env) tyArgs
            \<or> FI_Ghost fi = Ghost))"
     by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk not_ghost_cond have len_tmArgs:
+  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond have len_tmArgs:
     "length tmArgs = length (FI_TmArgs fi)"
     by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk not_ghost_cond len_tmArgs
+  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond len_tmArgs
   have after_ifs:
     "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
           expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
@@ -573,7 +589,7 @@ proof -
       by simp
   qed
 
-  from fi_lookup len_tyArgs tyArgs_wk ng_tyArgs ng_fn len_tmArgs fn_ty_eq
+  from fi_lookup len_tyArgs tyArgs_wk tyArgs_cp ng_tyArgs ng_fn len_tmArgs fn_ty_eq
        argTms_l2_pure ref_args_lvalues
   show ?thesis by blast
 qed
@@ -626,6 +642,7 @@ proof -
     fi: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
     wk: "list_all (is_well_kinded env) tyArgs" and
+    cp: "list_all is_complete_type tyArgs" and
     rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
@@ -708,7 +725,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi wk' rt' fn_ng len_ty len_tm l2_full' ty_eq
+    using fi wk' cp rt' fn_ng len_ty len_tm l2_full' ty_eq
     by (auto simp: fns_eq Let_def)
 qed
 
@@ -1255,6 +1272,7 @@ proof (induction env ghost stmt and env ghost stmts
     "(ghost = Ghost \<longrightarrow> declGhost = Ghost)
        \<and> is_well_kinded env varTy
        \<and> (declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy)
+       \<and> (declGhost = NotGhost \<longrightarrow> is_complete_type varTy)
        \<and> core_term_type env declGhost initTm = Some varTy"
     by (auto split: if_splits)
   hence wk: "is_well_kinded ?env1 varTy"
@@ -1285,6 +1303,7 @@ next
     gh: "ghost = Ghost \<longrightarrow> declGhost = Ghost" and
     wk: "is_well_kinded env varTy" and
     rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    cp: "declGhost = NotGhost \<longrightarrow> is_complete_type varTy" and
     ct: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
     cast: "cast_result_type env declGhost retTy castOpt = Some varTy" and
     env'_eq:
@@ -1302,7 +1321,7 @@ next
     using ct core_impure_call_type_irrelevant_tyvar by blast
   have cast': "cast_result_type ?env1 declGhost retTy castOpt = Some varTy"
     using cast cast_result_type_irrelevant_tyvar by blast
-  from gh wk' rt' ct' cast' show ?case
+  from gh wk' rt' cp ct' cast' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>VarDecl (Ref): the rhs must be an lvalue; same commutation.\<close>
@@ -1347,6 +1366,7 @@ next
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
     lhs: "core_term_type env assignGhost lhsTm = Some lhsTy" and
+    cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     env'_eq: "env' = env"
     by (auto split: if_splits option.splits)
@@ -1355,7 +1375,7 @@ next
     using lhs core_term_type_irrelevant_tyvar by blast
   have rhs': "core_term_type ?env1 assignGhost rhsTm = Some lhsTy"
     using rhs core_term_type_irrelevant_tyvar by blast
-  from gh wl glv lhs' rhs' show ?case
+  from gh wl glv lhs' cp rhs' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>AssignCall: env unchanged. The call check and cast both survive ?ext.\<close>
@@ -1378,6 +1398,7 @@ next
     ct: "core_impure_call_type env assignGhost fnName tyArgs argTms = Some retTy"
     by (simp split: option.splits)
   from "5.prems" pre lhs ct have
+    cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     cast: "cast_result_type env assignGhost retTy castOpt = Some lhsTy" and
     env'_eq: "env' = env"
     by (simp split: if_splits)+
@@ -1387,7 +1408,7 @@ next
     using ct core_impure_call_type_irrelevant_tyvar by blast
   have cast': "cast_result_type ?env1 assignGhost retTy castOpt = Some lhsTy"
     using cast cast_result_type_irrelevant_tyvar by blast
-  from gh wl glv lhs' ct' cast' show ?case
+  from gh wl glv lhs' cp ct' cast' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>Return: env unchanged. TE_ReturnType / TE_FunctionGhost survive ?ext.\<close>
@@ -1417,6 +1438,7 @@ next
     glvL: "ghost_lvalue_ok env swapGhost lhsTm" and
     glvR: "ghost_lvalue_ok env swapGhost rhsTm" and
     lhs: "core_term_type env swapGhost lhsTm = Some lhsTy" and
+    cp: "swapGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env swapGhost rhsTm = Some lhsTy" and
     env'_eq: "env' = env"
     by (auto split: if_splits option.splits)
@@ -1425,7 +1447,7 @@ next
     using lhs core_term_type_irrelevant_tyvar by blast
   have rhs': "core_term_type ?env1 swapGhost rhsTm = Some lhsTy"
     using rhs core_term_type_irrelevant_tyvar by blast
-  from gh wl wr glvL glvR lhs' rhs' show ?case by (simp add: env'_eq)
+  from gh wl wr glvL glvR lhs' cp rhs' show ?case by (simp add: env'_eq)
 next
   \<comment> \<open>Assert: env unchanged; body checked under goalEnv, which sets
       TE_ProofGoal to condTm when a condition is present, or keeps the current goal

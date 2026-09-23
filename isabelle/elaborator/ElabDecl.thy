@@ -483,6 +483,10 @@ definition elab_fun_signature ::
                    | Some rty \<Rightarrow> elab_type sigEnv sigElabEnv ghost rty) of
                Inl errs \<Rightarrow> Inl errs
              | Inr retTy \<Rightarrow>
+                 \<comment> \<open>Non-ghost functions must return a complete type\<close>
+                 if ghost = NotGhost \<and> \<not> is_complete_type retTy
+                 then Inl [TyErr_IncompleteArrayType (DF_Location df)]
+                 else
                  Inr \<lparr> FI_TyArgs = tyvars,
                        FI_TmArgs = zip argTys (map (\<lambda>(_, vor, _). vor) (DF_TmArgs df)),
                        FI_ReturnType = retTy,
@@ -799,6 +803,9 @@ definition elab_typedef_decl ::
                            else if name |\<in>| TE_RuntimeTypeVars env
                                 \<and> \<not> is_runtime_type env target
                            then Inl [TyErr_GhostRealizationOfRuntimeType loc name]
+                           \<comment> \<open>Abstract types must be realized by complete types.\<close>
+                           else if \<not> is_complete_type target
+                           then Inl [TyErr_IncompleteTypeArgument loc]
                            \<comment> \<open>Variable capture check.\<close>
                            else if realization_captures env elabEnv name target
                            then Inl [TyErr_TypeVarCapture loc name]

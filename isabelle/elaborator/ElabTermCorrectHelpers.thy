@@ -270,7 +270,7 @@ next
     by (auto split: sum.splits)
   from "16.prems" arms_nonempty elab_scrut obtain decoratedArms accSubst mv2 where
     decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy
-                    False fmempty (mv1 + 1) arms
+                    False fmempty mv1 arms
                   = Inr (decoratedArms, accSubst, mv2)"
     by (auto simp: Let_def split: sum.splits)
   from "16.prems" arms_nonempty elab_scrut decorate_eq obtain finalizedArms where
@@ -286,7 +286,7 @@ next
     by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> mv1"
     using "16.IH"(1) arms_nonempty elab_scrut by simp
-  have m2: "mv1 + 1 \<le> mv2"
+  have m2: "mv1 \<le> mv2"
     using decorate_match_arms_next_mv_monotone[OF decorate_eq] .
   have m3: "mv2 \<le> mv3"
     using "16.IH"(2) arms_nonempty elab_scrut decorate_eq finalize_eq elab_bodies
@@ -371,7 +371,8 @@ lemma resolve_type_args_correct:
        \<and> length newTyArgs = length tyvars
        \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
        \<and> (ghost = NotGhost \<longrightarrow>
-            list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)"
+            list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
+       \<and> list_all is_complete_type newTyArgs"
 proof -
   let ?numTyParams = "length tyvars"
   show ?thesis
@@ -400,8 +401,10 @@ proof -
       using results by (auto simp: extend_env_with_tyvars_def mv_fset_def fset_of_list_elem)
     have runtime_ok: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env_ext) ?genTyArgs"
       unfolding genTyArgs_eq using all_in_rtv list_all_tyvar_is_runtime by blast
+    have complete_ok: "list_all is_complete_type ?genTyArgs"
+      unfolding genTyArgs_eq by (rule list_all_tyvar_is_complete)
     show ?thesis
-      using results len_ok wk_ok runtime_ok mono by auto
+      using results len_ok wk_ok runtime_ok complete_ok mono by auto
   next
     case False
     show ?thesis
@@ -415,7 +418,8 @@ proof -
       from assms(1) False True elab_tyargs
       have results: "newTyArgs = elabTyArgs"
                     "next_mv' = next_mv"
-        by (auto simp: resolve_type_args_def Let_def)
+                    "list_all is_complete_type elabTyArgs"
+        by (auto simp: resolve_type_args_def Let_def split: if_splits)
       have len_ok: "length elabTyArgs = ?numTyParams"
         using elab_tyargs True elab_type_list_length by fastforce
       have mono: "next_mv \<le> next_mv'" using results by simp
@@ -442,7 +446,7 @@ qed
 (* ============================================================================== *)
 
 (* Validity predicate for a function callee: the function exists, is pure,
-   satisfies ghost constraints, type args are well-kinded/runtime,
+   satisfies ghost constraints, type args are well-kinded/runtime/complete,
    and expArgTypes + retType are consistent with the function declaration. *)
 definition callee_info_valid_function ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreType \<Rightarrow> CoreType list \<Rightarrow> bool" where
@@ -455,13 +459,14 @@ definition callee_info_valid_function ::
      \<and> length tyArgs = length (FI_TyArgs funInfo)
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
+     \<and> list_all is_complete_type tyArgs
      \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                          (FI_TmArgs funInfo)
      \<and> retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                               (FI_ReturnType funInfo))"
 
 (* Validity predicate for a data constructor callee: the constructor exists,
-   satisfies ghost constraints, type args are well-kinded/runtime,
+   satisfies ghost constraints, type args are well-kinded/runtime/complete,
    and expArgTypes is the singleton substituted payload type. *)
 definition callee_info_valid_data_ctor ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> bool" where
@@ -472,6 +477,7 @@ definition callee_info_valid_data_ctor ::
      \<and> length tyArgs = length tyvars
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
+     \<and> list_all is_complete_type tyArgs
      \<and> expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy])"
 
 (* Combined validity predicate: dispatches to the appropriate sub-predicate. *)
@@ -500,6 +506,7 @@ proof (cases ci)
     "length tyArgs = length (FI_TyArgs funInfo)"
     "list_all (is_well_kinded ?env1) tyArgs"
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
+    "list_all is_complete_type tyArgs"
     "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                        (FI_TmArgs funInfo)"
     "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
@@ -513,7 +520,7 @@ proof (cases ci)
   have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env2) tyArgs"
     using props(7) by (auto simp: list_all_iff
             intro: is_runtime_type_extend_env_with_tyvars_mono[OF _ assms(2,3)])
-  show ?thesis using CI_Function fn_eq props(2,3,4,5,8,9) wk rt
+  show ?thesis using CI_Function fn_eq props(2,3,4,5,8,9,10) wk rt
     unfolding callee_info_valid_def callee_info_valid_function_def by auto
 next
   case (CI_DataCtor ctorName dtName tyArgs)
@@ -525,6 +532,7 @@ next
     "length tyArgs = length tyvars"
     "list_all (is_well_kinded ?env1) tyArgs"
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
+    "list_all is_complete_type tyArgs"
     "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]"
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
   have dc_eq: "fmlookup (TE_DataCtors ?env2) ctorName = Some (dtName, tyvars, payloadTy)"
@@ -537,7 +545,7 @@ next
   have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env2) tyArgs"
     using props(5) by (auto simp: list_all_iff
             intro: is_runtime_type_extend_env_with_tyvars_mono[OF _ assms(2,3)])
-  show ?thesis using CI_DataCtor dc_eq ghost_eq props(3,6) wk rt
+  show ?thesis using CI_DataCtor dc_eq ghost_eq props(3,6,7) wk rt
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 qed
 
@@ -591,7 +599,8 @@ proof -
            \<and> length newTyArgs = length (FI_TyArgs funInfo)
            \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
            \<and> (ghost = NotGhost \<longrightarrow>
-                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)"
+                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
+           \<and> list_all is_complete_type newTyArgs"
     using resolve_type_args_correct[OF resolve_eq assms(2,3)] next_mv_eq by simp
 
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
@@ -708,7 +717,8 @@ proof -
            \<and> length newTyArgs = length tyvars
            \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs
            \<and> (ghost = NotGhost \<longrightarrow>
-                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)"
+                list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) newTyArgs)
+           \<and> list_all is_complete_type newTyArgs"
     using resolve_type_args_correct[OF resolve_eq assms(2) td_wf] next_mv_eq by simp
 
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
@@ -842,6 +852,7 @@ lemma build_call_result_correct:
       and locals_eq: "TE_LocalVars env' = TE_LocalVars env"
       and ret_eq: "TE_ReturnType env' = TE_ReturnType env"
       and abs_eq': "TE_AbstractTypes env' = TE_AbstractTypes env"
+      and subst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
   shows "core_term_type env' ghost resultTm = Some resultTy"
 proof (cases calleeInfo)
   case (CI_Function fnName tyArgs retType)
@@ -861,19 +872,22 @@ proof (cases calleeInfo)
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and
+    tyargs_cp: "list_all is_complete_type tyArgs" and
     expArgTypes_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                                        (FI_TmArgs funInfo)" and
     retType_eq: "retType = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                         (FI_ReturnType funInfo)"
     unfolding callee_info_valid_def callee_info_valid_function_def by auto
 
-  \<comment> \<open>Final type args well-kinded and runtime\<close>
+  \<comment> \<open>Final type args well-kinded, runtime and complete\<close>
   have finalTyArgs_wk: "list_all (is_well_kinded env') ?finalTyArgs"
     using tyargs_wk subst_wk by (auto simp: list_all_iff fmran'I
             intro: apply_subst_preserves_well_kinded split: option.splits)
   have finalTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') ?finalTyArgs"
     using tyargs_rt subst_rt by (auto simp: list_all_iff fmran'I
             intro: apply_subst_preserves_runtime split: option.splits)
+  have finalTyArgs_cp: "list_all is_complete_type ?finalTyArgs"
+    using map_apply_subst_preserves_complete[OF tyargs_cp subst_cp] .
   have len_finalTyArgs: "length ?finalTyArgs = length (FI_TyArgs funInfo)"
     using len_tyargs by simp
 
@@ -957,7 +971,7 @@ proof (cases calleeInfo)
 
   show ?thesis
     using resultTm_eq fn_lookup ghost_ok not_impure all_var
-          len_finalTyArgs finalTyArgs_wk finalTyArgs_rt
+          len_finalTyArgs finalTyArgs_wk finalTyArgs_rt finalTyArgs_cp
           len_finalArgTms args_match ret_eq2
     by (simp add: Let_def)
 next
@@ -978,16 +992,19 @@ next
     len_tyargs: "length tyArgs = length tyvars" and
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and
+    tyargs_cp: "list_all is_complete_type tyArgs" and
     expArg_eq: "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]"
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 
-  \<comment> \<open>Final type args well-kinded and runtime\<close>
+  \<comment> \<open>Final type args well-kinded, runtime and complete\<close>
   have finalTyArgs_wk: "list_all (is_well_kinded env') ?finalTyArgs"
     using tyargs_wk subst_wk by (auto simp: list_all_iff fmran'I
             intro: apply_subst_preserves_well_kinded split: option.splits)
   have finalTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') ?finalTyArgs"
     using tyargs_rt subst_rt by (auto simp: list_all_iff fmran'I
             intro: apply_subst_preserves_runtime split: option.splits)
+  have finalTyArgs_cp: "list_all is_complete_type ?finalTyArgs"
+    using map_apply_subst_preserves_complete[OF tyargs_cp subst_cp] .
   have len_finalTyArgs: "length ?finalTyArgs = length tyvars"
     using len_tyargs by simp
 
@@ -1038,7 +1055,7 @@ next
 
   show ?thesis
     using resultTm_eq resultTy_eq ctor_lookup len_finalTyArgs finalTyArgs_wk finalTyArgs_rt
-          ghost_ok payload_typed
+          finalTyArgs_cp ghost_ok payload_typed
     by (simp add: Let_def)
 qed
 
@@ -1431,9 +1448,11 @@ qed
 (* Correctness of unify_type_lists (Phase 1):
    If it succeeds, the substitution is well-kinded and runtime-preserving,
    finalSubst extends accSubst (via composition with some theta),
-   and for each pair of types, either they unify or the pair is coercible. *)
+   for each pair of types, either they unify or the pair is coercible,
+   and the range of finalSubst is complete whenever accSubst's was (every
+   per-pair substitution is checked to have a complete range). *)
 lemma unify_type_lists_correct:
-  assumes "unify_type_lists is_flex mk_err idx actualTys expectedTys accSubst = Inr finalSubst"
+  assumes "unify_type_lists is_flex locOf idx actualTys expectedTys accSubst = Inr finalSubst"
       and "tyenv_well_formed env"
       and "length actualTys = length expectedTys"
       and "list_all (is_well_kinded env) actualTys"
@@ -1450,19 +1469,21 @@ lemma unify_type_lists_correct:
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTys expectedTys
-       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
+       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)
+       \<and> ((\<forall>ty \<in> fmran' accSubst. is_complete_type ty)
+            \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty))"
   using assms
-proof (induction is_flex mk_err idx actualTys expectedTys accSubst
+proof (induction is_flex locOf idx actualTys expectedTys accSubst
        arbitrary: finalSubst
        rule: unify_type_lists.induct)
-  case (1 is_flex mk_err idx accSubst)
+  case (1 is_flex locOf idx accSubst)
   from "1.prems"(1) have finalSubst_eq: "finalSubst = accSubst" by simp
   moreover have "accSubst = compose_subst fmempty accSubst" by simp
   moreover from "1.prems"(10) finalSubst_eq have
     "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n" by simp
   ultimately show ?case using "1.prems"(6,9) by blast
 next
-  case (2 is_flex mk_err idx actualTy actualTys expectedTy expectedTys accSubst)
+  case (2 is_flex locOf idx actualTy actualTys expectedTy expectedTys accSubst)
   let ?actualTy' = "apply_subst accSubst actualTy"
   let ?expectedTy' = "apply_subst accSubst expectedTy"
 
@@ -1491,9 +1512,10 @@ next
       recursion continued with compose_subst newSubst accSubst.\<close>
   from "2.prems"(1) obtain newSubst where
     uoc: "unify_upto_coercion is_flex ?actualTy' ?expectedTy' = Some newSubst" and
-    recurse: "unify_type_lists is_flex mk_err (idx + 1) actualTys expectedTys
+    newSubst_cp: "typesubst_complete newSubst" and
+    recurse: "unify_type_lists is_flex locOf (idx + 1) actualTys expectedTys
                 (compose_subst newSubst accSubst) = Inr finalSubst"
-    by (auto simp: Let_def split: option.splits)
+    by (auto simp: Let_def split: option.splits if_splits)
   let ?composedSubst = "compose_subst newSubst accSubst"
 
   have newSubst_wk: "\<forall>ty \<in> fmran' newSubst. is_well_kinded env ty"
@@ -1510,6 +1532,10 @@ next
   have composed_dom_flex: "\<forall>n. n |\<in>| fmdom ?composedSubst \<longrightarrow> is_flex n"
     using newSubst_dom_flex "2.prems"(10)
     by (auto simp: compose_subst_def)
+  have composed_cp: "(\<forall>ty \<in> fmran' accSubst. is_complete_type ty)
+                     \<longrightarrow> (\<forall>ty \<in> fmran' ?composedSubst. is_complete_type ty)"
+    using newSubst_cp compose_subst_preserves_complete
+    unfolding typesubst_complete_def by blast
 
   have ih: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded env ty)
           \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env ty))
@@ -1518,9 +1544,14 @@ next
               apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
               \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
             actualTys expectedTys
-          \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)"
-    using "2.IH" uoc len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt composed_wk
-      expectedTys_rt expectedTys_wk recurse composed_dom_flex by simp
+          \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> is_flex n)
+          \<and> ((\<forall>ty \<in> fmran' ?composedSubst. is_complete_type ty)
+               \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty))"
+    using "2.IH" uoc newSubst_cp len_tl actualTys_rt actualTys_wk "2.prems"(2) composed_rt
+      composed_wk expectedTys_rt expectedTys_wk recurse composed_dom_flex by simp
+  have final_cp: "(\<forall>ty \<in> fmran' accSubst. is_complete_type ty)
+                  \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty)"
+    using ih composed_cp by blast
 
   \<comment> \<open>From IH, finalSubst = compose_subst theta (compose_subst newSubst accSubst) for some theta\<close>
   from ih obtain theta where
@@ -1549,7 +1580,7 @@ next
     assume "coercible (apply_subst newSubst ?actualTy') (apply_subst newSubst ?expectedTy')"
     thus ?thesis using coercible_apply_subst[of _ _ theta] by (simp add: actual_eq expected_eq)
   qed
-  show ?case using ih extends_acc head by auto
+  show ?case using ih extends_acc head final_cp by blast
 next
   case ("3_1" uu uv uw v va uz)
   then show ?case by simp
@@ -1580,6 +1611,7 @@ lemma apply_call_coercions_correct:
       and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
       and "list_all (is_well_kinded env) expectedTys"
       and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) expectedTys"
+      and subst_cp: "\<forall>ty \<in> fmran' subst. is_complete_type ty"
   shows "list_all2 (\<lambda>tm expectedTy.
            core_term_type env ghost tm = Some (apply_subst subst expectedTy))
          (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
@@ -1621,13 +1653,13 @@ next
   have ih: "list_all2 (\<lambda>tm expectedTy.
               core_term_type env ghost tm = Some (apply_subst subst expectedTy))
             (apply_call_coercions subst tms actualTys expectedTys) expectedTys"
-    using "2.IH" tail_typed tail_prop "2.prems"(3,4,5,8,9,10) len_tms len_tys
+    using "2.IH" tail_typed tail_prop "2.prems"(3,4,5,8,9,10,13) len_tms len_tys
           locals_unaffected ret_unaffected abs_no_subst expectedTys_wk expectedTys_rt
     by simp
 
   \<comment> \<open>For the head: apply_subst_to_term preserves typing (with substituted type)\<close>
   have head_tm'_typed: "core_term_type env ghost ?tm' = Some ?actualTy'"
-    by (simp add: "2.prems"(4,5,8,9,10) apply_subst_to_term_preserves_typing assms(3)
+    by (simp add: "2.prems"(4,5,8,9,10,13) apply_subst_to_term_preserves_typing assms(3)
         head_typed)
 
   \<comment> \<open>The substituted expected type is well-kinded / runtime (the cast target).\<close>

@@ -50,6 +50,10 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_IntLiteralOutOfRange Location
   | TyErr_InvalidCast Location
 
+  (* Incomplete array types (T[]) *)
+  | TyErr_IncompleteArrayType Location  (* storing, assigning, swapping or returning a value of incomplete type in executable code *)
+  | TyErr_IncompleteTypeArgument Location  (* a type argument (written or inferred) is not a complete type *)
+
   (* Type inference failure *)
   | TyErr_CannotInferType Location
 

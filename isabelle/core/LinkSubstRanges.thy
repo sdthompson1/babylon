@@ -685,4 +685,123 @@ proof -
     using main by blast
 qed
 
+
+(* The same transfer for completeness of the substitution ranges: if each
+   sub-link's abstract-type resolutions are complete types, so are the whole
+   link's. The proof is the well-founded induction of
+   link_modules_typesubst_well_kinded without any of the environment
+   bookkeeping: \<sigma>M's entry at n is apply_subst \<sigma>M e for a complete e from one
+   side, and each tyvar of e that \<sigma>M resolves is a dependency edge (IH). *)
+theorem link_modules_typesubst_complete:
+  assumes linkA: "link_modules as = Inr a"
+      and linkB: "link_modules bs = Inr b"
+      and linkM: "link_modules ms = Inr m"
+      and setMS: "set ms = set as \<union> set bs"
+      and cpA: "typesubst_complete (CM_TypeSubst a)"
+      and cpB: "typesubst_complete (CM_TypeSubst b)"
+  shows "typesubst_complete (CM_TypeSubst m)"
+proof -
+  define uA where "uA = fmlist_union (map CM_TypeSubst as)"
+  define uB where "uB = fmlist_union (map CM_TypeSubst bs)"
+  define uM where "uM = fmlist_union (map CM_TypeSubst ms)"
+
+  obtain \<sigma>A where sdisjA: "fmdisjoint_list (map CM_TypeSubst as)"
+      and acycA: "acyclic_subst_deps uA"
+      and closA: "is_subst_closure uA \<sigma>A"
+      and aeq: "a = link_result as \<sigma>A"
+    using linkA link_modules_Inr_iff_closure unfolding uA_def by blast
+  obtain \<sigma>B where sdisjB: "fmdisjoint_list (map CM_TypeSubst bs)"
+      and acycB: "acyclic_subst_deps uB"
+      and closB: "is_subst_closure uB \<sigma>B"
+      and beq: "b = link_result bs \<sigma>B"
+    using linkB link_modules_Inr_iff_closure unfolding uB_def by blast
+  obtain \<sigma>M where sdisjM: "fmdisjoint_list (map CM_TypeSubst ms)"
+      and acycM: "acyclic_subst_deps uM"
+      and closM: "is_subst_closure uM \<sigma>M"
+      and meq: "m = link_result ms \<sigma>M"
+    using linkM link_modules_Inr_iff_closure unfolding uM_def by blast
+
+  have \<sigma>A_eq: "CM_TypeSubst a = \<sigma>A"
+    and \<sigma>B_eq: "CM_TypeSubst b = \<sigma>B"
+    and \<sigma>M_eq: "CM_TypeSubst m = \<sigma>M"
+    using aeq beq meq by (simp_all add: link_result_def)
+
+  have cpA': "\<And>k ty. fmlookup \<sigma>A k = Some ty \<Longrightarrow> is_complete_type ty"
+    using cpA \<sigma>A_eq typesubst_complete_lookup by blast
+  have cpB': "\<And>k ty. fmlookup \<sigma>B k = Some ty \<Longrightarrow> is_complete_type ty"
+    using cpB \<sigma>B_eq typesubst_complete_lookup by blast
+
+  have setA: "set as \<subseteq> set ms" and setB: "set bs \<subseteq> set ms"
+    using setMS by auto
+  have mapsubA: "set (map CM_TypeSubst as) \<subseteq> set (map CM_TypeSubst ms)"
+    using setA by auto
+  have mapsubB: "set (map CM_TypeSubst bs) \<subseteq> set (map CM_TypeSubst ms)"
+    using setB by auto
+  have subA: "\<And>k v. fmlookup uA k = Some v \<Longrightarrow> fmlookup uM k = Some v"
+    unfolding uA_def uM_def
+    using fmlist_union_sublist_lookup[OF sdisjM sdisjA mapsubA] by blast
+  have subB: "\<And>k v. fmlookup uB k = Some v \<Longrightarrow> fmlookup uM k = Some v"
+    unfolding uB_def uM_def
+    using fmlist_union_sublist_lookup[OF sdisjM sdisjB mapsubB] by blast
+  have dom_char: "\<And>xs x. x |\<in>| fmdom (fmlist_union (map CM_TypeSubst xs))
+                    \<longleftrightarrow> (\<exists>y \<in> set xs. x |\<in>| fmdom (CM_TypeSubst y))"
+    by (auto simp: fmdom_fmlist_union funion_list_member)
+  have domM_eq: "fmdom uM = fmdom uA |\<union>| fmdom uB"
+  proof (rule fset_eqI)
+    fix x
+    show "x |\<in>| fmdom uM \<longleftrightarrow> x |\<in>| fmdom uA |\<union>| fmdom uB"
+      unfolding uA_def uB_def uM_def
+      using setMS by (auto simp: dom_char)
+  qed
+
+  have closPair: "is_subst_closure (\<sigma>A ++\<^sub>f \<sigma>B) \<sigma>M"
+    by (rule is_subst_closure_merged_pair[OF acycA closA acycB closB closM subA subB domM_eq])
+  have acycPair: "acyclic (subst_dep_rel (\<sigma>A ++\<^sub>f \<sigma>B))"
+    by (rule subst_dep_rel_merged_pair_acyclic[OF acycA closA acycB closB subA subB domM_eq acycM])
+  have wfPair: "wf (subst_dep_rel (\<sigma>A ++\<^sub>f \<sigma>B))"
+    using acycPair finite_subst_dep_rel finite_acyclic_wf by blast
+  have \<sigma>M_dom_pair: "fmdom \<sigma>M = fmdom (\<sigma>A ++\<^sub>f \<sigma>B)"
+    using closPair unfolding is_subst_closure_def by simp
+
+  have main: "\<forall>ty. fmlookup \<sigma>M n = Some ty \<longrightarrow> is_complete_type ty" for n
+  proof (induction n rule: wf_induct_rule[OF wfPair])
+    case (1 n)
+    show ?case
+    proof (intro allI impI)
+      fix ty assume \<sigma>M_n: "fmlookup \<sigma>M n = Some ty"
+      then have "n |\<in>| fmdom \<sigma>M" by (rule fmdomI)
+      then have n_pair: "n |\<in>| fmdom (\<sigma>A ++\<^sub>f \<sigma>B)" using \<sigma>M_dom_pair by simp
+      then obtain e where entry: "fmlookup (\<sigma>A ++\<^sub>f \<sigma>B) n = Some e"
+        by (meson fmlookup_dom_iff)
+      have ty_eq: "ty = apply_subst \<sigma>M e"
+        using closPair entry \<sigma>M_n unfolding is_subst_closure_def by auto
+      have e_cp: "is_complete_type e"
+      proof (cases "n |\<in>| fmdom \<sigma>B")
+        case True
+        then have "fmlookup \<sigma>B n = Some e" using entry by simp
+        then show ?thesis using cpB' by blast
+      next
+        case False
+        then have "fmlookup \<sigma>A n = Some e" using entry by simp
+        then show ?thesis using cpA' by blast
+      qed
+      have "is_complete_type (apply_subst \<sigma>M e)"
+      proof (rule apply_subst_preserves_complete_local[OF e_cp])
+        fix k t assume k_e: "k \<in> type_tyvars e" and k_res: "fmlookup \<sigma>M k = Some t"
+        have "k |\<in>| fmdom \<sigma>M" using k_res by (rule fmdomI)
+        then have k_dom: "k |\<in>| fmdom (\<sigma>A ++\<^sub>f \<sigma>B)" using \<sigma>M_dom_pair by simp
+        have edge: "(k, n) \<in> subst_dep_rel (\<sigma>A ++\<^sub>f \<sigma>B)"
+          unfolding subst_dep_rel_def using k_dom n_pair k_e entry by auto
+        show "is_complete_type t"
+          using "1.IH"[OF edge] k_res by blast
+      qed
+      then show "is_complete_type ty" using ty_eq by simp
+    qed
+  qed
+
+  show ?thesis
+    unfolding typesubst_complete_def \<sigma>M_eq
+    using main by (auto simp: fmran'_def)
+qed
+
 end

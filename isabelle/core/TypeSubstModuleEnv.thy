@@ -518,12 +518,15 @@ qed
      coverage, and binder-avoidance (capture-avoidance) for function / ctor
      type parameters
    - In NotGhost mode, the runtime-tyvar coverage holds
-     (module_env_subst_runtime_ok). *)
+     (module_env_subst_runtime_ok).
+   - The substitution's range consists of complete types (in any mode), so that
+     the type arguments of calls and constructors stay complete. *)
 lemma core_term_type_subst_module_env:
   assumes "core_term_type env ghost tm = Some ty"
       and "tyenv_well_formed env"
       and "module_env_subst_ok subst targetEnv env"
       and "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
+      and "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                         (apply_subst_to_term subst tm)
            = Some (apply_subst subst ty)"
@@ -570,7 +573,7 @@ next
       by auto
     from tms_typed tm_in have tm_typed: "core_term_type env ghost tm = Some elemTy"
       by (simp add: list_all_iff)
-    from CoreTm_LitArray.IH[OF tm_in tm_typed CoreTm_LitArray.prems(2,3,4)]
+    from CoreTm_LitArray.IH[OF tm_in tm_typed CoreTm_LitArray.prems(2,3,4,5)]
     show "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost tm'
             = Some (apply_subst subst elemTy)"
       using tm'_eq by simp
@@ -603,7 +606,7 @@ next
     tgt_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
-  from CoreTm_Cast.IH[OF op_typed CoreTm_Cast.prems(2,3,4)]
+  from CoreTm_Cast.IH[OF op_typed CoreTm_Cast.prems(2,3,4,5)]
   have op_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst operand)
@@ -638,7 +641,7 @@ next
   from CoreTm_Unop.prems(1) obtain operandTy where
     op_typed: "core_term_type env ghost operand = Some operandTy"
     by (auto split: option.splits)
-  from CoreTm_Unop.IH[OF op_typed CoreTm_Unop.prems(2,3,4)]
+  from CoreTm_Unop.IH[OF op_typed CoreTm_Unop.prems(2,3,4,5)]
   have op_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst operand)
@@ -676,12 +679,12 @@ next
     lhs_typed: "core_term_type env ghost lhs = Some lhsTy" and
     rhs_typed: "core_term_type env ghost rhs = Some rhsTy"
     by (auto split: option.splits)
-  from CoreTm_Binop.IH(1)[OF lhs_typed CoreTm_Binop.prems(2,3,4)]
+  from CoreTm_Binop.IH(1)[OF lhs_typed CoreTm_Binop.prems(2,3,4,5)]
   have lhs_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst lhs)
        = Some (apply_subst subst lhsTy)" .
-  from CoreTm_Binop.IH(2)[OF rhs_typed CoreTm_Binop.prems(2,3,4)]
+  from CoreTm_Binop.IH(2)[OF rhs_typed CoreTm_Binop.prems(2,3,4,5)]
   have rhs_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst rhs)
@@ -789,7 +792,7 @@ next
                                           else fminus (TE_GhostLocals env) {|var|}),
                         TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
 
-  from CoreTm_Let.IH(1)[OF rhs_typed CoreTm_Let.prems(2,3,4)]
+  from CoreTm_Let.IH(1)[OF rhs_typed CoreTm_Let.prems(2,3,4,5)]
   have rhs_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst rhs)
@@ -847,7 +850,7 @@ next
     using CoreTm_Let.prems(4)
     unfolding module_env_subst_runtime_ok_def by simp
 
-  from CoreTm_Let.IH(2)[OF body_typed wf_ext ok_ext ok_rt_ext]
+  from CoreTm_Let.IH(2)[OF body_typed wf_ext ok_ext ok_rt_ext CoreTm_Let.prems(5)]
   have body_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv ?env_ext) ghost
                     (apply_subst_to_term subst body)
@@ -902,7 +905,8 @@ next
     have body_rt_ok_premise:
       "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?env_ext"
       by simp
-    from CoreTm_Quantifier.IH[OF body_typed wf_ext ok_ext body_rt_ok_premise]
+    from CoreTm_Quantifier.IH[OF body_typed wf_ext ok_ext body_rt_ok_premise
+                                  CoreTm_Quantifier.prems(5)]
     have body_subst:
       "core_term_type (apply_subst_to_module_env subst targetEnv ?env_ext) Ghost
                       (apply_subst_to_term subst body)
@@ -931,6 +935,7 @@ next
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyArgs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyArgs_cp: "list_all is_complete_type tyArgs" and
     not_ghost_cond: "\<not> (ghost = NotGhost
                        \<and> (\<not> list_all (is_runtime_type env) tyArgs
                           \<or> FI_Ghost funInfo = Ghost))" and
@@ -963,6 +968,9 @@ next
   note len_tyArgs_subst  = call_setup(4)
   note tyArgs_distinct   = call_setup(5)
   note compose           = call_setup(6)
+
+  have tyArgs_cp_subst: "list_all is_complete_type ?subst_tyArgs"
+    using map_apply_subst_preserves_complete[OF tyArgs_cp CoreTm_FunctionCall.prems(5)] .
 
   have all_var_subst: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs ?funInfo')"
     using all_var by (fastforce simp: list_all_iff)
@@ -1016,7 +1024,7 @@ next
       by (auto split: option.splits)
     have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
     from CoreTm_FunctionCall.IH[OF tmArg_in actual_typed
-                                   CoreTm_FunctionCall.prems(2,3,4)]
+                                   CoreTm_FunctionCall.prems(2,3,4,5)]
     have ih_result:
       "core_term_type ?me ghost (apply_subst_to_term subst (tmArgs ! i))
          = Some (apply_subst subst actualTy)" .
@@ -1037,7 +1045,7 @@ next
     by (rule compose)
 
   show ?case
-    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_rt_subst ng_fn
+    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_fn
           all_var_subst not_impure len_tmArgs_subst args_check_subst
           ty_eq ret_compose
     by (auto simp: Let_def expected_eq)
@@ -1051,6 +1059,7 @@ next
     ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
     len_eq: "length tyArgs = length tyvars" and
     tyArgs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyArgs_cp: "list_all is_complete_type tyArgs" and
     ng_constraint: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs
                                           \<and> dtName |\<notin>| TE_GhostDatatypes env" and
     payload_typed: "core_term_type env ghost payload
@@ -1065,6 +1074,9 @@ next
     using tyArgs_wk
     by (induction tyArgs)
        (auto intro: apply_subst_preserves_well_kinded_module[OF _ CoreTm_VariantCtor.prems(3)])
+
+  have tyArgs_cp_subst: "list_all is_complete_type ?subst_tyArgs"
+    using map_apply_subst_preserves_complete[OF tyArgs_cp CoreTm_VariantCtor.prems(5)] .
 
   have tyArgs_rt_subst:
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?me) ?subst_tyArgs"
@@ -1083,7 +1095,7 @@ next
     "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?me"
     using ng_constraint by simp
 
-  from CoreTm_VariantCtor.IH[OF payload_typed CoreTm_VariantCtor.prems(2,3,4)]
+  from CoreTm_VariantCtor.IH[OF payload_typed CoreTm_VariantCtor.prems(2,3,4,5)]
   have payload_subst:
     "core_term_type ?me ghost (apply_subst_to_term subst payload)
        = Some (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))" .
@@ -1109,7 +1121,7 @@ next
   have len_eq_subst: "length ?subst_tyArgs = length tyvars" using len_eq by simp
 
   show ?case
-    using ctor_lookup tyArgs_wk_subst tyArgs_rt_subst ng_dt_subst
+    using ctor_lookup tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_dt_subst
           payload_subst_compose len_eq_subst ty_eq
     by (auto simp: Let_def)
 next
@@ -1127,7 +1139,7 @@ next
        core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                       (apply_subst_to_term subst (snd fld))
          = Some (apply_subst subst ty')"
-    using CoreTm_Record.IH CoreTm_Record.prems(2,3,4)
+    using CoreTm_Record.IH CoreTm_Record.prems(2,3,4,5)
     by (auto simp: snds.simps)
 
   have len_tys: "length fieldTys = length flds"
@@ -1190,7 +1202,7 @@ next
     inner_typed: "core_term_type env ghost tm = Some (CoreTy_Record fieldTypes)" and
     fld_lookup: "map_of fieldTypes fldName = Some ty"
     by (auto split: option.splits CoreType.splits)
-  from CoreTm_RecordProj.IH[OF inner_typed CoreTm_RecordProj.prems(2,3,4)]
+  from CoreTm_RecordProj.IH[OF inner_typed CoreTm_RecordProj.prems(2,3,4,5)]
   have inner_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst tm)
@@ -1211,7 +1223,7 @@ next
                           = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms" and
     ty_eq: "ty = elemTy"
     by (auto split: option.splits CoreType.splits if_splits)
-  from CoreTm_ArrayProj.IH(1)[OF inner_typed CoreTm_ArrayProj.prems(2,3,4)]
+  from CoreTm_ArrayProj.IH(1)[OF inner_typed CoreTm_ArrayProj.prems(2,3,4,5)]
   have inner_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst arr)
@@ -1228,7 +1240,7 @@ next
     from idxs_typed tm_in have
       tm_typed: "core_term_type env ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
       by (simp add: list_all_iff)
-    from CoreTm_ArrayProj.IH(2)[OF tm_in tm_typed CoreTm_ArrayProj.prems(2,3,4)]
+    from CoreTm_ArrayProj.IH(2)[OF tm_in tm_typed CoreTm_ArrayProj.prems(2,3,4,5)]
     show "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost tm'
             = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
       using tm'_eq by simp
@@ -1246,7 +1258,7 @@ next
 
   let ?me = "apply_subst_to_module_env subst targetEnv env"
 
-  from CoreTm_VariantProj.IH[OF inner_typed CoreTm_VariantProj.prems(2,3,4)]
+  from CoreTm_VariantProj.IH[OF inner_typed CoreTm_VariantProj.prems(2,3,4,5)]
   have inner_subst:
     "core_term_type ?me ghost (apply_subst_to_term subst tm)
        = Some (CoreTy_Datatype dtName (map (apply_subst subst) tyArgs))"
@@ -1286,7 +1298,7 @@ next
   let ?me = "apply_subst_to_module_env subst targetEnv env"
   let ?subst_arms = "map (\<lambda>(pat, body). (pat, apply_subst_to_term subst body)) arms"
 
-  from CoreTm_Match.IH(1)[OF scrut_typed CoreTm_Match.prems(2,3,4)]
+  from CoreTm_Match.IH(1)[OF scrut_typed CoreTm_Match.prems(2,3,4,5)]
   have scrut_subst:
     "core_term_type ?me ghost (apply_subst_to_term subst scrut)
        = Some (apply_subst subst scrutTy)" .
@@ -1296,7 +1308,7 @@ next
        core_term_type env ghost (snd arm) = Some ty' \<Longrightarrow>
        core_term_type ?me ghost (apply_subst_to_term subst (snd arm))
          = Some (apply_subst subst ty')"
-    using CoreTm_Match.IH(2) CoreTm_Match.prems(2,3,4)
+    using CoreTm_Match.IH(2) CoreTm_Match.prems(2,3,4,5)
     by (auto simp: snds.simps)
 
   have pats_eq: "map fst ?subst_arms = map fst arms"
@@ -1370,7 +1382,7 @@ next
     cond_ok: "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue tm \<and> ghost = NotGhost)" and
     ty_eq: "ty = sizeof_type dims"
     by (auto split: CoreType.splits option.splits if_splits)
-  from CoreTm_Sizeof.IH[OF inner CoreTm_Sizeof.prems(2,3,4)]
+  from CoreTm_Sizeof.IH[OF inner CoreTm_Sizeof.prems(2,3,4,5)]
   have inner_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst tm)
@@ -1393,7 +1405,7 @@ next
       ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits)
     from CoreTm_Allocated.IH[OF inner CoreTm_Allocated.prems(2,3)]
-         CoreTm_Allocated.prems(4)
+         CoreTm_Allocated.prems(4) CoreTm_Allocated.prems(5)
     have "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost
                           (apply_subst_to_term subst tm)
             = Some (apply_subst subst innerTy)" by simp
@@ -1409,7 +1421,7 @@ next
     case Ghost
     with CoreTm_Old.prems(1) have inner: "core_term_type env Ghost tm = Some ty" by simp
     from CoreTm_Old.IH[OF inner CoreTm_Old.prems(2,3)]
-         CoreTm_Old.prems(4)
+         CoreTm_Old.prems(4) CoreTm_Old.prems(5)
     have "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost
                           (apply_subst_to_term subst tm)
             = Some (apply_subst subst ty)" by simp
@@ -1560,6 +1572,7 @@ lemma core_impure_call_type_subst_module_env:
       and wf: "tyenv_well_formed env"
       and ok: "module_env_subst_ok subst targetEnv env"
       and ok_rt: "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
+      and cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows "core_impure_call_type (apply_subst_to_module_env subst targetEnv env) ghost
            fnName (map (apply_subst subst) tyArgs) (map (apply_subst_to_term subst) tmArgs)
            = Some (apply_subst subst retTy)"
@@ -1569,6 +1582,7 @@ proof -
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyArgs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyArgs_cp: "list_all is_complete_type tyArgs" and
     ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
     ng_fn: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
@@ -1598,6 +1612,9 @@ proof -
   note tyArgs_rt_subst   = call_setup(3)
   note len_tyArgs_subst  = call_setup(4)
   note compose           = call_setup(6)
+
+  have tyArgs_cp_subst: "list_all is_complete_type ?subst_tyArgs"
+    using map_apply_subst_preserves_complete[OF tyArgs_cp cp] .
 
   have len_tmArgs_subst:
     "length (map (apply_subst_to_term subst) tmArgs) = length (FI_TmArgs ?funInfo')"
@@ -1665,7 +1682,7 @@ proof -
       actual_typed: "core_term_type env ghost (tmArgs ! i) = Some actualTy" and
       actual_eq: "actualTy = apply_subst ?innerSubst ti"
       by (auto split: option.splits)
-    from core_term_type_subst_module_env[OF actual_typed wf ok ok_rt]
+    from core_term_type_subst_module_env[OF actual_typed wf ok ok_rt cp]
     have ih_typed:
       "core_term_type ?me ghost (apply_subst_to_term subst (tmArgs ! i))
          = Some (apply_subst subst (apply_subst ?innerSubst ti))"
@@ -1707,7 +1724,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_rt_subst ng_fn
+    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_fn
           len_tmArgs_subst l2_subst ty_eq ret_compose
     by (auto simp: Let_def expected_eq vor_eq)
 qed
@@ -1720,10 +1737,15 @@ qed
 (* The statement-level analogue of core_term_type_subst_module_env: if a
    statement typechecks producing envOut, the substituted statement
    typechecks in the substituted env, producing the substituted envOut.
-   Same six side conditions as the term lemma. The induction follows the
-   mutual structure of core_statement_type / core_statement_list_type
-   (mirroring core_statement_type_tyenv_extends, TyEnvExtension.thy). *)
-lemma core_statement_type_subst_module_env:
+   Same side conditions as the term lemma. The range-completeness of the
+   substitution is a fixed assumption (cp) rather than a premise of the
+   induction, since subst does not vary along the induction. The induction
+   follows the mutual structure of core_statement_type /
+   core_statement_list_type (mirroring core_statement_type_tyenv_extends,
+   TyEnvExtension.thy). *)
+lemma
+  assumes cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
+  shows core_statement_type_subst_module_env:
   "core_statement_type env ghost stmt = Some envOut \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow>
    module_env_subst_ok subst targetEnv env \<Longrightarrow>
@@ -1749,6 +1771,7 @@ proof (induction env ghost stmt and env ghost stmts
     gh: "ghost = Ghost \<longrightarrow> declGhost = Ghost" and
     wk: "is_well_kinded env varTy" and
     rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    cpv: "declGhost = NotGhost \<longrightarrow> is_complete_type varTy" and
     init: "core_term_type env declGhost initTm = Some varTy" and
     out_eq: "envOut = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                   TE_GhostLocals := (if declGhost = Ghost
@@ -1763,10 +1786,12 @@ proof (induction env ghost stmt and env ghost stmts
     using apply_subst_preserves_well_kinded_module[OF wk ok] .
   have rt_subst: "declGhost = NotGhost \<longrightarrow> is_runtime_type ?me (apply_subst subst varTy)"
     using apply_subst_preserves_runtime_module_cond[OF rt ok ok_rt_d] .
+  have cp_subst: "declGhost = NotGhost \<longrightarrow> is_complete_type (apply_subst subst varTy)"
+    using cpv apply_subst_preserves_complete[OF _ cp] by blast
   have init_subst:
     "core_term_type ?me declGhost (apply_subst_to_term subst initTm)
        = Some (apply_subst subst varTy)"
-    using core_term_type_subst_module_env[OF init wf ok ok_rt_d] .
+    using core_term_type_subst_module_env[OF init wf ok ok_rt_d cp] .
   have out_subst_eq:
     "apply_subst_to_module_env subst targetEnv envOut
        = ?me \<lparr> TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?me),
@@ -1776,7 +1801,7 @@ proof (induction env ghost stmt and env ghost stmts
                TE_ConstLocals := fminus (TE_ConstLocals ?me) {|varName|} \<rparr>"
     unfolding out_eq apply_subst_to_module_env_def by (simp add: fmmap_fmupd)
   show ?case
-    using gh wk_subst rt_subst init_subst out_subst_eq by simp
+    using gh wk_subst rt_subst cp_subst init_subst out_subst_eq by simp
 next
   \<comment> \<open>VarDeclCall: impure-call initializer, via the call and cast helpers.\<close>
   case (2 env ghost declGhost varName varTy castOpt fnName tyArgs argTms)
@@ -1785,6 +1810,7 @@ next
     gh: "ghost = Ghost \<longrightarrow> declGhost = Ghost" and
     wk: "is_well_kinded env varTy" and
     rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+    cpv: "declGhost = NotGhost \<longrightarrow> is_complete_type varTy" and
     ct: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
     cast: "cast_result_type env declGhost retTy castOpt = Some varTy" and
     out_eq: "envOut = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
@@ -1800,11 +1826,13 @@ next
     using apply_subst_preserves_well_kinded_module[OF wk ok] .
   have rt_subst: "declGhost = NotGhost \<longrightarrow> is_runtime_type ?me (apply_subst subst varTy)"
     using apply_subst_preserves_runtime_module_cond[OF rt ok ok_rt_d] .
+  have cp_subst: "declGhost = NotGhost \<longrightarrow> is_complete_type (apply_subst subst varTy)"
+    using cpv apply_subst_preserves_complete[OF _ cp] by blast
   have ct_subst:
     "core_impure_call_type ?me declGhost fnName
        (map (apply_subst subst) tyArgs) (map (apply_subst_to_term subst) argTms)
        = Some (apply_subst subst retTy)"
-    using core_impure_call_type_subst_module_env[OF ct wf ok ok_rt_d] .
+    using core_impure_call_type_subst_module_env[OF ct wf ok ok_rt_d cp] .
   have cast_subst:
     "cast_result_type ?me declGhost (apply_subst subst retTy)
        (map_option (apply_subst subst) castOpt)
@@ -1819,7 +1847,7 @@ next
                TE_ConstLocals := fminus (TE_ConstLocals ?me) {|varName|} \<rparr>"
     unfolding out_eq apply_subst_to_module_env_def by (simp add: fmmap_fmupd)
   show ?case
-    using gh wk_subst rt_subst ct_subst cast_subst out_subst_eq by simp
+    using gh wk_subst rt_subst cp_subst ct_subst cast_subst out_subst_eq by simp
 next
   \<comment> \<open>VarDecl (Ref): the initializer's lvalue-ness / writability / ghost
       discipline are unchanged by substitution.\<close>
@@ -1850,7 +1878,7 @@ next
   have init_subst:
     "core_term_type ?me declGhost (apply_subst_to_term subst initTm)
        = Some (apply_subst subst varTy)"
-    using core_term_type_subst_module_env[OF init wf ok ok_rt_d] .
+    using core_term_type_subst_module_env[OF init wf ok ok_rt_d cp] .
   have out_subst_eq:
     "apply_subst_to_module_env subst targetEnv envOut
        = ?me \<lparr> TE_LocalVars := fmupd varName (apply_subst subst varTy) (TE_LocalVars ?me),
@@ -1875,6 +1903,7 @@ next
     wl: "is_writable_lvalue env lhsTm" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
     lhs: "core_term_type env assignGhost lhsTm = Some lhsTy" and
+    cpl: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
     by (auto split: if_splits option.splits)
@@ -1884,13 +1913,15 @@ next
   have lhs_subst:
     "core_term_type ?me assignGhost (apply_subst_to_term subst lhsTm)
        = Some (apply_subst subst lhsTy)"
-    using core_term_type_subst_module_env[OF lhs wf ok ok_rt_a] .
+    using core_term_type_subst_module_env[OF lhs wf ok ok_rt_a cp] .
+  have cp_subst: "assignGhost = NotGhost \<longrightarrow> is_complete_type (apply_subst subst lhsTy)"
+    using cpl apply_subst_preserves_complete[OF _ cp] by blast
   have rhs_subst:
     "core_term_type ?me assignGhost (apply_subst_to_term subst rhsTm)
        = Some (apply_subst subst lhsTy)"
-    using core_term_type_subst_module_env[OF rhs wf ok ok_rt_a] .
+    using core_term_type_subst_module_env[OF rhs wf ok ok_rt_a cp] .
   show ?case
-    using gh wl glv lhs_subst rhs_subst out_eq by simp
+    using gh wl glv lhs_subst cp_subst rhs_subst out_eq by simp
 next
   \<comment> \<open>AssignCall: env unchanged; lhs term plus the call and cast helpers.\<close>
   case (5 env ghost assignGhost lhsTm castOpt fnName tyArgs argTms)
@@ -1912,6 +1943,7 @@ next
     ct: "core_impure_call_type env assignGhost fnName tyArgs argTms = Some retTy"
     by (simp split: option.splits)
   from "5.prems"(1) pre lhs ct have
+    cpl: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     cast: "cast_result_type env assignGhost retTy castOpt = Some lhsTy" and
     out_eq: "envOut = env"
     by (simp split: if_splits)+
@@ -1921,19 +1953,21 @@ next
   have lhs_subst:
     "core_term_type ?me assignGhost (apply_subst_to_term subst lhsTm)
        = Some (apply_subst subst lhsTy)"
-    using core_term_type_subst_module_env[OF lhs wf ok ok_rt_a] .
+    using core_term_type_subst_module_env[OF lhs wf ok ok_rt_a cp] .
+  have cp_subst: "assignGhost = NotGhost \<longrightarrow> is_complete_type (apply_subst subst lhsTy)"
+    using cpl apply_subst_preserves_complete[OF _ cp] by blast
   have ct_subst:
     "core_impure_call_type ?me assignGhost fnName
        (map (apply_subst subst) tyArgs) (map (apply_subst_to_term subst) argTms)
        = Some (apply_subst subst retTy)"
-    using core_impure_call_type_subst_module_env[OF ct wf ok ok_rt_a] .
+    using core_impure_call_type_subst_module_env[OF ct wf ok ok_rt_a cp] .
   have cast_subst:
     "cast_result_type ?me assignGhost (apply_subst subst retTy)
        (map_option (apply_subst subst) castOpt)
        = Some (apply_subst subst lhsTy)"
     using cast_result_type_subst_module_env[OF cast ok ok_rt_a] .
   show ?case
-    using gh wl glv lhs_subst ct_subst cast_subst out_eq by simp
+    using gh wl glv lhs_subst cp_subst ct_subst cast_subst out_eq by simp
 next
   \<comment> \<open>Return: the substituted env's return type is the substituted return type.\<close>
   case (6 env ghost tm)
@@ -1947,7 +1981,7 @@ next
   have tm_subst:
     "core_term_type ?me ghost (apply_subst_to_term subst tm)
        = Some (apply_subst subst (TE_ReturnType env))"
-    using core_term_type_subst_module_env[OF tm_typed wf ok "6.prems"(4)] .
+    using core_term_type_subst_module_env[OF tm_typed wf ok "6.prems"(4) cp] .
   show ?case
     using gh tm_subst out_eq by simp
 next
@@ -1961,6 +1995,7 @@ next
     glv_l: "ghost_lvalue_ok env swapGhost lhsTm" and
     glv_r: "ghost_lvalue_ok env swapGhost rhsTm" and
     lhs: "core_term_type env swapGhost lhsTm = Some lhsTy" and
+    cpl: "swapGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env swapGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
     by (auto split: if_splits option.splits)
@@ -1970,13 +2005,15 @@ next
   have lhs_subst:
     "core_term_type ?me swapGhost (apply_subst_to_term subst lhsTm)
        = Some (apply_subst subst lhsTy)"
-    using core_term_type_subst_module_env[OF lhs wf ok ok_rt_s] .
+    using core_term_type_subst_module_env[OF lhs wf ok ok_rt_s cp] .
+  have cp_subst: "swapGhost = NotGhost \<longrightarrow> is_complete_type (apply_subst subst lhsTy)"
+    using cpl apply_subst_preserves_complete[OF _ cp] by blast
   have rhs_subst:
     "core_term_type ?me swapGhost (apply_subst_to_term subst rhsTm)
        = Some (apply_subst subst lhsTy)"
-    using core_term_type_subst_module_env[OF rhs wf ok ok_rt_s] .
+    using core_term_type_subst_module_env[OF rhs wf ok ok_rt_s cp] .
   show ?case
-    using gh wl_l wl_r glv_l glv_r lhs_subst rhs_subst out_eq by simp
+    using gh wl_l wl_r glv_l glv_r lhs_subst cp_subst rhs_subst out_eq by simp
 next
   \<comment> \<open>Assert: the proof body runs in Ghost mode under the goal env; the
       substituted goal env is the module-env substitution of the goal env.\<close>
@@ -2025,7 +2062,7 @@ next
     with condOk have c: "core_term_type env Ghost condTm = Some CoreTy_Bool" by simp
     have triv_ok_rt': "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
       by simp
-    from core_term_type_subst_module_env[OF c wf ok triv_ok_rt']
+    from core_term_type_subst_module_env[OF c wf ok triv_ok_rt' cp]
     show ?thesis using Some by simp
   qed
   show ?case
@@ -2041,7 +2078,7 @@ next
     by (auto split: if_splits)
   have triv_ok_rt: "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
     by simp
-  from core_term_type_subst_module_env[OF tm_typed wf ok triv_ok_rt]
+  from core_term_type_subst_module_env[OF tm_typed wf ok triv_ok_rt cp]
   have tm_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost
                     (apply_subst_to_term subst tm)
@@ -2078,7 +2115,7 @@ next
   have scrut_subst:
     "core_term_type ?me matchGhost (apply_subst_to_term subst scrut)
        = Some (apply_subst subst scrutTy)"
-    using core_term_type_subst_module_env[OF scrut wf ok ok_rt_m] .
+    using core_term_type_subst_module_env[OF scrut wf ok ok_rt_m cp] .
   \<comment> \<open>Function-level bridging equations: the simplifier fuses the arm
       projections to \<open>map (fst \<circ> \<dots>)\<close> / \<open>map (snd \<circ> \<dots>)\<close> forms, so the
       equations must be stated at the composition level to rewrite them. \<close>
@@ -2155,7 +2192,7 @@ next
     using ghost_cond_weaken[OF gh "12.prems"(4)] .
   have cond_subst:
     "core_term_type ?me whileGhost (apply_subst_to_term subst condTm) = Some CoreTy_Bool"
-    using core_term_type_subst_module_env[OF cond wf ok ok_rt_w]
+    using core_term_type_subst_module_env[OF cond wf ok ok_rt_w cp]
     by simp
   have triv_ok_rt: "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
     by simp
@@ -2170,13 +2207,13 @@ next
       by auto
     from invs inv_in have "core_term_type env Ghost inv = Some CoreTy_Bool"
       by (simp add: list_all_iff)
-    from core_term_type_subst_module_env[OF this wf ok triv_ok_rt]
+    from core_term_type_subst_module_env[OF this wf ok triv_ok_rt cp]
     show "core_term_type ?me Ghost inv' = Some CoreTy_Bool"
       using inv'_eq by simp
   qed
   have decr_subst:
     "core_term_type ?me Ghost (apply_subst_to_term subst decrTm) = Some decrTy"
-    using core_term_type_subst_module_env[OF decr wf ok triv_ok_rt]
+    using core_term_type_subst_module_env[OF decr wf ok triv_ok_rt cp]
           is_valid_decreases_type_apply_subst[OF decr_valid]
     by simp
   have wf_F: "tyenv_well_formed ?envF"
@@ -2223,7 +2260,7 @@ next
     using ok unfolding module_env_subst_ok_def by simp
   have triv_ok_rt: "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?envX"
     by simp
-  from core_term_type_subst_module_env[OF cond wf_X ok_X triv_ok_rt]
+  from core_term_type_subst_module_env[OF cond wf_X ok_X triv_ok_rt cp]
   have cond_subst:
     "core_term_type (apply_subst_to_module_env subst targetEnv ?envX) Ghost
                     (apply_subst_to_term subst condTm)
@@ -2283,7 +2320,7 @@ next
   have wit_subst:
     "core_term_type ?me ghost (apply_subst_to_term subst witnessTm)
        = Some (apply_subst subst qVarTy)"
-    using core_term_type_subst_module_env[OF wit wf ok "15.prems"(4)] .
+    using core_term_type_subst_module_env[OF wit wf ok "15.prems"(4) cp] .
   have out_subst_eq:
     "apply_subst_to_module_env subst targetEnv envOut
        = ?me \<lparr> TE_ProofGoal := Some (apply_subst_to_term subst bodyTm) \<rparr>"
@@ -2518,6 +2555,7 @@ lemma tyenv_well_formed_apply_subst_to_module_env:
   assumes wf: "tyenv_well_formed env"
       and ok: "module_env_subst_ok subst targetEnv env"
       and ok_rt: "module_env_subst_runtime_ok subst targetEnv env"
+      and cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
       and abs_env: "TE_AbstractTypes env = TE_TypeVars env"
       and abs_target: "TE_AbstractTypes targetEnv = TE_TypeVars targetEnv"
       and rtv_target: "TE_RuntimeTypeVars targetEnv |\<subseteq>| TE_TypeVars targetEnv"
@@ -2531,6 +2569,7 @@ proof -
    and wf_ghost_sub: "tyenv_ghost_vars_subset env"
    and wf_ret_wk: "tyenv_return_type_well_kinded env"
    and wf_ret_rt: "tyenv_return_type_runtime env"
+   and wf_ret_cp: "tyenv_return_type_complete env"
    and wf_ctors_cons: "tyenv_ctors_consistent env"
    and wf_payloads: "tyenv_payloads_well_kinded env"
    and wf_ctor_dist: "tyenv_ctor_tyvars_distinct env"
@@ -2538,6 +2577,7 @@ proof -
    and wf_fun_wk: "tyenv_fun_types_well_kinded env"
    and wf_fun_dist: "tyenv_fun_tyvars_distinct env"
    and wf_fun_ghost: "tyenv_fun_ghost_constraint env"
+   and wf_fun_ret_cp: "tyenv_fun_return_types_complete env"
    and wf_ng_payloads: "tyenv_nonghost_payloads_runtime env"
    and wf_gdt_sub: "tyenv_ghost_datatypes_subset env"
    and wf_dt_nonempty: "tyenv_datatypes_nonempty env"
@@ -2661,6 +2701,16 @@ proof -
       using wf_ret_rt unfolding tyenv_return_type_runtime_def by simp
     show "is_runtime_type ?me (TE_ReturnType ?me)"
       using apply_subst_preserves_runtime_module[OF rt0 ok ok_rt] by simp
+  qed
+  have c5cp: "tyenv_return_type_complete ?me"
+    unfolding tyenv_return_type_complete_def
+  proof (intro impI)
+    assume "TE_FunctionGhost ?me = NotGhost"
+    hence "TE_FunctionGhost env = NotGhost" by simp
+    hence "is_complete_type (TE_ReturnType env)"
+      using wf_ret_cp unfolding tyenv_return_type_complete_def by simp
+    thus "is_complete_type (TE_ReturnType ?me)"
+      using apply_subst_preserves_complete[OF _ cp] by simp
   qed
 
   \<comment> \<open>Clause 6: ctors consistent with datatypes (substitution keeps the
@@ -2920,6 +2970,24 @@ proof -
       using args' ret' unfolding tyargs by blast
   qed
 
+  \<comment> \<open>Clause 12cp: non-ghost function return types stay complete (the
+      substitution's range is complete).\<close>
+  have c12cp: "tyenv_fun_return_types_complete ?me"
+    unfolding tyenv_fun_return_types_complete_def
+  proof (intro allI impI)
+    fix funName info
+    assume a: "fmlookup (TE_Functions ?me) funName = Some info \<and> FI_Ghost info = NotGhost"
+    then obtain info0 where
+      f0: "fmlookup (TE_Functions env) funName = Some info0" and
+      i_eq: "info = apply_subst_to_funinfo subst info0"
+      by (cases "fmlookup (TE_Functions env) funName") auto
+    from a have ng: "FI_Ghost info0 = NotGhost" by (simp add: i_eq)
+    have "is_complete_type (FI_ReturnType info0)"
+      using wf_fun_ret_cp f0 ng unfolding tyenv_fun_return_types_complete_def by blast
+    thus "is_complete_type (FI_ReturnType info)"
+      using apply_subst_preserves_complete[OF _ cp] by (simp add: i_eq)
+  qed
+
   \<comment> \<open>Clause 13: non-ghost ctor payloads are runtime (binder-extended runtime
       lifting at the ctor's tyvars).\<close>
   have c13: "tyenv_nonghost_payloads_runtime ?me"
@@ -2974,7 +3042,7 @@ proof -
 
   show ?thesis
     unfolding tyenv_well_formed_def
-    using c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16 c17
+    using c1 c2 c3 c4 c5 c5cp c6 c7 c8 c9 c10 c11 c12 c12cp c13 c14 c15 c16 c17
     by blast
 qed
 

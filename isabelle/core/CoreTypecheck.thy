@@ -351,7 +351,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 (* Function call:
    - Function must exist in environment
    - Number of type args must match
-   - Type args must be well-kinded
+   - Type args must be well-kinded and complete
    - In NotGhost mode: type args must be runtime types, and function must not be ghost
    - Term args must be well-typed with types matching expected arg types (after substitution) *)
 | "core_term_type env ghost (CoreTm_FunctionCall fnName tyArgs tmArgs) =
@@ -362,6 +362,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         if length tyArgs \<noteq> length (FI_TyArgs funInfo) then None
         \<comment> \<open>Check type arguments are well-kinded\<close>
         else if \<not> list_all (is_well_kinded env) tyArgs then None
+        \<comment> \<open>Check type arguments are complete types\<close>
+        else if \<not> list_all is_complete_type tyArgs then None
         \<comment> \<open>In NotGhost mode: check type args are runtime and function is not ghost\<close>
         else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) tyArgs \<or> FI_Ghost funInfo = Ghost)
              then None
@@ -385,7 +387,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
 (* Variant construction:
    - Constructor must exist in TE_DataCtors
    - Number of type arguments must match the constructor's type-vars
-   - Type arguments must be well-kinded
+   - Type arguments must be well-kinded and complete
    - In NotGhost mode: type arguments must be runtime types
    - Payload must typecheck to the expected payload type (after substitution) *)
 | "core_term_type env ghost (CoreTm_VariantCtor ctorName tyArgs payload) =
@@ -394,6 +396,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
     | Some (dtName, tyvars, payloadTy) \<Rightarrow>
         (if length tyArgs \<noteq> length tyvars then None
         else if \<not> list_all (is_well_kinded env) tyArgs then None
+        else if \<not> list_all is_complete_type tyArgs then None
         else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) tyArgs
                \<or> dtName |\<in>| TE_GhostDatatypes env) then None
         else let tySubst = fmap_of_list (zip tyvars tyArgs)
@@ -1272,6 +1275,7 @@ next
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_cp: "list_all is_complete_type tyArgs" and
     len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
@@ -1291,7 +1295,7 @@ next
   have tyargs_wk': "list_all (is_well_kinded ?env_x) tyArgs"
     using tyargs_wk by (simp add: list_all_iff wk_eq)
   from CoreTm_FunctionCall.prems(2) show ?case
-    using fn_lookup' len_tyargs tyargs_wk' len_tmargs not_impure all_var la2' ty_eq
+    using fn_lookup' len_tyargs tyargs_wk' tyargs_cp len_tmargs not_impure all_var la2' ty_eq
           wk_eq rt_eq by (auto simp: Let_def list_all_iff split: option.splits if_splits)
 next
   case (CoreTm_VariantCtor ctorName tyArgs payload)

@@ -40,6 +40,9 @@ qed
      abstract-types condition follows because abstract types are a subset of a base
      env's TE_TypeVars, which the fresh domain avoids.
 
+   - The substitution range consists of complete types (in any mode): the type
+     arguments of calls and constructors must stay complete after substitution.
+
    This lemma is a corollary of core_term_type_subst_callee_env: under these
    conditions, apply_subst_to_callee_env subst env env equals env up to
    TE_ProofGoal, which core_term_type ignores. *)
@@ -53,6 +56,7 @@ lemma apply_subst_to_term_preserves_typing:
                       \<Longrightarrow> apply_subst subst ty' = ty'"
       and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
       and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
+      and subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows "core_term_type env mode (apply_subst_to_term subst tm) = Some (apply_subst subst ty)"
 proof -
   \<comment> \<open>fmmap is the identity on TE_LocalVars (each entry's type is unchanged
@@ -104,7 +108,7 @@ proof -
       using rt by (auto split: option.splits intro: fmran'I)
   qed
 
-  from core_term_type_subst_callee_env[OF typed wf ok subst_wk subst_rt ok_rt]
+  from core_term_type_subst_callee_env[OF typed wf ok subst_wk subst_rt ok_rt subst_cp]
   show ?thesis
     unfolding env_subst_id
     by (simp add: core_term_type_TE_ProofGoal_irrelevant)
@@ -123,6 +127,7 @@ lemma apply_subst_core_impure_call_type:
                                          \<Longrightarrow> apply_subst subst ty' = ty'"
     and ret_unaffected: "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
     and abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup subst n = None"
+    and subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows "core_impure_call_type env ghost fnName
            (map (apply_subst subst) tyArgs) (map (apply_subst_to_term subst) tmArgs)
            = Some (apply_subst subst retTy)"
@@ -131,6 +136,7 @@ proof -
     fi: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
     wk: "list_all (is_well_kinded env) tyArgs" and
+    cp: "list_all is_complete_type tyArgs" and
     rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
@@ -195,6 +201,8 @@ proof -
       by (auto simp: list_all_iff intro!: apply_subst_preserves_runtime[where src=env and tgt=env]
                simp: fmran'I split: option.splits)
   qed
+  have sty_cp: "list_all is_complete_type (map (apply_subst subst) tyArgs)"
+    using map_apply_subst_preserves_complete[OF cp subst_cp] .
 
   \<comment> \<open>The substituted return type is the recomputation from the substituted ty-args.\<close>
   let ?subZip = "fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst subst) tyArgs))"
@@ -242,7 +250,7 @@ proof -
       by (auto split: option.splits)
     have "core_term_type env ghost (apply_subst_to_term subst (tmArgs ! i)) = Some (apply_subst subst actualTy)"
       using apply_subst_to_term_preserves_typing[OF tm_typed wf subst_wk subst_rt
-              locals_unaffected ret_unaffected abs_no_subst] .
+              locals_unaffected ret_unaffected abs_no_subst subst_cp] .
     moreover have "apply_subst subst (?exps0 ! i) = ?expsS ! i"
       using exps_recompute i_tm len_pure len_tm by simp
     ultimately show "case core_term_type env ghost (map (apply_subst_to_term subst) tmArgs ! i) of
@@ -308,7 +316,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi sty_wk sty_rt fn_ng len_sty len_tm l2_full ret_recompute
+    using fi sty_wk sty_cp sty_rt fn_ng len_sty len_tm l2_full ret_recompute
     by (auto simp: Let_def)
 qed
 

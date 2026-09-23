@@ -8,17 +8,39 @@ section \<open>Unify-and-compose\<close>
    performs: unify two types under the accumulator substitution, treating
    exactly the env-fixed type variables (TE_TypeVars env) as rigid, and
    compose the resulting substitution back on top of the accumulator.
-   The flex predicate is "env-baked" on purpose -- it expresses the
-   elaborator's fixed policy, unlike the general unify in Unify1-3 which
-   takes is_flex as a parameter. Returns None on failure. *)
+
+   A metavariable is never bound to an incomplete type - any attempt to
+   do so is treated as a unification failure. *)
 definition try_unify_compose ::
   "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst \<Rightarrow> TypeSubst option" where
   "try_unify_compose env actualTy expectedTy accSubst =
+    \<comment> \<open>Apply accumulator substitution to both types, then try to unify\<close>
     (let a = apply_subst accSubst actualTy;
          e = apply_subst accSubst expectedTy in
      case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) a e of
        None \<Rightarrow> None
-     | Some s \<Rightarrow> Some (compose_subst s accSubst))"
+     | Some s \<Rightarrow>
+         \<comment> \<open>Check that no bindings to incomplete types were introduced\<close>
+         if typesubst_complete (compose_subst s accSubst)
+         then Some (compose_subst s accSubst)
+         else None)"
+
+(* Unpacking a successful try_unify_compose: the underlying unify succeeded,
+   the result is the composition, and its range is complete. *)
+lemma try_unify_compose_SomeD:
+  assumes "try_unify_compose env actualTy expectedTy accSubst = Some s'"
+  shows "\<exists>s. unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                 (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s
+             \<and> s' = compose_subst s accSubst
+             \<and> typesubst_complete s'"
+  using assms unfolding try_unify_compose_def
+  by (auto simp: Let_def split: option.splits if_splits)
+
+(* The range of a successful try_unify_compose is complete, unconditionally. *)
+lemma try_unify_compose_range_complete:
+  assumes "try_unify_compose env actualTy expectedTy accSubst = Some s'"
+  shows "\<forall>ty \<in> fmran' s'. is_complete_type ty"
+  using try_unify_compose_SomeD[OF assms] unfolding typesubst_complete_def by blast
 
 (* try_unify_compose, when successful, returns a substitution of compose-shape
    on top of accSubst, and that substitution makes actualTy and expectedTy equal. *)
@@ -31,7 +53,7 @@ proof -
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
             (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s" and
     s'_eq: "s' = compose_subst s accSubst"
-    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits)
+    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits if_splits)
   have "apply_subst s (apply_subst accSubst actualTy)
          = apply_subst s (apply_subst accSubst expectedTy)"
     using unify_sound[OF unif] .
@@ -103,7 +125,7 @@ proof -
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
             (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s" and
     s'_eq: "s' = compose_subst s accSubst"
-    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits)
+    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits if_splits)
   \<comment> \<open>s is itself a unifier of the equation; by unify_mgu, any unifier (including s)
       factors through s. Apply with subst' = s gives idempotence of s. \<close>
   have s_unifies:
@@ -138,7 +160,7 @@ proof -
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
             (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s" and
     s'_eq: "s' = compose_subst s accSubst"
-    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits)
+    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits if_splits)
   \<comment> \<open>s' factors through accSubst (proved above). \<close>
   have s'_factors_acc: "subst_factors_through s' accSubst"
     using try_unify_compose_factors_through[OF assms] .
@@ -189,7 +211,7 @@ proof -
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
             (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s" and
     s'_eq: "s' = compose_subst s accSubst"
-    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits)
+    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits if_splits)
   have s_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> n |\<notin>| TE_TypeVars env"
     using unify_dom_flex[OF unif] .
   hence s_disj: "fmdom s |\<inter>| TE_TypeVars env = {||}" by auto
@@ -231,7 +253,7 @@ proof -
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
             (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s" and
     s'_eq: "s' = compose_subst s accSubst"
-    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits)
+    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits if_splits)
   have act'_rt: "is_runtime_type wkEnv (apply_subst accSubst actualTy)"
     using apply_subst_preserves_runtime_same_env[OF act_rt acc_rt] .
   have exp'_rt: "is_runtime_type wkEnv (apply_subst accSubst expectedTy)"
@@ -280,7 +302,7 @@ proof -
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env)
             (apply_subst accSubst actualTy) (apply_subst accSubst expectedTy) = Some s" and
     s'_eq: "s' = compose_subst s accSubst"
-    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits)
+    unfolding try_unify_compose_def by (auto simp: Let_def split: option.splits if_splits)
   \<comment> \<open>apply_subst accSubst actualTy is well-kinded under wkEnv. \<close>
   have act'_wk: "is_well_kinded wkEnv (apply_subst accSubst actualTy)"
     using apply_subst_preserves_well_kinded_same_env[OF act_wk acc_wk] .
@@ -293,5 +315,45 @@ proof -
   show ?thesis
     using compose_subst_preserves_well_kinded[OF acc_wk s_wk] s'_eq by simp
 qed
+
+
+section \<open>Unification against an atomic type\<close>
+
+(* An atomic type is one that contains no other type as a "subterm". *)
+fun is_atomic_type :: "CoreType \<Rightarrow> bool" where
+  "is_atomic_type CoreTy_Bool = True"
+| "is_atomic_type (CoreTy_FiniteInt _ _) = True"
+| "is_atomic_type CoreTy_MathInt = True"
+| "is_atomic_type CoreTy_MathReal = True"
+| "is_atomic_type _ = False"
+
+lemma is_integer_type_atomic:
+  "is_integer_type ty \<Longrightarrow> is_atomic_type ty"
+  by (cases ty) auto
+
+(* Unifying anything against an atomic type can only bind a single
+   flexible variable to that type, so the range of the unifier (if one exists)
+   consists of that type alone. *)
+lemma unify_atomic_range:
+  assumes "unify is_flex ty1 ty2 = Some s"
+      and "is_atomic_type ty2"
+  shows "\<forall>ty \<in> fmran' s. ty = ty2"
+  using assms
+  by (cases ty1; cases ty2)
+     (auto simp: fmran'_def singleton_subst_def occurs_def split: if_splits)
+
+(* In particular, the range of the unifier must be complete (because all atomic types
+   are complete).
+   This is why elaborator sites that unify a term's type against CoreTy_Bool or
+   against an integer type need no explicit completeness check. *)
+lemma unify_atomic_range_complete:
+  assumes "unify is_flex ty1 ty2 = Some s"
+      and "is_atomic_type ty2"
+  shows "\<forall>ty \<in> fmran' s. is_complete_type ty"
+  using unify_atomic_range[OF assms] assms(2) by (cases ty2) auto
+
+lemma unify_bool_range_complete:
+  "unify is_flex ty CoreTy_Bool = Some s \<Longrightarrow> \<forall>ty' \<in> fmran' s. is_complete_type ty'"
+  by (rule unify_atomic_range_complete[of is_flex ty CoreTy_Bool s]) simp_all
 
 end

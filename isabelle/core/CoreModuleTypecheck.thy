@@ -183,13 +183,14 @@ qed
 
 (* The main definition of what it means for a CoreModule to be well-typed:
    core_module_invariant must hold, every type in the range of CM_TypeSubst
-   must be well-kinded, and the module must satisfy normalized_module_well_typed
-   after normalization. *)
+   must be well-kinded and complete, and the module must satisfy
+   normalized_module_well_typed after normalization. *)
 
 definition core_module_well_typed :: "CoreModule \<Rightarrow> bool" where
   "core_module_well_typed m =
     (core_module_invariant m
      \<and> typesubst_well_kinded (CM_TyEnv m) (CM_TypeSubst m)
+     \<and> typesubst_complete (CM_TypeSubst m)
      \<and> normalized_module_well_typed (normalize_module m))"
 
 (* A well-typed module satisfies the standing structural invariant. *)
@@ -229,9 +230,11 @@ proof -
       using core_module_invariant_intro[OF idem cap tv nwt'] .
     have wk: "typesubst_well_kinded (CM_TyEnv m) (CM_TypeSubst m)"
       using assms unfolding typesubst_well_kinded_def by simp
+    have cp: "typesubst_complete (CM_TypeSubst m)"
+      using assms by simp
     show "core_module_well_typed m"
       unfolding core_module_well_typed_def
-      using inv wk nwt' by blast
+      using inv wk cp nwt' by blast
   qed
 qed
 

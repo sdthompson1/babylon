@@ -161,6 +161,7 @@ proof -
     be_ghost_subset: "tyenv_ghost_vars_subset ?be" and
     be_ret_wk: "tyenv_return_type_well_kinded ?be" and
     be_ret_rt: "tyenv_return_type_runtime ?be" and
+    be_ret_cp: "tyenv_return_type_complete ?be" and
     be_ctors_cons: "tyenv_ctors_consistent ?be" and
     be_payloads_wk: "tyenv_payloads_well_kinded ?be" and
     be_ctor_tyvars_distinct: "tyenv_ctor_tyvars_distinct ?be" and
@@ -168,6 +169,7 @@ proof -
     be_fun_types_wk: "tyenv_fun_types_well_kinded ?be" and
     be_fun_tyvars_distinct: "tyenv_fun_tyvars_distinct ?be" and
     be_fun_ghost: "tyenv_fun_ghost_constraint ?be" and
+    be_fun_ret_cp: "tyenv_fun_return_types_complete ?be" and
     be_nonghost_payloads: "tyenv_nonghost_payloads_runtime ?be" and
     be_ghost_dt_subset: "tyenv_ghost_datatypes_subset ?be" and
     be_rt_subset: "tyenv_runtime_tyvars_subset ?be" and
@@ -261,6 +263,9 @@ proof -
   have c4b: "tyenv_return_type_runtime ?pEnv"
     using be_ret_rt fg_eq other_eq(9) rt_self_eq tyenv_return_type_runtime_def by auto
 
+  have c4c: "tyenv_return_type_complete ?pEnv"
+    using be_ret_cp fg_eq other_eq(9) tyenv_return_type_complete_def by auto
+
   have c5: "tyenv_ctors_consistent ?pEnv"
     using be_ctors_cons unfolding tyenv_ctors_consistent_def
     by (simp add: other_eq)
@@ -317,6 +322,10 @@ proof -
   have c10: "tyenv_fun_tyvars_distinct ?pEnv"
     using be_fun_tyvars_distinct
     unfolding tyenv_fun_tyvars_distinct_def
+    by (simp add: other_eq)
+
+  have c12c: "tyenv_fun_return_types_complete ?pEnv"
+    using be_fun_ret_cp unfolding tyenv_fun_return_types_complete_def
     by (simp add: other_eq)
 
   have c12: "tyenv_fun_ghost_constraint ?pEnv"
@@ -397,7 +406,7 @@ proof -
   have c17: "tyenv_abstract_types_subset ?pEnv"
     unfolding tyenv_abstract_types_subset_def by (simp add: abs_pEnv)
 
-  from c1 c2 c3 c4 c4b c5 c6 c7 c8 c9 c10 c12 c13 c14 c15 c16 c17
+  from c1 c2 c3 c4 c4b c4c c5 c6 c7 c8 c9 c10 c12 c12c c13 c14 c15 c16 c17
   show ?thesis unfolding tyenv_well_formed_def by blast
 qed
 

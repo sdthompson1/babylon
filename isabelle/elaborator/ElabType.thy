@@ -42,6 +42,9 @@ where
             \<comment> \<open>Typedef case (also handles type variables, which map to CoreTy_Var)\<close>
             (if length elabTyArgs \<noteq> length tyvars then
               Inl [TyErr_WrongNumberOfTypeArgs loc name (length tyvars) (length tyargs)]
+             else if \<not> list_all is_complete_type elabTyArgs then
+              \<comment> \<open>A type argument must be a complete type (in any mode).\<close>
+              Inl [TyErr_IncompleteTypeArgument loc]
              else
               let subst = fmap_of_list (zip tyvars elabTyArgs);
                   resultTy = apply_subst subst targetTy
@@ -55,6 +58,9 @@ where
                 \<comment> \<open>Datatype case\<close>
                 (if length elabTyArgs \<noteq> expectedArity then
                   Inl [TyErr_WrongNumberOfTypeArgs loc name expectedArity (length tyargs)]
+                 else if \<not> list_all is_complete_type elabTyArgs then
+                  \<comment> \<open>A type argument must be a complete type (in any mode).\<close>
+                  Inl [TyErr_IncompleteTypeArgument loc]
                  else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) elabTyArgs
                         \<or> name |\<in>| TE_GhostDatatypes env) then
                   Inl [TyErr_GhostTypeInNonGhost loc]

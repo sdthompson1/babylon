@@ -1226,6 +1226,7 @@ proof -
     ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
     len_eq: "length tyArgs = length tyvars" and
     tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_cp: "list_all is_complete_type tyArgs" and
     tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
     dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env"
     by (auto simp: Let_def split: option.splits prod.splits if_splits)
@@ -1236,7 +1237,7 @@ proof -
   define tySubst where "tySubst = fmap_of_list (zip tyvars tyArgs)"
   define payloadTyOpt where "payloadTyOpt = core_term_type env NotGhost payload"
 
-  from typing ctor_lookup len_eq tyargs_wk tyargs_rt dt_nonghost
+  from typing ctor_lookup len_eq tyargs_wk tyargs_cp tyargs_rt dt_nonghost
   have typing': "(case payloadTyOpt of
       None \<Rightarrow> None
     | Some actualPayloadTy \<Rightarrow>

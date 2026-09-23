@@ -484,10 +484,12 @@ proof -
     unfolding tyenv_well_formed_def
               tyenv_vars_well_kinded_def tyenv_vars_runtime_def
               tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
-              tyenv_return_type_runtime_def tyenv_ctors_consistent_def
+              tyenv_return_type_runtime_def tyenv_return_type_complete_def
+              tyenv_ctors_consistent_def
               tyenv_payloads_well_kinded_def tyenv_ctor_tyvars_distinct_def
               tyenv_ctors_by_type_consistent_def tyenv_fun_types_well_kinded_def
               tyenv_fun_tyvars_distinct_def tyenv_fun_ghost_constraint_def
+              tyenv_fun_return_types_complete_def
               tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
               tyenv_runtime_tyvars_subset_def tyenv_abstract_types_subset_def
               tyenv_datatypes_nonempty_def empty_module_tyenv_def

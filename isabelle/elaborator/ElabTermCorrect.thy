@@ -146,7 +146,7 @@ proof -
   from elab_eq resolve_eq have len_args: "length args = length expArgTypes"
     by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
   from elab_eq resolve_eq len_args elab_args obtain finalArgTms finalSubst where
-    unify_args: "unify_and_coerce ?is_flex (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act])
+    unify_args: "unify_and_coerce ?is_flex (\<lambda>idx. bab_term_location (args ! idx))
                      elabArgTms actualTypes expArgTypes fmempty
                  = Inr (finalArgTms, finalSubst)"
     by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
@@ -222,7 +222,7 @@ proof -
 
   \<comment> \<open>Extract unify_type_lists from unify_and_coerce\<close>
   obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex (\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (args ! idx)) exp act]) 0
+    unify_types: "unify_type_lists ?is_flex (\<lambda>idx. bab_term_location (args ! idx)) 0
                      actualTypes expArgTypes fmempty = Inr unifySubst" and
     finalArgTms_eq: "finalArgTms = apply_call_coercions unifySubst elabArgTms actualTypes expArgTypes" and
     finalSubst_eq: "finalSubst = unifySubst"
@@ -233,16 +233,19 @@ proof -
 
   \<comment> \<open>Apply unify_type_lists_correct\<close>
   have empty_dom_flex: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
   have unify_correct: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty)
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
        \<and> list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes expArgTypes
-       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)"
+       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)
+       \<and> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty)"
     using unify_type_lists_correct[OF unify_types wf' len_actualTypes
             actualTypes_wk expArgTypes_wk _ actualTypes_rt expArgTypes_rt _ empty_dom_flex]
-          finalSubst_eq by fastforce
+          finalSubst_eq empty_cp by fastforce
 
   from unify_correct have
     finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty" and
@@ -251,7 +254,8 @@ proof -
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
            \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
          actualTypes expArgTypes" and
-    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
+    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n" and
+    finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
     by blast+
 
   \<comment> \<open>Subst doesn't affect locals or return type\<close>
@@ -275,7 +279,8 @@ proof -
          finalArgTms expArgTypes"
     using apply_call_coercions_correct[OF ih_args types_unified wf'
             finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes
-            locals_unaffected ret_unaffected abs_no_subst expArgTypes_wk expArgTypes_rt]
+            locals_unaffected ret_unaffected abs_no_subst expArgTypes_wk expArgTypes_rt
+            finalSubst_cp]
           finalArgTms_eq finalSubst_eq by simp
 
   \<comment> \<open>env' extends env with only type variables\<close>
@@ -289,7 +294,8 @@ proof -
   \<comment> \<open>Apply build_call_result_correct\<close>
   show ?thesis
     using build_call_result_correct[OF build_eq civ wf' wf coerce_correct
-            finalSubst_wk finalSubst_rt finalSubst_dom_flex env'_locals env'_ret env'_abs]
+            finalSubst_wk finalSubst_rt finalSubst_dom_flex env'_locals env'_ret env'_abs
+            finalSubst_cp]
           result_eq by simp
 qed
 
@@ -315,7 +321,7 @@ lemma elab_term_correct_array_proj:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?mk_err = "(\<lambda>idx (exp::CoreType) act. [TyErr_TypeMismatch (bab_term_location (idxs ! idx)) exp act])"
+  let ?locOf = "(\<lambda>idx. bab_term_location (idxs ! idx))"
 
   \<comment> \<open>Extract array type\<close>
   from elab_eq elab_arr obtain elemTy dims where
@@ -328,7 +334,7 @@ proof -
 
   from elab_eq elab_arr arr_ty len_eq elab_idxs
   obtain coercedIdxTms finalSubst where
-    unify_result: "unify_and_coerce ?is_flex ?mk_err elabIdxTms actualTypes ?expectedTypes fmempty
+    unify_result: "unify_and_coerce ?is_flex ?locOf elabIdxTms actualTypes ?expectedTypes fmempty
                    = Inr (coercedIdxTms, finalSubst)"
     by (auto simp: unify_and_coerce_def split: sum.splits)
   from elab_eq elab_arr arr_ty len_eq elab_idxs unify_result
@@ -367,7 +373,7 @@ proof -
 
   \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
   obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex ?mk_err 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
+    unify_types: "unify_type_lists ?is_flex ?locOf 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
     coercedIdxTms_eq: "coercedIdxTms = apply_call_coercions unifySubst elabIdxTms actualTypes ?expectedTypes" and
     finalSubst_eq: "finalSubst = unifySubst"
   proof -
@@ -381,6 +387,8 @@ proof -
   have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
     by (simp add: fmran'_def)
   have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
 
   have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
@@ -388,16 +396,19 @@ proof -
            apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
            \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
          actualTypes ?expectedTypes
-       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
+       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)
+       \<and> (\<forall>ty \<in> fmran' unifySubst. is_complete_type ty)"
     using unify_type_lists_correct[OF unify_types
             wf' len_actual_expected actualTypes_wk expectedTypes_wk empty_wk
-            actualTypes_rt expectedTypes_rt empty_rt empty_dom] by blast
+            actualTypes_rt expectedTypes_rt empty_rt empty_dom] empty_cp by blast
 
   have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
     using unify_correct finalSubst_eq by simp
   have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
     using unify_correct finalSubst_eq by simp
   have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
+    using unify_correct finalSubst_eq by simp
+  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
     using unify_correct finalSubst_eq by simp
   have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -426,7 +437,8 @@ proof -
          coercedIdxTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_idxs types_unified wf'
             finalSubst_wk finalSubst_rt len_elabIdxTms len_actual_expected
-            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt]
+            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt
+            finalSubst_cp]
           coercedIdxTms_eq finalSubst_eq by simp
 
   \<comment> \<open>apply_subst on u64_type is identity\<close>
@@ -487,7 +499,7 @@ lemma elab_term_correct_array_lit:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?mk_err = "(\<lambda>(idx::nat) (exp::CoreType) (act::CoreType). [TyErr_TypeMismatch (bab_term_location (tms ! idx)) exp act])"
+  let ?locOf = "(\<lambda>idx::nat. bab_term_location (tms ! idx))"
   let ?elemTy = "CoreTy_Var (mv_name next_mv)"
   let ?expectedTypes = "replicate (length elabTms) ?elemTy"
 
@@ -497,7 +509,7 @@ proof -
 
   \<comment> \<open>next_mv' = next_mv1 (no fresh metas after the element list)\<close>
   from elab_eq len_ok elab_elems obtain coercedTms finalSubst where
-    unify_result: "unify_and_coerce ?is_flex ?mk_err elabTms actualTypes ?expectedTypes fmempty
+    unify_result: "unify_and_coerce ?is_flex ?locOf elabTms actualTypes ?expectedTypes fmempty
                    = Inr (coercedTms, finalSubst)"
     by (auto simp: Let_def unify_and_coerce_def split: sum.splits prod.splits)
   from elab_eq len_ok elab_elems unify_result have
@@ -552,7 +564,7 @@ proof -
 
   \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
   obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex ?mk_err 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
+    unify_types: "unify_type_lists ?is_flex ?locOf 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
     coercedTms_eq: "coercedTms = apply_call_coercions unifySubst elabTms actualTypes ?expectedTypes" and
     finalSubst_eq: "finalSubst = unifySubst"
   proof -
@@ -566,6 +578,8 @@ proof -
   have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
     by (simp add: fmran'_def)
   have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
 
   have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
@@ -573,16 +587,19 @@ proof -
            apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
            \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
          actualTypes ?expectedTypes
-       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
+       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)
+       \<and> (\<forall>ty \<in> fmran' unifySubst. is_complete_type ty)"
     using unify_type_lists_correct[OF unify_types
             wf' len_expected actualTypes_wk expectedTypes_wk empty_wk
-            actualTypes_rt expectedTypes_rt empty_rt empty_dom] by blast
+            actualTypes_rt expectedTypes_rt empty_rt empty_dom] empty_cp by blast
 
   have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
     using unify_correct finalSubst_eq by simp
   have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
     using unify_correct finalSubst_eq by simp
   have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
+    using unify_correct finalSubst_eq by simp
+  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
     using unify_correct finalSubst_eq by simp
   have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -612,7 +629,8 @@ proof -
          coercedTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_elems types_unified wf'
             finalSubst_wk finalSubst_rt len_elabTms len_expected
-            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt]
+            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt
+            finalSubst_cp]
           coercedTms_eq finalSubst_eq by simp
 
   have len_coerced: "length coercedTms = length elabTms"
@@ -684,7 +702,7 @@ lemma elab_term_correct_record_update:
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?mk_err = "(\<lambda>idx exp act. [TyErr_TypeMismatch (bab_term_location (snd (flds ! idx))) exp act])"
+  let ?locOf = "(\<lambda>idx. bab_term_location (snd (flds ! idx)))"
 
   \<comment> \<open>Extract elaboration sub-results from elab_eq\<close>
   from elab_eq have no_dup: "first_duplicate_name fst flds = None"
@@ -702,7 +720,7 @@ proof -
 
   from elab_eq no_dup elab_parent parent_rec fields_exist elab_updates
   obtain coercedTms finalSubst where
-    unify_result: "unify_and_coerce ?is_flex ?mk_err newUpdateTms actualTypes ?expectedTypes fmempty
+    unify_result: "unify_and_coerce ?is_flex ?locOf newUpdateTms actualTypes ?expectedTypes fmempty
                    = Inr (coercedTms, finalSubst)"
     by (auto simp: Let_def build_updated_record_def
              split: sum.splits option.splits if_splits prod.splits)
@@ -800,7 +818,7 @@ proof -
 
   \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
   obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex ?mk_err 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
+    unify_types: "unify_type_lists ?is_flex ?locOf 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
     coercedTms_eq: "coercedTms = apply_call_coercions unifySubst newUpdateTms actualTypes ?expectedTypes" and
     finalSubst_eq: "finalSubst = unifySubst"
   proof -
@@ -814,6 +832,8 @@ proof -
   have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
     by (simp add: fmran'_def)
   have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
 
   have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
        \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
@@ -821,16 +841,19 @@ proof -
            apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
            \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
          actualTypes ?expectedTypes
-       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)"
+       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)
+       \<and> (\<forall>ty \<in> fmran' unifySubst. is_complete_type ty)"
     using unify_type_lists_correct[OF unify_types
             wf' len_expected actualTypes_wk expectedTypes_wk empty_wk
-            actualTypes_rt expectedTypes_rt empty_rt empty_dom] by blast
+            actualTypes_rt expectedTypes_rt empty_rt empty_dom] empty_cp by blast
 
   have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
     using unify_correct finalSubst_eq by simp
   have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
     using unify_correct finalSubst_eq by simp
   have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
+    using unify_correct finalSubst_eq by simp
+  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
     using unify_correct finalSubst_eq by simp
   have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
            apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
@@ -859,7 +882,8 @@ proof -
          coercedTms ?expectedTypes"
     using apply_call_coercions_correct[OF ih_updates types_unified wf'
             finalSubst_wk finalSubst_rt len_updates len_expected
-            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt]
+            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt
+            finalSubst_cp]
           coercedTms_eq finalSubst_eq by simp
 
   \<comment> \<open>Parent term after substitution\<close>
@@ -872,7 +896,8 @@ proof -
     have "core_term_type ?env' ghost ?finalParentTm
           = Some (apply_subst finalSubst (CoreTy_Record parentFields))"
       using apply_subst_to_term_preserves_typing
-              [OF ih_parent' wf' finalSubst_wk finalSubst_rt locals_unaffected ret_unaffected abs_no_subst] .
+              [OF ih_parent' wf' finalSubst_wk finalSubst_rt locals_unaffected ret_unaffected
+                  abs_no_subst finalSubst_cp] .
     also have "apply_subst finalSubst (CoreTy_Record parentFields)
               = CoreTy_Record ?finalParentFields" by simp
     finally show ?thesis .
@@ -1000,7 +1025,9 @@ lemma unify_arm_body_types_correct:
        \<and> (\<forall>ty' \<in> fmran' accSubst'. is_well_kinded envAmbient ty')
        \<and> (mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' accSubst'. is_runtime_type envAmbient ty'))
        \<and> fmdom accSubst' |\<inter>| TE_TypeVars envOuter = {||}
-       \<and> (\<exists>T. accSubst' = compose_subst T accSubst)"
+       \<and> (\<exists>T. accSubst' = compose_subst T accSubst)
+       \<and> ((\<forall>ty' \<in> fmran' accSubst. is_complete_type ty')
+            \<longrightarrow> (\<forall>ty' \<in> fmran' accSubst'. is_complete_type ty'))"
 using assms proof (induction locTys arbitrary: accSubst)
   case Nil
   from Nil.prems(1) have eq: "accSubst' = accSubst" by simp
@@ -1059,8 +1086,14 @@ next
     accSubst'_wk: "\<forall>ty' \<in> fmran' accSubst'. is_well_kinded envAmbient ty'" and
     accSubst'_rt: "mode = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' accSubst'. is_runtime_type envAmbient ty')" and
     accSubst'_dom: "fmdom accSubst' |\<inter>| TE_TypeVars envOuter = {||}" and
-    accSubst'_eq: "accSubst' = compose_subst T s"
+    accSubst'_eq: "accSubst' = compose_subst T s" and
+    accSubst'_cp_cond: "(\<forall>ty' \<in> fmran' s. is_complete_type ty')
+                        \<longrightarrow> (\<forall>ty' \<in> fmran' accSubst'. is_complete_type ty')"
     by blast
+
+  \<comment> \<open>s's range is complete (try_unify_compose checks this), hence so is accSubst'. \<close>
+  have accSubst'_cp: "\<forall>ty' \<in> fmran' accSubst'. is_complete_type ty'"
+    using accSubst'_cp_cond try_unify_compose_range_complete[OF tuc] by blast
 
   \<comment> \<open>s already makes bodyTy and expBodyTy equal; accSubst' refines s, so it does too. \<close>
   have head_eq_at_s: "apply_subst s bodyTy = apply_subst s expBodyTy"
@@ -1074,7 +1107,8 @@ next
     using compose_subst_chain_exists[OF try_unify_compose_compose_shape[OF tuc]]
           accSubst'_eq by blast
 
-  show ?case using rest_unif accSubst'_wk accSubst'_rt accSubst'_dom head_eq hd_eq refine by auto
+  show ?case using rest_unif accSubst'_wk accSubst'_rt accSubst'_dom head_eq hd_eq refine
+                   accSubst'_cp by auto
 qed
 
 
@@ -1107,9 +1141,11 @@ lemma finalize_match_term_correct:
       and accSubst_rt:
         "ghost = NotGhost \<Longrightarrow> \<forall>ty' \<in> fmran' accSubst. is_runtime_type envAmbient ty'"
       and accSubst_dom: "fmdom accSubst |\<inter>| TE_TypeVars envOuter = {||}"
+      and accSubst_cp: "\<forall>ty' \<in> fmran' accSubst. is_complete_type ty'"
       \<comment> \<open>Scrutinee well-typed under envAmbient. \<close>
       and scrut_typed: "core_term_type envAmbient ghost scrutTm = Some scrutTy"
-      \<comment> \<open>bodyTyVar is a meta in the ambient env. \<close>
+      \<comment> \<open>bodyTyVar (the expected body type; in practice the first arm's body type)
+          is well-kinded, and runtime in NotGhost mode, in the ambient env. \<close>
       and body_var_wk: "is_well_kinded envAmbient bodyTyVar"
       and body_var_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient bodyTyVar"
       \<comment> \<open>Per-arm: dps are compatible (under accSubst-substituted forms) and
@@ -1293,8 +1329,12 @@ proof -
     finalSubst_rt:
       "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' finalSubst. is_runtime_type envAmbient ty')" and
     finalSubst_dom: "fmdom finalSubst |\<inter>| TE_TypeVars envOuter = {||}" and
-    finalSubst_compose: "finalSubst = compose_subst T accSubst"
+    finalSubst_compose: "finalSubst = compose_subst T accSubst" and
+    finalSubst_cp_cond: "(\<forall>ty' \<in> fmran' accSubst. is_complete_type ty')
+                         \<longrightarrow> (\<forall>ty' \<in> fmran' finalSubst. is_complete_type ty')"
     by blast
+  have finalSubst_cp: "\<forall>ty' \<in> fmran' finalSubst. is_complete_type ty'"
+    using finalSubst_cp_cond accSubst_cp by blast
 
   \<comment> \<open>Step 3: Locals/return-type unaffected by finalSubst. Comes from
       flex_subst_identity_on_env applied to envOuter, plus the ambient_locals_eq /
@@ -1318,7 +1358,8 @@ proof -
     unfolding finalScrut_def finalScrutTy_def
     using apply_subst_to_term_preserves_typing[OF scrut_typed ambient_wf
                                                   finalSubst_wk _ ambient_locals_unaffected
-                                                  ambient_ret_unaffected ambient_abs_no_subst]
+                                                  ambient_ret_unaffected ambient_abs_no_subst
+                                                  finalSubst_cp]
           finalSubst_rt
     by simp
 
@@ -1572,7 +1613,7 @@ proof -
                                                     finalSubst_wk_pat finalSubst_rt_pat
                                                     env_pat_locals_unaffected
                                                     env_pat_ret_unaffected
-                                                    env_pat_abs_no_subst] .
+                                                    env_pat_abs_no_subst finalSubst_cp] .
 
     have bty_subst_eq: "apply_subst finalSubst ?bty = finalBodyTy"
     proof -
@@ -2052,13 +2093,15 @@ next
       payload_eq: "payloadTy = CoreTy_Record []"
       unfolding elabenv_well_formed_def nullary_data_ctors_consistent_def by force
 
-    \<comment> \<open>From resolve_type_args_correct: type args are well-kinded and runtime in ?env'\<close>
+    \<comment> \<open>From resolve_type_args_correct: type args are well-kinded, runtime (in
+        NotGhost mode) and complete in ?env'\<close>
     have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
       using "2.prems"(3) unfolding elabenv_well_formed_def by simp
     have rta: "next_mv \<le> next_mv'
              \<and> length newTyArgs = length tyvars
              \<and> list_all (is_well_kinded ?env') newTyArgs
-             \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') newTyArgs)"
+             \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') newTyArgs)
+             \<and> list_all is_complete_type newTyArgs"
       using resolve_type_args_correct[OF resolve_eq "2.prems"(2) td_wf] result_eq by simp
 
     \<comment> \<open>TE_DataCtors is unchanged by extend_env_with_tyvars\<close>
@@ -2163,11 +2206,15 @@ next
     have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup subst n = None"
       using flex_subst_abs_no_subst[OF unif_dom_flex[rule_format] "3.prems"(2) env'_abs] .
 
+    \<comment> \<open>The target is an (atomic) integer type, so the unifier's range is complete. \<close>
+    have subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
+      using unify_atomic_range_complete[OF Some is_integer_type_atomic[OF target_is_int]] .
+
     have subst_applied:
       "core_term_type ?env' ghost (apply_subst_to_term subst newOperand)
          = Some (apply_subst subst operandTy)"
       using apply_subst_to_term_preserves_typing
-              [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst] .
+              [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst subst_cp] .
     also have "apply_subst subst operandTy = apply_subst subst newTargetTy"
       using unify_sound[OF Some] .
     also have "apply_subst subst newTargetTy = newTargetTy"
@@ -2340,6 +2387,8 @@ next
     using ret_unaffected_for[OF condSubst_dom_flex] .
   have condSubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup condSubst n = None"
     using abs_no_subst_for[OF condSubst_dom_flex] .
+  have condSubst_cp: "\<forall>ty' \<in> fmran' condSubst. is_complete_type ty'"
+    using unify_bool_range_complete[OF cond_unify] .
 
   \<comment> \<open>Final condition has type Bool in ?env'. \<close>
   have finalCond_typed: "core_term_type ?env' ghost finalCond = Some CoreTy_Bool"
@@ -2347,7 +2396,8 @@ next
     have "core_term_type ?env' ghost (apply_subst_to_term condSubst newCond)
             = Some (apply_subst condSubst condTy)"
       using apply_subst_to_term_preserves_typing
-              [OF ih_cond wf' condSubst_wk condSubst_rt condSubst_locals condSubst_ret condSubst_abs] .
+              [OF ih_cond wf' condSubst_wk condSubst_rt condSubst_locals condSubst_ret condSubst_abs
+                  condSubst_cp] .
     also have "apply_subst condSubst condTy = apply_subst condSubst CoreTy_Bool"
       using unify_sound[OF cond_unify] .
     also have "apply_subst condSubst CoreTy_Bool = CoreTy_Bool" by simp
@@ -2365,8 +2415,11 @@ next
     let ?matchArms = "[(CorePat_Bool True, ?newThen'), (CorePat_Bool False, ?newElse')]"
 
     from "4.prems"(1) elab_cond elab_then elab_else cond_unify Some have
+      branchSubst_complete: "typesubst_complete branchSubst" and
       result_eq: "newTm = CoreTm_Match finalCond ?matchArms" "ty = ?resultTy"
-      by (auto simp: finalCond_def Let_def split: option.splits)
+      by (auto simp: finalCond_def Let_def split: option.splits if_splits)
+    have branchSubst_cp: "\<forall>ty' \<in> fmran' branchSubst. is_complete_type ty'"
+      using branchSubst_complete unfolding typesubst_complete_def .
 
     \<comment> \<open>From unify_sound: applying branchSubst unifies the types\<close>
     from unify_sound[OF Some] have unified: "apply_subst branchSubst thenTy = apply_subst branchSubst elseTy" .
@@ -2401,10 +2454,12 @@ next
 
     have then'_typed: "core_term_type ?env' ghost ?newThen' = Some ?resultTy"
       using apply_subst_to_term_preserves_typing
-              [OF ih_then wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret branchSubst_abs] .
+              [OF ih_then wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret
+                  branchSubst_abs branchSubst_cp] .
     have else'_typed: "core_term_type ?env' ghost ?newElse' = Some ?resultTy"
       using apply_subst_to_term_preserves_typing
-              [OF ih_else wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret branchSubst_abs]
+              [OF ih_else wf' branchSubst_wk branchSubst_rt branchSubst_locals branchSubst_ret
+                  branchSubst_abs branchSubst_cp]
             unified by simp
 
     \<comment> \<open>The match typechecks\<close>
@@ -2427,13 +2482,13 @@ next
     from "4.prems"(1) elab_cond elab_then elab_else cond_unify None
     obtain coercedThen coercedElse commonTy where
       coerce: "coerce_to_common_int_type newThen thenTy newElse elseTy = Some (coercedThen, coercedElse, commonTy)"
-      by (auto simp: finalCond_def Let_def split: option.splits)
+      by (auto simp: finalCond_def Let_def split: option.splits if_splits)
 
     let ?matchArms = "[(CorePat_Bool True, coercedThen), (CorePat_Bool False, coercedElse)]"
 
     from "4.prems"(1) elab_cond elab_then elab_else cond_unify None coerce have
       result_eq: "newTm = CoreTm_Match finalCond ?matchArms" "ty = commonTy"
-      by (auto simp: finalCond_def Let_def split: option.splits)
+      by (auto simp: finalCond_def Let_def split: option.splits if_splits)
 
     \<comment> \<open>From coerce_to_common_int_type_correct: coerced terms have common type\<close>
     have coerced_typed: "core_term_type ?env' ghost coercedThen = Some commonTy
@@ -2528,12 +2583,18 @@ next
     have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup subst n = None"
       using flex_subst_abs_no_subst[OF subst_dom_flex[rule_format] "5.prems"(2) env'_abs] .
 
+    \<comment> \<open>The default type is atomic (i32 or Bool), so the unifier's range is complete. \<close>
+    have default_atomic: "is_atomic_type ?defaultTy"
+      by (cases ?cop) simp_all
+    have subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
+      using unify_atomic_range_complete[OF Some default_atomic] .
+
     \<comment> \<open>After substitution, newOperand has type defaultTy in ?env'\<close>
     have operand2_typed: "core_term_type ?env' ghost ?newOperand2 = Some ?defaultTy"
     proof -
       have "core_term_type ?env' ghost ?newOperand2 = Some (apply_subst subst operandTy)"
         using apply_subst_to_term_preserves_typing
-                [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst] .
+                [OF ih wf' subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst subst_cp] .
       also have "apply_subst subst operandTy = apply_subst subst ?defaultTy"
         using unify_sound[OF Some] .
       also have "apply_subst subst ?defaultTy = ?defaultTy"
@@ -3027,6 +3088,8 @@ next
     unfolding extend_env_with_tyvars_def by simp
   have bodySubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env'_body \<Longrightarrow> fmlookup bodySubst n = None"
     using flex_subst_abs_no_subst[OF bodySubst_dom_flex[rule_format] "8.prems"(2) env'_body_abs] .
+  have bodySubst_cp: "\<forall>ty' \<in> fmran' bodySubst. is_complete_type ty'"
+    using unify_bool_range_complete[OF body_unify] .
 
   \<comment> \<open>Body substitution preserves typing\<close>
   have finalBody_typed: "core_term_type ?env'_body ghost finalBody = Some CoreTy_Bool"
@@ -3034,7 +3097,8 @@ next
     have "core_term_type ?env'_body ghost (apply_subst_to_term bodySubst bodyTm)
             = Some (apply_subst bodySubst bodyTy)"
       using apply_subst_to_term_preserves_typing
-              [OF ih_body' wf_body' bodySubst_wk bodySubst_rt bodySubst_locals bodySubst_ret bodySubst_abs] .
+              [OF ih_body' wf_body' bodySubst_wk bodySubst_rt bodySubst_locals bodySubst_ret
+                  bodySubst_abs bodySubst_cp] .
     also have "apply_subst bodySubst bodyTy = apply_subst bodySubst CoreTy_Bool"
       using unify_sound[OF body_unify] .
     also have "apply_subst bodySubst CoreTy_Bool = CoreTy_Bool" by simp
@@ -3464,7 +3528,7 @@ next
     by (auto split: sum.splits)
   from "16.prems"(1) arms_ne elab_scrut obtain decoratedRows accSubst mv2 where
     decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy
-                    False fmempty (mv1 + 1) arms
+                    False fmempty mv1 arms
                   = Inr (decoratedRows, accSubst, mv2)"
     by (auto simp: Let_def split: sum.splits)
   from "16.prems"(1) arms_ne elab_scrut decorate_eq obtain finalizedArms where
@@ -3481,7 +3545,7 @@ next
   \<comment> \<open>Monotonicity facts. \<close>
   have mono_1: "next_mv \<le> mv1"
     using elab_term_next_mv_monotone[OF elab_scrut] .
-  have mono_2: "mv1 + 1 \<le> mv2"
+  have mono_2: "mv1 \<le> mv2"
     using decorate_match_arms_next_mv_monotone[OF decorate_eq] .
   have mono_3: "mv2 \<le> mv3"
     using elab_term_list_with_envs_next_mv_monotone[OF elab_bodies] .
@@ -3502,7 +3566,7 @@ next
   let ?dps = "map fst finalizedArms"
   let ?bodyLocs = "map (\<lambda>(_, body). bab_term_location body) arms"
   have final_term_eq:
-    "finalize_match_term env loc (CoreTy_Var (mv_name mv1)) scrutTm scrutTy
+    "finalize_match_term env loc (hd bodyTys) scrutTm scrutTy
                           ?dps bodyTms ?bodyLocs bodyTys accSubst mv3
      = Inr (newTm, ty, next_mv')"
     using "16.prems"(1) arms_ne elab_scrut decorate_eq finalize_arms_eq elab_bodies
@@ -3534,33 +3598,30 @@ next
     "is_well_kinded (extend_env_with_tyvars env ghost next_mv mv1) scrutTy"
     using core_term_type_well_kinded[OF scrut_typed_at_mv1
               tyenv_well_formed_extend_env_with_tyvars[OF "16.prems"(2)]] .
-  have scrutTy_wk_mv1_succ:
-    "is_well_kinded (extend_env_with_tyvars env ghost next_mv (mv1 + 1)) scrutTy"
-    using is_well_kinded_extend_env_with_tyvars_mono[OF scrutTy_wk_mv1 order_refl]
-    by simp
-
   \<comment> \<open>envAmbient is well-formed and elabenv_well_formed. \<close>
   have envAmbient_wf_elab: "elabenv_well_formed envAmbient elabEnv"
     unfolding envAmbient_def
     using "16.prems"(3) elabenv_well_formed_extend_env_with_tyvars by blast
 
   \<comment> \<open>Apply strengthened decorate_match_arms_correct.
-      lo = next_mv; the lemma's "next_mv" = mv1 + 1; scrutTy is well-kinded under
-      extend_env_with_tyvars env ghost next_mv (mv1+1) (just shown). \<close>
-  have lo_le_mv1_succ: "next_mv \<le> mv1 + 1" using mono_1 by simp
+      lo = next_mv; the lemma's "next_mv" = mv1 (no body-type metavariable is
+      allocated); scrutTy is well-kinded under extend_env_with_tyvars env ghost next_mv mv1. \<close>
+  have lo_le_mv1: "next_mv \<le> mv1" using mono_1 .
   have acc_wk_init:
     "\<forall>ty \<in> fmran' (fmempty :: TypeSubst).
-        is_well_kinded (extend_env_with_tyvars env ghost next_mv (mv1 + 1)) ty"
+        is_well_kinded (extend_env_with_tyvars env ghost next_mv mv1) ty"
     by (simp add: fmran'_def)
   have acc_dom_init: "fmdom (fmempty :: TypeSubst) |\<inter>| TE_TypeVars env = {||}"
     by simp
   have acc_rt_init:
     "ghost = NotGhost \<Longrightarrow>
        \<forall>ty \<in> fmran' (fmempty :: TypeSubst).
-         is_runtime_type (extend_env_with_tyvars env ghost next_mv (mv1 + 1)) ty"
+         is_runtime_type (extend_env_with_tyvars env ghost next_mv mv1) ty"
     by (simp add: fmran'_def)
   have acc_idem_init: "subst_factors_through (fmempty :: TypeSubst) fmempty"
     by (simp add: subst_factors_through_fmempty)
+  have acc_cp_init: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
 
   \<comment> \<open>Scrutinee runtime when ghost = NotGhost: from core_term_type_well_kinded_and_runtime. \<close>
   have scrutTy_rt_mv1: "ghost = NotGhost \<Longrightarrow>
@@ -3568,14 +3629,11 @@ next
     using core_term_type_well_kinded_and_runtime[OF scrut_typed_at_mv1
               tyenv_well_formed_extend_env_with_tyvars[OF "16.prems"(2)]]
     by blast
-  have scrutTy_rt_mv1_succ: "ghost = NotGhost \<Longrightarrow>
-                                is_runtime_type (extend_env_with_tyvars env ghost next_mv (mv1 + 1)) scrutTy"
-    using is_runtime_type_extend_env_with_tyvars_mono le_add1 scrutTy_rt_mv1 by blast
 
   from decorate_match_arms_correct[OF decorate_eq "16.prems"(2) acc_idem_init
-                                       lo_le_mv1_succ scrutTy_wk_mv1_succ
+                                       lo_le_mv1 scrutTy_wk_mv1
                                        acc_wk_init acc_dom_init
-                                       scrutTy_rt_mv1_succ acc_rt_init]
+                                       scrutTy_rt_mv1 acc_rt_init]
   have
     dma_len: "length decoratedRows = length arms" and
     dma_bodies: "map snd decoratedRows = map snd arms" and
@@ -3587,7 +3645,7 @@ next
                     \<and> pattern_var_names_distinct [dp]
                     \<and> body = body')
                  decoratedRows arms" and
-    dma_mono: "mv1 + 1 \<le> mv2" and
+    dma_mono: "mv1 \<le> mv2" and
     dma_refine: "\<exists>T. accSubst = compose_subst T fmempty" and
     dma_factors_acc: "subst_factors_through accSubst fmempty" and
     dma_factors_self: "subst_factors_through accSubst accSubst" and
@@ -3616,6 +3674,10 @@ next
   have accSubst_dom: "fmdom accSubst |\<inter>| TE_TypeVars env = {||}"
     using dma_dom_flex .
 
+  \<comment> \<open>accSubst's range is complete: built from fmempty by try_unify_compose steps. \<close>
+  have accSubst_cp: "\<forall>ty' \<in> fmran' accSubst. is_complete_type ty'"
+    using decorate_match_arms_range_complete[OF decorate_eq acc_cp_init] .
+
   have accSubst_rt: "ghost = NotGhost \<Longrightarrow> \<forall>ty' \<in> fmran' accSubst. is_runtime_type envAmbient ty'"
   proof
     fix ty' assume ng: "ghost = NotGhost" and ty'_in: "ty' \<in> fmran' accSubst"
@@ -3625,25 +3687,6 @@ next
       using is_runtime_type_extend_env_with_tyvars_mono[OF rt_at_mv2 order_refl mv2_le_succ_mv3] .
     thus "is_runtime_type envAmbient ty'"
       unfolding envAmbient_def .
-  qed
-
-  have body_var_wk: "is_well_kinded envAmbient (CoreTy_Var (mv_name mv1))"
-  proof -
-    have "mv_name mv1 |\<in>| mv_fset next_mv (mv3 + 1)"
-      using mono_1 mono_2 mono_3 by auto
-    hence "mv_name mv1 |\<in>| TE_TypeVars envAmbient"
-      unfolding envAmbient_def extend_env_with_tyvars_def by simp
-    thus ?thesis by simp
-  qed
-
-  have body_var_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient (CoreTy_Var (mv_name mv1))"
-  proof -
-    assume ng: "ghost = NotGhost"
-    have "mv_name mv1 |\<in>| mv_fset next_mv (mv3 + 1)"
-      using mono_1 mono_2 mono_3 by auto
-    hence "mv_name mv1 |\<in>| TE_RuntimeTypeVars envAmbient"
-      unfolding envAmbient_def extend_env_with_tyvars_def using ng by simp
-    thus ?thesis by simp
   qed
 
   \<comment> \<open>Extract finalizedArms_eq from the finalize_match_arms success: it must have taken
@@ -4107,7 +4150,7 @@ next
        (\<lambda>(env_i, _) (tm', ty').
           core_term_type (extend_env_with_tyvars env_i ghost mv2 mv3) ghost tm' = Some ty')
        ?bodyJobs (zip bodyTms bodyTys)"
-    using "16.IH"(2)[OF arms_ne elab_scrut refl refl refl decorate_eq refl refl refl
+    using "16.IH"(2)[OF arms_ne elab_scrut refl refl decorate_eq refl refl refl
                        finalize_arms_eq refl elab_bodies
                        jobs_envs_wf jobs_envs_elab_wf jobs_envs_fresh] .
 
@@ -4324,6 +4367,44 @@ next
       by (simp add: list_all_length)
   qed
 
+  \<comment> \<open>Every body type is well-kinded under envAmbient (second conjunct of bodies_typed,
+      read off index-wise as in bodies_runtime). \<close>
+  have bodies_wk_list: "list_all (\<lambda>bty. is_well_kinded envAmbient bty) bodyTys"
+  proof -
+    have len_bodyTms_bodyTys: "length bodyTms = length bodyTys"
+      using len_bodyTms by simp
+    have len_dps_bodyTys: "length ?dps = length bodyTys"
+      using len_finalizedArms_dps len_finalizedArms len_zip_arms_jobs len_bodyTms_bodyTys
+            len_bodyTms by simp
+    have "\<forall>i < length bodyTys. is_well_kinded envAmbient (bodyTys ! i)"
+    proof (intro allI impI)
+      fix i assume i_lt: "i < length bodyTys"
+      have i_lt_dps: "i < length ?dps" using i_lt len_dps_bodyTys by simp
+      have i_lt_zip: "i < length (zip bodyTms bodyTys)"
+        using i_lt len_bodyTms_bodyTys by simp
+      have zip_at_i: "(zip bodyTms bodyTys) ! i = (bodyTms ! i, bodyTys ! i)"
+        using i_lt len_bodyTms_bodyTys by simp
+      show "is_well_kinded envAmbient (bodyTys ! i)"
+        using bodies_typed i_lt_dps i_lt_zip len_dps_bodyTys
+        unfolding list_all2_conv_all_nth
+        using zip_at_i
+        by (auto split: prod.splits)
+    qed
+    thus ?thesis by (simp add: list_all_length)
+  qed
+
+  \<comment> \<open>The expected body type is the first arm's body type (arms is non-empty, so
+      bodyTys is too); it is well-kinded, and runtime in NotGhost mode, in envAmbient. \<close>
+  have bodyTys_ne: "bodyTys \<noteq> []"
+  proof -
+    have "length bodyTys = length arms" using len_bodyTms(2) len_zip by simp
+    thus ?thesis using arms_ne by (cases bodyTys) auto
+  qed
+  have body_var_wk: "is_well_kinded envAmbient (hd bodyTys)"
+    using bodies_wk_list bodyTys_ne by (cases bodyTys) auto
+  have body_var_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type envAmbient (hd bodyTys)"
+    using bodies_runtime bodyTys_ne by (cases bodyTys) auto
+
   have outer_fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n mv3"
     using "16.prems"(4) mono_1 mono_2 mono_3 tyvar_fresh_ok_mono by fastforce
 
@@ -4345,7 +4426,7 @@ next
   \<comment> \<open>Apply finalize_match_term_correct. \<close>
   from finalize_match_term_correct[OF final_term_eq "16.prems"(2) envAmbient_wf envAmbient_wf_elab
                                       ambient_locals_eq ambient_ret_eq ambient_abs_eq
-                                      accSubst_wk accSubst_rt accSubst_dom
+                                      accSubst_wk accSubst_rt accSubst_dom accSubst_cp
                                       scrut_typed_amb body_var_wk body_var_rt
                                       lengths_dps
                                       dps_compat dps_bind_wk dps_bind_rt dps_meta_safe

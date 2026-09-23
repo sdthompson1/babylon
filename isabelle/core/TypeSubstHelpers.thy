@@ -527,7 +527,9 @@ qed
      types like Cast targets, Quantifier binders, function tyArgs, etc., to remain
      well-kinded after substitution)
    - In NotGhost mode, the substitution's range is also runtime in callerEnv
-     (needed for the runtime-type checks at non-ghost positions). *)
+     (needed for the runtime-type checks at non-ghost positions).
+   - The substitution's range consists of complete types (needed, in any mode,
+     for the completeness check on the type arguments of calls and constructors). *)
 lemma core_term_type_subst_callee_env:
   assumes "core_term_type calleeEnv ghost tm = Some ty"
       and "tyenv_well_formed calleeEnv"
@@ -535,6 +537,7 @@ lemma core_term_type_subst_callee_env:
       and "\<forall>ty' \<in> fmran' subst. is_well_kinded callerEnv ty'"
       and "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
       and "ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv calleeEnv"
+      and "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                         (apply_subst_to_term subst tm)
            = Some (apply_subst subst ty)"
@@ -587,7 +590,7 @@ next
       by auto
     from tms_typed tm_in have tm_typed: "core_term_type calleeEnv ghost tm = Some elemTy"
       by (simp add: list_all_iff)
-    from CoreTm_LitArray.IH[OF tm_in tm_typed CoreTm_LitArray.prems(2,3,4,5,6)]
+    from CoreTm_LitArray.IH[OF tm_in tm_typed CoreTm_LitArray.prems(2,3,4,5,6,7)]
     show "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost tm'
             = Some (apply_subst subst elemTy)"
       using tm'_eq by simp
@@ -665,7 +668,7 @@ next
     tgt_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type calleeEnv targetTy" and
     ty_eq: "ty = targetTy"
     by (auto split: option.splits if_splits)
-  from CoreTm_Cast.IH[OF op_typed CoreTm_Cast.prems(2,3,4,5,6)]
+  from CoreTm_Cast.IH[OF op_typed CoreTm_Cast.prems(2,3,4,5,6,7)]
   have op_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst operand)
@@ -704,7 +707,7 @@ next
   from CoreTm_Unop.prems(1) obtain operandTy where
     op_typed: "core_term_type calleeEnv ghost operand = Some operandTy"
     by (auto split: option.splits)
-  from CoreTm_Unop.IH[OF op_typed CoreTm_Unop.prems(2,3,4,5,6)]
+  from CoreTm_Unop.IH[OF op_typed CoreTm_Unop.prems(2,3,4,5,6,7)]
   have op_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst operand)
@@ -747,12 +750,12 @@ next
     lhs_typed: "core_term_type calleeEnv ghost lhs = Some lhsTy" and
     rhs_typed: "core_term_type calleeEnv ghost rhs = Some rhsTy"
     by (auto split: option.splits)
-  from CoreTm_Binop.IH(1)[OF lhs_typed CoreTm_Binop.prems(2,3,4,5,6)]
+  from CoreTm_Binop.IH(1)[OF lhs_typed CoreTm_Binop.prems(2,3,4,5,6,7)]
   have lhs_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst lhs)
        = Some (apply_subst subst lhsTy)" .
-  from CoreTm_Binop.IH(2)[OF rhs_typed CoreTm_Binop.prems(2,3,4,5,6)]
+  from CoreTm_Binop.IH(2)[OF rhs_typed CoreTm_Binop.prems(2,3,4,5,6,7)]
   have rhs_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst rhs)
@@ -859,7 +862,7 @@ next
                               TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>"
 
   \<comment> \<open>RHS IH gives the substituted rhs has the substituted rhsTy. \<close>
-  from CoreTm_Let.IH(1)[OF rhs_typed CoreTm_Let.prems(2,3,4,5,6)]
+  from CoreTm_Let.IH(1)[OF rhs_typed CoreTm_Let.prems(2,3,4,5,6,7)]
   have rhs_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst rhs)
@@ -920,7 +923,8 @@ next
     using CoreTm_Let.prems(6)
     unfolding callee_env_subst_runtime_ok_def by simp
 
-  from CoreTm_Let.IH(2)[OF body_typed wf_ext ok_ext CoreTm_Let.prems(4) CoreTm_Let.prems(5) ok_rt_ext]
+  from CoreTm_Let.IH(2)[OF body_typed wf_ext ok_ext CoreTm_Let.prems(4) CoreTm_Let.prems(5) ok_rt_ext
+                           CoreTm_Let.prems(7)]
   have body_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv ?env_ext) ghost
                     (apply_subst_to_term subst body)
@@ -987,7 +991,7 @@ next
       "Ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv ?env_ext"
       by simp
     from CoreTm_Quantifier.IH[OF body_typed wf_ext ok_ext CoreTm_Quantifier.prems(4)
-                                  body_rt_premise body_rt_ok_premise]
+                                  body_rt_premise body_rt_ok_premise CoreTm_Quantifier.prems(7)]
     have body_subst:
       "core_term_type (apply_subst_to_callee_env subst callerEnv ?env_ext) Ghost
                       (apply_subst_to_term subst body)
@@ -1018,6 +1022,7 @@ next
     fn_lookup: "fmlookup (TE_Functions calleeEnv) fnName = Some funInfo" and
     len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyArgs_wk: "list_all (is_well_kinded calleeEnv) tyArgs" and
+    tyArgs_cp: "list_all is_complete_type tyArgs" and
     not_ghost_cond: "\<not> (ghost = NotGhost
                        \<and> (\<not> list_all (is_runtime_type calleeEnv) tyArgs
                           \<or> FI_Ghost funInfo = Ghost))" and
@@ -1052,6 +1057,10 @@ next
   note fi_args_tyvars    = call_setup(6)
   note fi_ret_tyvars     = call_setup(7)
   note ret_compose       = call_setup(8)
+
+  \<comment> \<open>Substituted tyArgs stay complete (the substitution's range is complete). \<close>
+  have tyArgs_cp_subst: "list_all is_complete_type ?subst_tyArgs"
+    using map_apply_subst_preserves_complete[OF tyArgs_cp CoreTm_FunctionCall.prems(7)] .
 
   have len_tmArgs_eq: "length tmArgs = length (FI_TmArgs funInfo)" using len_tmArgs .
 
@@ -1104,7 +1113,7 @@ next
       \<comment> \<open>Apply the IH to this tmArg. \<close>
       have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
       from CoreTm_FunctionCall.IH[OF tmArg_in actual_typed
-                                     CoreTm_FunctionCall.prems(2,3,4,5,6)]
+                                     CoreTm_FunctionCall.prems(2,3,4,5,6,7)]
       have ih_result:
         "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
            = Some (apply_subst subst actualTy)" .
@@ -1137,7 +1146,7 @@ next
   qed
 
   show ?case
-    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_rt_subst ng_fn
+    using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_fn
           all_var not_impure len_tmArgs_eq args_check_subst ty_eq ret_compose
     by (auto simp: Let_def)
 next
@@ -1153,6 +1162,7 @@ next
     ctor_lookup: "fmlookup (TE_DataCtors calleeEnv) ctorName = Some (dtName, tyvars, payloadTy)" and
     len_eq: "length tyArgs = length tyvars" and
     tyArgs_wk: "list_all (is_well_kinded calleeEnv) tyArgs" and
+    tyArgs_cp: "list_all is_complete_type tyArgs" and
     ng_constraint: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type calleeEnv) tyArgs
                                           \<and> dtName |\<notin>| TE_GhostDatatypes calleeEnv" and
     payload_typed: "core_term_type calleeEnv ghost payload
@@ -1173,6 +1183,10 @@ next
     using tyArgs_wk
     by (induction tyArgs)
        (auto intro: apply_subst_preserves_well_kinded_callee[OF _ CoreTm_VariantCtor.prems(3)])
+
+  \<comment> \<open>Substituted tyArgs stay complete (the substitution's range is complete). \<close>
+  have tyArgs_cp_subst: "list_all is_complete_type ?subst_tyArgs"
+    using map_apply_subst_preserves_complete[OF tyArgs_cp CoreTm_VariantCtor.prems(7)] .
 
   \<comment> \<open>Substituted tyArgs are runtime in ?be (when ghost = NotGhost). \<close>
   have tyArgs_rt_subst:
@@ -1195,7 +1209,7 @@ next
     using ng_constraint by simp
 
   \<comment> \<open>Payload IH gives the substituted payload typechecks to substituted result. \<close>
-  from CoreTm_VariantCtor.IH[OF payload_typed CoreTm_VariantCtor.prems(2,3,4,5,6)]
+  from CoreTm_VariantCtor.IH[OF payload_typed CoreTm_VariantCtor.prems(2,3,4,5,6,7)]
   have payload_subst:
     "core_term_type ?be ghost (apply_subst_to_term subst payload)
        = Some (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))" .
@@ -1239,7 +1253,7 @@ next
   have len_eq_subst: "length ?subst_tyArgs = length tyvars" using len_eq by simp
 
   show ?case
-    using ctor_lookup_subst tyArgs_wk_subst tyArgs_rt_subst ng_dt_subst
+    using ctor_lookup_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_dt_subst
           payload_subst_compose len_eq_subst ty_eq by simp
 next
   case (CoreTm_Record flds)
@@ -1261,7 +1275,7 @@ next
        core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                       (apply_subst_to_term subst (snd fld))
          = Some (apply_subst subst ty')"
-    using CoreTm_Record.IH CoreTm_Record.prems(2,3,4,5,6)
+    using CoreTm_Record.IH CoreTm_Record.prems(2,3,4,5,6,7)
     by (auto simp: snds.simps)
 
   have len_tys: "length fieldTys = length flds"
@@ -1328,7 +1342,7 @@ next
     inner_typed: "core_term_type calleeEnv ghost tm = Some (CoreTy_Record fieldTypes)" and
     fld_lookup: "map_of fieldTypes fldName = Some ty"
     by (auto split: option.splits CoreType.splits)
-  from CoreTm_RecordProj.IH[OF inner_typed CoreTm_RecordProj.prems(2,3,4,5,6)]
+  from CoreTm_RecordProj.IH[OF inner_typed CoreTm_RecordProj.prems(2,3,4,5,6,7)]
   have inner_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst tm)
@@ -1352,7 +1366,7 @@ next
                           = Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms" and
     ty_eq: "ty = elemTy"
     by (auto split: option.splits CoreType.splits if_splits)
-  from CoreTm_ArrayProj.IH(1)[OF inner_typed CoreTm_ArrayProj.prems(2,3,4,5,6)]
+  from CoreTm_ArrayProj.IH(1)[OF inner_typed CoreTm_ArrayProj.prems(2,3,4,5,6,7)]
   have inner_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst arr)
@@ -1370,7 +1384,7 @@ next
     from idxs_typed tm_in have
       tm_typed: "core_term_type calleeEnv ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
       by (simp add: list_all_iff)
-    from CoreTm_ArrayProj.IH(2)[OF tm_in tm_typed CoreTm_ArrayProj.prems(2,3,4,5,6)]
+    from CoreTm_ArrayProj.IH(2)[OF tm_in tm_typed CoreTm_ArrayProj.prems(2,3,4,5,6,7)]
     show "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost tm'
             = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
       using tm'_eq by simp
@@ -1394,7 +1408,7 @@ next
     len_eq: "length tyArgs = length tyvars" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy"
     by (auto split: option.splits CoreType.splits if_splits prod.splits)
-  from CoreTm_VariantProj.IH[OF inner_typed CoreTm_VariantProj.prems(2,3,4,5,6)]
+  from CoreTm_VariantProj.IH[OF inner_typed CoreTm_VariantProj.prems(2,3,4,5,6,7)]
   have inner_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst tm)
@@ -1462,7 +1476,7 @@ next
   let ?subst_arms = "map (\<lambda>(pat, body). (pat, apply_subst_to_term subst body)) arms"
 
   \<comment> \<open>Scrutinee IH. \<close>
-  from CoreTm_Match.IH(1)[OF scrut_typed CoreTm_Match.prems(2,3,4,5,6)]
+  from CoreTm_Match.IH(1)[OF scrut_typed CoreTm_Match.prems(2,3,4,5,6,7)]
   have scrut_subst:
     "core_term_type ?be ghost (apply_subst_to_term subst scrut)
        = Some (apply_subst subst scrutTy)" .
@@ -1474,7 +1488,7 @@ next
        core_term_type calleeEnv ghost (snd arm) = Some ty' \<Longrightarrow>
        core_term_type ?be ghost (apply_subst_to_term subst (snd arm))
          = Some (apply_subst subst ty')"
-    using CoreTm_Match.IH(2) CoreTm_Match.prems(2,3,4,5,6)
+    using CoreTm_Match.IH(2) CoreTm_Match.prems(2,3,4,5,6,7)
     by (auto simp: snds.simps)
 
   \<comment> \<open>The patterns of arms are unchanged after substitution; we only substitute the bodies. \<close>
@@ -1554,7 +1568,7 @@ next
     cond_ok: "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue tm \<and> ghost = NotGhost)" and
     ty_eq: "ty = sizeof_type dims"
     by (auto split: CoreType.splits option.splits if_splits)
-  from CoreTm_Sizeof.IH[OF inner CoreTm_Sizeof.prems(2,3,4,5,6)]
+  from CoreTm_Sizeof.IH[OF inner CoreTm_Sizeof.prems(2,3,4,5,6,7)]
   have inner_subst:
     "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ghost
                     (apply_subst_to_term subst tm)
@@ -1579,7 +1593,7 @@ next
       ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits)
     from CoreTm_Allocated.IH[OF inner CoreTm_Allocated.prems(2,3,4)]
-         CoreTm_Allocated.prems(5) CoreTm_Allocated.prems(6)
+         CoreTm_Allocated.prems(5) CoreTm_Allocated.prems(6) CoreTm_Allocated.prems(7)
     have "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) Ghost
                           (apply_subst_to_term subst tm)
             = Some (apply_subst subst innerTy)" by simp
@@ -1597,7 +1611,7 @@ next
     case Ghost
     with CoreTm_Old.prems(1) have inner: "core_term_type calleeEnv Ghost tm = Some ty" by simp
     from CoreTm_Old.IH[OF inner CoreTm_Old.prems(2,3,4)]
-         CoreTm_Old.prems(5) CoreTm_Old.prems(6)
+         CoreTm_Old.prems(5) CoreTm_Old.prems(6) CoreTm_Old.prems(7)
     have "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) Ghost
                           (apply_subst_to_term subst tm)
             = Some (apply_subst subst ty)" by simp

@@ -162,8 +162,9 @@ definition elab_context_ok :: "CoreTyEnv \<Rightarrow> string fset \<Rightarrow>
      (CM_TyEnv m) when a realization is recorded);
    - the state env is well-formed and the elab env is well-formed over it
      (the entry conditions of the term/statement elaborator lemmas);
-   - the substitution's ranges are well-kinded in the state env (they must be,
-     to survive into core_module_well_typed of the link);
+   - the substitution's ranges are well-kinded in the state env, and complete
+     (an abstract type is only ever realized by a complete type); both must
+     hold to survive into core_module_well_typed of the link;
    - only ownAbstract names are realized, and realized names keep their
      EE_Typedefs entry (so a later declaration of the same name is caught by
      type_name_in_scope - the state env has forgotten the name, the typedef
@@ -205,6 +206,7 @@ definition elab_decls_invariant ::
      \<and> tyenv_well_formed env
      \<and> elabenv_well_formed env elabEnv
      \<and> typesubst_well_kinded env (CM_TypeSubst m)
+     \<and> typesubst_complete (CM_TypeSubst m)
      \<and> fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract
      \<and> fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)
      \<and> subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}
@@ -305,6 +307,7 @@ proof -
     ghost_sub: "tyenv_ghost_vars_subset env" and
     ret_wk: "tyenv_return_type_well_kinded env" and
     ret_rt: "tyenv_return_type_runtime env" and
+    ret_cp: "tyenv_return_type_complete env" and
     ctors_cons: "tyenv_ctors_consistent env" and
     pay_wk: "tyenv_payloads_well_kinded env" and
     ctor_dist: "tyenv_ctor_tyvars_distinct env" and
@@ -312,6 +315,7 @@ proof -
     fun_wk: "tyenv_fun_types_well_kinded env" and
     fun_dist: "tyenv_fun_tyvars_distinct env" and
     fun_ghost: "tyenv_fun_ghost_constraint env" and
+    fun_cp: "tyenv_fun_return_types_complete env" and
     ng_pay: "tyenv_nonghost_payloads_runtime env" and
     gdt_sub: "tyenv_ghost_datatypes_subset env" and
     rtv_sub: "tyenv_runtime_tyvars_subset env" and
@@ -368,6 +372,10 @@ proof -
     using ret_wk unfolding tyenv_return_type_well_kinded_def by (simp add: wk_cong)
   have ret_rt': "tyenv_return_type_runtime ?env'"
     using ret_rt unfolding tyenv_return_type_runtime_def by (simp add: rt_cong)
+  have ret_cp': "tyenv_return_type_complete ?env'"
+    using ret_cp unfolding tyenv_return_type_complete_def by simp
+  have fun_cp': "tyenv_fun_return_types_complete ?env'"
+    using fun_cp unfolding tyenv_fun_return_types_complete_def by simp
   have ghost_sub': "tyenv_ghost_vars_subset ?env'"
     using ghost_sub unfolding tyenv_ghost_vars_subset_def by simp
   have ctors_cons': "tyenv_ctors_consistent ?env'"
@@ -525,6 +533,7 @@ proof -
     unfolding tyenv_well_formed_def
     using vars_wk' vars_rt' ghost_sub' ret_wk' ret_rt' ctors_cons' pay_wk' ctor_dist'
           bytype' fun_wk' fun_dist' fun_ghost' ng_pay' gdt_sub' rtv_sub' abs_sub' dt_ne'
+          ret_cp' fun_cp'
     by blast
 qed
 
@@ -1091,7 +1100,8 @@ proof -
   have "core_term_type (apply_subst_to_module_env (CM_TypeSubst m) env env) ghost
           (apply_subst_to_term (CM_TypeSubst m) tm)
         = Some (apply_subst (CM_TypeSubst m) ty)"
-    using core_term_type_subst_module_env[OF typed wf ok] rt_ok by blast
+    using core_term_type_subst_module_env[OF typed wf ok] rt_ok
+      elab_decls_invariant_def inv typesubst_complete_def by auto
   moreover have "apply_subst_to_module_env (CM_TypeSubst m) env env = env"
     using state_env_subst_absorb[OF env_eq scope0 idem] .
   moreover have "apply_subst (CM_TypeSubst m) ty = ty"
@@ -1198,6 +1208,7 @@ proof -
    and gvs: "tyenv_ghost_vars_subset env"
    and rwk: "tyenv_return_type_well_kinded env"
    and rrt: "tyenv_return_type_runtime env"
+   and rrc: "tyenv_return_type_complete env"
    and cons: "tyenv_ctors_consistent env"
    and pwk: "tyenv_payloads_well_kinded env"
    and ctd: "tyenv_ctor_tyvars_distinct env"
@@ -1205,6 +1216,7 @@ proof -
    and fwk: "tyenv_fun_types_well_kinded env"
    and ftd: "tyenv_fun_tyvars_distinct env"
    and fgc: "tyenv_fun_ghost_constraint env"
+   and frc: "tyenv_fun_return_types_complete env"
    and npr: "tyenv_nonghost_payloads_runtime env"
    and gds: "tyenv_ghost_datatypes_subset env"
    and rts: "tyenv_runtime_tyvars_subset env"
@@ -1300,6 +1312,9 @@ proof -
   have fgc': "tyenv_fun_ghost_constraint ?env'"
     using fgc unfolding tyenv_fun_ghost_constraint_def Let_def
     by (simp add: proj rt_cong)
+  have frc': "tyenv_fun_return_types_complete ?env'"
+    using frc unfolding tyenv_fun_return_types_complete_def
+    by (simp add: proj tyenv_add_global_def)
   have npr': "tyenv_nonghost_payloads_runtime ?env'"
     using npr unfolding tyenv_nonghost_payloads_runtime_def
     by (simp add: proj rt_cong)
@@ -1315,10 +1330,12 @@ proof -
   have dne': "tyenv_datatypes_nonempty ?env'"
     using dne unfolding tyenv_datatypes_nonempty_def
     by (simp add: tyenv_add_global_def)
+  have rrc': "tyenv_return_type_complete ?env'"
+    using rrc unfolding tyenv_return_type_complete_def by (simp add: proj)
   show ?thesis
     unfolding tyenv_well_formed_def
     using vwk' vrt' gvs' rwk' rrt' cons' pwk' ctd' cbt' fwk' ftd' fgc' npr'
-          gds' rts' ats' dne'
+          gds' rts' ats' dne' rrc' frc'
     by blast
 qed
 
@@ -1508,6 +1525,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -1578,6 +1596,7 @@ proof -
     show "tyenv_well_formed ?env'" using wf' .
     show "elabenv_well_formed ?env' elabEnv" using eewf' .
     show "typesubst_well_kinded ?env' (CM_TypeSubst ?m')" using swk_env' by simp
+    show "typesubst_complete (CM_TypeSubst ?m')" using tsc by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| ownAbstract" using dom_own by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| fmdom (EE_Typedefs elabEnv)" using dom_td by simp
     show "subst_names (CM_TypeSubst ?m') |\<inter>| scope_bound_tyvars ?env' elabEnv = {||}"
@@ -1612,6 +1631,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -1664,6 +1684,7 @@ proof -
     show "tyenv_well_formed env" using wf .
     show "elabenv_well_formed env elabEnv" using eewf .
     show "typesubst_well_kinded env (CM_TypeSubst ?m')" using swk by simp
+    show "typesubst_complete (CM_TypeSubst ?m')" using tsc by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| ownAbstract" using dom_own by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| fmdom (EE_Typedefs elabEnv)" using dom_td by simp
     show "subst_names (CM_TypeSubst ?m') |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -2066,6 +2087,7 @@ lemma tyenv_well_formed_add_function:
                                 (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
+      and ret_cp: "FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
   shows "tyenv_well_formed (tyenv_add_function name info env)"
 proof -
   let ?env' = "tyenv_add_function name info env"
@@ -2102,6 +2124,7 @@ proof -
    and gvs: "tyenv_ghost_vars_subset env"
    and rwk: "tyenv_return_type_well_kinded env"
    and rrt: "tyenv_return_type_runtime env"
+   and rrc: "tyenv_return_type_complete env"
    and cons: "tyenv_ctors_consistent env"
    and pwk: "tyenv_payloads_well_kinded env"
    and ctd: "tyenv_ctor_tyvars_distinct env"
@@ -2109,12 +2132,34 @@ proof -
    and fwk: "tyenv_fun_types_well_kinded env"
    and ftd: "tyenv_fun_tyvars_distinct env"
    and fgc: "tyenv_fun_ghost_constraint env"
+   and frc: "tyenv_fun_return_types_complete env"
    and npr: "tyenv_nonghost_payloads_runtime env"
    and gds: "tyenv_ghost_datatypes_subset env"
    and rts: "tyenv_runtime_tyvars_subset env"
    and ats: "tyenv_abstract_types_subset env"
    and dne: "tyenv_datatypes_nonempty env"
     using wf unfolding tyenv_well_formed_def by blast+
+  \<comment> \<open>Return types of non-ghost functions stay complete: the new entry's by the
+      ret_cp assumption, the old ones by the env's own clause.\<close>
+  have frc': "tyenv_fun_return_types_complete ?env'"
+    unfolding tyenv_fun_return_types_complete_def
+  proof (intro allI impI)
+    fix funName info'
+    assume "fmlookup (TE_Functions ?env') funName = Some info' \<and> FI_Ghost info' = NotGhost"
+    then have lk: "fmlookup (fmupd name info (TE_Functions env)) funName = Some info'"
+          and ng: "FI_Ghost info' = NotGhost"
+      by (simp_all add: fns)
+    show "is_complete_type (FI_ReturnType info')"
+    proof (cases "funName = name")
+      case True
+      then have "info' = info" using lk by simp
+      then show ?thesis using ret_cp ng by simp
+    next
+      case False
+      then have "fmlookup (TE_Functions env) funName = Some info'" using lk by simp
+      then show ?thesis using frc ng unfolding tyenv_fun_return_types_complete_def by blast
+    qed
+  qed
   have vwk': "tyenv_vars_well_kinded ?env'"
     using vwk unfolding tyenv_vars_well_kinded_def
     by (simp add: proj wk_cong wk_cong0)
@@ -2257,10 +2302,12 @@ proof -
   have dne': "tyenv_datatypes_nonempty ?env'"
     using dne unfolding tyenv_datatypes_nonempty_def
     by (simp add: tyenv_add_function_def)
+  have rrc': "tyenv_return_type_complete ?env'"
+    using rrc unfolding tyenv_return_type_complete_def by (simp add: proj)
   show ?thesis
     unfolding tyenv_well_formed_def
     using vwk' vrt' gvs' rwk' rrt' cons' pwk' ctd' cbt' fwk' ftd' fgc' npr'
-          gds' rts' ats' dne'
+          gds' rts' ats' dne' rrc' frc'
     by blast
 qed
 
@@ -2398,6 +2445,7 @@ lemma elab_fun_signature_correct:
                         |\<union>| fset_of_list (DF_TyArgs df) \<rparr>)
                (FI_ReturnType info)"
     and "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType info = CoreTy_Record []"
+    and "DF_Ghost df = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
 proof -
   let ?tyvars = "DF_TyArgs df"
   let ?ghost = "DF_Ghost df"
@@ -2419,6 +2467,7 @@ proof -
     ret: "(case DF_ReturnType df of
              None \<Rightarrow> Inr (CoreTy_Record [])
            | Some rty \<Rightarrow> elab_type ?sigEnv ?sigEE ?ghost rty) = Inr retTy" and
+    ret_cp: "?ghost = NotGhost \<longrightarrow> is_complete_type retTy" and
     info_eq: "info = \<lparr> FI_TyArgs = ?tyvars,
                        FI_TmArgs = zip argTys
                                      (map (\<lambda>(_, vor, _). vor) (DF_TmArgs df)),
@@ -2428,7 +2477,8 @@ proof -
     unfolding elab_fun_signature_def Let_def
     by (cases "case DF_ReturnType df of
                  None \<Rightarrow> Inr (CoreTy_Record [])
-               | Some rty \<Rightarrow> elab_type ?sigEnv ?sigEE ?ghost rty") auto
+               | Some rty \<Rightarrow> elab_type ?sigEnv ?sigEE ?ghost rty")
+       (auto split: if_splits)
   \<comment> \<open>Structural conclusions.\<close>
   show tyargs: "FI_TyArgs info = DF_TyArgs df" by (simp add: info_eq)
   show "FI_Ghost info = DF_Ghost df" by (simp add: info_eq)
@@ -2517,6 +2567,9 @@ proof -
     have "retTy = CoreTy_Record []" using ret that by simp
     then show ?thesis by (simp add: info_eq)
   qed
+  \<comment> \<open>Complete return type (checked by the elaborator for non-ghost functions).\<close>
+  show "is_complete_type (FI_ReturnType info)" if "DF_Ghost df = NotGhost"
+    using ret_cp that by (simp add: info_eq)
 qed
 
 
@@ -2558,6 +2611,7 @@ lemma elab_decls_invariant_add_function:
                                 (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
+      and ret_cp: "FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_function name info env) elabEnv
            (m \<lparr> CM_TyEnv := tyenv_add_function name info (CM_TyEnv m) \<rparr>)"
@@ -2571,6 +2625,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -2646,7 +2701,7 @@ proof -
   have own_disj': "ownAbstract |\<inter>| TE_TypeVars (CM_TyEnv ?m') = {||}"
     using own_disj by (simp add: tyenv_add_function_def)
   have wf': "tyenv_well_formed ?env'"
-    using tyenv_well_formed_add_function[OF wf dist_fi wk_args wk_ret rt_p] .
+    using tyenv_well_formed_add_function[OF wf dist_fi wk_args wk_ret rt_p ret_cp] .
   \<comment> \<open>The new entry is fresh, so it cannot be a ghost constant, and
       elabenv_well_formed survives the TE_Functions update.\<close>
   have eewf': "elabenv_well_formed ?env' elabEnv"
@@ -2705,6 +2760,7 @@ proof -
     show "tyenv_well_formed ?env'" using wf' .
     show "elabenv_well_formed ?env' elabEnv" using eewf' .
     show "typesubst_well_kinded ?env' (CM_TypeSubst ?m')" using swk_env' by simp
+    show "typesubst_complete (CM_TypeSubst ?m')" using tsc by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| ownAbstract" using dom_own by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| fmdom (EE_Typedefs elabEnv)" using dom_td by simp
     show "subst_names (CM_TypeSubst ?m') |\<inter>| scope_bound_tyvars ?env' elabEnv = {||}"
@@ -2927,10 +2983,12 @@ proof -
   have ok: "module_env_subst_ok ?s ?be ?be"
    and rt_ok: "module_env_subst_runtime_ok ?s ?be ?be"
     using elab_decls_invariant_body_env_subst_ok[OF inv lk] by blast+
+  have cp: "\<forall>ty' \<in> fmran' ?s. is_complete_type ty'"
+    using inv unfolding elab_decls_invariant_def typesubst_complete_def by blast
   have "core_statement_list_type (apply_subst_to_module_env ?s ?be ?be)
           (FI_Ghost info) (apply_subst_to_statement_list ?s body)
         = Some (apply_subst_to_module_env ?s ?be envOut)"
-    using core_statement_list_type_subst_module_env[OF typed wf_be ok] rt_ok
+    using core_statement_list_type_subst_module_env[OF cp typed wf_be ok] rt_ok
     by blast
   then show ?thesis
     using elab_decls_invariant_body_env_absorb[OF inv lk] by simp
@@ -3096,6 +3154,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -3212,6 +3271,7 @@ proof -
     show "tyenv_well_formed env" using wf .
     show "elabenv_well_formed env elabEnv" using eewf .
     show "typesubst_well_kinded env (CM_TypeSubst ?m')" using swk by simp
+    show "typesubst_complete (CM_TypeSubst ?m')" using tsc by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| ownAbstract" using dom_own by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| fmdom (EE_Typedefs elabEnv)" using dom_td by simp
     show "subst_names (CM_TypeSubst ?m') |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -3463,6 +3523,8 @@ proof -
     show ?thesis
       by (metis abs_rtv abs_tv ng_df sigc(1,7))
   qed
+  have ret_cp': "FI_Ghost funInfo = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType funInfo)"
+    using sigc(9) sigc(2) by simp
   \<comment> \<open>Dispatch on whether the function is already declared.\<close>
   from elab show ?thesis
   proof (cases rule: elab_function_decl_Inr_elim)
@@ -3505,7 +3567,7 @@ proof -
       using Declare(8) fi by simp
     have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv ?m1"
       by (rule elab_decls_invariant_add_function
-                 [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p'])
+                 [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p' ret_cp'])
     have ee_td: "EE_Typedefs ?ee1 = EE_Typedefs elabEnv"
       by (cases "DF_ReturnType df = None") simp_all
     have ee_vc: "EE_NullaryDataCtors ?ee1 = EE_NullaryDataCtors elabEnv"
@@ -3808,6 +3870,7 @@ proof -
    and own_disj: "ownAbstract |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
    and wf: "tyenv_well_formed env"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -3828,6 +3891,7 @@ proof -
     show "tyenv_well_formed env" using wf .
     show "elabenv_well_formed env ?ee'" using eewf' .
     show "typesubst_well_kinded env (CM_TypeSubst m)" using swk .
+    show "typesubst_complete (CM_TypeSubst m)" using tsc .
     show "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract" using dom_own .
     show "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs ?ee')" using dom_td by simp
     show "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env ?ee' = {||}"
@@ -3903,11 +3967,15 @@ proof -
                              |\<union>| fset_of_list (FI_TyArgs ?info) \<rparr>)
                     (FI_ReturnType ?info)"
     by (simp add: ghost_const_fun_info_def)
+  \<comment> \<open>A ghost constant's desugared function is ghost, so the complete-return-type
+      condition is vacuous.\<close>
+  have ret_cp: "FI_Ghost ?info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType ?info)"
+    by (simp add: ghost_const_fun_info_def)
   have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals
                 (tyenv_add_function name ?info env) elabEnv
                 (m \<lparr> CM_TyEnv := tyenv_add_function name ?info (CM_TyEnv m) \<rparr>)"
     by (rule elab_decls_invariant_add_function
-               [OF inv notin fi_cap fi_fresh dist_fi wk_args wk_ret rt_p])
+               [OF inv notin fi_cap fi_fresh dist_fi wk_args wk_ret rt_p ret_cp])
   have lk1: "fmlookup (TE_Functions (tyenv_add_function name ?info env)) name
                = Some ?info"
     by (simp add: tyenv_add_function_def)
@@ -5139,11 +5207,16 @@ lemma apply_realization_invariant:
       and rt_ok: "name |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
       and nocap: "\<not> realization_captures env elabEnv name target"
       and res: "apply_realization name target env elabEnv m = (env', elabEnv', m')"
+      and cp_t: "is_complete_type target"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof -
   let ?s = "fmupd name target fmempty"
   let ?\<sigma> = "CM_TypeSubst m"
   let ?\<sigma>' = "fmupd name target (fmmap (apply_subst ?s) ?\<sigma>)"
+  \<comment> \<open>The singleton substitution's range is the (complete) target.\<close>
+  have cp_s: "\<forall>ty \<in> fmran' ?s. is_complete_type ty"
+    using fmran'_singleton_subst[of name target] cp_t
+    unfolding singleton_subst_def by simp
 
   \<comment> \<open>The three components of the result.\<close>
   have env'_eq: "env' = (apply_subst_to_tyenv ?s env)
@@ -5165,6 +5238,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and tswk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -5250,7 +5324,7 @@ proof -
       unfolding tv_env' rtv_env' using rtv_sub by auto
     have "tyenv_well_formed (apply_subst_to_module_env ?s env' env)"
       by (rule tyenv_well_formed_apply_subst_to_module_env
-                 [OF wf ok ok_rt abs_tv abs_target rtv_target])
+                 [OF wf ok ok_rt cp_s abs_tv abs_target rtv_target])
     then show ?thesis unfolding absorb .
   qed
 
@@ -5275,6 +5349,31 @@ proof -
       using vd0 rty_env' unfolding ee'_eq by simp
     show ?thesis
       unfolding elabenv_well_formed_def using td' vd_ctor' gc' vd' by simp
+  qed
+
+  \<comment> \<open>Conjunct 7b: the extended substitution's ranges are complete (the new
+      target is, and the rewritten old ranges stay so).\<close>
+  have tsc': "typesubst_complete ?\<sigma>'"
+    unfolding typesubst_complete_def
+  proof
+    fix ty assume "ty \<in> fmran' ?\<sigma>'"
+    then obtain n where lk: "fmlookup ?\<sigma>' n = Some ty"
+      by (auto simp: fmlookup_ran'_iff)
+    show "is_complete_type ty"
+    proof (cases "n = name")
+      case True
+      then have "ty = target" using lk by simp
+      then show ?thesis using cp_t by simp
+    next
+      case False
+      then obtain ty0 where lk0: "fmlookup ?\<sigma> n = Some ty0"
+                        and ty_eq: "ty = apply_subst ?s ty0"
+        using lk by (cases "fmlookup ?\<sigma> n") auto
+      have cp0: "is_complete_type ty0"
+        using tsc lk0 unfolding typesubst_complete_def by (auto intro: fmran'I)
+      show ?thesis
+        unfolding ty_eq by (rule apply_subst_preserves_complete[OF cp0 cp_s])
+    qed
   qed
 
   \<comment> \<open>Conjunct 7: the extended substitution's ranges are well-kinded.\<close>
@@ -5495,7 +5594,7 @@ proof -
                    (apply_subst_to_statement_list ?\<sigma> body0))
               = Some (apply_subst_to_module_env ?s
                          (module_body_env_for env' (CF_Args f0) ?info') envOut)"
-          using core_statement_list_type_subst_module_env[OF typed wf_be ok_be] ok_rt_be
+          using core_statement_list_type_subst_module_env[OF cp_s typed wf_be ok_be] ok_rt_be
           by blast
         then have "core_statement_list_type
                      (module_body_env_for env' (CF_Args f0) ?info')
@@ -5540,6 +5639,8 @@ proof -
     show "elabenv_well_formed env' elabEnv'" by (rule eewf')
     show "typesubst_well_kinded env' (CM_TypeSubst m')"
       unfolding m'_eq using tswk' by simp
+    show "typesubst_complete (CM_TypeSubst m')"
+      unfolding m'_eq using tsc' by simp
     show "fmdom (CM_TypeSubst m') |\<subseteq>| ownAbstract"
       unfolding m'_eq using dom_own' by simp
     show "fmdom (CM_TypeSubst m') |\<subseteq>| fmdom (EE_Typedefs elabEnv')"
@@ -5818,6 +5919,7 @@ proof -
    and gvs: "tyenv_ghost_vars_subset env"
    and rwk: "tyenv_return_type_well_kinded env"
    and rrt: "tyenv_return_type_runtime env"
+   and rrc: "tyenv_return_type_complete env"
    and cons: "tyenv_ctors_consistent env"
    and pwk: "tyenv_payloads_well_kinded env"
    and ctd: "tyenv_ctor_tyvars_distinct env"
@@ -5825,6 +5927,7 @@ proof -
    and fwk: "tyenv_fun_types_well_kinded env"
    and ftd: "tyenv_fun_tyvars_distinct env"
    and fgc: "tyenv_fun_ghost_constraint env"
+   and frc: "tyenv_fun_return_types_complete env"
    and npr: "tyenv_nonghost_payloads_runtime env"
    and gds: "tyenv_ghost_datatypes_subset env"
    and rts: "tyenv_runtime_tyvars_subset env"
@@ -6162,6 +6265,8 @@ proof -
   qed
   have ftd': "tyenv_fun_tyvars_distinct ?env'"
     using ftd unfolding tyenv_fun_tyvars_distinct_def by (simp add: proj)
+  have frc': "tyenv_fun_return_types_complete ?env'"
+    using frc unfolding tyenv_fun_return_types_complete_def by (simp add: proj)
   have fgc': "tyenv_fun_ghost_constraint ?env'"
     unfolding tyenv_fun_ghost_constraint_def Let_def
   proof (intro allI impI)
@@ -6295,10 +6400,12 @@ proof -
     show ?thesis
       unfolding tyenv_datatypes_nonempty_def using H1 H2 by auto
   qed
+  have rrc': "tyenv_return_type_complete ?env'"
+    using rrc unfolding tyenv_return_type_complete_def by (simp add: proj)
   show ?thesis
     unfolding tyenv_well_formed_def
     using vwk' vrt' gvs' rwk' rrt' cons' pwk' ctd' cbt' fwk' ftd' fgc' npr'
-          gds' rts' ats' dne'
+          gds' rts' ats' dne' rrc' frc'
     by blast
 qed
 
@@ -6547,6 +6654,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -6799,6 +6907,7 @@ proof -
     show "tyenv_well_formed ?env'" using wf' .
     show "elabenv_well_formed ?env' ?ee'" using eewf' .
     show "typesubst_well_kinded ?env' (CM_TypeSubst ?m')" using swk' by simp
+    show "typesubst_complete (CM_TypeSubst ?m')" using tsc by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| ownAbstract" using dom_own by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| fmdom (EE_Typedefs ?ee')" using dom_td by simp
     show "subst_names (CM_TypeSubst ?m') |\<inter>| scope_bound_tyvars ?env' ?ee' = {||}"
@@ -7111,8 +7220,9 @@ proof (cases rule: elab_datatype_decl_Inr_elim)
       then show ?thesis
         unfolding realization_captures_def by simp
     qed
+    have cp1: "is_complete_type (CoreTy_Datatype ?name [])" by simp
     show ?thesis
-      by (rule apply_realization_invariant[OF inv1 own tv1 wk1 noself1 rt1 nocap1 res])
+      by (rule apply_realization_invariant[OF inv1 own tv1 wk1 noself1 rt1 nocap1 res cp1])
 next
   case (Plain ctorInfo isGhost)
   \<comment> \<open>An ordinary (non-realizing) datatype declaration.\<close>
@@ -7147,6 +7257,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -7204,6 +7315,7 @@ proof -
     show "tyenv_well_formed env" using wf .
     show "elabenv_well_formed env ?ee'" using eewf' .
     show "typesubst_well_kinded env (CM_TypeSubst m)" using swk .
+    show "typesubst_complete (CM_TypeSubst m)" using tsc .
     show "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract" using dom_own .
     show "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs ?ee')" using dom_td by auto
     show "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env ?ee' = {||}" using cap' .
@@ -7239,6 +7351,7 @@ proof -
    and wf: "tyenv_well_formed env"
    and eewf: "elabenv_well_formed env elabEnv"
    and swk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and tsc: "typesubst_complete (CM_TypeSubst m)"
    and dom_own: "fmdom (CM_TypeSubst m) |\<subseteq>| ownAbstract"
    and dom_td: "fmdom (CM_TypeSubst m) |\<subseteq>| fmdom (EE_Typedefs elabEnv)"
    and cap_env: "subst_names (CM_TypeSubst m) |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -7354,6 +7467,7 @@ proof -
     show "tyenv_well_formed ?env'" using wf' .
     show "elabenv_well_formed ?env' ?ee'" using eewf' .
     show "typesubst_well_kinded ?env' (CM_TypeSubst ?m')" using swk' by simp
+    show "typesubst_complete (CM_TypeSubst ?m')" using tsc by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| ownAbstract" using dom_own by simp
     show "fmdom (CM_TypeSubst ?m') |\<subseteq>| fmdom (EE_Typedefs ?ee')" using dom_td by auto
     show "subst_names (CM_TypeSubst ?m') |\<inter>| scope_bound_tyvars ?env' ?ee' = {||}"
@@ -7388,6 +7502,7 @@ lemma elab_typedef_decl_Inr_elim:
     "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
     "\<not> realization_captures env elabEnv (DT_Name dt) target"
     "apply_realization (DT_Name dt) target env elabEnv m = (env', elabEnv', m')"
+    "is_complete_type target"
   | (NewAbstract)
     "\<not> DT_Extern dt"
     "DT_Name dt |\<notin>| TE_TypeVars env"
@@ -7448,18 +7563,22 @@ proof -
       by (cases "DT_Name dt |\<in>| TE_RuntimeTypeVars env
                  \<and> \<not> is_runtime_type env target")
          (auto simp: g1 True own dtdef noargs et noself)
+    have cp: "is_complete_type target"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "is_complete_type target")
+         (auto simp: g1 True own dtdef noargs et noself rt_ok')
     have nocap: "\<not> realization_captures env elabEnv (DT_Name dt) target"
       using ok unfolding elab_typedef_decl_def Let_def
       by (cases "realization_captures env elabEnv (DT_Name dt) target")
-         (auto simp: g1 True own dtdef noargs et noself rt_ok')
+         (auto simp: g1 True own dtdef noargs et noself rt_ok' cp)
     have res: "apply_realization (DT_Name dt) target env elabEnv m
                  = (env', elabEnv', m')"
       using ok unfolding elab_typedef_decl_def Let_def
-      by (auto simp: g1 True own dtdef noargs et noself rt_ok' nocap)
+      by (auto simp: g1 True own dtdef noargs et noself rt_ok' cp nocap)
     have rt_ok: "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
       using rt_ok' by blast
     show thesis
-      by (rule Realize[OF g1 True own dtdef noargs et noself rt_ok nocap res])
+      by (rule Realize[OF g1 True own dtdef noargs et noself rt_ok nocap res cp])
   next
     case False
     have notin: "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
@@ -7538,7 +7657,7 @@ proof (cases rule: elab_typedef_decl_Inr_elim)
     using elab_type_is_well_kinded(1)[OF td wf et] .
   show ?thesis
     by (rule apply_realization_invariant
-               [OF inv own Realize(2) wk noself rt_ok nocap res])
+               [OF inv own Realize(2) wk noself rt_ok nocap res Realize(11)])
 next
   case NewAbstract
   note notin = NewAbstract(3)
@@ -8835,6 +8954,10 @@ proof -
                     (FI_ReturnType info)"
     using wfI
     unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
+  have frcI: "\<And>funName info. fmlookup (TE_Functions (CM_TyEnv I)) funName = Some info \<Longrightarrow>
+                FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+    using wfI
+    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
   have nprI: "\<And>ctorName dtName tyVars payload.
                 fmlookup (TE_DataCtors (CM_TyEnv I)) ctorName
                   = Some (dtName, tyVars, payload) \<Longrightarrow>
@@ -8896,6 +9019,10 @@ proof -
                     (FI_ReturnType info)"
     using wf_env
     unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
+  have frcE: "\<And>funName info. fmlookup (TE_Functions env) funName = Some info \<Longrightarrow>
+                FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+    using wf_env
+    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
   have nprE: "\<And>ctorName dtName tyVars payload.
                 fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
                 dtName |\<notin>| TE_GhostDatatypes env \<Longrightarrow>
@@ -8994,6 +9121,29 @@ proof -
   next
     show "tyenv_return_type_runtime ?mid"
       unfolding tyenv_return_type_runtime_def by (simp add: fL(8))
+  next
+    show "tyenv_return_type_complete ?mid"
+      unfolding tyenv_return_type_complete_def by (simp add: fL(8))
+  next
+    show "tyenv_fun_return_types_complete ?mid"
+      unfolding tyenv_fun_return_types_complete_def
+    proof (intro allI impI)
+      fix funName info
+      assume asm: "fmlookup (TE_Functions ?mid) funName = Some info
+                     \<and> FI_Ghost info = NotGhost"
+      then have lk: "fmlookup (TE_Functions ?mid) funName = Some info"
+            and ng: "FI_Ghost info = NotGhost"
+        by simp_all
+      from fn_cases[OF lk]
+      show "is_complete_type (FI_ReturnType info)"
+      proof
+        assume lkI: "fmlookup (TE_Functions (CM_TyEnv I)) funName = Some info"
+        show ?thesis using frcI[OF lkI ng] .
+      next
+        assume lkB: "fmlookup (TE_Functions ?envB) funName = Some info"
+        show ?thesis using frcE[OF fnB_env[OF lkB] ng] .
+      qed
+    qed
   next
     show "tyenv_ctors_consistent ?mid"
       unfolding tyenv_ctors_consistent_def
@@ -9572,6 +9722,8 @@ proof -
   have t2: "core_term_type (link_mid_env I M L) ghost tm = Some ty"
     using core_term_type_tyenv_extends[OF ext cons1 t1] .
   \<comment> \<open>Substitute with the link's substitution, then collapse the env.\<close>
+  have cp_L: "\<forall>ty' \<in> fmran' (CM_TypeSubst L). is_complete_type ty'"
+    using inv unfolding elab_decls_invariant_def typesubst_complete_def subst_eq by blast
   have t3: "core_term_type
               (apply_subst_to_module_env (CM_TypeSubst L)
                  (CM_TyEnv (normalize_module L)) (link_mid_env I M L))
@@ -9580,7 +9732,7 @@ proof -
     using core_term_type_subst_module_env[OF t2
             elab_link_mid_env_well_formed[OF I_wt I_norm inv link]
             elab_link_mid_env_subst_ok[OF I_wt I_norm inv link]]
-          link_mid_env_runtime_ok[OF linkI linkM1 link setMS]
+          link_mid_env_runtime_ok[OF linkI linkM1 link setMS] cp_L
     by blast
   show ?thesis
     using t3
@@ -9973,11 +10125,13 @@ proof -
                                                 refl refl absL rtvL,
                                              where names = "CF_Args f"]
           by (simp add: subst_eq)
+        have cp_sb: "\<forall>ty' \<in> fmran' ?\<sigma>. is_complete_type ty'"
+          using inv unfolding elab_decls_invariant_def typesubst_complete_def by blast
         have t3: "core_statement_list_type (apply_subst_to_module_env ?\<sigma> ?tb ?sb)
                     (FI_Ghost info0)
                     (apply_subst_to_statement_list ?\<sigma> body0)
                     = Some (apply_subst_to_module_env ?\<sigma> ?tb envOut2)"
-          using core_statement_list_type_subst_module_env[OF t2 wf_sb ok_sb] rt_sb
+          using core_statement_list_type_subst_module_env[OF cp_sb t2 wf_sb ok_sb] rt_sb
           by blast
         have info_rel: "info0 = apply_subst_to_funinfo (CM_TypeSubst I) info0"
           by (simp add: I_norm)
@@ -10020,6 +10174,7 @@ proof -
     and invM: "core_module_invariant M"
     and wf_env: "tyenv_well_formed env"
     and wk_env: "typesubst_well_kinded env (CM_TypeSubst M)"
+    and cp_env: "typesubst_complete (CM_TypeSubst M)"
     using inv unfolding elab_decls_invariant_def by blast+
   have idemM: "idempotent_subst (CM_TypeSubst M)"
     using invM unfolding core_module_invariant_def by blast
@@ -10078,9 +10233,13 @@ proof -
     unfolding normalized_module_well_typed_def
     using C1 C2 C3 C4 by blast
 
+  \<comment> \<open>Substitution ranges complete: env-free, so it transfers directly.\<close>
+  have B': "typesubst_complete (CM_TypeSubst L)"
+    unfolding subst_eq by (rule cp_env)
+
   show ?thesis
     unfolding core_module_well_typed_def
-    using A B C by blast
+    using A B B' C by blast
 qed
 
 
