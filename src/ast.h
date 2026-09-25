@@ -62,8 +62,7 @@ struct UnivarNode {
     struct Type *type;
     uint32_t ref_count;
     bool must_be_executable;  // Type must be valid in executable code (e.g. not 'int' or 'real')
-    bool must_be_complete;    // Type must not be an "incomplete array" type (T[])
-    bool must_be_valid_decreases;   // Type must be usable in a "decreases" clause
+    bool must_be_valid_decreases;   // Type must be usable in a 'decreases' clause
 };
 
 

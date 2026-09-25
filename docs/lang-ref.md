@@ -315,6 +315,13 @@ The language includes the following types:
       (similar to an allocatable array) but the function also cannot
       resize the array dynamically (similar to a fixed-sized array).
 
+      We also use the phrase "incomplete type" more broadly to mean
+      any type that *contains* an incomplete array (such as `{i32[],
+      u64}`). An incomplete type can never be used as a type argument,
+      so, for example, `Maybe<i32[]>`, `f<i32[]>(x)` and
+      `Just<i32[]>(x)` are all errors. See "Function declarations"
+      below for more details.
+
  - Named types: any valid identifier, e.g. `MyType`, can also be used
    as a type. Typically this will be used to refer to a type created
    in a `typedef` or `datatype` declaration (see below), or else to a
@@ -1883,6 +1890,8 @@ Typedefs can also be "generic", i.e. have type parameters. For
 example, `type Pair<a,b> = {a,b};` declares that `Pair<a,b>` will be a
 synonym for the type `{a,b}`, for any types `a` and `b` (e.g.,
 `Pair<i32, bool>` could then be used as a synonym for `{i32, bool}`).
+The type arguments must be complete types, so e.g. `Pair<i32[], i32[]>`
+is not allowed (see "Types" above).
 
 If a typedef (with a particular name) is given in a module's
 interface, then no `type` or `datatype` declaration of the same name
@@ -2042,7 +2051,9 @@ constructors; the values of this type are `Nothing` and `Just(x)`
 where `x` is any value of type `a`. Because the Maybe type has been
 declared generic, it can be used with different type parameters, e.g.
 `Maybe<i32>`, `Maybe<bool>` and `Maybe<{i32,u64}>` are all valid
-types.
+types. Note that the type parameters must be complete types (see also
+"Types" above): for example, `Maybe<i32[]>` is not valid, and nor is
+`Just(a)` if `a` has type `i32[]`.
 
 It is not (currently) possible to use the built-in `==` operator with
 datatypes, except in ghost code. Instead, to check (within executable
@@ -2324,6 +2335,15 @@ types, whenever the call itself appears in executable code. This
 applies, even if the type parameter is not actually used anywhere --
 for example, given `function f<T>()`, the call `f<int>()` is only
 allowed in ghost code.
+
+Type parameters must also always be complete types (see "Types"
+above). For example, given `function same<T>(x: T, y: T)` and two
+variables `a: i32[]` and `b: i32[]`, both `same<i32[]>(a, b)` and
+`same(a, b)` are errors, because the type parameter `T` would be
+`i32[]`. The usual way to write a generic function over arrays of
+unknown size is to declare the parameters as `T[]` rather than `T`,
+e.g. `function copy<T>(ref dest: T[], src: T[])`; then `copy(a, b)` is
+fine, with `T = i32`.
 
 
 ### Extern functions

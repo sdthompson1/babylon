@@ -1,0 +1,27 @@
+src/IncompleteTyArg.b:57:13: Can't use an incomplete array type here
+src/IncompleteTyArg.b:58:15: Can't use an incomplete array type here
+src/IncompleteTyArg.b:59:10: Can't use an incomplete array type here
+src/IncompleteTyArg.b:60:18: Can't use an incomplete array type here
+src/IncompleteTyArg.b:69:13: Can't use an incomplete array type here
+src/IncompleteTyArg.b:70:15: Can't use an incomplete array type here
+src/IncompleteTyArg.b:71:10: Can't use an incomplete array type here
+src/IncompleteTyArg.b:72:18: Can't use an incomplete array type here
+src/IncompleteTyArg.b:81:13: Can't use an incomplete array type here
+src/IncompleteTyArg.b:81:16: Can't use an incomplete array type here   // T is still unbound after the first error, so the second argument fails too
+src/IncompleteTyArg.b:82:15: Can't use an incomplete array type here
+src/IncompleteTyArg.b:82:18: Can't use an incomplete array type here
+src/IncompleteTyArg.b:83:10: Can't use an incomplete array type here
+src/IncompleteTyArg.b:83:13: Can't use an incomplete array type here
+src/IncompleteTyArg.b:84:18: Can't use an incomplete array type here
+src/IncompleteTyArg.b:93:13: Can't use an incomplete array type here
+src/IncompleteTyArg.b:93:16: Can't use an incomplete array type here
+src/IncompleteTyArg.b:94:15: Can't use an incomplete array type here
+src/IncompleteTyArg.b:94:18: Can't use an incomplete array type here
+src/IncompleteTyArg.b:95:10: Can't use an incomplete array type here
+src/IncompleteTyArg.b:95:13: Can't use an incomplete array type here
+src/IncompleteTyArg.b:96:18: Can't use an incomplete array type here
+src/IncompleteTyArg.b:103:36: Can't use an incomplete array type here
+src/IncompleteTyArg.b:107:34: Can't use an incomplete array type here
+src/IncompleteTyArg.b:111:39: Can't use an incomplete array type here
+src/IncompleteTyArg.b:122:64: Can't use an incomplete array type here
+src/IncompleteTyArg.b:127:70: Can't use an incomplete array type here

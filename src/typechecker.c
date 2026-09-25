@@ -167,8 +167,13 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
                                struct Type *expected_type,
                                struct Term **term);
 
+struct TypeFlags {
+    bool must_be_executable;        // Type must be valid in executable code (e.g. not 'int' or 'real')
+    bool must_be_complete;          // Type must not be, or contain, an incomplete array type (T[])
+    bool must_be_valid_decreases;   // Type must be usable in a 'decreases' clause
+};
 static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
-                                    struct UnivarNode *node,
+                                    const struct TypeFlags *req,
                                     struct Type *type,
                                     const struct Location *loc);
 
@@ -357,6 +362,13 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                 // the tyargs should be proper types (not type constructors)
                 if (!kindcheck_type(tc_context, &node->type)) {
                     ok = false;
+                    continue;
+                }
+
+                // Type arguments must always be complete types
+                struct TypeFlags flags = { .must_be_complete = true };
+                if (!ensure_type_meets_flags(tc_context, &flags, node->type, &node->type->location)) {
+                    ok = false;
                 }
             }
 
@@ -397,10 +409,8 @@ static bool kindcheck_type(struct TypecheckContext *tc_context, struct Type **ty
     // Check it is executable (if applicable) -
     // kindcheck_type_constructor will not do this.
     if (tc_context->executable) {
-        struct UnivarNode node;
-        node.must_be_executable = true;
-        node.must_be_complete = node.must_be_valid_decreases = false;
-        if (!ensure_type_meets_flags(tc_context, &node, *type, &(*type)->location)) {
+        struct TypeFlags flags = { .must_be_executable = true };
+        if (!ensure_type_meets_flags(tc_context, &flags, *type, &(*type)->location)) {
             return false;
         }
     }
@@ -514,22 +524,23 @@ static struct Type * chase_univars(struct Type *type)
 // Make a new "empty" TY_UNIVAR type. The requirements will be
 // must_be_executable if tc_context->executable is true, or no
 // requirements otherwise.
+// (Note that univars are always required to be complete types;
+// see also update_univar_type.)
 static struct Type * new_univar_type(struct TypecheckContext *tc_context)
 {
     struct Type *type = make_type(g_no_location, TY_UNIVAR);
     type->univar_data.node = alloc(sizeof(struct UnivarNode));
     type->univar_data.node->must_be_executable = tc_context->executable;
-    type->univar_data.node->must_be_complete = false;
     type->univar_data.node->must_be_valid_decreases = false;
     type->univar_data.node->type = NULL;
     type->univar_data.node->ref_count = 1;
     return type;
 }
 
-// Ensure type 'type' meets the requirement flags present in 'node'.
+// Ensure type 'type' meets the requirement flags present in 'req'.
 // If not, an error is raised. Returns true if successful.
 static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
-                                    struct UnivarNode *node,
+                                    const struct TypeFlags *req,
                                     struct Type *type,
                                     const struct Location *loc)
 {
@@ -541,11 +552,11 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     type = chase_univars(type);
 
     // must_be_valid_decreases is checked separately
-    if (node->must_be_valid_decreases) {
+    if (req->must_be_valid_decreases) {
         // Only TY_FINITE_INT, TY_MATH_INT, TY_BOOL, and tuples of
         // those, are currently acceptable for 'decreases'.
         if (type->tag == TY_UNIVAR) {
-            type->univar_data.node->must_be_valid_decreases = node->must_be_valid_decreases;
+            type->univar_data.node->must_be_valid_decreases = true;
         } else if (type->tag == TY_RECORD) {
             for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
                 if (!isdigit((unsigned char)field->name[0])) {
@@ -566,15 +577,16 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     // recursively for any "child" types:
     switch (type->tag) {
     case TY_UNIVAR:
-        type->univar_data.node->must_be_executable = node->must_be_executable;
-        type->univar_data.node->must_be_complete = node->must_be_complete;
+        if (req->must_be_executable) {
+            type->univar_data.node->must_be_executable = true;
+        }
         return true;
 
     case TY_VAR:
         // If the type variable is marked 'ghost' in the env, then it
         // is a ghost abstract type ("ghost type T;") and must not be
         // used in an executable context.
-        if (node->must_be_executable) {
+        if (req->must_be_executable) {
             struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
             if (entry && entry->ghost) {
                 report_ghost_type_not_allowed(type->var_data.name, *loc);
@@ -590,7 +602,7 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
 
     case TY_MATH_INT:
     case TY_MATH_REAL:
-        if (node->must_be_executable) {
+        if (req->must_be_executable) {
             report_int_real_not_allowed(*loc);
             tc_context->error = true;
             return false;
@@ -599,7 +611,7 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
 
     case TY_RECORD:
         for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-            if (!ensure_type_meets_flags(tc_context, node, field->type, loc)) {
+            if (!ensure_type_meets_flags(tc_context, req, field->type, loc)) {
                 return false;
             }
         }
@@ -607,21 +619,21 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
 
     case TY_VARIANT:
         for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
-            if (!ensure_type_meets_flags(tc_context, node, variant->type, loc)) {
+            if (!ensure_type_meets_flags(tc_context, req, variant->type, loc)) {
                 return false;
             }
         }
         return true;
 
     case TY_ARRAY:
-        if (node->must_be_complete) {
+        if (req->must_be_complete) {
             if (!type->array_data.resizable && type->array_data.sizes == NULL) {
                 report_incomplete_array_type(*loc);
                 tc_context->error = true;
                 return false;
             }
         }
-        return ensure_type_meets_flags(tc_context, node, type->array_data.element_type, loc);
+        return ensure_type_meets_flags(tc_context, req, type->array_data.element_type, loc);
 
     case TY_FUNCTION:
         fatal_error("TY_FUNCTION was not expected here");
@@ -650,7 +662,15 @@ static bool update_univar_type(struct TypecheckContext *tc_context,
         fatal_error("update_univar_type: incorrect input");
     }
 
-    if (!ensure_type_meets_flags(tc_context, lhs->univar_data.node, rhs, loc)) {
+    // The new type must meet the requirements from the univar_data.node,
+    // and must also be complete (type inference will never infer an
+    // incomplete type).
+    struct TypeFlags flags = {
+        .must_be_executable = lhs->univar_data.node->must_be_executable,
+        .must_be_complete = true,
+        .must_be_valid_decreases = lhs->univar_data.node->must_be_valid_decreases
+    };
+    if (!ensure_type_meets_flags(tc_context, &flags, rhs, loc)) {
         return false;
     }
 
@@ -1339,6 +1359,13 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
         if (!kindcheck_type(tc_context, &tyarg->type)) {
             return;
         }
+
+        // Type arguments must always be complete types.
+        struct TypeFlags flags = { .must_be_complete = true };
+        if (!ensure_type_meets_flags(tc_context, &flags, tyarg->type, &tyarg->type->location)) {
+            return;
+        }
+
         ++num_tyargs_present;
     }
 
@@ -2418,7 +2445,7 @@ static void* typecheck_field_proj(void *context, struct Term *term, void *type_r
 static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
                               bool scrutinee_lvalue, bool scrutinee_read_only,
-                              bool scrutinee_ghost);
+                              bool scrutinee_ghost, bool in_statement);
 
 static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
                                      struct Location location,
@@ -2426,7 +2453,8 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
                                      struct Type *scrutinee_type,
                                      bool scrutinee_lvalue,
                                      bool scrutinee_read_only,
-                                     bool scrutinee_ghost)
+                                     bool scrutinee_ghost,
+                                     bool in_statement)
 {
     // First pass: number the positional fields
     int field_num = 0;
@@ -2485,7 +2513,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
             ok = false;
         } else if (!typecheck_pattern(tc_context, field->pattern, search->type,
                                       scrutinee_lvalue, scrutinee_read_only,
-                                      scrutinee_ghost)) {
+                                      scrutinee_ghost, in_statement)) {
             ok = false;
         }
     }
@@ -2498,7 +2526,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
 static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Pattern *pattern,
                               struct Type *scrutinee_type,
                               bool scrutinee_lvalue, bool scrutinee_read_only,
-                              bool scrutinee_ghost)
+                              bool scrutinee_ghost, bool in_statement)
 {
     scrutinee_type = chase_univars(scrutinee_type);
     if (!scrutinee_type) {
@@ -2508,27 +2536,35 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
     switch (pattern->tag) {
     case PAT_VAR:
 
-        // no ref patterns in postconditions
+        // No ref patterns in postconditions
         if (pattern->var.ref && tc_context->postcondition) {
             report_no_ref_in_postcondition(pattern->location);
             tc_context->error = true;
             return false;
         }
 
-        // for ref pattern, scrutinee must be lvalue
+        // For ref pattern, scrutinee must be lvalue
         if (pattern->var.ref && !scrutinee_lvalue) {
             report_cannot_take_ref(pattern->location);
             tc_context->error = true;
             return false;
         }
 
-        // in ghost code, a ref pattern must not bind to a non-ghost
-        // scrutinee, as otherwise ghost writes through the ref would
-        // modify a non-ghost variable (which codegen would skip)
+        // For ghost ref pattern, can only bind to a ghost scrutinee
+        // (otherwise ghost code would be able to write to non-ghost via the ref)
         if (pattern->var.ref && !tc_context->executable && !scrutinee_ghost) {
             report_ghost_ref_requires_ghost_lvalue(pattern->location);
             tc_context->error = true;
             return false;
+        }
+
+        // For non-ghost, non-ref patterns in match statements, the value is copied into
+        // a new variable, and so it must have a complete type (like any local variable)
+        if (in_statement && !pattern->var.ref && tc_context->executable) {
+            struct TypeFlags flags = { .must_be_complete = true };
+            if (!ensure_type_meets_flags(tc_context, &flags, scrutinee_type, &pattern->location)) {
+                return false;
+            }
         }
 
         bool pat_read_only;
@@ -2581,7 +2617,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         } else {
             return typecheck_record_pattern(tc_context, pattern->location, pattern->record.fields,
                                             scrutinee_type, scrutinee_lvalue, scrutinee_read_only,
-                                            scrutinee_ghost);
+                                            scrutinee_ghost, in_statement);
         }
 
     case PAT_VARIANT:
@@ -2633,7 +2669,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             if (has_payload) {
                 return typecheck_pattern(tc_context, pattern->variant.payload, payload_type,
                                          scrutinee_lvalue, scrutinee_read_only,
-                                         scrutinee_ghost);
+                                         scrutinee_ghost, in_statement);
             } else {
                 // we have a pattern w/o a payload (like "Red")
                 // but in the core language (post-typechecking), all variants have a payload,
@@ -2680,7 +2716,7 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
             // arms are expressions, so nothing can be written through a ref
             // pattern (and reading a non-ghost variable from ghost code is fine).
             if (!typecheck_pattern(context, arm->pattern, term->match.scrutinee->type,
-                                   lvalue, read_only, true)) {
+                                   lvalue, read_only, true, false)) {
                 patterns_ok = false;
             }
         }
@@ -2923,11 +2959,8 @@ static void typecheck_attributes(struct TypecheckContext *tc_context, struct Att
             if (attr->tag != ATTR_DECREASES) {
                 check_term_is_bool(tc_context, attr->term);
             } else {
-                struct UnivarNode node;
-                node.must_be_executable = false;
-                node.must_be_complete = false;
-                node.must_be_valid_decreases = true;
-                ensure_type_meets_flags(tc_context, &node, attr->term->type, &attr->term->location);
+                struct TypeFlags flags = { .must_be_valid_decreases = true };
+                ensure_type_meets_flags(tc_context, &flags, attr->term->type, &attr->term->location);
             }
 
             break;
@@ -3000,14 +3033,13 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
             return;
         }
 
-        // In executable code, non-ref variables must have a "complete" type
-        // (so that we know how much storage to allocate).
+        // In executable code, non-ref local variables must have a complete type.
         if (tc_context->executable && !stmt->var_decl.ref) {
-            struct UnivarNode node;
-            node.must_be_executable = true;
-            node.must_be_complete = true;
-            node.must_be_valid_decreases = false;
-            if (!ensure_type_meets_flags(tc_context, &node, stmt->var_decl.type, &stmt->var_decl.type->location)) {
+            struct TypeFlags flags = {
+                .must_be_executable = true,
+                .must_be_complete = true
+            };
+            if (!ensure_type_meets_flags(tc_context, &flags, stmt->var_decl.type, &stmt->var_decl.type->location)) {
                 return;
             }
         }
@@ -3051,11 +3083,11 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
 
                 // Make sure it is not an incomplete type (in non-ref, executable case).
                 if (tc_context->executable && !stmt->var_decl.ref) {
-                    struct UnivarNode node;
-                    node.must_be_executable = true;
-                    node.must_be_complete = true;
-                    node.must_be_valid_decreases = false;
-                    if (!ensure_type_meets_flags(tc_context, &node, stmt->var_decl.rhs->type, &stmt->var_decl.rhs->location)) {
+                    struct TypeFlags flags = {
+                        .must_be_executable = true,
+                        .must_be_complete = true
+                    };
+                    if (!ensure_type_meets_flags(tc_context, &flags, stmt->var_decl.rhs->type, &stmt->var_decl.rhs->location)) {
                         return;
                     }
                 }
@@ -3216,16 +3248,15 @@ static void typecheck_assign_stmt(struct TypecheckContext *tc_context,
     // The lhs and rhs types should match
     bool type_ok = match_term_to_type(tc_context, stmt->assign.lhs->type, &stmt->assign.rhs);
 
-    // In executable code, we do not currently allow assignment of incomplete array
-    // types (because the code generator would not produce the right code for it!).
+    // In executable code, we do not allow assignment of incomplete array types.
     if (type_ok && tc_context->executable) {
         // Only the lhs type needs be checked (because both lhs and rhs have the same type
         // at this point).
-        struct UnivarNode node;
-        node.must_be_executable = true;
-        node.must_be_complete = true;
-        node.must_be_valid_decreases = false;
-        ensure_type_meets_flags(tc_context, &node, stmt->assign.lhs->type, &stmt->assign.lhs->location);
+        struct TypeFlags flags = {
+            .must_be_executable = true,
+            .must_be_complete = true
+        };
+        ensure_type_meets_flags(tc_context, &flags, stmt->assign.lhs->type, &stmt->assign.lhs->location);
     }
 }
 
@@ -3259,13 +3290,13 @@ static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
     if (stmt->swap.lhs->type && stmt->swap.rhs->type) {
         unify_types(tc_context, stmt->swap.lhs->type, stmt->swap.rhs->type, &stmt->swap.rhs->location, true);
         if (tc_context->executable) {
-            // Similarly to assignment, we do not currently allow code generation for
-            // "swap A,B" where A and B are an incomplete array type (or contain one).
-            struct UnivarNode node;
-            node.must_be_executable = true;
-            node.must_be_complete = true;
-            node.must_be_valid_decreases = false;
-            ensure_type_meets_flags(tc_context, &node, stmt->swap.lhs->type, &stmt->swap.lhs->location);
+            // Similarly to assignment, we do not allow executable code generation for
+            // "swap A,B" where A and B are incomplete types.
+            struct TypeFlags flags = {
+                .must_be_executable = true,
+                .must_be_complete = true
+            };
+            ensure_type_meets_flags(tc_context, &flags, stmt->swap.lhs->type, &stmt->swap.lhs->location);
         }
     }
 }
@@ -3429,16 +3460,29 @@ static void typecheck_match_stmt(struct TypecheckContext *tc_context,
         tc_context->error = true;
     }
 
+    bool ghost = false;
+    bool read_only = false;
+    bool lvalue = false;
+    if (stmt->match.scrutinee->type) {
+        lvalue = is_lvalue(tc_context, stmt->match.scrutinee, &ghost, &read_only);
+
+        // If the scrutinee is not an lvalue then it is copied into a
+        // (hidden) variable, so in executable code its type must be
+        // complete (as for any other variable).
+        if (!lvalue && tc_context->executable) {
+            struct TypeFlags flags = { .must_be_complete = true };
+            ensure_type_meets_flags(tc_context, &flags, stmt->match.scrutinee->type,
+                                    &stmt->match.scrutinee->location);
+        }
+    }
+
     // for each arm
     for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
 
         // check the pattern, add any pattern-variables into the environment
         if (stmt->match.scrutinee->type) {
-            bool ghost = false;
-            bool read_only = false;
-            bool lvalue = is_lvalue(tc_context, stmt->match.scrutinee, &ghost, &read_only);
             typecheck_pattern(tc_context, arm->pattern, stmt->match.scrutinee->type,
-                              lvalue, read_only, ghost);
+                              lvalue, read_only, ghost, true);
         }
 
         // check the rhs
@@ -3823,13 +3867,12 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
             ret_type = decl->function_data.return_type;
 
             if (tc_context->executable) {
-                // Returning incomplete array types not currently supported, in executable contexts
-                // (as we're not sure if the code generator will handle this correctly)
-                struct UnivarNode node;
-                node.must_be_executable = true;
-                node.must_be_complete = true;
-                node.must_be_valid_decreases = false;
-                if (!ensure_type_meets_flags(tc_context, &node, ret_type, &ret_type->location)) {
+                // In executable code, return types must be complete.
+                struct TypeFlags flags = {
+                    .must_be_executable = true,
+                    .must_be_complete = true
+                };
+                if (!ensure_type_meets_flags(tc_context, &flags, ret_type, &ret_type->location)) {
                     ret_type_ok = false;
                 }
             }
@@ -3940,11 +3983,11 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
             // The new type must not be incomplete. Also, unless the
             // abstract type was marked "ghost", the new type must be
             // a runtime type.
-            struct UnivarNode node;
-            node.must_be_complete = true;
-            node.must_be_executable = !prev_entry->ghost;
-            node.must_be_valid_decreases = false;
-            if (!ensure_type_meets_flags(tc_context, &node, new_type, &decl->location)) {
+            struct TypeFlags flags = {
+                .must_be_executable = !prev_entry->ghost,
+                .must_be_complete = true
+            };
+            if (!ensure_type_meets_flags(tc_context, &flags, new_type, &decl->location)) {
                 return false;
             }
 
