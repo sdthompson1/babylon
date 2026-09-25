@@ -520,7 +520,8 @@ qed
    - In NotGhost mode, the runtime-tyvar coverage holds
      (module_env_subst_runtime_ok).
    - The substitution's range consists of complete types (in any mode), so that
-     the type arguments of calls and constructors stay complete. *)
+     the type arguments of calls and constructors, and the operand types of
+     allocated, stay complete. *)
 lemma core_term_type_subst_module_env:
   assumes "core_term_type env ghost tm = Some ty"
       and "tyenv_well_formed env"
@@ -1402,14 +1403,17 @@ next
     case Ghost
     with CoreTm_Allocated.prems(1) obtain innerTy where
       inner: "core_term_type env Ghost tm = Some innerTy" and
+      inner_cp: "is_complete_type innerTy" and
       ty_eq: "ty = CoreTy_Bool"
-      by (auto split: option.splits)
+      by (auto split: option.splits if_splits)
     from CoreTm_Allocated.IH[OF inner CoreTm_Allocated.prems(2,3)]
          CoreTm_Allocated.prems(4) CoreTm_Allocated.prems(5)
     have "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost
                           (apply_subst_to_term subst tm)
             = Some (apply_subst subst innerTy)" by simp
-    with Ghost ty_eq show ?thesis by simp
+    moreover have "is_complete_type (apply_subst subst innerTy)"
+      using apply_subst_preserves_complete[OF inner_cp CoreTm_Allocated.prems(5)] .
+    ultimately show ?thesis using Ghost ty_eq by simp
   qed
 next
   case (CoreTm_Old tm)

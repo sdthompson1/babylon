@@ -667,11 +667,12 @@ next
   next
     case Ghost
     with CoreTm_Allocated.prems(3) obtain tmTy where
-      tm_ty: "core_term_type env Ghost tm = Some tmTy" and ty_eq: "ty = CoreTy_Bool"
-      by (auto split: option.splits)
+      tm_ty: "core_term_type env Ghost tm = Some tmTy" and
+      cp: "is_complete_type tmTy" and ty_eq: "ty = CoreTy_Bool"
+      by (auto split: option.splits if_splits)
     have tm_ty': "core_term_type env' Ghost tm = Some tmTy"
       using CoreTm_Allocated.IH[OF CoreTm_Allocated.prems(1,2) tm_ty] .
-    show ?thesis using Ghost tm_ty' ty_eq by simp
+    show ?thesis using Ghost tm_ty' cp ty_eq by simp
   qed
 next
   case (CoreTm_Old tm)

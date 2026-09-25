@@ -474,11 +474,11 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else Some (sizeof_type dims)
     | _ \<Rightarrow> None)"
 
-  (* Allocated: Ghost only, parameter can be any type, result is bool *)
+  (* Allocated: Ghost only, parameter can be any complete type, result is bool *)
 | "core_term_type env NotGhost (CoreTm_Allocated _) = None"
 | "core_term_type env Ghost (CoreTm_Allocated tm) =
     (case core_term_type env Ghost tm of
-      Some _ \<Rightarrow> Some CoreTy_Bool
+      Some ty \<Rightarrow> if is_complete_type ty then Some CoreTy_Bool else None
     | None \<Rightarrow> None)"
 
   (* Old: Ghost only *)
@@ -980,8 +980,10 @@ proof -
       by (simp only: core_term_type.simps tm_eq CoreTm_VariantProj.prems)
   next
     case (CoreTm_Allocated tm)
-    then show ?case
-      by (metis (full_types) GhostOrNot.exhaust core_term_type.simps(19,20))
+    have tm_eq: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+      using CoreTm_Allocated.IH CoreTm_Allocated.prems by blast
+    show ?case
+      using tm_eq by (cases ghost) simp_all
   next
     case (CoreTm_Old tm)
     then show ?case
@@ -1429,7 +1431,7 @@ next
 next
   case (CoreTm_Allocated tm)
   then show ?case
-    by (cases ghost) (auto split: option.splits)
+    by (cases ghost) (auto split: option.splits if_splits)
 next
   case (CoreTm_Old tm)
   then show ?case
@@ -1728,7 +1730,7 @@ next
 next
   case (CoreTm_Allocated tm)
   then show ?case
-    by (cases ghost) (auto split: option.splits)
+    by (cases ghost) (auto split: option.splits if_splits)
 next
   case (CoreTm_Old tm)
   then show ?case
@@ -2253,11 +2255,12 @@ next
   next
     case Ghost
     from Ghost CoreTm_Allocated.prems(1) obtain tmTy where
-      tm_ty': "core_term_type ?env' Ghost tm = Some tmTy" and ty_eq: "ty = CoreTy_Bool"
-      by (auto split: option.splits)
+      tm_ty': "core_term_type ?env' Ghost tm = Some tmTy" and
+      cp: "is_complete_type tmTy" and ty_eq: "ty = CoreTy_Bool"
+      by (auto split: option.splits if_splits)
     have "core_term_type env Ghost tm = Some tmTy"
       by (rule CoreTm_Allocated.IH[OF tm_ty'[unfolded Ghost] CoreTm_Allocated.prems(2) tm_disj])
-    with Ghost ty_eq show ?thesis by simp
+    with Ghost cp ty_eq show ?thesis by simp
   qed
 next
   case (CoreTm_Old tm)
@@ -2760,7 +2763,7 @@ next
 next
   case (CoreTm_Allocated tm)
   show ?case using CoreTm_Allocated.prems(1)
-    by (cases ghost) (auto split: option.splits)
+    by (cases ghost) (auto split: option.splits if_splits)
 next
   case (CoreTm_Old tm)
   show ?case using CoreTm_Old.prems(1) CoreTm_Old.IH CoreTm_Old.prems(2)

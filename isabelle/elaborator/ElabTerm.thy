@@ -1126,13 +1126,14 @@ where
             else Inr (CoreTm_Sizeof newTm, sizeof_type dims, next_mv')
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc tmTy]))"
 
-  (* Allocated: ghost-only, any operand type, result is Bool *)
+  (* Allocated: ghost-only, operand must be of complete type, result is Bool *)
 | "elab_term env elabEnv ghost (BabTm_Allocated loc tm) next_mv =
     (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
      else case elab_term env elabEnv ghost tm next_mv of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (newTm, _, next_mv') \<Rightarrow>
-         Inr (CoreTm_Allocated newTm, CoreTy_Bool, next_mv'))"
+     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
+         if \<not> is_complete_type tmTy then Inl [TyErr_IncompleteArrayType loc]
+         else Inr (CoreTm_Allocated newTm, CoreTy_Bool, next_mv'))"
 
   (* Old: ghost-only, result has same type as operand *)
 | "elab_term env elabEnv ghost (BabTm_Old loc tm) next_mv =

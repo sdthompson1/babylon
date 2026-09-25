@@ -529,7 +529,8 @@ qed
    - In NotGhost mode, the substitution's range is also runtime in callerEnv
      (needed for the runtime-type checks at non-ghost positions).
    - The substitution's range consists of complete types (needed, in any mode,
-     for the completeness check on the type arguments of calls and constructors). *)
+     for the completeness check on the type arguments of calls and constructors,
+     and on the operand of allocated). *)
 lemma core_term_type_subst_callee_env:
   assumes "core_term_type calleeEnv ghost tm = Some ty"
       and "tyenv_well_formed calleeEnv"
@@ -1581,7 +1582,7 @@ next
 next
   case (CoreTm_Allocated tm)
   \<comment> \<open>Allocated is ghost-only and always returns Bool. The NotGhost equation reduces
-      to None, so we must be in Ghost. The inner term must typecheck to something. \<close>
+      to None, so we must be in Ghost. The inner term must typecheck to a complete type. \<close>
   show ?case
   proof (cases ghost)
     case NotGhost
@@ -1590,14 +1591,17 @@ next
     case Ghost
     with CoreTm_Allocated.prems(1) obtain innerTy where
       inner: "core_term_type calleeEnv Ghost tm = Some innerTy" and
+      inner_cp: "is_complete_type innerTy" and
       ty_eq: "ty = CoreTy_Bool"
-      by (auto split: option.splits)
+      by (auto split: option.splits if_splits)
     from CoreTm_Allocated.IH[OF inner CoreTm_Allocated.prems(2,3,4)]
          CoreTm_Allocated.prems(5) CoreTm_Allocated.prems(6) CoreTm_Allocated.prems(7)
     have "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) Ghost
                           (apply_subst_to_term subst tm)
             = Some (apply_subst subst innerTy)" by simp
-    with Ghost ty_eq show ?thesis by simp
+    moreover have "is_complete_type (apply_subst subst innerTy)"
+      using apply_subst_preserves_complete[OF inner_cp CoreTm_Allocated.prems(7)] .
+    ultimately show ?thesis using Ghost ty_eq by simp
   qed
 next
   case (CoreTm_Old tm)

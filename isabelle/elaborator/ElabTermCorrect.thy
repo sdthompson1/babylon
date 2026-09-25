@@ -4473,14 +4473,15 @@ next
     by (auto split: if_splits)
   from "18.prems"(1) ghost_eq obtain newSubTm subTy next_mv_sub where
     elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
+    sub_cp: "is_complete_type subTy" and
     newTm_eq: "newTm = CoreTm_Allocated newSubTm" and
     ty_eq: "ty = CoreTy_Bool" and
     next_mv_eq: "next_mv' = next_mv_sub"
-    by (auto split: sum.splits)
+    by (auto split: sum.splits if_splits)
   have ih: "core_term_type ?env' ghost newSubTm = Some subTy"
     using "18.IH" ghost_eq elab_sub next_mv_eq "18.prems"(2,3,4) by simp
   show ?case
-    using newTm_eq ty_eq ghost_eq ih by simp
+    using newTm_eq ty_eq ghost_eq ih sub_cp by simp
 next
   \<comment> \<open>Case: BabTm_Old\<close>
   case (19 env elabEnv ghost loc tm next_mv)
