@@ -2814,13 +2814,10 @@ static void * typecheck_allocated(void *context, struct Term *term, void *type_r
         return NULL;
     }
 
-    struct Type *array_type = chase_univars(rhs->type);
-
-    if (array_type->tag == TY_ARRAY
-    && array_type->array_data.sizes == NULL
-    && !array_type->array_data.resizable) {
-        report_incomplete_array_type(term->location);
-        tc_context->error = true;
+    // The operand must be a complete type (it must not be, or contain,
+    // an incomplete array type).
+    struct TypeFlags flags = { .must_be_complete = true };
+    if (!ensure_type_meets_flags(tc_context, &flags, rhs->type, &term->location)) {
         return NULL;
     }
 

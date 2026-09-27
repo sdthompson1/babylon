@@ -1,0 +1,4 @@
+src/AllocatedIncomplete.b:14:12: Can't use an incomplete array type here
+src/AllocatedIncomplete.b:19:12: Can't use an incomplete array type here
+src/AllocatedIncomplete.b:24:12: Can't use an incomplete array type here
+src/AllocatedIncomplete.b:28:14: Can't use an incomplete array type here
