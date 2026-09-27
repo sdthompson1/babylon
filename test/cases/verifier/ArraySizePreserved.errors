@@ -1,0 +1,4 @@
+src/ArraySizePreserved.b:12:5: Can't change the size of an array through an incomplete array type reference
+src/ArraySizePreserved.b:17:5: Can't change the size of an array through an incomplete array type reference
+src/ArraySizePreserved.b:36:5: Can't change the size of an array through an incomplete array type reference
+src/ArraySizePreserved.b:43:5: Can't change the size of an array through an incomplete array type reference

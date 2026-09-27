@@ -159,6 +159,7 @@ char * err_msg_var_still_allocated(const char *name, struct Location loc);
 char * err_msg_var_still_allocated_at_return(const char *name, struct Location loc);
 char * err_msg_ref_invalid_variant_change(struct Location location);
 char * err_msg_array_wrong_size(struct Term *term);
+char * err_msg_array_size_change(struct Location loc);
 
 // Fatal errors (not expected in normal operation)
 #define fatal_error(err) fatal_error_impl(err, __FILE__, __LINE__)

@@ -1486,9 +1486,11 @@ static struct Sexpr * expanded_fol_ret_type(struct TypeData_Function *func_data)
 }
 
 // "call_expr" is handed over
+// "args" (the translated actual arguments) is shared
 static struct Sexpr * handle_ref_args(struct VContext *cxt,
                                       struct Term *term,
-                                      struct Sexpr *call_expr)
+                                      struct Sexpr *call_expr,
+                                      struct Sexpr *args)
 {
     bool ref_found = false;
 
@@ -1508,6 +1510,22 @@ static struct Sexpr * handle_ref_args(struct VContext *cxt,
                 ret_fldn(num, fol_ret_ty),
                 copy_sexpr(call_expr));
 
+            // A function cannot change the size of a ref argument of incomplete
+            // array type (this is checked when verifying the function body), so
+            // we can add a fact that the size is unchanged.
+            if (formal->type->tag == TY_ARRAY
+            && !formal->type->array_data.resizable
+            && formal->type->array_data.sizes == NULL) {
+                // (The actual has been cast to the formal type, so is also of
+                // incomplete array type.)
+                struct Type *actual_type = actual->rhs->type;
+                add_fact(cxt,
+                         make_list3_sexpr(
+                             make_string_sexpr("="),
+                             dynamic_arr_size_sexpr(actual_type, copy_sexpr(projection)),
+                             dynamic_arr_size_sexpr(actual_type, copy_sexpr(args->left))));
+            }
+
             // assign that term to the reference
             struct RefChain *ref = ref_chain_for_term(cxt, actual->rhs);
             update_reference(cxt, ref, projection);
@@ -1520,6 +1538,7 @@ static struct Sexpr * handle_ref_args(struct VContext *cxt,
 
         formal = formal->next;
         actual = actual->next;
+        args = args->right;
     }
 
     // turn call_expr into ($FLD0 (f args)) if required
@@ -1859,7 +1878,7 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
     call_expr_dummies = NULL;
 
     // Handle any "refs"
-    call_expr = handle_ref_args(cxt, term, call_expr);
+    call_expr = handle_ref_args(cxt, term, call_expr, args);
 
     free_sexpr(generic_args);
     free_sexpr(args);
@@ -2164,16 +2183,7 @@ static void * verify_sizeof(void *context, struct Term *term, void *type_result,
 
     } else {
         // Dynamic-sized or Incomplete array type
-
-        struct Sexpr * array_type = verify_type(term->sizeof_data.rhs->type);
-
-        // array_type is (instance $PROD something)
-        // we change that to (instance $FLD1 something), and then apply that to the rhs.
-
-        free_sexpr(array_type->right->left);
-        array_type->right->left = make_string_sexpr("$FLD1");
-
-        return make_list2_sexpr(array_type, rhs_result);
+        return dynamic_arr_size_sexpr(term->sizeof_data.rhs->type, rhs_result);
     }
 }
 

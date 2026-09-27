@@ -259,6 +259,50 @@ static void check_assign_allocated_conditions(struct VContext *context,
     }
 }
 
+// True if the reference is (the whole of) a "ref" parameter, of the current
+// function, of incomplete array type (T[]). The caller might have bound this to an
+// array that is not resizable, so writes to it must not change its size.
+// (The renamer gives shadowing locals distinct names, so the name cannot refer to
+// some other variable.)
+static bool is_incomplete_array_ref_param(struct VContext *context,
+                                          struct RefChain *ref)
+{
+    if (ref->ref_type != RT_LOCAL_VAR
+    || ref->type->tag != TY_ARRAY
+    || ref->type->array_data.resizable
+    || ref->type->array_data.sizes != NULL) {
+        return false;
+    }
+
+    for (struct FunArg *arg = context->function_args; arg; arg = arg->next) {
+        if (arg->ref && strcmp(arg->name, ref->variable_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// If "ref" is a ref parameter of incomplete array type, verify that writing
+// "new_value" to it would not change the array's size.
+static void check_array_size_preserved(struct VContext *context,
+                                       struct Location location,
+                                       struct RefChain *ref,     // shared
+                                       struct Sexpr *new_value)  // shared
+{
+    if (!is_incomplete_array_ref_param(context, ref)) {
+        return;
+    }
+
+    struct Sexpr *old_value = ref_chain_to_sexpr(context, ref);
+    struct Sexpr *cond =
+        make_list3_sexpr(make_string_sexpr("="),
+                         dynamic_arr_size_sexpr(ref->type, copy_sexpr(new_value)),
+                         dynamic_arr_size_sexpr(ref->type, old_value));
+
+    verify_condition(context, location, cond, "array size preserved",
+                     err_msg_array_size_change(location));
+}
+
 static void verify_assign_stmt(struct VContext *context,
                                struct Statement *stmt)
 {
@@ -270,6 +314,9 @@ static void verify_assign_stmt(struct VContext *context,
 
     // Check allocation conditions
     check_assign_allocated_conditions(context, stmt, fol_rhs, ref);
+
+    // Check the size of an incomplete array is not changed
+    check_array_size_preserved(context, stmt->location, ref, fol_rhs);
 
     // Do the assignment
     update_reference(context, ref, fol_rhs);
@@ -286,6 +333,14 @@ static void verify_swap_stmt(struct VContext *context,
 
     struct RefChain *ref_rhs = ref_chain_for_term(context, stmt->swap.rhs);
     struct Sexpr *rhs = ref_chain_to_sexpr(context, ref_rhs);
+
+    // Check the size of an incomplete array is not changed
+    // (the condition is symmetric, so one check suffices)
+    if (is_incomplete_array_ref_param(context, ref_lhs)) {
+        check_array_size_preserved(context, stmt->location, ref_lhs, rhs);
+    } else {
+        check_array_size_preserved(context, stmt->location, ref_rhs, lhs);
+    }
 
     update_reference(context, ref_lhs, rhs);
     rhs = NULL;

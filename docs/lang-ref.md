@@ -306,27 +306,24 @@ The language includes the following types:
       illegal.
 
     - Incomplete arrays: An array type like `T[]` or `T[,,]` is called
-      an "incomplete" array type. Incomplete array types can only
-      appear as the types of function parameters (e.g. you cannot
-      declare a variable of an incomplete type). An incomplete type
-      means that the function might receive *either* a fixed-size *or*
-      an allocatable array as a parameter. This means that the
-      function must treat the array size as known only at runtime
-      (similar to an allocatable array) but the function also cannot
-      resize the array dynamically (similar to a fixed-sized array).
+      an "incomplete" array type. These mainly appear as the types of
+      function parameters, and signify that the parameter can be
+      *either* a fixed-size *or* an allocatable array. (The function
+      must be written to handle both cases -- so, for example, it
+      cannot change the size of the array.)
 
-      We also use the phrase "incomplete type" more broadly to mean
-      any type that *contains* an incomplete array (such as `{i32[],
-      u64}`). An incomplete type can never be used as a type argument,
-      so, for example, `Maybe<i32[]>`, `f<i32[]>(x)` and
-      `Just<i32[]>(x)` are all errors. See "Function declarations"
-      below for more details.
+      (We also use the term "incomplete type" more broadly, to
+      indicate any type that is or contains an incomplete array type.
+      For example, `i32[]` or `{size: u64, arr: i8[]}` are incomplete
+      types. There are some restrictions on the use of incomplete
+      types, which will be described later.)
 
  - Named types: any valid identifier, e.g. `MyType`, can also be used
    as a type. Typically this will be used to refer to a type created
    in a `typedef` or `datatype` declaration (see below), or else to a
    type variable appearing in a generic declaration (such as a
    generic `function` -- again, see below for details).
+
 
 
 
@@ -1107,7 +1104,7 @@ In more detail:
  - If `E` is a fixed-sized array type, then `allocated(E)` is true if
    `allocated(E[i])` is true for *any* valid array index `i`.
 
- - If `E` is an incomplete array type, then it is illegal to call
+ - If `E` is an incomplete type, then it is illegal to call
    `allocated(E)` (a type error will result).
 
  - If `E` is a tuple, record or datatype, then it is allocated if
@@ -1167,8 +1164,12 @@ as follows:
 
 Note that `int` or `real` types (or records, tuples or datatypes
 containing these) can only be created in ghost code (see "Ghost
-prefix" below). Variables of "incomplete array types" (`T[]`) cannot
-be created at all in a variable declaration statement.
+prefix" below). 
+
+Also, in executable (non-ghost) code, variables must have complete
+types. For example, `var x: i32[];` is illegal in executable code
+(because `i32[]` is an incomplete type), although this is allowable in
+ghost code.
 
 The new variable will be in scope until the end of the current "block"
 (a block is either a function body, the "then" or "else" part of an
@@ -1235,13 +1236,19 @@ The effect of the statement is simply to change whatever the
 left-hand-side refers to (variable, array element, etc.) such that it
 is equal to the value of the right-hand-side.
 
-An important restriction on assignment statements is that the
-right-hand-side of the assignment must not be "allocated" (i.e. if the
-right-hand-side expression is `E`, then `allocated(E)` must be false).
-This is because copying such an expression would require new memory to
-be allocated, which might not be possible (if the system is low on
-memory) and therefore there would be no guarantee that the assignment
-could be completed successfully.
+An important restriction on assignment statements (in non-ghost code)
+is that the right-hand-side of the assignment must not be "allocated"
+(i.e. if the right-hand-side expression is `E`, then `allocated(E)`
+must be false). This is because copying such an expression would
+require new memory to be allocated, which might not be possible (if
+the system is low on memory) and therefore there would be no guarantee
+that the assignment could be completed successfully. (This also
+implies that the value being assigned must not have an incomplete
+type - because `allocated` is not defined on incomplete types.)
+
+In ghost code, it is allowed to assign a value of incomplete array
+type, but such an assignment is not allowed to change the runtime size
+of the array (this is a proof obligation, checked by the verifier).
 
 
 ## Function call statements
@@ -1284,6 +1291,12 @@ the values are just swapped "in place". This means in particular that
 `swap e1, e2;` is permitted even if `allocated(e1)` or `allocated(e2)`
 are true (whereas the above sequence involving a `tmp` variable would
 not be permitted in that case).
+
+Note that in executable (non-ghost) code, the values being swapped
+must not have incomplete type. In ghost code, it is allowed to swap
+arrays of incomplete type, but in such cases, the size of the array
+must not be changed (this is a proof obligation, checked by the
+verifier).
 
 
 ## Return statements
@@ -2344,6 +2357,9 @@ variables `a: i32[]` and `b: i32[]`, both `same<i32[]>(a, b)` and
 unknown size is to declare the parameters as `T[]` rather than `T`,
 e.g. `function copy<T>(ref dest: T[], src: T[])`; then `copy(a, b)` is
 fine, with `T = i32`.
+
+The return type of an executable (non-ghost) function must be a
+complete type.
 
 
 ### Extern functions

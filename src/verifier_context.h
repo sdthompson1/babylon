@@ -292,6 +292,11 @@ struct Sexpr *match_arr_size(const char *arr_name, const char *size_name,
 // (i.e. where array_type->array_data.sizes != NULL).
 struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type);
 
+// create a sexpr giving the size of a dynamic-size or incomplete array
+// (i.e. where array_type->array_data.sizes == NULL).
+// arr_expr is handed over.
+struct Sexpr *dynamic_arr_size_sexpr(struct Type *array_type, struct Sexpr *arr_expr);
+
 // create a sexpr for an int literal
 struct Sexpr *int_literal_sexpr(uint64_t value, bool negative);
 

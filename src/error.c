@@ -926,6 +926,12 @@ char * err_msg_array_wrong_size(struct Term *term)
                    "Array might have the wrong size\n");
 }
 
+char * err_msg_array_size_change(struct Location loc)
+{
+    return err_msg(loc,
+                   "Can't change the size of an array through an incomplete array type reference\n");
+}
+
 
 //
 // Internal compiler errors

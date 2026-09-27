@@ -1130,6 +1130,21 @@ struct Sexpr *fixed_arr_size_sexpr(struct Type *array_type)
     }
 }
 
+struct Sexpr *dynamic_arr_size_sexpr(struct Type *array_type, struct Sexpr *arr_expr)
+{
+    if (array_type->tag != TY_ARRAY || array_type->array_data.sizes != NULL) {
+        fatal_error("dynamic_arr_size_sexpr: wrong type");
+    }
+
+    // The FOL type is (instance $PROD something).
+    // We change that to (instance $FLD1 something), and then apply that to the array.
+    struct Sexpr *fld1 = verify_type(array_type);
+    free_sexpr(fld1->right->left);
+    fld1->right->left = make_string_sexpr("$FLD1");
+
+    return make_list2_sexpr(fld1, arr_expr);
+}
+
 struct Sexpr *int_literal_sexpr(uint64_t value, bool negative)
 {
     char buf[50];
