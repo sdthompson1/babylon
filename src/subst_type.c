@@ -1,7 +1,7 @@
 /*
 This file is part of the Babylon compiler.
 
-Copyright (C) Stephen Thompson, 2023--2024.
+Copyright (C) Stephen Thompson, 2023--2026.
 
 For licensing information please see LICENCE.txt at the root of the
 repository.
@@ -306,136 +306,22 @@ struct NameReplacement {
     struct Type *replacement;
 };
 
-static void subst_in_term_func(void *context, struct Type **type)
+static void subst_type_fn(void *context, struct Type **type)
 {
     struct NameReplacement *nr = context;
     substitute_type_in_place(nr->name, nr->replacement, type);
 }
 
-static void substitute_type_in_term(const char *name,
-                                    struct Type *replacement,
-                                    struct Term *term)
+// Substitute 'name' to 'replacement' in every Type within the
+// "DeclData" part of this decl (i.e. the const, function, etc.,
+// specific part) and also the Attributes. Ignores the "tyvars" list
+// if any, and does not look at 'next' decls.
+static void do_substitute_type_in_decl(const char *name,
+                                       struct Type *replacement,
+                                       struct Decl *decl)
 {
     struct NameReplacement context = {name, replacement};
-    forall_types_in_term(subst_in_term_func, &context, term);
-}
-
-static void substitute_type_in_attributes(const char *name,
-                                          struct Type *replacement,
-                                          struct Attribute *attr)
-{
-    while (attr) {
-        // for now attribute is always one of these four (which always contain a Term)
-        // but this might change in future...
-        switch (attr->tag) {
-        case ATTR_REQUIRES:
-        case ATTR_ENSURES:
-        case ATTR_INVARIANT:
-        case ATTR_DECREASES:
-            substitute_type_in_term(name, replacement, attr->term);
-            break;
-        }
-        attr = attr->next;
-    }
-}
-
-static void substitute_type_in_statements(const char *name,
-                                          struct Type *replacement,
-                                          struct Statement *stmt)
-{
-    while (stmt) {
-        switch (stmt->tag) {
-        case ST_VAR_DECL:
-            substitute_type_in_place(name, replacement, &stmt->var_decl.type);
-            substitute_type_in_term(name, replacement, stmt->var_decl.rhs);
-            break;
-
-        case ST_FIX:
-            substitute_type_in_place(name, replacement, &stmt->fix.type);
-            break;
-
-        case ST_OBTAIN:
-            substitute_type_in_place(name, replacement, &stmt->obtain.type);
-            substitute_type_in_term(name, replacement, stmt->obtain.condition);
-            break;
-
-        case ST_USE:
-            substitute_type_in_term(name, replacement, stmt->use.term);
-            break;
-
-        case ST_ASSIGN:
-            substitute_type_in_term(name, replacement, stmt->assign.lhs);
-            substitute_type_in_term(name, replacement, stmt->assign.rhs);
-            break;
-
-        case ST_SWAP:
-            substitute_type_in_term(name, replacement, stmt->swap.lhs);
-            substitute_type_in_term(name, replacement, stmt->swap.rhs);
-            break;
-
-        case ST_RETURN:
-            substitute_type_in_term(name, replacement, stmt->ret.value);
-            break;
-
-        case ST_ASSERT:
-            substitute_type_in_term(name, replacement, stmt->assert_data.condition);
-            substitute_type_in_statements(name, replacement, stmt->assert_data.proof);
-            break;
-
-        case ST_ASSUME:
-            substitute_type_in_term(name, replacement, stmt->assume.condition);
-            break;
-
-        case ST_IF:
-            substitute_type_in_term(name, replacement, stmt->if_data.condition);
-            substitute_type_in_statements(name, replacement, stmt->if_data.then_block);
-            substitute_type_in_statements(name, replacement, stmt->if_data.else_block);
-            break;
-
-        case ST_WHILE:
-            substitute_type_in_term(name, replacement, stmt->while_data.condition);
-            substitute_type_in_attributes(name, replacement, stmt->while_data.attributes);
-            substitute_type_in_statements(name, replacement, stmt->while_data.body);
-            break;
-
-        case ST_CALL:
-            substitute_type_in_term(name, replacement, stmt->call.term);
-            break;
-
-        case ST_MATCH:
-            {
-                substitute_type_in_term(name, replacement, stmt->match.scrutinee);
-                for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
-                    substitute_type_in_statements(name, replacement, arm->rhs);
-                }
-            }
-            break;
-
-        case ST_MATCH_FAILURE:
-            break;
-
-        case ST_SHOW_HIDE:
-            break;
-        }
-
-        stmt = stmt->next;
-    }
-}
-
-static void substitute_type_in_funargs(const char *name, struct Type *replacement, struct FunArg *arg)
-{
-    while (arg) {
-        substitute_type_in_place(name, replacement, &arg->type);
-        arg = arg->next;
-    }
-}
-
-static void substitute_type_in_data_ctors(const char *name, struct Type *replacement, struct DataCtor *ctor)
-{
-    while (ctor) {
-        substitute_type_in_place(name, replacement, &ctor->payload);
-        ctor = ctor->next;
-    }
+    forall_types_in_decl(subst_type_fn, &context, decl);
 }
 
 static struct TyVarList *get_tyvars(struct Decl *decl)
@@ -457,39 +343,6 @@ static struct TyVarList *get_tyvars(struct Decl *decl)
     fatal_error("wrong decl tag");
 }
 
-
-// Substitute 'name' to 'replacement' in the "DeclData" part of this decl
-// (i.e. the const, function, etc., specific part of this decl)
-// and also the Attributes. But ignores the "tyvars" list if any.
-// Does not look at 'next' decls.
-static void do_substitute_type_in_decl(const char *name,
-                                       struct Type *replacement,
-                                       struct Decl *decl)
-{
-    switch (decl->tag) {
-    case DECL_CONST:
-        substitute_type_in_place(name, replacement, &decl->const_data.type);
-        substitute_type_in_term(name, replacement, decl->const_data.rhs);
-        substitute_type_in_term(name, replacement, decl->const_data.rhs);
-        break;
-
-    case DECL_FUNCTION:
-        substitute_type_in_funargs(name, replacement, decl->function_data.args);
-        substitute_type_in_place(name, replacement, &decl->function_data.return_type);
-        substitute_type_in_statements(name, replacement, decl->function_data.body);
-        break;
-
-    case DECL_DATATYPE:
-        substitute_type_in_data_ctors(name, replacement, decl->datatype_data.ctors);
-        break;
-
-    case DECL_TYPEDEF:
-        substitute_type_in_place(name, replacement, &decl->typedef_data.rhs);
-        break;
-    }
-
-    substitute_type_in_attributes(name, replacement, decl->attributes);
-}
 
 static void substitute_type_in_decls(const char *name,
                                      struct Type *replacement,

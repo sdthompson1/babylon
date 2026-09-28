@@ -6,7 +6,7 @@ const a1: i32[] = [true, false];   // Wrong type
 
 const a2 = [1, true];       // Types do not agree
 
-const a3 = [];              // Empty array literal (now works - the compiler picks a "default" type)
+const a3 = [];              // Empty array literal (error, the element type cannot be inferred)
 
 const a4 = [0, 1 + true];   // Type error in one of the elements
 

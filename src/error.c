@@ -557,6 +557,12 @@ void report_incomplete_array_type(struct Location loc)
     print_error("Can't use an incomplete array type here\n");
 }
 
+void report_cannot_infer_type(struct Location loc)
+{
+    print_location(loc);
+    print_error("Unable to infer type\n");
+}
+
 void report_unexpected_return_value(struct Term *term)
 {
     print_location(term->location);

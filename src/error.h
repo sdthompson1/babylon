@@ -75,6 +75,7 @@ void report_cannot_take_ref_to_readonly(struct Location location);
 void report_cannot_take_ref_to_resizable_array_element(struct Location location);
 void report_cannot_take_sizeof(struct Term *term);
 void report_incomplete_array_type(struct Location loc);
+void report_cannot_infer_type(struct Location loc);
 void report_unexpected_return_value(struct Term *term);
 void report_missing_return_value(struct Statement *stmt);
 void report_call_of_non_function(struct Term *term);

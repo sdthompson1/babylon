@@ -37,8 +37,8 @@ struct TypecheckContext {
     // Type environment
     TypeEnv *type_env;
 
-    // True if at least one type error has been detected
-    bool error;
+    // Number of type errors detected so far
+    int num_errors;
 
     // True if we are in executable code
     bool executable;
@@ -273,7 +273,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
 
                 if (hash_table_contains_key(found_field_names, field->name)) {
                     report_duplicate_field_name((*type)->location, field->name);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 }
 
@@ -311,7 +311,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
                 struct Term *normal = eval_to_normal_form(tc_context->type_env, (*type)->array_data.sizes[i]);
                 if (normal == NULL) {
                     // Size is not a compile time constant
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     free_type(u64);
                     return false;
                 }
@@ -352,7 +352,7 @@ static bool kindcheck_type_constructor(struct TypecheckContext *tc_context, stru
 
                 if (num_exp_tyargs != num_act_tyargs) {
                     report_wrong_number_of_type_arguments((*type)->location, num_exp_tyargs, num_act_tyargs);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 }
             }
@@ -402,7 +402,7 @@ static bool kindcheck_type(struct TypecheckContext *tc_context, struct Type **ty
         // error, this is a valid type constructor, but not a proper type
         // (it's missing its type arguments)
         report_wrong_number_of_type_arguments((*type)->location, tyvar_list_length((*type)->lambda_data.tyvars), 0);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return false;
     }
 
@@ -562,13 +562,13 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
                 if (!isdigit((unsigned char)field->name[0])) {
                     // must be a tuple, not a record
                     report_invalid_decreases_type(*loc);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     return false;
                 }
             }
         } else if (type->tag != TY_FINITE_INT && type->tag != TY_MATH_INT && type->tag != TY_BOOL) {
             report_invalid_decreases_type(*loc);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         }
     }
@@ -590,7 +590,7 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
             struct TypeEnvEntry *entry = lookup_type_info(tc_context, type->var_data.name);
             if (entry && entry->ghost) {
                 report_ghost_type_not_allowed(type->var_data.name, *loc);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
         }
@@ -604,7 +604,7 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     case TY_MATH_REAL:
         if (req->must_be_executable) {
             report_int_real_not_allowed(*loc);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         }
         return true;
@@ -629,7 +629,7 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
         if (req->must_be_complete) {
             if (!type->array_data.resizable && type->array_data.sizes == NULL) {
                 report_incomplete_array_type(*loc);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
         }
@@ -647,6 +647,26 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     }
 
     fatal_error("unrecognised type tag");
+}
+
+// Check that a type is fully inferred, i.e. contains no unresolved TY_UNIVARs.
+//  - If any are found, report a "Cannot infer type" error and return false.
+//  - Otherwise, return true.
+static bool check_type_inferred(struct TypecheckContext *tc_context,
+                                struct Type *type,
+                                const struct Location *loc)
+{
+    if (type == NULL) {
+        return false;
+    }
+
+    if (type_contains_unresolved_univars(type)) {
+        report_cannot_infer_type(*loc);
+        ++tc_context->num_errors;
+        return false;
+    }
+
+    return true;
 }
 
 // Unify types by setting LHS := RHS. LHS must be a "NULL" TY_UNIVAR
@@ -862,7 +882,7 @@ static bool unify_types(struct TypecheckContext *tc_context,
 
     if (!ok) {
         report_type_mismatch(expected_type, actual_type, *loc);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
     return ok;
 }
@@ -899,7 +919,7 @@ static void insert_array_cast_if_required(struct Type *expected_type,
 
 // Unify term->type with expected_type (both are assumed to be valid types of kind *).
 // If allow_casts is true, TM_CAST wrapper(s) may be added.
-// If error detected, prints msg and sets tc_context->error.
+// If error detected, prints msg and increments tc_context->num_errors.
 // Returns true if matching was successful.
 static bool match_term_to_type(struct TypecheckContext *tc_context,
                                struct Type *expected_type,
@@ -1109,7 +1129,7 @@ static struct Type * find_common_binop_type(struct TypecheckContext *tc_context,
         case BINOP_CAT_FINITE_INTEGER: msg = "finite-sized integer"; break;
         }
         report_type_mismatch_string(msg, first_term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         free_type(type);
         return NULL;
     }
@@ -1288,7 +1308,7 @@ static void typecheck_var_term(struct TypecheckContext *tc_context,
         // This happens when there was an error with the original declaration
         // of the variable, so the variable never got inserted into the env.
         // Ignore any further errors relating to this variable.
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -1299,19 +1319,19 @@ static void typecheck_var_term(struct TypecheckContext *tc_context,
     // Ghost variables can only be accessed from *nonexecutable* contexts.
     if (entry->ghost && tc_context->executable) {
         report_access_ghost_var_from_executable_code(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
     // Impure functions can only be accessed from impure, executable functions.
     if (entry->impure && !tc_context->executable) {
         report_access_impure_fun_from_ghost_code(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
     if (entry->impure && !tc_context->impure) {
         report_access_impure_fun_from_pure_code(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -1326,7 +1346,7 @@ static void typecheck_var_term(struct TypecheckContext *tc_context,
     // If we are left with TY_FUNCTION then this is only allowed as a func_call_lhs.
     if (term->type->tag == TY_FUNCTION && !func_call_lhs) {
         report_function_variable_not_allowed(term->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         free_type(term->type);
         term->type = NULL;
     }
@@ -1372,7 +1392,7 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
     // LHS must be TY_FORALL.
     if (term->tyapp.lhs->type->tag != TY_FORALL) {
         report_type_arguments_not_expected_here(term->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -1381,7 +1401,7 @@ static void typecheck_tyapp_term(struct TypecheckContext *tc_context,
     int num_tyargs_expected = tyvar_list_length(term->tyapp.lhs->type->forall_data.tyvars);
     if (num_tyargs_expected != num_tyargs_present) {
         report_wrong_number_of_type_arguments(term->location, num_tyargs_expected, num_tyargs_present);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -1565,7 +1585,7 @@ static void* typecheck_cast(void *context, struct Term *term, void *type_result,
 
     if (!valid_cast_type(from_type) || !valid_cast_type(to_type)) {
         report_invalid_cast(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     } else {
         term->type = copy_type(term->cast.target_type);
     }
@@ -1617,7 +1637,7 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
     case UNOP_NEGATE:
         if (!numeric || !is_signed) {
             report_type_mismatch_string("signed numeric type", operand);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             ok = false;
         }
         break;
@@ -1625,7 +1645,7 @@ static void* typecheck_unop(void *context, struct Term *term, void *type_result,
     case UNOP_COMPLEMENT:
         if (type->tag != TY_FINITE_INT) {
             report_type_mismatch_string("finite-sized integer", operand);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             ok = false;
         }
         break;
@@ -1685,7 +1705,7 @@ static bool check_chain_direction(struct TypecheckContext *tc_context, struct Te
             } else {
                 report_chaining_direction_error(node->rhs->location);
             }
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         } else if (new_dir != DIR_NEUTRAL) {
             dir = new_dir;
@@ -1960,13 +1980,13 @@ static void* typecheck_binop(void *context, struct Term *term, void *type_result
 
             if (term->binop.lhs->type && chase_univars(term->binop.lhs->type)->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", term->binop.lhs);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 ok = false;
             }
 
             if (term->binop.list->rhs->type && chase_univars(term->binop.list->rhs->type)->tag != TY_FINITE_INT) {
                 report_type_mismatch_string("finite-sized integer", term->binop.list->rhs);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 ok = false;
             }
 
@@ -2059,6 +2079,11 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
         return NULL;
     }
 
+    // The type of the let-bound name must be fully inferred at this point
+    // (in "let x = rhs in body;", the type of "x" must be inferred from "rhs"
+    // alone, not "body").
+    check_type_inferred(tc_context, term->let.rhs->type, &term->let.rhs->location);
+
     struct TypeEnvEntry *entry =
         add_to_type_env(tc_context->type_env,
                         term->let.name,
@@ -2079,7 +2104,7 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
 
     if (tc_context->executable) {
         report_executable_quantifier(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2131,7 +2156,7 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
     if (fun_type->tag != TY_FUNCTION) {
         // LHS term isn't a function; we can't call it.
         report_call_of_non_function(term->call.func);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2185,7 +2210,7 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
             struct TypeEnvEntry *entry = lookup_type_info(tc_context, func->var.name);
             if (entry && entry->impure) {
                 report_impure_call_not_allowed_in_subexpression(term);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 ok = false;
             }
         }
@@ -2200,7 +2225,7 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
     }
     if (dummy_list || actual_list) {
         report_wrong_number_of_arguments(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         ok = false;
 
     } else {
@@ -2223,25 +2248,25 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
 
                 if (!allow_side_effect) {
                     report_ref_arg_not_allowed_in_subexpression(actual_list->rhs->location);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 } else if (!lvalue) {
                     report_cannot_take_ref(actual_list->rhs->location);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 } else if (read_only) {
                     report_cannot_take_ref_to_readonly(actual_list->rhs->location);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 } else if (!ghost && !tc_context->executable) {
                     // Trying to write to a non-ghost variable in a ghost context.
                     report_writing_nonghost_from_ghost_code(actual_list->rhs->location);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 } else if (!ghost && dummy_list->ghost) {
                     // ref ghost arguments can only accept ghost lvalues
                     report_ref_ghost_requires_ghost_arg(actual_list->rhs->location);
-                    tc_context->error = true;
+                    ++tc_context->num_errors;
                     ok = false;
                 }
             }
@@ -2254,13 +2279,13 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
         if (ignoring_ret_val) {
             if (fun_type->function_data.return_type != NULL) {
                 report_function_return_value_ignored(term->call.func);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 ok = false;
             }
         } else {
             if (fun_type->function_data.return_type == NULL) {
                 report_function_does_not_return_a_value(term->call.func);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 ok = false;
             }
         }
@@ -2309,7 +2334,7 @@ static void* typecheck_record(void *context, struct Term *term, void *type_resul
 
         if (hash_table_contains_key(found_field_names, field->name)) {
             report_duplicate_field_name(term->location, field->name);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             ok = false;
         }
 
@@ -2355,7 +2380,7 @@ static void* typecheck_record_update(void *context, struct Term *term, void *typ
     }
     if (lhs_ty->tag != TY_RECORD) {
         report_updating_non_record(term->record_update.lhs->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2378,7 +2403,7 @@ static void* typecheck_record_update(void *context, struct Term *term, void *typ
         }
         if (!search) {
             report_field_not_found(update->location, update->name);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             ok = false;
             continue;
         }
@@ -2393,7 +2418,7 @@ static void* typecheck_record_update(void *context, struct Term *term, void *typ
         for (struct NameTermList *prev_update = term->record_update.fields; prev_update != update; prev_update = prev_update->next) {
             if (prev_update->name && strcmp(prev_update->name, update->name) == 0) {
                 report_duplicate_field_name(update->location, update->name);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 ok = false;
             }
         }
@@ -2430,12 +2455,12 @@ static void* typecheck_field_proj(void *context, struct Term *term, void *type_r
                 }
             }
             report_field_not_found(term->location, field_name);
-            tc_context->error = true;
+            ++tc_context->num_errors;
 
         } else {
             // LHS is not something we can project fields from.
             report_cannot_access_fields_in(lhs);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
     }
 
@@ -2478,7 +2503,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
         }
         if (num_expected_fields != field_num) {
             report_pattern_wrong_number_of_fields(location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         }
     }
@@ -2491,7 +2516,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
     for (struct NamePatternList *field = fields; field; field = field->next) {
         if (hash_table_contains_key(found_field_names, field->name)) {
             report_duplicate_field_name(location, field->name);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             ok = false;
         }
 
@@ -2509,7 +2534,7 @@ static bool typecheck_record_pattern(struct TypecheckContext *tc_context,
         // If not found - error; otherwise - check the pattern matches the expected type.
         if (search == NULL) {
             report_field_not_found(field->pattern->location, field->name);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             ok = false;
         } else if (!typecheck_pattern(tc_context, field->pattern, search->type,
                                       scrutinee_lvalue, scrutinee_read_only,
@@ -2539,14 +2564,14 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         // No ref patterns in postconditions
         if (pattern->var.ref && tc_context->postcondition) {
             report_no_ref_in_postcondition(pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         }
 
         // For ref pattern, scrutinee must be lvalue
         if (pattern->var.ref && !scrutinee_lvalue) {
             report_cannot_take_ref(pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         }
 
@@ -2554,7 +2579,13 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         // (otherwise ghost code would be able to write to non-ghost via the ref)
         if (pattern->var.ref && !tc_context->executable && !scrutinee_ghost) {
             report_ghost_ref_requires_ghost_lvalue(pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
+            return false;
+        }
+
+        // The type of a pattern variable must be fully inferred at this point
+        // (the match arms cannot be used to infer it).
+        if (!check_type_inferred(tc_context, scrutinee_type, &pattern->location)) {
             return false;
         }
 
@@ -2587,7 +2618,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
     case PAT_BOOL:
         if (scrutinee_type->tag != TY_BOOL) {
             report_type_mismatch_pattern(scrutinee_type, pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         } else {
             return true;
@@ -2596,14 +2627,14 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
     case PAT_INT:
         if (scrutinee_type->tag != TY_FINITE_INT) {
             report_type_mismatch_pattern(scrutinee_type, pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         } else if (!int_value_in_range(scrutinee_type->int_data.num_bits,
                                        scrutinee_type->int_data.is_signed,
                                        pattern->int_data.value,
                                        pattern->int_data.is_negative)) {
             report_int_pattern_out_of_range(scrutinee_type, pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         } else {
             return true;
@@ -2612,7 +2643,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
     case PAT_RECORD:
         if (scrutinee_type->tag != TY_RECORD) {
             report_type_mismatch_pattern(scrutinee_type, pattern->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
             return false;
         } else {
             return typecheck_record_pattern(tc_context, pattern->location, pattern->record.fields,
@@ -2624,7 +2655,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
         {
             if (scrutinee_type->tag != TY_VARIANT) {
                 report_type_mismatch_pattern(scrutinee_type, pattern->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
 
@@ -2662,7 +2693,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             // Report errors
             if (payload_type == NULL || has_payload != requires_payload) {
                 report_type_mismatch_pattern(scrutinee_type, pattern->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
 
@@ -2698,7 +2729,7 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
     // there must be at least one arm
     if (term->match.arms == NULL) {
         report_match_with_no_arms(term->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 
     struct Type * result_type = NULL;
@@ -2758,7 +2789,7 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
 
     if (array_type->tag != TY_ARRAY) {
         report_type_mismatch_string("array", rhs);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2771,7 +2802,7 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         // to free it.
         // In ghost code it is fine.
         report_cannot_take_sizeof(rhs);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2810,7 +2841,7 @@ static void * typecheck_allocated(void *context, struct Term *term, void *type_r
 
     if (tc_context->executable) {
         report_executable_allocated(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2840,7 +2871,7 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
 
     if (array_type->tag != TY_ARRAY) {
         report_cannot_index(lhs);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return NULL;
     }
 
@@ -2870,7 +2901,7 @@ static void * typecheck_array_proj(void *context, struct Term *term, void *type_
 
     if (num_indexes != array_type->array_data.ndim) {
         report_wrong_number_of_indexes(term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         ok = false;
     }
 
@@ -2928,7 +2959,7 @@ static void typecheck_attributes(struct TypecheckContext *tc_context, struct Att
 
         if (found_ensures && attr->tag == ATTR_REQUIRES) {
             report_requires_after_ensures(attr);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
 
         if (attr->tag == ATTR_ENSURES) {
@@ -3020,7 +3051,7 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
     // If there is no rhs and no type annotation, this is an error.
     if (!stmt->var_decl.type && !stmt->var_decl.rhs) {
         report_incomplete_definition(stmt->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -3051,13 +3082,13 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
             bool rhs_ghost = false;
             if (!is_lvalue(tc_context, stmt->var_decl.rhs, &rhs_ghost, &read_only)) {
                 report_cannot_take_ref(stmt->var_decl.rhs->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
             } else if (!tc_context->executable && !rhs_ghost) {
                 // A ref declared in ghost code must bind a ghost lvalue.
                 // Otherwise, ghost writes through the ref would modify a
                 // non-ghost variable (which codegen would skip).
                 report_ghost_ref_requires_ghost_lvalue(stmt->var_decl.rhs->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
             }
         }
 
@@ -3097,7 +3128,7 @@ static void typecheck_var_decl_stmt(struct TypecheckContext *tc_context,
         // If this is a ref, the rhs must not be an element of a resizable array.
         if (stmt->var_decl.ref && contains_resizable_array_element(stmt->var_decl.rhs)) {
             report_cannot_take_ref_to_resizable_array_element(stmt->var_decl.rhs->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
 
     } else {
@@ -3126,15 +3157,15 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
     struct Term *assert_term = tc_context->assert_term;
     if (assert_term == NULL) {
         report_fix_outside_proof(stmt);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else if (!tc_context->at_proof_top_level) {
         report_fix_at_wrong_scope(stmt);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else if (assert_term->tag != TM_QUANTIFIER || assert_term->quant.quant != QUANT_FORALL) {
         report_fix_no_forall_variable(stmt, assert_term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else if (!kindcheck_type(tc_context, &stmt->fix.type)) {
         // do nothing
@@ -3142,7 +3173,7 @@ static void typecheck_fix_stmt(struct TypecheckContext *tc_context,
     } else if (!unify_types(tc_context, assert_term->quant.type, stmt->fix.type, &stmt->location, true)) {
         // give an "extra" error message to show where the expected type came from
         report_fix_wrong_type(stmt, assert_term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else {
         // Move down one level inside the term (in case there is another "fix" later on!)
@@ -3192,15 +3223,15 @@ static void typecheck_use_stmt(struct TypecheckContext *tc_context,
     struct Term *assert_term = tc_context->assert_term;
     if (assert_term == NULL) {
         report_use_outside_proof(stmt);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else if (!tc_context->at_proof_top_level) {
         report_use_at_wrong_scope(stmt);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else if (assert_term->tag != TM_QUANTIFIER || assert_term->quant.quant != QUANT_EXISTS) {
         report_use_no_exists_variable(stmt, assert_term);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else {
         // Typecheck the provided term - it should match the type in the quantifier
@@ -3223,17 +3254,17 @@ static void typecheck_assign_stmt(struct TypecheckContext *tc_context,
     bool lvalue = is_lvalue(tc_context, stmt->assign.lhs, &lhs_is_ghost_var, &lhs_read_only);
     if (!lvalue) {
         report_cannot_assign(stmt->assign.lhs);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     } else if (lhs_read_only) {
         report_cannot_assign_to_readonly(stmt->assign.lhs);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     } else if (!lhs_is_ghost_var && !tc_context->executable) {
         // Note: typecheck_term reports the error if lhs is ghost
         // and we are in executable code.
         // Here we have to check the opposite error: writing nonghost
         // var from ghost code.
         report_writing_nonghost_from_ghost_code(stmt->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     } else {
         // No ghost/readonly/lvalue related errors, so proceed with typechecking
         typecheck_term(tc_context, stmt->assign.lhs);
@@ -3269,13 +3300,13 @@ static void typecheck_swap_stmt(struct TypecheckContext *tc_context,
         bool lvalue = is_lvalue(tc_context, term, &ghost, &read_only);
         if (!lvalue) {
             report_cannot_swap(term);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         } else if (read_only) {
             report_cannot_swap_readonly(term);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         } else if (!ghost && !tc_context->executable) {
             report_writing_nonghost_from_ghost_code(term->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         } else {
             typecheck_term(tc_context, term);
         }
@@ -3313,18 +3344,18 @@ static void typecheck_return_stmt(struct TypecheckContext *tc_context,
 
     if (!tc_context->executable && !return_info->ghost) {
         report_cant_return_in_ghost_code(stmt);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else if (return_info->type == NULL) {
         if (stmt->ret.value != NULL) {
             report_unexpected_return_value(stmt->ret.value);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
 
     } else {
         if (stmt->ret.value == NULL) {
             report_missing_return_value(stmt);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         } else {
             typecheck_term(tc_context, stmt->ret.value);
             match_term_to_type(tc_context, return_info->type, &stmt->ret.value);
@@ -3349,7 +3380,7 @@ static void typecheck_assert_stmt(struct TypecheckContext *tc_context,
         // Otherwise, leave tc_context->assert_term unchanged.
         if (old_assert_term == NULL) {
             report_assert_star_outside_proof(stmt);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
     }
 
@@ -3417,13 +3448,13 @@ static void typecheck_while_stmt(struct TypecheckContext *tc_context,
     for (struct Attribute *attr = stmt->while_data.attributes; attr; attr = attr->next) {
         if (attr->tag != ATTR_INVARIANT && attr->tag != ATTR_DECREASES) {
             report_attribute_not_allowed_here(attr);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
 
         if (attr->tag == ATTR_DECREASES) {
             if (decreases_found) {
                 report_duplicate_decreases(attr);
-                tc_context->error = true;
+                ++tc_context->num_errors;
             } else {
                 decreases_found = true;
             }
@@ -3454,7 +3485,7 @@ static void typecheck_match_stmt(struct TypecheckContext *tc_context,
     // there must be at least one arm
     if (stmt->match.arms == NULL) {
         report_match_with_no_arms(stmt->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 
     bool ghost = false;
@@ -3498,7 +3529,7 @@ static void typecheck_show_hide_stmt(struct TypecheckContext *tc_context,
     struct TypeEnvEntry * entry = lookup_type_info(tc_context, stmt->show_hide.name);
 
     if (entry == NULL) {
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -3512,7 +3543,7 @@ static void typecheck_show_hide_stmt(struct TypecheckContext *tc_context,
         // ok
     } else {
         report_can_only_show_hide_functions(stmt->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 }
 
@@ -3533,6 +3564,9 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
         tc_context->statement = stmt;
 
         struct Statement *next_stmt = stmt->next;
+
+        // Track whether any errors occur within this statement.
+        int errors_before = tc_context->num_errors;
 
         switch (stmt->tag) {
         case ST_VAR_DECL:
@@ -3596,6 +3630,23 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
             break;
         }
 
+        // After typechecking a statement, there should be no
+        // remaining unresolved univars -- otherwise it is an "Unable
+        // to resolve type" error. (E.g. in "var x = rhs;", the type
+        // of "x" must be inferred from "rhs" alone; later statements
+        // cannot be used.)
+
+        // The "Unable to infer" error is only reported if the
+        // statement was otherwise error-free, because a failed
+        // unification would typically leave behind unresolved univars
+        // as well.
+
+        if (tc_context->num_errors == errors_before
+        && statement_contains_unresolved_univars(stmt)) {
+            report_cannot_infer_type(stmt->location);
+            ++tc_context->num_errors;
+        }
+
         stmt = next_stmt;
 
         tc_context->executable = old_exec;
@@ -3632,7 +3683,7 @@ static void* const_abstract_type_callback(void *cxt, struct Type *type_var)
                                                   type_var->var_data.name);
     if (entry && !entry->extern_tyvar && !context->error_found) {
         report_const_uses_abstract_type(type_var->var_data.name, *context->const_loc);
-        context->tc_context->error = true;
+        ++context->tc_context->num_errors;
         context->error_found = true;
     }
 
@@ -3678,10 +3729,13 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
         }
     }
 
+    // Track whether any errors occur within this decl.
+    int errors_before = tc_context->num_errors;
+
     // Const decls cannot be recursive
     if (decl->recursive) {
         report_illegal_recursion(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
 
     } else {
         // If we have a term then let's typecheck it.
@@ -3704,18 +3758,31 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
             // Valid only in interface or ghost code.
             if (implementation && !decl->ghost) {
                 report_incomplete_definition(decl->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
             }
 
         } else {
             // "const foo" with neither type annotation nor RHS term. This is invalid.
             report_incomplete_definition(decl->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         }
     }
 
     if (decl->const_data.type) {
 
+        // The type of a constant must be inferred from its definition
+        // (i.e. not from later decls). So if any unresolved univars
+        // remain at this point, it is an "Unable to infer type"
+        // error. (This is reported only if the decl was otherwise
+        // error-free.)
+        if (tc_context->num_errors == errors_before
+        && decl_contains_unresolved_univars(decl)) {
+            report_cannot_infer_type(decl->location);
+            ++tc_context->num_errors;
+        }
+
+        // Remove any TY_UNIVARs that were inserted -- replacing with
+        // the actual resolved type.
         remove_univars_from_decl(decl);
 
         // Final check, for non-ghost constants:
@@ -3743,7 +3810,7 @@ static void evaluate_constant(struct TypecheckContext *tc_context,
             struct Term *value = eval_to_normal_form(tc_context->type_env->base,  // global env
                                                      decl->const_data.rhs);
             if (value == NULL) {
-                tc_context->error = true;
+                ++tc_context->num_errors;
             } else {
                 entry->value = value;
                 decl->const_data.value = copy_term(value);
@@ -3806,7 +3873,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     // functions cannot be recursive currently
     if (decl->recursive) {
         report_illegal_recursion(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -3814,12 +3881,12 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     // ghost and impure are incompatible
     if (decl->ghost && decl->function_data.impure) {
         report_impure_cannot_be_ghost(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
     if (decl->ghost && decl->function_data.is_extern) {
         report_extern_cannot_be_ghost(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -3891,13 +3958,23 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
     // attributes are considered non-executable
     bool old_exec = tc_context->executable;
     tc_context->executable = false;
+    int errors_before = tc_context->num_errors;
     typecheck_attributes(tc_context, decl->attributes);
+    bool attr_error = tc_context->num_errors != errors_before;
     tc_context->executable = old_exec;
 
     for (struct Attribute *attr = decl->attributes; attr; attr = attr->next) {
         if (attr->tag != ATTR_REQUIRES && attr->tag != ATTR_ENSURES) {
             report_attribute_not_allowed_here(attr);
-            tc_context->error = true;
+            ++tc_context->num_errors;
+        }
+
+        // Each attribute is typechecked separately (like a statement),
+        // so all univars created within it must have been resolved
+        // (only reported if all attributes were otherwise error-free).
+        if (!attr_error && term_contains_unresolved_univars(attr->term)) {
+            report_cannot_infer_type(attr->location);
+            ++tc_context->num_errors;
         }
     }
 
@@ -3905,7 +3982,7 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         if (decl->function_data.is_extern) {
             // body and extern are not allowed simultaneously
             report_both_body_and_extern(decl->location);
-            tc_context->error = true;
+            ++tc_context->num_errors;
         } else {
             // typecheck the function body
             typecheck_statements(tc_context, decl->function_data.body);
@@ -3913,12 +3990,12 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
 
     } else if (implementation && function_body_required(decl)) {
         report_incomplete_definition(decl->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 
     if (decl->function_data.is_extern && !is_valid_extern_name(decl->function_data.extern_name)) {
         report_invalid_extern_name(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 
     if (kinds_ok && ret_type_ok) {
@@ -3973,7 +4050,7 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
             // "datatype Foo<a> = ...;" in implementation.)
             if (decl->tag == DECL_DATATYPE && decl->datatype_data.tyvars != NULL) {
                 report_cannot_abstract_with_tyargs(decl->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
 
@@ -3995,7 +4072,7 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
             }
             if (new_alloc_level > prev_entry->alloc_level) {
                 report_incompatible_alloc_level(decl->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
 
@@ -4011,7 +4088,7 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
             }
             if (new_alloc_level > prev_entry->alloc_level) {
                 report_incompatible_alloc_level(decl->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
                 return false;
             }
         }
@@ -4028,7 +4105,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
     // datatypes cannot be recursive currently
     if (decl->recursive) {
         report_illegal_recursion(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -4143,7 +4220,7 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         free_type(variant_type);
 
     } else {
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 }
 
@@ -4155,14 +4232,14 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
     // typedefs cannot be recursive
     if (decl->recursive) {
         report_illegal_recursion(decl);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
     // tyvars can only be used with typedefs, not abstract types
     if (decl->typedef_data.tyvars && decl->typedef_data.rhs == NULL) {
         report_abstract_type_with_tyvars(decl->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -4170,7 +4247,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
     // i.e. not with "type Foo = RHS;" or "extern type Foo;".
     if (decl->ghost && (decl->typedef_data.rhs != NULL || decl->typedef_data.is_extern)) {
         report_ghost_type_must_be_abstract(decl->location);
-        tc_context->error = true;
+        ++tc_context->num_errors;
         return;
     }
 
@@ -4227,7 +4304,7 @@ static void typecheck_typedef_decl(struct TypecheckContext *tc_context,
         entry->alloc_level = decl->typedef_data.alloc_level;
 
     } else {
-        tc_context->error = true;
+        ++tc_context->num_errors;
     }
 }
 
@@ -4237,11 +4314,9 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
                             bool implementation,
                             struct DeclGroup *interface_decls)
 {
-    bool overall_error = tc_context->error;
-
     for (struct Decl *decl = decls; decl; decl = decl->next) {
 
-        tc_context->error = false;
+        int errors_before = tc_context->num_errors;
 
         // make a "local" type environment for the decl
         tc_context->type_env = push_type_env(tc_context->type_env);
@@ -4260,7 +4335,7 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
         switch (decl->tag) {
         case DECL_CONST:
             typecheck_const_decl(tc_context, decl, implementation);
-            if (!tc_context->error) {
+            if (tc_context->num_errors == errors_before) {
                 match_compiler_term(&tc_context->temp_name_counter, decl->const_data.rhs);
                 evaluate_constant(tc_context, decl);
             }
@@ -4268,7 +4343,7 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
 
         case DECL_FUNCTION:
             typecheck_function_decl(tc_context, decl, implementation);
-            if (!tc_context->error) {
+            if (tc_context->num_errors == errors_before) {
                 // match compiler
                 match_compiler_attributes(&tc_context->temp_name_counter, decl->attributes);
                 match_compiler_statements(&tc_context->temp_name_counter, decl->function_data.body);
@@ -4283,22 +4358,16 @@ static void typecheck_decls(struct TypecheckContext *tc_context,
             if (implementation && decl->typedef_data.rhs == NULL && !decl->typedef_data.is_extern) {
                 // "type Foo;" is only allowed in interface, not implementation
                 report_abstract_type_in_impl(decl->location);
-                tc_context->error = true;
+                ++tc_context->num_errors;
             } else {
                 typecheck_typedef_decl(tc_context, decl, implementation, interface_decls);
             }
             break;
         }
 
-        if (tc_context->error) {
-            overall_error = true;
-        }
-
         // remove the local env
         tc_context->type_env = pop_type_env(tc_context->type_env);
     }
-
-    tc_context->error = overall_error;
 }
 
 // This typechecks the DeclGroup and all "next" DeclGroups as well.
@@ -4548,7 +4617,7 @@ bool typecheck_module(TypeEnv *type_env,
 {
     struct TypecheckContext tc_context;
     tc_context.type_env = type_env;
-    tc_context.error = false;
+    tc_context.num_errors = 0;
     tc_context.executable = false;
     tc_context.impure = false;
     tc_context.statement = NULL;
@@ -4564,12 +4633,12 @@ bool typecheck_module(TypeEnv *type_env,
         typecheck_decl_groups(&tc_context, module->implementation, true, module->interface);
 
         // Only check interfaces if typechecking succeeded
-        if (!tc_context.error) {
-            tc_context.error = !check_interfaces(module);
+        if (tc_context.num_errors == 0 && !check_interfaces(module)) {
+            ++tc_context.num_errors;
         }
     }
 
-    return !tc_context.error;
+    return tc_context.num_errors == 0;
 }
 
 bool typecheck_main_function(TypeEnv *type_env,

@@ -28,7 +28,7 @@ interface {}
     var m3: Maybe<i32> = m;    // error
     var m4: Maybe<a,a> = m;    // error, wrong num tyargs
     var m5: Maybe;             // error, wrong num tyargs
-    var m6 = Nothing;          // now works - infers a type-argument
+    var m6 = Nothing;          // error, the type-argument cannot be inferred
   }
 
   function call_bar()
@@ -37,7 +37,7 @@ interface {}
     bar<bool>(Nothing<bool>);
     bar<i32>(100);             // error
 
-    bar<i32>(let n = Nothing in n);        // works, infers Nothing<i32>
+    bar<i32>(let n = Nothing in n);        // error, the type of 'n' must be inferred from its rhs alone
     bar<i32>(let n = Nothing<i32> in n);   // ok
     bar<i32>(let n = Nothing<u32> in n);   // error, type mismatch
 
@@ -49,7 +49,7 @@ interface {}
   const c1: Maybe = 100;                 // error, wrong num tyargs
   const c2: Maybe<Maybe> = 100;          // error, wrong num tyargs
   const c3: Maybe<Maybe<Maybe> > = 100;  // error, wrong num tyargs (note syntax!)
-  const c4 = Nothing;                    // works, infers a type-argument
+  const c4 = Nothing;                    // error, the type-argument cannot be inferred
   const c5: Maybe<i32> = Red;            // error, type mismatch
 
 

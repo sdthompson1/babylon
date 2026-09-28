@@ -16,9 +16,9 @@ function get<a>(x: Maybe<a>): a
 
 function f(): i32
 {
-    var x = Nothing;  // x :: Maybe<'a>    
-    var y = get(x);   // y :: 'a
-    assert y == 0;    // 'a now resolved to i32
+    var x: Maybe<i32> = Nothing;
+    var y = get(x);   // y :: i32
+    assert y == 0;
 
     x = Just(100);
     y = get(x);

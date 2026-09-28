@@ -47,13 +47,5 @@ function test2()
 
 function test3()
 {
-    var v = h2();   // v's type is an unresolved unification variable, created in executable code
-    var i: i32 = 0;
-    while i < 10
-        invariant i <= 10;
-        decreases v;    // checking the decreases clause must not clear the "must be executable" requirement on v's type
-    {
-        i = i + 1;
-    }
-    k(v);           // error: v's type would be resolved to 'int', which is not executable
+    var v = h2();   // error: unable to infer type
 }

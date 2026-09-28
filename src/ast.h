@@ -1,7 +1,7 @@
 /*
 This file is part of the Babylon compiler.
 
-Copyright (C) Stephen Thompson, 2023--2024.
+Copyright (C) Stephen Thompson, 2023--2026.
 
 For licensing information please see LICENCE.txt at the root of the
 repository.
@@ -825,11 +825,33 @@ void * transform_name_term_list(struct TermTransform *transform, void *context, 
 void * transform_arm(struct TermTransform *transform, void *context, struct Arm *arm);
 void * transform_term(struct TermTransform *transform, void *context, struct Term *term);
 
-// This is a cut-down version of transform_term that just applies a single function
-// to every Type in a term.
-void forall_types_in_term(void (*fn)(void *context, struct Type **type),
-                          void *context,
-                          struct Term *term);
+
+//
+// Recursive "For all types in" functions
+//
+
+// This is a simplified version of the "Transform" framework (above)
+// which just calls a particular function on every Type in a given
+// object (term, attribute list, statement or decl).
+
+// The function is passed a pointer to the Type pointer, so it can
+// replace the Type if desired.
+
+typedef void (*ForallTypesFn)(void *context, struct Type **type);
+
+void forall_types_in_term(ForallTypesFn fn, void *context, struct Term *term);
+
+void forall_types_in_attributes(ForallTypesFn fn, void *context, struct Attribute *attr);
+
+// Visit one statement only (not any following statements in the
+// list), although nested statement blocks are included.
+void forall_types_in_statement(ForallTypesFn fn, void *context, struct Statement *stmt);
+
+// Visit all statements in the list.
+void forall_types_in_statements(ForallTypesFn fn, void *context, struct Statement *stmt);
+
+// Visit one decl only (not any following decls in the group).
+void forall_types_in_decl(ForallTypesFn fn, void *context, struct Decl *decl);
 
 
 

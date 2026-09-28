@@ -1,7 +1,7 @@
 /*
 This file is part of the Babylon compiler.
 
-Copyright (C) Stephen Thompson, 2023--2024.
+Copyright (C) Stephen Thompson, 2023--2026.
 
 For licensing information please see LICENCE.txt at the root of the
 repository.
@@ -559,9 +559,7 @@ void * transform_term(struct TermTransform *tr, void *context, struct Term *term
     fatal_error("transform_term, bad tag");
 }
 
-void forall_types_in_term(void (*fn)(void *context, struct Type **type),
-                          void *context,
-                          struct Term *term)
+void forall_types_in_term(ForallTypesFn fn, void *context, struct Term *term)
 {
     if (term == NULL) {
         return;
@@ -691,6 +689,137 @@ void forall_types_in_term(void (*fn)(void *context, struct Type **type),
         }
         break;
     }
+}
+
+void forall_types_in_attributes(ForallTypesFn fn, void *context, struct Attribute *attr)
+{
+    for (; attr; attr = attr->next) {
+        switch (attr->tag) {
+        case ATTR_REQUIRES:
+        case ATTR_ENSURES:
+        case ATTR_INVARIANT:
+        case ATTR_DECREASES:
+            forall_types_in_term(fn, context, attr->term);
+            break;
+        }
+    }
+}
+
+void forall_types_in_statement(ForallTypesFn fn, void *context, struct Statement *stmt)
+{
+    if (stmt == NULL) {
+        return;
+    }
+
+    switch (stmt->tag) {
+    case ST_VAR_DECL:
+        fn(context, &stmt->var_decl.type);
+        forall_types_in_term(fn, context, stmt->var_decl.rhs);
+        break;
+
+    case ST_FIX:
+        fn(context, &stmt->fix.type);
+        break;
+
+    case ST_OBTAIN:
+        fn(context, &stmt->obtain.type);
+        forall_types_in_term(fn, context, stmt->obtain.condition);
+        break;
+
+    case ST_USE:
+        forall_types_in_term(fn, context, stmt->use.term);
+        break;
+
+    case ST_ASSIGN:
+        forall_types_in_term(fn, context, stmt->assign.lhs);
+        forall_types_in_term(fn, context, stmt->assign.rhs);
+        break;
+
+    case ST_SWAP:
+        forall_types_in_term(fn, context, stmt->swap.lhs);
+        forall_types_in_term(fn, context, stmt->swap.rhs);
+        break;
+
+    case ST_RETURN:
+        forall_types_in_term(fn, context, stmt->ret.value);
+        break;
+
+    case ST_ASSERT:
+        forall_types_in_term(fn, context, stmt->assert_data.condition);
+        forall_types_in_statements(fn, context, stmt->assert_data.proof);
+        break;
+
+    case ST_ASSUME:
+        forall_types_in_term(fn, context, stmt->assume.condition);
+        break;
+
+    case ST_IF:
+        forall_types_in_term(fn, context, stmt->if_data.condition);
+        forall_types_in_statements(fn, context, stmt->if_data.then_block);
+        forall_types_in_statements(fn, context, stmt->if_data.else_block);
+        break;
+
+    case ST_WHILE:
+        forall_types_in_term(fn, context, stmt->while_data.condition);
+        forall_types_in_attributes(fn, context, stmt->while_data.attributes);
+        forall_types_in_statements(fn, context, stmt->while_data.body);
+        break;
+
+    case ST_CALL:
+        forall_types_in_term(fn, context, stmt->call.term);
+        break;
+
+    case ST_MATCH:
+        forall_types_in_term(fn, context, stmt->match.scrutinee);
+        for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
+            forall_types_in_statements(fn, context, arm->rhs);
+        }
+        break;
+
+    case ST_MATCH_FAILURE:
+        break;
+
+    case ST_SHOW_HIDE:
+        break;
+    }
+}
+
+void forall_types_in_statements(ForallTypesFn fn, void *context, struct Statement *stmt)
+{
+    for (; stmt; stmt = stmt->next) {
+        forall_types_in_statement(fn, context, stmt);
+    }
+}
+
+void forall_types_in_decl(ForallTypesFn fn, void *context, struct Decl *decl)
+{
+    switch (decl->tag) {
+    case DECL_CONST:
+        fn(context, &decl->const_data.type);
+        forall_types_in_term(fn, context, decl->const_data.rhs);
+        forall_types_in_term(fn, context, decl->const_data.value);
+        break;
+
+    case DECL_FUNCTION:
+        for (struct FunArg *arg = decl->function_data.args; arg; arg = arg->next) {
+            fn(context, &arg->type);
+        }
+        fn(context, &decl->function_data.return_type);
+        forall_types_in_statements(fn, context, decl->function_data.body);
+        break;
+
+    case DECL_DATATYPE:
+        for (struct DataCtor *ctor = decl->datatype_data.ctors; ctor; ctor = ctor->next) {
+            fn(context, &ctor->payload);
+        }
+        break;
+
+    case DECL_TYPEDEF:
+        fn(context, &decl->typedef_data.rhs);
+        break;
+    }
+
+    forall_types_in_attributes(fn, context, decl->attributes);
 }
 
 
