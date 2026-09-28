@@ -17,14 +17,18 @@ struct Type;
 struct Term;
 struct Statement;
 struct Decl;
+struct Location;
 
 
 // Check whether there are any unresolved TY_UNIVAR types within the
-// given type, term, statement or decl.
-bool type_contains_unresolved_univars(struct Type *type);
-bool term_contains_unresolved_univars(struct Term *term);
-bool statement_contains_unresolved_univars(struct Statement *stmt);  // checks one stmt (not the whole list)
-bool decl_contains_unresolved_univars(struct Decl *decl);  // checks one decl (not the whole list)
+// given type, term, statement or decl. If so, return the origin
+// location of one of them, otherwise return NULL.
+// (The returned pointer points into a UnivarNode, so it should be
+// used before the univars are removed.)
+const struct Location * find_unresolved_univar_in_type(struct Type *type);
+const struct Location * find_unresolved_univar_in_term(struct Term *term);
+const struct Location * find_unresolved_univar_in_statement(struct Statement *stmt);  // checks one stmt (not the whole list)
+const struct Location * find_unresolved_univar_in_decl(struct Decl *decl);  // checks one decl (not the whole list)
 
 
 // Remove all TY_UNIVAR types, replacing them with their actual

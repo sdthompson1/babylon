@@ -16,13 +16,24 @@ repository.
 // ----------------------------------------------------------------------------------------------------
 // Checking for unresolved univars
 
+static bool location_before(const struct Location *a, const struct Location *b)
+{
+    return a->begin_line_num < b->begin_line_num
+        || (a->begin_line_num == b->begin_line_num
+            && a->begin_column_num < b->begin_column_num);
+}
+
+// 'context' is a (const struct Location **), pointing to the earliest
+// origin location found so far (or NULL if none found yet).
 static void * check_ty_univar(struct TypeTransform *tr, void *context, struct Type *type)
 {
-    bool *found_unresolved = context;
+    const struct Location **found = context;
     struct UnivarNode *node = type->univar_data.node;
 
     if (node->type == NULL) {
-        *found_unresolved = true;
+        if (*found == NULL || location_before(&node->location, *found)) {
+            *found = &node->location;
+        }
     } else {
         // Check the resolved type itself (it might contain further univars).
         transform_type(tr, context, node->type);
@@ -31,40 +42,42 @@ static void * check_ty_univar(struct TypeTransform *tr, void *context, struct Ty
     return NULL;
 }
 
-bool type_contains_unresolved_univars(struct Type *type)
+static void check_type(const struct Location **found, struct Type *type)
 {
-    bool found_unresolved = false;
     struct TypeTransform tr = {0};
     tr.nr_transform_univar = check_ty_univar;
-    transform_type(&tr, &found_unresolved, type);
-    return found_unresolved;
+    transform_type(&tr, found, type);
+}
+
+const struct Location * find_unresolved_univar_in_type(struct Type *type)
+{
+    const struct Location *found = NULL;
+    check_type(&found, type);
+    return found;
 }
 
 static void check_type_fn(void *context, struct Type **type)
 {
-    bool *found = context;
-    if (type_contains_unresolved_univars(*type)) {
-        *found = true;
-    }
+    check_type(context, *type);
 }
 
-bool term_contains_unresolved_univars(struct Term *term)
+const struct Location * find_unresolved_univar_in_term(struct Term *term)
 {
-    bool found = false;
+    const struct Location *found = NULL;
     forall_types_in_term(check_type_fn, &found, term);
     return found;
 }
 
-bool statement_contains_unresolved_univars(struct Statement *stmt)
+const struct Location * find_unresolved_univar_in_statement(struct Statement *stmt)
 {
-    bool found = false;
+    const struct Location *found = NULL;
     forall_types_in_statement(check_type_fn, &found, stmt);
     return found;
 }
 
-bool decl_contains_unresolved_univars(struct Decl *decl)
+const struct Location * find_unresolved_univar_in_decl(struct Decl *decl)
 {
-    bool found = false;
+    const struct Location *found = NULL;
     forall_types_in_decl(check_type_fn, &found, decl);
     return found;
 }

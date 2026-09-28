@@ -2,4 +2,4 @@ src/UnivarFlags.b:36:8: 'int' or 'real' types not allowed in executable code
 src/UnivarFlags.b:37:13: 'int' or 'real' types not allowed in executable code
 src/UnivarFlags.b:44:13: 'int' or 'real' types not allowed in executable code
 src/UnivarFlags.b:45:8: 'int' or 'real' types not allowed in executable code
-src/UnivarFlags.b:50:5: Unable to infer type
+src/UnivarFlags.b:50:13: Unable to infer type

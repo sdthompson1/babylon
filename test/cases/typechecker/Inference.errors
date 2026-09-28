@@ -1,10 +1,10 @@
-src/Inference.b:15:5: Unable to infer type
+src/Inference.b:15:13: Unable to infer type
 src/Inference.b:29:25: Type mismatch
 src/Inference.b:31:25: Type mismatch (expected numeric type)
 src/Inference.b:42:20: Unable to infer type
-src/Inference.b:48:15: Unable to infer type
-src/Inference.b:76:5: Unable to infer type
-src/Inference.b:78:5: Unable to infer type
+src/Inference.b:47:11: Unable to infer type
+src/Inference.b:76:12: Unable to infer type
+src/Inference.b:78:23: Unable to infer type
 src/Inference.b:89:12: 'int' or 'real' types not allowed in executable code
 src/Inference.b:90:7: 'int' or 'real' types not allowed in executable code
 src/Inference.b:91:7: 'int' or 'real' types not allowed in executable code

@@ -526,12 +526,17 @@ static struct Type * chase_univars(struct Type *type)
 // requirements otherwise.
 // (Note that univars are always required to be complete types;
 // see also update_univar_type.)
-static struct Type * new_univar_type(struct TypecheckContext *tc_context)
+// 'loc' is the location of the term that gave rise to the univar
+// (this is where "Unable to infer type" is reported, if the univar is
+// never resolved).
+static struct Type * new_univar_type(struct TypecheckContext *tc_context,
+                                     struct Location loc)
 {
     struct Type *type = make_type(g_no_location, TY_UNIVAR);
     type->univar_data.node = alloc(sizeof(struct UnivarNode));
     type->univar_data.node->must_be_executable = tc_context->executable;
     type->univar_data.node->must_be_valid_decreases = false;
+    type->univar_data.node->location = loc;
     type->univar_data.node->type = NULL;
     type->univar_data.node->ref_count = 1;
     return type;
@@ -653,14 +658,14 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
 //  - If any are found, report a "Cannot infer type" error and return false.
 //  - Otherwise, return true.
 static bool check_type_inferred(struct TypecheckContext *tc_context,
-                                struct Type *type,
-                                const struct Location *loc)
+                                struct Type *type)
 {
     if (type == NULL) {
         return false;
     }
 
-    if (type_contains_unresolved_univars(type)) {
+    const struct Location *loc = find_unresolved_univar_in_type(type);
+    if (loc) {
         report_cannot_infer_type(*loc);
         ++tc_context->num_errors;
         return false;
@@ -1063,9 +1068,11 @@ static struct Type * update_binop_type(struct Term *term, struct Type *type)
 // If this returns a type, that type is the "expected_type", to be unified with
 // all terms in the binop. The type must be freed by the caller.
 // If this returns NULL, then an error was printed and the caller should give up.
+// 'loc' is the location of the binop term.
 static struct Type * find_common_binop_type(struct TypecheckContext *tc_context,
                                             enum BinopCategory category,
-                                            struct TermData_BinOp *binop)
+                                            struct TermData_BinOp *binop,
+                                            struct Location loc)
 {
     struct Type * type = NULL;
     struct Term * first_term = NULL;
@@ -1090,7 +1097,7 @@ static struct Type * find_common_binop_type(struct TypecheckContext *tc_context,
     switch (category) {
     case BINOP_CAT_ANY:
         ok = true;
-        if (type == NULL) type = new_univar_type(tc_context);
+        if (type == NULL) type = new_univar_type(tc_context, loc);
         break;
 
     case BINOP_CAT_BOOL_OR_NUMERIC:
@@ -1147,7 +1154,7 @@ static bool check_binop_args(struct TypecheckContext *tc_context,
     struct TermData_BinOp *data = &binop->binop;
 
     // Find a suitable common type.
-    struct Type *type = find_common_binop_type(tc_context, cat, data);
+    struct Type *type = find_common_binop_type(tc_context, cat, data, binop->location);
     if (!type) {
         return false;
     }
@@ -1194,7 +1201,7 @@ static void infer_type_arguments(struct TypecheckContext *tc_context,
     struct TypeList **tail = &tyargs;
     struct HashTable *theta = new_hash_table();
     for (struct TyVarList *tyvar = term->type->forall_data.tyvars; tyvar; tyvar = tyvar->next) {
-        struct Type *ty = new_univar_type(tc_context);
+        struct Type *ty = new_univar_type(tc_context, term->location);
         *tail = alloc(sizeof(struct TypeList));
         (*tail)->type = copy_type(ty);
         (*tail)->next = NULL;
@@ -1529,7 +1536,7 @@ static void* typecheck_array_literal(void *context, struct Term *term, void *typ
 {
     struct TypecheckContext *tc_context = context;
 
-    struct Type *elem_type = new_univar_type(tc_context);
+    struct Type *elem_type = new_univar_type(tc_context, term->location);
     uint64_t num_elements = 0;
 
     for (struct OpTermList *node = term->array_literal.terms; node; node = node->next) {
@@ -2082,7 +2089,7 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
     // The type of the let-bound name must be fully inferred at this point
     // (in "let x = rhs in body;", the type of "x" must be inferred from "rhs"
     // alone, not "body").
-    check_type_inferred(tc_context, term->let.rhs->type, &term->let.rhs->location);
+    check_type_inferred(tc_context, term->let.rhs->type);
 
     struct TypeEnvEntry *entry =
         add_to_type_env(tc_context->type_env,
@@ -2585,7 +2592,7 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
 
         // The type of a pattern variable must be fully inferred at this point
         // (the match arms cannot be used to infer it).
-        if (!check_type_inferred(tc_context, scrutinee_type, &pattern->location)) {
+        if (!check_type_inferred(tc_context, scrutinee_type)) {
             return false;
         }
 
@@ -3641,10 +3648,12 @@ static void typecheck_statements(struct TypecheckContext *tc_context,
         // unification would typically leave behind unresolved univars
         // as well.
 
-        if (tc_context->num_errors == errors_before
-        && statement_contains_unresolved_univars(stmt)) {
-            report_cannot_infer_type(stmt->location);
-            ++tc_context->num_errors;
+        if (tc_context->num_errors == errors_before) {
+            const struct Location *loc = find_unresolved_univar_in_statement(stmt);
+            if (loc) {
+                report_cannot_infer_type(*loc);
+                ++tc_context->num_errors;
+            }
         }
 
         stmt = next_stmt;
@@ -3775,10 +3784,12 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
         // remain at this point, it is an "Unable to infer type"
         // error. (This is reported only if the decl was otherwise
         // error-free.)
-        if (tc_context->num_errors == errors_before
-        && decl_contains_unresolved_univars(decl)) {
-            report_cannot_infer_type(decl->location);
-            ++tc_context->num_errors;
+        if (tc_context->num_errors == errors_before) {
+            const struct Location *loc = find_unresolved_univar_in_decl(decl);
+            if (loc) {
+                report_cannot_infer_type(*loc);
+                ++tc_context->num_errors;
+            }
         }
 
         // Remove any TY_UNIVARs that were inserted -- replacing with
@@ -3972,9 +3983,12 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         // Each attribute is typechecked separately (like a statement),
         // so all univars created within it must have been resolved
         // (only reported if all attributes were otherwise error-free).
-        if (!attr_error && term_contains_unresolved_univars(attr->term)) {
-            report_cannot_infer_type(attr->location);
-            ++tc_context->num_errors;
+        if (!attr_error) {
+            const struct Location *loc = find_unresolved_univar_in_term(attr->term);
+            if (loc) {
+                report_cannot_infer_type(*loc);
+                ++tc_context->num_errors;
+            }
         }
     }
 
