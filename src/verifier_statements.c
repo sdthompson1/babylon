@@ -301,6 +301,7 @@ static void check_array_size_preserved(struct VContext *context,
 
     verify_condition(context, location, cond, "array size preserved",
                      err_msg_array_size_change(location));
+    free_sexpr(cond);
 }
 
 static void verify_assign_stmt(struct VContext *context,
