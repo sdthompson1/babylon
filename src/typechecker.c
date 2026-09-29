@@ -170,7 +170,6 @@ static bool match_term_to_type(struct TypecheckContext *tc_context,
 struct TypeFlags {
     bool must_be_executable;        // Type must be valid in executable code (e.g. not 'int' or 'real')
     bool must_be_complete;          // Type must not be, or contain, an incomplete array type (T[])
-    bool must_be_valid_decreases;   // Type must be usable in a 'decreases' clause
 };
 static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
                                     const struct TypeFlags *req,
@@ -535,7 +534,6 @@ static struct Type * new_univar_type(struct TypecheckContext *tc_context,
     struct Type *type = make_type(g_no_location, TY_UNIVAR);
     type->univar_data.node = alloc(sizeof(struct UnivarNode));
     type->univar_data.node->must_be_executable = tc_context->executable;
-    type->univar_data.node->must_be_valid_decreases = false;
     type->univar_data.node->location = loc;
     type->univar_data.node->type = NULL;
     type->univar_data.node->ref_count = 1;
@@ -555,28 +553,6 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     }
 
     type = chase_univars(type);
-
-    // must_be_valid_decreases is checked separately
-    if (req->must_be_valid_decreases) {
-        // Only TY_FINITE_INT, TY_MATH_INT, TY_BOOL, and tuples of
-        // those, are currently acceptable for 'decreases'.
-        if (type->tag == TY_UNIVAR) {
-            type->univar_data.node->must_be_valid_decreases = true;
-        } else if (type->tag == TY_RECORD) {
-            for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
-                if (!isdigit((unsigned char)field->name[0])) {
-                    // must be a tuple, not a record
-                    report_invalid_decreases_type(*loc);
-                    ++tc_context->num_errors;
-                    return false;
-                }
-            }
-        } else if (type->tag != TY_FINITE_INT && type->tag != TY_MATH_INT && type->tag != TY_BOOL) {
-            report_invalid_decreases_type(*loc);
-            ++tc_context->num_errors;
-            return false;
-        }
-    }
 
     // Check must_be_executable and must_be_complete, and check
     // recursively for any "child" types:
@@ -692,8 +668,7 @@ static bool update_univar_type(struct TypecheckContext *tc_context,
     // incomplete type).
     struct TypeFlags flags = {
         .must_be_executable = lhs->univar_data.node->must_be_executable,
-        .must_be_complete = true,
-        .must_be_valid_decreases = lhs->univar_data.node->must_be_valid_decreases
+        .must_be_complete = true
     };
     if (!ensure_type_meets_flags(tc_context, &flags, rhs, loc)) {
         return false;
@@ -2958,6 +2933,53 @@ static void typecheck_term(struct TypecheckContext *tc_context, struct Term *ter
 // Attribute typechecking
 //
 
+// Check that 'type' is usable in a 'decreases' clause. Only
+// TY_FINITE_INT, TY_MATH_INT, TY_BOOL, and tuples of those, are
+// currently acceptable. An unresolved univar is accepted here, since
+// it can never be resolved (univars cannot escape the term that
+// created them) and will be reported as "Unable to infer type" later.
+// Returns true if successful.
+static bool check_valid_decreases_type(struct TypecheckContext *tc_context,
+                                       struct Type *type,
+                                       const struct Location *loc)
+{
+    if (type == NULL) {
+        // ignore this error
+        return false;
+    }
+
+    type = chase_univars(type);
+
+    switch (type->tag) {
+    case TY_UNIVAR:
+    case TY_FINITE_INT:
+    case TY_MATH_INT:
+    case TY_BOOL:
+        return true;
+
+    case TY_RECORD:
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            if (!isdigit((unsigned char)field->name[0])) {
+                // must be a tuple, not a record
+                report_invalid_decreases_type(*loc);
+                ++tc_context->num_errors;
+                return false;
+            }
+        }
+        for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
+            if (!check_valid_decreases_type(tc_context, field->type, loc)) {
+                return false;
+            }
+        }
+        return true;
+
+    default:
+        report_invalid_decreases_type(*loc);
+        ++tc_context->num_errors;
+        return false;
+    }
+}
+
 static void typecheck_attributes(struct TypecheckContext *tc_context, struct Attribute *attr)
 {
     bool found_ensures = false;
@@ -2994,8 +3016,7 @@ static void typecheck_attributes(struct TypecheckContext *tc_context, struct Att
             if (attr->tag != ATTR_DECREASES) {
                 check_term_is_bool(tc_context, attr->term);
             } else {
-                struct TypeFlags flags = { .must_be_valid_decreases = true };
-                ensure_type_meets_flags(tc_context, &flags, attr->term->type, &attr->term->location);
+                check_valid_decreases_type(tc_context, attr->term->type, &attr->term->location);
             }
 
             break;

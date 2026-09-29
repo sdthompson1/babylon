@@ -62,7 +62,6 @@ struct UnivarNode {
     struct Type *type;
     uint32_t ref_count;
     bool must_be_executable;  // Type must be valid in executable code (e.g. not 'int' or 'real')
-    bool must_be_valid_decreases;   // Type must be usable in a 'decreases' clause
     struct Location location;  // Where the univar originated (for "Unable to infer type" errors)
 };
 
