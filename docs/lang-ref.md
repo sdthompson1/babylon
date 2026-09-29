@@ -640,25 +640,36 @@ satisfied (this assumption will be available for use in any future
 proofs).
 
 If the function is generic (see "function declarations" below), then
-suitable type arguments will be inferred automatically from the
-surrounding context. For example, if `f` is declared as `function
-f<T>(x: T)`, and called as `f(123)`, then we already know that `T =
-i32` (because the argument has type `i32`) so it is not necessary to
-write `f<i32>` explicitly. However, it is always allowed to explicitly
-provide the type parameters if desired, i.e. the above call could
-equally well have been written `f<i32>(123)` if this was desired for
-some reason.
+the caller may provide type arguments within angle brackets after the
+function name. For example, `f<i32>()` or `g<bool, i32>(true, 1)`.
 
-If generic type parameters cannot be inferred automatically, then they
-will default to `{}`. For example, if a function `f` is declared as
-`function f<T>(): T`, then the expression `f()` (with no other
-context) would have type `{}`. But if it had been written within a
-statement like `var x: i32 = f();`, or perhaps a statement like
-`return f();` (in a context where the return type of the current
-function is `i32`), then the compiler is able to figure out in these
-cases that the type is `i32` (i.e. that `f` should be interpreted as
-`f<i32>` in these cases). (TODO: perhaps the exact type inference
-algorithm should be documented in more detail.)
+The type arguments may also be omitted in contexts where it is obvious
+what they should be. For example, if `f` is declared as `function
+f<T>(x: T)`, and called as `f(123)`, then the compiler can infer that
+`T = i32` (because the argument has type `i32`), so the type argument
+does not need to be written explicitly: the programmer can just write
+`f(123)`. (Of course, the call could still be written out in full, as
+`f<i32>(123)`, if the programmer wanted to be explicit about the
+type.)
+
+If the type argument *cannot* be inferred automatically, then it is
+mandatory to provide the type arguments (the compiler does not fill in
+a "default" type or anything like that). For example, given `function
+g<T>(): T`, then a plain `g()` with no other context would be an error
+(as the compiler does not know what to use for `T`); however,
+something like `var x: i32 = g();` or `return g();` would be fine,
+because the compiler can infer the type in those cases (`i32` in the
+former, or the return type of the current function in the latter).
+
+Type inference also only works one statement at a time -- the
+"context" used to infer a type never extends beyond the statement in
+which the expression appears. In particular, the type of a variable
+(or a `let`-bound name, or a pattern variable) must be fully
+determined by the time it is declared. For example, `var x = Nothing;`
+is an error ("Unable to infer type"), even if a later statement such
+as `x = Just(1);` would have determined the type; it must be written
+as `var x: Maybe<i32> = Nothing;` (or `var x = Nothing<i32>;`)
+instead.
 
 Finally, note that there is a "short cut" syntax for functions that
 take exactly one parameter of record or tuple type. Instead of writing
@@ -833,7 +844,8 @@ inferred in this case. One could equally well write `Just<i32>(100)`
 to make the type parameter explicit, if desired. The expression
 `Nothing<i32>` would have type `Maybe<i32>`, and the expression
 `Nothing` would have type `Maybe<T>` where T is a type inferred from
-the context in which the expression appears.
+the context in which the expression appears (or an error if no such
+type can be inferred; see also "Function calls" above).
 
 
 ## If-expressions
