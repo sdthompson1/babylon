@@ -36,7 +36,7 @@ lemma inj_on_mv_name [simp]: "inj_on mv_name S"
 (*                                                                            *)
 (* NB. mv_block produces a CoreType list. The *name set* used in env tyvar    *)
 (* sets and substitution domains is "mv_name ` {lo..<hi}" (a string set) —   *)
-(* a different object; see ExtendEnvWithTyvars / clear_metavars.              *)
+(* a different object; see ExtendEnvWithTyvars.                               *)
 (* ========================================================================== *)
 
 definition mv_block :: "nat \<Rightarrow> nat \<Rightarrow> CoreType list" where

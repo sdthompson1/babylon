@@ -69,38 +69,10 @@ lemma build_comparison_chain_let_elim:
     "resultTm = CoreTm_Let varName rhs (CoreTm_Binop CoreBinop_And cmpTm restTm)"
   using assms by (auto split: sum.splits prod.splits)
 
-(* Helper: range of fmap_of_list where all values are the same *)
-lemma fmran'_fmap_of_list_const:
-  "\<forall>ty' \<in> fmran' (fmap_of_list (map (\<lambda>n. (n, v)) ns)). ty' = v"
-proof (induct ns)
-  case Nil thus ?case by (simp add: fmran'_def fmlookup_of_list)
-next
-  case (Cons n ns)
-  thus ?case by (auto simp: fmran'_def fmlookup_of_list)
-qed
-
-(* The range of const_subst_for contains only the default type *)
-lemma const_subst_for_range:
-  "\<forall>ty' \<in> fmran' (const_subst_for is_flex ty defaultTy). ty' = defaultTy"
-  unfolding const_subst_for_def by (rule fmran'_fmap_of_list_const)
-
-(* Helper: lookup in a constant-valued fmap_of_list *)
-lemma fmlookup_fmap_of_list_const:
-  "n \<in> set ns \<Longrightarrow> fmlookup (fmap_of_list (map (\<lambda>n. (n, v)) ns)) n = Some v"
-  by (induct ns) (auto simp: fmlookup_of_list)
-
-(* const_subst_for maps every flexible metavariable in the type *)
-lemma const_subst_for_domain:
-  "n \<in> type_tyvars ty \<Longrightarrow> is_flex n \<Longrightarrow>
-   fmlookup (const_subst_for is_flex ty defaultTy) n = Some defaultTy"
-  unfolding const_subst_for_def
-  using fmlookup_fmap_of_list_const[of n "filter is_flex (type_tyvars_list ty)" defaultTy]
-  by (simp add: set_type_tyvars_list)
-
 (* Correctness of resolve_binop_metas: if the input terms typecheck at their types,
    the resolved terms typecheck at the resolved types. *)
 lemma resolve_binop_metas_correct:
-  assumes resolved: "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
+  assumes resolved: "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
     and lhs_typed: "core_term_type env ghost lhsTm = Some lhsTy"
     and rhs_typed: "core_term_type env ghost rhsTm = Some rhsTy"
     and wf: "tyenv_well_formed env"
@@ -219,139 +191,14 @@ next
           sound
     by simp
 
-  show ?thesis
-  proof (cases "list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list ?unifiedTy)")
-    case True
-    \<comment> \<open>Resolved: directly use unified type\<close>
-    from resolved Some cp_fact True have
-      eqs: "lhsTm' = apply_subst_to_term unifSubst lhsTm"
-           "lhsTy' = ?unifiedTy"
-           "rhsTm' = apply_subst_to_term unifSubst rhsTm"
-           "rhsTy' = ?unifiedTy"
-      by (auto simp: Let_def)
-    show ?thesis using lhs_unif rhs_unif eqs by simp
-  next
-    case not_resolved: False
-    \<comment> \<open>Not resolved: fill remaining flexible metas with default type\<close>
-    let ?defaultTy = "default_type_for_binop babOp"
-    let ?fillSubst = "const_subst_for is_flex ?unifiedTy ?defaultTy"
-    let ?fullSubst = "compose_subst ?fillSubst unifSubst"
-    from resolved Some cp_fact not_resolved have
-      eqs: "lhsTm' = apply_subst_to_term ?fullSubst lhsTm"
-           "lhsTy' = apply_subst ?fillSubst ?unifiedTy"
-           "rhsTm' = apply_subst_to_term ?fullSubst rhsTm"
-           "rhsTy' = apply_subst ?fillSubst ?unifiedTy"
-      by (auto simp: Let_def)
-
-    \<comment> \<open>The default type is well-kinded, runtime and complete\<close>
-    have default_wk: "is_well_kinded env ?defaultTy"
-      by (auto simp: default_type_for_binop_def split: option.splits)
-    have default_rt: "is_runtime_type env ?defaultTy"
-      by (auto simp: default_type_for_binop_def split: option.splits)
-    have default_cp: "is_complete_type ?defaultTy"
-      by (auto simp: default_type_for_binop_def split: option.splits)
-
-    \<comment> \<open>The fill substitution range is well-kinded, runtime and complete\<close>
-    have fill_range_wk: "\<forall>ty' \<in> fmran' ?fillSubst. is_well_kinded env ty'"
-      using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_wk by metis
-    have fill_range_rt: "\<forall>ty' \<in> fmran' ?fillSubst. is_runtime_type env ty'"
-      using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_rt by metis
-    have fill_range_cp: "\<forall>ty' \<in> fmran' ?fillSubst. is_complete_type ty'"
-      using const_subst_for_range[of is_flex ?unifiedTy ?defaultTy] default_cp by metis
-
-    \<comment> \<open>Full substitution range is well-kinded, runtime and complete\<close>
-    have full_range_wk: "\<forall>ty' \<in> fmran' ?fullSubst. is_well_kinded env ty'"
-      using compose_subst_preserves_well_kinded fill_range_wk unif_range_wk by blast
-    have full_range_cp: "\<forall>ty' \<in> fmran' ?fullSubst. is_complete_type ty'"
-      using compose_subst_preserves_complete[OF unif_range_cp fill_range_cp] .
-    have full_range_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty')"
-    proof
-      assume ng: "ghost = NotGhost"
-      from unif_range_rt ng have "\<forall>ty' \<in> fmran' unifSubst. is_runtime_type env ty'" by simp
-      from compose_subst_preserves_runtime[OF fill_range_rt this]
-      show "\<forall>ty' \<in> fmran' ?fullSubst. is_runtime_type env ty'"
-        using Some compose_subst_preserves_runtime core_term_type_well_kinded_and_runtime fill_range_rt
-          lhs_typed local.wf ng rhs_typed unify_preserves_runtime by presburger
-    qed
-
-    \<comment> \<open>?fullSubst's domain is contained in flex metavars: it's the union of
-        unifSubst's domain (from unify_dom_flex) and ?fillSubst's domain
-        (filtered to flex by const_subst_for's definition). \<close>
-    have fill_dom_flex: "\<forall>n. n |\<in>| fmdom ?fillSubst \<longrightarrow> is_flex n"
-      unfolding const_subst_for_def
-      by auto
-    have full_dom_flex: "\<forall>n. n |\<in>| fmdom ?fullSubst \<longrightarrow> is_flex n"
-      using unif_dom_flex fill_dom_flex
-      by (auto simp: compose_subst_def)
-
-    have locals_unaffected_full:
-      "\<And>name ty'. fmlookup (TE_LocalVars env) name = Some ty' \<Longrightarrow> apply_subst ?fullSubst ty' = ty'"
-    proof -
-      fix name ty' assume lk: "fmlookup (TE_LocalVars env) name = Some ty'"
-      have "type_tyvars ty' \<inter> fset (fmdom ?fullSubst) = {}"
-      proof -
-        { fix n assume n_mv: "n \<in> type_tyvars ty'"
-                    and n_dom: "n \<in> fset (fmdom ?fullSubst)"
-          from n_dom have "n |\<in>| fmdom ?fullSubst" by simp
-          with full_dom_flex have "is_flex n" by blast
-          moreover from locals_rigid lk n_mv have "\<not> is_flex n" by blast
-          ultimately have False by simp
-        }
-        thus ?thesis by auto
-      qed
-      thus "apply_subst ?fullSubst ty' = ty'"
-        by (rule apply_subst_disjoint_id)
-    qed
-    have ret_unaffected_full: "apply_subst ?fullSubst (TE_ReturnType env) = TE_ReturnType env"
-    proof -
-      have "type_tyvars (TE_ReturnType env) \<inter> fset (fmdom ?fullSubst) = {}"
-      proof -
-        { fix n assume n_mv: "n \<in> type_tyvars (TE_ReturnType env)"
-                    and n_dom: "n \<in> fset (fmdom ?fullSubst)"
-          from n_dom have "n |\<in>| fmdom ?fullSubst" by simp
-          with full_dom_flex have "is_flex n" by blast
-          moreover from ret_rigid n_mv have "\<not> is_flex n" by blast
-          ultimately have False by simp
-        }
-        thus ?thesis by auto
-      qed
-      thus ?thesis by (rule apply_subst_disjoint_id)
-    qed
-    have abs_no_subst_full: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup ?fullSubst n = None"
-    proof -
-      fix n assume n_abs: "n |\<in>| TE_AbstractTypes env"
-      have "n |\<notin>| fmdom ?fullSubst"
-      proof
-        assume "n |\<in>| fmdom ?fullSubst"
-        with full_dom_flex have "is_flex n" by blast
-        moreover from abs_rigid n_abs have "\<not> is_flex n" by blast
-        ultimately show False by simp
-      qed
-      thus "fmlookup ?fullSubst n = None" by (simp add: fmdom_notD)
-    qed
-
-    \<comment> \<open>Applying fullSubst preserves typing\<close>
-    have lhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst lhsTm) =
-                    Some (apply_subst ?fullSubst lhsTy)"
-      using apply_subst_to_term_preserves_typing
-              [OF lhs_typed wf full_range_wk full_range_rt
-                  locals_unaffected_full ret_unaffected_full abs_no_subst_full full_range_cp]
-      by simp
-    have rhs_full: "core_term_type env ghost (apply_subst_to_term ?fullSubst rhsTm) =
-                    Some (apply_subst ?fullSubst rhsTy)"
-      using apply_subst_to_term_preserves_typing
-              [OF rhs_typed wf full_range_wk full_range_rt
-                  locals_unaffected_full ret_unaffected_full abs_no_subst_full full_range_cp]
-      by simp
-
-    \<comment> \<open>apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy via compose_subst_correct\<close>
-    have lhs_eq: "apply_subst ?fullSubst lhsTy = apply_subst ?fillSubst ?unifiedTy"
-      by (simp add: compose_subst_correct)
-    have rhs_eq: "apply_subst ?fullSubst rhsTy = apply_subst ?fillSubst ?unifiedTy"
-      using sound by (simp add: compose_subst_correct)
-
-    show ?thesis using lhs_full rhs_full lhs_eq rhs_eq eqs by simp
-  qed
+  \<comment> \<open>The resolved operands are the substituted terms at the unified type.\<close>
+  from resolved Some cp_fact have
+    eqs: "lhsTm' = apply_subst_to_term unifSubst lhsTm"
+         "lhsTy' = ?unifiedTy"
+         "rhsTm' = apply_subst_to_term unifSubst rhsTm"
+         "rhsTy' = ?unifiedTy"
+    by (auto simp: Let_def)
+  show ?thesis using lhs_unif rhs_unif eqs by simp
   qed
 qed
 
@@ -369,8 +216,8 @@ lemma elab_single_binop_correct:
   shows "core_term_type env ghost resultTm = Some resultTy"
 proof -
   obtain lhsTm' lhsTy' rhsTm' rhsTy' where
-    resolved: "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
-    by (cases "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy") auto
+    resolved: "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
+    by (cases "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy") auto
   have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
     and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
     using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid abs_rigid] by auto
@@ -534,8 +381,8 @@ proof (cases "babOp = BabBinop_ImpliedBy \<or> babOp = BabBinop_Iff")
     assume iff: "babOp = BabBinop_Iff"
     \<comment> \<open>Iff: resolves metas then checks both Bool\<close>
     obtain lhsTm' lhsTy' rhsTm' rhsTy' where
-      resolved: "resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
-      by (cases "resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy") auto
+      resolved: "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy = (lhsTm', lhsTy', rhsTm', rhsTy')"
+      by (cases "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy") auto
     have lhs': "core_term_type env ghost lhsTm' = Some lhsTy'"
       and rhs': "core_term_type env ghost rhsTm' = Some rhsTy'"
       using resolve_binop_metas_correct[OF resolved assms(2,3,4) locals_rigid ret_rigid abs_rigid] by auto
@@ -752,9 +599,9 @@ next
     case (Cons triple2 rest2)
     \<comment> \<open>rest is non-empty, so there is a recursive call that returns Inr\<close>
     obtain resolvedLhs resolvedLhsTy resolvedRhs resolvedRhsTy where
-      resolved: "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy =
+      resolved: "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy =
                  (resolvedLhs, resolvedLhsTy, resolvedRhs, resolvedRhsTy)"
-      by (cases "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy") auto
+      by (cases "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy") auto
     \<comment> \<open>Simplify the function with checks eliminated\<close>
     from checks_passed triple_eq
     have bcc_simplified:
@@ -763,7 +610,7 @@ next
          [] \<Rightarrow> (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rhsTm rhsTy of
                   Inl errs \<Rightarrow> Inl errs | Inr (cmpTm, _) \<Rightarrow> Inr cmpTm)
        | _ \<Rightarrow>
-         let (_, _, resolvedRhs', resolvedRhsTy') = resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy
+         let (_, _, resolvedRhs', resolvedRhsTy') = resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy
          in if is_simple_term resolvedRhs' then
               (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy resolvedRhs' resolvedRhsTy' of
                 Inl errs \<Rightarrow> Inl errs
@@ -888,9 +735,9 @@ next
 
   \<comment> \<open>Get resolved operands\<close>
   obtain resolvedLhs resolvedLhsTy resolvedRhs resolvedRhsTy where
-    resolved: "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy =
+    resolved: "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy =
                (resolvedLhs, resolvedLhsTy, resolvedRhs, resolvedRhsTy)"
-    by (cases "resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy") auto
+    by (cases "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy") auto
 
   have resolvedRhs_typed: "core_term_type env ghost resolvedRhs = Some resolvedRhsTy"
     using Cons.prems(2,4,6,7,8) resolve_binop_metas_correct resolved rhs_typed by blast

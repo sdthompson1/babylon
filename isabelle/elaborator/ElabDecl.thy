@@ -214,10 +214,11 @@ definition apply_realization ::
 (* Global Constants ("const" decls)                                           *)
 (* ========================================================================== *)
 
-(* Elaborate a "const" initializer against a known declared type: 
-   elaborate the rhs, coerce it to the declared type, clear leftover metavariables,
-   and check the compile-time-constant restriction (non-ghost initializers must
-   be a compile-time constant; ghost initializers can be any term). *)
+(* Elaborate a "const" initializer against a known declared type.
+   Elaborates the rhs, coerces it to the declared type, rejects any leftover
+   metavariables, and checks the compile-time-constant restriction (non-ghost
+   initializers must be a compile-time constant; ghost initializers can be any
+   term). *)
 definition elab_const_rhs ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreType \<Rightarrow> BabTerm
    \<Rightarrow> TypeError list + CoreTerm" where
@@ -228,14 +229,16 @@ definition elab_const_rhs ::
          (case coerce_term_to_type env loc coreTm rhsTy declTy of
             Inl errs \<Rightarrow> Inl errs
           | Inr coreTm' \<Rightarrow>
-              (let finalTm = clear_metavars 0 next_mv coreTm'
-               in if ghost = NotGhost \<and> \<not> is_constant_term finalTm
-                  then Inl [TyErr_NotCompileTimeConstant loc]
-                  else Inr finalTm)))"
+              if \<not> term_inferred env coreTm'
+              then Inl [TyErr_CannotInferType loc]
+              else if ghost = NotGhost \<and> \<not> is_constant_term coreTm'
+              then Inl [TyErr_NotCompileTimeConstant loc]
+              else Inr coreTm'))"
 
-(* As elab_const_rhs, but with no declared type: the constant's type is the
-   inferred rhs type, which must be free of unresolved metavariables (and must
-   be a runtime type for a non-ghost constant). *)
+(* As elab_const_rhs, but with no type annotation; the type is inferred from
+   the rhs. The elaborated rhs must be free of unresolved metavariables
+   (which makes its type metavariable-free too), and, for non-ghost constants, must
+   be a runtime type. *)
 definition elab_const_rhs_infer ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm
    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
@@ -243,15 +246,13 @@ definition elab_const_rhs_infer ::
     (case elab_term env elabEnv ghost rhs 0 of
        Inl errs \<Rightarrow> Inl errs
      | Inr (coreTm, rhsTy, next_mv) \<Rightarrow>
-         if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
+         if \<not> term_inferred env coreTm
          then Inl [TyErr_CannotInferType loc]
          else if ghost = NotGhost \<and> \<not> is_runtime_type env rhsTy
          then Inl [TyErr_GhostTypeInNonGhost loc]
-         else
-           (let finalTm = clear_metavars 0 next_mv coreTm
-            in if ghost = NotGhost \<and> \<not> is_constant_term finalTm
-               then Inl [TyErr_NotCompileTimeConstant loc]
-               else Inr (finalTm, rhsTy)))"
+         else if ghost = NotGhost \<and> \<not> is_constant_term coreTm
+         then Inl [TyErr_NotCompileTimeConstant loc]
+         else Inr (coreTm, rhsTy))"
 
 (* Elaborate a constant initializer against an optional type annotation:
    calls either elab_const_rhs_infer, or elab_type + elab_const_rhs, as applicable.
@@ -493,13 +494,17 @@ definition elab_fun_signature ::
                        FI_Ghost = ghost,
                        FI_Impure = DF_Impure df \<rparr>))"
 
-(* Typecheck a function's contract attributes and drop the results: FunInfo
+(* Typecheck a function's contract attributes and drop the results. (FunInfo
    and CoreFunction have no contract fields yet, so this exists purely to flag
-   type errors (verification is out of scope for now). `requires` and `decreases`
-   terms are elaborated in preEnv (the body env); `ensures` terms in postEnv
-   (the body env plus the `return` binding, for non-void functions). All are
-   elaborated in Ghost mode. An `invariant` attribute is not valid on a
-   function. *)
+   type errors - verification is out of scope for now.)
+
+   `requires` terms are elaborated in preEnv (the body env), and must have boolean type.
+   `ensures` terms are elaborated in postEnv (the body env plus the `return` binding,
+   for non-void functions), and must have boolean type.
+   `decreases` and `invariant` attributes are not valid on a function.
+
+   All attribute terms are elaborated in Ghost mode, and after unification, the term must
+   not contain any unresolved metavariables. *)
 fun elab_fun_contracts ::
   "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabAttribute list \<Rightarrow> nat
    \<Rightarrow> TypeError list + nat" where
@@ -507,26 +512,27 @@ fun elab_fun_contracts ::
 | "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Requires loc tm # rest) next_mv =
     (case elab_term preEnv elabEnv Ghost tm next_mv of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (_, ty, next_mv') \<Rightarrow>
+     | Inr (coreTm, ty, next_mv') \<Rightarrow>
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars preEnv) ty CoreTy_Bool of
             None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool ty]
-          | Some _ \<Rightarrow> elab_fun_contracts preEnv postEnv elabEnv rest next_mv'))"
+          | Some subst \<Rightarrow>
+              if \<not> term_inferred preEnv (apply_subst_to_term subst coreTm)
+              then Inl [TyErr_CannotInferType loc]
+              else elab_fun_contracts preEnv postEnv elabEnv rest next_mv'))"
 | "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Ensures loc tm # rest) next_mv =
     (case elab_term postEnv elabEnv Ghost tm next_mv of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (_, ty, next_mv') \<Rightarrow>
+     | Inr (coreTm, ty, next_mv') \<Rightarrow>
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars postEnv) ty CoreTy_Bool of
             None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool ty]
-          | Some _ \<Rightarrow> elab_fun_contracts preEnv postEnv elabEnv rest next_mv'))"
+          | Some subst \<Rightarrow>
+              if \<not> term_inferred postEnv (apply_subst_to_term subst coreTm)
+              then Inl [TyErr_CannotInferType loc]
+              else elab_fun_contracts preEnv postEnv elabEnv rest next_mv'))"
 | "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Invariant loc _ # rest) next_mv =
     Inl [TyErr_InvalidFunctionAttribute loc]"
 | "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Decreases loc tm # rest) next_mv =
-    (case elab_term preEnv elabEnv Ghost tm next_mv of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr (_, ty, next_mv') \<Rightarrow>
-         if \<not> is_valid_decreases_type ty
-         then Inl [TyErr_InvalidDecreasesType loc ty]
-         else elab_fun_contracts preEnv postEnv elabEnv rest next_mv')"
+    Inl [TyErr_InvalidFunctionAttribute loc]"
 
 (* Typecheck a function's contracts and (if present) its body, returning the
    elaborated body as a CoreStatement list. *)

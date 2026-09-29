@@ -17,7 +17,7 @@ fun type_tyvars :: "CoreType \<Rightarrow> string set" where
 | "type_tyvars (CoreTy_Array elemTy dims) = type_tyvars elemTy"
 | "type_tyvars (CoreTy_Var n) = {n}"
 
-(* Collect all type variables in a type as a list (executable) *)
+(* Executable version of type_tyvars, returning a list (possibly with duplicates) *)
 fun type_tyvars_list :: "CoreType \<Rightarrow> string list" where
   "type_tyvars_list (CoreTy_Datatype _ args) = concat (map type_tyvars_list args)"
 | "type_tyvars_list CoreTy_Bool = []"
@@ -133,6 +133,44 @@ fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> string set" where
 | "core_term_free_tyvars (CoreTm_Allocated tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Old tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Default ty) = type_tyvars ty"
+
+(* Executable version of core_term_free_tyvars, returning a list (possibly with duplicates). *)
+fun core_term_free_tyvars_list :: "CoreTerm \<Rightarrow> string list" where
+  "core_term_free_tyvars_list (CoreTm_LitBool _) = []"
+| "core_term_free_tyvars_list (CoreTm_LitInt _) = []"
+| "core_term_free_tyvars_list (CoreTm_LitArray elemTy tms) =
+    type_tyvars_list elemTy @ concat (map core_term_free_tyvars_list tms)"
+| "core_term_free_tyvars_list (CoreTm_Var _) = []"
+| "core_term_free_tyvars_list (CoreTm_Cast targetTy tm) =
+    type_tyvars_list targetTy @ core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Unop _ tm) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Binop _ lhs rhs) =
+    core_term_free_tyvars_list lhs @ core_term_free_tyvars_list rhs"
+| "core_term_free_tyvars_list (CoreTm_Let _ rhs body) =
+    core_term_free_tyvars_list rhs @ core_term_free_tyvars_list body"
+| "core_term_free_tyvars_list (CoreTm_Quantifier _ _ varTy body) =
+    type_tyvars_list varTy @ core_term_free_tyvars_list body"
+| "core_term_free_tyvars_list (CoreTm_FunctionCall _ tyArgs tmArgs) =
+    concat (map type_tyvars_list tyArgs) @ concat (map core_term_free_tyvars_list tmArgs)"
+| "core_term_free_tyvars_list (CoreTm_VariantCtor _ tyArgs payload) =
+    concat (map type_tyvars_list tyArgs) @ core_term_free_tyvars_list payload"
+| "core_term_free_tyvars_list (CoreTm_Record flds) =
+    concat (map (core_term_free_tyvars_list \<circ> snd) flds)"
+| "core_term_free_tyvars_list (CoreTm_RecordProj tm _) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_VariantProj tm _) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_ArrayProj arr idxs) =
+    core_term_free_tyvars_list arr @ concat (map core_term_free_tyvars_list idxs)"
+| "core_term_free_tyvars_list (CoreTm_Match scrut arms) =
+    core_term_free_tyvars_list scrut @ concat (map (core_term_free_tyvars_list \<circ> snd) arms)"
+| "core_term_free_tyvars_list (CoreTm_Sizeof tm) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Allocated tm) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Old tm) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Default ty) = type_tyvars_list ty"
+
+(* core_term_free_tyvars_list collects the same set as core_term_free_tyvars. *)
+lemma set_core_term_free_tyvars_list [simp]:
+  "set (core_term_free_tyvars_list tm) = core_term_free_tyvars tm"
+  by (induction tm) (auto simp: set_type_tyvars_list)
 
 
 (* ========================================================================== *)

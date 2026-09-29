@@ -4,49 +4,16 @@ theory ElabStmtCorrect
 begin
 
 (* ========================================================================== *)
-(* Lemmas about clear_metavars and clear_metavars_type *)
+(* Bridge lemmas: from the fresh-tyvar-extended env down to env              *)
 (* ========================================================================== *)
 
-(* The statement elaborator applies clear_metavars next_mv next_mv' to each   *)
-(* emitted initializer term, substituting the fresh-interval metavariables    *)
-(* with CoreTy_Record []. The lemmas below show this makes the term typecheck *)
-(* in the ORIGINAL env (no fresh-tyvar extension), which is what lets          *)
-(* elab_statement_correct be stated over plain env.                           *)
-
-(* The clearing substitution's domain is the (mv_name image of the) interval,
-   and its range is the single ground type CoreTy_Record []. The keys are the
-   fresh metavar NAMES mv_name n, matching clear_metavars / clear_metavars_type. *)
-lemma clear_metavars_subst_dom:
-  "fset (fmdom (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi]))) = mv_name ` {lo..<hi}"
-  by (simp add: fset_of_list.rep_eq image_image)
-
-lemma clear_metavars_subst_ran:
-  "fmran' (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])) \<subseteq> {CoreTy_Record []}"
-proof
-  fix ty assume "ty \<in> fmran' (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi]))"
-  then obtain k where "fmlookup (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])) k = Some ty"
-    by (auto simp: fmran'_def)
-  hence "(k, ty) \<in> set (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])"
-    by (rule fmap_of_list_SomeD)
-  thus "ty \<in> {CoreTy_Record []}" by auto
-qed
-
-lemma clear_metavars_subst_range_tyvars:
-  "subst_range_tyvars (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])) = {}"
-  using clear_metavars_subst_ran[of lo hi]
-  by (auto simp: subst_range_tyvars_def)
-
-(* The clearing substitution's range (the unit type) is complete, so clearing
-   preserves completeness of a type. *)
-lemma clear_metavars_subst_range_complete:
-  "\<forall>ty \<in> fmran' (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])).
-     is_complete_type ty"
-  using clear_metavars_subst_ran[of lo hi] by auto
-
-lemma clear_metavars_type_complete:
-  "is_complete_type ty \<Longrightarrow> is_complete_type (clear_metavars_type lo hi ty)"
-  unfolding clear_metavars_type_def
-  using apply_subst_preserves_complete[OF _ clear_metavars_subst_range_complete] .
+(* The statement elaborator checks (term_inferred / type_inferred /          *)
+(* call_inferred, ElabStmt.thy) that every emitted term mentions only type   *)
+(* variables that are in scope, i.e. none of the fresh-interval               *)
+(* metavariables. The lemmas below show that such a term, which               *)
+(* elab_term_correct types in the env extended with the fresh interval,       *)
+(* typechecks in the ORIGINAL env (no fresh-tyvar extension), which is what   *)
+(* lets elab_statement_correct be stated over plain env.                      *)
 
 (* In NotGhost mode the return type of a well-typed impure call is complete: the
    callee is a non-ghost function, whose declared return type is complete, and the
@@ -73,210 +40,127 @@ proof -
     using apply_subst_preserves_complete[OF ret_cp fmran'_fmap_of_list_zip_complete[OF cp]] .
 qed
 
-(* CoreTy_Record [] is well-kinded and a runtime type in any env. *)
-lemma is_well_kinded_empty_record [simp]: "is_well_kinded env (CoreTy_Record [])"
-  by simp
-lemma is_runtime_type_empty_record [simp]: "is_runtime_type env (CoreTy_Record [])"
-  by simp
-
-(* The clearing substitution is identity on a type all of whose tyvars are below
-   the interval start (in particular, on the env's stored local / return types,
-   whose tyvars are < next_mv by the tyvar-bound premise). *)
-lemma clear_metavars_subst_id_below:
-  assumes "type_tyvars ty \<subseteq> {n. tyvar_fresh_ok n lo}"
-  shows "apply_subst (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi])) ty = ty"
-proof (rule apply_subst_disjoint_id)
-  have "type_tyvars ty \<inter> mv_name ` {lo..<hi} = {}"
-  proof -
-    have "\<And>x. x \<in> type_tyvars ty \<Longrightarrow> x \<notin> mv_name ` {lo..<hi}"
-    proof -
-      fix x assume "x \<in> type_tyvars ty"
-      hence "tyvar_fresh_ok x lo" using assms by auto
-      thus "x \<notin> mv_name ` {lo..<hi}" unfolding tyvar_fresh_ok_def by force
-    qed
-    thus ?thesis by auto
-  qed
-  thus "type_tyvars ty \<inter> fset (fmdom (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo..<hi]))) = {}"
-    by (simp only: clear_metavars_subst_dom)
-qed
-
-(* Main bridge (general form): a term that typechecks (in a given ghost mode) under
-   env extended with the fresh interval, once its interval metavariables are cleared,
-   typechecks under the original env to the CLEARED type. Clearing removes the
-   interval tyvars from the term, so the interval can be dropped via
-   core_term_type_remove_unused_tyvars; the result type is whatever the cleared term
-   produces, namely clear_metavars_type applied to the original result type. *)
-lemma clear_metavars_typed_in_env_gen:
-  assumes typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost coreTm
-                    = Some ty"
-    and wf: "tyenv_well_formed env"
-    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-  shows "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm)
-           = Some (clear_metavars_type next_mv next_mv' ty)"
+(* Main bridge: a term that typechecks (in a given ghost mode) under env extended
+   with the fresh interval, and that passes the term_inferred check, typechecks
+   under the original env to the same type. The check says the term's free
+   tyvars are all in TE_TypeVars env; those are all below lo (the bound), so
+   they are disjoint from the interval, which core_term_type_remove_unused_tyvars
+   then lets us drop. *)
+lemma inferred_term_typed_in_env:
+  assumes typed: "core_term_type (extend_env_with_tyvars env ghost lo hi) ghost tm = Some ty"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+    and inf: "term_inferred env tm"
+  shows "core_term_type env ghost tm = Some ty"
 proof -
-  let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?subst = "fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv..<next_mv'])"
-  have wfE: "tyenv_well_formed ?envE"
-    using wf tyenv_well_formed_extend_env_with_tyvars by blast
-  \<comment> \<open>The clearing subst's range is well-kinded and runtime in the extended env.\<close>
-  have subst_wk: "\<forall>ty' \<in> fmran' ?subst. is_well_kinded ?envE ty'"
-    using clear_metavars_subst_ran is_well_kinded_empty_record by blast
-  have subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty' \<in> fmran' ?subst. is_runtime_type ?envE ty')"
-    using clear_metavars_subst_ran is_runtime_type_empty_record by blast
-  \<comment> \<open>The subst is identity on the extended env's locals and return type: their
-     tyvars come from env (all < next_mv), outside the interval.\<close>
-  have locals_below: "\<And>name ty'. fmlookup (TE_LocalVars ?envE) name = Some ty'
-                                 \<Longrightarrow> type_tyvars ty' \<subseteq> {n. tyvar_fresh_ok n next_mv}"
+  have free_sub: "core_term_free_tyvars tm \<subseteq> fset (TE_TypeVars env)"
+    using inf unfolding term_inferred_def by (auto simp: list_all_iff)
+  have disj: "core_term_free_tyvars tm \<inter> fset (mv_fset lo hi) = {}"
   proof -
-    fix name ty' assume "fmlookup (TE_LocalVars ?envE) name = Some ty'"
-    hence look: "fmlookup (TE_LocalVars env) name = Some ty'"
-      unfolding extend_env_with_tyvars_def by simp
-    have "is_well_kinded env ty'"
-      using wf look unfolding tyenv_well_formed_def tyenv_vars_well_kinded_def by blast
-    hence "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
-      using is_well_kinded_type_tyvars_subset by simp
-    thus "type_tyvars ty' \<subseteq> {n. tyvar_fresh_ok n next_mv}" using bound by auto
+    have "\<And>x. x \<in> core_term_free_tyvars tm \<Longrightarrow> x |\<in>| mv_fset lo hi \<Longrightarrow> False"
+    proof -
+      fix x assume x_free: "x \<in> core_term_free_tyvars tm" and x_mv: "x |\<in>| mv_fset lo hi"
+      have "tyvar_fresh_ok x lo" using free_sub x_free bound by auto
+      moreover obtain i where "lo \<le> i" and "x = mv_name i" using x_mv by auto
+      ultimately show False by simp
+    qed
+    thus ?thesis unfolding disjoint_iff by blast
   qed
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envE) name = Some ty'
-                                      \<Longrightarrow> apply_subst ?subst ty' = ty'"
-    using locals_below clear_metavars_subst_id_below by blast
-  have ret_below: "type_tyvars (TE_ReturnType ?envE) \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-  proof -
-    have "is_well_kinded env (TE_ReturnType env)"
-      using wf unfolding tyenv_well_formed_def tyenv_return_type_well_kinded_def by blast
-    hence "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)"
-      using is_well_kinded_type_tyvars_subset by simp
-    thus ?thesis using bound unfolding extend_env_with_tyvars_def by auto
-  qed
-  have ret_unaffected: "apply_subst ?subst (TE_ReturnType ?envE) = TE_ReturnType ?envE"
-    using clear_metavars_subst_id_below[OF ret_below] .
-  \<comment> \<open>The clearing subst's domain is the fresh interval [next_mv..<next_mv'); abstract
-     types are in TE_TypeVars env (all < next_mv), so they are not in the domain. \<close>
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envE \<Longrightarrow> fmlookup ?subst n = None"
-  proof -
-    fix n assume "n |\<in>| TE_AbstractTypes ?envE"
-    hence "n |\<in>| TE_AbstractTypes env"
-      unfolding extend_env_with_tyvars_def by simp
-    with wf have "n |\<in>| TE_TypeVars env"
-      unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
-    with bound have "tyvar_fresh_ok n next_mv" by blast
-    hence "n \<notin> mv_name ` {next_mv..<next_mv'}" unfolding tyvar_fresh_ok_def by force
-    thus "fmlookup ?subst n = None"
-      using clear_metavars_subst_dom by blast
-  qed
-  \<comment> \<open>Cleared term typechecks (to apply_subst ?subst ty) under the extended env.\<close>
-  have cleared_typedE: "core_term_type ?envE ghost (clear_metavars next_mv next_mv' coreTm)
-                          = Some (clear_metavars_type next_mv next_mv' ty)"
-    using apply_subst_to_term_preserves_typing
-            [OF typed wfE subst_wk subst_rt locals_unaffected ret_unaffected abs_no_subst
-                clear_metavars_subst_range_complete]
-    unfolding clear_metavars_def clear_metavars_type_def by simp
-  \<comment> \<open>The cleared term has no interval tyvars, so the interval can be dropped.\<close>
-  have free_gone: "core_term_free_tyvars (clear_metavars next_mv next_mv' coreTm)
-                     \<inter> fset (mv_fset next_mv next_mv') = {}"
-  proof -
-    have "core_term_free_tyvars (clear_metavars next_mv next_mv' coreTm)
-            \<subseteq> core_term_free_tyvars coreTm - fset (fmdom ?subst)"
-      using apply_subst_to_term_free_tyvars_ground[OF clear_metavars_subst_range_tyvars]
-      unfolding clear_metavars_def by blast
-    hence "core_term_free_tyvars (clear_metavars next_mv next_mv' coreTm)
-            \<subseteq> core_term_free_tyvars coreTm - mv_name ` {next_mv..<next_mv'}"
-      by (simp only: clear_metavars_subst_dom)
-    thus ?thesis by (auto simp: mv_fset_def fset_of_list.rep_eq image_image)
-  qed
-  have envE_shape: "?envE = env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| mv_fset next_mv next_mv',
-                                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env
-                                    |\<union>| (if ghost = NotGhost then mv_fset next_mv next_mv' else {||}) \<rparr>"
+  have envE_shape: "extend_env_with_tyvars env ghost lo hi
+        = env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| mv_fset lo hi,
+                TE_RuntimeTypeVars := TE_RuntimeTypeVars env
+                  |\<union>| (if ghost = NotGhost then mv_fset lo hi else {||}) \<rparr>"
     unfolding extend_env_with_tyvars_def by simp
   show ?thesis
-    using core_term_type_remove_unused_tyvars[OF cleared_typedE[unfolded envE_shape] _ ]
-          free_gone
+    using core_term_type_remove_unused_tyvars[OF typed[unfolded envE_shape] _ ] disj
     by (cases "ghost = NotGhost") auto
 qed
 
-(* Corollary: when the result type is metavariable-free (its tyvars are < next_mv,
-   hence outside the interval), clearing leaves it unchanged, so the cleared term
-   typechecks to the SAME type in the original env. This is the form the pure /
-   Ref / Assume VarDecl branches use. *)
-lemma clear_metavars_typed_in_env:
-  assumes typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost coreTm
-                    = Some ty"
-    and wf: "tyenv_well_formed env"
-    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    and ty_below: "type_tyvars ty \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-  shows "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm) = Some ty"
+(* Type-level bridge: a type that is well-kinded (and runtime, in NotGhost mode)
+   in the extended env, and that passes the type_inferred check, is well-kinded
+   (and runtime) in env. Its tyvars are all in TE_TypeVars env, hence below lo,
+   hence not interval metavariables; so they are also in TE_RuntimeTypeVars env
+   when they are runtime in the extended env. *)
+lemma inferred_type_well_kinded_runtime:
+  assumes wk: "is_well_kinded (extend_env_with_tyvars env ghost lo hi) ty"
+    and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type (extend_env_with_tyvars env ghost lo hi) ty"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+    and inf: "type_inferred env ty"
+  shows "is_well_kinded env ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env ty)"
 proof -
-  have "clear_metavars_type next_mv next_mv' ty = ty"
-    using clear_metavars_subst_id_below[OF ty_below] unfolding clear_metavars_type_def .
-  thus ?thesis using clear_metavars_typed_in_env_gen[OF typed wf bound] by simp
+  let ?envE = "extend_env_with_tyvars env ghost lo hi"
+  have tvs_sub: "type_tyvars ty \<subseteq> fset (TE_TypeVars env)"
+    using inf unfolding type_inferred_def
+    by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
+  have dt_eq: "TE_Datatypes env = TE_Datatypes ?envE"
+    unfolding extend_env_with_tyvars_def by simp
+  have wk': "is_well_kinded env ty"
+    using is_well_kinded_transfer[OF wk tvs_sub dt_eq] .
+  have rt': "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
+  proof
+    assume ng: "ghost = NotGhost"
+    have rtE: "is_runtime_type ?envE ty" using rt ng by simp
+    have rtv_eq: "fset (TE_RuntimeTypeVars ?envE)
+                    = fset (TE_RuntimeTypeVars env) \<union> mv_name ` {lo..<hi}"
+      using ng unfolding extend_env_with_tyvars_def
+      by (simp add: mv_fset_def fset_of_list.rep_eq image_image)
+    have tvs_in_rt: "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
+    proof
+      fix n assume n_in: "n \<in> type_tyvars ty"
+      from n_in tvs_sub have "n |\<in>| TE_TypeVars env" by auto
+      hence n_fresh: "tyvar_fresh_ok n lo" using bound by simp
+      hence n_not_fresh: "n \<notin> mv_name ` {lo..<hi}" unfolding tyvar_fresh_ok_def by force
+      from n_in is_runtime_type_tyvars_subset[OF rtE] rtv_eq
+      have "n \<in> fset (TE_RuntimeTypeVars env) \<union> mv_name ` {lo..<hi}" by auto
+      with n_not_fresh show "n \<in> fset (TE_RuntimeTypeVars env)" by auto
+    qed
+    have gd_eq: "TE_GhostDatatypes env = TE_GhostDatatypes ?envE"
+      unfolding extend_env_with_tyvars_def by simp
+    show "is_runtime_type env ty"
+      using is_runtime_type_transfer[OF rtE tvs_in_rt gd_eq] .
+  qed
+  from wk' rt' show ?thesis by blast
 qed
 
-(* Clearing a type that is well-kinded in the fresh-tyvar-extended env yields a type
-   well-kinded in the original env: the cleared interval metavariables become the
-   ground type CoreTy_Record [] and every surviving tyvar is < next_mv, hence in
-   TE_TypeVars env. (And likewise for runtime-ness, in NotGhost mode.) *)
-lemma clear_metavars_type_well_kinded:
-  assumes wk: "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv') ty"
-    and wf: "tyenv_well_formed env"
-    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-  shows "is_well_kinded env (clear_metavars_type next_mv next_mv' ty)"
+(* List version, for the type arguments of an impure call. *)
+lemma inferred_types_well_kinded_runtime:
+  assumes wk: "list_all (is_well_kinded (extend_env_with_tyvars env ghost lo hi)) tys"
+    and rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type (extend_env_with_tyvars env ghost lo hi)) tys"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+    and inf: "list_all (type_inferred env) tys"
+  shows "list_all (is_well_kinded env) tys"
+    and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tys"
 proof -
-  let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?subst = "fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv..<next_mv'])"
-  show ?thesis
-    unfolding clear_metavars_type_def
-  proof (rule apply_subst_preserves_well_kinded[OF wk])
-    show "TE_Datatypes env = TE_Datatypes ?envE" unfolding extend_env_with_tyvars_def by simp
-  next
-    fix n assume "n |\<in>| TE_TypeVars ?envE"
-    hence n_in: "n |\<in>| TE_TypeVars env \<or> n \<in> mv_name ` {next_mv..<next_mv'}"
-      unfolding extend_env_with_tyvars_def by (auto simp: mv_fset_def fset_of_list.rep_eq image_image)
-    show "case fmlookup ?subst n of Some ty' \<Rightarrow> is_well_kinded env ty' | None \<Rightarrow> n |\<in>| TE_TypeVars env"
-    proof (cases "fmlookup ?subst n")
-      case None
-      hence "n \<notin> mv_name ` {next_mv..<next_mv'}"
-        by (metis clear_metavars_subst_dom fmdom_notI)
-      thus ?thesis using None n_in by auto
-    next
-      case (Some ty')
-      hence "ty' \<in> fmran' ?subst" by (auto simp: fmran'_def)
-      with clear_metavars_subst_ran have "ty' = CoreTy_Record []" by blast
-      thus ?thesis using Some by simp
-    qed
+  have each: "\<And>t. t \<in> set tys \<Longrightarrow> is_well_kinded env t \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)"
+  proof -
+    fix t assume t_in: "t \<in> set tys"
+    have wkE: "is_well_kinded (extend_env_with_tyvars env ghost lo hi) t"
+      using wk t_in by (simp add: list_all_iff)
+    have rtE: "ghost = NotGhost \<longrightarrow> is_runtime_type (extend_env_with_tyvars env ghost lo hi) t"
+      using rt t_in by (simp add: list_all_iff)
+    have infT: "type_inferred env t" using inf t_in by (simp add: list_all_iff)
+    show "is_well_kinded env t \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)"
+      using inferred_type_well_kinded_runtime[OF wkE rtE bound infT] .
   qed
+  show "list_all (is_well_kinded env) tys" using each by (auto simp: list_all_iff)
+  show "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tys" using each by (auto simp: list_all_iff)
 qed
 
-lemma clear_metavars_type_runtime:
-  assumes rt: "is_runtime_type (extend_env_with_tyvars env NotGhost next_mv next_mv') ty"
-    and wf: "tyenv_well_formed env"
-    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    and rtbound: "\<forall>n. n |\<in>| TE_RuntimeTypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-  shows "is_runtime_type env (clear_metavars_type next_mv next_mv' ty)"
-proof -
-  let ?envE = "extend_env_with_tyvars env NotGhost next_mv next_mv'"
-  let ?subst = "fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv..<next_mv'])"
-  show ?thesis
-    unfolding clear_metavars_type_def
-  proof (rule apply_subst_preserves_runtime[OF rt])
-    show "TE_GhostDatatypes env = TE_GhostDatatypes ?envE" unfolding extend_env_with_tyvars_def by simp
-  next
-    fix n assume "n |\<in>| TE_RuntimeTypeVars ?envE"
-    hence n_in: "n |\<in>| TE_RuntimeTypeVars env \<or> n \<in> mv_name ` {next_mv..<next_mv'}"
-      unfolding extend_env_with_tyvars_def by (auto simp: mv_fset_def fset_of_list.rep_eq image_image)
-    show "case fmlookup ?subst n of Some ty' \<Rightarrow> is_runtime_type env ty' | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
-    proof (cases "fmlookup ?subst n")
-      case None
-      hence "n \<notin> mv_name ` {next_mv..<next_mv'}"
-        by (metis clear_metavars_subst_dom fmdom_notI)
-      thus ?thesis using None n_in by auto
-    next
-      case (Some ty')
-      hence "ty' \<in> fmran' ?subst" by (auto simp: fmran'_def)
-      with clear_metavars_subst_ran have "ty' = CoreTy_Record []" by blast
-      thus ?thesis using Some by simp
-    qed
-  qed
-qed
+(* The inferred checks depend on the env only through TE_TypeVars, so they
+   transfer between envs that agree on it (e.g. env and env with
+   TE_ProofTopLevel := False, or env with a local added). *)
+lemma term_inferred_cong_env:
+  "TE_TypeVars env' = TE_TypeVars env \<Longrightarrow> term_inferred env' tm = term_inferred env tm"
+  by (simp add: term_inferred_def)
+
+lemma type_inferred_cong_env:
+  "TE_TypeVars env' = TE_TypeVars env \<Longrightarrow> type_inferred env' ty = type_inferred env ty"
+  by (simp add: type_inferred_def)
+
+lemma call_inferred_cong_env:
+  assumes "TE_TypeVars env' = TE_TypeVars env"
+  shows "call_inferred env' tyArgs argTms = call_inferred env tyArgs argTms"
+  by (simp add: call_inferred_def list_all_iff
+                type_inferred_cong_env[OF assms] term_inferred_cong_env[OF assms])
 
 (* ========================================================================== *)
 (* Lemmas about coerce_term_to_type and reconcile_call_result *)
@@ -297,26 +181,26 @@ lemma coerce_term_to_type_unfold:
      | None \<Rightarrow> Inl [TyErr_TypeMismatch loc tgtTy srcTy])"
   by (simp add: coerce_term_to_type_def unify_and_coerce_def Let_def split: option.splits)
 
-(* The coerce-then-clear composite: if the elaborated rhs typechecks in the
-   metavariable-extended env and coercion to a (metavariable-free) target type
-   succeeds, the cleared coerced term typechecks to the target type in the
-   original env. This is the one correctness argument for every statement-level
-   coercion (annotated VarDecl, Assign, Use, Return) and for constant
-   initializers at declaration level. *)
-lemma coerce_clear_typed_in_env:
+(* The coerce-then-check composite: if the elaborated rhs typechecks in the
+   metavariable-extended env, coercion to a (metavariable-free) target type
+   succeeds, and the coerced term passes the term_inferred check, then the
+   coerced term typechecks to the target type in the original env. This is the
+   one correctness argument for every statement-level coercion (annotated
+   VarDecl, Assign, Use, Return) and for constant initializers at declaration
+   level. *)
+lemma coerce_inferred_typed_in_env:
   assumes typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv')
                     ghost coreTm = Some rhsTy"
       and coerce: "coerce_term_to_type env loc coreTm rhsTy tgtTy = Inr coreTm'"
+      and inf: "term_inferred env coreTm'"
       and wf: "tyenv_well_formed env"
       and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
       and wk: "is_well_kinded env tgtTy"
       and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env tgtTy"
-  shows "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some tgtTy"
+  shows "core_term_type env ghost coreTm' = Some tgtTy"
 proof -
   let ?envD = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
-  have tgtTy_below: "type_tyvars tgtTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
   have wfD: "tyenv_well_formed ?envD"
     using wf tyenv_well_formed_extend_env_with_tyvars by blast
   have tgtTy_wkD: "is_well_kinded ?envD tgtTy"
@@ -378,9 +262,10 @@ proof -
                       (insert_cast (apply_subst subst rhsTy) tgtTy (apply_subst_to_term subst coreTm))
                     = Some tgtTy"
     using insert_cast_typed[OF subst_typed ok tgtTy_wkD tgtTy_rtD] .
+  \<comment> \<open>The coerced term passes the inferred check, so the interval can be dropped.\<close>
   show ?thesis
     unfolding tm'_eq tgt_id
-    using clear_metavars_typed_in_env[OF cast_typed wf bound tgtTy_below] .
+    using inferred_term_typed_in_env[OF cast_typed bound inf[unfolded tm'_eq tgt_id]] .
 qed
 
 (* is_writable_lvalue is unchanged by the fresh-tyvar extension (it ignores type
@@ -408,25 +293,19 @@ lemma ghost_lvalue_ok_extend_env_with_tyvars [simp]:
   by (rule ghost_lvalue_ok_cong_env) (simp_all add: extend_env_with_tyvars_def)
 
 (* Impure-call bridge: an impure call that typechecks (via core_impure_call_type)
-   under env extended with the fresh interval, once its ty-args and arg-terms have
-   their interval metavariables cleared, typechecks under the original env to the
-   SAME return type (which is metavariable-free). This is the impure-call analog of
-   clear_metavars_typed_in_env, and is what the VarDeclCall main sub-case needs. *)
-lemma clear_metavars_impure_call_typed_in_env:
+   under env extended with the fresh interval, and whose ty-args and arg-terms
+   pass the call_inferred check, typechecks under the original env to the SAME
+   return type. This is the impure-call analog of inferred_term_typed_in_env,
+   and is what the VarDeclCall / AssignCall cases need. *)
+lemma inferred_impure_call_typed_in_env:
   assumes ct: "core_impure_call_type (extend_env_with_tyvars env ghost next_mv next_mv')
                  ghost fnName tyArgs argTms = Some retTy"
     and wf: "tyenv_well_formed env"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    and rtbound: "\<forall>n. n |\<in>| TE_RuntimeTypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    and ret_below: "type_tyvars retTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-  shows "core_impure_call_type env ghost fnName
-           (map (clear_metavars_type next_mv next_mv') tyArgs)
-           (map (clear_metavars next_mv next_mv') argTms) = Some retTy"
+    and inf: "call_inferred env tyArgs argTms"
+  shows "core_impure_call_type env ghost fnName tyArgs argTms = Some retTy"
 proof -
   let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  let ?ct = "clear_metavars_type next_mv next_mv'"
-  let ?ctm = "clear_metavars next_mv next_mv'"
-  have wfE: "tyenv_well_formed ?envE" using wf tyenv_well_formed_extend_env_with_tyvars by blast
   from core_impure_call_type_fn_facts[OF ct] obtain funInfo where
     fiE: "fmlookup (TE_Functions ?envE) fnName = Some funInfo" and
     len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
@@ -449,160 +328,34 @@ proof -
     by blast
   have fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
     using fiE unfolding extend_env_with_tyvars_def by simp
+  from inf have ty_inf: "list_all (type_inferred env) tyArgs"
+    and tm_inf: "list_all (term_inferred env) argTms"
+    unfolding call_inferred_def by simp_all
 
-  \<comment> \<open>Signature facts for the substitution-composition step. Signature types' tyvars
-      are within the abstract types together with the function's type parameters; the
-      abstract ones are below next_mv, so not in the clearing subst's domain. \<close>
-  let ?cs0 = "fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv..<next_mv'])"
-  have abs_no_cs: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> n |\<notin>| fmdom ?cs0"
-  proof -
-    fix n assume "n |\<in>| TE_AbstractTypes env"
-    with wf have "n |\<in>| TE_TypeVars env"
-      unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
-    with bound have "tyvar_fresh_ok n next_mv" by blast
-    hence "n \<notin> mv_name ` {next_mv..<next_mv'}" unfolding tyvar_fresh_ok_def by force
-    hence "n \<notin> fset (fmdom ?cs0)"
-      using clear_metavars_subst_dom by blast
-    thus "n |\<notin>| fmdom ?cs0" by simp
-  qed
-  have distinct_tyargs: "distinct (FI_TyArgs funInfo)"
-    using wf fi unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
-  have fi_args_wk: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
-    using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
-                                  (FI_ReturnType funInfo)"
-    using wf fi unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
-            \<forall>n \<in> type_tyvars t. n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom ?cs0"
-  proof (intro ballI)
-    fix t n assume t_in: "t \<in> fst ` set (FI_TmArgs funInfo)" and n_in: "n \<in> type_tyvars t"
-    from t_in fi_args_wk have "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
-      by blast
-    from is_well_kinded_type_tyvars_subset[OF this] n_in
-    have "n |\<in>| TE_AbstractTypes env \<or> n \<in> set (FI_TyArgs funInfo)"
-      by (auto simp: fset_of_list.rep_eq)
-    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom ?cs0" using abs_no_cs by blast
-  qed
-  have fi_ret_tyvars: "\<And>n. n \<in> type_tyvars (FI_ReturnType funInfo)
-                            \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom ?cs0"
-  proof -
-    fix n assume n_in: "n \<in> type_tyvars (FI_ReturnType funInfo)"
-    from is_well_kinded_type_tyvars_subset[OF fi_ret_wk] n_in
-    have "n |\<in>| TE_AbstractTypes env \<or> n \<in> set (FI_TyArgs funInfo)"
-      by (auto simp: fset_of_list.rep_eq)
-    thus "n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom ?cs0" using abs_no_cs by blast
-  qed
+  \<comment> \<open>The ty-args are well-kinded / runtime in env (their tyvars are in scope).\<close>
+  have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
+    and tyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
+    using inferred_types_well_kinded_runtime[OF wk rt bound ty_inf] by blast+
 
-  \<comment> \<open>Cleared ty-args are well-kinded / runtime / complete in env.\<close>
-  have len_cty: "length (map ?ct tyArgs) = length (FI_TyArgs funInfo)" using len_ty by simp
-  have cty_wk: "list_all (is_well_kinded env) (map ?ct tyArgs)"
-    using wk clear_metavars_type_well_kinded[OF _ wf bound] by (auto simp: list_all_iff)
-  have cty_cp: "list_all is_complete_type (map ?ct tyArgs)"
-    using cp clear_metavars_type_complete by (auto simp: list_all_iff)
-  have cty_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) (map ?ct tyArgs)"
-  proof
-    assume ng: "ghost = NotGhost"
-    have "list_all (is_runtime_type env) (map ?ct tyArgs)"
-      using rt[rule_format, OF ng] clear_metavars_type_runtime[OF _ wf bound rtbound]
-      by (auto simp: list_all_iff ng)
-    thus "list_all (is_runtime_type env) (map ?ct tyArgs)" .
-  qed
-
-  \<comment> \<open>The return type is unchanged by clearing (metavar-free) and equals the
-      recomputation from the cleared ty-args.\<close>
-  have tysubst_eq: "fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))
-                      = fmap_of_list (zip (FI_TyArgs funInfo) (map (apply_subst
-                          (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv..<next_mv']))) tyArgs))"
-    unfolding clear_metavars_type_def by simp
-  let ?cs = "fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv..<next_mv'])"
-  have ret_recompute:
-    "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) (FI_ReturnType funInfo) = retTy"
+  \<comment> \<open>Each arg term typechecks in env to its expected type (the term bridge).\<close>
+  let ?exps = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                   (FI_TmArgs funInfo)"
+  have len_exps: "length argTms = length ?exps" using l2_pure by (simp add: list_all2_lengthD)
+  have arg_typed: "\<And>i. i < length argTms \<Longrightarrow> core_term_type env ghost (argTms ! i) = Some (?exps ! i)"
   proof -
-    have "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) (FI_ReturnType funInfo)
-            = apply_subst ?cs (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo))"
-      using apply_subst_compose_zip_extra[OF len_ty[symmetric] fi_ret_tyvars distinct_tyargs]
-      unfolding clear_metavars_type_def by simp
-    also have "\<dots> = apply_subst ?cs retTy" using ty_eq by simp
-    also have "\<dots> = retTy" using clear_metavars_subst_id_below[OF ret_below]
-      unfolding clear_metavars_type_def by simp
-    finally show ?thesis .
-  qed
-
-  \<comment> \<open>Per-argument check survives clearing: the cleared arg term typechecks in env to
-      the cleared expected type, which is the recomputed expected type from cleared
-      ty-args (substitution composition).\<close>
-  let ?exps0 = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty) (FI_TmArgs funInfo)"
-  let ?expsC = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ty) (FI_TmArgs funInfo)"
-  have exps_recompute: "?expsC = map ?ct ?exps0"
-  proof -
-    have "?expsC = map (\<lambda>(ty, _). apply_subst ?cs
-            (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)) (FI_TmArgs funInfo)"
-    proof (rule map_cong[OF refl])
-      fix x assume "x \<in> set (FI_TmArgs funInfo)"
-      obtain t v where x_eq: "x = (t, v)" by (cases x)
-      with \<open>x \<in> set (FI_TmArgs funInfo)\<close> have t_in: "t \<in> fst ` set (FI_TmArgs funInfo)"
-        by (force simp: rev_image_eqI)
-      have t_tyvars_ok: "\<And>n. n \<in> type_tyvars t \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom ?cs0"
-        using fi_args_tyvars t_in by blast
-      thus "(case x of (ty, _) \<Rightarrow> apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ty)
-            = (case x of (ty, _) \<Rightarrow> apply_subst ?cs (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty))"
-        using x_eq apply_subst_compose_zip_extra[OF len_ty[symmetric] t_tyvars_ok distinct_tyargs]
-        unfolding clear_metavars_type_def by simp
-    qed
-    also have "\<dots> = map ?ct ?exps0"
-      unfolding clear_metavars_type_def by (simp add: case_prod_unfold comp_def)
-    finally show ?thesis .
-  qed
-  have len_pure: "length argTms = length ?exps0" using l2_pure by (simp add: list_all2_lengthD)
-  have l2_clear: "list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type env ghost tm of None \<Rightarrow> False
-                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  (map ?ctm argTms) ?expsC"
-    unfolding list_all2_conv_all_nth
-  proof (intro conjI allI impI)
-    show "length (map ?ctm argTms) = length ?expsC" using len_tm by simp
-  next
-    fix i assume i_lt: "i < length (map ?ctm argTms)"
-    hence i_tm: "i < length argTms" by simp
-    \<comment> \<open>The original arg types to its expected type in the extended env.\<close>
+    fix i assume i_lt: "i < length argTms"
     have "case core_term_type ?envE ghost (argTms ! i) of None \<Rightarrow> False
-          | Some actualTy \<Rightarrow> actualTy = ?exps0 ! i"
-      using list_all2_nthD[OF l2_pure] i_tm len_pure by simp
-    then obtain actualTy where
-      tm_typed: "core_term_type ?envE ghost (argTms ! i) = Some actualTy" and
-      aeq: "actualTy = ?exps0 ! i"
+          | Some actualTy \<Rightarrow> actualTy = ?exps ! i"
+      using list_all2_nthD[OF l2_pure] i_lt len_exps by simp
+    hence tm_typed: "core_term_type ?envE ghost (argTms ! i) = Some (?exps ! i)"
       by (auto split: option.splits)
-    \<comment> \<open>Clearing the arg term types it (in env) to the cleared expected type.\<close>
-    have "core_term_type env ghost (?ctm (argTms ! i)) = Some (?ct actualTy)"
-      using clear_metavars_typed_in_env_gen[OF tm_typed wf bound] .
-    moreover have "?ct (?exps0 ! i) = ?expsC ! i"
-      using exps_recompute i_tm len_pure len_tm by simp
-    ultimately show "case core_term_type env ghost (map ?ctm argTms ! i) of None \<Rightarrow> False
-                     | Some actualTy' \<Rightarrow> actualTy' = ?expsC ! i"
-      using i_tm aeq by simp
+    have infI: "term_inferred env (argTms ! i)"
+      using tm_inf i_lt by (simp add: list_all_length)
+    show "core_term_type env ghost (argTms ! i) = Some (?exps ! i)"
+      using inferred_term_typed_in_env[OF tm_typed bound infI] .
   qed
 
-  \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact)
-      under clearing.\<close>
-  have ref_lv_clear: "\<forall>i < length (map ?ctm argTms).
-                        snd (FI_TmArgs funInfo ! i) = Ref
-                          \<longrightarrow> is_writable_lvalue env ((map ?ctm argTms) ! i)
-                              \<and> ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
-  proof (intro allI impI)
-    fix i assume i_lt: "i < length (map ?ctm argTms)" and ref: "snd (FI_TmArgs funInfo ! i) = Ref"
-    hence i_lt_tm: "i < length argTms" by simp
-    have "is_writable_lvalue ?envE (argTms ! i)" and "ghost_lvalue_ok ?envE ghost (argTms ! i)"
-      using ref_lv i_lt_tm ref by simp_all
-    hence "is_writable_lvalue env (argTms ! i)" and "ghost_lvalue_ok env ghost (argTms ! i)"
-      by simp_all
-    thus "is_writable_lvalue env ((map ?ctm argTms) ! i)
-            \<and> ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
-      using i_lt_tm unfolding clear_metavars_def by simp
-  qed
-
-  \<comment> \<open>Reassemble core_impure_call_type from the cleared pieces, mirroring
-      core_impure_call_type_irrelevant_tyvar's reconstruction.\<close>
+  \<comment> \<open>Reassemble core_impure_call_type's per-argument check in env.\<close>
   let ?P = "\<lambda>(tm, vor) expectedTy.
                  case vor of
                    Var \<Rightarrow> (case core_term_type env ghost tm of None \<Rightarrow> False
@@ -610,77 +363,67 @@ proof -
                  | Ref \<Rightarrow> is_writable_lvalue env tm
                           \<and> ghost_lvalue_ok env ghost tm
                           \<and> core_term_type env ghost tm = Some expectedTy"
-  let ?zts = "zip (map ?ctm argTms) (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
-  have len_zts: "length ?zts = length ?expsC" using len_tm by simp
-  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsC ! i)"
+  let ?zts = "zip argTms (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
+  have len_zts: "length ?zts = length ?exps" using len_tm by simp
+  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?exps ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length argTms" using len_tm by simp
     with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
     obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
       by (cases "FI_TmArgs funInfo ! i") auto
-    have zip_nth: "?zts ! i = ((map ?ctm argTms) ! i, vor)"
+    have zip_nth: "?zts ! i = (argTms ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp
-    have exp_nth: "?expsC ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) (map ?ct tyArgs))) ti"
-      using i_lt_fi fi_arg by simp
-    have pure_i: "case core_term_type env ghost ((map ?ctm argTms) ! i) of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = ?expsC ! i"
-      using list_all2_nthD[OF l2_clear] i_lt_tm by simp
-    show "?P (?zts ! i) (?expsC ! i)"
+    have typed_i: "core_term_type env ghost (argTms ! i) = Some (?exps ! i)"
+      using arg_typed[OF i_lt_tm] .
+    show "?P (?zts ! i) (?exps ! i)"
     proof (cases vor)
-      case Var with zip_nth pure_i show ?thesis by simp
+      case Var with zip_nth typed_i show ?thesis by simp
     next
       case Ref
-      have "is_writable_lvalue env ((map ?ctm argTms) ! i)"
-        and "ghost_lvalue_ok env ghost ((map ?ctm argTms) ! i)"
-        using ref_lv_clear i_lt_tm fi_arg Ref by simp_all
-      moreover from pure_i have
-        "core_term_type env ghost ((map ?ctm argTms) ! i) = Some (?expsC ! i)"
-        by (auto split: option.splits)
-      ultimately show ?thesis using Ref zip_nth by simp
+      have "is_writable_lvalue ?envE (argTms ! i)" and "ghost_lvalue_ok ?envE ghost (argTms ! i)"
+        using ref_lv i_lt_tm fi_arg Ref by simp_all
+      hence "is_writable_lvalue env (argTms ! i)" and "ghost_lvalue_ok env ghost (argTms ! i)"
+        by simp_all
+      thus ?thesis using Ref zip_nth typed_i by simp
     qed
   qed
-  have l2_full: "list_all2 ?P ?zts ?expsC"
+  have l2_full: "list_all2 ?P ?zts ?exps"
     using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi cty_wk cty_cp cty_rt fn_ng len_cty len_tm l2_full ret_recompute
+    using fi tyArgs_wk cp tyArgs_rt fn_ng len_ty len_tm l2_full ty_eq
     by (auto simp: Let_def)
 qed
 
 
-
-(* The reconcile-then-clear composite, the impure-call counterpart of
-   coerce_clear_typed_in_env: if the elaborated call typechecks in the
-   metavariable-extended env and reconciliation against a (metavariable-free)
-   target type succeeds, the cleared, substituted call typechecks in the original
+(* The reconcile-then-check composite, the impure-call counterpart of
+   coerce_inferred_typed_in_env: if the elaborated call typechecks in the
+   metavariable-extended env, reconciliation against a (metavariable-free)
+   target type succeeds, and the substituted ty-args / arg terms pass the
+   call_inferred check, then the substituted call typechecks in the original
    env to some type from which the chosen castOpt reaches the target. This is the
    one correctness argument for the three impure-call statement forms (annotated
    VarDecl, Assign, Return). *)
-lemma reconcile_clear_typed_in_env:
+lemma reconcile_inferred_typed_in_env:
   assumes ctE: "core_impure_call_type (extend_env_with_tyvars env ghost next_mv next_mv')
                   ghost fnName tyArgs argTms = Some retTy"
       and rcr: "reconcile_call_result env loc tyArgs argTms retTy tgtTy
                   = Inr (castOpt, tyArgs', argTms')"
+      and inf: "call_inferred env tyArgs' argTms'"
       and wf: "tyenv_well_formed env"
       and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
       and wk: "is_well_kinded env tgtTy"
       and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env tgtTy"
   shows "\<exists>callRetTy.
-        core_impure_call_type env ghost fnName
-          (map (clear_metavars_type next_mv next_mv') tyArgs')
-          (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy
+        core_impure_call_type env ghost fnName tyArgs' argTms' = Some callRetTy
         \<and> cast_result_type env ghost callRetTy castOpt = Some tgtTy"
 proof -
   let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
-  have rtbound: "\<forall>n. n |\<in>| TE_RuntimeTypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    using wf bound unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
   have wfE: "tyenv_well_formed ?envE"
     using wf tyenv_well_formed_extend_env_with_tyvars by blast
-  have tgtTy_below: "type_tyvars tgtTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
   have tgt_tvs: "type_tyvars tgtTy \<subseteq> fset (TE_TypeVars env)"
     using is_well_kinded_type_tyvars_subset[OF wk] .
   have tgtTy_wkE: "is_well_kinded ?envE tgtTy"
@@ -734,18 +477,12 @@ proof -
     using dom_flex tgt_tvs by auto
   have tgt_id: "apply_subst subst tgtTy = tgtTy"
     using apply_subst_disjoint_id[OF dom_disj] .
-  \<comment> \<open>The substituted return type is tgtTy or coercible to it; either way it has
-      tgtTy's type variables, hence is metavar-free, so the clearing bridge applies.\<close>
+  \<comment> \<open>The substituted return type is tgtTy or coercible to it.\<close>
   have ok: "apply_subst subst retTy = tgtTy \<or> coercible (apply_subst subst retTy) tgtTy"
     using unify_upto_coercion_sound[OF uoc] unfolding tgt_id .
-  have retTy'_tvs: "type_tyvars (apply_subst subst retTy) = type_tyvars tgtTy"
-    using ok coercible_type_tyvars by blast
-  have retTy'_below: "type_tyvars (apply_subst subst retTy) \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using tgtTy_below unfolding retTy'_tvs .
-  have ct: "core_impure_call_type env ghost fnName
-              (map (clear_metavars_type next_mv next_mv') tyArgs')
-              (map (clear_metavars next_mv next_mv') argTms') = Some (apply_subst subst retTy)"
-    using clear_metavars_impure_call_typed_in_env[OF ctE' wf bound rtbound retTy'_below] .
+  \<comment> \<open>The substituted call passes the inferred check, so the interval can be dropped.\<close>
+  have ct: "core_impure_call_type env ghost fnName tyArgs' argTms' = Some (apply_subst subst retTy)"
+    using inferred_impure_call_typed_in_env[OF ctE' wf bound inf] .
   \<comment> \<open>castOpt = None when the substituted return type is already tgtTy, otherwise
       Some tgtTy on a coercible pair: both reach tgtTy through cast_result_type.\<close>
   have cast_ok: "cast_result_type env ghost (apply_subst subst retTy) castOpt = Some tgtTy"
@@ -1377,54 +1114,27 @@ proof -
 qed
 
 
-(* Corollary for the inferred impure-call VarDecl branch: when the call's return
-   type has no unresolved metavariables, it is well-kinded (runtime in NotGhost)
-   in env itself — analogous to elab_term_inferred_type_well_kinded_runtime. *)
-lemma elab_impure_call_term_inferred_type_well_kinded_runtime:
+(* Corollary for the impure-call statement forms: when the call's ty-args and
+   arg-terms pass the call_inferred check, the call typechecks in env itself
+   (not just in the fresh-tyvar extension), and its return type is well-kinded
+   (runtime in NotGhost) in env. *)
+lemma elab_impure_call_term_inferred:
   assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
                    = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    and no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)"
-  shows "is_well_kinded env retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
+    and inf: "call_inferred env finalTyArgs finalArgTms"
+  shows "core_impure_call_type env ghost fnName finalTyArgs finalArgTms = Some retTy"
+    and "is_well_kinded env retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
 proof -
-  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  have ct: "core_impure_call_type ?env' ghost fnName finalTyArgs finalArgTms = Some retTy"
+  have ctE: "core_impure_call_type (extend_env_with_tyvars env ghost next_mv next_mv')
+               ghost fnName finalTyArgs finalArgTms = Some retTy"
     using elab_impure_call_term_correct[OF elab wf ee_wf bound] .
-  have wf': "tyenv_well_formed ?env'"
-    using wf tyenv_well_formed_extend_env_with_tyvars by blast
-  \<comment> \<open>Well-kinded / runtime at the extended env, then transfer down to env.\<close>
-  have wkrt': "is_well_kinded ?env' retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ?env' retTy)"
-    using core_impure_call_type_well_kinded_and_runtime[OF ct wf'] .
-  have tvs_sub: "type_tyvars retTy \<subseteq> fset (TE_TypeVars env)"
-    using no_meta by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-  have dt_eq: "TE_Datatypes env = TE_Datatypes ?env'" unfolding extend_env_with_tyvars_def by simp
-  have wk: "is_well_kinded env retTy"
-    using is_well_kinded_transfer[OF conjunct1[OF wkrt'] tvs_sub dt_eq] .
-  have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env retTy"
-  proof
-    assume ng: "ghost = NotGhost"
-    have rt': "is_runtime_type ?env' retTy" using wkrt' ng by simp
-    have rtv_eq: "fset (TE_RuntimeTypeVars ?env')
-                    = fset (TE_RuntimeTypeVars env) \<union> mv_name ` {next_mv..<next_mv'}"
-      using ng unfolding extend_env_with_tyvars_def by (simp add: mv_fset_def fset_of_list.rep_eq image_image)
-    have tvs_in_rt: "type_tyvars retTy \<subseteq> fset (TE_RuntimeTypeVars env)"
-    proof
-      fix n assume n_in: "n \<in> type_tyvars retTy"
-      from n_in tvs_sub have "n |\<in>| TE_TypeVars env" by auto
-      hence n_fresh: "tyvar_fresh_ok n next_mv" using bound by simp
-      hence n_not_fresh: "n \<notin> mv_name ` {next_mv..<next_mv'}" unfolding tyvar_fresh_ok_def by force
-      from n_in is_runtime_type_tyvars_subset[OF rt'] rtv_eq
-      have "n \<in> fset (TE_RuntimeTypeVars env) \<union> mv_name ` {next_mv..<next_mv'}" by auto
-      with n_not_fresh show "n \<in> fset (TE_RuntimeTypeVars env)" by auto
-    qed
-    have gd_eq: "TE_GhostDatatypes env = TE_GhostDatatypes ?env'"
-      unfolding extend_env_with_tyvars_def by simp
-    show "is_runtime_type env retTy"
-      using is_runtime_type_transfer[OF rt' tvs_in_rt gd_eq] .
-  qed
-  from wk rt show ?thesis by blast
+  show ct: "core_impure_call_type env ghost fnName finalTyArgs finalArgTms = Some retTy"
+    using inferred_impure_call_typed_in_env[OF ctE wf bound inf] .
+  show "is_well_kinded env retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
+    using core_impure_call_type_well_kinded_and_runtime[OF ct wf] by blast
 qed
 
 
@@ -1522,68 +1232,25 @@ lemma elab_vardecl_impure_cong_fields:
            split: BabTerm.splits sum.splits prod.splits option.splits if_splits)
 
 
-(* Helper for the inferred-type VarDecl branches: when elab_term succeeds and its
-   synthesized type has no unresolved metavariables (all its tyvars are already in
-   TE_TypeVars env, the no-metavar check the elaborator performs), that type is
-   well-kinded in env; and in NotGhost mode it is also a runtime type. The type
-   typechecks under env extended with the fresh interval [next_mv, next_mv'); the
-   bound (\<forall>n |\<in>| TE_TypeVars env. n < next_mv) lets us strip that interval back off,
-   transferring well-kindedness / runtime-ness down to env itself. *)
-lemma elab_term_inferred_type_well_kinded_runtime:
+(* Helper for the pure statement forms: when elab_term succeeds and its result
+   passes the term_inferred check, the term typechecks in env itself (not just in
+   the fresh-tyvar extension), and its type is well-kinded (runtime in NotGhost)
+   in env. *)
+lemma elab_term_inferred_typed:
   assumes elab: "elab_term env elabEnv g tm next_mv = Inr (coreTm, rhsTy, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    and no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)"
-  shows "is_well_kinded env rhsTy
-         \<and> (g = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
+    and inf: "term_inferred env coreTm"
+  shows "core_term_type env g coreTm = Some rhsTy"
+    and "is_well_kinded env rhsTy \<and> (g = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
 proof -
-  let ?env1 = "extend_env_with_tyvars env g next_mv next_mv'"
-  \<comment> \<open>The elaborated term typechecks under the extended env.\<close>
-  have typed: "core_term_type ?env1 g coreTm = Some rhsTy"
+  have typed: "core_term_type (extend_env_with_tyvars env g next_mv next_mv') g coreTm = Some rhsTy"
     using elab_term_correct(1)[OF elab wf ee_wf] bound by simp
-  have wf1: "tyenv_well_formed ?env1"
-    using wf tyenv_well_formed_extend_env_with_tyvars by simp
-  \<comment> \<open>All tyvars of rhsTy are in the original (un-extended) TE_TypeVars.\<close>
-  have tvs_sub: "type_tyvars rhsTy \<subseteq> fset (TE_TypeVars env)"
-    using no_meta by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-  have dt_eq: "TE_Datatypes env = TE_Datatypes ?env1"
-    unfolding extend_env_with_tyvars_def by simp
-  \<comment> \<open>Well-kinded under the extended env, then transferred down to env.\<close>
-  have wk1: "is_well_kinded ?env1 rhsTy" using core_term_type_well_kinded[OF typed wf1] .
-  have wk: "is_well_kinded env rhsTy"
-    using is_well_kinded_transfer[OF wk1 tvs_sub dt_eq] .
-  \<comment> \<open>Runtime in NotGhost mode.\<close>
-  have rt: "g = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
-  proof
-    assume ng: "g = NotGhost"
-    have rt1: "is_runtime_type ?env1 rhsTy"
-      using core_term_type_notghost_runtime[OF typed[unfolded ng] wf1[unfolded ng]]
-      by (simp add: ng)
-    \<comment> \<open>rhsTy's tyvars are runtime in the extended env; the fresh interval is above
-        next_mv, but every tyvar of rhsTy is < next_mv, so they are runtime in env.\<close>
-    have rtv1: "type_tyvars rhsTy \<subseteq> fset (TE_RuntimeTypeVars ?env1)"
-      using is_runtime_type_tyvars_subset[OF rt1] .
-    have rtv_eq: "fset (TE_RuntimeTypeVars ?env1)
-                    = fset (TE_RuntimeTypeVars env) \<union> mv_name ` {next_mv..<next_mv'}"
-      using ng unfolding extend_env_with_tyvars_def
-      by (simp add: mv_fset_def fset_of_list.rep_eq image_image)
-    have tvs_in_rt: "type_tyvars rhsTy \<subseteq> fset (TE_RuntimeTypeVars env)"
-    proof
-      fix n assume n_in: "n \<in> type_tyvars rhsTy"
-      from n_in tvs_sub have "n |\<in>| TE_TypeVars env" by auto
-      hence n_fresh: "tyvar_fresh_ok n next_mv" using bound by simp
-      hence n_not_fresh: "n \<notin> mv_name ` {next_mv..<next_mv'}" unfolding tyvar_fresh_ok_def by force
-      from n_in rtv1 rtv_eq have "n \<in> fset (TE_RuntimeTypeVars env) \<union> mv_name ` {next_mv..<next_mv'}"
-        by auto
-      with n_not_fresh show "n \<in> fset (TE_RuntimeTypeVars env)" by auto
-    qed
-    have gd_eq: "TE_GhostDatatypes env = TE_GhostDatatypes ?env1"
-      unfolding extend_env_with_tyvars_def by simp
-    show "is_runtime_type env rhsTy"
-      using is_runtime_type_transfer[OF rt1 tvs_in_rt gd_eq] .
-  qed
-  from wk rt show ?thesis by blast
+  show t: "core_term_type env g coreTm = Some rhsTy"
+    using inferred_term_typed_in_env[OF typed bound inf] .
+  show "is_well_kinded env rhsTy \<and> (g = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
+    using core_term_type_well_kinded_and_runtime[OF t wf] .
 qed
 
 
@@ -1621,10 +1288,10 @@ proof -
     \<comment> \<open>Inferred type = rhsTy; the no-metavar check makes it well-kinded / runtime.\<close>
     from elab None etm have
       env'_eq: "env' = vardecl_add_local env ghost varName rhsTy" and
-      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)"
+      inf: "term_inferred env coreTm"
       by (auto simp: elab_vardecl_pure_def split: sum.splits prod.splits if_splits)
     have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-      using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
+      using elab_term_inferred_typed(2)[OF etm wf ee_wf bound inf] .
     show ?thesis using env'_eq wkrt by blast
   next
     case (Some ty)
@@ -1663,22 +1330,19 @@ proof -
   show ?thesis
   proof (cases tyOpt)
     case None
-    \<comment> \<open>Inferred: coreTy = rhsTy (metavar-free), initTm = clear_metavars coreTm.\<close>
+    \<comment> \<open>Inferred: coreTy = rhsTy, initTm = coreTm (which passes the inferred check).\<close>
     from elab None etm have
-      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
+      inf: "term_inferred env coreTm" and
       cp: "ghost = NotGhost \<longrightarrow> is_complete_type rhsTy" and
-      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var rhsTy
-                            (clear_metavars next_mv next_mv' coreTm)" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var rhsTy coreTm" and
       env'_eq: "env' = vardecl_add_local env ghost varName rhsTy"
       by (auto simp: elab_vardecl_pure_def split: sum.splits prod.splits if_splits)
-    have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-      using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
-    have wk: "is_well_kinded env rhsTy" using wkrt by simp
-    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy" using wkrt by auto
-    have rhsTy_below: "type_tyvars rhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-      using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
-    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm) = Some rhsTy"
-      using clear_metavars_typed_in_env[OF coreTm_typed_decl wf bound rhsTy_below] .
+    have init_typed: "core_term_type env ghost coreTm = Some rhsTy"
+      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf] .
+    have wk: "is_well_kinded env rhsTy"
+      using core_term_type_well_kinded[OF init_typed wf] .
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
+      using core_term_type_notghost_runtime init_typed wf by auto
     show ?thesis using wk rt cp init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
   next
     case (Some ty)
@@ -1687,17 +1351,17 @@ proof -
       ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
       cp: "ghost = NotGhost \<longrightarrow> is_complete_type coreTy" and
       coerce: "coerce_term_to_type env loc coreTm rhsTy coreTy = Inr coreTm'" and
-      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var coreTy
-                            (clear_metavars next_mv next_mv' coreTm')" and
+      inf: "term_inferred env coreTm'" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Var coreTy coreTm'" and
       env'_eq: "env' = vardecl_add_local env ghost varName coreTy"
       by (auto simp: elab_vardecl_pure_def split: sum.splits prod.splits option.splits if_splits)
     have wk: "is_well_kinded env coreTy"
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
       using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-    \<comment> \<open>The coerced+cleared initializer typechecks to coreTy in env.\<close>
-    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some coreTy"
-      using coerce_clear_typed_in_env[OF coreTm_typed_decl coerce wf bound wk rt] .
+    \<comment> \<open>The coerced initializer typechecks to coreTy in env.\<close>
+    have init_typed: "core_term_type env ghost coreTm' = Some coreTy"
+      using coerce_inferred_typed_in_env[OF coreTm_typed_decl coerce inf wf bound wk rt] .
     show ?thesis using wk rt cp init_typed by (simp add: cs_eq env'_eq vardecl_add_local_def)
   qed
 qed
@@ -1741,11 +1405,10 @@ proof -
     \<comment> \<open>Inferred: recorded type = retTy, which is metavar-free by the check.\<close>
     from elab tm_eq ec None have
       env'_eq: "env' = vardecl_add_local env ghost varName retTy" and
-      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)"
+      inf: "call_inferred env finalTyArgs finalArgTms"
       by (auto simp: elab_vardecl_impure_def Let_def split: sum.splits prod.splits if_splits)
     have wkrt: "is_well_kinded env retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
-      using elab_impure_call_term_inferred_type_well_kinded_runtime
-              [OF ec wf ee_wf bound no_meta] .
+      using elab_impure_call_term_inferred(2)[OF ec wf ee_wf bound inf] .
     show ?thesis using env'_eq wkrt by blast
   next
     case (Some ty)
@@ -1779,9 +1442,6 @@ proof -
   let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
   have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
     using ee_wf unfolding elabenv_well_formed_def by simp
-  \<comment> \<open>The fresh interval is above TE_RuntimeTypeVars env too (runtime tyvars \<subseteq> tyvars).\<close>
-  have rtbound: "\<forall>n. n |\<in>| TE_RuntimeTypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    using wf bound unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
   \<comment> \<open>The impure rhs is a call; extract the elaborated call and its facts.\<close>
   from impure obtain rloc callee rargs where tm_eq: "tm = BabTm_Call rloc callee rargs"
     by (auto simp: is_impure_call_def split: BabTerm.splits)
@@ -1796,23 +1456,17 @@ proof -
   show ?thesis
   proof (cases tyOpt)
     case None
-    \<comment> \<open>Inferred: varTy = retTy (metavar-free), castOpt = None, args as-is.\<close>
+    \<comment> \<open>Inferred: varTy = retTy, castOpt = None, args as-is (passing the inferred check).\<close>
     from elab tm_eq ec None have
-      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)" and
+      inf: "call_inferred env finalTyArgs finalArgTms" and
       cp: "ghost = NotGhost \<longrightarrow> is_complete_type retTy" and
       cs_eq: "coreStmt = CoreStmt_VarDeclCall ghost varName retTy None fnName
-                            (map (clear_metavars_type next_mv next_mv') finalTyArgs)
-                            (map (clear_metavars next_mv next_mv') finalArgTms)" and
+                            finalTyArgs finalArgTms" and
       env'_eq: "env' = vardecl_add_local env ghost varName retTy"
       by (auto simp: elab_vardecl_impure_def Let_def split: sum.splits prod.splits if_splits)
-    have wkrt: "is_well_kinded env retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
-      using elab_impure_call_term_inferred_type_well_kinded_runtime[OF ec wf ee_wf bound no_meta] .
-    have retTy_below: "type_tyvars retTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-      using is_well_kinded_type_tyvars_subset[OF conjunct1[OF wkrt]] bound by auto
-    have ct: "core_impure_call_type env ghost fnName
-                (map (clear_metavars_type next_mv next_mv') finalTyArgs)
-                (map (clear_metavars next_mv next_mv') finalArgTms) = Some retTy"
-      using clear_metavars_impure_call_typed_in_env[OF ctE wf bound rtbound retTy_below] .
+    have ct: "core_impure_call_type env ghost fnName finalTyArgs finalArgTms = Some retTy"
+      and wkrt: "is_well_kinded env retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env retTy)"
+      using elab_impure_call_term_inferred[OF ec wf ee_wf bound inf] by blast+
     show ?thesis using wkrt cp ct
       by (simp add: cs_eq env'_eq vardecl_add_local_def cast_result_type_def)
   next
@@ -1823,9 +1477,9 @@ proof -
       cp: "ghost = NotGhost \<longrightarrow> is_complete_type coreTy" and
       rcr: "reconcile_call_result env loc finalTyArgs finalArgTms retTy coreTy
               = Inr (castOpt, tyArgs', argTms')" and
+      inf: "call_inferred env tyArgs' argTms'" and
       cs_eq: "coreStmt = CoreStmt_VarDeclCall ghost varName coreTy castOpt fnName
-                            (map (clear_metavars_type next_mv next_mv') tyArgs')
-                            (map (clear_metavars next_mv next_mv') argTms')" and
+                            tyArgs' argTms'" and
       env'_eq: "env' = vardecl_add_local env ghost varName coreTy"
       by (auto simp: elab_vardecl_impure_def Let_def
                split: sum.splits prod.splits option.splits if_splits)
@@ -1833,12 +1487,9 @@ proof -
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
       using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-    \<comment> \<open>The cleared, substituted call typechecks to a type from which castOpt
-        reaches coreTy.\<close>
-    from reconcile_clear_typed_in_env[OF ctE rcr wf bound wk rt] obtain callRetTy where
-      ct: "core_impure_call_type env ghost fnName
-             (map (clear_metavars_type next_mv next_mv') tyArgs')
-             (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy" and
+    \<comment> \<open>The substituted call typechecks to a type from which castOpt reaches coreTy.\<close>
+    from reconcile_inferred_typed_in_env[OF ctE rcr inf wf bound wk rt] obtain callRetTy where
+      ct: "core_impure_call_type env ghost fnName tyArgs' argTms' = Some callRetTy" and
       cast_ok: "cast_result_type env ghost callRetTy castOpt = Some coreTy" by blast
     show ?thesis using wk rt cp ct cast_ok
       by (simp add: cs_eq env'_eq vardecl_add_local_def)
@@ -1879,7 +1530,7 @@ proof -
     case None
     \<comment> \<open>Inferred type = rhsTy; the no-metavar check makes it well-kinded / runtime.\<close>
     from elab tm_eq etm None have
-      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
+      inf: "term_inferred env coreTm" and
       env'_eq: "env' = (vardecl_add_local env ghost varName rhsTy)
                          \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
                                               then fminus (TE_ConstLocals env) {|varName|}
@@ -1887,7 +1538,7 @@ proof -
       by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
                split: sum.splits prod.splits if_splits)
     have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-      using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
+      using elab_term_inferred_typed(2)[OF etm wf ee_wf bound inf] .
     show ?thesis using env'_eq wkrt by blast
   next
     case (Some ty)
@@ -1929,34 +1580,23 @@ proof -
   show ?thesis
   proof (cases tyOpt)
     case None
-    \<comment> \<open>Inferred: varTy = rhsTy (metavar-free), initTm = clear_metavars coreTm.\<close>
+    \<comment> \<open>Inferred: varTy = rhsTy, initTm = coreTm (which passes the inferred check).\<close>
     from elab tm_eq etm None have
-      no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)" and
-      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref rhsTy
-                            (clear_metavars next_mv next_mv' coreTm)" and
+      inf: "term_inferred env coreTm" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref rhsTy coreTm" and
       env'_eq: "env' = (vardecl_add_local env ghost varName rhsTy)
                          \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
                                               then fminus (TE_ConstLocals env) {|varName|}
                                               else finsert varName (TE_ConstLocals env)) \<rparr>"
       by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
                split: sum.splits prod.splits if_splits)
-    have wkrt: "is_well_kinded env rhsTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
-      using elab_term_inferred_type_well_kinded_runtime[OF etm wf ee_wf bound no_meta] .
-    have wk: "is_well_kinded env rhsTy" using wkrt by simp
-    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy" using wkrt by auto
-    have rhsTy_below: "type_tyvars rhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-      using is_well_kinded_type_tyvars_subset[OF wk] bound by auto
-    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm) = Some rhsTy"
-      using clear_metavars_typed_in_env[OF coreTm_typed_decl wf bound rhsTy_below] .
-    have lv': "is_lvalue (clear_metavars next_mv next_mv' coreTm)"
-      using lv unfolding clear_metavars_def by simp
-    have glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' coreTm)"
-      using glv unfolding clear_metavars_def by simp
-    have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm)
-                   = is_writable_lvalue env coreTm"
-      using is_writable_lvalue_apply_subst_to_term_eq[OF lv]
-      unfolding clear_metavars_def by simp
-    show ?thesis using wk rt lv' glv' init_typed wl_eq
+    have init_typed: "core_term_type env ghost coreTm = Some rhsTy"
+      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf] .
+    have wk: "is_well_kinded env rhsTy"
+      using core_term_type_well_kinded[OF init_typed wf] .
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
+      using core_term_type_notghost_runtime init_typed wf by auto
+    show ?thesis using wk rt lv glv init_typed
       by (simp add: cs_eq env'_eq vardecl_add_local_def)
   next
     case (Some ty)
@@ -1966,8 +1606,8 @@ proof -
       ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
       coerce: "coerce_term_to_type env loc coreTm rhsTy coreTy = Inr coreTm'" and
       lv': "is_lvalue coreTm'" and
-      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref coreTy
-                            (clear_metavars next_mv next_mv' coreTm')" and
+      inf: "term_inferred env coreTm'" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref coreTy coreTm'" and
       env'_eq: "env' = (vardecl_add_local env ghost varName coreTy)
                          \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm'
                                               then fminus (TE_ConstLocals env) {|varName|}
@@ -1978,9 +1618,9 @@ proof -
       using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
       using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-    \<comment> \<open>The coerced+cleared initializer typechecks to coreTy in env.\<close>
-    have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some coreTy"
-      using coerce_clear_typed_in_env[OF coreTm_typed_decl coerce wf bound wk rt] .
+    \<comment> \<open>The coerced initializer typechecks to coreTy in env.\<close>
+    have init_typed: "core_term_type env ghost coreTm' = Some coreTy"
+      using coerce_inferred_typed_in_env[OF coreTm_typed_decl coerce inf wf bound wk rt] .
     \<comment> \<open>Coercion preserves the lvalue's base variable: a substitution does not touch
         it, and an inserted cast that leaves the term an lvalue is an array cast,
         which lvalue_base_name looks through. Hence the ghost check transfers.\<close>
@@ -1995,15 +1635,7 @@ proof -
     qed
     have glv': "ghost_lvalue_ok env ghost coreTm'"
       using glv base_eq unfolding ghost_lvalue_ok_def by simp
-    have lv'': "is_lvalue (clear_metavars next_mv next_mv' coreTm')"
-      using lv' unfolding clear_metavars_def by simp
-    have glv'': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' coreTm')"
-      using glv' unfolding clear_metavars_def by simp
-    have wl_eq: "is_writable_lvalue env (clear_metavars next_mv next_mv' coreTm')
-                   = is_writable_lvalue env coreTm'"
-      using is_writable_lvalue_apply_subst_to_term_eq[OF lv']
-      unfolding clear_metavars_def by simp
-    show ?thesis using wk rt lv'' glv'' init_typed wl_eq
+    show ?thesis using wk rt lv' glv' init_typed
       by (simp add: cs_eq env'_eq vardecl_add_local_def)
   qed
 qed
@@ -2014,96 +1646,102 @@ qed
 (* The pure helper advances the counter (from next_mv1, via elab_term) and
    leaves the env unchanged. *)
 lemma elab_assign_pure_next_mv:
-  "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> next_mv1 \<le> next_mv'"
   by (auto simp: elab_assign_pure_def coerce_term_to_type_unfold
            dest!: elab_term_next_mv_monotone
            split: sum.splits prod.splits option.splits if_splits)
 
 lemma elab_assign_pure_env:
-  "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> env' = env"
   by (auto simp: elab_assign_pure_def coerce_term_to_type_unfold
            split: sum.splits prod.splits option.splits if_splits)
 
 (* elab_assign_pure emits a CoreStmt_Assign that typechecks in env. The lhs term
-   (elaborated at next_mv, output next_mv1, a writable lvalue of the metavar-free
-   type lhsTy) is widened to next_mv2 and cleared; the rhs is coerced to lhsTy. *)
+   (elaborated at next_mv, output next_mv1, a writable lvalue) passes the inferred
+   check, so it types to lhsTy in env itself; the rhs is coerced to lhsTy and
+   likewise passes the check. *)
 lemma elab_assign_pure_correct:
-  assumes elab: "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  assumes elab: "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
                    = Inr (coreStmt, env', next_mv')"
     and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     and lhs_wl: "is_writable_lvalue env lhsTm"
     and lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
-    and lhs_below: "type_tyvars lhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
     and mono_lhs: "next_mv \<le> next_mv1"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
   shows "core_statement_type env ghost coreStmt = Some env'"
 proof -
-  from elab obtain rhsTm rhsTy rhsTm' where
-    lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
-    erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv')" and
-    coerce: "coerce_term_to_type env loc rhsTm rhsTy lhsTy = Inr rhsTm'" and
-    cs_eq: "coreStmt = CoreStmt_Assign ghost
-                          (clear_metavars next_mv next_mv' lhsTm)
-                          (clear_metavars next_mv next_mv' rhsTm')" and
+  \<comment> \<open>Peel the helper one step at a time (the nested cases and ifs are too many
+      for a single obtain).\<close>
+  have lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy"
+    using elab unfolding elab_assign_pure_def by (auto split: if_splits)
+  have not_cp: "\<not> (ghost = NotGhost \<and> \<not> is_complete_type lhsTy)" using lhs_cp by blast
+  from elab not_cp obtain rhsTm rhsTy next_mv2 where
+    erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv2)"
+    unfolding elab_assign_pure_def by (auto split: sum.splits prod.splits)
+  have elab2: "(case coerce_term_to_type env loc rhsTm rhsTy lhsTy of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr rhsTm' \<Rightarrow>
+                    if \<not> (term_inferred env lhsTm \<and> term_inferred env rhsTm')
+                    then Inl [TyErr_CannotInferType loc]
+                    else Inr (CoreStmt_Assign ghost lhsTm rhsTm', env, next_mv2))
+               = Inr (coreStmt, env', next_mv')"
+    using elab not_cp unfolding elab_assign_pure_def by (simp add: erhs)
+  from elab2 obtain rhsTm' where
+    coerce: "coerce_term_to_type env loc rhsTm rhsTy lhsTy = Inr rhsTm'"
+    by (cases "coerce_term_to_type env loc rhsTm rhsTy lhsTy") auto
+  from elab2 have
+    lhs_inf: "term_inferred env lhsTm" and
+    rhs_inf: "term_inferred env rhsTm'" and
+    cs_eq: "coreStmt = CoreStmt_Assign ghost lhsTm rhsTm'" and
     env'_eq: "env' = env"
-    by (auto simp: elab_assign_pure_def split: sum.splits prod.splits if_splits)
-  let ?envD = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  have mono_rhs: "next_mv1 \<le> next_mv'" using elab_term_next_mv_monotone[OF erhs] .
-  \<comment> \<open>lhs: widen to next_mv', clear (lhsTy metavar-free), preserve writability.\<close>
-  have lhs_typedD: "core_term_type ?envD ghost lhsTm = Some lhsTy"
-    using core_term_type_extend_env_with_tyvars_mono[OF lhs_typed le_refl mono_rhs] .
-  have lhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' lhsTm) = Some lhsTy"
-    using clear_metavars_typed_in_env[OF lhs_typedD wf bound lhs_below] .
-  have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
-    using lhs_wl unfolding clear_metavars_def by simp
-  have lhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' lhsTm)"
-    using lhs_glv unfolding clear_metavars_def by simp
-  \<comment> \<open>rhs: typed at extend env next_mv next_mv' (widen from next_mv1), then coerced
-      to lhsTy and cleared.\<close>
-  have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost rhsTm = Some rhsTy"
-    using elab_term_correct(1)[OF erhs wf ee_wf] bound mono_lhs tyvar_fresh_ok_mono by blast
-  have rhs_typedD: "core_term_type ?envD ghost rhsTm = Some rhsTy"
-    using core_term_type_extend_env_with_tyvars_mono[OF rhs_typed1 mono_lhs le_refl] .
-  \<comment> \<open>lhsTy is well-kinded / runtime in env (it is metavar-free and typed by the cleared lhs).\<close>
+    unfolding coerce by (auto split: if_splits)
+  \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
+  have lhs_init: "core_term_type env ghost lhsTm = Some lhsTy"
+    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf] .
+  \<comment> \<open>rhs: typed at the extended env from next_mv1, then coerced to lhsTy.\<close>
+  have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using bound mono_lhs tyvar_fresh_ok_mono by blast
+  have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost rhsTm = Some rhsTy"
+    using elab_term_correct(1)[OF erhs wf ee_wf] bound1 by simp
+  \<comment> \<open>lhsTy is well-kinded / runtime in env (it is typed by the lhs).\<close>
   have lhsTy_wk: "is_well_kinded env lhsTy"
     using core_term_type_well_kinded[OF lhs_init wf] .
   have lhsTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env lhsTy"
     using core_term_type_notghost_runtime lhs_init wf by auto
-  have rhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' rhsTm') = Some lhsTy"
-    using coerce_clear_typed_in_env[OF rhs_typedD coerce wf bound lhsTy_wk lhsTy_rt] .
-  show ?thesis using lhs_wl' lhs_glv' lhs_init rhs_init lhs_cp by (simp add: cs_eq env'_eq)
+  have rhs_init: "core_term_type env ghost rhsTm' = Some lhsTy"
+    using coerce_inferred_typed_in_env[OF rhs_typed1 coerce rhs_inf wf bound1 lhsTy_wk lhsTy_rt] .
+  show ?thesis using lhs_wl lhs_glv lhs_init rhs_init lhs_cp by (simp add: cs_eq env'_eq)
 qed
 
 (* The impure helper is only reached for an is_impure_call rhs (forces rhs to be
    a BabTm_Call); it advances the counter (from next_mv1) and leaves env unchanged. *)
 lemma elab_assign_impure_next_mv:
-  "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> is_impure_call env elabEnv rhs \<Longrightarrow> next_mv1 \<le> next_mv'"
   by (auto simp: elab_assign_impure_def is_impure_call_def reconcile_call_result_def Let_def
            dest!: elab_impure_call_term_next_mv
            split: BabTerm.splits sum.splits prod.splits option.splits if_splits)
 
 lemma elab_assign_impure_env:
-  "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> is_impure_call env elabEnv rhs \<Longrightarrow> env' = env"
   by (auto simp: elab_assign_impure_def is_impure_call_def reconcile_call_result_def Let_def
            split: BabTerm.splits sum.splits prod.splits option.splits if_splits)
 
 (* elab_assign_impure emits a CoreStmt_AssignCall that typechecks in env. The lhs is
    handled as in elab_assign_pure; the impure rhs reconciles to lhsTy via
-   reconcile_clear_typed_in_env, as in elab_vardecl_impure_correct. *)
+   reconcile_inferred_typed_in_env, as in elab_vardecl_impure_correct. *)
 lemma elab_assign_impure_correct:
-  assumes elab: "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  assumes elab: "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
                    = Inr (coreStmt, env', next_mv')"
     and impure: "is_impure_call env elabEnv rhs"
     and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     and lhs_wl: "is_writable_lvalue env lhsTm"
     and lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
-    and lhs_below: "type_tyvars lhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
     and mono_lhs: "next_mv \<le> next_mv1"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -2112,47 +1750,59 @@ lemma elab_assign_impure_correct:
 proof -
   from impure obtain rloc callee rargs where rhs_eq: "rhs = BabTm_Call rloc callee rargs"
     by (auto simp: is_impure_call_def split: BabTerm.splits)
-  from elab rhs_eq obtain fnName finalTyArgs finalArgTms retTy castOpt tyArgs' argTms' where
-    lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
+  \<comment> \<open>Peel the helper one step at a time (the nested cases and ifs are too many
+      for a single obtain).\<close>
+  have lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy"
+    using elab unfolding rhs_eq elab_assign_impure_def by (auto split: if_splits)
+  have not_cp: "\<not> (ghost = NotGhost \<and> \<not> is_complete_type lhsTy)" using lhs_cp by blast
+  from elab not_cp obtain fnName finalTyArgs finalArgTms retTy next_mv2 where
     ec: "elab_impure_call_term env elabEnv ghost False rloc callee rargs next_mv1
-           = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')" and
+           = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv2)"
+    unfolding rhs_eq elab_assign_impure_def by (auto split: sum.splits prod.splits)
+  have elab2: "(case reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr (castOpt, tyArgs', argTms') \<Rightarrow>
+                    if \<not> (term_inferred env lhsTm \<and> call_inferred env tyArgs' argTms')
+                    then Inl [TyErr_CannotInferType loc]
+                    else Inr (CoreStmt_AssignCall ghost lhsTm castOpt fnName tyArgs' argTms',
+                              env, next_mv2))
+               = Inr (coreStmt, env', next_mv')"
+    using elab not_cp unfolding rhs_eq elab_assign_impure_def by (simp add: ec)
+  obtain castOpt tyArgs' argTms' where
     rcr: "reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy
-            = Inr (castOpt, tyArgs', argTms')" and
-    cs_eq: "coreStmt = CoreStmt_AssignCall ghost (clear_metavars next_mv next_mv' lhsTm) castOpt fnName
-                          (map (clear_metavars_type next_mv next_mv') tyArgs')
-                          (map (clear_metavars next_mv next_mv') argTms')" and
+            = Inr (castOpt, tyArgs', argTms')"
+  proof (cases "reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy")
+    case (Inl errs)
+    thus ?thesis using elab2 by simp
+  next
+    case (Inr rcres)
+    thus ?thesis using that by (cases rcres) auto
+  qed
+  from elab2 have
+    lhs_inf: "term_inferred env lhsTm" and
+    call_inf: "call_inferred env tyArgs' argTms'" and
+    cs_eq: "coreStmt = CoreStmt_AssignCall ghost lhsTm castOpt fnName tyArgs' argTms'" and
     env'_eq: "env' = env"
-    by (auto simp: elab_assign_impure_def split: sum.splits prod.splits if_splits)
-  let ?envE = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  have mono_rhs: "next_mv1 \<le> next_mv'" using elab_impure_call_term_next_mv[OF ec] .
-  \<comment> \<open>lhs: widen to next_mv', clear, preserve writability + typing to lhsTy.\<close>
-  have lhs_typedE: "core_term_type ?envE ghost lhsTm = Some lhsTy"
-    using core_term_type_extend_env_with_tyvars_mono[OF lhs_typed le_refl mono_rhs] .
-  have lhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' lhsTm) = Some lhsTy"
-    using clear_metavars_typed_in_env[OF lhs_typedE wf bound lhs_below] .
-  have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
-    using lhs_wl unfolding clear_metavars_def by simp
-  have lhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' lhsTm)"
-    using lhs_glv unfolding clear_metavars_def by simp
-  \<comment> \<open>The call typechecks (extended env), via elab_impure_call_term_correct at next_mv1.\<close>
-  have ec_fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1" using bound mono_lhs tyvar_fresh_ok_mono by fastforce
-  have ctE1: "core_impure_call_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost fnName finalTyArgs finalArgTms = Some retTy"
-    using elab_impure_call_term_correct[OF ec wf ee_wf ec_fresh] .
-  have ctE: "core_impure_call_type ?envE ghost fnName finalTyArgs finalArgTms = Some retTy"
-    using core_impure_call_type_extend_env_with_tyvars_mono ctE1 mono_lhs by blast
-  \<comment> \<open>lhsTy well-kinded / runtime (metavar-free, typed by the lhs).\<close>
+    unfolding rcr by (auto split: if_splits)
+  \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
+  have lhs_init: "core_term_type env ghost lhsTm = Some lhsTy"
+    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf] .
+  \<comment> \<open>The call typechecks (extended env from next_mv1), via elab_impure_call_term_correct.\<close>
+  have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using bound mono_lhs tyvar_fresh_ok_mono by blast
+  have ctE: "core_impure_call_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost fnName finalTyArgs finalArgTms = Some retTy"
+    using elab_impure_call_term_correct[OF ec wf ee_wf bound1] .
+  \<comment> \<open>lhsTy well-kinded / runtime (typed by the lhs).\<close>
   have lhsTy_wk: "is_well_kinded env lhsTy"
     using core_term_type_well_kinded[OF lhs_init wf] .
   have lhsTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env lhsTy"
     using core_term_type_notghost_runtime lhs_init wf by auto
-  \<comment> \<open>The cleared, substituted call typechecks to a type from which castOpt
-      reaches lhsTy.\<close>
-  from reconcile_clear_typed_in_env[OF ctE rcr wf bound lhsTy_wk lhsTy_rt] obtain callRetTy where
-    ct: "core_impure_call_type env ghost fnName
-           (map (clear_metavars_type next_mv next_mv') tyArgs')
-           (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy" and
+  \<comment> \<open>The substituted call typechecks to a type from which castOpt reaches lhsTy.\<close>
+  from reconcile_inferred_typed_in_env[OF ctE rcr call_inf wf bound1 lhsTy_wk lhsTy_rt]
+  obtain callRetTy where
+    ct: "core_impure_call_type env ghost fnName tyArgs' argTms' = Some callRetTy" and
     cast_ok: "cast_result_type env ghost callRetTy castOpt = Some lhsTy" by blast
-  show ?thesis using lhs_wl' lhs_glv' lhs_init ct cast_ok lhs_cp
+  show ?thesis using lhs_wl lhs_glv lhs_init ct cast_ok lhs_cp
     by (simp add: cs_eq env'_eq)
 qed
 
@@ -2162,69 +1812,72 @@ qed
 (* The swap helper advances the counter (from next_mv1, via the rhs elab_term) and
    leaves the env unchanged. *)
 lemma elab_swap_next_mv:
-  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> next_mv1 \<le> next_mv'"
   by (auto simp: elab_swap_def
            dest!: elab_term_next_mv_monotone
            split: sum.splits prod.splits if_splits)
 
 lemma elab_swap_env:
-  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
      = Inr (coreStmt, env', next_mv') \<Longrightarrow> env' = env"
   by (auto simp: elab_swap_def
            split: sum.splits prod.splits if_splits)
 
 (* elab_swap emits a CoreStmt_Swap that typechecks in env. Both the lhs (elaborated
-   at next_mv, output next_mv1, a writable lvalue of the metavar-free type lhsTy) and
-   the rhs (elaborated at next_mv1) are widened to next_mv2 and cleared; the rhs is
+   at next_mv, output next_mv1, a writable lvalue) and the rhs (elaborated at
+   next_mv1) pass the inferred check, so each types in env itself; the rhs is
    required to be a writable lvalue of exactly type lhsTy (no coercion). *)
 lemma elab_swap_correct:
-  assumes elab: "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  assumes elab: "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
                    = Inr (coreStmt, env', next_mv')"
     and lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     and lhs_wl: "is_writable_lvalue env lhsTm"
     and lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
-    and lhs_below: "type_tyvars lhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
     and mono_lhs: "next_mv \<le> next_mv1"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
   shows "core_statement_type env ghost coreStmt = Some env'"
 proof -
-  from elab obtain rhsTm rhsTy where
-    lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
-    erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv')" and
+  \<comment> \<open>Peel the helper one step at a time (the nested case and ifs are too many
+      for a single obtain).\<close>
+  have lhs_cp: "ghost = NotGhost \<longrightarrow> is_complete_type lhsTy"
+    using elab unfolding elab_swap_def by (auto split: if_splits)
+  have not_cp: "\<not> (ghost = NotGhost \<and> \<not> is_complete_type lhsTy)" using lhs_cp by blast
+  from elab not_cp obtain rhsTm rhsTy next_mv2 where
+    erhs: "elab_term env elabEnv ghost rhs next_mv1 = Inr (rhsTm, rhsTy, next_mv2)"
+    unfolding elab_swap_def by (auto split: sum.splits prod.splits)
+  have elab2: "(if \<not> is_writable_lvalue env rhsTm then Inl [TyErr_NotWritableLvalue loc]
+                else if \<not> ghost_lvalue_ok env ghost rhsTm
+                then Inl [TyErr_WriteToNonGhostFromGhost loc]
+                else if rhsTy \<noteq> lhsTy then Inl [TyErr_TypeMismatch loc lhsTy rhsTy]
+                else if \<not> (term_inferred env lhsTm \<and> term_inferred env rhsTm)
+                then Inl [TyErr_CannotInferType loc]
+                else Inr (CoreStmt_Swap ghost lhsTm rhsTm, env, next_mv2))
+               = Inr (coreStmt, env', next_mv')"
+    using elab not_cp unfolding elab_swap_def by (simp add: erhs)
+  from elab2 have
     rhs_wl: "is_writable_lvalue env rhsTm" and
     rhs_glv: "ghost_lvalue_ok env ghost rhsTm" and
     rhs_ty: "rhsTy = lhsTy" and
-    cs_eq: "coreStmt = CoreStmt_Swap ghost
-                          (clear_metavars next_mv next_mv' lhsTm)
-                          (clear_metavars next_mv next_mv' rhsTm)" and
+    lhs_inf: "term_inferred env lhsTm" and
+    rhs_inf: "term_inferred env rhsTm" and
+    cs_eq: "coreStmt = CoreStmt_Swap ghost lhsTm rhsTm" and
     env'_eq: "env' = env"
-    by (auto simp: elab_swap_def split: sum.splits prod.splits if_splits)
-  have mono_rhs: "next_mv1 \<le> next_mv'" using elab_term_next_mv_monotone[OF erhs] .
-  \<comment> \<open>lhs: widen to next_mv', clear (lhsTy metavar-free), preserve writability.\<close>
-  have lhs_typedD: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost lhsTm = Some lhsTy"
-    using core_term_type_extend_env_with_tyvars_mono[OF lhs_typed le_refl mono_rhs] .
-  have lhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' lhsTm) = Some lhsTy"
-    using clear_metavars_typed_in_env[OF lhs_typedD wf bound lhs_below] .
-  have lhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' lhsTm)"
-    using lhs_wl unfolding clear_metavars_def by simp
-  have lhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' lhsTm)"
-    using lhs_glv unfolding clear_metavars_def by simp
-  \<comment> \<open>rhs: typed at extend env next_mv next_mv' (widen from next_mv1); its type is
-      exactly lhsTy (metavar-free), so clearing types it to lhsTy in env.\<close>
-  have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv') ghost rhsTm = Some rhsTy"
-    using elab_term_correct(1)[OF erhs wf ee_wf] bound mono_lhs tyvar_fresh_ok_mono by blast
-  have rhs_typedD: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost rhsTm = Some lhsTy"
-    using core_term_type_extend_env_with_tyvars_mono[OF rhs_typed1 mono_lhs le_refl] rhs_ty by simp
-  have rhs_init: "core_term_type env ghost (clear_metavars next_mv next_mv' rhsTm) = Some lhsTy"
-    using clear_metavars_typed_in_env[OF rhs_typedD wf bound lhs_below] .
-  have rhs_wl': "is_writable_lvalue env (clear_metavars next_mv next_mv' rhsTm)"
-    using rhs_wl unfolding clear_metavars_def by simp
-  have rhs_glv': "ghost_lvalue_ok env ghost (clear_metavars next_mv next_mv' rhsTm)"
-    using rhs_glv unfolding clear_metavars_def by simp
-  show ?thesis using lhs_wl' rhs_wl' lhs_glv' rhs_glv' lhs_init rhs_init lhs_cp
+    by (auto split: if_splits)
+  \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
+  have lhs_init: "core_term_type env ghost lhsTm = Some lhsTy"
+    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf] .
+  \<comment> \<open>rhs: typed at the extended env from next_mv1; its type is exactly lhsTy, and it
+      passes the inferred check, so it types to lhsTy in env.\<close>
+  have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using bound mono_lhs tyvar_fresh_ok_mono by blast
+  have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost rhsTm = Some rhsTy"
+    using elab_term_correct(1)[OF erhs wf ee_wf] bound1 by simp
+  have rhs_init: "core_term_type env ghost rhsTm = Some lhsTy"
+    using inferred_term_typed_in_env[OF rhs_typed1 bound1 rhs_inf] rhs_ty by simp
+  show ?thesis using lhs_wl rhs_wl lhs_glv rhs_glv lhs_init rhs_init lhs_cp
     by (simp add: cs_eq env'_eq)
 qed
 
@@ -2273,11 +1926,10 @@ proof -
   from elab tm_eq callee_eq obtain fnName finalTyArgs finalArgTms retTy where
     ec: "elab_impure_call_term ?bodyEnv elabEnv ghost True cloc callee args next_mv
            = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')" and
-    no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)" and
+    inf: "call_inferred env finalTyArgs finalArgTms" and
     cs_eq: "coreStmt = CoreStmt_Block
                          [CoreStmt_VarDeclCall ghost ''call@@tmp'' retTy None fnName
-                            (map (clear_metavars_type next_mv next_mv') finalTyArgs)
-                            (map (clear_metavars next_mv next_mv') finalArgTms)]" and
+                            finalTyArgs finalArgTms]" and
     env'_eq: "env' = env"
     by (auto simp: elab_call_statement_def Let_def
              split: sum.splits prod.splits if_splits)
@@ -2287,23 +1939,16 @@ proof -
   have eeB: "elabenv_well_formed ?bodyEnv elabEnv"
     using ee_wf elabenv_well_formed_cong_env[where env' = ?bodyEnv and env = env] by simp
   have boundB: "\<forall>n. n |\<in>| TE_TypeVars ?bodyEnv \<longrightarrow> tyvar_fresh_ok n next_mv" using bound by simp
-  have no_metaB: "list_all (\<lambda>n. n |\<in>| TE_TypeVars ?bodyEnv) (type_tyvars_list retTy)"
-    using no_meta by simp
-  have rtboundB: "\<forall>n. n |\<in>| TE_RuntimeTypeVars ?bodyEnv \<longrightarrow> tyvar_fresh_ok n next_mv"
-    using wfB boundB unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
-  \<comment> \<open>The call typechecks in bodyEnv's tyvar extension; clear the metavars down to
-      bodyEnv itself (retTy is metavar-free, so the clearing bridge applies).\<close>
+  have infB: "call_inferred ?bodyEnv finalTyArgs finalArgTms"
+    using inf call_inferred_cong_env[of ?bodyEnv env] by simp
+  \<comment> \<open>The call typechecks in bodyEnv's tyvar extension, hence (it passes the inferred
+      check) in bodyEnv itself, with a well-kinded / runtime return type.\<close>
   have ctE: "core_impure_call_type (extend_env_with_tyvars ?bodyEnv ghost next_mv next_mv')
                ghost fnName finalTyArgs finalArgTms = Some retTy"
     using elab_impure_call_term_correct[OF ec wfB eeB boundB] .
-  have wkrt: "is_well_kinded ?bodyEnv retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ?bodyEnv retTy)"
-    using elab_impure_call_term_inferred_type_well_kinded_runtime[OF ec wfB eeB boundB no_metaB] .
-  have retTy_below: "type_tyvars retTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using is_well_kinded_type_tyvars_subset[OF conjunct1[OF wkrt]] boundB by auto
-  have ct: "core_impure_call_type ?bodyEnv ghost fnName
-              (map (clear_metavars_type next_mv next_mv') finalTyArgs)
-              (map (clear_metavars next_mv next_mv') finalArgTms) = Some retTy"
-    using clear_metavars_impure_call_typed_in_env[OF ctE wfB boundB rtboundB retTy_below] .
+  have ct: "core_impure_call_type ?bodyEnv ghost fnName finalTyArgs finalArgTms = Some retTy"
+    and wkrt: "is_well_kinded ?bodyEnv retTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type ?bodyEnv retTy)"
+    using elab_impure_call_term_inferred[OF ec wfB eeB boundB infB] by blast+
   \<comment> \<open>In NotGhost mode the temporary's type (the callee's return type) is complete.\<close>
   have retTy_cp: "ghost = NotGhost \<longrightarrow> is_complete_type retTy"
   proof
@@ -2374,10 +2019,12 @@ proof -
   have elab2: "(case reconcile_call_result env loc finalTyArgs finalArgTms retTy ?retTy of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr (castOpt, tyArgs', argTms') \<Rightarrow>
+                    if \<not> call_inferred env tyArgs' argTms'
+                    then Inl [TyErr_CannotInferType loc]
+                    else
                     Inr (CoreStmt_Block
                            [CoreStmt_VarDeclCall ghost ''return@@tmp'' ?retTy castOpt fnName
-                              (map (clear_metavars_type next_mv next_mv') tyArgs')
-                              (map (clear_metavars next_mv next_mv') argTms'),
+                              tyArgs' argTms',
                             CoreStmt_Return (CoreTm_Var ''return@@tmp'')],
                          env, next_mv'))
                = Inr (coreStmt, env', next_mv')"
@@ -2392,13 +2039,13 @@ proof -
     case (Inr rcres)
     thus ?thesis using that by (cases rcres) auto
   qed
-  have cs_eq: "coreStmt = CoreStmt_Block
+  have inf: "call_inferred env tyArgs' argTms'" and
+    cs_eq: "coreStmt = CoreStmt_Block
                             [CoreStmt_VarDeclCall ghost ''return@@tmp'' ?retTy castOpt fnName
-                               (map (clear_metavars_type next_mv next_mv') tyArgs')
-                               (map (clear_metavars next_mv next_mv') argTms'),
+                               tyArgs' argTms',
                              CoreStmt_Return (CoreTm_Var ''return@@tmp'')]" and
     env'_eq: "env' = env"
-    using elab2 unfolding rcr by auto
+    using elab2 unfolding rcr by (auto split: if_splits)
   \<comment> \<open>The entry invariants transfer to bodyEnv.\<close>
   have wfB: "tyenv_well_formed ?bodyEnv"
     using wf tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
@@ -2426,18 +2073,18 @@ proof -
   have rcrB: "reconcile_call_result ?bodyEnv loc finalTyArgs finalArgTms retTy ?retTy
                 = Inr (castOpt, tyArgs', argTms')"
     using rcr unfolding reconcile_call_result_def by simp
-  \<comment> \<open>The cleared, substituted call typechecks in bodyEnv to a type from which castOpt
+  \<comment> \<open>The inferred check is stated over env, but only looks at TE_TypeVars, which
+      bodyEnv shares with env.\<close>
+  have infB: "call_inferred ?bodyEnv tyArgs' argTms'"
+    using inf call_inferred_cong_env[of ?bodyEnv env] by simp
+  \<comment> \<open>The substituted call typechecks in bodyEnv to a type from which castOpt
       reaches ?retTy (exactly as in elab_vardecl_impure_correct's annotated branch).\<close>
   have main: "\<exists>callRetTy.
-        core_impure_call_type ?bodyEnv ghost fnName
-          (map (clear_metavars_type next_mv next_mv') tyArgs')
-          (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy
+        core_impure_call_type ?bodyEnv ghost fnName tyArgs' argTms' = Some callRetTy
         \<and> cast_result_type ?bodyEnv ghost callRetTy castOpt = Some ?retTy"
-    using reconcile_clear_typed_in_env[OF ctE rcrB wfB boundB wkB rtB] .
+    using reconcile_inferred_typed_in_env[OF ctE rcrB infB wfB boundB wkB rtB] .
   then obtain callRetTy where
-    ct: "core_impure_call_type ?bodyEnv ghost fnName
-           (map (clear_metavars_type next_mv next_mv') tyArgs')
-           (map (clear_metavars next_mv next_mv') argTms') = Some callRetTy" and
+    ct: "core_impure_call_type ?bodyEnv ghost fnName tyArgs' argTms' = Some callRetTy" and
     cast_ok: "cast_result_type ?bodyEnv ghost callRetTy castOpt = Some ?retTy" by blast
   \<comment> \<open>Assemble: the VarDeclCall types the temporary at ?retTy in bodyEnv; the Return
       of the temporary then matches the (unchanged) return type, under the (unchanged)
@@ -2532,7 +2179,7 @@ lemma elab_use_cong_fields:
 
 (* elab_use emits a CoreStmt_Use that typechecks in env to env'. The witness is
    elaborated and coerced (unify-or-integer-cast) to the existential goal's bound-
-   variable type qVarTy, then cleared, so it types to exactly qVarTy in env — the
+   variable type qVarTy (and passes the inferred check), so it types to exactly qVarTy in env — the
    Core Use rule's requirement. qVarTy's well-kindedness comes from the elaborator's
    own (never-failing) guard, not from a well-formedness invariant about the goal. *)
 lemma elab_use_correct:
@@ -2549,18 +2196,22 @@ proof -
     qVarTy_wk: "is_well_kinded env qVarTy" and
     etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, tmTy, next_mv')" and
     coerce: "coerce_term_to_type env loc coreTm tmTy qVarTy = Inr coreTm'" and
-    cs_eq: "coreStmt = CoreStmt_Use (clear_metavars next_mv next_mv' coreTm')" and
+    cs_eq: "coreStmt = CoreStmt_Use coreTm'" and
     env'_eq: "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
     by (auto simp: elab_use_def
              split: CoreTerm.splits Quantifier.splits option.splits sum.splits prod.splits if_splits)
+  \<comment> \<open>The coerced witness passed the inferred check (else the result is Inl).\<close>
+  have inf: "term_inferred env coreTm'"
+    using elab gh goal top qVarTy_wk etm coerce unfolding elab_use_def
+    by (auto split: if_splits)
   \<comment> \<open>The witness types in the extended env.\<close>
   have coreTm_typed: "core_term_type (extend_env_with_tyvars env Ghost next_mv next_mv') Ghost coreTm
                         = Some tmTy"
     using elab_term_correct(1)[OF etm wf ee_wf] bound by simp
   have qVarTy_rt: "Ghost = NotGhost \<longrightarrow> is_runtime_type env qVarTy" by simp
-  \<comment> \<open>The cleared coerced witness types to qVarTy in env (coerce reasoning, Ghost mode).\<close>
-  have witness_typed: "core_term_type env Ghost (clear_metavars next_mv next_mv' coreTm') = Some qVarTy"
-    using coerce_clear_typed_in_env[OF coreTm_typed coerce wf bound qVarTy_wk qVarTy_rt] .
+  \<comment> \<open>The coerced witness types to qVarTy in env (coerce reasoning, Ghost mode).\<close>
+  have witness_typed: "core_term_type env Ghost coreTm' = Some qVarTy"
+    using coerce_inferred_typed_in_env[OF coreTm_typed coerce inf wf bound qVarTy_wk qVarTy_rt] .
   show ?thesis using gh goal top witness_typed by (simp add: cs_eq env'_eq)
 qed
 
@@ -2580,15 +2231,16 @@ next
   from "2.prems" obtain coreInv invTy next_mv1 subst rest where
     etm: "elab_term env elabEnv Ghost invTm next_mv = Inr (coreInv, invTy, next_mv1)" and
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) invTy CoreTy_Bool = Some subst" and
+    inf: "term_inferred env (apply_subst_to_term subst coreInv)" and
     rec: "elab_while_invariants env elabEnv invs next_mv1 = Inr (rest, next_mv')"
-    by (auto split: sum.splits prod.splits option.splits)
+    by (auto split: sum.splits prod.splits option.splits if_splits)
   have "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
-  also have "next_mv1 \<le> next_mv'" using "2.IH" etm unif rec by simp
+  also have "next_mv1 \<le> next_mv'" using "2.IH" etm unif inf rec by simp
   finally show ?case .
 qed
 
-(* Each invariant term elaborated by elab_while_invariants, after clearing, typechecks to
-   Bool in env under Ghost mode — exactly the Assume reasoning, applied per element. *)
+(* Each invariant term elaborated by elab_while_invariants typechecks to Bool in env
+   under Ghost mode — exactly the Assume reasoning, applied per element. *)
 lemma elab_while_invariants_correct:
   "elab_while_invariants env elabEnv invs next_mv = Inr (coreInvars, next_mv') \<Longrightarrow>
    tyenv_well_formed env \<Longrightarrow> elabenv_well_formed env elabEnv \<Longrightarrow>
@@ -2604,9 +2256,10 @@ next
   from "2.prems"(1) obtain coreInv invTy next_mv1 subst rest where
     etm: "elab_term env elabEnv Ghost invTm next_mv = Inr (coreInv, invTy, next_mv1)" and
     unif: "unify ?is_flex invTy CoreTy_Bool = Some subst" and
+    inf: "term_inferred env (apply_subst_to_term subst coreInv)" and
     rec: "elab_while_invariants env elabEnv invs next_mv1 = Inr (rest, next_mv')" and
-    ci_eq: "coreInvars = clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreInv) # rest"
-    by (auto split: sum.splits prod.splits option.splits)
+    ci_eq: "coreInvars = apply_subst_to_term subst coreInv # rest"
+    by (auto split: sum.splits prod.splits option.splits if_splits)
   \<comment> \<open>Head invariant types to Bool in env (Assume reasoning, Ghost mode).\<close>
   let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv1"
   have typed_ghost: "core_term_type ?envD Ghost coreInv = Some invTy"
@@ -2642,41 +2295,39 @@ next
   hence subst_typed_bool:
     "core_term_type ?envD Ghost (apply_subst_to_term subst coreInv) = Some CoreTy_Bool"
     using subst_typed by simp
-  have head_typed: "core_term_type env Ghost
-                      (clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreInv))
-                        = Some CoreTy_Bool"
-    using clear_metavars_typed_in_env[OF subst_typed_bool "2.prems"(2,4)] by simp
+  have head_typed: "core_term_type env Ghost (apply_subst_to_term subst coreInv) = Some CoreTy_Bool"
+    using inferred_term_typed_in_env[OF subst_typed_bool "2.prems"(4) inf] .
   \<comment> \<open>Tail invariants type to Bool via the IH (the tyvar bound lifts to next_mv1).\<close>
   have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1" using "2.prems"(4) nmv1 tyvar_fresh_ok_mono by blast
   have tail_typed: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) rest"
-    using "2.IH" etm unif rec "2.prems"(2,3) bound1 by simp
+    using "2.IH" etm unif inf rec "2.prems"(2,3) bound1 by simp
   show ?case using head_typed tail_typed by (simp add: ci_eq)
 qed
 
 (* elab_while_header only advances the metavariable counter. *)
 lemma elab_while_header_next_mv:
   "elab_while_header env elabEnv ghost loc cond invs decr next_mv
-     = Inr (clearedCond, coreInvars, clearedDecr, next_mv')
+     = Inr (condTm, coreInvars, decrTm, next_mv')
    \<Longrightarrow> next_mv \<le> next_mv'"
   by (auto simp: elab_while_header_def
            dest!: elab_term_next_mv_monotone elab_while_invariants_next_mv
            split: sum.splits prod.splits option.splits if_splits
            intro: order_trans)
 
-(* elab_while_header produces a cleared condition that types to Bool in env (ambient
-   ghost), cleared invariants that each type to Bool in env (Ghost), and a cleared
-   decreases term that types to a valid decreases type in env (Ghost). This bundles the
-   three premises the Core While rule needs (besides the body). *)
+(* elab_while_header produces a condition that types to Bool in env (ambient ghost),
+   invariants that each type to Bool in env (Ghost), and a decreases term that types
+   to a valid decreases type in env (Ghost). This bundles the three premises the
+   Core While rule needs (besides the body). *)
 lemma elab_while_header_correct:
   assumes elab: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
-                   = Inr (clearedCond, coreInvars, clearedDecr, next_mv')"
+                   = Inr (condTm, coreInvars, decrTm, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-  shows "core_term_type env ghost clearedCond = Some CoreTy_Bool
+  shows "core_term_type env ghost condTm = Some CoreTy_Bool
        \<and> list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars
-       \<and> (\<exists>decrTy. core_term_type env Ghost clearedDecr = Some decrTy
+       \<and> (\<exists>decrTy. core_term_type env Ghost decrTm = Some decrTy
                    \<and> is_valid_decreases_type decrTy)"
 proof -
   let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
@@ -2687,11 +2338,17 @@ proof -
     invsE: "elab_while_invariants env elabEnv invs next_mv1 = Inr (coreInvars, next_mv2)" and
     decrE: "elab_term env elabEnv Ghost decr next_mv2 = Inr (coreDecr, decrTy, next_mv')" and
     decr_valid: "is_valid_decreases_type decrTy" and
-    cc_eq: "clearedCond = clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond)" and
-    cd_eq: "clearedDecr = clear_metavars next_mv2 next_mv' coreDecr"
+    cc_eq: "condTm = apply_subst_to_term subst coreCond" and
+    cd_eq: "decrTm = coreDecr"
     by (auto simp: elab_while_header_def
              split: sum.splits prod.splits option.splits if_splits)
-  \<comment> \<open>(1) The cleared condition types to Bool in env (Assume reasoning at ambient ghost).\<close>
+  \<comment> \<open>Both inferred checks passed (else the result is Inl).\<close>
+  have cond_inf: "term_inferred env (apply_subst_to_term subst coreCond)"
+    using elab etm unif unfolding elab_while_header_def by (auto split: if_splits)
+  have decr_inf: "term_inferred env coreDecr"
+    using elab etm unif cond_inf invsE decrE decr_valid unfolding elab_while_header_def
+    by (auto split: if_splits)
+  \<comment> \<open>(1) The condition types to Bool in env (Assume reasoning at ambient ghost).\<close>
   let ?envC = "extend_env_with_tyvars env ghost next_mv next_mv1"
   have cond_typed: "core_term_type ?envC ghost coreCond = Some condTy"
     using elab_term_correct(1)[OF etm wf ee_wf] bound by simp
@@ -2733,28 +2390,23 @@ proof -
   hence subst_typed_bool:
     "core_term_type ?envC ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
     using subst_typed by simp
-  have cond_bool: "core_term_type env ghost clearedCond = Some CoreTy_Bool"
-    using clear_metavars_typed_in_env[OF subst_typed_bool wf bound] cc_eq by simp
+  have cond_bool: "core_term_type env ghost condTm = Some CoreTy_Bool"
+    using inferred_term_typed_in_env[OF subst_typed_bool bound cond_inf] cc_eq by simp
   \<comment> \<open>Lift the tyvar bound across the cond / invariant intervals.\<close>
   have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1" using bound nmv1 tyvar_fresh_ok_mono by blast
   have nmv2: "next_mv1 \<le> next_mv2" using elab_while_invariants_next_mv[OF invsE] .
   have bound2: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv2" using bound1 nmv2 tyvar_fresh_ok_mono by blast
-  \<comment> \<open>(2) Each cleared invariant types to Bool in env (Ghost mode).\<close>
+  \<comment> \<open>(2) Each invariant types to Bool in env (Ghost mode).\<close>
   have inv_bool: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars"
     using elab_while_invariants_correct[OF invsE wf ee_wf bound1] .
-  \<comment> \<open>(3) The cleared decreases term types to decrTy (a valid decreases type) in env (Ghost).\<close>
+  \<comment> \<open>(3) The decreases term types to decrTy (a valid decreases type) in env (Ghost).\<close>
   let ?envD = "extend_env_with_tyvars env Ghost next_mv2 next_mv'"
   have decr_typed: "core_term_type ?envD Ghost coreDecr = Some decrTy"
     using elab_term_correct(1)[OF decrE wf ee_wf] bound2 by simp
-  have wfD: "tyenv_well_formed ?envD" using wf tyenv_well_formed_extend_env_with_tyvars by blast
-  \<comment> \<open>decrTy is a valid decreases type, hence has no type variables, so clearing the term's
-      interval metavariables leaves the type unchanged.\<close>
-  have decrTy_below: "type_tyvars decrTy \<subseteq> {n. tyvar_fresh_ok n next_mv2}"
-    using is_valid_decreases_type_no_tyvars[OF decr_valid] by simp
-  have decr_cleared: "core_term_type env Ghost clearedDecr = Some decrTy"
-    using clear_metavars_typed_in_env[OF decr_typed wf bound2 decrTy_below] cd_eq by simp
-  show ?thesis using cond_bool inv_bool decr_cleared decr_valid by blast
+  have decr_in_env: "core_term_type env Ghost decrTm = Some decrTy"
+    using inferred_term_typed_in_env[OF decr_typed bound2 decr_inf] cd_eq by simp
+  show ?thesis using cond_bool inv_bool decr_in_env decr_valid by blast
 qed
 
 
@@ -2763,28 +2415,38 @@ qed
 (* ========================================================================== *)
 
 (* elab_match_stmt_scrut consumes exactly one counter value (hi becomes the
-   match@@n suffix). Proved by explicit case analysis on the two Inr branches,
-   to keep the simplifier away from the unfolded Let-duplicated terms. *)
+   match@@n suffix). Proved by explicit case analysis on the inferred check and
+   the two Inr branches, to keep the simplifier away from the unfolded
+   Let-duplicated terms. *)
 lemma elab_match_stmt_scrut_next_mv:
-  assumes "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps
+  assumes "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
             = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)"
   shows "mvOut = hi + 1"
-proof (cases "is_lvalue (clear_metavars lo hi (apply_subst_to_term accSubst scrutTm))
-              \<and> ghost_lvalue_ok env ghost (clear_metavars lo hi (apply_subst_to_term accSubst scrutTm))")
-  case True
+proof (cases "term_inferred env (apply_subst_to_term accSubst scrutTm)")
+  case False
   thus ?thesis using assms unfolding elab_match_stmt_scrut_def Let_def
     by (simp del: nat_to_string.simps)
 next
-  case False
+  case True
+  note inf = True
   show ?thesis
-  proof (cases "filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps)")
-    case Nil
-    thus ?thesis using assms False unfolding elab_match_stmt_scrut_def Let_def
+  proof (cases "is_lvalue (apply_subst_to_term accSubst scrutTm)
+                \<and> ghost_lvalue_ok env ghost (apply_subst_to_term accSubst scrutTm)")
+    case True
+    thus ?thesis using assms inf unfolding elab_match_stmt_scrut_def Let_def
       by (simp del: nat_to_string.simps)
   next
-    case (Cons b rest)
-    thus ?thesis using assms False unfolding elab_match_stmt_scrut_def Let_def
-      by (cases b) (auto simp del: nat_to_string.simps)
+    case False
+    show ?thesis
+    proof (cases "filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps)")
+      case Nil
+      thus ?thesis using assms inf False unfolding elab_match_stmt_scrut_def Let_def
+        by (simp del: nat_to_string.simps)
+    next
+      case (Cons b rest)
+      thus ?thesis using assms inf False unfolding elab_match_stmt_scrut_def Let_def
+        by (cases b) (auto simp del: nat_to_string.simps)
+    qed
   qed
 qed
 
@@ -2870,14 +2532,14 @@ next
   proof (cases "is_impure_call env elabEnv rhs")
     case True
     with "5.prems" lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')"
       by (auto split: if_splits)
     thus ?thesis using mono_lhs elab_assign_impure_next_mv[OF _ True] by fastforce
   next
     case False
     with "5.prems" lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')"
       by (auto split: if_splits)
     thus ?thesis using mono_lhs elab_assign_pure_next_mv by fastforce
@@ -2891,7 +2553,7 @@ next
     by (auto split: sum.splits prod.splits)
   have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
   from "6.prems" lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
           = Inr (coreStmt, env', next_mv')"
     by (auto split: if_splits)
   thus ?case using mono_lhs elab_swap_next_mv by fastforce
@@ -2925,15 +2587,15 @@ next
     with "8.prems" obtain coreCond condTy next_mv1 subst coreBody benv where
       etm: "elab_term env elabEnv Ghost cond next_mv = Inr (coreCond, condTy, next_mv1)" and
       unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool = Some subst" and
+      inf: "term_inferred env (apply_subst_to_term subst coreCond)" and
       body: "elab_statement_list
-               (env \<lparr> TE_ProofGoal := Some (clear_metavars next_mv next_mv1
-                                              (apply_subst_to_term subst coreCond)),
+               (env \<lparr> TE_ProofGoal := Some (apply_subst_to_term subst coreCond),
                       TE_ProofTopLevel := True \<rparr>)
                elabEnv Ghost proofBody next_mv1 = Inr (coreBody, benv, next_mv')"
-      by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+      by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
     have mono1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
     have mono2: "next_mv1 \<le> next_mv'"
-      using "8.IH"(2) Some etm unif body by simp
+      using "8.IH"(2) Some etm unif inf body by simp
     from mono1 mono2 show ?thesis by simp
   qed
 next
@@ -2949,14 +2611,15 @@ next
   from "10.prems" obtain coreCond condTy next_mv1 subst coreThen tenv next_mv2 coreElse eenv where
     etm: "elab_term env elabEnv ghost cond next_mv = Inr (coreCond, condTy, next_mv1)" and
     unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool = Some subst" and
+    inf: "term_inferred env (apply_subst_to_term subst coreCond)" and
     thenE: "elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>) elabEnv ghost thenB next_mv1
               = Inr (coreThen, tenv, next_mv2)" and
     elseE: "elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>) elabEnv ghost elseB next_mv2
               = Inr (coreElse, eenv, next_mv')"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
   have m1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
-  have m2: "next_mv1 \<le> next_mv2" using "10.IH"(1) etm unif thenE by simp
-  have m3: "next_mv2 \<le> next_mv'" using "10.IH"(2) etm unif thenE elseE by simp
+  have m2: "next_mv1 \<le> next_mv2" using "10.IH"(1) etm unif inf thenE by simp
+  have m3: "next_mv2 \<le> next_mv'" using "10.IH"(2) etm unif inf thenE elseE by simp
   from m1 m2 m3 show ?case by simp
 next
   \<comment> \<open>While: the header (cond / invariants / decreases) advances next_mv to next_mv3, then
@@ -2966,9 +2629,9 @@ next
   from "11.prems" obtain invs decr where
     attrs_ok: "collect_while_attributes loc attrs = Inr (invs, [decr])"
     by (cases "collect_while_attributes loc attrs") (auto split: prod.splits list.splits)
-  from "11.prems" attrs_ok obtain clearedCond coreInvars clearedDecr next_mv3 where
+  from "11.prems" attrs_ok obtain condTm coreInvars decrTm next_mv3 where
     hdr: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
-            = Inr (clearedCond, coreInvars, clearedDecr, next_mv3)"
+            = Inr (condTm, coreInvars, decrTm, next_mv3)"
     by (cases "elab_while_header env elabEnv ghost loc cond invs decr next_mv")
        (auto split: prod.splits)
   from "11.prems" attrs_ok hdr obtain coreBody benv where
@@ -3000,7 +2663,7 @@ next
     by (auto simp: Let_def split: sum.splits)
   from "13.prems" arms_ne elab_scrut dec_eq
   obtain scrut' scrutTy' mode freshName writable envAfterFresh mv3 where
-    scrut_fin: "elab_match_stmt_scrut env ghost loc accSubst next_mv mv2
+    scrut_fin: "elab_match_stmt_scrut env ghost loc accSubst mv2
                   scrutTm scrutTy (map fst decoratedRows)
                 = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3)"
     by (auto simp: Let_def split: sum.splits)
@@ -3157,13 +2820,13 @@ next
   proof (cases "is_impure_call env elabEnv rhs")
     case True
     with "5.prems"(1) lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis using elab_assign_impure_env[OF _ True] by simp
   next
     case False
     with "5.prems"(1) lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis using elab_assign_pure_env by simp
   qed
@@ -3175,7 +2838,7 @@ next
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
     by (auto split: sum.splits prod.splits)
   from "6.prems"(1) lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
           = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
   hence "env' = env" using elab_swap_env by simp
   thus ?case by simp
@@ -3202,7 +2865,7 @@ next
       four tracked fields are trivially unchanged.\<close>
   case (10 env elabEnv ghost loc cond thenB elseB next_mv)
   show ?case using "10.prems"(1)
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
 next
   \<comment> \<open>While: env' = env in every success path (the body env is discarded), so all four
       tracked fields are trivially unchanged.\<close>
@@ -3370,13 +3033,13 @@ next
   proof (cases "is_impure_call env elabEnv rhs")
     case True
     with "5.prems"(1) lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis using elab_assign_impure_env[OF _ True] by simp
   next
     case False
     with "5.prems"(1) lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis using elab_assign_pure_env by simp
   qed
@@ -3388,7 +3051,7 @@ next
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
     by (auto split: sum.splits prod.splits)
   from "6.prems"(1) lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
           = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
   hence "env' = env" using elab_swap_env by simp
   thus ?case using "6.prems"(2) by simp
@@ -3416,7 +3079,7 @@ next
   \<comment> \<open>If: env unchanged (the per-branch envs are discarded).\<close>
   case (10 env elabEnv ghost loc cond thenB elseB next_mv)
   from "10.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
   thus ?case using "10.prems"(2) by simp
 next
   \<comment> \<open>While: env unchanged (the body env is discarded).\<close>
@@ -3625,13 +3288,13 @@ next
   proof (cases "is_impure_call env elabEnv rhs")
     case True
     with "5.prems"(1) lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis using elab_assign_impure_env[OF _ True] by simp
   next
     case False
     with "5.prems"(1) lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis using elab_assign_pure_env by simp
   qed
@@ -3643,7 +3306,7 @@ next
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
     by (auto split: sum.splits prod.splits)
   from "6.prems"(1) lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
           = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
   hence "env' = env" using elab_swap_env by simp
   thus ?case using "6.prems"(2) by simp
@@ -3671,7 +3334,7 @@ next
   \<comment> \<open>If: env unchanged (the per-branch envs are discarded).\<close>
   case (10 env elabEnv ghost loc cond thenB elseB next_mv)
   from "10.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits)
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
   thus ?case using "10.prems"(2) by simp
 next
   \<comment> \<open>While: env unchanged (the body env is discarded).\<close>
@@ -3889,10 +3552,10 @@ qed
 
 (* Characterization of a successful elab_match_stmt_scrut. *)
 lemma elab_match_stmt_scrut_facts:
-  assumes "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps
+  assumes "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
             = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)"
-  shows "scrut' = clear_metavars lo hi (apply_subst_to_term accSubst scrutTm)"
-    and "scrutTy' = clear_metavars_type lo hi (apply_subst accSubst scrutTy)"
+  shows "scrut' = apply_subst_to_term accSubst scrutTm"
+    and "scrutTy' = apply_subst accSubst scrutTy"
     and "writable = is_writable_lvalue env scrut'"
     and "mode = (if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut' then Ref else Var)"
     and "envAfterFresh
@@ -3903,12 +3566,17 @@ lemma elab_match_stmt_scrut_facts:
     and "mode = Var \<Longrightarrow>
            filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = []"
     and "mode = Ref \<Longrightarrow> is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'"
+    and "term_inferred env scrut'"
 proof -
-  let ?s = "clear_metavars lo hi (apply_subst_to_term accSubst scrutTm)"
-  let ?t = "clear_metavars_type lo hi (apply_subst accSubst scrutTy)"
+  let ?s = "apply_subst_to_term accSubst scrutTm"
+  let ?t = "apply_subst accSubst scrutTy"
   let ?f = "''match@@'' @ nat_to_string hi"
   let ?w = "is_writable_lvalue env ?s"
   let ?refOk = "is_lvalue ?s \<and> ghost_lvalue_ok env ghost ?s"
+  \<comment> \<open>The inferred check passed (otherwise the result would be Inl).\<close>
+  have inf: "term_inferred env ?s"
+    using assms unfolding elab_match_stmt_scrut_def Let_def
+    by (cases "term_inferred env ?s") (simp_all del: nat_to_string.simps)
   have outcome:
     "scrut' = ?s \<and> scrutTy' = ?t \<and> freshName = ?f \<and> writable = ?w
      \<and> mode = (if ?refOk then Ref else Var)
@@ -3921,13 +3589,13 @@ proof -
           filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = [])"
   proof (cases ?refOk)
     case True
-    have red: "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps
+    have red: "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
                  = Inr (?s, ?t, Ref, ?f, ?w,
                         (vardecl_add_local env ghost ?f ?t)
                           \<lparr> TE_ConstLocals := (if ?w then fminus (TE_ConstLocals env) {|?f|}
                                                else finsert ?f (TE_ConstLocals env)) \<rparr>,
                         hi + 1)"
-      using True unfolding elab_match_stmt_scrut_def Let_def
+      using True inf unfolding elab_match_stmt_scrut_def Let_def
       by (simp del: nat_to_string.simps)
     have inr_eq:
       "(scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)
@@ -3944,9 +3612,9 @@ proof -
     show ?thesis
     proof (cases "filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps)")
       case Nil
-      have red: "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps
+      have red: "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
                    = Inr (?s, ?t, Var, ?f, ?w, vardecl_add_local env ghost ?f ?t, hi + 1)"
-        using False Nil unfolding elab_match_stmt_scrut_def Let_def
+        using False inf Nil unfolding elab_match_stmt_scrut_def Let_def
         by (simp del: nat_to_string.simps)
       have inr_eq:
         "(scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)
@@ -3962,7 +3630,7 @@ proof -
         by (cases ghost) (auto simp add: vardecl_add_local_def simp del: nat_to_string.simps)
     next
       case (Cons b rest)
-      thus ?thesis using assms False unfolding elab_match_stmt_scrut_def Let_def
+      thus ?thesis using assms False inf unfolding elab_match_stmt_scrut_def Let_def
         by (cases b) (auto simp del: nat_to_string.simps)
     qed
   qed
@@ -3983,6 +3651,8 @@ proof -
     using outcome by (auto split: if_splits simp del: nat_to_string.simps)
   show "mode = Ref \<Longrightarrow> is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'"
     using outcome by (auto split: if_splits simp del: nat_to_string.simps)
+  show "term_inferred env scrut'"
+    using inf outcome by (simp del: nat_to_string.simps)
 qed
 
 (* Characterization of a successful finalize_match_stmt: the assembled
@@ -4391,8 +4061,8 @@ next
     etm: "elab_term (vardecl_add_local env Ghost varName coreTy) elabEnv Ghost tm next_mv
             = Inr (coreTm, condTy, next_mv')" and
     unif: "unify ?is_flex condTy CoreTy_Bool = Some subst" and
-    cs_eq: "coreStmt = CoreStmt_Obtain varName coreTy
-                         (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))" and
+    inf: "term_inferred env (apply_subst_to_term subst coreTm)" and
+    cs_eq: "coreStmt = CoreStmt_Obtain varName coreTy (apply_subst_to_term subst coreTm)" and
     env'_eq: "env' = vardecl_add_local env Ghost varName coreTy"
     by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
   \<comment> \<open>coreTy is well-kinded (Ghost-mode elaboration of the annotation).\<close>
@@ -4447,10 +4117,12 @@ next
   hence subst_typed_bool:
     "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
     using subst_typed by simp
-  have cond_typed: "core_term_type ?eo Ghost
-                      (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))
-                        = Some CoreTy_Bool"
-    using clear_metavars_typed_in_env[OF subst_typed_bool wf_obtain bound_obtain] by simp
+  \<comment> \<open>The inferred check is stated over env, but only looks at TE_TypeVars, which
+      env_obtain shares with env.\<close>
+  have inf_obtain: "term_inferred ?eo (apply_subst_to_term subst coreTm)"
+    using inf term_inferred_cong_env[of ?eo env] by simp
+  have cond_typed: "core_term_type ?eo Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
+    using inferred_term_typed_in_env[OF subst_typed_bool bound_obtain inf_obtain] .
   \<comment> \<open>Assemble the Core Obtain rule: is_well_kinded env coreTy plus the Bool-typed
       predicate under env_obtain, which is definitionally the rule's result env.\<close>
   show ?case using wk cond_typed
@@ -4464,59 +4136,52 @@ next
                             = Inr (coreStmt, env', next_mv')" by simp
   thus ?case using elab_use_correct[OF _ "4.prems"(2,3,4)] by simp
 next
-  \<comment> \<open>Assign: elaborate the lhs (a writable lvalue of a metavar-free type), then
-      dispatch the rhs to the pure or impure Assign helper.\<close>
+  \<comment> \<open>Assign: elaborate the lhs (a writable lvalue), then dispatch the rhs to the
+      pure or impure Assign helper (which also checks the whole statement for
+      unresolved metavariables).\<close>
   case (5 env elabEnv ghost loc lhs rhs next_mv)
   from "5.prems"(1) obtain lhsTm lhsTy next_mv1 where
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)" and
     lhs_wl: "is_writable_lvalue env lhsTm" and
-    lhs_glv: "ghost_lvalue_ok env ghost lhsTm" and
-    lhs_no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)"
+    lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
     by (auto split: sum.splits prod.splits if_splits)
   have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
   have lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     using elab_term_correct(1)[OF lhs_elab "5.prems"(2,3)] "5.prems"(4) by simp
-  have lhs_below: "type_tyvars lhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using lhs_no_meta "5.prems"(4)
-    by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
   show ?case
   proof (cases "is_impure_call env elabEnv rhs")
     case True
-    with "5.prems"(1) lhs_elab lhs_wl lhs_glv lhs_no_meta
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    with "5.prems"(1) lhs_elab lhs_wl lhs_glv
+    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis
-      using elab_assign_impure_correct[OF _ True lhs_typed lhs_wl lhs_glv lhs_below mono_lhs "5.prems"(2,3,4)] by simp
+      using elab_assign_impure_correct[OF _ True lhs_typed lhs_wl lhs_glv mono_lhs "5.prems"(2,3,4)] by simp
   next
     case False
-    with "5.prems"(1) lhs_elab lhs_wl lhs_glv lhs_no_meta
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+    with "5.prems"(1) lhs_elab lhs_wl lhs_glv
+    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
             = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
     thus ?thesis
-      using elab_assign_pure_correct[OF _ lhs_typed lhs_wl lhs_glv lhs_below mono_lhs "5.prems"(2,3,4)] by simp
+      using elab_assign_pure_correct[OF _ lhs_typed lhs_wl lhs_glv mono_lhs "5.prems"(2,3,4)] by simp
   qed
 next
-  \<comment> \<open>Swap: elaborate the lhs (a writable lvalue of a metavar-free type) exactly as in
-      Assign, then hand off to elab_swap, which elaborates the rhs and requires it to be
-      a writable lvalue of the same (exact) type.\<close>
+  \<comment> \<open>Swap: elaborate the lhs (a writable lvalue) exactly as in Assign, then hand off
+      to elab_swap, which elaborates the rhs and requires it to be a writable lvalue
+      of the same (exact) type (and checks the statement for unresolved metavariables).\<close>
   case (6 env elabEnv ghost loc lhs rhs next_mv)
   from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
     lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)" and
     lhs_wl: "is_writable_lvalue env lhsTm" and
-    lhs_glv: "ghost_lvalue_ok env ghost lhsTm" and
-    lhs_no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)"
+    lhs_glv: "ghost_lvalue_ok env ghost lhsTm"
     by (auto split: sum.splits prod.splits if_splits)
   have mono_lhs: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF lhs_elab] .
   have lhs_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv1) ghost lhsTm = Some lhsTy"
     using elab_term_correct(1)[OF lhs_elab "6.prems"(2,3)] "6.prems"(4) by simp
-  have lhs_below: "type_tyvars lhsTy \<subseteq> {n. tyvar_fresh_ok n next_mv}"
-    using lhs_no_meta "6.prems"(4)
-    by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-  from "6.prems"(1) lhs_elab lhs_wl lhs_glv lhs_no_meta
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
+  from "6.prems"(1) lhs_elab lhs_wl lhs_glv
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
           = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
   thus ?case
-    using elab_swap_correct[OF _ lhs_typed lhs_wl lhs_glv lhs_below mono_lhs "6.prems"(2,3,4)] by simp
+    using elab_swap_correct[OF _ lhs_typed lhs_wl lhs_glv mono_lhs "6.prems"(2,3,4)] by simp
 next
   \<comment> \<open>Return: env' = env. The elaborator's guard gives ghost = TE_FunctionGhost env
       (the Core rule's first obligation). In a void function the only success is a
@@ -4525,8 +4190,8 @@ next
       non-void function an impure-call value is delegated to elab_return_impure_correct
       (a block binding the call result to a temporary at the return type, then
       returning it); a pure value is elaborated and coerced to TE_ReturnType env (which
-      is metavar-free), then cleared - identical to elab_assign_pure_correct's coerce
-      step, retargeted at the return type.\<close>
+      is metavar-free) and checked for unresolved metavariables - identical to
+      elab_assign_pure_correct's coerce step, retargeted at the return type.\<close>
   case (7 env elabEnv ghost loc tmOpt next_mv)
   let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
   \<comment> \<open>The elaborator only succeeds when ghost matches the function-ghost flag.\<close>
@@ -4562,13 +4227,34 @@ next
       show ?thesis using elab_return_impure_correct[OF eri gh "7.prems"(2,3,4)] .
     next
       case notimp: False
-      from "7.prems"(1) gh False where_some notimp obtain coreTm tmTy coreTm' where
-      etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, tmTy, next_mv')" and
-      coerce: "coerce_term_to_type env loc coreTm tmTy (TE_ReturnType env) = Inr coreTm'" and
-      cs_eq: "coreStmt = CoreStmt_Return (clear_metavars next_mv next_mv' coreTm')" and
-      env'_eq: "env' = env"
-      by (auto split: sum.splits prod.splits)
       let ?retTy = "TE_ReturnType env"
+      \<comment> \<open>Peel the elaborator clause one step at a time: reduce the guards first,
+          then the two cases, then the inferred check.\<close>
+      have elab2: "(case elab_term env elabEnv ghost tm next_mv of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (coreTm, tmTy, next_mv2) \<Rightarrow>
+                        (case coerce_term_to_type env loc coreTm tmTy ?retTy of
+                           Inl errs \<Rightarrow> Inl errs
+                         | Inr coreTm' \<Rightarrow>
+                             if \<not> term_inferred env coreTm'
+                             then Inl [TyErr_CannotInferType loc]
+                             else Inr (CoreStmt_Return coreTm', env, next_mv2)))
+                   = Inr (coreStmt, env', next_mv')"
+        using "7.prems"(1) gh False where_some notimp by simp
+      from elab2 obtain coreTm tmTy next_mv2 where
+        etm0: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, tmTy, next_mv2)"
+        by (auto split: sum.splits prod.splits)
+      from elab2 obtain coreTm' where
+        coerce: "coerce_term_to_type env loc coreTm tmTy ?retTy = Inr coreTm'"
+        unfolding etm0 by (cases "coerce_term_to_type env loc coreTm tmTy ?retTy") auto
+      from elab2 have
+        inf: "term_inferred env coreTm'" and
+        cs_eq: "coreStmt = CoreStmt_Return coreTm'" and
+        env'_eq: "env' = env" and
+        nmv: "next_mv' = next_mv2"
+        by (auto simp: etm0 coerce split: if_splits)
+      have etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, tmTy, next_mv')"
+        using etm0 nmv by simp
       \<comment> \<open>The return type is well-kinded in env (so metavar-free) and, via gh and the
           tyenv_return_type_runtime well-formedness clause, runtime in NotGhost mode.\<close>
       have retTy_wk: "is_well_kinded env ?retTy"
@@ -4584,9 +4270,9 @@ next
       have coreTm_typed: "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost coreTm
                             = Some tmTy"
         using elab_term_correct(1)[OF etm "7.prems"(2,3)] "7.prems"(4) by simp
-      \<comment> \<open>The cleared coerced term types to the return type in env (coerce reasoning).\<close>
-      have init_typed: "core_term_type env ghost (clear_metavars next_mv next_mv' coreTm') = Some ?retTy"
-        using coerce_clear_typed_in_env[OF coreTm_typed coerce "7.prems"(2,4) retTy_wk retTy_rt] .
+      \<comment> \<open>The coerced term types to the return type in env (coerce reasoning).\<close>
+      have init_typed: "core_term_type env ghost coreTm' = Some ?retTy"
+        using coerce_inferred_typed_in_env[OF coreTm_typed coerce inf "7.prems"(2,4) retTy_wk retTy_rt] .
       show ?thesis using gh init_typed by (simp add: cs_eq env'_eq)
     qed
   qed
@@ -4594,7 +4280,7 @@ next
   \<comment> \<open>Assert: emits CoreStmt_Assert with env' = env. The asserted condition (if any)
       is elaborated and coerced to Bool exactly as in Assume, so it typechecks in env
       under Ghost mode (giving condOk). The proof body is elaborated in Ghost mode under
-      goalEnv = env with TE_ProofGoal set to the (cleared) condition / kept as-is, and
+      goalEnv = env with TE_ProofGoal set to the (substituted) condition / kept as-is, and
       TE_ProofTopLevel := True — definitionally the Core rule's goalEnv. The list IH,
       whose two ambient invariants are trivial/vacuous in Ghost mode, certifies the body.\<close>
   case (8 env elabEnv ghost loc condOpt proofBody next_mv)
@@ -4634,16 +4320,19 @@ next
     from "8.prems"(1) Some etm obtain subst where
       unif: "unify ?is_flex condTy CoreTy_Bool = Some subst"
       by (cases "unify ?is_flex condTy CoreTy_Bool") auto
-    let ?clearedCond0 = "clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond)"
-    let ?goalEnv0 = "env \<lparr> TE_ProofGoal := Some ?clearedCond0, TE_ProofTopLevel := True \<rparr>"
-    from "8.prems"(1) Some etm unif obtain coreBody benv where
-      cs_eq: "coreStmt = CoreStmt_Assert (Some ?clearedCond0) coreBody" and
+    let ?cond0 = "apply_subst_to_term subst coreCond"
+    let ?goalEnv0 = "env \<lparr> TE_ProofGoal := Some ?cond0, TE_ProofTopLevel := True \<rparr>"
+    \<comment> \<open>The substituted condition passed the inferred check (else the result is Inl).\<close>
+    from "8.prems"(1) Some etm unif have inf: "term_inferred env ?cond0"
+      by (auto split: if_splits)
+    from "8.prems"(1) Some etm unif inf obtain coreBody benv where
+      cs_eq: "coreStmt = CoreStmt_Assert (Some ?cond0) coreBody" and
       env'_eq: "env' = env" and
       body: "elab_statement_list ?goalEnv0 elabEnv Ghost proofBody next_mv1
                = Inr (coreBody, benv, next_mv')"
       by (cases "elab_statement_list ?goalEnv0 elabEnv Ghost proofBody next_mv1")
          (auto simp: Let_def split: prod.splits)
-    \<comment> \<open>The cleared condition typechecks to Bool in env under Ghost mode (Assume reasoning).\<close>
+    \<comment> \<open>The condition typechecks to Bool in env under Ghost mode (Assume reasoning).\<close>
     let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv1"
     have typed_ghost: "core_term_type ?envD Ghost coreCond = Some condTy"
       using elab_term_correct(1)[OF etm "8.prems"(2,3)] "8.prems"(4) by simp
@@ -4678,9 +4367,9 @@ next
     hence subst_typed_bool:
       "core_term_type ?envD Ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
       using subst_typed by simp
-    have cond_typed: "core_term_type env Ghost ?clearedCond0 = Some CoreTy_Bool"
-      using clear_metavars_typed_in_env[OF subst_typed_bool "8.prems"(2,4)] by simp
-    \<comment> \<open>goalEnv0 = env with the cleared condition installed; premises for the list IH.\<close>
+    have cond_typed: "core_term_type env Ghost ?cond0 = Some CoreTy_Bool"
+      using inferred_term_typed_in_env[OF subst_typed_bool "8.prems"(4) inf] .
+    \<comment> \<open>goalEnv0 = env with the condition installed; premises for the list IH.\<close>
     have wf_goal: "tyenv_well_formed ?goalEnv0"
       using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF
               tyenv_well_formed_TE_ProofGoal_irrelevant[OF "8.prems"(2)]] by simp
@@ -4689,7 +4378,7 @@ next
     have bound_goal: "\<forall>n. n |\<in>| TE_TypeVars ?goalEnv0 \<longrightarrow> tyvar_fresh_ok n next_mv1"
       using "8.prems"(4) elab_term_next_mv_monotone[OF etm] tyvar_fresh_ok_mono by (auto simp del: tyvar_fresh_ok_mv_name)
     have body_typed: "core_statement_list_type ?goalEnv0 Ghost coreBody = Some benv"
-      using "8.IH"(2) Some etm unif wf_goal ee_goal bound_goal body by simp
+      using "8.IH"(2) Some etm unif inf wf_goal ee_goal bound_goal body by simp
     \<comment> \<open>Assemble the Core Assert rule: condOk = cond typechecks to Bool; body under goalEnv.\<close>
     show ?thesis using cond_typed body_typed by (simp add: cs_eq env'_eq Some Let_def)
   qed
@@ -4702,13 +4391,22 @@ next
   case (9 env elabEnv ghost loc tm next_mv)
   let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv'"
   let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
-  from "9.prems"(1) obtain coreTm condTy subst where
-    etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, condTy, next_mv')" and
-    unif: "unify ?is_flex condTy CoreTy_Bool = Some subst" and
-    cs_eq: "coreStmt = CoreStmt_Assume
-                         (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))" and
-    env'_eq: "env' = env"
-    by (auto split: sum.splits prod.splits option.splits if_splits)
+  \<comment> \<open>Peel the elaborator clause one step at a time: the elaborated term, the
+      unifier, then the inferred check and the result equations.\<close>
+  from "9.prems"(1) obtain coreTm condTy next_mv2 where
+    etm0: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, condTy, next_mv2)"
+    by (auto split: sum.splits prod.splits)
+  from "9.prems"(1) etm0 obtain subst where
+    unif: "unify ?is_flex condTy CoreTy_Bool = Some subst"
+    by (cases "unify ?is_flex condTy CoreTy_Bool") auto
+  from "9.prems"(1) have
+    inf: "term_inferred env (apply_subst_to_term subst coreTm)" and
+    cs_eq: "coreStmt = CoreStmt_Assume (apply_subst_to_term subst coreTm)" and
+    env'_eq: "env' = env" and
+    nmv: "next_mv' = next_mv2"
+    by (auto simp: etm0 unif split: if_splits)
+  have etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, condTy, next_mv')"
+    using etm0 nmv by simp
   have typed_ghost: "core_term_type ?envD Ghost coreTm = Some condTy"
     using elab_term_correct(1)[OF etm "9.prems"(2,3)] "9.prems"(4) by simp
   have wfD: "tyenv_well_formed ?envD"
@@ -4744,16 +4442,14 @@ next
   hence subst_typed_bool:
     "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
     using subst_typed by simp
-  have init_typed: "core_term_type env Ghost
-                      (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm))
-                        = Some CoreTy_Bool"
-    using clear_metavars_typed_in_env[OF subst_typed_bool "9.prems"(2,4)] by simp
+  have init_typed: "core_term_type env Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
+    using inferred_term_typed_in_env[OF subst_typed_bool "9.prems"(4) inf] .
   show ?case using init_typed by (simp add: cs_eq env'_eq)
 next
   \<comment> \<open>If: desugars to a CoreStmt_Match on the condition with a True arm (the then-block)
       and a False arm (the else-block). env' = env (the Core Match rule discards the
       per-arm scopes and returns the entry env). Three obligations for the Core Match
-      rule: (a) the scrutinee (cleared condition) typechecks to Bool in env under the
+      rule: (a) the scrutinee (substituted condition) typechecks to Bool in env under the
       ambient ghost mode — exactly the Assume reasoning, retargeted from Ghost to the
       ambient ghost; (b) both patterns are Bool-compatible — immediate, since the
       scrutinee is Bool; (c) each block typechecks as a statement list under
@@ -4769,21 +4465,24 @@ next
   from "10.prems"(1) etm obtain subst where
     unif: "unify ?is_flex condTy CoreTy_Bool = Some subst"
     by (cases "unify ?is_flex condTy CoreTy_Bool") auto
-  let ?clearedCond = "clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond)"
-  from "10.prems"(1) etm unif obtain coreThen tenv next_mv2 where
+  let ?cond = "apply_subst_to_term subst coreCond"
+  \<comment> \<open>The substituted condition passed the inferred check (else the result is Inl).\<close>
+  from "10.prems"(1) etm unif have inf: "term_inferred env ?cond"
+    by (auto split: if_splits)
+  from "10.prems"(1) etm unif inf obtain coreThen tenv next_mv2 where
     thenE: "elab_statement_list ?armEnv elabEnv ghost thenB next_mv1
               = Inr (coreThen, tenv, next_mv2)"
     by (cases "elab_statement_list ?armEnv elabEnv ghost thenB next_mv1")
        (auto simp: Let_def split: prod.splits)
-  from "10.prems"(1) etm unif thenE obtain coreElse eenv where
+  from "10.prems"(1) etm unif inf thenE obtain coreElse eenv where
     elseE: "elab_statement_list ?armEnv elabEnv ghost elseB next_mv2
               = Inr (coreElse, eenv, next_mv')" and
-    cs_eq: "coreStmt = CoreStmt_Match ghost ?clearedCond
+    cs_eq: "coreStmt = CoreStmt_Match ghost ?cond
                          [(CorePat_Bool True, coreThen), (CorePat_Bool False, coreElse)]" and
     env'_eq: "env' = env"
     by (cases "elab_statement_list ?armEnv elabEnv ghost elseB next_mv2")
        (auto simp: Let_def split: prod.splits)
-  \<comment> \<open>(a) The cleared condition typechecks to Bool in env (Assume reasoning at ambient ghost).\<close>
+  \<comment> \<open>(a) The condition typechecks to Bool in env (Assume reasoning at ambient ghost).\<close>
   let ?envD = "extend_env_with_tyvars env ghost next_mv next_mv1"
   have typed_amb: "core_term_type ?envD ghost coreCond = Some condTy"
     using elab_term_correct(1)[OF etm "10.prems"(2,3)] "10.prems"(4) by simp
@@ -4826,8 +4525,8 @@ next
   hence subst_typed_bool:
     "core_term_type ?envD ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
     using subst_typed by simp
-  have scrut_typed: "core_term_type env ghost ?clearedCond = Some CoreTy_Bool"
-    using clear_metavars_typed_in_env[OF subst_typed_bool "10.prems"(2,4)] by simp
+  have scrut_typed: "core_term_type env ghost ?cond = Some CoreTy_Bool"
+    using inferred_term_typed_in_env[OF subst_typed_bool "10.prems"(4) inf] .
   \<comment> \<open>(c) The then-block and else-block typecheck under armEnv (the mutual list IH).
       armEnv differs from env only in TE_ProofTopLevel, so the IH premises transfer.\<close>
   have wf_arm: "tyenv_well_formed ?armEnv"
@@ -4844,11 +4543,11 @@ next
   have bound_then: "\<forall>n. n |\<in>| TE_TypeVars ?armEnv \<longrightarrow> tyvar_fresh_ok n next_mv1"
     using "10.prems"(4) nmv1 tyvar_fresh_ok_mono by (auto simp del: tyvar_fresh_ok_mv_name)
   have then_typed: "core_statement_list_type ?armEnv ghost coreThen = Some tenv"
-    using "10.IH"(1) etm unif thenE wf_arm ee_arm bound_then inv1_arm inv2_arm by simp
+    using "10.IH"(1) etm unif inf thenE wf_arm ee_arm bound_then inv1_arm inv2_arm by simp
   have bound_else: "\<forall>n. n |\<in>| TE_TypeVars ?armEnv \<longrightarrow> tyvar_fresh_ok n next_mv2"
     using bound_then nmv2 tyvar_fresh_ok_mono by (auto simp del: tyvar_fresh_ok_mv_name)
   have else_typed: "core_statement_list_type ?armEnv ghost coreElse = Some eenv"
-    using "10.IH"(2) etm unif thenE elseE wf_arm ee_arm bound_else inv1_arm inv2_arm by simp
+    using "10.IH"(2) etm unif inf thenE elseE wf_arm ee_arm bound_else inv1_arm inv2_arm by simp
   \<comment> \<open>Assemble the Core Match rule: the scrutinee is Bool, both Bool patterns are
       compatible, and both blocks typecheck under armEnv = env\<lparr>TE_ProofTopLevel := False\<rparr>.\<close>
   show ?case
@@ -4857,9 +4556,9 @@ next
 next
   \<comment> \<open>While: emits CoreStmt_While with env' = env (the Core While rule discards the body
       scope and returns the entry env). The header (condition / invariants / decreases) is
-      certified by elab_while_header_correct: the cleared condition types to Bool in env
-      (ambient ghost), each cleared invariant types to Bool (Ghost), and the cleared
-      decreases term types to a valid decreases type (Ghost). The body typechecks under
+      certified by elab_while_header_correct: the condition types to Bool in env
+      (ambient ghost), each invariant types to Bool (Ghost), and the decreases term
+      types to a valid decreases type (Ghost). The body typechecks under
       bodyEnv = env with TE_ProofTopLevel := False via the (single) list IH, whose two
       ambient invariants transfer since bodyEnv only changes TE_ProofTopLevel.\<close>
   case (11 env elabEnv ghost loc cond attrs body next_mv)
@@ -4869,23 +4568,23 @@ next
     attrs_ok: "collect_while_attributes loc attrs = Inr (invs, [decr])"
     by (cases "collect_while_attributes loc attrs")
        (auto split: prod.splits list.splits)
-  from "11.prems"(1) attrs_ok obtain clearedCond coreInvars clearedDecr next_mv3 where
+  from "11.prems"(1) attrs_ok obtain condTm coreInvars decrTm next_mv3 where
     hdr: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
-            = Inr (clearedCond, coreInvars, clearedDecr, next_mv3)"
+            = Inr (condTm, coreInvars, decrTm, next_mv3)"
     by (cases "elab_while_header env elabEnv ghost loc cond invs decr next_mv")
        (auto split: prod.splits)
   from "11.prems"(1) attrs_ok hdr obtain coreBody benv where
     bodyE: "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3
               = Inr (coreBody, benv, next_mv')" and
-    cs_eq: "coreStmt = CoreStmt_While ghost clearedCond coreInvars clearedDecr coreBody" and
+    cs_eq: "coreStmt = CoreStmt_While ghost condTm coreInvars decrTm coreBody" and
     env'_eq: "env' = env"
     by (cases "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3")
        (auto simp: Let_def split: prod.splits)
   \<comment> \<open>The header obligations (cond Bool, invariants Bool, decreases valid).\<close>
   from elab_while_header_correct[OF hdr "11.prems"(2,3,4)] obtain decrTy where
-    cond_bool: "core_term_type env ghost clearedCond = Some CoreTy_Bool" and
+    cond_bool: "core_term_type env ghost condTm = Some CoreTy_Bool" and
     inv_bool: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars" and
-    decr_typed: "core_term_type env Ghost clearedDecr = Some decrTy" and
+    decr_typed: "core_term_type env Ghost decrTm = Some decrTy" and
     decr_valid: "is_valid_decreases_type decrTy"
     by blast
   \<comment> \<open>The body typechecks under bodyEnv (the list IH). bodyEnv differs from env only in
@@ -4932,7 +4631,7 @@ next
     by (auto simp: Let_def split: sum.splits)
   from "13.prems"(1) arms_ne etm dec_eq
   obtain scrut' scrutTy' mode freshName writable envAfterFresh mv3 where
-    scrut_fin: "elab_match_stmt_scrut env ghost loc accSubst next_mv mv2
+    scrut_fin: "elab_match_stmt_scrut env ghost loc accSubst mv2
                   scrutTm scrutTy (map fst decoratedRows)
                 = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3)"
     by (auto simp: Let_def split: sum.splits)
@@ -5011,7 +4710,7 @@ next
   note scrut_facts = elab_match_stmt_scrut_facts[OF scrut_fin]
   note fin_facts = finalize_match_stmt_facts[OF fin_stmt]
 
-  \<comment> \<open>The substituted-and-cleared scrutinee typechecks in the plain env.\<close>
+  \<comment> \<open>The substituted scrutinee typechecks in the plain env (it passed the inferred check).\<close>
   have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term accSubst scrutTm)
                        = Some (apply_subst accSubst scrutTy)"
   proof -
@@ -5034,23 +4733,17 @@ next
               [OF typed_D wfD dma_range_wk dma_range_rt locals_unaffected ret_unaffected abs_no_subst
                   dma_range_cp] .
   qed
-  have cleared_typed: "core_term_type env ghost scrut' = Some scrutTy'"
+  have scrut_typed: "core_term_type env ghost scrut' = Some scrutTy'"
     unfolding scrut_facts(1) scrut_facts(2)
-    using clear_metavars_typed_in_env_gen[OF subst_typed "13.prems"(2,4)] .
+    using inferred_term_typed_in_env[OF subst_typed "13.prems"(4)
+                                        scrut_facts(8)[unfolded scrut_facts(1)]] .
   have scrutTy'_wk: "is_well_kinded env scrutTy'"
-    unfolding scrut_facts(2)
-    using clear_metavars_type_well_kinded[OF core_term_type_well_kinded[OF subst_typed wfD]
-                                             "13.prems"(2,4)] .
-  have rtbound: "\<forall>n. n |\<in>| TE_RuntimeTypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    using "13.prems"(2,4)
-    unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
+    using core_term_type_well_kinded[OF scrut_typed "13.prems"(2)] .
   have scrutTy'_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type env scrutTy'"
   proof -
     assume ng: "ghost = NotGhost"
-    have "is_runtime_type ?envD (apply_subst accSubst scrutTy)"
-      using core_term_type_notghost_runtime ng subst_typed wfD by auto
-    thus "is_runtime_type env scrutTy'"
-      using "13.prems"(2) cleared_typed core_term_type_notghost_runtime ng by auto
+    show "is_runtime_type env scrutTy'"
+      using core_term_type_notghost_runtime[OF scrut_typed[unfolded ng] "13.prems"(2)] .
   qed
 
   \<comment> \<open>The Block-entry env and the env after the fresh binding.\<close>
@@ -5058,7 +4751,7 @@ next
   let ?env1 = "envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>"
 
   have typed_P: "core_term_type ?envP ghost scrut' = Some scrutTy'"
-    using cleared_typed core_term_type_TE_ProofTopLevel_irrelevant by simp
+    using scrut_typed core_term_type_TE_ProofTopLevel_irrelevant by simp
   have wf_P: "tyenv_well_formed ?envP"
     using "13.prems"(2) tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
   have wk_P: "is_well_kinded ?envP scrutTy'"
@@ -5175,17 +4868,10 @@ next
                          ?substDps"
     using fin_eq not_clash unfolding finalize_match_arms_def Let_def
     by (simp split: if_splits)
-  have meta_safe:
-    "\<And>dp. dp \<in> set ?substDps \<Longrightarrow>
-        list_all (\<lambda>(_, _, vTy).
-            list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list vTy))
-                 (dec_pattern_var_bindings dp)"
-    using not_clash env1_tv
-    by (force simp: list_all_iff list_ex_iff case_prod_unfold)
   have dps_eq: "map fst finalizedArms = ?substDps"
     using finalizedArms_eq by (simp add: comp_def)
 
-  \<comment> \<open>Each (substituted) dp is compatible with the cleared scrutinee type.\<close>
+  \<comment> \<open>Each (substituted) dp is compatible with the substituted scrutinee type.\<close>
   have raw_compat:
     "\<And>dp. dp \<in> set ?substDps \<Longrightarrow>
         dec_pattern_compatible env dp (apply_subst accSubst scrutTy)"
@@ -5196,41 +4882,11 @@ next
     using dma_pred
     by (fastforce simp: list_all2_conv_all_nth in_set_conv_nth case_prod_unfold)
 
-  let ?clearS = "fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [next_mv ..< mv2])"
-  have clear_dom_disjoint: "fmdom ?clearS |\<inter>| TE_TypeVars env = {||}"
-  proof -
-    have "\<And>x. x |\<in>| TE_TypeVars env \<Longrightarrow> x \<notin> mv_name ` {next_mv..<mv2}"
-    proof -
-      fix x assume "x |\<in>| TE_TypeVars env"
-      hence "tyvar_fresh_ok x next_mv" using "13.prems"(4) by simp
-      thus "x \<notin> mv_name ` {next_mv..<mv2}" unfolding tyvar_fresh_ok_def by force
-    qed
-    thus ?thesis
-      using clear_metavars_subst_dom by fastforce
-  qed
-  have dp_clear_id: "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> apply_subst_to_dec_pattern ?clearS dp = dp"
-    using apply_subst_to_dec_pattern_id_of_bindings_id
-          dec_pattern_var_bindings_apply_subst_id_of_meta_safe[OF meta_safe clear_dom_disjoint]
-    by blast
-  \<comment> \<open>?clearS does not touch env's abstract types: they are in TE_TypeVars env, disjoint
-      from ?clearS's (fresh-metavar) domain. \<close>
-  have clear_dom_flex: "\<And>n. n |\<in>| fmdom ?clearS \<Longrightarrow> n |\<notin>| TE_TypeVars env"
-    using clear_dom_disjoint by auto
-  have clear_abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes env \<Longrightarrow> fmlookup ?clearS n = None"
-    using flex_subst_abs_no_subst[OF clear_dom_flex "13.prems"(2) refl] .
-  have compat_cleared: "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> dec_pattern_compatible env dp scrutTy'"
-  proof -
-    fix dp assume dp_in: "dp \<in> set ?substDps"
-    have "dec_pattern_compatible env (apply_subst_to_dec_pattern ?clearS dp)
-            (apply_subst ?clearS (apply_subst accSubst scrutTy))"
-      using apply_subst_to_dec_pattern_preserves_compatibility
-              [OF raw_compat[OF dp_in] "13.prems"(2) clear_abs_no_subst] .
-    thus "dec_pattern_compatible env dp scrutTy'"
-      using dp_clear_id[OF dp_in]
-      unfolding scrut_facts(2) clear_metavars_type_def by simp
-  qed
+  \<comment> \<open>The substituted scrutinee type IS scrutTy'.\<close>
+  have compat_subst: "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> dec_pattern_compatible env dp scrutTy'"
+    unfolding scrut_facts(2) using raw_compat by blast
   have compat_env1: "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> dec_pattern_compatible ?env1 dp scrutTy'"
-    using compat_cleared dec_pattern_compatible_TE_DataCtors_cong[OF env1_dc] by simp
+    using compat_subst dec_pattern_compatible_TE_DataCtors_cong[OF env1_dc] by simp
   have pat_compat:
     "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> pattern_compatible ?env1 (dec_to_core_pat dp) scrutTy'"
     using dec_to_core_pat_pattern_compatible[OF compat_env1 wk_1 env1_wf] .

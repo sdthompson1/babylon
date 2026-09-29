@@ -314,16 +314,6 @@ fun binop_to_core :: "BabBinop \<Rightarrow> CoreBinop option" where
 | "binop_to_core BabBinop_ImpliedBy = None"
 | "binop_to_core BabBinop_Iff = None"
 
-(* Default type for binary operators when both operands are metavariables.
-   Logical/iff/implied-by default to Bool, everything else defaults to i32. *)
-definition default_type_for_binop :: "BabBinop \<Rightarrow> CoreType" where
-  "default_type_for_binop op =
-    (case binop_to_core op of
-      Some cop \<Rightarrow>
-        if is_logical_binop cop then CoreTy_Bool
-        else CoreTy_FiniteInt Signed IntBits_32
-    | None \<Rightarrow> CoreTy_Bool)"  \<comment> \<open>ImpliedBy and Iff default to Bool\<close>
-
 (* Check if a term is simple enough to duplicate without let-binding *)
 fun is_simple_term :: "CoreTerm \<Rightarrow> bool" where
   "is_simple_term (CoreTm_Var _) = True"
@@ -378,42 +368,28 @@ fun check_implies_chain :: "(BabBinop \<times> 'a \<times> 'b) list \<Rightarrow
 fun is_comparison_bab_binop :: "BabBinop \<Rightarrow> bool" where
   "is_comparison_bab_binop op = (comparison_direction op \<noteq> None)"
 
-(* Build a substitution that maps every flexible metavariable in a type to a
-   given default type. Rigid type-variable metas are skipped. *)
-definition const_subst_for :: "(string \<Rightarrow> bool) \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> TypeSubst" where
-  "const_subst_for is_flex ty defaultTy =
-     fmap_of_list (map (\<lambda>n. (n, defaultTy)) (filter is_flex (type_tyvars_list ty)))"
-
 (* Resolve metavariables in binary operator operands using unification.
    1. Try to unify the two operand types.
-   2. If unification succeeds and the result is ground (contains no unifiable metavariables), 
-      use the unified type.
-   3. If unification succeeds but metavariables remain, fill them with the
-      default type for the operator.
-   4. If unification fails, pass through unchanged (downstream checks will
+   2. If unification succeeds, apply the unifier to both operands and use the
+      unified type. Any metavariables that remain in the unified type are left
+      in place: there is no default type, so an operand type that is still
+      unresolved is rejected downstream (by the operator's own operand-type
+      check, or by the statement-level "unable to infer type" check).
+   3. If unification fails, pass through unchanged (downstream checks will
       report the appropriate type error). A unifier that would bind a
       metavariable to an incomplete array type is treated as a failure too
       (a metavariable is never bound to an incomplete type). *)
-fun resolve_binop_metas :: "(string \<Rightarrow> bool) \<Rightarrow> BabBinop
+fun resolve_binop_metas :: "(string \<Rightarrow> bool)
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (CoreTerm \<times> CoreType \<times> CoreTerm \<times> CoreType)" where
-  "resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy =
+  "resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy =
     (case unify is_flex lhsTy rhsTy of
        Some unifSubst \<Rightarrow>
          if \<not> typesubst_complete unifSubst then (lhsTm, lhsTy, rhsTm, rhsTy)
          else
          let unifiedTy = apply_subst unifSubst lhsTy
-         in if list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list unifiedTy) then
-              (apply_subst_to_term unifSubst lhsTm, unifiedTy,
-               apply_subst_to_term unifSubst rhsTm, unifiedTy)
-            else
-              let defaultTy = default_type_for_binop babOp;
-                  fillSubst = const_subst_for is_flex unifiedTy defaultTy;
-                  fullSubst = compose_subst fillSubst unifSubst
-              in (apply_subst_to_term fullSubst lhsTm,
-                  apply_subst fillSubst unifiedTy,
-                  apply_subst_to_term fullSubst rhsTm,
-                  apply_subst fillSubst unifiedTy)
+         in (apply_subst_to_term unifSubst lhsTm, unifiedTy,
+             apply_subst_to_term unifSubst rhsTm, unifiedTy)
      | None \<Rightarrow> (lhsTm, lhsTy, rhsTm, rhsTy))"
 
 (* Elaborate a single binary operation on already-elaborated operands.
@@ -424,7 +400,7 @@ fun elab_single_binop :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<R
     \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
   "elab_single_binop is_flex loc ghost babOp lhsTm lhsTy rhsTm rhsTy =
     (let (lhsTm', lhsTy', rhsTm', rhsTy') =
-           resolve_binop_metas is_flex babOp lhsTm lhsTy rhsTm rhsTy
+           resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy
      in
       case binop_to_core babOp of
         None \<Rightarrow> undefined \<comment> \<open>should not happen\<close>
@@ -485,7 +461,7 @@ fun elab_binop_with_special :: "(string \<Rightarrow> bool) \<Rightarrow> Locati
     elab_single_binop is_flex loc ghost BabBinop_Implies rhsTm rhsTy lhsTm lhsTy"
 | "elab_binop_with_special is_flex loc ghost BabBinop_Iff lhsTm lhsTy rhsTm rhsTy =
     \<comment> \<open>A <==> B becomes A == B (both must be Bool)\<close>
-    (let (lhs', lTy, rhs', rTy) = resolve_binop_metas is_flex BabBinop_Iff lhsTm lhsTy rhsTm rhsTy
+    (let (lhs', lTy, rhs', rTy) = resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy
      in if lTy = CoreTy_Bool \<and> rTy = CoreTy_Bool
         then Inr (CoreTm_Binop CoreBinop_Equal lhs' rhs', CoreTy_Bool)
         else Inl [TyErr_TypeMismatch loc CoreTy_Bool
@@ -540,10 +516,11 @@ fun build_comparison_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Locatio
         | Inr (cmpTm, _) \<Rightarrow> Inr cmpTm)
     | _ \<Rightarrow>
         \<comment> \<open>More comparisons follow - need to reuse rhsTm as next LHS.
-           Resolve metas first so the RHS type is ground (needed for let-binding
-           and to pass a concrete type to the next comparison).\<close>
+           Resolve metas first (unifying the RHS type with the LHS type) so that
+           the RHS type is as resolved as it can be before it is let-bound and
+           passed to the next comparison.\<close>
         let (_, _, resolvedRhs, resolvedRhsTy) =
-              resolve_binop_metas is_flex op lhsTm lhsTy rhsTm rhsTy
+              resolve_binop_metas is_flex lhsTm lhsTy rhsTm rhsTy
         in if is_simple_term resolvedRhs then
           \<comment> \<open>Simple term: duplicate directly, using resolvedRhs in both comparisons\<close>
           (case elab_binop_with_special is_flex loc ghost op lhsTm lhsTy resolvedRhs resolvedRhsTy of
@@ -554,8 +531,9 @@ fun build_comparison_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Locatio
               | Inr restTm \<Rightarrow>
                   Inr (CoreTm_Binop CoreBinop_And cmpTm restTm)))
         else if \<not> list_all (\<lambda>n. \<not> is_flex n) (type_tyvars_list resolvedRhsTy) then
-          \<comment> \<open>This check is now effectively dead code since resolve_binop_metas
-             produces resolved types, but keeping it simplifies the correctness proof.\<close>
+          \<comment> \<open>The RHS is about to be let-bound, and let-bound names must have a
+             metavariable-free type (as in BabTm_Let); e.g. `h() < h() < h()` with
+             `h<U>(): U` is rejected here.\<close>
           Inl [TyErr_CannotInferType loc]
         else
           \<comment> \<open>Complex term: introduce let-binding, use variable in both comparisons\<close>

@@ -3,23 +3,23 @@ theory ElabStmt
 begin
 
 (* ========================================================================== *)
-(* Metavariable clearing helpers *)
+(* Metavariable resolution checks *)
 (* ========================================================================== *)
 
-(* Substitute every metavariable in the interval [lo, hi) with the unit type
-   CoreTy_Record []. The term elaborator allocates fresh metavariables in this
-   interval; some may remain unresolved in the emitted term (phantom type
-   arguments). Clearing them with a ground runtime type lets the elaborated
-   statement typecheck in the original env, with no fresh-tyvar extension. *)
-definition clear_metavars :: "nat \<Rightarrow> nat \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
-  "clear_metavars lo hi tm =
-     apply_subst_to_term (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo ..< hi])) tm"
+(* Check that all types in a term were fully inferred, i.e., no type metavariables
+   remain. Variables not in TE_TypeVars env are assumed to be metavariables. *)
+definition term_inferred :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
+  "term_inferred env tm =
+     list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (core_term_free_tyvars_list tm)"
 
-(* The type-level analog of clear_metavars, for the (substituted) type arguments
-   of an elaborated call emitted by CoreStmt_AssignCall / VarDeclCall. *)
-definition clear_metavars_type :: "nat \<Rightarrow> nat \<Rightarrow> CoreType \<Rightarrow> CoreType" where
-  "clear_metavars_type lo hi ty =
-     apply_subst (fmap_of_list (map (\<lambda>n. (mv_name n, CoreTy_Record [])) [lo ..< hi])) ty"
+(* The type-level analog. *)
+definition type_inferred :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "type_inferred env ty = list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list ty)"
+
+(* Both checks together. *)
+definition call_inferred :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> bool" where
+  "call_inferred env tyArgs argTms =
+     (list_all (type_inferred env) tyArgs \<and> list_all (term_inferred env) argTms)"
 
 
 (* ========================================================================== *)
@@ -190,9 +190,11 @@ definition vardecl_add_local ::
            TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
 
 (* VarDecl(Var) with a pure initializer. With no annotation the declared type is
-   the inferred rhs type (which must be metavariable-free); with an annotation the
-   rhs is coerced to it and the annotation type is recorded. In executable code the
-   new variable must have a complete type. Emits CoreStmt_VarDecl. *)
+   the inferred rhs type; with an annotation the rhs is coerced to it and the
+   annotation type is recorded. Either way the (final) initializer must contain no
+   unresolved metavariables, which also makes the inferred type metavariable-free.
+   In executable code the new variable must have a complete type. Emits
+   CoreStmt_VarDecl. *)
 definition elab_vardecl_pure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
    \<Rightarrow> BabType option \<Rightarrow> BabTerm \<Rightarrow> nat
@@ -204,12 +206,11 @@ definition elab_vardecl_pure ::
          (case tyOpt of
             None \<Rightarrow>
               \<comment> \<open>Inferred type from the initializer; reject unresolved metavars.\<close>
-              if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
+              if \<not> term_inferred env coreTm
               then Inl [TyErr_CannotInferType loc]
               else if ghost = NotGhost \<and> \<not> is_complete_type rhsTy
               then Inl [TyErr_IncompleteArrayType loc]
-              else Inr (CoreStmt_VarDecl ghost varName Var rhsTy
-                          (clear_metavars next_mv next_mv' coreTm),
+              else Inr (CoreStmt_VarDecl ghost varName Var rhsTy coreTm,
                         vardecl_add_local env ghost varName rhsTy, next_mv')
           | Some ty \<Rightarrow>
               \<comment> \<open>Annotated: coerce the rhs to the annotation type; record the annotation.\<close>
@@ -222,16 +223,19 @@ definition elab_vardecl_pure ::
                    (case coerce_term_to_type env loc coreTm rhsTy coreTy of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr coreTm' \<Rightarrow>
-                        Inr (CoreStmt_VarDecl ghost varName Var coreTy
-                               (clear_metavars next_mv next_mv' coreTm'),
-                             vardecl_add_local env ghost varName coreTy, next_mv')))))"
+                        if \<not> term_inferred env coreTm'
+                        then Inl [TyErr_CannotInferType loc]
+                        else Inr (CoreStmt_VarDecl ghost varName Var coreTy coreTm',
+                                  vardecl_add_local env ghost varName coreTy, next_mv')))))"
 
 (* VarDecl(Var) with an impure-call initializer. Takes the whole rhs term and
    pattern-matches BabTm_Call internally (undefined otherwise; callers guard on
-   is_impure_call). With no annotation the declared type is the (metavar-free)
-   call return type and no cast is applied; with an annotation the declared type
-   is the annotation and reconcile_call_result chooses the cast. In executable code
-   the new variable must have a complete type. Emits CoreStmt_VarDeclCall. *)
+   is_impure_call). With no annotation the declared type is the call return type
+   and no cast is applied; with an annotation the declared type is the annotation
+   and reconcile_call_result chooses the cast. Either way the (final) type
+   arguments and argument terms must contain no unresolved metavariables, which
+   also makes the inferred return type metavariable-free. In executable code the
+   new variable must have a complete type. Emits CoreStmt_VarDeclCall. *)
 definition elab_vardecl_impure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string
    \<Rightarrow> BabType option \<Rightarrow> BabTerm \<Rightarrow> nat
@@ -243,19 +247,18 @@ definition elab_vardecl_impure ::
             Inl errs \<Rightarrow> Inl errs
           | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv') \<Rightarrow>
               (let mkCallStmt = \<lambda>varTy castOpt tyArgs argTms.
-                         if ghost = NotGhost \<and> \<not> is_complete_type varTy
+                         if \<not> call_inferred env tyArgs argTms
+                         then Inl [TyErr_CannotInferType loc]
+                         else if ghost = NotGhost \<and> \<not> is_complete_type varTy
                          then Inl [TyErr_IncompleteArrayType loc]
                          else
                          Inr (CoreStmt_VarDeclCall ghost varName varTy castOpt fnName
-                                (map (clear_metavars_type next_mv next_mv') tyArgs)
-                                (map (clear_metavars next_mv next_mv') argTms),
+                                tyArgs argTms,
                               vardecl_add_local env ghost varName varTy, next_mv')
                in (case tyOpt of
                      None \<Rightarrow>
-                       \<comment> \<open>Inferred: declared type = return type; reject metavars; no cast.\<close>
-                       if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)
-                       then Inl [TyErr_CannotInferType loc]
-                       else mkCallStmt retTy None finalTyArgs finalArgTms
+                       \<comment> \<open>Inferred: declared type = return type; no cast.\<close>
+                       mkCallStmt retTy None finalTyArgs finalArgTms
                    | Some ty \<Rightarrow>
                        \<comment> \<open>Annotated: declared type = annotation; pick castOpt.\<close>
                        (case elab_type env elabEnv ghost ty of
@@ -271,8 +274,7 @@ definition elab_vardecl_impure ::
    pure or impure, since a call result is not an lvalue), and in ghost code it
    must be rooted at a ghost variable.
 
-   With no annotation the recorded type is the initializer type, which must be
-   metavariable-free.
+   With no annotation the recorded type is the initializer type.
 
    With an annotation the initializer is coerced to the annotation type and that type is
    recorded. A ref must match its annotation exactly (up to unification), so the coerced
@@ -280,6 +282,9 @@ definition elab_vardecl_impure ::
    target is not an array type, so this check rejects integer coercions (`ref r: i64 =
    some_i32_variable`) while an array cast (`ref a: T[] = someTn`) passes, giving `a` a
    borrowed view of the fixed-size array. The new ref is const iff its base is read-only.
+
+   Either way the (final) initializer must contain no unresolved metavariables,
+   which also makes the recorded type metavariable-free.
 
    Emits CoreStmt_VarDecl ... Ref. *)
 definition elab_vardecl_ref ::
@@ -298,8 +303,10 @@ definition elab_vardecl_ref ::
               then Inl [TyErr_GhostRefNeedsGhostVar loc varName]
               else
                 (let mkRefStmt = \<lambda>varTy initTm.
-                         Inr (CoreStmt_VarDecl ghost varName Ref varTy
-                                (clear_metavars next_mv next_mv' initTm),
+                         if \<not> term_inferred env initTm
+                         then Inl [TyErr_CannotInferType loc]
+                         else
+                         Inr (CoreStmt_VarDecl ghost varName Ref varTy initTm,
                               (vardecl_add_local env ghost varName varTy)
                                 \<lparr> TE_ConstLocals := (if is_writable_lvalue env initTm
                                                      then fminus (TE_ConstLocals env) {|varName|}
@@ -307,10 +314,8 @@ definition elab_vardecl_ref ::
                               next_mv')
                  in (case tyOpt of
                        None \<Rightarrow>
-                         \<comment> \<open>Inferred type from the initializer; reject unresolved metavars.\<close>
-                         if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list rhsTy)
-                         then Inl [TyErr_CannotInferType loc]
-                         else mkRefStmt rhsTy coreTm
+                         \<comment> \<open>Inferred type from the initializer.\<close>
+                         mkRefStmt rhsTy coreTm
                      | Some ty \<Rightarrow>
                          \<comment> \<open>Annotated: coerce the initializer to the annotation type; the
                              result must still be an lvalue.\<close>
@@ -327,13 +332,15 @@ definition elab_vardecl_ref ::
 (* ----- Assign branch helpers ----- *)
 
 (* Assignment with a pure rhs: coerce the rhs to the lhs type (unify or integer
-   cast). In executable code the lhs type must be complete. The environment is
-   unchanged. Emits CoreStmt_Assign. *)
+   cast). The lhs has already been elaborated by the caller (giving lhsTm of type
+   lhsTy, a writable lvalue, counter advanced to next_mv1). Neither the lhs nor the
+   (coerced) rhs may contain unresolved metavariables. In executable code the lhs
+   type must be complete. The environment is unchanged. Emits CoreStmt_Assign. *)
 definition elab_assign_pure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
-   \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
+   \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
-  "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
+  "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1 =
     (if ghost = NotGhost \<and> \<not> is_complete_type lhsTy then Inl [TyErr_IncompleteArrayType loc]
      else case elab_term env elabEnv ghost rhs next_mv1 of
        Inl errs \<Rightarrow> Inl errs
@@ -341,20 +348,21 @@ definition elab_assign_pure ::
          (case coerce_term_to_type env loc rhsTm rhsTy lhsTy of
             Inl errs \<Rightarrow> Inl errs
           | Inr rhsTm' \<Rightarrow>
-              Inr (CoreStmt_Assign ghost
-                     (clear_metavars next_mv next_mv2 lhsTm)
-                     (clear_metavars next_mv next_mv2 rhsTm'),
-                   env, next_mv2)))"
+              if \<not> (term_inferred env lhsTm \<and> term_inferred env rhsTm')
+              then Inl [TyErr_CannotInferType loc]
+              else Inr (CoreStmt_Assign ghost lhsTm rhsTm', env, next_mv2)))"
 
 (* Assignment with an impure-call rhs. Takes the whole rhs term and pattern-matches
    BabTm_Call internally (undefined otherwise; callers guard on is_impure_call).
-   reconcile_call_result chooses the cast against the lhs type. In executable code the
-   lhs type must be complete. The environment is unchanged. Emits CoreStmt_AssignCall. *)
+   reconcile_call_result chooses the cast against the lhs type. Neither the lhs nor
+   the call's (final) type arguments and argument terms may contain unresolved
+   metavariables. In executable code the lhs type must be complete. The
+   environment is unchanged. Emits CoreStmt_AssignCall. *)
 definition elab_assign_impure ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
-   \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
+   \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
-  "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
+  "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1 =
     (case rhs of
        BabTm_Call rloc callee rargs \<Rightarrow>
          if ghost = NotGhost \<and> \<not> is_complete_type lhsTy then Inl [TyErr_IncompleteArrayType loc]
@@ -365,27 +373,25 @@ definition elab_assign_impure ::
               (case reconcile_call_result env loc finalTyArgs finalArgTms retTy lhsTy of
                  Inl errs \<Rightarrow> Inl errs
                | Inr (castOpt, tyArgs', argTms') \<Rightarrow>
-                   Inr (CoreStmt_AssignCall ghost
-                          (clear_metavars next_mv next_mv2 lhsTm)
-                          castOpt fnName
-                          (map (clear_metavars_type next_mv next_mv2) tyArgs')
-                          (map (clear_metavars next_mv next_mv2) argTms'),
-                        env, next_mv2)))
+                   if \<not> (term_inferred env lhsTm \<and> call_inferred env tyArgs' argTms')
+                   then Inl [TyErr_CannotInferType loc]
+                   else Inr (CoreStmt_AssignCall ghost lhsTm castOpt fnName tyArgs' argTms',
+                             env, next_mv2)))
      | _ \<Rightarrow> undefined)"
 
 (* ----- Swap branch helper ----- *)
 
 (* Swap of two writable lvalues. The lhs has already been elaborated by the caller
-   (giving lhsTm of type lhsTy, a writable lvalue of a metavariable-free type,
-   counter advanced to next_mv1). This elaborates the rhs (pure), requires it to be
-   a writable lvalue whose type is EXACTLY lhsTy (no coercion, unlike Assign), and
-   emits CoreStmt_Swap. In executable code the (common) type must be complete. The
-   environment is unchanged. *)
+   (giving lhsTm of type lhsTy, a writable lvalue, counter advanced to next_mv1).
+   This elaborates the rhs (pure), requires it to be a writable lvalue whose type is
+   EXACTLY lhsTy (no coercion, unlike Assign), requires both sides to contain no
+   unresolved metavariables, and emits CoreStmt_Swap. In executable code the
+   (common) type must be complete. The environment is unchanged. *)
 definition elab_swap ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CoreTerm \<Rightarrow> CoreType
-   \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> nat
+   \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreStatement \<times> CoreTyEnv \<times> nat)" where
-  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1 =
+  "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1 =
     (if ghost = NotGhost \<and> \<not> is_complete_type lhsTy then Inl [TyErr_IncompleteArrayType loc]
      else case elab_term env elabEnv ghost rhs next_mv1 of
        Inl errs \<Rightarrow> Inl errs
@@ -394,11 +400,9 @@ definition elab_swap ::
          else if \<not> ghost_lvalue_ok env ghost rhsTm
          then Inl [TyErr_WriteToNonGhostFromGhost loc]
          else if rhsTy \<noteq> lhsTy then Inl [TyErr_TypeMismatch loc lhsTy rhsTy]
-         else
-           Inr (CoreStmt_Swap ghost
-                  (clear_metavars next_mv next_mv2 lhsTm)
-                  (clear_metavars next_mv next_mv2 rhsTm),
-                env, next_mv2))"
+         else if \<not> (term_inferred env lhsTm \<and> term_inferred env rhsTm)
+         then Inl [TyErr_CannotInferType loc]
+         else Inr (CoreStmt_Swap ghost lhsTm rhsTm, env, next_mv2))"
 
 
 (* ----- Call branch helper ----- *)
@@ -433,14 +437,15 @@ definition elab_call_statement ::
                            callee args next_mv of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv') \<Rightarrow>
-                        \<comment> \<open>The temporary's declared type is the return type, which
-                            must be metavariable-free (as in the inferred VarDecl).\<close>
-                        if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list retTy)
+                        \<comment> \<open>The call's type arguments and argument terms must contain no
+                            unresolved metavariables (as in the inferred VarDecl); this
+                            also makes the temporary's declared type, the return type,
+                            metavariable-free.\<close>
+                        if \<not> call_inferred env finalTyArgs finalArgTms
                         then Inl [TyErr_CannotInferType loc]
                         else Inr (CoreStmt_Block
                                     [CoreStmt_VarDeclCall ghost ''call@@tmp'' retTy None fnName
-                                       (map (clear_metavars_type next_mv next_mv') finalTyArgs)
-                                       (map (clear_metavars next_mv next_mv') finalArgTms)],
+                                       finalTyArgs finalArgTms],
                                   env, next_mv'))
           | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location tm)])"
@@ -466,11 +471,12 @@ definition elab_return_impure ::
                          (TE_ReturnType env) of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (castOpt, tyArgs', argTms') \<Rightarrow>
+                      if \<not> call_inferred env tyArgs' argTms'
+                      then Inl [TyErr_CannotInferType loc]
+                      else
                       Inr (CoreStmt_Block
                              [CoreStmt_VarDeclCall ghost ''return@@tmp''
-                                (TE_ReturnType env) castOpt fnName
-                                (map (clear_metavars_type next_mv next_mv') tyArgs')
-                                (map (clear_metavars next_mv next_mv') argTms'),
+                                (TE_ReturnType env) castOpt fnName tyArgs' argTms',
                               CoreStmt_Return (CoreTm_Var ''return@@tmp'')],
                            env, next_mv')))
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location tm)])"
@@ -531,8 +537,10 @@ definition elab_use ::
                         (case coerce_term_to_type env loc coreTm tmTy qVarTy of
                            Inl errs \<Rightarrow> Inl errs
                          | Inr coreTm' \<Rightarrow>
-                             Inr (CoreStmt_Use (clear_metavars next_mv next_mv' coreTm'),
-                                  env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>, next_mv')))
+                             if \<not> term_inferred env coreTm'
+                             then Inl [TyErr_CannotInferType loc]
+                             else Inr (CoreStmt_Use coreTm',
+                                       env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>, next_mv')))
           | _ \<Rightarrow> Inl [TyErr_UseNoExistsGoal loc])"
 
 
@@ -556,9 +564,9 @@ fun collect_while_attributes ::
           | _ \<Rightarrow> Inl [TyErr_InvalidWhileAttribute (bab_attribute_location attr)]))"
 
 (* Elaborate a list of while-loop invariant terms. Each is elaborated in Ghost mode and
-   its type unified with Bool (as in Assume); the unifier is applied and the interval
-   metavariables cleared, so each cleared term typechecks to Bool in the original env.
-   Threads the metavariable counter left-to-right. *)
+   its type unified with Bool (as in Assume); the unifier is applied and the result
+   must contain no unresolved metavariables, so each term typechecks to Bool in the
+   original env. Threads the metavariable counter left-to-right. *)
 fun elab_while_invariants ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabTerm list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreTerm list \<times> nat)" where
@@ -570,19 +578,22 @@ fun elab_while_invariants ::
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) invTy CoreTy_Bool of
             None \<Rightarrow> Inl [TyErr_TypeMismatch (bab_term_location invTm) CoreTy_Bool invTy]
           | Some subst \<Rightarrow>
+              if \<not> term_inferred env (apply_subst_to_term subst coreInv)
+              then Inl [TyErr_CannotInferType (bab_term_location invTm)]
+              else
               (case elab_while_invariants env elabEnv invs next_mv1 of
                  Inl errs \<Rightarrow> Inl errs
                | Inr (rest, next_mv2) \<Rightarrow>
-                   Inr (clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreInv) # rest,
-                        next_mv2))))"
+                   Inr (apply_subst_to_term subst coreInv # rest, next_mv2))))"
 
 (* Elaborate the "header" of a while loop, given the invariant terms and the (single)
    decreases term already extracted from the attribute list. The condition is elaborated in
    the ambient ghost mode and coerced to Bool (like BabStmt_If); the invariants are each
    elaborated in Ghost mode and coerced to Bool; the decreases term is elaborated in Ghost
-   mode and must have a valid decreases type. Returns the cleared condition, the cleared
-   invariant terms, the cleared decreases term, and the advanced counter. The body
-   elaboration (which recurses into elab_statement_list) is left to the main clause. *)
+   mode and must have a valid decreases type. None of the elaborated terms may contain
+   unresolved metavariables. Returns the condition, the invariant terms, the decreases
+   term, and the advanced counter. The body elaboration (which recurses into
+   elab_statement_list) is left to the main clause. *)
 definition elab_while_header ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreTerm list \<times> CoreTerm \<times> nat)" where
@@ -593,6 +604,9 @@ definition elab_while_header ::
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
             None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
           | Some subst \<Rightarrow>
+              if \<not> term_inferred env (apply_subst_to_term subst coreCond)
+              then Inl [TyErr_CannotInferType loc]
+              else
               (case elab_while_invariants env elabEnv invs next_mv1 of
                  Inl errs \<Rightarrow> Inl errs
                | Inr (coreInvars, next_mv2) \<Rightarrow>
@@ -601,10 +615,12 @@ definition elab_while_header ::
                     | Inr (coreDecr, decrTy, next_mv3) \<Rightarrow>
                         if \<not> is_valid_decreases_type decrTy
                         then Inl [TyErr_InvalidDecreasesType (bab_term_location decr) decrTy]
+                        else if \<not> term_inferred env coreDecr
+                        then Inl [TyErr_CannotInferType (bab_term_location decr)]
                         else
-                          Inr (clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond),
+                          Inr (apply_subst_to_term subst coreCond,
                                coreInvars,
-                               clear_metavars next_mv2 next_mv3 coreDecr,
+                               coreDecr,
                                next_mv3)))))"
 
 
@@ -616,7 +632,8 @@ definition elab_while_header ::
 
    This is passed an accumulated substitution (which came from typechecking the patterns
    against the scrutinee; e.g. a "true" pattern might have substituted some metavar in the
-   scrutinee to Bool). We apply the accSubst to the scrutinee, then clear metavars.
+   scrutinee to Bool). We apply the accSubst to the scrutinee; the result must contain
+   no unresolved metavariables (which also makes the scrutinee type metavariable-free).
 
    Then, we create a synthetic match@@n variable and bind it to the scrutinee.
    If the scrutinee is an lvalue, this will be a VarDecl Ref, else VarDecl Var.
@@ -632,16 +649,17 @@ definition elab_while_header ::
    the new env with the match@@n binding, and the new counter (hi is consumed as the
    match@@n suffix). *)
 definition elab_match_stmt_scrut ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst \<Rightarrow> nat \<Rightarrow> nat
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst \<Rightarrow> nat
    \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> DecPattern list
    \<Rightarrow> TypeError list
       + (CoreTerm \<times> CoreType \<times> VarOrRef \<times> string \<times> bool \<times> CoreTyEnv \<times> nat)" where
-  "elab_match_stmt_scrut env ghost loc accSubst lo hi scrutTm scrutTy dps =
-    (let scrut' = clear_metavars lo hi (apply_subst_to_term accSubst scrutTm);
-         scrutTy' = clear_metavars_type lo hi (apply_subst accSubst scrutTy);
+  "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps =
+    (let scrut' = apply_subst_to_term accSubst scrutTm;
+         scrutTy' = apply_subst accSubst scrutTy;
          freshName = ''match@@'' @ nat_to_string hi;
          writable = is_writable_lvalue env scrut'
-     in if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'
+     in if \<not> term_inferred env scrut' then Inl [TyErr_CannotInferType loc]
+        else if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'
         then Inr (scrut', scrutTy', Ref, freshName, writable,
                   (vardecl_add_local env ghost freshName scrutTy')
                     \<lparr> TE_ConstLocals := (if writable
@@ -767,10 +785,10 @@ where
                  (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
                     None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
                   | Some subst \<Rightarrow>
-                      Inr (CoreStmt_Obtain varName coreTy
-                             (clear_metavars next_mv next_mv'
-                                (apply_subst_to_term subst coreTm)),
-                           env', next_mv'))))"
+                      if \<not> term_inferred env (apply_subst_to_term subst coreTm)
+                      then Inl [TyErr_CannotInferType loc]
+                      else Inr (CoreStmt_Obtain varName coreTy (apply_subst_to_term subst coreTm),
+                                env', next_mv'))))"
 
   (* Use: Supply a witness for an enclosing existential TE_ProofGoal. *)
 | "elab_statement env elabEnv ghost (BabStmt_Use loc tm) next_mv =
@@ -783,16 +801,15 @@ where
     (case elab_term env elabEnv ghost lhs next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (lhsTm, lhsTy, next_mv1) \<Rightarrow>
-         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars),
-             and (in ghost code) that it is rooted at a ghost variable.\<close>
+         \<comment> \<open>Check lhs is a writable lvalue, and (in ghost code) that it is rooted
+             at a ghost variable. (The helpers check that the whole statement is
+             free of unresolved metavariables.)\<close>
          if \<not> is_writable_lvalue env lhsTm then Inl [TyErr_NotWritableLvalue loc]
          else if \<not> ghost_lvalue_ok env ghost lhsTm
          then Inl [TyErr_WriteToNonGhostFromGhost loc]
-         else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)
-         then Inl [TyErr_CannotInferType loc]
          else if is_impure_call env elabEnv rhs
-         then elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1
-         else elab_assign_pure   env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"
+         then elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
+         else elab_assign_pure   env elabEnv ghost loc lhsTm lhsTy rhs next_mv1)"
 
   (* Swap: Swap two writable lvalues. Both terms must be writable lvalues and they
      must have exactly the same type. (No unifying is necessary, because lvalues always
@@ -802,14 +819,13 @@ where
     (case elab_term env elabEnv ghost lhs next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (lhsTm, lhsTy, next_mv1) \<Rightarrow>
-         \<comment> \<open>Check lhs is a writable lvalue of a ground type (no metavars),
-             and (in ghost code) that it is rooted at a ghost variable.\<close>
+         \<comment> \<open>Check lhs is a writable lvalue, and (in ghost code) that it is rooted
+             at a ghost variable. (elab_swap checks that the whole statement is
+             free of unresolved metavariables.)\<close>
          if \<not> is_writable_lvalue env lhsTm then Inl [TyErr_NotWritableLvalue loc]
          else if \<not> ghost_lvalue_ok env ghost lhsTm
          then Inl [TyErr_WriteToNonGhostFromGhost loc]
-         else if \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list lhsTy)
-         then Inl [TyErr_CannotInferType loc]
-         else elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv next_mv1)"
+         else elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1)"
 
   (* Return from current function. The term can be either pure or impure, and must
      match the current function's return type (or be absent if the current function
@@ -837,8 +853,9 @@ where
                  (case coerce_term_to_type env loc coreTm tmTy (TE_ReturnType env) of
                     Inl errs \<Rightarrow> Inl errs
                   | Inr coreTm' \<Rightarrow>
-                      Inr (CoreStmt_Return (clear_metavars next_mv next_mv' coreTm'),
-                           env, next_mv')))))"
+                      if \<not> term_inferred env coreTm'
+                      then Inl [TyErr_CannotInferType loc]
+                      else Inr (CoreStmt_Return coreTm', env, next_mv')))))"
 
   (* Assert: asserts that a given boolean condition is true. This creates a proof
      obligation. An optional proof body (list of statements) can be given; TE_ProofGoal
@@ -861,14 +878,16 @@ where
               (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
                  None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
                | Some subst \<Rightarrow>
-                   let clearedCond =
-                         clear_metavars next_mv next_mv1 (apply_subst_to_term subst coreCond);
-                       goalEnv = env \<lparr> TE_ProofGoal := Some clearedCond,
+                   if \<not> term_inferred env (apply_subst_to_term subst coreCond)
+                   then Inl [TyErr_CannotInferType loc]
+                   else
+                   let coreCond' = apply_subst_to_term subst coreCond;
+                       goalEnv = env \<lparr> TE_ProofGoal := Some coreCond',
                                        TE_ProofTopLevel := True \<rparr>
                    in (case elab_statement_list goalEnv elabEnv Ghost proofBody next_mv1 of
                          Inl errs \<Rightarrow> Inl errs
                        | Inr (coreBody, _, next_mv') \<Rightarrow>
-                           Inr (CoreStmt_Assert (Some clearedCond) coreBody, env, next_mv')))))"
+                           Inr (CoreStmt_Assert (Some coreCond') coreBody, env, next_mv')))))"
 
   (* Assume: states without proof that a given boolean condition is true. This can be 
      used to bypass the verifier. *)
@@ -879,9 +898,9 @@ where
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) ty CoreTy_Bool of
             None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool ty]
           | Some subst \<Rightarrow>
-              Inr (CoreStmt_Assume
-                     (clear_metavars next_mv next_mv' (apply_subst_to_term subst coreTm)),
-                   env, next_mv')))"
+              if \<not> term_inferred env (apply_subst_to_term subst coreTm)
+              then Inl [TyErr_CannotInferType loc]
+              else Inr (CoreStmt_Assume (apply_subst_to_term subst coreTm), env, next_mv')))"
 
   (* If-then-else: Evaluate a boolean condition and branch to one of two statement blocks.
      Each block creates a new variable scope. Elaborates to CoreStmt_Match. *)
@@ -892,6 +911,9 @@ where
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
             None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
           | Some subst \<Rightarrow>
+              if \<not> term_inferred env (apply_subst_to_term subst coreCond)
+              then Inl [TyErr_CannotInferType loc]
+              else
               (let armEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
                in case elab_statement_list armEnv elabEnv ghost thenB next_mv1 of
                     Inl errs \<Rightarrow> Inl errs
@@ -900,8 +922,7 @@ where
                          Inl errs \<Rightarrow> Inl errs
                        | Inr (coreElse, _, next_mv3) \<Rightarrow>
                            Inr (CoreStmt_Match ghost
-                                  (clear_metavars next_mv next_mv1
-                                     (apply_subst_to_term subst coreCond))
+                                  (apply_subst_to_term subst coreCond)
                                   [(CorePat_Bool True, coreThen),
                                    (CorePat_Bool False, coreElse)],
                                 env, next_mv3)))))"
@@ -919,12 +940,12 @@ where
               \<comment> \<open>Elaborate the condition / invariants / decreases (header), then the body.\<close>
               (case elab_while_header env elabEnv ghost loc cond invs decr next_mv of
                  Inl errs \<Rightarrow> Inl errs
-               | Inr (clearedCond, coreInvars, clearedDecr, next_mv3) \<Rightarrow>
+               | Inr (coreCond, coreInvars, coreDecr, next_mv3) \<Rightarrow>
                    (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
                     in case elab_statement_list bodyEnv elabEnv ghost body next_mv3 of
                          Inl errs \<Rightarrow> Inl errs
                        | Inr (coreBody, _, next_mv4) \<Rightarrow>
-                           Inr (CoreStmt_While ghost clearedCond coreInvars clearedDecr coreBody,
+                           Inr (CoreStmt_While ghost coreCond coreInvars coreDecr coreBody,
                                 env, next_mv4)))
           | _ \<Rightarrow> Inl [TyErr_WhileNeedsOneDecreases loc]))"
 
@@ -948,7 +969,7 @@ where
             Inl errs \<Rightarrow> Inl errs
           | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
               let rawDps = map fst decoratedRows in
-              (case elab_match_stmt_scrut env ghost loc accSubst next_mv mv2
+              (case elab_match_stmt_scrut env ghost loc accSubst mv2
                       scrutTm scrutTy rawDps of
                  Inl errs \<Rightarrow> Inl errs
                | Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3) \<Rightarrow>

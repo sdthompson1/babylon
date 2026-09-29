@@ -1446,22 +1446,24 @@ proof -
   from elab obtain coreTm rhsTy next_mv coreTm' where
     etm: "elab_term env elabEnv ghost rhs 0 = Inr (coreTm, rhsTy, next_mv)" and
     co: "coerce_term_to_type env loc coreTm rhsTy declTy = Inr coreTm'" and
-    fin: "finalTm = clear_metavars 0 next_mv coreTm'"
+    inf: "term_inferred env coreTm'" and
+    fin: "finalTm = coreTm'"
     unfolding elab_const_rhs_def
-    by (auto simp: Let_def split: sum.splits prod.splits if_splits)
+    by (auto split: sum.splits prod.splits if_splits)
   show "ghost = NotGhost \<longrightarrow> is_constant_term finalTm"
     using elab unfolding elab_const_rhs_def
-    by (auto simp: Let_def split: sum.splits prod.splits if_splits)
+    by (auto split: sum.splits prod.splits if_splits)
   have typed_ext: "core_term_type (extend_env_with_tyvars env ghost 0 next_mv)
                      ghost coreTm = Some rhsTy"
     using elab_term_correct(1)[OF etm wf eewf] bound by simp
   show "core_term_type env ghost finalTm = Some declTy"
     unfolding fin
-    using coerce_clear_typed_in_env[OF typed_ext co wf bound wk rt] .
+    using coerce_inferred_typed_in_env[OF typed_ext co inf wf bound wk rt] .
 qed
 
 (* Likewise for the inferred-type form; here the result type is additionally
-   well-kinded (runtime, if non-ghost) courtesy of the no-metavariable check. *)
+   well-kinded (runtime, if non-ghost) courtesy of the no-metavariable check on
+   the term. *)
 lemma elab_const_rhs_infer_correct:
   assumes elab: "elab_const_rhs_infer env elabEnv ghost loc rhs = Inr (finalTm, resTy)"
       and wf: "tyenv_well_formed env"
@@ -1472,28 +1474,20 @@ lemma elab_const_rhs_infer_correct:
     and "ghost = NotGhost \<longrightarrow> is_runtime_type env resTy"
     and "ghost = NotGhost \<longrightarrow> is_constant_term finalTm"
 proof -
-  from elab obtain coreTm next_mv where
-    etm: "elab_term env elabEnv ghost rhs 0 = Inr (coreTm, resTy, next_mv)" and
-    no_meta: "list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list resTy)" and
-    fin: "finalTm = clear_metavars 0 next_mv coreTm"
+  from elab obtain next_mv where
+    etm: "elab_term env elabEnv ghost rhs 0 = Inr (finalTm, resTy, next_mv)" and
+    inf: "term_inferred env finalTm"
     unfolding elab_const_rhs_infer_def
-    by (auto simp: Let_def split: sum.splits prod.splits if_splits)
+    by (auto split: sum.splits prod.splits if_splits)
   show "ghost = NotGhost \<longrightarrow> is_constant_term finalTm"
     using elab unfolding elab_const_rhs_infer_def
-    by (auto simp: Let_def split: sum.splits prod.splits if_splits)
+    by (auto split: sum.splits prod.splits if_splits)
+  show "core_term_type env ghost finalTm = Some resTy"
+    using elab_term_inferred_typed(1)[OF etm wf eewf bound inf] .
   have wkrt: "is_well_kinded env resTy \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env resTy)"
-    using elab_term_inferred_type_well_kinded_runtime[OF etm wf eewf bound no_meta] .
+    using elab_term_inferred_typed(2)[OF etm wf eewf bound inf] .
   then show "is_well_kinded env resTy"
         and "ghost = NotGhost \<longrightarrow> is_runtime_type env resTy" by blast+
-  have typed_ext: "core_term_type (extend_env_with_tyvars env ghost 0 next_mv)
-                     ghost coreTm = Some resTy"
-    using elab_term_correct(1)[OF etm wf eewf] bound by simp
-  have wk_res: "is_well_kinded env resTy" using wkrt by blast
-  have below: "type_tyvars resTy \<subseteq> {n. tyvar_fresh_ok n 0}"
-    using is_well_kinded_type_tyvars_subset[OF wk_res] bound by auto
-  show "core_term_type env ghost finalTm = Some resTy"
-    unfolding fin
-    using clear_metavars_typed_in_env[OF typed_ext wf bound below] .
 qed
 
 
