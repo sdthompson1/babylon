@@ -1,0 +1,14 @@
+src/MatchRefExpr.b:22:29: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:23:32: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:24:32: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:25:35: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:28:39: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:29:33: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:53:34: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:61:29: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:62:32: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:63:39: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:64:30: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:75:30: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:79:32: 'ref' patterns are only allowed in match statements, not expressions
+src/MatchRefExpr.b:81:28: 'ref' patterns are only allowed in match statements, not expressions

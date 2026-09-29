@@ -1,0 +1,2 @@
+src/MatchAlloc.b:17:10: Can't assign, right-hand-side might be allocated
+src/MatchAlloc.b:17:21: 'a' might still be allocated at return statement

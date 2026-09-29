@@ -49,9 +49,6 @@ struct TypecheckContext {
     // True if we are at the "top level scope" of a proof
     bool at_proof_top_level;
 
-    // True if we are in a postcondition
-    bool postcondition;
-
     // Pointer to the current statement being checked (if any)
     struct Statement *statement;
 
@@ -2556,9 +2553,9 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
     switch (pattern->tag) {
     case PAT_VAR:
 
-        // No ref patterns in postconditions
-        if (pattern->var.ref && tc_context->postcondition) {
-            report_no_ref_in_postcondition(pattern->location);
+        // No ref patterns in match terms (only in match statements)
+        if (pattern->var.ref && !in_statement) {
+            report_no_ref_in_match_term(pattern->location);
             ++tc_context->num_errors;
             return false;
         }
@@ -2736,13 +2733,11 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
 
         // check the pattern, add any pattern-variables into the environment
         if (term->match.scrutinee->type) {
-            bool read_only = false;
-            bool lvalue = is_lvalue(context, term->match.scrutinee, NULL, &read_only);
-            // scrutinee_ghost is passed as true because in a match *term*, the
-            // arms are expressions, so nothing can be written through a ref
-            // pattern (and reading a non-ghost variable from ghost code is fine).
+            // scrutinee_lvalue, scrutinee_read_only and scrutinee_ghost only matter
+            // for ref patterns, which are not allowed in a match *term*, so we
+            // just pass false for all three.
             if (!typecheck_pattern(context, arm->pattern, term->match.scrutinee->type,
-                                   lvalue, read_only, true, false)) {
+                                   false, false, false, false)) {
                 patterns_ok = false;
             }
         }
@@ -3014,15 +3009,7 @@ static void typecheck_attributes(struct TypecheckContext *tc_context, struct Att
         case ATTR_INVARIANT:
         case ATTR_DECREASES:
 
-            if (attr->tag == ATTR_ENSURES) {
-                tc_context->postcondition = true;
-            }
-
             typecheck_term(tc_context, attr->term);
-
-            if (attr->tag == ATTR_ENSURES) {
-                tc_context->postcondition = false;
-            }
 
             // requires, ensures, invariant must be bool
             // decreases must be int, bool, or tuple of those
@@ -4671,7 +4658,6 @@ bool typecheck_module(TypeEnv *type_env,
     tc_context.statement = NULL;
     tc_context.assert_term = NULL;
     tc_context.at_proof_top_level = false;
-    tc_context.postcondition = false;
     tc_context.temp_name_counter = 0;
 
     typecheck_decl_groups(&tc_context, module->interface, false, module->interface);

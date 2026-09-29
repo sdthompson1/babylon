@@ -112,7 +112,7 @@ void report_duplicate_field_name(struct Location location, const char *name);
 void report_ref_arg_not_allowed_in_subexpression(struct Location location);
 void report_ref_ghost_requires_ghost_arg(struct Location location);
 void report_ghost_ref_requires_ghost_lvalue(struct Location location);
-void report_no_ref_in_postcondition(struct Location location);
+void report_no_ref_in_match_term(struct Location location);
 void report_cannot_index(struct Term *term);
 void report_wrong_number_of_indexes(struct Term *term);
 void report_main_not_found(const char *module_name, const char *function_name);

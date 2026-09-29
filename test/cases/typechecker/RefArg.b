@@ -38,7 +38,7 @@ function f6()
 }
 
 function f7(ref x: i32)
-    ensures match (x) { case ref xx => true };    // Error, match ref in postcondition
+    ensures match (x) { case ref xx => true };    // Error, ref pattern in a match expression
 {
 }
 

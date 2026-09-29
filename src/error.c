@@ -240,10 +240,10 @@ void report_ghost_ref_requires_ghost_lvalue(struct Location location)
     print_error("A 'ref' declared in ghost code must refer to a ghost variable\n");
 }
 
-void report_no_ref_in_postcondition(struct Location location)
+void report_no_ref_in_match_term(struct Location location)
 {
     print_location(location);
-    print_error("'match ref' not allowed in postconditions\n");
+    print_error("'ref' patterns are only allowed in match statements, not expressions\n");
 }
 
 void report_cannot_index(struct Term *term)

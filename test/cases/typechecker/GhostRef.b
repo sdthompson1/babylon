@@ -50,7 +50,7 @@ function g()
     case Mk(ref x) =>       // Error, ref pattern over non-ghost scrutinee in ghost code
     }
 
-    // In a match *term*, ref patterns cannot be written through, so they are
-    // allowed over non-ghost scrutinees even in proof code.
-    assert (match v { case Mk(ref x) => x == 50 });   // OK
+    // A match *term* has no ref patterns (see MatchRefExpr.b), but it can
+    // read a non-ghost scrutinee from proof code with an ordinary pattern.
+    assert (match v { case Mk(x) => x == 50 });   // OK
 }
