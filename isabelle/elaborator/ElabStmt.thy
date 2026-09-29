@@ -12,11 +12,8 @@ definition term_inferred :: "CoreTyEnv \<Rightarrow> CoreTerm \<Rightarrow> bool
   "term_inferred env tm =
      list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (core_term_free_tyvars_list tm)"
 
-(* The type-level analog. *)
-definition type_inferred :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
-  "type_inferred env ty = list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list ty)"
-
-(* Both checks together. *)
+(* The term-level check together with its type-level analog (type_inferred, which
+   is defined in ElabTerm). *)
 definition call_inferred :: "CoreTyEnv \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> bool" where
   "call_inferred env tyArgs argTms =
      (list_all (type_inferred env) tyArgs \<and> list_all (term_inferred env) argTms)"
@@ -630,8 +627,9 @@ definition elab_while_header ::
 
 (* Scrutinee binding for BabStmt_Match.
 
-   The elaborated scrutinee must contain no unresolved metavariables (which also
-   makes the scrutinee type metavariable-free).
+   The elaborated scrutinee must contain no unresolved metavariables. (Its type
+   contains none, which the caller has checked already; this check is for a
+   metavariable that occurs in the scrutinee term but not in its type.)
 
    We create a synthetic match@@n variable and bind it to the scrutinee.
    If the scrutinee is an lvalue, this will be a VarDecl Ref, else VarDecl Var.
@@ -952,6 +950,8 @@ where
 
   (* Match: run the first arm whose pattern matches the scrutinee, with the
      pattern's variables in scope. Each arm creates a new variable scope.
+     As for a match term, the scrutinee's type must contain no unresolved
+     metavariables; this is checked before any pattern is looked at.
      Elaborates to a CoreStmt_Block binding the scrutinee to a synthesised
      match@@n variable (by Ref if it is an lvalue), then a CoreStmt_Match
      whose arm bodies start with one VarDecl per pattern variable. *)
@@ -960,6 +960,9 @@ where
      else case elab_term env elabEnv ghost scrut next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
+         if \<not> type_inferred env scrutTy
+         then Inl [TyErr_CannotInferType (bab_term_location scrut)]
+         else
          (case decorate_match_arms env elabEnv ghost scrutTy True arms of
             Inl errs \<Rightarrow> Inl errs
           | Inr decoratedRows \<Rightarrow>

@@ -632,6 +632,16 @@ definition build_updated_record ::
 
 
 (* ========================================================================== *)
+(* Metavariable resolution check for types *)
+(* ========================================================================== *)
+
+(* Check that a type was fully inferred, i.e., no type metavariables remain in
+   it. Variables not in TE_TypeVars env are assumed to be metavariables. *)
+definition type_inferred :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "type_inferred env ty = list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list ty)"
+
+
+(* ========================================================================== *)
 (* Match helpers *)
 (* ========================================================================== *)
 
@@ -1028,8 +1038,12 @@ where
   (* Match: elaborate the scrutinee, decorate every arm's pattern against the
      scrutinee type, and elaborate every arm's body under the env extended with
      that arm's pattern variables (every pattern variable is const, as for Let).
-     The type of the match is the first arm's body type: every arm body is
+
+     The scrutinee's type must be fully determined by the scrutinee itself.
+
+     The type of the match is the first arm's body type. Every arm body is
      converted to it, using the same implicit conversions as function arguments.
+
      The result is handed off to finalize_match_term (which translates
      DecPatterns to CorePatterns and emits the binder-projection Lets). *)
 | "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv =
@@ -1037,6 +1051,9 @@ where
      else case elab_term env elabEnv ghost scrut next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
+         if \<not> type_inferred env scrutTy
+         then Inl [TyErr_CannotInferType (bab_term_location scrut)]
+         else
          (case decorate_match_arms env elabEnv ghost scrutTy False arms of
             Inl errs \<Rightarrow> Inl errs
           | Inr decoratedRows \<Rightarrow>

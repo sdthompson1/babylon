@@ -101,19 +101,6 @@ definition unknown_field_names ::
   "unknown_field_names fieldTypes userFlds =
     filter (\<lambda>n. map_of fieldTypes n = None) (map fst userFlds)"
 
-(* The error to report when the scrutinee type does not have the shape that a
-   pattern requires. Patterns are checked against the scrutinee type and never
-   contribute to type inference, so if the scrutinee type is still an unresolved
-   metavariable (a type variable not in TE_TypeVars env) the error is "unable to
-   infer type"; otherwise it is the given shape-specific error. *)
-definition pattern_shape_error ::
-  "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreType \<Rightarrow> TypeError \<Rightarrow> TypeError list" where
-  "pattern_shape_error env loc scrutTy err =
-    (case scrutTy of
-       CoreTy_Var n \<Rightarrow>
-         if n |\<notin>| TE_TypeVars env then [TyErr_CannotInferType loc] else [err]
-     | _ \<Rightarrow> [err])"
-
 (* Resolve a constructor name appearing in a pattern: look it up in
    TE_DataCtors and check the ghost-context rule. Returns (datatype name,
    type vars, payload type, isNullary), where isNullary records whether the
@@ -158,7 +145,11 @@ section \<open>The decorator\<close>
    variable or wildcard pattern accepts any type. Every other pattern requires
    the scrutinee type to already have the matching shape, and reads the types
    of its sub-patterns (record fields, the instantiated constructor payload)
-   off the scrutinee type. *)
+   off the scrutinee type.
+
+   The callers check that the scrutinee type contains no unresolved
+   metavariables before any pattern is decorated, so a type of the wrong shape
+   is always reported as a shape error. *)
 function (sequential)
   decorate_pattern ::
     "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabPattern \<Rightarrow> CoreType
@@ -169,7 +160,10 @@ and decorate_pattern_list ::
 
   (* Variable: matches anything; becomes a DP_Var of the scrutinee type. The type
      bound to the variable must contain no unresolved metavariables (mirroring
-     BabTm_Let's similar restriction). *)
+     BabTm_Let's similar restriction). This check cannot fail when the type of
+     the whole scrutinee contains no metavariables, as the callers ensure; it is
+     made here as well so that the property can be read off the decorator
+     alone. *)
   "decorate_pattern env elabEnv ghost (BabPat_Var loc vr name) scrutTy =
     (if list_all (\<lambda>n. n |\<in>| TE_TypeVars env) (type_tyvars_list scrutTy)
      then Inr (DP_Var vr name scrutTy)
@@ -182,8 +176,7 @@ and decorate_pattern_list ::
   (* Bool literal: the scrutinee must have type bool. *)
 | "decorate_pattern env elabEnv ghost (BabPat_Bool loc b) scrutTy =
     (if scrutTy = CoreTy_Bool then Inr (DP_Bool b)
-     else Inl (pattern_shape_error env loc scrutTy
-                 (TyErr_TypeMismatch loc CoreTy_Bool scrutTy)))"
+     else Inl [TyErr_TypeMismatch loc CoreTy_Bool scrutTy])"
 
   (* Int literal: the scrutinee must have a finite integer type, and the literal
      must be in range of that type (matching an int literal against a MathInt
@@ -195,8 +188,7 @@ and decorate_pattern_list ::
          (if int_in_range (int_range sign bits) i
           then Inr (DP_Int i)
           else Inl [TyErr_IntPatternOutOfRange loc scrutTy])
-     | _ \<Rightarrow> Inl (pattern_shape_error env loc scrutTy
-                   (TyErr_FiniteIntegerTypeRequired loc scrutTy)))"
+     | _ \<Rightarrow> Inl [TyErr_FiniteIntegerTypeRequired loc scrutTy])"
 
   (* Tuple: desugars to a record pattern with synthetic field names. The
      scrutinee must be a tuple type (a record with the synthetic field names)
@@ -209,8 +201,7 @@ and decorate_pattern_list ::
                Inl errs \<Rightarrow> Inl errs
              | Inr decPats \<Rightarrow> Inr (DP_Record (zip (map fst fieldTypes) decPats)))
           else Inl [TyErr_TuplePatternMismatch loc (length pats) scrutTy])
-     | _ \<Rightarrow> Inl (pattern_shape_error env loc scrutTy
-                   (TyErr_TuplePatternMismatch loc (length pats) scrutTy)))"
+     | _ \<Rightarrow> Inl [TyErr_TuplePatternMismatch loc (length pats) scrutTy])"
 
   (* Record: the scrutinee must be a record type, the pattern's field names
      must be a subset of those in the record, and the pattern must not have
@@ -232,8 +223,7 @@ and decorate_pattern_list ::
                         Inr (DP_Record
                               (build_record_dec_patterns fieldTypes
                                  (map fst userFlds) decPats))))
-          | _ \<Rightarrow> Inl (pattern_shape_error env loc scrutTy
-                        (TyErr_NotARecordType loc scrutTy))))"
+          | _ \<Rightarrow> Inl [TyErr_NotARecordType loc scrutTy]))"
 
   (* Variant: resolve the constructor; the scrutinee must be an instance of the
      constructor's datatype. Check payload presence, and recurse on the payload
@@ -258,9 +248,8 @@ and decorate_pattern_list ::
                           | Inr dp \<Rightarrow> Inr (DP_Variant ctorName (Some dp))))
                else Inl [TyErr_TypeMismatch loc
                            (CoreTy_Datatype dtName (map CoreTy_Var tyvars)) scrutTy])
-          | _ \<Rightarrow> Inl (pattern_shape_error env loc scrutTy
-                        (TyErr_TypeMismatch loc
-                           (CoreTy_Datatype dtName (map CoreTy_Var tyvars)) scrutTy))))"
+          | _ \<Rightarrow> Inl [TyErr_TypeMismatch loc
+                          (CoreTy_Datatype dtName (map CoreTy_Var tyvars)) scrutTy]))"
 
 | "decorate_pattern_list env elabEnv ghost [] _ = Inr []"
 

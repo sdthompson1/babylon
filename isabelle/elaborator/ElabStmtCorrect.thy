@@ -7,10 +7,10 @@ begin
 (* Bridge lemmas: from the fresh-tyvar-extended env down to env              *)
 (* ========================================================================== *)
 
-(* The statement elaborator checks (term_inferred / type_inferred /          *)
-(* call_inferred, ElabStmt.thy) that every emitted term mentions only type   *)
-(* variables that are in scope, i.e. none of the fresh-interval               *)
-(* metavariables. The lemmas below show that such a term, which               *)
+(* The statement elaborator checks (term_inferred / call_inferred in          *)
+(* ElabStmt.thy, type_inferred in ElabTerm.thy) that every emitted term       *)
+(* mentions only type variables that are in scope, i.e. none of the           *)
+(* fresh-interval metavariables. The lemmas below show that such a term, which *)
 (* elab_term_correct types in the env extended with the fresh interval,       *)
 (* typechecks in the ORIGINAL env (no fresh-tyvar extension), which is what   *)
 (* lets elab_statement_correct be stated over plain env.                      *)
@@ -2656,16 +2656,18 @@ next
   from "13.prems" arms_ne obtain scrutTm scrutTy mv1 where
     elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "13.prems" arms_ne elab_scrut obtain decoratedRows where
+  from "13.prems" arms_ne elab_scrut have scrut_inf: "type_inferred env scrutTy"
+    by (auto split: if_splits)
+  from "13.prems" arms_ne elab_scrut scrut_inf obtain decoratedRows where
     dec_eq: "decorate_match_arms env elabEnv ghost scrutTy True arms = Inr decoratedRows"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems" arms_ne elab_scrut dec_eq
+  from "13.prems" arms_ne elab_scrut scrut_inf dec_eq
   obtain mode freshName writable envAfterFresh mv2 where
     scrut_fin: "elab_match_stmt_scrut env ghost loc mv1
                   scrutTm scrutTy (map fst decoratedRows)
                 = Inr (mode, freshName, writable, envAfterFresh, mv2)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin obtain coreBodies mv3 where
+  from "13.prems" arms_ne elab_scrut scrut_inf dec_eq scrut_fin obtain coreBodies mv3 where
     bodies_eq: "elab_statement_lists_with_envs
                   (zip (map (\<lambda>dp. extend_env_with_pattern_vars
                                     (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
@@ -2674,14 +2676,14 @@ next
                        (map snd arms)) elabEnv ghost mv2
                 = Inr (coreBodies, mv3)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin bodies_eq
+  from "13.prems" arms_ne elab_scrut scrut_inf dec_eq scrut_fin bodies_eq
   have mv'_eq: "next_mv' = mv3"
     by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> mv1" using elab_term_next_mv_monotone[OF elab_scrut] .
   have m2: "mv2 = mv1 + 1"
     using elab_match_stmt_scrut_next_mv[OF scrut_fin] .
   have m3: "mv2 \<le> mv3"
-    using "13.IH" arms_ne elab_scrut dec_eq scrut_fin bodies_eq by fastforce
+    using "13.IH" arms_ne elab_scrut scrut_inf dec_eq scrut_fin bodies_eq by fastforce
   show ?case using m1 m2 m3 mv'_eq by simp
 next
   \<comment> \<open>ShowHide: next_mv unchanged.\<close>
@@ -4614,10 +4616,12 @@ next
   from "13.prems"(1) arms_ne obtain scrutTm scrutTy mv1 where
     etm: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "13.prems"(1) arms_ne etm obtain decoratedRows where
+  from "13.prems"(1) arms_ne etm have scrut_inf: "type_inferred env scrutTy"
+    by (auto split: if_splits)
+  from "13.prems"(1) arms_ne etm scrut_inf obtain decoratedRows where
     dec_eq: "decorate_match_arms env elabEnv ghost scrutTy True arms = Inr decoratedRows"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems"(1) arms_ne etm dec_eq
+  from "13.prems"(1) arms_ne etm scrut_inf dec_eq
   obtain mode freshName writable envAfterFresh mv2 where
     scrut_fin: "elab_match_stmt_scrut env ghost loc mv1
                   scrutTm scrutTy (map fst decoratedRows)
@@ -4632,11 +4636,11 @@ next
   let ?bodyJobs = "zip (map (\<lambda>dp. extend_env_with_pattern_vars ?env1 ?constOf ghost [dp]) ?dps)
                        (map snd arms)"
 
-  from "13.prems"(1) arms_ne etm dec_eq scrut_fin obtain coreBodies mv3 where
+  from "13.prems"(1) arms_ne etm scrut_inf dec_eq scrut_fin obtain coreBodies mv3 where
     bodies_eq: "elab_statement_lists_with_envs ?bodyJobs elabEnv ghost mv2
                 = Inr (coreBodies, mv3)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems"(1) arms_ne etm dec_eq scrut_fin bodies_eq have
+  from "13.prems"(1) arms_ne etm scrut_inf dec_eq scrut_fin bodies_eq have
     fin_stmt: "finalize_match_stmt ghost loc mode freshName scrutTy scrutTm
                  ?dps coreBodies = Inr coreStmt" and
     env'_eq: "env' = env"
@@ -4875,7 +4879,7 @@ next
     "list_all2 (\<lambda>(env_i, _) coreStmts_i.
         core_statement_list_type env_i ghost coreStmts_i \<noteq> None)
        ?bodyJobs coreBodies"
-    using "13.IH" arms_ne etm dec_eq scrut_fin bodies_eq jobs_inv by fastforce
+    using "13.IH" arms_ne etm scrut_inf dec_eq scrut_fin bodies_eq jobs_inv by fastforce
 
   \<comment> \<open>Lengths.\<close>
   have len_jobs: "length ?bodyJobs = length decoratedRows"

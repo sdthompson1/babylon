@@ -3241,18 +3241,23 @@ next
   from "16.prems"(1) arms_ne obtain scrutTm scrutTy mv1 where
     elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "16.prems"(1) arms_ne elab_scrut obtain decoratedRows where
+  \<comment> \<open>The scrutinee type passed the inferred check (made before the patterns
+      are decorated). \<close>
+  from "16.prems"(1) arms_ne elab_scrut have scrut_inf: "type_inferred env scrutTy"
+    by (auto split: if_splits)
+  hence scrut_inf_nn: "\<not> \<not> type_inferred env scrutTy" by simp
+  from "16.prems"(1) arms_ne elab_scrut scrut_inf obtain decoratedRows where
     decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy False arms
                   = Inr decoratedRows"
     by (auto simp: Let_def split: sum.splits)
   let ?dps = "map fst decoratedRows"
   let ?bodyJobs = "zip (map ?armEnv ?dps) (map snd arms)"
-  from "16.prems"(1) arms_ne elab_scrut decorate_eq
+  from "16.prems"(1) arms_ne elab_scrut scrut_inf decorate_eq
   obtain bodyTms bodyTys mv2 where
     elab_bodies: "elab_term_list_with_envs ?bodyJobs elabEnv ghost mv1
                   = Inr (bodyTms, bodyTys, mv2)"
     by (auto simp: Let_def split: sum.splits)
-  from "16.prems"(1) arms_ne elab_scrut decorate_eq elab_bodies
+  from "16.prems"(1) arms_ne elab_scrut scrut_inf decorate_eq elab_bodies
   obtain coercedBodies finalSubst where
     uc: "unify_and_coerce ?is_flex ?locOf bodyTms bodyTys
            (replicate (length bodyTms) (hd bodyTys)) fmempty
@@ -3262,7 +3267,7 @@ next
     "finalize_match_term loc scrutTm ?dps coercedBodies
                          (apply_subst finalSubst (hd bodyTys)) mv2
      = Inr (newTm, ty, next_mv')"
-    using "16.prems"(1) arms_ne elab_scrut decorate_eq elab_bodies uc
+    using "16.prems"(1) arms_ne elab_scrut scrut_inf decorate_eq elab_bodies uc
     by (auto simp: Let_def split: sum.splits)
 
   \<comment> \<open>Monotonicity facts. \<close>
@@ -3402,8 +3407,8 @@ next
        (\<lambda>(env_i, _) (tm', ty').
           core_term_type (extend_env_with_tyvars env_i ghost mv1 mv2) ghost tm' = Some ty')
        ?bodyJobs (zip bodyTms bodyTys)"
-    using "16.IH"(2)[OF arms_ne elab_scrut refl refl decorate_eq refl refl elab_bodies
-                       jobs_envs_wf jobs_envs_elab_wf jobs_envs_fresh] .
+    using "16.IH"(2)[OF arms_ne elab_scrut refl refl scrut_inf_nn decorate_eq refl refl
+                       elab_bodies jobs_envs_wf jobs_envs_elab_wf jobs_envs_fresh] .
 
   \<comment> \<open>Lengths. \<close>
   have len_bodyTms: "length bodyTms = length arms"

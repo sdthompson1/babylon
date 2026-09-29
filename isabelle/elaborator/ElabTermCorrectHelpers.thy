@@ -359,11 +359,14 @@ next
   from "16.prems" arms_nonempty obtain scrutTm scrutTy mv1 where
     elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "16.prems" arms_nonempty elab_scrut obtain decoratedArms where
+  from "16.prems" arms_nonempty elab_scrut have scrut_inf: "type_inferred env scrutTy"
+    by (auto split: if_splits)
+  hence scrut_inf_nn: "\<not> \<not> type_inferred env scrutTy" by simp
+  from "16.prems" arms_nonempty elab_scrut scrut_inf obtain decoratedArms where
     decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy False arms
                   = Inr decoratedArms"
     by (auto simp: Let_def split: sum.splits)
-  from "16.prems" arms_nonempty elab_scrut decorate_eq
+  from "16.prems" arms_nonempty elab_scrut scrut_inf decorate_eq
   obtain bodyTms bodyTys mv2 where
     elab_bodies: "elab_term_list_with_envs
                     (zip (map (\<lambda>dp. extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp])
@@ -375,8 +378,9 @@ next
   have m1: "next_mv \<le> mv1"
     using "16.IH"(1) arms_nonempty elab_scrut by simp
   have m2: "mv1 \<le> mv2"
-    using "16.IH"(2)[OF arms_nonempty elab_scrut refl refl decorate_eq refl refl elab_bodies] .
-  from "16.prems" arms_nonempty elab_scrut decorate_eq elab_bodies
+    using "16.IH"(2)[OF arms_nonempty elab_scrut refl refl scrut_inf_nn decorate_eq
+                       refl refl elab_bodies] .
+  from "16.prems" arms_nonempty elab_scrut scrut_inf decorate_eq elab_bodies
   have "next_mv' = mv2 + 1"
     by (auto simp: Let_def finalize_match_term_def split: sum.splits prod.splits if_splits)
   with m1 m2 show ?case by simp
