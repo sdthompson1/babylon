@@ -27,6 +27,96 @@ proof -
   thus "fmlookup subst n = None" by (simp add: fmdom_notD)
 qed
 
+(* apply_subst preserves runtime when the substitution's range is runtime
+   under the same env. (Specialisation of apply_subst_preserves_runtime with src = tgt.) *)
+lemma apply_subst_preserves_runtime_same_env:
+  assumes ty_rt: "is_runtime_type env ty"
+      and acc_rt: "\<forall>ty' \<in> fmran' subst. is_runtime_type env ty'"
+  shows "is_runtime_type env (apply_subst subst ty)"
+proof (rule apply_subst_preserves_runtime[OF ty_rt refl])
+  fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
+  show "case fmlookup subst n of
+          Some ty' \<Rightarrow> is_runtime_type env ty'
+        | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
+  proof (cases "fmlookup subst n")
+    case None
+    thus ?thesis using n_in by simp
+  next
+    case (Some ty')
+    hence "ty' \<in> fmran' subst" by (auto simp: fmran'I)
+    thus ?thesis using acc_rt Some by simp
+  qed
+qed
+
+(* apply_subst preserves well-kindedness when the substitution's range is
+   well-kinded under the same env. (Specialisation of apply_subst_preserves_well_kinded
+   with src = tgt.) *)
+lemma apply_subst_preserves_well_kinded_same_env:
+  assumes ty_wk: "is_well_kinded env ty"
+      and acc_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded env ty'"
+  shows "is_well_kinded env (apply_subst subst ty)"
+proof (rule apply_subst_preserves_well_kinded[OF ty_wk refl])
+  fix n assume n_in: "n |\<in>| TE_TypeVars env"
+  show "case fmlookup subst n of
+          Some ty' \<Rightarrow> is_well_kinded env ty'
+        | None \<Rightarrow> n |\<in>| TE_TypeVars env"
+  proof (cases "fmlookup subst n")
+    case None
+    thus ?thesis using n_in by simp
+  next
+    case (Some ty')
+    hence "ty' \<in> fmran' subst" by (auto simp: fmran'I)
+    thus ?thesis using acc_wk Some by simp
+  qed
+qed
+
+
+(* ========================================================================== *)
+(* Unification against an atomic type *)
+(* ========================================================================== *)
+
+(* An atomic type is one that contains no other type as a "subterm". *)
+fun is_atomic_type :: "CoreType \<Rightarrow> bool" where
+  "is_atomic_type CoreTy_Bool = True"
+| "is_atomic_type (CoreTy_FiniteInt _ _) = True"
+| "is_atomic_type CoreTy_MathInt = True"
+| "is_atomic_type CoreTy_MathReal = True"
+| "is_atomic_type _ = False"
+
+lemma is_integer_type_atomic:
+  "is_integer_type ty \<Longrightarrow> is_atomic_type ty"
+  by (cases ty) auto
+
+(* Unifying anything against an atomic type can only bind a single
+   flexible variable to that type, so the range of the unifier (if one exists)
+   consists of that type alone. *)
+lemma unify_atomic_range:
+  assumes "unify is_flex ty1 ty2 = Some s"
+      and "is_atomic_type ty2"
+  shows "\<forall>ty \<in> fmran' s. ty = ty2"
+  using assms
+  by (cases ty1; cases ty2)
+     (auto simp: fmran'_def singleton_subst_def occurs_def split: if_splits)
+
+(* In particular, the range of the unifier must be complete (because all atomic types
+   are complete).
+   This is why elaborator sites that unify a term's type against CoreTy_Bool or
+   against an integer type need no explicit completeness check. *)
+lemma unify_atomic_range_complete:
+  assumes "unify is_flex ty1 ty2 = Some s"
+      and "is_atomic_type ty2"
+  shows "\<forall>ty \<in> fmran' s. is_complete_type ty"
+  using unify_atomic_range[OF assms] assms(2) by (cases ty2) auto
+
+lemma unify_bool_range_complete:
+  "unify is_flex ty CoreTy_Bool = Some s \<Longrightarrow> \<forall>ty' \<in> fmran' s. is_complete_type ty'"
+  by (rule unify_atomic_range_complete[of is_flex ty CoreTy_Bool s]) simp_all
+
+
+(* ========================================================================== *)
+(* Monotonicity of the metavariable counter *)
+(* ========================================================================== *)
+
 (* Monotonicity of next_mv: elab_term / elab_term_list / elab_term_list_with_envs only advance the counter. *)
 lemma elab_term_next_mv_monotone:
   "elab_term env elabEnv ghost tm next_mv = Inr (tm', ty', next_mv') \<Longrightarrow> next_mv \<le> next_mv'"
@@ -261,40 +351,35 @@ next
   with mono1 mono2 show ?case by simp
 next
   case (16 env elabEnv ghost loc scrut arms next_mv)
-  \<comment> \<open>BabTm_Match: threads through scrutinee, decorate_match_arms (non-mutual),
-       elab_term_list_with_envs (mutual), unify_arm_body_types (non-mutual).\<close>
+  \<comment> \<open>BabTm_Match: threads through scrutinee and elab_term_list_with_envs (mutual);
+       decorate_match_arms and unify_and_coerce allocate nothing; finalize_match_term
+       consumes one counter value.\<close>
   from "16.prems" have arms_nonempty: "arms \<noteq> []"
     by (auto split: if_splits)
   from "16.prems" arms_nonempty obtain scrutTm scrutTy mv1 where
     elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "16.prems" arms_nonempty elab_scrut obtain decoratedArms accSubst mv2 where
-    decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy
-                    False fmempty mv1 arms
-                  = Inr (decoratedArms, accSubst, mv2)"
+  from "16.prems" arms_nonempty elab_scrut obtain decoratedArms where
+    decorate_eq: "decorate_match_arms env elabEnv ghost scrutTy False arms
+                  = Inr decoratedArms"
     by (auto simp: Let_def split: sum.splits)
-  from "16.prems" arms_nonempty elab_scrut decorate_eq obtain finalizedArms where
-    finalize_eq: "finalize_match_arms env (\<lambda>_. True) ghost loc accSubst (map fst decoratedArms)
-                  = Inr finalizedArms"
-    by (auto simp: Let_def split: sum.splits)
-  from "16.prems" arms_nonempty elab_scrut decorate_eq finalize_eq
-  obtain bodyTms bodyTys mv3 where
+  from "16.prems" arms_nonempty elab_scrut decorate_eq
+  obtain bodyTms bodyTys mv2 where
     elab_bodies: "elab_term_list_with_envs
-                    (zip (map snd finalizedArms) (map snd arms))
-                    elabEnv ghost mv2
-                  = Inr (bodyTms, bodyTys, mv3)"
+                    (zip (map (\<lambda>dp. extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp])
+                              (map fst decoratedArms))
+                         (map snd arms))
+                    elabEnv ghost mv1
+                  = Inr (bodyTms, bodyTys, mv2)"
     by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> mv1"
     using "16.IH"(1) arms_nonempty elab_scrut by simp
   have m2: "mv1 \<le> mv2"
-    using decorate_match_arms_next_mv_monotone[OF decorate_eq] .
-  have m3: "mv2 \<le> mv3"
-    using "16.IH"(2) arms_nonempty elab_scrut decorate_eq finalize_eq elab_bodies
-    by (simp add: Let_def)
-  from "16.prems" arms_nonempty elab_scrut decorate_eq finalize_eq elab_bodies
-  have "next_mv' = mv3 + 1"
-    by (auto simp: Let_def finalize_match_term_def split: sum.splits if_splits)
-  with m1 m2 m3 show ?case by simp
+    using "16.IH"(2)[OF arms_nonempty elab_scrut refl refl decorate_eq refl refl elab_bodies] .
+  from "16.prems" arms_nonempty elab_scrut decorate_eq elab_bodies
+  have "next_mv' = mv2 + 1"
+    by (auto simp: Let_def finalize_match_term_def split: sum.splits prod.splits if_splits)
+  with m1 m2 show ?case by simp
 next
   case (17 env elabEnv ghost loc tm next_mv)
   \<comment> \<open>BabTm_Sizeof: forwards sub-term's next_mv\<close>
@@ -357,6 +442,29 @@ proof (induction tms arbitrary: tms' tys' next_mv next_mv')
 next
   case (Cons tm tms)
   then show ?case by (auto split: sum.splits)
+qed
+
+(* Likewise for elab_term_list_with_envs. *)
+lemma elab_term_list_with_envs_length:
+  "elab_term_list_with_envs jobs elabEnv ghost next_mv = Inr (tms', tys', next_mv')
+   \<Longrightarrow> length tms' = length jobs \<and> length tys' = length jobs"
+proof (induction jobs arbitrary: tms' tys' next_mv next_mv')
+  case Nil
+  thus ?case by simp
+next
+  case (Cons hd rest)
+  obtain env_h tm_h where hd_eq: "hd = (env_h, tm_h)" by (cases hd) auto
+  from Cons.prems hd_eq obtain tm' ty' nmv1 where
+    elab_h: "elab_term env_h elabEnv ghost tm_h next_mv = Inr (tm', ty', nmv1)"
+    by (auto split: sum.splits)
+  from Cons.prems hd_eq elab_h obtain tms_r tys_r where
+    elab_r: "elab_term_list_with_envs rest elabEnv ghost nmv1 = Inr (tms_r, tys_r, next_mv')" and
+    tms_eq: "tms' = tm' # tms_r" and
+    tys_eq: "tys' = ty' # tys_r"
+    by (auto split: sum.splits)
+  from Cons.IH[OF elab_r] have "length tms_r = length rest" "length tys_r = length rest"
+    by simp_all
+  thus ?case using tms_eq tys_eq by simp
 qed
 
 (* Correctness of resolve_type_args:
@@ -1693,6 +1801,29 @@ next
   case ("3_6" subst v va)
   then show ?case by simp
 qed
+
+(* Index-wise characterisation of apply_call_coercions. This is the form to use
+   when the terms are not all typed in the same env (e.g. match arm bodies, each
+   typed in an env extended with its own arm's pattern variables), so that
+   apply_call_coercions_correct does not apply directly. *)
+lemma apply_call_coercions_length:
+  "length tms = length actualTys \<Longrightarrow> length actualTys = length expectedTys
+   \<Longrightarrow> length (apply_call_coercions subst tms actualTys expectedTys) = length tms"
+  by (induction subst tms actualTys expectedTys rule: apply_call_coercions.induct)
+     simp_all
+
+lemma apply_call_coercions_nth:
+  "length tms = length actualTys \<Longrightarrow> length actualTys = length expectedTys
+   \<Longrightarrow> i < length tms
+   \<Longrightarrow> apply_call_coercions subst tms actualTys expectedTys ! i
+       = insert_cast (apply_subst subst (actualTys ! i))
+                     (apply_subst subst (expectedTys ! i))
+                     (apply_subst_to_term subst (tms ! i))"
+proof (induction subst tms actualTys expectedTys arbitrary: i
+       rule: apply_call_coercions.induct)
+  case (2 subst tm tms actualTy actualTys expectedTy expectedTys)
+  thus ?case by (cases i) auto
+qed simp_all
 
 (* Correctness of coerce_to_common_int_type:
    If coercion succeeds, both output terms have the common type. *)

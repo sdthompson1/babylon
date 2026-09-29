@@ -2419,10 +2419,10 @@ qed
    the two Inr branches, to keep the simplifier away from the unfolded
    Let-duplicated terms. *)
 lemma elab_match_stmt_scrut_next_mv:
-  assumes "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
-            = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)"
+  assumes "elab_match_stmt_scrut env ghost loc hi scrutTm scrutTy dps
+            = Inr (mode, freshName, writable, envAfterFresh, mvOut)"
   shows "mvOut = hi + 1"
-proof (cases "term_inferred env (apply_subst_to_term accSubst scrutTm)")
+proof (cases "term_inferred env scrutTm")
   case False
   thus ?thesis using assms unfolding elab_match_stmt_scrut_def Let_def
     by (simp del: nat_to_string.simps)
@@ -2430,8 +2430,7 @@ next
   case True
   note inf = True
   show ?thesis
-  proof (cases "is_lvalue (apply_subst_to_term accSubst scrutTm)
-                \<and> ghost_lvalue_ok env ghost (apply_subst_to_term accSubst scrutTm)")
+  proof (cases "is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm")
     case True
     thus ?thesis using assms inf unfolding elab_match_stmt_scrut_def Let_def
       by (simp del: nat_to_string.simps)
@@ -2657,36 +2656,33 @@ next
   from "13.prems" arms_ne obtain scrutTm scrutTy mv1 where
     elab_scrut: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "13.prems" arms_ne elab_scrut obtain decoratedRows accSubst mv2 where
-    dec_eq: "decorate_match_arms env elabEnv ghost scrutTy True fmempty mv1 arms
-             = Inr (decoratedRows, accSubst, mv2)"
+  from "13.prems" arms_ne elab_scrut obtain decoratedRows where
+    dec_eq: "decorate_match_arms env elabEnv ghost scrutTy True arms = Inr decoratedRows"
     by (auto simp: Let_def split: sum.splits)
   from "13.prems" arms_ne elab_scrut dec_eq
-  obtain scrut' scrutTy' mode freshName writable envAfterFresh mv3 where
-    scrut_fin: "elab_match_stmt_scrut env ghost loc accSubst mv2
+  obtain mode freshName writable envAfterFresh mv2 where
+    scrut_fin: "elab_match_stmt_scrut env ghost loc mv1
                   scrutTm scrutTy (map fst decoratedRows)
-                = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3)"
+                = Inr (mode, freshName, writable, envAfterFresh, mv2)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin obtain finalizedArms where
-    fin_eq: "finalize_match_arms (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
-               (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost loc accSubst (map fst decoratedRows)
-             = Inr finalizedArms"
-    by (auto simp: Let_def split: sum.splits)
-  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin fin_eq obtain coreBodies mv4 where
+  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin obtain coreBodies mv3 where
     bodies_eq: "elab_statement_lists_with_envs
-                  (zip (map snd finalizedArms) (map snd arms)) elabEnv ghost mv3
-                = Inr (coreBodies, mv4)"
+                  (zip (map (\<lambda>dp. extend_env_with_pattern_vars
+                                    (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
+                                    (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost [dp])
+                            (map fst decoratedRows))
+                       (map snd arms)) elabEnv ghost mv2
+                = Inr (coreBodies, mv3)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin fin_eq bodies_eq
-  have mv'_eq: "next_mv' = mv4"
+  from "13.prems" arms_ne elab_scrut dec_eq scrut_fin bodies_eq
+  have mv'_eq: "next_mv' = mv3"
     by (auto simp: Let_def split: sum.splits)
   have m1: "next_mv \<le> mv1" using elab_term_next_mv_monotone[OF elab_scrut] .
-  have m2: "mv1 \<le> mv2" using decorate_match_arms_next_mv_monotone[OF dec_eq] .
-  have m3: "mv3 = mv2 + 1"
+  have m2: "mv2 = mv1 + 1"
     using elab_match_stmt_scrut_next_mv[OF scrut_fin] .
-  have m4: "mv3 \<le> mv4"
-    using "13.IH" arms_ne elab_scrut dec_eq scrut_fin fin_eq bodies_eq by fastforce
-  show ?case using m1 m2 m3 m4 mv'_eq by simp
+  have m3: "mv2 \<le> mv3"
+    using "13.IH" arms_ne elab_scrut dec_eq scrut_fin bodies_eq by fastforce
+  show ?case using m1 m2 m3 mv'_eq by simp
 next
   \<comment> \<open>ShowHide: next_mv unchanged.\<close>
   case (14 env elabEnv ghost loc sh name next_mv)
@@ -3552,36 +3548,32 @@ qed
 
 (* Characterization of a successful elab_match_stmt_scrut. *)
 lemma elab_match_stmt_scrut_facts:
-  assumes "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
-            = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)"
-  shows "scrut' = apply_subst_to_term accSubst scrutTm"
-    and "scrutTy' = apply_subst accSubst scrutTy"
-    and "writable = is_writable_lvalue env scrut'"
-    and "mode = (if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut' then Ref else Var)"
+  assumes "elab_match_stmt_scrut env ghost loc hi scrutTm scrutTy dps
+            = Inr (mode, freshName, writable, envAfterFresh, mvOut)"
+  shows "writable = is_writable_lvalue env scrutTm"
+    and "mode = (if is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm then Ref else Var)"
     and "envAfterFresh
-           = (vardecl_add_local env ghost freshName scrutTy')
+           = (vardecl_add_local env ghost freshName scrutTy)
                \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
                                     then finsert freshName (TE_ConstLocals env)
                                     else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
     and "mode = Var \<Longrightarrow>
            filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = []"
-    and "mode = Ref \<Longrightarrow> is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'"
-    and "term_inferred env scrut'"
+    and "mode = Ref \<Longrightarrow> is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm"
+    and "term_inferred env scrutTm"
 proof -
-  let ?s = "apply_subst_to_term accSubst scrutTm"
-  let ?t = "apply_subst accSubst scrutTy"
   let ?f = "''match@@'' @ nat_to_string hi"
-  let ?w = "is_writable_lvalue env ?s"
-  let ?refOk = "is_lvalue ?s \<and> ghost_lvalue_ok env ghost ?s"
+  let ?w = "is_writable_lvalue env scrutTm"
+  let ?refOk = "is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm"
   \<comment> \<open>The inferred check passed (otherwise the result would be Inl).\<close>
-  have inf: "term_inferred env ?s"
+  have inf: "term_inferred env scrutTm"
     using assms unfolding elab_match_stmt_scrut_def Let_def
-    by (cases "term_inferred env ?s") (simp_all del: nat_to_string.simps)
+    by (cases "term_inferred env scrutTm") (simp_all del: nat_to_string.simps)
   have outcome:
-    "scrut' = ?s \<and> scrutTy' = ?t \<and> freshName = ?f \<and> writable = ?w
+    "freshName = ?f \<and> writable = ?w
      \<and> mode = (if ?refOk then Ref else Var)
      \<and> envAfterFresh
-         = (vardecl_add_local env ghost ?f ?t)
+         = (vardecl_add_local env ghost ?f scrutTy)
              \<lparr> TE_ConstLocals := (if ?refOk \<and> \<not> ?w
                                   then finsert ?f (TE_ConstLocals env)
                                   else fminus (TE_ConstLocals env) {|?f|}) \<rparr>
@@ -3589,18 +3581,18 @@ proof -
           filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = [])"
   proof (cases ?refOk)
     case True
-    have red: "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
-                 = Inr (?s, ?t, Ref, ?f, ?w,
-                        (vardecl_add_local env ghost ?f ?t)
+    have red: "elab_match_stmt_scrut env ghost loc hi scrutTm scrutTy dps
+                 = Inr (Ref, ?f, ?w,
+                        (vardecl_add_local env ghost ?f scrutTy)
                           \<lparr> TE_ConstLocals := (if ?w then fminus (TE_ConstLocals env) {|?f|}
                                                else finsert ?f (TE_ConstLocals env)) \<rparr>,
                         hi + 1)"
       using True inf unfolding elab_match_stmt_scrut_def Let_def
       by (simp del: nat_to_string.simps)
     have inr_eq:
-      "(scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)
-         = (?s, ?t, Ref, ?f, ?w,
-            (vardecl_add_local env ghost ?f ?t)
+      "(mode, freshName, writable, envAfterFresh, mvOut)
+         = (Ref, ?f, ?w,
+            (vardecl_add_local env ghost ?f scrutTy)
               \<lparr> TE_ConstLocals := (if ?w then fminus (TE_ConstLocals env) {|?f|}
                                    else finsert ?f (TE_ConstLocals env)) \<rparr>,
             hi + 1)"
@@ -3612,20 +3604,20 @@ proof -
     show ?thesis
     proof (cases "filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps)")
       case Nil
-      have red: "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps
-                   = Inr (?s, ?t, Var, ?f, ?w, vardecl_add_local env ghost ?f ?t, hi + 1)"
+      have red: "elab_match_stmt_scrut env ghost loc hi scrutTm scrutTy dps
+                   = Inr (Var, ?f, ?w, vardecl_add_local env ghost ?f scrutTy, hi + 1)"
         using False inf Nil unfolding elab_match_stmt_scrut_def Let_def
         by (simp del: nat_to_string.simps)
       have inr_eq:
-        "(scrut', scrutTy', mode, freshName, writable, envAfterFresh, mvOut)
-           = (?s, ?t, Var, ?f, ?w, vardecl_add_local env ghost ?f ?t, hi + 1)"
+        "(mode, freshName, writable, envAfterFresh, mvOut)
+           = (Var, ?f, ?w, vardecl_add_local env ghost ?f scrutTy, hi + 1)"
         using assms red by (metis Inr_inject)
-      from inr_eq have c1: "scrut' = ?s" and c2: "scrutTy' = ?t" and c3: "mode = Var"
+      from inr_eq have c3: "mode = Var"
         and c4: "freshName = ?f" and c5: "writable = ?w"
-        and c6: "envAfterFresh = vardecl_add_local env ghost ?f ?t"
+        and c6: "envAfterFresh = vardecl_add_local env ghost ?f scrutTy"
         by (simp_all del: nat_to_string.simps)
       show ?thesis
-        unfolding c1 c2 c3 c4 c5 c6
+        unfolding c3 c4 c5 c6
         using False Nil
         by (cases ghost) (auto simp add: vardecl_add_local_def simp del: nat_to_string.simps)
     next
@@ -3634,14 +3626,12 @@ proof -
         by (cases b) (auto simp del: nat_to_string.simps)
     qed
   qed
-  show "scrut' = ?s" and "scrutTy' = ?t"
-    using outcome by (simp_all del: nat_to_string.simps)
-  show "writable = is_writable_lvalue env scrut'"
+  show "writable = is_writable_lvalue env scrutTm"
     using outcome by (simp del: nat_to_string.simps)
-  show "mode = (if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut' then Ref else Var)"
+  show "mode = (if is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm then Ref else Var)"
     using outcome by (simp del: nat_to_string.simps)
   show "envAfterFresh
-          = (vardecl_add_local env ghost freshName scrutTy')
+          = (vardecl_add_local env ghost freshName scrutTy)
               \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
                                    then finsert freshName (TE_ConstLocals env)
                                    else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
@@ -3649,10 +3639,10 @@ proof -
   show "mode = Var \<Longrightarrow>
           filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) = []"
     using outcome by (auto split: if_splits simp del: nat_to_string.simps)
-  show "mode = Ref \<Longrightarrow> is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'"
+  show "mode = Ref \<Longrightarrow> is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm"
     using outcome by (auto split: if_splits simp del: nat_to_string.simps)
-  show "term_inferred env scrut'"
-    using inf outcome by (simp del: nat_to_string.simps)
+  show "term_inferred env scrutTm"
+    using inf by simp
 qed
 
 (* Characterization of a successful finalize_match_stmt: the assembled
@@ -4618,176 +4608,118 @@ next
       synthesised match@@n variable, followed by a CoreStmt_Match whose arm
       bodies start with the pattern-variable VarDecls (wrap_vardecls).\<close>
   case (13 env elabEnv ghost loc scrut arms next_mv)
-  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
 
   \<comment> \<open>Peel the elaborator's case chain.\<close>
   from "13.prems"(1) have arms_ne: "arms \<noteq> []" by (auto split: if_splits)
   from "13.prems"(1) arms_ne obtain scrutTm scrutTy mv1 where
     etm: "elab_term env elabEnv ghost scrut next_mv = Inr (scrutTm, scrutTy, mv1)"
     by (auto split: sum.splits)
-  from "13.prems"(1) arms_ne etm obtain decoratedRows accSubst mv2 where
-    dec_eq: "decorate_match_arms env elabEnv ghost scrutTy True fmempty mv1 arms
-             = Inr (decoratedRows, accSubst, mv2)"
+  from "13.prems"(1) arms_ne etm obtain decoratedRows where
+    dec_eq: "decorate_match_arms env elabEnv ghost scrutTy True arms = Inr decoratedRows"
     by (auto simp: Let_def split: sum.splits)
   from "13.prems"(1) arms_ne etm dec_eq
-  obtain scrut' scrutTy' mode freshName writable envAfterFresh mv3 where
-    scrut_fin: "elab_match_stmt_scrut env ghost loc accSubst mv2
+  obtain mode freshName writable envAfterFresh mv2 where
+    scrut_fin: "elab_match_stmt_scrut env ghost loc mv1
                   scrutTm scrutTy (map fst decoratedRows)
-                = Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3)"
+                = Inr (mode, freshName, writable, envAfterFresh, mv2)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems"(1) arms_ne etm dec_eq scrut_fin obtain finalizedArms where
-    fin_eq: "finalize_match_arms (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
-               (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost loc accSubst (map fst decoratedRows)
-             = Inr finalizedArms"
+
+  \<comment> \<open>The Block-entry env, the env after the fresh binding, and the per-arm envs.\<close>
+  let ?envP = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
+  let ?env1 = "envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>"
+  let ?constOf = "\<lambda>vr. vr = Ref \<and> \<not> writable"
+  let ?dps = "map fst decoratedRows"
+  let ?bodyJobs = "zip (map (\<lambda>dp. extend_env_with_pattern_vars ?env1 ?constOf ghost [dp]) ?dps)
+                       (map snd arms)"
+
+  from "13.prems"(1) arms_ne etm dec_eq scrut_fin obtain coreBodies mv3 where
+    bodies_eq: "elab_statement_lists_with_envs ?bodyJobs elabEnv ghost mv2
+                = Inr (coreBodies, mv3)"
     by (auto simp: Let_def split: sum.splits)
-  from "13.prems"(1) arms_ne etm dec_eq scrut_fin fin_eq obtain coreBodies mv4 where
-    bodies_eq: "elab_statement_lists_with_envs
-                  (zip (map snd finalizedArms) (map snd arms)) elabEnv ghost mv3
-                = Inr (coreBodies, mv4)"
-    by (auto simp: Let_def split: sum.splits)
-  from "13.prems"(1) arms_ne etm dec_eq scrut_fin fin_eq bodies_eq have
-    fin_stmt: "finalize_match_stmt ghost loc mode freshName scrutTy' scrut'
-                 (map fst finalizedArms) coreBodies = Inr coreStmt" and
+  from "13.prems"(1) arms_ne etm dec_eq scrut_fin bodies_eq have
+    fin_stmt: "finalize_match_stmt ghost loc mode freshName scrutTy scrutTm
+                 ?dps coreBodies = Inr coreStmt" and
     env'_eq: "env' = env"
     by (auto simp: Let_def split: sum.splits)
 
   \<comment> \<open>Counters.\<close>
   have m_etm: "next_mv \<le> mv1" using elab_term_next_mv_monotone[OF etm] .
-  have m_dec: "mv1 \<le> mv2" using decorate_match_arms_next_mv_monotone[OF dec_eq] .
-  have mv3_eq: "mv3 = mv2 + 1" using elab_match_stmt_scrut_next_mv[OF scrut_fin] .
+  have mv2_eq: "mv2 = mv1 + 1" using elab_match_stmt_scrut_next_mv[OF scrut_fin] .
 
   \<comment> \<open>Scrutinee typing under the fresh-interval-extended env.\<close>
-  let ?envD = "extend_env_with_tyvars env ghost next_mv mv2"
-  have wfD: "tyenv_well_formed ?envD"
-    using "13.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
   have typed_mv1: "core_term_type (extend_env_with_tyvars env ghost next_mv mv1) ghost scrutTm
                      = Some scrutTy"
     using elab_term_correct(1)[OF etm "13.prems"(2,3)] "13.prems"(4) by simp
-  have typed_D: "core_term_type ?envD ghost scrutTm = Some scrutTy"
-    using core_term_type_extend_env_with_tyvars_mono[OF typed_mv1 order_refl m_dec] .
-
-  \<comment> \<open>decorate_match_arms facts (at lo := next_mv).\<close>
   have scrutTy_wk_mv1:
     "is_well_kinded (extend_env_with_tyvars env ghost next_mv mv1) scrutTy"
     using core_term_type_well_kinded[OF typed_mv1
             tyenv_well_formed_extend_env_with_tyvars[OF "13.prems"(2)]] .
   have scrutTy_rt_mv1:
-    "ghost = NotGhost \<Longrightarrow>
+    "ghost = NotGhost \<longrightarrow>
        is_runtime_type (extend_env_with_tyvars env ghost next_mv mv1) scrutTy"
     using core_term_type_notghost_runtime typed_mv1
           tyenv_well_formed_extend_env_with_tyvars[OF "13.prems"(2)] by auto
-  have acc_idem_init: "subst_factors_through (fmempty :: TypeSubst) fmempty"
-    by (simp add: subst_factors_through_fmempty)
-  have acc_wk_init: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst).
-        is_well_kinded (extend_env_with_tyvars env ghost next_mv mv1) ty"
-    by (simp add: fmran'_def)
-  have acc_dom_init: "fmdom (fmempty :: TypeSubst) |\<inter>| TE_TypeVars env = {||}" by simp
-  have acc_rt_init: "ghost = NotGhost \<Longrightarrow> \<forall>ty \<in> fmran' (fmempty :: TypeSubst).
-        is_runtime_type (extend_env_with_tyvars env ghost next_mv mv1) ty"
-    by (simp add: fmran'_def)
-  from decorate_match_arms_correct[OF dec_eq "13.prems"(2) acc_idem_init m_etm
-                                      scrutTy_wk_mv1 acc_wk_init acc_dom_init
-                                      scrutTy_rt_mv1 acc_rt_init]
+
+  \<comment> \<open>Pattern decoration facts.\<close>
+  note dma = decorate_match_arms_correct[OF dec_eq "13.prems"(2)
+                                            scrutTy_wk_mv1 scrutTy_rt_mv1 "13.prems"(4)]
   have dma_len: "length decoratedRows = length arms"
-   and dma_pred: "list_all2
-          (\<lambda>(dp, body) (pat, body').
-             dec_pattern_compatible env (apply_subst_to_dec_pattern accSubst dp)
-                                        (apply_subst accSubst scrutTy)
-             \<and> pattern_var_names_distinct [dp] \<and> body = body')
-          decoratedRows arms"
-   and dma_range_wk: "\<forall>ty \<in> fmran' accSubst. is_well_kinded ?envD ty"
-   and dma_dom: "fmdom accSubst |\<inter>| TE_TypeVars env = {||}"
-   and dma_range_rt: "ghost = NotGhost \<longrightarrow>
-          (\<forall>ty \<in> fmran' accSubst. is_runtime_type ?envD ty)"
-    by simp_all
-  \<comment> \<open>accSubst's range is complete (it is built from fmempty by try_unify_compose steps).\<close>
-  have acc_cp_init: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-  have dma_range_cp: "\<forall>ty \<in> fmran' accSubst. is_complete_type ty"
-    using decorate_match_arms_range_complete[OF dec_eq acc_cp_init] .
+    using dma(1) .
 
   \<comment> \<open>Scrutinee finalization facts.\<close>
   note scrut_facts = elab_match_stmt_scrut_facts[OF scrut_fin]
   note fin_facts = finalize_match_stmt_facts[OF fin_stmt]
 
-  \<comment> \<open>The substituted scrutinee typechecks in the plain env (it passed the inferred check).\<close>
-  have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term accSubst scrutTm)
-                       = Some (apply_subst accSubst scrutTy)"
-  proof -
-    have dom_flex: "\<forall>n. n |\<in>| fmdom accSubst \<longrightarrow> ?is_flex n" using dma_dom by auto
-    have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
-      unfolding extend_env_with_tyvars_def by simp
-    have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
-      unfolding extend_env_with_tyvars_def by simp
-    from flex_subst_identity_on_env[OF dom_flex "13.prems"(2) envD_locals envD_ret]
-    have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
-                              \<Longrightarrow> apply_subst accSubst ty' = ty'"
-     and ret_unaffected: "apply_subst accSubst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-      by blast+
-    have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes env"
-      unfolding extend_env_with_tyvars_def by simp
-    have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup accSubst n = None"
-      using flex_subst_abs_no_subst[OF dom_flex[rule_format] "13.prems"(2) envD_abs] .
-    show ?thesis
-      using apply_subst_to_term_preserves_typing
-              [OF typed_D wfD dma_range_wk dma_range_rt locals_unaffected ret_unaffected abs_no_subst
-                  dma_range_cp] .
-  qed
-  have scrut_typed: "core_term_type env ghost scrut' = Some scrutTy'"
-    unfolding scrut_facts(1) scrut_facts(2)
-    using inferred_term_typed_in_env[OF subst_typed "13.prems"(4)
-                                        scrut_facts(8)[unfolded scrut_facts(1)]] .
-  have scrutTy'_wk: "is_well_kinded env scrutTy'"
+  \<comment> \<open>The scrutinee typechecks in the plain env (it passed the inferred check).\<close>
+  have scrut_typed: "core_term_type env ghost scrutTm = Some scrutTy"
+    using inferred_term_typed_in_env[OF typed_mv1 "13.prems"(4) scrut_facts(6)] .
+  have scrutTy_wk: "is_well_kinded env scrutTy"
     using core_term_type_well_kinded[OF scrut_typed "13.prems"(2)] .
-  have scrutTy'_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type env scrutTy'"
+  have scrutTy_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type env scrutTy"
   proof -
     assume ng: "ghost = NotGhost"
-    show "is_runtime_type env scrutTy'"
+    show "is_runtime_type env scrutTy"
       using core_term_type_notghost_runtime[OF scrut_typed[unfolded ng] "13.prems"(2)] .
   qed
 
-  \<comment> \<open>The Block-entry env and the env after the fresh binding.\<close>
-  let ?envP = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
-  let ?env1 = "envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>"
-
-  have typed_P: "core_term_type ?envP ghost scrut' = Some scrutTy'"
+  have typed_P: "core_term_type ?envP ghost scrutTm = Some scrutTy"
     using scrut_typed core_term_type_TE_ProofTopLevel_irrelevant by simp
   have wf_P: "tyenv_well_formed ?envP"
     using "13.prems"(2) tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
-  have wk_P: "is_well_kinded ?envP scrutTy'"
-    using scrutTy'_wk is_well_kinded_cong_env[of ?envP env scrutTy'] by simp
-  have rt_P: "ghost = NotGhost \<Longrightarrow> is_runtime_type ?envP scrutTy'"
-    using scrutTy'_rt is_runtime_type_cong_env[of ?envP env scrutTy'] by simp
+  have wk_P: "is_well_kinded ?envP scrutTy"
+    using scrutTy_wk is_well_kinded_cong_env[of ?envP env scrutTy] by simp
+  have rt_P: "ghost = NotGhost \<Longrightarrow> is_runtime_type ?envP scrutTy"
+    using scrutTy_rt is_runtime_type_cong_env[of ?envP env scrutTy] by simp
 
   \<comment> \<open>The fresh VarDecl typechecks from ?envP to ?env1.\<close>
   have env1_shape:
-    "?env1 = ?envP \<lparr> TE_LocalVars := fmupd freshName scrutTy' (TE_LocalVars ?envP),
+    "?env1 = ?envP \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars ?envP),
                      TE_GhostLocals := (if ghost = Ghost
                                         then finsert freshName (TE_GhostLocals ?envP)
                                         else fminus (TE_GhostLocals ?envP) {|freshName|}),
                      TE_ConstLocals := (if mode = Ref \<and> \<not> writable
                                         then finsert freshName (TE_ConstLocals ?envP)
                                         else fminus (TE_ConstLocals ?envP) {|freshName|}) \<rparr>"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
-  have writable_P: "is_writable_lvalue ?envP scrut' = writable"
-    using scrut_facts(3) by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
+  have writable_P: "is_writable_lvalue ?envP scrutTm = writable"
+    using scrut_facts(1) by simp
   have vardecl_typed:
-    "core_statement_type ?envP ghost (CoreStmt_VarDecl ghost freshName mode scrutTy' scrut')
+    "core_statement_type ?envP ghost (CoreStmt_VarDecl ghost freshName mode scrutTy scrutTm)
        = Some ?env1"
   proof (cases mode)
     case Var
     \<comment> \<open>A by-value scrutinee binding needs a complete type in NotGhost mode; the
         elaborator checked this in finalize_match_stmt.\<close>
-    have cp_P: "ghost = NotGhost \<Longrightarrow> is_complete_type scrutTy'"
+    have cp_P: "ghost = NotGhost \<Longrightarrow> is_complete_type scrutTy"
       using fin_facts(3) Var by blast
     show ?thesis
       unfolding Var env1_shape
       using typed_P wk_P rt_P cp_P Var by (cases ghost) auto
   next
     case Ref
-    have lv: "is_lvalue scrut'" using scrut_facts(7)[OF Ref] by simp
-    have glv_P: "ghost_lvalue_ok ?envP ghost scrut'"
-      using scrut_facts(7)[OF Ref] by simp
+    have lv: "is_lvalue scrutTm" using scrut_facts(5)[OF Ref] by simp
+    have glv_P: "ghost_lvalue_ok ?envP ghost scrutTm"
+      using scrut_facts(5)[OF Ref] by simp
     show ?thesis
       unfolding Ref env1_shape
       using typed_P wk_P rt_P lv glv_P writable_P Ref by (cases ghost) auto
@@ -4800,121 +4732,95 @@ next
     proof (cases "ghost = Ghost")
       case True
       have ext_eq: "envAfterFresh
-            = (env \<lparr> TE_LocalVars := fmupd freshName scrutTy' (TE_LocalVars env),
+            = (env \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars env),
                      TE_GhostLocals := finsert freshName (TE_GhostLocals env) \<rparr>)
                 \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
                                      then finsert freshName (TE_ConstLocals env)
                                      else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
-        using True unfolding scrut_facts(5) vardecl_add_local_def by simp
+        using True unfolding scrut_facts(3) vardecl_add_local_def by simp
       show ?thesis
-        using True tyenv_well_formed_add_ghost_var[OF "13.prems"(2) scrutTy'_wk] ext_eq
+        using True tyenv_well_formed_add_ghost_var[OF "13.prems"(2) scrutTy_wk] ext_eq
               tyenv_well_formed_TE_ConstLocals_irrelevant
         by simp
     next
       case False
       hence ng: "ghost = NotGhost" by (cases ghost) auto
       have ext_eq: "envAfterFresh
-            = (env \<lparr> TE_LocalVars := fmupd freshName scrutTy' (TE_LocalVars env),
+            = (env \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars env),
                      TE_GhostLocals := fminus (TE_GhostLocals env) {|freshName|} \<rparr>)
                 \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
                                      then finsert freshName (TE_ConstLocals env)
                                      else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
-        using ng unfolding scrut_facts(5) vardecl_add_local_def by simp
+        using ng unfolding scrut_facts(3) vardecl_add_local_def by simp
       show ?thesis
-        using tyenv_well_formed_add_var[OF "13.prems"(2) scrutTy'_wk scrutTy'_rt[OF ng]]
+        using tyenv_well_formed_add_var[OF "13.prems"(2) scrutTy_wk scrutTy_rt[OF ng]]
               ext_eq tyenv_well_formed_TE_ConstLocals_irrelevant
         by simp
     qed
     thus ?thesis using tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
   qed
   have env1_tv: "TE_TypeVars ?env1 = TE_TypeVars env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_dt: "TE_Datatypes ?env1 = TE_Datatypes env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_dc: "TE_DataCtors ?env1 = TE_DataCtors env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_ret: "TE_ReturnType ?env1 = TE_ReturnType env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_rtv: "TE_RuntimeTypeVars ?env1 = TE_RuntimeTypeVars env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_gd: "TE_GhostDatatypes ?env1 = TE_GhostDatatypes env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_fg: "TE_FunctionGhost ?env1 = TE_FunctionGhost env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_pg: "TE_ProofGoal ?env1 = TE_ProofGoal env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_fn: "TE_Functions ?env1 = TE_Functions env"
-    unfolding scrut_facts(5) vardecl_add_local_def by simp
+    unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_ee: "elabenv_well_formed ?env1 elabEnv"
     using "13.prems"(3)
           elabenv_well_formed_cong_env[OF env1_tv env1_dt env1_dc env1_ret env1_fn]
     by simp
-  have wk_1: "is_well_kinded ?env1 scrutTy'"
-    using scrutTy'_wk is_well_kinded_cong_env[of ?env1 env scrutTy'] env1_tv env1_dt by simp
-  have rt_1: "ghost = NotGhost \<Longrightarrow> is_runtime_type ?env1 scrutTy'"
-    using scrutTy'_rt is_runtime_type_cong_env[of ?env1 env scrutTy'] env1_gd env1_rtv by simp
+  have wk_1: "is_well_kinded ?env1 scrutTy"
+    using scrutTy_wk is_well_kinded_cong_env[of ?env1 env scrutTy] env1_tv env1_dt by simp
+  have rt_1: "ghost = NotGhost \<Longrightarrow> is_runtime_type ?env1 scrutTy"
+    using scrutTy_rt is_runtime_type_cong_env[of ?env1 env scrutTy] env1_gd env1_rtv by simp
 
-  \<comment> \<open>Finalize facts: the per-arm dps and envs.\<close>
-  let ?substDps = "map (apply_subst_to_dec_pattern accSubst) (map fst decoratedRows)"
-  let ?constOf = "\<lambda>vr. vr = Ref \<and> \<not> writable"
-  have not_clash:
-    "\<not> list_ex (\<lambda>dp. list_ex (\<lambda>(_, _, vTy).
-            \<not> list_all (\<lambda>n. n |\<in>| TE_TypeVars ?env1) (type_tyvars_list vTy))
-                            (dec_pattern_var_bindings dp)) ?substDps"
-    using fin_eq unfolding finalize_match_arms_def Let_def
-    by (simp split: if_splits)
-  have finalizedArms_eq:
-    "finalizedArms = map (\<lambda>dp. (dp, extend_env_with_pattern_vars ?env1 ?constOf ghost [dp]))
-                         ?substDps"
-    using fin_eq not_clash unfolding finalize_match_arms_def Let_def
-    by (simp split: if_splits)
-  have dps_eq: "map fst finalizedArms = ?substDps"
-    using finalizedArms_eq by (simp add: comp_def)
-
-  \<comment> \<open>Each (substituted) dp is compatible with the substituted scrutinee type.\<close>
-  have raw_compat:
-    "\<And>dp. dp \<in> set ?substDps \<Longrightarrow>
-        dec_pattern_compatible env dp (apply_subst accSubst scrutTy)"
-    using dma_pred
-    by (fastforce simp: list_all2_conv_all_nth in_set_conv_nth case_prod_unfold)
-  have raw_distinct:
-    "\<And>rawDp. rawDp \<in> set (map fst decoratedRows) \<Longrightarrow> pattern_var_names_distinct [rawDp]"
-    using dma_pred
-    by (fastforce simp: list_all2_conv_all_nth in_set_conv_nth case_prod_unfold)
-
-  \<comment> \<open>The substituted scrutinee type IS scrutTy'.\<close>
-  have compat_subst: "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> dec_pattern_compatible env dp scrutTy'"
-    unfolding scrut_facts(2) using raw_compat by blast
-  have compat_env1: "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> dec_pattern_compatible ?env1 dp scrutTy'"
-    using compat_subst dec_pattern_compatible_TE_DataCtors_cong[OF env1_dc] by simp
+  \<comment> \<open>Each decorated pattern is compatible with the scrutinee type.\<close>
+  have compat_env1: "\<And>dp. dp \<in> set ?dps \<Longrightarrow> dec_pattern_compatible ?env1 dp scrutTy"
+    using dma(3) dec_pattern_compatible_TE_DataCtors_cong[OF env1_dc] by simp
   have pat_compat:
-    "\<And>dp. dp \<in> set ?substDps \<Longrightarrow> pattern_compatible ?env1 (dec_to_core_pat dp) scrutTy'"
+    "\<And>dp. dp \<in> set ?dps \<Longrightarrow> pattern_compatible ?env1 (dec_to_core_pat dp) scrutTy"
     using dec_to_core_pat_pattern_compatible[OF compat_env1 wk_1 env1_wf] .
+  have pat_compat_nth:
+    "\<And>i. i < length decoratedRows \<Longrightarrow>
+       pattern_compatible ?env1 (dec_to_core_pat (?dps ! i)) scrutTy"
+    using pat_compat by (metis length_map nth_mem)
 
-  \<comment> \<open>The scrutinee variable looks up to scrutTy' in ?env1.\<close>
-  have scrut_var_typed: "core_term_type ?env1 ghost (CoreTm_Var freshName) = Some scrutTy'"
-    unfolding scrut_facts(5) vardecl_add_local_def
+  \<comment> \<open>The scrutinee variable looks up to scrutTy in ?env1.\<close>
+  have scrut_var_typed: "core_term_type ?env1 ghost (CoreTm_Var freshName) = Some scrutTy"
+    unfolding scrut_facts(3) vardecl_add_local_def
     by (simp add: tyenv_lookup_var_def tyenv_var_ghost_def split: option.splits)
 
   \<comment> \<open>Arm bodies typecheck under the per-arm envs (the with-envs IH).\<close>
   have jobs_inv:
     "list_all (\<lambda>(env_i, _).
         tyenv_well_formed env_i \<and> elabenv_well_formed env_i elabEnv
-        \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv3)
+        \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2)
         \<and> (TE_FunctionGhost env_i = Ghost \<longrightarrow> ghost = Ghost)
         \<and> (ghost = NotGhost \<longrightarrow> TE_ProofGoal env_i = None))
-       (zip (map snd finalizedArms) (map snd arms))"
+       ?bodyJobs"
   proof -
-    have per_env: "\<And>env_i. env_i \<in> set (map snd finalizedArms) \<Longrightarrow>
+    have per_dp: "\<And>dp env_i. dp \<in> set ?dps
+            \<Longrightarrow> env_i = extend_env_with_pattern_vars ?env1 ?constOf ghost [dp] \<Longrightarrow>
             tyenv_well_formed env_i \<and> elabenv_well_formed env_i elabEnv
-            \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv3)
+            \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2)
             \<and> (TE_FunctionGhost env_i = Ghost \<longrightarrow> ghost = Ghost)
             \<and> (ghost = NotGhost \<longrightarrow> TE_ProofGoal env_i = None)"
     proof -
-      fix env_i assume "env_i \<in> set (map snd finalizedArms)"
-      then obtain dp where dp_in: "dp \<in> set ?substDps"
-        and env_i_eq: "env_i = extend_env_with_pattern_vars ?env1 ?constOf ghost [dp]"
-        using finalizedArms_eq by auto
+      fix dp env_i
+      assume dp_in: "dp \<in> set ?dps"
+         and env_i_eq: "env_i = extend_env_with_pattern_vars ?env1 ?constOf ghost [dp]"
       have bind_wk: "list_all (\<lambda>(_, _, vTy). is_well_kinded ?env1 vTy)
                               (dec_pattern_var_bindings_list [dp])"
         using dec_pattern_compatible_vars_well_kinded[OF compat_env1[OF dp_in] wk_1 env1_wf]
@@ -4933,14 +4839,15 @@ next
         using elabenv_well_formed_extend_env_with_pattern_vars[OF env1_ee] .
       have tv_i: "TE_TypeVars env_i = TE_TypeVars env"
         unfolding env_i_eq using env1_tv by simp
-      have bound_i: "\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv3"
-        using tv_i "13.prems"(4) m_etm m_dec mv3_eq tyvar_fresh_ok_mono by (metis le_add1)
+      have nm_le: "next_mv \<le> mv2" using m_etm mv2_eq by simp
+      have bound_i: "\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2"
+        using tv_i "13.prems"(4) nm_le tyvar_fresh_ok_mono by metis
       have fg_i: "TE_FunctionGhost env_i = Ghost \<longrightarrow> ghost = Ghost"
         unfolding env_i_eq using env1_fg "13.prems"(5) by simp
       have pg_i: "ghost = NotGhost \<longrightarrow> TE_ProofGoal env_i = None"
         unfolding env_i_eq using env1_pg "13.prems"(6) by simp
       show "tyenv_well_formed env_i \<and> elabenv_well_formed env_i elabEnv
-            \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv3)
+            \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2)
             \<and> (TE_FunctionGhost env_i = Ghost \<longrightarrow> ghost = Ghost)
             \<and> (ghost = NotGhost \<longrightarrow> TE_ProofGoal env_i = None)"
         using wf_i ee_i bound_i fg_i pg_i by blast
@@ -4948,97 +4855,85 @@ next
     show ?thesis
       unfolding list_all_length
     proof (intro allI impI)
-      fix i assume i_lt: "i < length (zip (map snd finalizedArms) (map snd arms))"
-      have i_fa: "i < length finalizedArms" and i_ar: "i < length arms"
+      fix i assume i_lt: "i < length ?bodyJobs"
+      have i_dr: "i < length decoratedRows" and i_ar: "i < length arms"
         using i_lt by simp_all
-      have fst_i: "fst (zip (map snd finalizedArms) (map snd arms) ! i)
-                     = map snd finalizedArms ! i"
-        using i_fa i_ar by simp
-      have mem: "map snd finalizedArms ! i \<in> set (map snd finalizedArms)"
-        using i_fa by simp
-      show "case zip (map snd finalizedArms) (map snd arms) ! i of (env_i, _) \<Rightarrow>
+      have dp_in: "?dps ! i \<in> set ?dps" using i_dr by (metis length_map nth_mem)
+      have job_i: "?bodyJobs ! i
+                     = (extend_env_with_pattern_vars ?env1 ?constOf ghost [?dps ! i],
+                        snd (arms ! i))"
+        using i_dr i_ar by simp
+      show "case ?bodyJobs ! i of (env_i, _) \<Rightarrow>
               tyenv_well_formed env_i \<and> elabenv_well_formed env_i elabEnv
-              \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv3)
+              \<and> (\<forall>n. n |\<in>| TE_TypeVars env_i \<longrightarrow> tyvar_fresh_ok n mv2)
               \<and> (TE_FunctionGhost env_i = Ghost \<longrightarrow> ghost = Ghost)
               \<and> (ghost = NotGhost \<longrightarrow> TE_ProofGoal env_i = None)"
-        using per_env[OF mem] fst_i by (simp add: case_prod_unfold)
+        unfolding job_i using per_dp[OF dp_in refl] by simp
     qed
   qed
   have bodies_typed_l2:
     "list_all2 (\<lambda>(env_i, _) coreStmts_i.
         core_statement_list_type env_i ghost coreStmts_i \<noteq> None)
-       (zip (map snd finalizedArms) (map snd arms)) coreBodies"
-    using "13.IH" arms_ne etm dec_eq scrut_fin fin_eq bodies_eq jobs_inv by fastforce
+       ?bodyJobs coreBodies"
+    using "13.IH" arms_ne etm dec_eq scrut_fin bodies_eq jobs_inv by fastforce
 
   \<comment> \<open>Lengths.\<close>
-  have len_fin: "length finalizedArms = length arms"
-    using finalizedArms_eq dma_len by simp
-  have len_bodies: "length coreBodies = length finalizedArms"
-    using bodies_typed_l2 len_fin
-    by (simp add: list_all2_iff)
+  have len_jobs: "length ?bodyJobs = length decoratedRows"
+    using dma_len by simp
+  have len_bodies: "length coreBodies = length decoratedRows"
+    using list_all2_lengthD[OF bodies_typed_l2] dma_len by simp
 
   \<comment> \<open>The freshName is writable in ?env1 exactly per the const policy.\<close>
   have fresh_writable:
     "tyenv_var_writable ?env1 freshName = (\<not> (mode = Ref \<and> \<not> writable))"
-    unfolding scrut_facts(5) vardecl_add_local_def tyenv_var_writable_def
+    unfolding scrut_facts(3) vardecl_add_local_def tyenv_var_writable_def
     by auto
 
   \<comment> \<open>In Ghost mode the freshName is a ghost local of ?env1, so the binding
       VarDecls emitted for ref patterns (refs rooted at freshName) satisfy the
       ghost-write discipline.\<close>
   have fresh_ghost: "ghost = Ghost \<Longrightarrow> tyenv_var_ghost ?env1 freshName"
-    unfolding scrut_facts(5) vardecl_add_local_def tyenv_var_ghost_def
+    unfolding scrut_facts(3) vardecl_add_local_def tyenv_var_ghost_def
     by simp
 
   \<comment> \<open>Each emitted arm typechecks: the binding VarDecls thread ?env1 to the
       per-arm env, under which the elaborated body typechecks.\<close>
   have arm_ok:
-    "\<And>i. i < length finalizedArms \<Longrightarrow>
+    "\<And>i. i < length decoratedRows \<Longrightarrow>
         core_statement_list_type ?env1 ghost
-          (wrap_vardecls ghost freshName (map fst finalizedArms ! i) @ coreBodies ! i)
+          (wrap_vardecls ghost freshName (?dps ! i) @ coreBodies ! i)
         \<noteq> None"
   proof -
-    fix i assume i_lt: "i < length finalizedArms"
-    let ?dp = "map fst finalizedArms ! i"
-    have dp_in: "?dp \<in> set ?substDps"
-      using i_lt dps_eq by (metis length_map nth_mem)
+    fix i assume i_lt: "i < length decoratedRows"
+    let ?dp = "?dps ! i"
+    have i_ar: "i < length arms" using i_lt dma_len by simp
+    have dp_in: "?dp \<in> set ?dps"
+      using i_lt by (metis length_map nth_mem)
     have fresh_dp: "freshName |\<notin>| dec_pattern_var_names ?dp"
-      using finalize_match_stmt_facts(2)[OF fin_stmt] i_lt
-      by (metis length_map nth_mem)
+      using fin_facts(2)[OF dp_in] .
     have dist_dp: "distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings ?dp))"
-    proof -
-      obtain rawDp where raw_in: "rawDp \<in> set (map fst decoratedRows)"
-        and dp_eq: "?dp = apply_subst_to_dec_pattern accSubst rawDp"
-        using dp_in by auto
-      have "pattern_var_names_distinct [?dp]"
-        using apply_subst_to_dec_pattern_preserves_distinct[OF raw_distinct[OF raw_in]] dp_eq
-        by simp
-      thus ?thesis
-        unfolding pattern_var_names_distinct_def by simp
-    qed
+      using dma(4)[OF dp_in]
+      unfolding pattern_var_names_distinct_def by simp
     have body_typed:
       "core_statement_list_type
          (extend_env_with_pattern_vars ?env1 ?constOf ghost [?dp]) ghost (coreBodies ! i)
        \<noteq> None"
     proof -
-      have "fst (zip (map snd finalizedArms) (map snd arms) ! i) = snd (finalizedArms ! i)"
-        using i_lt len_fin by simp
-      moreover have "snd (finalizedArms ! i)
-                       = extend_env_with_pattern_vars ?env1 ?constOf ghost [?dp]"
-        using finalizedArms_eq i_lt dps_eq
-        by (metis (no_types, lifting) length_map nth_map snd_conv)
-      ultimately show ?thesis
-        using bodies_typed_l2 i_lt len_fin
-        by (fastforce simp: list_all2_conv_all_nth case_prod_unfold)
+      have i_jobs: "i < length ?bodyJobs" using i_lt len_jobs by simp
+      have job_i: "?bodyJobs ! i
+                     = (extend_env_with_pattern_vars ?env1 ?constOf ghost [?dp],
+                        snd (arms ! i))"
+        using i_lt i_ar by simp
+      from list_all2_nthD[OF bodies_typed_l2 i_jobs]
+      show ?thesis
+        unfolding job_i by simp
     qed
     \<comment> \<open>By-value pattern variables have complete types in NotGhost mode (checked by
         finalize_match_stmt).\<close>
-    have dp_in_fin: "?dp \<in> set (map fst finalizedArms)"
-      using i_lt by (metis length_map nth_mem)
     have bind_cp_dp:
       "\<And>vr n vTy. (vr, n, vTy) \<in> set (dec_pattern_var_bindings ?dp)
          \<Longrightarrow> ghost = NotGhost \<Longrightarrow> vr = Var \<Longrightarrow> is_complete_type vTy"
-      using fin_facts(4)[OF dp_in_fin] by blast
+      using fin_facts(4)[OF dp_in] by blast
     \<comment> \<open>Choose the writableFlag for the chain by mode; in Var mode there are no
         Ref bindings, so the two const policies agree on the bindings.\<close>
     show "core_statement_list_type ?env1 ghost
@@ -5067,24 +4962,18 @@ next
         using wrap_vardecls_types[OF compat_env1[OF dp_in] scrut_var_typed env1_wf
                                      wk_1 rt_1 fresh_dp dist_dp flag fresh_ghost bind_cp_dp] .
       \<comment> \<open>No Ref bindings in Var mode, so the two policies build the same env.\<close>
-      have no_refs_raw:
-        "filter (\<lambda>(vr, _, _). vr = Ref)
-                (dec_pattern_var_bindings_list (map fst decoratedRows)) = []"
-        using scrut_facts(6) Var by simp
+      have no_refs:
+        "filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list ?dps) = []"
+        using scrut_facts(4) Var by simp
       have no_refs_dp: "\<And>vr n ty. (vr, n, ty) \<in> set (dec_pattern_var_bindings_list [?dp])
                           \<Longrightarrow> vr \<noteq> Ref"
       proof -
         fix vr n ty assume in_dp: "(vr, n, ty) \<in> set (dec_pattern_var_bindings_list [?dp])"
-        obtain rawDp where raw_in: "rawDp \<in> set (map fst decoratedRows)"
-          and dp_eq: "?dp = apply_subst_to_dec_pattern accSubst rawDp"
-          using dp_in by auto
         have "(vr, n, ty) \<in> set (dec_pattern_var_bindings ?dp)" using in_dp by simp
-        then obtain ty0 where raw_bind: "(vr, n, ty0) \<in> set (dec_pattern_var_bindings rawDp)"
-          unfolding dp_eq dec_pattern_var_bindings_apply_subst by auto
-        have "(vr, n, ty0) \<in> set (dec_pattern_var_bindings_list (map fst decoratedRows))"
-          using dec_pattern_var_bindings_list_member_subset[OF raw_in] raw_bind by blast
+        hence "(vr, n, ty) \<in> set (dec_pattern_var_bindings_list ?dps)"
+          using dec_pattern_var_bindings_list_member_subset[OF dp_in] by blast
         thus "vr \<noteq> Ref"
-          using no_refs_raw by (fastforce simp: filter_empty_conv)
+          using no_refs by (fastforce simp: filter_empty_conv)
       qed
       have env_cong: "extend_env_with_pattern_vars ?env1 (\<lambda>vr. vr = Ref \<and> \<not> True) ghost [?dp]
                     = extend_env_with_pattern_vars ?env1 ?constOf ghost [?dp]"
@@ -5096,14 +4985,14 @@ next
   \<comment> \<open>Assemble: the Match typechecks under ?env1; then the Block.\<close>
   let ?coreArms = "map2 (\<lambda>dp body. (dec_to_core_pat dp,
                                     wrap_vardecls ghost freshName dp @ body))
-                        (map fst finalizedArms) coreBodies"
+                        ?dps coreBodies"
   have env1_ptl: "?env1 \<lparr> TE_ProofTopLevel := False \<rparr> = ?env1" by simp
   have match_typed:
     "core_statement_type ?env1 ghost
        (CoreStmt_Match ghost (CoreTm_Var freshName) ?coreArms) = Some ?env1"
   proof -
-    have pats_ok: "list_all (\<lambda>p. pattern_compatible ?env1 p scrutTy') (map fst ?coreArms)"
-      using pat_compat dps_eq len_bodies
+    have pats_ok: "list_all (\<lambda>p. pattern_compatible ?env1 p scrutTy) (map fst ?coreArms)"
+      using pat_compat_nth len_bodies
       by (force simp: list_all_length)
     have bodies_ok: "list_all (\<lambda>body. core_statement_list_type
                         (?env1 \<lparr> TE_ProofTopLevel := False \<rparr>) ghost body \<noteq> None)
@@ -5115,7 +5004,7 @@ next
   qed
   have block_body_typed:
     "core_statement_list_type ?envP ghost
-       [CoreStmt_VarDecl ghost freshName mode scrutTy' scrut',
+       [CoreStmt_VarDecl ghost freshName mode scrutTy scrutTm,
         CoreStmt_Match ghost (CoreTm_Var freshName) ?coreArms] = Some ?env1"
     using vardecl_typed match_typed by simp
   show ?case

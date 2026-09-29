@@ -88,6 +88,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_RefPatternNeedsLvalue Location string  (* `ref` binding in a match statement whose scrutinee is not an lvalue *)
   | TyErr_EmptyMatch Location  (* match expression with zero arms *)
   | TyErr_IntPatternOutOfRange Location CoreType  (* integer literal pattern out of range for the (finite integer) scrutinee type *)
+  | TyErr_TuplePatternMismatch Location nat CoreType  (* tuple pattern with the given number of components, matched against a type that is not a tuple of that size *)
 
   (* Declaration/Module level errors *)
   | TyErr_DuplicateName Location string  (* a constant, function, constructor, parameter, etc., was defined twice *)

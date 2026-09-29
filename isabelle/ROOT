@@ -95,7 +95,6 @@ session Babylon = "HOL-Library" +
     "elaborator/Unify"
     "elaborator/Unify2"
     "elaborator/Unify3"
-    "elaborator/UnifyCompose"
 
     (* graph *)
     "graph/Dependency"

@@ -635,38 +635,16 @@ definition build_updated_record ::
 (* Match helpers *)
 (* ========================================================================== *)
 
-(* Unify a list of arm-body types against an expected body type, threading
-   a substitution. Each entry pairs the body's source location (for error
-   reporting) with its actual type. Used by BabTm_Match after each arm's
-   body has been elaborated by elab_term_list_with_envs. The flex predicate
-   forbids unification from binding any tyvar already in the outer env. *)
-fun unify_arm_body_types ::
-  "CoreTyEnv \<Rightarrow> CoreType
-   \<Rightarrow> (Location \<times> CoreType) list
-   \<Rightarrow> TypeSubst
-   \<Rightarrow> TypeError list + TypeSubst"
-where
-  "unify_arm_body_types _ _ [] accSubst = Inr accSubst"
-
-| "unify_arm_body_types env expBodyTy ((loc, bodyTy) # rest) accSubst =
-    (case try_unify_compose env bodyTy expBodyTy accSubst of
-       None \<Rightarrow> Inl [TyErr_TypeMismatch loc
-                      (apply_subst accSubst expBodyTy) (apply_subst accSubst bodyTy)]
-     | Some s \<Rightarrow> unify_arm_body_types env expBodyTy rest s)"
-
-(* Final-stage helper for term-context match elaboration. Takes the per-arm
-   results (as four parallel lists: dps, body terms, body locations, body
-   types) plus the elaborated scrutinee + the expected body type (the first
-   arm's body type; see BabTm_Match) + the running accSubst, and produces the
-   elaborated match term.
+(* Final-stage helper for term-context match elaboration. Takes the elaborated
+   scrutinee, and the per-arm results as two parallel lists (the decorated
+   patterns, and the arm bodies already converted to the common body type
+   bodyTy), and produces the elaborated match term.
 
    Steps:
-   1. Unify each body type with expBodyTy, threading accSubst \<rightarrow> finalSubst.
-   2. Apply finalSubst to scrutinee, dps, and body terms.
-   3. Mint a fresh scrutinee binding name (match@@<n>) and validate that it
-      doesn't clash with any free var of the substituted scrutinee or any
-      pattern variable.
-   4. Build the elaborated match: a CoreTm_Let binds the scrutinee to the
+   1. Mint a fresh scrutinee binding name (match@@<n>) and validate that it
+      doesn't clash with any free var of the scrutinee or of an arm body, or
+      with any pattern variable.
+   2. Build the elaborated match: a CoreTm_Let binds the scrutinee to the
       fresh name, then CoreTm_Match dispatches on the (binder-free) Core
       patterns. Each arm's body is wrapped in a CoreTm_Let per surface
       pattern variable, projecting from the fresh scrutinee.
@@ -675,33 +653,22 @@ where
    returned counter is `nextMv + 1` (one more, for the synthesised name's
    numeric suffix). *)
 definition finalize_match_term ::
-  "CoreTyEnv \<Rightarrow> Location \<Rightarrow> CoreType
-   \<Rightarrow> CoreTerm \<Rightarrow> CoreType
-   \<Rightarrow> DecPattern list \<Rightarrow> CoreTerm list \<Rightarrow> Location list \<Rightarrow> CoreType list
-   \<Rightarrow> TypeSubst \<Rightarrow> nat
+  "Location \<Rightarrow> CoreTerm \<Rightarrow> DecPattern list \<Rightarrow> CoreTerm list \<Rightarrow> CoreType \<Rightarrow> nat
    \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType \<times> nat)" where
-  "finalize_match_term env loc expBodyTy scrutTm scrutTy dps bodyTms bodyLocs bodyTys
-                       accSubst nextMv =
-    (case unify_arm_body_types env expBodyTy (zip bodyLocs bodyTys) accSubst of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr finalSubst \<Rightarrow>
-         let finalScrut = apply_subst_to_term finalSubst scrutTm;
-             finalDps = map (apply_subst_to_dec_pattern finalSubst) dps;
-             finalBodies = map (apply_subst_to_term finalSubst) bodyTms;
-             finalBodyTy = apply_subst finalSubst expBodyTy;
-             freshName = ''match@@'' @ nat_to_string nextMv
-         in if freshName |\<in>| core_term_free_vars finalScrut
-               \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) finalDps
-               \<or> list_ex (\<lambda>body. freshName |\<in>| core_term_free_vars body) finalBodies
-            then Inl [TyErr_UnexpectedNameClash loc]
-            else
-              let armPats = map dec_to_core_pat finalDps;
-                  armBodies = map (\<lambda>(dp, body). wrap_lets freshName dp body)
-                                  (zip finalDps finalBodies);
-                  matchTm = CoreTm_Match (CoreTm_Var freshName)
-                                         (zip armPats armBodies);
-                  resultTm = CoreTm_Let freshName finalScrut matchTm
-              in Inr (resultTm, finalBodyTy, nextMv + 1))"
+  "finalize_match_term loc scrutTm dps bodies bodyTy nextMv =
+    (let freshName = ''match@@'' @ nat_to_string nextMv
+     in if freshName |\<in>| core_term_free_vars scrutTm
+           \<or> list_ex (\<lambda>dp. freshName |\<in>| dec_pattern_var_names dp) dps
+           \<or> list_ex (\<lambda>body. freshName |\<in>| core_term_free_vars body) bodies
+        then Inl [TyErr_UnexpectedNameClash loc]
+        else
+          let armPats = map dec_to_core_pat dps;
+              armBodies = map (\<lambda>(dp, body). wrap_lets freshName dp body)
+                              (zip dps bodies);
+              matchTm = CoreTm_Match (CoreTm_Var freshName)
+                                     (zip armPats armBodies);
+              resultTm = CoreTm_Let freshName scrutTm matchTm
+          in Inr (resultTm, bodyTy, nextMv + 1))"
 
 
 (* ========================================================================== *)
@@ -1058,39 +1025,40 @@ where
                       Inr (CoreTm_ArrayProj newArr coercedIdxTms, elemTy, next_mv2)))
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc arrTy]))"
 
-  (* Match: elaborate the scrutinee, decorate every arm's pattern, elaborate
-     every arm's body under the env extended with that arm's pattern variables,
-     unify every arm's body type against the first arm's body type, then apply
-     the final substitution to the scrutinee, every DP_Var, and every arm body,
-     and hand the result off to finalize_match_term (which translates
+  (* Match: elaborate the scrutinee, decorate every arm's pattern against the
+     scrutinee type, and elaborate every arm's body under the env extended with
+     that arm's pattern variables (every pattern variable is const, as for Let).
+     The type of the match is the first arm's body type: every arm body is
+     converted to it, using the same implicit conversions as function arguments.
+     The result is handed off to finalize_match_term (which translates
      DecPatterns to CorePatterns and emits the binder-projection Lets). *)
 | "elab_term env elabEnv ghost (BabTm_Match loc scrut arms) next_mv =
     (if arms = [] then Inl [TyErr_EmptyMatch loc]
      else case elab_term env elabEnv ghost scrut next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
-         (case decorate_match_arms env elabEnv ghost scrutTy
-                 False fmempty mv1 arms of
+         (case decorate_match_arms env elabEnv ghost scrutTy False arms of
             Inl errs \<Rightarrow> Inl errs
-          | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
-              \<comment> \<open>Substitute dps with accSubst, run inference check, build per-arm envs. \<close>
-              let rawDps = map fst decoratedRows in
-              (case finalize_match_arms env (\<lambda>_. True) ghost loc accSubst rawDps of
+          | Inr decoratedRows \<Rightarrow>
+              \<comment> \<open>Build body-elaboration jobs from the per-arm envs and the original
+                  body terms (from arms). Constructing the body list directly from
+                  arms keeps it syntactically derived, so termination is easy to
+                  verify. \<close>
+              let dps = map fst decoratedRows;
+                  bodyJobs = zip (map (\<lambda>dp. extend_env_with_pattern_vars
+                                              env (\<lambda>_. True) ghost [dp]) dps)
+                                 (map snd arms) in
+              (case elab_term_list_with_envs bodyJobs elabEnv ghost mv1 of
                  Inl errs \<Rightarrow> Inl errs
-               | Inr finalizedArms \<Rightarrow>
-                  \<comment> \<open>Build body-elaboration jobs from the per-arm envs (from finalizedArms)
-                      and the original body terms (from arms). Constructing the body list
-                      directly from arms keeps it syntactically derived, so termination is
-                      easy to verify. \<close>
-                  let bodyJobs = zip (map snd finalizedArms) (map snd arms) in
-                  (case elab_term_list_with_envs bodyJobs elabEnv ghost mv2 of
-                     Inl errs \<Rightarrow> Inl errs
-                   | Inr (bodyTms, bodyTys, mv3) \<Rightarrow>
-                       let dps = map fst finalizedArms;
-                           bodyLocs = map (\<lambda>(_, body). bab_term_location body) arms
-                       in finalize_match_term env loc (hd bodyTys) scrutTm scrutTy
-                                              dps bodyTms bodyLocs bodyTys
-                                              accSubst mv3))))"
+               | Inr (bodyTms, bodyTys, mv2) \<Rightarrow>
+                   (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                           (\<lambda>idx. bab_term_location (snd (arms ! idx)))
+                           bodyTms bodyTys
+                           (replicate (length bodyTms) (hd bodyTys)) fmempty of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (coercedBodies, finalSubst) \<Rightarrow>
+                        finalize_match_term loc scrutTm dps coercedBodies
+                          (apply_subst finalSubst (hd bodyTys)) mv2))))"
 
   (* Sizeof: operand must be an array; allocatable dims require lvalue or ghost *)
 | "elab_term env elabEnv ghost (BabTm_Sizeof loc tm) next_mv =
@@ -1194,14 +1162,15 @@ next
   show ?case
     using size_list_size_snd_le_size_prod[where xs=flds and f="\<lambda>_. 0"] by simp
 next
-  case (23 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba xc yb xd yc xe bb xca)
+  case (23 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba dps bodyJobs)
   \<comment> \<open>BabTm_Match body-elaboration sub-call: bodies (taken syntactically from arms,
-      zipped with the envs from finalize_match_arms) sum to less than the whole
-      BabTm_Match. \<close>
+      zipped with the per-arm envs) sum to less than the whole BabTm_Match. \<close>
   have helper:
-    "size_list (size \<circ> snd) (zip (map snd bb) (map snd arms))
+    "size_list (size \<circ> snd)
+       (zip (map (\<lambda>dp. extend_env_with_pattern_vars env (\<lambda>_. True) ghost [dp]) dps)
+            (map snd arms))
        \<le> size_list (size_prod (\<lambda>x. 0) size) arms"
-    using size_list_size_snd_zip_map_snd_le[where as="map snd bb" and bs=arms and f="\<lambda>x. 0"] .
+    by (rule size_list_size_snd_zip_map_snd_le)
   from 23 helper show ?case by simp
 qed (simp_all add: comp_def)
 

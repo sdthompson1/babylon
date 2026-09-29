@@ -628,14 +628,12 @@ definition elab_while_header ::
 (* Match branch helpers *)
 (* ========================================================================== *)
 
-(* Scrutinee finalization for BabStmt_Match. 
+(* Scrutinee binding for BabStmt_Match.
 
-   This is passed an accumulated substitution (which came from typechecking the patterns
-   against the scrutinee; e.g. a "true" pattern might have substituted some metavar in the
-   scrutinee to Bool). We apply the accSubst to the scrutinee; the result must contain
-   no unresolved metavariables (which also makes the scrutinee type metavariable-free).
+   The elaborated scrutinee must contain no unresolved metavariables (which also
+   makes the scrutinee type metavariable-free).
 
-   Then, we create a synthetic match@@n variable and bind it to the scrutinee.
+   We create a synthetic match@@n variable and bind it to the scrutinee.
    If the scrutinee is an lvalue, this will be a VarDecl Ref, else VarDecl Var.
 
    "Ref" patterns are only allowed in the Ref-binding case.
@@ -644,34 +642,31 @@ definition elab_while_header ::
    location, it becomes VarDecl Var, not Ref -- otherwise we would be creating a ref to a
    non-ghost variable from ghost code, which is not allowed.)
 
-   The return values are: final scrutinee and type, binding mode, the match@@n name,
-   the writability of the scrutinee (which determines "constness" of ref-patterns),
-   the new env with the match@@n binding, and the new counter (hi is consumed as the
-   match@@n suffix). *)
+   The return values are: the binding mode, the match@@n name, the writability of
+   the scrutinee (which determines "constness" of ref-patterns), the new env with
+   the match@@n binding, and the new counter (hi is consumed as the match@@n
+   suffix). *)
 definition elab_match_stmt_scrut ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> TypeSubst \<Rightarrow> nat
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> nat
    \<Rightarrow> CoreTerm \<Rightarrow> CoreType \<Rightarrow> DecPattern list
-   \<Rightarrow> TypeError list
-      + (CoreTerm \<times> CoreType \<times> VarOrRef \<times> string \<times> bool \<times> CoreTyEnv \<times> nat)" where
-  "elab_match_stmt_scrut env ghost loc accSubst hi scrutTm scrutTy dps =
-    (let scrut' = apply_subst_to_term accSubst scrutTm;
-         scrutTy' = apply_subst accSubst scrutTy;
-         freshName = ''match@@'' @ nat_to_string hi;
-         writable = is_writable_lvalue env scrut'
-     in if \<not> term_inferred env scrut' then Inl [TyErr_CannotInferType loc]
-        else if is_lvalue scrut' \<and> ghost_lvalue_ok env ghost scrut'
-        then Inr (scrut', scrutTy', Ref, freshName, writable,
-                  (vardecl_add_local env ghost freshName scrutTy')
+   \<Rightarrow> TypeError list + (VarOrRef \<times> string \<times> bool \<times> CoreTyEnv \<times> nat)" where
+  "elab_match_stmt_scrut env ghost loc hi scrutTm scrutTy dps =
+    (let freshName = ''match@@'' @ nat_to_string hi;
+         writable = is_writable_lvalue env scrutTm
+     in if \<not> term_inferred env scrutTm then Inl [TyErr_CannotInferType loc]
+        else if is_lvalue scrutTm \<and> ghost_lvalue_ok env ghost scrutTm
+        then Inr (Ref, freshName, writable,
+                  (vardecl_add_local env ghost freshName scrutTy)
                     \<lparr> TE_ConstLocals := (if writable
                                          then fminus (TE_ConstLocals env) {|freshName|}
                                          else finsert freshName (TE_ConstLocals env)) \<rparr>,
                   hi + 1)
         else (case filter (\<lambda>(vr, _, _). vr = Ref) (dec_pattern_var_bindings_list dps) of
-                [] \<Rightarrow> Inr (scrut', scrutTy', Var, freshName, writable,
-                           vardecl_add_local env ghost freshName scrutTy',
+                [] \<Rightarrow> Inr (Var, freshName, writable,
+                           vardecl_add_local env ghost freshName scrutTy,
                            hi + 1)
               | (_, name, _) # _ \<Rightarrow>
-                  Inl [if is_lvalue scrut'
+                  Inl [if is_lvalue scrutTm
                        then TyErr_GhostRefNeedsGhostVar loc name
                        else TyErr_RefPatternNeedsLvalue loc name]))"
 
@@ -965,32 +960,30 @@ where
      else case elab_term env elabEnv ghost scrut next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (scrutTm, scrutTy, mv1) \<Rightarrow>
-         (case decorate_match_arms env elabEnv ghost scrutTy True fmempty mv1 arms of
+         (case decorate_match_arms env elabEnv ghost scrutTy True arms of
             Inl errs \<Rightarrow> Inl errs
-          | Inr (decoratedRows, accSubst, mv2) \<Rightarrow>
-              let rawDps = map fst decoratedRows in
-              (case elab_match_stmt_scrut env ghost loc accSubst mv2
-                      scrutTm scrutTy rawDps of
+          | Inr decoratedRows \<Rightarrow>
+              let dps = map fst decoratedRows in
+              (case elab_match_stmt_scrut env ghost loc mv1 scrutTm scrutTy dps of
                  Inl errs \<Rightarrow> Inl errs
-               | Inr (scrut', scrutTy', mode, freshName, writable, envAfterFresh, mv3) \<Rightarrow>
-                   (case finalize_match_arms
-                           (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
-                           (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost loc accSubst rawDps of
+               | Inr (mode, freshName, writable, envAfterFresh, mv2) \<Rightarrow>
+                   \<comment> \<open>Build body-elaboration jobs from the per-arm envs (the env after
+                       the match@@n binding, extended with the arm's pattern variables)
+                       and the original bodies (from arms). Constructing the body list
+                       directly from arms keeps it syntactically derived, so
+                       termination is easy to verify (compare BabTm_Match).\<close>
+                   let bodyJobs =
+                         zip (map (\<lambda>dp. extend_env_with_pattern_vars
+                                          (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
+                                          (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost [dp]) dps)
+                             (map snd arms) in
+                   (case elab_statement_lists_with_envs bodyJobs elabEnv ghost mv2 of
                       Inl errs \<Rightarrow> Inl errs
-                    | Inr finalizedArms \<Rightarrow>
-                        \<comment> \<open>Build body-elaboration jobs from the per-arm envs (from
-                            finalizedArms) and the original bodies (from arms).
-                            Constructing the body list directly from arms keeps it
-                            syntactically derived, so termination is easy to verify
-                            (compare BabTm_Match).\<close>
-                        let bodyJobs = zip (map snd finalizedArms) (map snd arms) in
-                        (case elab_statement_lists_with_envs bodyJobs elabEnv ghost mv3 of
+                    | Inr (coreBodies, mv3) \<Rightarrow>
+                        (case finalize_match_stmt ghost loc mode freshName
+                                scrutTy scrutTm dps coreBodies of
                            Inl errs \<Rightarrow> Inl errs
-                         | Inr (coreBodies, mv4) \<Rightarrow>
-                             (case finalize_match_stmt ghost loc mode freshName
-                                     scrutTy' scrut' (map fst finalizedArms) coreBodies of
-                                Inl errs \<Rightarrow> Inl errs
-                              | Inr coreStmt \<Rightarrow> Inr (coreStmt, env, mv4)))))))"
+                         | Inr coreStmt \<Rightarrow> Inr (coreStmt, env, mv3))))))"
 
   (* ShowHide: show or hide a name from the verifier. Has no effect on typechecking.
      TODO: We should at least check that the name is in scope. *)
@@ -1059,12 +1052,16 @@ proof (relation
                  (case_sum (\<lambda>(_, _, _, stmts, _). size_list size stmts)
                            (\<lambda>(jobs, _, _, _). size_list (size_list size \<circ> snd) jobs)))",
        goal_cases)
-  case (7 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba xb yb xc yc xd
-          bb xe yd xf ye xg yf xh yg xi yh xj yi bc xk)
+  case (7 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba dps
+          bb mode yb freshName yc writable yd envAfterFresh mv2 bodyJobs)
   \<comment> \<open>BabStmt_Match body-elaboration sub-call: bodies (taken syntactically from
-      arms, zipped with the envs from finalize_match_arms) sum to less than
-      the whole BabStmt_Match.\<close>
-  have "size_list (size_list size \<circ> snd) (zip (map snd bc) (map snd arms))
+      arms, zipped with the per-arm envs) sum to less than the whole
+      BabStmt_Match.\<close>
+  have "size_list (size_list size \<circ> snd)
+          (zip (map (\<lambda>dp. extend_env_with_pattern_vars
+                           (envAfterFresh \<lparr> TE_ProofTopLevel := False \<rparr>)
+                           (\<lambda>vr. vr = Ref \<and> \<not> writable) ghost [dp]) dps)
+               (map snd arms))
           \<le> size_list (size_prod (\<lambda>x. 0) (size_list size)) arms"
     by (rule size_list_stmts_snd_zip_map_snd_le)
   with 7 show ?case by simp
