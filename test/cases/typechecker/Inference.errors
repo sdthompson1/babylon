@@ -4,7 +4,7 @@ src/Inference.b:31:25: Type mismatch (expected numeric type)
 src/Inference.b:42:20: Unable to infer type
 src/Inference.b:47:11: Unable to infer type
 src/Inference.b:76:12: Unable to infer type
-src/Inference.b:78:23: Unable to infer type
+src/Inference.b:78:12: Unable to infer type
 src/Inference.b:89:12: 'int' or 'real' types not allowed in executable code
 src/Inference.b:90:7: 'int' or 'real' types not allowed in executable code
 src/Inference.b:91:7: 'int' or 'real' types not allowed in executable code

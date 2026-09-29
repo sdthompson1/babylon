@@ -65,3 +65,10 @@ void set_location_end(struct Location *loc, const struct Location *from)
     loc->end_line_num = from->end_line_num;
     loc->end_column_num = from->end_column_num;
 }
+
+bool location_before(const struct Location *a, const struct Location *b)
+{
+    return a->begin_line_num < b->begin_line_num
+        || (a->begin_line_num == b->begin_line_num
+            && a->begin_column_num < b->begin_column_num);
+}

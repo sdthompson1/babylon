@@ -33,4 +33,7 @@ void format_location(const struct Location *loc,
 
 void set_location_end(struct Location *loc, const struct Location *from);
 
+// True if 'a' begins strictly before 'b' (filenames are not compared).
+bool location_before(const struct Location *a, const struct Location *b);
+
 #endif

@@ -16,13 +16,6 @@ repository.
 // ----------------------------------------------------------------------------------------------------
 // Checking for unresolved univars
 
-static bool location_before(const struct Location *a, const struct Location *b)
-{
-    return a->begin_line_num < b->begin_line_num
-        || (a->begin_line_num == b->begin_line_num
-            && a->begin_column_num < b->begin_column_num);
-}
-
 // 'context' is a (const struct Location **), pointing to the earliest
 // origin location found so far (or NULL if none found yet).
 static void * check_ty_univar(struct TypeTransform *tr, void *context, struct Type *type)

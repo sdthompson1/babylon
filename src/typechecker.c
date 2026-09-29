@@ -674,6 +674,19 @@ static bool update_univar_type(struct TypecheckContext *tc_context,
         return false;
     }
 
+    // If rhs is itself an unresolved univar, then lhs becomes an alias
+    // for it, so rhs should take over the earlier of the two origin
+    // locations.
+    // This is purely for error reporting (it affects the location of
+    // "Unable to infer type" errors).
+    // Note that callers have already called chase_univars (on both lhs and
+    // rhs), so we don't need to check whether rhs->univar_data.node->type
+    // is NULL.
+    if (rhs->tag == TY_UNIVAR
+    && location_before(&lhs->univar_data.node->location, &rhs->univar_data.node->location)) {
+        rhs->univar_data.node->location = lhs->univar_data.node->location;
+    }
+
     lhs->univar_data.node->type = copy_type(rhs);
     return true;
 }
