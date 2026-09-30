@@ -11,11 +11,11 @@ lemma fold_process_one_arg_error:
   by (induct xs) simp_all
 
 lemma process_one_arg_val_error:
-  "\<exists>e. process_one_arg ((name, vr), refResult, Inl err) acc = Inl e"
+  "\<exists>e. process_one_arg ((name, vr, gh), refResult, Inl err) acc = Inl e"
   by (cases vr; cases refResult; cases acc) simp_all
 
 lemma process_one_arg_ref_error:
-  "\<exists>e. process_one_arg ((name, Ref), Inl err, valResult) acc = Inl e"
+  "\<exists>e. process_one_arg ((name, Ref, gh), Inl err, valResult) acc = Inl e"
   by (cases valResult; cases acc) simp_all
 
 (* If the fold succeeds and an argument is Ref, its lvalue result must be Inr *)
@@ -23,7 +23,7 @@ lemma fold_process_one_arg_ref_ok:
   assumes "fold process_one_arg (zip args (zip refResults valResults)) acc = Inr finalState"
     and "length args = length refResults"
     and "length refResults = length valResults"
-    and "(i, (name, Ref)) \<in> set (zip [0..<length args] args)"
+    and "(i, (name, Ref, gh)) \<in> set (zip [0..<length args] args)"
   shows "\<exists>lval. refResults ! i = Inr lval"
   using assms
 proof (induction args arbitrary: refResults valResults acc i)
@@ -38,9 +38,9 @@ next
       and len_val': "length refResults' = length valResults'"
     by (cases refResults; cases valResults) auto
 
-  obtain argName argVr where arg_eq: "arg = (argName, argVr)" by (cases arg)
+  obtain argName argVr argGh where arg_eq: "arg = (argName, argVr, argGh)" by (cases arg)
 
-  let ?step = "process_one_arg ((argName, argVr), refResult, valResult') acc"
+  let ?step = "process_one_arg ((argName, argVr, argGh), refResult, valResult') acc"
 
   have fold_eq: "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc
                = fold process_one_arg (zip args (zip refResults' valResults')) ?step"
@@ -48,17 +48,17 @@ next
 
   from Cons.prems(4) obtain j where j_bound: "j < length (arg # args)"
     and i_eq: "i = [0..<length (arg # args)] ! j"
-    and arg_at_j: "(arg # args) ! j = (name, Ref)"
+    and arg_at_j: "(arg # args) ! j = (name, Ref, gh)"
     by (auto simp: set_zip)
   hence i_eq': "i = j" using j_bound
     by (metis One_nat_def add_diff_inverse_nat diff_Suc_1 diff_Suc_Suc less_zeroE nth_upt)
-  hence i_bound: "i < Suc (length args)" and arg_at_i: "(arg # args) ! i = (name, Ref)"
+  hence i_bound: "i < Suc (length args)" and arg_at_i: "(arg # args) ! i = (name, Ref, gh)"
     using j_bound arg_at_j by auto
 
   show ?case
   proof (cases "i = 0")
     case True
-    hence "arg = (name, Ref)" using arg_at_i by simp
+    hence "arg = (name, Ref, gh)" using arg_at_i by simp
     hence argVr_eq: "argVr = Ref" and argName_eq: "argName = name" using arg_eq by auto
     show ?thesis
     proof (cases refResult)
@@ -78,11 +78,11 @@ next
   next
     case False
     hence i_pos: "i > 0" using i_bound by simp
-    have tail_in: "(i - 1, (name, Ref)) \<in> set (zip [0..<length args] args)"
+    have tail_in: "(i - 1, (name, Ref, gh)) \<in> set (zip [0..<length args] args)"
     proof -
       from False i_bound have len: "i - 1 < length args" by simp
       have "[0..<length args] ! (i - 1) = i - 1" using len by simp
-      moreover have "args ! (i - 1) = (name, Ref)" using arg_at_i False by simp
+      moreover have "args ! (i - 1) = (name, Ref, gh)" using arg_at_i False by simp
       ultimately show ?thesis using len by (auto simp: set_zip intro!: exI[of _ "i - 1"])
     qed
     (* Need to show the fold on tail succeeds *)
@@ -151,14 +151,14 @@ lemma fold_process_one_arg_ref_lvalue_ok:
     and "length argTms = length refResults"
     and "length refResults = length valResults"
     and "refResults = map f argTms"
-    and "(argTm, (name, Ref)) \<in> set (zip argTms fnArgs)"
+    and "(argTm, (name, Ref, gh)) \<in> set (zip argTms fnArgs)"
   shows "\<exists>lval. f argTm = Inr lval"
 proof -
   from assms(6) obtain i where i_bound: "i < length argTms"
     and argTm_eq: "argTms ! i = argTm"
-    and fnArg_eq: "fnArgs ! i = (name, Ref)"
+    and fnArg_eq: "fnArgs ! i = (name, Ref, gh)"
     by (auto simp: set_zip in_set_conv_nth)
-  have "(i, (name, Ref)) \<in> set (zip [0..<length fnArgs] fnArgs)"
+  have "(i, (name, Ref, gh)) \<in> set (zip [0..<length fnArgs] fnArgs)"
     using i_bound fnArg_eq assms(2) by (auto simp: set_zip intro!: exI[of _ i])
   hence "\<exists>lval. refResults ! i = Inr lval"
     using fold_process_one_arg_ref_ok[OF assms(1) _ _ ] assms(2,3,4) by auto
@@ -187,9 +187,9 @@ next
       and len_val': "length refResults' = length valResults'"
     by (cases refResults; cases valResults) auto
 
-  obtain name vr where arg_eq: "arg = (name, vr)" by (cases arg)
+  obtain name vr gh where arg_eq: "arg = (name, vr, gh)" by (cases arg)
 
-  let ?step = "process_one_arg ((name, vr), refResult, valResult') acc"
+  let ?step = "process_one_arg ((name, vr, gh), refResult, valResult') acc"
 
   have fold_eq: "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc
                = fold process_one_arg (zip args (zip refResults' valResults')) ?step"
@@ -255,19 +255,19 @@ proof (cases acc)
 next
   case State: (Inr st)
   show ?thesis proof (cases fnArg)
-    case (Pair name argType)
+    case (fields name argType argGh)
     show ?thesis proof (cases argType)
       case Var
       show ?thesis proof (cases "interp_term f state argTm")
         case (Inl err)
         (* For Var, the term result matters. If it's Inl err, that error propagates. *)
         (* The assumption says result \<noteq> InsufficientFuel, so err \<noteq> InsufficientFuel *)
-        hence "err \<noteq> InsufficientFuel" using assms(3) State Pair Var by simp
+        hence "err \<noteq> InsufficientFuel" using assms(3) State fields Var by simp
         (* So interp_term f state argTm = Inl err where err \<noteq> InsufficientFuel *)
         (* This means interp_term f state argTm \<noteq> Inl InsufficientFuel, so IH applies *)
         hence "\<forall>f'\<ge>f. interp_term f' state argTm = interp_term f state argTm"
           using assms(1) Inl by auto
-        thus ?thesis using Inl State Pair Var by simp
+        thus ?thesis using Inl State fields Var by simp
       next
         case (Inr val)
         (* Term succeeded with value val *)
@@ -276,17 +276,17 @@ next
         have "interp_term f state argTm \<noteq> Inl InsufficientFuel" using Inr by simp
         hence "\<forall>f'\<ge>f. interp_term f' state argTm = interp_term f state argTm"
           using assms(1) by blast
-        thus ?thesis using Inr State Pair Var by simp
+        thus ?thesis using Inr State fields Var by simp
       qed
     next
       case Ref
       show ?thesis proof (cases "interp_writable_lvalue f state argTm")
         case (Inl err)
         (* For Ref, the lvalue result matters. If it's Inl err, that error propagates. *)
-        hence "err \<noteq> InsufficientFuel" using assms(3) State Pair Ref by simp
+        hence "err \<noteq> InsufficientFuel" using assms(3) State fields Ref by simp
         hence "\<forall>f'\<ge>f. interp_writable_lvalue f' state argTm = interp_writable_lvalue f state argTm"
           using assms(2) Inl by auto
-        thus ?thesis using Inl State Pair Ref by simp
+        thus ?thesis using Inl State fields Ref by simp
       next
         case (Inr lval)
         (* Lvalue succeeded - now we also need to check the term result *)
@@ -302,10 +302,10 @@ next
         proof (cases "interp_term f state argTm")
           case (Inl err')
           (* Term evaluation failed - this will cause process_one_arg to fail *)
-          hence "err' \<noteq> InsufficientFuel" using assms(3) State Pair Ref lval_eq Inr by simp
+          hence "err' \<noteq> InsufficientFuel" using assms(3) State fields Ref lval_eq Inr by simp
           hence tm_eq: "\<forall>f'\<ge>f. interp_term f' state argTm = Inl err'"
             using assms(1) Inl by auto
-          thus ?thesis using State Pair Ref lv_eq' lval_eq Inl by simp
+          thus ?thesis using State fields Ref lv_eq' lval_eq Inl by simp
         next
           case (Inr val)
           (* Term evaluation succeeded *)
@@ -313,7 +313,7 @@ next
           hence tm_eq: "\<forall>f'\<ge>f. interp_term f' state argTm = Inr val"
             using assms(1) Inr by simp
           (* Now both lvalue and term results are the same for all f' >= f *)
-          thus ?thesis using State Pair Ref lv_eq' lval_eq tm_eq by simp
+          thus ?thesis using State fields Ref lv_eq' lval_eq tm_eq by simp
         qed
       qed
     qed
@@ -1789,27 +1789,27 @@ next
               qed
 
               (* For Ref arguments, lvalue must have succeeded (not InsufficientFuel) *)
-              have ref_lvalues_ok: "\<forall>argTm \<in> set argTms. \<forall>name.
-                  (argTm, (name, Ref)) \<in> set (zip argTms ?fnArgs)
+              have ref_lvalues_ok: "\<forall>argTm \<in> set argTms. \<forall>name gh.
+                  (argTm, (name, Ref, gh)) \<in> set (zip argTms ?fnArgs)
                   \<longrightarrow> (\<exists>lval. interp_writable_lvalue fuel state argTm = Inr lval)"
               proof (intro ballI allI impI)
-                fix argTm name
+                fix argTm name gh
                 assume "argTm \<in> set argTms"
-                  and in_zip: "(argTm, (name, Ref)) \<in> set (zip argTms ?fnArgs)"
+                  and in_zip: "(argTm, (name, Ref, gh)) \<in> set (zip argTms ?fnArgs)"
                 show "\<exists>lval. interp_writable_lvalue fuel state argTm = Inr lval"
                   using fold_process_one_arg_ref_lvalue_ok[OF PreCall len_eq _ len_val refl in_zip]
                     len_ref by simp
               qed
 
               (* For Ref arguments, lvalue results are equal (they didn't return InsufficientFuel) *)
-              have ref_lvalues_eq: "\<forall>i < length argTms. snd (?fnArgs ! i) = Ref \<longrightarrow>
+              have ref_lvalues_eq: "\<forall>i < length argTms. fst (snd (?fnArgs ! i)) = Ref \<longrightarrow>
                   interp_writable_lvalue f'' state (argTms ! i) = interp_writable_lvalue fuel state (argTms ! i)"
               proof (intro allI impI)
-                fix i assume i_bound: "i < length argTms" and is_ref: "snd (?fnArgs ! i) = Ref"
-                obtain argName where fnArg_eq: "?fnArgs ! i = (argName, Ref)"
+                fix i assume i_bound: "i < length argTms" and is_ref: "fst (snd (?fnArgs ! i)) = Ref"
+                obtain argName argGh where fnArg_eq: "?fnArgs ! i = (argName, Ref, argGh)"
                   using is_ref by (cases "?fnArgs ! i") auto
                 have argTm_in: "argTms ! i \<in> set argTms" using i_bound by simp
-                have "(argTms ! i, (argName, Ref)) \<in> set (zip argTms ?fnArgs)"
+                have "(argTms ! i, (argName, Ref, argGh)) \<in> set (zip argTms ?fnArgs)"
                   using i_bound fnArg_eq len_eq by (auto simp: set_zip intro!: exI[of _ i])
                 hence "\<exists>lval. interp_writable_lvalue fuel state (argTms ! i) = Inr lval"
                   using ref_lvalues_ok argTm_in by blast
@@ -1819,7 +1819,7 @@ next
               qed
 
               (* The filtered refs (for Ref args only) are equal *)
-              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
+              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr, _), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                     (zip ?fnArgs refResults)"
               have filtered_refs_eq: "?filter_refs (map (interp_writable_lvalue f'' state) argTms) =
@@ -1832,7 +1832,7 @@ next
                 fix i assume "i < length (?filter_refs (map (interp_writable_lvalue f'' state) argTms))"
                 hence i_bound: "i < length ?fnArgs" by simp
                 hence i_bound': "i < length argTms" using len_eq by simp
-                obtain argName argVr where fnArg_eq: "?fnArgs ! i = (argName, argVr)"
+                obtain argName argVr argGh where fnArg_eq: "?fnArgs ! i = (argName, argVr, argGh)"
                   by (cases "?fnArgs ! i")
                 show "?filter_refs (map (interp_writable_lvalue f'' state) argTms) ! i =
                       ?filter_refs ?refResults ! i"

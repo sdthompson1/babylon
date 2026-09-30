@@ -6,8 +6,10 @@ record FunInfo =
   (* Type arguments: type variable names *)
   FI_TyArgs :: "string list"
 
-  (* Term arguments: type, and whether passed by value (Var) or reference (Ref). *)
-  FI_TmArgs :: "(CoreType \<times> VarOrRef) list"
+  (* Term arguments: type, whether passed by value (Var) or reference (Ref), and
+     whether the parameter is ghost. A ghost parameter's actual is ghost code: it
+     is typechecked in Ghost mode and is not evaluated at run time. *)
+  FI_TmArgs :: "(CoreType \<times> VarOrRef \<times> GhostOrNot) list"
 
   (* Return type *)
   FI_ReturnType :: CoreType

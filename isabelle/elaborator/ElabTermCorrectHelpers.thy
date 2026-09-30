@@ -567,7 +567,7 @@ definition callee_info_valid_function ::
        fmlookup (TE_Functions env) fnName = Some funInfo
      \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
      \<and> \<not> FI_Impure funInfo
-     \<and> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)
+     \<and> list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)
      \<and> length tyArgs = length (FI_TyArgs funInfo)
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
@@ -614,7 +614,7 @@ proof (cases ci)
     "fmlookup (TE_Functions ?env1) fnName = Some funInfo"
     "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     "\<not> FI_Impure funInfo"
-    "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)"
+    "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)"
     "length tyArgs = length (FI_TyArgs funInfo)"
     "list_all (is_well_kinded ?env1) tyArgs"
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
@@ -689,7 +689,7 @@ proof -
   from assms(1) fn_lookup not_gc not_void have not_impure: "\<not> FI_Impure funInfo"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
   from assms(1) fn_lookup not_gc not_void not_impure have
-    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)"
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
   from assms(1) fn_lookup not_gc not_void not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
@@ -980,7 +980,7 @@ proof (cases calleeInfo)
     fn_lookup: "fmlookup (TE_Functions env') fnName = Some funInfo" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     not_impure: "\<not> FI_Impure funInfo" and
-    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and

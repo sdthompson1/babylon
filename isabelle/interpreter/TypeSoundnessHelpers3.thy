@@ -1587,7 +1587,7 @@ lemma type_soundness_function_call:
     and ty_wk: "list_all (is_well_kinded env) tyArgs"
     and ty_rt: "list_all (is_runtime_type env) tyArgs"
     and ref_writable: "\<forall>i < length argTms.
-         (snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
+         (fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
           is_writable_lvalue env (argTms ! i))"
     and IH_term: "\<And>env' (state' :: 'w InterpState) storeTyping' tm' ty'.
                 state_matches_env state' env' storeTyping' \<Longrightarrow>
@@ -1750,7 +1750,7 @@ proof -
                   | Inl err \<Rightarrow> Inl err)
              | Inr externFun \<Rightarrow>
                  (let vals = rights ?valResults;
-                      refs = rights (map (\<lambda>((_, vr), refResult).
+                      refs = rights (map (\<lambda>((_, vr, _), refResult).
                                             if vr = Ref then refResult else Inl TypeError)
                                         (zip (IF_Args f) ?refResults));
                       (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
@@ -1818,14 +1818,14 @@ proof -
 
   have lvals_sound:
     "\<forall>i < length (FI_TmArgs funInfo).
-       snd (FI_TmArgs funInfo ! i) = Ref \<longrightarrow>
+       fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
          sound_lvalue_result state env storeTyping
            (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                         (fst (FI_TmArgs funInfo ! i)))
            (?refResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-                and is_ref: "snd (FI_TmArgs funInfo ! i) = Ref"
+                and is_ref: "fst (snd (FI_TmArgs funInfo ! i)) = Ref"
     with len_argTms_fi have i_argTms: "i < length argTms" by simp
     let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
     let ?expTy_i = "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ?paramTy_i"
@@ -2139,7 +2139,7 @@ proof -
 
       \<comment> \<open>The interpreter result for the extern branch. \<close>
       let ?vals = "rights ?valResults"
-      let ?refs = "rights (map (\<lambda>((_, vr), refResult).
+      let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
                                   if vr = Ref then refResult else Inl TypeError)
                               (zip (IF_Args f) ?refResults))"
 
@@ -2161,7 +2161,7 @@ proof -
       have inr_chars:
         "\<forall>i < length (IF_Args f).
            (\<exists>v. ?valResults ! i = Inr v) \<and>
-           (snd ((IF_Args f) ! i) = Ref \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p)))" .
+           (fst (snd ((IF_Args f) ! i)) = Ref \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p)))" .
 
       \<comment> \<open>All valResults are Inr — construct the vals list. \<close>
       have all_val_inr: "\<forall>i < length argTms. \<exists>v. ?valResults ! i = Inr v"
@@ -2348,7 +2348,7 @@ proof -
                   value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo)) \<and>
                   list_all2 (value_has_type env) refUpdates
                     (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))))"
+                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))))"
         unfolding extern_fun_contract_def by meson
       from ext_inst prem_dom prem_range prem_list_all2
       have contract_implies:
@@ -2357,14 +2357,14 @@ proof -
              value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo)) \<and>
              list_all2 (value_has_type env) refUpdates
                (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
+                    (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))"
         by meson
       from contract_implies ext_call
       have contract_post:
         "value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo))
          \<and> list_all2 (value_has_type env) refUpdates
              (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                  (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
+                  (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))"
         by simp
       from contract_post have ret_typed_apply:
         "value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo))"
@@ -2372,40 +2372,40 @@ proof -
       from contract_post have ref_updates_typed:
         "list_all2 (value_has_type env) refUpdates
            (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
+                (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))"
         by simp
 
       \<comment> \<open>Now build the ref-list information for apply_ref_updates_sound. \<close>
       \<comment> \<open>FI_TmArgs and IF_Args have matching Var/Ref positions. \<close>
       from fi_match have if_args_match:
-        "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
+        "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
                    (FI_TmArgs funInfo) (IF_Args f)"
         unfolding fun_info_matches_interp_fun_def by simp
       have vor_match:
         "\<forall>i < length (IF_Args f).
-             snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> snd (FI_TmArgs funInfo ! i) = Ref"
+             fst (snd ((IF_Args f) ! i)) = Ref \<longleftrightarrow> fst (snd (FI_TmArgs funInfo ! i)) = Ref"
       proof (intro allI impI)
         fix i assume i_lt: "i < length (IF_Args f)"
         with len_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
-        obtain t1 v1 where fi_i: "FI_TmArgs funInfo ! i = (t1, v1)"
+        obtain t1 v1 g1 where fi_i: "FI_TmArgs funInfo ! i = (t1, v1, g1)"
           by (cases "FI_TmArgs funInfo ! i") auto
-        obtain n2 v2 where if_i: "(IF_Args f) ! i = (n2, v2)"
+        obtain n2 v2 g2 where if_i: "(IF_Args f) ! i = (n2, v2, g2)"
           by (cases "(IF_Args f) ! i") auto
         from if_args_match i_lt len_fi fi_i if_i have "v1 = v2"
           by (auto simp: list_all2_conv_all_nth)
-        thus "snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> snd (FI_TmArgs funInfo ! i) = Ref"
+        thus "fst (snd ((IF_Args f) ! i)) = Ref \<longleftrightarrow> fst (snd (FI_TmArgs funInfo ! i)) = Ref"
           using fi_i if_i by simp
       qed
 
       \<comment> \<open>From fold_process_one_arg_inr_inversion: each Ref-position refResult is Inr. \<close>
       have all_ref_inr:
-        "\<forall>i < length (IF_Args f). snd ((IF_Args f) ! i) = Ref
+        "\<forall>i < length (IF_Args f). fst (snd ((IF_Args f) ! i)) = Ref
            \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p))"
         using inr_chars by blast
 
       \<comment> \<open>Bind the idxs list name. \<close>
       define idxs :: "nat list" where
-        idxs_def: "idxs = filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)]"
+        idxs_def: "idxs = filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)]"
       from rights_filter_zip_refs_chars[OF len_ir all_ref_inr]
       have refs_len: "length ?refs = length idxs"
         and refs_nth: "\<forall>j < length idxs.
@@ -2418,59 +2418,59 @@ proof -
       proof (intro allI impI)
         fix j assume "j < length idxs"
         then have mem: "idxs ! j \<in> set idxs" by simp
-        hence "idxs ! j \<in> set (filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)])"
+        hence "idxs ! j \<in> set (filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)])"
           unfolding idxs_def .
         hence "idxs ! j \<in> set [0 ..< length (IF_Args f)]" by auto
         thus "idxs ! j < length (IF_Args f)" by simp
       qed
       have idxs_is_ref:
-        "\<forall>j < length idxs. snd ((IF_Args f) ! (idxs ! j)) = Ref"
+        "\<forall>j < length idxs. fst (snd ((IF_Args f) ! (idxs ! j))) = Ref"
       proof (intro allI impI)
         fix j assume "j < length idxs"
         then have mem: "idxs ! j \<in> set idxs" by simp
-        hence "idxs ! j \<in> set (filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)])"
+        hence "idxs ! j \<in> set (filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)])"
           unfolding idxs_def .
-        thus "snd ((IF_Args f) ! (idxs ! j)) = Ref" by simp
+        thus "fst (snd ((IF_Args f) ! (idxs ! j))) = Ref" by simp
       qed
 
       \<comment> \<open>The filter on FI_TmArgs gives the same length as idxs (via vor_match).
           Strategy: both filter-lengths equal the cardinality of the Ref-positions
           among [0 ..< length FI_TmArgs funInfo] = [0 ..< length (IF_Args f)]. \<close>
       have filter_FI_len:
-        "length (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)) = length idxs"
+        "length (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)) = length idxs"
       proof -
         \<comment> \<open>Step 1: count Ref-positions in FI_TmArgs by indexing. \<close>
         have count_FI:
-          "length (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))
-            = card {i. i < length (FI_TmArgs funInfo) \<and> snd (FI_TmArgs funInfo ! i) = Ref}"
+          "length (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))
+            = card {i. i < length (FI_TmArgs funInfo) \<and> fst (snd (FI_TmArgs funInfo ! i)) = Ref}"
         proof -
-          have "length (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))
+          have "length (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))
                 = card {i. i < length (FI_TmArgs funInfo) \<and>
-                            (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo ! i)}"
+                            (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo ! i)}"
             by (simp add: length_filter_conv_card)
           also have "\<dots> = card {i. i < length (FI_TmArgs funInfo) \<and>
-                                  snd (FI_TmArgs funInfo ! i) = Ref}"
+                                  fst (snd (FI_TmArgs funInfo ! i)) = Ref}"
             by (rule arg_cong[where f=card]) (auto simp: case_prod_unfold)
           finally show ?thesis .
         qed
         \<comment> \<open>Step 2: same count on idxs. \<close>
         have count_idxs:
-          "length idxs = card {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
+          "length idxs = card {i. i < length (IF_Args f) \<and> fst (snd ((IF_Args f) ! i)) = Ref}"
         proof -
           have "length idxs
-              = length (filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)])"
+              = length (filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)])"
             unfolding idxs_def by simp
           also have "\<dots> = card {i. i < length [0 ..< length (IF_Args f)]
-                                  \<and> snd ((IF_Args f) ! ([0 ..< length (IF_Args f)] ! i)) = Ref}"
+                                  \<and> fst (snd ((IF_Args f) ! ([0 ..< length (IF_Args f)] ! i))) = Ref}"
             by (rule length_filter_conv_card)
-          also have "\<dots> = card {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
+          also have "\<dots> = card {i. i < length (IF_Args f) \<and> fst (snd ((IF_Args f) ! i)) = Ref}"
             by (rule arg_cong[where f=card]) auto
           finally show ?thesis .
         qed
         \<comment> \<open>Step 3: the two index-sets are equal (via vor_match + len_fi). \<close>
         have sets_eq:
-          "{i. i < length (FI_TmArgs funInfo) \<and> snd (FI_TmArgs funInfo ! i) = Ref}
-            = {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
+          "{i. i < length (FI_TmArgs funInfo) \<and> fst (snd (FI_TmArgs funInfo ! i)) = Ref}
+            = {i. i < length (IF_Args f) \<and> fst (snd ((IF_Args f) ! i)) = Ref}"
           using len_fi vor_match by auto
         show ?thesis
           using count_FI count_idxs sets_eq by simp
@@ -2496,8 +2496,8 @@ proof -
         from idxs_in_bound j_lt have i_lt_if: "?i < length (IF_Args f)" by blast
         with len_fi have i_lt_fi: "?i < length (FI_TmArgs funInfo)" by simp
         with len_argTms_fi have i_lt_argTms: "?i < length argTms" by simp
-        from idxs_is_ref j_lt have if_i_ref: "snd ((IF_Args f) ! ?i) = Ref" by blast
-        with vor_match i_lt_if have fi_i_ref: "snd (FI_TmArgs funInfo ! ?i) = Ref"
+        from idxs_is_ref j_lt have if_i_ref: "fst (snd ((IF_Args f) ! ?i)) = Ref" by blast
+        with vor_match i_lt_if have fi_i_ref: "fst (snd (FI_TmArgs funInfo ! ?i)) = Ref"
           by blast
         let ?paramTy_i = "fst (FI_TmArgs funInfo ! ?i)"
 
@@ -2550,7 +2550,7 @@ proof -
       \<comment> \<open>Define tys as the contract's expected type list for refUpdates. \<close>
       define tys :: "CoreType list" where
         tys_def: "tys = map (\<lambda>(ty, _). apply_subst tySubst ty)
-                            (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))"
+                            (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))"
 
       have tys_len: "length tys = length idxs"
         using tys_def filter_FI_len by simp
@@ -2630,17 +2630,17 @@ proof -
       \<comment> \<open>Apply: filter (Ref-only) FI_TmArgs = map (FI_TmArgs !) idxs_FI, where
           idxs_FI = filter (\<lambda>i. snd(snd(FI_TmArgs ! i)) = Ref) [0..<len]. \<close>
       have fi_filter_indexed:
-        "filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)
+        "filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)
           = map (\<lambda>i. FI_TmArgs funInfo ! i)
-                (filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
+                (filter (\<lambda>i. fst (snd (FI_TmArgs funInfo ! i)) = Ref)
                         [0 ..< length (FI_TmArgs funInfo)])"
-        using filter_via_indices[where P = "\<lambda>(_, vor). vor = Ref"
+        using filter_via_indices[where P = "\<lambda>(_, vor, _). vor = Ref"
                                    and xs = "FI_TmArgs funInfo"]
         by (auto simp: case_prod_unfold)
 
       \<comment> \<open>idxs_FI = idxs (via vor_match + len_fi). \<close>
       have idxs_FI_eq_idxs:
-        "filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
+        "filter (\<lambda>i. fst (snd (FI_TmArgs funInfo ! i)) = Ref)
                 [0 ..< length (FI_TmArgs funInfo)]
           = idxs"
       proof -
@@ -2648,22 +2648,22 @@ proof -
           using len_fi by simp
         have pred_eq:
           "\<And>i. i < length (IF_Args f) \<Longrightarrow>
-                snd (FI_TmArgs funInfo ! i) = Ref
-                \<longleftrightarrow> snd ((IF_Args f) ! i) = Ref"
+                fst (snd (FI_TmArgs funInfo ! i)) = Ref
+                \<longleftrightarrow> fst (snd ((IF_Args f) ! i)) = Ref"
           using vor_match by blast
-        have "filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
+        have "filter (\<lambda>i. fst (snd (FI_TmArgs funInfo ! i)) = Ref)
                      [0 ..< length (FI_TmArgs funInfo)]
-            = filter (\<lambda>i. snd (FI_TmArgs funInfo ! i) = Ref)
+            = filter (\<lambda>i. fst (snd (FI_TmArgs funInfo ! i)) = Ref)
                      [0 ..< length (IF_Args f)]"
           using len_upt by simp
-        also have "\<dots> = filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref)
+        also have "\<dots> = filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref)
                                 [0 ..< length (IF_Args f)]"
           using pred_eq by (intro filter_cong) auto
         finally show ?thesis unfolding idxs_def .
       qed
 
       have fi_filter_eq:
-        "filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)
+        "filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)
           = map (\<lambda>i. FI_TmArgs funInfo ! i) idxs"
         using fi_filter_indexed idxs_FI_eq_idxs by simp
 
@@ -2674,7 +2674,7 @@ proof -
         fix j assume j_lt: "j < length idxs"
         have "tys ! j
             = ((map (\<lambda>(ty, _). apply_subst tySubst ty)
-                    (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+                    (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))) ! j)"
           unfolding tys_def by simp
         also have "\<dots> = ((map (\<lambda>(ty, _). apply_subst tySubst ty)
                               (map (\<lambda>i. FI_TmArgs funInfo ! i) idxs)) ! j)"
@@ -2708,12 +2708,12 @@ proof -
         from ref_updates_typed have len_eq:
           "length refUpdates
             = length (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                          (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))"
+                          (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))"
           by (auto dest: list_all2_lengthD)
         from ref_updates_typed j_lt have
           "value_has_type env (refUpdates ! j)
              ((map (\<lambda>(ty, _). apply_subst tySubst ty)
-                   (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo))) ! j)"
+                   (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))) ! j)"
           using list_all2_nthD by fastforce
         thus "value_has_type env (refUpdates ! j) (tys ! j)"
           unfolding tys_def by simp

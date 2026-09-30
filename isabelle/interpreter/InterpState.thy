@@ -17,7 +17,7 @@ type_synonym 'w ExternFunc = "'w \<Rightarrow> CoreValue list \<Rightarrow> 'w \
 (* Function info for the interpreter *)
 record 'w InterpFun =
   IF_TyArgs :: "string list"
-  IF_Args :: "(string \<times> VarOrRef) list"
+  IF_Args :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
   IF_Body :: "CoreStatement list + 'w ExternFunc"
   IF_Impure :: bool
 

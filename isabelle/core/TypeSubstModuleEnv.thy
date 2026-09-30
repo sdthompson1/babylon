@@ -940,7 +940,7 @@ next
     not_ghost_cond: "\<not> (ghost = NotGhost
                        \<and> (\<not> list_all (is_runtime_type env) tyArgs
                           \<or> FI_Ghost funInfo = Ghost))" and
-    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
     args_check: "list_all2 (\<lambda>tm expectedTy.
@@ -973,7 +973,7 @@ next
   have tyArgs_cp_subst: "list_all is_complete_type ?subst_tyArgs"
     using map_apply_subst_preserves_complete[OF tyArgs_cp CoreTm_FunctionCall.prems(5)] .
 
-  have all_var_subst: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs ?funInfo')"
+  have all_var_subst: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs ?funInfo')"
     using all_var by (fastforce simp: list_all_iff)
 
   have len_tmArgs_subst:
@@ -1029,7 +1029,7 @@ next
     have ih_result:
       "core_term_type ?me ghost (apply_subst_to_term subst (tmArgs ! i))
          = Some (apply_subst subst actualTy)" .
-    obtain ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor)"
+    obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs funInfo ! i") auto
     from actual_eq fi_arg_eq have actual_eq2: "actualTy = apply_subst ?innerSubst ti" by simp
     show "case core_term_type ?me ghost (map (apply_subst_to_term subst) tmArgs ! i) of
@@ -1599,7 +1599,7 @@ proof -
                 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length tmArgs.
-                snd (FI_TmArgs funInfo ! i) = Ref
+                fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
@@ -1631,7 +1631,7 @@ proof -
        = (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))"
     using compose by (auto simp: fun_eq_iff split: prod.splits)
   have vor_eq:
-    "(\<lambda>(_, vor). vor) \<circ> (\<lambda>(ty, vr). (apply_subst subst ty, vr)) = (\<lambda>(_, vor). vor)"
+    "(\<lambda>(_, vor, _). vor) \<circ> (\<lambda>(ty, vr). (apply_subst subst ty, vr)) = (\<lambda>(_, vor, _). vor)"
     by (auto simp: fun_eq_iff split: prod.splits)
 
   have l2_subst:
@@ -1645,26 +1645,26 @@ proof -
                       \<and> ghost_lvalue_ok ?me ghost tm
                       \<and> core_term_type ?me ghost tm = Some expectedTy)
                (zip (map (apply_subst_to_term subst) tmArgs)
-                    (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)))
+                    (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))
                (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
                     (FI_TmArgs funInfo))"
     unfolding list_all2_conv_all_nth
   proof (intro conjI allI impI)
     show "length (zip (map (apply_subst_to_term subst) tmArgs)
-                      (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)))
+                      (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))
             = length (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
                           (FI_TmArgs funInfo))"
       using len_tmArgs by simp
   next
     fix i assume i_lt: "i < length (zip (map (apply_subst_to_term subst) tmArgs)
-                                        (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)))"
+                                        (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))"
     hence i_lt_tm: "i < length tmArgs" by simp
     with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor)"
+    obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth:
       "zip (map (apply_subst_to_term subst) tmArgs)
-           (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)) ! i
+           (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)) ! i
          = (apply_subst_to_term subst (tmArgs ! i), vor)"
       using i_lt_tm i_lt_fi fi_arg_eq by simp
     have exp_nth:
@@ -1692,7 +1692,7 @@ proof -
          = Some (apply_subst subst (apply_subst ?innerSubst ti))"
       using actual_eq by simp
     show "(case zip (map (apply_subst_to_term subst) tmArgs)
-                    (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)) ! i of
+                    (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)) ! i of
              (tm, vor) \<Rightarrow>
                \<lambda>expectedTy.
                  (case vor of

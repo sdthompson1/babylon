@@ -72,7 +72,7 @@ definition resolve_callee_function ::
           Inl [TyErr_FunctionNoReturnType loc name]
         else if FI_Impure funInfo then
           Inl [TyErr_ImpureFunctionInTermContext loc name]
-        else if \<not> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo) then
+        else if \<not> list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo) then
           Inl [TyErr_RefArgInTermContext loc name]
         else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
           Inl [TyErr_GhostFunctionInNonGhost loc name]

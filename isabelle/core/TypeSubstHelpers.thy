@@ -1027,7 +1027,7 @@ next
     not_ghost_cond: "\<not> (ghost = NotGhost
                        \<and> (\<not> list_all (is_runtime_type calleeEnv) tyArgs
                           \<or> FI_Ghost funInfo = Ghost))" and
-    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
     args_check: "list_all2 (\<lambda>tm expectedTy.
@@ -1120,7 +1120,7 @@ next
            = Some (apply_subst subst actualTy)" .
       \<comment> \<open>The substituted actual type equals the substituted-with-composed
           version of the i-th FI_TmArgs type. \<close>
-      obtain ti vor where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor)"
+      obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
         by (cases "FI_TmArgs funInfo ! i") auto
       from actual_eq fi_arg_eq have actual_eq2: "actualTy = apply_subst ?innerSubst ti" by simp
       \<comment> \<open>ti's type variables are in FI_TyArgs (from fi_args_tyvars). \<close>

@@ -2464,7 +2464,7 @@ proof -
     ret_cp: "?ghost = NotGhost \<longrightarrow> is_complete_type retTy" and
     info_eq: "info = \<lparr> FI_TyArgs = ?tyvars,
                        FI_TmArgs = zip argTys
-                                     (map (\<lambda>(_, vor, _). vor) (DF_TmArgs df)),
+                                     (map (\<lambda>(_, vor, _). (vor, NotGhost)) (DF_TmArgs df)),
                        FI_ReturnType = retTy,
                        FI_Ghost = ?ghost,
                        FI_Impure = DF_Impure df \<rparr>"
@@ -2486,7 +2486,7 @@ proof -
     have "map fst (zip argTys (map (\<lambda>(_, vor, _). vor) (DF_TmArgs df))) = argTys"
       by (rule map_fst_zip) (simp add: len_args)
     then show ?thesis
-      unfolding info_eq by (metis FunInfo.select_convs(2) set_map)
+      unfolding info_eq by (simp add: image_set len_args)
   qed
   \<comment> \<open>Entry conditions for the type elaborator at the signature env.\<close>
   have rt_sub: "(if ?ghost = NotGhost then fset_of_list ?tyvars else {||})

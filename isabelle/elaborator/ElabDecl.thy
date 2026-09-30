@@ -489,7 +489,9 @@ definition elab_fun_signature ::
                  then Inl [TyErr_IncompleteArrayType (DF_Location df)]
                  else
                  Inr \<lparr> FI_TyArgs = tyvars,
-                       FI_TmArgs = zip argTys (map (\<lambda>(_, vor, _). vor) (DF_TmArgs df)),
+                       \<comment> \<open>Ghost parameters are not yet in the Bab syntax, so every
+                           parameter is NotGhost here.\<close>
+                       FI_TmArgs = zip argTys (map (\<lambda>(_, vor, _). (vor, NotGhost)) (DF_TmArgs df)),
                        FI_ReturnType = retTy,
                        FI_Ghost = ghost,
                        FI_Impure = DF_Impure df \<rparr>))"

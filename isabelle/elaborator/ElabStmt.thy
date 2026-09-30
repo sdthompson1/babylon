@@ -34,7 +34,7 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
             None \<Rightarrow> False
           | Some funInfo \<Rightarrow>
               FI_Impure funInfo
-              \<or> \<not> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo))
+              \<or> \<not> list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo))
      | _ \<Rightarrow> False)"
 
 (* Resolve the callee of an impure call. This checks that the callee is a
@@ -69,7 +69,7 @@ definition resolve_impure_callee ::
                  | Inr (newTyArgs, next_mv') \<Rightarrow>
                      let subst0 = fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs);
                          expArgTypes = map (\<lambda>(ty, _). apply_subst subst0 ty) (FI_TmArgs funInfo);
-                         varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo);
+                         varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo);
                          retType0 = apply_subst subst0 (FI_ReturnType funInfo)
                      in Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')))
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"

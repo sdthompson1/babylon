@@ -148,7 +148,7 @@ proof -
                 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length tmArgs.
-                snd (FI_TmArgs funInfo ! i) = Ref
+                fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
     by blast
@@ -261,12 +261,12 @@ proof -
   \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact) under
       the term substitution.\<close>
   have ref_lv_subst: "\<forall>i < length (map (apply_subst_to_term subst) tmArgs).
-                        snd (FI_TmArgs funInfo ! i) = Ref
+                        fst (snd (FI_TmArgs funInfo ! i)) = Ref
                           \<longrightarrow> is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)
                               \<and> ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length (map (apply_subst_to_term subst) tmArgs)"
-      and ref: "snd (FI_TmArgs funInfo ! i) = Ref"
+      and ref: "fst (snd (FI_TmArgs funInfo ! i)) = Ref"
     hence i_tm: "i < length tmArgs" by simp
     have "is_writable_lvalue env (tmArgs ! i)" and "ghost_lvalue_ok env ghost (tmArgs ! i)"
       using ref_lv i_tm ref by simp_all
@@ -283,14 +283,14 @@ proof -
                  | Ref \<Rightarrow> is_writable_lvalue env tm
                           \<and> ghost_lvalue_ok env ghost tm
                           \<and> core_term_type env ghost tm = Some expectedTy"
-  let ?zts = "zip (map (apply_subst_to_term subst) tmArgs) (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
+  let ?zts = "zip (map (apply_subst_to_term subst) tmArgs) (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
   have len_zts: "length ?zts = length ?expsS" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsS ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_tm: "i < length tmArgs" using len_tm by simp
     with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
+    obtain ti vor gh where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = ((map (apply_subst_to_term subst) tmArgs) ! i, vor)"
       using i_tm i_lt_fi fi_arg by simp

@@ -322,7 +322,7 @@ proof -
                 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo))" and
     ref_lv: "\<forall>i < length argTms.
-                snd (FI_TmArgs funInfo ! i) = Ref
+                fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue ?envE (argTms ! i)
                       \<and> ghost_lvalue_ok ?envE ghost (argTms ! i)"
     by blast
@@ -363,14 +363,14 @@ proof -
                  | Ref \<Rightarrow> is_writable_lvalue env tm
                           \<and> ghost_lvalue_ok env ghost tm
                           \<and> core_term_type env ghost tm = Some expectedTy"
-  let ?zts = "zip argTms (map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo))"
+  let ?zts = "zip argTms (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
   have len_zts: "length ?zts = length ?exps" using len_tm by simp
   have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?exps ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length argTms" using len_tm by simp
     with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain ti vor where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor)"
+    obtain ti vor gh where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = (argTms ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp
@@ -567,7 +567,7 @@ lemma resolve_impure_callee_correct:
           \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
           \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                               (FI_TmArgs funInfo)
-          \<and> varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)
+          \<and> varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)
           \<and> retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)
           \<and> distinct (FI_TyArgs funInfo)
           \<and> (\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
@@ -591,7 +591,7 @@ proof -
     next_mv_eq: "next_mv' = next_mv1" and
     expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
-    vor_eq: "varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)" and
+    vor_eq: "varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)" and
     ret_eq: "retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: resolve_impure_callee_def Let_def
              split: sum.splits prod.splits if_splits)
@@ -772,7 +772,7 @@ proof -
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
-    vor_eq: "varOrRefs = map (\<lambda>(_, vor). vor) (FI_TmArgs funInfo)" and
+    vor_eq: "varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)" and
     ret0_eq: "retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)" and
     distinct_tyargs: "distinct (FI_TyArgs funInfo)" and
     fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).

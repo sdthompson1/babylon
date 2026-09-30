@@ -1,6 +1,8 @@
 # Plan: type inference for ghost arguments
 
 Status: proposal (30-Sep-2026). Nothing described here is implemented.
+The Isabelle work is staged: the prerequisite in 3.1 (ghost parameters
+existing at all) comes first, then the inference rule in 3.2-3.3.
 
 This plan changes how type arguments are inferred at a call that has `ghost`
 parameters. It covers the C compiler (`src/`), which already has ghost
@@ -267,14 +269,90 @@ measures it properly.
 
 ## 3. Isabelle
 
-### 3.1 Prerequisite (not part of this plan)
+### 3.1 Prerequisite: ghost parameters
 
-Ghost parameters must exist: a ghost flag on `DF_TmArgs` and `FI_TmArgs`;
-Core's call rules type the actual for a ghost formal in `Ghost` mode and
-require runtime types only of non-ghost formals; the interpreter ignores
-ghost actuals. This plan only fixes how the elaborator's call cases infer
-types once that is in place. Data constructors have no ghost fields and
-are unaffected.
+Ghost parameters must exist before 3.2 can be built. This is a larger
+change than 3.2 and touches every layer; the decisions below were settled
+on 30-Sep-2026. Data constructors have no ghost fields and are unaffected.
+
+**Representation.** The ghost flag goes on the end of the parameter tuple:
+
+* `FI_TmArgs` (`core/CoreTyEnv.thy`) becomes
+  `(CoreType × VarOrRef × GhostOrNot) list`;
+* `IF_Args` (`interpreter/InterpState.thy`) becomes
+  `(string × VarOrRef × GhostOrNot) list`, since the interpreter's arity
+  check and argument binding go through it;
+* `DF_TmArgs` (`bab/BabSyntax.thy`) gains a `GhostOrNot`.
+
+The position is chosen for how the build fails. Tuples nest to the right,
+so every existing `fst` access and `λ(ty, _). …` pattern still typechecks,
+while every `snd` access and `λ(_, vor). …` pattern becomes a type error.
+The failures are therefore exactly the sites that need a decision: the
+three call rules, `body_env_for`, `module_body_env_for`,
+`extern_fun_contract` and `fun_info_matches_interp_fun`.
+
+**Normalisation.** A parameter of a ghost function is ghost whatever its
+own flag says, as in the C (`entry->ghost = decl->ghost || arg->ghost`,
+`src/typechecker.c:3914`). This is applied once, in `elab_fun_signature`
+(`elaborator/ElabDecl.thy`), so that Core only ever reads the
+per-parameter flag. `elab_fun_signature` must also elaborate a ghost
+parameter's type in `Ghost` mode; today it elaborates every parameter type
+of a non-ghost function in `NotGhost` mode.
+
+**Core rules.** Three sites: the `CoreTm_FunctionCall` case of
+`core_term_type` (`core/CoreTypecheck.thy`), `core_impure_call_type`, and
+the `AssignCall`/`VarDeclCall` checks in `core/CoreStmtTypecheck.thy`.
+
+* The actual for a ghost formal is typed in `Ghost` mode, whatever the
+  ambient mode.
+* A ghost `ref` formal accepts only a ghost lvalue, which is
+  `ghost_lvalue_ok env Ghost tm` (`core/CoreTypeProps.thy`). The C rule is
+  at `src/typechecker.c:2258`.
+* `tyenv_fun_ghost_constraint` (`core/CoreTyEnvWellFormed.thy`) requires
+  a runtime type only of non-ghost parameters.
+* `module_body_env_for` (`core/CoreModuleTypecheck.thy`) and
+  `body_env_for` (`interpreter/StateMatchesEnv.thy`) put the ghost
+  parameter names into `TE_GhostLocals`. `body_env_for` currently
+  hard-codes `TE_GhostLocals := {||}`.
+
+**Interpreter.** `process_one_arg` (`interpreter/CoreInterp.thy`) skips a
+ghost parameter: the actual is not evaluated and the name is not bound.
+This matches how the interpreter already treats a ghost `VarDecl`, and
+`state_matches_env` already allows a ghost local to be absent from the
+state. In the extern branch of `interp_function_call`, `vals` excludes the
+ghost slots, and `extern_fun_contract` filters the same way for both the
+argument list and the ref-update list. The proof cost lands in
+`partial_body_env_for` (`interpreter/TypeSoundnessHelpers2.thy`), which
+assumes empty `TE_GhostLocals` throughout the argument-binding induction.
+
+**Extern functions.** Ghost parameters are *allowed* on extern functions.
+They add no expressiveness: an extern has no body, so a ghost input `g`
+can only appear in the contract, and "requires P(args, g), ensures
+Q(args, g, return)" is equivalent for the caller to "requires ∃g. P,
+ensures ∀g. P ⟶ Q", because the implementation cannot observe `g`. The
+one pattern they make more convenient is threading a ghost model of the
+outside world through extern calls via a ghost `ref`, instead of
+`ensures ∃m. …` plus `obtain` at the call site. They are allowed because
+the C already permits them and already omits them from the generated
+prototype and call (`src/codegen.c:2955`), and because forbidding them
+costs the same as allowing them. Core has no notion of extern until link
+time, so the interpreter filter above is needed either way.
+
+**Syntax.** `parse_fun_arg` (`bab_loader/BabParser.thy`) accepts `ghost`
+and `ref` either before the name or after the colon, in any order, at most
+once each, as the C parser does (`src/parser.c:2190`).
+
+**Staging.** Implement the prerequisite bottom-up: representation, Core
+rules, interpreter and soundness, then parser, renamer and
+`elab_fun_signature`. For the elaborator's call cases, the interim version
+elaborates *every* actual in the ambient mode, exactly as today. That is
+stricter than the language should be but keeps `ElabTermCorrect`
+sorry-free, provided a term typed in `NotGhost` mode is also typed in
+`Ghost` mode. No term-level lemma of that form was found in `core/`
+(30-Sep-2026), so proving it belongs to this step. (This is a different
+lemma from the env-monotonicity one in 3.3; see 7.) With the prerequisite
+built end to end, 3.2 and 3.3 are a self-contained change to two
+functions and two proof cases.
 
 ### 3.2 Definitions
 
@@ -346,11 +424,11 @@ For a ghost actual in a `NotGhost` call:
   removes that block from the env.
 * The remaining env differs from the target
   `extend_env_with_tyvars env NotGhost next_mv next_mv'` only by having
-  fewer type variables and fewer runtime type variables. `Ghost`-mode
-  typing is monotone in both. (A lemma "growing `TE_TypeVars` and
-  `TE_RuntimeTypeVars` preserves `core_term_type env Ghost`" is needed if
-  not already available in this form; the `is_runtime_type` half exists in
-  `core/CoreTypeProps.thy:195`.)
+  fewer type variables and fewer runtime type variables. Typing is
+  monotone in both: `core_term_type_irrelevant_tyvar`
+  (`core/CoreTypecheck.thy:1456`) adds arbitrary `extraTV` and `extraRT`
+  to the two fields and preserves `core_term_type env ghost` in either
+  mode.
 
 For the type arguments: `accSubst` comes only from step 2, so the existing
 argument that its range is runtime in `NotGhost` mode applies unchanged.
@@ -505,4 +583,9 @@ implementing (see 7).
   "not a type variable of the expected type". The interval form matches
   how the proof removes the block afterwards and is preferred unless it
   proves awkward.
-* Whether the monotonicity lemma in 3.3 exists in a usable form.
+* Resolved: the monotonicity lemma in 3.3 is
+  `core_term_type_irrelevant_tyvar` (`core/CoreTypecheck.thy:1456`).
+  Still missing is the different, mode-weakening lemma (`NotGhost` typing
+  implies `Ghost` typing) that the interim elaborator in 3.1 needs; only
+  `core_term_type_notghost_runtime` and the statement-level
+  `core_statement_type_ghost_to_notghost` exist (checked 30-Sep-2026).

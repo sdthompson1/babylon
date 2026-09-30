@@ -339,7 +339,7 @@ proof -
       by (simp_all add: make_interp_fun_def)
     have mapfst: "map fst (zip (CF_Args f) (map snd (FI_TmArgs info))) = CF_Args f"
       by (simp add: len)
-    have markers: "list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
+    have markers: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
                      (FI_TmArgs info) (zip (CF_Args f) (map snd (FI_TmArgs info)))"
       by (auto simp add: list_all2_conv_all_nth len split_def)
     have distZip: "distinct (map fst (zip (CF_Args f) (map snd (FI_TmArgs info))))"

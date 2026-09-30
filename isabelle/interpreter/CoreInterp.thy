@@ -372,31 +372,33 @@ fun is_pure_fun :: "'w InterpState \<Rightarrow> string \<Rightarrow> bool" wher
   "is_pure_fun state fnName =
     (case fmlookup (IS_Functions state) fnName of
       Some funInfo \<Rightarrow> 
-        (\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args funInfo))
+        (\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (IF_Args funInfo))
         \<and> (\<not> IF_Impure funInfo)
     | None \<Rightarrow> False)"
 
 (* Add a single function argument to the state. *)
 (* Takes: (parameter info, lvalue result, rvalue result) and current state
-   Returns: updated state, or error *)
-fun process_one_arg :: "((string \<times> VarOrRef)
+   Returns: updated state, or error.
+   The parameter's ghost flag is not yet consulted: ghost parameters are
+   processed exactly like non-ghost ones for now. *)
+fun process_one_arg :: "((string \<times> VarOrRef \<times> GhostOrNot)
                         \<times> (InterpError + (nat \<times> LValuePath list))
                         \<times> (InterpError + CoreValue))
                 \<Rightarrow> InterpError + 'w InterpState
                 \<Rightarrow> InterpError + 'w InterpState" where
   "process_one_arg _ (Inl err) = Inl err"
-| "process_one_arg ((name, Var), _, Inr val) (Inr state) =
+| "process_one_arg ((name, Var, _), _, Inr val) (Inr state) =
     (let (state', addr) = alloc_store state val
     in Inr (state' \<lparr> IS_Locals := fmupd name addr (IS_Locals state'),
                       IS_Refs := fmdrop name (IS_Refs state'),
                       IS_ConstLocals := finsert name (IS_ConstLocals state') \<rparr>))"
-| "process_one_arg ((name, Var), _, Inl err) _ = Inl err"
-| "process_one_arg ((name, Ref), Inr (addr, path), Inr _) (Inr state) =
+| "process_one_arg ((name, Var, _), _, Inl err) _ = Inl err"
+| "process_one_arg ((name, Ref, _), Inr (addr, path), Inr _) (Inr state) =
     Inr (state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
                   IS_Refs := fmupd name (addr, path) (IS_Refs state),
                   IS_ConstLocals := fminus (IS_ConstLocals state) {|name|} \<rparr>)"
-| "process_one_arg ((name, Ref), Inl err, _) _ = Inl err"
-| "process_one_arg ((name, Ref), _, Inl err) _ = Inl err"
+| "process_one_arg ((name, Ref, _), Inl err, _) _ = Inl err"
+| "process_one_arg ((name, Ref, _), _, Inl err) _ = Inl err"
 
 (* Apply extern function ref updates back to the store. *)
 (* Takes list of ref lvalues and corresponding new values, returns updated state. *)
@@ -950,7 +952,7 @@ where
                           Inl err)
                   | Inr externFun \<Rightarrow>
                       (let vals = rights valResults;
-                           refs = rights (map (\<lambda>((_, vr), refResult).
+                           refs = rights (map (\<lambda>((_, vr, _), refResult).
                                                   if vr = Ref then refResult else Inl TypeError)
                                               (zip (IF_Args f) refResults));
                            (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;

@@ -368,7 +368,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) tyArgs \<or> FI_Ghost funInfo = Ghost)
              then None
         \<comment> \<open>Term-level calls must be pure: no Ref arguments, not impure\<close>
-        else if \<not> list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo) then None
+        else if \<not> list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo) then None
         else if FI_Impure funInfo then None
         \<comment> \<open>Check number of term arguments\<close>
         else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
@@ -1280,7 +1280,7 @@ next
     tyargs_cp: "list_all is_complete_type tyArgs" and
     len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
-    all_var: "list_all (\<lambda>(_, vor). vor = Var) (FI_TmArgs funInfo)" and
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
     la2: "list_all2 (\<lambda>tm expectedTy.
         case core_term_type env ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
         tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)

@@ -30,7 +30,7 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> Fu
       TE_GhostLocals := {||},
       TE_ConstLocals := fset_of_list
         (map fst
-             (filter (\<lambda>(_, vor). vor = Var) (zip names (map snd (FI_TmArgs funInfo))))),
+             (filter (\<lambda>(_, vor, _). vor = Var) (zip names (map snd (FI_TmArgs funInfo))))),
       TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo),
       TE_ReturnType := FI_ReturnType funInfo,
@@ -117,7 +117,7 @@ definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow>
           list_all2 (value_has_type env)
                     refUpdates
                     (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, vor). vor = Ref) (FI_TmArgs funInfo)))))"
+                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))))"
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed for typechecking the function body, if there is one.
@@ -126,8 +126,8 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
   "fun_info_matches_interp_fun env funInfo interpFun =
     \<comment> \<open>Type arguments match\<close>
     (FI_TyArgs funInfo = IF_TyArgs interpFun \<and>
-    \<comment> \<open>Term arguments match: same length, and the Var/Ref markers agree.\<close>
-    list_all2 (\<lambda>(_, vor1) (_, vor2). vor1 = vor2)
+    \<comment> \<open>Term arguments match: same length, and the Var/Ref and ghost markers agree.\<close>
+    list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
     \<comment> \<open>Parameter names are distinct.\<close>
     distinct (map fst (IF_Args interpFun)) \<and>
