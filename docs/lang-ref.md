@@ -1238,6 +1238,10 @@ say, either a variable name, a string literal, or a field projection
 or array projection expression in which the left-hand side is itself
 an lvalue.
 
+If a `<type>` is given, it must be exactly the type of the
+`<expression>`; no implicit cast is inserted. For example, if `a` has
+type `i32[10]`, then `ref r: i32[] = a;` is an error.
+
 A `ref` statement creates a "reference" to the variable, field or
 array element that the right-hand-side expression denotes. The `ref`
 variable then acts as another name for that same location: reading the

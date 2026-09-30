@@ -273,12 +273,12 @@ definition elab_vardecl_impure ::
 
    With no annotation the recorded type is the initializer type.
 
-   With an annotation the initializer is coerced to the annotation type and that type is
-   recorded. A ref must match its annotation exactly (up to unification), so the coerced
-   term must still be an lvalue. An inserted cast destroys lvalue-ness exactly when its
-   target is not an array type, so this check rejects integer coercions (`ref r: i64 =
-   some_i32_variable`) while an array cast (`ref a: T[] = someTn`) passes, giving `a` a
-   borrowed view of the fixed-size array. The new ref is const iff its base is read-only.
+   With an annotation the initializer type must equal the annotation type exactly: no
+   coercion is inserted, so both integer coercions (`ref r: i64 = some_i32_variable`)
+   and array casts (`ref a: T[] = someTn`) are rejected. (This is unlike a Ref argument
+   of an impure call, where an array cast is allowed.)
+
+   The new ref is const iff its base is read-only.
 
    Either way the (final) initializer must contain no unresolved metavariables,
    which also makes the recorded type metavariable-free.
@@ -314,17 +314,13 @@ definition elab_vardecl_ref ::
                          \<comment> \<open>Inferred type from the initializer.\<close>
                          mkRefStmt rhsTy coreTm
                      | Some ty \<Rightarrow>
-                         \<comment> \<open>Annotated: coerce the initializer to the annotation type; the
-                             result must still be an lvalue.\<close>
+                         \<comment> \<open>Annotated: the initializer type must be exactly the annotation type.\<close>
                          (case elab_type env elabEnv ghost ty of
                             Inl errs \<Rightarrow> Inl errs
                           | Inr coreTy \<Rightarrow>
-                              (case coerce_term_to_type env loc coreTm rhsTy coreTy of
-                                 Inl errs \<Rightarrow> Inl errs
-                               | Inr coreTm' \<Rightarrow>
-                                   if \<not> is_lvalue coreTm'
-                                   then Inl [TyErr_TypeMismatch loc coreTy rhsTy]
-                                   else mkRefStmt coreTy coreTm'))))))"
+                              if rhsTy \<noteq> coreTy
+                              then Inl [TyErr_TypeMismatch loc coreTy rhsTy]
+                              else mkRefStmt coreTy coreTm)))))"
 
 (* ----- Assign branch helpers ----- *)
 

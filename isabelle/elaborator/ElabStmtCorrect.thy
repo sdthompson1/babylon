@@ -1565,8 +1565,6 @@ lemma elab_vardecl_ref_correct:
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
   shows "core_statement_type env ghost coreStmt = Some env'"
 proof -
-  have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
-    using ee_wf unfolding elabenv_well_formed_def by simp
   from elab obtain tm coreTm rhsTy where
     tm_eq: "tmOpt = Some tm" and
     etm: "elab_term env elabEnv ghost tm next_mv = Inr (coreTm, rhsTy, next_mv')" and
@@ -1600,42 +1598,26 @@ proof -
       by (simp add: cs_eq env'_eq vardecl_add_local_def)
   next
     case (Some ty)
-    \<comment> \<open>Annotated: varTy = elaborated annotation; the initializer is coerced to it
-        (unify or cast) and the coerced term is checked to still be an lvalue.\<close>
-    from elab tm_eq etm Some obtain coreTy coreTm' where
+    \<comment> \<open>Annotated: the elaborated annotation equals rhsTy, so this is the inferred
+        case again: varTy = rhsTy, initTm = coreTm.\<close>
+    from elab tm_eq etm Some obtain coreTy where
       ety: "elab_type env elabEnv ghost ty = Inr coreTy" and
-      coerce: "coerce_term_to_type env loc coreTm rhsTy coreTy = Inr coreTm'" and
-      lv': "is_lvalue coreTm'" and
-      inf: "term_inferred env coreTm'" and
-      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref coreTy coreTm'" and
+      ty_eq: "rhsTy = coreTy" and
+      inf: "term_inferred env coreTm" and
+      cs_eq: "coreStmt = CoreStmt_VarDecl ghost varName Ref coreTy coreTm" and
       env'_eq: "env' = (vardecl_add_local env ghost varName coreTy)
-                         \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm'
+                         \<lparr> TE_ConstLocals := (if is_writable_lvalue env coreTm
                                               then fminus (TE_ConstLocals env) {|varName|}
                                               else finsert varName (TE_ConstLocals env)) \<rparr>"
       by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
                split: sum.splits prod.splits option.splits if_splits)
+    have init_typed: "core_term_type env ghost coreTm = Some coreTy"
+      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf] ty_eq by simp
     have wk: "is_well_kinded env coreTy"
-      using elab_type_is_well_kinded(1)[OF td_wf wf ety] .
+      using core_term_type_well_kinded[OF init_typed wf] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
-      using elab_type_notghost_is_runtime(1)[OF td_wf wf] ety by auto
-    \<comment> \<open>The coerced initializer typechecks to coreTy in env.\<close>
-    have init_typed: "core_term_type env ghost coreTm' = Some coreTy"
-      using coerce_inferred_typed_in_env[OF coreTm_typed_decl coerce inf wf bound wk rt] .
-    \<comment> \<open>Coercion preserves the lvalue's base variable: a substitution does not touch
-        it, and an inserted cast that leaves the term an lvalue is an array cast,
-        which lvalue_base_name looks through. Hence the ghost check transfers.\<close>
-    have base_eq: "lvalue_base_name coreTm' = lvalue_base_name coreTm"
-    proof -
-      from coerce obtain subst where
-        tm'_eq: "coreTm' = insert_cast (apply_subst subst rhsTy) (apply_subst subst coreTy)
-                             (apply_subst_to_term subst coreTm)"
-        unfolding coerce_term_to_type_unfold by (auto split: option.splits if_splits)
-      show ?thesis using tm'_eq lv' lvalue_base_name_apply_subst_to_term[OF lv]
-        by (cases "apply_subst subst rhsTy = apply_subst subst coreTy") (auto simp: insert_cast_def)
-    qed
-    have glv': "ghost_lvalue_ok env ghost coreTm'"
-      using glv base_eq unfolding ghost_lvalue_ok_def by simp
-    show ?thesis using wk rt lv' glv' init_typed
+      using core_term_type_notghost_runtime init_typed wf by auto
+    show ?thesis using wk rt lv glv init_typed
       by (simp add: cs_eq env'_eq vardecl_add_local_def)
   qed
 qed
