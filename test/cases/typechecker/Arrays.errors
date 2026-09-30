@@ -11,5 +11,3 @@ src/Arrays.b:38:5: Wrong number of array indices (expected 2)
 src/Arrays.b:43:16: Type mismatch
 src/Arrays.b:44:18: Type mismatch (expected numeric type)
 src/Arrays.b:45:13: Cannot index this term
-src/Arrays.b:54:19: Can't take reference to element of resizable array
-src/Arrays.b:57:19: Can't take reference to element of resizable array

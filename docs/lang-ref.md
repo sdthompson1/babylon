@@ -1278,11 +1278,16 @@ global constants, and non-ref formal parameters of the current
 function). It is possible to create a `ref` pointing to such a value,
 but attempting to write to it will be a compile-time error.
 
-There is also a rule (currently) that it is illegal to create a
-reference to an element of an allocatable array. This is to prevent a
-situation where e.g. a reference is created to `a[9]` for some array
-`a`, but then `a` is resized to have fewer than 10 elements (so that
-`a[9]` is no longer a valid element of the array).
+It is possible to create a reference to an element of a resizable
+array. Such a reference refers to a particular index position in the
+array, rather than to a fixed location in memory. For example, if a
+reference is created to `a[9]`, and the array `a` is then freed and
+reallocated, the reference refers to element 9 of the new array. If
+`a` is instead resized to have fewer than 10 elements (so that `a[9]`
+is no longer a valid element of the array), then the reference must no
+longer be used. The verifier enforces this by checking, each time the
+reference is used, that the index is still within the bounds of the
+array.
 
 
 ## Assignment statements

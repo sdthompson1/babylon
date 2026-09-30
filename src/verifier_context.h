@@ -180,6 +180,7 @@ struct RefChain {
             struct Sexpr *array_index;  // The index-expr
             int ndim;    // Number of dimensions of the array
             bool fixed_size;   // True if it is a fixed-size array
+            bool resizable;    // True if it is a resizable array
         };
         struct {
             // Vars relevant to RT_SEXPR

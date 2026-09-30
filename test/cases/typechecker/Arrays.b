@@ -45,18 +45,16 @@ function f2(a: i32[*,*])
     var k = 1 [2];             // Error, cannot index "1"
 }
 
-function ref_not_allowed(a: i32[*],
-                         b: {x: i32[4][*]})
+function ref_to_resizable(a: i32[*],
+                          b: {x: i32[4][*]})
 {
-    // Error, ref to resizable array element not supported (because the
-    // array might be reallocated, therefore moving the element to a
-    // different address in memory!)
+    // Refs to resizable array elements are allowed (the verifier checks
+    // that the element still exists each time the ref is used).
     ref r1: i32 = a[10];
 
-    // Similar error but the array is "buried" somewhere in the rhs expression
+    // Similarly when the array is "buried" somewhere in the rhs expression
     ref r2: i32 = b.x[3][2];
 
-    // A reference to a resizable array in itself is fine, just not the elements,
-    // so this is NOT an error:
+    // A reference to a resizable array in itself is also fine.
     ref r3: i32[*] = b.x[3];
 }

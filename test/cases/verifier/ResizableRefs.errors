@@ -1,0 +1,8 @@
+src/ResizableRefs.b:33:13: Reference may have become invalid due to change in array size
+src/ResizableRefs.b:34:5: Reference may have become invalid due to change in array size
+src/ResizableRefs.b:49:14: Reference may have become invalid due to change in array size
+src/ResizableRefs.b:74:5: Reference may have become invalid due to change in array size
+src/ResizableRefs.b:92:9: Reference may have become invalid due to change in array size
+src/ResizableRefs.b:92:9: Reference may have become invalid due to change in datatype variant
+src/ResizableRefs.b:114:5: Reference may have become invalid due to change in array size
+src/ResizableRefs.b:130:5: Reference may have become invalid due to change in array size

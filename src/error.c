@@ -539,12 +539,6 @@ void report_cannot_take_ref_to_readonly(struct Location location)
     print_error("Can't take reference (expression is read-only)\n");
 }
 
-void report_cannot_take_ref_to_resizable_array_element(struct Location location)
-{
-    print_location(location);
-    print_error("Can't take reference to element of resizable array\n");
-}
-
 void report_cannot_take_sizeof(struct Term *term)
 {
     print_location(term->location);
@@ -924,6 +918,12 @@ char * err_msg_ref_invalid_variant_change(struct Location location)
 {
     return err_msg(location,
                    "Reference may have become invalid due to change in datatype variant\n");
+}
+
+char * err_msg_ref_invalid_array_bounds(struct Location location)
+{
+    return err_msg(location,
+                   "Reference may have become invalid due to change in array size\n");
 }
 
 char * err_msg_array_wrong_size(struct Term *term)

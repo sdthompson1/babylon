@@ -60,6 +60,15 @@ struct CodegenEntry {
     bool is_func_const;         // true if 'const' decl represented by a function.
     const char *foreign_name;   // non-NULL if 'extern' func. points to allocated mem.
     bool is_abstract_type;      // true if abstract type decl ("type Foo;").
+
+    // Most 'ref' variables are represented as a C variable of type char*.
+    // But if the ref might point to an element of a resizable array,
+    // then it cannot be represented that way (because the array might be
+    // reallocated, moving the element to a different address). Instead,
+    // lazy_ref_term is non-NULL, and the address of the ref is recomputed
+    // on each use, as the address of lazy_ref_term plus lazy_ref_offset.
+    struct Term *lazy_ref_term;
+    int lazy_ref_offset;
 };
 
 struct CGContext {
@@ -82,6 +91,40 @@ static bool is_ref_var(struct CGContext *cxt, const char *name)
 {
     struct CodegenEntry *entry = hash_table_lookup(cxt->env, name);
     return entry && entry->is_ref;
+}
+
+static struct CodegenEntry * lookup_lazy_ref(struct CGContext *cxt, const char *name)
+{
+    struct CodegenEntry *entry = hash_table_lookup(cxt->env, name);
+    return (entry && entry->is_ref && entry->lazy_ref_term) ? entry : NULL;
+}
+
+// Determine whether a 'ref' to the given term needs to be a "lazy"
+// reference (see struct CodegenEntry).
+static bool needs_lazy_ref(struct CGContext *cxt, struct Term *term)
+{
+    switch (term->tag) {
+    case TM_VAR:
+        return lookup_lazy_ref(cxt, term->var.name) != NULL;
+
+    case TM_FIELD_PROJ:
+        return needs_lazy_ref(cxt, term->field_proj.lhs);
+
+    case TM_ARRAY_PROJ:
+        return term->array_proj.lhs->type->array_data.resizable
+            || needs_lazy_ref(cxt, term->array_proj.lhs);
+
+    case TM_STRING_LITERAL:
+        // String literal data is in static storage, so cannot move.
+        return false;
+
+    default:
+        // The typechecker should have ensured that the term is an lvalue.
+        // (Array casts are also lvalues according to the typechecker, but
+        // they cannot appear here: refs are not allowed to cast, and the
+        // typechecker never inserts a cast underneath a projection.)
+        fatal_error("needs_lazy_ref: unexpected term");
+    }
 }
 
 static bool is_func_const(struct CGContext *cxt, const char *name)
@@ -811,6 +854,24 @@ static void copy_term_to_term(struct CGContext *cxt,
     end_item(cxt->pr);
 }
 
+// Print the address (a char*) that a "lazy" reference currently points to.
+static void print_lazy_ref_address(struct CGContext *cxt,
+                                   enum Priority pri,
+                                   struct CodegenEntry *entry)
+{
+    if (entry->lazy_ref_offset == 0) {
+        codegen_term(cxt, pri, MODE_ADDR, entry->lazy_ref_term);
+    } else {
+        if (pri > ADD_EXPR) print_token(cxt->pr, "(");
+        codegen_term(cxt, ADD_EXPR, MODE_ADDR, entry->lazy_ref_term);
+        print_token(cxt->pr, "+");
+        char buf[20];
+        sprintf(buf, "%d", entry->lazy_ref_offset);
+        print_token(cxt->pr, buf);
+        if (pri > ADD_EXPR) print_token(cxt->pr, ")");
+    }
+}
+
 static void codegen_var(struct CGContext *cxt,
                         enum Priority pri,
                         enum TermMode mode,
@@ -820,7 +881,30 @@ static void codegen_var(struct CGContext *cxt,
     bool scalar = is_scalar_type(cxt, term->type);
     char *mangled_name = mangle_name(term->var.name);
 
-    if (scalar && mode == MODE_VALUE) {
+    struct CodegenEntry *lazy = lookup_lazy_ref(cxt, term->var.name);
+
+    if (lazy && scalar && mode == MODE_VALUE) {
+        // need to recompute the address of the reference, then read
+        // the value using memmove
+        char temp_name[TEMP_NAME_LEN];
+        make_temporary(cxt, temp_name, term->type);
+
+        begin_item(cxt->pr);
+        memmove_begin(cxt);
+        print_token(cxt->pr, "&");
+        print_token(cxt->pr, temp_name);
+        print_token(cxt->pr, ",");
+        print_lazy_ref_address(cxt, ASSIGN_EXPR, lazy);
+        memmove_end(cxt, term->type);
+        end_item(cxt->pr);
+
+        print_token(cxt->pr, temp_name);
+
+    } else if (lazy) {
+        // return the (recomputed) address of the reference
+        print_lazy_ref_address(cxt, pri, lazy);
+
+    } else if (scalar && mode == MODE_VALUE) {
         if (ref) {
             // need to read value of reference using memmove
             char temp_name[TEMP_NAME_LEN];
@@ -2024,26 +2108,35 @@ static void codegen_match(struct CGContext *cxt,
                 switch (arm->pattern->variant.payload->tag) {
                 case PAT_VAR:
                     {
-                        // Make a variable for the payload...
-                        begin_item(cxt->pr);
-                        print_token(cxt->pr, "char");
-                        print_token(cxt->pr, "*");
-                        char *mangled_name = mangle_name(arm->pattern->variant.payload->var.name);
-                        print_token(cxt->pr, mangled_name);
-                        free(mangled_name);
-                        print_token(cxt->pr, "=");
-                        print_token(cxt->pr, scrut_ptr_name);
-                        print_token(cxt->pr, "+");
-                        sprintf(buf, "%d", tag_size);
-                        print_token(cxt->pr, buf);
-                        print_token(cxt->pr, ";");
-                        new_line(cxt->pr);
-                        end_item(cxt->pr);
-
                         // We will need a new CodegenEntry for the payload variable
                         entry = alloc(sizeof(struct CodegenEntry));
                         memset(entry, 0, sizeof(*entry));
                         entry->is_ref = true;
+
+                        if (needs_lazy_ref(cxt, scrut)) {
+                            // The scrutinee might move, so the payload must be
+                            // a lazy reference as well.
+                            entry->lazy_ref_term = scrut;
+                            entry->lazy_ref_offset = tag_size;
+                        } else {
+                            // The scrutinee is at a fixed address, so it can be
+                            // represented with a char* variable.
+                            begin_item(cxt->pr);
+                            print_token(cxt->pr, "char");
+                            print_token(cxt->pr, "*");
+                            char *mangled_name = mangle_name(arm->pattern->variant.payload->var.name);
+                            print_token(cxt->pr, mangled_name);
+                            free(mangled_name);
+                            print_token(cxt->pr, "=");
+                            print_token(cxt->pr, scrut_ptr_name);
+                            print_token(cxt->pr, "+");
+                            sprintf(buf, "%d", tag_size);
+                            print_token(cxt->pr, buf);
+                            print_token(cxt->pr, ";");
+                            new_line(cxt->pr);
+                            end_item(cxt->pr);
+                        }
+
                         copied_name = copy_string(arm->pattern->variant.payload->var.name);
                         hash_table_insert(cxt->env, copied_name, entry);
                     }
@@ -2434,6 +2527,46 @@ static void codegen_term(struct CGContext *cxt,
 static void codegen_statements(struct CGContext *cxt,
                                struct Statement *stmts);
 
+// Modify an lvalue term so that all array indexes are evaluated now
+// (into new temporary variables), rather than when the term is used.
+static void freeze_array_indexes(struct CGContext *cxt, struct Term *term)
+{
+    switch (term->tag) {
+    case TM_FIELD_PROJ:
+        freeze_array_indexes(cxt, term->field_proj.lhs);
+        break;
+
+    case TM_ARRAY_PROJ:
+        freeze_array_indexes(cxt, term->array_proj.lhs);
+
+        for (struct OpTermList *index = term->array_proj.indexes; index; index = index->next) {
+            // "@" cannot begin any other variable name, so this name is unique
+            char name[TEMP_NAME_LEN];
+            sprintf(name, "@idx%" PRIu64, cxt->tmp_num++);
+
+            char *mangled_name = mangle_name(name);
+            declare_variable(cxt, mangled_name, index->rhs->type, false);
+            copy_term_to_variable(cxt, mangled_name, false, index->rhs);
+            free(mangled_name);
+
+            struct Term *var = make_var_term(index->rhs->location, name);
+            var->type = copy_type(index->rhs->type);
+            free_term(index->rhs);
+            index->rhs = var;
+        }
+        break;
+
+    case TM_VAR:
+        // Nothing to do.
+        break;
+
+    default:
+        // This is only called on terms for which needs_lazy_ref returned
+        // true, so only the above cases are possible.
+        fatal_error("freeze_array_indexes: unexpected term");
+    }
+}
+
 static void codegen_var_decl_stmt(struct CGContext *cxt,
                                   struct Statement *stmt)
 {
@@ -2444,17 +2577,25 @@ static void codegen_var_decl_stmt(struct CGContext *cxt,
     begin_item(cxt->pr);
 
     if (stmt->var_decl.ref) {
-        print_token(cxt->pr, "char");
-        print_token(cxt->pr, "*");
-        print_token(cxt->pr, mangled_name);
-        print_token(cxt->pr, "=");
-        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, stmt->var_decl.rhs);
-        print_token(cxt->pr, ";");
-        new_line(cxt->pr);
-
         entry = alloc(sizeof(struct CodegenEntry));
         memset(entry, 0, sizeof(*entry));
         entry->is_ref = true;
+
+        if (needs_lazy_ref(cxt, stmt->var_decl.rhs)) {
+            // The address will be recomputed on each use, but the array
+            // indexes must be evaluated now.
+            entry->lazy_ref_term = copy_term(stmt->var_decl.rhs);
+            freeze_array_indexes(cxt, entry->lazy_ref_term);
+        } else {
+            print_token(cxt->pr, "char");
+            print_token(cxt->pr, "*");
+            print_token(cxt->pr, mangled_name);
+            print_token(cxt->pr, "=");
+            codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, stmt->var_decl.rhs);
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
+        }
+
         copied_name = copy_string(stmt->var_decl.name);
         hash_table_insert(cxt->env, copied_name, entry);
 
@@ -2472,6 +2613,7 @@ static void codegen_var_decl_stmt(struct CGContext *cxt,
     if (entry) {
         hash_table_remove(cxt->env, copied_name);
         free(copied_name);
+        free_term(entry->lazy_ref_term);
         free(entry);
     }
 }
@@ -2993,6 +3135,12 @@ static void free_codegen_entry(void *context, const char *key, void *value)
 {
     struct CodegenEntry *entry = value;
     free((void*)entry->foreign_name);
+
+    // Note: lazy_ref_term does not need to be freed here. It is only set
+    // for local 'ref' variables, and those entries are removed from the
+    // env (and the term freed, if it is not shared with the AST) by the
+    // code that created them, when the variable goes out of scope.
+
     free((void*)key);
     free(value);
 }

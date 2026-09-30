@@ -203,6 +203,7 @@ struct RefChain *ref_chain_for_term(struct VContext *context, struct Term *term)
             ref->array_index = NULL;
             ref->ndim = term->array_proj.lhs->type->array_data.ndim;
             ref->fixed_size = (term->array_proj.lhs->type->array_data.sizes != NULL);
+            ref->resizable = term->array_proj.lhs->type->array_data.resizable;
 
             // we need a sexpr for the lhs so that we can get the size
             struct Sexpr *fol_lhs = ref_chain_to_sexpr(context, base);
@@ -419,8 +420,35 @@ void validate_ref_chain(struct VContext *context,
     case RT_ARRAY_ELEMENT:
         validate_ref_chain(context, ref->base, location);
 
-        // Refs to elements of resizable arrays are now illegal
-        // so there is nothing further to check
+        // If the array is resizable, validate that the indexes are still in
+        // range of the (possibly new) size. (Other arrays cannot change size.)
+        if (ref->resizable) {
+            struct Sexpr *base = ref_chain_to_sexpr(context, ref->base);
+
+            struct Sexpr *size = make_string_sexpr("$FLD1");
+            make_instance(&size, copy_sexpr(ref->fol_type->right->right->left));
+            size = make_list2_sexpr(size, base);
+            base = NULL;
+
+            // no need for the >= 0 check since that was already done when the ref was
+            // created.
+            struct Sexpr *in_bounds = array_index_in_range(ref->ndim, "$idx", "$size", NULL, true);
+            in_bounds = make_list3_sexpr(
+                make_string_sexpr("let"),
+                make_list2_sexpr(
+                    make_list2_sexpr(
+                        make_string_sexpr("$idx"),
+                        copy_sexpr(ref->array_index)),
+                    make_list2_sexpr(
+                        make_string_sexpr("$size"),
+                        size)),
+                in_bounds);
+
+            verify_condition(context, location, in_bounds, "array ref valid",
+                             err_msg_ref_invalid_array_bounds(location));
+
+            free_sexpr(in_bounds);
+        }
         break;
 
     case RT_ARRAY_CAST:

@@ -138,6 +138,7 @@ struct RefChain * copy_ref_chain(struct RefChain *ref)
         result->array_index = copy_sexpr(ref->array_index);
         result->ndim = ref->ndim;
         result->fixed_size = ref->fixed_size;
+        result->resizable = ref->resizable;
         break;
 
     case RT_ARRAY_CAST:

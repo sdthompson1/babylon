@@ -72,7 +72,6 @@ void report_cannot_swap(struct Term *term);
 void report_cannot_swap_readonly(struct Term *term);
 void report_cannot_take_ref(struct Location location);
 void report_cannot_take_ref_to_readonly(struct Location location);
-void report_cannot_take_ref_to_resizable_array_element(struct Location location);
 void report_cannot_take_sizeof(struct Term *term);
 void report_incomplete_array_type(struct Location loc);
 void report_cannot_infer_type(struct Location loc);
@@ -159,6 +158,7 @@ char * err_msg_return_allocated(struct Location loc);
 char * err_msg_var_still_allocated(const char *name, struct Location loc);
 char * err_msg_var_still_allocated_at_return(const char *name, struct Location loc);
 char * err_msg_ref_invalid_variant_change(struct Location location);
+char * err_msg_ref_invalid_array_bounds(struct Location location);
 char * err_msg_array_wrong_size(struct Term *term);
 char * err_msg_array_size_change(struct Location loc);
 
