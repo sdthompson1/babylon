@@ -1039,8 +1039,38 @@ Some examples may make this clearer:
    within *expressions* and *types* is significant, the order of
    record fields within *patterns* is not.)
 
-Note that all pattern matches must be *exhaustive*; at least one of
-the cases must always match at runtime. This is checked by the
+Variables created by patterns in a match expression are similar to
+variables created by `let` (see "Let-expressions" above). They are
+read-only, and each one is simply a name for the corresponding part of
+the scrutinee's value. Nothing is copied, so there are no restrictions
+on what kind of value may be matched into a variable; for example, the
+value might be `allocated` (see "Allocated expressions" below), or
+have an incomplete type.
+
+The type of the scrutinee must be fully known from the scrutinee
+itself; it cannot be inferred from the patterns. For example, given
+`function f<T>(): T`, the expression `match f() { case true => 1; case
+false => 2 }` is an error ("Unable to infer type"); the compiler does
+not use `case true` to deduce that `f` is being called as `f<bool>()`.
+The programmer should instead write the missing type parameter
+explicitly (`match f<bool>() { ... }`).
+
+The expressions on the right-hand-sides of the cases do not all need
+to have exactly the same type. The type of the match expression is the
+type of the right-hand-side of its *first* case; the right-hand-side
+of each later case is implicitly converted to that type, using the
+same implicit conversions as for function arguments (see "Function
+calls" above). For example, if `x` has type `i64`, then `match b {
+case true => x; case false => 1 }` has type `i64`, with the `1` (which
+has type `i32`) being implicitly converted to `i64`. Conversely,
+`match b { case true => 1; case false => x }` has type `i32`, because
+it is always the first case that determines the type. In that example,
+`x` is converted to `i32`, so (as with all such type conversions) the
+verifier will need to prove that the value of `x` is within the range
+of an `i32`.
+
+Finally, note that all pattern matches must be *exhaustive*; at least
+one of the cases must always match at runtime. This is checked by the
 verifier; if a proof that the scrutinee matches at least one "case"
 cannot be found, then verification fails. This means that code like
 `match x { case 1 => true; case 2 => false }` will (usually) fail
@@ -1208,9 +1238,11 @@ say, either a variable name, a string literal, or a field projection
 or array projection expression in which the left-hand side is itself
 an lvalue.
 
-A ref statement creates a "reference" to the right-hand-side
-expression; effectively, the right-hand-side expression is substituted
-anywhere that the ref variable appears. For example, in:
+A `ref` statement creates a "reference" to the variable, field or
+array element that the right-hand-side expression denotes. The `ref`
+variable then acts as another name for that same location: reading the
+variable reads from the location, and writing to the variable writes
+to it. For example, in:
 
 ```
 var x: i32[10];
@@ -1218,7 +1250,24 @@ ref r = x[4];
 r = r + 1;
 ```
 
-the last statement is actually equivalent to `x[4] = x[4] + 1;`.
+the last statement is equivalent to `x[4] = x[4] + 1;`.
+
+The location is determined once, at the time when the `ref` statement
+is executed. In particular, any array indexes on the right-hand-side
+are evaluated at that time, and changing the variables involved
+afterwards does not change what the reference points to. For example,
+in:
+
+```
+var x: i32[10];
+var i: i32 = 4;
+ref r = x[i];
+i = 7;
+r = 100;
+```
+
+the reference `r` still refers to `x[4]` after `i` is changed, so the
+last statement sets `x[4]` (not `x[7]`) to 100.
 
 Some lvalues are considered read-only (specifically: string literals,
 global constants, and non-ref formal parameters of the current
@@ -1478,7 +1527,7 @@ assert j == 0;
 ## Match statements
 
 In addition to match expressions (see above), there are also match
-statements. These work exactly the same as a match expression, except
+statements. These work in the same way as a match expression, except
 that where previously there was an expression on the right-hand-side
 of each case, now there is a list of statements:
 
@@ -1495,12 +1544,13 @@ There can be any number of cases (one or more).
 When execution reaches a `match` statement, the corresponding `case`
 is found and then the block of statements corresponding to that case
 (and only that case) is executed. (This block of statements could be
-empty; if so, the match statement is just skipped entirely, in that
-case.)
+empty; if so, the match statement is then just skipped entirely.)
 
 As with match expressions, match statements are required to be
 exhaustive -- the verifier will prove that at least one of the cases
-matches successfully.
+matches successfully. Also as with match expressions, the type of the
+scrutinee must be determined by the scrutinee expression itself (the
+patterns do not participate in type inference).
 
 An example of a match statement:
 
@@ -1512,11 +1562,17 @@ case _ => // Do nothing
 }
 ```
 
-There is one additional feature that match statements have, which
-match expressions do not have, and that is that variable patterns can
-be matched either by *reference* or by *value*. This is done by either
-preceding the variable name with the keyword `ref`, or by not doing
-so, as in:
+(Here, `println` is assumed to be a function defined somewhere else in
+the program. The language doesn't include any built-in "print"
+statement or function.)
+
+The other difference between match statements and match expressions
+concerns the variables created by patterns. In a match expression,
+these are similar to `let`-bound variables (as was explained above).
+In a match statement, they are instead similar to variables created by
+`var` or `ref` statements (see "Variable declarations" and "Reference
+declarations" above). Which of the two applies depends on whether the
+variable name in the pattern is preceded by the keyword `ref`, as in:
 
 ```
 var x: {i32, i32} = ...;
@@ -1526,27 +1582,37 @@ case {2, b} =>      // 'b' matched by value
 }
 ```
 
-The meaning, in short, is that if a variable `a` is matched by
-reference, then it is just a reference or pointer to part of the
-original scrutinee; no copy is made. If it is matched by value, then
-the variable is a full copy of that part of the original scrutinee.
+If a variable is matched by *value* (i.e. without `ref`), then it is a
+new variable, initialized with a copy of the corresponding part of the
+scrutinee, as if it had been declared by `var b = x.1;`. Like any
+other `var` variable, it is writable. Writing to it does not affect
+the scrutinee, and (conversely) any later change to the scrutinee does
+not affect the variable.
 
-A restriction is that if any variable pattern in any of the cases is
-being matched by reference (i.e. is marked `ref`), then the scrutinee
-must be an lvalue (see "Reference declarations", above, for the
-definition of an lvalue). However, it does not have to be a *writable*
-lvalue; e.g. it could be a (read-only) function parameter variable.
+If a variable is matched by *reference* (i.e. with `ref`), then it is
+a reference to the corresponding part of the scrutinee, as if it had
+been declared by `ref a = x.1;`. No copy is made. Writing to the
+variable modifies the scrutinee, and is therefore only allowed if the
+scrutinee is itself writable.
 
-A further restriction is that if a non-`ref` variable pattern is used,
-then the part of the scrutinee that is matched into that variable must
-*not* be `allocated`. (This is to prevent any potential copying of
-allocated values at runtime, which might result in memory leaks or
-double-free bugs etc.)
+The restrictions on these patterns are similar to the restrictions on
+`var` and `ref` statements:
 
-Also note that in match statements, any variables created in patterns
-are *writable*. The only exception is that if the scrutinee was
-non-writable and the variable pattern was marked `ref` then it becomes
-a non-writable variable instead.
+ - If any variable pattern in any of the cases is matched by
+   reference, then the scrutinee must be an lvalue (see "Reference
+   declarations", above, for the definition of an lvalue).
+
+ - In non-ghost match statements, if a variable is matched by value,
+   then the part of the scrutinee that is matched into that variable
+   must *not* be `allocated`. (This is to prevent any potential
+   copying of allocated values at runtime, which might result in
+   memory leaks or double-free bugs etc. The same restriction applies
+   to assignments; see "Assignment statements" above.)
+
+ - In non-ghost match statements, a variable that is matched by value
+   must have a complete type (as with any other variable in executable
+   code). Also, if the scrutinee is not an lvalue, then the scrutinee
+   itself must have a complete type.
 
 Some examples may help to clarify this. Imagine we have:
 
@@ -1840,8 +1906,7 @@ types is as follows:
    context that is implicitly ghost, such as inside an `assert` proof
    block, and to `ref` patterns in ghost `match` statements (the
    scrutinee must be a ghost variable if any of the patterns use
-   `ref`). Note that `ref` patterns in match *expressions* are exempt
-   from this rule, because nothing can be written through them.
+   `ref`).
 
  - A ghost assignment statement is used to assign to a ghost variable.
    For example, `ghost x = 2;` sets the ghost variable `x` to 2. (This
