@@ -1,0 +1,13 @@
+src/MatchArmCoerce.b:39:14: Can't take reference (expression is not an lvalue)
+src/MatchArmCoerce.b:75:59: Type mismatch
+src/MatchArmCoerce.b:80:59: Type mismatch
+src/MatchArmCoerce.b:85:59: Type mismatch
+src/MatchArmCoerce.b:90:59: Type mismatch
+src/MatchArmCoerce.b:98:48: Type mismatch
+src/MatchArmCoerce.b:103:45: Type mismatch
+src/MatchArmCoerce.b:108:59: Type mismatch
+src/MatchArmCoerce.b:115:59: Type mismatch
+src/MatchArmCoerce.b:120:58: Type mismatch
+src/MatchArmCoerce.b:128:19: Type mismatch
+src/MatchArmCoerce.b:129:19: Type mismatch
+src/MatchArmCoerce.b:144:33: Unable to infer type

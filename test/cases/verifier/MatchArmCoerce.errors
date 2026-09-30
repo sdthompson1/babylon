@@ -1,0 +1,7 @@
+src/MatchArmCoerce.b:21:45: Operator precondition might not be met
+src/MatchArmCoerce.b:33:47: Operator precondition might not be met
+src/MatchArmCoerce.b:34:60: Operator precondition might not be met
+src/MatchArmCoerce.b:49:45: Operator precondition might not be met
+src/MatchArmCoerce.b:55:45: Operator precondition might not be met
+src/MatchArmCoerce.b:74:59: Array might have the wrong size
+src/MatchArmCoerce.b:93:59: Array might have the wrong size

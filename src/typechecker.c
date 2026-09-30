@@ -2575,11 +2575,9 @@ static bool typecheck_pattern(struct TypecheckContext *tc_context, struct Patter
             return false;
         }
 
-        // The type of a pattern variable must be fully inferred at this point
-        // (the match arms cannot be used to infer it).
-        if (!check_type_inferred(tc_context, scrutinee_type)) {
-            return false;
-        }
+        // (The type of the pattern variable is fully inferred at this point,
+        // because the type of the scrutinee is; this is checked before
+        // the patterns are typechecked.)
 
         // For non-ghost, non-ref patterns in match statements, the value is copied into
         // a new variable, and so it must have a complete type (like any local variable)
@@ -2718,6 +2716,11 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
     // typecheck the scrutinee.
     transform_term(tr, context, term->match.scrutinee);
 
+    // The type of the scrutinee must be fully inferred from the scrutinee
+    // itself (the patterns and arms cannot be used to infer it). If it is
+    // not, we report "Unable to infer type", and skip checking the patterns.
+    bool scrutinee_ok = check_type_inferred(tc_context, term->match.scrutinee->type);
+
     // there must be at least one arm
     if (term->match.arms == NULL) {
         report_match_with_no_arms(term->location);
@@ -2732,7 +2735,7 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
     for (struct Arm *arm = term->match.arms; arm; arm = arm->next) {
 
         // check the pattern, add any pattern-variables into the environment
-        if (term->match.scrutinee->type) {
+        if (scrutinee_ok) {
             // scrutinee_lvalue, scrutinee_read_only and scrutinee_ghost only matter
             // for ref patterns, which are not allowed in a match *term*, so we
             // just pass false for all three.
@@ -2759,7 +2762,7 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
         }
     }
 
-    if (term->match.scrutinee->type && patterns_ok && result_type && consistent_type) {
+    if (scrutinee_ok && patterns_ok && result_type && consistent_type) {
         term->type = copy_type(result_type);
     }
 
@@ -3507,6 +3510,10 @@ static void typecheck_match_stmt(struct TypecheckContext *tc_context,
     // typecheck the scrutinee
     typecheck_term(tc_context, stmt->match.scrutinee);
 
+    // The type of the scrutinee must be fully inferred from the scrutinee
+    // itself (as in nr_typecheck_match).
+    bool scrutinee_ok = check_type_inferred(tc_context, stmt->match.scrutinee->type);
+
     bool old_top_level = tc_context->at_proof_top_level;
     tc_context->at_proof_top_level = false;
 
@@ -3519,7 +3526,7 @@ static void typecheck_match_stmt(struct TypecheckContext *tc_context,
     bool ghost = false;
     bool read_only = false;
     bool lvalue = false;
-    if (stmt->match.scrutinee->type) {
+    if (scrutinee_ok) {
         lvalue = is_lvalue(tc_context, stmt->match.scrutinee, &ghost, &read_only);
 
         // If the scrutinee is not an lvalue then it is copied into a
@@ -3536,7 +3543,7 @@ static void typecheck_match_stmt(struct TypecheckContext *tc_context,
     for (struct Arm *arm = stmt->match.arms; arm; arm = arm->next) {
 
         // check the pattern, add any pattern-variables into the environment
-        if (stmt->match.scrutinee->type) {
+        if (scrutinee_ok) {
             typecheck_pattern(tc_context, arm->pattern, stmt->match.scrutinee->type,
                               lvalue, read_only, ghost, true);
         }
