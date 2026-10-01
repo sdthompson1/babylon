@@ -452,16 +452,12 @@ next
                list_all (is_runtime_type env) tyArgs \<Longrightarrow>
                list_all (is_runtime_type env') tyArgs"
     using rt_mono by (auto simp: list_all_iff)
-  have IH: "\<And>tm ty. tm \<in> set tmArgs \<Longrightarrow> core_term_type env ghost tm = Some ty \<Longrightarrow>
-                     core_term_type env' ghost tm = Some ty"
+  have IH: "\<And>tm mode ty. tm \<in> set tmArgs \<Longrightarrow> core_term_type env mode tm = Some ty \<Longrightarrow>
+                     core_term_type env' mode tm = Some ty"
     using CoreTm_FunctionCall.IH ext cons by blast
-  have la2_mono: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
-          (\<exists>y. core_term_type env ghost tm = Some y) \<and>
-          (\<forall>x2. core_term_type env ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) tmArgs ys \<Longrightarrow>
-        list_all2 (\<lambda>tm expectedTy.
-          (\<exists>y. core_term_type env' ghost tm = Some y) \<and>
-          (\<forall>x2. core_term_type env' ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) tmArgs ys"
-    using IH by (fastforce simp: list_all2_iff in_set_zip)
+  have la2_mono: "\<And>ys. args_typed (core_term_type env) tmArgs ys \<Longrightarrow>
+                       args_typed (core_term_type env') tmArgs ys"
+    using IH by (elim args_typed_mono) blast
   show ?case using CoreTm_FunctionCall.prems(3) fn_lk fn_lk' la_wk la_rt la2_mono
     by (auto split: option.splits if_splits simp: Let_def)
 next
@@ -794,16 +790,15 @@ proof -
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)" and
-    l2_pure: "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env ghost tm of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))" and
+    l2_pure: "args_typed (core_term_type env) tmArgs
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+                      \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                         (tmArgs ! i)"
     by blast
 
   have fi': "fmlookup (TE_Functions env') fnName = Some funInfo"
@@ -812,28 +807,23 @@ proof -
     using wk is_well_kinded_tyenv_extends[OF ext] by (fastforce simp: list_all_iff)
   have rt': "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs"
     using rt wk is_runtime_type_tyenv_extends[OF ext] by (fastforce simp: list_all_iff)
-  have l2_pure': "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env' ghost tm of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))"
-    using l2_pure core_term_type_tyenv_extends[OF ext cons]
-    by (elim list_all2_mono) (auto split: option.splits)
+  let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+  let ?exps = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have l2_pure': "args_typed (core_term_type env') tmArgs (zip ?exps ?modes)"
+    by (rule args_typed_mono[OF l2_pure]) (use core_term_type_tyenv_extends[OF ext cons] in blast)
 
   \<comment> \<open>Rebuild the full per-argument (Var/Ref) check for the extended env.\<close>
-  let ?P' = "\<lambda>(tm, vor) expectedTy.
+  let ?P' = "\<lambda>(tm, vor) (expectedTy, mode).
                  case vor of
-                   Var \<Rightarrow> (case core_term_type env' ghost tm of None \<Rightarrow> False
+                   Var \<Rightarrow> (case core_term_type env' mode tm of None \<Rightarrow> False
                             | Some actualTy \<Rightarrow> actualTy = expectedTy)
                  | Ref \<Rightarrow> is_writable_lvalue env' tm
-                          \<and> ghost_lvalue_ok env' ghost tm
-                          \<and> core_term_type env' ghost tm = Some expectedTy"
+                          \<and> ghost_lvalue_ok env' mode tm
+                          \<and> core_term_type env' mode tm = Some expectedTy"
   let ?zts = "zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
-  let ?exps = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                    (FI_TmArgs funInfo)"
-  have len_zts: "length ?zts = length ?exps" using len_tm by simp
-  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P' (?zts ! i) (?exps ! i)"
+  have len_zts: "length ?zts = length (zip ?exps ?modes)" using len_tm by simp
+  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P' (?zts ! i) (zip ?exps ?modes ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length tmArgs" using len_tm by simp
@@ -842,39 +832,29 @@ proof -
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = (tmArgs ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp
-    have exp_nth: "?exps ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti"
+    have exp_nth: "zip ?exps ?modes ! i = (apply_subst ?tySubst ti, param_mode ghost gh)"
       using i_lt_fi fi_arg by simp
-    have pure_env_i: "case core_term_type env ghost (tmArgs ! i) of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti"
-      using list_all2_nthD[OF l2_pure] i_lt_tm len_tm exp_nth by metis
-    have pure_i: "case core_term_type env' ghost (tmArgs ! i) of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti"
-      using list_all2_nthD[OF l2_pure'] i_lt_tm len_tm exp_nth by metis
-    show "?P' (?zts ! i) (?exps ! i)"
+    have pure_i: "core_term_type env' (param_mode ghost gh) (tmArgs ! i)
+                    = Some (apply_subst ?tySubst ti)"
+      using args_typed_nthD[OF l2_pure' i_lt_tm] exp_nth by simp
+    show "?P' (?zts ! i) (zip ?exps ?modes ! i)"
     proof (cases vor)
       case Var
       with zip_nth exp_nth pure_i show ?thesis by simp
     next
       case Ref
-      have typed_env: "core_term_type env ghost (tmArgs ! i)
-             = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
-        using pure_env_i by (auto split: option.splits)
       have "is_writable_lvalue env (tmArgs ! i)"
         using ref_lv i_lt_tm fi_arg Ref by simp
       hence writ': "is_writable_lvalue env' (tmArgs ! i)"
         using is_writable_lvalue_tyenv_extends[OF ext] by simp
-      have "ghost_lvalue_ok env ghost (tmArgs ! i)"
-        using ref_lv i_lt_tm fi_arg Ref by simp
-      hence glv': "ghost_lvalue_ok env' ghost (tmArgs ! i)"
+      have "ghost_lvalue_ok env (param_mode ghost gh) (tmArgs ! i)"
+        using ref_lv i_lt_tm fi_arg Ref by auto
+      hence glv': "ghost_lvalue_ok env' (param_mode ghost gh) (tmArgs ! i)"
         using ghost_lvalue_ok_tyenv_extends[OF ext] by blast
-      from pure_i have
-        "core_term_type env' ghost (tmArgs ! i)
-           = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
-        by (auto split: option.splits)
-      with Ref zip_nth exp_nth writ' glv' show ?thesis by simp
+      with Ref zip_nth exp_nth writ' pure_i show ?thesis by simp
     qed
   qed
-  have l2_full': "list_all2 ?P' ?zts ?exps"
+  have l2_full': "list_all2 ?P' ?zts (zip ?exps ?modes)"
     using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
 
   show ?thesis

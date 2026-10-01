@@ -25,16 +25,28 @@ proof -
   obtain name vr gh refRes valRes where arg_eq: "arg = ((name, vr, gh), refRes, valRes)"
     by (cases arg) auto
   show ?thesis
+  proof (cases gh)
+    case Ghost
+    \<comment> \<open>A ghost parameter only drops a shadowed binding of its name.\<close>
+    with arg_eq assms
+    have "state' = state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
+                            IS_Refs := fmdrop name (IS_Refs state),
+                            IS_ConstLocals := fminus (IS_ConstLocals state) {|name|} \<rparr>"
+      by simp
+    then show ?thesis by simp
+  next
+    case NotGhost
+    show ?thesis
   proof (cases vr)
     case Var
     show ?thesis
     proof (cases valRes)
       case (Inl err)
-      with arg_eq Var assms show ?thesis by simp
+      with arg_eq Var NotGhost assms show ?thesis by simp
     next
       case (Inr val)
       let ?alloc = "alloc_store state val"
-      from arg_eq Var Inr assms
+      from arg_eq Var NotGhost Inr assms
       have state'_eq:
         "state' = (fst ?alloc) \<lparr> IS_Locals := fmupd name (snd ?alloc) (IS_Locals (fst ?alloc)),
                                   IS_Refs := fmdrop name (IS_Refs (fst ?alloc)),
@@ -51,17 +63,17 @@ proof -
     show ?thesis
     proof (cases refRes)
       case (Inl err)
-      with arg_eq Ref assms show ?thesis by simp
+      with arg_eq Ref NotGhost assms show ?thesis by simp
     next
       case (Inr addrPath)
       obtain addr path where addrPath_eq: "addrPath = (addr, path)" by (cases addrPath)
       show ?thesis
       proof (cases valRes)
         case Inl
-        with arg_eq Ref Inr addrPath_eq assms show ?thesis by simp
+        with arg_eq Ref NotGhost Inr addrPath_eq assms show ?thesis by simp
       next
         case (Inr v)
-        from arg_eq Ref \<open>refRes = Inr addrPath\<close> addrPath_eq Inr assms
+        from arg_eq Ref NotGhost \<open>refRes = Inr addrPath\<close> addrPath_eq Inr assms
         have "state' = state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
                                 IS_Refs := fmupd name (addr, path) (IS_Refs state),
                                 IS_ConstLocals := fminus (IS_ConstLocals state) {|name|} \<rparr>"
@@ -69,6 +81,7 @@ proof -
         then show ?thesis by simp
       qed
     qed
+  qed
   qed
 qed
 
@@ -743,9 +756,11 @@ next
       next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
-        let ?vals = "rights ?valResults"
-        let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
-                                      if vr = Ref then refResult else Inl TypeError)
+        let ?vals = "rights (map (\<lambda>(a, valResult).
+                                      if arg_is_passed a then valResult else Inl TypeError)
+                                 (zip (IF_Args f) ?valResults))"
+        let ?refs = "rights (map (\<lambda>(a, refResult).
+                                      if arg_is_ref_passed a then refResult else Inl TypeError)
                                  (zip (IF_Args f) ?refResults))"
         obtain newWorld refUpdates externRetVal where
           ext_eq: "externFun (IS_World state) ?vals = (newWorld, refUpdates, externRetVal)"

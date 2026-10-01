@@ -61,6 +61,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_RequiresGhostContext Location
   | TyErr_GhostVariableInNonGhost Location string
   | TyErr_GhostFunctionInNonGhost Location string  (* executable code tried to call a ghost function *)
+  | TyErr_GhostArgInNonGhostCall Location string  (* executable code called a function with a ghost parameter (not yet supported) *)
   | TyErr_GhostTypeInNonGhost Location
   | TyErr_WriteToNonGhostFromGhost Location  (* ghost code attempting to write a non-ghost variable (assignment, swap, or ref argument) *)
   | TyErr_GhostRefNeedsGhostVar Location string  (* a ref declared in ghost code must refer to a ghost variable; string = ref/pattern var name *)

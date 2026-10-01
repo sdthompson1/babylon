@@ -345,14 +345,21 @@ once each, as the C parser does (`src/parser.c:2190`).
 **Staging.** Implement the prerequisite bottom-up: representation, Core
 rules, interpreter and soundness, then parser, renamer and
 `elab_fun_signature`. For the elaborator's call cases, the interim version
-elaborates *every* actual in the ambient mode, exactly as today. That is
-stricter than the language should be but keeps `ElabTermCorrect`
-sorry-free, provided a term typed in `NotGhost` mode is also typed in
-`Ghost` mode. No term-level lemma of that form was found in `core/`
-(30-Sep-2026), so proving it belongs to this step. (This is a different
-lemma from the env-monotonicity one in 3.3; see 7.) With the prerequisite
-built end to end, 3.2 and 3.3 are a self-contained change to two
-functions and two proof cases.
+*rejects* an executable call to any function with a ghost parameter
+(`TyErr_GhostArgInNonGhostCall`, raised by `resolve_callee_function` and
+`resolve_impure_callee`); in a ghost context nothing changes. The
+tempting alternative, elaborating every actual in the ambient mode, is
+unsound: the correctness proofs discharge unification and coercion from
+"every expected argument type is runtime in `NotGhost` mode", which no
+longer holds for a ghost parameter of type `int`, and `k(h())` with
+`k(ghost z: int)` and `h<U>(): U` would emit `h<int>()` in executable
+code. That is the laundering of 1.4 in another guise, and only the rule
+of 2.1 avoids it. So 3.2 replaces the rejection rather than a weaker
+check. A mode-weakening lemma (`NotGhost` typing implies `Ghost` typing,
+`core_term_type_ghost_weaken` / `core_term_type_NotGhost_imp_Ghost`, and
+`args_typed_weaken_modes` on top of it) was proved for this step anyway;
+it is what lets the ambient-mode typing of the actuals satisfy the
+per-argument modes of the Core rule when no parameter is ghost.
 
 ### 3.2 Definitions
 
@@ -436,6 +443,57 @@ That is the point of the design.
 
 The statement-level lemmas are unaffected: a statement still applies one
 final substitution and checks `term_inferred` / `call_inferred`.
+
+### 3.4 Progress on the prerequisite (1-Oct-2026)
+
+Done and committed: the representation (3.1 "Representation").
+
+Done and building (`core/` and `elaborator/` clean), not yet committed:
+
+* Core rules consult the flag. The call check is a named predicate
+  `args_typed tc tmArgs (zip expectedTypes modes)` (`core/CoreTypecheck.thy`,
+  declared `[fundef_cong]` so the function package sees the recursive
+  calls) with `param_mode ghost gh` in `core/CoreTyEnv.thy`; the impure rule
+  zips `(expectedTy, mode)` and checks `ghost_lvalue_ok` at the mode.
+  `core_impure_call_type_fn_facts` exposes `args_typed` and a per-index
+  `nth_check`. `tyenv_fun_ghost_constraint` constrains only
+  `(ty, vor, NotGhost) ∈ set (FI_TmArgs info)`; `ball_fst_imp_nonghost_params`
+  bridges the elaborator's stronger signature facts to it.
+* `module_body_env_for`, `body_env_for` and the linking/soundness
+  well-formedness proofs over them (ghost names go into `TE_GhostLocals`; a
+  non-ghost local is shown to come from a `NotGhost` parameter).
+* The interim elaborator rule (see "Staging" above) and its proofs;
+  `check_ref_args` takes the per-argument modes.
+
+In progress, not yet building (`interpreter/`):
+
+* Done: `process_one_arg` skips a ghost parameter; the extern branch passes
+  `rights (map (λ(a, r). if arg_is_passed a then r else Inl TypeError) …)`
+  and likewise `arg_is_ref_passed` for ref updates (abbreviations in
+  `CoreInterp.thy`); `extern_fun_contract` filters the same way;
+  `fun_info_matches_interp_fun` requires the ghost markers to agree.
+  `CoreInterpFuelMono.thy` and `CoreInterpPreservation.thy` rewritten
+  (`fold_process_one_arg_all_ok` is index-based and non-ghost only).
+  `TypeSoundnessHelpers1.thy`: `rights_filter_zip_chars(_aux)` generic over a
+  predicate (replaces the `_refs_` versions), and
+  `state_matches_env_add_ghost_local_gen` allows the new ghost local to be
+  const. `TypeSoundnessHelpers2.thy`: `partial_body_env_for` restricts
+  `TE_GhostLocals` to the k-prefix, `_step` adds the name to it for a ghost
+  parameter, `process_one_arg_step_sound` has a ghost case, and the two
+  inversion lemmas, the two fold lemmas and the extern-contract transfer
+  (`fes_tgt`) are conditioned on non-ghost positions. None of this has been
+  built yet.
+* Remaining: `TypeSoundnessHelpers3.thy` `type_soundness_function_call`
+  (premise `args_typed` in place of the ambient `list_all2`; derive
+  `vals_sound`/`lvals_sound` only at `NotGhost` positions, where the mode is
+  `NotGhost`; `paramTy_apply_ground` only for non-ghost parameters; the
+  extern branch types `vals` via `rights_filter_zip_chars` with
+  `arg_is_passed` and `filter_via_indices` on `FI_TmArgs`, mirroring the
+  existing ref-update argument, whose predicate becomes `arg_is_ref_passed`);
+  `TypeSoundness.thy` (`interp_function_call_sound` statement and its four
+  call sites take `args_typed`); `MakeInterpStateCorrect.thy` (`body_match`
+  over the new `body_env_for`). Then the front end (parser, renamer,
+  `elab_fun_signature` elaborating ghost parameter types in `Ghost` mode).
 
 ## 4. C compiler
 
@@ -585,7 +643,7 @@ implementing (see 7).
   proves awkward.
 * Resolved: the monotonicity lemma in 3.3 is
   `core_term_type_irrelevant_tyvar` (`core/CoreTypecheck.thy:1456`).
-  Still missing is the different, mode-weakening lemma (`NotGhost` typing
-  implies `Ghost` typing) that the interim elaborator in 3.1 needs; only
-  `core_term_type_notghost_runtime` and the statement-level
-  `core_statement_type_ghost_to_notghost` exist (checked 30-Sep-2026).
+  The mode-weakening lemma (`NotGhost` typing implies `Ghost` typing) is
+  `core_term_type_ghost_weaken` in `core/CoreTypecheck.thy`
+  (1-Oct-2026), generalised over the ghost-local set because a `Let`
+  moves its variable in or out of that set depending on the mode.

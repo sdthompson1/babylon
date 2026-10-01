@@ -96,8 +96,10 @@ definition tyenv_fun_tyvars_distinct :: "CoreTyEnv \<Rightarrow> bool" where
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
       distinct (FI_TyArgs info))"
 
-(* For non-ghost functions, types must be runtime types (for polymorphic functions,
-   this only needs to hold when the type arguments themselves are runtime types). *)
+(* For non-ghost functions, the return type and the non-ghost parameter types must
+   be runtime types (for polymorphic functions, this only needs to hold when the
+   type arguments themselves are runtime types). A ghost parameter's type is
+   unconstrained, since its actual is ghost code. *)
 definition tyenv_fun_ghost_constraint :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_fun_ghost_constraint env =
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<and>
@@ -105,8 +107,15 @@ definition tyenv_fun_ghost_constraint :: "CoreTyEnv \<Rightarrow> bool" where
       (let fenv = env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info),
                         TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                                |\<union>| fset_of_list (FI_TyArgs info) \<rparr>
-       in (\<forall>ty \<in> fst ` set (FI_TmArgs info). is_runtime_type fenv ty) \<and>
+       in (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)
+                    \<longrightarrow> is_runtime_type fenv ty) \<and>
           is_runtime_type fenv (FI_ReturnType info)))"
+
+(* A property of every parameter type is in particular a property of the
+   non-ghost parameter types (the shape tyenv_fun_ghost_constraint needs). *)
+lemma ball_fst_imp_nonghost_params:
+  "(\<forall>ty \<in> fst ` set args. P ty) \<Longrightarrow> \<forall>ty vor. (ty, vor, NotGhost) \<in> set args \<longrightarrow> P ty"
+  by (metis fst_conv imageI)
 
 (* For non-ghost functions, the return type must be complete. *)
 definition tyenv_fun_return_types_complete :: "CoreTyEnv \<Rightarrow> bool" where
@@ -694,14 +703,14 @@ proof -
        and ng: "FI_Ghost info = NotGhost"
     from info_lk' have info_lk: "fmlookup (TE_Functions env) funName = Some info" by simp
     from fun_ghost info_lk ng have
-      args_rt: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
+      args_rt: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
             is_runtime_type (env \<lparr> TE_TypeVars := ?A |\<union>| fset_of_list (FI_TyArgs info),
                   TE_RuntimeTypeVars := (?A |\<inter>| TE_RuntimeTypeVars env) |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
       and ret_rt': "is_runtime_type (env \<lparr> TE_TypeVars := ?A |\<union>| fset_of_list (FI_TyArgs info),
                   TE_RuntimeTypeVars := (?A |\<inter>| TE_RuntimeTypeVars env) |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                   (FI_ReturnType info)"
       unfolding tyenv_fun_ghost_constraint_def Let_def by auto
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
               is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs info),
                   TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
                                          |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>

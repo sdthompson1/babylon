@@ -39,15 +39,17 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
 
 (* Resolve the callee of an impure call. This checks that the callee is a
    ghost-compatible function; resolves the type arguments (allocating fresh metavariables
-   when omitted); and computes the per-argument expected types and Var/Ref markers, plus
+   when omitted); and computes the per-argument expected types, Var/Ref markers and
+   checking modes (Ghost for a ghost parameter, the ambient mode otherwise), plus
    the substituted return type. Void functions are rejected unless allowVoid is set
    (statement-position calls allow them; their Core return type is unit). Returns:
-     (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv').
+     (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv').
    The data-constructor / arg-count checks are left to the caller. *)
 definition resolve_impure_callee ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list
-      + (string \<times> CoreType list \<times> CoreType list \<times> VarOrRef list \<times> CoreType \<times> nat)" where
+      + (string \<times> CoreType list \<times> CoreType list \<times> VarOrRef list \<times> GhostOrNot list
+         \<times> CoreType \<times> nat)" where
   "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv =
     (case callee of
        BabTm_Name nloc name tyArgs \<Rightarrow>
@@ -62,6 +64,10 @@ definition resolve_impure_callee ::
                 Inl [TyErr_FunctionNoReturnType nloc name]
               else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
                 Inl [TyErr_GhostFunctionInNonGhost nloc name]
+              \<comment> \<open>An executable call to a function with a ghost parameter is not
+                  yet supported (see resolve_callee_function).\<close>
+              else if ghost = NotGhost \<and> list_ex (\<lambda>(_, _, gh). gh = Ghost) (FI_TmArgs funInfo) then
+                Inl [TyErr_GhostArgInNonGhostCall nloc name]
               else
                 (case resolve_type_args env elabEnv ghost nloc name
                         (FI_TyArgs funInfo) tyArgs next_mv of
@@ -70,8 +76,9 @@ definition resolve_impure_callee ::
                      let subst0 = fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs);
                          expArgTypes = map (\<lambda>(ty, _). apply_subst subst0 ty) (FI_TmArgs funInfo);
                          varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo);
+                         argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo);
                          retType0 = apply_subst subst0 (FI_ReturnType funInfo)
-                     in Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')))
+                     in Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv')))
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"
 
 (* Check the Ref-argument discipline of an impure call. This runs after unify_and_coerce
@@ -79,26 +86,28 @@ definition resolve_impure_callee ::
    expected argument types with the final substitution applied. For each Ref position:
      - the actual and expected types must be equal, or related by an array cast (the
        finite-integer coercion that Var arguments enjoy is not permitted for Ref);
-     - the (coerced) term must be a writable lvalue obeying the ghost-write discipline.
+     - the (coerced) term must be a writable lvalue obeying the ghost-write discipline
+       in the position's checking mode (so a ghost Ref parameter only accepts a ghost
+       lvalue, even in an executable call).
    Var positions need no further checks. Errors are reported at the location of the
    offending argument: locOf maps an argument index to its location, and idx is the
    index of the first argument in the lists. *)
 fun check_ref_args ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> (nat \<Rightarrow> Location) \<Rightarrow> nat
-   \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> VarOrRef list
+  "CoreTyEnv \<Rightarrow> (nat \<Rightarrow> Location) \<Rightarrow> nat
+   \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> VarOrRef list \<Rightarrow> GhostOrNot list
    \<Rightarrow> TypeError list + unit" where
-  "check_ref_args env ghost locOf idx [] [] [] [] = Inr ()"
-| "check_ref_args env ghost locOf idx (tm # tms) (actualTy # actualTys)
-       (expectedTy # expectedTys) (vor # vors) =
+  "check_ref_args env locOf idx [] [] [] [] [] = Inr ()"
+| "check_ref_args env locOf idx (tm # tms) (actualTy # actualTys)
+       (expectedTy # expectedTys) (vor # vors) (mode # modes) =
     (case vor of
-       Var \<Rightarrow> check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors
+       Var \<Rightarrow> check_ref_args env locOf (idx + 1) tms actualTys expectedTys vors modes
      | Ref \<Rightarrow>
          (if actualTy \<noteq> expectedTy \<and> \<not> array_cast_ok actualTy expectedTy
           then Inl [TyErr_TypeMismatch (locOf idx) expectedTy actualTy]
           else if \<not> is_writable_lvalue env tm then Inl [TyErr_NotWritableLvalue (locOf idx)]
-          else if \<not> ghost_lvalue_ok env ghost tm then Inl [TyErr_WriteToNonGhostFromGhost (locOf idx)]
-          else check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors))"
-| "check_ref_args env ghost locOf idx _ _ _ _ = undefined"
+          else if \<not> ghost_lvalue_ok env mode tm then Inl [TyErr_WriteToNonGhostFromGhost (locOf idx)]
+          else check_ref_args env locOf (idx + 1) tms actualTys expectedTys vors modes))"
+| "check_ref_args env locOf idx _ _ _ _ _ = undefined"
 
 (* Elaborate an impure function call term appearing at the outermost rhs of an
    Assign or VarDecl. The arguments are unified and coerced exactly as for a pure
@@ -110,7 +119,7 @@ definition elab_impure_call_term ::
   "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv =
     (case resolve_impure_callee env elabEnv ghost allowVoid callee next_mv of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1) \<Rightarrow>
+     | Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1) \<Rightarrow>
          if length args \<noteq> length expArgTypes then
            Inl [TyErr_WrongNumberOfArgs loc name (length expArgTypes) (length args)]
          else
@@ -122,11 +131,11 @@ definition elab_impure_call_term ::
                         elabArgTms actualTypes expArgTypes fmempty of
                    Inl errs \<Rightarrow> Inl errs
                  | Inr (finalArgTms, finalSubst) \<Rightarrow>
-                     (case check_ref_args env ghost (\<lambda>idx. bab_term_location (args ! idx)) 0
+                     (case check_ref_args env (\<lambda>idx. bab_term_location (args ! idx)) 0
                              finalArgTms
                              (map (apply_subst finalSubst) actualTypes)
                              (map (apply_subst finalSubst) expArgTypes)
-                             varOrRefs of
+                             varOrRefs argModes of
                         Inl errs \<Rightarrow> Inl errs
                       | Inr _ \<Rightarrow>
                           Inr (name,

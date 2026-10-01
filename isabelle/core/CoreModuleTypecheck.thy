@@ -62,7 +62,11 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
   "module_body_env_for env names info =
     env \<lparr>
       TE_LocalVars := fmap_of_list (zip names (map fst (FI_TmArgs info))),
-      TE_GhostLocals := (if FI_Ghost info = Ghost then fset_of_list names else {||}),
+      TE_GhostLocals := (if FI_Ghost info = Ghost then fset_of_list names
+                         else fset_of_list
+                                (map fst
+                                     (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                             (zip names (map snd (FI_TmArgs info)))))),
       TE_ConstLocals := fset_of_list
         (map fst
              (filter (\<lambda>(_, vor, _). vor = Var) (zip names (map snd (FI_TmArgs info))))),

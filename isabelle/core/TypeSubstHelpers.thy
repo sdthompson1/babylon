@@ -1030,11 +1030,10 @@ next
     all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
-    args_check: "list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type calleeEnv ghost tm of
-                      None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                              (FI_TmArgs funInfo))" and
+    args_check: "args_typed (core_term_type calleeEnv) tmArgs
+                   (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                             (FI_TmArgs funInfo))
+                        (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: Let_def split: option.splits if_splits)
   have ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type calleeEnv) tyArgs"
@@ -1068,82 +1067,65 @@ next
   \<comment> \<open>Each tmArg's IH lifts to the substituted version. The expected type after
       substitution is apply_subst subst (apply_subst ?innerSubst (FI_TmArgs[i].type)),
       which by composition equals apply_subst ?subst_innerSubst (FI_TmArgs[i].type). \<close>
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  let ?expsS = "map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo)"
   have args_check_subst:
-    "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type ?be ghost tm of
-                    None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-              (map (apply_subst_to_term subst) tmArgs)
-              (map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
-  proof -
-    \<comment> \<open>The original list_all2 says, for each tmArg, the term typechecks to the
-        expected substituted-arg-type. The IH on each tmArg gives us the substituted
-        version, which has the substituted-substituted type. Composition equates
-        that to the substituted-with-composed-tyArgs type. \<close>
-    have len_eq:
-      "length tmArgs = length (map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo))"
+    "args_typed (core_term_type ?be) (map (apply_subst_to_term subst) tmArgs) (zip ?expsS ?modes)"
+    unfolding args_typed_conv_all_nth
+  proof (intro conjI allI impI)
+    \<comment> \<open>The original check says, for each tmArg, the term typechecks (in its own
+        mode) to the expected substituted-arg-type. The IH on each tmArg gives us
+        the substituted version, which has the substituted-substituted type.
+        Composition equates that to the substituted-with-composed-tyArgs type. \<close>
+    show "length (map (apply_subst_to_term subst) tmArgs) = length (zip ?expsS ?modes)"
       using len_tmArgs by simp
-    show ?thesis
-    proof (rule list_all2_all_nthI)
-      show "length (map (apply_subst_to_term subst) tmArgs)
-              = length (map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty) (FI_TmArgs funInfo))"
-        using len_tmArgs by simp
-    next
-      fix i assume i_bound: "i < length (map (apply_subst_to_term subst) tmArgs)"
-      hence i_bound': "i < length tmArgs" by simp
-      hence i_bound_args: "i < length (FI_TmArgs funInfo)" using len_tmArgs by simp
-      \<comment> \<open>From args_check, the i-th tmArg typechecks to the i-th expected (inner-sub'd) type. \<close>
-      from args_check have args_nth_raw:
-        "case core_term_type calleeEnv ghost (tmArgs ! i) of
-           None \<Rightarrow> False
-         | Some actualTy \<Rightarrow>
-             actualTy = map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo) ! i"
-        using i_bound' len_tmArgs
-        by (simp add: list_all2_conv_all_nth)
-      have args_nth:
-        "case core_term_type calleeEnv ghost (tmArgs ! i) of
-           None \<Rightarrow> False
-         | Some actualTy \<Rightarrow> actualTy = (case FI_TmArgs funInfo ! i of
-              (ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
-        using args_nth_raw i_bound_args
-        by (metis nth_map)
-      then obtain actualTy where
-        actual_typed: "core_term_type calleeEnv ghost (tmArgs ! i) = Some actualTy" and
-        actual_eq: "actualTy = (case FI_TmArgs funInfo ! i of
-                                (ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
-        by (auto split: option.splits)
-      \<comment> \<open>Apply the IH to this tmArg. \<close>
-      have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
-      from CoreTm_FunctionCall.IH[OF tmArg_in actual_typed
-                                     CoreTm_FunctionCall.prems(2,3,4,5,6,7)]
-      have ih_result:
-        "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
-           = Some (apply_subst subst actualTy)" .
-      \<comment> \<open>The substituted actual type equals the substituted-with-composed
-          version of the i-th FI_TmArgs type. \<close>
-      obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
-        by (cases "FI_TmArgs funInfo ! i") auto
-      from actual_eq fi_arg_eq have actual_eq2: "actualTy = apply_subst ?innerSubst ti" by simp
-      \<comment> \<open>ti's type variables are in FI_TyArgs (from fi_args_tyvars). \<close>
-      have ti_in: "ti \<in> fst ` set (FI_TmArgs funInfo)"
-        using i_bound_args fi_arg_eq
-        by (force simp: image_iff in_set_conv_nth)
-      have ti_tyvars: "\<And>n. n \<in> type_tyvars ti \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
-        using fi_args_tyvars ti_in by blast
-      have actual_compose:
-        "apply_subst subst actualTy = apply_subst ?subst_innerSubst ti"
-        unfolding actual_eq2
-        using apply_subst_compose_zip_extra[OF len_tyArgs[symmetric] ti_tyvars tyArgs_distinct]
-        by simp
-      from ih_result actual_compose have ih_result':
-        "core_term_type ?be ghost (apply_subst_to_term subst (tmArgs ! i))
-           = Some (apply_subst ?subst_innerSubst ti)" by simp
-      show "case core_term_type ?be ghost (map (apply_subst_to_term subst) tmArgs ! i) of
-              None \<Rightarrow> False
-            | Some actualTy \<Rightarrow> actualTy = map (\<lambda>(ty, _). apply_subst ?subst_innerSubst ty)
-                                              (FI_TmArgs funInfo) ! i"
-        using ih_result' i_bound' i_bound_args fi_arg_eq
-        by simp
-    qed
+  next
+    fix i assume i_bound: "i < length (map (apply_subst_to_term subst) tmArgs)"
+    hence i_bound': "i < length tmArgs" by simp
+    hence i_bound_args: "i < length (FI_TmArgs funInfo)" using len_tmArgs by simp
+    obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
+      by (cases "FI_TmArgs funInfo ! i") auto
+    \<comment> \<open>From args_check, the i-th tmArg typechecks to the i-th expected (inner-sub'd) type. \<close>
+    have exp_nth:
+      "zip (map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo)) ?modes ! i
+         = (apply_subst ?innerSubst ti, param_mode ghost gh)"
+      using i_bound_args fi_arg_eq by simp
+    have actual_typed:
+      "core_term_type calleeEnv (param_mode ghost gh) (tmArgs ! i) = Some (apply_subst ?innerSubst ti)"
+      using args_typed_nthD[OF args_check i_bound'] exp_nth by simp
+    \<comment> \<open>Apply the IH to this tmArg, at its own mode. The NotGhost-conditioned
+        premises follow from the ambient ones: if the mode is NotGhost then so
+        is the ambient mode. \<close>
+    have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
+    have subst_rt_m: "param_mode ghost gh = NotGhost
+                        \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type callerEnv ty')"
+      using CoreTm_FunctionCall.prems(5) by simp
+    have ok_rt_m: "param_mode ghost gh = NotGhost
+                     \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv calleeEnv"
+      using CoreTm_FunctionCall.prems(6) by simp
+    from CoreTm_FunctionCall.IH[OF tmArg_in actual_typed CoreTm_FunctionCall.prems(2,3,4)
+                                   subst_rt_m ok_rt_m CoreTm_FunctionCall.prems(7)]
+    have ih_result:
+      "core_term_type ?be (param_mode ghost gh) (apply_subst_to_term subst (tmArgs ! i))
+         = Some (apply_subst subst (apply_subst ?innerSubst ti))" .
+    \<comment> \<open>The substituted actual type equals the substituted-with-composed
+        version of the i-th FI_TmArgs type. ti's type variables are in
+        FI_TyArgs (from fi_args_tyvars). \<close>
+    have ti_in: "ti \<in> fst ` set (FI_TmArgs funInfo)"
+      using i_bound_args fi_arg_eq
+      by (force simp: image_iff in_set_conv_nth)
+    have ti_tyvars: "\<And>n. n \<in> type_tyvars ti \<Longrightarrow> n \<in> set (FI_TyArgs funInfo) \<or> n |\<notin>| fmdom subst"
+      using fi_args_tyvars ti_in by blast
+    have actual_compose:
+      "apply_subst subst (apply_subst ?innerSubst ti) = apply_subst ?subst_innerSubst ti"
+      using apply_subst_compose_zip_extra[OF len_tyArgs[symmetric] ti_tyvars tyArgs_distinct]
+      by simp
+    have expS_nth: "zip ?expsS ?modes ! i = (apply_subst ?subst_innerSubst ti, param_mode ghost gh)"
+      using i_bound_args fi_arg_eq by simp
+    show "core_term_type ?be (snd (zip ?expsS ?modes ! i))
+            (map (apply_subst_to_term subst) tmArgs ! i)
+          = Some (fst (zip ?expsS ?modes ! i))"
+      using ih_result actual_compose expS_nth i_bound' by simp
   qed
 
   show ?case

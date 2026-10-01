@@ -1727,7 +1727,7 @@ proof -
     using wfB unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
   have fgcA: "\<And>funName info. fmlookup (TE_Functions ?envA) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      (?envA \<lparr> TE_TypeVars := TE_AbstractTypes ?envA
                                              |\<union>| fset_of_list (FI_TyArgs info),
@@ -1745,7 +1745,7 @@ proof -
     unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
   have fgcB: "\<And>funName info. fmlookup (TE_Functions ?envB) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      (?envB \<lparr> TE_TypeVars := TE_AbstractTypes ?envB
                                              |\<union>| fset_of_list (FI_TyArgs info),
@@ -2141,7 +2141,7 @@ proof -
             and ng: "FI_Ghost info = NotGhost"
         by simp_all
       from fn_cases[OF lk]
-      show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+      show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                is_runtime_type
                  (?mid \<lparr> TE_TypeVars := TE_AbstractTypes ?mid
                                         |\<union>| fset_of_list (FI_TyArgs info),
@@ -2210,7 +2210,12 @@ proof -
             by (rule link_side_rt_transfer[OF linkA linkM subA ghostOK w r])
                (auto simp: absa absb)
         qed
-        show ?thesis using fgcA[OF lkA ng] ftwkA[OF lkA] step by blast
+        have wkA': "\<And>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<Longrightarrow>
+                      is_well_kinded (?envA \<lparr> TE_TypeVars :=
+                                              TE_AbstractTypes ?envA
+                                              |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
+          using ftwkA[OF lkA] by force
+        show ?thesis using fgcA[OF lkA ng] wkA' step ftwkA lkA by blast
       next
         assume lkB: "fmlookup (TE_Functions ?envB) funName = Some info"
         have step: "\<And>ty.
@@ -2266,7 +2271,12 @@ proof -
             by (rule link_side_rt_transfer[OF linkB linkM subB ghostOK w r])
                (auto simp: absa absb)
         qed
-        show ?thesis using fgcB[OF lkB ng] ftwkB[OF lkB] step by blast
+        have wkB': "\<And>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<Longrightarrow>
+                      is_well_kinded (?envB \<lparr> TE_TypeVars :=
+                                              TE_AbstractTypes ?envB
+                                              |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
+          using ftwkB[OF lkB] by force
+        show ?thesis using fgcB[OF lkB ng] wkB' step ftwkB lkB by blast
       qed
     qed
   next
@@ -2742,6 +2752,37 @@ proof -
   have locals_dom: "fmdom (TE_LocalVars ?be) = fset_of_list names"
     by (simp add: module_body_env_for_def names_eq)
 
+  \<comment> \<open>A non-ghost local of a non-ghost function's body env is a non-ghost
+      parameter: its type is paired with NotGhost in the signature.\<close>
+  have locals_val_ng: "\<And>v ty. fmlookup (TE_LocalVars ?be) v = Some ty
+                        \<Longrightarrow> v |\<notin>| TE_GhostLocals ?be \<Longrightarrow> FI_Ghost info = NotGhost
+                        \<Longrightarrow> \<exists>vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)"
+  proof -
+    fix v ty
+    assume lk_v: "fmlookup (TE_LocalVars ?be) v = Some ty"
+       and ng_v: "v |\<notin>| TE_GhostLocals ?be"
+       and ng: "FI_Ghost info = NotGhost"
+    from lk_v have "(v, ty) \<in> set (zip names (map fst (FI_TmArgs info)))"
+      by (auto simp: module_body_env_for_def fmlookup_of_list dest: map_of_SomeD)
+    then obtain i where i_lt: "i < length names" and v_eq: "names ! i = v"
+                    and ty_eq: "ty = fst (FI_TmArgs info ! i)"
+      using len by (auto simp: in_set_zip)
+    obtain vor gh where fi_i: "FI_TmArgs info ! i = (ty, vor, gh)"
+      using ty_eq by (cases "FI_TmArgs info ! i") auto
+    have "gh = NotGhost"
+    proof (rule ccontr)
+      assume "gh \<noteq> NotGhost"
+      hence g: "gh = Ghost" by (cases gh) auto
+      have "(v, vor, gh) \<in> set (zip names (map snd (FI_TmArgs info)))"
+        unfolding in_set_zip using fi_i i_lt len v_eq by auto
+      hence "v |\<in>| TE_GhostLocals ?be"
+        using g ng by (force simp: module_body_env_for_def fset_of_list_elem image_iff)
+      thus False using ng_v by simp
+    qed
+    thus "\<exists>vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)"
+      using fi_i i_lt len by (metis nth_mem)
+  qed
+
   \<comment> \<open>Side facts from the enclosing env's well-formedness.\<close>
   have gvwk: "\<And>name ty. fmlookup (TE_GlobalVars env) name = Some ty \<Longrightarrow>
                 is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env \<rparr>) ty"
@@ -2768,7 +2809,7 @@ proof -
     using wf unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fgc: "\<And>funName info'. fmlookup (TE_Functions env) funName = Some info' \<Longrightarrow>
                FI_Ghost info' = NotGhost \<Longrightarrow>
-               (\<forall>ty \<in> fst ` set (FI_TmArgs info').
+               (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info') \<longrightarrow>
                   is_runtime_type
                     (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                           |\<union>| fset_of_list (FI_TyArgs info'),
@@ -2845,7 +2886,8 @@ proof -
         then show ?thesis using ng_l by simp
       next
         case NotGhost
-        have "ty \<in> fst ` set (FI_TmArgs info)" using lk_l by (rule locals_val)
+        obtain vor where "(ty, vor, NotGhost) \<in> set (FI_TmArgs info)"
+          using locals_val_ng[OF lk_l ng_l NotGhost] by blast
         then have "is_runtime_type
                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                            |\<union>| fset_of_list (FI_TyArgs info),
@@ -2900,7 +2942,11 @@ proof -
   next
     show "tyenv_ghost_vars_subset ?be"
       unfolding tyenv_ghost_vars_subset_def
-      by (simp add: module_body_env_for_def names_eq)
+      \<comment> \<open>Both the ghost-function case (all names) and the ghost-parameter case
+          (names of a filtered zip) are subsets of the locals' domain, names.\<close>
+      by (auto simp: module_body_env_for_def names_eq less_eq_fset.rep_eq
+                     fset_of_list.rep_eq fimage.rep_eq ffilter.rep_eq
+               dest: set_zip_leftD)
   next
     show "tyenv_return_type_well_kinded ?be"
     proof -
@@ -3052,7 +3098,7 @@ proof -
           by (rule is_runtime_type_mono_rtv[OF r])
              (auto simp: module_body_env_for_def)
       qed
-      show "(\<forall>ty \<in> fst ` set (FI_TmArgs info').
+      show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info') \<longrightarrow>
                is_runtime_type
                  (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be
                                        |\<union>| fset_of_list (FI_TyArgs info'),
@@ -3508,7 +3554,7 @@ proof -
     show "TE_GlobalVars ?lhs = TE_GlobalVars ?tb"
       using fam(1) by (simp add: module_body_env_for_def)
     show "TE_GhostLocals ?lhs = TE_GhostLocals ?tb"
-      by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def)
+      using snds by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def compS)
     show "TE_ConstLocals ?lhs = TE_ConstLocals ?tb"
       using snds by (simp add: module_body_env_for_def compS)
     show "TE_TypeVars ?lhs = TE_TypeVars ?tb"

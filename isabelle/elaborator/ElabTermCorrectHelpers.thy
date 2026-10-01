@@ -558,14 +558,16 @@ qed
 (* ============================================================================== *)
 
 (* Validity predicate for a function callee: the function exists, is pure,
-   satisfies ghost constraints, type args are well-kinded/runtime/complete,
-   and expArgTypes + retType are consistent with the function declaration. *)
+   satisfies ghost constraints (in an executable call it is not ghost and has
+   no ghost parameter), type args are well-kinded/runtime/complete, and
+   expArgTypes + retType are consistent with the function declaration. *)
 definition callee_info_valid_function ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreType \<Rightarrow> CoreType list \<Rightarrow> bool" where
   "callee_info_valid_function env ghost fnName tyArgs retType expArgTypes =
     (\<exists>funInfo.
        fmlookup (TE_Functions env) fnName = Some funInfo
      \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost)
+     \<and> (ghost = NotGhost \<longrightarrow> \<not> list_ex (\<lambda>(_, _, gh). gh = Ghost) (FI_TmArgs funInfo))
      \<and> \<not> FI_Impure funInfo
      \<and> list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)
      \<and> length tyArgs = length (FI_TyArgs funInfo)
@@ -613,6 +615,7 @@ proof (cases ci)
   from assms(1) CI_Function obtain funInfo where props:
     "fmlookup (TE_Functions ?env1) fnName = Some funInfo"
     "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
+    "ghost = NotGhost \<longrightarrow> \<not> list_ex (\<lambda>(_, _, gh). gh = Ghost) (FI_TmArgs funInfo)"
     "\<not> FI_Impure funInfo"
     "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)"
     "length tyArgs = length (FI_TyArgs funInfo)"
@@ -627,12 +630,12 @@ proof (cases ci)
   have fn_eq: "fmlookup (TE_Functions ?env2) fnName = Some funInfo"
     using props(1) by (simp add: extend_env_with_tyvars_def)
   have wk: "list_all (is_well_kinded ?env2) tyArgs"
-    using props(6) by (auto simp: list_all_iff
+    using props(7) by (auto simp: list_all_iff
             intro: is_well_kinded_extend_env_with_tyvars_mono[OF _ assms(2,3)])
   have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env2) tyArgs"
-    using props(7) by (auto simp: list_all_iff
+    using props(8) by (auto simp: list_all_iff
             intro: is_runtime_type_extend_env_with_tyvars_mono[OF _ assms(2,3)])
-  show ?thesis using CI_Function fn_eq props(2,3,4,5,8,9,10) wk rt
+  show ?thesis using CI_Function fn_eq props(2,3,4,5,6,9,10,11) wk rt
     unfolding callee_info_valid_def callee_info_valid_function_def by auto
 next
   case (CI_DataCtor ctorName dtName tyArgs)
@@ -694,8 +697,11 @@ proof -
   from assms(1) fn_lookup not_gc not_void not_impure all_var have
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
+  from assms(1) fn_lookup not_gc not_void not_impure all_var ghost_ok have
+    no_ghost_params: "ghost = NotGhost \<longrightarrow> \<not> list_ex (\<lambda>(_, _, gh). gh = Ghost) (FI_TmArgs funInfo)"
+    by (auto simp: resolve_callee_function_def split: if_splits sum.splits)
 
-  from assms(1) fn_lookup not_gc not_void not_impure all_var ghost_ok
+  from assms(1) fn_lookup not_gc not_void not_impure all_var ghost_ok no_ghost_params
   obtain newTyArgs next_mv1 where
     name_eq: "calleeName = name" and
     resolve_eq: "resolve_type_args env elabEnv ghost loc name (FI_TyArgs funInfo) tyArgs next_mv
@@ -723,7 +729,7 @@ proof -
                (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo))
                expArgTypes"
     unfolding callee_info_valid_function_def
-    using fn_lookup' ghost_ok not_impure all_var rta expArg_eq by auto
+    using fn_lookup' ghost_ok no_ghost_params not_impure all_var rta expArg_eq by auto
 
   \<comment> \<open>expArgTypes well-kinded: each is apply_subst of a function param type\<close>
   have wf': "tyenv_well_formed ?env'"
@@ -757,7 +763,7 @@ proof -
   have "tyenv_fun_ghost_constraint ?env'"
     using wf' tyenv_well_formed_def by blast
   hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
-          \<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+          \<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
             is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
                   TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
                                          |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
@@ -770,9 +776,12 @@ proof -
     have "list_all (\<lambda>(ty, _). is_runtime_type ?env' (apply_subst
             (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
-      with fi_args_rt_inner[OF fg_ng]
+      fix t v assume mem: "(t, v) \<in> set (FI_TmArgs funInfo)"
+      obtain vor gh where v_eq: "v = (vor, gh)" by (cases v)
+      \<comment> \<open>In an executable call no parameter is ghost, so this one is NotGhost.\<close>
+      have "gh = NotGhost"
+        using no_ghost_params ng mem v_eq by (cases gh) (auto simp: list_ex_iff)
+      with fi_args_rt_inner[OF fg_ng] mem v_eq
       have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
                   TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
                                          |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
@@ -1050,12 +1059,15 @@ proof (cases calleeInfo)
       fi_args_tyvars' fi_tyargs_distinct len_tyargs map_apply_subst_compose_zip_extra
     by presburger
 
-  have args_match: "list_all2 (\<lambda>tm expectedTy.
-           case core_term_type env' ghost tm of
-             None \<Rightarrow> False
-           | Some actualTy \<Rightarrow> actualTy = expectedTy)
-         finalArgTms ?coreExpArgTypes"
+  \<comment> \<open>The coerced arguments all typecheck in the ambient mode; the per-argument
+      modes of the Core check are each the ambient mode or Ghost, so the
+      mode-weakening lemma turns this into the Core check.\<close>
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have args_ambient: "list_all2 (\<lambda>tm expectedTy. core_term_type env' ghost tm = Some expectedTy)
+                        finalArgTms ?coreExpArgTypes"
     using coerce core_exp_eq by (simp add: list_all2_conv_all_nth)
+  have args_match: "args_typed (core_term_type env') finalArgTms (zip ?coreExpArgTypes ?modes)"
+    by (rule args_typed_weaken_modes[OF args_ambient]) (auto simp: param_mode_def split: prod.splits)
 
   have len_finalArgTms: "length finalArgTms = length (FI_TmArgs funInfo)"
     using coerce expArgTypes_eq by (simp add: list_all2_lengthD)

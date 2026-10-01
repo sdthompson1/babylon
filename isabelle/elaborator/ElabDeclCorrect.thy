@@ -462,7 +462,7 @@ proof -
     then have lk: "fmlookup (TE_Functions env) funName = Some info"
           and ng: "FI_Ghost info = NotGhost"
       by simp_all
-    have base: "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    have base: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                               |\<union>| fset_of_list (FI_TyArgs info),
@@ -490,7 +490,7 @@ proof -
                                                       |\<inter>| TE_RuntimeTypeVars ?env')
                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
       by (erule is_runtime_type_mono_rtv) auto
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
              is_runtime_type
                (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env'
                           |\<union>| fset_of_list (FI_TyArgs info),
@@ -2241,7 +2241,7 @@ proof -
     then have ng: "FI_Ghost inf = NotGhost" by blast
     from h have "inf = info \<or> fmlookup (TE_Functions env) funName = Some inf"
       using entry_cases by blast
-    then show "(\<forall>ty \<in> fst ` set (FI_TmArgs inf).
+    then show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs inf) \<longrightarrow>
                   is_runtime_type
                     (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env'
                                |\<union>| fset_of_list (FI_TyArgs inf),
@@ -2259,11 +2259,15 @@ proof -
       assume inf_eq: "inf = info"
       have ng': "FI_Ghost info = NotGhost"
         using ng unfolding inf_eq .
+      \<comment> \<open>rt_p gives every parameter type runtime, hence in particular the
+          non-ghost ones.\<close>
       show ?thesis
-        using rt_p[OF ng'] unfolding inf_eq by (simp add: proj rt_cong)
+        using ball_fst_imp_nonghost_params[OF conjunct1[OF rt_p[OF ng']]]
+              conjunct2[OF rt_p[OF ng']]
+        unfolding inf_eq by (simp add: proj rt_cong)
     next
       assume "fmlookup (TE_Functions env) funName = Some inf"
-      then have "(\<forall>ty \<in> fst ` set (FI_TmArgs inf).
+      then have "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs inf) \<longrightarrow>
                     is_runtime_type
                       (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                |\<union>| fset_of_list (FI_TyArgs inf),
@@ -6276,7 +6280,7 @@ proof -
                                          |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                                 (FI_ReturnType info)"
       using fwk lk unfolding tyenv_fun_types_well_kinded_def by blast+
-    have argsrt: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    have argsrt: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                     is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                              |\<union>| fset_of_list (FI_TyArgs info),
                                            TE_RuntimeTypeVars :=
@@ -6289,14 +6293,20 @@ proof -
                                           |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                                  (FI_ReturnType info)"
       using fgc lk ng unfolding tyenv_fun_ghost_constraint_def Let_def by blast+
-    have argsrt': "\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    \<comment> \<open>Well-kindedness of the non-ghost parameter types, in the shape the
+        transfer lemma wants.\<close>
+    have argswk_ng: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                       is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                               |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
+      using ball_fst_imp_nonghost_params[OF argswk] .
+    have argsrt': "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                      is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes env
                                                 |\<union>| fset_of_list (FI_TyArgs info),
                                               TE_RuntimeTypeVars :=
                                                 (TE_AbstractTypes env
                                                    |\<inter>| TE_RuntimeTypeVars env)
                                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
-      using argsrt argswk rt_tr by blast
+      using argsrt argswk_ng rt_tr by blast
     have retrt': "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes env
                                              |\<union>| fset_of_list (FI_TyArgs info),
                                            TE_RuntimeTypeVars :=
@@ -6305,7 +6315,7 @@ proof -
                                              |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                                   (FI_ReturnType info)"
       using retrt retwk rt_tr by blast
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
              is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env'
                                         |\<union>| fset_of_list (FI_TyArgs info),
                                       TE_RuntimeTypeVars :=
@@ -8930,7 +8940,7 @@ proof -
     using wfI unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fgcI: "\<And>funName info. fmlookup (TE_Functions (CM_TyEnv I)) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      ((CM_TyEnv I) \<lparr> TE_TypeVars := TE_AbstractTypes (CM_TyEnv I)
                                              |\<union>| fset_of_list (FI_TyArgs info),
@@ -8997,7 +9007,7 @@ proof -
     using wf_env unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fgcE: "\<And>funName info. fmlookup (TE_Functions env) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                            |\<union>| fset_of_list (FI_TyArgs info),
@@ -9302,7 +9312,7 @@ proof -
             and ng: "FI_Ghost info = NotGhost"
         by simp_all
       from fn_cases[OF lk]
-      show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+      show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                is_runtime_type
                  (?mid \<lparr> TE_TypeVars := TE_AbstractTypes ?mid
                                         |\<union>| fset_of_list (FI_TyArgs info),
@@ -9374,7 +9384,12 @@ proof -
                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
             by (rule rt_I_to_mid[OF w r]) (auto simp: absI)
         qed
-        show ?thesis using fgcI[OF lkI ng] ftwkI[OF lkI] step by blast
+        have wkI': "\<And>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<Longrightarrow>
+                      is_well_kinded ((CM_TyEnv I) \<lparr> TE_TypeVars :=
+                          TE_AbstractTypes (CM_TyEnv I)
+                          |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
+          using ball_fst_imp_nonghost_params[OF conjunct1[OF ftwkI[OF lkI]]] by blast
+        show ?thesis using fgcI[OF lkI ng] wkI' step ftwkI lkI by blast
       next
         assume lkB: "fmlookup (TE_Functions ?envB) funName = Some info"
         have step: "\<And>ty.

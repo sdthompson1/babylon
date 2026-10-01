@@ -76,6 +76,11 @@ definition resolve_callee_function ::
           Inl [TyErr_RefArgInTermContext loc name]
         else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
           Inl [TyErr_GhostFunctionInNonGhost loc name]
+        \<comment> \<open>An executable call to a function with a ghost parameter is not yet
+            supported: its ghost actuals would have to be elaborated in Ghost
+            mode without letting them determine the call's type arguments.\<close>
+        else if ghost = NotGhost \<and> list_ex (\<lambda>(_, _, gh). gh = Ghost) (FI_TmArgs funInfo) then
+          Inl [TyErr_GhostArgInNonGhostCall loc name]
         else
           (case resolve_type_args env elabEnv ghost loc name (FI_TyArgs funInfo) tyArgs next_mv of
             Inl errs \<Rightarrow> Inl errs

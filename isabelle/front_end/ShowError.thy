@@ -308,6 +308,9 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
         loc_prefix loc @ ''ghost variable '' @ quote name @ '' used in executable code''
     | TyErr_GhostFunctionInNonGhost loc name \<Rightarrow>
         loc_prefix loc @ ''ghost function '' @ quote name @ '' called from executable code''
+    | TyErr_GhostArgInNonGhostCall loc name \<Rightarrow>
+        loc_prefix loc @ ''function '' @ quote name
+          @ '' has a ghost parameter, which is not yet supported in executable code''
     | TyErr_GhostTypeInNonGhost loc \<Rightarrow>
         loc_prefix loc @ ''ghost type used in executable code''
     | TyErr_WriteToNonGhostFromGhost loc \<Rightarrow>

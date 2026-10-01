@@ -20,6 +20,25 @@ record FunInfo =
   (* Impure flag - impure functions may modify the world state *)
   FI_Impure :: bool
 
+(* The mode in which the actual for a parameter is typechecked, given the
+   ambient mode of the call and the parameter's ghost flag: the actual for a
+   ghost parameter is always ghost code; otherwise the ambient mode applies. *)
+definition param_mode :: "GhostOrNot \<Rightarrow> GhostOrNot \<Rightarrow> GhostOrNot" where
+  "param_mode ghost gh = (if gh = Ghost then Ghost else ghost)"
+
+lemma param_mode_NotGhost [simp]: "param_mode ghost NotGhost = ghost"
+  by (simp add: param_mode_def)
+
+lemma param_mode_Ghost [simp]: "param_mode ghost Ghost = Ghost"
+  by (simp add: param_mode_def)
+
+lemma param_mode_ambient_Ghost [simp]: "param_mode Ghost gh = Ghost"
+  by (simp add: param_mode_def)
+
+lemma param_mode_eq_NotGhost_iff [simp]:
+  "param_mode ghost gh = NotGhost \<longleftrightarrow> ghost = NotGhost \<and> gh = NotGhost"
+  by (cases gh; cases ghost) (simp_all add: param_mode_def)
+
 
 record CoreTyEnv =
   (* Local variable bindings (mutable or const-local, e.g. let-bindings, function params).

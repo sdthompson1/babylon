@@ -243,6 +243,61 @@ lemma cast_ok_transfer:
 
 
 (* ========================================================================== *)
+(* Argument typing for function calls *)
+(* ========================================================================== *)
+
+(* The per-argument check of a function call: each actual typechecks, in the
+   mode paired with it, to exactly the expected type. The mode is Ghost for a
+   ghost parameter and the ambient mode otherwise (see param_mode).
+   The typing function is a parameter so that this can be used inside the
+   definition of core_term_type; args_typed_cong tells the function package
+   which recursive calls are made. *)
+definition args_typed ::
+  "(GhostOrNot \<Rightarrow> CoreTerm \<Rightarrow> CoreType option) \<Rightarrow> CoreTerm list
+   \<Rightarrow> (CoreType \<times> GhostOrNot) list \<Rightarrow> bool" where
+  "args_typed tc tmArgs expected =
+     list_all2 (\<lambda>tm (expectedTy, mode). tc mode tm = Some expectedTy) tmArgs expected"
+
+lemma args_typed_cong [fundef_cong]:
+  assumes "tmArgs = tmArgs'" and "expected = expected'"
+    and "\<And>tm expectedTy mode. tm \<in> set tmArgs' \<Longrightarrow> (expectedTy, mode) \<in> set expected'
+           \<Longrightarrow> tc mode tm = tc' mode tm"
+  shows "args_typed tc tmArgs expected = args_typed tc' tmArgs' expected'"
+proof -
+  have "list_all2 (\<lambda>tm (expectedTy, mode). tc mode tm = Some expectedTy) tmArgs' expected'
+        = list_all2 (\<lambda>tm (expectedTy, mode). tc' mode tm = Some expectedTy) tmArgs' expected'"
+    by (rule list.rel_cong[OF refl refl]) (auto simp: assms(3))
+  thus ?thesis using assms(1,2) unfolding args_typed_def by simp
+qed
+
+lemma args_typed_Nil [simp]: "args_typed tc [] []"
+  unfolding args_typed_def by simp
+
+lemma args_typed_lengthD:
+  "args_typed tc tmArgs expected \<Longrightarrow> length tmArgs = length expected"
+  unfolding args_typed_def by (rule list_all2_lengthD)
+
+lemma args_typed_conv_all_nth:
+  "args_typed tc tmArgs expected \<longleftrightarrow>
+     length tmArgs = length expected
+     \<and> (\<forall>i < length tmArgs.
+          tc (snd (expected ! i)) (tmArgs ! i) = Some (fst (expected ! i)))"
+  unfolding args_typed_def by (simp add: list_all2_conv_all_nth case_prod_unfold)
+
+lemma args_typed_nthD:
+  assumes "args_typed tc tmArgs expected" and "i < length tmArgs"
+  shows "tc (snd (expected ! i)) (tmArgs ! i) = Some (fst (expected ! i))"
+  using assms by (simp add: args_typed_conv_all_nth)
+
+(* If every argument's typing is preserved by moving from tc to tc' (at any
+   mode), then so is the whole check. *)
+lemma args_typed_mono:
+  assumes "args_typed tc tmArgs expected"
+    and "\<And>tm mode ty. tm \<in> set tmArgs \<Longrightarrow> tc mode tm = Some ty \<Longrightarrow> tc' mode tm = Some ty"
+  shows "args_typed tc' tmArgs expected"
+  using assms unfolding args_typed_conv_all_nth by (metis nth_mem)
+
+(* ========================================================================== *)
 (* Main type-checking function *)
 (* ========================================================================== *)
 
@@ -353,7 +408,9 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
    - Number of type args must match
    - Type args must be well-kinded and complete
    - In NotGhost mode: type args must be runtime types, and function must not be ghost
-   - Term args must be well-typed with types matching expected arg types (after substitution) *)
+   - Term args must be well-typed with types matching expected arg types (after
+     substitution). The actual for a ghost parameter is typechecked in Ghost mode
+     (see param_mode); the others in the ambient mode. *)
 | "core_term_type env ghost (CoreTm_FunctionCall fnName tyArgs tmArgs) =
     (case fmlookup (TE_Functions env) fnName of
       None \<Rightarrow> None
@@ -374,13 +431,11 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
         else
           let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
-              expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo)
-          in \<comment> \<open>Check each term argument has the expected type\<close>
-             if list_all2 (\<lambda>tm expectedTy.
-                   case core_term_type env ghost tm of
-                     None \<Rightarrow> False
-                   | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                 tmArgs expectedArgTypes
+              expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
+              argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)
+          in \<comment> \<open>Check each term argument has the expected type, in the mode
+                 determined by its parameter's ghost flag\<close>
+             if args_typed (core_term_type env) tmArgs (zip expectedArgTypes argModes)
              then Some (apply_subst tySubst (FI_ReturnType funInfo))
              else None)"
 
@@ -544,16 +599,17 @@ next
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
-  \<comment> \<open>CoreTm_FunctionCall - elements of tmArgs are smaller\<close>
+  \<comment> \<open>CoreTm_FunctionCall - elements of tmArgs are smaller (whatever mode
+      each one is checked in)\<close>
   fix env :: CoreTyEnv
-  fix ghost :: GhostOrNot
+  fix ghost mode :: GhostOrNot
   fix fnName tyArgs tmArgs x2 x xa yb
   fix z :: CoreTerm
   assume "z \<in> set tmArgs"
   hence "size z < Suc (size_list size tmArgs)"
     using size_list_estimation
     by (metis less_not_refl not_less_eq)
-  thus "((env, ghost, z), env, ghost, CoreTm_FunctionCall fnName tyArgs tmArgs)
+  thus "((env, mode, z), env, ghost, CoreTm_FunctionCall fnName tyArgs tmArgs)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next
@@ -855,16 +911,12 @@ proof -
       using is_well_kinded_cong_env CoreTm_FunctionCall.prems by metis
     have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
       using is_runtime_type_cong_env CoreTm_FunctionCall.prems by metis
-    have IH: "\<And>tm. tm \<in> set args \<Longrightarrow>
-      core_term_type env1 ghost tm = core_term_type env2 ghost tm"
+    have IH: "\<And>tm mode. tm \<in> set args \<Longrightarrow>
+      core_term_type env1 mode tm = core_term_type env2 mode tm"
       using CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems by blast
-    have la2_eq: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
-          case core_term_type env1 ghost tm of
-            None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys =
-        list_all2 (\<lambda>tm expectedTy.
-          case core_term_type env2 ghost tm of
-            None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy) args ys"
-      by (rule iffI; erule list.rel_mono_strong; simp add: IH)
+    have la2_eq: "\<And>ys. args_typed (core_term_type env1) args ys
+                       = args_typed (core_term_type env2) args ys"
+      by (rule args_typed_cong[OF refl refl]) (simp add: IH)
     have la_wk: "list_all (is_well_kinded env1) tyArgs = list_all (is_well_kinded env2) tyArgs"
       by (simp add: list_all_iff wk_eq)
     have la_rt: "list_all (is_runtime_type env1) tyArgs = list_all (is_runtime_type env2) tyArgs"
@@ -1271,8 +1323,8 @@ next
   have "\<forall>tm \<in> set tmArgs. x |\<notin>| core_term_free_vars tm"
     by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff)
   with CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems(3)
-  have IH: "\<forall>tm \<in> set tmArgs. \<forall>ty. core_term_type env ghost tm = Some ty \<longrightarrow>
-      core_term_type ?env_x ghost tm = Some ty" by blast
+  have IH: "\<forall>tm \<in> set tmArgs. \<forall>mode ty. core_term_type env mode tm = Some ty \<longrightarrow>
+      core_term_type ?env_x mode tm = Some ty" by blast
   from CoreTm_FunctionCall.prems(2) obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
@@ -1281,17 +1333,17 @@ next
     len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
-    la2: "list_all2 (\<lambda>tm expectedTy.
-        case core_term_type env ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-        tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                    (FI_TmArgs funInfo))" and
+    la2: "args_typed (core_term_type env) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))
+                 (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: Let_def split: option.splits if_splits)
-  have la2': "list_all2 (\<lambda>tm expectedTy.
-      case core_term_type ?env_x ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-      tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                  (FI_TmArgs funInfo))"
-    using la2 IH by (auto simp: list.rel_mono_strong split: option.splits)
+  have la2': "args_typed (core_term_type ?env_x) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))
+                 (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))"
+    by (rule args_typed_mono[OF la2]) (use IH in blast)
   have fn_lookup': "fmlookup (TE_Functions ?env_x) fnName = Some funInfo"
     using fn_lookup by simp
   have tyargs_wk': "list_all (is_well_kinded ?env_x) tyArgs"
@@ -1449,6 +1501,345 @@ next
 qed
 
 
+(* Mode weakening: a term that typechecks in some mode also typechecks in Ghost
+   mode, in any env whose ghost locals include the original ones. Ghost mode
+   only ever relaxes the checks: ghost variables may be read, non-runtime types
+   are allowed, ghost functions may be called, and every call argument is
+   checked in Ghost mode. The ghost-local set is generalised because a Let in
+   NotGhost mode removes its variable from the set whereas the same Let in
+   Ghost mode adds it. *)
+lemma core_term_type_ghost_weaken:
+  assumes "core_term_type env ghost tm = Some ty"
+      and "TE_GhostLocals env |\<subseteq>| G"
+  shows "core_term_type (env \<lparr> TE_GhostLocals := G \<rparr>) Ghost tm = Some ty"
+using assms proof (induction tm arbitrary: env ghost ty G)
+  case (CoreTm_Var name)
+  have lookup_eq: "tyenv_lookup_var (env \<lparr> TE_GhostLocals := G \<rparr>) name = tyenv_lookup_var env name"
+    unfolding tyenv_lookup_var_def by (simp split: option.splits)
+  from CoreTm_Var.prems(1) show ?case
+    by (simp add: lookup_eq split: option.splits if_splits)
+next
+  case (CoreTm_Let var rhs body)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  from CoreTm_Let.prems(1) obtain rhsTy where
+    rhs_ty: "core_term_type env ghost rhs = Some rhsTy" and
+    body_ty: "core_term_type
+      (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+             TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                 else fminus (TE_GhostLocals env) {|var|}),
+             TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
+      ghost body = Some ty"
+    by (auto simp: Let_def split: option.splits)
+  from CoreTm_Let.IH(1)[OF rhs_ty CoreTm_Let.prems(2)]
+  have rhs_ty': "core_term_type ?envG Ghost rhs = Some rhsTy" .
+  let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
+                        TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
+                                            else fminus (TE_GhostLocals env) {|var|}),
+                        TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
+  have sub_body: "TE_GhostLocals ?body_env |\<subseteq>| finsert var G"
+    using CoreTm_Let.prems(2) by auto
+  from CoreTm_Let.IH(2)[OF body_ty sub_body]
+  have body_ty': "core_term_type (?body_env \<lparr> TE_GhostLocals := finsert var G \<rparr>) Ghost body = Some ty" .
+  have env_eq: "?body_env \<lparr> TE_GhostLocals := finsert var G \<rparr>
+                = ?envG \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars ?envG),
+                          TE_GhostLocals := finsert var (TE_GhostLocals ?envG),
+                          TE_ConstLocals := finsert var (TE_ConstLocals ?envG) \<rparr>"
+    by simp
+  from body_ty' env_eq rhs_ty' show ?case by (simp add: Let_def)
+next
+  case (CoreTm_Quantifier quant var varTy body)
+  show ?case
+  proof (cases ghost)
+    case NotGhost
+    with CoreTm_Quantifier.prems(1) show ?thesis by simp
+  next
+    case Ghost
+    let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+    from Ghost CoreTm_Quantifier.prems(1) have wk: "is_well_kinded env varTy"
+      by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
+    have wk': "is_well_kinded ?envG varTy"
+      using wk is_well_kinded_cong_env[of ?envG env] by simp
+    from Ghost CoreTm_Quantifier.prems(1) obtain bodyTy where
+      body_ty: "core_term_type
+        (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+        Ghost body = Some bodyTy"
+      and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
+      by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
+    let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
+                          TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+    have sub_body: "TE_GhostLocals ?body_env |\<subseteq>| finsert var G"
+      using CoreTm_Quantifier.prems(2) by auto
+    from CoreTm_Quantifier.IH[OF body_ty sub_body]
+    have body_ty': "core_term_type (?body_env \<lparr> TE_GhostLocals := finsert var G \<rparr>) Ghost body
+                      = Some bodyTy" .
+    have env_eq: "?body_env \<lparr> TE_GhostLocals := finsert var G \<rparr>
+                  = ?envG \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?envG),
+                            TE_GhostLocals := finsert var (TE_GhostLocals ?envG) \<rparr>"
+      by simp
+    from body_ty' env_eq body_bool ty_eq wk' show ?thesis by (simp add: Let_def)
+  qed
+next
+  case (CoreTm_LitBool b) then show ?case by simp
+next
+  case (CoreTm_LitInt i) then show ?case by (auto split: option.splits)
+next
+  case (CoreTm_LitArray elemTy tms)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  have wk_eq: "is_well_kinded ?envG elemTy = is_well_kinded env elemTy"
+    using is_well_kinded_cong_env[of ?envG env] by simp
+  from CoreTm_LitArray.IH CoreTm_LitArray.prems(2)
+  have "\<forall>tm \<in> set tms. \<forall>ty. core_term_type env ghost tm = Some ty \<longrightarrow>
+      core_term_type ?envG Ghost tm = Some ty" by blast
+  then show ?case using CoreTm_LitArray.prems(1) wk_eq
+    by (auto simp: list_all_iff split: if_splits)
+next
+  case (CoreTm_Cast targetTy tm)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  have co_eq: "\<And>a b. cast_ok ?envG a b = cast_ok env a b"
+    using cast_ok_cong_env[of ?envG env] by simp
+  from CoreTm_Cast show ?case by (auto simp: co_eq split: option.splits if_splits)
+next
+  case (CoreTm_Unop op tm)
+  from CoreTm_Unop.prems(1) obtain operandTy where
+    op_ty: "core_term_type env ghost tm = Some operandTy"
+    by (auto split: option.splits)
+  from CoreTm_Unop.IH[OF op_ty CoreTm_Unop.prems(2)]
+  have op_ty': "core_term_type (env \<lparr> TE_GhostLocals := G \<rparr>) Ghost tm = Some operandTy" .
+  from CoreTm_Unop.prems(1) show ?case using op_ty op_ty'
+    by (auto split: option.splits)
+next
+  case (CoreTm_Binop op lhs rhs)
+  from CoreTm_Binop.prems(1) obtain lhsTy rhsTy where
+    lhs_ty: "core_term_type env ghost lhs = Some lhsTy" and
+    rhs_ty: "core_term_type env ghost rhs = Some rhsTy"
+    by (auto split: option.splits prod.splits)
+  from CoreTm_Binop.IH(1)[OF lhs_ty CoreTm_Binop.prems(2)]
+  have lhs_ty': "core_term_type (env \<lparr> TE_GhostLocals := G \<rparr>) Ghost lhs = Some lhsTy" .
+  from CoreTm_Binop.IH(2)[OF rhs_ty CoreTm_Binop.prems(2)]
+  have rhs_ty': "core_term_type (env \<lparr> TE_GhostLocals := G \<rparr>) Ghost rhs = Some rhsTy" .
+  from CoreTm_Binop.prems(1) show ?case using lhs_ty lhs_ty' rhs_ty rhs_ty'
+    by (auto split: option.splits if_splits)
+next
+  case (CoreTm_FunctionCall fnName tyArgs tmArgs)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  have wk_eq: "\<And>t. is_well_kinded ?envG t = is_well_kinded env t"
+    using is_well_kinded_cong_env[of ?envG env] by simp
+  from CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems(2)
+  have IH: "\<forall>tm \<in> set tmArgs. \<forall>mode ty. core_term_type env mode tm = Some ty \<longrightarrow>
+      core_term_type ?envG Ghost tm = Some ty" by blast
+  from CoreTm_FunctionCall.prems(1) obtain funInfo where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+    len_tyargs: "length tyArgs = length (FI_TyArgs funInfo)" and
+    tyargs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyargs_cp: "list_all is_complete_type tyArgs" and
+    len_tmargs: "length tmArgs = length (FI_TmArgs funInfo)" and
+    not_impure: "\<not> FI_Impure funInfo" and
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
+    la2: "args_typed (core_term_type env) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))
+                 (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    by (auto simp: Let_def split: option.splits if_splits)
+  let ?exps = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                   (FI_TmArgs funInfo)"
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  let ?modesG = "map (\<lambda>(_, _, gh). param_mode Ghost gh) (FI_TmArgs funInfo)"
+  \<comment> \<open>Every argument is now checked in Ghost mode, whatever mode it was
+      checked in before.\<close>
+  have la2': "args_typed (core_term_type ?envG) tmArgs (zip ?exps ?modesG)"
+    unfolding args_typed_conv_all_nth
+  proof (intro conjI allI impI)
+    show "length tmArgs = length (zip ?exps ?modesG)" using len_tmargs by simp
+  next
+    fix i assume i_lt: "i < length tmArgs"
+    with len_tmargs have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
+    obtain ti vor gh where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
+      by (cases "FI_TmArgs funInfo ! i") auto
+    have exp_nth: "zip ?exps ?modes ! i
+                     = (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti, param_mode ghost gh)"
+      using i_lt_fi fi_arg by simp
+    have expG_nth: "zip ?exps ?modesG ! i
+                      = (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti, Ghost)"
+      using i_lt_fi fi_arg by simp
+    have "core_term_type env (param_mode ghost gh) (tmArgs ! i)
+            = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
+      using args_typed_nthD[OF la2 i_lt] exp_nth by simp
+    hence "core_term_type ?envG Ghost (tmArgs ! i)
+             = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
+      using IH i_lt by (blast intro: nth_mem)
+    thus "core_term_type ?envG (snd (zip ?exps ?modesG ! i)) (tmArgs ! i)
+            = Some (fst (zip ?exps ?modesG ! i))"
+      using expG_nth by simp
+  qed
+  have fn_lookup': "fmlookup (TE_Functions ?envG) fnName = Some funInfo"
+    using fn_lookup by simp
+  have tyargs_wk': "list_all (is_well_kinded ?envG) tyArgs"
+    using tyargs_wk by (simp add: list_all_iff wk_eq)
+  \<comment> \<open>simp does not rewrite under the pattern-lambda, so normalise the mode
+      list explicitly.\<close>
+  have modesG_simp: "?modesG = map (\<lambda>(_, _, _). Ghost) (FI_TmArgs funInfo)"
+    by (rule map_cong[OF refl]) (auto split: prod.splits)
+  show ?case
+    using fn_lookup' len_tyargs tyargs_wk' tyargs_cp len_tmargs not_impure all_var la2' ty_eq
+    by (auto simp: Let_def modesG_simp)
+next
+  case (CoreTm_VariantCtor ctorName tyArgs payload)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  have wk_eq: "\<And>t. is_well_kinded ?envG t = is_well_kinded env t"
+    using is_well_kinded_cong_env[of ?envG env] by simp
+  then show ?case using CoreTm_VariantCtor.prems CoreTm_VariantCtor.IH
+    by (auto simp: wk_eq list_all_iff split: option.splits if_splits)
+next
+  case (CoreTm_Record flds)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  from CoreTm_Record.prems(1) obtain tys where
+    distinct_names: "distinct (map fst flds)" and
+    those_eq: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
+    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
+    by (auto split: option.splits if_splits)
+  from those_eq have la2: "list_all2 (\<lambda>x y. x = Some y)
+      (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
+    using those_eq_Some by blast
+  hence len_eq: "length flds = length tys" by (auto dest: list_all2_lengthD)
+  have "\<And>i. i < length flds \<Longrightarrow> core_term_type ?envG Ghost (snd (flds ! i)) =
+        core_term_type env ghost (snd (flds ! i))"
+  proof -
+    fix i assume "i < length flds"
+    obtain nm tm where p_eq: "flds ! i = (nm, tm)" by (cases "flds ! i") auto
+    from \<open>i < length flds\<close> have "flds ! i \<in> set flds" by simp
+    from la2 \<open>i < length flds\<close> len_eq
+    have "core_term_type env ghost tm = Some (tys ! i)"
+      by (auto dest: list_all2_nthD simp: p_eq)
+    from p_eq have "tm \<in> Basic_BNFs.snds (flds ! i)" by simp
+    from CoreTm_Record.IH[OF \<open>flds ! i \<in> set flds\<close> this
+        \<open>core_term_type env ghost tm = Some (tys ! i)\<close> CoreTm_Record.prems(2)]
+    have "core_term_type ?envG Ghost tm = Some (tys ! i)" .
+    with \<open>core_term_type env ghost tm = Some (tys ! i)\<close>
+    show "core_term_type ?envG Ghost (snd (flds ! i)) = core_term_type env ghost (snd (flds ! i))"
+      by (simp add: p_eq)
+  qed
+  hence map_eq: "map (\<lambda>(name, tm). core_term_type ?envG Ghost tm) flds =
+                 map (\<lambda>(name, tm). core_term_type env ghost tm) flds"
+    by (metis (mono_tags, lifting) map_equality_iff split_beta)
+  show ?case by (simp add: map_eq those_eq ty_eq distinct_names)
+next
+  case (CoreTm_RecordProj tm fldName) then show ?case
+    by (auto split: option.splits CoreType.splits)
+next
+  case (CoreTm_VariantProj tm ctorName) then show ?case
+    by (auto split: option.splits CoreType.splits)
+next
+  case (CoreTm_ArrayProj arr idxs)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  from CoreTm_ArrayProj.prems(1) obtain elemTy dims where
+    arr_ty: "core_term_type env ghost arr = Some (CoreTy_Array elemTy dims)"
+    by (auto split: option.splits CoreType.splits if_splits)
+  from CoreTm_ArrayProj.IH(1)[OF arr_ty CoreTm_ArrayProj.prems(2)]
+  have arr_ty': "core_term_type ?envG Ghost arr = Some (CoreTy_Array elemTy dims)" .
+  have idx_transfer: "\<And>tm. tm \<in> set idxs \<Longrightarrow>
+      core_term_type env ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64) \<Longrightarrow>
+      core_term_type ?envG Ghost tm = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
+    using CoreTm_ArrayProj.IH(2) CoreTm_ArrayProj.prems(2) by blast
+  from CoreTm_ArrayProj.prems(1) show ?case using arr_ty arr_ty' idx_transfer
+    by (auto simp: list_all_iff split: option.splits CoreType.splits if_splits)
+next
+  case (CoreTm_Match scrut arms)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  have pc_eq: "\<And>p t. pattern_compatible ?envG p t = pattern_compatible env p t"
+    by (rule pattern_compatible_cong_env) simp
+  from CoreTm_Match.prems(1) obtain scrutTy where
+    scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
+    by (auto split: option.splits)
+  from CoreTm_Match.IH(1)[OF scrut_ty CoreTm_Match.prems(2)]
+  have scrut_ty': "core_term_type ?envG Ghost scrut = Some scrutTy" .
+  have body_transfer: "\<And>arm body resultTy. arm \<in> set arms \<Longrightarrow> body = snd arm \<Longrightarrow>
+      core_term_type env ghost body = Some resultTy \<Longrightarrow>
+      core_term_type ?envG Ghost body = Some resultTy"
+  proof -
+    fix arm body resultTy
+    assume "arm \<in> set arms" and "body = snd arm"
+      and body_ty: "core_term_type env ghost body = Some resultTy"
+    have "body \<in> Basic_BNFs.snds arm"
+      using \<open>body = snd arm\<close> by (cases arm) simp
+    from CoreTm_Match.IH(2)[OF \<open>arm \<in> set arms\<close> \<open>body \<in> Basic_BNFs.snds arm\<close>
+        body_ty CoreTm_Match.prems(2)]
+    show "core_term_type ?envG Ghost body = Some resultTy" .
+  qed
+  have hd_transfer: "arms \<noteq> [] \<Longrightarrow> core_term_type env ghost (snd (hd arms)) = Some resultTy \<Longrightarrow>
+      core_term_type ?envG Ghost (snd (hd arms)) = Some resultTy" for resultTy
+    using body_transfer[of "hd arms" "snd (hd arms)"] by (cases arms) auto
+  have tl_transfer: "\<And>body resultTy. body \<in> set (tl (map snd arms)) \<Longrightarrow>
+      core_term_type env ghost body = Some resultTy \<Longrightarrow>
+      core_term_type ?envG Ghost body = Some resultTy"
+  proof -
+    fix body resultTy
+    assume "body \<in> set (tl (map snd arms))"
+      and body_ty: "core_term_type env ghost body = Some resultTy"
+    from \<open>body \<in> set (tl (map snd arms))\<close> obtain arm where
+      "arm \<in> set arms" and "body = snd arm" by (cases arms) auto
+    from body_transfer[OF this body_ty]
+    show "core_term_type ?envG Ghost body = Some resultTy" .
+  qed
+  from CoreTm_Match.prems(1) show ?case
+    using scrut_ty scrut_ty' pc_eq hd_transfer tl_transfer
+    by (auto simp: list_all_iff Let_def split: option.splits if_splits)
+next
+  case (CoreTm_Sizeof tm) then show ?case
+    by (auto split: option.splits CoreType.splits if_splits)
+next
+  case (CoreTm_Allocated tm)
+  then show ?case
+    by (cases ghost) (auto split: option.splits if_splits)
+next
+  case (CoreTm_Old tm)
+  then show ?case
+    by (cases ghost) auto
+next
+  case (CoreTm_Default tyD)
+  let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
+  have wk_eq: "is_well_kinded ?envG tyD = is_well_kinded env tyD"
+    using is_well_kinded_cong_env[of ?envG env] by simp
+  from CoreTm_Default.prems(1) show ?case
+    by (metis GhostOrNot.distinct(1) core_term_type.simps(23) option.distinct(1) wk_eq)
+qed
+
+(* The common special case: same env, NotGhost typing implies Ghost typing. *)
+lemma core_term_type_NotGhost_imp_Ghost:
+  assumes "core_term_type env ghost tm = Some ty"
+  shows "core_term_type env Ghost tm = Some ty"
+  using core_term_type_ghost_weaken[OF assms, of "TE_GhostLocals env"] by simp
+
+(* Arguments that all typecheck in the ambient mode also pass the per-argument
+   check of a call, whose modes are each either the ambient mode or Ghost. *)
+lemma args_typed_weaken_modes:
+  assumes typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env ghost tm = Some expectedTy)
+                    tmArgs expectedTys"
+      and len: "length expectedTys = length modes"
+      and modes: "\<And>m. m \<in> set modes \<Longrightarrow> m = ghost \<or> m = Ghost"
+  shows "args_typed (core_term_type env) tmArgs (zip expectedTys modes)"
+  unfolding args_typed_conv_all_nth
+proof (intro conjI allI impI)
+  show "length tmArgs = length (zip expectedTys modes)"
+    using list_all2_lengthD[OF typed] len by simp
+next
+  fix i assume i_lt: "i < length tmArgs"
+  hence i_exp: "i < length expectedTys" and i_modes: "i < length modes"
+    using list_all2_lengthD[OF typed] len by simp_all
+  have t: "core_term_type env ghost (tmArgs ! i) = Some (expectedTys ! i)"
+    using list_all2_nthD[OF typed i_lt] .
+  have "core_term_type env (modes ! i) (tmArgs ! i) = Some (expectedTys ! i)"
+    using modes[OF nth_mem[OF i_modes]] t core_term_type_NotGhost_imp_Ghost[OF t] by auto
+  thus "core_term_type env (snd (zip expectedTys modes ! i)) (tmArgs ! i)
+          = Some (fst (zip expectedTys modes ! i))"
+    using i_exp i_modes by simp
+qed
+
+lemma param_mode_cases: "param_mode ghost gh = ghost \<or> param_mode ghost gh = Ghost"
+  by (simp add: param_mode_def)
+
+
 (* Weakening: extending TE_TypeVars and TE_RuntimeTypeVars does not change what
    core_term_type accepts. The kind and runtime checks embedded in core_term_type
    are monotone under growing these sets, and lookups into TE_LocalVars /
@@ -1585,16 +1976,12 @@ next
     using wk_mono by (auto simp: list_all_iff)
   have la_rt: "list_all (is_runtime_type env) tyArgs \<Longrightarrow> list_all (is_runtime_type ?env') tyArgs"
     using rt_mono by (auto simp: list_all_iff)
-  have IH: "\<And>tm ty. tm \<in> set args \<Longrightarrow> core_term_type env ghost tm = Some ty \<Longrightarrow>
-                     core_term_type ?env' ghost tm = Some ty"
+  have IH: "\<And>tm mode ty. tm \<in> set args \<Longrightarrow> core_term_type env mode tm = Some ty \<Longrightarrow>
+                     core_term_type ?env' mode tm = Some ty"
     using CoreTm_FunctionCall.IH by blast
-  have la2_mono: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
-          (\<exists>y. core_term_type env ghost tm = Some y) \<and>
-          (\<forall>x2. core_term_type env ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) args ys \<Longrightarrow>
-        list_all2 (\<lambda>tm expectedTy.
-          (\<exists>y. core_term_type ?env' ghost tm = Some y) \<and>
-          (\<forall>x2. core_term_type ?env' ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) args ys"
-    using IH by (fastforce simp: list_all2_iff in_set_zip)
+  have la2_mono: "\<And>ys. args_typed (core_term_type env) args ys \<Longrightarrow>
+                       args_typed (core_term_type ?env') args ys"
+    using IH by (elim args_typed_mono) blast
   show ?case using CoreTm_FunctionCall.prems la_wk la_rt la2_mono
     by (auto split: option.splits if_splits simp: Let_def)
 next
@@ -2011,22 +2398,19 @@ next
     moreover have "list_all (is_runtime_type env) as" using Cons by simp
     ultimately show ?case by simp
   qed simp
-  have IH: "\<And>tm ty. tm \<in> set args \<Longrightarrow> core_term_type ?env' ghost tm = Some ty \<Longrightarrow>
-                     core_term_type env ghost tm = Some ty"
+  have IH: "\<And>tm mode ty. tm \<in> set args \<Longrightarrow> core_term_type ?env' mode tm = Some ty \<Longrightarrow>
+                     core_term_type env mode tm = Some ty"
   proof -
-    fix tm ty assume mem: "tm \<in> set args" and tm_ty': "core_term_type ?env' ghost tm = Some ty"
+    fix tm mode ty
+    assume mem: "tm \<in> set args" and tm_ty': "core_term_type ?env' mode tm = Some ty"
     have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
       using mem CoreTm_FunctionCall.prems(3) by (force simp: list_all_iff)
-    show "core_term_type env ghost tm = Some ty"
+    show "core_term_type env mode tm = Some ty"
       by (rule CoreTm_FunctionCall.IH[OF mem tm_ty' CoreTm_FunctionCall.prems(2) tm_disj])
   qed
-  have la2_mono: "\<And>ys. list_all2 (\<lambda>tm expectedTy.
-          (\<exists>y. core_term_type ?env' ghost tm = Some y) \<and>
-          (\<forall>x2. core_term_type ?env' ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) args ys \<Longrightarrow>
-        list_all2 (\<lambda>tm expectedTy.
-          (\<exists>y. core_term_type env ghost tm = Some y) \<and>
-          (\<forall>x2. core_term_type env ghost tm = Some x2 \<longrightarrow> x2 = expectedTy)) args ys"
-    using IH by (fastforce simp: list_all2_iff in_set_zip)
+  have la2_mono: "\<And>ys. args_typed (core_term_type ?env') args ys \<Longrightarrow>
+                       args_typed (core_term_type env) args ys"
+    using IH by (elim args_typed_mono) blast
   show ?case using CoreTm_FunctionCall.prems(1) wk_down'[OF tyArgs_disj] rt_down'[OF tyArgs_disj] la2_mono
     by (auto split: option.splits if_splits simp: Let_def)
 next
