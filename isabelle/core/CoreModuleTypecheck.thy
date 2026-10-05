@@ -40,23 +40,24 @@ begin
    typecheck.
 
    This is the module-level analogue of body_env_for (interpreter/StateMatchesEnv.thy)
-   generalized in two ways:
-     - the module env may have unresolved abstract types, so TE_TypeVars is
-       TE_AbstractTypes env plus the function's own type parameters (rather
-       than the type parameters alone); and
-     - ghost functions are covered (body_env_for hard-wires NotGhost because
-       the interpreter skips ghost calls): a ghost function's parameters are
-       ghost locals and its type parameters are not runtime type variables.
+   generalized in one way: the module env may have unresolved abstract types,
+   so TE_TypeVars is TE_AbstractTypes env plus the function's own type
+   parameters (rather than the type parameters alone), and TE_RuntimeTypeVars
+   likewise keeps the abstract types that are runtime type variables.
+
+   Ghost functions are covered, as they are in body_env_for: a ghost
+   function's parameters are ghost locals and its type parameters are not
+   runtime type variables.
 
    In the NotGhost case, the TE_RuntimeTypeVars formula is the same one used
    by tyenv_fun_ghost_constraint (CoreTyEnvWellFormed.thy) when it checks a
    non-ghost function's argument/return types for being runtime types, so
    runtime-type facts about the signature transfer directly to the body env.
 
-   On a *closed* module (TE_AbstractTypes env = {||}) with a NotGhost
-   function, this definition coincides field-for-field with body_env_for -
-   which is why state_matches_env's body-typecheck obligation will match the
-   module-level check when an InterpState is built. *)
+   On a *closed* module (TE_AbstractTypes env = {||}), this definition
+   coincides field-for-field with body_env_for, for any function - which is
+   why state_matches_env's body-typecheck obligation matches the module-level
+   check when an InterpState is built. *)
 
 definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv" where
   "module_body_env_for env names info =

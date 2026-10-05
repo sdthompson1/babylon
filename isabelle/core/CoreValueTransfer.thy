@@ -8,11 +8,10 @@ begin
    normalization direction).
 
    The key observation throughout is that a well-typed value's types are
-   ground (value_has_type_ground), and every kind/runtime check that
-   value_has_type makes is on a type whose groundness the same clause
-   asserts. So value_has_type only really reads TE_Datatypes, TE_DataCtors
-   and TE_GhostDatatypes, and it is stable under any change that preserves
-   the entries those reads can hit. *)
+   ground (value_has_type_ground), and every kind check that value_has_type
+   makes is on a type whose groundness the same clause asserts. So
+   value_has_type only really reads TE_Datatypes and TE_DataCtors, and it is
+   stable under any change that preserves the entries those reads can hit. *)
 
 
 (* ========================================================================== *)
@@ -122,21 +121,15 @@ qed simp_all
 (* value_has_type under environment extension                                 *)
 (* ========================================================================== *)
 
-(* value_has_type transfers to any env that preserves the datatype-table
-   entries and the ghost markers on the old datatype domain. This is the
-   value-side analogue of core_term_type_tyenv_extends, but with weaker
-   premises: the tyvar and scope fields may change arbitrarily, because a
-   value's types are ground. tyenv_ctors_consistent env pins the variant
-   datatype names into the old datatype domain for the ghost-marker
-   transfer. *)
+(* value_has_type transfers to any env that preserves the entries of the
+   constructor and datatype tables. This is the value-side analogue of
+   core_term_type_tyenv_extends, but with weaker premises: the tyvar and scope
+   fields may change arbitrarily, because a value's types are ground. *)
 lemma value_has_type_env_mono:
   assumes dc: "\<And>c e. fmlookup (TE_DataCtors env) c = Some e
                  \<Longrightarrow> fmlookup (TE_DataCtors env') c = Some e"
       and dt: "\<And>d n. fmlookup (TE_Datatypes env) d = Some n
                  \<Longrightarrow> fmlookup (TE_Datatypes env') d = Some n"
-      and gd: "\<And>d. d |\<in>| fmdom (TE_Datatypes env)
-                 \<Longrightarrow> (d |\<in>| TE_GhostDatatypes env' \<longleftrightarrow> d |\<in>| TE_GhostDatatypes env)"
-      and cons: "tyenv_ctors_consistent env"
       and vht: "value_has_type env val ty"
   shows "value_has_type env' val ty"
 using vht proof (induction val arbitrary: ty)
@@ -191,9 +184,7 @@ next
       dty_eq: "dty1 = dty2" and
       len_eq: "length tyvars = length argTypes" and
       args_wk: "list_all (is_well_kinded env) argTypes" and
-      args_rt: "list_all (is_runtime_type env) argTypes" and
       args_ground: "list_all (\<lambda>a. type_tyvars a = {}) argTypes" and
-      not_ghost: "dty1 |\<notin>| TE_GhostDatatypes env" and
       payload_vht: "value_has_type env payload
                       (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       by (auto split: option.splits)
@@ -202,20 +193,11 @@ next
     have args_wk': "list_all (is_well_kinded env') argTypes"
       using args_wk args_ground is_well_kinded_ground_mono[OF dt]
       unfolding list_all_iff by blast
-    have args_rt': "list_all (is_runtime_type env') argTypes"
-      using args_wk args_rt args_ground is_runtime_type_ground_mono[OF dt gd]
-      unfolding list_all_iff by blast
-    have dt_dom: "dty2 |\<in>| fmdom (TE_Datatypes env)"
-      using cons lookup unfolding tyenv_ctors_consistent_def
-      by (blast intro: fmdomI)
-    have not_ghost': "dty1 |\<notin>| TE_GhostDatatypes env'"
-      using gd[OF dt_dom] not_ghost dty_eq by blast
     have payload': "value_has_type env' payload
                       (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       using CV_Variant.IH payload_vht by blast
     show ?thesis
-      using CoreTy_Datatype lookup' dty_eq len_eq args_wk' args_rt' args_ground
-            not_ghost' payload'
+      using CoreTy_Datatype lookup' dty_eq len_eq args_wk' args_ground payload'
       by simp
   qed (use CV_Variant.prems in auto)
 next
@@ -225,7 +207,6 @@ next
     case (CoreTy_Array elemTy dims)
     from CV_Array.prems CoreTy_Array have
       elem_wk: "is_well_kinded env elemTy" and
-      elem_rt: "is_runtime_type env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
                              \<longrightarrow> value_has_type env val elemTy" and
@@ -235,8 +216,6 @@ next
       by simp_all
     have elem_wk': "is_well_kinded env' elemTy"
       using is_well_kinded_ground_mono[OF dt elem_ground elem_wk] .
-    have elem_rt': "is_runtime_type env' elemTy"
-      using is_runtime_type_ground_mono[OF dt gd elem_ground elem_wk elem_rt] .
     have elems_vht': "\<forall>idx val. fmlookup valuesMap idx = Some val
                                  \<longrightarrow> value_has_type env' val elemTy"
     proof (intro allI impI)
@@ -248,30 +227,31 @@ next
         by (auto simp: fmran'I)
     qed
     show ?thesis
-      using CoreTy_Array elem_wk' elem_rt' elem_ground elems_vht'
+      using CoreTy_Array elem_wk' elem_ground elems_vht'
             dims_wk matches sizes_ok
       by simp
   qed (use CV_Array.prems in auto)
+next
+  case (CV_Int i)
+  then show ?case by simp
+next
+  case (CV_Real r)
+  then show ?case by simp
 qed
 
 (* Corollary in terms of tyenv_extends: the extension's lookup-preservation
-   and ghost-marker clauses are exactly the premises of the mono lemma. *)
+   clauses are exactly the premises of the mono lemma. *)
 lemma value_has_type_tyenv_extends:
   assumes ext: "tyenv_extends env env'"
-      and cons: "tyenv_ctors_consistent env"
       and vht: "value_has_type env val ty"
   shows "value_has_type env' val ty"
-proof (rule value_has_type_env_mono[OF _ _ _ cons vht])
+proof (rule value_has_type_env_mono[OF _ _ vht])
   fix c e assume "fmlookup (TE_DataCtors env) c = Some e"
   thus "fmlookup (TE_DataCtors env') c = Some e"
     using ext unfolding tyenv_extends_def by blast
 next
   fix d n assume "fmlookup (TE_Datatypes env) d = Some n"
   thus "fmlookup (TE_Datatypes env') d = Some n"
-    using ext unfolding tyenv_extends_def by blast
-next
-  fix d assume "d |\<in>| fmdom (TE_Datatypes env)"
-  thus "d |\<in>| TE_GhostDatatypes env' \<longleftrightarrow> d |\<in>| TE_GhostDatatypes env"
     using ext unfolding tyenv_extends_def by blast
 qed
 
@@ -282,7 +262,7 @@ qed
 
 (* The generic form: env' is any env whose constructor table is env's with
    the substitution applied to the payload types, and whose datatype table
-   and ghost markers are unchanged. The value is untouched (values contain no
+   is unchanged. The value is untouched (values contain no
    types), and its type moves by apply_subst - though since a well-typed
    value's type is ground, the substitution on the type side is a no-op
    (see value_has_type_apply_subst_ground below).
@@ -293,7 +273,6 @@ qed
 lemma value_has_type_apply_subst_generic:
   assumes dc': "TE_DataCtors env' = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
       and dt': "TE_Datatypes env' = TE_Datatypes env"
-      and gd': "TE_GhostDatatypes env' = TE_GhostDatatypes env"
       and cap: "\<And>ctorName dtName tyVars payloadTy.
                   fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payloadTy)
                   \<Longrightarrow> subst_names subst |\<inter>| fset_of_list tyVars = {||}"
@@ -367,9 +346,7 @@ next
       dty_eq: "dty1 = dty2" and
       len_eq: "length tyvars = length argTypes" and
       args_wk: "list_all (is_well_kinded env) argTypes" and
-      args_rt: "list_all (is_runtime_type env) argTypes" and
       args_ground: "list_all (\<lambda>a. type_tyvars a = {}) argTypes" and
-      not_ghost: "dty1 |\<notin>| TE_GhostDatatypes env" and
       payload_vht: "value_has_type env payload
                       (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       by (auto split: option.splits)
@@ -389,15 +366,10 @@ next
     have lookup': "fmlookup (TE_DataCtors env') ctor
                      = Some (dty2, tyvars, apply_subst subst payloadTy)"
       using lookup unfolding dc' by simp
-    \<comment> \<open>Kind/runtime checks: ground congruence over the unchanged fields.\<close>
+    \<comment> \<open>Kind checks: ground congruence over the unchanged fields.\<close>
     have args_wk': "list_all (is_well_kinded env') argTypes"
       using args_wk args_ground is_well_kinded_ground_cong_env[OF _ dt']
       unfolding list_all_iff by blast
-    have args_rt': "list_all (is_runtime_type env') argTypes"
-      using args_rt args_ground is_runtime_type_ground_cong_env[OF _ gd']
-      unfolding list_all_iff by blast
-    have not_ghost': "dty1 |\<notin>| TE_GhostDatatypes env'"
-      using not_ghost gd' by simp
     \<comment> \<open>Payload: the IH moves the value across, and capture-avoidance commutes
         the instantiation with the substitution.\<close>
     have payload_IH: "value_has_type env' payload
@@ -415,7 +387,7 @@ next
       using payload_IH commute args_id by simp
     show ?thesis
       unfolding ty'_eq
-      using lookup' dty_eq len_eq args_wk' args_rt' args_ground not_ghost' payload'
+      using lookup' dty_eq len_eq args_wk' args_ground payload'
       by simp
   qed (use CV_Variant.prems in auto)
 next
@@ -425,7 +397,6 @@ next
     case (CoreTy_Array elemTy dims)
     from CV_Array.prems CoreTy_Array have
       elem_wk: "is_well_kinded env elemTy" and
-      elem_rt: "is_runtime_type env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
                              \<longrightarrow> value_has_type env val elemTy" and
@@ -439,8 +410,6 @@ next
       using CoreTy_Array elem_id by simp
     have elem_wk': "is_well_kinded env' elemTy"
       using elem_wk is_well_kinded_ground_cong_env[OF elem_ground dt'] by blast
-    have elem_rt': "is_runtime_type env' elemTy"
-      using elem_rt is_runtime_type_ground_cong_env[OF elem_ground gd'] by blast
     have elems_vht': "\<forall>idx val. fmlookup valuesMap idx = Some val
                                  \<longrightarrow> value_has_type env' val elemTy"
     proof (intro allI impI)
@@ -454,9 +423,15 @@ next
     qed
     show ?thesis
       unfolding ty'_eq
-      using elem_wk' elem_rt' elem_ground elems_vht' dims_wk matches sizes_ok
+      using elem_wk' elem_ground elems_vht' dims_wk matches sizes_ok
       by simp
   qed (use CV_Array.prems in auto)
+next
+  case (CV_Int i)
+  then show ?case by simp
+next
+  case (CV_Real r)
+  then show ?case by simp
 qed
 
 (* The type side of the substitution is in fact a no-op: a well-typed value's
@@ -480,13 +455,11 @@ lemma value_has_type_apply_subst_to_tyenv:
                   fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payloadTy)
                   \<Longrightarrow> subst_names subst |\<inter>| fset_of_list tyVars = {||}"
   shows "value_has_type (apply_subst_to_tyenv subst env) val (apply_subst subst ty)"
-proof (rule value_has_type_apply_subst_generic[OF _ _ _ cap _ vht])
+proof (rule value_has_type_apply_subst_generic[OF _ _ cap _ vht])
   show "TE_DataCtors (apply_subst_to_tyenv subst env)
           = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
     by (simp add: apply_subst_to_tyenv_def)
   show "TE_Datatypes (apply_subst_to_tyenv subst env) = TE_Datatypes env"
-    by (simp add: apply_subst_to_tyenv_def)
-  show "TE_GhostDatatypes (apply_subst_to_tyenv subst env) = TE_GhostDatatypes env"
     by (simp add: apply_subst_to_tyenv_def)
 next
   fix ctorName dtName tyVars payloadTy
@@ -498,22 +471,18 @@ qed
 (* Instantiation for apply_subst_to_module_env: the value-side analogue of
    core_term_type_subst_module_env. module_env_subst_ok's constructor
    capture-avoidance clause supplies cap; tyenv_well_formed supplies the
-   binder distinctness. (No runtime_ok side condition: a value's types are
-   ground, so runtime-ness never consults the substituted tyvars.) *)
+   binder distinctness. *)
 lemma value_has_type_subst_module_env:
   assumes vht: "value_has_type env val ty"
       and wf: "tyenv_well_formed env"
       and ok: "module_env_subst_ok subst targetEnv env"
   shows "value_has_type (apply_subst_to_module_env subst targetEnv env) val
                         (apply_subst subst ty)"
-proof (rule value_has_type_apply_subst_generic[OF _ _ _ _ _ vht])
+proof (rule value_has_type_apply_subst_generic[OF _ _ _ _ vht])
   show "TE_DataCtors (apply_subst_to_module_env subst targetEnv env)
           = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
     by (simp add: apply_subst_to_module_env_def)
   show "TE_Datatypes (apply_subst_to_module_env subst targetEnv env) = TE_Datatypes env"
-    by (simp add: apply_subst_to_module_env_def)
-  show "TE_GhostDatatypes (apply_subst_to_module_env subst targetEnv env)
-          = TE_GhostDatatypes env"
     by (simp add: apply_subst_to_module_env_def)
 next
   fix ctorName dtName tyVars payloadTy

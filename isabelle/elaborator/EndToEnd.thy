@@ -9,8 +9,10 @@ begin
    supplied extern functions satisfy extern_fun_contract), then
    make_interp_state on the whole-program module yields a state satisfying
    state_matches_env against the normalized module's type environment, with
-   the empty store typing - so the type soundness theorems govern every
-   evaluation performed in it.
+   the empty store typing; and that type environment is well-formed
+   (tyenv_well_formed). These are the two hypotheses of the type soundness
+   theorem - so we know that type soundness is applicable to all evaluations
+   performed starting from that state.
 
    The proof is pure composition: elab_program_well_typed gives
    core_module_well_typed prog, elab_program_closed gives
@@ -34,5 +36,11 @@ theorem compile_program_interp_state:
   shows "state_matches_env state (CM_TyEnv (normalize_module prog)) []"
   by (rule make_interp_state_matches_env[OF elab_program_well_typed[OF cp link]
         elab_program_closed[OF cp link] externs_ok mk])
+
+theorem compile_program_env_well_formed:
+  assumes cp: "elab_program modules = Inr ps"
+      and link: "whole_program_link ps = Inr prog"
+  shows "tyenv_well_formed (CM_TyEnv (normalize_module prog))"
+  by (rule core_module_well_typed_env_well_formed[OF elab_program_well_typed[OF cp link]])
 
 end

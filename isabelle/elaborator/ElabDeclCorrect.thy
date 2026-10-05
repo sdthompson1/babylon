@@ -597,7 +597,7 @@ proof -
       using gwt unfolding module_globals_well_typed_def by blast
     have decl': "fmlookup (TE_GlobalVars ?env') name = Some declTy" using decl by simp
     have t': "value_has_type ?env' v declTy"
-      by (rule value_has_type_env_mono[OF _ _ _ cons t]) simp_all
+      by (rule value_has_type_env_mono[OF _ _ t]) simp_all
     show "\<exists>declTy. fmlookup (TE_GlobalVars ?env') name = Some declTy \<and>
             value_has_type ?env' v declTy"
       using decl' t' by blast
@@ -1356,7 +1356,7 @@ proof (intro allI impI)
   have d': "fmlookup (TE_GlobalVars env') name = Some declTy"
     using ext d unfolding tyenv_extends_def by blast
   have "value_has_type env' v declTy"
-    using value_has_type_tyenv_extends[OF ext cons t] .
+    using value_has_type_tyenv_extends[OF ext t] .
   then show "\<exists>declTy. fmlookup (TE_GlobalVars env') name = Some declTy \<and>
           value_has_type env' v declTy"
     using d' by blast
@@ -1721,7 +1721,7 @@ proof -
   have cons: "tyenv_ctors_consistent env"
     using wf unfolding tyenv_well_formed_def by blast
   have vht1: "value_has_type ?env1 v ty"
-    using value_has_type_tyenv_extends[OF ext cons vht] .
+    using value_has_type_tyenv_extends[OF ext vht] .
   have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv
           (?m1 \<lparr> CM_GlobalVars := fmupd name v (CM_GlobalVars ?m1) \<rparr>)"
     by (rule elab_decls_invariant_define_global[OF inv1 lk1 vht1])
@@ -9779,11 +9779,9 @@ proof -
   have ext: "tyenv_extends ?e1 (link_mid_env I M L)"
     using link_mid_env_extends[OF linkI linkM1 link setMS ghostOK]
     unfolding normI .
-  have consI: "tyenv_ctors_consistent (CM_TyEnv I)"
-    using wfI unfolding tyenv_well_formed_def by blast
   \<comment> \<open>One extension step: ?e1's datatype fields are exactly CM_TyEnv I's.\<close>
   have v_mid: "value_has_type (link_mid_env I M L) v ty"
-  proof (rule value_has_type_env_mono[OF _ _ _ consI v0])
+  proof (rule value_has_type_env_mono[OF _ _ v0])
     fix c e assume "fmlookup (TE_DataCtors (CM_TyEnv I)) c = Some e"
     then have "fmlookup (TE_DataCtors ?e1) c = Some e" by simp
     then show "fmlookup (TE_DataCtors (link_mid_env I M L)) c = Some e"
@@ -9793,12 +9791,6 @@ proof -
     then have "fmlookup (TE_Datatypes ?e1) d = Some n" by simp
     then show "fmlookup (TE_Datatypes (link_mid_env I M L)) d = Some n"
       using ext unfolding tyenv_extends_def by blast
-  next
-    fix d assume "d |\<in>| fmdom (TE_Datatypes (CM_TyEnv I))"
-    then have "d |\<in>| fmdom (TE_Datatypes ?e1)" by simp
-    then show "d |\<in>| TE_GhostDatatypes (link_mid_env I M L)
-                 \<longleftrightarrow> d |\<in>| TE_GhostDatatypes (CM_TyEnv I)"
-      using ext unfolding tyenv_extends_def by auto
   qed
   \<comment> \<open>Substitute with the link's substitution, then collapse the env.\<close>
   have v_subst: "value_has_type

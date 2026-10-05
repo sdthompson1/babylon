@@ -22,9 +22,11 @@ datatype 'w ExecResult =
 (* Integer operations *)
 (* ========================================================================== *)
 
-(* Check if a finite integer is zero *)
+(* Check if a number (finite integer, int or real) is zero *)
 fun is_zero :: "CoreValue \<Rightarrow> bool" where
   "is_zero (CV_FiniteInt _ _ i) = (i = 0)"
+| "is_zero (CV_Int i) = (i = 0)"
+| "is_zero (CV_Real r) = (r = 0)"
 | "is_zero _ = False"
 
 (* Check if a shift operation is valid: shift count must be non-negative
@@ -57,6 +59,8 @@ fun eval_unop :: "CoreUnop \<Rightarrow> CoreValue \<Rightarrow> InterpError + C
       CV_FiniteInt sign bits i \<Rightarrow>
         if int_fits sign bits (-i) then Inr (CV_FiniteInt sign bits (-i))
         else Inl RuntimeError  \<comment> \<open>overflow (negation of largest negative number)\<close>
+    | CV_Int i \<Rightarrow> Inr (CV_Int (-i))
+    | CV_Real r \<Rightarrow> Inr (CV_Real (-r))
     | _ \<Rightarrow> Inl TypeError)"
 | "eval_unop CoreUnop_Complement val =
     (case val of
@@ -69,23 +73,42 @@ fun eval_unop :: "CoreUnop \<Rightarrow> CoreValue \<Rightarrow> InterpError + C
     | _ \<Rightarrow> Inl TypeError)"
 
 (* Evaluate a generic binop int * int \<rightarrow> int *)
-(* Checks types and overflow *)
-fun generic_int_binop :: "(int \<Rightarrow> int \<Rightarrow> int) \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
-  "generic_int_binop f (CV_FiniteInt s1 b1 i1) (CV_FiniteInt s2 b2 i2) =
+(* Checks types and overflow (only CV_FiniteInt accepted) *)
+fun generic_finite_int_binop :: "(int \<Rightarrow> int \<Rightarrow> int) \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "generic_finite_int_binop f (CV_FiniteInt s1 b1 i1) (CV_FiniteInt s2 b2 i2) =
     (if s1 = s2 \<and> b1 = b2 then
       let result = f i1 i2 in
       if int_fits s1 b1 result then Inr (CV_FiniteInt s1 b1 result)
       else Inl RuntimeError  \<comment> \<open>overflow\<close>
      else Inl TypeError)"   \<comment> \<open>mismatched signedness or number of bits\<close>
-| "generic_int_binop _ _ _ = Inl TypeError"  \<comment> \<open>mismatched types\<close>
+| "generic_finite_int_binop _ _ _ = Inl TypeError"  \<comment> \<open>mismatched types\<close>
 
 (* Evaluate a generic binop int * int \<rightarrow> bool *)
-(* Checks types *)
-fun generic_int_cmp_binop :: "(int \<Rightarrow> int \<Rightarrow> bool) \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
-  "generic_int_cmp_binop f (CV_FiniteInt s1 b1 i1) (CV_FiniteInt s2 b2 i2) =
+(* Checks types (only CV_FiniteInt accepted) *)
+fun generic_finite_int_cmp_binop :: "(int \<Rightarrow> int \<Rightarrow> bool) \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "generic_finite_int_cmp_binop f (CV_FiniteInt s1 b1 i1) (CV_FiniteInt s2 b2 i2) =
     (if s1 = s2 \<and> b1 = b2 then Inr (CV_Bool (f i1 i2))
       else Inl TypeError)"  \<comment> \<open>mismatched signedness or number of bits\<close>
-| "generic_int_cmp_binop _ _ _ = Inl TypeError"  \<comment> \<open>mismatched types\<close>
+| "generic_finite_int_cmp_binop _ _ _ = Inl TypeError"  \<comment> \<open>mismatched types\<close>
+
+(* Like generic_finite_int_binop, but also accepts CV_Int *)
+fun generic_integer_binop :: "(int \<Rightarrow> int \<Rightarrow> int) \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "generic_integer_binop f (CV_Int i1) (CV_Int i2) = Inr (CV_Int (f i1 i2))"
+| "generic_integer_binop f v1 v2 = generic_finite_int_binop f v1 v2"
+
+(* Like generic_integer_binop, but also accepts CV_Real *)
+fun generic_numeric_binop :: "(int \<Rightarrow> int \<Rightarrow> int) \<Rightarrow> (real \<Rightarrow> real \<Rightarrow> real)
+                                \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "generic_numeric_binop fi fr (CV_Real r1) (CV_Real r2) = Inr (CV_Real (fr r1 r2))"
+| "generic_numeric_binop fi fr v1 v2 = generic_integer_binop fi v1 v2"
+
+(* Evaluate a generic comparison of two numbers of the same type: ints, reals,
+   or finite integers. *)
+fun generic_numeric_cmp_binop :: "(int \<Rightarrow> int \<Rightarrow> bool) \<Rightarrow> (real \<Rightarrow> real \<Rightarrow> bool)
+                                    \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "generic_numeric_cmp_binop fi fr (CV_Int i1) (CV_Int i2) = Inr (CV_Bool (fi i1 i2))"
+| "generic_numeric_cmp_binop fi fr (CV_Real r1) (CV_Real r2) = Inr (CV_Bool (fr r1 r2))"
+| "generic_numeric_cmp_binop fi fr v1 v2 = generic_finite_int_cmp_binop fi v1 v2"
 
 (* Evaluate a generic binop bool * bool \<rightarrow> bool *)
 (* Checks types *)
@@ -94,40 +117,39 @@ fun generic_bool_binop :: "(bool \<Rightarrow> bool \<Rightarrow> bool) \<Righta
 | "generic_bool_binop _ _ _ = Inl TypeError"
 
 (* Evaluate a binop *)
+(* Arithmetic and ordering work on finite integers, ints and reals; modulo on
+   finite integers and ints; the bitwise operators and shifts on finite
+   integers only. *)
 fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
-  "eval_binop CoreBinop_Add v1 v2 = generic_int_binop (\<lambda>x y. x + y) v1 v2"
-| "eval_binop CoreBinop_Subtract v1 v2 = generic_int_binop (\<lambda>x y. x - y) v1 v2"
-| "eval_binop CoreBinop_Multiply v1 v2 = generic_int_binop (\<lambda>x y. x * y) v1 v2"
+  "eval_binop CoreBinop_Add v1 v2 = generic_numeric_binop (\<lambda>x y. x + y) (\<lambda>x y. x + y) v1 v2"
+| "eval_binop CoreBinop_Subtract v1 v2 = generic_numeric_binop (\<lambda>x y. x - y) (\<lambda>x y. x - y) v1 v2"
+| "eval_binop CoreBinop_Multiply v1 v2 = generic_numeric_binop (\<lambda>x y. x * y) (\<lambda>x y. x * y) v1 v2"
 | "eval_binop CoreBinop_Divide v1 v2 =
     (if is_zero v2 then Inl RuntimeError  \<comment> \<open>division by zero\<close>
-    else generic_int_binop tdiv v1 v2)"
+    else generic_numeric_binop tdiv (\<lambda>x y. x / y) v1 v2)"
 | "eval_binop CoreBinop_Modulo v1 v2 =
     (if is_zero v2 then Inl RuntimeError  \<comment> \<open>division by zero\<close>
-    else generic_int_binop tmod v1 v2)"
-| "eval_binop CoreBinop_BitAnd v1 v2 = generic_int_binop (\<lambda>x y. and x y) v1 v2"
-| "eval_binop CoreBinop_BitOr v1 v2 = generic_int_binop (\<lambda>x y. or x y) v1 v2"
-| "eval_binop CoreBinop_BitXor v1 v2 = generic_int_binop (\<lambda>x y. xor x y) v1 v2"
+    else generic_integer_binop tmod v1 v2)"
+| "eval_binop CoreBinop_BitAnd v1 v2 = generic_finite_int_binop (\<lambda>x y. and x y) v1 v2"
+| "eval_binop CoreBinop_BitOr v1 v2 = generic_finite_int_binop (\<lambda>x y. or x y) v1 v2"
+| "eval_binop CoreBinop_BitXor v1 v2 = generic_finite_int_binop (\<lambda>x y. xor x y) v1 v2"
 | "eval_binop CoreBinop_ShiftLeft v1 v2 =
     (if \<not> is_valid_shift v1 v2 then Inl RuntimeError
-    else generic_int_binop (\<lambda>x y. push_bit (nat y) x) v1 v2)"
+    else generic_finite_int_binop (\<lambda>x y. push_bit (nat y) x) v1 v2)"
 | "eval_binop CoreBinop_ShiftRight v1 v2 =
     (if \<not> is_valid_shift v1 v2 then Inl RuntimeError
-    else generic_int_binop (\<lambda>x y. drop_bit (nat y) x) v1 v2)"
-| "eval_binop CoreBinop_Equal v1 v2 =
-    \<comment> \<open>Equality is supported for bools and finite ints only, for now\<close>
-    (case (v1, v2) of
-      (CV_Bool b1, CV_Bool b2) \<Rightarrow> Inr (CV_Bool (b1 = b2))
-    | (CV_FiniteInt _ _ _, CV_FiniteInt _ _ _) \<Rightarrow> generic_int_cmp_binop (\<lambda>x y. x = y) v1 v2
-    | _ \<Rightarrow> Inl TypeError)"
-| "eval_binop CoreBinop_NotEqual v1 v2 =
-    (case (v1, v2) of
-      (CV_Bool b1, CV_Bool b2) \<Rightarrow> Inr (CV_Bool (b1 \<noteq> b2))
-    | (CV_FiniteInt _ _ _, CV_FiniteInt _ _ _) \<Rightarrow> generic_int_cmp_binop (\<lambda>x y. x \<noteq> y) v1 v2
-    | _ \<Rightarrow> Inl TypeError)"
-| "eval_binop CoreBinop_Less v1 v2 = generic_int_cmp_binop (\<lambda>x y. x < y) v1 v2"
-| "eval_binop CoreBinop_LessEqual v1 v2 = generic_int_cmp_binop (\<lambda>x y. x \<le> y) v1 v2"
-| "eval_binop CoreBinop_Greater v1 v2 = generic_int_cmp_binop (\<lambda>x y. x > y) v1 v2"
-| "eval_binop CoreBinop_GreaterEqual v1 v2 = generic_int_cmp_binop (\<lambda>x y. x \<ge> y) v1 v2"
+    else generic_finite_int_binop (\<lambda>x y. drop_bit (nat y) x) v1 v2)"
+  (* Equality and inequality compare any two values *)
+| "eval_binop CoreBinop_Equal v1 v2 = Inr (CV_Bool (v1 = v2))"
+| "eval_binop CoreBinop_NotEqual v1 v2 = Inr (CV_Bool (v1 \<noteq> v2))"
+| "eval_binop CoreBinop_Less v1 v2 =
+    generic_numeric_cmp_binop (\<lambda>x y. x < y) (\<lambda>x y. x < y) v1 v2"
+| "eval_binop CoreBinop_LessEqual v1 v2 =
+    generic_numeric_cmp_binop (\<lambda>x y. x \<le> y) (\<lambda>x y. x \<le> y) v1 v2"
+| "eval_binop CoreBinop_Greater v1 v2 =
+    generic_numeric_cmp_binop (\<lambda>x y. x > y) (\<lambda>x y. x > y) v1 v2"
+| "eval_binop CoreBinop_GreaterEqual v1 v2 =
+    generic_numeric_cmp_binop (\<lambda>x y. x \<ge> y) (\<lambda>x y. x \<ge> y) v1 v2"
 | "eval_binop CoreBinop_And v1 v2 = generic_bool_binop (\<lambda>x y. x \<and> y) v1 v2"
 | "eval_binop CoreBinop_Or v1 v2 = generic_bool_binop (\<lambda>x y. x \<or> y) v1 v2"
 | "eval_binop CoreBinop_Implies v1 v2 = generic_bool_binop (\<lambda>x y. x \<longrightarrow> y) v1 v2"
@@ -426,12 +448,11 @@ fun fixed_dim_sizes :: "CoreDimension list \<Rightarrow> int list" where
 | "fixed_dim_sizes (CoreDim_Fixed n # ds) = n # fixed_dim_sizes ds"
 | "fixed_dim_sizes (_ # ds) = fixed_dim_sizes ds"
 
-(* Compute the default value of a (ground, runtime) CoreType. Fuel is required
+(* Compute the default value of a (ground) CoreType. Fuel is required
    because the recursion goes through datatype payload types substituted by
    the datatype's tyArgs, which need not be syntactically smaller than the
-   input. Runs out-of-fuel with InsufficientFuel; encounters MathInt/MathReal
-   or a CoreTy_Var with TypeError (statically impossible for a well-typed,
-   ground, runtime input). *)
+   input. Runs out-of-fuel with InsufficientFuel; encounters a CoreTy_Var
+   with TypeError (statically impossible for a well-typed, ground input). *)
 function default_value :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreType \<Rightarrow> InterpError + CoreValue"
   and default_value_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreType list \<Rightarrow> InterpError + CoreValue list"
 where
@@ -462,8 +483,8 @@ where
            Inr (CV_Array sizes (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices sizes)))))
      else
        Inr (CV_Array (replicate (length dims) 0) fmempty))"
-| "default_value (Suc _) _ CoreTy_MathInt = Inl TypeError"
-| "default_value (Suc _) _ CoreTy_MathReal = Inl TypeError"
+| "default_value (Suc _) _ CoreTy_MathInt = Inr (CV_Int 0)"
+| "default_value (Suc _) _ CoreTy_MathReal = Inr (CV_Real 0)"
 | "default_value (Suc _) _ (CoreTy_Var _) = Inl TypeError"
 
 | "default_value_list 0 _ _ = Inl InsufficientFuel"
@@ -484,17 +505,25 @@ termination by lexicographic_order
 (* ========================================================================== *)
 
 (* Apply a cast to a value.
-    - RuntimeError if the cast fails (overflow for integer casts; array's runtime size
-      doesn't match for array casts to CoreDim_Fixed).
+    - RuntimeError if the cast fails (overflow for casts to a finite integer type;
+      array's runtime size doesn't match for array casts to CoreDim_Fixed).
     - TypeError if the cast itself is invalid (only array or integer targets are allowed).
     - Otherwise: successful cast, returns the new value. *)
 fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
   "cast_value (CoreTy_FiniteInt sign bits) (CV_FiniteInt _ _ i) =
      (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
       else Inl RuntimeError)"
+| "cast_value (CoreTy_FiniteInt sign bits) (CV_Int i) =
+     (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
+      else Inl RuntimeError)"
+| "cast_value (CoreTy_FiniteInt _ _) _ = Inl TypeError"
+| "cast_value CoreTy_MathInt (CV_FiniteInt _ _ i) = Inr (CV_Int i)"
+| "cast_value CoreTy_MathInt (CV_Int i) = Inr (CV_Int i)"
+| "cast_value CoreTy_MathInt _ = Inl TypeError"
 | "cast_value (CoreTy_Array _ dims) (CV_Array sizes elems) =
      (if sizes_match_dims sizes dims then Inr (CV_Array sizes elems)
       else Inl RuntimeError)"
+| "cast_value (CoreTy_Array _ _) _ = Inl TypeError"
 | "cast_value _ _ = Inl TypeError"
 
 (* Apply an optional cast to a value (used for the return value of an
@@ -506,32 +535,160 @@ fun apply_cast_opt :: "CoreType option \<Rightarrow> CoreValue \<Rightarrow> Int
 
 
 (* ========================================================================== *)
+(* Helpers for Quantifier and Obtain *)
+(* ========================================================================== *)
+
+(* The set of all values of a (ground) type; this is what a quantified variable
+   of that type ranges over.
+   Whether a value has a ground type depends only on the datatype tables of the
+   type environment (value_has_type reads nothing else), so "any environment
+   that has the state's tables" picks out a single set. *)
+definition values_of_type :: "'w InterpState \<Rightarrow> CoreType \<Rightarrow> CoreValue set" where
+  "values_of_type state ty =
+    {v. \<exists>env. TE_Datatypes env = IS_Datatypes state
+             \<and> TE_DataCtors env = IS_DataCtors state
+             \<and> value_has_type env v ty}"
+
+(* The result of f at the least fuel where it is not InsufficientFuel, or
+   InsufficientFuel if there is no such fuel. *)
+definition converged :: "(nat \<Rightarrow> InterpError + 'a) \<Rightarrow> InterpError + 'a" where
+  "converged f =
+    (if \<exists>m. f m \<noteq> Inl InsufficientFuel
+     then f (LEAST m. f m \<noteq> Inl InsufficientFuel)
+     else Inl InsufficientFuel)"
+
+(* Given a set of values, and an "evaluation function", return None if all values
+   evaluate to Inr b (with b boolean), or an error otherwise.
+
+   This is used when interpreting a quantifier term, "forall (x:ty) e" or
+   "exists (x:ty) e", or for "obtain" statements. The argument "vals" represents all
+   values of type "ty", and the function "r" represents evaluating the expression "e"
+   with "x" bound to that value.
+
+   The error InsufficientFuel takes priority over all other errors. Otherwise,
+   an instance that is still out of fuel could turn into an error at greater depth
+   and change the answer, breaking fuel monotonicity.
+
+   After that, TypeError takes priority over RuntimeError. TypeError can result from
+   some instance returning Inl TypeError, or some instance returning Inr x where x
+   is not CV_Bool.
+*)
+definition instances_error ::
+    "CoreValue set \<Rightarrow> (CoreValue \<Rightarrow> InterpError + CoreValue) \<Rightarrow> InterpError option" where
+  "instances_error vals r =
+    (if \<exists>v \<in> vals. r v = Inl InsufficientFuel then Some InsufficientFuel
+     else if \<exists>v \<in> vals. r v = Inl TypeError \<or> (\<exists>w. r v = Inr w \<and> (\<forall>b. w \<noteq> CV_Bool b))
+          then Some TypeError
+     else if \<exists>v \<in> vals. r v = Inl RuntimeError then Some RuntimeError
+     else None)"
+
+(* Evaluate a quantifier term, "forall x:ty e" or "exists x:ty e", given the set of
+   all values of type "ty", and a function that evaluates "e" given a value for "x". *)
+definition eval_quantifier ::
+    "Quantifier \<Rightarrow> CoreValue set \<Rightarrow> (CoreValue \<Rightarrow> InterpError + CoreValue)
+      \<Rightarrow> InterpError + CoreValue" where
+  "eval_quantifier quant vals r =
+    \<comment> \<open>Check for error using instances_error.\<close>
+    (case instances_error vals r of
+      Some err \<Rightarrow> Inl err
+    | None \<Rightarrow>
+        \<comment> \<open>Since instances_error returned None, we know that `r v` is either CV_Bool True
+           or CV_False for every v \<in> vals, so we can evaluate the quantifier using a HOL
+           \<forall> or \<exists> expression.\<close>
+        Inr (CV_Bool (case quant of
+               Quant_Forall \<Rightarrow> (\<forall>v \<in> vals. r v = Inr (CV_Bool True))
+             | Quant_Exists \<Rightarrow> (\<exists>v \<in> vals. r v = Inr (CV_Bool True)))))"
+
+(* Choose a value satisfying the condition of an Obtain, given the result of
+   the condition at each value of the domain. It is a RuntimeError if there is
+   no such value.
+
+   TODO: currently this produces the same value whenever the type and condition are
+   the same. For example, after "obtain x:i32 x>0" and "obtain y:i32 y>0", it would be
+   provable that x==y. I think this is undesirable. I think the correct semantics should be
+   that if the *same* obtain statement is run twice (with equivalent conditions) then the
+   same value is obtained, but if *different* obtain statements are run, then they might
+   give different values. For example, in the above example with x and y, we would then be
+   able to prove neither x==y, nor x!=y. However, in an example like "ghost function f(): i32
+   { obtain x:i32 x>0; return x; }", f() would still be a pure function - so all calls to f()
+   would give the same result - as would be expected for any pure function.
+
+   To implement that, we would need to add some kind of unique tag (the source code location
+   would do) to CoreStmt_Obtain, and then use the tag in the SOME, as in:
+     SOME (loc,v). v \<in> vals \<and> r v = Inr (CV_Bool True) \<and> loc = (location from the CoreStmt).
+
+   This is left as future work.
+*)
+definition choose_witness ::
+    "CoreValue set \<Rightarrow> (CoreValue \<Rightarrow> InterpError + CoreValue) \<Rightarrow> InterpError + CoreValue" where
+  "choose_witness vals r =
+    (case instances_error vals r of
+      Some err \<Rightarrow> Inl err
+    | None \<Rightarrow>
+        if \<exists>v \<in> vals. r v = Inr (CV_Bool True)
+        then Inr (SOME v. v \<in> vals \<and> r v = Inr (CV_Bool True))
+        else Inl RuntimeError)"
+
+(* Bind a local variable to a value, in a fresh store cell. Whether the name
+   counts as a const local is left as it was. Used for quantified variables. *)
+fun bind_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
+  "bind_local varName val state =
+    (let (state', addr) = alloc_store state val
+     in state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                 IS_Refs := fmdrop varName (IS_Refs state') \<rparr>)"
+
+(* Bind a non-const local variable to a value, in a fresh store cell. Used for
+   the variable of an Obtain, which is an ordinary non-const local, as for
+   CoreStmt_VarDecl. *)
+fun bind_mutable_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
+  "bind_mutable_local varName val state =
+    (let (state', addr) = alloc_store state val
+     in state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                 IS_Refs := fmdrop varName (IS_Refs state'),
+                 IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)"
+
+
+(* ========================================================================== *)
 (* The main intepreter definitions *)
 (* ========================================================================== *)
 
-function interp_term :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
-  and interp_term_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
-  and interp_writable_lvalue :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
-  and interp_statement :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement \<Rightarrow> InterpError + 'w ExecResult"
-  and interp_statement_list :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement list \<Rightarrow> InterpError + 'w ExecResult"
-  and interp_function_call :: "nat \<Rightarrow> 'w InterpState \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)"
+(* The interpreter runs both Ghost and NotGhost code. As a consequence, it is
+   not executable.
+
+   The fuel has two levels. The first argument of each function is the
+   depth `d`, the second is the ordinary fuel. Every case passes the depth
+   through unchanged, except Quantifier and Obtain, which spend one unit of
+   depth and in return evaluate each instance of their body at whatever
+   fuel that instance needs.
+
+   "The program terminates with result r" is therefore "there are d and fuel at which
+   the interpreter returns r". If this exists, it is independent of the precise
+   amount of fuel used (so long as it is sufficient); see CoreInterpFuelMono.thy.
+*)
+
+function interp_term :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
+  and interp_term_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
+  and interp_writable_lvalue :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
+  and interp_statement :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement \<Rightarrow> InterpError + 'w ExecResult"
+  and interp_statement_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement list \<Rightarrow> InterpError + 'w ExecResult"
+  and interp_function_call :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)"
 where
   (* Interpret a term *)
-  "interp_term 0 _ _ = Inl InsufficientFuel"
+  "interp_term _ 0 _ _ = Inl InsufficientFuel"
 
   (* Literals *)
-| "interp_term (Suc _) _ (CoreTm_LitBool b) = Inr (CV_Bool b)"
-| "interp_term (Suc _) _ (CoreTm_LitInt i) = 
+| "interp_term _ (Suc _) _ (CoreTm_LitBool b) = Inr (CV_Bool b)"
+| "interp_term _ (Suc _) _ (CoreTm_LitInt i) =
     (case get_type_for_int i of
       Some (sign, bits) \<Rightarrow> Inr (CV_FiniteInt sign bits i)
     | None \<Rightarrow> Inl TypeError)"
-| "interp_term (Suc fuel) state (CoreTm_LitArray _ tms) =
-    (case interp_term_list fuel state tms of
+| "interp_term d (Suc fuel) state (CoreTm_LitArray _ tms) =
+    (case interp_term_list d fuel state tms of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (make_1d_array vals))"
 
   (* Variable lookup (local var or global constant) *)
-| "interp_term (Suc _) state (CoreTm_Var varName) =
+| "interp_term _ (Suc _) state (CoreTm_Var varName) =
     (case fmlookup (IS_Locals state) varName of
       Some addr \<Rightarrow> Inr (IS_Store state ! addr)
     | None \<Rightarrow>
@@ -543,64 +700,64 @@ where
         | None \<Rightarrow> Inl TypeError)))"  \<comment> \<open>name not in scope\<close>
 
   (* Cast (delegates to cast_value) *)
-| "interp_term (Suc fuel) state (CoreTm_Cast targetTy tm) =
-    (case interp_term fuel state tm of
+| "interp_term d (Suc fuel) state (CoreTm_Cast targetTy tm) =
+    (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
     | Inr v \<Rightarrow> cast_value targetTy v)"
 
   (* Unary operator *)
-| "interp_term (Suc fuel) state (CoreTm_Unop op tm) =
-    (case interp_term fuel state tm of
+| "interp_term d (Suc fuel) state (CoreTm_Unop op tm) =
+    (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
     | Inr val \<Rightarrow> eval_unop op val)"
 
   (* Binary operator *)
-| "interp_term (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm) =
-    (case interp_term fuel state lhsTm of
+| "interp_term d (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm) =
+    (case interp_term d fuel state lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsVal \<Rightarrow>
         (case short_circuit op lhsVal of
           Some result \<Rightarrow> Inr result
         | None \<Rightarrow>
-            (case interp_term fuel state rhsTm of
+            (case interp_term d fuel state rhsTm of
               Inl err \<Rightarrow> Inl err
             | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal)))"
 
   (* Let *)
-| "interp_term (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
-    (case interp_term fuel state rhsTm of
+| "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
+    (case interp_term d fuel state rhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr rhsVal \<Rightarrow>
         (let (state', addr) = alloc_store state rhsVal;
              state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
                                 IS_Refs := fmdrop varName (IS_Refs state'),
                                 IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>
-        in interp_term fuel state'' bodyTm))"
+        in interp_term d fuel state'' bodyTm))"
 
   (* Function call *)
-| "interp_term (Suc fuel) state (CoreTm_FunctionCall fnName argTypes argTms) =
+| "interp_term d (Suc fuel) state (CoreTm_FunctionCall fnName argTypes argTms) =
     (if is_pure_fun state fnName then
-      (case interp_function_call fuel state fnName argTypes argTms of
+      (case interp_function_call d fuel state fnName argTypes argTms of
         \<comment> \<open>Pure functions don't change the state, so we can ignore the new state here\<close>
         Inr (newState, retVal) \<Rightarrow> Inr retVal
       | Inl err \<Rightarrow> Inl err)
     else Inl TypeError)"  \<comment> \<open>attempt to call non-pure function in term context\<close>
 
   (* Variant construction *)
-| "interp_term (Suc fuel) state (CoreTm_VariantCtor ctorName _ payloadTm) =
-    (case interp_term fuel state payloadTm of
+| "interp_term d (Suc fuel) state (CoreTm_VariantCtor ctorName _ payloadTm) =
+    (case interp_term d fuel state payloadTm of
       Inl err \<Rightarrow> Inl err
     | Inr payloadValue \<Rightarrow> Inr (CV_Variant ctorName payloadValue))"
 
   (* Record construction *)
-| "interp_term (Suc fuel) state (CoreTm_Record nameTermPairs) =
-    (case interp_term_list fuel state (map snd nameTermPairs) of
+| "interp_term d (Suc fuel) state (CoreTm_Record nameTermPairs) =
+    (case interp_term_list d fuel state (map snd nameTermPairs) of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (CV_Record (zip (map fst nameTermPairs) vals)))"
 
   (* Record projection *)
-| "interp_term (Suc fuel) state (CoreTm_RecordProj tm fldName) =
-    (case interp_term fuel state tm of
+| "interp_term d (Suc fuel) state (CoreTm_RecordProj tm fldName) =
+    (case interp_term d fuel state tm of
       Inr (CV_Record nameTmPairs) \<Rightarrow>
         (case map_of nameTmPairs fldName of
           Some val \<Rightarrow> Inr val
@@ -609,8 +766,8 @@ where
     | Inl err \<Rightarrow> Inl err)"
 
   (* Variant projection (get payload; ctor name must match) *)
-| "interp_term (Suc fuel) state (CoreTm_VariantProj tm expectedCtorName) =
-    (case interp_term fuel state tm of
+| "interp_term d (Suc fuel) state (CoreTm_VariantProj tm expectedCtorName) =
+    (case interp_term d fuel state tm of
       Inr (CV_Variant actualCtorName payload) \<Rightarrow>
         (if actualCtorName = expectedCtorName then Inr payload
         else Inl RuntimeError)  \<comment> \<open>constructor name mismatch\<close>
@@ -618,10 +775,10 @@ where
     | Inl err \<Rightarrow> Inl err)"
 
   (* Array projection (indexing) *)
-| "interp_term (Suc fuel) state (CoreTm_ArrayProj arrayTm idxTms) =
-    (case interp_term fuel state arrayTm of
+| "interp_term d (Suc fuel) state (CoreTm_ArrayProj arrayTm idxTms) =
+    (case interp_term d fuel state arrayTm of
       Inr (CV_Array _ elementMap) \<Rightarrow>
-        (case interp_term_list fuel state idxTms of
+        (case interp_term_list d fuel state idxTms of
           Inr indexVals \<Rightarrow>
             (case interpret_index_vals indexVals of
               Inr indices \<Rightarrow>
@@ -634,29 +791,41 @@ where
     | Inl err \<Rightarrow> Inl err)"  \<comment> \<open>error evaluating array term\<close>
 
   (* Pattern match *)
-| "interp_term (Suc fuel) state (CoreTm_Match scrutTm arms) =
-    (case interp_term fuel state scrutTm of
+| "interp_term d (Suc fuel) state (CoreTm_Match scrutTm arms) =
+    (case interp_term d fuel state scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
-          Inr armTm \<Rightarrow> interp_term fuel state armTm
+          Inr armTm \<Rightarrow> interp_term d fuel state armTm
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
   (* Sizeof *)
-| "interp_term (Suc fuel) state (CoreTm_Sizeof tm) =
-    (case interp_term fuel state tm of
+| "interp_term d (Suc fuel) state (CoreTm_Sizeof tm) =
+    (case interp_term d fuel state tm of
       Inr (CV_Array sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Quantifier, Allocated, Old - not allowed at runtime *)
-| "interp_term (Suc _) state (CoreTm_Quantifier _ _ _ _) = Inl TypeError"
-| "interp_term (Suc _) _ (CoreTm_Allocated _) = Inl TypeError"
-| "interp_term (Suc _) _ (CoreTm_Old _) = Inl TypeError"
+  (* Quantifier. This spends one unit of depth. The body is evaluated at every
+     value of the variable's type, each at its own converged fuel, and the
+     results are combined by eval_quantifier. *)
+| "interp_term 0 (Suc _) _ (CoreTm_Quantifier _ _ _ _) = Inl InsufficientFuel"
+| "interp_term (Suc d) (Suc _) state (CoreTm_Quantifier quant varName varTy bodyTm) =
+    eval_quantifier quant
+      (values_of_type state (apply_subst (IS_TyArgs state) varTy))
+      (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_local varName v state) bodyTm))"
+
+  (* Allocated: always false for now, and the operand is not evaluated. The
+     real answer depends on the operand's type (a fixed-size array and an
+     allocatable array can have the same value), which is not available here. *)
+| "interp_term _ (Suc _) _ (CoreTm_Allocated _) = Inr (CV_Bool False)"
+
+  (* Old: the identity (Core has no postconditions yet) *)
+| "interp_term d (Suc fuel) state (CoreTm_Old tm) = interp_term d fuel state tm"
 
   (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
      delegate to the recursive default_value helper. *)
-| "interp_term (Suc fuel) state (CoreTm_Default ty) =
+| "interp_term _ (Suc fuel) state (CoreTm_Default ty) =
     default_value fuel state (apply_subst (IS_TyArgs state) ty)"
 
   (* Evaluate a writable lvalue into (addr, path).
@@ -664,8 +833,8 @@ where
      Note: this doesn't check for "bad paths" (e.g. incorrect field name); that happens
      later when the path is used. It does, however, check whether the base variable name
      exists and whether any array indices can be successfully evaluated. *)
-| "interp_writable_lvalue 0 _ _ = Inl InsufficientFuel"
-| "interp_writable_lvalue (Suc fuel) state tm =
+| "interp_writable_lvalue _ 0 _ _ = Inl InsufficientFuel"
+| "interp_writable_lvalue d (Suc fuel) state tm =
     (case tm of
       CoreTm_Var varName \<Rightarrow>
         if varName |\<in>| IS_ConstLocals state then Inl TypeError  \<comment> \<open>read-only variable\<close>
@@ -677,17 +846,17 @@ where
               Some (addr, path) \<Rightarrow> Inr (addr, path)
             | None \<Rightarrow> Inl TypeError))
     | CoreTm_RecordProj tm fldName \<Rightarrow>
-        (case interp_writable_lvalue fuel state tm of
+        (case interp_writable_lvalue d fuel state tm of
           Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_RecordProj fldName])
         | Inl err \<Rightarrow> Inl err)
     | CoreTm_VariantProj tm ctorName \<Rightarrow>
-        (case interp_writable_lvalue fuel state tm of
+        (case interp_writable_lvalue d fuel state tm of
           Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_VariantProj ctorName])
         | Inl err \<Rightarrow> Inl err)
     | CoreTm_ArrayProj tm indexTms \<Rightarrow>
-        (case interp_writable_lvalue fuel state tm of
-          Inr (addr, path) \<Rightarrow> 
-            (case interp_term_list fuel state indexTms of
+        (case interp_writable_lvalue d fuel state tm of
+          Inr (addr, path) \<Rightarrow>
+            (case interp_term_list d fuel state indexTms of
               Inr indexVals \<Rightarrow>
                 (case interpret_index_vals indexVals of
                   Inr indices \<Rightarrow> Inr (addr, path @ [LVPath_ArrayProj indices])
@@ -699,44 +868,34 @@ where
             record the cast as a path step. Casts to other types are not lvalues.\<close>
         (case targetTy of
           CoreTy_Array _ dims \<Rightarrow>
-            (case interp_writable_lvalue fuel state tm of
+            (case interp_writable_lvalue d fuel state tm of
               Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_ArrayCast dims])
             | Inl err \<Rightarrow> Inl err)
         | _ \<Rightarrow> Inl TypeError)
     | _ \<Rightarrow> Inl TypeError)"
 
   (* Interpret a list of terms *)
-| "interp_term_list 0 _ _ = Inl InsufficientFuel"
-| "interp_term_list (Suc _) _ [] = Inr []"
-| "interp_term_list (Suc fuel) state (tm # tms) =
-    (case interp_term fuel state tm of
+| "interp_term_list _ 0 _ _ = Inl InsufficientFuel"
+| "interp_term_list _ (Suc _) _ [] = Inr []"
+| "interp_term_list d (Suc fuel) state (tm # tms) =
+    (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
     | Inr val \<Rightarrow>
-        (case interp_term_list fuel state tms of
+        (case interp_term_list d fuel state tms of
           Inl err \<Rightarrow> Inl err
         | Inr vals \<Rightarrow> Inr (val # vals)))"
 
   (* Interpret a statement *)
-| "interp_statement 0 _ _ = Inl InsufficientFuel"
+| "interp_statement _ 0 _ _ = Inl InsufficientFuel"
 
   (* Variable declaration *)
-  (* Ghost VarDecl: does not evaluate the initializer or allocate store.
-     However, if the variable was previously a non-ghost local, it is now shadowed
-     by a ghost variable, so we remove it from IS_Locals/IS_Refs to maintain the
-     invariant that ghost variables are not present in the interpreter state.
-     We also remove it from IS_ConstLocals in case the previous binding (now
-     shadowed) was a const local. *)
-| "interp_statement (Suc _) state (CoreStmt_VarDecl Ghost varName _ _ _) =
-    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                           IS_Refs := fmdrop varName (IS_Refs state),
-                           IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
-| "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Var _ initialTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Var _ initialTm) =
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
         CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
 
         We remove varName from IS_ConstLocals in case it was previously a const
         local (now shadowed by this fresh non-const declaration). \<close>
-    (case interp_term fuel state initialTm of
+    (case interp_term d fuel state initialTm of
        Inr initialVal \<Rightarrow>
          (let (state', addr) = alloc_store state initialVal
           in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
@@ -744,16 +903,10 @@ where
                                       IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
      | Inl err \<Rightarrow> Inl err)"
 
-| "interp_statement (Suc fuel) state (CoreStmt_VarDeclCall Ghost varName _ _ _ _ _) =
-    \<comment> \<open>Ghost declaration: the call is not executed; just drop any shadowed binding.\<close>
-    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                           IS_Refs := fmdrop varName (IS_Refs state),
-                           IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
-
-| "interp_statement (Suc fuel) state (CoreStmt_VarDeclCall NotGhost varName _ castOpt fnName argTys argTms) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall _ varName _ castOpt fnName argTys argTms) =
     \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
         optional cast to the returned value before binding it.\<close>
-    (case interp_function_call fuel state fnName argTys argTms of
+    (case interp_function_call d fuel state fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
          (case apply_cast_opt castOpt retVal of
             Inr initialVal \<Rightarrow>
@@ -763,7 +916,7 @@ where
                                            IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
           | Inl err \<Rightarrow> Inl err)
      | Inl err \<Rightarrow> Inl err)"
-| "interp_statement (Suc fuel) state (CoreStmt_VarDecl NotGhost varName Ref _ lvalueTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Ref _ lvalueTm) =
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
         \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
@@ -777,7 +930,7 @@ where
           \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
              A compiler would likely use a read-only pointer, but copying is
              semantically equivalent since the source is immutable.\<close>
-          (case interp_term fuel state lvalueTm of
+          (case interp_term d fuel state lvalueTm of
             Inl err \<Rightarrow> Inl err
           | Inr val \<Rightarrow>
               (let (state', addr) = alloc_store state val
@@ -788,7 +941,7 @@ where
           \<comment> \<open>Base variable is writable: alias via writable lvalue. Drop varName
              from IS_Locals and IS_ConstLocals so that the new ref properly
              shadows any previous binding with the same name. \<close>
-          (case interp_writable_lvalue fuel state lvalueTm of
+          (case interp_writable_lvalue d fuel state lvalueTm of
             Inr addrAndPath \<Rightarrow>
               Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
                                       IS_Refs := fmupd varName addrAndPath (IS_Refs state),
@@ -797,14 +950,13 @@ where
     | None \<Rightarrow> Inl TypeError)"
 
   (* Assignment *)
-| "interp_statement (Suc _) state (CoreStmt_Assign Ghost _ _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_Assign NotGhost lhsLvalue rhsTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_Assign _ lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
         evaluating it.\<close>
-    (case interp_writable_lvalue fuel state lhsLvalue of
+    (case interp_writable_lvalue d fuel state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        (case interp_term fuel state rhsTm of
+        (case interp_term d fuel state rhsTm of
           Inr rhsVal \<Rightarrow>
             (let oldVal = IS_Store state ! addr in
             case update_value_at_path oldVal path rhsVal of
@@ -815,13 +967,12 @@ where
     | Inl err \<Rightarrow> Inl err)"
 
   (* Assignment from an impure call *)
-| "interp_statement (Suc _) state (CoreStmt_AssignCall Ghost _ _ _ _ _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_AssignCall NotGhost lhsLvalue castOpt fnName argTys argTms) =
+| "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
     \<comment> \<open>Resolve the lhs first, then run the (possibly impure) call observing its
         state effect, apply the optional cast, and store the result.\<close>
-    (case interp_writable_lvalue fuel state lhsLvalue of
+    (case interp_writable_lvalue d fuel state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        (case interp_function_call fuel state fnName argTys argTms of
+        (case interp_function_call d fuel state fnName argTys argTms of
           Inr (newState, retVal) \<Rightarrow>
             (case apply_cast_opt castOpt retVal of
               Inr rhsVal \<Rightarrow>
@@ -835,33 +986,31 @@ where
     | Inl err \<Rightarrow> Inl err)"
 
   (* Swap *)
-| "interp_statement (Suc _) state (CoreStmt_Swap Ghost _ _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_Swap NotGhost lhsTm rhsTm) =
-    (case interp_writable_lvalue fuel state lhsTm of
+| "interp_statement d (Suc fuel) state (CoreStmt_Swap _ lhsTm rhsTm) =
+    (case interp_writable_lvalue d fuel state lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
-        (case interp_writable_lvalue fuel state rhsTm of
+        (case interp_writable_lvalue d fuel state rhsTm of
           Inl err \<Rightarrow> Inl err
-        | Inr rhsLvalue \<Rightarrow> 
+        | Inr rhsLvalue \<Rightarrow>
             (case perform_swap state lhsLvalue rhsLvalue of
               Inl err \<Rightarrow> Inl err
             | Inr newState \<Rightarrow> Inr (Continue newState))))"
 
   (* Return *)
-| "interp_statement (Suc fuel) state (CoreStmt_Return tm) = 
-    (case interp_term fuel state tm of
+| "interp_statement d (Suc fuel) state (CoreStmt_Return tm) =
+    (case interp_term d fuel state tm of
       Inr val \<Rightarrow> Inr (Return state val)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* While *)
-| "interp_statement (Suc _) state (CoreStmt_While Ghost _ _ _ _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_While NotGhost condTm invars decr bodyStmts) =
-    (case interp_term fuel state condTm of
+  (* While. The invariants and the decreases-term are not evaluated. *)
+| "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+    (case interp_term d fuel state condTm of
       Inr (CV_Bool True) \<Rightarrow>
-        (case interp_statement_list fuel state bodyStmts of
+        (case interp_statement_list d fuel state bodyStmts of
           Inr (Continue state') \<Rightarrow>
-            interp_statement fuel (restore_scope state state')
-                             (CoreStmt_While NotGhost condTm invars decr bodyStmts)
+            interp_statement d fuel (restore_scope state state')
+                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)
         | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
         | Inl err \<Rightarrow> Inl err)
     | Inr (CV_Bool False) \<Rightarrow> Inr (Continue state)
@@ -869,63 +1018,78 @@ where
     | Inl err \<Rightarrow> Inl err)"
 
   (* Pattern match *)
-| "interp_statement (Suc _) state (CoreStmt_Match Ghost _ _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_Match NotGhost scrutTm arms) =
-    (case interp_term fuel state scrutTm of
+| "interp_statement d (Suc fuel) state (CoreStmt_Match _ scrutTm arms) =
+    (case interp_term d fuel state scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
           Inr armStmts \<Rightarrow>
-            (case interp_statement_list fuel state armStmts of
+            (case interp_statement_list d fuel state armStmts of
               Inr (Continue state') \<Rightarrow> Inr (Continue (restore_scope state state'))
             | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
             | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Assert, Assume, ShowHide - ignored at runtime *)
-| "interp_statement (Suc fuel) state (CoreStmt_Assert _ _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_Assume _) = Inr (Continue state)"
-| "interp_statement (Suc fuel) state (CoreStmt_ShowHide _ _) = Inr (Continue state)"
+  (* Assert: the condition is evaluated, and it is a RuntimeError if it is
+     false. The proof body is not run.
+     "assert *" (no condition) only occurs inside a proof body, so it should
+     never be executed. *)
+| "interp_statement d (Suc fuel) state (CoreStmt_Assert (Some condTm) _) =
+    (case interp_term d fuel state condTm of
+      Inr (CV_Bool True) \<Rightarrow> Inr (Continue state)
+    | Inr (CV_Bool False) \<Rightarrow> Inl RuntimeError  \<comment> \<open>assertion failed\<close>
+    | Inr _ \<Rightarrow> Inl TypeError
+    | Inl err \<Rightarrow> Inl err)"
+| "interp_statement _ (Suc _) _ (CoreStmt_Assert None _) = Inl TypeError"
 
-  (* Obtain: brings a new ghost variable into scope. Like a Ghost VarDecl, it
-     is a runtime no-op; we only drop any shadowed binding of varName from the
-     runtime maps so the (ghost, not-actually-bound) name cannot be read as a
-     stale runtime value. *)
-| "interp_statement (Suc fuel) state (CoreStmt_Obtain varName _ _) =
-    Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                           IS_Refs := fmdrop varName (IS_Refs state),
-                           IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))"
+  (* Assume: a no-op; the condition is not evaluated. (To be revisited later.) *)
+| "interp_statement _ (Suc _) state (CoreStmt_Assume _) = Inr (Continue state)"
+
+  (* ShowHide: a no-op. *)
+| "interp_statement _ (Suc _) state (CoreStmt_ShowHide _ _) = Inr (Continue state)"
+
+  (* Obtain: brings a new variable into scope, bound to a value of its type
+     that satisfies the condition. It is a RuntimeError if there is no such
+     value. Like a Quantifier, this spends one unit of depth, and evaluates the
+     condition at every value of the type, each at its own converged fuel. *)
+| "interp_statement 0 (Suc _) _ (CoreStmt_Obtain _ _ _) = Inl InsufficientFuel"
+| "interp_statement (Suc d) (Suc _) state (CoreStmt_Obtain varName varTy condTm) =
+    (case choose_witness
+            (values_of_type state (apply_subst (IS_TyArgs state) varTy))
+            (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_mutable_local varName v state) condTm)) of
+      Inr witness \<Rightarrow> Inr (Continue (bind_mutable_local varName witness state))
+    | Inl err \<Rightarrow> Inl err)"
 
   (* Fix, Use - only appear in proofs; should never be executed *)
-| "interp_statement (Suc fuel) _ (CoreStmt_Fix _ _) = Inl TypeError"
-| "interp_statement (Suc fuel) _ (CoreStmt_Use _) = Inl TypeError"
+| "interp_statement _ (Suc _) _ (CoreStmt_Fix _ _) = Inl TypeError"
+| "interp_statement _ (Suc _) _ (CoreStmt_Use _) = Inl TypeError"
 
   (* Block: interpret a list of statements in a fresh scope. *)
-| "interp_statement (Suc fuel) state (CoreStmt_Block body) =
-    (case interp_statement_list fuel state body of
+| "interp_statement d (Suc fuel) state (CoreStmt_Block body) =
+    (case interp_statement_list d fuel state body of
       Inr (Continue state') \<Rightarrow> Inr (Continue (restore_scope state state'))
     | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
     | Inl err \<Rightarrow> Inl err)"
 
   (* Interpret a list of statements *)
-| "interp_statement_list 0 _ _ = Inl InsufficientFuel"
-| "interp_statement_list (Suc _) state [] = Inr (Continue state)"
-| "interp_statement_list (Suc fuel) state (stmt # stmts) =
-    (case interp_statement fuel state stmt of
+| "interp_statement_list _ 0 _ _ = Inl InsufficientFuel"
+| "interp_statement_list _ (Suc _) state [] = Inr (Continue state)"
+| "interp_statement_list d (Suc fuel) state (stmt # stmts) =
+    (case interp_statement d fuel state stmt of
       Inl err \<Rightarrow> Inl err
-    | Inr (Continue state') \<Rightarrow> interp_statement_list fuel state' stmts
+    | Inr (Continue state') \<Rightarrow> interp_statement_list d fuel state' stmts
     | Inr (Return state' retVal) \<Rightarrow> Inr (Return state' retVal))"
 
   (* Interpret a function call *)
-| "interp_function_call 0 _ _ _ _ = Inl InsufficientFuel"
-| "interp_function_call (Suc fuel) state fnName argTys argTms =
+| "interp_function_call _ 0 _ _ _ _ = Inl InsufficientFuel"
+| "interp_function_call d (Suc fuel) state fnName argTys argTms =
     (case fmlookup (IS_Functions state) fnName of
       Some f \<Rightarrow>
         (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
         else if length argTys \<noteq> length (IF_TyArgs f) then Inl TypeError  \<comment> \<open>wrong number of type args\<close>
         else
-            let refResults = map (interp_writable_lvalue fuel state) argTms;
-                valResults = map (interp_term fuel state) argTms;
+            let refResults = map (interp_writable_lvalue d fuel state) argTms;
+                valResults = map (interp_term d fuel state) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 \<comment> \<open>Resolve each argTy against the caller's IS_TyArgs (which is
                     ground by the well-formedness invariant) before binding it.
@@ -943,8 +1107,8 @@ where
               | Inr preCallState \<Rightarrow>
                   (case IF_Body f of
                     Inl bodyStmts \<Rightarrow>
-                      (case interp_statement_list fuel preCallState bodyStmts of
-                        Inr (Return postCallState retVal) \<Rightarrow> 
+                      (case interp_statement_list d fuel preCallState bodyStmts of
+                        Inr (Return postCallState retVal) \<Rightarrow>
                           Inr (restore_scope state postCallState, retVal)
                       | Inr (Continue _) \<Rightarrow>
                           Inl RuntimeError  \<comment> \<open>Reached end of function without return statement\<close>
@@ -964,13 +1128,16 @@ where
 
   by pat_completeness auto
 
-termination by (relation "measure (\<lambda>x. case x of
-    Inl (Inl (fuel, _, _)) \<Rightarrow> fuel
-  | Inl (Inr (Inl (fuel, _, _))) \<Rightarrow> fuel
-  | Inl (Inr (Inr (fuel, _, _))) \<Rightarrow> fuel
-  | Inr (Inl (fuel, _, _)) \<Rightarrow> fuel
-  | Inr (Inr (Inl (fuel, _, _))) \<Rightarrow> fuel
-  | Inr (Inr (Inr (fuel, _, _))) \<Rightarrow> fuel
+(* Termination: lexicographic order on (depth, fuel). Only the Quantifier and
+   Obtain cases decrease the depth; every other recursive call keeps the depth
+   and decreases the fuel. *)
+termination by (relation "inv_image (less_than <*lex*> less_than) (\<lambda>x. case x of
+    Inl (Inl (d, fuel, _)) \<Rightarrow> (d, fuel)
+  | Inl (Inr (Inl (d, fuel, _))) \<Rightarrow> (d, fuel)
+  | Inl (Inr (Inr (d, fuel, _))) \<Rightarrow> (d, fuel)
+  | Inr (Inl (d, fuel, _)) \<Rightarrow> (d, fuel)
+  | Inr (Inr (Inl (d, fuel, _))) \<Rightarrow> (d, fuel)
+  | Inr (Inr (Inr (d, fuel, _))) \<Rightarrow> (d, fuel)
 )", auto)
 
 end

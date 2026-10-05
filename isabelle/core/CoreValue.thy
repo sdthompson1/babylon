@@ -1,5 +1,5 @@
 theory CoreValue
-  imports CoreTyEnv CoreKindcheck TypeSubst CoreTyEnvWellFormed
+  imports CoreTyEnv CoreKindcheck TypeSubst CoreTyEnvWellFormed "HOL.Real"
 begin
 
 (* This file defines CoreValue and provides some helpers e.g. type calculations. *)
@@ -10,13 +10,15 @@ begin
 (* ========================================================================== *)
 
 (* Evaluated values *)
-(* This only covers runtime values - MathInt/MathReal not included *)
+(* Note: CV_Int and CV_Real arise only when ghost code is run. *)
 datatype CoreValue =
   CV_Bool bool
   | CV_FiniteInt Signedness IntBits int
   | CV_Record "(string \<times> CoreValue) list"
   | CV_Variant string CoreValue
   | CV_Array "int list" "(int list, CoreValue) fmap"  (* size list, array index \<rightarrow> value *)
+  | CV_Int int
+  | CV_Real real
   (* TODO: extern or abstract types? *)
 
 
@@ -77,9 +79,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
             (dty1 = dty2 \<and>
             length tyvars = length argTypes \<and>
             list_all (is_well_kinded env) argTypes \<and>
-            list_all (is_runtime_type env) argTypes \<and>
             list_all (\<lambda>a. type_tyvars a = {}) argTypes \<and>
-            dty1 |\<notin>| TE_GhostDatatypes env \<and>
             value_has_type env payload
                 (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy))
         | None \<Rightarrow> False)
@@ -88,13 +88,14 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
     (case ty of
       CoreTy_Array elemTy dims \<Rightarrow>
         is_well_kinded env elemTy \<and>
-        is_runtime_type env elemTy \<and>
         type_tyvars elemTy = {} \<and>
         (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy) \<and>
         array_dims_well_kinded dims \<and>
         fmap_matches_sizes sizes valuesMap \<and>
         sizes_match_dims sizes dims
     | _ => False)"
+| "value_has_type env (CV_Int _) ty = (ty = CoreTy_MathInt)"
+| "value_has_type env (CV_Real _) ty = (ty = CoreTy_MathReal)"
 
   by pat_completeness auto
 
@@ -178,7 +179,7 @@ qed
 
 
 (* ========================================================================== *)
-(* Value types are well-kinded, runtime, and ground. *)
+(* Value types are well-kinded and ground. *)
 (* ========================================================================== *)
 
 lemma value_has_type_well_kinded:
@@ -251,69 +252,12 @@ next
     by (cases ty) auto
   show ?case
     using ty_eq elem_wk dims_wk by simp
-qed
-
-lemma value_has_type_runtime:
-  assumes "value_has_type env val ty"
-  shows "is_runtime_type env ty"
-using assms proof (induction val arbitrary: ty)
-  case (CV_Bool b)
+next
+  case (CV_Int i)
   then show ?case by simp
 next
-  case (CV_FiniteInt sign bits i)
+  case (CV_Real r)
   then show ?case by simp
-next
-  case (CV_Record fieldValues)
-  then obtain fieldTypes where
-    ty_eq: "ty = CoreTy_Record fieldTypes" and
-    distinct_names: "distinct (map fst fieldTypes)" and
-    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
-             fieldValues fieldTypes"
-    by (cases ty) auto
-  have "list_all (is_runtime_type env) (map snd fieldTypes)"
-    unfolding list_all_iff
-  proof
-    fix fldTy
-    assume "fldTy \<in> set (map snd fieldTypes)"
-    then obtain name2 where name2_in: "(name2, fldTy) \<in> set fieldTypes" by auto
-    from all2 have len_eq: "length fieldValues = length fieldTypes"
-      by (rule list_all2_lengthD)
-    from name2_in obtain i where
-      i_bound: "i < length fieldTypes" and
-      idx_eq: "fieldTypes ! i = (name2, fldTy)"
-      by (metis in_set_conv_nth)
-    with len_eq have i_bound': "i < length fieldValues" by simp
-    define fldVal where "fldVal = snd (fieldValues ! i)"
-    define name1 where "name1 = fst (fieldValues ! i)"
-    have fv_idx: "fieldValues ! i = (name1, fldVal)"
-      by (simp add: name1_def fldVal_def)
-    from all2 i_bound have "(\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env v t)
-                             (fieldValues ! i) (fieldTypes ! i)"
-      by (simp add: list_all2_nthD2)
-    with fv_idx idx_eq have typed: "value_has_type env fldVal fldTy" by simp
-    from i_bound' fv_idx have in_fv: "(name1, fldVal) \<in> set fieldValues"
-      by (metis nth_mem)
-    then show "is_runtime_type env fldTy"
-      using CV_Record.IH typed by fastforce
-  qed
-  then show ?case using ty_eq distinct_names by simp
-next
-  case (CV_Variant ctor payload)
-  then obtain dtName argTypes where
-    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-    dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" and
-    args_rt: "list_all (is_runtime_type env) argTypes"
-    by (cases ty) (auto split: option.splits prod.splits)
-  show ?case
-    using ty_eq dt_nonghost args_rt by simp
-next
-  case (CV_Array sizes valuesMap)
-  then obtain elemTy dims where
-    ty_eq: "ty = CoreTy_Array elemTy dims" and
-    elem_rt: "is_runtime_type env elemTy"
-    by (cases ty) auto
-  show ?case
-    using ty_eq elem_rt by simp
 qed
 
 (* value_has_type only succeeds for ground types. The CV_Variant and CV_Array
@@ -373,6 +317,12 @@ next
     elem_ground: "type_tyvars elemTy = {}"
     by (cases ty) auto
   show ?case using ty_eq elem_ground by simp
+next
+  case (CV_Int i)
+  then show ?case by simp
+next
+  case (CV_Real r)
+  then show ?case by simp
 qed
 
 
@@ -385,8 +335,6 @@ lemma value_has_type_cong_env:
   assumes "TE_DataCtors env' = TE_DataCtors env"
     and "TE_Datatypes env' = TE_Datatypes env"
     and "TE_TypeVars env' = TE_TypeVars env"
-    and "TE_GhostDatatypes env' = TE_GhostDatatypes env"
-    and "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
   shows "value_has_type env' val ty = value_has_type env val ty"
 using assms proof (induction val arbitrary: ty)
   case (CV_Bool b)
@@ -409,18 +357,12 @@ next
   case (CV_Variant ctor payload)
   have wk_eq: "\<And>tys. list_all (is_well_kinded env') tys = list_all (is_well_kinded env) tys"
     using CV_Variant.prems list_all_iff is_well_kinded_cong_env by metis
-  have rt_eq: "\<And>t. is_runtime_type env' t = is_runtime_type env t"
-    by (rule is_runtime_type_cong_env[OF CV_Variant.prems(4) CV_Variant.prems(5)])
-  have rt_list_eq: "\<And>tys. list_all (is_runtime_type env') tys = list_all (is_runtime_type env) tys"
-    using rt_eq by (simp add: list_all_iff)
-  then show ?case using CV_Variant.prems CV_Variant.IH wk_eq rt_eq
+  show ?case using CV_Variant.prems CV_Variant.IH wk_eq
     by (cases ty) (auto split: option.splits)
 next
   case (CV_Array sizes valuesMap)
   have wk_eq: "\<And>t. is_well_kinded env' t = is_well_kinded env t"
     using CV_Array.prems is_well_kinded_cong_env by blast
-  have rt_eq: "\<And>t. is_runtime_type env' t = is_runtime_type env t"
-    using assms(4,5) is_runtime_type_cong_env by blast
   have val_eq: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow>
                   value_has_type env' v t = value_has_type env v t"
     using CV_Array.IH CV_Array.prems by auto
@@ -430,8 +372,14 @@ next
     have "(\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env' val elemTy) =
           (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy)"
       using val_eq by (simp add: fmran'I)
-    then show ?thesis using CoreTy_Array wk_eq rt_eq by auto
+    then show ?thesis using CoreTy_Array wk_eq by auto
   qed auto
+next
+  case (CV_Int i)
+  then show ?case by simp
+next
+  case (CV_Real r)
+  then show ?case by simp
 qed
 
 (* value_has_type does not depend on TE_ProofGoal (corollary of the env
@@ -447,26 +395,23 @@ lemma value_has_type_TE_ProofTopLevel_irrelevant [simp]:
 
 
 (* A weaker congruence lemma for value_has_type. Instead of requiring that the
-   two environments agree on TE_TypeVars and TE_RuntimeTypeVars, it asks only
-   that the type ty is well-kinded and runtime in both envs (plus agreement on
-   the datatype fields). This is useful when transferring value_has_type across
-   a function-call boundary, where the caller and callee have different
-   type vars, but the store-typing types are well-kinded in both. *)
+   two environments agree on TE_TypeVars, it asks only that the type ty is
+   well-kinded in both envs (plus agreement on the datatype fields). This is
+   useful when transferring value_has_type across a function-call boundary,
+   where the caller and callee have different type vars, but the store-typing
+   types are well-kinded in both. *)
 lemma value_has_type_cong_env_wk:
   assumes dc: "TE_DataCtors env' = TE_DataCtors env"
       and dt: "TE_Datatypes env' = TE_Datatypes env"
-      and gd: "TE_GhostDatatypes env' = TE_GhostDatatypes env"
       and wf: "tyenv_well_formed env"
       and wf': "tyenv_well_formed env'"
       and abs: "TE_AbstractTypes env = {||}"
       and abs': "TE_AbstractTypes env' = {||}"
       and wk: "is_well_kinded env ty"
       and wk': "is_well_kinded env' ty"
-      and rt: "is_runtime_type env ty"
-      and rt': "is_runtime_type env' ty"
       and vht: "value_has_type env val ty"
   shows "value_has_type env' val ty"
-using vht wk wk' rt rt' proof (induction val arbitrary: ty)
+using vht wk wk' proof (induction val arbitrary: ty)
   case (CV_Bool b)
   then show ?case by (cases ty) auto
 next
@@ -478,8 +423,6 @@ next
                    value_has_type env v t \<Longrightarrow>
                    is_well_kinded env t \<Longrightarrow>
                    is_well_kinded env' t \<Longrightarrow>
-                   is_runtime_type env t \<Longrightarrow>
-                   is_runtime_type env' t \<Longrightarrow>
                    value_has_type env' v t"
     using CV_Record.IH by auto
   show ?case
@@ -496,10 +439,6 @@ next
       "list_all (is_well_kinded env) (map snd fieldTypes)" by simp
     from CV_Record.prems(3) CoreTy_Record have wk'_flds:
       "list_all (is_well_kinded env') (map snd fieldTypes)" by simp
-    from CV_Record.prems(4) CoreTy_Record have rt_flds:
-      "list_all (is_runtime_type env) (map snd fieldTypes)" by simp
-    from CV_Record.prems(5) CoreTy_Record have rt'_flds:
-      "list_all (is_runtime_type env') (map snd fieldTypes)" by simp
     have target: "list_all2 (\<lambda>(n1, v) (n2, t). n1 = n2 \<and> value_has_type env' v t)
                     fieldValues fieldTypes"
       unfolding list_all2_conv_all_nth
@@ -523,11 +462,7 @@ next
         by (simp add: list_all_length)
       from wk'_flds i_lt' have wk'_t: "is_well_kinded env' ?t"
         by (simp add: list_all_length)
-      from rt_flds i_lt' have rt_t: "is_runtime_type env ?t"
-        by (simp add: list_all_length)
-      from rt'_flds i_lt' have rt'_t: "is_runtime_type env' ?t"
-        by (simp add: list_all_length)
-      from fieldIH[OF v_in vht_v wk_t wk'_t rt_t rt'_t]
+      from fieldIH[OF v_in vht_v wk_t wk'_t]
       have vht_v': "value_has_type env' ?v ?t" .
       from n_eq vht_v'
       show "(case fieldValues ! i of (n1, v) \<Rightarrow>
@@ -547,52 +482,35 @@ next
       dty_eq: "dty1 = dty2" and
       len_eq: "length tyvars = length argTypes" and
       args_wk: "list_all (is_well_kinded env) argTypes" and
-      args_rt: "list_all (is_runtime_type env) argTypes" and
-      not_ghost: "dty1 |\<notin>| TE_GhostDatatypes env" and
       payload_vht: "value_has_type env payload
                       (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
       by (auto split: option.splits)
     let ?subst = "fmap_of_list (zip tyvars argTypes)"
-    \<comment> \<open>Transfer the ctor lookup and the non-ghost condition to env'. \<close>
+    \<comment> \<open>Transfer the ctor lookup to env'. \<close>
     have lookup': "fmlookup (TE_DataCtors env') ctor = Some (dty2, tyvars, payloadTy)"
       using lookup dc by simp
-    have not_ghost': "dty1 |\<notin>| TE_GhostDatatypes env'"
-      using not_ghost gd by simp
-    \<comment> \<open>args_wk / args_rt under env'. \<close>
+    \<comment> \<open>args_wk under env'. \<close>
     from CV_Variant.prems(3) CoreTy_Datatype lookup'
     have args_wk': "list_all (is_well_kinded env') argTypes"
       by (auto split: option.splits)
-    from CV_Variant.prems(5) CoreTy_Datatype
-    have args_rt': "list_all (is_runtime_type env') argTypes"
-      by simp
-    \<comment> \<open>Well-kindedness and runtime of the ctor's declared payload type under a
-        witness env whose TE_TypeVars are the ctor's tyvars. \<close>
+    \<comment> \<open>Well-kindedness of the ctor's declared payload type under a witness env
+        whose TE_TypeVars are the ctor's tyvars. \<close>
     let ?payloadSrc = "env \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>"
     let ?payloadSrc' = "env' \<lparr> TE_TypeVars := fset_of_list tyvars \<rparr>"
-    let ?payloadSrcRt = "env \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>"
-    let ?payloadSrcRt' = "env' \<lparr> TE_TypeVars := fset_of_list tyvars,
-                                  TE_RuntimeTypeVars := fset_of_list tyvars \<rparr>"
     from wf have payloads_wk: "tyenv_payloads_well_kinded env"
       unfolding tyenv_well_formed_def by simp
     from wf' have payloads_wk': "tyenv_payloads_well_kinded env'"
       unfolding tyenv_well_formed_def by simp
-    from wf have payloads_rt: "tyenv_nonghost_payloads_runtime env"
+    from wf have "tyenv_ctor_tyvars_distinct env"
       unfolding tyenv_well_formed_def by simp
-    from wf' have payloads_rt': "tyenv_nonghost_payloads_runtime env'"
-      unfolding tyenv_well_formed_def by simp
+    with lookup have dist_tv: "distinct tyvars"
+      unfolding tyenv_ctor_tyvars_distinct_def by blast
     have payload_wk_src: "is_well_kinded ?payloadSrc payloadTy"
       using payloads_wk lookup abs
       unfolding tyenv_payloads_well_kinded_def by simp
     have payload_wk_src': "is_well_kinded ?payloadSrc' payloadTy"
       using payloads_wk' lookup' abs'
       unfolding tyenv_payloads_well_kinded_def by simp
-    have payload_rt_src: "is_runtime_type ?payloadSrcRt payloadTy"
-      using payloads_rt lookup not_ghost dty_eq abs
-      unfolding tyenv_nonghost_payloads_runtime_def by simp
-    have payload_rt_src': "is_runtime_type ?payloadSrcRt' payloadTy"
-      using payloads_rt' lookup' not_ghost' dty_eq abs'
-      unfolding tyenv_nonghost_payloads_runtime_def by simp
 
     \<comment> \<open>Each of the ctor's tyvars is mapped by ?subst to the corresponding argType. \<close>
     have subst_lookup: "\<And>n. n |\<in>| fset_of_list tyvars \<Longrightarrow>
@@ -605,9 +523,8 @@ next
       from i_lt len_eq have i_lt_arg: "i < length argTypes" by simp
       let ?ty' = "argTypes ! i"
       have "fmlookup ?subst n = Some ?ty'"
-        using mv_eq i_lt i_lt_arg len_eq
-        by (metis fmlookup_of_list local.wf lookup map_of_zip_nth tyenv_ctor_tyvars_distinct_def
-            tyenv_well_formed_def)
+        using mv_eq map_of_zip_nth[OF len_eq dist_tv i_lt_arg]
+        by (simp add: fmlookup_of_list)
       moreover have "?ty' \<in> set argTypes" using i_lt_arg by simp
       ultimately show "\<exists>ty'. fmlookup ?subst n = Some ty' \<and> ty' \<in> set argTypes" by blast
     qed
@@ -642,41 +559,12 @@ next
                     | None \<Rightarrow> n |\<in>| TE_TypeVars env'" by simp
     qed
 
-    have subst_ty_rt: "is_runtime_type env (apply_subst ?subst payloadTy)"
-    proof (rule apply_subst_preserves_runtime[OF payload_rt_src])
-      show "TE_GhostDatatypes env = TE_GhostDatatypes ?payloadSrcRt" by simp
-    next
-      fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars ?payloadSrcRt"
-      then have "n |\<in>| fset_of_list tyvars" by simp
-      from subst_lookup[OF this] obtain ty' where
-        lk: "fmlookup ?subst n = Some ty'" and mem: "ty' \<in> set argTypes" by blast
-      from mem args_rt have "is_runtime_type env ty'"
-        by (simp add: list_all_iff)
-      with lk show "case fmlookup ?subst n of
-                      Some ty' \<Rightarrow> is_runtime_type env ty'
-                    | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env" by simp
-    qed
-
-    have subst_ty_rt': "is_runtime_type env' (apply_subst ?subst payloadTy)"
-    proof (rule apply_subst_preserves_runtime[OF payload_rt_src'])
-      show "TE_GhostDatatypes env' = TE_GhostDatatypes ?payloadSrcRt'" by simp
-    next
-      fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars ?payloadSrcRt'"
-      then have "n |\<in>| fset_of_list tyvars" by simp
-      from subst_lookup[OF this] obtain ty' where
-        lk: "fmlookup ?subst n = Some ty'" and mem: "ty' \<in> set argTypes" by blast
-      from mem args_rt' have "is_runtime_type env' ty'"
-        by (simp add: list_all_iff)
-      with lk show "case fmlookup ?subst n of
-                      Some ty' \<Rightarrow> is_runtime_type env' ty'
-                    | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env'" by simp
-    qed
-    from CV_Variant.IH[OF payload_vht subst_ty_wk subst_ty_wk' subst_ty_rt subst_ty_rt']
+    from CV_Variant.IH[OF payload_vht subst_ty_wk subst_ty_wk']
     have payload_vht': "value_has_type env' payload (apply_subst ?subst payloadTy)" .
     have args_ground: "list_all (\<lambda>a. type_tyvars a = {}) argTypes"
       using CV_Variant.prems(1) CoreTy_Datatype by (auto split: option.splits)
     show ?thesis
-      using CoreTy_Datatype lookup' dty_eq len_eq args_wk' args_rt' args_ground not_ghost' payload_vht'
+      using CoreTy_Datatype lookup' dty_eq len_eq args_wk' args_ground payload_vht'
       by simp
   qed (use CV_Variant.prems(1) in auto)
 next
@@ -686,7 +574,6 @@ next
     case (CoreTy_Array elemTy dims)
     from CV_Array.prems(1) CoreTy_Array have
       elem_wk: "is_well_kinded env elemTy" and
-      elem_rt: "is_runtime_type env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
                              \<longrightarrow> value_has_type env val elemTy" and
@@ -695,20 +582,25 @@ next
       sizes_ok: "sizes_match_dims sizes dims"
       by simp_all
     from CV_Array.prems(3) CoreTy_Array have elem_wk': "is_well_kinded env' elemTy" by simp
-    from CV_Array.prems(5) CoreTy_Array have elem_rt': "is_runtime_type env' elemTy" by simp
     have elems_vht': "\<forall>idx val. fmlookup valuesMap idx = Some val
                                  \<longrightarrow> value_has_type env' val elemTy"
     proof (intro allI impI)
       fix idx val
       assume lk: "fmlookup valuesMap idx = Some val"
       with elems_vht have vht: "value_has_type env val elemTy" by blast
-      from CV_Array.IH[of val elemTy] vht elem_wk elem_wk' elem_rt elem_rt' lk
+      from CV_Array.IH[of val elemTy] vht elem_wk elem_wk' lk
       show "value_has_type env' val elemTy"
         by (auto simp: fmran'I)
     qed
     show ?thesis
-      using CoreTy_Array elem_wk' elem_rt' elem_ground elems_vht' dims_wk matches sizes_ok by simp
+      using CoreTy_Array elem_wk' elem_ground elems_vht' dims_wk matches sizes_ok by simp
   qed (use CV_Array.prems(1) in auto)
+next
+  case (CV_Int i)
+  then show ?case by simp
+next
+  case (CV_Real r)
+  then show ?case by simp
 qed
 
 
@@ -736,6 +628,16 @@ lemma value_has_type_Array:
   shows "\<exists>sizes valuesMap. val = CV_Array sizes valuesMap \<and>
     (\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy)"
   using assms by (cases val; auto split: CoreType.splits)
+
+lemma value_has_type_MathInt:
+  assumes "value_has_type env val CoreTy_MathInt"
+  shows "\<exists>i. val = CV_Int i"
+  using assms by (cases val; auto)
+
+lemma value_has_type_MathReal:
+  assumes "value_has_type env val CoreTy_MathReal"
+  shows "\<exists>r. val = CV_Real r"
+  using assms by (cases val; auto)
 
 (* An array value typed at dims is also typed at any well-kinded dims' that its
    sizes match. *)

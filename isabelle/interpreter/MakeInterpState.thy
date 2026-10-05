@@ -14,10 +14,10 @@ begin
    The construction:
     1. Normalizes the module (grounding all types; the substitution becomes
        empty).
-    2. Populates IS_DefaultCtors from the type environment's datatype tables.
-    3. Populates IS_Functions from the non-ghost CM_Functions entries (ghost
-       functions do not exist at runtime), pairing each extern function with
-       its supplied ExternFunc.
+    2. Populates IS_DefaultCtors, IS_Datatypes and IS_DataCtors from the type
+       environment's datatype tables.
+    3. Populates IS_Functions from the CM_Functions entries, pairing each
+       extern function with its supplied ExternFunc.
     4. Populates IS_Globals directly from CM_GlobalVars: the elaborator has
        already evaluated every constant initializer to a CoreValue at compile
        time, so state construction just installs the values. (There is no
@@ -66,7 +66,7 @@ definition default_ctors_map ::
 (* ========================================================================== *)
 
 (* The state before globals and functions are installed: everything empty
-   except IS_DefaultCtors (and the world). *)
+   except the datatype tables and the world. *)
 definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w InterpState" where
   "base_interp_state env world =
      \<lparr> IS_Globals = fmempty,
@@ -76,6 +76,8 @@ definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w Int
        IS_ConstLocals = {||},
        IS_TyArgs = fmempty,
        IS_DefaultCtors = default_ctors_map env,
+       IS_Datatypes = TE_Datatypes env,
+       IS_DataCtors = TE_DataCtors env,
        IS_Functions = fmempty,
        IS_World = world \<rparr>"
 
@@ -84,8 +86,8 @@ definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w Int
 (* Functions                                                                  *)
 (* ========================================================================== *)
 
-(* The InterpFun for one non-ghost function: type parameters, argument Var/Ref
-   tags and the impure flag come from the FunInfo; argument names from the
+(* The InterpFun for one function: type parameters, argument Var/Ref tags
+   and the impure flag come from the FunInfo; argument names from the
    CoreFunction; the body is supplied by the caller (the Core body, or the
    ExternFunc for an extern function). *)
 definition make_interp_fun ::
@@ -97,7 +99,7 @@ definition make_interp_fun ::
        IF_Impure = FI_Impure info \<rparr>"
 
 (* Build the IS_Functions map from the (name, CoreFunction) pairs of
-   CM_Functions. Ghost functions are skipped (they do not exist at runtime). *)
+   CM_Functions. Ghost functions are included. *)
 fun build_interp_funs ::
   "(string, 'w ExternFunc) fmap \<Rightarrow> CoreTyEnv \<Rightarrow> (string \<times> CoreFunction) list
    \<Rightarrow> InterpStateError + (string, 'w InterpFun) fmap" where
@@ -109,16 +111,14 @@ fun build_interp_funs ::
          (case build_interp_funs externs env rest of
             Inl err \<Rightarrow> Inl err
           | Inr acc \<Rightarrow>
-              if FI_Ghost info = Ghost then Inr acc
-              else
-                (case CF_Body f of
-                   Some body \<Rightarrow>
-                     Inr (fmupd name (make_interp_fun info f (Inl body)) acc)
-                 | None \<Rightarrow>
-                     (case fmlookup externs name of
-                        None \<Rightarrow> Inl (ISE_MissingExtern name)
-                      | Some externFun \<Rightarrow>
-                          Inr (fmupd name (make_interp_fun info f (Inr externFun)) acc)))))"
+              (case CF_Body f of
+                 Some body \<Rightarrow>
+                   Inr (fmupd name (make_interp_fun info f (Inl body)) acc)
+               | None \<Rightarrow>
+                   (case fmlookup externs name of
+                      None \<Rightarrow> Inl (ISE_MissingExtern name)
+                    | Some externFun \<Rightarrow>
+                        Inr (fmupd name (make_interp_fun info f (Inr externFun)) acc)))))"
 
 
 (* ========================================================================== *)
@@ -126,7 +126,7 @@ fun build_interp_funs ::
 (* ========================================================================== *)
 
 (* Build an InterpState from a closed CoreModule. `externs` supplies an
-   ExternFunc for each extern (CF_Body = None) non-ghost function. *)
+   ExternFunc for each extern (CF_Body = None) function. *)
 definition make_interp_state ::
   "'w \<Rightarrow> (string, 'w ExternFunc) fmap \<Rightarrow> CoreModule
    \<Rightarrow> InterpStateError + 'w InterpState" where

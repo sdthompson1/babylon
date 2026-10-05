@@ -52,6 +52,12 @@ record 'world InterpState =
      CoreTm_Default at a datatype type. *)
   IS_DefaultCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
 
+  (* The datatypes of the program (name to number of type parameters) and their
+     data constructors (constructor name to datatype name, type parameters and
+     payload type). *)
+  IS_Datatypes :: "(string, nat) fmap"
+  IS_DataCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
+
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"
 

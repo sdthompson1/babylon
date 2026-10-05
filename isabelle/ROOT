@@ -4,6 +4,7 @@ session Babylon = "HOL-Library" +
     "bab_loader"
     "bab_passes"
     "core"
+    "core_ghost"
     "core_passes"
     "elaborator"
     "graph"
@@ -38,6 +39,7 @@ session Babylon = "HOL-Library" +
     "core/CoreModuleTypecheck"
     "core/CoreStmtTypecheck"
     "core/CoreSyntax"
+    "core/CoreTermTypeMode"
     "core/CoreTyEnv"
     "core/CoreTyEnvWellFormed"
     "core/CoreTypeProps"
@@ -61,6 +63,20 @@ session Babylon = "HOL-Library" +
     "core/TypeSubstPreservation"
     "core/TypeSubstStmt"
     "core/TypeSubstTerm"
+
+    (* core_ghost *)
+    "core_ghost/EraseGhost"
+    "core_ghost/EraseGhostLemmas"
+    "core_ghost/EraseGhostModuleTyping"
+    "core_ghost/EraseGhostSimulation"
+    "core_ghost/EraseGhostStmtTyping"
+    "core_ghost/EraseGhostTyping"
+    "core_ghost/ErasedIsGhostFree"
+    "core_ghost/ErasedState"
+    "core_ghost/ErasedSteps"
+    "core_ghost/GhostFree"
+    "core_ghost/GhostInvisible"
+    "core_ghost/TrivialDecreases"
 
     (* core_passes *)
     "core_passes/MatchCompile"
@@ -109,6 +125,7 @@ session Babylon = "HOL-Library" +
 
     (* interpreter *)
     "interpreter/CoreInterp"
+    "interpreter/CoreInterpFrame"
     "interpreter/CoreInterpFuelMono"
     "interpreter/CoreInterpPreservation"
     "interpreter/InterpState"
@@ -119,6 +136,7 @@ session Babylon = "HOL-Library" +
     "interpreter/TypeSoundnessHelpers1"
     "interpreter/TypeSoundnessHelpers2"
     "interpreter/TypeSoundnessHelpers3"
+    "interpreter/TypeSoundnessHelpers4"
 
     (* util *)
     "util/DistinctCheck"

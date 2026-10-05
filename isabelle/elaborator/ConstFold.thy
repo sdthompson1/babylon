@@ -10,12 +10,14 @@ begin
    initializers are evaluated to data bytes at compile time -- unlike C++, where global
    constructors are run before "main" at program startup).
 
-   Instead of directly calling interp_term (the actual Core interpreter), the
-   elaborator defines its own eval_const and fold_const functions, which are then
-   proved equivalent to interp_term (see theorem fold_const_is_core_evaluation in
-   ConstFoldCorrect.thy). The advantages of doing it this way are that no fuel
-   is needed, and the full InterpState is not needed (we just need a map from
-   global variable names to values).
+   Instead of directly calling interp_term (the actual Core interpreter), which would
+   not be possible (the interpreter is not executable), the elaborator defines its own
+   eval_const and fold_const functions. A successful fold_const is then proved to give
+   the value that interp_term would have given (see theorem fold_const_is_core_evaluation
+   in ConstFoldCorrect.thy).
+
+   The other advantages of doing it this way are that no fuel is needed, and the full
+   InterpState is not needed (we just need a map from global variable names to values).
 *)
 
 
@@ -23,16 +25,15 @@ begin
 (* Compile-time constant terms *)
 (* ========================================================================== *)
 
-(* A "compile-time constant term" is one that doesn't include function calls, quantifiers
-   or CoreTm_Default.
+(* A "compile-time constant term" is one that doesn't include function calls, quantifiers,
+   CoreTm_Allocated, CoreTm_Old or CoreTm_Default.
 
    The rule against function calls is there to simplify the elaborator, which doesn't want
-   to have to worry about calling functions at compile time. The other two - quantifiers
-   and default - can't occur in legal non-ghost consts anyway, so these are not "real"
-   restrictions.
+   to have to worry about calling functions at compile time. The others - quantifiers,
+   allocated, old and default - can't occur in legal non-ghost consts anyway, so these are
+   not "real" restrictions.
 
-   Terms that satisfy is_constant_term are exactly the ones for which eval_const
-   and interp_term agree. *)
+   On a term that satisfies is_constant_term, eval_const and interp_term agree. *)
 
 fun is_constant_term :: "CoreTerm \<Rightarrow> bool" where
   "is_constant_term (CoreTm_LitBool _) = True"
@@ -57,8 +58,8 @@ fun is_constant_term :: "CoreTerm \<Rightarrow> bool" where
 | "is_constant_term (CoreTm_Match scrut arms) =
     (is_constant_term scrut \<and> list_all (is_constant_term \<circ> snd) arms)"
 | "is_constant_term (CoreTm_Sizeof tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Allocated tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Old tm) = is_constant_term tm"
+| "is_constant_term (CoreTm_Allocated _) = False"
+| "is_constant_term (CoreTm_Old _) = False"
 | "is_constant_term (CoreTm_Default _) = False"
 
 
@@ -152,8 +153,8 @@ lemma size_list_map_snd_le:
    The implementation doesn't call interp_term directly, but it does re-use helpers from
    the interpreter, such as eval_binop.
 
-   eval_const is (roughly speaking) equivalent to interp_term for compile-time constant
-   terms; the precise statement is `eval_const_interp_agree` in ConstFoldCorrect.thy.
+   eval_const agrees with interp_term on compile-time constant terms; the precise
+   statement is `eval_const_interp_agree` in ConstFoldCorrect.thy.
 *)
 
 function eval_const :: "(string, CoreValue) fmap \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
@@ -272,8 +273,9 @@ where
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Quantifier, Allocated, Old, Default - not constant terms (and interp_term
-     also rejects Quantifier/Allocated/Old with TypeError) *)
+  (* Quantifier, Allocated, Old, Default - not evaluated at compile time. None of
+     these occurs in a legal non-ghost const. (interp_term, which also runs ghost
+     code, does evaluate Quantifier and Old.) *)
 | "eval_const vals (CoreTm_Quantifier _ _ _ _) = Inl TypeError"
 | "eval_const vals (CoreTm_Allocated _) = Inl TypeError"
 | "eval_const vals (CoreTm_Old _) = Inl TypeError"

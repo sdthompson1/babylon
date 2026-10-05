@@ -74,7 +74,8 @@ lemma eval_binop_sound_values:
   shows "value_has_type env v ty"
 proof -
   have "sound_term_result (undefined :: unit InterpState) env ty (eval_binop op lhsVal rhsVal)"
-    by (rule eval_binop_sound[OF typing lhs_typing rhs_typing lhs_typed rhs_typed])
+    by (rule eval_binop_sound[OF typing lhs_typing rhs_typing])
+       (rule lhs_typed, rule rhs_typed)
   with ev show ?thesis
     using binop_result_apply_subst[OF typing lhs_typing rhs_typing] by simp
 qed
@@ -151,7 +152,6 @@ next
   case (CoreTm_LitArray elemTy tms)
   from CoreTm_LitArray.prems(1) have
     wk: "is_well_kinded env elemTy" and
-    rt: "is_runtime_type env elemTy" and
     all_typed: "list_all (\<lambda>tm. core_term_type env NotGhost tm = Some elemTy) tms" and
     len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
     ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
@@ -188,7 +188,7 @@ next
     using len_ok len_vals by simp
   have "value_has_type env (make_1d_array vs)
           (CoreTy_Array elemTy [CoreDim_Fixed (int (length vs))])"
-    using make_1d_array_typed[OF wk rt elem_ground vs_elem_typed len_ok'] .
+    using make_1d_array_typed[OF wk elem_ground vs_elem_typed len_ok'] .
   then show ?case using v_eq ty_eq len_vals by simp
 next
   case (CoreTm_Var name)
@@ -333,8 +333,6 @@ next
     lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
     len_eq: "length tyArgs = length tyvars" and
     args_wk: "list_all (is_well_kinded env) tyArgs" and
-    args_rt: "list_all (is_runtime_type env) tyArgs" and
-    not_ghost: "dtName |\<notin>| TE_GhostDatatypes env" and
     payload_typing: "core_term_type env NotGhost payload
                        = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
@@ -353,7 +351,7 @@ next
             CoreTm_VariantCtor.prems(3) ev_payload] .
   show ?case
     unfolding v_eq ty_eq
-    using lookup len_eq args_wk args_rt args_ground not_ghost pv_typed
+    using lookup len_eq args_wk args_ground pv_typed
     by simp
 next
   case (CoreTm_Record flds)
@@ -617,7 +615,7 @@ definition vals_agree :: "'w InterpState \<Rightarrow> (string, CoreValue) fmap 
 lemma vals_agree_lookup:
   assumes ag: "vals_agree st vals"
       and lk: "fmlookup vals name = Some v"
-  shows "interp_term (Suc f) (st :: 'w InterpState) (CoreTm_Var name) = Inr v"
+  shows "interp_term d (Suc f) (st :: 'w InterpState) (CoreTm_Var name) = Inr v"
 proof -
   from ag lk have "(case fmlookup (IS_Locals st) name of
       Some addr \<Rightarrow> addr < length (IS_Store st) \<and> IS_Store st ! addr = v
@@ -672,110 +670,111 @@ qed
    Each lemma turns per-subterm agreement (at ANY sufficiently large fuel)
    into agreement for a term whose interp clause spends one Suc and then
    evaluates the subterm(s) at the decremented fuel. The `step` premise is
-   the per-clause computation, discharged by simp at each use site. *)
+   the per-clause computation, discharged by simp at each use site.
+   The depth `d` is the same throughout: none of these clauses spends depth. *)
 
 lemma agree_leafI:
   fixes st :: "'w InterpState"
-  assumes "\<And>f. interp_term (Suc f) st tm = eval_const vals tm"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  assumes "\<And>f. interp_term d (Suc f) st tm = eval_const vals tm"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
 proof -
-  have "\<forall>f\<ge>Suc 0. interp_term f st tm = eval_const vals tm"
+  have "\<forall>f\<ge>Suc 0. interp_term d f st tm = eval_const vals tm"
   proof (intro allI impI)
     fix f assume "Suc 0 \<le> f"
     then obtain f' where "f = Suc f'" using Suc_le_D by auto
-    thus "interp_term f st tm = eval_const vals tm" using assms by blast
+    thus "interp_term d f st tm = eval_const vals tm" using assms by blast
   qed
   thus ?thesis by blast
 qed
 
 lemma agree_lift1:
   fixes st :: "'w InterpState" and st1 :: "'w InterpState"
-  assumes sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st1 t1 = eval_const vals1 t1"
-      and step: "\<And>f. interp_term f st1 t1 = eval_const vals1 t1 \<Longrightarrow>
-                   interp_term (Suc f) st tm = eval_const vals tm"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  assumes sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st1 t1 = eval_const vals1 t1"
+      and step: "\<And>f. interp_term d f st1 t1 = eval_const vals1 t1 \<Longrightarrow>
+                   interp_term d (Suc f) st tm = eval_const vals tm"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
 proof -
-  obtain N where N: "\<forall>f\<ge>N. interp_term f st1 t1 = eval_const vals1 t1"
+  obtain N where N: "\<forall>f\<ge>N. interp_term d f st1 t1 = eval_const vals1 t1"
     using sub by blast
-  have "\<forall>f\<ge>Suc N. interp_term f st tm = eval_const vals tm"
+  have "\<forall>f\<ge>Suc N. interp_term d f st tm = eval_const vals tm"
   proof (intro allI impI)
     fix f assume "Suc N \<le> f"
     then obtain f' where f_eq: "f = Suc f'" and ge: "N \<le> f'"
       using Suc_le_D by auto
-    have "interp_term (Suc f') st tm = eval_const vals tm"
+    have "interp_term d (Suc f') st tm = eval_const vals tm"
       by (rule step) (use N ge in blast)
-    thus "interp_term f st tm = eval_const vals tm" by (simp add: f_eq)
+    thus "interp_term d f st tm = eval_const vals tm" by (simp add: f_eq)
   qed
   thus ?thesis by blast
 qed
 
 lemma agree_lift2:
   fixes st :: "'w InterpState" and st1 :: "'w InterpState" and st2 :: "'w InterpState"
-  assumes sub1: "\<exists>N. \<forall>f\<ge>N. interp_term f st1 t1 = eval_const vals1 t1"
-      and sub2: "\<exists>N. \<forall>f\<ge>N. interp_term f st2 t2 = eval_const vals2 t2"
-      and step: "\<And>f. interp_term f st1 t1 = eval_const vals1 t1 \<Longrightarrow>
-                   interp_term f st2 t2 = eval_const vals2 t2 \<Longrightarrow>
-                   interp_term (Suc f) st tm = eval_const vals tm"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  assumes sub1: "\<exists>N. \<forall>f\<ge>N. interp_term d f st1 t1 = eval_const vals1 t1"
+      and sub2: "\<exists>N. \<forall>f\<ge>N. interp_term d f st2 t2 = eval_const vals2 t2"
+      and step: "\<And>f. interp_term d f st1 t1 = eval_const vals1 t1 \<Longrightarrow>
+                   interp_term d f st2 t2 = eval_const vals2 t2 \<Longrightarrow>
+                   interp_term d (Suc f) st tm = eval_const vals tm"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
 proof -
-  obtain N1 where N1: "\<forall>f\<ge>N1. interp_term f st1 t1 = eval_const vals1 t1"
+  obtain N1 where N1: "\<forall>f\<ge>N1. interp_term d f st1 t1 = eval_const vals1 t1"
     using sub1 by blast
-  obtain N2 where N2: "\<forall>f\<ge>N2. interp_term f st2 t2 = eval_const vals2 t2"
+  obtain N2 where N2: "\<forall>f\<ge>N2. interp_term d f st2 t2 = eval_const vals2 t2"
     using sub2 by blast
-  have "\<forall>f\<ge>Suc (max N1 N2). interp_term f st tm = eval_const vals tm"
+  have "\<forall>f\<ge>Suc (max N1 N2). interp_term d f st tm = eval_const vals tm"
   proof (intro allI impI)
     fix f assume "Suc (max N1 N2) \<le> f"
     then obtain f' where f_eq: "f = Suc f'" and ge1: "N1 \<le> f'" and ge2: "N2 \<le> f'"
       using Suc_le_D by force
-    have "interp_term (Suc f') st tm = eval_const vals tm"
+    have "interp_term d (Suc f') st tm = eval_const vals tm"
       by (rule step) (use N1 ge1 N2 ge2 in blast)+
-    thus "interp_term f st tm = eval_const vals tm" by (simp add: f_eq)
+    thus "interp_term d f st tm = eval_const vals tm" by (simp add: f_eq)
   qed
   thus ?thesis by blast
 qed
 
 lemma agree_lift_list:
   fixes st :: "'w InterpState" and st1 :: "'w InterpState"
-  assumes sub: "\<exists>N. \<forall>f\<ge>N. interp_term_list f st1 tms = eval_const_list vals1 tms"
-      and step: "\<And>f. interp_term_list f st1 tms = eval_const_list vals1 tms \<Longrightarrow>
-                   interp_term (Suc f) st tm = eval_const vals tm"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  assumes sub: "\<exists>N. \<forall>f\<ge>N. interp_term_list d f st1 tms = eval_const_list vals1 tms"
+      and step: "\<And>f. interp_term_list d f st1 tms = eval_const_list vals1 tms \<Longrightarrow>
+                   interp_term d (Suc f) st tm = eval_const vals tm"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
 proof -
-  obtain N where N: "\<forall>f\<ge>N. interp_term_list f st1 tms = eval_const_list vals1 tms"
+  obtain N where N: "\<forall>f\<ge>N. interp_term_list d f st1 tms = eval_const_list vals1 tms"
     using sub by blast
-  have "\<forall>f\<ge>Suc N. interp_term f st tm = eval_const vals tm"
+  have "\<forall>f\<ge>Suc N. interp_term d f st tm = eval_const vals tm"
   proof (intro allI impI)
     fix f assume "Suc N \<le> f"
     then obtain f' where f_eq: "f = Suc f'" and ge: "N \<le> f'"
       using Suc_le_D by auto
-    have "interp_term (Suc f') st tm = eval_const vals tm"
+    have "interp_term d (Suc f') st tm = eval_const vals tm"
       by (rule step) (use N ge in blast)
-    thus "interp_term f st tm = eval_const vals tm" by (simp add: f_eq)
+    thus "interp_term d f st tm = eval_const vals tm" by (simp add: f_eq)
   qed
   thus ?thesis by blast
 qed
 
 lemma agree_lift_tm_list:
   fixes st :: "'w InterpState" and st1 :: "'w InterpState" and st2 :: "'w InterpState"
-  assumes sub1: "\<exists>N. \<forall>f\<ge>N. interp_term f st1 t1 = eval_const vals1 t1"
-      and sub2: "\<exists>N. \<forall>f\<ge>N. interp_term_list f st2 tms = eval_const_list vals2 tms"
-      and step: "\<And>f. interp_term f st1 t1 = eval_const vals1 t1 \<Longrightarrow>
-                   interp_term_list f st2 tms = eval_const_list vals2 tms \<Longrightarrow>
-                   interp_term (Suc f) st tm = eval_const vals tm"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  assumes sub1: "\<exists>N. \<forall>f\<ge>N. interp_term d f st1 t1 = eval_const vals1 t1"
+      and sub2: "\<exists>N. \<forall>f\<ge>N. interp_term_list d f st2 tms = eval_const_list vals2 tms"
+      and step: "\<And>f. interp_term d f st1 t1 = eval_const vals1 t1 \<Longrightarrow>
+                   interp_term_list d f st2 tms = eval_const_list vals2 tms \<Longrightarrow>
+                   interp_term d (Suc f) st tm = eval_const vals tm"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
 proof -
-  obtain N1 where N1: "\<forall>f\<ge>N1. interp_term f st1 t1 = eval_const vals1 t1"
+  obtain N1 where N1: "\<forall>f\<ge>N1. interp_term d f st1 t1 = eval_const vals1 t1"
     using sub1 by blast
-  obtain N2 where N2: "\<forall>f\<ge>N2. interp_term_list f st2 tms = eval_const_list vals2 tms"
+  obtain N2 where N2: "\<forall>f\<ge>N2. interp_term_list d f st2 tms = eval_const_list vals2 tms"
     using sub2 by blast
-  have "\<forall>f\<ge>Suc (max N1 N2). interp_term f st tm = eval_const vals tm"
+  have "\<forall>f\<ge>Suc (max N1 N2). interp_term d f st tm = eval_const vals tm"
   proof (intro allI impI)
     fix f assume "Suc (max N1 N2) \<le> f"
     then obtain f' where f_eq: "f = Suc f'" and ge1: "N1 \<le> f'" and ge2: "N2 \<le> f'"
       using Suc_le_D by force
-    have "interp_term (Suc f') st tm = eval_const vals tm"
+    have "interp_term d (Suc f') st tm = eval_const vals tm"
       by (rule step) (use N1 ge1 N2 ge2 in blast)+
-    thus "interp_term f st tm = eval_const vals tm" by (simp add: f_eq)
+    thus "interp_term d f st tm = eval_const vals tm" by (simp add: f_eq)
   qed
   thus ?thesis by blast
 qed
@@ -784,39 +783,39 @@ qed
    throughout: interp_term_list does not thread state changes). *)
 lemma agree_list:
   fixes st :: "'w InterpState"
-  assumes "\<And>t. t \<in> set tms \<Longrightarrow> \<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term_list f st tms = eval_const_list vals tms"
+  assumes "\<And>t. t \<in> set tms \<Longrightarrow> \<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term_list d f st tms = eval_const_list vals tms"
   using assms
 proof (induction tms)
   case Nil
-  have "\<forall>f\<ge>Suc 0. interp_term_list f st [] = eval_const_list vals ([] :: CoreTerm list)"
+  have "\<forall>f\<ge>Suc 0. interp_term_list d f st [] = eval_const_list vals ([] :: CoreTerm list)"
   proof (intro allI impI)
     fix f assume "Suc 0 \<le> f"
     then obtain f' where "f = Suc f'" using Suc_le_D by auto
-    thus "interp_term_list f st [] = eval_const_list vals ([] :: CoreTerm list)"
+    thus "interp_term_list d f st [] = eval_const_list vals ([] :: CoreTerm list)"
       by simp
   qed
   thus ?case by blast
 next
   case (Cons t ts)
-  obtain N1 where N1: "\<forall>f\<ge>N1. interp_term f st t = eval_const vals t"
+  obtain N1 where N1: "\<forall>f\<ge>N1. interp_term d f st t = eval_const vals t"
     using Cons.prems[of t] by auto
-  have tl_agree: "\<exists>N. \<forall>f\<ge>N. interp_term_list f st ts = eval_const_list vals ts"
+  have tl_agree: "\<exists>N. \<forall>f\<ge>N. interp_term_list d f st ts = eval_const_list vals ts"
   proof (rule Cons.IH)
     fix ta assume "ta \<in> set ts"
-    thus "\<exists>N. \<forall>f\<ge>N. interp_term f st ta = eval_const vals ta"
+    thus "\<exists>N. \<forall>f\<ge>N. interp_term d f st ta = eval_const vals ta"
       using Cons.prems[of ta] by simp
   qed
-  then obtain N2 where N2: "\<forall>f\<ge>N2. interp_term_list f st ts = eval_const_list vals ts"
+  then obtain N2 where N2: "\<forall>f\<ge>N2. interp_term_list d f st ts = eval_const_list vals ts"
     by blast
-  have "\<forall>f\<ge>Suc (max N1 N2). interp_term_list f st (t # ts) = eval_const_list vals (t # ts)"
+  have "\<forall>f\<ge>Suc (max N1 N2). interp_term_list d f st (t # ts) = eval_const_list vals (t # ts)"
   proof (intro allI impI)
     fix f assume "Suc (max N1 N2) \<le> f"
     then obtain f' where f_eq: "f = Suc f'" and ge1: "N1 \<le> f'" and ge2: "N2 \<le> f'"
       using Suc_le_D by force
-    have h: "interp_term f' st t = eval_const vals t" using N1 ge1 by blast
-    have tl: "interp_term_list f' st ts = eval_const_list vals ts" using N2 ge2 by blast
-    show "interp_term_list f st (t # ts) = eval_const_list vals (t # ts)"
+    have h: "interp_term d f' st t = eval_const vals t" using N1 ge1 by blast
+    have tl: "interp_term_list d f' st ts = eval_const_list vals ts" using N2 ge2 by blast
+    show "interp_term_list d f st (t # ts) = eval_const_list vals (t # ts)"
       by (simp add: f_eq h tl split: sum.split)
   qed
   thus ?case by blast
@@ -829,14 +828,16 @@ qed
 
 (* Generalized over the Let-extended value map and state. Structural
    induction; every case is: obtain agreement for the subterms (IH), then
-   the clause-level computation is literally the same case expression on
-   both sides (shared helpers), discharged by simp. *)
+   the clause-level computation is the same case expression on both sides
+   (shared helpers), discharged by simp.
+
+   The depth `d` is arbitrary, because a constant term has no quantifier. *)
 theorem eval_const_interp_agree_gen:
   fixes st :: "'w InterpState"
   assumes "is_constant_term tm"
       and "core_term_free_vars tm |\<subseteq>| fmdom vals"
       and "vals_agree st vals"
-  shows "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
   using assms
 proof (induction tm arbitrary: vals st)
   case (CoreTm_LitBool b)
@@ -847,7 +848,7 @@ next
 next
   case (CoreTm_LitArray elemTy tms)
   have members: "\<And>t. t \<in> set tms \<Longrightarrow>
-                   \<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
+                   \<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
   proof -
     fix t assume mem: "t \<in> set tms"
     have c: "is_constant_term t"
@@ -855,13 +856,13 @@ next
     have fv: "core_term_free_vars t |\<subseteq>| fmdom vals"
       using CoreTm_LitArray.prems(2) mem
       by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
-    show "\<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
+    show "\<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
       using CoreTm_LitArray.IH mem c fv CoreTm_LitArray.prems(3) by blast
   qed
   show ?case
   proof (rule agree_lift_list[OF agree_list[OF members]])
-    fix f assume h: "interp_term_list f st tms = eval_const_list vals tms"
-    show "interp_term (Suc f) st (CoreTm_LitArray elemTy tms)
+    fix f assume h: "interp_term_list d f st tms = eval_const_list vals tms"
+    show "interp_term d (Suc f) st (CoreTm_LitArray elemTy tms)
             = eval_const vals (CoreTm_LitArray elemTy tms)"
       by (simp add: h)
   qed
@@ -874,9 +875,9 @@ next
   show ?case
   proof (rule agree_leafI)
     fix f
-    have "interp_term (Suc f) st (CoreTm_Var name) = Inr v"
+    have "interp_term d (Suc f) st (CoreTm_Var name) = Inr v"
       by (rule vals_agree_lookup[OF CoreTm_Var.prems(3) lk])
-    thus "interp_term (Suc f) st (CoreTm_Var name) = eval_const vals (CoreTm_Var name)"
+    thus "interp_term d (Suc f) st (CoreTm_Var name) = eval_const vals (CoreTm_Var name)"
       by (simp add: lk)
   qed
 next
@@ -884,12 +885,12 @@ next
   have c: "is_constant_term operand" using CoreTm_Cast.prems(1) by simp
   have fv: "core_term_free_vars operand |\<subseteq>| fmdom vals"
     using CoreTm_Cast.prems(2) by simp
-  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st operand = eval_const vals operand"
+  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st operand = eval_const vals operand"
     by (rule CoreTm_Cast.IH[OF c fv CoreTm_Cast.prems(3)])
   show ?case
   proof (rule agree_lift1[OF sub])
-    fix f assume h: "interp_term f st operand = eval_const vals operand"
-    show "interp_term (Suc f) st (CoreTm_Cast targetTy operand)
+    fix f assume h: "interp_term d f st operand = eval_const vals operand"
+    show "interp_term d (Suc f) st (CoreTm_Cast targetTy operand)
             = eval_const vals (CoreTm_Cast targetTy operand)"
       by (simp add: h)
   qed
@@ -898,12 +899,12 @@ next
   have c: "is_constant_term operand" using CoreTm_Unop.prems(1) by simp
   have fv: "core_term_free_vars operand |\<subseteq>| fmdom vals"
     using CoreTm_Unop.prems(2) by simp
-  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st operand = eval_const vals operand"
+  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st operand = eval_const vals operand"
     by (rule CoreTm_Unop.IH[OF c fv CoreTm_Unop.prems(3)])
   show ?case
   proof (rule agree_lift1[OF sub])
-    fix f assume h: "interp_term f st operand = eval_const vals operand"
-    show "interp_term (Suc f) st (CoreTm_Unop op operand)
+    fix f assume h: "interp_term d f st operand = eval_const vals operand"
+    show "interp_term d (Suc f) st (CoreTm_Unop op operand)
             = eval_const vals (CoreTm_Unop op operand)"
       by (simp add: h)
   qed
@@ -914,15 +915,15 @@ next
   have fv1: "core_term_free_vars lhs |\<subseteq>| fmdom vals"
    and fv2: "core_term_free_vars rhs |\<subseteq>| fmdom vals"
     using CoreTm_Binop.prems(2) by (auto simp: fsubset_iff)
-  have sub1: "\<exists>N. \<forall>f\<ge>N. interp_term f st lhs = eval_const vals lhs"
+  have sub1: "\<exists>N. \<forall>f\<ge>N. interp_term d f st lhs = eval_const vals lhs"
     by (rule CoreTm_Binop.IH(1)[OF c1 fv1 CoreTm_Binop.prems(3)])
-  have sub2: "\<exists>N. \<forall>f\<ge>N. interp_term f st rhs = eval_const vals rhs"
+  have sub2: "\<exists>N. \<forall>f\<ge>N. interp_term d f st rhs = eval_const vals rhs"
     by (rule CoreTm_Binop.IH(2)[OF c2 fv2 CoreTm_Binop.prems(3)])
   show ?case
   proof (rule agree_lift2[OF sub1 sub2])
-    fix f assume h1: "interp_term f st lhs = eval_const vals lhs"
-             and h2: "interp_term f st rhs = eval_const vals rhs"
-    show "interp_term (Suc f) st (CoreTm_Binop op lhs rhs)
+    fix f assume h1: "interp_term d f st lhs = eval_const vals lhs"
+             and h2: "interp_term d f st rhs = eval_const vals rhs"
+    show "interp_term d (Suc f) st (CoreTm_Binop op lhs rhs)
             = eval_const vals (CoreTm_Binop op lhs rhs)"
       by (simp add: h1 h2 split: sum.split option.split)
   qed
@@ -932,15 +933,15 @@ next
     using CoreTm_Let.prems(1) by simp_all
   have fv_rhs: "core_term_free_vars rhs |\<subseteq>| fmdom vals"
     using CoreTm_Let.prems(2) by (auto simp: fsubset_iff)
-  have sub_rhs: "\<exists>N. \<forall>f\<ge>N. interp_term f st rhs = eval_const vals rhs"
+  have sub_rhs: "\<exists>N. \<forall>f\<ge>N. interp_term d f st rhs = eval_const vals rhs"
     by (rule CoreTm_Let.IH(1)[OF c_rhs fv_rhs CoreTm_Let.prems(3)])
   show ?case
   proof (cases "eval_const vals rhs")
     case (Inl err)
     show ?thesis
     proof (rule agree_lift1[OF sub_rhs])
-      fix f assume h: "interp_term f st rhs = eval_const vals rhs"
-      show "interp_term (Suc f) st (CoreTm_Let var rhs body)
+      fix f assume h: "interp_term d f st rhs = eval_const vals rhs"
+      show "interp_term d (Suc f) st (CoreTm_Let var rhs body)
               = eval_const vals (CoreTm_Let var rhs body)"
         by (simp add: h Inl)
     qed
@@ -957,16 +958,16 @@ next
       by (rule vals_agree_extend[OF CoreTm_Let.prems(3)]) (simp_all add: st''_def)
     have fv_body: "core_term_free_vars body |\<subseteq>| fmdom vals'"
       using CoreTm_Let.prems(2) by (auto simp: vals'_def fsubset_iff)
-    have sub_body: "\<exists>N. \<forall>f\<ge>N. interp_term f st'' body = eval_const vals' body"
+    have sub_body: "\<exists>N. \<forall>f\<ge>N. interp_term d f st'' body = eval_const vals' body"
       by (rule CoreTm_Let.IH(2)[OF c_body fv_body ag'])
     show ?thesis
     proof (rule agree_lift2[OF sub_rhs sub_body])
-      fix f assume h1: "interp_term f st rhs = eval_const vals rhs"
-               and h2: "interp_term f st'' body = eval_const vals' body"
-      have "interp_term (Suc f) st (CoreTm_Let var rhs body) = interp_term f st'' body"
+      fix f assume h1: "interp_term d f st rhs = eval_const vals rhs"
+               and h2: "interp_term d f st'' body = eval_const vals' body"
+      have "interp_term d (Suc f) st (CoreTm_Let var rhs body) = interp_term d f st'' body"
         by (simp add: h1 Inr st''_def Let_def)
       also have "... = eval_const vals' body" by (rule h2)
-      finally show "interp_term (Suc f) st (CoreTm_Let var rhs body)
+      finally show "interp_term d (Suc f) st (CoreTm_Let var rhs body)
                       = eval_const vals (CoreTm_Let var rhs body)"
         by (simp add: Inr vals'_def)
     qed
@@ -982,19 +983,19 @@ next
   have c: "is_constant_term payload" using CoreTm_VariantCtor.prems(1) by simp
   have fv: "core_term_free_vars payload |\<subseteq>| fmdom vals"
     using CoreTm_VariantCtor.prems(2) by simp
-  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st payload = eval_const vals payload"
+  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st payload = eval_const vals payload"
     by (rule CoreTm_VariantCtor.IH[OF c fv CoreTm_VariantCtor.prems(3)])
   show ?case
   proof (rule agree_lift1[OF sub])
-    fix f assume h: "interp_term f st payload = eval_const vals payload"
-    show "interp_term (Suc f) st (CoreTm_VariantCtor ctorName tyArgs payload)
+    fix f assume h: "interp_term d f st payload = eval_const vals payload"
+    show "interp_term d (Suc f) st (CoreTm_VariantCtor ctorName tyArgs payload)
             = eval_const vals (CoreTm_VariantCtor ctorName tyArgs payload)"
       by (simp add: h)
   qed
 next
   case (CoreTm_Record flds)
   have members: "\<And>t. t \<in> set (map snd flds) \<Longrightarrow>
-                   \<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
+                   \<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
   proof -
     fix t assume "t \<in> set (map snd flds)"
     then obtain nm where mem: "(nm, t) \<in> set flds" by auto
@@ -1003,14 +1004,14 @@ next
     have fv: "core_term_free_vars t |\<subseteq>| fmdom vals"
       using CoreTm_Record.prems(2) mem
       by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
-    show "\<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
+    show "\<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
       using CoreTm_Record.IH mem c fv CoreTm_Record.prems(3) by fastforce
   qed
   show ?case
   proof (rule agree_lift_list[OF agree_list[OF members]])
-    fix f assume h: "interp_term_list f st (map snd flds)
+    fix f assume h: "interp_term_list d f st (map snd flds)
                        = eval_const_list vals (map snd flds)"
-    show "interp_term (Suc f) st (CoreTm_Record flds)
+    show "interp_term d (Suc f) st (CoreTm_Record flds)
             = eval_const vals (CoreTm_Record flds)"
       by (simp add: h)
   qed
@@ -1019,12 +1020,12 @@ next
   have c: "is_constant_term tm" using CoreTm_RecordProj.prems(1) by simp
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom vals"
     using CoreTm_RecordProj.prems(2) by simp
-  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
     by (rule CoreTm_RecordProj.IH[OF c fv CoreTm_RecordProj.prems(3)])
   show ?case
   proof (rule agree_lift1[OF sub])
-    fix f assume h: "interp_term f st tm = eval_const vals tm"
-    show "interp_term (Suc f) st (CoreTm_RecordProj tm fldName)
+    fix f assume h: "interp_term d f st tm = eval_const vals tm"
+    show "interp_term d (Suc f) st (CoreTm_RecordProj tm fldName)
             = eval_const vals (CoreTm_RecordProj tm fldName)"
       by (simp add: h)
   qed
@@ -1033,12 +1034,12 @@ next
   have c: "is_constant_term tm" using CoreTm_VariantProj.prems(1) by simp
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom vals"
     using CoreTm_VariantProj.prems(2) by simp
-  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
     by (rule CoreTm_VariantProj.IH[OF c fv CoreTm_VariantProj.prems(3)])
   show ?case
   proof (rule agree_lift1[OF sub])
-    fix f assume h: "interp_term f st tm = eval_const vals tm"
-    show "interp_term (Suc f) st (CoreTm_VariantProj tm expectedCtor)
+    fix f assume h: "interp_term d f st tm = eval_const vals tm"
+    show "interp_term d (Suc f) st (CoreTm_VariantProj tm expectedCtor)
             = eval_const vals (CoreTm_VariantProj tm expectedCtor)"
       by (simp add: h)
   qed
@@ -1048,10 +1049,10 @@ next
     using CoreTm_ArrayProj.prems(1) by simp
   have fv_arr: "core_term_free_vars arr |\<subseteq>| fmdom vals"
     using CoreTm_ArrayProj.prems(2) by (auto simp: fsubset_iff)
-  have sub_arr: "\<exists>N. \<forall>f\<ge>N. interp_term f st arr = eval_const vals arr"
+  have sub_arr: "\<exists>N. \<forall>f\<ge>N. interp_term d f st arr = eval_const vals arr"
     by (rule CoreTm_ArrayProj.IH(1)[OF c_arr fv_arr CoreTm_ArrayProj.prems(3)])
   have members: "\<And>t. t \<in> set idxTms \<Longrightarrow>
-                   \<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
+                   \<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
   proof -
     fix t assume mem: "t \<in> set idxTms"
     have c: "is_constant_term t"
@@ -1059,14 +1060,14 @@ next
     have fv: "core_term_free_vars t |\<subseteq>| fmdom vals"
       using CoreTm_ArrayProj.prems(2) mem
       by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
-    show "\<exists>N. \<forall>f\<ge>N. interp_term f st t = eval_const vals t"
+    show "\<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
       using CoreTm_ArrayProj.IH(2) mem c fv CoreTm_ArrayProj.prems(3) by blast
   qed
   show ?case
   proof (rule agree_lift_tm_list[OF sub_arr agree_list[OF members]])
-    fix f assume h1: "interp_term f st arr = eval_const vals arr"
-             and h2: "interp_term_list f st idxTms = eval_const_list vals idxTms"
-    show "interp_term (Suc f) st (CoreTm_ArrayProj arr idxTms)
+    fix f assume h1: "interp_term d f st arr = eval_const vals arr"
+             and h2: "interp_term_list d f st idxTms = eval_const_list vals idxTms"
+    show "interp_term d (Suc f) st (CoreTm_ArrayProj arr idxTms)
             = eval_const vals (CoreTm_ArrayProj arr idxTms)"
       by (simp add: h1 h2 split: sum.split CoreValue.split)
   qed
@@ -1076,15 +1077,15 @@ next
     using CoreTm_Match.prems(1) by simp
   have fv_scrut: "core_term_free_vars scrut |\<subseteq>| fmdom vals"
     using CoreTm_Match.prems(2) by (auto simp: fsubset_iff)
-  have sub_scrut: "\<exists>N. \<forall>f\<ge>N. interp_term f st scrut = eval_const vals scrut"
+  have sub_scrut: "\<exists>N. \<forall>f\<ge>N. interp_term d f st scrut = eval_const vals scrut"
     by (rule CoreTm_Match.IH(1)[OF c_scrut fv_scrut CoreTm_Match.prems(3)])
   show ?case
   proof (cases "eval_const vals scrut")
     case (Inl err)
     show ?thesis
     proof (rule agree_lift1[OF sub_scrut])
-      fix f assume h: "interp_term f st scrut = eval_const vals scrut"
-      show "interp_term (Suc f) st (CoreTm_Match scrut arms)
+      fix f assume h: "interp_term d f st scrut = eval_const vals scrut"
+      show "interp_term d (Suc f) st (CoreTm_Match scrut arms)
               = eval_const vals (CoreTm_Match scrut arms)"
         by (simp add: h Inl)
     qed
@@ -1095,8 +1096,8 @@ next
       case (Inl err)
       show ?thesis
       proof (rule agree_lift1[OF sub_scrut])
-        fix f assume h: "interp_term f st scrut = eval_const vals scrut"
-        show "interp_term (Suc f) st (CoreTm_Match scrut arms)
+        fix f assume h: "interp_term d f st scrut = eval_const vals scrut"
+        show "interp_term d (Suc f) st (CoreTm_Match scrut arms)
                 = eval_const vals (CoreTm_Match scrut arms)"
           by (simp add: h Inr Inl)
       qed
@@ -1110,13 +1111,13 @@ next
       have fv_arm: "core_term_free_vars armTm |\<subseteq>| fmdom vals"
         using CoreTm_Match.prems(2) mem
         by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
-      have sub_arm: "\<exists>N. \<forall>f\<ge>N. interp_term f st armTm = eval_const vals armTm"
+      have sub_arm: "\<exists>N. \<forall>f\<ge>N. interp_term d f st armTm = eval_const vals armTm"
         using CoreTm_Match.IH(2) mem c_arm fv_arm CoreTm_Match.prems(3) by fastforce
       show ?thesis
       proof (rule agree_lift2[OF sub_scrut sub_arm])
-        fix f assume h1: "interp_term f st scrut = eval_const vals scrut"
-                 and h2: "interp_term f st armTm = eval_const vals armTm"
-        show "interp_term (Suc f) st (CoreTm_Match scrut arms)
+        fix f assume h1: "interp_term d f st scrut = eval_const vals scrut"
+                 and h2: "interp_term d f st armTm = eval_const vals armTm"
+        show "interp_term d (Suc f) st (CoreTm_Match scrut arms)
                 = eval_const vals (CoreTm_Match scrut arms)"
           by (simp add: h1 h2 \<open>eval_const vals scrut = Inr scrutVal\<close> fma)
       qed
@@ -1127,21 +1128,21 @@ next
   have c: "is_constant_term tm" using CoreTm_Sizeof.prems(1) by simp
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom vals"
     using CoreTm_Sizeof.prems(2) by simp
-  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term f st tm = eval_const vals tm"
+  have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
     by (rule CoreTm_Sizeof.IH[OF c fv CoreTm_Sizeof.prems(3)])
   show ?case
   proof (rule agree_lift1[OF sub])
-    fix f assume h: "interp_term f st tm = eval_const vals tm"
-    show "interp_term (Suc f) st (CoreTm_Sizeof tm)
+    fix f assume h: "interp_term d f st tm = eval_const vals tm"
+    show "interp_term d (Suc f) st (CoreTm_Sizeof tm)
             = eval_const vals (CoreTm_Sizeof tm)"
       by (simp add: h)
   qed
 next
   case (CoreTm_Allocated tm)
-  show ?case by (rule agree_leafI) simp
+  then show ?case by simp
 next
   case (CoreTm_Old tm)
-  show ?case by (rule agree_leafI) simp
+  then show ?case by simp
 next
   case (CoreTm_Default defTy)
   then show ?case by simp
@@ -1152,17 +1153,17 @@ qed
 (* Main results for eval_const/interp_term agreement *)
 (* ========================================================================== *)
 
-(* Compile-time evaluation equals runtime interpretation (for SOME fuel)
-   at any state that agrees with the constants' value map. *)
+(* Compile-time evaluation equals runtime interpretation (for SOME fuel, at
+   any depth) at any state that agrees with the constants' value map. *)
 theorem eval_const_interp_agree:
   fixes st :: "'w InterpState"
   assumes "is_constant_term tm"
       and "core_term_free_vars tm |\<subseteq>| fmdom globalVals"
       and "vals_agree st globalVals"
-  shows "\<exists>fuel. interp_term fuel st tm = eval_const globalVals tm"
+  shows "\<exists>fuel. interp_term d fuel st tm = eval_const globalVals tm"
 proof -
-  obtain N where "\<forall>f\<ge>N. interp_term f st tm = eval_const globalVals tm"
-    using eval_const_interp_agree_gen[OF assms] by blast
+  obtain N where "\<forall>f\<ge>N. interp_term d f st tm = eval_const globalVals tm"
+    using eval_const_interp_agree_gen[where d = d, OF assms] by blast
   thus ?thesis by (meson order_refl)
 qed
 
@@ -1172,7 +1173,7 @@ corollary fold_const_interp_agree:
   assumes const: "is_constant_term tm"
       and fold_ok: "fold_const globalVals loc tm = Inr v"
       and ag: "vals_agree st globalVals"
-  shows "\<exists>fuel. interp_term fuel st tm = Inr v"
+  shows "\<exists>fuel. interp_term d fuel st tm = Inr v"
 proof -
   from fold_ok have
     miss: "core_term_free_vars tm |-| fmdom globalVals = {||}" and
@@ -1181,7 +1182,7 @@ proof -
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom globalVals"
     using miss by (metis fempty_iff fminus_iff fsubsetI)
   show ?thesis
-    using eval_const_interp_agree[OF const fv ag] ev by simp
+    using eval_const_interp_agree[where d = d, OF const fv ag] ev by simp
 qed
 
 (* A canonical witness for vals_agree: globals hold exactly the constants' value map,
@@ -1195,6 +1196,8 @@ definition const_eval_state :: "(string, CoreValue) fmap \<Rightarrow> unit Inte
        IS_ConstLocals = {||},
        IS_TyArgs = fmempty,
        IS_DefaultCtors = fmempty,
+       IS_Datatypes = fmempty,
+       IS_DataCtors = fmempty,
        IS_Functions = fmempty,
        IS_World = () \<rparr>"
 
@@ -1211,7 +1214,7 @@ lemma const_eval_state_agrees: "vals_agree (const_eval_state vals) vals"
 corollary fold_const_is_core_evaluation:
   assumes const: "is_constant_term tm"
       and fold_ok: "fold_const globalVals loc tm = Inr v"
-  shows "\<exists>fuel. interp_term fuel (const_eval_state globalVals) tm = Inr v"
+  shows "\<exists>fuel. interp_term d fuel (const_eval_state globalVals) tm = Inr v"
   by (rule fold_const_interp_agree[OF const fold_ok const_eval_state_agrees])
 
 end

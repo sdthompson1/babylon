@@ -3616,12 +3616,10 @@ proof -
       never moves, only the environment does. The tyvar-widening step of the
       term chain is unnecessary: value_has_type ignores the tyvar fields, so
       one value_has_type_env_mono application reaches the mid env directly.\<close>
-  have cons_envA: "tyenv_ctors_consistent ?envA"
-    using wfA unfolding tyenv_well_formed_def by blast
   have ext: "tyenv_extends ?e1 ?mid"
     using link_mid_env_extends[OF linkA linkB linkM setMS ghostOK] .
   have v_mid: "value_has_type ?mid v declTy0"
-  proof (rule value_has_type_env_mono[OF _ _ _ cons_envA a_vht])
+  proof (rule value_has_type_env_mono[OF _ _ a_vht])
     fix c e assume "fmlookup (TE_DataCtors ?envA) c = Some e"
     hence "fmlookup (TE_DataCtors ?e1) c = Some e" by simp
     thus "fmlookup (TE_DataCtors ?mid) c = Some e"
@@ -3631,14 +3629,6 @@ proof -
     hence "fmlookup (TE_Datatypes ?e1) d = Some n" by simp
     thus "fmlookup (TE_Datatypes ?mid) d = Some n"
       using ext unfolding tyenv_extends_def by blast
-  next
-    fix d assume "d |\<in>| fmdom (TE_Datatypes ?envA)"
-    hence d_e1: "d |\<in>| fmdom (TE_Datatypes ?e1)" by simp
-    have gd_e1: "TE_GhostDatatypes ?e1 = TE_GhostDatatypes ?envA" by simp
-    from ext d_e1 have "d |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> d |\<in>| TE_GhostDatatypes ?e1"
-      unfolding tyenv_extends_def by blast
-    thus "d |\<in>| TE_GhostDatatypes ?mid \<longleftrightarrow> d |\<in>| TE_GhostDatatypes ?envA"
-      using gd_e1 by simp
   qed
   \<comment> \<open>Substitute with the whole link's substitution, then collapse the env.\<close>
   have v_subst: "value_has_type (apply_subst_to_module_env ?\<sigma>M ?envM ?mid) v

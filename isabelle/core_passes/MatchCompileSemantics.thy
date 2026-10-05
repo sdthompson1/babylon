@@ -1838,7 +1838,8 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
           unfolding col_pats_eq ps0_c_int by simp
         have col_c_int: "is_integer_type (colTys ! c)"
           using col_c_int_when[OF i0_in] by (cases "colTys ! c") auto
-        from v_c_ty col_c_int obtain sign bits i where v_c_eq: "v_c = CV_FiniteInt sign bits i"
+        from v_c_ty col_c_int col_c_int_when[OF i0_in]
+        obtain sign bits i where v_c_eq: "v_c = CV_FiniteInt sign bits i"
           by (cases v_c; cases "colTys ! c") auto
         have eval_at_c: "eval_match_scrut \<rho> (scruts ! c) = Some (CV_FiniteInt sign bits i)"
           using v_c_eval v_c_eq by simp

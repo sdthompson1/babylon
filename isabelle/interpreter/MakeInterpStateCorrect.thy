@@ -9,7 +9,9 @@ begin
 (* This theory proves that make_interp_state, applied to a closed and
    well-typed CoreModule (with contract-satisfying extern functions),
    produces a state satisfying state_matches_env against the normalized
-   module's type environment, with an empty store typing.
+   module's type environment, with an empty store typing. The module
+   typecheck types each function body at the mode given by FI_Ghost, which
+   is what state_matches_env asks of a function body.
 
    Proof plan. Write m' = normalize_module m and env = CM_TyEnv m'. The
    constructed state is base_interp_state with CM_GlobalVars m' installed as
@@ -17,8 +19,8 @@ begin
    of state_matches_env follows directly: every declared global is defined
    (by closedness's domain equality) and its stored value has the declared
    type (module_globals_well_typed - the elaborator evaluated the
-   initializers at compile time). Every declared non-ghost function got a
-   matching InterpFun (build_interp_funs). *)
+   initializers at compile time). Every declared function, ghost or not, got
+   a matching InterpFun (build_interp_funs). *)
 
 
 (* ========================================================================== *)
@@ -63,11 +65,10 @@ qed
 (* Body environments                                                          *)
 (* ========================================================================== *)
 
-(* For a non-ghost function in a module with no abstract types, the module
-   typechecker's body environment coincides with the interpreter's. *)
+(* In a module with no abstract types, the module typechecker's body
+   environment coincides with the interpreter's, for any function. *)
 lemma module_body_env_for_eq_body_env_for:
   assumes abs_empty: "TE_AbstractTypes env = {||}"
-      and ng: "FI_Ghost info = NotGhost"
   shows "module_body_env_for env names info = body_env_for env names info"
   using assms unfolding module_body_env_for_def body_env_for_def by simp
 
@@ -76,15 +77,14 @@ lemma module_body_env_for_eq_body_env_for:
 (* build_interp_funs                                                          *)
 (* ========================================================================== *)
 
-(* A successful build gives every listed non-ghost function a matching
-   InterpFun: the fields of make_interp_fun, with the Core body, or the
-   supplied ExternFunc for an extern function. *)
+(* A successful build gives every listed function a matching InterpFun: the
+   fields of make_interp_fun, with the Core body, or the supplied ExternFunc
+   for an extern function. *)
 lemma build_interp_funs_lookup_some:
   assumes ok: "build_interp_funs externs env pairs = Inr funs"
       and mem: "(name, f) \<in> set pairs"
       and dist: "distinct (map fst pairs)"
       and info_lk: "fmlookup (TE_Functions env) name = Some info"
-      and ng: "FI_Ghost info = NotGhost"
   shows "\<exists>body. fmlookup funs name = Some (make_interp_fun info f body)
               \<and> (case CF_Body f of
                    Some stmts \<Rightarrow> body = Inl stmts
@@ -115,41 +115,38 @@ next
     proof (cases "CF_Body f")
       case (Some stmts)
       have "funs = fmupd name (make_interp_fun info f (Inl stmts)) acc"
-        using Cons.prems(1) p_eq True f1_eq info1_lk info1_eq rest_ok ng Some
-        by (auto split: if_splits)
+        using Cons.prems(1) p_eq True f1_eq info1_lk info1_eq rest_ok Some
+        by auto
       then show ?thesis using Some by simp
     next
       case None
-      from Cons.prems(1) p_eq True f1_eq info1_lk info1_eq rest_ok ng None
+      from Cons.prems(1) p_eq True f1_eq info1_lk info1_eq rest_ok None
       obtain externFun where
         ext_lk: "fmlookup externs name = Some externFun" and
         funs_eq: "funs = fmupd name (make_interp_fun info f (Inr externFun)) acc"
-        by (auto split: if_splits option.splits)
+        by (auto split: option.splits)
       then show ?thesis using None by auto
     qed
   next
     case False
     from Cons.prems(1) p_eq info1_lk rest_ok False
     have lk_eq: "fmlookup funs name = fmlookup acc name"
-      by (auto split: if_splits option.splits)
+      by (auto split: option.splits)
     from Cons.prems(2) p_eq False have mem_rest: "(name, f) \<in> set rest" by auto
     from Cons.prems(3) have dist_rest: "distinct (map fst rest)" by simp
     from Cons.IH[OF rest_ok mem_rest dist_rest] lk_eq show ?thesis by simp
   qed
 qed
 
-(* Names that occur in the list only as ghost functions (or not at all) are
-   absent from the built map. *)
+(* Names that do not occur in the list are absent from the built map. *)
 lemma build_interp_funs_lookup_none:
   assumes ok: "build_interp_funs externs env pairs = Inr funs"
-      and ghost_only:
-        "\<And>f. (name, f) \<in> set pairs \<Longrightarrow>
-           \<exists>info. fmlookup (TE_Functions env) name = Some info \<and> FI_Ghost info = Ghost"
+      and absent: "name \<notin> fst ` set pairs"
   shows "fmlookup funs name = None"
-  using ok ghost_only
+  using ok absent
 proof (induction pairs arbitrary: funs)
   case Nil
-  then show ?case by simp
+  then show ?case by auto
 next
   case (Cons p rest)
   obtain n1 f1 where p_eq: "p = (n1, f1)" by (cases p) auto
@@ -159,25 +156,15 @@ next
   from Cons.prems(1) p_eq info1_lk obtain acc where
     rest_ok: "build_interp_funs externs env rest = Inr acc"
     by (auto split: sum.splits)
+  from Cons.prems(2) p_eq have ne: "n1 \<noteq> name"
+    and absent_rest: "name \<notin> fst ` set rest"
+    by auto
   have acc_none: "fmlookup acc name = None"
-    using Cons.IH[OF rest_ok] Cons.prems(2) p_eq by auto
-  show ?case
-  proof (cases "n1 = name")
-    case True
-    from Cons.prems(2) p_eq True obtain info where
-      "fmlookup (TE_Functions env) name = Some info" and "FI_Ghost info = Ghost"
-      by auto
-    with True info1_lk have ghost1: "FI_Ghost info1 = Ghost" by simp
-    have "funs = acc"
-      using Cons.prems(1) p_eq info1_lk rest_ok ghost1 by auto
-    then show ?thesis using acc_none by simp
-  next
-    case False
-    from Cons.prems(1) p_eq info1_lk rest_ok False
-    have "fmlookup funs name = fmlookup acc name"
-      by (auto split: if_splits option.splits)
-    then show ?thesis using acc_none by simp
-  qed
+    by (rule Cons.IH[OF rest_ok absent_rest])
+  from Cons.prems(1) p_eq info1_lk rest_ok ne
+  have "fmlookup funs name = fmlookup acc name"
+    by (auto split: option.splits)
+  then show ?case using acc_none by simp
 qed
 
 
@@ -218,13 +205,11 @@ qed
 (* The state holding the module's global values and the built function map
    matches env: every declared global is defined (by the domain equality from
    closedness) and its stored value has the declared type
-   (module_globals_well_typed); every declared non-ghost function has a
-   matching InterpFun; nothing extra exists. *)
+   (module_globals_well_typed); every declared function has a matching
+   InterpFun; nothing extra exists. *)
 lemma assembled_state_matches:
-  assumes wf: "tyenv_well_formed env"
-      and scope: "tyenv_module_scope env"
+  assumes scope: "tyenv_module_scope env"
       and tv: "TE_TypeVars env = {||}"
-      and rtv: "TE_RuntimeTypeVars env = {||}"
       and gdom: "fmdom (TE_GlobalVars env) = fmdom globals"
       and fdom: "fmdom (TE_Functions env) = fmdom funDefs"
       and gwt: "module_globals_well_typed env globals"
@@ -241,7 +226,6 @@ proof -
   let ?st = "base_interp_state env world \<lparr> IS_Globals := globals, IS_Functions := funs \<rparr>"
 
   from scope have locals: "TE_LocalVars env = fmempty"
-    and ghostlocals: "TE_GhostLocals env = {||}"
     and constlocals: "TE_ConstLocals env = {||}"
     and abs_tv: "TE_AbstractTypes env = TE_TypeVars env"
     unfolding tyenv_module_scope_def by simp_all
@@ -256,6 +240,8 @@ proof -
     "IS_TyArgs ?st = fmempty"
     "IS_DefaultCtors ?st = default_ctors_map env"
     "IS_Functions ?st = funs"
+    "IS_Datatypes ?st = TE_Datatypes env"
+    "IS_DataCtors ?st = TE_DataCtors env"
     by (simp_all add: base_interp_state_def)
 
   \<comment> \<open>Conjunct: declared globals exist with their declared types.\<close>
@@ -291,14 +277,12 @@ proof -
       using fmdom_notD by (simp add: st_sel)
   qed
 
-  \<comment> \<open>Conjunct: declared non-ghost functions exist with matching InterpFuns.\<close>
+  \<comment> \<open>Conjunct: declared functions (ghost or not) exist with matching InterpFuns.\<close>
   have fe: "funs_exist_in_state ?st env"
     unfolding funs_exist_in_state_def
   proof (intro allI impI)
     fix name info
-    assume a: "fmlookup (TE_Functions env) name = Some info \<and> FI_Ghost info = NotGhost"
-    hence decl: "fmlookup (TE_Functions env) name = Some info"
-      and ng: "FI_Ghost info = NotGhost" by auto
+    assume decl: "fmlookup (TE_Functions env) name = Some info"
     have "name |\<in>| fmdom funDefs" using fmdomI[OF decl] fdom by simp
     then obtain f where f_lk: "fmlookup funDefs name = Some f"
       by (auto simp add: fmlookup_dom_iff)
@@ -311,7 +295,7 @@ proof -
                  | None \<Rightarrow> (\<exists>externFun. fmlookup externs name = Some externFun
                                        \<and> body = Inr externFun))"
       using build_interp_funs_lookup_some[OF funs_ok mem
-              distinct_map_fst_sorted_list_of_fmap decl ng]
+              distinct_map_fst_sorted_list_of_fmap decl]
       by auto
 
     \<comment> \<open>Definition-vs-declaration consistency from the module typecheck.\<close>
@@ -349,23 +333,23 @@ proof -
              core_statement_list_type
                (body_env_for env
                   (map fst (zip (CF_Args f) (map snd (FI_TmArgs info)))) info)
-               NotGhost bodyStmts \<noteq> None
+               (FI_Ghost info) bodyStmts \<noteq> None
          | Inr externFun \<Rightarrow> extern_fun_contract env info externFun"
       unfolding mapfst
     proof (cases "CF_Body f")
       case (Some stmts)
       with body_ok have body_eq: "body = Inl stmts" by simp
-      from body_wt Some info'_eq ng
+      from body_wt Some info'_eq
       have "core_statement_list_type
-              (module_body_env_for env (CF_Args f) info) NotGhost stmts \<noteq> None"
+              (module_body_env_for env (CF_Args f) info) (FI_Ghost info) stmts \<noteq> None"
         by simp
       thus "case body of
               Inl bodyStmts \<Rightarrow>
                 core_statement_list_type
-                  (body_env_for env (CF_Args f) info) NotGhost bodyStmts \<noteq> None
+                  (body_env_for env (CF_Args f) info) (FI_Ghost info) bodyStmts \<noteq> None
             | Inr externFun \<Rightarrow> extern_fun_contract env info externFun"
         unfolding body_eq
-        by (simp add: module_body_env_for_eq_body_env_for[OF abs ng])
+        by (simp add: module_body_env_for_eq_body_env_for[OF abs])
     next
       case None
       with body_ok obtain externFun where
@@ -375,7 +359,7 @@ proof -
       show "case body of
               Inl bodyStmts \<Rightarrow>
                 core_statement_list_type
-                  (body_env_for env (CF_Args f) info) NotGhost bodyStmts \<noteq> None
+                  (body_env_for env (CF_Args f) info) (FI_Ghost info) bodyStmts \<noteq> None
             | Inr externFun \<Rightarrow> extern_fun_contract env info externFun"
         unfolding body_eq
         using externs_ok[OF decl ext_lk] by simp
@@ -390,25 +374,22 @@ proof -
       by (simp add: st_sel funs_lk match)
   qed
 
-  \<comment> \<open>Conjunct: no functions beyond the declared non-ghost ones.\<close>
+  \<comment> \<open>Conjunct: no functions beyond the declared ones.\<close>
   have nef: "no_extra_funs ?st env"
     unfolding no_extra_funs_def
   proof (intro allI impI)
     fix n
-    assume a: "case fmlookup (TE_Functions env) n of
-                 None \<Rightarrow> True | Some info \<Rightarrow> FI_Ghost info = Ghost"
-    have "fmlookup funs n = None"
-    proof (rule build_interp_funs_lookup_none[OF funs_ok])
-      fix f assume "(n, f) \<in> set (sorted_list_of_fmap funDefs)"
+    assume a: "fmlookup (TE_Functions env) n = None"
+    have "n \<notin> fst ` set (sorted_list_of_fmap funDefs)"
+    proof
+      assume "n \<in> fst ` set (sorted_list_of_fmap funDefs)"
+      then obtain f where "(n, f) \<in> set (sorted_list_of_fmap funDefs)" by auto
       hence "fmlookup funDefs n = Some f" by (simp add: sorted_list_of_fmap_mem_iff)
       hence "n |\<in>| fmdom (TE_Functions env)" using fmdomI fdom by fastforce
-      then obtain info where info_lk: "fmlookup (TE_Functions env) n = Some info"
-        by (auto simp add: fmlookup_dom_iff)
-      with a have "FI_Ghost info = Ghost" by simp
-      with info_lk
-      show "\<exists>info. fmlookup (TE_Functions env) n = Some info \<and> FI_Ghost info = Ghost"
-        by auto
+      with a show False by (auto simp add: fmlookup_dom_iff)
     qed
+    hence "fmlookup funs n = None"
+      by (rule build_interp_funs_lookup_none[OF funs_ok])
     thus "fmlookup (IS_Functions ?st) n = None" by (simp add: st_sel)
   qed
 
@@ -430,12 +411,12 @@ proof -
     show "no_extra_funs ?st env" by (rule nef)
     show "const_locals_match ?st env"
       unfolding const_locals_match_def
-      by (simp add: st_sel constlocals ghostlocals)
+      by (simp add: st_sel constlocals)
     show "store_well_typed ?st env []"
       unfolding store_well_typed_def by (simp add: st_sel)
     show "ty_args_well_formed ?st env"
       unfolding ty_args_well_formed_def
-      by (simp add: st_sel rtv ranEmpty srtEmpty)
+      by (simp add: st_sel tv ranEmpty srtEmpty)
     show "default_ctors_match ?st env"
     proof -
       have "IS_DefaultCtors ?st = default_ctors_map env" by (rule st_sel(7))
@@ -443,9 +424,20 @@ proof -
       moreover have "TE_DataCtors env = TE_DataCtors env" by (rule refl)
       ultimately show ?thesis by (rule default_ctors_map_match)
     qed
+    show "tables_match ?st env"
+      unfolding tables_match_def by (simp add: st_sel)
     show "TE_AbstractTypes env = {||}" by (rule abs)
   qed
 qed
+
+
+(* The normalized type environment of a well-typed module is well-formed, in
+   the sense that the type soundness theorem asks for. *)
+lemma core_module_well_typed_env_well_formed:
+  assumes wt: "core_module_well_typed m"
+  shows "tyenv_well_formed (CM_TyEnv (normalize_module m))"
+  using wt unfolding core_module_well_typed_def normalized_module_well_typed_def
+  by blast
 
 
 (* ========================================================================== *)
@@ -472,8 +464,7 @@ proof -
   \<comment> \<open>Facts about the normalized module.\<close>
   have nwt: "normalized_module_well_typed m'"
     using wt unfolding core_module_well_typed_def m'_def by blast
-  have wf: "tyenv_well_formed env"
-    and scope: "tyenv_module_scope env"
+  have scope: "tyenv_module_scope env"
     and gwt: "module_globals_well_typed env (CM_GlobalVars m')"
     and fwt: "module_functions_well_typed env (CM_Functions m')"
     using nwt unfolding normalized_module_well_typed_def env_def by blast+
@@ -483,13 +474,6 @@ proof -
     and fdom: "fmdom (TE_Functions env) = fmdom (CM_Functions m')"
     and tv: "TE_TypeVars env = {||}"
     using closed' unfolding core_module_closed_def env_def by blast+
-  have rtv: "TE_RuntimeTypeVars env = {||}"
-  proof -
-    have "TE_RuntimeTypeVars env |\<subseteq>| TE_TypeVars env"
-      using wf
-      unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def by blast
-    thus ?thesis using tv by simp
-  qed
   have externs_ok': "\<And>name info externFun.
         \<lbrakk> fmlookup (TE_Functions env) name = Some info;
           fmlookup externs name = Some externFun \<rbrakk> \<Longrightarrow>
@@ -507,7 +491,7 @@ proof -
 
   show ?thesis
     unfolding m'_def[symmetric] env_def[symmetric] state_eq
-    by (rule assembled_state_matches[OF wf scope tv rtv gdom fdom gwt fwt
+    by (rule assembled_state_matches[OF scope tv gdom fdom gwt fwt
           funs_ok[unfolded funPairs_def] externs_ok'])
 qed
 
