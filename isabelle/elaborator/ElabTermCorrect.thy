@@ -3,43 +3,6 @@ theory ElabTermCorrect
 begin
 
 (* ========================================================================== *)
-(* Record update helper lemmas *)
-(* ========================================================================== *)
-
-(* A substitution whose domain is disjoint from TE_TypeVars env
-   is the identity on all local variable types and the return type.
-   This pattern recurs in If, Quantifier, Call, RecordUpdate, etc. *)
-lemma flex_subst_identity_on_env:
-  assumes dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> n |\<notin>| TE_TypeVars env"
-      and wf: "tyenv_well_formed env"
-      and locals_eq: "TE_LocalVars env' = TE_LocalVars env"
-      and ret_eq: "TE_ReturnType env' = TE_ReturnType env"
-  shows "(\<forall>vname vty. fmlookup (TE_LocalVars env') vname = Some vty
-                       \<longrightarrow> apply_subst subst vty = vty)
-       \<and> apply_subst subst (TE_ReturnType env') = TE_ReturnType env'"
-proof (intro conjI allI impI)
-  fix vname vty
-  assume lk: "fmlookup (TE_LocalVars env') vname = Some vty"
-  with locals_eq have lk_env: "fmlookup (TE_LocalVars env) vname = Some vty" by simp
-  from wf have "tyenv_vars_well_kinded env" unfolding tyenv_well_formed_def by simp
-  with lk_env have "is_well_kinded env vty" unfolding tyenv_vars_well_kinded_def by blast
-  hence "type_tyvars vty \<subseteq> fset (TE_TypeVars env)"
-    using is_well_kinded_type_tyvars_subset by blast
-  hence "type_tyvars vty \<inter> fset (fmdom subst) = {}" using dom_flex by auto
-  thus "apply_subst subst vty = vty" by (rule apply_subst_disjoint_id)
-next
-  from wf have "tyenv_return_type_well_kinded env" unfolding tyenv_well_formed_def by simp
-  hence "is_well_kinded env (TE_ReturnType env)" unfolding tyenv_return_type_well_kinded_def .
-  hence "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)"
-    using is_well_kinded_type_tyvars_subset by blast
-  hence "type_tyvars (TE_ReturnType env) \<inter> fset (fmdom subst) = {}" using dom_flex by auto
-  hence "apply_subst subst (TE_ReturnType env) = TE_ReturnType env"
-    by (rule apply_subst_disjoint_id)
-  thus "apply_subst subst (TE_ReturnType env') = TE_ReturnType env'" using ret_eq by simp
-qed
-
-
-(* ========================================================================== *)
 (* The special arguments of a call *)
 (* ========================================================================== *)
 
@@ -67,8 +30,6 @@ lemma special_args_typed:
 proof -
   let ?EG = "extend_env_with_tyvars env Ghost base hi"
   let ?E = "extend_env_with_tyvars env g base hi"
-  have wfG: "tyenv_well_formed ?EG"
-    using wf tyenv_well_formed_extend_env_with_tyvars by blast
   have triv: "Ghost = NotGhost \<longrightarrow> P" for P :: bool by simp
 
   \<comment> \<open>The arguments are typed in the env with all the metavariables.\<close>
@@ -78,17 +39,6 @@ proof -
     assume "core_term_type (extend_env_with_tyvars env Ghost mid hi) Ghost tm = Some ty"
     then show "core_term_type ?EG Ghost tm = Some ty"
       by (rule core_term_type_extend_env_with_tyvars_mono[OF _ le1 order_refl])
-  qed
-  have len_tms: "length tms = length tys" using typedG by (rule list_all2_lengthD)
-  have tys_wk: "list_all (is_well_kinded ?EG) tys"
-    unfolding list_all_length
-  proof (intro allI impI)
-    fix i assume i: "i < length tys"
-    from i len_tms have i': "i < length tms" by simp
-    from list_all2_nthD[OF typedG i']
-    have "core_term_type ?EG Ghost (tms ! i) = Some (tys ! i)" .
-    then show "is_well_kinded ?EG (tys ! i)"
-      using wfG core_term_type_well_kinded by blast
   qed
 
   \<comment> \<open>The expected types are well-kinded there too. (Well-kindedness does not
@@ -106,36 +56,11 @@ proof -
     then show "is_well_kinded ?EG t" by (simp only: wk_eq)
   qed
 
-  \<comment> \<open>Take unify_and_coerce apart, and apply the correctness of unification.\<close>
-  from unify have
-    ut: "unify_type_lists (\<lambda>n. n |\<in>| mv_fset mid hi) locOf 0 tys expTys fmempty = Inr s" and
-    tms'_eq: "tms' = apply_call_coercions s tms tys expTys"
-    by (auto simp: unify_and_coerce_def split: sum.splits)
-  have empty_dom_flex: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> n |\<in>| mv_fset mid hi"
-    by simp
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?EG ty"
-    by (simp add: fmran'_def)
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-  note U = unify_type_lists_correct
-             [where ghost = Ghost,
-              OF ut wfG len tys_wk exp_wkG empty_wk triv triv triv empty_dom_flex]
-  from U have s_wk: "\<forall>ty \<in> fmran' s. is_well_kinded ?EG ty" by blast
-  from U have unified:
-    "list_all2 (\<lambda>actualTy expectedTy.
-        apply_subst s actualTy = apply_subst s expectedTy
-        \<or> coercible (apply_subst s actualTy) (apply_subst s expectedTy))
-      tys expTys"
-    by blast
-  from U have s_dom: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> n |\<in>| mv_fset mid hi" by blast
-  from U empty_cp have s_cp: "\<forall>ty \<in> fmran' s. is_complete_type ty" by blast
-
-  \<comment> \<open>The substitution binds new metavariables only, so it does not touch the
-      types of env.\<close>
-  have dom_env: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> n |\<notin>| TE_TypeVars env"
+  \<comment> \<open>Only the metavariables of [mid, hi) are flexible, and none of them is a
+      type variable of env.\<close>
+  have flex: "\<forall>n. n |\<in>| mv_fset mid hi \<longrightarrow> n |\<notin>| TE_TypeVars env"
   proof (intro allI impI)
-    fix n assume "n |\<in>| fmdom s"
-    with s_dom have nin: "n |\<in>| mv_fset mid hi" by blast
+    fix n assume nin: "n |\<in>| mv_fset mid hi"
     show "n |\<notin>| TE_TypeVars env"
     proof
       assume "n |\<in>| TE_TypeVars env"
@@ -145,28 +70,11 @@ proof -
       with nin show False by blast
     qed
   qed
-  have EG_locals: "TE_LocalVars ?EG = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have EG_ret: "TE_ReturnType ?EG = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  have EG_abs: "TE_AbstractTypes ?EG = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_env wf EG_locals EG_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?EG) name = Some ty'
-                                      \<Longrightarrow> apply_subst s ty' = ty'"
-    and ret_unaffected: "apply_subst s (TE_ReturnType ?EG) = TE_ReturnType ?EG"
-    by blast+
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?EG \<Longrightarrow> fmlookup s n = None"
-    using flex_subst_abs_no_subst[OF dom_env[rule_format] wf EG_abs] .
 
   \<comment> \<open>The coerced arguments have the substituted expected types.\<close>
-  have coerced: "list_all2 (\<lambda>tm e. core_term_type ?EG Ghost tm = Some (apply_subst s e))
-                   tms' expTys"
-    unfolding tms'_eq
-    by (rule apply_call_coercions_correct
-               [where ghost = Ghost,
-                OF typedG unified wfG s_wk triv len_tms len
-                   locals_unaffected ret_unaffected abs_no_subst exp_wkG triv s_cp])
+  note U = unify_and_coerce_correct
+             [where ghost = Ghost, OF unify flex wf refl typedG len exp_wkG triv]
+  note coerced = U(1) and s_dom = U(4) and dom_env = U(5)
 
   \<comment> \<open>The substitution leaves the expected types as they are: they mention
       no metavariable of [mid, hi).\<close>
@@ -229,6 +137,10 @@ proof -
   show ?thesis by (rule list_all2_mono[OF coerced']) (rule to_E)
 qed
 
+
+(* ========================================================================== *)
+(* Record update helper lemmas *)
+(* ========================================================================== *)
 
 lemma check_update_fields_exist_sound:
   "check_update_fields_exist flds parentFields = None \<Longrightarrow>
@@ -380,8 +292,6 @@ proof -
   have mono_3: "next_mvP \<le> next_mv'"
     using elab_term_list_next_mv_monotone[OF elab_special] .
   have mono_12: "next_mv \<le> next_mvP" using mono_1 mono_2 by simp
-  have wfP: "tyenv_well_formed ?envP"
-    using wf tyenv_well_formed_extend_env_with_tyvars by blast
 
   \<comment> \<open>The expected types, in the env of the plain arguments\<close>
   have exp_wkP: "list_all (is_well_kinded ?envP) expArgTypes"
@@ -419,80 +329,18 @@ proof -
     then show "core_term_type ?envP ghost tm = Some ty"
       by (rule core_term_type_extend_env_with_tyvars_mono[OF _ mono_1 order_refl])
   qed
-  have len_pt: "length plainTms = length plainTys"
-    using ih_plainP by (rule list_all2_lengthD)
   have len_pe: "length plainTys = length ?pExp"
     using elab_term_list_length[OF elab_plain]
           plain_args_length_cong[where fs = flags, OF len_args]
     by simp
-  have ptys_wk: "list_all (is_well_kinded ?envP) plainTys"
-    unfolding list_all_length
-  proof (intro allI impI)
-    fix i assume i: "i < length plainTys"
-    from i len_pt have i': "i < length plainTms" by simp
-    from list_all2_nthD[OF ih_plainP i']
-    have "core_term_type ?envP ghost (plainTms ! i) = Some (plainTys ! i)" .
-    then show "is_well_kinded ?envP (plainTys ! i)"
-      using wfP core_term_type_well_kinded by blast
-  qed
-  have ptys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?envP) plainTys"
-    using ih_plainP wfP core_term_type_notghost_runtime
-    by (auto simp: list_all2_conv_all_nth list_all_length)
 
-  \<comment> \<open>Unification of the plain arguments\<close>
-  from unify_plain have
-    ut: "unify_type_lists ?is_flex locP 0 plainTys ?pExp fmempty = Inr finalSubst" and
-    plainFinal_eq: "plainFinal = apply_call_coercions finalSubst plainTms plainTys ?pExp"
-    by (auto simp: unify_and_coerce_def split: sum.splits)
-  have empty_dom_flex: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?envP ty"
-    by (simp add: fmran'_def)
-  have empty_rt: "ghost = NotGhost
-                    \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?envP ty)"
-    by (simp add: fmran'_def)
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-  note U = unify_type_lists_correct
-             [OF ut wfP len_pe ptys_wk pexp_wk empty_wk ptys_rt pexp_rt empty_rt empty_dom_flex]
-  from U have finalSubst_wkP: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?envP ty" by blast
-  from U have finalSubst_rtP:
-    "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?envP ty)" by blast
-  from U have types_unified:
-    "list_all2 (\<lambda>actualTy expectedTy.
-        apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-        \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-      plainTys ?pExp"
-    by blast
-  from U have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> n |\<notin>| TE_TypeVars env"
-    by blast
-  from U empty_cp have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    by blast
-
-  \<comment> \<open>The substitution doesn't affect locals, the return type or abstract types\<close>
-  have envP_locals: "TE_LocalVars ?envP = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envP_ret: "TE_ReturnType ?envP = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envP_abs: "TE_AbstractTypes ?envP = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf envP_locals envP_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envP) name = Some ty'
-                                      \<Longrightarrow> apply_subst finalSubst ty' = ty'"
-    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?envP) = TE_ReturnType ?envP"
-    by blast+
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envP \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf envP_abs] .
-
-  \<comment> \<open>The coerced plain arguments typecheck with the substituted expected
-      types, in the mode of the call\<close>
-  have plain_coercedP:
-    "list_all2 (\<lambda>tm e. core_term_type ?envP ghost tm = Some (apply_subst finalSubst e))
-       plainFinal ?pExp"
-    unfolding plainFinal_eq
-    by (rule apply_call_coercions_correct
-               [OF ih_plainP types_unified wfP finalSubst_wkP finalSubst_rtP len_pt len_pe
-                   locals_unaffected ret_unaffected abs_no_subst pexp_wk pexp_rt
-                   finalSubst_cp])
+  \<comment> \<open>Unification of the plain arguments: the coerced plain arguments typecheck
+      with the substituted expected types, in the mode of the call, and the
+      substitution has the usual properties, all in that env\<close>
+  have flex: "\<forall>n. ?is_flex n \<longrightarrow> n |\<notin>| TE_TypeVars env" by simp
+  note U = unify_and_coerce_correct[OF unify_plain flex wf refl ih_plainP len_pe pexp_wk pexp_rt]
+  note plain_coercedP = U(1) and finalSubst_wkP = U(2) and finalSubst_rtP = U(3)
+    and finalSubst_dom_flex = U(5) and finalSubst_cp = U(6)
   have plain_coerced:
     "list_all2 (\<lambda>tm e. core_term_type ?env' ghost tm = Some (apply_subst finalSubst e))
        plainFinal ?pExp"
@@ -702,9 +550,6 @@ proof -
   have result_eq: "newTm = CoreTm_ArrayProj newArr coercedIdxTms" "ty = elemTy"
     by auto
 
-  have wf': "tyenv_well_formed ?env'"
-    using wf tyenv_well_formed_extend_env_with_tyvars by blast
-
   \<comment> \<open>Lengths\<close>
   have len_elabIdxTms: "length elabIdxTms = length actualTypes"
     using ih_idxs by (simp add: list_all2_lengthD)
@@ -713,94 +558,17 @@ proof -
   have len_actual_expected: "length actualTypes = length ?expectedTypes"
     using len_elabIdxTms len_idxs_actual len_eq by simp
 
-  \<comment> \<open>Well-kindedness and runtime for actualTypes\<close>
-  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
-  proof (simp add: list_all_length, intro allI impI)
-    fix i assume "i < length actualTypes"
-    with ih_idxs have "core_term_type ?env' ghost (elabIdxTms ! i) = Some (actualTypes ! i)"
-      by (simp add: list_all2_conv_all_nth len_elabIdxTms)
-    thus "is_well_kinded ?env' (actualTypes ! i)"
-      using core_term_type_well_kinded wf' by blast
-  qed
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
-    using ih_idxs wf' core_term_type_notghost_runtime
-    by (auto simp: list_all2_conv_all_nth list_all_length len_elabIdxTms)
-
   \<comment> \<open>Well-kindedness and runtime for expectedTypes (replicate of u64_type) — trivial\<close>
   have expectedTypes_wk: "list_all (is_well_kinded ?env') ?expectedTypes"
     by (simp add: list_all_length u64_type_def)
   have expectedTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') ?expectedTypes"
     by (simp add: list_all_length u64_type_def)
 
-  \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
-  obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex ?locOf 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
-    coercedIdxTms_eq: "coercedIdxTms = apply_call_coercions unifySubst elabIdxTms actualTypes ?expectedTypes" and
-    finalSubst_eq: "finalSubst = unifySubst"
-  proof -
-    from unify_result show ?thesis
-      by (auto simp: unify_and_coerce_def split: sum.splits intro: that)
-  qed
-
-  \<comment> \<open>Apply unify_type_lists_correct\<close>
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?env' ty"
-    by (simp add: fmran'_def)
-  have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
-    by (simp add: fmran'_def)
-  have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-
-  have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
-       \<and> list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
-           \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
-         actualTypes ?expectedTypes
-       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)
-       \<and> (\<forall>ty \<in> fmran' unifySubst. is_complete_type ty)"
-    using unify_type_lists_correct[OF unify_types
-            wf' len_actual_expected actualTypes_wk expectedTypes_wk empty_wk
-            actualTypes_rt expectedTypes_rt empty_rt empty_dom] empty_cp by blast
-
-  have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    using unify_correct finalSubst_eq by simp
-  have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-         actualTypes ?expectedTypes"
-    using unify_correct finalSubst_eq by simp
-
-  \<comment> \<open>Subst doesn't affect locals or return type\<close>
-  have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf env'_locals env'_ret]
-  have locals_unaffected: "\<And>vname vty. fmlookup (TE_LocalVars ?env') vname = Some vty
-                                       \<Longrightarrow> apply_subst finalSubst vty = vty"
-    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-    by blast+
-  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
-
-  \<comment> \<open>Apply apply_call_coercions_correct — coerced index terms have type u64_type\<close>
-  have coerced_typed: "list_all2 (\<lambda>tm expectedTy.
-           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
-         coercedIdxTms ?expectedTypes"
-    using apply_call_coercions_correct[OF ih_idxs types_unified wf'
-            finalSubst_wk finalSubst_rt len_elabIdxTms len_actual_expected
-            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt
-            finalSubst_cp]
-          coercedIdxTms_eq finalSubst_eq by simp
+  \<comment> \<open>The coerced index terms have type (subst of) u64_type\<close>
+  have flex: "\<forall>n. ?is_flex n \<longrightarrow> n |\<notin>| TE_TypeVars env" by simp
+  note coerced_typed = unify_and_coerce_correct(1)
+                         [OF unify_result flex wf refl ih_idxs len_actual_expected
+                             expectedTypes_wk expectedTypes_rt]
 
   \<comment> \<open>apply_subst on u64_type is identity\<close>
   have subst_u64: "apply_subst finalSubst u64_type = u64_type"
@@ -880,9 +648,6 @@ proof -
                               [CoreDim_Fixed (int (length coercedTms))]"
     by (auto simp: Let_def split: sum.splits prod.splits)
 
-  have wf': "tyenv_well_formed ?env'"
-    using wf tyenv_well_formed_extend_env_with_tyvars by blast
-
   \<comment> \<open>Fresh meta next_mv is a type var (and runtime in NotGhost mode) in ?env'\<close>
   have next_mv_lt: "next_mv < next_mv'"
   proof -
@@ -900,19 +665,6 @@ proof -
   have len_expected: "length actualTypes = length ?expectedTypes"
     using len_elabTms by simp
 
-  \<comment> \<open>Well-kindedness and runtime for actualTypes in ?env'\<close>
-  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
-  proof (simp add: list_all_length, intro allI impI)
-    fix i assume "i < length actualTypes"
-    with ih_elems have "core_term_type ?env' ghost (elabTms ! i) = Some (actualTypes ! i)"
-      by (simp add: list_all2_conv_all_nth len_elabTms)
-    thus "is_well_kinded ?env' (actualTypes ! i)"
-      using core_term_type_well_kinded wf' by blast
-  qed
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
-    using ih_elems wf' core_term_type_notghost_runtime
-    by (auto simp: list_all2_conv_all_nth list_all_length len_elabTms)
-
   \<comment> \<open>Well-kindedness and runtime for expectedTypes (replicate of CoreTy_Var next_mv)\<close>
   have elemTy_wk: "is_well_kinded ?env' ?elemTy"
     using next_mv_in by simp
@@ -923,76 +675,13 @@ proof -
   have expectedTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') ?expectedTypes"
     using elemTy_rt by (simp add: list_all_length)
 
-  \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
-  obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex ?locOf 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
-    coercedTms_eq: "coercedTms = apply_call_coercions unifySubst elabTms actualTypes ?expectedTypes" and
-    finalSubst_eq: "finalSubst = unifySubst"
-  proof -
-    from unify_result show ?thesis
-      by (auto simp: unify_and_coerce_def split: sum.splits intro: that)
-  qed
-
-  \<comment> \<open>Apply unify_type_lists_correct\<close>
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?env' ty"
-    by (simp add: fmran'_def)
-  have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
-    by (simp add: fmran'_def)
-  have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-
-  have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
-       \<and> list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
-           \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
-         actualTypes ?expectedTypes
-       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)
-       \<and> (\<forall>ty \<in> fmran' unifySubst. is_complete_type ty)"
-    using unify_type_lists_correct[OF unify_types
-            wf' len_expected actualTypes_wk expectedTypes_wk empty_wk
-            actualTypes_rt expectedTypes_rt empty_rt empty_dom] empty_cp by blast
-
-  have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    using unify_correct finalSubst_eq by simp
-  have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-         actualTypes ?expectedTypes"
-    using unify_correct finalSubst_eq by simp
-
-  \<comment> \<open>Subst doesn't affect locals or return type\<close>
-  have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf env'_locals env'_ret]
-  have locals_unaffected: "\<And>vname vty. fmlookup (TE_LocalVars ?env') vname = Some vty
-                                       \<Longrightarrow> apply_subst finalSubst vty = vty"
-    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-    by blast+
-  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
-
-  \<comment> \<open>Apply apply_call_coercions_correct — coerced element terms type to subst(elemTy)\<close>
+  \<comment> \<open>The coerced element terms type to subst(elemTy), and the substitution
+      is well-kinded and (in NotGhost mode) runtime\<close>
   let ?finalElemTy = "apply_subst finalSubst ?elemTy"
-  have coerced_typed: "list_all2 (\<lambda>tm expectedTy.
-           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
-         coercedTms ?expectedTypes"
-    using apply_call_coercions_correct[OF ih_elems types_unified wf'
-            finalSubst_wk finalSubst_rt len_elabTms len_expected
-            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt
-            finalSubst_cp]
-          coercedTms_eq finalSubst_eq by simp
+  have flex: "\<forall>n. ?is_flex n \<longrightarrow> n |\<notin>| TE_TypeVars env" by simp
+  note U = unify_and_coerce_correct
+             [OF unify_result flex wf refl ih_elems len_expected expectedTypes_wk expectedTypes_rt]
+  note coerced_typed = U(1) and finalSubst_wk = U(2) and finalSubst_rt = U(3)
 
   have len_coerced: "length coercedTms = length elabTms"
     using coerced_typed by (simp add: list_all2_lengthD)
@@ -1111,20 +800,6 @@ proof -
   have len_expected: "length actualTypes = length ?expectedTypes"
     using len_flds_actual by simp
 
-  \<comment> \<open>Well-kindedness and runtime for actualTypes in ?env'\<close>
-  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
-  proof (simp add: list_all_length, intro allI impI)
-    fix i assume "i < length actualTypes"
-    with ih_updates have "core_term_type ?env' ghost (newUpdateTms ! i) = Some (actualTypes ! i)"
-      by (simp add: list_all2_conv_all_nth len_updates)
-    thus "is_well_kinded ?env' (actualTypes ! i)"
-      using core_term_type_well_kinded wf' by blast
-  qed
-
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
-    using ih_updates wf' core_term_type_notghost_runtime
-    by (auto simp: list_all2_conv_all_nth list_all_length len_updates)
-
   \<comment> \<open>Well-kindedness and runtime for parentFields in ?env'\<close>
   have parent_ty_wk: "is_well_kinded ?env' (CoreTy_Record parentFields)"
     using core_term_type_well_kinded[OF ih_parent' wf'] .
@@ -1177,75 +852,14 @@ proof -
     qed
   qed
 
-  \<comment> \<open>Extract unify_type_lists result from unify_and_coerce\<close>
-  obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex ?locOf 0 actualTypes ?expectedTypes fmempty = Inr unifySubst" and
-    coercedTms_eq: "coercedTms = apply_call_coercions unifySubst newUpdateTms actualTypes ?expectedTypes" and
-    finalSubst_eq: "finalSubst = unifySubst"
-  proof -
-    from unify_result show ?thesis
-      by (auto simp: unify_and_coerce_def split: sum.splits intro: that)
-  qed
-
-  \<comment> \<open>Apply unify_type_lists_correct\<close>
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?env' ty"
-    by (simp add: fmran'_def)
-  have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
-    by (simp add: fmran'_def)
-  have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-
-  have unify_correct: "(\<forall>ty \<in> fmran' unifySubst. is_well_kinded ?env' ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' unifySubst. is_runtime_type ?env' ty))
-       \<and> list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst unifySubst actualTy = apply_subst unifySubst expectedTy
-           \<or> coercible (apply_subst unifySubst actualTy) (apply_subst unifySubst expectedTy))
-         actualTypes ?expectedTypes
-       \<and> (\<forall>n. n |\<in>| fmdom unifySubst \<longrightarrow> ?is_flex n)
-       \<and> (\<forall>ty \<in> fmran' unifySubst. is_complete_type ty)"
-    using unify_type_lists_correct[OF unify_types
-            wf' len_expected actualTypes_wk expectedTypes_wk empty_wk
-            actualTypes_rt expectedTypes_rt empty_rt empty_dom] empty_cp by blast
-
-  have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
-    using unify_correct finalSubst_eq by simp
-  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    using unify_correct finalSubst_eq by simp
-  have types_unified: "list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-         actualTypes ?expectedTypes"
-    using unify_correct finalSubst_eq by simp
-
-  \<comment> \<open>Subst doesn't affect locals or return type\<close>
-  have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf env'_locals env'_ret]
-  have locals_unaffected: "\<And>vname vty. fmlookup (TE_LocalVars ?env') vname = Some vty
-                                       \<Longrightarrow> apply_subst finalSubst vty = vty"
-    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-    by blast+
-  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
-
-  \<comment> \<open>Apply apply_call_coercions_correct\<close>
-  have coerced_typed: "list_all2 (\<lambda>tm expectedTy.
-           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
-         coercedTms ?expectedTypes"
-    using apply_call_coercions_correct[OF ih_updates types_unified wf'
-            finalSubst_wk finalSubst_rt len_updates len_expected
-            locals_unaffected ret_unaffected abs_no_subst expectedTypes_wk expectedTypes_rt
-            finalSubst_cp]
-          coercedTms_eq finalSubst_eq by simp
+  \<comment> \<open>The coerced update terms have the substituted expected types, and the
+      substitution has the usual properties\<close>
+  have flex: "\<forall>n. ?is_flex n \<longrightarrow> n |\<notin>| TE_TypeVars env" by simp
+  note U = unify_and_coerce_correct
+             [OF unify_result flex wf refl ih_updates len_expected expectedTypes_wk expectedTypes_rt]
+  note coerced_typed = U(1) and finalSubst_wk = U(2) and finalSubst_rt = U(3)
+    and finalSubst_cp = U(6) and locals_unaffected = U(7) and ret_unaffected = U(8)
+    and abs_no_subst = U(9)
 
   \<comment> \<open>Parent term after substitution\<close>
   let ?finalParentTm = "apply_subst_to_term finalSubst parentTm"
@@ -1416,13 +1030,6 @@ proof -
   let ?expTy = "hd bodyTys"
   let ?expTys = "replicate (length bodyTms) ?expTy"
 
-  \<comment> \<open>Unpack unify_and_coerce. \<close>
-  have unify_types:
-    "unify_type_lists ?is_flex locOf 0 bodyTys ?expTys fmempty = Inr finalSubst"
-   and coerced_eq:
-    "coercedBodies = apply_call_coercions finalSubst bodyTms bodyTys ?expTys"
-    using uc by (auto simp: unify_and_coerce_def split: sum.splits)
-
   have len_tms_tys: "length bodyTms = length bodyTys" using lengths by simp
   have len_exp: "length bodyTys = length ?expTys" using len_tms_tys by simp
 
@@ -1487,59 +1094,19 @@ proof -
   have expectedTys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type envAmbient) ?expTys"
     using expTy_rt by (simp add: list_all_length)
 
-  \<comment> \<open>Apply unify_type_lists_correct. \<close>
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded envAmbient ty"
-    by (simp add: fmran'_def)
-  have empty_rt: "ghost = NotGhost \<longrightarrow>
-                    (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type envAmbient ty)"
-    by (simp add: fmran'_def)
-  have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-
-  have unify_correct:
-    "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded envAmbient ty)
-     \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type envAmbient ty))
-     \<and> list_all2 (\<lambda>actualTy expectedTy.
-         apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-         \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-       bodyTys ?expTys
-     \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)
-     \<and> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty)"
-    using unify_type_lists_correct[OF unify_types
-            ambient_wf len_exp actualTys_wk expectedTys_wk empty_wk
-            actualTys_rt expectedTys_rt empty_rt empty_dom] empty_cp by blast
-
-  have finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded envAmbient ty"
-    using unify_correct by simp
-  have finalSubst_rt:
-    "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type envAmbient ty)"
-    using unify_correct by simp
-  have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n"
-    using unify_correct by simp
-  have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    using unify_correct by simp
-  have types_unified:
-    "list_all2 (\<lambda>actualTy expectedTy.
-         apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-         \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-       bodyTys ?expTys"
-    using unify_correct by simp
+  \<comment> \<open>Unification: the bodies are not all typed in one env, so only the
+      substitution half applies. finalSubst has the usual properties, and
+      envAmbient's locals / return type / abstract types are unaffected by it. \<close>
+  have flex: "\<forall>n. ?is_flex n \<longrightarrow> n |\<notin>| TE_TypeVars envOuter" by simp
+  note U = unify_and_coerce_subst_correct
+             [OF uc flex outer_wf ambient_wf ambient_locals_eq ambient_ret_eq ambient_abs_eq
+                 len_exp actualTys_wk actualTys_rt expectedTys_wk expectedTys_rt]
+  note coerced_eq = U(1) and types_unified = U(2) and finalSubst_wk = U(3)
+    and finalSubst_rt = U(4) and finalSubst_dom_flex = U(6) and finalSubst_cp = U(7)
+    and ambient_locals_unaffected = U(8) and ambient_ret_unaffected = U(9)
+    and ambient_abs_no_subst = U(10)
   have finalSubst_dom: "fmdom finalSubst |\<inter>| TE_TypeVars envOuter = {||}"
     using finalSubst_dom_flex by auto
-
-  \<comment> \<open>envAmbient's locals / return type / abstract types are unaffected by finalSubst. \<close>
-  have ambient_locals_unaffected:
-    "\<And>name ty'. fmlookup (TE_LocalVars envAmbient) name = Some ty'
-                  \<Longrightarrow> apply_subst finalSubst ty' = ty'"
-       and ambient_ret_unaffected:
-    "apply_subst finalSubst (TE_ReturnType envAmbient) = TE_ReturnType envAmbient"
-    using flex_subst_identity_on_env[OF finalSubst_dom_flex outer_wf
-                                        ambient_locals_eq ambient_ret_eq]
-    by auto
-  have ambient_abs_no_subst:
-    "\<And>n. n |\<in>| TE_AbstractTypes envAmbient \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] outer_wf ambient_abs_eq] .
 
   \<comment> \<open>The substituted expected type is well-kinded / runtime: it is the cast target. \<close>
   have final_wk: "is_well_kinded envAmbient (apply_subst finalSubst ?expTy)"
