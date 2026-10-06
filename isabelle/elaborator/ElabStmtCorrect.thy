@@ -234,19 +234,9 @@ proof -
     using unify_upto_coercion_dom_flex[OF uoc] .
   \<comment> \<open>A flex-only substitution with a well-kinded / runtime range keeps coreTm
       well-typed (at the substituted rhs type) and leaves tgtTy alone.\<close>
-  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex wf envD_locals envD_ret]
-  have locals_unaffected: "\<And>vname ty'. fmlookup (TE_LocalVars ?envD) vname = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-    by blast+
-  have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] wf envD_abs] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex wf]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex wf]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex wf]
   have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term subst coreTm)
                        = Some (apply_subst subst rhsTy)"
     using apply_subst_to_term_preserves_typing
@@ -465,19 +455,9 @@ proof -
     using unify_upto_coercion_dom_flex[OF uoc] .
   \<comment> \<open>A flex-only substitution with a well-kinded / runtime range keeps the call
       well-typed (at the substituted return type) and leaves tgtTy alone.\<close>
-  have envE_locals: "TE_LocalVars ?envE = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envE_ret: "TE_ReturnType ?envE = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex wf envE_locals envE_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envE) name = Some ty'
-                                      \<Longrightarrow> apply_subst subst ty' = ty'"
-    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envE) = TE_ReturnType ?envE"
-    by blast+
-  have envE_abs: "TE_AbstractTypes ?envE = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envE \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] wf envE_abs] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex wf]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex wf]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex wf]
   have ctE': "core_impure_call_type ?envE ghost fnName tyArgs' argTms'
                 = Some (apply_subst subst retTy)"
     using apply_subst_core_impure_call_type
@@ -955,7 +935,7 @@ proof -
   have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
     unfolding extend_env_with_tyvars_def by simp
   have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
+    using flex_subst_extend_env(3)[OF finalSubst_dom_flex wf] .
 
   \<comment> \<open>The mode of each position is the checking mode of its parameter.\<close>
   have len_final_exp: "length finalArgTms = length expArgTypes"
@@ -2338,19 +2318,9 @@ next
     using unify_preserves_well_kinded[OF unif invTy_wk] by simp
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
     using unify_unify_list_dom_flex(1)[OF unif] .
-  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex "2.prems"(2) envD_locals envD_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-    by blast+
-  have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] "2.prems"(2) envD_abs] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex "2.prems"(2)]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex "2.prems"(2)]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex "2.prems"(2)]
   have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreInv)
                        = Some (apply_subst subst invTy)"
     using apply_subst_to_term_preserves_typing
@@ -2433,19 +2403,9 @@ proof -
   qed
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
     using unify_unify_list_dom_flex(1)[OF unif] .
-  have envC_locals: "TE_LocalVars ?envC = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envC_ret: "TE_ReturnType ?envC = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex wf envC_locals envC_ret]
-  have c_locals: "\<And>name ty'. fmlookup (TE_LocalVars ?envC) name = Some ty'
-                               \<Longrightarrow> apply_subst subst ty' = ty'"
-    and c_ret: "apply_subst subst (TE_ReturnType ?envC) = TE_ReturnType ?envC"
-    by blast+
-  have envC_abs: "TE_AbstractTypes ?envC = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have c_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?envC \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] wf envC_abs] .
+  note c_locals = flex_subst_extend_env(1)[OF dom_flex wf]
+   and c_ret = flex_subst_extend_env(2)[OF dom_flex wf]
+   and c_abs = flex_subst_extend_env(3)[OF dom_flex wf]
   have subst_typed: "core_term_type ?envC ghost (apply_subst_to_term subst coreCond)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
@@ -4152,19 +4112,9 @@ next
   \<comment> \<open>The flex predicate is stated over env, but TE_TypeVars ?eo = TE_TypeVars env.\<close>
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> n |\<notin>| TE_TypeVars ?eo"
     using unify_unify_list_dom_flex(1)[OF unif] conjunct1[OF flds] by simp
-  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars ?eo"
-    unfolding extend_env_with_tyvars_def by simp
-  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType ?eo"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex wf_obtain envD_locals envD_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-    by blast+
-  have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes ?eo"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] wf_obtain envD_abs] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex wf_obtain]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex wf_obtain]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex wf_obtain]
   have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
@@ -4402,19 +4352,9 @@ next
       using unify_preserves_well_kinded[OF unif condTy_wk] by simp
     have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
       using unify_unify_list_dom_flex(1)[OF unif] .
-    have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
-      unfolding extend_env_with_tyvars_def by simp
-    have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
-      unfolding extend_env_with_tyvars_def by simp
-    from flex_subst_identity_on_env[OF dom_flex "8.prems"(2) envD_locals envD_ret]
-    have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
-                                          \<Longrightarrow> apply_subst subst ty' = ty'"
-      and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-      by blast+
-    have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes env"
-      unfolding extend_env_with_tyvars_def by simp
-    have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup subst n = None"
-      using flex_subst_abs_no_subst[OF dom_flex[rule_format] "8.prems"(2) envD_abs] .
+    note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex "8.prems"(2)]
+     and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex "8.prems"(2)]
+     and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex "8.prems"(2)]
     have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreCond)
                          = Some (apply_subst subst condTy)"
       using apply_subst_to_term_preserves_typing
@@ -4476,19 +4416,9 @@ next
     using unify_preserves_well_kinded[OF unif condTy_wk] by simp
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
     using unify_unify_list_dom_flex(1)[OF unif] .
-  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex "9.prems"(2) envD_locals envD_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-    by blast+
-  have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] "9.prems"(2) envD_abs] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex "9.prems"(2)]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex "9.prems"(2)]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex "9.prems"(2)]
   have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing
@@ -4560,19 +4490,9 @@ next
   qed
   have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
     using unify_unify_list_dom_flex(1)[OF unif] .
-  have envD_locals: "TE_LocalVars ?envD = TE_LocalVars env"
-    unfolding extend_env_with_tyvars_def by simp
-  have envD_ret: "TE_ReturnType ?envD = TE_ReturnType env"
-    unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF dom_flex "10.prems"(2) envD_locals envD_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envD) name = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-    and ret_unaffected: "apply_subst subst (TE_ReturnType ?envD) = TE_ReturnType ?envD"
-    by blast+
-  have envD_abs: "TE_AbstractTypes ?envD = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envD \<Longrightarrow> fmlookup subst n = None"
-    using flex_subst_abs_no_subst[OF dom_flex[rule_format] "10.prems"(2) envD_abs] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex "10.prems"(2)]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex "10.prems"(2)]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex "10.prems"(2)]
   have subst_typed: "core_term_type ?envD ghost (apply_subst_to_term subst coreCond)
                        = Some (apply_subst subst condTy)"
     using apply_subst_to_term_preserves_typing

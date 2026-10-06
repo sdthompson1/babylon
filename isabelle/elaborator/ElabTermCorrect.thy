@@ -1833,19 +1833,9 @@ next
     \<comment> \<open>The unifier only binds flex metas; locals and return type are unaffected. \<close>
     have unif_dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
       using unify_unify_list_dom_flex(1)[OF Some] .
-    have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
-      unfolding extend_env_with_tyvars_def by simp
-    have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
-      unfolding extend_env_with_tyvars_def by simp
-    from flex_subst_identity_on_env[OF unif_dom_flex "3.prems"(2) env'_locals env'_ret]
-    have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-      and ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-      by blast+
-    have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-      unfolding extend_env_with_tyvars_def by simp
-    have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup subst n = None"
-      using flex_subst_abs_no_subst[OF unif_dom_flex[rule_format] "3.prems"(2) env'_abs] .
+    note locals_unaffected = flex_subst_extend_env(1)[OF unif_dom_flex "3.prems"(2)]
+     and ret_unaffected = flex_subst_extend_env(2)[OF unif_dom_flex "3.prems"(2)]
+     and abs_no_subst = flex_subst_extend_env(3)[OF unif_dom_flex "3.prems"(2)]
 
     \<comment> \<open>The target is an (atomic) integer type, so the unifier's range is complete. \<close>
     have subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
@@ -1938,72 +1928,6 @@ next
   have wf': "tyenv_well_formed ?env'"
     using "4.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
 
-  \<comment> \<open>A generic helper: any substitution whose domain is disjoint from
-      TE_TypeVars env leaves locals and the return type unchanged. \<close>
-  have unif_id_on_env:
-    "\<And>s ty'. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
-              \<Longrightarrow> type_tyvars ty' \<subseteq> fset (TE_TypeVars env)
-              \<Longrightarrow> apply_subst s ty' = ty'"
-  proof -
-    fix s :: "(string, CoreType) fmap" and ty'
-    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
-    assume mvs: "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)"
-    have "type_tyvars ty' \<inter> fset (fmdom s) = {}"
-      using mvs dom_flex by auto
-    thus "apply_subst s ty' = ty'" by (rule apply_subst_disjoint_id)
-  qed
-  have locals_unaffected_for:
-    "\<And>s name ty'. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
-                 \<Longrightarrow> fmlookup (TE_LocalVars ?env') name = Some ty'
-                 \<Longrightarrow> apply_subst s ty' = ty'"
-  proof -
-    fix s :: "(string, CoreType) fmap" and name ty'
-    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
-    assume lk: "fmlookup (TE_LocalVars ?env') name = Some ty'"
-    have "TE_LocalVars ?env' = TE_LocalVars env"
-      unfolding extend_env_with_tyvars_def by simp
-    with lk have lk_env: "fmlookup (TE_LocalVars env) name = Some ty'" by simp
-    from "4.prems"(2) have "tyenv_vars_well_kinded env"
-      unfolding tyenv_well_formed_def by simp
-    with lk_env have "is_well_kinded env ty'"
-      unfolding tyenv_vars_well_kinded_def by blast
-    from is_well_kinded_type_tyvars_subset[OF this]
-    have "type_tyvars ty' \<subseteq> fset (TE_TypeVars env)" .
-    thus "apply_subst s ty' = ty'"
-      using unif_id_on_env[OF dom_flex] by blast
-  qed
-  have ret_unaffected_for:
-    "\<And>s. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
-         \<Longrightarrow> apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
-  proof -
-    fix s :: "(string, CoreType) fmap"
-    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
-    have ret_eq: "TE_ReturnType ?env' = TE_ReturnType env"
-      unfolding extend_env_with_tyvars_def by simp
-    from "4.prems"(2) have "tyenv_return_type_well_kinded env"
-      unfolding tyenv_well_formed_def by simp
-    hence "is_well_kinded env (TE_ReturnType env)"
-      unfolding tyenv_return_type_well_kinded_def .
-    from is_well_kinded_type_tyvars_subset[OF this]
-    have "type_tyvars (TE_ReturnType env) \<subseteq> fset (TE_TypeVars env)" .
-    hence "apply_subst s (TE_ReturnType env) = TE_ReturnType env"
-      using unif_id_on_env[OF dom_flex] by blast
-    thus "apply_subst s (TE_ReturnType ?env') = TE_ReturnType ?env'"
-      using ret_eq by simp
-  qed
-  have abs_no_subst_for:
-    "\<And>s n. \<forall>n. n |\<in>| fmdom (s :: (string, CoreType) fmap) \<longrightarrow> ?is_flex n
-         \<Longrightarrow> n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup s n = None"
-  proof -
-    fix s :: "(string, CoreType) fmap" and n
-    assume dom_flex: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> ?is_flex n"
-    assume n_abs: "n |\<in>| TE_AbstractTypes ?env'"
-    have abs_eq: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-      unfolding extend_env_with_tyvars_def by simp
-    show "fmlookup s n = None"
-      using flex_subst_abs_no_subst[OF dom_flex[rule_format] "4.prems"(2) abs_eq n_abs] .
-  qed
-
   \<comment> \<open>condSubst range is well-kinded / runtime in ?env'. \<close>
   have cond_wk: "is_well_kinded ?env' condTy"
     using core_term_type_well_kinded[OF ih_cond wf'] .
@@ -2021,13 +1945,9 @@ next
   qed
   have condSubst_dom_flex: "\<forall>n. n |\<in>| fmdom condSubst \<longrightarrow> ?is_flex n"
     using unify_unify_list_dom_flex(1)[OF cond_unify] .
-  have condSubst_locals: "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
-                                     \<Longrightarrow> apply_subst condSubst ty' = ty'"
-    using locals_unaffected_for[OF condSubst_dom_flex] .
-  have condSubst_ret: "apply_subst condSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-    using ret_unaffected_for[OF condSubst_dom_flex] .
-  have condSubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup condSubst n = None"
-    using abs_no_subst_for[OF condSubst_dom_flex] .
+  note condSubst_locals = flex_subst_extend_env(1)[OF condSubst_dom_flex "4.prems"(2)]
+   and condSubst_ret = flex_subst_extend_env(2)[OF condSubst_dom_flex "4.prems"(2)]
+   and condSubst_abs = flex_subst_extend_env(3)[OF condSubst_dom_flex "4.prems"(2)]
   have condSubst_cp: "\<forall>ty' \<in> fmran' condSubst. is_complete_type ty'"
     using unify_bool_range_complete[OF cond_unify] .
 
@@ -2084,14 +2004,9 @@ next
     qed
     have branchSubst_dom_flex: "\<forall>n. n |\<in>| fmdom branchSubst \<longrightarrow> ?is_flex n"
       using unify_unify_list_dom_flex(1)[OF Some] .
-    have branchSubst_locals:
-      "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
-                    \<Longrightarrow> apply_subst branchSubst ty' = ty'"
-      using locals_unaffected_for[OF branchSubst_dom_flex] .
-    have branchSubst_ret: "apply_subst branchSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-      using ret_unaffected_for[OF branchSubst_dom_flex] .
-    have branchSubst_abs: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup branchSubst n = None"
-      using abs_no_subst_for[OF branchSubst_dom_flex] .
+    note branchSubst_locals = flex_subst_extend_env(1)[OF branchSubst_dom_flex "4.prems"(2)]
+     and branchSubst_ret = flex_subst_extend_env(2)[OF branchSubst_dom_flex "4.prems"(2)]
+     and branchSubst_abs = flex_subst_extend_env(3)[OF branchSubst_dom_flex "4.prems"(2)]
 
     have then'_typed: "core_term_type ?env' ghost ?newThen' = Some ?resultTy"
       using apply_subst_to_term_preserves_typing
@@ -2210,19 +2125,9 @@ next
     \<comment> \<open>subst has flex domain, so locals and return type are unaffected. \<close>
     have subst_dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
       using unify_unify_list_dom_flex(1)[OF Some] .
-    have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
-      unfolding extend_env_with_tyvars_def by simp
-    have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
-      unfolding extend_env_with_tyvars_def by simp
-    from flex_subst_identity_on_env[OF subst_dom_flex "5.prems"(2) env'_locals env'_ret]
-    have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
-                                        \<Longrightarrow> apply_subst subst ty' = ty'"
-      and ret_unaffected: "apply_subst subst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-      by blast+
-    have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-      unfolding extend_env_with_tyvars_def by simp
-    have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup subst n = None"
-      using flex_subst_abs_no_subst[OF subst_dom_flex[rule_format] "5.prems"(2) env'_abs] .
+    note locals_unaffected = flex_subst_extend_env(1)[OF subst_dom_flex "5.prems"(2)]
+     and ret_unaffected = flex_subst_extend_env(2)[OF subst_dom_flex "5.prems"(2)]
+     and abs_no_subst = flex_subst_extend_env(3)[OF subst_dom_flex "5.prems"(2)]
 
     \<comment> \<open>The default type is atomic (i32 or Bool), so the unifier's range is complete. \<close>
     have default_atomic: "is_atomic_type ?defaultTy"
