@@ -65,6 +65,7 @@ lemma apply_subst_to_tyenv_simps [simp]:
   "TE_AbstractTypes (apply_subst_to_tyenv subst env) = TE_AbstractTypes env"
   "TE_ReturnType (apply_subst_to_tyenv subst env) = TE_ReturnType env"
   "TE_FunctionGhost (apply_subst_to_tyenv subst env) = TE_FunctionGhost env"
+  "TE_FunctionImpure (apply_subst_to_tyenv subst env) = TE_FunctionImpure env"
   "TE_ProofGoal (apply_subst_to_tyenv subst env) = TE_ProofGoal env"
   "TE_ProofTopLevel (apply_subst_to_tyenv subst env) = TE_ProofTopLevel env"
   "TE_Functions (apply_subst_to_tyenv subst env)
@@ -448,6 +449,7 @@ lemma link_modules_result_fields:
            = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms)"            \<comment> \<open>(16)\<close>
     and "CM_GlobalVars m = fmlist_union (map CM_GlobalVars ms)"                     \<comment> \<open>(17)\<close>
     and "CM_Functions m = fmlist_union (map CM_Functions ms)"                       \<comment> \<open>(18)\<close>
+    and "\<not> TE_FunctionImpure (CM_TyEnv m)"                                         \<comment> \<open>(19)\<close>
 proof -
   obtain \<sigma> where meq: "m = link_result ms \<sigma>"
     using ok link_modules_Inr_iff by blast
@@ -481,6 +483,7 @@ proof -
            = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms)"
     and "CM_GlobalVars m = fmlist_union (map CM_GlobalVars ms)"
     and "CM_Functions m = fmlist_union (map CM_Functions ms)"
+    and "\<not> TE_FunctionImpure (CM_TyEnv m)"
     unfolding meq link_result_def by simp_all
 qed
 
@@ -623,7 +626,7 @@ proof -
 
   have scope: "tyenv_module_scope (CM_TyEnv m)"
     unfolding tyenv_module_scope_def
-    by (simp add: fM(1) fM(3) fM(4) fM(8) fM(9) fM(10) fM(11) abs_tv)
+    by (simp add: fM(1) fM(3) fM(4) fM(8) fM(9) fM(10) fM(11) fM(19) abs_tv)
 
   show ?thesis
     unfolding core_module_invariant_def
@@ -898,6 +901,7 @@ lemma link_mid_env_simps [simp]:
      = TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars (CM_TyEnv b)"
   "TE_ReturnType (link_mid_env a b m) = TE_ReturnType (CM_TyEnv m)"
   "TE_FunctionGhost (link_mid_env a b m) = TE_FunctionGhost (CM_TyEnv m)"
+  "TE_FunctionImpure (link_mid_env a b m) = TE_FunctionImpure (CM_TyEnv m)"
   "TE_ProofGoal (link_mid_env a b m) = TE_ProofGoal (CM_TyEnv m)"
   "TE_ProofTopLevel (link_mid_env a b m) = TE_ProofTopLevel (CM_TyEnv m)"
   "TE_Functions (link_mid_env a b m)
@@ -1105,6 +1109,10 @@ proof -
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_FunctionGhost (CM_TyEnv (normalize_module m))"
       by simp
+    show "TE_FunctionImpure (apply_subst_to_module_env (CM_TypeSubst m)
+            (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
+            = TE_FunctionImpure (CM_TyEnv (normalize_module m))"
+      by simp
     show "TE_ProofGoal (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_ProofGoal (CM_TyEnv (normalize_module m))"
@@ -1266,7 +1274,7 @@ proof -
     then have "fmlookup (fmmap (apply_subst_to_datactor (CM_TypeSubst b)) ?dcB) ctorName
                  = Some (dtName, tyVars, payload)"
       using lk
-      by (metis apply_subst_to_tyenv_simps(14) fmadd_drop_lookup link_mid_env_simps(14)
+      by (metis apply_subst_to_tyenv_simps(15) fmadd_drop_lookup link_mid_env_simps(15)
           normalize_module_simps(1))
     then obtain entry0 where b_lk: "fmlookup ?dcB ctorName = Some entry0"
         and entry_eq: "(dtName, tyVars, payload) = apply_subst_to_datactor (CM_TypeSubst b) entry0"
@@ -2591,6 +2599,8 @@ proof -
       by (simp add: fA(8) fM(8))
     show "TE_FunctionGhost ?mid = TE_FunctionGhost ?envA"
       by (simp add: fA(9) fM(9))
+    show "TE_FunctionImpure ?mid = TE_FunctionImpure ?envA"
+      by (simp add: fA(19) fM(19))
     show "TE_ProofGoal ?mid = TE_ProofGoal ?envA"
       by (simp add: fA(10) fM(10))
     show "TE_ProofTopLevel ?mid = TE_ProofTopLevel ?envA"
@@ -3215,6 +3225,8 @@ proof -
       by (simp add: module_body_env_for_def)
     show "TE_FunctionGhost ?be2 = TE_FunctionGhost ?e1"
       by (simp add: module_body_env_for_def)
+    show "TE_FunctionImpure ?be2 = TE_FunctionImpure ?e1"
+      by (simp add: module_body_env_for_def)
     show "TE_ProofGoal ?be2 = TE_ProofGoal ?e1"
       by (simp add: module_body_env_for_def)
     show "TE_ProofTopLevel ?be2 = TE_ProofTopLevel ?e1"
@@ -3520,6 +3532,8 @@ proof -
     show "TE_ReturnType ?lhs = TE_ReturnType ?tb"
       by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def absA)
     show "TE_FunctionGhost ?lhs = TE_FunctionGhost ?tb"
+      by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def)
+    show "TE_FunctionImpure ?lhs = TE_FunctionImpure ?tb"
       by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def)
     show "TE_ProofGoal ?lhs = TE_ProofGoal ?tb"
       by (simp add: module_body_env_for_def)
@@ -3921,7 +3935,7 @@ proof -
   \<comment> \<open>Clause 2: module scope (inert scope fields plus Abs = TV).\<close>
   have scope: "tyenv_module_scope ?envM"
     unfolding tyenv_module_scope_def
-    using abs_tv fM(1,9,10,11,3,4,8) by auto
+    using abs_tv fM(1,9,10,11,3,4,8,19) by auto
 
   \<comment> \<open>Clause 3: globals. Each defined global comes from one input module,
       hence from one sub-link; route through the matching contribution lemma.\<close>

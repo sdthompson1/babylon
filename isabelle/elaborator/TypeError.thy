@@ -28,6 +28,9 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   (* Function/data-constructor call errors *)
   | TyErr_CalleeNotFunction Location
   | TyErr_ImpureFunctionInTermContext Location string
+  | TyErr_ImpureFunctionInGhost Location string  (* ghost code tried to call an impure function *)
+  | TyErr_ImpureFunctionInPure Location string  (* a pure function tried to call an impure function *)
+  | TyErr_ImpureGhostFunction Location string  (* a function declared both ghost and impure *)
   | TyErr_RefArgInTermContext Location string
   | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
   | TyErr_FunctionNoReturnType Location string

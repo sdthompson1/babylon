@@ -52,6 +52,7 @@ definition empty_module_tyenv :: CoreTyEnv where
        TE_AbstractTypes = {||},
        TE_ReturnType = CoreTy_Record [],
        TE_FunctionGhost = NotGhost,
+       TE_FunctionImpure = False,
        TE_ProofGoal = None,
        TE_ProofTopLevel = False,
        TE_Functions = fmempty,
@@ -487,6 +488,9 @@ definition elab_fun_signature ::
                  \<comment> \<open>Non-ghost functions must return a complete type\<close>
                  if ghost = NotGhost \<and> \<not> is_complete_type retTy
                  then Inl [TyErr_IncompleteArrayType (DF_Location df)]
+                 \<comment> \<open>A ghost function cannot be impure\<close>
+                 else if ghost = Ghost \<and> DF_Impure df
+                 then Inl [TyErr_ImpureGhostFunction (DF_Location df) (DF_Name df)]
                  else
                  Inr \<lparr> FI_TyArgs = tyvars,
                        \<comment> \<open>Ghost parameters are not yet in the Bab syntax, so every

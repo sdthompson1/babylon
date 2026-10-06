@@ -148,6 +148,7 @@ lemma erase_ghost_tyenv_simps [simp]:
   "TE_AbstractTypes (erase_ghost_tyenv env) = TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env"
   "TE_ReturnType (erase_ghost_tyenv env) = TE_ReturnType env"
   "TE_FunctionGhost (erase_ghost_tyenv env) = TE_FunctionGhost env"
+  "TE_FunctionImpure (erase_ghost_tyenv env) = TE_FunctionImpure env"
   "TE_ProofGoal (erase_ghost_tyenv env) = TE_ProofGoal env"
   "TE_ProofTopLevel (erase_ghost_tyenv env) = TE_ProofTopLevel env"
   "TE_Functions (erase_ghost_tyenv env) = fmfilter (tyenv_nonghost_fun env) (TE_Functions env)"

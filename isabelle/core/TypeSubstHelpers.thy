@@ -205,6 +205,11 @@ lemma apply_subst_to_callee_env_TE_FunctionGhost [simp]:
      = TE_FunctionGhost calleeEnv"
   by (simp add: apply_subst_to_callee_env_def)
 
+lemma apply_subst_to_callee_env_TE_FunctionImpure [simp]:
+  "TE_FunctionImpure (apply_subst_to_callee_env subst callerEnv calleeEnv)
+     = TE_FunctionImpure calleeEnv"
+  by (simp add: apply_subst_to_callee_env_def)
+
 lemma apply_subst_to_callee_env_TE_Functions [simp]:
   "TE_Functions (apply_subst_to_callee_env subst callerEnv calleeEnv)
      = TE_Functions calleeEnv"

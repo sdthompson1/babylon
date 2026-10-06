@@ -1,5 +1,5 @@
 theory GhostInvisible
-  imports ErasedState "../interpreter/CoreInterpFrame"
+  imports ErasedState "../interpreter/CoreInterpFrame" "../interpreter/CoreInterpWorld"
 begin
 
 (* Ghost statements are invisible to the erased program.
@@ -13,6 +13,8 @@ begin
       (ghost_lvalue_ok), so only to cells outside the embedding;
     - a call that it makes changes only the cells passed as Ref arguments (the
       frame lemma), and those arguments are again ghost lvalues;
+    - a call that it makes is a call of a pure function, which leaves the
+      world unchanged;
     - it contains no Return, because the enclosing function is not ghost.
 
    This is what the simulation proof needs for each statement that
@@ -651,12 +653,12 @@ qed
    the base variables of its Ref arguments, and those variables are ghost
    (the call is typed in Ghost mode, so each Ref argument is a ghost lvalue).
 
-   That the call leaves the world unchanged is not proved (the one sorry
-   below). It cannot be yet: Core has no rules about impure functions, so
-   nothing stops ghost code from calling a function that changes the world. *)
+   The call leaves the world unchanged, because ghost code can only call a
+   pure function. *)
 lemma ghost_call_invisible:
   assumes rel: "state_erased env emb full erased"
     and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and callT: "core_impure_call_type env Ghost fnName argTys argTms = Some retTy"
     and call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
   shows "state_erased env emb newState erased"
@@ -664,10 +666,14 @@ proof -
   note cf = interp_function_call_frame[OF call]
   have st: "static_parts_eq full newState"
     by (rule interp_function_call_static[OF call])
-  \<comment> \<open>Needs the rules about impure functions: ghost code calls no impure
-      function, and a call of a function that is not impure keeps the world. \<close>
+  \<comment> \<open>Ghost code calls no impure function, and a call of a pure function
+      keeps the world. \<close>
+  from pure_context_callee_pure[OF callT disjI1[OF refl]] obtain pinfo where
+    pinfo: "fmlookup (TE_Functions env) fnName = Some pinfo" and
+    np: "\<not> FI_Impure pinfo"
+    by blast
   have world: "IS_World newState = IS_World full"
-    sorry
+    by (rule pure_function_call_keeps_world[OF pure pinfo np call])
   from rel have gh: "ghost_locals_separate env emb full" by (simp add: state_erased_def)
   from rel have se: "store_erased emb full erased"
     by (simp add: state_erased_def heap_erased_def)
@@ -738,23 +744,6 @@ proof -
   show ?thesis by (rule state_erased_restore_scope[OF rel rel1 fnsB len1])
 qed
 
-(* The body of each arm of a well-typed Match statement is well-typed, in the
-   mode of the statement's marker. *)
-lemma match_arm_typed:
-  assumes "core_statement_type env ghost (CoreStmt_Match g scrut arms) = Some env'"
-    and "armStmts \<in> snd ` set arms"
-  shows "\<exists>armEnv. core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) g armStmts
-                    = Some armEnv"
-proof -
-  from assms(1) obtain scrutTy where
-    sT: "core_term_type env g scrut = Some scrutTy"
-    by (cases "core_term_type env g scrut") (simp_all split: if_splits)
-  from sT assms
-  have "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) g armStmts \<noteq> None"
-    by (auto simp: Let_def list_all_iff split: if_splits)
-  then show ?thesis by auto
-qed
-
 (* Both statements are proved together by induction on the fuel, at a fixed
    depth. Function calls need no induction of their own: ghost_call_invisible
    says all that is needed about them.
@@ -766,6 +755,7 @@ lemma ghost_invisible_aux:
   fixes funInfos :: "(string, FunInfo) fmap"
     and funs :: "(string, 'w InterpFun) fmap"
   assumes agree: "fun_var_ref_agree funInfos funs"
+    and pure: "funs_respect_purity funInfos funs"
   shows "\<forall>env env' emb (full :: 'w InterpState) (erased :: 'w InterpState) res.
            TE_Functions env = funInfos \<longrightarrow>
            IS_Functions full = funs \<longrightarrow>
@@ -816,6 +806,8 @@ next
         using rel by (simp add: state_erased_def)
       have agree': "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
         using agree by (simp add: fn_eq funs_eq)
+      have pure': "funs_respect_purity (TE_Functions env) (IS_Functions full)"
+        using pure by (simp add: fn_eq funs_eq)
 
       \<comment> \<open>The environment in which the body of a While, Match or Block is typed. \<close>
       have fnB: "TE_Functions (env \<lparr> TE_ProofTopLevel := False \<rparr>) = funInfos"
@@ -934,7 +926,7 @@ next
           call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         have rel1: "state_erased env emb newState erased"
-          by (rule ghost_call_invisible[OF rel agree' callT call])
+          by (rule ghost_call_invisible[OF rel agree' pure' callT call])
         from H CoreStmt_VarDeclCall call obtain initVal where
           cast: "apply_cast_opt castOpt retVal = Inr initVal"
           by (auto split: sum.splits)
@@ -1037,7 +1029,7 @@ next
           call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         have rel1: "state_erased env emb newState erased"
-          by (rule ghost_call_invisible[OF rel agree' callT call])
+          by (rule ghost_call_invisible[OF rel agree' pure' callT call])
         from H CoreStmt_AssignCall wl call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
           by (auto split: sum.splits)
@@ -1338,10 +1330,11 @@ theorem ghost_statement_invisible:
     and fg: "TE_FunctionGhost env = NotGhost"
     and rel: "state_erased env emb full erased"
     and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and H: "interp_statement d fuel full stmt = Inr res"
   shows "\<exists>full'. res = Continue full' \<and> state_erased env' emb full' erased"
 proof -
-  from ghost_invisible_aux(1)[OF agree, rule_format, OF refl refl fg rel T H]
+  from ghost_invisible_aux(1)[OF agree pure, rule_format, OF refl refl fg rel T H]
   have "is_continue res \<and> state_erased env' emb (result_state res) erased" .
   then show ?thesis by (cases res) simp_all
 qed
@@ -1351,10 +1344,11 @@ theorem ghost_statement_list_invisible:
     and fg: "TE_FunctionGhost env = NotGhost"
     and rel: "state_erased env emb full erased"
     and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and H: "interp_statement_list d fuel full stmts = Inr res"
   shows "\<exists>full'. res = Continue full' \<and> state_erased env' emb full' erased"
 proof -
-  from ghost_invisible_aux(2)[OF agree, rule_format, OF refl refl fg rel T H]
+  from ghost_invisible_aux(2)[OF agree pure, rule_format, OF refl refl fg rel T H]
   have "is_continue res \<and> state_erased env' emb (result_state res) erased" .
   then show ?thesis by (cases res) simp_all
 qed
@@ -1439,9 +1433,10 @@ theorem erased_statement_invisible:
     and fg: "TE_FunctionGhost env = NotGhost"
     and rel: "state_erased env emb full erased"
     and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and H: "interp_statement d fuel full stmt = Inr res"
   shows "\<exists>full'. res = Continue full' \<and> state_erased env' emb full' erased"
   by (rule ghost_statement_invisible
-             [OF erased_statement_ghost_mode[OF er T] fg rel agree H])
+             [OF erased_statement_ghost_mode[OF er T] fg rel agree pure H])
 
 end

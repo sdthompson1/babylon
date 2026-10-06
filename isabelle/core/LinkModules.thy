@@ -373,6 +373,7 @@ definition link_result :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow>
              funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms) |-| fmdom \<sigma>,
            TE_ReturnType = CoreTy_Record [],
            TE_FunctionGhost = NotGhost,
+           TE_FunctionImpure = False,
            TE_ProofGoal = None,
            TE_ProofTopLevel = False,
            TE_Functions = fmlist_union (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms),
@@ -701,6 +702,7 @@ proof -
         "TE_ConstLocals (CM_TyEnv m) = {||}"
         "TE_ReturnType (CM_TyEnv m) = CoreTy_Record []"
         "TE_FunctionGhost (CM_TyEnv m) = NotGhost"
+        "\<not> TE_FunctionImpure (CM_TyEnv m)"
         "TE_ProofGoal (CM_TyEnv m) = None"
         "TE_ProofTopLevel (CM_TyEnv m) = False"
     using inv

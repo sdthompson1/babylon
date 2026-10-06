@@ -261,6 +261,13 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_ImpureFunctionInTermContext loc name \<Rightarrow>
         loc_prefix loc @ ''impure function '' @ quote name
           @ '' cannot be called in an expression context''
+    | TyErr_ImpureFunctionInGhost loc name \<Rightarrow>
+        loc_prefix loc @ ''impure function '' @ quote name @ '' called from ghost code''
+    | TyErr_ImpureFunctionInPure loc name \<Rightarrow>
+        loc_prefix loc @ ''impure function '' @ quote name @ '' called from a pure function''
+    | TyErr_ImpureGhostFunction loc name \<Rightarrow>
+        loc_prefix loc @ ''function '' @ quote name
+          @ '' cannot be both ghost and impure''
     | TyErr_RefArgInTermContext loc name \<Rightarrow>
         loc_prefix loc @ ''function '' @ quote name @ '' takes '' @ quote ''ref''
           @ '' arguments, so it cannot be called in an expression context''

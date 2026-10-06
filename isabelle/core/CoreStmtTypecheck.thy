@@ -9,7 +9,9 @@ begin
 (* Typecheck an impure call (e.g. one occurring in CoreStmt_VarDeclCall or
    CoreStmt_AssignCall). The fnName must exist in the env, and the numbers of
    tyArgs and tmArgs must be correct. The tyArgs must be well-kinded, complete,
-   and (in NotGhost mode) runtime types. For each argument:
+   and (in NotGhost mode) runtime types. An impure function (FI_Impure) can only
+   be called in NotGhost mode, and only from an impure function
+   (TE_FunctionImpure). For each argument:
      - Ref parameter: argument must be a writable lvalue of the expected
        (substituted) type.
      - Var parameter: argument is typechecked via core_term_type, so nested
@@ -27,6 +29,8 @@ definition core_impure_call_type ::
          else if ghost = NotGhost
                  \<and> (\<not> list_all (is_runtime_type env) tyArgs
                     \<or> FI_Ghost funInfo = Ghost) then None
+         else if FI_Impure funInfo
+                 \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env) then None
          else if length tmArgs \<noteq> length (FI_TmArgs funInfo) then None
          else
            let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
@@ -388,7 +392,8 @@ lemma core_impure_call_type_fn_facts:
             \<and> (\<forall>i < length tmArgs.
                  fst (snd (FI_TmArgs funInfo ! i)) = Ref
                    \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i))"
+                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i))
+            \<and> (FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env)"
 proof -
   from assms have unfolded:
     "(case fmlookup (TE_Functions env) fnName of
@@ -400,6 +405,8 @@ proof -
           else if ghost = NotGhost
                   \<and> (\<not> list_all (is_runtime_type env) tyArgs
                      \<or> FI_Ghost fi = Ghost) then None
+          else if FI_Impure fi
+                  \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env) then None
           else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
           else
             let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
@@ -429,6 +436,8 @@ proof -
       else if ghost = NotGhost
               \<and> (\<not> list_all (is_runtime_type env) tyArgs
                  \<or> FI_Ghost fi = Ghost) then None
+      else if FI_Impure fi
+              \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env) then None
       else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
       else
         let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
@@ -459,10 +468,13 @@ proof -
         \<and> (\<not> list_all (is_runtime_type env) tyArgs
            \<or> FI_Ghost fi = Ghost))"
     by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond have len_tmArgs:
+  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond have not_impure_cond:
+    "\<not> (FI_Impure fi \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env))"
+    by (metis option.distinct(1))
+  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond not_impure_cond have len_tmArgs:
     "length tmArgs = length (FI_TmArgs fi)"
     by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond len_tmArgs
+  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond not_impure_cond len_tmArgs
   have after_ifs:
     "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
           expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
@@ -589,8 +601,11 @@ proof -
       by simp
   qed
 
+  have impure_ok: "FI_Impure fi \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
+    using not_impure_cond by (cases ghost) auto
+
   from fi_lookup len_tyArgs tyArgs_wk tyArgs_cp ng_tyArgs ng_fn len_tmArgs fn_ty_eq
-       argTms_l2_pure ref_args_lvalues
+       argTms_l2_pure ref_args_lvalues impure_ok
   show ?thesis by blast
 qed
 
@@ -656,7 +671,8 @@ proof -
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+    imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
   \<comment> \<open>Transfer the embedded checks to the extended environment.\<close>
@@ -725,7 +741,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi wk' cp rt' fn_ng len_ty len_tm l2_full' ty_eq
+    using fi wk' cp rt' fn_ng imp len_ty len_tm l2_full' ty_eq
     by (auto simp: fns_eq Let_def)
 qed
 

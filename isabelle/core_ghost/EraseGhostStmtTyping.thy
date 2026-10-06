@@ -44,6 +44,7 @@ proof -
     unfolding d by (rule tyenv_erased_decls[OF rel])
   have ret: "TE_ReturnType envE = TE_ReturnType ?env'"
     and fg: "TE_FunctionGhost envE = TE_FunctionGhost ?env'"
+    and fi: "TE_FunctionImpure envE = TE_FunctionImpure ?env'"
     and gl: "TE_GhostLocals envE = {||}"
     using rel unfolding tyenv_erased_def by simp_all
   have locals: "fmlookup (TE_LocalVars envE) name = fmlookup (TE_LocalVars ?env') name
@@ -60,7 +61,7 @@ proof -
       by simp
   qed
   show ?thesis
-    unfolding tyenv_erased_def using decls ret fg gl locals by blast
+    unfolding tyenv_erased_def using decls ret fg fi gl locals by blast
 qed
 
 lemma tyenv_erased_var_writable:
@@ -160,6 +161,7 @@ proof -
       cps: "list_all is_complete_type tyArgs" and
       rts: "list_all (is_runtime_type env) tyArgs" and
       ng: "FI_Ghost funInfo \<noteq> Ghost" and
+      imp: "FI_Impure funInfo \<longrightarrow> TE_FunctionImpure env" and
       len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
       args: "list_all2 (?ok env) (zip tmArgs ?vors) ?expected" and
       ty_eq: "ty = apply_subst ?sub (FI_ReturnType funInfo)"
@@ -196,8 +198,10 @@ proof -
       show ?thesis using p Ref tE wE by simp
     qed
   qed
+  have impE: "FI_Impure funInfo \<longrightarrow> TE_FunctionImpure envE"
+    using imp rel unfolding tyenv_erased_def by simp
   show ?thesis
-    using fnE len_ty tysE cps ngN len_tm argsE ty_eq
+    using fnE len_ty tysE cps ngN impE len_tm argsE ty_eq
     by (simp add: core_impure_call_type_def Let_def)
 qed
 

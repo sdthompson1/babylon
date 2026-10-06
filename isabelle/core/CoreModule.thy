@@ -178,7 +178,8 @@ definition module_ghost_subsets_ok :: "CoreModule \<Rightarrow> bool" where
 (* This predicate says that a type environment is at *module scope*, i.e. not
    inside any function or proof. Specifically: there are no local variables
    (TE_LocalVars, TE_GhostLocals and TE_ConstLocals all empty); no enclosing function
-   (TE_ReturnType = CoreTy_Record [] and TE_FunctionGhost = NotGhost by convention);
+   (TE_ReturnType = CoreTy_Record [], TE_FunctionGhost = NotGhost and
+   TE_FunctionImpure = False by convention);
    no enclosing proof (TE_ProofGoal = None, TE_ProofTopLevel = False); and no
    function-level type parameters (every in-scope type variable is a module-level
    abstract type, i.e. TE_AbstractTypes = TE_TypeVars). *)
@@ -189,6 +190,7 @@ definition tyenv_module_scope :: "CoreTyEnv \<Rightarrow> bool" where
      \<and> TE_ConstLocals env = {||}
      \<and> TE_ReturnType env = CoreTy_Record []
      \<and> TE_FunctionGhost env = NotGhost
+     \<and> \<not> TE_FunctionImpure env
      \<and> TE_ProofGoal env = None
      \<and> TE_ProofTopLevel env = False
      \<and> TE_AbstractTypes env = TE_TypeVars env)"

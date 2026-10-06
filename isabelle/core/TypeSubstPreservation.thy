@@ -150,7 +150,8 @@ proof -
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+    imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
   \<comment> \<open>Signature facts (distinctness + tyvar containment) for substitution composition.
@@ -316,7 +317,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi sty_wk sty_cp sty_rt fn_ng len_sty len_tm l2_full ret_recompute
+    using fi sty_wk sty_cp sty_rt fn_ng imp len_sty len_tm l2_full ret_recompute
     by (auto simp: Let_def)
 qed
 

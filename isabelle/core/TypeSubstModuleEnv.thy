@@ -112,6 +112,11 @@ lemma apply_subst_to_module_env_TE_FunctionGhost [simp]:
      = TE_FunctionGhost env"
   by (simp add: apply_subst_to_module_env_def)
 
+lemma apply_subst_to_module_env_TE_FunctionImpure [simp]:
+  "TE_FunctionImpure (apply_subst_to_module_env subst targetEnv env)
+     = TE_FunctionImpure env"
+  by (simp add: apply_subst_to_module_env_def)
+
 lemma apply_subst_to_module_env_TE_ProofGoal [simp]:
   "TE_ProofGoal (apply_subst_to_module_env subst targetEnv env)
      = map_option (apply_subst_to_term subst) (TE_ProofGoal env)"
@@ -1601,7 +1606,8 @@ proof -
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+    imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
   let ?innerSubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
@@ -1729,7 +1735,7 @@ proof -
   show ?thesis
     unfolding core_impure_call_type_def
     using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_fn
-          len_tmArgs_subst l2_subst ty_eq ret_compose
+          imp len_tmArgs_subst l2_subst ty_eq ret_compose
     by (auto simp: Let_def expected_eq vor_eq)
 qed
 

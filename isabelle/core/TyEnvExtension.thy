@@ -39,6 +39,7 @@ definition tyenv_extends :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> boo
    \<and> TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env
    \<and> TE_ReturnType env' = TE_ReturnType env
    \<and> TE_FunctionGhost env' = TE_FunctionGhost env
+   \<and> TE_FunctionImpure env' = TE_FunctionImpure env
    \<and> TE_ProofGoal env' = TE_ProofGoal env
    \<and> TE_ProofTopLevel env' = TE_ProofTopLevel env
      \<comment> \<open>Declaration maps: every old entry survives unchanged.\<close>
@@ -803,11 +804,14 @@ proof -
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+    imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
   have fi': "fmlookup (TE_Functions env') fnName = Some funInfo"
     using ext fi unfolding tyenv_extends_def by blast
+  have imp': "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env'"
+    using ext imp unfolding tyenv_extends_def by blast
   have wk': "list_all (is_well_kinded env') tyArgs"
     using wk is_well_kinded_tyenv_extends[OF ext] by (fastforce simp: list_all_iff)
   have rt': "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs"
@@ -879,7 +883,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi' wk' cp rt' fn_ng len_ty len_tm l2_full' ty_eq
+    using fi' wk' cp rt' fn_ng imp' len_ty len_tm l2_full' ty_eq
     by (auto simp: Let_def)
 qed
 

@@ -73,6 +73,7 @@ lemma erase_ghost_simulation_aux:
     and funs :: "(string, 'w InterpFun) fmap"
   assumes agree: "fun_var_ref_agree (TE_Functions genv) funs"
     and bodies: "fun_bodies_typed genv funs"
+    and pure: "funs_respect_purity (TE_Functions genv) funs"
   shows "\<forall>env emb (full :: 'w InterpState) (erased :: 'w InterpState) v.
            TE_Functions env = TE_Functions genv \<longrightarrow>
            IS_Functions full = funs \<longrightarrow>
@@ -1177,11 +1178,13 @@ next
           using static_parts_eqD(2)[OF interp_statement_static[OF r1]] funs_eq by simp
         have agree': "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
           using agree by (simp add: fn_eq funs_eq)
+        have pure': "funs_respect_purity (TE_Functions env) (IS_Functions full)"
+          using pure by (simp add: fn_eq funs_eq)
         from erase_ghost_statement_shape[of stmt1] show ?thesis
         proof (elim disjE exE)
           \<comment> \<open>The first statement is deleted: the erased state does not move. \<close>
           assume er: "erase_ghost_statement stmt1 = []"
-          from erased_statement_invisible[OF er T1 fg rel agree' r1] obtain full1 where
+          from erased_statement_invisible[OF er T1 fg rel agree' pure' r1] obtain full1 where
             r1_eq: "res1 = Continue full1" and
             rel1: "state_erased envMid emb full1 erased"
             by blast
@@ -1533,7 +1536,8 @@ theorem erase_ghost_simulation:
               \<and> result_erased env' emb res res'"
   by (rule erase_ghost_simulation_aux(5)
              [OF funs_exist_in_state_var_ref_agree[OF fes]
-                 funs_exist_in_state_bodies_typed[OF fes],
+                 funs_exist_in_state_bodies_typed[OF fes]
+                 funs_exist_in_state_respect_purity[OF fes],
               rule_format, OF refl refl fg rel T H])
 
 (* The same, with the whole state invariant as the hypothesis. *)

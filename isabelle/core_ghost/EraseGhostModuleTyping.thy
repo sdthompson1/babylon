@@ -594,12 +594,13 @@ proof -
     using g tvE rtvE fE dE cE bE gdE by blast
   have ret: "TE_ReturnType ?BE = TE_ReturnType ?B"
     and fg: "TE_FunctionGhost ?BE = TE_FunctionGhost ?B"
+    and fi: "TE_FunctionImpure ?BE = TE_FunctionImpure ?B"
     and gl: "TE_GhostLocals ?BE = {||}"
     and lv: "TE_LocalVars ?BE = TE_LocalVars ?B"
     and cl: "TE_ConstLocals ?BE = TE_ConstLocals ?B"
     using ng by (simp_all add: module_body_env_for_def)
   show ?thesis
-    unfolding tyenv_erased_def using decls ret fg gl lv cl by simp
+    unfolding tyenv_erased_def using decls ret fg fi gl lv cl by simp
 qed
 
 

@@ -324,10 +324,13 @@ proof -
     ref_lv: "\<forall>i < length argTms.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue ?envE (argTms ! i)
-                      \<and> ghost_lvalue_ok ?envE ghost (argTms ! i)"
+                      \<and> ghost_lvalue_ok ?envE ghost (argTms ! i)" and
+    impE: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure ?envE"
     by blast
   have fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
     using fiE unfolding extend_env_with_tyvars_def by simp
+  have imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
+    using impE unfolding extend_env_with_tyvars_def by simp
   from inf have ty_inf: "list_all (type_inferred env) tyArgs"
     and tm_inf: "list_all (term_inferred env) argTms"
     unfolding call_inferred_def by simp_all
@@ -393,7 +396,7 @@ proof -
 
   show ?thesis
     unfolding core_impure_call_type_def
-    using fi tyArgs_wk cp tyArgs_rt fn_ng len_ty len_tm l2_full ty_eq
+    using fi tyArgs_wk cp tyArgs_rt fn_ng imp len_ty len_tm l2_full ty_eq
     by (auto simp: Let_def)
 qed
 
@@ -572,7 +575,8 @@ lemma resolve_impure_callee_correct:
           \<and> distinct (FI_TyArgs funInfo)
           \<and> (\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
                type_tyvars t \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo))
-          \<and> type_tyvars (FI_ReturnType funInfo) \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo)"
+          \<and> type_tyvars (FI_ReturnType funInfo) \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo)
+          \<and> (FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env)"
 proof -
   have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
     using ee_wf unfolding elabenv_well_formed_def by simp
@@ -585,6 +589,9 @@ proof -
     by (auto simp: resolve_impure_callee_def split: option.splits if_splits sum.splits prod.splits)
   from rc callee_eq fn_lookup have ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
     by (auto simp: resolve_impure_callee_def split: if_splits sum.splits prod.splits)
+  from rc callee_eq fn_lookup have impure_ok:
+      "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
+    by (cases ghost) (auto simp: resolve_impure_callee_def split: if_splits sum.splits prod.splits)
   from rc callee_eq fn_lookup ghost_ok obtain next_mv1 where
     resolve_eq: "resolve_type_args env elabEnv ghost nloc fnName (FI_TyArgs funInfo) tyArgs next_mv
                  = Inr (newTyArgs, next_mv1)" and
@@ -624,6 +631,7 @@ proof -
     using is_well_kinded_type_tyvars_subset[OF fi_ret_wk] by (simp add: fset_of_list.rep_eq)
   show ?thesis
     using fn_lookup rta ghost_ok expArg_eq vor_eq ret_eq distinct_tyargs fi_args_tyvars fi_ret_tyvars
+          impure_ok
     by blast
 qed
 
@@ -778,7 +786,8 @@ proof -
     fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
                         type_tyvars t \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo)" and
     fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo)
-                        \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo)"
+                        \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo)" and
+    impure_ok: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
   have mono_2: "next_mv1 \<le> next_mv2" using elab_term_list_next_mv_monotone[OF el] .
@@ -1106,10 +1115,13 @@ proof -
               (FI_TmArgs funInfo))"
     using args_checked exp_recompute by simp
 
+  have impure_ok': "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure ?env'"
+    using impure_ok by (simp add: extend_env_with_tyvars_def)
+
   show ?thesis
     unfolding core_impure_call_type_def
     using fn_lookup' len_finalTyArgs finalTyArgs_wk finalTyArgs_rt finalTyArgs_cp ghost_ok
-          len_finalArgTms vor_eq check_l2 ret_recompute
+          impure_ok' len_finalArgTms vor_eq check_l2 ret_recompute
     by (auto simp: Let_def split: if_splits)
 qed
 

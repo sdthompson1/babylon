@@ -24,6 +24,7 @@ begin
      function, empty.
    - TE_ReturnType: set to the function's declared return type.
    - TE_FunctionGhost: set to the function's FI_Ghost.
+   - TE_FunctionImpure: set to the function's FI_Impure.
 
    (With no abstract types, this is the same environment as module_body_env_for
    in core/CoreModuleTypecheck.thy.)
@@ -41,6 +42,7 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> Fu
                              then fset_of_list (FI_TyArgs funInfo) else {||}),
       TE_ReturnType := FI_ReturnType funInfo,
       TE_FunctionGhost := FI_Ghost funInfo,
+      TE_FunctionImpure := FI_Impure funInfo,
       TE_ProofGoal := None,
       TE_ProofTopLevel := False
     \<rparr>"
@@ -101,12 +103,14 @@ definition global_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTy
    (substituted) Ref-parameter types.
    The type arguments are not required to be runtime types: ghost code may call
    the function at any ground, well-kinded type arguments.
-   The world is opaque to soundness so it is left unconstrained.
+   The world is opaque to soundness, so the contract says only one thing about
+   it: a pure function (one that is not marked impure) returns the world it
+   was given. This holds for every input, not only for well-typed arguments.
    Discharging this contract is the responsibility of whoever provides the
    ExternFunc; the soundness proof for extern calls consumes it. *)
 definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
   "extern_fun_contract env funInfo externFun =
-    (\<forall>tySubst world vals.
+   ((\<forall>tySubst world vals.
        \<comment> \<open>tySubst maps exactly the callee's type arguments to ground,
            well-kinded types in the caller's env.\<close>
        fmdom tySubst = fset_of_list (FI_TyArgs funInfo) \<and>
@@ -124,7 +128,15 @@ definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow>
           list_all2 (value_has_type env)
                     refUpdates
                     (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))))"
+                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))))
+    \<comment> \<open>A pure function leaves the world unchanged.\<close>
+    \<and> (\<not> FI_Impure funInfo \<longrightarrow> (\<forall>world vals. fst (externFun world vals) = world)))"
+
+(* A pure extern function returns the world it was given. *)
+lemma extern_fun_contract_pure_world:
+  assumes "extern_fun_contract env funInfo externFun" and "\<not> FI_Impure funInfo"
+  shows "fst (externFun world vals) = world"
+  using assms unfolding extern_fun_contract_def by simp
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed for typechecking the function body, if there is one. *)

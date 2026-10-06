@@ -50,6 +50,7 @@ definition tyenv_erased :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool
     (tyenv_decls_erased env envE
      \<and> TE_ReturnType envE = TE_ReturnType env
      \<and> TE_FunctionGhost envE = TE_FunctionGhost env
+     \<and> TE_FunctionImpure envE = TE_FunctionImpure env
      \<and> TE_GhostLocals envE = {||}
      \<and> (\<forall>name. \<not> tyenv_var_ghost env name \<longrightarrow>
            fmlookup (TE_LocalVars envE) name = fmlookup (TE_LocalVars env) name
@@ -165,6 +166,7 @@ proof -
     unfolding d by (rule tyenv_erased_decls[OF rel])
   have ret: "TE_ReturnType ?envE' = TE_ReturnType ?env'"
     and fg: "TE_FunctionGhost ?envE' = TE_FunctionGhost ?env'"
+    and fi: "TE_FunctionImpure ?envE' = TE_FunctionImpure ?env'"
     and gl: "TE_GhostLocals ?envE' = {||}"
     using rel unfolding tyenv_erased_def by simp_all
   have locals: "fmlookup (TE_LocalVars ?envE') name = fmlookup (TE_LocalVars ?env') name
@@ -183,7 +185,7 @@ proof -
       by simp
   qed
   show ?thesis
-    unfolding tyenv_erased_def using decls ret fg gl locals by blast
+    unfolding tyenv_erased_def using decls ret fg fi gl locals by blast
 qed
 
 (* The same, for a const local (the binding of a Let). *)

@@ -400,6 +400,7 @@ lemma partial_body_env_for_fields:
      = (if FI_Ghost funInfo = NotGhost then fset_of_list (FI_TyArgs funInfo) else {||})"
   "TE_ReturnType (partial_body_env_for env names funInfo k) = FI_ReturnType funInfo"
   "TE_FunctionGhost (partial_body_env_for env names funInfo k) = FI_Ghost funInfo"
+  "TE_FunctionImpure (partial_body_env_for env names funInfo k) = FI_Impure funInfo"
   by (simp_all add: partial_body_env_for_def body_env_for_def)
 
 (* How partial_body_env_for evolves between k and Suc k: the (k+1)-th FI_TmArg is

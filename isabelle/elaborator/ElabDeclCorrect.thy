@@ -8561,6 +8561,8 @@ proof -
       using fL(8) scope_i unfolding tyenv_module_scope_def by simp
     show "TE_FunctionGhost (CM_TyEnv l) = TE_FunctionGhost ?pre"
       using fL(9) scope_i unfolding tyenv_module_scope_def by simp
+    show "TE_FunctionImpure (CM_TyEnv l) = TE_FunctionImpure ?pre"
+      using fL(19) scope_i unfolding tyenv_module_scope_def by simp
     show "TE_ProofGoal (CM_TyEnv l) = TE_ProofGoal ?pre"
       using fL(10) scope_i unfolding tyenv_module_scope_def by simp
     show "TE_ProofTopLevel (CM_TyEnv l) = TE_ProofTopLevel ?pre"

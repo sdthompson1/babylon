@@ -38,8 +38,10 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
      | _ \<Rightarrow> False)"
 
 (* Resolve the callee of an impure call. This checks that the callee is a
-   ghost-compatible function; resolves the type arguments (allocating fresh metavariables
-   when omitted); and computes the per-argument expected types and Var/Ref markers, plus
+   ghost-compatible function, and that an impure callee is only called from
+   NotGhost code in an impure function; resolves the type arguments
+   (allocating fresh metavariables when omitted);
+   and computes the per-argument expected types and Var/Ref markers, plus
    the substituted return type. Void functions are rejected unless allowVoid is set
    (statement-position calls allow them; their Core return type is unit). Returns:
      (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv').
@@ -62,6 +64,12 @@ definition resolve_impure_callee ::
                 Inl [TyErr_FunctionNoReturnType nloc name]
               else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
                 Inl [TyErr_GhostFunctionInNonGhost nloc name]
+              \<comment> \<open>An impure function can be called only from executable code, and
+                  only from an impure function.\<close>
+              else if FI_Impure funInfo \<and> ghost = Ghost then
+                Inl [TyErr_ImpureFunctionInGhost nloc name]
+              else if FI_Impure funInfo \<and> \<not> TE_FunctionImpure env then
+                Inl [TyErr_ImpureFunctionInPure nloc name]
               else
                 (case resolve_type_args env elabEnv ghost nloc name
                         (FI_TyArgs funInfo) tyArgs next_mv of

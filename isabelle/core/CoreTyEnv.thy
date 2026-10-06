@@ -59,6 +59,9 @@ record CoreTyEnv =
   (* Ghost-ness of the enclosing function. *)
   TE_FunctionGhost :: GhostOrNot
 
+  (* True if the enclosing function is impure (it may modify the world state). *)
+  TE_FunctionImpure :: bool
+
   (* The remaining goal of the immediately-enclosing assert proof (if applicable).
      Note: Fix and Use strip quantifiers from the TE_ProofGoal, without renaming or
      substituting into the body correctly, so this might not be a well-typed term.
@@ -114,7 +117,7 @@ definition tyenv_var_writable :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> b
 
 (* tyenv_fixed_eq env1 env2: the "fixed" fields of env1 and env2 are identical.
    These are the fields that do not change during statement execution:
-   globals, return type, function ghost-ness, functions, datatypes, etc.
+   globals, return type, function ghost-ness and impurity, functions, datatypes, etc.
    This is used in the Return case of sound_statement_result to transfer
    value_has_type and TE_ReturnType across environments. *)
 definition tyenv_fixed_eq :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
@@ -122,6 +125,7 @@ definition tyenv_fixed_eq :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bo
     TE_GlobalVars env1 = TE_GlobalVars env2 \<and>
     TE_ReturnType env1 = TE_ReturnType env2 \<and>
     TE_FunctionGhost env1 = TE_FunctionGhost env2 \<and>
+    TE_FunctionImpure env1 = TE_FunctionImpure env2 \<and>
     TE_Functions env1 = TE_Functions env2 \<and>
     TE_Datatypes env1 = TE_Datatypes env2 \<and>
     TE_DataCtors env1 = TE_DataCtors env2 \<and>

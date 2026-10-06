@@ -74,6 +74,7 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
                                    else {||}),
       TE_ReturnType := FI_ReturnType info,
       TE_FunctionGhost := FI_Ghost info,
+      TE_FunctionImpure := FI_Impure info,
       TE_ProofGoal := None,
       TE_ProofTopLevel := False
     \<rparr>"
