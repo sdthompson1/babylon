@@ -740,9 +740,9 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
          tmArgNames = map (\<lambda>(name, _, _). name) (DF_TmArgs df);
 
          (tyArgNameErrs, env1) = add_local_type_names loc tyArgNames env;
-         argResults = map (\<lambda>(name, varRef, ty).
+         argResults = map (\<lambda>(name, varRef, ty, gh).
                             let (errs, newTy) = rename_type env1 ty
-                            in (errs, (name, varRef, newTy))) (DF_TmArgs df);
+                            in (errs, (name, varRef, newTy, gh))) (DF_TmArgs df);
          tmArgErrs = concat (map fst argResults);
          newTmArgs = map snd argResults;
          (retTyErrs, newRetTy) = (case DF_ReturnType df of

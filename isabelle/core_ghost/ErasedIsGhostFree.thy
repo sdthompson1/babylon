@@ -10,14 +10,14 @@ begin
 (* Helper lemma *)
 lemma erase_ghost_statement_list_ghost_free_aux:
   assumes "\<And>stmt. stmt \<in> set stmts
-             \<Longrightarrow> core_statement_list_ghost_free (erase_ghost_statement stmt)"
-  shows "core_statement_list_ghost_free (erase_ghost_statement_list stmts)"
+             \<Longrightarrow> core_statement_list_ghost_free (erase_ghost_statement funs stmt)"
+  shows "core_statement_list_ghost_free (erase_ghost_statement_list funs stmts)"
   using assms
   by (induction stmts) (simp_all add: core_statement_list_ghost_free_append)
 
 (* erase_ghost_statement produces a ghost-free statement list *)
 lemma erase_ghost_statement_ghost_free:
-  "core_statement_list_ghost_free (erase_ghost_statement stmt)"
+  "core_statement_list_ghost_free (erase_ghost_statement funs stmt)"
 proof (induction stmt)
   case (CoreStmt_VarDecl declGhost varName vr varTy initTm)
   show ?case by (cases declGhost) simp_all
@@ -53,17 +53,17 @@ next
   show ?case by simp
 next
   case (CoreStmt_While whileGhost condTm invars decrTm body)
-  have b: "core_statement_list_ghost_free (erase_ghost_statement_list body)"
+  have b: "core_statement_list_ghost_free (erase_ghost_statement_list funs body)"
     by (rule erase_ghost_statement_list_ghost_free_aux) (rule CoreStmt_While.IH)
   show ?case by (cases whileGhost) (simp_all add: b)
 next
   case (CoreStmt_Match matchGhost scrut arms)
-  have arm: "core_statement_list_ghost_free (erase_ghost_statement_list body)"
+  have arm: "core_statement_list_ghost_free (erase_ghost_statement_list funs body)"
     if arm_in: "(pat, body) \<in> set arms" for pat body
   proof (rule erase_ghost_statement_list_ghost_free_aux)
     fix s assume s_in: "s \<in> set body"
     have sn: "body \<in> Basic_BNFs.snds (pat, body)" by simp
-    show "core_statement_list_ghost_free (erase_ghost_statement s)"
+    show "core_statement_list_ghost_free (erase_ghost_statement funs s)"
       by (rule CoreStmt_Match.IH[OF arm_in sn s_in])
   qed
   show ?case using arm by (cases matchGhost) (auto simp: list_all_iff)
@@ -72,14 +72,14 @@ next
   show ?case by simp
 next
   case (CoreStmt_Block body)
-  have b: "core_statement_list_ghost_free (erase_ghost_statement_list body)"
+  have b: "core_statement_list_ghost_free (erase_ghost_statement_list funs body)"
     by (rule erase_ghost_statement_list_ghost_free_aux) (rule CoreStmt_Block.IH)
   show ?case by (simp add: b)
 qed
 
 (* erase_ghost_statement_list produces a ghost-free statement list *)
 theorem erase_ghost_statement_list_ghost_free:
-  "core_statement_list_ghost_free (erase_ghost_statement_list stmts)"
+  "core_statement_list_ghost_free (erase_ghost_statement_list funs stmts)"
   by (rule erase_ghost_statement_list_ghost_free_aux)
      (rule erase_ghost_statement_ghost_free)
 
@@ -88,18 +88,20 @@ theorem erase_ghost_module_ghost_free:
   "core_module_ghost_free (erase_ghost_module m)"
 proof -
   let ?envE = "erase_ghost_tyenv (CM_TyEnv m)"
-  have fns: "FI_Ghost info = NotGhost"
+  have fns: "FI_Ghost info = NotGhost \<and> no_ghost_params info"
     if "fmlookup (TE_Functions ?envE) name = Some info" for name info
-    using that unfolding erase_ghost_tyenv_fun_lookup by simp
+    using that unfolding erase_ghost_tyenv_fun_lookup by auto
   have gd: "TE_GhostDatatypes ?envE = {||}" by simp
   have tv: "TE_TypeVars ?envE |\<subseteq>| TE_RuntimeTypeVars ?envE" by auto
   have bodies: "core_statement_list_ghost_free body"
     if lk: "fmlookup (CM_Functions (erase_ghost_module m)) name = Some f"
       and b: "CF_Body f = Some body" for name f body
   proof -
-    from lk obtain f0 where f: "f = erase_ghost_function f0"
+    from lk obtain f0 where
+      f: "f = erase_ghost_function (TE_Functions (CM_TyEnv m)) name f0"
       unfolding erase_ghost_module_fun_lookup by blast
-    from b f obtain body0 where "body = erase_ghost_statement_list body0"
+    from b f obtain body0 where
+      "body = erase_ghost_statement_list (TE_Functions (CM_TyEnv m)) body0"
       by auto
     thus ?thesis by (simp add: erase_ghost_statement_list_ghost_free)
   qed

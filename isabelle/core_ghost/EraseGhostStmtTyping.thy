@@ -134,27 +134,85 @@ next
   show ?thesis using Some coE tt ty_eq by (simp add: cast_result_type_def)
 qed
 
+(* The per-argument check of an impure call, written as a relation between the
+   actuals and the parameter list. Q is the check for one argument: it takes
+   the parameter's Var/Ref tag, the actual, the expected type and the mode. *)
+lemma impure_args_conv:
+  assumes "length tms = length params"
+  shows "list_all2 (\<lambda>(tm, vor) (expectedTy, mode). Q vor tm expectedTy mode)
+           (zip tms (map (\<lambda>(_, vor, _). vor) params))
+           (zip (map (\<lambda>(ty, _). f ty) params) (map (\<lambda>(_, _, gh). m gh) params))
+         \<longleftrightarrow> list_all2 (\<lambda>tm (pty, vor, gh). Q vor tm (f pty) (m gh)) tms params"
+  using assms by (induction tms params rule: list_induct2) auto
+
+(* The actuals of an executable impure call, after erasure: the actuals of the
+   ghost parameters are dropped, and the others pass the check in NotGhost mode
+   against the parameters that are not ghost. Q and QE are the checks in the
+   two environments, and e is the erasure of a term. *)
+lemma impure_args_erased_aux:
+  assumes typed: "list_all2 (\<lambda>tm (pty, vor, gh). Q vor tm (f pty) (param_mode NotGhost gh))
+                    tms params"
+    and sub: "\<And>tm vor ety. tm \<in> set tms \<Longrightarrow> Q vor tm ety NotGhost
+                \<Longrightarrow> QE vor (e tm) ety NotGhost"
+  shows "list_all2 (\<lambda>tm (pty, vor, gh). QE vor tm (f pty) (param_mode NotGhost gh))
+           (drop_ghost (map (\<lambda>(_, _, gh). gh) params) (map e tms))
+           (filter (\<lambda>(_, _, gh). gh = NotGhost) params)"
+  using assms
+proof (induction tms params rule: list_all2_induct)
+  case Nil
+  show ?case by simp
+next
+  case (Cons tm tms p params)
+  obtain pty vor gh where p: "p = (pty, vor, gh)" by (cases p)
+  have tl: "list_all2 (\<lambda>tm (pty, vor, gh). QE vor tm (f pty) (param_mode NotGhost gh))
+              (drop_ghost (map (\<lambda>(_, _, gh). gh) params) (map e tms))
+              (filter (\<lambda>(_, _, gh). gh = NotGhost) params)"
+  proof (rule Cons.IH)
+    fix tm' vor' ety' assume "tm' \<in> set tms" and "Q vor' tm' ety' NotGhost"
+    then show "QE vor' (e tm') ety' NotGhost"
+      by (intro Cons.prems) simp_all
+  qed
+  show ?case
+  proof (cases gh)
+    case NotGhost
+    have "Q vor tm (f pty) NotGhost"
+      using Cons.hyps(1) p NotGhost by simp
+    then have "QE vor (e tm) (f pty) NotGhost"
+      by (intro Cons.prems) simp_all
+    with tl show ?thesis by (simp add: p NotGhost)
+  next
+    case Ghost
+    with tl show ?thesis by (simp add: p)
+  qed
+qed
+
+(* An impure call typed in NotGhost mode in env: with its ghost actuals dropped
+   and its other actuals erased, it has the same type, in NotGhost mode, in
+   envE. *)
 lemma core_impure_call_type_erased:
   assumes rel: "tyenv_erased env envE" and wf: "tyenv_well_formed env"
     and ct: "core_impure_call_type env NotGhost fnName tyArgs tmArgs = Some ty"
-  shows "core_impure_call_type envE NotGhost fnName tyArgs tmArgs = Some ty"
+  shows "core_impure_call_type envE NotGhost fnName tyArgs
+           (erase_ghost_args (TE_Functions env) fnName
+              (map (erase_ghost_term (TE_Functions env)) tmArgs))
+         = Some ty"
 proof -
   from ct obtain funInfo where
       fn: "fmlookup (TE_Functions env) fnName = Some funInfo"
     by (auto simp: core_impure_call_type_def split: option.splits)
+  let ?E = "erase_ghost_term (TE_Functions env)"
   let ?sub = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-  let ?expected = "map (\<lambda>(ty, _). apply_subst ?sub ty) (FI_TmArgs funInfo)"
-  let ?vors = "map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)"
-  let ?ok = "\<lambda>e. (\<lambda>(tm, vor) expectedTy.
-               case vor of
-                 Var \<Rightarrow>
-                   (case core_term_type e NotGhost tm of
-                      None \<Rightarrow> False
-                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
-               | Ref \<Rightarrow>
-                   is_writable_lvalue e tm
-                   \<and> ghost_lvalue_ok e NotGhost tm
-                   \<and> core_term_type e NotGhost tm = Some expectedTy)"
+  let ?infoE = "erase_ghost_funinfo funInfo"
+  let ?argsE = "drop_ghost (param_ghost_flags funInfo) (map ?E tmArgs)"
+  \<comment> \<open>The check that core_impure_call_type makes for one argument, in environment e.\<close>
+  let ?Q = "\<lambda>e vor tm expectedTy mode.
+              case vor of
+                Var \<Rightarrow>
+                  core_term_type e mode tm = Some expectedTy
+              | Ref \<Rightarrow>
+                  is_writable_lvalue e tm
+                  \<and> ghost_lvalue_ok e mode tm
+                  \<and> core_term_type e mode tm = Some expectedTy"
   from ct fn have
       len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
       wks: "list_all (is_well_kinded env) tyArgs" and
@@ -163,46 +221,71 @@ proof -
       ng: "FI_Ghost funInfo \<noteq> Ghost" and
       imp: "FI_Impure funInfo \<longrightarrow> TE_FunctionImpure env" and
       len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
-      args: "list_all2 (?ok env) (zip tmArgs ?vors) ?expected" and
+      args: "list_all2 (\<lambda>(tm, vor) (expectedTy, mode). ?Q env vor tm expectedTy mode)
+               (zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))
+               (zip (map (\<lambda>(ty, _). apply_subst ?sub ty) (FI_TmArgs funInfo))
+                    (map (\<lambda>(_, _, gh). param_mode NotGhost gh) (FI_TmArgs funInfo)))" and
       ty_eq: "ty = apply_subst ?sub (FI_ReturnType funInfo)"
     by (auto simp: core_impure_call_type_def Let_def split: if_splits)
   have ngN: "FI_Ghost funInfo = NotGhost"
     using ng by (cases "FI_Ghost funInfo") simp_all
-  have fnE: "fmlookup (TE_Functions envE) fnName = Some funInfo"
+  have fnE: "fmlookup (TE_Functions envE) fnName = Some ?infoE"
     by (rule tyenv_erased_fun_lookup[OF rel fn ngN])
   note tysE = tyenv_erased_runtime_type_list[OF rel wks rts]
-  have argsE: "list_all2 (?ok envE) (zip tmArgs ?vors) ?expected"
+  \<comment> \<open>The actuals, as a relation with the parameter list.\<close>
+  have args0: "list_all2 (\<lambda>tm (pty, vor, gh).
+                   ?Q env vor tm (apply_subst ?sub pty) (param_mode NotGhost gh))
+                 tmArgs (FI_TmArgs funInfo)"
     using args
-  proof (rule list.rel_mono_strong)
-    fix p ety
-    assume h: "?ok env p ety"
-    obtain tm vor where p: "p = (tm, vor)" by (cases p)
-    show "?ok envE p ety"
+    unfolding impure_args_conv[where Q = "?Q env" and f = "apply_subst ?sub"
+                                 and m = "param_mode NotGhost", OF len_tm] .
+  \<comment> \<open>The actuals that are kept, against the parameters that are kept.\<close>
+  have argsE0: "list_all2 (\<lambda>tm (pty, vor, gh).
+                    ?Q envE vor tm (apply_subst ?sub pty) (param_mode NotGhost gh))
+                  ?argsE (FI_TmArgs ?infoE)"
+    unfolding param_ghost_flags_def erase_ghost_funinfo_simps
+  proof (rule impure_args_erased_aux[where Q = "?Q env" and QE = "?Q envE" and e = "?E"
+                                       and f = "apply_subst ?sub", OF args0])
+    fix tm vor ety
+    assume tin: "tm \<in> set tmArgs" and q: "?Q env vor tm ety NotGhost"
+    show "?Q envE vor (?E tm) ety NotGhost"
     proof (cases vor)
       case Var
-      from h p Var have "core_term_type env NotGhost tm = Some ety"
+      from q Var have "core_term_type env NotGhost tm = Some ety"
         by (simp split: option.splits)
-      hence "core_term_type envE NotGhost tm = Some ety"
+      hence "core_term_type envE NotGhost (?E tm) = Some ety"
         by (rule core_term_type_erased[OF _ wf rel])
-      thus ?thesis using p Var by simp
+      thus ?thesis using Var by simp
     next
       case Ref
-      from h p Ref have
+      from q Ref have
           w: "is_writable_lvalue env tm" and
           t: "core_term_type env NotGhost tm = Some ety"
         by simp_all
-      have tE: "core_term_type envE NotGhost tm = Some ety"
+      have tE: "core_term_type envE NotGhost (?E tm) = Some ety"
         by (rule core_term_type_erased[OF t wf rel])
-      have wE: "is_writable_lvalue envE tm"
+      have wE: "is_writable_lvalue envE (?E tm)"
         using is_writable_lvalue_erased[OF rel t] w by simp
-      show ?thesis using p Ref tE wE by simp
+      show ?thesis using Ref tE wE by simp
     qed
   qed
+  have lenE: "length ?argsE = length (FI_TmArgs ?infoE)"
+    using argsE0 by (rule list_all2_lengthD)
+  have argsE: "list_all2 (\<lambda>(tm, vor) (expectedTy, mode). ?Q envE vor tm expectedTy mode)
+                 (zip ?argsE (map (\<lambda>(_, vor, _). vor) (FI_TmArgs ?infoE)))
+                 (zip (map (\<lambda>(ty, _). apply_subst ?sub ty) (FI_TmArgs ?infoE))
+                      (map (\<lambda>(_, _, gh). param_mode NotGhost gh) (FI_TmArgs ?infoE)))"
+    using argsE0
+    unfolding impure_args_conv[where Q = "?Q envE" and f = "apply_subst ?sub"
+                                 and m = "param_mode NotGhost", OF lenE] .
   have impE: "FI_Impure funInfo \<longrightarrow> TE_FunctionImpure envE"
     using imp rel unfolding tyenv_erased_def by simp
-  show ?thesis
-    using fnE len_ty tysE cps ngN impE len_tm argsE ty_eq
+  have callE: "core_impure_call_type envE NotGhost fnName tyArgs ?argsE = Some ty"
+    using fnE len_ty tysE cps ngN impE lenE argsE ty_eq
     by (simp add: core_impure_call_type_def Let_def)
+  have eq: "erase_ghost_args (TE_Functions env) fnName (map ?E tmArgs) = ?argsE"
+    by (simp add: erase_ghost_args_def fn)
+  show ?thesis unfolding eq by (rule callE)
 qed
 
 
@@ -242,11 +325,12 @@ lemma erase_ghost_statement_list_typed_aux:
             \<Longrightarrow> core_statement_type env NotGhost stmt = Some env'
             \<Longrightarrow> tyenv_well_formed env
             \<Longrightarrow> tyenv_erased env envE
-            \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost (erase_ghost_statement stmt)
+            \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost
+                            (erase_ghost_statement (TE_Functions env) stmt)
                             = Some envE'
                          \<and> tyenv_erased env' envE')
      \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost
-                     (erase_ghost_statement_list stmts) = Some envE'
+                     (erase_ghost_statement_list (TE_Functions env) stmts) = Some envE'
                   \<and> tyenv_erased env' envE'"
 proof (induction stmts arbitrary: env envE)
   case Nil
@@ -259,18 +343,23 @@ next
     by (auto split: option.splits)
   have sin: "stmt \<in> set (stmt # stmts)" by simp
   from Cons.prems(4)[OF sin head Cons.prems(2) Cons.prems(3)] obtain envEMid where
-      headE: "core_statement_list_type envE NotGhost (erase_ghost_statement stmt)
+      headE: "core_statement_list_type envE NotGhost
+                (erase_ghost_statement (TE_Functions env) stmt)
                 = Some envEMid" and
       relMid: "tyenv_erased envMid envEMid"
     by blast
   have wfMid: "tyenv_well_formed envMid"
     by (rule core_statement_type_preserves_well_formed[OF head Cons.prems(2)])
+  \<comment> \<open>A statement does not change the function table.\<close>
+  have fnMid: "TE_Functions envMid = TE_Functions env"
+    using core_statement_type_fixed_eq[OF head] unfolding tyenv_fixed_eq_def by simp
   have each': "\<And>s env envE env'.
         s \<in> set stmts
         \<Longrightarrow> core_statement_type env NotGhost s = Some env'
         \<Longrightarrow> tyenv_well_formed env
         \<Longrightarrow> tyenv_erased env envE
-        \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost (erase_ghost_statement s)
+        \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost
+                        (erase_ghost_statement (TE_Functions env) s)
                         = Some envE'
                      \<and> tyenv_erased env' envE'"
   proof -
@@ -280,18 +369,21 @@ next
       and w: "tyenv_well_formed env"
       and r: "tyenv_erased env envE"
     have s_in': "s \<in> set (stmt # stmts)" using s_in by simp
-    show "\<exists>envE'. core_statement_list_type envE NotGhost (erase_ghost_statement s)
+    show "\<exists>envE'. core_statement_list_type envE NotGhost
+                    (erase_ghost_statement (TE_Functions env) s)
                     = Some envE'
                   \<and> tyenv_erased env' envE'"
       by (rule Cons.prems(4)[OF s_in' t w r])
   qed
   from Cons.IH[OF tail wfMid relMid each'] obtain envE' where
-      tailE: "core_statement_list_type envEMid NotGhost (erase_ghost_statement_list stmts)
+      tailE: "core_statement_list_type envEMid NotGhost
+                (erase_ghost_statement_list (TE_Functions env) stmts)
                 = Some envE'" and
       rel': "tyenv_erased env' envE'"
-    by fastforce
+    unfolding fnMid by fastforce
   have "core_statement_list_type envE NotGhost
-          (erase_ghost_statement stmt @ erase_ghost_statement_list stmts) = Some envE'"
+          (erase_ghost_statement (TE_Functions env) stmt
+             @ erase_ghost_statement_list (TE_Functions env) stmts) = Some envE'"
     by (simp add: core_statement_list_type_append headE tailE)
   thus ?case using rel' by auto
 qed
@@ -305,7 +397,8 @@ lemma erase_ghost_statement_typed:
   "core_statement_type env NotGhost stmt = Some env'
      \<Longrightarrow> tyenv_well_formed env
      \<Longrightarrow> tyenv_erased env envE
-     \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost (erase_ghost_statement stmt)
+     \<Longrightarrow> \<exists>envE'. core_statement_list_type envE NotGhost
+                     (erase_ghost_statement (TE_Functions env) stmt)
                      = Some envE'
                   \<and> tyenv_erased env' envE'"
 proof (induction stmt arbitrary: env envE env')
@@ -354,10 +447,11 @@ proof (induction stmt arbitrary: env envE env')
                            TE_ConstLocals := TE_ConstLocals env |-| {|varName|} \<rparr>"
         by (auto split: if_splits)
       note tt = tyenv_erased_runtime_type[OF rel wk rt]
-      have itE: "core_term_type envE NotGhost initTm = Some varTy"
+      let ?initE = "erase_ghost_term (TE_Functions env) initTm"
+      have itE: "core_term_type envE NotGhost ?initE = Some varTy"
         by (rule core_term_type_erased[OF it wf rel])
       have sE: "core_statement_type envE NotGhost
-                  (CoreStmt_VarDecl NotGhost varName Var varTy initTm)
+                  (CoreStmt_VarDecl NotGhost varName Var varTy ?initE)
                 = Some (envE \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars envE),
                                 TE_GhostLocals := TE_GhostLocals envE |-| {|varName|},
                                 TE_ConstLocals := TE_ConstLocals envE |-| {|varName|} \<rparr>)"
@@ -382,19 +476,21 @@ proof (induction stmt arbitrary: env envE env')
                                               else finsert varName (TE_ConstLocals env)) \<rparr>"
         by (auto split: if_splits)
       note tt = tyenv_erased_runtime_type[OF rel wk rt]
-      have itE: "core_term_type envE NotGhost initTm = Some varTy"
+      let ?initE = "erase_ghost_term (TE_Functions env) initTm"
+      have itE: "core_term_type envE NotGhost ?initE = Some varTy"
         by (rule core_term_type_erased[OF it wf rel])
-      have wE: "is_writable_lvalue envE initTm = is_writable_lvalue env initTm"
-        by (rule is_writable_lvalue_erased[OF rel it])
+      have lvE: "is_lvalue ?initE" using lv by simp
+      have wE: "is_writable_lvalue envE ?initE = is_writable_lvalue env initTm"
+        using is_writable_lvalue_erased[OF rel it] by simp
       have sE: "core_statement_type envE NotGhost
-                  (CoreStmt_VarDecl NotGhost varName Ref varTy initTm)
+                  (CoreStmt_VarDecl NotGhost varName Ref varTy ?initE)
                 = Some (envE \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars envE),
                                 TE_GhostLocals := TE_GhostLocals envE |-| {|varName|},
                                 TE_ConstLocals :=
                                   (if is_writable_lvalue env initTm
                                    then TE_ConstLocals envE |-| {|varName|}
                                    else finsert varName (TE_ConstLocals envE)) \<rparr>)"
-        using tt lv itE wE by simp
+        using tt lvE itE wE by simp
       have relE: "tyenv_erased env'
                     (envE \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars envE),
                             TE_GhostLocals := TE_GhostLocals envE |-| {|varName|},
@@ -437,12 +533,14 @@ next
                          TE_ConstLocals := TE_ConstLocals env |-| {|varName|} \<rparr>"
       by (auto split: if_splits option.splits)
     note tt = tyenv_erased_runtime_type[OF rel wk rt]
-    have ctE: "core_impure_call_type envE NotGhost fnName tyArgs argTms = Some retTy"
+    let ?argsE = "erase_ghost_args (TE_Functions env) fnName
+                    (map (erase_ghost_term (TE_Functions env)) argTms)"
+    have ctE: "core_impure_call_type envE NotGhost fnName tyArgs ?argsE = Some retTy"
       by (rule core_impure_call_type_erased[OF rel wf ct])
     have castE: "cast_result_type envE NotGhost retTy castOpt = Some varTy"
       by (rule cast_result_type_erased[OF rel cast])
     have sE: "core_statement_type envE NotGhost
-                (CoreStmt_VarDeclCall NotGhost varName varTy castOpt fnName tyArgs argTms)
+                (CoreStmt_VarDeclCall NotGhost varName varTy castOpt fnName tyArgs ?argsE)
               = Some (envE \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars envE),
                               TE_GhostLocals := TE_GhostLocals envE |-| {|varName|},
                               TE_ConstLocals := TE_ConstLocals envE |-| {|varName|} \<rparr>)"
@@ -493,13 +591,15 @@ next
         rt: "core_term_type env NotGhost rhsTm = Some lhsTy" and
         e: "env' = env"
       by (auto split: if_splits option.splits)
-    have wE: "is_writable_lvalue envE lhsTm"
+    let ?E = "erase_ghost_term (TE_Functions env)"
+    have wE: "is_writable_lvalue envE (?E lhsTm)"
       using is_writable_lvalue_erased[OF rel lt] w by simp
-    have ltE: "core_term_type envE NotGhost lhsTm = Some lhsTy"
+    have ltE: "core_term_type envE NotGhost (?E lhsTm) = Some lhsTy"
       by (rule core_term_type_erased[OF lt wf rel])
-    have rtE: "core_term_type envE NotGhost rhsTm = Some lhsTy"
+    have rtE: "core_term_type envE NotGhost (?E rhsTm) = Some lhsTy"
       by (rule core_term_type_erased[OF rt wf rel])
-    have sE: "core_statement_type envE NotGhost (CoreStmt_Assign NotGhost lhsTm rhsTm)
+    have sE: "core_statement_type envE NotGhost
+                (CoreStmt_Assign NotGhost (?E lhsTm) (?E rhsTm))
                 = Some envE"
       using wE ltE cp rtE by simp
     have relE: "tyenv_erased env' envE" using rel e by simp
@@ -529,16 +629,18 @@ next
         cast: "cast_result_type env NotGhost retTy castOpt = Some lhsTy" and
         e: "env' = env"
       by (simp_all split: if_splits)
-    have wE: "is_writable_lvalue envE lhsTm"
+    let ?E = "erase_ghost_term (TE_Functions env)"
+    let ?argsE = "erase_ghost_args (TE_Functions env) fnName (map ?E argTms)"
+    have wE: "is_writable_lvalue envE (?E lhsTm)"
       using is_writable_lvalue_erased[OF rel lt] w by simp
-    have ltE: "core_term_type envE NotGhost lhsTm = Some lhsTy"
+    have ltE: "core_term_type envE NotGhost (?E lhsTm) = Some lhsTy"
       by (rule core_term_type_erased[OF lt wf rel])
-    have ctE: "core_impure_call_type envE NotGhost fnName tyArgs argTms = Some retTy"
+    have ctE: "core_impure_call_type envE NotGhost fnName tyArgs ?argsE = Some retTy"
       by (rule core_impure_call_type_erased[OF rel wf ct])
     have castE: "cast_result_type envE NotGhost retTy castOpt = Some lhsTy"
       by (rule cast_result_type_erased[OF rel cast])
     have sE: "core_statement_type envE NotGhost
-                (CoreStmt_AssignCall NotGhost lhsTm castOpt fnName tyArgs argTms)
+                (CoreStmt_AssignCall NotGhost (?E lhsTm) castOpt fnName tyArgs ?argsE)
               = Some envE"
       using wE ltE ctE cp castE by simp
     have relE: "tyenv_erased env' envE" using rel e by simp
@@ -563,15 +665,17 @@ next
         rt: "core_term_type env NotGhost rhsTm = Some lhsTy" and
         e: "env' = env"
       by (auto split: if_splits option.splits)
-    have wlE: "is_writable_lvalue envE lhsTm"
+    let ?E = "erase_ghost_term (TE_Functions env)"
+    have wlE: "is_writable_lvalue envE (?E lhsTm)"
       using is_writable_lvalue_erased[OF rel lt] wl by simp
-    have wrE: "is_writable_lvalue envE rhsTm"
+    have wrE: "is_writable_lvalue envE (?E rhsTm)"
       using is_writable_lvalue_erased[OF rel rt] wr by simp
-    have ltE: "core_term_type envE NotGhost lhsTm = Some lhsTy"
+    have ltE: "core_term_type envE NotGhost (?E lhsTm) = Some lhsTy"
       by (rule core_term_type_erased[OF lt wf rel])
-    have rtE: "core_term_type envE NotGhost rhsTm = Some lhsTy"
+    have rtE: "core_term_type envE NotGhost (?E rhsTm) = Some lhsTy"
       by (rule core_term_type_erased[OF rt wf rel])
-    have sE: "core_statement_type envE NotGhost (CoreStmt_Swap NotGhost lhsTm rhsTm)
+    have sE: "core_statement_type envE NotGhost
+                (CoreStmt_Swap NotGhost (?E lhsTm) (?E rhsTm))
                 = Some envE"
       using wlE wrE ltE cp rtE by simp
     have relE: "tyenv_erased env' envE" using rel e by simp
@@ -590,9 +694,10 @@ next
     using rel fg unfolding tyenv_erased_def by simp
   have retE: "TE_ReturnType envE = TE_ReturnType env"
     using rel unfolding tyenv_erased_def by simp
-  have tE: "core_term_type envE NotGhost tm = Some (TE_ReturnType env)"
+  let ?tmE = "erase_ghost_term (TE_Functions env) tm"
+  have tE: "core_term_type envE NotGhost ?tmE = Some (TE_ReturnType env)"
     by (rule core_term_type_erased[OF t wf rel])
-  have sE: "core_statement_type envE NotGhost (CoreStmt_Return tm) = Some envE"
+  have sE: "core_statement_type envE NotGhost (CoreStmt_Return ?tmE) = Some envE"
     using fgE retE tE by simp
   have relE: "tyenv_erased env' envE" using rel e by simp
   from erased_typed_single[OF sE relE] show ?case by simp
@@ -629,19 +734,21 @@ next
                              (envE \<lparr> TE_ProofTopLevel := False \<rparr>)"
       using rel by simp
     have "\<exists>envE'. core_statement_list_type (envE \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost
-                     (erase_ghost_statement_list body) = Some envE'
+                     (erase_ghost_statement_list
+                        (TE_Functions (env \<lparr> TE_ProofTopLevel := False \<rparr>)) body) = Some envE'
                   \<and> tyenv_erased bodyEnv envE'"
       by (rule erase_ghost_statement_list_typed_aux[OF b wfB relB])
          (rule CoreStmt_While.IH)
     then obtain bodyEnvE where
         bE: "core_statement_list_type (envE \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost
-               (erase_ghost_statement_list body) = Some bodyEnvE"
-      by blast
-    have cE: "core_term_type envE NotGhost condTm = Some CoreTy_Bool"
+               (erase_ghost_statement_list (TE_Functions env) body) = Some bodyEnvE"
+      by auto
+    let ?condE = "erase_ghost_term (TE_Functions env) condTm"
+    have cE: "core_term_type envE NotGhost ?condE = Some CoreTy_Bool"
       by (rule core_term_type_erased[OF c wf rel])
     have sE: "core_statement_type envE NotGhost
-                (CoreStmt_While NotGhost condTm [] (CoreTm_LitBool False)
-                   (erase_ghost_statement_list body))
+                (CoreStmt_While NotGhost ?condE [] (CoreTm_LitBool False)
+                   (erase_ghost_statement_list (TE_Functions env) body))
               = Some envE"
       using cE bE by simp
     have relE: "tyenv_erased env' envE" using rel e by simp
@@ -669,7 +776,8 @@ next
         e: "env' = env"
       by (auto simp: Let_def split: if_splits option.splits)
     define armsE where
-      "armsE = map (\<lambda>(pat, body). (pat, erase_ghost_statement_list body)) arms"
+      "armsE = map (\<lambda>(pat, body).
+                      (pat, erase_ghost_statement_list (TE_Functions env) body)) arms"
     have fst_eq: "map fst armsE = map fst arms"
       unfolding armsE_def by (induction arms) auto
     have wfB: "tyenv_well_formed (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
@@ -677,7 +785,8 @@ next
     have relB: "tyenv_erased (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                              (envE \<lparr> TE_ProofTopLevel := False \<rparr>)"
       using rel by simp
-    have sE': "core_term_type envE NotGhost scrut = Some scrutTy"
+    let ?scrutE = "erase_ghost_term (TE_Functions env) scrut"
+    have sE': "core_term_type envE NotGhost ?scrutE = Some scrutTy"
       by (rule core_term_type_erased[OF s wf rel])
     have srt: "is_runtime_type env scrutTy"
       by (rule core_term_type_notghost_runtime[OF s wf])
@@ -699,7 +808,7 @@ next
       fix bodyE assume "bodyE \<in> set (map snd armsE)"
       then obtain pat body where
           ain: "(pat, body) \<in> set arms" and
-          bodyE: "bodyE = erase_ghost_statement_list body"
+          bodyE: "bodyE = erase_ghost_statement_list (TE_Functions env) body"
         unfolding armsE_def by auto
       have "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost body
               \<noteq> None"
@@ -710,7 +819,9 @@ next
         by auto
       have sn: "body \<in> Basic_BNFs.snds (pat, body)" by simp
       have "\<exists>envE'. core_statement_list_type (envE \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost
-                       (erase_ghost_statement_list body) = Some envE'
+                       (erase_ghost_statement_list
+                          (TE_Functions (env \<lparr> TE_ProofTopLevel := False \<rparr>)) body)
+                       = Some envE'
                     \<and> tyenv_erased bodyEnv envE'"
         by (rule erase_ghost_statement_list_typed_aux[OF b wfB relB])
            (rule CoreStmt_Match.IH[OF ain sn])
@@ -718,7 +829,7 @@ next
               \<noteq> None"
         using bodyE by auto
     qed
-    have sE: "core_statement_type envE NotGhost (CoreStmt_Match NotGhost scrut armsE)
+    have sE: "core_statement_type envE NotGhost (CoreStmt_Match NotGhost ?scrutE armsE)
                 = Some envE"
       using sE' patsE bodiesE by (simp add: Let_def)
     have relE: "tyenv_erased env' envE" using rel e by simp
@@ -744,16 +855,17 @@ next
                            (envE \<lparr> TE_ProofTopLevel := False \<rparr>)"
     using rel by simp
   have "\<exists>envE'. core_statement_list_type (envE \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost
-                   (erase_ghost_statement_list body) = Some envE'
+                   (erase_ghost_statement_list
+                      (TE_Functions (env \<lparr> TE_ProofTopLevel := False \<rparr>)) body) = Some envE'
                 \<and> tyenv_erased bodyEnv envE'"
     by (rule erase_ghost_statement_list_typed_aux[OF b wfB relB])
        (rule CoreStmt_Block.IH)
   then obtain bodyEnvE where
       bE: "core_statement_list_type (envE \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost
-             (erase_ghost_statement_list body) = Some bodyEnvE"
-    by blast
+             (erase_ghost_statement_list (TE_Functions env) body) = Some bodyEnvE"
+    by auto
   have sE: "core_statement_type envE NotGhost
-              (CoreStmt_Block (erase_ghost_statement_list body)) = Some envE"
+              (CoreStmt_Block (erase_ghost_statement_list (TE_Functions env) body)) = Some envE"
     using bE by simp
   have relE: "tyenv_erased env' envE" using rel e by simp
   from erased_typed_single[OF sE relE] show ?case by simp
@@ -764,7 +876,8 @@ theorem erase_ghost_statement_list_typed:
   assumes "core_statement_list_type env NotGhost stmts = Some env'"
     and "tyenv_well_formed env"
     and "tyenv_erased env envE"
-  shows "\<exists>envE'. core_statement_list_type envE NotGhost (erase_ghost_statement_list stmts)
+  shows "\<exists>envE'. core_statement_list_type envE NotGhost
+                   (erase_ghost_statement_list (TE_Functions env) stmts)
                    = Some envE'
                  \<and> tyenv_erased env' envE'"
   by (rule erase_ghost_statement_list_typed_aux[OF assms])

@@ -986,43 +986,54 @@ qed
 (* ========================================================================== *)
 
 lemma erase_ghost_interp_fun_simps [simp]:
-  "IF_TyArgs (erase_ghost_interp_fun f) = IF_TyArgs f"
-  "IF_Args (erase_ghost_interp_fun f) = IF_Args f"
-  "IF_Impure (erase_ghost_interp_fun f) = IF_Impure f"
-  "IF_Body (erase_ghost_interp_fun f) = map_sum erase_ghost_statement_list id (IF_Body f)"
+  "IF_TyArgs (erase_ghost_interp_fun funInfos f) = IF_TyArgs f"
+  "IF_Args (erase_ghost_interp_fun funInfos f)
+     = filter (\<lambda>(_, _, gh). gh = NotGhost) (IF_Args f)"
+  "IF_Impure (erase_ghost_interp_fun funInfos f) = IF_Impure f"
+  "IF_Body (erase_ghost_interp_fun funInfos f)
+     = map_sum (erase_ghost_statement_list funInfos) id (IF_Body f)"
   by (simp_all add: erase_ghost_interp_fun_def)
 
-(* A function that is not ghost is, in the erased state, the same function
-   with its body erased. *)
+(* A function that is not ghost is, in the erased state, the erased function:
+   the same function without its ghost parameters, and with its body erased. *)
 lemma funs_erased_lookup:
   assumes "funs_erased env full erased"
     and "fmlookup (TE_Functions env) fnName = Some info"
     and "FI_Ghost info = NotGhost"
     and "fmlookup (IS_Functions full) fnName = Some f"
-  shows "fmlookup (IS_Functions erased) fnName = Some (erase_ghost_interp_fun f)"
+  shows "fmlookup (IS_Functions erased) fnName
+           = Some (erase_ghost_interp_fun (TE_Functions env) f)"
 proof -
   from assms(1,2,3)
   have "fmlookup (IS_Functions erased) fnName
-          = map_option erase_ghost_interp_fun (fmlookup (IS_Functions full) fnName)"
+          = map_option (erase_ghost_interp_fun (TE_Functions env))
+                       (fmlookup (IS_Functions full) fnName)"
     unfolding funs_erased_def by blast
   with assms(4) show ?thesis by simp
 qed
 
+(* A function that is pure in the full state is pure in the erased state.
+   (The converse fails: the full function may have a ghost Ref parameter, which
+   the erased function does not have.) *)
 lemma is_pure_fun_erased:
   assumes "funs_erased env full erased"
     and "fmlookup (TE_Functions env) fnName = Some info"
     and "FI_Ghost info = NotGhost"
-  shows "is_pure_fun erased fnName = is_pure_fun full fnName"
+    and "is_pure_fun full fnName"
+  shows "is_pure_fun erased fnName"
 proof (cases "fmlookup (IS_Functions full) fnName")
   case None
-  from assms
-  have "fmlookup (IS_Functions erased) fnName
-          = map_option erase_ghost_interp_fun (fmlookup (IS_Functions full) fnName)"
-    unfolding funs_erased_def by blast
-  with None show ?thesis by simp
+  with assms(4) show ?thesis by simp
 next
   case (Some f)
-  from funs_erased_lookup[OF assms Some] Some show ?thesis by simp
+  from assms(4) Some
+  have noRef: "\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (IF_Args f)" and np: "\<not> IF_Impure f"
+    by simp_all
+  from noRef
+  have noRefE: "\<not> list_ex (\<lambda>(_, vr, _). vr = Ref)
+                    (filter (\<lambda>(_, _, gh). gh = NotGhost) (IF_Args f))"
+    by (auto simp: list_ex_iff)
+  from funs_erased_lookup[OF assms(1,2,3) Some] noRefE np show ?thesis by simp
 qed
 
 (* The bodies of the functions typecheck, each in the environment of its own
@@ -1065,13 +1076,70 @@ lemma body_env_for_facts:
   "TE_Functions (body_env_for env names info) = TE_Functions env"
   by (simp add: body_env_for_def)
 
-(* The environment of the body of a function that is not ghost: it belongs to
-   a function that is not ghost, and none of its variables are ghost. *)
+(* The environment of the body of a function that is not ghost belongs to a
+   function that is not ghost. *)
 lemma body_env_for_notghost:
   assumes "FI_Ghost info = NotGhost"
   shows "TE_FunctionGhost (body_env_for env names info) = NotGhost"
-    and "\<not> tyenv_var_ghost (body_env_for env names info) name"
-  using assms by (simp_all add: body_env_for_def tyenv_var_ghost_def)
+  using assms by (simp add: body_env_for_def)
+
+(* In that environment, the ghost variables are the ghost parameters. Here
+   params is the parameter list of the function in the state: its names are
+   distinct, and its flags are those of the signature. *)
+lemma body_env_for_param_ghost:
+  assumes ng: "FI_Ghost info = NotGhost"
+    and dist: "distinct (map fst params)"
+    and flags: "map snd params = map snd (FI_TmArgs info)"
+    and mem: "(name, vr, gh) \<in> set params"
+  shows "tyenv_var_ghost (body_env_for env (map fst params) info) name \<longleftrightarrow> gh = Ghost"
+proof -
+  let ?be = "body_env_for env (map fst params) info"
+  let ?ghostParams = "filter (\<lambda>(_, _, gh). gh = Ghost) params"
+  have z: "zip (map fst params) (map snd (FI_TmArgs info)) = params"
+    unfolding flags[symmetric] by (rule zip_map_fst_snd)
+  from flags have len: "length params = length (FI_TmArgs info)"
+    by (rule map_eq_imp_length_eq)
+
+  \<comment> \<open>Every parameter is a local variable of the body. \<close>
+  have lv: "fmlookup (TE_LocalVars ?be) name \<noteq> None"
+  proof -
+    from mem have "fst (name, vr, gh) \<in> fst ` set params" by (rule imageI)
+    then have nin: "name \<in> set (map fst params)" by simp
+    have "length (map fst params) = length (map fst (FI_TmArgs info))" using len by simp
+    from map_of_zip_is_Some[OF this] nin obtain ty where
+      "map_of (zip (map fst params) (map fst (FI_TmArgs info))) name = Some ty"
+      by blast
+    then show ?thesis by (simp add: body_env_for_def fmlookup_of_list)
+  qed
+
+  \<comment> \<open>The ghost locals are the names of the ghost parameters. \<close>
+  have gl: "TE_GhostLocals ?be = fset_of_list (map fst ?ghostParams)"
+    unfolding body_env_for_def z by (simp add: ng)
+  have gm: "name |\<in>| TE_GhostLocals ?be \<longleftrightarrow> gh = Ghost"
+  proof
+    assume "name |\<in>| TE_GhostLocals ?be"
+    then have "name \<in> fst ` set ?ghostParams"
+      unfolding gl by (simp only: fset_of_list_elem set_map)
+    then obtain p where pm: "p \<in> set ?ghostParams" and pn: "name = fst p" by blast
+    obtain name' vr' gh' where p_eq: "p = (name', vr', gh')" by (cases p)
+    from pm p_eq have pm': "(name', vr', gh') \<in> set params" and g': "gh' = Ghost"
+      by auto
+    from pn p_eq have n_eq: "name' = name" by simp
+    from eq_key_imp_eq_value[OF dist pm'[unfolded n_eq] mem]
+    have "(vr', gh') = (vr, gh)" .
+    with g' show "gh = Ghost" by simp
+  next
+    assume g: "gh = Ghost"
+    from mem g have "(name, vr, gh) \<in> set ?ghostParams" by simp
+    then have "fst (name, vr, gh) \<in> fst ` set ?ghostParams" by (rule imageI)
+    then have "name \<in> fst ` set ?ghostParams" by (simp only: fst_conv)
+    then show "name |\<in>| TE_GhostLocals ?be"
+      unfolding gl by (simp only: fset_of_list_elem set_map)
+  qed
+
+  show ?thesis
+    unfolding tyenv_var_ghost_def using lv gm by blast
+qed
 
 
 (* ========================================================================== *)
@@ -1080,11 +1148,11 @@ lemma body_env_for_notghost:
 
 (* The states in which the binding of arguments starts: the caller's states
    with empty frames. They are related in the environment of the callee's
-   body, in which no variable is ghost. *)
+   body. (Its ghost variables are the callee's ghost parameters, and none of
+   them is bound yet.) *)
 lemma state_erased_call_entry:
   assumes rel: "state_erased env emb full erased"
     and fns: "TE_Functions envB = TE_Functions env"
-    and noghost: "\<forall>name. \<not> tyenv_var_ghost envB name"
   shows "state_erased envB emb
            (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                    IS_ConstLocals := {||}, IS_TyArgs := tyArgs \<rparr>)
@@ -1116,29 +1184,31 @@ proof -
     show "IS_TyArgs ?e = IS_TyArgs ?f" by simp
     show "locals_erased envB emb ?f ?e" by (simp add: locals_erased_def)
     show "ghost_locals_separate envB emb ?f"
-      using noghost by (simp add: ghost_locals_separate_def)
+      by (simp add: ghost_locals_separate_def)
   qed
 qed
 
-(* Binding one argument. The value result and the lvalue result of the
-   argument in the erased state (vE, rE) correspond to those in the full state
-   (vF, rF): the same value, and corresponding addresses under the caller's
-   embedding emb.
+(* Binding the argument of a parameter that is not ghost, in both states. The
+   value result and the lvalue result of the argument in the erased state
+   (vE, rE) correspond to those in the full state (vF, rF): the same value, and
+   corresponding addresses under the caller's embedding emb.
 
    A Var parameter gets a new cell in both states, so the embedding grows at
    the end; a Ref parameter points to corresponding cells of the caller. *)
 lemma process_one_arg_erased:
   assumes rel: "state_erased envB (emb @ extra) fullK erasedK"
-    and noghost: "\<forall>name. \<not> tyenv_var_ghost envB name"
+    and ng: "\<not> tyenv_var_ghost envB (fst p)"
     and vals: "\<forall>v. vF = Inr v \<longrightarrow> vE = Inr v"
     and refs: "\<forall>addr path. rF = Inr (addr, path) \<longrightarrow>
                  (\<exists>i. rE = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr)"
     and stepF: "process_one_arg (p, rF, vF) (Inr fullK) = Inr mid"
   shows "\<exists>midE extraM. process_one_arg (p, rE, vE) (Inr erasedK) = Inr midE \<and>
-                         state_erased envB (emb @ extraM) mid midE"
+                         state_erased envB (emb @ extraM) mid midE \<and>
+                         length (IS_Store fullK) \<le> length (IS_Store mid) \<and>
+                         (extraM = extra \<or> extraM = extra @ [length (IS_Store fullK)])"
 proof -
   obtain name vr gh where p_eq: "p = (name, vr, gh)" by (cases p)
-  from noghost have ng: "\<not> tyenv_var_ghost envB name" by simp
+  from ng p_eq have ng: "\<not> tyenv_var_ghost envB name" by simp
   show ?thesis
   proof (cases vr)
     case Var
@@ -1167,7 +1237,11 @@ proof -
       then have rel': "state_erased envB (emb @ (extra @ [length (IS_Store fullK)]))
                          mid midE"
         by simp
-      from stepE rel' show ?thesis by blast
+      have len': "length (IS_Store fullK) \<le> length (IS_Store mid)"
+        by (simp add: fresh_binding_stepD(3)[OF sF])
+      show ?thesis
+        by (rule exI[of _ midE], rule exI[of _ "extra @ [length (IS_Store fullK)]"])
+           (use stepE rel' len' in simp)
     qed
   next
     case Ref
@@ -1206,44 +1280,158 @@ proof -
         have rel': "state_erased envB (emb @ extra) mid midE"
           by (rule state_erased_bind_both_ref[OF rel ng refl refl sF sE i_lt' ei'])
              (simp add: cF cE)
-        from stepE rel' show ?thesis by blast
+        have len': "length (IS_Store fullK) \<le> length (IS_Store mid)"
+          by (simp add: ref_binding_stepD(3)[OF sF])
+        show ?thesis
+          by (rule exI[of _ midE], rule exI[of _ extra]) (use stepE rel' len' in simp)
       qed
     qed
   qed
 qed
 
-(* Binding all the arguments. The argument terms are tms; lvF and tmF give the
-   lvalue result and the value result of a term in the full state, lvE and tmE
-   in the erased state. *)
+(* Binding the argument of a ghost parameter. Only the full state does this:
+   the erased function does not have the parameter. The erased state stays
+   where it is, as it does when a ghost variable is declared.
+
+   A Var parameter gets a new cell, which is a ghost cell. A Ref parameter
+   points to the cell of the caller's lvalue, which has to be a ghost cell
+   already. *)
+lemma process_one_arg_ghost:
+  assumes rel: "state_erased envB embK fullK erasedK"
+    and g: "tyenv_var_ghost envB (fst p)"
+    and refs: "\<forall>addr path. fst (snd p) = Ref \<longrightarrow> rF = Inr (addr, path) \<longrightarrow>
+                 addr < length (IS_Store fullK) \<and> addr \<notin> set embK"
+    and stepF: "process_one_arg (p, rF, vF) (Inr fullK) = Inr mid"
+  shows "state_erased envB embK mid erasedK"
+    and "length (IS_Store fullK) \<le> length (IS_Store mid)"
+proof -
+  obtain name vr gh where p_eq: "p = (name, vr, gh)" by (cases p)
+  from g p_eq have gv: "tyenv_var_ghost envB name" by simp
+  have both: "state_erased envB embK mid erasedK
+              \<and> length (IS_Store fullK) \<le> length (IS_Store mid)"
+  proof (cases vr)
+    case Var
+    show ?thesis
+    proof (cases vF)
+      case (Inl err)
+      with p_eq Var stepF show ?thesis by simp
+    next
+      case (Inr val)
+      from p_eq Var Inr stepF[symmetric]
+      have sF: "fresh_binding_step name val fullK mid"
+        by (simp add: fresh_binding_step_def static_parts_eq_def Let_def)
+      note F = fresh_binding_stepD[OF sF]
+      have rel': "state_erased envB embK mid erasedK"
+      proof (rule state_erased_bind_ghost_fresh[OF rel gv refl refl F(1) F(2) F(3) F(4) F(5)])
+        fix n assume "n \<noteq> name"
+        then show "(n |\<in>| IS_ConstLocals mid) = (n |\<in>| IS_ConstLocals fullK)" by (rule F(6))
+      qed
+      have len': "length (IS_Store fullK) \<le> length (IS_Store mid)" by (simp add: F(3))
+      show ?thesis by (rule conjI[OF rel' len'])
+    qed
+  next
+    case Ref
+    show ?thesis
+    proof (cases rF)
+      case (Inl err)
+      with p_eq Ref stepF show ?thesis by simp
+    next
+      case refInr: (Inr addrPath)
+      obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
+      from refs p_eq Ref refInr ap
+      have addr_lt: "addr < length (IS_Store fullK)" and addr_notin: "addr \<notin> set embK"
+        by simp_all
+      show ?thesis
+      proof (cases vF)
+        case (Inl err)
+        with p_eq Ref refInr ap stepF show ?thesis by simp
+      next
+        case (Inr val)
+        from p_eq Ref refInr ap Inr stepF[symmetric]
+        have sF: "ref_binding_step name addr path fullK mid"
+          by (simp add: ref_binding_step_def static_parts_eq_def)
+        note F = ref_binding_stepD[OF sF]
+        have rel': "state_erased envB embK mid erasedK"
+        proof (rule state_erased_bind_ghost_ref
+                      [OF rel gv refl refl F(1) F(2) F(3) F(4) F(5) addr_lt addr_notin])
+          fix n assume "n \<noteq> name"
+          then show "(n |\<in>| IS_ConstLocals mid) = (n |\<in>| IS_ConstLocals fullK)"
+            by (rule F(6))
+        qed
+        have len': "length (IS_Store fullK) \<le> length (IS_Store mid)" by (simp add: F(3))
+        show ?thesis by (rule conjI[OF rel' len'])
+      qed
+    qed
+  qed
+  from both show "state_erased envB embK mid erasedK" by (rule conjunct1)
+  from both show "length (IS_Store fullK) \<le> length (IS_Store mid)" by (rule conjunct2)
+qed
+
+(* Binding all the arguments. The full state binds every parameter. The erased
+   state binds only the parameters that are not ghost, to the arguments that
+   erasure keeps.
+
+   The argument terms of the full call are tms. lvF and tmF give the lvalue
+   result and the value result of an argument in the full state; lvE and tmE
+   give those of the corresponding argument of the erased call in the erased
+   state.
+
+   The hypotheses, in order:
+    - an argument of a parameter that is not ghost has corresponding results
+      in the two states;
+    - an lvalue passed to a ghost Ref parameter is a ghost cell of the caller
+      (n0 is the length of the caller's store);
+    - in the environment of the callee's body, the ghost variables are the
+      ghost parameters;
+    - the states so far are related, and the cells added to the embedding so
+      far are new cells, beyond the caller's store. *)
 lemma fold_process_one_arg_erased:
-  assumes vals: "\<forall>tm \<in> set tms. \<forall>v. tmF tm = Inr v \<longrightarrow> tmE tm = Inr v"
-    and refs: "\<forall>tm \<in> set tms. \<forall>addr path. lvF tm = Inr (addr, path) \<longrightarrow>
-                 (\<exists>i. lvE tm = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr)"
-    and noghost: "\<forall>name. \<not> tyenv_var_ghost envB name"
+  assumes vals: "\<forall>tm name vr. (tm, (name, vr, NotGhost)) \<in> set (zip tms params) \<longrightarrow>
+                   (\<forall>v. tmF tm = Inr v \<longrightarrow> tmE tm = Inr v)"
+    and refs: "\<forall>tm name vr. (tm, (name, vr, NotGhost)) \<in> set (zip tms params) \<longrightarrow>
+                 (\<forall>addr path. lvF tm = Inr (addr, path) \<longrightarrow>
+                    (\<exists>i. lvE tm = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr))"
+    and ghost_refs: "\<forall>tm name. (tm, (name, Ref, Ghost)) \<in> set (zip tms params) \<longrightarrow>
+                 (\<forall>addr path. lvF tm = Inr (addr, path) \<longrightarrow> addr < n0 \<and> addr \<notin> set emb)"
+    and pg: "\<forall>name vr gh. (name, vr, gh) \<in> set params \<longrightarrow>
+               (tyenv_var_ghost envB name \<longleftrightarrow> gh = Ghost)"
     and rel: "state_erased envB (emb @ extra) fullK erasedK"
+    and lo: "n0 \<le> length (IS_Store fullK)"
+    and ex: "\<forall>a \<in> set extra. n0 \<le> a"
     and foldF: "fold process_one_arg (zip params (zip (map lvF tms) (map tmF tms))) (Inr fullK)
                   = Inr fullN"
   shows "\<exists>erasedN extraN.
-           fold process_one_arg (zip params (zip (map lvE tms) (map tmE tms))) (Inr erasedK)
+           fold process_one_arg
+                (zip (filter (\<lambda>(_, _, gh). gh = NotGhost) params)
+                     (zip (map lvE (drop_ghost (map (\<lambda>(_, _, gh). gh) params) tms))
+                          (map tmE (drop_ghost (map (\<lambda>(_, _, gh). gh) params) tms))))
+                (Inr erasedK)
              = Inr erasedN \<and>
            state_erased envB (emb @ extraN) fullN erasedN"
   using assms
 proof (induction params arbitrary: tms extra fullK erasedK)
   case Nil
-  from Nil.prems(5) have "fullN = fullK" by simp
-  with Nil.prems(4) show ?case by auto
+  from Nil.prems(8) have "fullN = fullK" by simp
+  with Nil.prems(5) show ?case by auto
 next
   case (Cons p ps)
+  note vals = Cons.prems(1) and refs = Cons.prems(2) and ghost_refs = Cons.prems(3)
+    and pg = Cons.prems(4) and rel = Cons.prems(5) and lo = Cons.prems(6)
+    and ex = Cons.prems(7) and foldF = Cons.prems(8)
+  note IH = Cons.IH
   show ?case
   proof (cases tms)
     case Nil
-    from Cons.prems(5) Nil have "fullN = fullK" by simp
-    with Cons.prems(4) Nil show ?thesis by auto
+    from foldF Nil have "fullN = fullK" by simp
+    with rel Nil show ?thesis by auto
   next
     case tms_eq: (Cons tm rest)
+    obtain name vr gh where p_eq: "p = (name, vr, gh)" by (cases p)
     let ?restF = "zip ps (zip (map lvF rest) (map tmF rest))"
-    let ?restE = "zip ps (zip (map lvE rest) (map tmE rest))"
-    from Cons.prems(5) tms_eq
+    let ?flags = "map (\<lambda>(_, _, gh). gh) ps"
+    let ?restE = "zip (filter (\<lambda>(_, _, gh). gh = NotGhost) ps)
+                      (zip (map lvE (drop_ghost ?flags rest)) (map tmE (drop_ghost ?flags rest)))"
+    from foldF tms_eq
     have foldF': "fold process_one_arg ?restF (process_one_arg (p, lvF tm, tmF tm) (Inr fullK))
                     = Inr fullN"
       by simp
@@ -1258,35 +1446,102 @@ next
     qed
     then obtain mid where stepF: "process_one_arg (p, lvF tm, tmF tm) (Inr fullK) = Inr mid"
       by blast
-    from Cons.prems(1) tms_eq
-    have v1: "\<forall>v. tmF tm = Inr v \<longrightarrow> tmE tm = Inr v"
-      and vals': "\<forall>tm' \<in> set rest. \<forall>v. tmF tm' = Inr v \<longrightarrow> tmE tm' = Inr v"
-      by auto
-    from Cons.prems(2) tms_eq
-    have r1: "\<forall>addr path. lvF tm = Inr (addr, path) \<longrightarrow>
-                (\<exists>i. lvE tm = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr)"
-      and refs': "\<forall>tm' \<in> set rest. \<forall>addr path. lvF tm' = Inr (addr, path) \<longrightarrow>
-                    (\<exists>i. lvE tm' = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr)"
-      by auto
-    \<comment> \<open>So it is in the erased state. \<close>
-    from process_one_arg_erased[OF Cons.prems(4) Cons.prems(3) v1 r1 stepF]
-    obtain midE extraM where
-      stepE: "process_one_arg (p, lvE tm, tmE tm) (Inr erasedK) = Inr midE" and
-      relM: "state_erased envB (emb @ extraM) mid midE"
-      by blast
-    \<comment> \<open>Then the rest. \<close>
     from foldF' stepF have restF: "fold process_one_arg ?restF (Inr mid) = Inr fullN"
       by simp
-    from Cons.IH[OF vals' refs' Cons.prems(3) relM restF]
-    obtain erasedN extraN where
-      restE: "fold process_one_arg ?restE (Inr midE) = Inr erasedN" and
-      relN: "state_erased envB (emb @ extraN) fullN erasedN"
-      by blast
-    from restE stepE tms_eq
-    have "fold process_one_arg (zip (p # ps) (zip (map lvE tms) (map tmE tms))) (Inr erasedK)
+    \<comment> \<open>The hypotheses, for the remaining arguments. \<close>
+    from vals tms_eq
+    have vals': "\<forall>tm' name' vr'. (tm', (name', vr', NotGhost)) \<in> set (zip rest ps) \<longrightarrow>
+                   (\<forall>v. tmF tm' = Inr v \<longrightarrow> tmE tm' = Inr v)"
+      by auto
+    from refs tms_eq
+    have refs': "\<forall>tm' name' vr'. (tm', (name', vr', NotGhost)) \<in> set (zip rest ps) \<longrightarrow>
+                   (\<forall>addr path. lvF tm' = Inr (addr, path) \<longrightarrow>
+                      (\<exists>i. lvE tm' = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr))"
+      by auto
+    from ghost_refs tms_eq
+    have ghost_refs': "\<forall>tm' name'. (tm', (name', Ref, Ghost)) \<in> set (zip rest ps) \<longrightarrow>
+                   (\<forall>addr path. lvF tm' = Inr (addr, path) \<longrightarrow> addr < n0 \<and> addr \<notin> set emb)"
+      by auto
+    from pg
+    have pg': "\<forall>name' vr' gh'. (name', vr', gh') \<in> set ps \<longrightarrow>
+                 (tyenv_var_ghost envB name' \<longleftrightarrow> gh' = Ghost)"
+      by auto
+    from pg[rule_format, of name vr gh] p_eq
+    have g_iff: "tyenv_var_ghost envB name \<longleftrightarrow> gh = Ghost" by simp
+    show ?thesis
+    proof (cases gh)
+      case NotGhost
+      \<comment> \<open>A parameter that is not ghost: both states bind it. \<close>
+      from g_iff NotGhost p_eq have ng: "\<not> tyenv_var_ghost envB (fst p)" by simp
+      have mem: "(tm, (name, vr, NotGhost)) \<in> set (zip tms (p # ps))"
+        using tms_eq p_eq NotGhost by simp
+      from vals mem have v1: "\<forall>v. tmF tm = Inr v \<longrightarrow> tmE tm = Inr v" by blast
+      from refs mem
+      have r1: "\<forall>addr path. lvF tm = Inr (addr, path) \<longrightarrow>
+                  (\<exists>i. lvE tm = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr)"
+        by blast
+      from process_one_arg_erased[OF rel ng v1 r1 stepF]
+      obtain midE extraM where
+        stepE: "process_one_arg (p, lvE tm, tmE tm) (Inr erasedK) = Inr midE" and
+        relM: "state_erased envB (emb @ extraM) mid midE" and
+        lenM: "length (IS_Store fullK) \<le> length (IS_Store mid)" and
+        exM: "extraM = extra \<or> extraM = extra @ [length (IS_Store fullK)]"
+        by blast
+      from lo lenM have lo': "n0 \<le> length (IS_Store mid)" by simp
+      from ex exM lo have ex': "\<forall>a \<in> set extraM. n0 \<le> a" by auto
+      from IH[OF vals' refs' ghost_refs' pg' relM lo' ex' restF]
+      obtain erasedN extraN where
+        restE: "fold process_one_arg ?restE (Inr midE) = Inr erasedN" and
+        relN: "state_erased envB (emb @ extraN) fullN erasedN"
+        by blast
+      from restE stepE tms_eq p_eq NotGhost
+      have "fold process_one_arg
+              (zip (filter (\<lambda>(_, _, gh). gh = NotGhost) (p # ps))
+                   (zip (map lvE (drop_ghost (map (\<lambda>(_, _, gh). gh) (p # ps)) tms))
+                        (map tmE (drop_ghost (map (\<lambda>(_, _, gh). gh) (p # ps)) tms))))
+              (Inr erasedK)
             = Inr erasedN"
-      by simp
-    with relN show ?thesis by blast
+        by simp
+      with relN show ?thesis by blast
+    next
+      case Ghost
+      \<comment> \<open>A ghost parameter: only the full state binds it, in a ghost cell. \<close>
+      from g_iff Ghost p_eq have g: "tyenv_var_ghost envB (fst p)" by simp
+      have refsG: "\<forall>addr path. fst (snd p) = Ref \<longrightarrow> lvF tm = Inr (addr, path) \<longrightarrow>
+                     addr < length (IS_Store fullK) \<and> addr \<notin> set (emb @ extra)"
+      proof (intro allI impI)
+        fix addr path
+        assume r: "fst (snd p) = Ref" and lv: "lvF tm = Inr (addr, path)"
+        from r p_eq have vr_eq: "vr = Ref" by simp
+        have mem: "(tm, (name, Ref, Ghost)) \<in> set (zip tms (p # ps))"
+          using tms_eq p_eq Ghost vr_eq by simp
+        from ghost_refs mem lv have a: "addr < n0" and b: "addr \<notin> set emb" by blast+
+        from a lo have c: "addr < length (IS_Store fullK)" by simp
+        have d: "addr \<notin> set extra"
+        proof
+          assume "addr \<in> set extra"
+          with ex have "n0 \<le> addr" by blast
+          with a show False by simp
+        qed
+        from b c d show "addr < length (IS_Store fullK) \<and> addr \<notin> set (emb @ extra)" by simp
+      qed
+      note G = process_one_arg_ghost[OF rel g refsG stepF]
+      from lo G(2) have lo': "n0 \<le> length (IS_Store mid)" by simp
+      from IH[OF vals' refs' ghost_refs' pg' G(1) lo' ex restF]
+      obtain erasedN extraN where
+        restE: "fold process_one_arg ?restE (Inr erasedK) = Inr erasedN" and
+        relN: "state_erased envB (emb @ extraN) fullN erasedN"
+        by blast
+      from restE tms_eq p_eq Ghost
+      have "fold process_one_arg
+              (zip (filter (\<lambda>(_, _, gh). gh = NotGhost) (p # ps))
+                   (zip (map lvE (drop_ghost (map (\<lambda>(_, _, gh). gh) (p # ps)) tms))
+                        (map tmE (drop_ghost (map (\<lambda>(_, _, gh). gh) (p # ps)) tms))))
+              (Inr erasedK)
+            = Inr erasedN"
+        by simp
+      with relN show ?thesis by blast
+    qed
   qed
 qed
 
@@ -1461,7 +1716,8 @@ qed
 
 (* A statement erases to nothing or to one statement. *)
 lemma erase_ghost_statement_shape:
-  "erase_ghost_statement stmt = [] \<or> (\<exists>stmt'. erase_ghost_statement stmt = [stmt'])"
+  "erase_ghost_statement funInfos stmt = []
+     \<or> (\<exists>stmt'. erase_ghost_statement funInfos stmt = [stmt'])"
 proof (cases stmt)
   case (CoreStmt_VarDecl g varName vr varTy initTm)
   then show ?thesis by (cases g) simp_all
@@ -1559,42 +1815,104 @@ lemma notghost_typed_Let:
   using assms
   by (cases "core_term_type env NotGhost rhs") (simp_all add: notghost_typed_def Let_def)
 
+(* What the simulation needs to know about the arguments of a call in
+   executable code, given the signature of the function called.
+
+   The argument of a parameter that is not ghost is in executable position.
+   The argument of a ghost parameter is typed in Ghost mode, and erasure drops
+   it; nothing is said about it, except that if the parameter is a Ref, the
+   argument is an lvalue whose base variable is ghost. *)
+definition call_args_notghost :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> CoreTerm list \<Rightarrow> bool" where
+  "call_args_notghost env info tmArgs \<equiv>
+    list_all2 (\<lambda>tm (_, vr, gh).
+                 (gh = NotGhost \<longrightarrow> notghost_typed env tm) \<and>
+                 (gh = Ghost \<longrightarrow> vr = Ref \<longrightarrow> ghost_lvalue_ok env Ghost tm))
+              tmArgs (FI_TmArgs info)"
+
+lemma call_args_notghost_length:
+  assumes "call_args_notghost env info tmArgs"
+  shows "length tmArgs = length (FI_TmArgs info)"
+  using assms unfolding call_args_notghost_def by (rule list_all2_lengthD)
+
+(* The same facts for one argument, found by its position in the parameter
+   list of the function in the state (params), whose flags are those of the
+   signature. *)
+lemma call_args_notghostD:
+  assumes args: "call_args_notghost env info tmArgs"
+    and flags: "map snd params = map snd (FI_TmArgs info)"
+    and mem: "(tm, (name, vr, gh)) \<in> set (zip tmArgs params)"
+  shows "gh = NotGhost \<Longrightarrow> notghost_typed env tm"
+    and "gh = Ghost \<Longrightarrow> vr = Ref \<Longrightarrow> ghost_lvalue_ok env Ghost tm"
+proof -
+  from mem obtain i where ti: "tmArgs ! i = tm" and pi: "params ! i = (name, vr, gh)"
+    and i1: "i < length tmArgs" and i2: "i < length params"
+    by (auto simp: in_set_zip)
+  from flags have len: "length params = length (FI_TmArgs info)"
+    by (rule map_eq_imp_length_eq)
+  from i2 len have i3: "i < length (FI_TmArgs info)" by simp
+  have "snd (FI_TmArgs info ! i) = map snd (FI_TmArgs info) ! i" using i3 by simp
+  also have "\<dots> = map snd params ! i" by (simp only: flags)
+  also have "\<dots> = (vr, gh)" using i2 pi by simp
+  finally have sn: "snd (FI_TmArgs info ! i) = (vr, gh)" .
+  obtain pty where fi: "FI_TmArgs info ! i = (pty, vr, gh)"
+  proof -
+    have "FI_TmArgs info ! i = (fst (FI_TmArgs info ! i), snd (FI_TmArgs info ! i))" by simp
+    then show ?thesis unfolding sn by (rule that)
+  qed
+  from list_all2_nthD[OF args[unfolded call_args_notghost_def] i1]
+  have both: "(gh = NotGhost \<longrightarrow> notghost_typed env tm) \<and>
+              (gh = Ghost \<longrightarrow> vr = Ref \<longrightarrow> ghost_lvalue_ok env Ghost tm)"
+    by (simp add: ti fi)
+  from both show "gh = NotGhost \<Longrightarrow> notghost_typed env tm" by simp
+  from both show "gh = Ghost \<Longrightarrow> vr = Ref \<Longrightarrow> ghost_lvalue_ok env Ghost tm" by simp
+qed
+
 (* A call in executable position is a call of a function that is not ghost,
-   and its arguments are in executable position. *)
+   and its arguments are as above. (A function called in a term has no Ref
+   parameter, so the fact about ghost lvalues holds for the trivial reason.) *)
 lemma notghost_typed_FunctionCall:
   assumes "notghost_typed env (CoreTm_FunctionCall fnName tyArgs tmArgs)"
   shows "\<exists>info. fmlookup (TE_Functions env) fnName = Some info \<and>
                 FI_Ghost info = NotGhost \<and>
-                list_all (notghost_typed env) tmArgs"
+                call_args_notghost env info tmArgs"
 proof -
-  from assms obtain info where info: "fmlookup (TE_Functions env) fnName = Some info"
-    by (cases "fmlookup (TE_Functions env) fnName") (simp_all add: notghost_typed_def)
-  have ng: "FI_Ghost info = NotGhost"
-  proof (rule ccontr)
-    assume "FI_Ghost info \<noteq> NotGhost"
-    then have "FI_Ghost info = Ghost" by (cases "FI_Ghost info") simp_all
-    with assms info show False by (auto simp: notghost_typed_def split: if_splits)
+  from assms obtain ty where
+    T: "core_term_type env NotGhost (CoreTm_FunctionCall fnName tyArgs tmArgs) = Some ty"
+    unfolding notghost_typed_def by (auto simp only: not_None_eq)
+  from T obtain info where
+    info: "fmlookup (TE_Functions env) fnName = Some info" and
+    ng: "FI_Ghost info \<noteq> Ghost" and
+    len: "length tmArgs = length (FI_TmArgs info)" and
+    all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs info)" and
+    la2: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs info) tyArgs)) ty)
+                      (FI_TmArgs info))
+                 (map (\<lambda>(_, _, gh). param_mode NotGhost gh) (FI_TmArgs info)))"
+    by (auto simp: Let_def split: option.splits if_splits)
+  from ng have ng': "FI_Ghost info = NotGhost" by (cases "FI_Ghost info") simp_all
+  have args: "call_args_notghost env info tmArgs"
+    unfolding call_args_notghost_def
+  proof (rule list_all2_all_nthI, goal_cases)
+    case 1
+    show ?case by (rule len)
+  next
+    case (2 i)
+    note i_lt = 2
+    from i_lt len have i_lt': "i < length (FI_TmArgs info)" by simp
+    obtain pty vr gh where pi: "FI_TmArgs info ! i = (pty, vr, gh)"
+      by (cases "FI_TmArgs info ! i")
+    from all_var i_lt' have "case FI_TmArgs info ! i of (_, vor, _) \<Rightarrow> vor = Var"
+      by (simp add: list_all_length)
+    with pi have vr_eq: "vr = Var" by simp
+    have ngt: "gh = NotGhost \<longrightarrow> notghost_typed env (tmArgs ! i)"
+    proof
+      assume g: "gh = NotGhost"
+      from list_all2_case_prod_nthD[OF la2 i_lt] i_lt' pi g
+      show "notghost_typed env (tmArgs ! i)" by (simp add: notghost_typed_def)
+    qed
+    show ?case using ngt vr_eq by (simp add: pi)
   qed
-  let ?expected = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs info) tyArgs)) ty)
-                       (FI_TmArgs info)"
-  have la: "list_all2 (\<lambda>tm expectedTy.
-                case core_term_type env NotGhost tm of
-                  None \<Rightarrow> False
-                | Some actualTy \<Rightarrow> actualTy = expectedTy)
-              tmArgs ?expected"
-  proof (rule ccontr)
-    assume "\<not> list_all2 (\<lambda>tm expectedTy.
-                case core_term_type env NotGhost tm of
-                  None \<Rightarrow> False
-                | Some actualTy \<Rightarrow> actualTy = expectedTy)
-              tmArgs ?expected"
-    with assms info show False by (auto simp: notghost_typed_def Let_def split: if_splits)
-  qed
-  have args: "list_all (notghost_typed env) tmArgs"
-    using la
-    by (fastforce simp: notghost_typed_def list_all_length list_all2_conv_all_nth
-                  split: option.splits)
-  from info ng args show ?thesis by blast
+  from info ng' args show ?thesis by blast
 qed
 
 lemma notghost_typed_VariantCtor:
@@ -1720,19 +2038,50 @@ lemma notghost_impure_call_typed:
   assumes "core_impure_call_type env NotGhost fnName tyArgs tmArgs = Some retTy"
   shows "\<exists>info. fmlookup (TE_Functions env) fnName = Some info \<and>
                 FI_Ghost info = NotGhost \<and>
-                list_all (notghost_typed env) tmArgs"
+                call_args_notghost env info tmArgs"
 proof -
   from core_impure_call_type_fn_facts[OF assms] obtain info where
     info: "fmlookup (TE_Functions env) fnName = Some info" and
-    ng: "FI_Ghost info \<noteq> Ghost"
+    ng: "FI_Ghost info \<noteq> Ghost" and
+    len: "length tmArgs = length (FI_TmArgs info)" and
+    la2: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs info) tyArgs)) ty)
+                      (FI_TmArgs info))
+                 (map (\<lambda>(_, _, gh). param_mode NotGhost gh) (FI_TmArgs info)))" and
+    refs: "\<forall>i < length tmArgs.
+             fst (snd (FI_TmArgs info ! i)) = Ref
+               \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
+                   \<and> ghost_lvalue_ok env (param_mode NotGhost (snd (snd (FI_TmArgs info ! i))))
+                                      (tmArgs ! i)"
     by blast
   from ng have ng': "FI_Ghost info = NotGhost" by (cases "FI_Ghost info") simp_all
-  from core_impure_call_type_args_typed[OF assms]
-  have args: "list_all (\<lambda>tm. \<exists>t. core_term_type env NotGhost tm = Some t) tmArgs"
-    by blast
-  from args have args': "list_all (notghost_typed env) tmArgs"
-    by (auto simp: notghost_typed_def list_all_iff)
-  from info ng' args' show ?thesis by blast
+  have args: "call_args_notghost env info tmArgs"
+    unfolding call_args_notghost_def
+  proof (rule list_all2_all_nthI, goal_cases)
+    case 1
+    show ?case by (rule len)
+  next
+    case (2 i)
+    note i_lt = 2
+    from i_lt len have i_lt': "i < length (FI_TmArgs info)" by simp
+    obtain pty vr gh where pi: "FI_TmArgs info ! i = (pty, vr, gh)"
+      by (cases "FI_TmArgs info ! i")
+    have ngt: "gh = NotGhost \<longrightarrow> notghost_typed env (tmArgs ! i)"
+    proof
+      assume g: "gh = NotGhost"
+      from list_all2_case_prod_nthD[OF la2 i_lt] i_lt' pi g
+      show "notghost_typed env (tmArgs ! i)" by (simp add: notghost_typed_def)
+    qed
+    have glv: "gh = Ghost \<longrightarrow> vr = Ref \<longrightarrow> ghost_lvalue_ok env Ghost (tmArgs ! i)"
+    proof (intro impI)
+      assume g: "gh = Ghost" and r: "vr = Ref"
+      from pi r have is_ref: "fst (snd (FI_TmArgs info ! i)) = Ref" by simp
+      from refs[rule_format, OF i_lt is_ref] pi g
+      show "ghost_lvalue_ok env Ghost (tmArgs ! i)" by simp
+    qed
+    show ?case using ngt glv by (simp add: pi)
+  qed
+  from info ng' args show ?thesis by blast
 qed
 
 end

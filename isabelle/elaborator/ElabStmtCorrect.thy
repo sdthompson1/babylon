@@ -40,17 +40,19 @@ proof -
     using apply_subst_preserves_complete[OF ret_cp fmran'_fmap_of_list_zip_complete[OF cp]] .
 qed
 
-(* Main bridge: a term that typechecks (in a given ghost mode) under env extended
-   with the fresh interval, and that passes the term_inferred check, typechecks
+(* Main bridge: a term that typechecks (in any mode) under env extended with
+   the fresh interval, and that passes the term_inferred check, typechecks
    under the original env to the same type. The check says the term's free
    tyvars are all in TE_TypeVars env; those are all below lo (the bound), so
    they are disjoint from the interval, which core_term_type_remove_unused_tyvars
-   then lets us drop. *)
+   then lets us drop. The typing mode is independent of the mode the interval
+   was added in: a call's ghost actual is typed in Ghost mode inside an
+   interval added in the ambient mode. *)
 lemma inferred_term_typed_in_env:
-  assumes typed: "core_term_type (extend_env_with_tyvars env ghost lo hi) ghost tm = Some ty"
+  assumes typed: "core_term_type (extend_env_with_tyvars env ghost lo hi) mode tm = Some ty"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
     and inf: "term_inferred env tm"
-  shows "core_term_type env ghost tm = Some ty"
+  shows "core_term_type env mode tm = Some ty"
 proof -
   have free_sub: "core_term_free_tyvars tm \<subseteq> fset (TE_TypeVars env)"
     using inf unfolding term_inferred_def by (auto simp: list_all_iff)
@@ -315,16 +317,16 @@ proof -
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length argTms = length (FI_TmArgs funInfo)" and
     ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)" and
-    l2_pure: "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type ?envE ghost tm of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                argTms
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))" and
+    l2_pure: "list_all2 (\<lambda>tm (expectedTy, mode).
+                  core_term_type ?envE mode tm = Some expectedTy) argTms
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ref_lv: "\<forall>i < length argTms.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue ?envE (argTms ! i)
-                      \<and> ghost_lvalue_ok ?envE ghost (argTms ! i)" and
+                      \<and> ghost_lvalue_ok ?envE (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                          (argTms ! i)" and
     impE: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure ?envE"
     by blast
   have fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
@@ -340,35 +342,34 @@ proof -
     and tyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
     using inferred_types_well_kinded_runtime[OF wk rt bound ty_inf] by blast+
 
-  \<comment> \<open>Each arg term typechecks in env to its expected type (the term bridge).\<close>
+  \<comment> \<open>Each arg term typechecks in env, in its own mode, to its expected type
+      (the term bridge).\<close>
   let ?exps = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                    (FI_TmArgs funInfo)"
-  have len_exps: "length argTms = length ?exps" using l2_pure by (simp add: list_all2_lengthD)
-  have arg_typed: "\<And>i. i < length argTms \<Longrightarrow> core_term_type env ghost (argTms ! i) = Some (?exps ! i)"
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have arg_typed: "\<And>i. i < length argTms \<Longrightarrow>
+                     core_term_type env (?modes ! i) (argTms ! i) = Some (?exps ! i)"
   proof -
     fix i assume i_lt: "i < length argTms"
-    have "case core_term_type ?envE ghost (argTms ! i) of None \<Rightarrow> False
-          | Some actualTy \<Rightarrow> actualTy = ?exps ! i"
-      using list_all2_nthD[OF l2_pure] i_lt len_exps by simp
-    hence tm_typed: "core_term_type ?envE ghost (argTms ! i) = Some (?exps ! i)"
-      by (auto split: option.splits)
+    with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
+    have tm_typed: "core_term_type ?envE (?modes ! i) (argTms ! i) = Some (?exps ! i)"
+      using list_all2_case_prod_nthD[OF l2_pure i_lt] i_lt_fi by simp
     have infI: "term_inferred env (argTms ! i)"
       using tm_inf i_lt by (simp add: list_all_length)
-    show "core_term_type env ghost (argTms ! i) = Some (?exps ! i)"
+    show "core_term_type env (?modes ! i) (argTms ! i) = Some (?exps ! i)"
       using inferred_term_typed_in_env[OF tm_typed bound infI] .
   qed
 
   \<comment> \<open>Reassemble core_impure_call_type's per-argument check in env.\<close>
-  let ?P = "\<lambda>(tm, vor) expectedTy.
+  let ?P = "\<lambda>(tm, vor) (expectedTy, mode).
                  case vor of
-                   Var \<Rightarrow> (case core_term_type env ghost tm of None \<Rightarrow> False
-                            | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                   Var \<Rightarrow> core_term_type env mode tm = Some expectedTy
                  | Ref \<Rightarrow> is_writable_lvalue env tm
-                          \<and> ghost_lvalue_ok env ghost tm
-                          \<and> core_term_type env ghost tm = Some expectedTy"
+                          \<and> ghost_lvalue_ok env mode tm
+                          \<and> core_term_type env mode tm = Some expectedTy"
   let ?zts = "zip argTms (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
-  have len_zts: "length ?zts = length ?exps" using len_tm by simp
-  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?exps ! i)"
+  have len_zts: "length ?zts = length (zip ?exps ?modes)" using len_tm by simp
+  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (zip ?exps ?modes ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length argTms" using len_tm by simp
@@ -377,21 +378,27 @@ proof -
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = (argTms ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp
-    have typed_i: "core_term_type env ghost (argTms ! i) = Some (?exps ! i)"
-      using arg_typed[OF i_lt_tm] .
-    show "?P (?zts ! i) (?exps ! i)"
+    have exp_nth: "zip ?exps ?modes ! i
+                     = (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti, param_mode ghost gh)"
+      using i_lt_fi fi_arg by simp
+    have typed_i: "core_term_type env (param_mode ghost gh) (argTms ! i)
+                     = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
+      using arg_typed[OF i_lt_tm] i_lt_fi fi_arg by simp
+    show "?P (?zts ! i) (zip ?exps ?modes ! i)"
     proof (cases vor)
-      case Var with zip_nth typed_i show ?thesis by simp
+      case Var with zip_nth exp_nth typed_i show ?thesis by simp
     next
       case Ref
-      have "is_writable_lvalue ?envE (argTms ! i)" and "ghost_lvalue_ok ?envE ghost (argTms ! i)"
-        using ref_lv i_lt_tm fi_arg Ref by simp_all
-      hence "is_writable_lvalue env (argTms ! i)" and "ghost_lvalue_ok env ghost (argTms ! i)"
+      have "is_writable_lvalue ?envE (argTms ! i)"
+        and "ghost_lvalue_ok ?envE (param_mode ghost gh) (argTms ! i)"
+        using ref_lv i_lt_tm fi_arg Ref by auto
+      hence "is_writable_lvalue env (argTms ! i)"
+        and "ghost_lvalue_ok env (param_mode ghost gh) (argTms ! i)"
         by simp_all
-      thus ?thesis using Ref zip_nth typed_i by simp
+      thus ?thesis using Ref zip_nth exp_nth typed_i by simp
     qed
   qed
-  have l2_full: "list_all2 ?P ?zts ?exps"
+  have l2_full: "list_all2 ?P ?zts (zip ?exps ?modes)"
     using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
 
   show ?thesis
@@ -513,33 +520,64 @@ lemma resolve_type_args_next_mv:
 (* resolve_impure_callee only advances the counter through resolve_type_args. *)
 lemma resolve_impure_callee_next_mv:
   "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
-     = Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')
+     = Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv')
      \<Longrightarrow> next_mv \<le> next_mv'"
   by (auto simp: resolve_impure_callee_def Let_def
            dest!: resolve_type_args_next_mv
            split: BabTerm.splits option.splits sum.splits prod.splits if_splits)
 
-(* elab_impure_call_term advances the counter: resolve_impure_callee then
-   elab_term_list (unify_and_coerce / check_ref_args do not allocate). *)
+(* A successful elaboration of an impure call, taken apart: the callee is
+   resolved, the plain arguments are elaborated in the mode of the call, then
+   the special arguments in Ghost mode, the arguments are type-checked
+   (unify_impure_call_args), and the Ref arguments are checked. *)
+lemma elab_impure_call_term_elim:
+  assumes "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
+             = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
+  obtains newTyArgs expArgTypes varOrRefs argModes retType0 next_mv1
+          plainTms plainTys next_mvP specialTms specialTys finalActualTys finalSubst where
+    "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
+       = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1)"
+    "length args = length expArgTypes"
+    "elab_term_list env elabEnv ghost
+       (plain_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mv1
+       = Inr (plainTms, plainTys, next_mvP)"
+    "elab_term_list env elabEnv Ghost
+       (special_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mvP
+       = Inr (specialTms, specialTys, next_mv')"
+    "unify_impure_call_args env loc args (map (\<lambda>mode. mode \<noteq> ghost) argModes) expArgTypes
+       plainTms plainTys next_mvP specialTms specialTys next_mv'
+       = Inr (finalArgTms, finalActualTys, finalSubst)"
+    "check_ref_args env (\<lambda>idx. bab_term_location (args ! idx)) 0
+       finalArgTms finalActualTys (map (apply_subst finalSubst) expArgTypes)
+       varOrRefs argModes = Inr ()"
+    "finalTyArgs = map (apply_subst finalSubst) newTyArgs"
+    "retTy = apply_subst finalSubst retType0"
+  using assms
+  by (auto simp: elab_impure_call_term_def split: sum.splits prod.splits if_splits)
+
+(* elab_impure_call_term advances the counter: resolve_impure_callee, then the
+   two calls of elab_term_list (the type-checking of the arguments and
+   check_ref_args do not allocate). *)
 lemma elab_impure_call_term_next_mv:
-  "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
-     = Inr (fnName, tyArgs, argTms, retTy, next_mv')
-     \<Longrightarrow> next_mv \<le> next_mv'"
+  assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
+                   = Inr (fnName, tyArgs, argTms, retTy, next_mv')"
+  shows "next_mv \<le> next_mv'"
 proof -
-  assume elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
-                  = Inr (fnName, tyArgs, argTms, retTy, next_mv')"
-  from elab obtain name newTyArgs expArgTypes varOrRefs retType0 next_mv1 where
+  obtain newTyArgs expArgTypes varOrRefs argModes retType0 next_mv1
+         plainTms plainTys next_mvP specialTms specialTys where
     rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
-           = Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1)"
-    by (auto simp: elab_impure_call_term_def split: sum.splits prod.splits)
-  from elab rc obtain elabArgTms actualTypes next_mv2 where
-    el: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)" and
-    nmv': "next_mv' = next_mv2"
-    by (auto simp: elab_impure_call_term_def Let_def
-             split: sum.splits prod.splits if_splits)
+           = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1)" and
+    elab_plain: "elab_term_list env elabEnv ghost
+                   (plain_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mv1
+                 = Inr (plainTms, plainTys, next_mvP)" and
+    elab_special: "elab_term_list env elabEnv Ghost
+                     (special_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mvP
+                   = Inr (specialTms, specialTys, next_mv')"
+    by (rule elab_impure_call_term_elim[OF elab]) blast
   have "next_mv \<le> next_mv1" using resolve_impure_callee_next_mv[OF rc] .
-  moreover have "next_mv1 \<le> next_mv2" using elab_term_list_next_mv_monotone[OF el] .
-  ultimately show ?thesis using nmv' by simp
+  moreover have "next_mv1 \<le> next_mvP" using elab_term_list_next_mv_monotone[OF elab_plain] .
+  moreover have "next_mvP \<le> next_mv'" using elab_term_list_next_mv_monotone[OF elab_special] .
+  ultimately show ?thesis by simp
 qed
 
 
@@ -556,7 +594,7 @@ qed
    distinct and its component types only mention those tyvars. *)
 lemma resolve_impure_callee_correct:
   assumes rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
-                 = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')"
+                 = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
   shows "\<exists>funInfo.
@@ -571,6 +609,7 @@ lemma resolve_impure_callee_correct:
           \<and> expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                               (FI_TmArgs funInfo)
           \<and> varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)
+          \<and> argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)
           \<and> retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)
           \<and> distinct (FI_TyArgs funInfo)
           \<and> (\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
@@ -599,6 +638,7 @@ proof -
     expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
     vor_eq: "varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)" and
+    modes_eq: "argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)" and
     ret_eq: "retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: resolve_impure_callee_def Let_def
              split: sum.splits prod.splits if_splits)
@@ -630,8 +670,8 @@ proof -
   have fi_ret_tyvars: "type_tyvars (FI_ReturnType funInfo) \<subseteq> fset (TE_AbstractTypes env) \<union> set (FI_TyArgs funInfo)"
     using is_well_kinded_type_tyvars_subset[OF fi_ret_wk] by (simp add: fset_of_list.rep_eq)
   show ?thesis
-    using fn_lookup rta ghost_ok expArg_eq vor_eq ret_eq distinct_tyargs fi_args_tyvars fi_ret_tyvars
-          impure_ok
+    using fn_lookup rta ghost_ok expArg_eq vor_eq modes_eq ret_eq distinct_tyargs
+          fi_args_tyvars fi_ret_tyvars impure_ok
     by blast
 qed
 
@@ -642,87 +682,87 @@ qed
    facts live. *)
 lemma check_ref_args_extend_env_with_tyvars:
   "check_ref_args (extend_env_with_tyvars env tvGhost lo hi)
-     ghost locOf idx tms actualTys expectedTys varOrRefs
-   = check_ref_args env ghost locOf idx tms actualTys expectedTys varOrRefs"
-  by (induction env ghost locOf idx tms actualTys expectedTys varOrRefs
+     locOf idx tms actualTys expectedTys varOrRefs modes
+   = check_ref_args env locOf idx tms actualTys expectedTys varOrRefs modes"
+  by (induction env locOf idx tms actualTys expectedTys varOrRefs modes
       rule: check_ref_args.induct)
      (auto split: VarOrRef.splits)
 
-(* Correctness of check_ref_args: given that the (already coerced) terms type to
-   the expected types, a successful check yields the per-argument shape that
-   core_impure_call_type's list_all2 check requires — Var positions just carry
-   the typing, Ref positions are additionally writable lvalues obeying the
-   ghost-write discipline. The actual-type list only feeds the Ref type check,
-   so nothing is assumed about it beyond its length. *)
+(* Correctness of check_ref_args: given that the (already coerced) terms type,
+   each in its own mode, to the expected types, a successful check yields the
+   per-argument shape that core_impure_call_type's list_all2 check requires -
+   Var positions just carry the typing, Ref positions are additionally writable
+   lvalues obeying the ghost-write discipline in their mode. The actual-type
+   list only feeds the Ref type check, so nothing is assumed about it beyond
+   its length. *)
 lemma check_ref_args_correct:
-  assumes cra: "check_ref_args env ghost locOf idx tms actualTys expectedTys varOrRefs = Inr ()"
-      and typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env ghost tm = Some expectedTy)
-                    tms expectedTys"
+  assumes cra: "check_ref_args env locOf idx tms actualTys expectedTys varOrRefs modes = Inr ()"
+      and typed: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy)
+                    tms (zip expectedTys modes)"
       and len1: "length tms = length actualTys"
       and len2: "length actualTys = length expectedTys"
       and len3: "length expectedTys = length varOrRefs"
-  shows "list_all2 (\<lambda>(tm, vor) expectedTy.
+      and len4: "length varOrRefs = length modes"
+  shows "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
            case vor of
-             Var \<Rightarrow> (case core_term_type env ghost tm of
-                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+             Var \<Rightarrow> core_term_type env mode tm = Some expectedTy
            | Ref \<Rightarrow> is_writable_lvalue env tm
-                    \<and> ghost_lvalue_ok env ghost tm
-                    \<and> core_term_type env ghost tm = Some expectedTy)
-         (zip tms varOrRefs) expectedTys"
+                    \<and> ghost_lvalue_ok env mode tm
+                    \<and> core_term_type env mode tm = Some expectedTy)
+         (zip tms varOrRefs) (zip expectedTys modes)"
   using assms
-proof (induction env ghost locOf idx tms actualTys expectedTys varOrRefs
+proof (induction env locOf idx tms actualTys expectedTys varOrRefs modes
        rule: check_ref_args.induct)
-  case (1 env ghost locOf idx)
+  case (1 env locOf idx)
   then show ?case by simp
 next
-  case (2 env ghost locOf idx tm tms actualTy actualTys expectedTy expectedTys vor vors)
+  case (2 env locOf idx tm tms actualTy actualTys expectedTy expectedTys vor vors mode modes)
   from "2.prems"(2) have
-    head_typed: "core_term_type env ghost tm = Some expectedTy" and
-    tail_typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env ghost tm = Some expectedTy)
-                   tms expectedTys"
+    head_typed: "core_term_type env mode tm = Some expectedTy" and
+    tail_typed: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy)
+                   tms (zip expectedTys modes)"
     by simp_all
-  from "2.prems"(3,4,5) have
+  from "2.prems"(3,4,5,6) have
     len_tms: "length tms = length actualTys" and
     len_tys: "length actualTys = length expectedTys" and
-    len_vor: "length expectedTys = length vors"
+    len_vor: "length expectedTys = length vors" and
+    len_modes: "length vors = length modes"
     by simp_all
   show ?case
   proof (cases vor)
     case Var
     from "2.prems"(1) Var have
-      tail_cra: "check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors = Inr ()"
+      tail_cra: "check_ref_args env locOf (idx + 1) tms actualTys expectedTys vors modes = Inr ()"
       by simp
-    have ih: "list_all2 (\<lambda>(tm, vor) expectedTy.
+    have ih: "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                 case vor of
-                  Var \<Rightarrow> (case core_term_type env ghost tm of
-                            None \<Rightarrow> False | Some t \<Rightarrow> t = expectedTy)
+                  Var \<Rightarrow> core_term_type env mode tm = Some expectedTy
                 | Ref \<Rightarrow> is_writable_lvalue env tm
-                         \<and> ghost_lvalue_ok env ghost tm
-                         \<and> core_term_type env ghost tm = Some expectedTy)
-              (zip tms vors) expectedTys"
-      using "2.IH"(1)[OF Var tail_cra tail_typed len_tms len_tys len_vor] .
+                         \<and> ghost_lvalue_ok env mode tm
+                         \<and> core_term_type env mode tm = Some expectedTy)
+              (zip tms vors) (zip expectedTys modes)"
+      using "2.IH"(1)[OF Var tail_cra tail_typed len_tms len_tys len_vor len_modes] .
     show ?thesis using head_typed ih Var by simp
   next
     case Ref
     from "2.prems"(1) Ref have
       ok: "actualTy = expectedTy \<or> array_cast_ok actualTy expectedTy" and
       writ: "is_writable_lvalue env tm" and
-      glv: "ghost_lvalue_ok env ghost tm" and
-      tail_cra: "check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors = Inr ()"
+      glv: "ghost_lvalue_ok env mode tm" and
+      tail_cra: "check_ref_args env locOf (idx + 1) tms actualTys expectedTys vors modes = Inr ()"
       by (auto split: if_splits)
     have g1: "\<not> (actualTy \<noteq> expectedTy \<and> \<not> array_cast_ok actualTy expectedTy)"
       using ok by simp
     have g2: "\<not> \<not> is_writable_lvalue env tm" using writ by simp
-    have g3: "\<not> \<not> ghost_lvalue_ok env ghost tm" using glv by simp
-    have ih: "list_all2 (\<lambda>(tm, vor) expectedTy.
+    have g3: "\<not> \<not> ghost_lvalue_ok env mode tm" using glv by simp
+    have ih: "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                 case vor of
-                  Var \<Rightarrow> (case core_term_type env ghost tm of
-                            None \<Rightarrow> False | Some t \<Rightarrow> t = expectedTy)
+                  Var \<Rightarrow> core_term_type env mode tm = Some expectedTy
                 | Ref \<Rightarrow> is_writable_lvalue env tm
-                         \<and> ghost_lvalue_ok env ghost tm
-                         \<and> core_term_type env ghost tm = Some expectedTy)
-              (zip tms vors) expectedTys"
-      using "2.IH"(2)[OF Ref g1 g2 g3 tail_cra tail_typed len_tms len_tys len_vor] .
+                         \<and> ghost_lvalue_ok env mode tm
+                         \<and> core_term_type env mode tm = Some expectedTy)
+              (zip tms vors) (zip expectedTys modes)"
+      using "2.IH"(2)[OF Ref g1 g2 g3 tail_cra tail_typed len_tms len_tys len_vor len_modes] .
     show ?thesis using head_typed writ glv ih Ref by simp
   qed
 qed (simp_all)
@@ -743,44 +783,63 @@ proof -
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   let ?locOf = "(\<lambda>idx. bab_term_location (args ! idx))"
 
-  \<comment> \<open>Extract the sub-results of elab_impure_call_term.\<close>
-  from elab obtain newTyArgs expArgTypes varOrRefs retType0 next_mv1 where
+  \<comment> \<open>The steps of the elaboration.\<close>
+  obtain newTyArgs expArgTypes varOrRefs argModes retType0 next_mv1
+         plainTms plainTys next_mvP specialTms specialTys finalActualTys finalSubst where
     rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
-           = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1)"
-    by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
-  from elab rc have len_args: "length args = length expArgTypes"
-    by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
-  from elab rc len_args obtain elabArgTms actualTypes next_mv2 where
-    el: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
-    by (auto simp: elab_impure_call_term_def split: if_splits sum.splits prod.splits)
-  from elab rc len_args el obtain finalSubst where
-    unify_eq: "unify_type_lists ?is_flex ?locOf 0 actualTypes expArgTypes fmempty = Inr finalSubst"
-    by (auto simp: elab_impure_call_term_def unify_and_coerce_def
-             split: if_splits sum.splits prod.splits)
-  from elab rc len_args el unify_eq have
-    finalArgTms_eq: "finalArgTms = apply_call_coercions finalSubst elabArgTms actualTypes expArgTypes" and
-    cra: "check_ref_args env ghost ?locOf 0 finalArgTms
-            (map (apply_subst finalSubst) actualTypes) (map (apply_subst finalSubst) expArgTypes)
-            varOrRefs = Inr ()" and
+           = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1)" and
+    len_args: "length args = length expArgTypes" and
+    elab_plain: "elab_term_list env elabEnv ghost
+                   (plain_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mv1
+                 = Inr (plainTms, plainTys, next_mvP)" and
+    elab_special: "elab_term_list env elabEnv Ghost
+                     (special_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mvP
+                   = Inr (specialTms, specialTys, next_mv')" and
+    uica: "unify_impure_call_args env loc args (map (\<lambda>mode. mode \<noteq> ghost) argModes) expArgTypes
+             plainTms plainTys next_mvP specialTms specialTys next_mv'
+           = Inr (finalArgTms, finalActualTys, finalSubst)" and
+    cra: "check_ref_args env (\<lambda>idx. bab_term_location (args ! idx)) 0
+            finalArgTms finalActualTys (map (apply_subst finalSubst) expArgTypes)
+            varOrRefs argModes = Inr ()" and
     tyargs_eq: "finalTyArgs = map (apply_subst finalSubst) newTyArgs" and
-    retTy_eq: "retTy = apply_subst finalSubst retType0" and
-    next_mv2_eq: "next_mv' = next_mv2"
-    by (auto simp: elab_impure_call_term_def unify_and_coerce_def
-             split: if_splits sum.splits prod.splits)
+    retTy_eq: "retTy = apply_subst finalSubst retType0"
+    by (rule elab_impure_call_term_elim[OF elab])
+
+  \<comment> \<open>An argument is special if its checking mode is not the mode of the call.\<close>
+  let ?flags = "map (\<lambda>mode. mode \<noteq> ghost) argModes"
+  let ?pExp = "plain_args ?flags expArgTypes"
+  let ?sExp = "special_args ?flags expArgTypes"
+
+  \<comment> \<open>Take unify_impure_call_args apart.\<close>
+  from uica obtain plainFinal specialFinal sSubst where
+    unify_plain: "unify_and_coerce ?is_flex
+                    (\<lambda>idx. bab_term_location (plain_args ?flags args ! idx))
+                    plainTms plainTys ?pExp fmempty
+                  = Inr (plainFinal, finalSubst)" and
+    unify_special: "unify_and_coerce (\<lambda>n. n |\<in>| mv_fset next_mvP next_mv')
+                      (\<lambda>idx. bab_term_location (special_args ?flags args ! idx))
+                      specialTms specialTys (map (apply_subst finalSubst) ?sExp) fmempty
+                    = Inr (specialFinal, sSubst)" and
+    finalArgTms_eq: "finalArgTms = merge_args ?flags plainFinal specialFinal" and
+    finalActualTys_eq: "finalActualTys
+                          = merge_args ?flags (map (apply_subst finalSubst) plainTys)
+                                              (map (apply_subst sSubst) specialTys)"
+    by (auto simp: unify_impure_call_args_def split: sum.splits prod.splits if_splits)
 
   \<comment> \<open>Facts from resolve_impure_callee_correct (at next_mv1).\<close>
+  let ?env1 = "extend_env_with_tyvars env ghost next_mv next_mv1"
   from resolve_impure_callee_correct[OF rc wf ee_wf] obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
     mono_1: "next_mv \<le> next_mv1" and
     len_tyargs: "length newTyArgs = length (FI_TyArgs funInfo)" and
-    newTyArgs_wk1: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1)) newTyArgs" and
-    newTyArgs_rt1: "ghost = NotGhost \<longrightarrow>
-                      list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1)) newTyArgs" and
+    newTyArgs_wk1: "list_all (is_well_kinded ?env1) newTyArgs" and
+    newTyArgs_rt1: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) newTyArgs" and
     newTyArgs_cp: "list_all is_complete_type newTyArgs" and
     ghost_ok: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     expArg_eq: "expArgTypes = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)
                                   (FI_TmArgs funInfo)" and
     vor_eq: "varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)" and
+    modes_eq: "argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)" and
     ret0_eq: "retType0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) (FI_ReturnType funInfo)" and
     distinct_tyargs: "distinct (FI_TyArgs funInfo)" and
     fi_args_tyvars: "\<forall>t \<in> fst ` set (FI_TmArgs funInfo).
@@ -790,205 +849,218 @@ proof -
     impure_ok: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
-  have mono_2: "next_mv1 \<le> next_mv2" using elab_term_list_next_mv_monotone[OF el] .
-  have env'_eq2: "?env' = extend_env_with_tyvars env ghost next_mv next_mv2"
-    using next_mv2_eq by simp
+  have mono_2: "next_mv1 \<le> next_mvP" using elab_term_list_next_mv_monotone[OF elab_plain] .
+  have mono_3: "next_mvP \<le> next_mv'" using elab_term_list_next_mv_monotone[OF elab_special] .
+  have mono_23: "next_mv1 \<le> next_mv'" using mono_2 mono_3 by simp
+  have wf1: "tyenv_well_formed ?env1"
+    using wf tyenv_well_formed_extend_env_with_tyvars by blast
   have wf': "tyenv_well_formed ?env'"
     using wf tyenv_well_formed_extend_env_with_tyvars by blast
 
-  \<comment> \<open>The fresh interval bound carries through resolve to next_mv1.\<close>
-  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1" using bound mono_1 tyvar_fresh_ok_mono by fastforce
-
-  \<comment> \<open>IH from elab_term_list: elaborated args type to their actual types at ?env1,
-      lifted to ?env'.\<close>
-  have ih_args_1: "list_all2 (\<lambda>tm ty. core_term_type
-                       (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
-                     elabArgTms actualTypes"
-    using elab_term_list_correct[OF el wf ee_wf fresh_1] .
-  have ih_args: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) elabArgTms actualTypes"
-  proof -
-    have "\<And>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty
-                  \<Longrightarrow> core_term_type ?env' ghost tm = Some ty"
-      using core_term_type_extend_env_with_tyvars_mono[where lo=next_mv1 and hi=next_mv2
-              and lo'=next_mv and hi'=next_mv'] mono_1 mono_2 next_mv2_eq by simp
-    thus ?thesis using ih_args_1 by (auto elim!: list_all2_mono)
-  qed
+  \<comment> \<open>The fresh interval bound carries through to next_mv1 and next_mvP.\<close>
+  have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
+    using bound mono_1 tyvar_fresh_ok_mono by fastforce
+  have fresh_P: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mvP"
+    using fresh_1 mono_2 tyvar_fresh_ok_mono by fastforce
 
   \<comment> \<open>Lengths.\<close>
-  have len_elab: "length elabArgTms = length actualTypes"
-    using ih_args by (simp add: list_all2_lengthD)
-  have len_actual_exp: "length actualTypes = length expArgTypes"
-    using len_args el by (simp add: elab_term_list_length)
+  have len_exp_fi: "length expArgTypes = length (FI_TmArgs funInfo)"
+    using expArg_eq by simp
   have len_exp_vor: "length expArgTypes = length varOrRefs"
     using expArg_eq vor_eq by simp
+  have len_vor_modes: "length varOrRefs = length argModes"
+    using vor_eq modes_eq by simp
+  have flags_len: "length ?flags = length expArgTypes"
+    using len_exp_vor len_vor_modes by simp
 
-  \<comment> \<open>Well-kindedness / runtime of actual and expected types at ?env'.\<close>
-  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
-  proof (simp add: list_all_length, intro allI impI)
-    fix i assume "i < length actualTypes"
-    with ih_args have "core_term_type ?env' ghost (elabArgTms ! i) = Some (actualTypes ! i)"
-      by (simp add: list_all2_conv_all_nth len_elab)
-    thus "is_well_kinded ?env' (actualTypes ! i)"
-      using wf' core_term_type_well_kinded by blast
-  qed
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
-    using ih_args wf' core_term_type_notghost_runtime
-    by (auto simp: list_all2_conv_all_nth list_all_length len_elab)
-
-  \<comment> \<open>newTyArgs well-kinded / runtime at ?env' (lift from ?env1).\<close>
-  have newTyArgs_wk: "list_all (is_well_kinded ?env') newTyArgs"
-    unfolding list_all_iff env'_eq2
-  proof
-    fix t assume "t \<in> set newTyArgs"
-    with newTyArgs_wk1 have "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1) t"
-      by (simp add: list_all_iff)
-    thus "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv2) t"
-      using is_well_kinded_extend_env_with_tyvars_mono mono_2 by blast
-  qed
-  have newTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') newTyArgs"
-  proof
-    assume ng: "ghost = NotGhost"
-    show "list_all (is_runtime_type ?env') newTyArgs"
-      unfolding list_all_iff env'_eq2
-    proof
-      fix t assume "t \<in> set newTyArgs"
-      with newTyArgs_rt1 ng have "is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1) t"
-        by (simp add: list_all_iff)
-      thus "is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv2) t"
-        using is_runtime_type_extend_env_with_tyvars_mono mono_2 by blast
-    qed
-  qed
-
-  \<comment> \<open>?env' satisfies the abstract-types-subset clause (well-formed). \<close>
-  have abs_sub': "TE_AbstractTypes ?env' |\<subseteq>| TE_TypeVars ?env'"
-    using wf' unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
-
-  \<comment> \<open>Expected types well-kinded / runtime at ?env' (each is apply_subst of a param type).\<close>
-  have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
+  \<comment> \<open>Expected types are well-kinded at ?env1 (each is apply_subst of a param type).\<close>
+  have abs_sub1: "TE_AbstractTypes ?env1 |\<subseteq>| TE_TypeVars ?env1"
+    using wf1 unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+  have exp_wk1: "list_all (is_well_kinded ?env1) expArgTypes"
   proof -
     have fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-      using wf' fn_lookup unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def
+            is_well_kinded (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+      using wf1 fn_lookup unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def
       by (simp add: extend_env_with_tyvars_def)
-    have "list_all (\<lambda>(ty, _). is_well_kinded ?env'
+    have "list_all (\<lambda>(ty, _). is_well_kinded ?env1
             (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
     proof (unfold list_all_iff, intro ballI, clarify)
       fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
       hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
       with fi_args_wk_inner
-      have "is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-      thus "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-        using apply_subst_specializes_well_kinded[OF _ newTyArgs_wk len_tyargs[symmetric] abs_sub'] by simp
+      have "is_well_kinded (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
+      thus "is_well_kinded ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+        using apply_subst_specializes_well_kinded[OF _ newTyArgs_wk1 len_tyargs[symmetric] abs_sub1] by simp
     qed
     thus ?thesis using expArg_eq by (auto simp: list_all_iff)
   qed
-  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
+
+  \<comment> \<open>In an executable call, the expected types of the plain arguments are
+      runtime types: a plain argument belongs to a parameter that is not ghost.\<close>
+  have pexp_rt1: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) ?pExp"
   proof
     assume ng: "ghost = NotGhost"
     hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
-    have fi_args_rt_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
-                                     TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+    have fi_args_rt_inner: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
+            is_runtime_type (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo),
+                                     TE_RuntimeTypeVars := (TE_AbstractTypes ?env1 |\<inter>| TE_RuntimeTypeVars ?env1)
                                                             |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-      using wf' fn_lookup fg_ng unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def
+      using wf1 fn_lookup fg_ng unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def
       by (simp add: extend_env_with_tyvars_def Let_def)
-    have tyargs_rt: "list_all (is_runtime_type ?env') newTyArgs" using newTyArgs_rt ng by simp
-    have "list_all (\<lambda>(ty, _). is_runtime_type ?env'
-            (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
-    proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
-      with fi_args_rt_inner
-      have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
-                                     TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+    have tyargs_rt: "list_all (is_runtime_type ?env1) newTyArgs" using newTyArgs_rt1 ng by simp
+    show "list_all (is_runtime_type ?env1) ?pExp"
+    proof (rule list_all_plain_argsI[OF flags_len])
+      fix i assume i_lt: "i < length expArgTypes" and nf: "\<not> ?flags ! i"
+      from i_lt len_exp_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
+      obtain t vor gh where p_eq: "FI_TmArgs funInfo ! i = (t, vor, gh)"
+        by (cases "FI_TmArgs funInfo ! i")
+      \<comment> \<open>The argument is plain, so its parameter is checked in the mode of
+          the call, which means the parameter is not ghost.\<close>
+      from nf i_fi p_eq have pm: "param_mode ghost gh = ghost" by (simp add: modes_eq)
+      from pm ng have gh_eq: "gh = NotGhost" by simp
+      have mem: "(t, vor, NotGhost) \<in> set (FI_TmArgs funInfo)"
+        using nth_mem[OF i_fi] p_eq gh_eq by simp
+      from fi_args_rt_inner mem
+      have "is_runtime_type (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo),
+                                     TE_RuntimeTypeVars := (TE_AbstractTypes ?env1 |\<inter>| TE_RuntimeTypeVars ?env1)
                                                             |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-      thus "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+      then have "is_runtime_type ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
         using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
+      moreover have "expArgTypes ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t"
+        using expArg_eq i_fi p_eq by simp
+      ultimately show "is_runtime_type ?env1 (expArgTypes ! i)" by simp
     qed
-    thus "list_all (is_runtime_type ?env') expArgTypes" using expArg_eq by (auto simp: list_all_iff)
   qed
 
-  \<comment> \<open>unify_type_lists facts at ?env'.\<close>
-  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?env' ty" by (simp add: fmran'_def)
-  have empty_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?env' ty)"
-    by (simp add: fmran'_def)
-  have empty_dom: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
-  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
-    by (simp add: fmran'_def)
-  have unify_correct:
-    "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty)
-     \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
-     \<and> list_all2 (\<lambda>actualTy expectedTy.
-         apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-         \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-       actualTypes expArgTypes
-     \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)
-     \<and> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty)"
-    using unify_type_lists_correct[OF unify_eq wf' len_actual_exp actualTypes_wk expArgTypes_wk
-            empty_wk actualTypes_rt expArgTypes_rt empty_rt empty_dom] empty_cp by blast
-  from unify_correct have
-    finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty" and
-    finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)" and
-    types_unified: "list_all2 (\<lambda>actualTy expectedTy.
-         apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-         \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-       actualTypes expArgTypes" and
-    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n" and
-    finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    by blast+
+  \<comment> \<open>From elab_term_list: each group of arguments is typed in the env extended
+      with its own metavariables.\<close>
+  have ih_plain: "list_all2 (\<lambda>tm ty. core_term_type
+                                (extend_env_with_tyvars env ghost next_mv1 next_mvP) ghost tm
+                              = Some ty)
+                     plainTms plainTys"
+    using elab_term_list_correct[OF elab_plain wf ee_wf fresh_1] .
+  have ih_special: "list_all2 (\<lambda>tm ty. core_term_type
+                                  (extend_env_with_tyvars env Ghost next_mvP next_mv') Ghost tm
+                                = Some ty)
+                       specialTms specialTys"
+    using elab_term_list_correct[OF elab_special wf ee_wf fresh_P] .
 
-  \<comment> \<open>finalSubst is identity on locals / return type of ?env'.\<close>
-  have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env" unfolding extend_env_with_tyvars_def by simp
-  have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env" unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf env'_locals env'_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
-                                      \<Longrightarrow> apply_subst finalSubst ty' = ty'"
-    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
-    by blast+
+  \<comment> \<open>The arguments typecheck, each in the mode of its position, exactly as
+      for a pure call; and the substitution has the usual properties.\<close>
+  note A = call_args_typed[OF wf bound mono_1 len_args flags_len exp_wk1 pexp_rt1
+                              elab_plain elab_special ih_plain ih_special
+                              unify_plain unify_special]
+  note finalSubst_wk = A(2) and finalSubst_rt = A(3)
+    and finalSubst_dom_flex = A(4) and finalSubst_cp = A(5)
   have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
     unfolding extend_env_with_tyvars_def by simp
   have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
     using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
 
-  \<comment> \<open>The coerced arg terms type to the substituted expected types (at ?env'),
-      exactly as for a pure call.\<close>
-  have args_typed: "list_all2 (\<lambda>tm expectedTy.
-           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
-         finalArgTms expArgTypes"
-    unfolding finalArgTms_eq
-    using apply_call_coercions_correct[OF ih_args types_unified wf' finalSubst_wk finalSubst_rt
-            len_elab len_actual_exp locals_unaffected ret_unaffected abs_no_subst
-            expArgTypes_wk expArgTypes_rt finalSubst_cp] .
-  have args_typed': "list_all2 (\<lambda>tm expectedTy. core_term_type ?env' ghost tm = Some expectedTy)
-         finalArgTms (map (apply_subst finalSubst) expArgTypes)"
-    using args_typed by (simp add: list_all2_map2)
+  \<comment> \<open>The mode of each position is the checking mode of its parameter.\<close>
   have len_final_exp: "length finalArgTms = length expArgTypes"
-    using list_all2_lengthD[OF args_typed] .
-  have len_final_actual': "length finalArgTms = length (map (apply_subst finalSubst) actualTypes)"
-    using len_final_exp len_actual_exp by simp
-  have len_actual_exp': "length (map (apply_subst finalSubst) actualTypes)
-                         = length (map (apply_subst finalSubst) expArgTypes)"
-    using len_actual_exp by simp
+    using list_all2_lengthD[OF A(1)] flags_len by (simp add: finalArgTms_eq)
+  have args_typed_modes: "list_all2 (\<lambda>tm (expectedTy, mode).
+                              core_term_type ?env' mode tm = Some expectedTy) finalArgTms
+                            (zip (map (apply_subst finalSubst) expArgTypes) argModes)"
+    unfolding list_all2_case_prod_conv_all_nth
+  proof (intro conjI allI impI)
+    show "length finalArgTms = length (zip (map (apply_subst finalSubst) expArgTypes) argModes)"
+      using len_final_exp len_exp_vor len_vor_modes by simp
+  next
+    fix i assume i_lt: "i < length finalArgTms"
+    from i_lt len_final_exp have i_exp: "i < length expArgTypes" by simp
+    from i_exp len_exp_vor len_vor_modes have i_md: "i < length argModes" by simp
+    from i_exp len_exp_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
+    obtain t vor gh where p_eq: "FI_TmArgs funInfo ! i = (t, vor, gh)"
+      by (cases "FI_TmArgs funInfo ! i")
+    have md_i: "argModes ! i = param_mode ghost gh"
+      using i_fi p_eq by (simp add: modes_eq)
+    have flag_i: "?flags ! i = (argModes ! i \<noteq> ghost)" using i_md by simp
+    have mode_i: "(if ?flags ! i then Ghost else ghost) = argModes ! i"
+      unfolding flag_i md_i using param_mode_cases[of ghost gh] by auto
+    from list_all2_nthD[OF A(1) i_lt[unfolded finalArgTms_eq]] i_exp i_md
+    have "core_term_type ?env' (if ?flags ! i then Ghost else ghost) (finalArgTms ! i)
+            = Some (apply_subst finalSubst (expArgTypes ! i))"
+      by (simp add: finalArgTms_eq)
+    then have typed_i: "core_term_type ?env' (argModes ! i) (finalArgTms ! i)
+                          = Some (apply_subst finalSubst (expArgTypes ! i))"
+      unfolding mode_i .
+    have zip_i: "zip (map (apply_subst finalSubst) expArgTypes) argModes ! i
+                   = (apply_subst finalSubst (expArgTypes ! i), argModes ! i)"
+      using i_exp i_md by simp
+    show "core_term_type ?env'
+            (snd (zip (map (apply_subst finalSubst) expArgTypes) argModes ! i)) (finalArgTms ! i)
+          = Some (fst (zip (map (apply_subst finalSubst) expArgTypes) argModes ! i))"
+      unfolding zip_i fst_conv snd_conv by (rule typed_i)
+  qed
+
+  \<comment> \<open>The list of actual types that check_ref_args was given has the right
+      length. (Its contents only feed the Ref type check.)\<close>
+  have len_actual: "length finalActualTys = length expArgTypes"
+  proof -
+    have lp: "length plainTys = length ?pExp"
+      using elab_term_list_length[OF elab_plain]
+            plain_args_length_cong[where fs = "map (\<lambda>mode. mode \<noteq> ghost) argModes", OF len_args]
+      by simp
+    have ls: "length specialTys = length ?sExp"
+      using elab_term_list_length[OF elab_special]
+            special_args_length_cong[where fs = "map (\<lambda>mode. mode \<noteq> ghost) argModes", OF len_args]
+      by simp
+    have p: "list_all2 (\<lambda>_ _. True) (map (apply_subst finalSubst) plainTys) ?pExp"
+      using lp by (simp add: list_all2_conv_all_nth)
+    have s: "list_all2 (\<lambda>_ _. True) (map (apply_subst sSubst) specialTys) ?sExp"
+      using ls by (simp add: list_all2_conv_all_nth)
+    from merge_args_list_all2[OF p s flags_len]
+    have "length finalActualTys = length (zip ?flags expArgTypes)"
+      unfolding finalActualTys_eq by (rule list_all2_lengthD)
+    then show ?thesis using flags_len by simp
+  qed
+  have len_final_actual: "length finalArgTms = length finalActualTys"
+    using len_final_exp len_actual by simp
+  have len_actual_exp': "length finalActualTys = length (map (apply_subst finalSubst) expArgTypes)"
+    using len_actual by simp
   have len_exp_vor': "length (map (apply_subst finalSubst) expArgTypes) = length varOrRefs"
     using len_exp_vor by simp
 
   \<comment> \<open>Move the Ref check into the extended env (check_ref_args is tyvar-irrelevant),
       so it can be combined with the extended-env typing facts.\<close>
-  have cra': "check_ref_args ?env' ghost ?locOf 0 finalArgTms
-                (map (apply_subst finalSubst) actualTypes) (map (apply_subst finalSubst) expArgTypes)
-                varOrRefs = Inr ()"
+  have cra': "check_ref_args ?env' ?locOf 0 finalArgTms finalActualTys
+                (map (apply_subst finalSubst) expArgTypes) varOrRefs argModes = Inr ()"
     using cra by (simp add: check_ref_args_extend_env_with_tyvars)
   \<comment> \<open>The coerced arg terms satisfy the per-argument core_impure_call_type check.\<close>
-  have args_checked: "list_all2 (\<lambda>(tm, vor) expectedTy.
+  have args_checked: "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
            case vor of
-             Var \<Rightarrow> (case core_term_type ?env' ghost tm of
-                       None \<Rightarrow> False | Some t \<Rightarrow> t = expectedTy)
+             Var \<Rightarrow> core_term_type ?env' mode tm = Some expectedTy
            | Ref \<Rightarrow> is_writable_lvalue ?env' tm
-                    \<and> ghost_lvalue_ok ?env' ghost tm
-                    \<and> core_term_type ?env' ghost tm = Some expectedTy)
+                    \<and> ghost_lvalue_ok ?env' mode tm
+                    \<and> core_term_type ?env' mode tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
-         (map (apply_subst finalSubst) expArgTypes)"
-    using check_ref_args_correct[OF cra' args_typed' len_final_actual' len_actual_exp' len_exp_vor'] .
+         (zip (map (apply_subst finalSubst) expArgTypes) argModes)"
+    using check_ref_args_correct[OF cra' args_typed_modes len_final_actual len_actual_exp'
+                                    len_exp_vor' len_vor_modes] .
+
+  \<comment> \<open>newTyArgs well-kinded / runtime at ?env' (lift from ?env1).\<close>
+  have newTyArgs_wk: "list_all (is_well_kinded ?env') newTyArgs"
+    unfolding list_all_iff
+  proof
+    fix t assume "t \<in> set newTyArgs"
+    with newTyArgs_wk1 have "is_well_kinded ?env1 t" by (simp add: list_all_iff)
+    thus "is_well_kinded ?env' t"
+      by (rule is_well_kinded_extend_env_with_tyvars_mono[OF _ order_refl mono_23])
+  qed
+  have newTyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') newTyArgs"
+  proof
+    assume ng: "ghost = NotGhost"
+    show "list_all (is_runtime_type ?env') newTyArgs"
+      unfolding list_all_iff
+    proof
+      fix t assume "t \<in> set newTyArgs"
+      with newTyArgs_rt1 ng have "is_runtime_type ?env1 t" by (simp add: list_all_iff)
+      thus "is_runtime_type ?env' t"
+        by (rule is_runtime_type_extend_env_with_tyvars_mono[OF _ order_refl mono_23])
+    qed
+  qed
 
   \<comment> \<open>The substituted expected types coincide with core_impure_call_type's recomputation
       from finalTyArgs (substitution composition).\<close>
@@ -1103,16 +1175,16 @@ proof -
     using fn_lookup by (simp add: extend_env_with_tyvars_def)
 
   \<comment> \<open>Assemble: unfold core_impure_call_type with all the checks discharged.\<close>
-  have check_l2: "list_all2 (\<lambda>(tm, vor) expectedTy.
+  have check_l2: "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
            case vor of
-             Var \<Rightarrow> (case core_term_type ?env' ghost tm of
-                       None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+             Var \<Rightarrow> core_term_type ?env' mode tm = Some expectedTy
            | Ref \<Rightarrow> is_writable_lvalue ?env' tm
-                    \<and> ghost_lvalue_ok ?env' ghost tm
-                    \<and> core_term_type ?env' ghost tm = Some expectedTy)
+                    \<and> ghost_lvalue_ok ?env' mode tm
+                    \<and> core_term_type ?env' mode tm = Some expectedTy)
          (zip finalArgTms varOrRefs)
-         (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
-              (FI_TmArgs funInfo))"
+         (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) finalTyArgs)) ty)
+                   (FI_TmArgs funInfo))
+              argModes)"
     using args_checked exp_recompute by simp
 
   have impure_ok': "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure ?env'"
@@ -1121,7 +1193,7 @@ proof -
   show ?thesis
     unfolding core_impure_call_type_def
     using fn_lookup' len_finalTyArgs finalTyArgs_wk finalTyArgs_rt finalTyArgs_cp ghost_ok
-          impure_ok' len_finalArgTms vor_eq check_l2 ret_recompute
+          impure_ok' len_finalArgTms vor_eq modes_eq check_l2 ret_recompute
     by (auto simp: Let_def split: if_splits)
 qed
 

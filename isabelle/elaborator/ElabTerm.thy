@@ -125,6 +125,60 @@ definition resolve_callee ::
     | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"
 
 
+(* ========================================================================== *)
+(* Ghost arguments of executable calls *)
+(* ========================================================================== *)
+
+(* In an executable call, the argument of a ghost parameter is ghost code. It
+   is elaborated in Ghost mode, and it is checked against the type of its
+   parameter without being allowed to determine the type arguments of the call
+   (which are runtime data). These are the "special" arguments of the call; all
+   other arguments are "plain".
+
+   call_special_flags gives one flag for each argument of a call: True if the
+   argument is special. n is the number of arguments. In ghost code no argument
+   is special. Data constructors do not have ghost parameters. *)
+definition call_special_flags :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> BabTerm \<Rightarrow> nat \<Rightarrow> bool list" where
+  "call_special_flags env ghost callee n =
+    (case callee of
+       BabTm_Name _ name _ \<Rightarrow>
+         (case fmlookup (TE_DataCtors env) name of
+            Some _ \<Rightarrow> replicate n False
+          | None \<Rightarrow>
+              (case fmlookup (TE_Functions env) name of
+                 Some funInfo \<Rightarrow>
+                   map (\<lambda>(_, _, gh). ghost = NotGhost \<and> gh = Ghost) (FI_TmArgs funInfo)
+               | None \<Rightarrow> replicate n False))
+     | _ \<Rightarrow> replicate n False)"
+
+(* Split a list by flags: the elements whose flag is False, and the elements
+   whose flag is True. *)
+fun plain_args :: "bool list \<Rightarrow> 'a list \<Rightarrow> 'a list" where
+  "plain_args (f # fs) (x # xs) = (if f then plain_args fs xs else x # plain_args fs xs)"
+| "plain_args [] xs = xs"
+| "plain_args fs [] = []"
+
+fun special_args :: "bool list \<Rightarrow> 'a list \<Rightarrow> 'a list" where
+  "special_args (f # fs) (x # xs) = (if f then x # special_args fs xs else special_args fs xs)"
+| "special_args _ _ = []"
+
+(* Put the two parts back together, in the original order. *)
+fun merge_args :: "bool list \<Rightarrow> 'a list \<Rightarrow> 'a list \<Rightarrow> 'a list" where
+  "merge_args (True # fs) ps (s # ss) = s # merge_args fs ps ss"
+| "merge_args (False # fs) (p # ps) ss = p # merge_args fs ps ss"
+| "merge_args [] ps ss = ps"
+| "merge_args _ _ _ = []"
+
+(* The parts are no bigger than the whole (for the termination of elab_term). *)
+lemma size_list_plain_args_le:
+  "size_list f (plain_args fs xs) \<le> size_list f xs"
+  by (induction fs xs rule: plain_args.induct) auto
+
+lemma size_list_special_args_le:
+  "size_list f (special_args fs xs) \<le> size_list f xs"
+  by (induction fs xs rule: special_args.induct) auto
+
+
 (* Build the final term and type from a resolved callee and coerced arguments. *)
 definition build_call_result ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> CalleeInfo \<Rightarrow> TypeSubst \<Rightarrow> CoreTerm list
@@ -238,6 +292,53 @@ definition unify_and_coerce :: "(string \<Rightarrow> bool) \<Rightarrow> (nat \
     (case unify_type_lists is_flex locOf 0 actualTys expectedTys accSubst of
        Inl errs \<Rightarrow> Inl errs
      | Inr finalSubst \<Rightarrow> Inr (apply_call_coercions finalSubst tms actualTys expectedTys, finalSubst))"
+
+(* Type-check the arguments of a call, once they have been elaborated, and build
+   the result.
+
+   The plain arguments are unified with their parameter types in the usual way.
+   This is what determines the type arguments of the call.
+
+   Then the special arguments (see call_special_flags) are checked as a closed
+   unit. They were elaborated after the plain arguments, with the metavariable
+   counter going from lo to hi, so the metavariables in [lo, hi) are exactly
+   the ones they created. Only those are flexible when a special argument is
+   unified with its parameter type. So a special argument can be checked
+   against the type arguments of the call, but cannot determine them. The
+   substitution found is applied to the special arguments only, and none of
+   their own metavariables may remain afterwards.
+
+   (Note: The reason for the split between "plain" and "special" arguments is as follows.
+   If ghost arguments were allowed to influence the inferred type of a NotGhost call, then
+   a function f<T>(ghost x: T), called as f(int(1)), would be inferred as f<int>; but the
+   type arguments to NotGhost functions must be runtime (int is not a runtime type). There
+   are ways to work around this, but the simplest solution is just to ban ghost parameters
+   from affecting the type inference entirely.)
+*)
+definition finish_call ::
+  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm list \<Rightarrow> bool list \<Rightarrow> CoreType list
+   \<Rightarrow> CalleeInfo \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> nat
+   \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm \<times> CoreType)" where
+  "finish_call env ghost loc args flags expArgTypes calleeInfo
+               plainTms plainTys lo specialTms specialTys hi =
+    (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+            (\<lambda>idx. bab_term_location (plain_args flags args ! idx))
+            plainTms plainTys (plain_args flags expArgTypes) fmempty of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (plainFinal, finalSubst) \<Rightarrow>
+         (case unify_and_coerce (\<lambda>n. n |\<in>| mv_fset lo hi)
+                 (\<lambda>idx. bab_term_location (special_args flags args ! idx))
+                 specialTms specialTys
+                 (map (apply_subst finalSubst) (special_args flags expArgTypes)) fmempty of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (specialFinal, _) \<Rightarrow>
+              if \<not> list_all (\<lambda>tm. list_all (\<lambda>n. n |\<notin>| mv_fset lo hi)
+                                           (core_term_free_tyvars_list tm))
+                            specialFinal
+              then Inl [TyErr_CannotInferType loc]
+              else Inr (build_call_result env ghost loc calleeInfo finalSubst
+                          (merge_args flags plainFinal specialFinal))))"
 
 
 (* ========================================================================== *)
@@ -928,16 +1029,25 @@ where
         if length args \<noteq> length expArgTypes then
           Inl [TyErr_WrongNumberOfArgs loc calleeName (length expArgTypes) (length args)]
         else
-          (case elab_term_list env elabEnv ghost args next_mv1 of
+          \<comment> \<open>Elaborate the plain arguments, in the mode of the call; then the
+              special arguments (the arguments of ghost parameters, in an
+              executable call) in Ghost mode. See finish_call for the rest.\<close>
+          (case elab_term_list env elabEnv ghost
+                  (plain_args (call_special_flags env ghost callee (length args)) args)
+                  next_mv1 of
             Inl errs \<Rightarrow> Inl errs
-          | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
-              (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                      (\<lambda>idx. bab_term_location (args ! idx))
-                      elabArgTms actualTypes expArgTypes fmempty of
+          | Inr (plainTms, plainTys, next_mvP) \<Rightarrow>
+              (case elab_term_list env elabEnv Ghost
+                      (special_args (call_special_flags env ghost callee (length args)) args)
+                      next_mvP of
                 Inl errs \<Rightarrow> Inl errs
-              | Inr (finalArgTms, finalSubst) \<Rightarrow>
-                  let (resultTm, resultTy) = build_call_result env ghost loc calleeInfo finalSubst finalArgTms
-                  in Inr (resultTm, resultTy, next_mv2))))"
+              | Inr (specialTms, specialTys, next_mv2) \<Rightarrow>
+                  (case finish_call env ghost loc args
+                          (call_special_flags env ghost callee (length args))
+                          expArgTypes calleeInfo
+                          plainTms plainTys next_mvP specialTms specialTys next_mv2 of
+                    Inl errs \<Rightarrow> Inl errs
+                  | Inr (resultTm, resultTy) \<Rightarrow> Inr (resultTm, resultTy, next_mv2)))))"
 
   (* Tuple: elaborated to a record with synthetic field names "0", "1", ... *)
 | "elab_term env elabEnv ghost (BabTm_Tuple loc tms) next_mv =
@@ -1169,17 +1279,31 @@ proof (relation
   show ?case
     using size_list_size_snd_le_size_prod[where xs=operands and f="\<lambda>_. 0"] by simp
 next
-  case (15 env elabEnv ghost loc flds next_mv)
+  case (13 env elabEnv ghost loc callee args)
+  \<comment> \<open>BabTm_Call: the plain arguments. \<close>
+  show ?case
+    using size_list_plain_args_le
+            [of size "call_special_flags env ghost callee (length args)" args]
+    by simp
+next
+  case (14 env elabEnv ghost loc callee args)
+  \<comment> \<open>BabTm_Call: the special arguments. \<close>
+  show ?case
+    using size_list_special_args_le
+            [of size "call_special_flags env ghost callee (length args)" args]
+    by simp
+next
+  case (16 env elabEnv ghost loc flds next_mv)
   \<comment> \<open>BabTm_Record fields sub-call. \<close>
   show ?case
     using size_list_size_snd_le_size_prod[where xs=flds and f="\<lambda>_. 0"] by simp
 next
-  case (17 env elabEnv ghost loc tm flds next_mv b x y xa ya x6)
+  case (18 env elabEnv ghost loc tm flds next_mv b x y xa ya x6)
   \<comment> \<open>BabTm_RecordUpdate update-fields sub-call. \<close>
   show ?case
     using size_list_size_snd_le_size_prod[where xs=flds and f="\<lambda>_. 0"] by simp
 next
-  case (23 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba dps bodyJobs)
+  case (24 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba dps bodyJobs)
   \<comment> \<open>BabTm_Match body-elaboration sub-call: bodies (taken syntactically from arms,
       zipped with the per-arm envs) sum to less than the whole BabTm_Match. \<close>
   have helper:
@@ -1188,7 +1312,7 @@ next
             (map snd arms))
        \<le> size_list (size_prod (\<lambda>x. 0) size) arms"
     by (rule size_list_size_snd_zip_map_snd_le)
-  from 23 helper show ?case by simp
+  from 24 helper show ?case by simp
 qed (simp_all add: comp_def)
 
 

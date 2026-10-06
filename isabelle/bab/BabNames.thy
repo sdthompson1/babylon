@@ -139,7 +139,7 @@ fun bab_declaration_names :: "BabDeclaration \<Rightarrow> NsRef list" where
      (case DC_Type dc of None \<Rightarrow> [] | Some ty \<Rightarrow> bab_type_names ty)
      @ (case DC_Value dc of None \<Rightarrow> [] | Some tm \<Rightarrow> bab_term_names tm)"
 | "bab_declaration_names (BabDecl_Function df) =
-     concat (map (\<lambda>(_, _, ty). bab_type_names ty) (DF_TmArgs df))
+     concat (map (\<lambda>(_, _, ty, _). bab_type_names ty) (DF_TmArgs df))
      @ (case DF_ReturnType df of None \<Rightarrow> [] | Some ty \<Rightarrow> bab_type_names ty)
      @ concat (map bab_attribute_names (DF_Attributes df))
      @ (case DF_Body df of None \<Rightarrow> [] | Some body \<Rightarrow> bab_statement_list_names body)"

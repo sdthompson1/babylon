@@ -123,7 +123,7 @@ record DeclFun =
   DF_Location :: Location
   DF_Name :: string
   DF_TyArgs :: "string list"
-  DF_TmArgs :: "(string \<times> VarOrRef \<times> BabType) list"
+  DF_TmArgs :: "(string \<times> VarOrRef \<times> BabType \<times> GhostOrNot) list"
   DF_ReturnType :: "BabType option"
   DF_Body :: "(BabStatement list) option"
   DF_Attributes :: "BabAttribute list"

@@ -13,8 +13,10 @@ begin
 
 
 (* Note: There is no separate ghost-free predicate for terms.
-   Terms are already fully executable, so long as they are well-typed in
-   NotGhost mode. *)
+   A term that is well-typed in NotGhost mode is already fully executable, except for
+   any ghost arguments that it passes to functions. But in a ghost-free module, there
+   are no functions with ghost arguments, so this cannot arise. *)
+
 
 (* A statement is ghost-free if:
     - it is not marked Ghost;
@@ -59,14 +61,15 @@ and core_statement_list_ghost_free :: "CoreStatement list \<Rightarrow> bool" wh
 
 (* A module is ghost-free if:
     - no function is ghost;
+    - no function has a ghost parameter;
     - no datatype is ghost;
     - every abstract type is a runtime type;
-    - every function body is ghost-free. 
+    - every function body is ghost-free.
 *)
 definition core_module_ghost_free :: "CoreModule \<Rightarrow> bool" where
   "core_module_ghost_free m =
     ((\<forall>name info. fmlookup (TE_Functions (CM_TyEnv m)) name = Some info
-                    \<longrightarrow> FI_Ghost info = NotGhost)
+                    \<longrightarrow> FI_Ghost info = NotGhost \<and> no_ghost_params info)
      \<and> TE_GhostDatatypes (CM_TyEnv m) = {||}
      \<and> TE_TypeVars (CM_TyEnv m) |\<subseteq>| TE_RuntimeTypeVars (CM_TyEnv m)
      \<and> (\<forall>name f body. fmlookup (CM_Functions m) name = Some f \<and> CF_Body f = Some body

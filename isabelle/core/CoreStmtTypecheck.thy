@@ -35,18 +35,19 @@ definition core_impure_call_type ::
          else
            let tySubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs);
                expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo);
-               varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)
-           in if list_all2 (\<lambda>(tm, vor) expectedTy.
+               varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo);
+               argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)
+           in \<comment> \<open>Each actual is checked in the mode determined by its parameter's
+                  ghost flag. A ghost Ref parameter therefore requires a ghost lvalue.\<close>
+              if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                     case vor of
                       Var \<Rightarrow>
-                        (case core_term_type env ghost tm of
-                           None \<Rightarrow> False
-                         | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                        core_term_type env mode tm = Some expectedTy
                     | Ref \<Rightarrow>
                         is_writable_lvalue env tm
-                        \<and> ghost_lvalue_ok env ghost tm
-                        \<and> core_term_type env ghost tm = Some expectedTy)
-                  (zip tmArgs varOrRefs) expectedArgTypes
+                        \<and> ghost_lvalue_ok env mode tm
+                        \<and> core_term_type env mode tm = Some expectedTy)
+                  (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
               then Some (apply_subst tySubst (FI_ReturnType funInfo))
               else None)"
 
@@ -382,17 +383,15 @@ lemma core_impure_call_type_fn_facts:
             \<and> length tmArgs = length (FI_TmArgs funInfo)
             \<and> ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                (FI_ReturnType funInfo)
-            \<and> list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env ghost tm of
-                    None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))
+            \<and> list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))
             \<and> (\<forall>i < length tmArgs.
                  fst (snd (FI_TmArgs funInfo ! i)) = Ref
                    \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                       \<and> ghost_lvalue_ok env ghost (tmArgs ! i))
+                       \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                          (tmArgs ! i))
             \<and> (FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env)"
 proof -
   from assms have unfolded:
@@ -411,18 +410,17 @@ proof -
           else
             let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
                 expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-                varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)
-            in if list_all2 (\<lambda>(tm, vor) expectedTy.
+                varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi);
+                argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)
+            in if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                      case vor of
                        Var \<Rightarrow>
-                         (case core_term_type env ghost tm of
-                            None \<Rightarrow> False
-                          | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                         core_term_type env mode tm = Some expectedTy
                      | Ref \<Rightarrow>
                          is_writable_lvalue env tm
-                         \<and> ghost_lvalue_ok env ghost tm
-                         \<and> core_term_type env ghost tm = Some expectedTy)
-                   (zip tmArgs varOrRefs) expectedArgTypes
+                         \<and> ghost_lvalue_ok env mode tm
+                         \<and> core_term_type env mode tm = Some expectedTy)
+                   (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
                then Some (apply_subst tySubst (FI_ReturnType fi))
                else None) = Some ty"
     unfolding core_impure_call_type_def by simp
@@ -442,18 +440,17 @@ proof -
       else
         let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
             expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-            varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)
-        in if list_all2 (\<lambda>(tm, vor) expectedTy.
+            varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi);
+            argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)
+        in if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                  case vor of
                    Var \<Rightarrow>
-                     (case core_term_type env ghost tm of
-                        None \<Rightarrow> False
-                      | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                     core_term_type env mode tm = Some expectedTy
                  | Ref \<Rightarrow>
                      is_writable_lvalue env tm
-                     \<and> ghost_lvalue_ok env ghost tm
-                     \<and> core_term_type env ghost tm = Some expectedTy)
-               (zip tmArgs varOrRefs) expectedArgTypes
+                     \<and> ghost_lvalue_ok env mode tm
+                     \<and> core_term_type env mode tm = Some expectedTy)
+               (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
            then Some (apply_subst tySubst (FI_ReturnType fi))
            else None) = Some ty"
     by simp
@@ -478,93 +475,95 @@ proof -
   have after_ifs:
     "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
           expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-          varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)
-      in if list_all2 (\<lambda>(tm, vor) expectedTy.
+          varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi);
+          argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)
+      in if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                case vor of
                  Var \<Rightarrow>
-                   (case core_term_type env ghost tm of
-                      None \<Rightarrow> False
-                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                   core_term_type env mode tm = Some expectedTy
                | Ref \<Rightarrow>
                    is_writable_lvalue env tm
-                   \<and> ghost_lvalue_ok env ghost tm
-                   \<and> core_term_type env ghost tm = Some expectedTy)
-             (zip tmArgs varOrRefs) expectedArgTypes
+                   \<and> ghost_lvalue_ok env mode tm
+                   \<and> core_term_type env mode tm = Some expectedTy)
+             (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
          then Some (apply_subst tySubst (FI_ReturnType fi))
          else None) = Some ty"
     by auto
+  let ?tySubst = "fmap_of_list (zip (FI_TyArgs fi) tyArgs)"
+  let ?vors = "map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)"
+  let ?exps = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs fi)"
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)"
   from after_ifs have argTms_l2_impure:
-    "list_all2 (\<lambda>(tm, vor) expectedTy.
+    "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
                   case vor of
                     Var \<Rightarrow>
-                      (case core_term_type env ghost tm of
-                         None \<Rightarrow> False
-                       | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                      core_term_type env mode tm = Some expectedTy
                   | Ref \<Rightarrow>
                       is_writable_lvalue env tm
-                      \<and> ghost_lvalue_ok env ghost tm
-                      \<and> core_term_type env ghost tm = Some expectedTy)
-               (zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)))
-               (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-                    (FI_TmArgs fi))"
+                      \<and> ghost_lvalue_ok env mode tm
+                      \<and> core_term_type env mode tm = Some expectedTy)
+               (zip tmArgs ?vors) (zip ?exps ?modes)"
     by (simp add: Let_def split: if_splits)
   from after_ifs have fn_ty_eq:
-    "ty = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) (FI_ReturnType fi)"
+    "ty = apply_subst ?tySubst (FI_ReturnType fi)"
     by (simp add: Let_def split: if_splits)
 
-  \<comment> \<open>Derive the pure-shape list_all2: every argument (whether Var or Ref)
-      satisfies core_term_type ... = Some expectedTy, because the impure
-      check requires it in both branches. \<close>
-  have argTms_l2_pure:
-    "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env ghost tm of
-                    None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-               tmArgs
-               (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-                    (FI_TmArgs fi))"
-    unfolding list_all2_conv_all_nth
+  \<comment> \<open>Per-index view of the impure check, with the i-th parameter destructured. \<close>
+  have nth_check:
+    "\<And>i ti vor gh. i < length tmArgs \<Longrightarrow> FI_TmArgs fi ! i = (ti, vor, gh) \<Longrightarrow>
+       (case vor of
+          Var \<Rightarrow>
+            core_term_type env (param_mode ghost gh) (tmArgs ! i)
+              = Some (apply_subst ?tySubst ti)
+        | Ref \<Rightarrow>
+            is_writable_lvalue env (tmArgs ! i)
+            \<and> ghost_lvalue_ok env (param_mode ghost gh) (tmArgs ! i)
+            \<and> core_term_type env (param_mode ghost gh) (tmArgs ! i)
+                = Some (apply_subst ?tySubst ti))"
+  proof -
+    fix i ti vor gh
+    assume i_lt: "i < length tmArgs" and fi_arg_eq: "FI_TmArgs fi ! i = (ti, vor, gh)"
+    with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
+    have i_lt_zip: "i < length (zip tmArgs ?vors)" using i_lt len_tmArgs by simp
+    have zip_nth: "zip tmArgs ?vors ! i = (tmArgs ! i, vor)"
+      using i_lt i_lt_fi fi_arg_eq by simp
+    have expected_nth:
+      "zip ?exps ?modes ! i = (apply_subst ?tySubst ti, param_mode ghost gh)"
+      using i_lt_fi fi_arg_eq by simp
+    show "(case vor of
+             Var \<Rightarrow>
+               core_term_type env (param_mode ghost gh) (tmArgs ! i) 
+                 = Some (apply_subst ?tySubst ti)
+           | Ref \<Rightarrow>
+               is_writable_lvalue env (tmArgs ! i)
+               \<and> ghost_lvalue_ok env (param_mode ghost gh) (tmArgs ! i)
+               \<and> core_term_type env (param_mode ghost gh) (tmArgs ! i)
+                   = Some (apply_subst ?tySubst ti))"
+      using list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth
+      by simp
+  qed
+
+  \<comment> \<open>Derive the pure-shape check: every argument (whether Var or Ref)
+      satisfies core_term_type ... = Some expectedTy in its own mode, because
+      the impure check requires it in both branches. \<close>
+  have argTms_l2_pure: "list_all2 (\<lambda>tm (expectedTy, mode).
+                            core_term_type env mode tm = Some expectedTy) tmArgs (zip ?exps ?modes)"
+    unfolding list_all2_case_prod_conv_all_nth
   proof (intro conjI allI impI)
-    show "length tmArgs
-            = length (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-                          (FI_TmArgs fi))"
+    show "length tmArgs = length (zip ?exps ?modes)"
       using len_tmArgs by simp
   next
     fix i assume i_lt: "i < length tmArgs"
     with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
-    have i_lt_zip:
-      "i < length (zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)))"
-      using i_lt len_tmArgs by simp
     obtain ti vor gh where fi_arg_eq: "FI_TmArgs fi ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs fi ! i") auto
-    have zip_nth:
-      "zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
-      using i_lt i_lt_fi fi_arg_eq by simp
     have expected_nth:
-      "(map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-            (FI_TmArgs fi)) ! i
-          = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
+      "zip ?exps ?modes ! i = (apply_subst ?tySubst ti, param_mode ghost gh)"
       using i_lt_fi fi_arg_eq by simp
-    have nth_check:
-      "(case vor of
-          Var \<Rightarrow>
-            (case core_term_type env ghost (tmArgs ! i) of
-               None \<Rightarrow> False
-             | Some actualTy \<Rightarrow>
-                 actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti)
-        | Ref \<Rightarrow>
-            is_writable_lvalue env (tmArgs ! i)
-            \<and> ghost_lvalue_ok env ghost (tmArgs ! i)
-            \<and> core_term_type env ghost (tmArgs ! i)
-                = Some (apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti))"
-      using list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth
-      by simp
-    show "case core_term_type env ghost (tmArgs ! i) of
-            None \<Rightarrow> False
-          | Some actualTy \<Rightarrow>
-              actualTy = map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-                             (FI_TmArgs fi) ! i"
-      using nth_check expected_nth by (cases vor; auto split: option.splits)
+    show "core_term_type env (snd (zip ?exps ?modes ! i)) (tmArgs ! i)
+            = Some (fst (zip ?exps ?modes ! i))"
+      using nth_check[OF i_lt fi_arg_eq] expected_nth
+      by (cases vor; auto split: option.splits)
   qed
 
   have ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
@@ -578,26 +577,15 @@ proof -
     "\<forall>i < length tmArgs.
        fst (snd (FI_TmArgs fi ! i)) = Ref
          \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-             \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+             \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs fi ! i)))) (tmArgs ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length tmArgs" and ref: "fst (snd (FI_TmArgs fi ! i)) = Ref"
-    with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs fi)" by simp
-    have i_lt_zip:
-      "i < length (zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)))"
-      using i_lt len_tmArgs by simp
     obtain ti vor gh where fi_arg_eq: "FI_TmArgs fi ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs fi ! i") auto
     from ref fi_arg_eq have vor_eq: "vor = Ref" by simp
-    have zip_nth:
-      "zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)) ! i = (tmArgs ! i, vor)"
-      using i_lt i_lt_fi fi_arg_eq by simp
-    have expected_nth:
-      "(map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-            (FI_TmArgs fi)) ! i
-          = apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ti"
-      using i_lt_fi fi_arg_eq by simp
-    from list_all2_nthD2[OF argTms_l2_impure, of i] i_lt_zip zip_nth expected_nth vor_eq
-    show "is_writable_lvalue env (tmArgs ! i) \<and> ghost_lvalue_ok env ghost (tmArgs ! i)"
+    from nth_check[OF i_lt fi_arg_eq] vor_eq fi_arg_eq
+    show "is_writable_lvalue env (tmArgs ! i)
+          \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs fi ! i)))) (tmArgs ! i)"
       by simp
   qed
 
@@ -607,36 +595,6 @@ proof -
   from fi_lookup len_tyArgs tyArgs_wk tyArgs_cp ng_tyArgs ng_fn len_tmArgs fn_ty_eq
        argTms_l2_pure ref_args_lvalues impure_ok
   show ?thesis by blast
-qed
-
-(* A convenient weaker corollary of core_impure_call_type = Some, derived from
-   core_impure_call_type_fn_facts: the function is looked up, and every argument
-   term typechecks to *some* type via core_term_type. This is enough for several
-   downstream proofs (erasure, fuel-monotonicity, preservation) that only need
-   to know the arguments are well-typed rather than the full Var/Ref-respecting
-   check. *)
-lemma core_impure_call_type_args_typed:
-  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
-  shows "\<exists>fi. fmlookup (TE_Functions env) fnName = Some fi
-              \<and> length tmArgs = length (FI_TmArgs fi)
-              \<and> list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
-proof -
-  from core_impure_call_type_fn_facts[OF assms] obtain fi where
-    fi_lookup: "fmlookup (TE_Functions env) fnName = Some fi" and
-    len_tmArgs: "length tmArgs = length (FI_TmArgs fi)" and
-    argTms_l2:
-      "list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type env ghost tm of
-                      None \<Rightarrow> False
-                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                 tmArgs
-                 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs fi) tyArgs)) ty)
-                      (FI_TmArgs fi))"
-    by blast
-  have "list_all (\<lambda>tm. \<exists>t. core_term_type env ghost tm = Some t) tmArgs"
-    using argTms_l2
-    by (fastforce simp: list_all_length list_all2_conv_all_nth split: option.splits)
-  with fi_lookup len_tmArgs show ?thesis by blast
 qed
 
 (* The impure-call typecheck is preserved under adding type variables to the
@@ -662,16 +620,15 @@ proof -
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)" and
-    l2_pure: "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env ghost tm of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))" and
+    l2_pure: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+                      \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                         (tmArgs ! i)" and
     imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
@@ -681,29 +638,24 @@ proof -
     using wk is_well_kinded_extend_tyvars by (fastforce simp: list_all_iff)
   have rt': "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') tyArgs"
     using rt is_runtime_type_extend_runtime_tyvars by (fastforce simp: list_all_iff)
-  have l2_pure': "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type ?env' ghost tm of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))"
-    using l2_pure core_term_type_irrelevant_tyvar
-    by (elim list_all2_mono) (auto split: option.splits)
+  let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+  let ?exps = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have l2_pure': "list_all2 (\<lambda>tm (expectedTy, mode).
+                      core_term_type ?env' mode tm = Some expectedTy) tmArgs (zip ?exps ?modes)"
+    by (rule list_all2_case_prod_mono[OF l2_pure]) (use core_term_type_irrelevant_tyvar in blast)
 
   \<comment> \<open>Rebuild the full per-argument (Var/Ref) check for the extended env, by
       proving each index from the pure list and the Ref-lvalue witnesses.\<close>
-  let ?P' = "\<lambda>(tm, vor) expectedTy.
+  let ?P' = "\<lambda>(tm, vor) (expectedTy, mode).
                  case vor of
-                   Var \<Rightarrow> (case core_term_type ?env' ghost tm of None \<Rightarrow> False
-                            | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                   Var \<Rightarrow> core_term_type ?env' mode tm = Some expectedTy
                  | Ref \<Rightarrow> is_writable_lvalue ?env' tm
-                          \<and> ghost_lvalue_ok ?env' ghost tm
-                          \<and> core_term_type ?env' ghost tm = Some expectedTy"
+                          \<and> ghost_lvalue_ok ?env' mode tm
+                          \<and> core_term_type ?env' mode tm = Some expectedTy"
   let ?zts = "zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
-  let ?exps = "map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                    (FI_TmArgs funInfo)"
-  have len_zts: "length ?zts = length ?exps" using len_tm by simp
-  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P' (?zts ! i) (?exps ! i)"
+  have len_zts: "length ?zts = length (zip ?exps ?modes)" using len_tm by simp
+  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P' (?zts ! i) (zip ?exps ?modes ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length tmArgs" using len_tm by simp
@@ -712,12 +664,12 @@ proof -
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = (tmArgs ! i, vor)"
       using i_lt_tm i_lt_fi fi_arg by simp
-    have exp_nth: "?exps ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti"
+    have exp_nth: "zip ?exps ?modes ! i = (apply_subst ?tySubst ti, param_mode ghost gh)"
       using i_lt_fi fi_arg by simp
-    have pure_i: "case core_term_type ?env' ghost (tmArgs ! i) of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti"
-      using list_all2_nthD[OF l2_pure'] i_lt_tm len_tm exp_nth by metis
-    show "?P' (?zts ! i) (?exps ! i)"
+    have pure_i: "core_term_type ?env' (param_mode ghost gh) (tmArgs ! i)
+                    = Some (apply_subst ?tySubst ti)"
+      using list_all2_case_prod_nthD[OF l2_pure' i_lt_tm] exp_nth by simp
+    show "?P' (?zts ! i) (zip ?exps ?modes ! i)"
     proof (cases vor)
       case Var
       with zip_nth exp_nth pure_i show ?thesis by simp
@@ -726,17 +678,13 @@ proof -
       have "is_writable_lvalue env (tmArgs ! i)"
         using ref_lv i_lt_tm fi_arg Ref by simp
       hence writ': "is_writable_lvalue ?env' (tmArgs ! i)" by simp
-      have "ghost_lvalue_ok env ghost (tmArgs ! i)"
-        using ref_lv i_lt_tm fi_arg Ref by simp
-      hence glv': "ghost_lvalue_ok ?env' ghost (tmArgs ! i)" by simp
-      from pure_i have
-        "core_term_type ?env' ghost (tmArgs ! i)
-           = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti)"
-        by (auto split: option.splits)
-      with Ref zip_nth exp_nth writ' glv' show ?thesis by simp
+      have "ghost_lvalue_ok env (param_mode ghost gh) (tmArgs ! i)"
+        using ref_lv i_lt_tm fi_arg Ref by auto
+      hence glv': "ghost_lvalue_ok ?env' (param_mode ghost gh) (tmArgs ! i)" by simp
+      with Ref zip_nth exp_nth writ' pure_i show ?thesis by simp
     qed
   qed
-  have l2_full': "list_all2 ?P' ?zts ?exps"
+  have l2_full': "list_all2 ?P' ?zts (zip ?exps ?modes)"
     using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
 
   show ?thesis

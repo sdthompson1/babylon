@@ -63,7 +63,11 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
   "module_body_env_for env names info =
     env \<lparr>
       TE_LocalVars := fmap_of_list (zip names (map fst (FI_TmArgs info))),
-      TE_GhostLocals := (if FI_Ghost info = Ghost then fset_of_list names else {||}),
+      TE_GhostLocals := (if FI_Ghost info = Ghost then fset_of_list names
+                         else fset_of_list
+                                (map fst
+                                     (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                             (zip names (map snd (FI_TmArgs info)))))),
       TE_ConstLocals := fset_of_list
         (map fst
              (filter (\<lambda>(_, vor, _). vor = Var) (zip names (map snd (FI_TmArgs info))))),
@@ -105,7 +109,11 @@ definition module_globals_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreVa
    up one-for-one with the types and Var/Ref tags in FI_TmArgs, and the body
    (if any - extern functions have CF_Body = None) typechecks in the body
    environment. (Distinctness of parameter names is also required - this matches
-   the same requirement in fun_info_matches_interp_fun.) *)
+   the same requirement in fun_info_matches_interp_fun.)
+
+   An extern function has no ghost parameter. Its implementation is outside
+   the program and takes the whole argument list, so ghost erasure could not
+   remove a ghost argument from it. *)
 definition module_functions_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreFunction) fmap \<Rightarrow> bool" where
   "module_functions_well_typed env funs =
     (\<forall>name f. fmlookup funs name = Some f \<longrightarrow>
@@ -117,7 +125,8 @@ definition module_functions_well_typed :: "CoreTyEnv \<Rightarrow> (string, Core
                 | Some body \<Rightarrow>
                     core_statement_list_type
                       (module_body_env_for env (CF_Args f) info)
-                      (FI_Ghost info) body \<noteq> None)))"
+                      (FI_Ghost info) body \<noteq> None) \<and>
+               (CF_Body f = None \<longrightarrow> no_ghost_params info)))"
 
 
 (* ========================================================================== *)

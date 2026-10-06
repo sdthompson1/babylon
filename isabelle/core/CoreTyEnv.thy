@@ -8,7 +8,7 @@ record FunInfo =
 
   (* Term arguments: type, whether passed by value (Var) or reference (Ref), and
      whether the parameter is ghost. A ghost parameter's actual is ghost code: it
-     is typechecked in Ghost mode and is not evaluated at run time. *)
+     is typechecked in Ghost mode, and ghost erasure removes it. *)
   FI_TmArgs :: "(CoreType \<times> VarOrRef \<times> GhostOrNot) list"
 
   (* Return type *)
@@ -93,6 +93,10 @@ record CoreTyEnv =
      contains MathInt, MathReal, or another ghost datatype. *)
   TE_GhostDatatypes :: "string fset"
 
+
+(* This is true if a function has no ghost parameter. *)
+definition no_ghost_params :: "FunInfo \<Rightarrow> bool" where
+  "no_ghost_params info = list_all (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info)"
 
 (* Is a variable ghost? For locals, check TE_GhostLocals; globals are never
    ghost (in Core).

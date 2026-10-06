@@ -197,7 +197,9 @@ proof -
                \<and> dt |\<notin>| TE_GhostDatatypes env"
     if "fmlookup (TE_DataCtors ?E) c = Some (dt, tvs, p)" for c dt tvs p
     using that unfolding erase_ghost_tyenv_ctor_lookup .
-  have funD: "fmlookup (TE_Functions env) f = Some info \<and> FI_Ghost info = NotGhost"
+  have funD: "\<exists>info0. fmlookup (TE_Functions env) f = Some info0
+                     \<and> FI_Ghost info0 = NotGhost
+                     \<and> info = erase_ghost_funinfo info0"
     if "fmlookup (TE_Functions ?E) f = Some info" for f info
     using that unfolding erase_ghost_tyenv_fun_lookup .
 
@@ -317,24 +319,53 @@ proof -
   proof (intro allI impI)
     fix f info
     assume lkE: "fmlookup (TE_Functions ?E) f = Some info"
-    note d = funD[OF lkE]
-    let ?T = "fset_of_list (FI_TyArgs info)"
+    from funD[OF lkE] obtain info0 where
+        lk0: "fmlookup (TE_Functions env) f = Some info0" and
+        ng0: "FI_Ghost info0 = NotGhost" and
+        info_eq: "info = erase_ghost_funinfo info0"
+      by blast
+    let ?T = "fset_of_list (FI_TyArgs info0)"
     let ?wenv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| ?T \<rparr>"
     let ?renv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| ?T,
                         TE_RuntimeTypeVars :=
                           (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| ?T \<rparr>"
-    have wks: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wenv ty)
-               \<and> is_well_kinded ?wenv (FI_ReturnType info)"
-      using a11 d unfolding tyenv_fun_types_well_kinded_def by blast
-    have rts: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_runtime_type ?renv ty)
-               \<and> is_runtime_type ?renv (FI_ReturnType info)"
-      using a13 d unfolding tyenv_fun_ghost_constraint_def Let_def by blast
+    have wks: "(\<forall>ty \<in> fst ` set (FI_TmArgs info0). is_well_kinded ?wenv ty)
+               \<and> is_well_kinded ?wenv (FI_ReturnType info0)"
+      using a11 lk0 unfolding tyenv_fun_types_well_kinded_def by blast
+    have rts: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info0)
+                           \<longrightarrow> is_runtime_type ?renv ty)
+               \<and> is_runtime_type ?renv (FI_ReturnType info0)"
+      using a13 lk0 ng0 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
+    \<comment> \<open>A parameter of the erased signature is a non-ghost parameter of the
+        original one.\<close>
+    have kept: "\<exists>vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info0)"
+      if "ty \<in> fst ` set (FI_TmArgs info)" for ty
+      using that unfolding info_eq by force
     note S = erase_ghost_tyenv_scoped_type(1)[where env = env and T = ?T]
     show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
-              is_well_kinded (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| ?T \<rparr>) ty)
-          \<and> is_well_kinded (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| ?T \<rparr>)
-                            (FI_ReturnType info)"
-      using S wks rts by blast
+              is_well_kinded
+                (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+                ty)
+          \<and> is_well_kinded
+              (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+              (FI_ReturnType info)"
+    proof (intro conjI ballI)
+      fix ty assume "ty \<in> fst ` set (FI_TmArgs info)"
+      from kept[OF this] obtain vor where
+          m: "(ty, vor, NotGhost) \<in> set (FI_TmArgs info0)"
+        by blast
+      have wk: "is_well_kinded ?wenv ty" using wks m by force
+      have rt: "is_runtime_type ?renv ty" using rts m by blast
+      show "is_well_kinded
+              (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+              ty"
+        unfolding info_eq erase_ghost_funinfo_simps by (rule S[OF wk rt])
+    next
+      show "is_well_kinded
+              (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+              (FI_ReturnType info)"
+        unfolding info_eq erase_ghost_funinfo_simps using S wks rts by blast
+    qed
   qed
 
   have c12: "tyenv_fun_tyvars_distinct ?E"
@@ -342,9 +373,13 @@ proof -
   proof (intro allI impI)
     fix f info
     assume lkE: "fmlookup (TE_Functions ?E) f = Some info"
-    note d = funD[OF lkE]
-    show "distinct (FI_TyArgs info)"
-      using a12 d unfolding tyenv_fun_tyvars_distinct_def by blast
+    from funD[OF lkE] obtain info0 where
+        lk0: "fmlookup (TE_Functions env) f = Some info0" and
+        info_eq: "info = erase_ghost_funinfo info0"
+      by blast
+    have "distinct (FI_TyArgs info0)"
+      using a12 lk0 unfolding tyenv_fun_tyvars_distinct_def by blast
+    thus "distinct (FI_TyArgs info)" by (simp add: info_eq)
   qed
 
   have c13: "tyenv_fun_ghost_constraint ?E"
@@ -353,30 +388,43 @@ proof -
     fix f info
     assume A: "fmlookup (TE_Functions ?E) f = Some info \<and> FI_Ghost info = NotGhost"
     hence lkE: "fmlookup (TE_Functions ?E) f = Some info" by simp
-    note d = funD[OF lkE]
-    let ?T = "fset_of_list (FI_TyArgs info)"
+    from funD[OF lkE] obtain info0 where
+        lk0: "fmlookup (TE_Functions env) f = Some info0" and
+        ng0: "FI_Ghost info0 = NotGhost" and
+        info_eq: "info = erase_ghost_funinfo info0"
+      by blast
+    let ?T = "fset_of_list (FI_TyArgs info0)"
     let ?wenv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| ?T \<rparr>"
     let ?renv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| ?T,
                         TE_RuntimeTypeVars :=
                           (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| ?T \<rparr>"
-    have wks: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wenv ty)
-               \<and> is_well_kinded ?wenv (FI_ReturnType info)"
-      using a11 d unfolding tyenv_fun_types_well_kinded_def by blast
-    have rts: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_runtime_type ?renv ty)
-               \<and> is_runtime_type ?renv (FI_ReturnType info)"
-      using a13 d unfolding tyenv_fun_ghost_constraint_def Let_def by blast
+    let ?rE = "\<lambda>tvs. ?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list tvs,
+                           TE_RuntimeTypeVars :=
+                             (TE_AbstractTypes ?E |\<inter>| TE_RuntimeTypeVars ?E)
+                               |\<union>| fset_of_list tvs \<rparr>"
+    have wks: "(\<forall>ty \<in> fst ` set (FI_TmArgs info0). is_well_kinded ?wenv ty)
+               \<and> is_well_kinded ?wenv (FI_ReturnType info0)"
+      using a11 lk0 unfolding tyenv_fun_types_well_kinded_def by blast
+    have rts: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info0)
+                           \<longrightarrow> is_runtime_type ?renv ty)
+               \<and> is_runtime_type ?renv (FI_ReturnType info0)"
+      using a13 lk0 ng0 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
     note S = erase_ghost_tyenv_scoped_type(2)[where env = env and T = ?T]
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
-              is_runtime_type
-                (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| ?T,
-                      TE_RuntimeTypeVars :=
-                        (TE_AbstractTypes ?E |\<inter>| TE_RuntimeTypeVars ?E) |\<union>| ?T \<rparr>) ty)
-          \<and> is_runtime_type
-              (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| ?T,
-                    TE_RuntimeTypeVars :=
-                      (TE_AbstractTypes ?E |\<inter>| TE_RuntimeTypeVars ?E) |\<union>| ?T \<rparr>)
-              (FI_ReturnType info)"
-      using S wks rts by blast
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)
+                      \<longrightarrow> is_runtime_type (?rE (FI_TyArgs info)) ty)
+          \<and> is_runtime_type (?rE (FI_TyArgs info)) (FI_ReturnType info)"
+    proof (intro conjI allI impI)
+      fix ty vor assume "(ty, vor, NotGhost) \<in> set (FI_TmArgs info)"
+      hence m: "(ty, vor, NotGhost) \<in> set (FI_TmArgs info0)"
+        by (simp add: info_eq)
+      have wk: "is_well_kinded ?wenv ty" using wks m by force
+      have rt: "is_runtime_type ?renv ty" using rts m by blast
+      show "is_runtime_type (?rE (FI_TyArgs info)) ty"
+        unfolding info_eq erase_ghost_funinfo_simps by (rule S[OF wk rt])
+    next
+      show "is_runtime_type (?rE (FI_TyArgs info)) (FI_ReturnType info)"
+        unfolding info_eq erase_ghost_funinfo_simps using S wks rts by blast
+    qed
   qed
 
   have c14: "tyenv_fun_return_types_complete ?E"
@@ -385,9 +433,14 @@ proof -
     fix f info
     assume A: "fmlookup (TE_Functions ?E) f = Some info \<and> FI_Ghost info = NotGhost"
     hence lkE: "fmlookup (TE_Functions ?E) f = Some info" by simp
-    note d = funD[OF lkE]
-    show "is_complete_type (FI_ReturnType info)"
-      using a14 d unfolding tyenv_fun_return_types_complete_def by blast
+    from funD[OF lkE] obtain info0 where
+        lk0: "fmlookup (TE_Functions env) f = Some info0" and
+        ng0: "FI_Ghost info0 = NotGhost" and
+        info_eq: "info = erase_ghost_funinfo info0"
+      by blast
+    have "is_complete_type (FI_ReturnType info0)"
+      using a14 lk0 ng0 unfolding tyenv_fun_return_types_complete_def by blast
+    thus "is_complete_type (FI_ReturnType info)" by (simp add: info_eq)
   qed
 
   have c15: "tyenv_nonghost_payloads_runtime ?E"
@@ -552,12 +605,85 @@ qed
 (* Function body environments *)
 (* ========================================================================== *)
 
-(* For a function that is not ghost, the body environment of the erased module
-   is related to the body environment of the original module. *)
+(* The erased parameter list has no ghost parameter. *)
+lemma erased_params_no_ghost:
+  "filter (\<lambda>(_, _, gh). gh = Ghost)
+          (zip xs (map snd (filter (\<lambda>(_, _, gh). gh = NotGhost) params))) = []"
+  by (auto simp: filter_empty_conv dest!: set_zip_rightD)
+
+(* A name that is not the name of a ghost parameter: it is bound to the same
+   type (or to nothing) by the parameters and by the parameters that are not
+   ghost. *)
+lemma body_env_locals_erased:
+  assumes "length names = length params"
+    and "name \<notin> fst ` set (filter (\<lambda>(_, _, gh). gh = Ghost) (zip names (map snd params)))"
+  shows "map_of (zip (drop_ghost (map (\<lambda>(_, _, gh). gh) params) names)
+                     (map fst (filter (\<lambda>(_, _, gh). gh = NotGhost) params))) name
+           = map_of (zip names (map fst params)) name"
+  using assms
+proof (induction names params rule: list_induct2)
+  case Nil
+  show ?case by simp
+next
+  case (Cons n names p params)
+  obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
+  have rest: "name \<notin> fst ` set (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                        (zip names (map snd params)))"
+    by (cases gh) (use Cons.prems in \<open>auto simp: p\<close>)
+  note IH = Cons.IH[OF rest]
+  show ?case
+  proof (cases gh)
+    case NotGhost
+    show ?thesis using IH by (simp add: p NotGhost)
+  next
+    case Ghost
+    have "name \<noteq> n" using Cons.prems by (auto simp: p Ghost)
+    then show ?thesis using IH by (simp add: p Ghost)
+  qed
+qed
+
+(* The same, for being a Var parameter (a const local of the body). *)
+lemma body_env_consts_erased:
+  assumes "length names = length params"
+    and "name \<notin> fst ` set (filter (\<lambda>(_, _, gh). gh = Ghost) (zip names (map snd params)))"
+  shows "name \<in> fst ` set (filter (\<lambda>(_, vor, _). vor = Var)
+                             (zip (drop_ghost (map (\<lambda>(_, _, gh). gh) params) names)
+                                  (map snd (filter (\<lambda>(_, _, gh). gh = NotGhost) params))))
+         \<longleftrightarrow> name \<in> fst ` set (filter (\<lambda>(_, vor, _). vor = Var)
+                                  (zip names (map snd params)))"
+  using assms
+proof (induction names params rule: list_induct2)
+  case Nil
+  show ?case by simp
+next
+  case (Cons n names p params)
+  obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
+  have rest: "name \<notin> fst ` set (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                        (zip names (map snd params)))"
+    by (cases gh) (use Cons.prems in \<open>auto simp: p\<close>)
+  note IH = Cons.IH[OF rest]
+  show ?case
+  proof (cases gh)
+    case NotGhost
+    show ?thesis by (cases vor) (use IH in \<open>simp_all add: p NotGhost\<close>)
+  next
+    case Ghost
+    have ne: "name \<noteq> n" using Cons.prems by (auto simp: p Ghost)
+    show ?thesis by (cases vor) (use IH ne in \<open>simp_all add: p Ghost\<close>)
+  qed
+qed
+
+(* For a function that is not ghost, the body environment of the erased
+   function is related to the body environment of the original one. The erased
+   function has lost its ghost parameters; in the original body environment
+   they are ghost locals, about which the relation says nothing. *)
 lemma tyenv_erased_module_body_env:
   assumes ng: "FI_Ghost info = NotGhost"
+    and len: "length names = length (FI_TmArgs info)"
   shows "tyenv_erased (module_body_env_for env names info)
-                      (module_body_env_for (erase_ghost_tyenv env) names info)"
+                      (module_body_env_for (erase_ghost_tyenv env)
+                         (drop_ghost (param_ghost_flags info) names)
+                         (erase_ghost_funinfo info))"
     (is "tyenv_erased ?B ?BE")
 proof -
   have flds: "TE_Functions ?B = TE_Functions env"
@@ -576,7 +702,8 @@ proof -
     using ng by (simp add: module_body_env_for_def fset_scoped_tyvars_eq1)
   have rtvE: "TE_RuntimeTypeVars ?BE = TE_RuntimeTypeVars ?B"
     using ng by (simp add: module_body_env_for_def fset_scoped_tyvars_eq2)
-  have fE: "TE_Functions ?BE = fmfilter (tyenv_nonghost_fun env) (TE_Functions env)"
+  have fE: "TE_Functions ?BE
+              = fmmap erase_ghost_funinfo (fmfilter (tyenv_nonghost_fun env) (TE_Functions env))"
     by (simp add: module_body_env_for_def)
   have dE: "TE_Datatypes ?BE
               = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_Datatypes env)"
@@ -596,11 +723,63 @@ proof -
     and fg: "TE_FunctionGhost ?BE = TE_FunctionGhost ?B"
     and fi: "TE_FunctionImpure ?BE = TE_FunctionImpure ?B"
     and gl: "TE_GhostLocals ?BE = {||}"
-    and lv: "TE_LocalVars ?BE = TE_LocalVars ?B"
-    and cl: "TE_ConstLocals ?BE = TE_ConstLocals ?B"
-    using ng by (simp_all add: module_body_env_for_def)
+    using ng by (simp_all add: module_body_env_for_def erased_params_no_ghost)
+  \<comment> \<open>A name that is not a ghost local of the original body environment is not
+      the name of a ghost parameter, and so it means the same on both sides.\<close>
+  have locals: "fmlookup (TE_LocalVars ?BE) name = fmlookup (TE_LocalVars ?B) name
+                \<and> (name |\<in>| TE_ConstLocals ?BE \<longleftrightarrow> name |\<in>| TE_ConstLocals ?B)"
+    if nv: "\<not> tyenv_var_ghost ?B name" for name
+  proof -
+    \<comment> \<open>The fields of the two body environments, written out. They are stated
+        as equations and used by unfolding, so that simp does not get to
+        rewrite the two sides of the goal into different forms.\<close>
+    have glB: "TE_GhostLocals ?B
+                 = fset_of_list (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                                 (zip names (map snd (FI_TmArgs info)))))"
+      using ng by (simp add: module_body_env_for_def)
+    have lvB: "fmlookup (TE_LocalVars ?B) name
+                 = map_of (zip names (map fst (FI_TmArgs info))) name"
+      by (simp add: module_body_env_for_def fmlookup_of_list)
+    have lvE: "fmlookup (TE_LocalVars ?BE) name
+                 = map_of (zip (drop_ghost (map (\<lambda>(_, _, gh). gh) (FI_TmArgs info)) names)
+                               (map fst (filter (\<lambda>(_, _, gh). gh = NotGhost)
+                                                (FI_TmArgs info)))) name"
+      by (simp add: module_body_env_for_def fmlookup_of_list param_ghost_flags_def)
+    have clB: "TE_ConstLocals ?B
+                 = fset_of_list (map fst (filter (\<lambda>(_, vor, _). vor = Var)
+                                                 (zip names (map snd (FI_TmArgs info)))))"
+      by (simp add: module_body_env_for_def)
+    have clE: "TE_ConstLocals ?BE
+                 = fset_of_list
+                     (map fst (filter (\<lambda>(_, vor, _). vor = Var)
+                        (zip (drop_ghost (map (\<lambda>(_, _, gh). gh) (FI_TmArgs info)) names)
+                             (map snd (filter (\<lambda>(_, _, gh). gh = NotGhost)
+                                              (FI_TmArgs info))))))"
+      by (simp add: module_body_env_for_def param_ghost_flags_def)
+    have mem: "(name |\<in>| fset_of_list (map fst xs)) = (name \<in> fst ` set xs)"
+      for xs :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
+      by (simp only: fset_of_list_elem set_map)
+    have notg: "name \<notin> fst ` set (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                          (zip names (map snd (FI_TmArgs info))))"
+    proof
+      assume a: "name \<in> fst ` set (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                           (zip names (map snd (FI_TmArgs info))))"
+      hence "name \<in> set names" by (auto dest: set_zip_leftD)
+      hence "\<exists>y. map_of (zip names (map fst (FI_TmArgs info))) name = Some y"
+        using len map_of_zip_is_Some[of names "map fst (FI_TmArgs info)" name] by simp
+      hence bound: "fmlookup (TE_LocalVars ?B) name \<noteq> None"
+        unfolding lvB by simp
+      have "name |\<in>| TE_GhostLocals ?B"
+        unfolding glB mem by (rule a)
+      with bound nv show False unfolding tyenv_var_ghost_def by simp
+    qed
+    show ?thesis
+      unfolding lvB lvE clB clE mem
+      using body_env_locals_erased[OF len notg] body_env_consts_erased[OF len notg]
+      by blast
+  qed
   show ?thesis
-    unfolding tyenv_erased_def using decls ret fg fi gl lv cl by simp
+    unfolding tyenv_erased_def using decls ret fg fi gl locals by blast
 qed
 
 
@@ -667,10 +846,11 @@ proof -
   proof (intro allI impI)
     fix name f
     assume lkE: "fmlookup (CM_Functions (erase_ghost_module m)) name = Some f"
-    then obtain f0 where
+    let ?F = "TE_Functions ?env"
+    from lkE obtain f0 where
         lk0: "fmlookup (CM_Functions m) name = Some f0" and
         ngf: "tyenv_nonghost_fun ?env name" and
-        f: "f = erase_ghost_function f0"
+        f: "f = erase_ghost_function ?F name f0"
       unfolding erase_ghost_module_fun_lookup by blast
     from funs lk0 obtain info where
         fi: "fmlookup (TE_Functions ?env) name = Some info" and
@@ -685,14 +865,19 @@ proof -
       unfolding module_functions_well_typed_def by blast
     have ng: "FI_Ghost info = NotGhost"
       using ngf fi unfolding tyenv_nonghost_fun_def by simp
-    have fiE: "fmlookup (TE_Functions ?E) name = Some info"
-      unfolding erase_ghost_tyenv_fun_lookup using fi ng by simp
+    \<comment> \<open>The erased signature and the erased parameter names.\<close>
+    let ?infoE = "erase_ghost_funinfo info"
+    let ?namesE = "drop_ghost (param_ghost_flags info) (CF_Args f0)"
+    have fiE: "fmlookup (TE_Functions ?E) name = Some ?infoE"
+      by (rule tyenv_erased_fun_lookup[OF rel fi ng])
+    have argsE: "CF_Args f = ?namesE"
+      unfolding f by (simp add: erase_ghost_args_def fi)
     have bodyE: "case CF_Body f0 of
                    None \<Rightarrow> True
                  | Some body \<Rightarrow>
                      core_statement_list_type
-                       (module_body_env_for ?E (CF_Args f0) info) NotGhost
-                       (erase_ghost_statement_list body)
+                       (module_body_env_for ?E ?namesE ?infoE) NotGhost
+                       (erase_ghost_statement_list ?F body)
                      \<noteq> None"
     proof (cases "CF_Body f0")
       case None
@@ -706,12 +891,14 @@ proof -
       have wfB: "tyenv_well_formed (module_body_env_for ?env (CF_Args f0) info)"
         by (rule module_body_env_for_well_formed[OF wf fi len])
       have relB: "tyenv_erased (module_body_env_for ?env (CF_Args f0) info)
-                               (module_body_env_for ?E (CF_Args f0) info)"
-        by (rule tyenv_erased_module_body_env[OF ng])
-      from erase_ghost_statement_list_typed[OF t wfB relB] obtain envBE where
+                               (module_body_env_for ?E ?namesE ?infoE)"
+        by (rule tyenv_erased_module_body_env[OF ng len])
+      have fnB: "TE_Functions (module_body_env_for ?env (CF_Args f0) info) = ?F"
+        by (simp add: module_body_env_for_def)
+      from erase_ghost_statement_list_typed[OF t wfB relB, unfolded fnB] obtain envBE where
           "core_statement_list_type
-             (module_body_env_for ?E (CF_Args f0) info) NotGhost
-             (erase_ghost_statement_list body0) = Some envBE"
+             (module_body_env_for ?E ?namesE ?infoE) NotGhost
+             (erase_ghost_statement_list ?F body0) = Some envBE"
         by blast
       thus ?thesis using Some by simp
     qed
@@ -719,11 +906,15 @@ proof -
                     None \<Rightarrow> True
                   | Some body \<Rightarrow>
                       core_statement_list_type
-                        (module_body_env_for ?E (CF_Args f) info) (FI_Ghost info) body
+                        (module_body_env_for ?E (CF_Args f) ?infoE) (FI_Ghost ?infoE) body
                       \<noteq> None"
-      using bodyE ng unfolding f by (cases "CF_Body f0") simp_all
-    have lenE: "length (CF_Args f) = length (FI_TmArgs info)" using len f by simp
-    have distE: "distinct (CF_Args f)" using dist f by simp
+      unfolding argsE using bodyE ng unfolding f by (cases "CF_Body f0") simp_all
+    have lenE: "length (CF_Args f) = length (FI_TmArgs ?infoE)"
+      unfolding argsE param_ghost_flags_def
+      using length_drop_ghost_params[OF len] by simp
+    have distE: "distinct (CF_Args f)"
+      unfolding argsE by (rule distinct_drop_ghost[OF dist])
+    have externE: "CF_Body f = None \<longrightarrow> no_ghost_params ?infoE" by simp
     show "\<exists>info. fmlookup (TE_Functions ?E) name = Some info
                  \<and> length (CF_Args f) = length (FI_TmArgs info)
                  \<and> distinct (CF_Args f)
@@ -732,8 +923,9 @@ proof -
                     | Some body \<Rightarrow>
                         core_statement_list_type
                           (module_body_env_for ?E (CF_Args f) info) (FI_Ghost info) body
-                        \<noteq> None)"
-      using fiE lenE distE bodyE' by blast
+                        \<noteq> None)
+                 \<and> (CF_Body f = None \<longrightarrow> no_ghost_params info)"
+      by (intro exI[of _ ?infoE] conjI) (rule fiE lenE distE bodyE' externE)+
   qed
 
   have nwtE: "normalized_module_well_typed (erase_ghost_module m)"

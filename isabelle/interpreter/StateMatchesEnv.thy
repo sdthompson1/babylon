@@ -17,7 +17,7 @@ begin
    - TE_LocalVars: replaced with the function's formal args (names from `names`,
      types from FI_TmArgs).
    - TE_GhostLocals: for a Ghost function, all function parameters; for a NotGhost
-     function, empty.
+     function, the ghost parameters.
    - TE_ConstLocals: Var args are const initially; Ref args are not.
    - TE_TypeVars: replaced with the function's type variables.
    - TE_RuntimeTypeVars: for a NotGhost function, equal to TE_TypeVars; for a Ghost
@@ -33,7 +33,11 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> Fu
   "body_env_for env names funInfo =
     env \<lparr>
       TE_LocalVars := fmap_of_list (zip names (map fst (FI_TmArgs funInfo))),
-      TE_GhostLocals := (if FI_Ghost funInfo = Ghost then fset_of_list names else {||}),
+      TE_GhostLocals := (if FI_Ghost funInfo = Ghost then fset_of_list names
+                         else fset_of_list
+                                (map fst
+                                     (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                             (zip names (map snd (FI_TmArgs funInfo)))))),
       TE_ConstLocals := fset_of_list
         (map fst
              (filter (\<lambda>(_, vor, _). vor = Var) (zip names (map snd (FI_TmArgs funInfo))))),
@@ -160,7 +164,12 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
            (body_env_for env (map fst (IF_Args interpFun)) funInfo)
            (FI_Ghost funInfo) bodyStmts \<noteq> None
      | Inr externFun \<Rightarrow>
-         extern_fun_contract env funInfo externFun))"
+         extern_fun_contract env funInfo externFun) \<and>
+    \<comment> \<open>An external function has no ghost parameter. (It is given the whole
+        argument list, so ghost erasure could not drop a ghost argument.)\<close>
+    (case IF_Body interpFun of
+       Inl _ \<Rightarrow> True
+     | Inr _ \<Rightarrow> no_ghost_params funInfo))"
 
 (* Lemma: extern_fun_contract does not depend on TE_ProofGoal. *)
 lemma extern_fun_contract_TE_ProofGoal_irrelevant [simp]:
@@ -477,7 +486,8 @@ proof -
   qed
 
   \<comment> \<open>(2) tyenv_vars_runtime ?be. Locals: the parameters of a ghost function are all
-        ghost locals; those of a function that is not ghost have runtime types by
+        ghost locals; of a function that is not ghost, a parameter that is not a
+        ghost local is a non-ghost parameter, and has a runtime type by
         tyenv_fun_ghost_constraint. Globals are inherited. \<close>
   have c2: "tyenv_vars_runtime ?be"
     unfolding tyenv_vars_runtime_def
@@ -500,12 +510,32 @@ proof -
       with ng show ?thesis by simp
     next
       case NotGhost
+      \<comment> \<open>The parameter's ghost flag is NotGhost: otherwise its name would be
+          a ghost local. \<close>
+      from in_zip obtain i where i_lt: "i < length names"
+          and i_fi: "i < length (FI_TmArgs funInfo)"
+          and name_i: "names ! i = name" and ty_i: "ty = fst (FI_TmArgs funInfo ! i)"
+        by (auto simp: in_set_zip)
+      obtain vor gh where fi_i: "FI_TmArgs funInfo ! i = (ty, vor, gh)"
+        using ty_i by (cases "FI_TmArgs funInfo ! i") auto
+      have "gh = NotGhost"
+      proof (rule ccontr)
+        assume "gh \<noteq> NotGhost"
+        hence g: "gh = Ghost" by (cases gh) auto
+        have "(name, vor, gh) \<in> set (zip names (map snd (FI_TmArgs funInfo)))"
+          unfolding in_set_zip by (intro exI[of _ i]) (simp add: fi_i name_i i_lt i_fi)
+        hence "name |\<in>| TE_GhostLocals ?be"
+          using g NotGhost by (force simp: body_env_for_def fset_of_list_elem image_iff)
+        thus False using ng by simp
+      qed
+      hence in_ng_args: "(ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo)"
+        using fi_i i_fi by (metis nth_mem)
       from fun_ghost fn_lookup NotGhost have
-        "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+        "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
             is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                     TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
         unfolding tyenv_fun_ghost_constraint_def Let_def by (auto simp: abs_collapse)
-      with in_args have rt_inner:
+      with in_ng_args have rt_inner:
         "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
                                 TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
         by blast
@@ -534,8 +564,26 @@ proof -
   have dom_be: "fmdom (TE_LocalVars ?be) = fset_of_list names"
     using len_names by (simp add: body_env_for_def)
   have c3: "tyenv_ghost_vars_subset ?be"
-    unfolding tyenv_ghost_vars_subset_def dom_be
-    by (simp add: body_env_for_def)
+  proof -
+    have sub: "fset_of_list (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                             (zip names (map snd (FI_TmArgs funInfo)))))
+                 |\<subseteq>| fset_of_list names"
+    proof (rule fsubsetI)
+      fix x
+      assume "x |\<in>| fset_of_list (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                             (zip names (map snd (FI_TmArgs funInfo)))))"
+      then have "x \<in> set (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
+                                          (zip names (map snd (FI_TmArgs funInfo)))))"
+        by (simp only: fset_of_list_elem)
+      then have "x \<in> set names"
+        by (auto dest: set_zip_leftD)
+      then show "x |\<in>| fset_of_list names"
+        by (simp only: fset_of_list_elem)
+    qed
+    thus ?thesis
+      unfolding tyenv_ghost_vars_subset_def dom_be
+      by (simp add: body_env_for_def)
+  qed
 
   \<comment> \<open>(4) tyenv_return_type_well_kinded ?be: TE_ReturnType ?be = FI_ReturnType. \<close>
   have c4: "tyenv_return_type_well_kinded ?be"
@@ -643,14 +691,14 @@ proof -
     from info_lk_be have info_lk: "fmlookup (TE_Functions env) funName = Some info"
       by (simp add: body_env_for_def)
     from fun_ghost info_lk ng_info have
-      "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+      "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
             is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                     TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
        is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
                                TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
       unfolding tyenv_fun_ghost_constraint_def Let_def by (auto simp: abs_collapse)
-    thus "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    thus "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
               is_runtime_type (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list (FI_TyArgs info),
                   TE_RuntimeTypeVars := (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
                                          |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>

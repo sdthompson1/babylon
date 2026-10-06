@@ -942,14 +942,21 @@ definition parse_const_decl :: "BabDeclaration Parser" where
                                   DC_Ghost = ghost \<rparr>)
   })"
 
-definition parse_fun_arg :: "(string \<times> VarOrRef \<times> BabType) Parser" where
+(* A function parameter. 'ref' and 'ghost' are allowed either before the name
+   or after the colon, in any order, but only once each. *)
+definition parse_fun_arg :: "(string \<times> VarOrRef \<times> BabType \<times> GhostOrNot) Parser" where
   "parse_fun_arg = do {
+    ghost0 \<leftarrow> optional (expect (KEYWORD KW_GHOST));
     ref0 \<leftarrow> optional (expect (KEYWORD KW_REF));
+    ghost1 \<leftarrow> (if ghost0 = None then optional (expect (KEYWORD KW_GHOST)) else return ghost0);
     name \<leftarrow> parse_name;
     expect COLON;
+    ghost2 \<leftarrow> (if ghost1 = None then optional (expect (KEYWORD KW_GHOST)) else return ghost1);
     ref \<leftarrow> (if ref0 = None then optional (expect (KEYWORD KW_REF)) else return ref0);
+    ghost \<leftarrow> (if ghost2 = None then optional (expect (KEYWORD KW_GHOST)) else return ghost2);
     type \<leftarrow> parse_type;
-    return (name, if ref = None then Var else Ref, type)
+    return (name, if ref = None then Var else Ref, type,
+            if ghost = None then NotGhost else Ghost)
   }"
 
 definition parse_function_decl :: "BabDeclaration Parser" where
@@ -1457,7 +1464,7 @@ fun post_parse_declaration :: "BabDeclaration \<Rightarrow> (Location \<times> P
     case_option [] (post_parse_type False) (DC_Type cst)
     @ case_option [] (post_parse_term False) (DC_Value cst)"
 | "post_parse_declaration (BabDecl_Function fun) =
-    concat (map (\<lambda>(_,_,ty). post_parse_type False ty) (DF_TmArgs fun))
+    concat (map (\<lambda>(_,_,ty,_). post_parse_type False ty) (DF_TmArgs fun))
     @ case_option [] (post_parse_type False) (DF_ReturnType fun)
     @ case_option [] (concat \<circ> map post_parse_statement) (DF_Body fun)
     @ concat (map post_parse_attribute (DF_Attributes fun))"

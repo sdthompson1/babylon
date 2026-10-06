@@ -462,7 +462,7 @@ proof -
     then have lk: "fmlookup (TE_Functions env) funName = Some info"
           and ng: "FI_Ghost info = NotGhost"
       by simp_all
-    have base: "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    have base: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                               |\<union>| fset_of_list (FI_TyArgs info),
@@ -490,7 +490,7 @@ proof -
                                                       |\<inter>| TE_RuntimeTypeVars ?env')
                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
       by (erule is_runtime_type_mono_rtv) auto
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
              is_runtime_type
                (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env'
                           |\<union>| fset_of_list (FI_TyArgs info),
@@ -632,7 +632,8 @@ proof -
                     None \<Rightarrow> True
                   | Some body \<Rightarrow>
                       core_statement_list_type (module_body_env_for env (CF_Args f) info)
-                        (FI_Ghost info) body \<noteq> None"
+                        (FI_Ghost info) body \<noteq> None" and
+        extern_ok: "CF_Body f = None \<longrightarrow> no_ghost_params info"
       using fwt unfolding module_functions_well_typed_def by blast
     have decl': "fmlookup (TE_Functions ?env') name = Some info" using decl by simp
     have body_ok': "case CF_Body f of
@@ -674,8 +675,9 @@ proof -
                None \<Rightarrow> True
              | Some body \<Rightarrow>
                  core_statement_list_type (module_body_env_for ?env' (CF_Args f) info)
-                   (FI_Ghost info) body \<noteq> None)"
-      using decl' len dist body_ok' by blast
+                   (FI_Ghost info) body \<noteq> None) \<and>
+            (CF_Body f = None \<longrightarrow> no_ghost_params info)"
+      using decl' len dist body_ok' extern_ok by simp
   qed
 qed
 
@@ -1378,7 +1380,8 @@ proof (intro allI impI)
     body: "case CF_Body f of
              None \<Rightarrow> True
            | Some body \<Rightarrow> core_statement_list_type
-               (module_body_env_for env (CF_Args f) info) (FI_Ghost info) body \<noteq> None"
+               (module_body_env_for env (CF_Args f) info) (FI_Ghost info) body \<noteq> None" and
+    extern_ok: "CF_Body f = None \<longrightarrow> no_ghost_params info"
     unfolding module_functions_well_typed_def by blast
   have info': "fmlookup (TE_Functions env') name = Some info"
     using ext info unfolding tyenv_extends_def by blast
@@ -1413,8 +1416,9 @@ proof (intro allI impI)
                (case CF_Body f of
                   None \<Rightarrow> True
                 | Some body \<Rightarrow> core_statement_list_type
-                    (module_body_env_for env' (CF_Args f) info) (FI_Ghost info) body \<noteq> None)"
-    using info' len dst body' by blast
+                    (module_body_env_for env' (CF_Args f) info) (FI_Ghost info) body \<noteq> None) \<and>
+               (CF_Body f = None \<longrightarrow> no_ghost_params info)"
+    using info' len dst body' extern_ok by simp
 qed
 
 (* tyenv_add_global commutes with module_context_env, provided the new type
@@ -2067,7 +2071,7 @@ lemma tyenv_well_formed_add_function:
                                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                      (FI_ReturnType info)"
       and rt_p: "FI_Ghost info = NotGhost \<Longrightarrow>
-                   (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                   (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                       is_runtime_type
                         (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                  |\<union>| fset_of_list (FI_TyArgs info),
@@ -2241,7 +2245,7 @@ proof -
     then have ng: "FI_Ghost inf = NotGhost" by blast
     from h have "inf = info \<or> fmlookup (TE_Functions env) funName = Some inf"
       using entry_cases by blast
-    then show "(\<forall>ty \<in> fst ` set (FI_TmArgs inf).
+    then show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs inf) \<longrightarrow>
                   is_runtime_type
                     (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env'
                                |\<union>| fset_of_list (FI_TyArgs inf),
@@ -2260,10 +2264,11 @@ proof -
       have ng': "FI_Ghost info = NotGhost"
         using ng unfolding inf_eq .
       show ?thesis
-        using rt_p[OF ng'] unfolding inf_eq by (simp add: proj rt_cong)
+        using conjunct1[OF rt_p[OF ng']] conjunct2[OF rt_p[OF ng']]
+        unfolding inf_eq by (simp add: proj rt_cong)
     next
       assume "fmlookup (TE_Functions env) funName = Some inf"
-      then have "(\<forall>ty \<in> fst ` set (FI_TmArgs inf).
+      then have "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs inf) \<longrightarrow>
                     is_runtime_type
                       (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                |\<union>| fset_of_list (FI_TyArgs inf),
@@ -2406,11 +2411,32 @@ qed
 (* Correctness of signature elaboration                                       *)
 (* -------------------------------------------------------------------------- *)
 
+(* elab_param_types elaborates each type in its own mode. *)
+lemma elab_param_types_Inr:
+  assumes "elab_param_types env elabEnv ps = Inr tys"
+  shows "list_all2 (\<lambda>p ty'. elab_type env elabEnv (fst p) (snd p) = Inr ty') ps tys"
+  using assms
+proof (induction ps arbitrary: tys)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons p ps)
+  obtain mode ty where p: "p = (mode, ty)" by (cases p)
+  from Cons.prems obtain ty' tys' where
+    hd: "elab_type env elabEnv mode ty = Inr ty'" and
+    tl: "elab_param_types env elabEnv ps = Inr tys'" and
+    tys: "tys = ty' # tys'"
+    unfolding p by (auto split: sum.splits)
+  show ?case using hd Cons.IH[OF tl] by (simp add: p tys)
+qed
+
 (* A successfully elaborated signature has the declaration's type parameters
    and flags, one argument entry per declared parameter, and argument/return
-   types well-kinded (runtime, for a non-ghost function) over the env
-   extended with the type parameters. A void declaration's return type is
-   unit. *)
+   types well-kinded over the env extended with the type parameters. For a
+   non-ghost function, the return type and the types of the parameters that
+   are not ghost are runtime types. A void declaration's return type is unit.
+   If the declaration marks no parameter as ghost, the signature has no ghost
+   parameter. *)
 lemma elab_fun_signature_correct:
   assumes wf: "tyenv_well_formed env"
       and td: "typedefs_well_formed env (EE_Typedefs elabEnv)"
@@ -2426,7 +2452,7 @@ lemma elab_fun_signature_correct:
                                  |\<union>| fset_of_list (DF_TyArgs df) \<rparr>)
            (FI_ReturnType info)"
     and "DF_Ghost df = NotGhost \<Longrightarrow>
-           (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+           (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
               is_runtime_type
                 (env \<lparr> TE_TypeVars := TE_TypeVars env
                          |\<union>| fset_of_list (DF_TyArgs df),
@@ -2440,6 +2466,7 @@ lemma elab_fun_signature_correct:
                (FI_ReturnType info)"
     and "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType info = CoreTy_Record []"
     and "DF_Ghost df = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+    and "list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df) \<Longrightarrow> no_ghost_params info"
 proof -
   let ?tyvars = "DF_TyArgs df"
   let ?ghost = "DF_Ghost df"
@@ -2450,21 +2477,21 @@ proof -
   let ?sigEE = "elabEnv \<lparr> EE_Typedefs :=
                    tyvar_typedef_entries ?tyvars (EE_Typedefs elabEnv) \<rparr>"
   let ?wkEnv = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list ?tyvars \<rparr>"
+  \<comment> \<open>The parameter types with their modes, and the parameter flags.\<close>
+  let ?modes = "map (\<lambda>(_, _, ty, gh). (param_mode ?ghost gh, ty)) (DF_TmArgs df)"
+  let ?flags = "map (\<lambda>(_, vor, _, gh). (vor, gh)) (DF_TmArgs df)"
   \<comment> \<open>Peel the two scrutinees one at a time.\<close>
   from sig obtain argTys where
-    args: "elab_type_list ?sigEnv ?sigEE ?ghost
-             (map (\<lambda>(_, _, ty). ty) (DF_TmArgs df)) = Inr argTys"
+    args: "elab_param_types ?sigEnv ?sigEE ?modes = Inr argTys"
     unfolding elab_fun_signature_def Let_def
-    by (cases "elab_type_list ?sigEnv ?sigEE ?ghost
-                 (map (\<lambda>(_, _, ty). ty) (DF_TmArgs df))") auto
+    by (cases "elab_param_types ?sigEnv ?sigEE ?modes") auto
   from sig args obtain retTy where
     ret: "(case DF_ReturnType df of
              None \<Rightarrow> Inr (CoreTy_Record [])
            | Some rty \<Rightarrow> elab_type ?sigEnv ?sigEE ?ghost rty) = Inr retTy" and
     ret_cp: "?ghost = NotGhost \<longrightarrow> is_complete_type retTy" and
     info_eq: "info = \<lparr> FI_TyArgs = ?tyvars,
-                       FI_TmArgs = zip argTys
-                                     (map (\<lambda>(_, vor, _). (vor, NotGhost)) (DF_TmArgs df)),
+                       FI_TmArgs = zip argTys ?flags,
                        FI_ReturnType = retTy,
                        FI_Ghost = ?ghost,
                        FI_Impure = DF_Impure df \<rparr>"
@@ -2473,20 +2500,24 @@ proof -
                  None \<Rightarrow> Inr (CoreTy_Record [])
                | Some rty \<Rightarrow> elab_type ?sigEnv ?sigEE ?ghost rty")
        (auto split: if_splits)
+  \<comment> \<open>Each parameter type was elaborated in the mode of its parameter.\<close>
+  note la = elab_param_types_Inr[OF args]
   \<comment> \<open>Structural conclusions.\<close>
   show tyargs: "FI_TyArgs info = DF_TyArgs df" by (simp add: info_eq)
   show "FI_Ghost info = DF_Ghost df" by (simp add: info_eq)
   show "FI_Impure info = DF_Impure df" by (simp add: info_eq)
   have len_args: "length argTys = length (DF_TmArgs df)"
-    using elab_type_list_length[OF args] by simp
+    using list_all2_lengthD[OF la] by simp
   show "length (FI_TmArgs info) = length (DF_TmArgs df)"
     using len_args by (simp add: info_eq)
+  have tm_args: "FI_TmArgs info = zip argTys ?flags" by (simp add: info_eq)
   have fst_tm: "fst ` set (FI_TmArgs info) = set argTys"
   proof -
-    have "map fst (zip argTys (map (\<lambda>(_, vor, _). vor) (DF_TmArgs df))) = argTys"
+    have "map fst (zip argTys ?flags) = argTys"
       by (rule map_fst_zip) (simp add: len_args)
-    then show ?thesis
-      unfolding info_eq by (simp add: image_set len_args)
+    then have "set (map fst (FI_TmArgs info)) = set argTys"
+      unfolding tm_args by (rule arg_cong)
+    then show ?thesis by simp
   qed
   \<comment> \<open>Entry conditions for the type elaborator at the signature env.\<close>
   have rt_sub: "(if ?ghost = NotGhost then fset_of_list ?tyvars else {||})
@@ -2503,7 +2534,14 @@ proof -
   have wk_drop: "\<And>ty. is_well_kinded ?sigEnv ty = is_well_kinded ?wkEnv ty"
     by (rule is_well_kinded_cong_env) simp_all
   have args_wk: "list_all (is_well_kinded ?sigEnv) argTys"
-    using elab_type_is_well_kinded(2)[OF td_sig wf_sig args] .
+    unfolding list_all_length
+  proof (intro allI impI)
+    fix i assume i: "i < length argTys"
+    from list_all2_nthD2[OF la i]
+    have "elab_type ?sigEnv ?sigEE (fst (?modes ! i)) (snd (?modes ! i)) = Inr (argTys ! i)" .
+    then show "is_well_kinded ?sigEnv (argTys ! i)"
+      by (rule elab_type_is_well_kinded(1)[OF td_sig wf_sig])
+  qed
   show "\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wkEnv ty"
     using args_wk unfolding fst_tm list_all_iff wk_drop by blast
   have ret_wk: "is_well_kinded ?sigEnv retTy"
@@ -2520,7 +2558,7 @@ proof -
     using ret_wk unfolding wk_drop by (simp add: info_eq)
   \<comment> \<open>Runtime types, in the non-ghost case (where the signature env's
       runtime-tyvar conditional resolves).\<close>
-  show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+  show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
            is_runtime_type
              (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list ?tyvars,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env
@@ -2537,23 +2575,44 @@ proof -
                                    TE_RuntimeTypeVars := TE_RuntimeTypeVars env
                                      |\<union>| fset_of_list ?tyvars \<rparr>"
       by (simp add: ng)
-    have args_rt: "list_all (is_runtime_type ?sigEnv) argTys"
-      using elab_type_notghost_is_runtime(2)[OF td_sig wf_sig] args ng by simp
-    have ret_rt: "is_runtime_type ?sigEnv retTy"
+    \<comment> \<open>A parameter that is not ghost had its type elaborated in the mode of
+        the function, which is NotGhost.\<close>
+    have args_rt: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                     is_runtime_type ?sigEnv ty"
+    proof (intro allI impI)
+      fix ty vor
+      assume mem: "(ty, vor, NotGhost) \<in> set (FI_TmArgs info)"
+      from mem obtain i where i: "i < length argTys"
+        and ti: "argTys ! i = ty"
+        and fi: "?flags ! i = (vor, NotGhost)"
+        unfolding tm_args by (auto simp: in_set_zip)
+      from i len_args have i2: "i < length (DF_TmArgs df)" by simp
+      obtain name vr bty gh where p_eq: "DF_TmArgs df ! i = (name, vr, bty, gh)"
+        by (cases "DF_TmArgs df ! i")
+      from fi i2 p_eq have gh_eq: "gh = NotGhost" by simp
+      have mode_i: "?modes ! i = (NotGhost, bty)"
+        using i2 p_eq gh_eq ng by simp
+      from list_all2_nthD2[OF la i]
+      have "elab_type ?sigEnv ?sigEE (fst (?modes ! i)) (snd (?modes ! i)) = Inr (argTys ! i)" .
+      then have "elab_type ?sigEnv ?sigEE NotGhost bty = Inr ty"
+        unfolding mode_i ti by simp
+      then show "is_runtime_type ?sigEnv ty"
+        by (rule elab_type_notghost_is_runtime(1)[OF td_sig wf_sig])
+    qed
+    have ret_rt: "is_runtime_type ?sigEnv (FI_ReturnType info)"
     proof (cases "DF_ReturnType df")
       case None
       then have "retTy = CoreTy_Record []" using ret by simp
-      then show ?thesis by simp
+      then show ?thesis by (simp add: info_eq)
     next
       case (Some rty)
       then have "elab_type ?sigEnv ?sigEE ?ghost rty = Inr retTy" using ret by simp
-      then show ?thesis
+      then have "is_runtime_type ?sigEnv retTy"
         using elab_type_notghost_is_runtime(1)[OF td_sig wf_sig] ng by simp
+      then show ?thesis by (simp add: info_eq)
     qed
     show ?thesis
-      using args_rt ret_rt
-      unfolding env_res [symmetric] fst_tm list_all_iff
-      by (simp add: info_eq)
+      unfolding env_res[symmetric] by (rule conjI[OF args_rt ret_rt])
   qed
   \<comment> \<open>Void return.\<close>
   show "FI_ReturnType info = CoreTy_Record []" if "DF_ReturnType df = None"
@@ -2564,6 +2623,21 @@ proof -
   \<comment> \<open>Complete return type (checked by the elaborator for non-ghost functions).\<close>
   show "is_complete_type (FI_ReturnType info)" if "DF_Ghost df = NotGhost"
     using ret_cp that by (simp add: info_eq)
+  \<comment> \<open>The parameter flags are those of the declaration.\<close>
+  show "no_ghost_params info"
+    if all: "list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)"
+  proof -
+    have "snd (snd x) = NotGhost" if x_in: "x \<in> set (FI_TmArgs info)" for x
+    proof -
+      from x_in have "(fst x, snd x) \<in> set (zip argTys ?flags)"
+        unfolding tm_args by simp
+      then have "snd x \<in> set ?flags"
+        by (rule set_zip_rightD)
+      then show ?thesis using all by (auto simp: list_all_iff)
+    qed
+    then show ?thesis
+      unfolding no_ghost_params_def list_all_iff by (auto simp: case_prod_unfold)
+  qed
 qed
 
 
@@ -2591,7 +2665,7 @@ lemma elab_decls_invariant_add_function:
                                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                      (FI_ReturnType info)"
       and rt_p: "FI_Ghost info = NotGhost \<Longrightarrow>
-                   (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                   (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                       is_runtime_type
                         (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                  |\<union>| fset_of_list (FI_TyArgs info),
@@ -3133,6 +3207,7 @@ lemma elab_decls_invariant_define_function:
                         core_statement_list_type
                           (module_body_env_for env paramNames funInfo)
                           (FI_Ghost funInfo) coreBody \<noteq> None"
+      and extern_ok: "bodyOpt = None \<longrightarrow> no_ghost_params funInfo"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
            (m \<lparr> CM_Functions := fmupd name \<lparr> CF_Args = paramNames,
                                              CF_Body = bodyOpt \<rparr>
@@ -3220,7 +3295,8 @@ proof -
                   | Some body \<Rightarrow>
                       core_statement_list_type
                         (module_body_env_for env (CF_Args f) info)
-                        (FI_Ghost info) body \<noteq> None)"
+                        (FI_Ghost info) body \<noteq> None) \<and>
+                 (CF_Body f = None \<longrightarrow> no_ghost_params info)"
     proof (cases "n = name")
       case True
       then have f_eq: "f = \<lparr> CF_Args = paramNames,
@@ -3243,6 +3319,8 @@ proof -
                     (module_body_env_for env (CF_Args f) funInfo)
                     (FI_Ghost funInfo) body \<noteq> None"
           using body' by (simp add: f_eq option.case_eq_if)
+        show "CF_Body f = None \<longrightarrow> no_ghost_params funInfo"
+          using extern_ok by (simp add: f_eq)
       qed
     next
       case False
@@ -3311,6 +3389,7 @@ lemma elab_function_decl_Inr_elim:
                       \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
                         CF_Body = bodyOpt \<rparr>
                       (CM_Functions m) \<rparr>"
+    "DF_Extern df \<longrightarrow> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)"
   | (Declare) funInfo bodyOpt where
     "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
     "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
@@ -3340,6 +3419,7 @@ lemma elab_function_decl_Inr_elim:
                             (CM_Functions m) \<rparr>
            else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
                                   (CM_TyEnv m) \<rparr>)"
+    "DF_Extern df \<longrightarrow> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)"
 proof -
   \<comment> \<open>Peel the guards and the signature one at a time (auto with the full
       split set loops on this definition).\<close>
@@ -3360,10 +3440,28 @@ proof -
       a rewrite on the normalized elaborator equation).\<close>
   have g4': "\<not> (DF_Extern df \<and> (\<exists>y. DF_Body df = Some y))"
     using g4 by simp
+  \<comment> \<open>An extern function has no ghost parameter.\<close>
+  have g5: "DF_Extern df \<longrightarrow> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)"
+  proof (rule ccontr)
+    assume "\<not> (DF_Extern df
+                \<longrightarrow> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df))"
+    then have ext: "DF_Extern df"
+      and gp: "\<not> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)"
+      by simp_all
+    \<comment> \<open>An extern function has no body, so the test before this one passed.\<close>
+    from g4 ext have nb: "DF_Body df = None" by simp
+    from ok show False
+      unfolding elab_function_decl_def Let_def
+      by (simp add: g1 g2 g3 ext gp nb)
+  qed
+  \<comment> \<open>The same guard as a rewrite rule for the whole test.\<close>
+  have g5': "\<not> (DF_Extern df
+                \<and> \<not> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df))"
+    using g5 by blast
   from ok obtain funInfo where
     sig: "elab_fun_signature env elabEnv df = Inr funInfo"
     unfolding elab_function_decl_def Let_def
-    by (cases "elab_fun_signature env elabEnv df") (auto simp: g1 g2 g3 g4 g4')
+    by (cases "elab_fun_signature env elabEnv df") (auto simp: g1 g2 g3 g4 g4' g5')
   show thesis
   proof (cases "fmlookup (TE_Functions env) (DF_Name df)")
     case (Some declInfo)
@@ -3372,23 +3470,23 @@ proof -
     have isdef: "DF_Extern df \<or> DF_Body df \<noteq> None"
       using ok unfolding elab_function_decl_def Let_def
       by (cases "DF_Extern df \<or> DF_Body df \<noteq> None")
-         (auto simp: g1 g2 g3 g4 g4' sig Some)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig Some)
     have nd: "DF_Name df |\<notin>| fmdom (CM_Functions m)"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "DF_Name df |\<in>| fmdom (CM_Functions m)")
-         (auto simp: g1 g2 g3 g4 g4' sig Some)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig Some)
     have ngc: "DF_Name df |\<notin>| EE_GhostConstants elabEnv"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "DF_Name df |\<in>| EE_GhostConstants elabEnv")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd)
     have fi_eq: "funInfo = declInfo"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "funInfo = declInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd ngc)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd ngc)
     have vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd ngc fi_eq)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd ngc fi_eq)
     from ok isdef obtain bodyOpt where
       elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
       eq1: "env' = env" and
@@ -3400,17 +3498,17 @@ proof -
                              (CM_Functions m) \<rparr>"
       unfolding elab_function_decl_def Let_def
       by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig Some nd ngc fi_eq vd)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd ngc fi_eq vd)
     have lk: "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
       using Some fi_eq by simp
     show thesis
-      by (rule Define[OF g1 g2 g3 g4 sig lk isdef nd vd elabB eq1 eq2 eq3])
+      by (rule Define[OF g1 g2 g3 g4 sig lk isdef nd vd elabB eq1 eq2 eq3 g5])
   next
     case None
     have notin: "\<not> term_name_in_scope env (DF_Name df)"
       using ok unfolding elab_function_decl_def Let_def
       by (cases "term_name_in_scope env (DF_Name df)")
-         (auto simp: g1 g2 g3 g4 g4' sig None)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig None)
     let ?env1 = "tyenv_add_function (DF_Name df) funInfo env"
     let ?ee1 = "(if DF_ReturnType df = None
                  then elabEnv \<lparr> EE_VoidFunctions :=
@@ -3432,10 +3530,24 @@ proof -
                                          (CM_TyEnv m) \<rparr>)"
       unfolding elab_function_decl_def Let_def
       by (cases "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' sig None notin)
+         (auto simp: g1 g2 g3 g4 g4' g5' sig None notin)
     show thesis
-      by (rule Declare[OF g1 g2 g3 g4 sig None notin elabB eq1 eq2 eq3])
+      by (rule Declare[OF g1 g2 g3 g4 sig None notin elabB eq1 eq2 eq3 g5])
   qed
+qed
+
+(* A function whose elaborated body is absent was declared without a body. *)
+lemma elab_fun_body_and_contracts_None:
+  assumes "elab_fun_body_and_contracts env elabEnv df funInfo = Inr None"
+  shows "DF_Body df = None"
+proof (cases "DF_Body df")
+  case None
+  then show ?thesis .
+next
+  case (Some body)
+  with assms show ?thesis
+    unfolding elab_fun_body_and_contracts_def Let_def
+    by (auto split: sum.splits prod.splits)
 qed
 
 (* The branches of elab_function_decl, dispatched to the step lemmas:
@@ -3497,7 +3609,7 @@ proof -
                                          |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
                    (FI_ReturnType funInfo)"
     using sigc(6) unfolding abs_tv sigc(1) .
-  have rt_p': "(\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+  have rt_p': "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
                   is_runtime_type
                     (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                              |\<union>| fset_of_list (FI_TyArgs funInfo),
@@ -3515,7 +3627,7 @@ proof -
   proof -
     have ng_df: "DF_Ghost df = NotGhost" using ng sigc(2) by simp
     show ?thesis
-      by (metis abs_rtv abs_tv ng_df sigc(1,7))
+      using sigc(7)[OF ng_df] unfolding abs_tv inf_absorb2[OF rtv_sub] sigc(1) .
   qed
   have ret_cp': "FI_Ghost funInfo = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType funInfo)"
     using sigc(9) sigc(2) by simp
@@ -3539,11 +3651,24 @@ proof -
                          (FI_Ghost funInfo) coreBody \<noteq> None"
       by (rule elab_fun_body_and_contracts_correct
                  [OF inv lk sigc(1) sigc(2) len_pn sigc(8) elabB])
+    \<comment> \<open>A definition with no body is an extern function, which has no ghost
+        parameter.\<close>
+    have extern_ok: "bodyOpt = None \<longrightarrow> no_ghost_params funInfo"
+    proof
+      assume bn: "bodyOpt = None"
+      have nb: "DF_Body df = None"
+        by (rule elab_fun_body_and_contracts_None[OF elabB[unfolded bn]])
+      from Define(7) nb have ext: "DF_Extern df" by simp
+      from Define(14) ext
+      have "list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)" by simp
+      then show "no_ghost_params funInfo" by (rule sigc(10))
+    qed
     have "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
             (m \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
                                                 CF_Body = bodyOpt \<rparr>
                                        (CM_Functions m) \<rparr>)"
-      by (rule elab_decls_invariant_define_function[OF inv lk len_pn dst_pn body_ok])
+      by (rule elab_decls_invariant_define_function
+                 [OF inv lk len_pn dst_pn body_ok extern_ok])
     then show ?thesis using Define(11) Define(12) Define(13) by simp
   next
     case (Declare funInfo2 bodyOpt)
@@ -3585,11 +3710,22 @@ proof -
     show ?thesis
     proof (cases "DF_Extern df \<or> DF_Body df \<noteq> None")
       case True
+      have extern_ok: "bodyOpt = None \<longrightarrow> no_ghost_params funInfo"
+      proof
+        assume bn: "bodyOpt = None"
+        have nb: "DF_Body df = None"
+          by (rule elab_fun_body_and_contracts_None[OF elabB[unfolded bn]])
+        from True nb have ext: "DF_Extern df" by simp
+        from Declare(12) ext
+        have "list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)" by simp
+        then show "no_ghost_params funInfo" by (rule sigc(10))
+      qed
       have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
               (?m1 \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
                                                     CF_Body = bodyOpt \<rparr>
                                            (CM_Functions ?m1) \<rparr>)"
-        by (rule elab_decls_invariant_define_function[OF inv2 lk1 len_pn dst_pn body_ok])
+        by (rule elab_decls_invariant_define_function
+                   [OF inv2 lk1 len_pn dst_pn body_ok extern_ok])
       then show ?thesis using Declare(9) Declare(10) Declare(11) fi True by simp
     next
       case False
@@ -3946,7 +4082,7 @@ proof -
     then show ?thesis using wk by (simp add: ghost_const_fun_info_def)
   qed
   have rt_p: "FI_Ghost ?info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs ?info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs ?info) \<longrightarrow>
                    is_runtime_type
                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                               |\<union>| fset_of_list (FI_TyArgs ?info),
@@ -4005,8 +4141,11 @@ proof -
                        (FI_Ghost (ghost_const_fun_info declTy)) coreBody \<noteq> None"
     using ghost_const_body_typechecks[OF wf scope_env typed]
     by (simp add: ghost_const_fun_info_def)
+  have extern_ok: "Some [CoreStmt_Return finalTm] = None
+                     \<longrightarrow> no_ghost_params (ghost_const_fun_info declTy)"
+    by simp
   show ?thesis
-    using elab_decls_invariant_define_function[OF inv lk len dst body_ok]
+    using elab_decls_invariant_define_function[OF inv lk len dst body_ok extern_ok]
     by (simp add: ghost_const_fun_def)
 qed
 
@@ -5523,6 +5662,7 @@ proof -
                           core_statement_list_type
                             (module_body_env_for env (CF_Args ?f\<sigma>) info)
                             (FI_Ghost info) body \<noteq> None"
+          and extern\<sigma>: "CF_Body ?f\<sigma> = None \<longrightarrow> no_ghost_params info"
         unfolding module_functions_well_typed_def by blast
       have len: "length (CF_Args f0) = length (FI_TmArgs info)" using len\<sigma> by simp
       have dst: "distinct (CF_Args f0)" using dst\<sigma> by simp
@@ -5605,7 +5745,8 @@ proof -
                | Some body \<Rightarrow>
                    core_statement_list_type
                      (module_body_env_for env' (CF_Args f') info')
-                     (FI_Ghost info') body \<noteq> None)"
+                     (FI_Ghost info') body \<noteq> None) \<and>
+              (CF_Body f' = None \<longrightarrow> no_ghost_params info')"
       proof (intro exI[of _ ?info'] conjI)
         show "fmlookup (TE_Functions env') fname = Some ?info'" by (rule ilk')
         show "length (CF_Args f') = length (FI_TmArgs ?info')"
@@ -5618,6 +5759,8 @@ proof -
                     (module_body_env_for env' (CF_Args f') ?info')
                     (FI_Ghost ?info') body \<noteq> None"
           by (rule body')
+        show "CF_Body f' = None \<longrightarrow> no_ghost_params ?info'"
+          using extern\<sigma> f'_eq by simp
       qed
     qed
   qed
@@ -6276,7 +6419,7 @@ proof -
                                          |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                                 (FI_ReturnType info)"
       using fwk lk unfolding tyenv_fun_types_well_kinded_def by blast+
-    have argsrt: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    have argsrt: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                     is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                              |\<union>| fset_of_list (FI_TyArgs info),
                                            TE_RuntimeTypeVars :=
@@ -6289,14 +6432,20 @@ proof -
                                           |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                                  (FI_ReturnType info)"
       using fgc lk ng unfolding tyenv_fun_ghost_constraint_def Let_def by blast+
-    have argsrt': "\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    \<comment> \<open>Well-kindedness of the non-ghost parameter types, in the shape the
+        transfer lemma wants.\<close>
+    have argswk_ng: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                       is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                               |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
+      using ball_fst_imp_nonghost_params[OF argswk] .
+    have argsrt': "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                      is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes env
                                                 |\<union>| fset_of_list (FI_TyArgs info),
                                               TE_RuntimeTypeVars :=
                                                 (TE_AbstractTypes env
                                                    |\<inter>| TE_RuntimeTypeVars env)
                                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
-      using argsrt argswk rt_tr by blast
+      using argsrt argswk_ng rt_tr by blast
     have retrt': "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes env
                                              |\<union>| fset_of_list (FI_TyArgs info),
                                            TE_RuntimeTypeVars :=
@@ -6305,7 +6454,7 @@ proof -
                                              |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                                   (FI_ReturnType info)"
       using retrt retwk rt_tr by blast
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
              is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env'
                                         |\<union>| fset_of_list (FI_TyArgs info),
                                       TE_RuntimeTypeVars :=
@@ -8932,7 +9081,7 @@ proof -
     using wfI unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fgcI: "\<And>funName info. fmlookup (TE_Functions (CM_TyEnv I)) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      ((CM_TyEnv I) \<lparr> TE_TypeVars := TE_AbstractTypes (CM_TyEnv I)
                                              |\<union>| fset_of_list (FI_TyArgs info),
@@ -8999,7 +9148,7 @@ proof -
     using wf_env unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
   have fgcE: "\<And>funName info. fmlookup (TE_Functions env) funName = Some info \<Longrightarrow>
                 FI_Ghost info = NotGhost \<Longrightarrow>
-                (\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                    is_runtime_type
                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                            |\<union>| fset_of_list (FI_TyArgs info),
@@ -9304,7 +9453,7 @@ proof -
             and ng: "FI_Ghost info = NotGhost"
         by simp_all
       from fn_cases[OF lk]
-      show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+      show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
                is_runtime_type
                  (?mid \<lparr> TE_TypeVars := TE_AbstractTypes ?mid
                                         |\<union>| fset_of_list (FI_TyArgs info),
@@ -9376,7 +9525,12 @@ proof -
                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
             by (rule rt_I_to_mid[OF w r]) (auto simp: absI)
         qed
-        show ?thesis using fgcI[OF lkI ng] ftwkI[OF lkI] step by blast
+        have wkI': "\<And>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<Longrightarrow>
+                      is_well_kinded ((CM_TyEnv I) \<lparr> TE_TypeVars :=
+                          TE_AbstractTypes (CM_TyEnv I)
+                          |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
+          using ball_fst_imp_nonghost_params[OF conjunct1[OF ftwkI[OF lkI]]] by blast
+        show ?thesis using fgcI[OF lkI ng] wkI' step ftwkI lkI by blast
       next
         assume lkB: "fmlookup (TE_Functions ?envB) funName = Some info"
         have step: "\<And>ty.
@@ -9993,7 +10147,8 @@ proof -
                  core_statement_list_type
                    (module_body_env_for (CM_TyEnv (normalize_module L))
                                         (CF_Args f') info)
-                   (FI_Ghost info) body \<noteq> None)"
+                   (FI_Ghost info) body \<noteq> None) \<and>
+            (CF_Body f' = None \<longrightarrow> no_ghost_params info)"
     proof (cases "fmlookup (CM_Functions M) name")
       case (Some fM)
       \<comment> \<open>M-side entry: the fold invariant's typechecking clause is already a
@@ -10013,10 +10168,11 @@ proof -
                 | Some body \<Rightarrow>
                     core_statement_list_type
                       (module_body_env_for env (CF_Args f') info)
-                      (FI_Ghost info) body \<noteq> None"
+                      (FI_Ghost info) body \<noteq> None" and
+        externM: "CF_Body f' = None \<longrightarrow> no_ghost_params info"
         using fwtM f'_isM unfolding module_functions_well_typed_def by blast
       show ?thesis
-        unfolding env_eq using declM lenM distM bodyM by blast
+        unfolding env_eq using declM lenM distM bodyM externM by simp
     next
       case None
       \<comment> \<open>I-side entry: transfer I's own body typing across the substitution
@@ -10032,7 +10188,8 @@ proof -
                    | Some body \<Rightarrow>
                        core_statement_list_type
                          (module_body_env_for (CM_TyEnv I) (CF_Args f) info0)
-                         (FI_Ghost info0) body \<noteq> None"
+                         (FI_Ghost info0) body \<noteq> None" and
+        extern0: "CF_Body f = None \<longrightarrow> no_ghost_params info0"
         using fwtI inI unfolding module_functions_well_typed_def by blast
       have m_raw: "fmlookup (TE_Functions (CM_TyEnv L)) name = Some info0"
         using link_modules_decl_submaps(2)[OF linkI link subI a_decl] .
@@ -10138,9 +10295,11 @@ proof -
       qed
       have args_eq: "CF_Args f' = CF_Args f"
         by (simp add: f'_eq)
+      have externM: "CF_Body f' = None \<longrightarrow> no_ghost_params ?infoM"
+        using extern0 by (simp add: f'_eq)
       show ?thesis
         unfolding env_eq args_eq
-        using m_decl lenM dist0 body_case by blast
+        using m_decl lenM dist0 body_case externM by simp
     qed
   qed
 qed

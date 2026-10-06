@@ -948,11 +948,11 @@ next
     all_var: "list_all (\<lambda>(_, vor, _). vor = Var) (FI_TmArgs funInfo)" and
     not_impure: "\<not> FI_Impure funInfo" and
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
-    args_check: "list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type env ghost tm of
-                      None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  tmArgs (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                              (FI_TmArgs funInfo))" and
+    args_check: "list_all2 (\<lambda>tm (expectedTy, mode).
+                     core_term_type env mode tm = Some expectedTy) tmArgs
+                   (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                             (FI_TmArgs funInfo))
+                        (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     by (auto simp: Let_def split: option.splits if_splits)
   have ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
@@ -993,56 +993,58 @@ next
     "(\<lambda>(ty, _). apply_subst ?subst_innerSubst ty) \<circ> (\<lambda>(ty, vr). (apply_subst subst ty, vr))
        = (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))"
     using compose by (auto simp: fun_eq_iff split: prod.splits)
+  have modes_eq:
+    "(\<lambda>(_, _, gh). param_mode ghost gh) \<circ> (\<lambda>(ty, vr). (apply_subst subst ty, vr))
+       = (\<lambda>(_, _, gh). param_mode ghost gh)"
+    by (auto simp: fun_eq_iff split: prod.splits)
 
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
   have args_check_subst:
-    "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type ?me ghost tm of
-                    None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-              (map (apply_subst_to_term subst) tmArgs)
-              (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty)) (FI_TmArgs funInfo))"
-  proof (rule list_all2_all_nthI)
+    "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type ?me mode tm = Some expectedTy)
+       (map (apply_subst_to_term subst) tmArgs)
+       (zip (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty)) (FI_TmArgs funInfo))
+            ?modes)"
+    unfolding list_all2_case_prod_conv_all_nth
+  proof (intro conjI allI impI)
     show "length (map (apply_subst_to_term subst) tmArgs)
-            = length (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
-                          (FI_TmArgs funInfo))"
+            = length (zip (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
+                               (FI_TmArgs funInfo))
+                          ?modes)"
       using len_tmArgs by simp
   next
     fix i assume i_bound: "i < length (map (apply_subst_to_term subst) tmArgs)"
     hence i_bound': "i < length tmArgs" by simp
     hence i_bound_args: "i < length (FI_TmArgs funInfo)" using len_tmArgs by simp
-    from args_check have args_nth_raw:
-      "case core_term_type env ghost (tmArgs ! i) of
-         None \<Rightarrow> False
-       | Some actualTy \<Rightarrow>
-           actualTy = map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo) ! i"
-      using i_bound' len_tmArgs
-      by (simp add: list_all2_conv_all_nth)
-    have args_nth:
-      "case core_term_type env ghost (tmArgs ! i) of
-         None \<Rightarrow> False
-       | Some actualTy \<Rightarrow> actualTy = (case FI_TmArgs funInfo ! i of
-            (ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
-      using args_nth_raw i_bound_args
-      by (metis nth_map)
-    then obtain actualTy where
-      actual_typed: "core_term_type env ghost (tmArgs ! i) = Some actualTy" and
-      actual_eq: "actualTy = (case FI_TmArgs funInfo ! i of
-                              (ty, _) \<Rightarrow> apply_subst ?innerSubst ty)"
-      by (auto split: option.splits)
-    have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
-    from CoreTm_FunctionCall.IH[OF tmArg_in actual_typed
-                                   CoreTm_FunctionCall.prems(2,3,4,5)]
-    have ih_result:
-      "core_term_type ?me ghost (apply_subst_to_term subst (tmArgs ! i))
-         = Some (apply_subst subst actualTy)" .
     obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs funInfo ! i") auto
-    from actual_eq fi_arg_eq have actual_eq2: "actualTy = apply_subst ?innerSubst ti" by simp
-    show "case core_term_type ?me ghost (map (apply_subst_to_term subst) tmArgs ! i) of
-            None \<Rightarrow> False
-          | Some actualTy \<Rightarrow> actualTy = map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
-                                            (FI_TmArgs funInfo) ! i"
-      using ih_result actual_eq2 i_bound' i_bound_args fi_arg_eq
-      by simp
+    have exp_nth:
+      "zip (map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo)) ?modes ! i
+         = (apply_subst ?innerSubst ti, param_mode ghost gh)"
+      using i_bound_args fi_arg_eq by simp
+    have actual_typed:
+      "core_term_type env (param_mode ghost gh) (tmArgs ! i) = Some (apply_subst ?innerSubst ti)"
+      using list_all2_case_prod_nthD[OF args_check i_bound'] exp_nth by simp
+    have tmArg_in: "tmArgs ! i \<in> set tmArgs" using i_bound' by simp
+    have ok_rt_m: "param_mode ghost gh = NotGhost
+                     \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
+      using CoreTm_FunctionCall.prems(4) by simp
+    from CoreTm_FunctionCall.IH[OF tmArg_in actual_typed
+                                   CoreTm_FunctionCall.prems(2,3) ok_rt_m CoreTm_FunctionCall.prems(5)]
+    have ih_result:
+      "core_term_type ?me (param_mode ghost gh) (apply_subst_to_term subst (tmArgs ! i))
+         = Some (apply_subst subst (apply_subst ?innerSubst ti))" .
+    have expS_nth:
+      "zip (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty)) (FI_TmArgs funInfo))
+           ?modes ! i
+         = (apply_subst subst (apply_subst ?innerSubst ti), param_mode ghost gh)"
+      using i_bound_args fi_arg_eq by simp
+    show "core_term_type ?me
+            (snd (zip (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
+                           (FI_TmArgs funInfo)) ?modes ! i))
+            (map (apply_subst_to_term subst) tmArgs ! i)
+          = Some (fst (zip (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
+                                (FI_TmArgs funInfo)) ?modes ! i))"
+      using ih_result expS_nth i_bound' by simp
   qed
 
   have ret_compose:
@@ -1054,7 +1056,7 @@ next
     using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_fn
           all_var_subst not_impure len_tmArgs_subst args_check_subst
           ty_eq ret_compose
-    by (auto simp: Let_def expected_eq)
+    by (auto simp: Let_def expected_eq modes_eq)
 next
   case (CoreTm_VariantCtor ctorName tyArgs payload)
   \<comment> \<open>VariantCtor: the ctor lookup in the substituted env returns the
@@ -1597,16 +1599,15 @@ proof -
     len_tmArgs: "length tmArgs = length (FI_TmArgs funInfo)" and
     ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                 (FI_ReturnType funInfo)" and
-    l2_pure: "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env ghost tm of
-                    None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))" and
+    l2_pure: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+                      \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                         (tmArgs ! i)" and
     imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
@@ -1639,89 +1640,68 @@ proof -
   have vor_eq:
     "(\<lambda>(_, vor, _). vor) \<circ> (\<lambda>(ty, vr). (apply_subst subst ty, vr)) = (\<lambda>(_, vor, _). vor)"
     by (auto simp: fun_eq_iff split: prod.splits)
+  \<comment> \<open>Stated for any mode g: the final step may replace ghost by NotGhost
+      (an impure callee is only called in NotGhost mode).\<close>
+  have modes_eq:
+    "(\<lambda>(_, _, gh). param_mode g gh) \<circ> (\<lambda>(ty, vr). (apply_subst subst ty, vr))
+       = (\<lambda>(_, _, gh). param_mode g gh)" for g
+    by (auto simp: fun_eq_iff split: prod.splits)
 
-  have l2_subst:
-    "list_all2 (\<lambda>(tm, vor) expectedTy.
-                  case vor of
-                    Var \<Rightarrow>
-                      (case core_term_type ?me ghost tm of
-                         None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  | Ref \<Rightarrow>
-                      is_writable_lvalue ?me tm
-                      \<and> ghost_lvalue_ok ?me ghost tm
-                      \<and> core_term_type ?me ghost tm = Some expectedTy)
-               (zip (map (apply_subst_to_term subst) tmArgs)
-                    (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))
-               (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
-                    (FI_TmArgs funInfo))"
+  let ?P = "\<lambda>(tm, vor) (expectedTy, mode).
+                 case vor of
+                   Var \<Rightarrow>
+                     core_term_type ?me mode tm = Some expectedTy
+                 | Ref \<Rightarrow>
+                     is_writable_lvalue ?me tm
+                     \<and> ghost_lvalue_ok ?me mode tm
+                     \<and> core_term_type ?me mode tm = Some expectedTy"
+  let ?zts = "zip (map (apply_subst_to_term subst) tmArgs)
+                  (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
+  let ?expsS = "map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty)) (FI_TmArgs funInfo)"
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have l2_subst: "list_all2 ?P ?zts (zip ?expsS ?modes)"
     unfolding list_all2_conv_all_nth
   proof (intro conjI allI impI)
-    show "length (zip (map (apply_subst_to_term subst) tmArgs)
-                      (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))
-            = length (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
-                          (FI_TmArgs funInfo))"
+    show "length ?zts = length (zip ?expsS ?modes)"
       using len_tmArgs by simp
   next
-    fix i assume i_lt: "i < length (zip (map (apply_subst_to_term subst) tmArgs)
-                                        (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)))"
+    fix i assume i_lt: "i < length ?zts"
     hence i_lt_tm: "i < length tmArgs" by simp
     with len_tmArgs have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
     obtain ti vor gh where fi_arg_eq: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
       by (cases "FI_TmArgs funInfo ! i") auto
-    have zip_nth:
-      "zip (map (apply_subst_to_term subst) tmArgs)
-           (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)) ! i
-         = (apply_subst_to_term subst (tmArgs ! i), vor)"
+    have zip_nth: "?zts ! i = (apply_subst_to_term subst (tmArgs ! i), vor)"
       using i_lt_tm i_lt_fi fi_arg_eq by simp
     have exp_nth:
-      "map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty)) (FI_TmArgs funInfo) ! i
-         = apply_subst subst (apply_subst ?innerSubst ti)"
+      "zip ?expsS ?modes ! i
+         = (apply_subst subst (apply_subst ?innerSubst ti), param_mode ghost gh)"
       using i_lt_fi fi_arg_eq by simp
-    from l2_pure have pure_nth_raw:
-      "case core_term_type env ghost (tmArgs ! i) of
-         None \<Rightarrow> False
-       | Some actualTy \<Rightarrow>
-           actualTy = map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo) ! i"
-      using i_lt_tm len_tmArgs by (simp add: list_all2_conv_all_nth)
-    have pure_nth:
-      "case core_term_type env ghost (tmArgs ! i) of
-         None \<Rightarrow> False
-       | Some actualTy \<Rightarrow> actualTy = apply_subst ?innerSubst ti"
-      using pure_nth_raw i_lt_fi fi_arg_eq by (metis case_prod_conv nth_map)
-    then obtain actualTy where
-      actual_typed: "core_term_type env ghost (tmArgs ! i) = Some actualTy" and
-      actual_eq: "actualTy = apply_subst ?innerSubst ti"
-      by (auto split: option.splits)
-    from core_term_type_subst_module_env[OF actual_typed wf ok ok_rt cp]
+    have exp0_nth:
+      "zip (map (\<lambda>(ty, _). apply_subst ?innerSubst ty) (FI_TmArgs funInfo)) ?modes ! i
+         = (apply_subst ?innerSubst ti, param_mode ghost gh)"
+      using i_lt_fi fi_arg_eq by simp
+    have actual_typed:
+      "core_term_type env (param_mode ghost gh) (tmArgs ! i) = Some (apply_subst ?innerSubst ti)"
+      using list_all2_case_prod_nthD[OF l2_pure i_lt_tm] exp0_nth by simp
+    have ok_rt_m: "param_mode ghost gh = NotGhost
+                     \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
+      using ok_rt by simp
+    from core_term_type_subst_module_env[OF actual_typed wf ok ok_rt_m cp]
     have ih_typed:
-      "core_term_type ?me ghost (apply_subst_to_term subst (tmArgs ! i))
-         = Some (apply_subst subst (apply_subst ?innerSubst ti))"
-      using actual_eq by simp
-    show "(case zip (map (apply_subst_to_term subst) tmArgs)
-                    (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo)) ! i of
-             (tm, vor) \<Rightarrow>
-               \<lambda>expectedTy.
-                 (case vor of
-                   Var \<Rightarrow>
-                     (case core_term_type ?me ghost tm of
-                        None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                 | Ref \<Rightarrow>
-                     is_writable_lvalue ?me tm
-                     \<and> ghost_lvalue_ok ?me ghost tm
-                     \<and> core_term_type ?me ghost tm = Some expectedTy))
-          (map (\<lambda>(ty, _). apply_subst subst (apply_subst ?innerSubst ty))
-               (FI_TmArgs funInfo) ! i)"
+      "core_term_type ?me (param_mode ghost gh) (apply_subst_to_term subst (tmArgs ! i))
+         = Some (apply_subst subst (apply_subst ?innerSubst ti))" .
+    show "?P (?zts ! i) (zip ?expsS ?modes ! i)"
     proof (cases vor)
       case Var
       with zip_nth exp_nth ih_typed show ?thesis by simp
     next
       case Ref
       have wl: "is_writable_lvalue env (tmArgs ! i)" and
-           glv: "ghost_lvalue_ok env ghost (tmArgs ! i)"
+           glv: "ghost_lvalue_ok env (param_mode ghost gh) (tmArgs ! i)"
         using ref_lv i_lt_tm fi_arg_eq Ref by auto
       have wl': "is_writable_lvalue ?me (apply_subst_to_term subst (tmArgs ! i))"
         using wl by simp
-      have glv': "ghost_lvalue_ok ?me ghost (apply_subst_to_term subst (tmArgs ! i))"
+      have glv': "ghost_lvalue_ok ?me (param_mode ghost gh) (apply_subst_to_term subst (tmArgs ! i))"
         using glv by simp
       with Ref zip_nth exp_nth ih_typed wl' show ?thesis by simp
     qed
@@ -1736,7 +1716,7 @@ proof -
     unfolding core_impure_call_type_def
     using fn_lookup_subst len_tyArgs_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_fn
           imp len_tmArgs_subst l2_subst ty_eq ret_compose
-    by (auto simp: Let_def expected_eq vor_eq)
+    by (auto simp: Let_def expected_eq vor_eq modes_eq)
 qed
 
 
@@ -2935,7 +2915,8 @@ proof -
     let ?tgtAbs = "?me \<lparr> TE_TypeVars := TE_AbstractTypes ?me |\<union>| fset_of_list (FI_TyArgs info0),
                          TE_RuntimeTypeVars := (TE_AbstractTypes ?me |\<inter>| TE_RuntimeTypeVars ?me)
                                                 |\<union>| fset_of_list (FI_TyArgs info0) \<rparr>"
-    have rt0_all: "(\<forall>ty0 \<in> fst ` set (FI_TmArgs info0). is_runtime_type ?srcAbs ty0)
+    have rt0_all: "(\<forall>ty0 vor. (ty0, vor, NotGhost) \<in> set (FI_TmArgs info0)
+                              \<longrightarrow> is_runtime_type ?srcAbs ty0)
                    \<and> is_runtime_type ?srcAbs (FI_ReturnType info0)"
       using wf_fun_ghost f0 ng unfolding tyenv_fun_ghost_constraint_def Let_def by blast
     have rt_lift: "\<And>ty0. is_runtime_type ?srcAbs ty0 \<Longrightarrow>
@@ -2953,10 +2934,11 @@ proof -
         by (intro is_runtime_type_cong_env) (simp_all add: abs_target tv_inter_target gdt_eq)
       show "is_runtime_type ?tgtAbs (apply_subst subst ty0)" using rt_t tgt_eq by simp
     qed
-    have args': "\<forall>ty \<in> fst ` set (FI_TmArgs info). is_runtime_type ?tgtAbs ty"
-    proof
-      fix ty assume "ty \<in> fst ` set (FI_TmArgs info)"
-      then obtain ty0 where ty0_in: "ty0 \<in> fst ` set (FI_TmArgs info0)"
+    have args': "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)
+                          \<longrightarrow> is_runtime_type ?tgtAbs ty"
+    proof (intro allI impI)
+      fix ty vor assume "(ty, vor, NotGhost) \<in> set (FI_TmArgs info)"
+      then obtain ty0 where ty0_in: "(ty0, vor, NotGhost) \<in> set (FI_TmArgs info0)"
                         and ty_eq: "ty = apply_subst subst ty0"
         by (force simp: i_eq apply_subst_to_funinfo_def)
       have "is_runtime_type ?srcAbs ty0" using rt0_all ty0_in by blast
@@ -2967,7 +2949,7 @@ proof -
       have "is_runtime_type ?srcAbs (FI_ReturnType info0)" using rt0_all by blast
       from rt_lift[OF this] show ?thesis by (simp add: i_eq)
     qed
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+    show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
              is_runtime_type
                (?me \<lparr> TE_TypeVars := TE_AbstractTypes ?me |\<union>| fset_of_list (FI_TyArgs info),
                       TE_RuntimeTypeVars := (TE_AbstractTypes ?me |\<inter>| TE_RuntimeTypeVars ?me)

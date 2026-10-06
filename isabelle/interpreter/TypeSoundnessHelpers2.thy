@@ -389,7 +389,7 @@ qed
 lemma partial_body_env_for_fields:
   "TE_GlobalVars (partial_body_env_for env names funInfo k) = TE_GlobalVars env"
   "TE_GhostLocals (partial_body_env_for env names funInfo k)
-     = (if FI_Ghost funInfo = Ghost then fset_of_list names else {||})"
+     = TE_GhostLocals (body_env_for env names funInfo)"
   "TE_Functions (partial_body_env_for env names funInfo k) = TE_Functions env"
   "TE_Datatypes (partial_body_env_for env names funInfo k) = TE_Datatypes env"
   "TE_DataCtors (partial_body_env_for env names funInfo k) = TE_DataCtors env"

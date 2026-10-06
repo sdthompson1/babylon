@@ -26,42 +26,49 @@ begin
 (* ========================================================================== *)
 
 (* The function table of the state agrees with the signatures of the
-   environment about which parameters are Var and which are Ref. This is the
-   one fact about the function table that this file needs. It follows from
-   funs_exist_in_state (see funs_exist_in_state_var_ref_agree below). *)
-definition fun_var_ref_agree ::
+   environment about the flags of each parameter: whether it is Var or Ref,
+   and whether it is ghost. This is the one fact about the function table that
+   this file needs. It follows from funs_exist_in_state (see
+   funs_exist_in_state_param_flags_agree below). *)
+definition fun_param_flags_agree ::
     "(string, FunInfo) fmap \<Rightarrow> (string, 'w InterpFun) fmap \<Rightarrow> bool" where
-  "fun_var_ref_agree funInfos funs \<equiv>
+  "fun_param_flags_agree funInfos funs \<equiv>
     \<forall>fnName info f.
       fmlookup funInfos fnName = Some info \<longrightarrow> fmlookup funs fnName = Some f \<longrightarrow>
-        map (fst \<circ> snd) (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
+        map snd (IF_Args f) = map snd (FI_TmArgs info)"
 
-lemma fun_var_ref_agree_Ref:
-  assumes "fun_var_ref_agree funInfos funs"
+lemma fun_param_flags_agreeD:
+  assumes "fun_param_flags_agree funInfos funs"
+    and "fmlookup funInfos fnName = Some info"
+    and "fmlookup funs fnName = Some f"
+  shows "map snd (IF_Args f) = map snd (FI_TmArgs info)"
+  using assms unfolding fun_param_flags_agree_def by blast
+
+lemma fun_param_flags_agree_Ref:
+  assumes "fun_param_flags_agree funInfos funs"
     and "fmlookup funInfos fnName = Some info"
     and "fmlookup funs fnName = Some f"
     and "i < length (IF_Args f)"
     and "fst (snd (IF_Args f ! i)) = Ref"
   shows "fst (snd (FI_TmArgs info ! i)) = Ref"
 proof -
-  from assms(1,2,3)
-  have eq: "map (fst \<circ> snd) (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
-    unfolding fun_var_ref_agree_def by blast
+  have eq: "map snd (IF_Args f) = map snd (FI_TmArgs info)"
+    by (rule fun_param_flags_agreeD[OF assms(1,2,3)])
   from eq have len: "length (IF_Args f) = length (FI_TmArgs info)"
     by (rule map_eq_imp_length_eq)
   from assms(4) len have i_lt: "i < length (FI_TmArgs info)" by simp
   from eq
-  have "map (fst \<circ> snd) (IF_Args f) ! i = map (fst \<circ> snd) (FI_TmArgs info) ! i"
+  have "map snd (IF_Args f) ! i = map snd (FI_TmArgs info) ! i"
     by simp
   with assms(4) i_lt
-  have "fst (snd (IF_Args f ! i)) = fst (snd (FI_TmArgs info ! i))" by simp
+  have "snd (IF_Args f ! i) = snd (FI_TmArgs info ! i)" by simp
   with assms(5) show ?thesis by simp
 qed
 
-lemma funs_exist_in_state_var_ref_agree:
+lemma funs_exist_in_state_param_flags_agree:
   assumes "funs_exist_in_state state env"
-  shows "fun_var_ref_agree (TE_Functions env) (IS_Functions state)"
-  unfolding fun_var_ref_agree_def
+  shows "fun_param_flags_agree (TE_Functions env) (IS_Functions state)"
+  unfolding fun_param_flags_agree_def
 proof (intro allI impI)
   fix fnName info f
   assume info: "fmlookup (TE_Functions env) fnName = Some info"
@@ -75,9 +82,9 @@ proof (intro allI impI)
   then have la: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
                            (FI_TmArgs info) (IF_Args f)"
     by (simp add: fun_info_matches_interp_fun_def)
-  have "map (fst \<circ> snd) (FI_TmArgs info) = map (fst \<circ> snd) (IF_Args f)"
-    using la by (induction rule: list_all2_induct) (auto simp: case_prod_beta)
-  then show "map (fst \<circ> snd) (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)" by simp
+  have "map snd (FI_TmArgs info) = map snd (IF_Args f)"
+    using la by (induction rule: list_all2_induct) (auto simp: case_prod_beta prod_eq_iff)
+  then show "map snd (IF_Args f) = map snd (FI_TmArgs info)" by simp
 qed
 
 
@@ -657,7 +664,7 @@ qed
    pure function. *)
 lemma ghost_call_invisible:
   assumes rel: "state_erased env emb full erased"
-    and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and agree: "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
     and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and callT: "core_impure_call_type env Ghost fnName argTys argTms = Some retTy"
     and call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
@@ -677,7 +684,10 @@ proof -
   from rel have gh: "ghost_locals_separate env emb full" by (simp add: state_erased_def)
   from rel have se: "store_erased emb full erased"
     by (simp add: state_erased_def heap_erased_def)
-  from core_impure_call_type_fn_facts[OF callT] obtain info where
+  \<comment> \<open>In Ghost mode every argument is checked in Ghost mode, whatever the
+      flag of its parameter. \<close>
+  from core_impure_call_type_fn_facts[OF callT, unfolded param_mode_ambient_Ghost]
+  obtain info where
     info: "fmlookup (TE_Functions env) fnName = Some info" and
     refs: "\<forall>i < length argTms.
              fst (snd (FI_TmArgs info ! i)) = Ref
@@ -700,7 +710,7 @@ proof -
         va: "var_addr full name = Some a"
         unfolding call_ref_addrs_def by blast
       have r: "fst (snd (FI_TmArgs info ! i)) = Ref"
-        by (rule fun_var_ref_agree_Ref[OF agree info f i2 is_ref])
+        by (rule fun_param_flags_agree_Ref[OF agree info f i2 is_ref])
       from refs i1 r have "ghost_lvalue_ok env Ghost (argTms ! i)" by blast
       with base have g: "tyenv_var_ghost env name"
         by (simp add: ghost_lvalue_ok_def)
@@ -754,7 +764,7 @@ qed
 lemma ghost_invisible_aux:
   fixes funInfos :: "(string, FunInfo) fmap"
     and funs :: "(string, 'w InterpFun) fmap"
-  assumes agree: "fun_var_ref_agree funInfos funs"
+  assumes agree: "fun_param_flags_agree funInfos funs"
     and pure: "funs_respect_purity funInfos funs"
   shows "\<forall>env env' emb (full :: 'w InterpState) (erased :: 'w InterpState) res.
            TE_Functions env = funInfos \<longrightarrow>
@@ -804,7 +814,7 @@ next
         by (rule interp_statement_static[OF H])
       have gh: "ghost_locals_separate env emb full"
         using rel by (simp add: state_erased_def)
-      have agree': "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+      have agree': "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
         using agree by (simp add: fn_eq funs_eq)
       have pure': "funs_respect_purity (TE_Functions env) (IS_Functions full)"
         using pure by (simp add: fn_eq funs_eq)
@@ -1335,7 +1345,7 @@ theorem ghost_statement_invisible:
   assumes T: "core_statement_type env Ghost stmt = Some env'"
     and fg: "TE_FunctionGhost env = NotGhost"
     and rel: "state_erased env emb full erased"
-    and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and agree: "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
     and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and H: "interp_statement d fuel full stmt = Inr res"
   shows "\<exists>full'. res = Continue full' \<and> state_erased env' emb full' erased"
@@ -1349,7 +1359,7 @@ theorem ghost_statement_list_invisible:
   assumes T: "core_statement_list_type env Ghost stmts = Some env'"
     and fg: "TE_FunctionGhost env = NotGhost"
     and rel: "state_erased env emb full erased"
-    and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and agree: "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
     and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and H: "interp_statement_list d fuel full stmts = Inr res"
   shows "\<exists>full'. res = Continue full' \<and> state_erased env' emb full' erased"
@@ -1371,7 +1381,7 @@ qed
    Assert, Assume, ShowHide) whose typing does not look at the surrounding
    mode. Fix and Use are not well-typed in NotGhost mode. *)
 lemma erased_statement_ghost_mode:
-  assumes er: "erase_ghost_statement stmt = []"
+  assumes er: "erase_ghost_statement funInfos stmt = []"
     and T: "core_statement_type env NotGhost stmt = Some env'"
   shows "core_statement_type env Ghost stmt = Some env'"
 proof (cases stmt)
@@ -1434,11 +1444,11 @@ qed
    code that erases to nothing leaves the full state related to the same
    erased state. *)
 theorem erased_statement_invisible:
-  assumes er: "erase_ghost_statement stmt = []"
+  assumes er: "erase_ghost_statement funInfos stmt = []"
     and T: "core_statement_type env NotGhost stmt = Some env'"
     and fg: "TE_FunctionGhost env = NotGhost"
     and rel: "state_erased env emb full erased"
-    and agree: "fun_var_ref_agree (TE_Functions env) (IS_Functions full)"
+    and agree: "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
     and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and H: "interp_statement d fuel full stmt = Inr res"
   shows "\<exists>full'. res = Continue full' \<and> state_erased env' emb full' erased"

@@ -39,6 +39,197 @@ next
 qed
 
 
+(* ========================================================================== *)
+(* The special arguments of a call *)
+(* ========================================================================== *)
+
+(* The special arguments of a call (the arguments of ghost parameters, in an
+   executable call) were elaborated in Ghost mode with the metavariable counter
+   going from mid to hi. They are unified with their expected types with only
+   those metavariables flexible.
+
+   The expected types mention only older type variables (those of env, and the
+   metavariables in [base, mid)), so the substitution found leaves them as they
+   are. Each coerced argument therefore has exactly its expected type, in Ghost
+   mode, in the env of the whole call (whatever the mode g of the call). *)
+lemma special_args_typed:
+  assumes wf: "tyenv_well_formed env"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n base"
+    and le1: "base \<le> mid" and le2: "mid \<le> hi"
+    and typed: "list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env Ghost mid hi)
+                                                    Ghost tm = Some ty) tms tys"
+    and exp_wk: "list_all (is_well_kinded (extend_env_with_tyvars env g base mid)) expTys"
+    and len: "length tys = length expTys"
+    and unify: "unify_and_coerce (\<lambda>n. n |\<in>| mv_fset mid hi) locOf tms tys expTys fmempty
+                  = Inr (tms', s)"
+  shows "list_all2 (\<lambda>tm e. core_term_type (extend_env_with_tyvars env g base hi) Ghost tm
+                              = Some e) tms' expTys"
+proof -
+  let ?EG = "extend_env_with_tyvars env Ghost base hi"
+  let ?E = "extend_env_with_tyvars env g base hi"
+  have wfG: "tyenv_well_formed ?EG"
+    using wf tyenv_well_formed_extend_env_with_tyvars by blast
+  have triv: "Ghost = NotGhost \<longrightarrow> P" for P :: bool by simp
+
+  \<comment> \<open>The arguments are typed in the env with all the metavariables.\<close>
+  have typedG: "list_all2 (\<lambda>tm ty. core_term_type ?EG Ghost tm = Some ty) tms tys"
+  proof (rule list_all2_mono[OF typed])
+    fix tm ty
+    assume "core_term_type (extend_env_with_tyvars env Ghost mid hi) Ghost tm = Some ty"
+    then show "core_term_type ?EG Ghost tm = Some ty"
+      by (rule core_term_type_extend_env_with_tyvars_mono[OF _ le1 order_refl])
+  qed
+  have len_tms: "length tms = length tys" using typedG by (rule list_all2_lengthD)
+  have tys_wk: "list_all (is_well_kinded ?EG) tys"
+    unfolding list_all_length
+  proof (intro allI impI)
+    fix i assume i: "i < length tys"
+    from i len_tms have i': "i < length tms" by simp
+    from list_all2_nthD[OF typedG i']
+    have "core_term_type ?EG Ghost (tms ! i) = Some (tys ! i)" .
+    then show "is_well_kinded ?EG (tys ! i)"
+      using wfG core_term_type_well_kinded by blast
+  qed
+
+  \<comment> \<open>The expected types are well-kinded there too. (Well-kindedness does not
+      depend on the mode of the env extension.)\<close>
+  have wk_eq: "is_well_kinded ?EG t = is_well_kinded ?E t" for t
+    by (rule is_well_kinded_cong_env) (simp_all add: extend_env_with_tyvars_def)
+  have exp_wkG: "list_all (is_well_kinded ?EG) expTys"
+    unfolding list_all_iff
+  proof (intro ballI)
+    fix t assume "t \<in> set expTys"
+    with exp_wk have "is_well_kinded (extend_env_with_tyvars env g base mid) t"
+      by (simp add: list_all_iff)
+    then have "is_well_kinded ?E t"
+      by (rule is_well_kinded_extend_env_with_tyvars_mono[OF _ order_refl le2])
+    then show "is_well_kinded ?EG t" by (simp only: wk_eq)
+  qed
+
+  \<comment> \<open>Take unify_and_coerce apart, and apply the correctness of unification.\<close>
+  from unify have
+    ut: "unify_type_lists (\<lambda>n. n |\<in>| mv_fset mid hi) locOf 0 tys expTys fmempty = Inr s" and
+    tms'_eq: "tms' = apply_call_coercions s tms tys expTys"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
+  have empty_dom_flex: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> n |\<in>| mv_fset mid hi"
+    by simp
+  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?EG ty"
+    by (simp add: fmran'_def)
+  have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
+    by (simp add: fmran'_def)
+  note U = unify_type_lists_correct
+             [where ghost = Ghost,
+              OF ut wfG len tys_wk exp_wkG empty_wk triv triv triv empty_dom_flex]
+  from U have s_wk: "\<forall>ty \<in> fmran' s. is_well_kinded ?EG ty" by blast
+  from U have unified:
+    "list_all2 (\<lambda>actualTy expectedTy.
+        apply_subst s actualTy = apply_subst s expectedTy
+        \<or> coercible (apply_subst s actualTy) (apply_subst s expectedTy))
+      tys expTys"
+    by blast
+  from U have s_dom: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> n |\<in>| mv_fset mid hi" by blast
+  from U empty_cp have s_cp: "\<forall>ty \<in> fmran' s. is_complete_type ty" by blast
+
+  \<comment> \<open>The substitution binds new metavariables only, so it does not touch the
+      types of env.\<close>
+  have dom_env: "\<forall>n. n |\<in>| fmdom s \<longrightarrow> n |\<notin>| TE_TypeVars env"
+  proof (intro allI impI)
+    fix n assume "n |\<in>| fmdom s"
+    with s_dom have nin: "n |\<in>| mv_fset mid hi" by blast
+    show "n |\<notin>| TE_TypeVars env"
+    proof
+      assume "n |\<in>| TE_TypeVars env"
+      with fresh have "tyvar_fresh_ok n base" by blast
+      then have "tyvar_fresh_ok n mid" using le1 by (rule tyvar_fresh_ok_mono)
+      then have "n |\<notin>| mv_fset mid hi" by (rule tyvar_fresh_ok_notin_mv_fset)
+      with nin show False by blast
+    qed
+  qed
+  have EG_locals: "TE_LocalVars ?EG = TE_LocalVars env"
+    unfolding extend_env_with_tyvars_def by simp
+  have EG_ret: "TE_ReturnType ?EG = TE_ReturnType env"
+    unfolding extend_env_with_tyvars_def by simp
+  have EG_abs: "TE_AbstractTypes ?EG = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF dom_env wf EG_locals EG_ret]
+  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?EG) name = Some ty'
+                                      \<Longrightarrow> apply_subst s ty' = ty'"
+    and ret_unaffected: "apply_subst s (TE_ReturnType ?EG) = TE_ReturnType ?EG"
+    by blast+
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?EG \<Longrightarrow> fmlookup s n = None"
+    using flex_subst_abs_no_subst[OF dom_env[rule_format] wf EG_abs] .
+
+  \<comment> \<open>The coerced arguments have the substituted expected types.\<close>
+  have coerced: "list_all2 (\<lambda>tm e. core_term_type ?EG Ghost tm = Some (apply_subst s e))
+                   tms' expTys"
+    unfolding tms'_eq
+    by (rule apply_call_coercions_correct
+               [where ghost = Ghost,
+                OF typedG unified wfG s_wk triv len_tms len
+                   locals_unaffected ret_unaffected abs_no_subst exp_wkG triv s_cp])
+
+  \<comment> \<open>The substitution leaves the expected types as they are: they mention
+      no metavariable of [mid, hi).\<close>
+  have exp_id: "apply_subst s e = e" if e_in: "e \<in> set expTys" for e
+  proof -
+    from exp_wk e_in have "is_well_kinded (extend_env_with_tyvars env g base mid) e"
+      by (simp add: list_all_iff)
+    then have sub: "type_tyvars e
+                      \<subseteq> fset (TE_TypeVars (extend_env_with_tyvars env g base mid))"
+      by (rule is_well_kinded_type_tyvars_subset)
+    have "type_tyvars e \<inter> fset (fmdom s) = {}"
+    proof (rule ccontr)
+      assume "type_tyvars e \<inter> fset (fmdom s) \<noteq> {}"
+      then obtain n where n_ty: "n \<in> type_tyvars e" and n_dom: "n |\<in>| fmdom s" by auto
+      from s_dom n_dom have n_mv: "n |\<in>| mv_fset mid hi" by blast
+      from sub n_ty have "n |\<in>| TE_TypeVars (extend_env_with_tyvars env g base mid)" by auto
+      then have "n |\<in>| TE_TypeVars env \<or> n |\<in>| mv_fset base mid"
+        unfolding extend_env_with_tyvars_def by simp
+      then show False
+      proof
+        assume "n |\<in>| TE_TypeVars env"
+        with dom_env n_dom show False by blast
+      next
+        assume "n |\<in>| mv_fset base mid"
+        then obtain i where "i < mid" and "n = mv_name i" by auto
+        then have "tyvar_fresh_ok n mid" by simp
+        then have "n |\<notin>| mv_fset mid hi" by (rule tyvar_fresh_ok_notin_mv_fset)
+        with n_mv show False by blast
+      qed
+    qed
+    then show ?thesis by (rule apply_subst_disjoint_id)
+  qed
+  have coerced': "list_all2 (\<lambda>tm e. core_term_type ?EG Ghost tm = Some e) tms' expTys"
+    unfolding list_all2_conv_all_nth
+  proof (intro conjI allI impI)
+    show "length tms' = length expTys" using coerced by (rule list_all2_lengthD)
+  next
+    fix i assume i: "i < length tms'"
+    from i list_all2_lengthD[OF coerced] have ie: "i < length expTys" by simp
+    from list_all2_nthD[OF coerced i]
+    have "core_term_type ?EG Ghost (tms' ! i) = Some (apply_subst s (expTys ! i))" .
+    then show "core_term_type ?EG Ghost (tms' ! i) = Some (expTys ! i)"
+      by (simp only: exp_id[OF nth_mem[OF ie]])
+  qed
+
+  \<comment> \<open>Ghost-mode typing does not depend on which type variables are runtime,
+      so the result holds in the env of the call, whatever its mode.\<close>
+  have to_E: "core_term_type ?E Ghost tm = Some t"
+    if tG: "core_term_type ?EG Ghost tm = Some t" for tm t
+  proof (cases g)
+    case Ghost
+    with tG show ?thesis by simp
+  next
+    case NotGhost
+    have E_eq: "?E = ?EG \<lparr> TE_TypeVars := TE_TypeVars ?EG |\<union>| {||},
+                            TE_RuntimeTypeVars := TE_RuntimeTypeVars ?EG |\<union>| mv_fset base hi \<rparr>"
+      by (simp add: extend_env_with_tyvars_def NotGhost)
+    show ?thesis unfolding E_eq by (rule core_term_type_irrelevant_tyvar[OF tG])
+  qed
+  show ?thesis by (rule list_all2_mono[OF coerced']) (rule to_E)
+qed
+
+
 lemma check_update_fields_exist_sound:
   "check_update_fields_exist flds parentFields = None \<Longrightarrow>
    \<forall>(name, _) \<in> set flds. map_of parentFields name \<noteq> None"
@@ -119,184 +310,354 @@ qed
 (* Helper lemmas for specific cases of elab_term_correct *)
 (* ========================================================================== *)
 
-(* Helper lemma for BabTm_Call case of elab_term_correct.
-   Given that the arg terms are already well-typed in env',
-   and the elaboration of the Call succeeds, the result typechecks. *)
-lemma elab_term_correct_call:
-  assumes
-    elab_eq: "elab_term env elabEnv ghost (BabTm_Call loc callee args) next_mv
-              = Inr (newTm, ty, next_mv')"
-    and wf: "tyenv_well_formed env"
-    and td_wf: "elabenv_well_formed env elabEnv"
+
+
+(* The arguments of a call, after the two unifications (shared by calls in
+   terms and call statements).
+
+   The plain arguments were elaborated in the mode of the call (counter from
+   next_mv1 to next_mvP), and the special ones in Ghost mode (counter from
+   next_mvP to next_mv'). The expected types are well-kinded in the env of the
+   callee resolution (counter from next_mv to next_mv1), and those of the plain
+   arguments are runtime types in an executable call.
+
+   Then the merged argument list typechecks against the substituted expected
+   types, each argument in the mode of its position, in the env of the whole
+   call; and the substitution found for the plain arguments has the usual
+   properties there. *)
+lemma call_args_typed:
+  assumes wf: "tyenv_well_formed env"
     and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
-    \<comment> \<open>Sub-elaboration results\<close>
-    and resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
-                     = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
-    and elab_args: "elab_term_list env elabEnv ghost args next_mv1
-                    = Inr (elabArgTms, actualTypes, next_mv2)"
-    \<comment> \<open>IH result lifted to the full extended env\<close>
-    and ih_args: "list_all2 (\<lambda>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost tm = Some ty)
-                  elabArgTms actualTypes"
-  shows "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newTm = Some ty"
+    and mono_1: "next_mv \<le> next_mv1"
+    and len_args: "length args = length expArgTypes"
+    and flags_len: "length flags = length expArgTypes"
+    and exp_wk1: "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1))
+                    expArgTypes"
+    and pexp_rt1: "ghost = NotGhost \<longrightarrow>
+                     list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1))
+                              (plain_args flags expArgTypes)"
+    and elab_plain: "elab_term_list env elabEnv ghost (plain_args flags args) next_mv1
+                     = Inr (plainTms, plainTys, next_mvP)"
+    and elab_special: "elab_term_list env elabEnv Ghost (special_args flags args) next_mvP
+                       = Inr (specialTms, specialTys, next_mv')"
+    and ih_plain: "list_all2 (\<lambda>tm ty. core_term_type
+                                (extend_env_with_tyvars env ghost next_mv1 next_mvP) ghost tm
+                              = Some ty)
+                     plainTms plainTys"
+    and ih_special: "list_all2 (\<lambda>tm ty. core_term_type
+                                  (extend_env_with_tyvars env Ghost next_mvP next_mv') Ghost tm
+                                = Some ty)
+                       specialTms specialTys"
+    and unify_plain: "unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env) locP
+                        plainTms plainTys (plain_args flags expArgTypes) fmempty
+                      = Inr (plainFinal, finalSubst)"
+    and unify_special: "unify_and_coerce (\<lambda>n. n |\<in>| mv_fset next_mvP next_mv') locS
+                          specialTms specialTys
+                          (map (apply_subst finalSubst) (special_args flags expArgTypes)) fmempty
+                        = Inr (specialFinal, sSubst)"
+  shows "list_all2 (\<lambda>tm (f, expTy).
+                      core_term_type (extend_env_with_tyvars env ghost next_mv next_mv')
+                                     (if f then Ghost else ghost) tm
+                        = Some (apply_subst finalSubst expTy))
+           (merge_args flags plainFinal specialFinal) (zip flags expArgTypes)"
+    and "\<forall>ty \<in> fmran' finalSubst.
+           is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv') ty"
+    and "ghost = NotGhost \<longrightarrow>
+           (\<forall>ty \<in> fmran' finalSubst.
+              is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv') ty)"
+    and "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> n |\<notin>| TE_TypeVars env"
+    and "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
 proof -
   let ?is_flex = "(\<lambda>n. n |\<notin>| TE_TypeVars env)"
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-
-  \<comment> \<open>Extract shared results from the elaboration\<close>
-  from elab_eq resolve_eq have len_args: "length args = length expArgTypes"
-    by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
-  from elab_eq resolve_eq len_args elab_args obtain finalArgTms finalSubst where
-    unify_args: "unify_and_coerce ?is_flex (\<lambda>idx. bab_term_location (args ! idx))
-                     elabArgTms actualTypes expArgTypes fmempty
-                 = Inr (finalArgTms, finalSubst)"
-    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
-  obtain resultTm resultTy where
-    build_eq: "build_call_result env ghost loc calleeInfo finalSubst finalArgTms
-               = (resultTm, resultTy)"
-    by (cases "build_call_result env ghost loc calleeInfo finalSubst finalArgTms") auto
-  from elab_eq resolve_eq len_args elab_args unify_args build_eq
-  have result_eq: "newTm = resultTm" "ty = resultTy" "next_mv' = next_mv2"
-    by (auto simp: build_call_result_def Let_def unify_and_coerce_def
-             split: sum.splits CalleeInfo.splits if_splits prod.splits)
-
-  \<comment> \<open>Properties from resolve_callee_correct (at next_mv1)\<close>
+  let ?envP = "extend_env_with_tyvars env ghost next_mv next_mvP"
   let ?env1 = "extend_env_with_tyvars env ghost next_mv next_mv1"
-  have rc: "next_mv \<le> next_mv1
-          \<and> callee_info_valid ?env1 ghost calleeInfo expArgTypes
-          \<and> list_all (is_well_kinded ?env1) expArgTypes
-          \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) expArgTypes)"
-    using resolve_callee_correct[OF resolve_eq wf td_wf] by simp
-  have mono_1: "next_mv \<le> next_mv1" using rc by simp
-  have mono_2: "next_mv1 \<le> next_mv2"
-    using elab_term_list_next_mv_monotone[OF elab_args] .
-  have wf': "tyenv_well_formed ?env'"
+  let ?pExp = "plain_args flags expArgTypes"
+  let ?sExp = "special_args flags expArgTypes"
+
+  have mono_2: "next_mv1 \<le> next_mvP"
+    using elab_term_list_next_mv_monotone[OF elab_plain] .
+  have mono_3: "next_mvP \<le> next_mv'"
+    using elab_term_list_next_mv_monotone[OF elab_special] .
+  have mono_12: "next_mv \<le> next_mvP" using mono_1 mono_2 by simp
+  have wfP: "tyenv_well_formed ?envP"
     using wf tyenv_well_formed_extend_env_with_tyvars by blast
 
-  \<comment> \<open>next_mv' = next_mv2, so ?env' = extend_env_with_tyvars env ghost next_mv next_mv2\<close>
-  have env'_eq: "?env' = extend_env_with_tyvars env ghost next_mv next_mv2"
-    using result_eq by simp
-
-  \<comment> \<open>Lift expArgTypes well-kindedness/runtime from ?env1 to ?env'\<close>
-  have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
-  proof (simp add: list_all_iff env'_eq, intro ballI)
+  \<comment> \<open>The expected types, in the env of the plain arguments\<close>
+  have exp_wkP: "list_all (is_well_kinded ?envP) expArgTypes"
+    unfolding list_all_iff
+  proof (intro ballI)
     fix t assume "t \<in> set expArgTypes"
-    with rc have "is_well_kinded ?env1 t" by (simp add: list_all_iff)
-    thus "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv2) t"
-      using is_well_kinded_extend_env_with_tyvars_mono mono_2 by blast
+    with exp_wk1 have "is_well_kinded ?env1 t" by (simp add: list_all_iff)
+    then show "is_well_kinded ?envP t"
+      by (rule is_well_kinded_extend_env_with_tyvars_mono[OF _ order_refl mono_2])
   qed
-  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
-  proof (intro impI)
+  have pexp_wk: "list_all (is_well_kinded ?envP) ?pExp"
+    using exp_wkP plain_args_subset[of flags expArgTypes] by (auto simp: list_all_iff)
+  have sexp_wk: "list_all (is_well_kinded ?envP) ?sExp"
+    using exp_wkP special_args_subset[of flags expArgTypes] by (auto simp: list_all_iff)
+  have pexp_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?envP) ?pExp"
+  proof
     assume ng: "ghost = NotGhost"
-    show "list_all (is_runtime_type ?env') expArgTypes"
-      unfolding list_all_iff env'_eq
+    show "list_all (is_runtime_type ?envP) ?pExp"
+      unfolding list_all_iff
     proof (intro ballI)
-      fix t assume "t \<in> set expArgTypes"
-      with rc ng have "is_runtime_type ?env1 t" by (simp add: list_all_iff)
-      thus "is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv2) t"
-        using is_runtime_type_extend_env_with_tyvars_mono mono_2 by blast
+      fix t assume "t \<in> set ?pExp"
+      with pexp_rt1 ng have "is_runtime_type ?env1 t" by (simp add: list_all_iff)
+      then show "is_runtime_type ?envP t"
+        by (rule is_runtime_type_extend_env_with_tyvars_mono[OF _ order_refl mono_2])
     qed
   qed
 
-  \<comment> \<open>Lift callee_info_valid from ?env1 to ?env'\<close>
-  have civ: "callee_info_valid ?env' ghost calleeInfo expArgTypes"
-    using callee_info_valid_mono[OF _ mono_1 mono_2] rc env'_eq
-    by (metis callee_info_valid_mono mono_2 order_refl)
-
-  \<comment> \<open>Well-kindedness and runtime for actualTypes in ?env'\<close>
-  have len_elabArgTms: "length elabArgTms = length actualTypes"
-    using ih_args by (simp add: list_all2_lengthD)
-  have len_actualTypes: "length actualTypes = length expArgTypes"
-    using len_args elab_args by (simp add: elab_term_list_length)
-
-  have actualTypes_wk: "list_all (is_well_kinded ?env') actualTypes"
-  proof (simp add: list_all_length, intro allI impI)
-    fix i assume "i < length actualTypes"
-    with ih_args have "core_term_type ?env' ghost (elabArgTms ! i) = Some (actualTypes ! i)"
-      by (simp add: list_all2_conv_all_nth)
-    thus "is_well_kinded ?env' (actualTypes ! i)"
-      using wf' core_term_type_well_kinded by blast
+  \<comment> \<open>The plain arguments are typed in that env\<close>
+  have ih_plainP: "list_all2 (\<lambda>tm ty. core_term_type ?envP ghost tm = Some ty)
+                     plainTms plainTys"
+  proof (rule list_all2_mono[OF ih_plain])
+    fix tm ty
+    assume "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mvP) ghost tm
+              = Some ty"
+    then show "core_term_type ?envP ghost tm = Some ty"
+      by (rule core_term_type_extend_env_with_tyvars_mono[OF _ mono_1 order_refl])
   qed
-  have actualTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') actualTypes"
-    using ih_args wf' core_term_type_notghost_runtime
+  have len_pt: "length plainTms = length plainTys"
+    using ih_plainP by (rule list_all2_lengthD)
+  have len_pe: "length plainTys = length ?pExp"
+    using elab_term_list_length[OF elab_plain]
+          plain_args_length_cong[where fs = flags, OF len_args]
+    by simp
+  have ptys_wk: "list_all (is_well_kinded ?envP) plainTys"
+    unfolding list_all_length
+  proof (intro allI impI)
+    fix i assume i: "i < length plainTys"
+    from i len_pt have i': "i < length plainTms" by simp
+    from list_all2_nthD[OF ih_plainP i']
+    have "core_term_type ?envP ghost (plainTms ! i) = Some (plainTys ! i)" .
+    then show "is_well_kinded ?envP (plainTys ! i)"
+      using wfP core_term_type_well_kinded by blast
+  qed
+  have ptys_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?envP) plainTys"
+    using ih_plainP wfP core_term_type_notghost_runtime
     by (auto simp: list_all2_conv_all_nth list_all_length)
 
-  \<comment> \<open>Extract unify_type_lists from unify_and_coerce\<close>
-  obtain unifySubst where
-    unify_types: "unify_type_lists ?is_flex (\<lambda>idx. bab_term_location (args ! idx)) 0
-                     actualTypes expArgTypes fmempty = Inr unifySubst" and
-    finalArgTms_eq: "finalArgTms = apply_call_coercions unifySubst elabArgTms actualTypes expArgTypes" and
-    finalSubst_eq: "finalSubst = unifySubst"
-  proof -
-    from unify_args show ?thesis
-      by (auto simp: unify_and_coerce_def split: sum.splits intro: that)
-  qed
-
-  \<comment> \<open>Apply unify_type_lists_correct\<close>
+  \<comment> \<open>Unification of the plain arguments\<close>
+  from unify_plain have
+    ut: "unify_type_lists ?is_flex locP 0 plainTys ?pExp fmempty = Inr finalSubst" and
+    plainFinal_eq: "plainFinal = apply_call_coercions finalSubst plainTms plainTys ?pExp"
+    by (auto simp: unify_and_coerce_def split: sum.splits)
   have empty_dom_flex: "\<forall>n. n |\<in>| fmdom (fmempty :: TypeSubst) \<longrightarrow> ?is_flex n" by simp
+  have empty_wk: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_well_kinded ?envP ty"
+    by (simp add: fmran'_def)
+  have empty_rt: "ghost = NotGhost
+                    \<longrightarrow> (\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_runtime_type ?envP ty)"
+    by (simp add: fmran'_def)
   have empty_cp: "\<forall>ty \<in> fmran' (fmempty :: TypeSubst). is_complete_type ty"
     by (simp add: fmran'_def)
-  have unify_correct: "(\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty)
-       \<and> (ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty))
-       \<and> list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-         actualTypes expArgTypes
-       \<and> (\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n)
-       \<and> (\<forall>ty \<in> fmran' finalSubst. is_complete_type ty)"
-    using unify_type_lists_correct[OF unify_types wf' len_actualTypes
-            actualTypes_wk expArgTypes_wk _ actualTypes_rt expArgTypes_rt _ empty_dom_flex]
-          finalSubst_eq empty_cp by fastforce
+  note U = unify_type_lists_correct
+             [OF ut wfP len_pe ptys_wk pexp_wk empty_wk ptys_rt pexp_rt empty_rt empty_dom_flex]
+  from U have finalSubst_wkP: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?envP ty" by blast
+  from U have finalSubst_rtP:
+    "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?envP ty)" by blast
+  from U have types_unified:
+    "list_all2 (\<lambda>actualTy expectedTy.
+        apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
+        \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
+      plainTys ?pExp"
+    by blast
+  from U have finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> n |\<notin>| TE_TypeVars env"
+    by blast
+  from U empty_cp have finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
+    by blast
 
-  from unify_correct have
-    finalSubst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty" and
-    finalSubst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)" and
-    types_unified: "list_all2 (\<lambda>actualTy expectedTy.
-           apply_subst finalSubst actualTy = apply_subst finalSubst expectedTy
-           \<or> coercible (apply_subst finalSubst actualTy) (apply_subst finalSubst expectedTy))
-         actualTypes expArgTypes" and
-    finalSubst_dom_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> ?is_flex n" and
-    finalSubst_cp: "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
-    by blast+
-
-  \<comment> \<open>Subst doesn't affect locals or return type\<close>
-  have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
+  \<comment> \<open>The substitution doesn't affect locals, the return type or abstract types\<close>
+  have envP_locals: "TE_LocalVars ?envP = TE_LocalVars env"
     unfolding extend_env_with_tyvars_def by simp
-  have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
+  have envP_ret: "TE_ReturnType ?envP = TE_ReturnType env"
     unfolding extend_env_with_tyvars_def by simp
-  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf env'_locals env'_ret]
-  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?env') name = Some ty'
+  have envP_abs: "TE_AbstractTypes ?envP = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  from flex_subst_identity_on_env[OF finalSubst_dom_flex wf envP_locals envP_ret]
+  have locals_unaffected: "\<And>name ty'. fmlookup (TE_LocalVars ?envP) name = Some ty'
                                       \<Longrightarrow> apply_subst finalSubst ty' = ty'"
-    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?env') = TE_ReturnType ?env'"
+    and ret_unaffected: "apply_subst finalSubst (TE_ReturnType ?envP) = TE_ReturnType ?envP"
     by blast+
-  have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
-    unfolding extend_env_with_tyvars_def by simp
-  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?env' \<Longrightarrow> fmlookup finalSubst n = None"
-    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf env'_abs] .
+  have abs_no_subst: "\<And>n. n |\<in>| TE_AbstractTypes ?envP \<Longrightarrow> fmlookup finalSubst n = None"
+    using flex_subst_abs_no_subst[OF finalSubst_dom_flex[rule_format] wf envP_abs] .
 
-  \<comment> \<open>Coerced args typecheck with substituted expected types\<close>
-  have coerce_correct: "list_all2 (\<lambda>tm expectedTy.
-           core_term_type ?env' ghost tm = Some (apply_subst finalSubst expectedTy))
-         finalArgTms expArgTypes"
-    using apply_call_coercions_correct[OF ih_args types_unified wf'
-            finalSubst_wk finalSubst_rt len_elabArgTms len_actualTypes
-            locals_unaffected ret_unaffected abs_no_subst expArgTypes_wk expArgTypes_rt
-            finalSubst_cp]
-          finalArgTms_eq finalSubst_eq by simp
+  \<comment> \<open>The coerced plain arguments typecheck with the substituted expected
+      types, in the mode of the call\<close>
+  have plain_coercedP:
+    "list_all2 (\<lambda>tm e. core_term_type ?envP ghost tm = Some (apply_subst finalSubst e))
+       plainFinal ?pExp"
+    unfolding plainFinal_eq
+    by (rule apply_call_coercions_correct
+               [OF ih_plainP types_unified wfP finalSubst_wkP finalSubst_rtP len_pt len_pe
+                   locals_unaffected ret_unaffected abs_no_subst pexp_wk pexp_rt
+                   finalSubst_cp])
+  have plain_coerced:
+    "list_all2 (\<lambda>tm e. core_term_type ?env' ghost tm = Some (apply_subst finalSubst e))
+       plainFinal ?pExp"
+  proof (rule list_all2_mono[OF plain_coercedP])
+    fix tm e
+    assume "core_term_type ?envP ghost tm = Some (apply_subst finalSubst e)"
+    then show "core_term_type ?env' ghost tm = Some (apply_subst finalSubst e)"
+      by (rule core_term_type_extend_env_with_tyvars_mono[OF _ order_refl mono_3])
+  qed
 
-  \<comment> \<open>env' extends env with only type variables\<close>
+  \<comment> \<open>The special arguments: checked against the substituted expected types,
+      with only their own metavariables flexible\<close>
+  let ?sExp' = "map (apply_subst finalSubst) ?sExp"
+  have sexp'_wk: "list_all (is_well_kinded ?envP) ?sExp'"
+    unfolding list_all_iff
+  proof (intro ballI)
+    fix t assume "t \<in> set ?sExp'"
+    then obtain e where e_in: "e \<in> set ?sExp" and t_eq: "t = apply_subst finalSubst e"
+      by auto
+    from sexp_wk e_in have "is_well_kinded ?envP e" by (simp add: list_all_iff)
+    then show "is_well_kinded ?envP t"
+      unfolding t_eq by (rule apply_subst_preserves_well_kinded_same_env[OF _ finalSubst_wkP])
+  qed
+  have len_se: "length specialTys = length ?sExp'"
+    using elab_term_list_length[OF elab_special]
+          special_args_length_cong[where fs = flags, OF len_args]
+    by simp
+  have special_typed:
+    "list_all2 (\<lambda>tm e. core_term_type ?env' Ghost tm = Some e) specialFinal ?sExp'"
+    by (rule special_args_typed
+               [OF wf fresh mono_12 mono_3 ih_special sexp'_wk len_se unify_special])
+  have special_coerced:
+    "list_all2 (\<lambda>tm e. core_term_type ?env' Ghost tm = Some (apply_subst finalSubst e))
+       specialFinal ?sExp"
+    using special_typed by (simp add: list_all2_map2)
+
+  \<comment> \<open>Put the two groups back together: each argument typechecks in the mode
+      of its position\<close>
+  have merged:
+    "list_all2 (\<lambda>x (f, e). if f then core_term_type ?env' Ghost x
+                                        = Some (apply_subst finalSubst e)
+                            else core_term_type ?env' ghost x
+                                   = Some (apply_subst finalSubst e))
+       (merge_args flags plainFinal specialFinal) (zip flags expArgTypes)"
+    by (rule merge_args_list_all2[OF plain_coerced special_coerced flags_len])
+  show "list_all2 (\<lambda>tm (f, expTy).
+                     core_term_type ?env' (if f then Ghost else ghost) tm
+                       = Some (apply_subst finalSubst expTy))
+          (merge_args flags plainFinal specialFinal) (zip flags expArgTypes)"
+    by (rule list_all2_mono[OF merged]) (auto split: if_splits)
+
+  \<comment> \<open>The substitution, in the env of the whole call\<close>
+  show "\<forall>ty \<in> fmran' finalSubst. is_well_kinded ?env' ty"
+  proof
+    fix t assume "t \<in> fmran' finalSubst"
+    with finalSubst_wkP have "is_well_kinded ?envP t" by blast
+    then show "is_well_kinded ?env' t"
+      by (rule is_well_kinded_extend_env_with_tyvars_mono[OF _ order_refl mono_3])
+  qed
+  show "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type ?env' ty)"
+  proof (intro impI ballI)
+    fix t assume "ghost = NotGhost" and "t \<in> fmran' finalSubst"
+    with finalSubst_rtP have "is_runtime_type ?envP t" by blast
+    then show "is_runtime_type ?env' t"
+      by (rule is_runtime_type_extend_env_with_tyvars_mono[OF _ order_refl mono_3])
+  qed
+  show "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> n |\<notin>| TE_TypeVars env"
+    by (rule finalSubst_dom_flex)
+  show "\<forall>ty \<in> fmran' finalSubst. is_complete_type ty"
+    by (rule finalSubst_cp)
+qed
+
+(* Helper lemma for BabTm_Call case of elab_term_correct.
+   Given the steps of the elaboration of the call (see elab_term_Call_elim), and
+   that the elaborated arguments are well-typed (the plain ones in the mode of
+   the call, the special ones in Ghost mode), the result typechecks. *)
+lemma elab_term_correct_call:
+  assumes wf: "tyenv_well_formed env"
+    and td_wf: "elabenv_well_formed env elabEnv"
+    and fresh: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
+    \<comment> \<open>The steps of the elaboration\<close>
+    and resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
+                     = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
+    and len_args: "length args = length expArgTypes"
+    and flags_def: "flags = call_special_flags env ghost callee (length args)"
+    and elab_plain: "elab_term_list env elabEnv ghost (plain_args flags args) next_mv1
+                     = Inr (plainTms, plainTys, next_mvP)"
+    and elab_special: "elab_term_list env elabEnv Ghost (special_args flags args) next_mvP
+                       = Inr (specialTms, specialTys, next_mv')"
+    and fin: "finish_call env ghost loc args flags expArgTypes calleeInfo
+                plainTms plainTys next_mvP specialTms specialTys next_mv'
+              = Inr (newTm, ty)"
+    \<comment> \<open>IH results, each in the env of its own elaboration\<close>
+    and ih_plain: "list_all2 (\<lambda>tm ty. core_term_type
+                                (extend_env_with_tyvars env ghost next_mv1 next_mvP) ghost tm
+                              = Some ty)
+                     plainTms plainTys"
+    and ih_special: "list_all2 (\<lambda>tm ty. core_term_type
+                                  (extend_env_with_tyvars env Ghost next_mvP next_mv') Ghost tm
+                                = Some ty)
+                       specialTms specialTys"
+  shows "core_term_type (extend_env_with_tyvars env ghost next_mv next_mv') ghost newTm = Some ty"
+proof -
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  let ?env1 = "extend_env_with_tyvars env ghost next_mv next_mv1"
+  let ?pExp = "plain_args flags expArgTypes"
+  let ?sExp = "special_args flags expArgTypes"
+
+  \<comment> \<open>Take finish_call apart\<close>
+  from fin obtain plainFinal finalSubst specialFinal sSubst where
+    unify_plain: "unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+                    (\<lambda>idx. bab_term_location (plain_args flags args ! idx))
+                    plainTms plainTys ?pExp fmempty
+                  = Inr (plainFinal, finalSubst)" and
+    unify_special: "unify_and_coerce (\<lambda>n. n |\<in>| mv_fset next_mvP next_mv')
+                      (\<lambda>idx. bab_term_location (special_args flags args ! idx))
+                      specialTms specialTys (map (apply_subst finalSubst) ?sExp) fmempty
+                    = Inr (specialFinal, sSubst)" and
+    build_eq: "build_call_result env ghost loc calleeInfo finalSubst
+                 (merge_args flags plainFinal specialFinal)
+               = (newTm, ty)"
+    by (auto simp: finish_call_def split: sum.splits prod.splits if_splits)
+
+  \<comment> \<open>Properties from resolve_callee_correct (at next_mv1)\<close>
+  have flags_eq: "flags = call_special_flags env ghost callee (length expArgTypes)"
+    using flags_def len_args by simp
+  note rc = resolve_callee_correct[OF resolve_eq wf td_wf]
+  have mono_1: "next_mv \<le> next_mv1" using rc by simp
+  have civ1: "callee_info_valid ?env1 ghost calleeInfo expArgTypes" using rc by simp
+  have exp_wk1: "list_all (is_well_kinded ?env1) expArgTypes" using rc by simp
+  have pexp_rt1: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) ?pExp"
+    unfolding flags_eq using rc by blast
+  have flags_len: "length flags = length expArgTypes"
+    unfolding flags_eq using rc by blast
+  have flags_ok: "call_flags_ok env ghost calleeInfo flags"
+    unfolding flags_eq using rc by blast
+
+  \<comment> \<open>The arguments typecheck, each in the mode of its position\<close>
+  note A = call_args_typed[OF wf fresh mono_1 len_args flags_len exp_wk1 pexp_rt1
+                              elab_plain elab_special ih_plain ih_special
+                              unify_plain unify_special]
+
+  \<comment> \<open>Lift callee_info_valid to the env of the whole call\<close>
+  have mono_23: "next_mv1 \<le> next_mv'"
+    using elab_term_list_next_mv_monotone[OF elab_plain]
+          elab_term_list_next_mv_monotone[OF elab_special]
+    by simp
+  have civ: "callee_info_valid ?env' ghost calleeInfo expArgTypes"
+    by (rule callee_info_valid_mono[OF civ1 order_refl mono_23])
+  have wf': "tyenv_well_formed ?env'"
+    using wf tyenv_well_formed_extend_env_with_tyvars by blast
   have env'_locals: "TE_LocalVars ?env' = TE_LocalVars env"
     unfolding extend_env_with_tyvars_def by simp
   have env'_ret: "TE_ReturnType ?env' = TE_ReturnType env"
     unfolding extend_env_with_tyvars_def by simp
   have env'_abs: "TE_AbstractTypes ?env' = TE_AbstractTypes env"
+    unfolding extend_env_with_tyvars_def by simp
+  have env'_funs: "TE_Functions ?env' = TE_Functions env"
     unfolding extend_env_with_tyvars_def by simp
 
   \<comment> \<open>Apply build_call_result_correct\<close>
   show ?thesis
-    using build_call_result_correct[OF build_eq civ wf' wf coerce_correct
-            finalSubst_wk finalSubst_rt finalSubst_dom_flex env'_locals env'_ret env'_abs
-            finalSubst_cp]
-          result_eq by simp
+    by (rule build_call_result_correct
+               [OF build_eq civ wf' wf flags_ok flags_len env'_funs A(1) A(2) A(3) A(4)
+                   env'_locals env'_ret env'_abs A(5)])
 qed
 
 (* Helper lemma for BabTm_ArrayProj case of elab_term_correct.
@@ -2833,52 +3194,55 @@ next
 next
   \<comment> \<open>Case: BabTm_Call (function call or data constructor call)\<close>
   case (9 env elabEnv ghost loc callee args next_mv)
-  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  \<comment> \<open>Extract resolve_callee result\<close>
-  from "9.prems"(1) obtain calleeName expArgTypes calleeInfo next_mv1 where
+  let ?flags = "call_special_flags env ghost callee (length args)"
+  \<comment> \<open>The steps of the elaboration: resolve the callee, elaborate the plain
+      arguments, then the special ones, then finish_call\<close>
+  from "9.prems"(1) obtain calleeName expArgTypes calleeInfo next_mv1
+       plainTms plainTys next_mvP specialTms specialTys where
     resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
-                 = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
-    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
-  from "9.prems"(1) resolve_eq have len_args: "length args = length expArgTypes"
-    by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
-  from "9.prems"(1) resolve_eq len_args obtain elabArgTms actualTypes next_mv2 where
-    elab_args: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
-    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
-  from "9.prems"(1) resolve_eq len_args elab_args have next_mv_eq: "next_mv' = next_mv2"
-    by (auto simp: build_call_result_def Let_def unify_and_coerce_def
-             split: sum.splits CalleeInfo.splits prod.splits)
+                 = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)" and
+    len_args: "length args = length expArgTypes" and
+    elab_plain: "elab_term_list env elabEnv ghost (plain_args ?flags args) next_mv1
+                 = Inr (plainTms, plainTys, next_mvP)" and
+    elab_special: "elab_term_list env elabEnv Ghost (special_args ?flags args) next_mvP
+                   = Inr (specialTms, specialTys, next_mv')" and
+    fin: "finish_call env ghost loc args ?flags expArgTypes calleeInfo
+            plainTms plainTys next_mvP specialTms specialTys next_mv'
+          = Inr (newTm, ty)"
+    by (rule elab_term_Call_elim)
 
-  \<comment> \<open>Monotonicity from resolve_callee\<close>
+  \<comment> \<open>Monotonicity, and freshness at each stage\<close>
   have mono_1: "next_mv \<le> next_mv1"
     using resolve_callee_correct[OF resolve_eq "9.prems"(2,3)] by simp
-
-  \<comment> \<open>Freshness carries through resolve_callee\<close>
+  have mono_2: "next_mv1 \<le> next_mvP"
+    using elab_term_list_next_mv_monotone[OF elab_plain] .
   have fresh_1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
     using "9.prems"(4) mono_1 tyvar_fresh_ok_mono by fastforce
-  \<comment> \<open>From IH on elab_term_list: elaborated args have their types in a sub-extended env\<close>
-  have ih_args_sub: "list_all2 (\<lambda>tm ty. core_term_type
-                                  (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty)
-                               elabArgTms actualTypes"
-    using "9.IH" "9.prems"(2,3) resolve_eq elab_args len_args fresh_1
-    by (auto simp: resolve_callee_def build_call_result_def Let_def
+  have fresh_P: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mvP"
+    using fresh_1 mono_2 tyvar_fresh_ok_mono by fastforce
+
+  \<comment> \<open>From the IHs on the two calls of elab_term_list: each group of
+      arguments is typed in the env extended with its own metavariables\<close>
+  have ih_plain: "list_all2 (\<lambda>tm ty. core_term_type
+                                (extend_env_with_tyvars env ghost next_mv1 next_mvP) ghost tm
+                              = Some ty)
+                     plainTms plainTys"
+    using "9.IH"(1) "9.prems"(2,3) resolve_eq elab_plain len_args fresh_1
+    by (auto simp: resolve_callee_def Let_def
              split: sum.splits BabTerm.splits option.splits CalleeInfo.splits prod.splits)
-  have mono_2: "next_mv1 \<le> next_mv2"
-    using elab_term_list_next_mv_monotone[OF elab_args] .
-  \<comment> \<open>Lift ih_args_sub to the outer extended env\<close>
-  have ih_args: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty)
-                           elabArgTms actualTypes"
-  proof -
-    have "\<And>tm ty. core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost tm = Some ty \<Longrightarrow>
-                  core_term_type ?env' ghost tm = Some ty"
-      using core_term_type_extend_env_with_tyvars_mono[where lo=next_mv1 and hi=next_mv2
-                                                        and lo'=next_mv and hi'=next_mv']
-            mono_1 mono_2 next_mv_eq by simp
-    thus ?thesis using ih_args_sub by (auto elim!: list_all2_mono)
-  qed
+  have ih_special: "list_all2 (\<lambda>tm ty. core_term_type
+                                  (extend_env_with_tyvars env Ghost next_mvP next_mv') Ghost tm
+                                = Some ty)
+                       specialTms specialTys"
+    using "9.IH"(2) "9.prems"(2,3) resolve_eq elab_plain elab_special len_args fresh_P
+    by (auto simp: resolve_callee_def Let_def
+             split: sum.splits BabTerm.splits option.splits CalleeInfo.splits prod.splits)
 
   (* Use the helper lemma to complete the proof *)
   show ?case
-    using elab_term_correct_call[OF "9.prems"(1,2,3,4) resolve_eq elab_args ih_args] .
+    by (rule elab_term_correct_call
+               [OF "9.prems"(2,3,4) resolve_eq len_args refl elab_plain elab_special fin
+                   ih_plain ih_special])
 
 next
   \<comment> \<open>Case: BabTm_Tuple\<close>

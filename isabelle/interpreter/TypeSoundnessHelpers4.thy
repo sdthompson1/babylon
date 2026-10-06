@@ -51,8 +51,7 @@ lemma type_soundness_at_depth:
   and
     "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
        list_all2 (\<lambda>tm expectedTy.
-           case core_term_type env Ghost tm of
-             None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+           core_term_type env Ghost tm = Some expectedTy)
          argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                      (FI_TmArgs funInfo));
        retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo);
@@ -341,13 +340,16 @@ next
           by (auto simp: Let_def split: option.splits if_splits)
         let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
         let ?expectedArgTypes = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
-        from typing CoreTm_FunctionCall fn_lookup len_tyargs tyargs_wk all_var not_impure
-             len_tmargs have
-          args_check: "list_all2 (\<lambda>tm expectedTy.
-              case core_term_type env Ghost tm of None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
-            tmArgs ?expectedArgTypes" and
-          ty_eq: "ty = apply_subst ?tySubst (FI_ReturnType funInfo)"
-          by (auto simp: Let_def split: if_splits)
+        \<comment> \<open>Each actual is typed at the mode given by its parameter's ghost flag.
+            All of them are typed in Ghost mode; the flag is not looked at. \<close>
+        have typing_fc: "core_term_type env Ghost (CoreTm_FunctionCall fnName tyArgs tmArgs) = Some ty"
+          using typing unfolding CoreTm_FunctionCall .
+        have args_check: "list_all2 (\<lambda>tm expectedTy.
+              core_term_type env Ghost tm = Some expectedTy)
+            tmArgs ?expectedArgTypes"
+          by (rule core_term_type_FunctionCall_args_Ghost(1)[OF typing_fc fn_lookup])
+        have ty_eq: "ty = apply_subst ?tySubst (FI_ReturnType funInfo)"
+          by (rule core_term_type_FunctionCall_args_Ghost(2)[OF typing_fc fn_lookup])
         \<comment> \<open>Vacuous lvalue obligation: all args are Var. \<close>
         have ref_lvalues: "\<forall>i < length tmArgs.
                             fst (snd (FI_TmArgs funInfo ! i)) = Ref
@@ -372,8 +374,7 @@ next
                 tyenv_well_formed env' \<Longrightarrow>
                 fmlookup (TE_Functions env') fnName' = Some funInfo' \<Longrightarrow>
                 list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type env' Ghost tm of
-                      None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                    core_term_type env' Ghost tm = Some expectedTy)
                   argTms' (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) ty)
                                (FI_TmArgs funInfo')) \<Longrightarrow>
                 retTy' = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo') tyArgs')) (FI_ReturnType funInfo') \<Longrightarrow>
@@ -930,8 +931,7 @@ next
                 tyenv_well_formed env0 \<Longrightarrow>
                 fmlookup (TE_Functions env0) fnName0 = Some funInfo0 \<Longrightarrow>
                 list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type env0 Ghost tm of
-                      None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                    core_term_type env0 Ghost tm = Some expectedTy)
                   argTms0 (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty)
                                (FI_TmArgs funInfo0)) \<Longrightarrow>
                 retTy0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) (FI_ReturnType funInfo0) \<Longrightarrow>
@@ -956,7 +956,7 @@ next
               "core_term_type env declGhost initTm = Some varTy"
               by (auto split: if_splits)
             have init_ty: "core_term_type env Ghost initTm = Some varTy"
-              by (rule core_term_type_imp_Ghost[OF init_ty0])
+              by (rule core_term_type_NotGhost_imp_Ghost[OF init_ty0])
             from typing CoreStmt_VarDecl Var have env'_eq:
               "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                             TE_GhostLocals := (if declGhost = Ghost
@@ -1028,7 +1028,7 @@ next
                                                        else finsert varName (TE_ConstLocals env)) \<rparr>"
               by (auto split: if_splits)
             have init_ty: "core_term_type env Ghost initTm = Some varTy"
-              by (rule core_term_type_imp_Ghost[OF init_ty0])
+              by (rule core_term_type_NotGhost_imp_Ghost[OF init_ty0])
 
             \<comment> \<open>The interpreter dispatches on lvalue_base_name initTm. is_lvalue ensures
                 this is Some baseName. \<close>
@@ -1217,8 +1217,7 @@ next
             fn_ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                            (FI_ReturnType funInfo)" and
             args_check: "list_all2 (\<lambda>tm expectedTy.
-                           case core_term_type env Ghost tm of
-                             None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                           core_term_type env Ghost tm = Some expectedTy)
                          argTms
                          (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                               (FI_TmArgs funInfo))" and
@@ -1300,9 +1299,9 @@ next
             env'_eq: "env' = env"
             by (auto split: if_splits option.splits)
           have lhs_ty: "core_term_type env Ghost lhsTm = Some lhsTy"
-            by (rule core_term_type_imp_Ghost[OF lhs_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF lhs_ty0])
           have rhs_ty: "core_term_type env Ghost rhsTm = Some lhsTy"
-            by (rule core_term_type_imp_Ghost[OF rhs_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF rhs_ty0])
           from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty]]
           have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
               (interp_writable_lvalue d fuel state lhsTm)" .
@@ -1390,7 +1389,7 @@ next
             env'_eq: "env' = env"
             by (simp_all split: if_splits)
           have lhs_ty: "core_term_type env Ghost lhsTm = Some lhsTy"
-            by (rule core_term_type_imp_Ghost[OF lhs_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF lhs_ty0])
           have cast_ty: "cast_result_type env Ghost retTy castOpt = Some lhsTy"
             by (rule cast_result_type_imp_Ghost[OF cast_ty0])
           \<comment> \<open>Extract the function-call facts (shape for IH_fc / type_soundness_function_call),
@@ -1403,8 +1402,7 @@ next
             fn_ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                            (FI_ReturnType funInfo)" and
             args_check: "list_all2 (\<lambda>tm expectedTy.
-                           case core_term_type env Ghost tm of
-                             None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                           core_term_type env Ghost tm = Some expectedTy)
                          argTms
                          (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                               (FI_TmArgs funInfo))" and
@@ -1573,9 +1571,9 @@ next
             env'_eq: "env' = env"
             by (auto split: if_splits option.splits)
           have lhs_ty: "core_term_type env Ghost lhsTm = Some lhsTy"
-            by (rule core_term_type_imp_Ghost[OF lhs_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF lhs_ty0])
           have rhs_ty: "core_term_type env Ghost rhsTm = Some lhsTy"
-            by (rule core_term_type_imp_Ghost[OF rhs_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF rhs_ty0])
           from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty]]
           have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
               (interp_writable_lvalue d fuel state lhsTm)" .
@@ -1714,7 +1712,7 @@ next
           env'_eq: "env' = env"
           by (auto split: if_splits)
         have tm_ty: "core_term_type env Ghost tm = Some (TE_ReturnType env)"
-          by (rule core_term_type_imp_Ghost[OF tm_ty0])
+          by (rule core_term_type_NotGhost_imp_Ghost[OF tm_ty0])
         from IH_term[OF "4.prems"(1,2) tm_ty]
         have tm_sound: "sound_term_result state env (TE_ReturnType env) (interp_term d fuel state tm)" .
         show ?thesis proof (cases "interp_term d fuel state tm")
@@ -1820,7 +1818,7 @@ next
             unfolding benv_def
             by (auto split: if_splits option.splits CoreType.splits)
           have cond_ty: "core_term_type env Ghost condTm = Some CoreTy_Bool"
-            by (rule core_term_type_imp_Ghost[OF cond_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF cond_ty0])
           \<comment> \<open>Core typing result: CoreStmt_While yields env' = env. We need the
               recursive-call premise of that exact shape. \<close>
           have while_typed: "core_statement_type env ghost
@@ -2079,7 +2077,7 @@ next
             unfolding benv_def
             by (auto simp: Let_def split: if_splits option.splits)
           have scrut_ty: "core_term_type env Ghost scrut = Some scrutTy"
-            by (rule core_term_type_imp_Ghost[OF scrut_ty0])
+            by (rule core_term_type_NotGhost_imp_Ghost[OF scrut_ty0])
           have sme_benv: "state_matches_env state benv storeTyping"
             using "4.prems"(1) unfolding benv_def by simp
           have wf_benv: "tyenv_well_formed benv"

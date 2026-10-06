@@ -114,6 +114,137 @@ lemma unify_bool_range_complete:
 
 
 (* ========================================================================== *)
+(* The steps of elaborating a call *)
+(* ========================================================================== *)
+
+(* A successful elaboration of a call, taken apart: the callee is resolved, the
+   plain arguments are elaborated in the mode of the call, then the special
+   arguments in Ghost mode, and finish_call type-checks them and builds the
+   result. *)
+lemma elab_term_Call_elim:
+  assumes "elab_term env elabEnv ghost (BabTm_Call loc callee args) next_mv
+             = Inr (newTm, ty, next_mv')"
+  obtains calleeName expArgTypes calleeInfo next_mv1
+          plainTms plainTys next_mvP specialTms specialTys where
+    "resolve_callee env elabEnv ghost callee next_mv
+       = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
+    "length args = length expArgTypes"
+    "elab_term_list env elabEnv ghost
+       (plain_args (call_special_flags env ghost callee (length args)) args) next_mv1
+       = Inr (plainTms, plainTys, next_mvP)"
+    "elab_term_list env elabEnv Ghost
+       (special_args (call_special_flags env ghost callee (length args)) args) next_mvP
+       = Inr (specialTms, specialTys, next_mv')"
+    "finish_call env ghost loc args (call_special_flags env ghost callee (length args))
+       expArgTypes calleeInfo plainTms plainTys next_mvP specialTms specialTys next_mv'
+       = Inr (newTm, ty)"
+  using assms by (auto split: sum.splits prod.splits if_splits)
+
+(* Splitting a list by flags commutes with map, and loses no element. *)
+lemma plain_args_map:
+  "plain_args fs (map f xs) = map f (plain_args fs xs)"
+  by (induction fs xs rule: plain_args.induct) auto
+
+lemma special_args_map:
+  "special_args fs (map f xs) = map f (special_args fs xs)"
+  by (induction fs xs rule: special_args.induct) auto
+
+lemma plain_args_subset: "set (plain_args fs xs) \<subseteq> set xs"
+  by (induction fs xs rule: plain_args.induct) auto
+
+lemma special_args_subset: "set (special_args fs xs) \<subseteq> set xs"
+  by (induction fs xs rule: special_args.induct) auto
+
+(* The sizes of the parts depend only on the flags and on the length of the
+   list. *)
+lemma plain_args_length_cong:
+  "length xs = length ys \<Longrightarrow> length (plain_args fs xs) = length (plain_args fs ys)"
+proof (induction fs arbitrary: xs ys)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons f fs)
+  note IH = Cons.IH and len = Cons.prems
+  show ?case
+  proof (cases xs)
+    case Nil
+    with len show ?thesis by simp
+  next
+    case xs_eq: (Cons x xs')
+    with len obtain y ys' where ys: "ys = y # ys'" and len': "length xs' = length ys'"
+      by (cases ys) auto
+    from IH[OF len'] show ?thesis by (simp add: xs_eq ys)
+  qed
+qed
+
+lemma special_args_length_cong:
+  "length xs = length ys \<Longrightarrow> length (special_args fs xs) = length (special_args fs ys)"
+proof (induction fs arbitrary: xs ys)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons f fs)
+  note IH = Cons.IH and len = Cons.prems
+  show ?case
+  proof (cases xs)
+    case Nil
+    with len show ?thesis by simp
+  next
+    case xs_eq: (Cons x xs')
+    with len obtain y ys' where ys: "ys = y # ys'" and len': "length xs' = length ys'"
+      by (cases ys) auto
+    from IH[OF len'] show ?thesis by (simp add: xs_eq ys)
+  qed
+qed
+
+(* With no flag set, every element is plain. *)
+lemma plain_args_all_False:
+  "\<not> (\<exists>f \<in> set fs. f) \<Longrightarrow> plain_args fs xs = xs"
+  by (induction fs xs rule: plain_args.induct) auto
+
+lemma special_args_all_False:
+  "\<not> (\<exists>f \<in> set fs. f) \<Longrightarrow> special_args fs xs = []"
+  by (induction fs xs rule: special_args.induct) auto
+
+(* Merging the two parts: if the plain part of ys relates to ps by Pp, and the
+   special part of ys relates to ss by Ps, then the merged list relates to ys,
+   position by position, by whichever of the two the flag selects. *)
+lemma merge_args_list_all2:
+  assumes "list_all2 Pp ps (plain_args fs ys)"
+    and "list_all2 Ps ss (special_args fs ys)"
+    and "length fs = length ys"
+  shows "list_all2 (\<lambda>x (f, y). if f then Ps x y else Pp x y)
+           (merge_args fs ps ss) (zip fs ys)"
+  using assms
+proof (induction fs arbitrary: ys ps ss)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons f fs)
+  from Cons.prems(3) obtain y ys' where ys: "ys = y # ys'" and len: "length fs = length ys'"
+    by (cases ys) auto
+  show ?case
+  proof (cases f)
+    case True
+    from Cons.prems(2) ys True obtain s ss' where
+      ss: "ss = s # ss'" and hd: "Ps s y" and
+      tl: "list_all2 Ps ss' (special_args fs ys')"
+      by (cases ss) auto
+    from Cons.prems(1) ys True have pl: "list_all2 Pp ps (plain_args fs ys')" by simp
+    from Cons.IH[OF pl tl len] hd show ?thesis by (simp add: ys ss True)
+  next
+    case False
+    from Cons.prems(1) ys False obtain p ps' where
+      ps: "ps = p # ps'" and hd: "Pp p y" and
+      tl: "list_all2 Pp ps' (plain_args fs ys')"
+      by (cases ps) auto
+    from Cons.prems(2) ys False have sp: "list_all2 Ps ss (special_args fs ys')" by simp
+    from Cons.IH[OF tl sp len] hd show ?thesis by (simp add: ys ps False)
+  qed
+qed
+
+
+(* ========================================================================== *)
 (* Monotonicity of the metavariable counter *)
 (* ========================================================================== *)
 
@@ -242,11 +373,24 @@ next
     using "8.IH" by (auto simp: Let_def split: sum.splits if_splits option.splits)
 next
   case (9 env elabEnv ghost loc callee args next_mv)
-  \<comment> \<open>BabTm_Call: threads through resolve_callee, elab_term_list, build_call_result\<close>
-  from "9.prems" obtain calleeName expArgTypes calleeInfo next_mv1 where
+  \<comment> \<open>BabTm_Call: threads through resolve_callee and the two calls of
+      elab_term_list (plain arguments, then special arguments)\<close>
+  from "9.prems" obtain calleeName expArgTypes calleeInfo next_mv1
+       plainTms plainTys next_mvP specialTms specialTys where
     resolve_eq: "resolve_callee env elabEnv ghost callee next_mv
-                 = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)"
-    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
+                 = Inr (calleeName, expArgTypes, calleeInfo, next_mv1)" and
+    len_args: "length args = length expArgTypes" and
+    elab_plain: "elab_term_list env elabEnv ghost
+                   (plain_args (call_special_flags env ghost callee (length args)) args) next_mv1
+                 = Inr (plainTms, plainTys, next_mvP)" and
+    elab_special: "elab_term_list env elabEnv Ghost
+                     (special_args (call_special_flags env ghost callee (length args)) args)
+                     next_mvP
+                   = Inr (specialTms, specialTys, next_mv')" and
+    fin: "finish_call env ghost loc args (call_special_flags env ghost callee (length args))
+            expArgTypes calleeInfo plainTms plainTys next_mvP specialTms specialTys next_mv'
+          = Inr (tm', ty')"
+    by (rule elab_term_Call_elim)
   \<comment> \<open>resolve_callee is monotone\<close>
   have resolve_mono: "next_mv \<le> next_mv1"
   proof (cases callee)
@@ -256,19 +400,15 @@ next
                      resolve_type_args_def Let_def
                split: option.splits if_splits sum.splits)
   qed (use resolve_eq in \<open>simp_all add: resolve_callee_def\<close>)
-  from "9.prems" resolve_eq have len_args: "length args = length expArgTypes"
-    by (auto simp: build_call_result_def Let_def split: if_splits sum.splits CalleeInfo.splits prod.splits)
-  from "9.prems" resolve_eq len_args obtain elabArgTms actualTypes next_mv2 where
-    elab_args: "elab_term_list env elabEnv ghost args next_mv1 = Inr (elabArgTms, actualTypes, next_mv2)"
-    by (auto simp: build_call_result_def Let_def split: sum.splits CalleeInfo.splits prod.splits)
-  have m2: "next_mv1 \<le> next_mv2"
-    using "9.IH" resolve_eq len_args elab_args
-    by (auto simp: resolve_callee_def build_call_result_def Let_def
+  have m2: "next_mv1 \<le> next_mvP"
+    using "9.IH"(1) resolve_eq len_args elab_plain
+    by (auto simp: resolve_callee_def Let_def
              split: sum.splits BabTerm.splits option.splits CalleeInfo.splits prod.splits)
-  from "9.prems" resolve_eq len_args elab_args have "next_mv' = next_mv2"
-    by (auto simp: build_call_result_def Let_def unify_and_coerce_def
-             split: sum.splits CalleeInfo.splits prod.splits)
-  with resolve_mono m2 show ?case by simp
+  have m3: "next_mvP \<le> next_mv'"
+    using "9.IH"(2) resolve_eq len_args elab_plain elab_special
+    by (auto simp: resolve_callee_def Let_def
+             split: sum.splits BabTerm.splits option.splits CalleeInfo.splits prod.splits)
+  from resolve_mono m2 m3 show ?case by simp
 next
   case (10 env elabEnv ghost loc tms next_mv)
   \<comment> \<open>BabTm_Tuple: forwards elab_term_list's next_mv\<close>
@@ -558,8 +698,9 @@ qed
 (* ============================================================================== *)
 
 (* Validity predicate for a function callee: the function exists, is pure,
-   satisfies ghost constraints, type args are well-kinded/runtime/complete,
-   and expArgTypes + retType are consistent with the function declaration. *)
+   satisfies ghost constraints (in an executable call it is not ghost), type
+   args are well-kinded/runtime/complete, and expArgTypes + retType are
+   consistent with the function declaration. *)
 definition callee_info_valid_function ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreType \<Rightarrow> CoreType list \<Rightarrow> bool" where
   "callee_info_valid_function env ghost fnName tyArgs retType expArgTypes =
@@ -661,22 +802,50 @@ next
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 qed
 
+(* A property of the plain elements of a list, from the property at each
+   position whose flag is not set. *)
+lemma list_all_plain_argsI:
+  assumes "length fs = length xs"
+    and "\<And>i. i < length xs \<Longrightarrow> \<not> fs ! i \<Longrightarrow> P (xs ! i)"
+  shows "list_all P (plain_args fs xs)"
+  using assms
+proof (induction fs xs rule: list_induct2)
+  case Nil
+  show ?case by simp
+next
+  case (Cons f fs x xs)
+  have tl: "list_all P (plain_args fs xs)"
+  proof (rule Cons.IH)
+    fix i assume "i < length xs" and "\<not> fs ! i"
+    then show "P (xs ! i)" using Cons.prems[of "Suc i"] by simp
+  qed
+  have hd: "\<not> f \<Longrightarrow> P x" using Cons.prems[of 0] by simp
+  show ?case using tl hd by simp
+qed
+
 (* Correctness of resolve_callee_function:
-   If it succeeds, callee_info_valid_function holds in the extended env. *)
+   If it succeeds, callee_info_valid_function holds in the extended env. In an
+   executable call, the expected types of the parameters that are not ghost
+   are runtime types. (A ghost parameter may have any type.) *)
 lemma resolve_callee_function_correct:
   assumes "resolve_callee_function env elabEnv ghost loc name tyArgs next_mv
            = Inr (calleeName, expArgTypes, calleeInfo, next_mv')"
       and "tyenv_well_formed env"
       and "typedefs_well_formed env (EE_Typedefs elabEnv)"
-  shows "\<exists>newTyArgs retType.
+  shows "\<exists>newTyArgs retType funInfo.
      calleeName = name
    \<and> calleeInfo = CI_Function name newTyArgs retType
    \<and> next_mv \<le> next_mv'
+   \<and> fmlookup (TE_Functions env) name = Some funInfo
+   \<and> length expArgTypes = length (FI_TmArgs funInfo)
    \<and> callee_info_valid_function (extend_env_with_tyvars env ghost next_mv next_mv')
                                 ghost name newTyArgs retType expArgTypes
    \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes
    \<and> (ghost = NotGhost \<longrightarrow>
-        list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes)"
+        (\<forall>i < length expArgTypes.
+           snd (snd (FI_TmArgs funInfo ! i)) = NotGhost \<longrightarrow>
+           is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')
+                           (expArgTypes ! i)))"
 proof -
   from assms(1) obtain funInfo where
     fn_lookup: "fmlookup (TE_Functions env) name = Some funInfo"
@@ -757,34 +926,50 @@ proof -
   have "tyenv_fun_ghost_constraint ?env'"
     using wf' tyenv_well_formed_def by blast
   hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
-          \<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+          \<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
             is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
                   TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
                                          |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
     using fn_lookup' tyenv_fun_ghost_constraint_def by (simp add: Let_def)
-  have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
-  proof
+  have len_exp: "length expArgTypes = length (FI_TmArgs funInfo)"
+    using expArg_eq by simp
+  have expArgTypes_rt:
+    "ghost = NotGhost \<longrightarrow>
+       (\<forall>i < length expArgTypes.
+          snd (snd (FI_TmArgs funInfo ! i)) = NotGhost \<longrightarrow>
+          is_runtime_type ?env' (expArgTypes ! i))"
+  proof (intro impI allI)
+    fix i
     assume ng: "ghost = NotGhost"
-    hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
+      and i_lt: "i < length expArgTypes"
+      and flag: "snd (snd (FI_TmArgs funInfo ! i)) = NotGhost"
+    from ng have fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
     have tyargs_rt: "list_all (is_runtime_type ?env') newTyArgs" using rta ng by simp
-    have "list_all (\<lambda>(ty, _). is_runtime_type ?env' (apply_subst
-            (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
-    proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
-      with fi_args_rt_inner[OF fg_ng]
-      have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
-                  TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
-                                         |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-      thus "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-        using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
-    qed
-    thus "list_all (is_runtime_type ?env') expArgTypes"
-      using expArg_eq by (auto simp: list_all_iff)
+    from i_lt len_exp have i_lt': "i < length (FI_TmArgs funInfo)" by simp
+    obtain t vor gh where p_eq: "FI_TmArgs funInfo ! i = (t, vor, gh)"
+      by (cases "FI_TmArgs funInfo ! i")
+    from flag p_eq have gh_eq: "gh = NotGhost" by simp
+    \<comment> \<open>The parameter is not ghost, so its declared type is a runtime type.\<close>
+    have mem: "(t, vor, NotGhost) \<in> set (FI_TmArgs funInfo)"
+      using nth_mem[OF i_lt'] p_eq gh_eq by simp
+    from fi_args_rt_inner[OF fg_ng] mem
+    have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
+                TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
+                                       |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
+    then have "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+      using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
+    moreover have "expArgTypes ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t"
+      using expArg_eq i_lt' p_eq by simp
+    ultimately show "is_runtime_type ?env' (expArgTypes ! i)" by simp
   qed
 
+  from rta have mono: "next_mv \<le> next_mv'" by simp
   show ?thesis
-    using name_eq ci_eq rta civ expArgTypes_wk expArgTypes_rt by blast
+    by (intro exI[of _ newTyArgs]
+              exI[of _ "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs))
+                                    (FI_ReturnType funInfo)"]
+              exI[of _ funInfo] conjI)
+       (rule name_eq ci_eq mono fn_lookup len_exp civ expArgTypes_wk expArgTypes_rt)+
 qed
 
 (* Correctness of resolve_callee_data_ctor:
@@ -884,7 +1069,22 @@ proof -
     using name_eq ci_eq rta civ expArgTypes_wk expArgTypes_rt by blast
 qed
 
-(* Combined resolve_callee correctness: monotonicity + callee_info_valid in the extended env. *)
+(* What the flags of call_special_flags are, for a resolved callee: the ghost
+   flags of the function's parameters (in an executable call), or a single
+   False for the one argument of a data constructor. *)
+definition call_flags_ok :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CalleeInfo \<Rightarrow> bool list \<Rightarrow> bool" where
+  "call_flags_ok env ghost ci flags =
+    (case ci of
+       CI_Function fnName _ _ \<Rightarrow>
+         (\<exists>funInfo. fmlookup (TE_Functions env) fnName = Some funInfo
+                  \<and> flags = map (\<lambda>(_, _, gh). ghost = NotGhost \<and> gh = Ghost)
+                                (FI_TmArgs funInfo))
+     | CI_DataCtor _ _ _ \<Rightarrow> flags = [False])"
+
+(* Combined resolve_callee correctness: monotonicity + callee_info_valid in the
+   extended env. In an executable call the expected types of the plain
+   arguments are runtime types. The flags are those of call_special_flags, for
+   a call with the right number of arguments. *)
 lemma resolve_callee_correct:
   assumes "resolve_callee env elabEnv ghost callee next_mv
            = Inr (calleeName, expArgTypes, calleeInfo, next_mv')"
@@ -894,9 +1094,16 @@ lemma resolve_callee_correct:
        \<and> callee_info_valid (extend_env_with_tyvars env ghost next_mv next_mv') ghost calleeInfo expArgTypes
        \<and> list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes
        \<and> (ghost = NotGhost \<longrightarrow>
-            list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes)"
+            list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv'))
+                     (plain_args (call_special_flags env ghost callee (length expArgTypes))
+                                 expArgTypes))
+       \<and> length (call_special_flags env ghost callee (length expArgTypes)) = length expArgTypes
+       \<and> call_flags_ok env ghost calleeInfo
+                       (call_special_flags env ghost callee (length expArgTypes))"
 proof (cases callee)
   case (BabTm_Name loc name tyArgs)
+  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
+  let ?flags = "call_special_flags env ghost callee (length expArgTypes)"
   show ?thesis
   proof (cases "fmlookup (TE_DataCtors env) name")
     case (Some entry)
@@ -910,15 +1117,25 @@ proof (cases callee)
       "calleeName = name"
       "calleeInfo = CI_DataCtor name dtName newTyArgs"
       "next_mv \<le> next_mv'"
-      "callee_info_valid_data_ctor (extend_env_with_tyvars env ghost next_mv next_mv')
-                                   ghost name dtName newTyArgs expArgTypes"
-      "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes"
-      "ghost = NotGhost \<longrightarrow>
-         list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes"
+      "callee_info_valid_data_ctor ?env' ghost name dtName newTyArgs expArgTypes"
+      "list_all (is_well_kinded ?env') expArgTypes"
+      "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
       by blast
-    have civ: "callee_info_valid (extend_env_with_tyvars env ghost next_mv next_mv') ghost calleeInfo expArgTypes"
+    have civ: "callee_info_valid ?env' ghost calleeInfo expArgTypes"
       using props by (simp add: callee_info_valid_def)
-    show ?thesis using props civ by simp
+    \<comment> \<open>A data constructor takes one argument, and it is plain.\<close>
+    from props(4) have len1: "length expArgTypes = 1"
+      unfolding callee_info_valid_data_ctor_def by auto
+    have flags_eq: "?flags = [False]"
+      using BabTm_Name Some len1 by (simp add: call_special_flags_def)
+    have plain_eq: "plain_args ?flags expArgTypes = expArgTypes"
+      unfolding flags_eq by (rule plain_args_all_False) simp
+    have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') (plain_args ?flags expArgTypes)"
+      unfolding plain_eq by (rule props(6))
+    have len: "length ?flags = length expArgTypes" using flags_eq len1 by simp
+    have fok: "call_flags_ok env ghost calleeInfo ?flags"
+      using props(2) flags_eq by (simp add: call_flags_ok_def)
+    show ?thesis by (intro conjI) (rule props(3) civ props(5) rt len fok)+
   next
     case None
     \<comment> \<open>Function path\<close>
@@ -929,19 +1146,48 @@ proof (cases callee)
     have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
       using assms(3) unfolding elabenv_well_formed_def by simp
     from resolve_callee_function_correct[OF resolve_fn assms(2) td_wf]
-    obtain newTyArgs retType where props:
+    obtain newTyArgs retType funInfo where props:
       "calleeName = name"
       "calleeInfo = CI_Function name newTyArgs retType"
       "next_mv \<le> next_mv'"
-      "callee_info_valid_function (extend_env_with_tyvars env ghost next_mv next_mv')
-                                  ghost name newTyArgs retType expArgTypes"
-      "list_all (is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes"
+      "fmlookup (TE_Functions env) name = Some funInfo"
+      "length expArgTypes = length (FI_TmArgs funInfo)"
+      "callee_info_valid_function ?env' ghost name newTyArgs retType expArgTypes"
+      "list_all (is_well_kinded ?env') expArgTypes"
       "ghost = NotGhost \<longrightarrow>
-         list_all (is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv')) expArgTypes"
+         (\<forall>i < length expArgTypes.
+            snd (snd (FI_TmArgs funInfo ! i)) = NotGhost \<longrightarrow>
+            is_runtime_type ?env' (expArgTypes ! i))"
       by blast
-    have civ: "callee_info_valid (extend_env_with_tyvars env ghost next_mv next_mv') ghost calleeInfo expArgTypes"
+    have civ: "callee_info_valid ?env' ghost calleeInfo expArgTypes"
       using props by (simp add: callee_info_valid_def)
-    show ?thesis using props civ by simp
+    \<comment> \<open>The flags are the ghost flags of the function's parameters.\<close>
+    have flags_eq: "?flags = map (\<lambda>(_, _, gh). ghost = NotGhost \<and> gh = Ghost)
+                                (FI_TmArgs funInfo)"
+      using BabTm_Name None props(4) by (simp add: call_special_flags_def)
+    have len: "length ?flags = length expArgTypes"
+      unfolding flags_eq using props(5) by simp
+    have fok: "call_flags_ok env ghost calleeInfo ?flags"
+      using props(2,4) flags_eq by (simp add: call_flags_ok_def)
+    have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') (plain_args ?flags expArgTypes)"
+    proof
+      assume ng: "ghost = NotGhost"
+      show "list_all (is_runtime_type ?env') (plain_args ?flags expArgTypes)"
+      proof (rule list_all_plain_argsI[OF len])
+        fix i assume i_lt: "i < length expArgTypes" and nf: "\<not> ?flags ! i"
+        from i_lt props(5) have i_lt': "i < length (FI_TmArgs funInfo)" by simp
+        obtain t vor gh where p_eq: "FI_TmArgs funInfo ! i = (t, vor, gh)"
+          by (cases "FI_TmArgs funInfo ! i")
+        from nf have nf': "\<not> map (\<lambda>(_, _, gh). ghost = NotGhost \<and> gh = Ghost)
+                                   (FI_TmArgs funInfo) ! i"
+          unfolding flags_eq .
+        from nf' i_lt' p_eq ng have "gh \<noteq> Ghost" by simp
+        then have "gh = NotGhost" by (cases gh) simp_all
+        with p_eq have "snd (snd (FI_TmArgs funInfo ! i)) = NotGhost" by simp
+        with props(8) ng i_lt show "is_runtime_type ?env' (expArgTypes ! i)" by blast
+      qed
+    qed
+    show ?thesis by (intro conjI) (rule props(3) civ props(7) rt len fok)+
   qed
 qed (use assms(1) in \<open>simp_all add: resolve_callee_def\<close>)
 
@@ -949,15 +1195,23 @@ qed (use assms(1) in \<open>simp_all add: resolve_callee_def\<close>)
 (* Correctness of build_call_result:
    Given that calleeInfo is valid in env', the coerced args typecheck in env',
    and the substitution is well-kinded/runtime, the result term typechecks in env'.
-   env' must be an extension of env that only adds type variables. *)
+   env' must be an extension of env that only adds type variables.
+
+   Each argument typechecks in the mode of its position: Ghost for a special
+   argument (flag True), and the mode of the call for a plain one. *)
 lemma build_call_result_correct:
   assumes build_eq: "build_call_result env ghost loc calleeInfo finalSubst finalArgTms
                      = (resultTm, resultTy)"
       and civ: "callee_info_valid env' ghost calleeInfo expArgTypes"
       and wf': "tyenv_well_formed env'"
       and wf: "tyenv_well_formed env"
-      and coerce: "list_all2 (\<lambda>tm expTy. core_term_type env' ghost tm = Some (apply_subst finalSubst expTy))
-                             finalArgTms expArgTypes"
+      and flags_ok: "call_flags_ok env ghost calleeInfo flags"
+      and flags_len: "length flags = length expArgTypes"
+      and funs_eq: "TE_Functions env' = TE_Functions env"
+      and coerce: "list_all2 (\<lambda>tm (f, expTy).
+                                core_term_type env' (if f then Ghost else ghost) tm
+                                  = Some (apply_subst finalSubst expTy))
+                             finalArgTms (zip flags expArgTypes)"
       and subst_wk: "\<forall>ty \<in> fmran' finalSubst. is_well_kinded env' ty"
       and subst_rt: "ghost = NotGhost \<longrightarrow> (\<forall>ty \<in> fmran' finalSubst. is_runtime_type env' ty)"
       and subst_flex: "\<forall>n. n |\<in>| fmdom finalSubst \<longrightarrow> n |\<notin>| TE_TypeVars env"
@@ -1050,15 +1304,54 @@ proof (cases calleeInfo)
       fi_args_tyvars' fi_tyargs_distinct len_tyargs map_apply_subst_compose_zip_extra
     by presburger
 
-  have args_match: "list_all2 (\<lambda>tm expectedTy.
-           case core_term_type env' ghost tm of
-             None \<Rightarrow> False
-           | Some actualTy \<Rightarrow> actualTy = expectedTy)
-         finalArgTms ?coreExpArgTypes"
-    using coerce core_exp_eq by (simp add: list_all2_conv_all_nth)
-
+  \<comment> \<open>The flags are the ghost flags of this function's parameters.\<close>
+  from flags_ok CI_Function fn_lookup funs_eq
+  have flags_eq: "flags = map (\<lambda>(_, _, gh). ghost = NotGhost \<and> gh = Ghost) (FI_TmArgs funInfo)"
+    by (auto simp: call_flags_ok_def)
+  have len_exp: "length expArgTypes = length (FI_TmArgs funInfo)"
+    using expArgTypes_eq by simp
   have len_finalArgTms: "length finalArgTms = length (FI_TmArgs funInfo)"
-    using coerce expArgTypes_eq by (simp add: list_all2_lengthD)
+    using list_all2_lengthD[OF coerce] flags_len len_exp by simp
+
+  \<comment> \<open>Each coerced argument typechecks in the mode that the Core check uses
+      for its position: Ghost for the argument of a ghost parameter, and the
+      mode of the call otherwise.\<close>
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have args_match: "list_all2 (\<lambda>tm (expectedTy, mode).
+                        core_term_type env' mode tm = Some expectedTy)
+                      finalArgTms (zip ?coreExpArgTypes ?modes)"
+    unfolding list_all2_case_prod_conv_all_nth
+  proof (intro conjI allI impI)
+    show "length finalArgTms = length (zip ?coreExpArgTypes ?modes)"
+      using len_finalArgTms by simp
+  next
+    fix i assume i_lt: "i < length finalArgTms"
+    from i_lt len_finalArgTms have i_fi: "i < length (FI_TmArgs funInfo)" by simp
+    from i_fi len_exp flags_len have i_exp: "i < length expArgTypes" and i_fl: "i < length flags"
+      by simp_all
+    obtain t vor gh where p_eq: "FI_TmArgs funInfo ! i = (t, vor, gh)"
+      by (cases "FI_TmArgs funInfo ! i")
+    have flag_i: "flags ! i = (ghost = NotGhost \<and> gh = Ghost)"
+      using i_fi p_eq by (simp add: flags_eq)
+    have mode_i: "(if flags ! i then Ghost else ghost) = param_mode ghost gh"
+      unfolding flag_i by (cases ghost; cases gh) (simp_all add: param_mode_def)
+    from list_all2_nthD[OF coerce i_lt] i_exp i_fl
+    have "core_term_type env' (if flags ! i then Ghost else ghost) (finalArgTms ! i)
+            = Some (apply_subst finalSubst (expArgTypes ! i))"
+      by simp
+    then have typed_i: "core_term_type env' (param_mode ghost gh) (finalArgTms ! i)
+                          = Some (apply_subst finalSubst (expArgTypes ! i))"
+      unfolding mode_i .
+    have ce_i: "?coreExpArgTypes ! i = apply_subst finalSubst (expArgTypes ! i)"
+      unfolding core_exp_eq using i_exp by simp
+    have md_i: "?modes ! i = param_mode ghost gh"
+      using i_fi p_eq by simp
+    have zip_i: "zip ?coreExpArgTypes ?modes ! i = (?coreExpArgTypes ! i, ?modes ! i)"
+      using i_fi by simp
+    show "core_term_type env' (snd (zip ?coreExpArgTypes ?modes ! i)) (finalArgTms ! i)
+            = Some (fst (zip ?coreExpArgTypes ?modes ! i))"
+      unfolding zip_i fst_conv snd_conv ce_i md_i by (rule typed_i)
+  qed
 
   \<comment> \<open>Return type after double substitution\<close>
   have fi_ret_tyvars: "\<And>n. n \<in> type_tyvars (FI_ReturnType funInfo)
@@ -1159,9 +1452,13 @@ next
   \<comment> \<open>Show payload typechecks with the expected type\<close>
   have payload_typed: "core_term_type env' ghost ?payload = Some (apply_subst ?coreTySubst payloadTy)"
   proof -
-    from coerce expArg_eq have "core_term_type env' ghost (hd finalArgTms)
-                                = Some (apply_subst finalSubst (apply_subst ?origSubst payloadTy))"
-      using list.rel_cases by fastforce
+    \<comment> \<open>The one argument of a data constructor is plain.\<close>
+    from flags_ok CI_DataCtor have flags_eq: "flags = [False]"
+      by (simp add: call_flags_ok_def)
+    from coerce expArg_eq flags_eq
+    have "core_term_type env' ghost (hd finalArgTms)
+            = Some (apply_subst finalSubst (apply_subst ?origSubst payloadTy))"
+      by (auto simp: list_all2_Cons2)
     thus ?thesis using payload_double_subst by simp
   qed
 

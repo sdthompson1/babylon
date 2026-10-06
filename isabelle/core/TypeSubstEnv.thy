@@ -51,6 +51,12 @@ definition apply_subst_to_tyenv :: "TypeSubst \<Rightarrow> CoreTyEnv \<Rightarr
 (* Field projections                                                          *)
 (* ========================================================================== *)
 
+(* Substitution does not change the parameters' ghost flags. *)
+lemma no_ghost_params_apply_subst_to_funinfo [simp]:
+  "no_ghost_params (apply_subst_to_funinfo subst info) = no_ghost_params info"
+  by (simp add: no_ghost_params_def apply_subst_to_funinfo_def list.pred_map
+                comp_def case_prod_unfold)
+
 lemma apply_subst_to_funinfo_FI_TyArgs [simp]:
   "FI_TyArgs (apply_subst_to_funinfo subst info) = FI_TyArgs info"
   by (simp add: apply_subst_to_funinfo_def)

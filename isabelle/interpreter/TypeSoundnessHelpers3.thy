@@ -1664,8 +1664,7 @@ lemma type_soundness_function_call:
     and wf_env: "tyenv_well_formed env"
     and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
     and args_typed: "list_all2 (\<lambda>tm expectedTy.
-         case core_term_type env Ghost tm of
-           None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = expectedTy)
+         core_term_type env Ghost tm = Some expectedTy)
        argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
                    (FI_TmArgs funInfo))"
     and retTy_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"

@@ -462,11 +462,29 @@ definition elab_const_decl ::
 (* Functions                                                                  *)
 (* ========================================================================== *)
 
+(* Elaborate a list of types, each in its own mode. (Cf. elab_type_list, which
+   elaborates every type in the same mode.) *)
+fun elab_param_types ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> (GhostOrNot \<times> BabType) list
+   \<Rightarrow> TypeError list + CoreType list" where
+  "elab_param_types env elabEnv [] = Inr []"
+| "elab_param_types env elabEnv ((mode, ty) # rest) =
+    (case (elab_type env elabEnv mode ty, elab_param_types env elabEnv rest) of
+      (Inl errs1, Inl errs2) \<Rightarrow> Inl (errs1 @ errs2)
+    | (Inl errs, Inr _) \<Rightarrow> Inl errs
+    | (Inr _, Inl errs) \<Rightarrow> Inl errs
+    | (Inr ty', Inr tys') \<Rightarrow> Inr (ty' # tys'))"
+
 (* Elaborate a function's signature to a FunInfo. The argument and return
    types are elaborated with the function's type parameters in scope; for a
    non-ghost function they are elaborated in NotGhost mode with the type
-   parameters as runtime type variables (which enforces that all arguments
-   and the return value have runtime types). *)
+   parameters as runtime type variables (which enforces that the return value
+   and the parameters that are not ghost have runtime types). The type of a
+   ghost parameter is elaborated in Ghost mode.
+
+   The ghost flag of each parameter is copied from the declaration. A
+   parameter of a ghost function need not be marked: Core treats every
+   parameter of a ghost function as ghost, whatever its flag. *)
 definition elab_fun_signature ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DeclFun \<Rightarrow> TypeError list + FunInfo" where
   "elab_fun_signature env elabEnv df =
@@ -477,7 +495,8 @@ definition elab_fun_signature ::
                           (if ghost = NotGhost then fset_of_list tyvars else {||}) \<rparr>;
          sigElabEnv = elabEnv \<lparr> EE_Typedefs :=
                           tyvar_typedef_entries tyvars (EE_Typedefs elabEnv) \<rparr>
-     in case elab_type_list sigEnv sigElabEnv ghost (map (\<lambda>(_, _, ty). ty) (DF_TmArgs df)) of
+     in case elab_param_types sigEnv sigElabEnv
+               (map (\<lambda>(_, _, ty, gh). (param_mode ghost gh, ty)) (DF_TmArgs df)) of
           Inl errs \<Rightarrow> Inl errs
         | Inr argTys \<Rightarrow>
             (case (case DF_ReturnType df of
@@ -493,9 +512,7 @@ definition elab_fun_signature ::
                  then Inl [TyErr_ImpureGhostFunction (DF_Location df) (DF_Name df)]
                  else
                  Inr \<lparr> FI_TyArgs = tyvars,
-                       \<comment> \<open>Ghost parameters are not yet in the Bab syntax, so every
-                           parameter is NotGhost here.\<close>
-                       FI_TmArgs = zip argTys (map (\<lambda>(_, vor, _). (vor, NotGhost)) (DF_TmArgs df)),
+                       FI_TmArgs = zip argTys (map (\<lambda>(_, vor, _, gh). (vor, gh)) (DF_TmArgs df)),
                        FI_ReturnType = retTy,
                        FI_Ghost = ghost,
                        FI_Impure = DF_Impure df \<rparr>))"
@@ -599,6 +616,11 @@ definition elab_function_decl ::
            then Inl [TyErr_TypeVarCapture loc name]
            else if DF_Extern df \<and> DF_Body df \<noteq> None
            then Inl [TyErr_ExternFunctionWithBody loc name]
+           \<comment> \<open>An extern function is given its whole argument list, so it cannot
+              have a ghost parameter (ghost erasure could not drop the argument)\<close>
+           else if DF_Extern df
+                   \<and> \<not> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)
+           then Inl [TyErr_GhostParamOnExternFunction loc name]
            else
              \<comment> \<open>Elaborate the signature, create FunInfo\<close>
              (case elab_fun_signature env elabEnv df of

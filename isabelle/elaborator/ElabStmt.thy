@@ -41,15 +41,17 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
    ghost-compatible function, and that an impure callee is only called from
    NotGhost code in an impure function; resolves the type arguments
    (allocating fresh metavariables when omitted);
-   and computes the per-argument expected types and Var/Ref markers, plus
+   and computes the per-argument expected types, Var/Ref markers and
+   checking modes (Ghost for a ghost parameter, the ambient mode otherwise), plus
    the substituted return type. Void functions are rejected unless allowVoid is set
    (statement-position calls allow them; their Core return type is unit). Returns:
-     (fnName, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv').
+     (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv').
    The data-constructor / arg-count checks are left to the caller. *)
 definition resolve_impure_callee ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> BabTerm \<Rightarrow> nat
    \<Rightarrow> TypeError list
-      + (string \<times> CoreType list \<times> CoreType list \<times> VarOrRef list \<times> CoreType \<times> nat)" where
+      + (string \<times> CoreType list \<times> CoreType list \<times> VarOrRef list \<times> GhostOrNot list
+         \<times> CoreType \<times> nat)" where
   "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv =
     (case callee of
        BabTm_Name nloc name tyArgs \<Rightarrow>
@@ -78,8 +80,9 @@ definition resolve_impure_callee ::
                      let subst0 = fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs);
                          expArgTypes = map (\<lambda>(ty, _). apply_subst subst0 ty) (FI_TmArgs funInfo);
                          varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo);
+                         argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo);
                          retType0 = apply_subst subst0 (FI_ReturnType funInfo)
-                     in Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv')))
+                     in Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv')))
      | _ \<Rightarrow> Inl [TyErr_CalleeNotFunction (bab_term_location callee)])"
 
 (* Check the Ref-argument discipline of an impure call. This runs after unify_and_coerce
@@ -87,30 +90,69 @@ definition resolve_impure_callee ::
    expected argument types with the final substitution applied. For each Ref position:
      - the actual and expected types must be equal, or related by an array cast (the
        finite-integer coercion that Var arguments enjoy is not permitted for Ref);
-     - the (coerced) term must be a writable lvalue obeying the ghost-write discipline.
+     - the (coerced) term must be a writable lvalue obeying the ghost-write discipline
+       in the position's checking mode (so a ghost Ref parameter only accepts a ghost
+       lvalue, even in an executable call).
    Var positions need no further checks. Errors are reported at the location of the
    offending argument: locOf maps an argument index to its location, and idx is the
    index of the first argument in the lists. *)
 fun check_ref_args ::
-  "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> (nat \<Rightarrow> Location) \<Rightarrow> nat
-   \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> VarOrRef list
+  "CoreTyEnv \<Rightarrow> (nat \<Rightarrow> Location) \<Rightarrow> nat
+   \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> VarOrRef list \<Rightarrow> GhostOrNot list
    \<Rightarrow> TypeError list + unit" where
-  "check_ref_args env ghost locOf idx [] [] [] [] = Inr ()"
-| "check_ref_args env ghost locOf idx (tm # tms) (actualTy # actualTys)
-       (expectedTy # expectedTys) (vor # vors) =
+  "check_ref_args env locOf idx [] [] [] [] [] = Inr ()"
+| "check_ref_args env locOf idx (tm # tms) (actualTy # actualTys)
+       (expectedTy # expectedTys) (vor # vors) (mode # modes) =
     (case vor of
-       Var \<Rightarrow> check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors
+       Var \<Rightarrow> check_ref_args env locOf (idx + 1) tms actualTys expectedTys vors modes
      | Ref \<Rightarrow>
          (if actualTy \<noteq> expectedTy \<and> \<not> array_cast_ok actualTy expectedTy
           then Inl [TyErr_TypeMismatch (locOf idx) expectedTy actualTy]
           else if \<not> is_writable_lvalue env tm then Inl [TyErr_NotWritableLvalue (locOf idx)]
-          else if \<not> ghost_lvalue_ok env ghost tm then Inl [TyErr_WriteToNonGhostFromGhost (locOf idx)]
-          else check_ref_args env ghost locOf (idx + 1) tms actualTys expectedTys vors))"
-| "check_ref_args env ghost locOf idx _ _ _ _ = undefined"
+          else if \<not> ghost_lvalue_ok env mode tm then Inl [TyErr_WriteToNonGhostFromGhost (locOf idx)]
+          else check_ref_args env locOf (idx + 1) tms actualTys expectedTys vors modes))"
+| "check_ref_args env locOf idx _ _ _ _ _ = undefined"
+
+(* Type-check the arguments of an impure call, once they have been elaborated.
+   This is the same as for a pure call (see finish_call): the plain arguments
+   are unified with their parameter types, and then the special arguments (the
+   arguments of ghost parameters, in an executable call) are checked as a closed
+   unit, with only their own metavariables (those in [lo, hi)) flexible.
+
+   Returns the arguments in their original order, their types (for
+   check_ref_args), and the substitution found for the plain arguments. *)
+definition unify_impure_call_args ::
+  "CoreTyEnv \<Rightarrow> Location \<Rightarrow> BabTerm list \<Rightarrow> bool list \<Rightarrow> CoreType list
+   \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> nat \<Rightarrow> CoreTerm list \<Rightarrow> CoreType list \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreType list \<times> TypeSubst)" where
+  "unify_impure_call_args env loc args flags expArgTypes
+                          plainTms plainTys lo specialTms specialTys hi =
+    (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
+            (\<lambda>idx. bab_term_location (plain_args flags args ! idx))
+            plainTms plainTys (plain_args flags expArgTypes) fmempty of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (plainFinal, finalSubst) \<Rightarrow>
+         (case unify_and_coerce (\<lambda>n. n |\<in>| mv_fset lo hi)
+                 (\<lambda>idx. bab_term_location (special_args flags args ! idx))
+                 specialTms specialTys
+                 (map (apply_subst finalSubst) (special_args flags expArgTypes)) fmempty of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (specialFinal, specialSubst) \<Rightarrow>
+              if \<not> list_all (\<lambda>tm. list_all (\<lambda>n. n |\<notin>| mv_fset lo hi)
+                                           (core_term_free_tyvars_list tm))
+                            specialFinal
+              then Inl [TyErr_CannotInferType loc]
+              else Inr (merge_args flags plainFinal specialFinal,
+                        merge_args flags (map (apply_subst finalSubst) plainTys)
+                                         (map (apply_subst specialSubst) specialTys),
+                        finalSubst)))"
 
 (* Elaborate an impure function call term appearing at the outermost rhs of an
-   Assign or VarDecl. The arguments are unified and coerced exactly as for a pure
-   call (unify_and_coerce); the only impure-specific step is check_ref_args.
+   Assign or VarDecl. The arguments are elaborated, unified and coerced as for a
+   pure call: the plain arguments first, in the mode of the call, then the
+   special arguments in Ghost mode (an argument is special if its checking mode
+   differs from the mode of the call). The only impure-specific step is
+   check_ref_args.
    Returns the elaborated call term, its return type, and the advanced counter. *)
 definition elab_impure_call_term ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> nat
@@ -118,30 +160,34 @@ definition elab_impure_call_term ::
   "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv =
     (case resolve_impure_callee env elabEnv ghost allowVoid callee next_mv of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (name, newTyArgs, expArgTypes, varOrRefs, retType0, next_mv1) \<Rightarrow>
+     | Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1) \<Rightarrow>
          if length args \<noteq> length expArgTypes then
            Inl [TyErr_WrongNumberOfArgs loc name (length expArgTypes) (length args)]
          else
-           (case elab_term_list env elabEnv ghost args next_mv1 of
+           (case elab_term_list env elabEnv ghost
+                   (plain_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mv1 of
               Inl errs \<Rightarrow> Inl errs
-            | Inr (elabArgTms, actualTypes, next_mv2) \<Rightarrow>
-                (case unify_and_coerce (\<lambda>n. n |\<notin>| TE_TypeVars env)
-                        (\<lambda>idx. bab_term_location (args ! idx))
-                        elabArgTms actualTypes expArgTypes fmempty of
+            | Inr (plainTms, plainTys, next_mvP) \<Rightarrow>
+                (case elab_term_list env elabEnv Ghost
+                        (special_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mvP of
                    Inl errs \<Rightarrow> Inl errs
-                 | Inr (finalArgTms, finalSubst) \<Rightarrow>
-                     (case check_ref_args env ghost (\<lambda>idx. bab_term_location (args ! idx)) 0
-                             finalArgTms
-                             (map (apply_subst finalSubst) actualTypes)
-                             (map (apply_subst finalSubst) expArgTypes)
-                             varOrRefs of
+                 | Inr (specialTms, specialTys, next_mv2) \<Rightarrow>
+                     (case unify_impure_call_args env loc args
+                             (map (\<lambda>mode. mode \<noteq> ghost) argModes) expArgTypes
+                             plainTms plainTys next_mvP specialTms specialTys next_mv2 of
                         Inl errs \<Rightarrow> Inl errs
-                      | Inr _ \<Rightarrow>
-                          Inr (name,
-                               map (apply_subst finalSubst) newTyArgs,
-                               finalArgTms,
-                               apply_subst finalSubst retType0,
-                               next_mv2)))))"
+                      | Inr (finalArgTms, finalActualTys, finalSubst) \<Rightarrow>
+                          (case check_ref_args env (\<lambda>idx. bab_term_location (args ! idx)) 0
+                                  finalArgTms finalActualTys
+                                  (map (apply_subst finalSubst) expArgTypes)
+                                  varOrRefs argModes of
+                             Inl errs \<Rightarrow> Inl errs
+                           | Inr _ \<Rightarrow>
+                               Inr (name,
+                                    map (apply_subst finalSubst) newTyArgs,
+                                    finalArgTms,
+                                    apply_subst finalSubst retType0,
+                                    next_mv2))))))"
 
 
 (* ========================================================================== *)

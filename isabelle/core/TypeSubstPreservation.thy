@@ -141,16 +141,15 @@ proof -
     fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
     len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
     ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)" and
-    l2_pure: "list_all2 (\<lambda>tm expectedTy.
-                  case core_term_type env ghost tm of None \<Rightarrow> False
-                  | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                tmArgs
-                (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                     (FI_TmArgs funInfo))" and
+    l2_pure: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
     ref_lv: "\<forall>i < length tmArgs.
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env ghost (tmArgs ! i)" and
+                      \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                         (tmArgs ! i)" and
     imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
     by blast
 
@@ -231,32 +230,40 @@ proof -
     finally show ?thesis .
   qed
 
-  \<comment> \<open>Each substituted arg term typechecks to the substituted expected type.\<close>
-  have len_pure: "length tmArgs = length ?exps0" using l2_pure by (simp add: list_all2_lengthD)
-  have l2_subst: "list_all2 (\<lambda>tm expectedTy.
-                    case core_term_type env ghost tm of None \<Rightarrow> False
-                    | Some actualTy \<Rightarrow> actualTy = expectedTy)
-                  (map (apply_subst_to_term subst) tmArgs) ?expsS"
-    unfolding list_all2_conv_all_nth
+  \<comment> \<open>Each substituted arg term typechecks, in its own mode, to the substituted
+      expected type.\<close>
+  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
+  have len_pure: "length tmArgs = length ?exps0" using len_tm by simp
+  have l2_subst: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy)
+                    (map (apply_subst_to_term subst) tmArgs) (zip ?expsS ?modes)"
+    unfolding list_all2_case_prod_conv_all_nth
   proof (intro conjI allI impI)
-    show "length (map (apply_subst_to_term subst) tmArgs) = length ?expsS" using len_tm by simp
+    show "length (map (apply_subst_to_term subst) tmArgs) = length (zip ?expsS ?modes)"
+      using len_tm by simp
   next
     fix i assume i_lt: "i < length (map (apply_subst_to_term subst) tmArgs)"
     hence i_tm: "i < length tmArgs" by simp
-    have "case core_term_type env ghost (tmArgs ! i) of None \<Rightarrow> False
-          | Some actualTy \<Rightarrow> actualTy = ?exps0 ! i"
-      using list_all2_nthD[OF l2_pure] i_tm len_pure by simp
-    then obtain actualTy where
-      tm_typed: "core_term_type env ghost (tmArgs ! i) = Some actualTy" and aeq: "actualTy = ?exps0 ! i"
-      by (auto split: option.splits)
-    have "core_term_type env ghost (apply_subst_to_term subst (tmArgs ! i)) = Some (apply_subst subst actualTy)"
-      using apply_subst_to_term_preserves_typing[OF tm_typed wf subst_wk subst_rt
+    with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
+    obtain ti vor gh where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
+      by (cases "FI_TmArgs funInfo ! i") auto
+    have mode_nth: "?modes ! i = param_mode ghost gh" using i_lt_fi fi_arg by simp
+    have exp0_nth: "?exps0 ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ti"
+      using i_lt_fi fi_arg by simp
+    have tm_typed: "core_term_type env (param_mode ghost gh) (tmArgs ! i) = Some (?exps0 ! i)"
+      using list_all2_case_prod_nthD[OF l2_pure i_tm] i_tm len_pure mode_nth by simp
+    have subst_rt_m: "param_mode ghost gh = NotGhost
+                        \<longrightarrow> (\<forall>ty' \<in> fmran' subst. is_runtime_type env ty')"
+      using subst_rt by simp
+    have "core_term_type env (param_mode ghost gh) (apply_subst_to_term subst (tmArgs ! i))
+            = Some (apply_subst subst (?exps0 ! i))"
+      using apply_subst_to_term_preserves_typing[OF tm_typed wf subst_wk subst_rt_m
               locals_unaffected ret_unaffected abs_no_subst subst_cp] .
     moreover have "apply_subst subst (?exps0 ! i) = ?expsS ! i"
       using exps_recompute i_tm len_pure len_tm by simp
-    ultimately show "case core_term_type env ghost (map (apply_subst_to_term subst) tmArgs ! i) of
-                       None \<Rightarrow> False | Some actualTy' \<Rightarrow> actualTy' = ?expsS ! i"
-      using i_tm aeq by simp
+    ultimately show "core_term_type env (snd (zip ?expsS ?modes ! i))
+                       (map (apply_subst_to_term subst) tmArgs ! i)
+                     = Some (fst (zip ?expsS ?modes ! i))"
+      using i_tm len_tm mode_nth by simp
   qed
 
   \<comment> \<open>Ref positions stay writable lvalues (with the ghost discipline intact) under
@@ -264,29 +271,31 @@ proof -
   have ref_lv_subst: "\<forall>i < length (map (apply_subst_to_term subst) tmArgs).
                         fst (snd (FI_TmArgs funInfo ! i)) = Ref
                           \<longrightarrow> is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)
-                              \<and> ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
+                              \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                                 ((map (apply_subst_to_term subst) tmArgs) ! i)"
   proof (intro allI impI)
     fix i assume i_lt: "i < length (map (apply_subst_to_term subst) tmArgs)"
       and ref: "fst (snd (FI_TmArgs funInfo ! i)) = Ref"
     hence i_tm: "i < length tmArgs" by simp
-    have "is_writable_lvalue env (tmArgs ! i)" and "ghost_lvalue_ok env ghost (tmArgs ! i)"
+    have "is_writable_lvalue env (tmArgs ! i)"
+      and "ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i)))) (tmArgs ! i)"
       using ref_lv i_tm ref by simp_all
     thus "is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)
-            \<and> ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
+            \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                               ((map (apply_subst_to_term subst) tmArgs) ! i)"
       using i_tm by simp
   qed
 
   \<comment> \<open>Reassemble the per-argument (Var/Ref) check for the substituted call.\<close>
-  let ?P = "\<lambda>(tm, vor) expectedTy.
+  let ?P = "\<lambda>(tm, vor) (expectedTy, mode).
                  case vor of
-                   Var \<Rightarrow> (case core_term_type env ghost tm of None \<Rightarrow> False
-                            | Some actualTy \<Rightarrow> actualTy = expectedTy)
+                   Var \<Rightarrow> core_term_type env mode tm = Some expectedTy
                  | Ref \<Rightarrow> is_writable_lvalue env tm
-                          \<and> ghost_lvalue_ok env ghost tm
-                          \<and> core_term_type env ghost tm = Some expectedTy"
+                          \<and> ghost_lvalue_ok env mode tm
+                          \<and> core_term_type env mode tm = Some expectedTy"
   let ?zts = "zip (map (apply_subst_to_term subst) tmArgs) (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
-  have len_zts: "length ?zts = length ?expsS" using len_tm by simp
-  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (?expsS ! i)"
+  have len_zts: "length ?zts = length (zip ?expsS ?modes)" using len_tm by simp
+  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P (?zts ! i) (zip ?expsS ?modes ! i)"
   proof -
     fix i assume i_lt: "i < length ?zts"
     hence i_tm: "i < length tmArgs" using len_tm by simp
@@ -295,24 +304,23 @@ proof -
       by (cases "FI_TmArgs funInfo ! i") auto
     have zip_nth: "?zts ! i = ((map (apply_subst_to_term subst) tmArgs) ! i, vor)"
       using i_tm i_lt_fi fi_arg by simp
-    have pure_i: "case core_term_type env ghost ((map (apply_subst_to_term subst) tmArgs) ! i) of
-                    None \<Rightarrow> False | Some actualTy \<Rightarrow> actualTy = ?expsS ! i"
-      using list_all2_nthD[OF l2_subst] i_tm by simp
-    show "?P (?zts ! i) (?expsS ! i)"
+    have exp_nth: "zip ?expsS ?modes ! i = (?expsS ! i, param_mode ghost gh)"
+      using i_tm len_tm i_lt_fi fi_arg by simp
+    have pure_i: "core_term_type env (param_mode ghost gh) ((map (apply_subst_to_term subst) tmArgs) ! i)
+                    = Some (?expsS ! i)"
+      using list_all2_case_prod_nthD[OF l2_subst] i_tm exp_nth by fastforce
+    show "?P (?zts ! i) (zip ?expsS ?modes ! i)"
     proof (cases vor)
-      case Var with zip_nth pure_i show ?thesis by simp
+      case Var with zip_nth exp_nth pure_i show ?thesis by simp
     next
       case Ref
       have "is_writable_lvalue env ((map (apply_subst_to_term subst) tmArgs) ! i)"
-        and "ghost_lvalue_ok env ghost ((map (apply_subst_to_term subst) tmArgs) ! i)"
-        using ref_lv_subst i_tm fi_arg Ref by simp_all
-      moreover from pure_i have
-        "core_term_type env ghost ((map (apply_subst_to_term subst) tmArgs) ! i) = Some (?expsS ! i)"
-        by (auto split: option.splits)
-      ultimately show ?thesis using Ref zip_nth by simp
+        and "ghost_lvalue_ok env (param_mode ghost gh) ((map (apply_subst_to_term subst) tmArgs) ! i)"
+        using ref_lv_subst i_tm fi_arg Ref by auto
+      thus ?thesis using Ref zip_nth exp_nth pure_i by simp
     qed
   qed
-  have l2_full: "list_all2 ?P ?zts ?expsS"
+  have l2_full: "list_all2 ?P ?zts (zip ?expsS ?modes)"
     using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
 
   show ?thesis
