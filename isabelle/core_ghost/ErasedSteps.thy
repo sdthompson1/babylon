@@ -1647,25 +1647,19 @@ qed
 (* Terms: Let, Match and Default *)
 (* ========================================================================== *)
 
-(* The state in which the body of a Let is evaluated. *)
-definition bind_let_var :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
-  "bind_let_var varName val state =
-    (let (state', addr) = alloc_store state val
-     in state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                 IS_Refs := fmdrop varName (IS_Refs state'),
-                 IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>)"
-
+(* The defining equation of interp_term for a Let, with the binding of the
+   variable kept folded (as bind_const_local). *)
 lemma interp_term_Let:
   "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
     (case interp_term d fuel state rhsTm of
        Inl err \<Rightarrow> Inl err
-     | Inr rhsVal \<Rightarrow> interp_term d fuel (bind_let_var varName rhsVal state) bodyTm)"
-  by (cases "interp_term d fuel state rhsTm") (simp_all add: bind_let_var_def Let_def)
+     | Inr rhsVal \<Rightarrow> interp_term d fuel (bind_const_local varName rhsVal state) bodyTm)"
+  by (simp del: bind_const_local.simps)
 
-lemma bind_let_var_step:
-  "fresh_binding_step varName val state (bind_let_var varName val state)"
-  "varName |\<in>| IS_ConstLocals (bind_let_var varName val state)"
-  by (simp_all add: bind_let_var_def fresh_binding_step_def static_parts_eq_def Let_def)
+lemma bind_const_local_step:
+  "fresh_binding_step varName val state (bind_const_local varName val state)"
+  "varName |\<in>| IS_ConstLocals (bind_const_local varName val state)"
+  by (simp_all add: fresh_binding_step_def static_parts_eq_def Let_def)
 
 (* Erasing the arm bodies of a Match does not change which arm is chosen. *)
 lemma find_matching_arm_map:

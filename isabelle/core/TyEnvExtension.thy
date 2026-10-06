@@ -419,14 +419,17 @@ next
     from Ghost CoreTm_Quantifier.prems(3) obtain bodyTy where
       body_ty: "core_term_type
         (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+               TE_GhostLocals := finsert var (TE_GhostLocals env),
+               TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
         Ghost body = Some bodyTy"
       and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
       by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
     let ?bodyEnv = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                          TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                          TE_GhostLocals := finsert var (TE_GhostLocals env),
+                          TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     let ?bodyEnv' = "env' \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env'),
-                            TE_GhostLocals := finsert var (TE_GhostLocals env') \<rparr>"
+                            TE_GhostLocals := finsert var (TE_GhostLocals env'),
+                            TE_ConstLocals := finsert var (TE_ConstLocals env') \<rparr>"
     have ext_body: "tyenv_extends ?bodyEnv ?bodyEnv'"
       using ext unfolding tyenv_extends_def by simp
     have cons_body: "tyenv_ctors_consistent ?bodyEnv"

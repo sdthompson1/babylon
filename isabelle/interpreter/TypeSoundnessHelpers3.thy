@@ -3375,25 +3375,29 @@ qed
 (* Binding a quantified variable to a value of its type gives a state that
    matches the environment in which the quantifier's body is typed, and that
    environment is well-formed. *)
-lemma bind_local_sound:
+lemma bind_const_local_sound:
   fixes state :: "'w InterpState"
   assumes state_env: "state_matches_env state env storeTyping"
     and wf_env: "tyenv_well_formed env"
     and wk: "is_well_kinded env varTy"
     and v_typed: "value_has_type env v (apply_subst (IS_TyArgs state) varTy)"
-  shows "state_matches_env (bind_local var v state)
+  shows "state_matches_env (bind_const_local var v state)
            (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                  TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+                  TE_GhostLocals := finsert var (TE_GhostLocals env),
+                  TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
            (storeTyping @ [apply_subst (IS_TyArgs state) varTy])"
     and "tyenv_well_formed
            (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                  TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)"
+                  TE_GhostLocals := finsert var (TE_GhostLocals env),
+                  TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)"
 proof -
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                     TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
-  let ?env1 = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env) \<rparr>"
+                     TE_GhostLocals := finsert var (TE_GhostLocals env),
+                     TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
+  (* The same environment without the TE_GhostLocals update, which
+     state_matches_env does not read. *)
   let ?env2 = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                     TE_ConstLocals := TE_ConstLocals env \<rparr>"
+                     TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
 
   obtain state' addr where alloc_eq: "(state', addr) = alloc_store state v"
     by (cases "alloc_store state v") auto
@@ -3402,24 +3406,20 @@ proof -
     by (simp_all add: Let_def)
   let ?state'' = "state' \<lparr> IS_Locals := fmupd var addr (IS_Locals state'),
                            IS_Refs := fmdrop var (IS_Refs state'),
-                           IS_ConstLocals := IS_ConstLocals state' \<rparr>"
-  \<comment> \<open>A quantified variable leaves the set of constant names as it is. \<close>
-  have bind_eq: "bind_local var v state = ?state''"
+                           IS_ConstLocals := finsert var (IS_ConstLocals state') \<rparr>"
+  have bind_eq: "bind_const_local var v state = ?state''"
     by (rule InterpState.equality; simp add: st'_eq addr_eq Let_def)
-  have cn: "const_locals_match ?state'' ?env2"
-    using state_env st'_eq
-    unfolding state_matches_env_def const_locals_match_def by simp
   have sme2: "state_matches_env ?state'' ?env2
                 (storeTyping @ [apply_subst (IS_TyArgs state) varTy])"
-    by (rule state_matches_env_add_local[OF state_env v_typed alloc_eq refl refl cn])
+    by (rule state_matches_env_add_const_local[OF state_env v_typed alloc_eq refl refl])
   have sme_eq: "state_matches_env ?state'' ?env' st = state_matches_env ?state'' ?env2 st" for st
     by (rule state_matches_env_cong_env) simp_all
-  show "state_matches_env (bind_local var v state) ?env'
+  show "state_matches_env (bind_const_local var v state) ?env'
           (storeTyping @ [apply_subst (IS_TyArgs state) varTy])"
     unfolding bind_eq using sme2 sme_eq by simp
 
   show "tyenv_well_formed ?env'"
-    by (rule tyenv_well_formed_add_ghost_var[OF wf_env wk])
+    by (rule tyenv_well_formed_declare_ghost[OF wf_env wk])
 qed
 
 (* Type soundness for a quantifier at a positive depth. The body is run at the
@@ -3439,19 +3439,20 @@ lemma type_soundness_quantifier:
            (interp_term (Suc d) (Suc fuel) state (CoreTm_Quantifier quant var varTy body))"
 proof -
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                     TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                     TE_GhostLocals := finsert var (TE_GhostLocals env),
+                     TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
   from typing have wk: "is_well_kinded env varTy"
     and body_typing: "core_term_type ?env' Ghost body = Some CoreTy_Bool"
     and ty_eq: "ty = CoreTy_Bool"
     by (auto simp: Let_def split: if_splits option.splits CoreType.splits)
   let ?gty = "apply_subst (IS_TyArgs state) varTy"
   let ?vals = "values_of_type state ?gty"
-  let ?r = "\<lambda>v. converged (\<lambda>m. interp_term d m (bind_local var v state) body)"
+  let ?r = "\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local var v state) body)"
 
   have interp_eq:
     "interp_term (Suc d) (Suc fuel) state (CoreTm_Quantifier quant var varTy body)
        = eval_quantifier quant ?vals ?r"
-    by (simp del: bind_local.simps)
+    by (simp del: bind_const_local.simps)
 
   \<comment> \<open>Each instance is not a TypeError, and is a boolean if it has a value. \<close>
   have inst: "\<forall>v \<in> ?vals. ?r v \<noteq> Inl TypeError \<and> (\<forall>w. ?r v = Inr w \<longrightarrow> (\<exists>b. w = CV_Bool b))"
@@ -3459,11 +3460,11 @@ proof -
     fix v assume v_in: "v \<in> ?vals"
     then have v_typed: "value_has_type env v ?gty"
       using values_of_type_iff[OF state_env] by simp
-    let ?st = "bind_local var v state"
+    let ?st = "bind_const_local var v state"
     have sme: "state_matches_env ?st ?env' (storeTyping @ [?gty])"
-      by (rule bind_local_sound(1)[OF state_env wf_env wk v_typed])
+      by (rule bind_const_local_sound(1)[OF state_env wf_env wk v_typed])
     have wf': "tyenv_well_formed ?env'"
-      by (rule bind_local_sound(2)[OF state_env wf_env wk v_typed])
+      by (rule bind_const_local_sound(2)[OF state_env wf_env wk v_typed])
     have each: "sound_term_result ?st ?env' CoreTy_Bool (interp_term d m ?st body)" for m
       by (rule depth_IH[OF sme wf' body_typing])
     from converged_cases[of "\<lambda>m. interp_term d m ?st body"]
@@ -3475,11 +3476,11 @@ proof -
       from each[of m] show ?thesis
         unfolding c
         by (cases "interp_term d m ?st body")
-           (auto simp del: bind_local.simps
+           (auto simp del: bind_const_local.simps
                  simp: sound_error_result_iff dest: value_has_type_Bool)
     next
       assume "converged (\<lambda>m. interp_term d m ?st body) = Inl InsufficientFuel"
-      then show ?thesis by (simp del: bind_local.simps)
+      then show ?thesis by (simp del: bind_const_local.simps)
     qed
   qed
 
@@ -3487,7 +3488,7 @@ proof -
   show ?thesis
     unfolding interp_eq ty_eq
     by (cases "eval_quantifier quant ?vals ?r")
-       (auto simp del: bind_local.simps simp: sound_error_result_iff)
+       (auto simp del: bind_const_local.simps simp: sound_error_result_iff)
 qed
 
 (* Type soundness for Obtain at a positive depth. The condition is run at the

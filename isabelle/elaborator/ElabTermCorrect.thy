@@ -3012,7 +3012,8 @@ next
 
   \<comment> \<open>Body env\<close>
   let ?body_env = "env \<lparr> TE_LocalVars := fmupd name coreVarTy (TE_LocalVars env),
-                         TE_GhostLocals := finsert name (TE_GhostLocals env) \<rparr>"
+                         TE_GhostLocals := finsert name (TE_GhostLocals env),
+                         TE_ConstLocals := finsert name (TE_ConstLocals env) \<rparr>"
 
   \<comment> \<open>Elaborate the body\<close>
   from "8.prems"(1) ghost_eq elab_ty obtain bodyTm bodyTy next_mv_body where
@@ -3040,9 +3041,10 @@ next
   have varTy_wk: "is_well_kinded env coreVarTy"
     using elab_ty "8.prems"(2) td_wf elab_type_is_well_kinded by simp
 
-  \<comment> \<open>body_env is well-formed\<close>
+  \<comment> \<open>body_env is well-formed (tyenv_well_formed does not read TE_ConstLocals)\<close>
   have wf_body_env: "tyenv_well_formed ?body_env"
-    using tyenv_well_formed_add_ghost_var[OF "8.prems"(2) varTy_wk] .
+    by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
+               [OF tyenv_well_formed_add_ghost_var[OF "8.prems"(2) varTy_wk]])
 
   \<comment> \<open>elabenv is well-formed w.r.t. body_env\<close>
   have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
@@ -3064,7 +3066,8 @@ next
 
   \<comment> \<open>The extended env for the body in core terms\<close>
   let ?env'_body = "?env' \<lparr> TE_LocalVars := fmupd name coreVarTy (TE_LocalVars ?env'),
-                            TE_GhostLocals := finsert name (TE_GhostLocals ?env') \<rparr>"
+                            TE_GhostLocals := finsert name (TE_GhostLocals ?env'),
+                            TE_ConstLocals := finsert name (TE_ConstLocals ?env') \<rparr>"
 
   have env_eq: "extend_env_with_tyvars ?body_env ghost next_mv next_mv' = ?env'_body"
     unfolding extend_env_with_tyvars_def by simp
@@ -3082,7 +3085,8 @@ next
         nat_le_linear)
 
   have wf_body': "tyenv_well_formed ?env'_body"
-    using tyenv_well_formed_add_ghost_var[OF wf' varTy_wk'] .
+    by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
+               [OF tyenv_well_formed_add_ghost_var[OF wf' varTy_wk']])
 
   \<comment> \<open>bodySubst properties\<close>
   have bodySubst_dom_flex: "\<forall>n. n |\<in>| fmdom bodySubst \<longrightarrow> ?is_flex n"

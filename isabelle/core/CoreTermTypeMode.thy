@@ -62,12 +62,14 @@ next
     from Ghost CoreTm_Quantifier.prems(1) obtain bodyTy where
       body_ty: "core_term_type
         (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+               TE_GhostLocals := finsert var (TE_GhostLocals env),
+               TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
         Ghost body = Some bodyTy"
       and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
       by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
     let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                          TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                          TE_GhostLocals := finsert var (TE_GhostLocals env),
+                          TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     have sub_body: "TE_GhostLocals ?body_env |\<subseteq>| finsert var G"
       using CoreTm_Quantifier.prems(2) by auto
     from CoreTm_Quantifier.IH[OF body_ty sub_body]
@@ -75,7 +77,8 @@ next
                       = Some bodyTy" .
     have env_eq: "?body_env \<lparr> TE_GhostLocals := finsert var G \<rparr>
                   = ?envG \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?envG),
-                            TE_GhostLocals := finsert var (TE_GhostLocals ?envG) \<rparr>"
+                            TE_GhostLocals := finsert var (TE_GhostLocals ?envG),
+                            TE_ConstLocals := finsert var (TE_ConstLocals ?envG) \<rparr>"
       by simp
     from body_ty' env_eq body_bool ty_eq wk' show ?thesis by (simp add: Let_def)
   qed
@@ -466,8 +469,8 @@ lemma cast_result_type_imp_Ghost:
 
 (* Declaring a ghost local: the variable is added to TE_LocalVars and
    TE_GhostLocals, and TE_ConstLocals changes. (This is the environment that
-   Ghost-mode typing gives to the body of a Let, and to the statements after an
-   Obtain.) *)
+   Ghost-mode typing gives to the body of a Let or a Quantifier, and to the
+   statements after an Obtain.) *)
 lemma tyenv_well_formed_declare_ghost:
   assumes "tyenv_well_formed env"
     and "is_well_kinded env ty"

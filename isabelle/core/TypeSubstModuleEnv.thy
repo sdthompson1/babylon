@@ -888,16 +888,19 @@ next
       varTy_wk: "is_well_kinded env varTy" and
       body_typed: "core_term_type
                      (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                            TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+                            TE_GhostLocals := finsert var (TE_GhostLocals env),
+                            TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
                      Ghost body = Some CoreTy_Bool" and
       ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits CoreType.splits if_splits)
 
     let ?env_ext = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                          TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                          TE_GhostLocals := finsert var (TE_GhostLocals env),
+                          TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
 
-    from tyenv_well_formed_add_ghost_var[OF CoreTm_Quantifier.prems(2) varTy_wk]
-    have wf_ext: "tyenv_well_formed ?env_ext" .
+    have wf_ext: "tyenv_well_formed ?env_ext"
+      by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
+                 [OF tyenv_well_formed_add_ghost_var[OF CoreTm_Quantifier.prems(2) varTy_wk]])
 
     have ok_ext: "module_env_subst_ok subst targetEnv ?env_ext"
       using CoreTm_Quantifier.prems(3)
@@ -923,7 +926,8 @@ next
          = (apply_subst_to_module_env subst targetEnv env) \<lparr>
               TE_LocalVars := fmupd var (apply_subst subst varTy)
                                 (TE_LocalVars (apply_subst_to_module_env subst targetEnv env)),
-              TE_GhostLocals := finsert var (TE_GhostLocals (apply_subst_to_module_env subst targetEnv env)) \<rparr>"
+              TE_GhostLocals := finsert var (TE_GhostLocals (apply_subst_to_module_env subst targetEnv env)),
+              TE_ConstLocals := finsert var (TE_ConstLocals (apply_subst_to_module_env subst targetEnv env)) \<rparr>"
       unfolding apply_subst_to_module_env_def by (simp add: fmmap_fmupd)
 
     show ?thesis

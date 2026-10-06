@@ -402,18 +402,18 @@ next
         from HL obtain x where s1: "interp_term d fuel full rhs = Inr x"
           by (cases "interp_term d fuel full rhs") simp_all
         note s1E = sub[OF W1 s1]
-        from HL s1 have s2: "interp_term d fuel (bind_let_var var x full) body = Inr v"
-          by simp
+        from HL s1 have s2: "interp_term d fuel (bind_const_local var x full) body = Inr v"
+          by (simp del: bind_const_local.simps)
         \<comment> \<open>The body runs with the new variable bound, in both states, to a
             new cell. \<close>
         have relL: "state_erased ?envL (emb @ [length (IS_Store full)])
-                      (bind_let_var var x full) (bind_let_var var x erased)"
+                      (bind_const_local var x full) (bind_const_local var x erased)"
           by (rule state_erased_bind_both_fresh
-                     [OF rel decl(1) decl(2) fnsL bind_let_var_step(1) bind_let_var_step(1)])
-             (simp_all add: bind_let_var_step(2))
+                     [OF rel decl(1) decl(2) fnsL bind_const_local_step(1) bind_const_local_step(1)])
+             (simp_all add: bind_const_local_step(2))
         have fnL: "TE_Functions ?envL = TE_Functions genv" using fn_eq by simp
-        have funsL: "IS_Functions (bind_let_var var x full) = funs"
-          using static_parts_eqD(2)[OF fresh_binding_stepD(1)[OF bind_let_var_step(1)]] funs_eq
+        have funsL: "IS_Functions (bind_const_local var x full) = funs"
+          using static_parts_eqD(2)[OF fresh_binding_stepD(1)[OF bind_const_local_step(1)]] funs_eq
           by auto
         note s2E = IH_term[OF fnL funsL relL W2 s2]
         show ?thesis

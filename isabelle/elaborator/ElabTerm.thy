@@ -1002,14 +1002,16 @@ where
                 | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
                     Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
 
-  (* Quantifier: ghost-only, body must be Bool *)
+  (* Quantifier: ghost-only, body must be Bool. The bound variable is a const
+     local, as for Let. *)
 | "elab_term env elabEnv ghost (BabTm_Quantifier loc quant name ty tm) next_mv =
     (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
      else case elab_type env elabEnv ghost ty of
        Inl errs \<Rightarrow> Inl errs
      | Inr varTy \<Rightarrow>
          let env' = env \<lparr> TE_LocalVars := fmupd name varTy (TE_LocalVars env),
-                          TE_GhostLocals := finsert name (TE_GhostLocals env) \<rparr>
+                          TE_GhostLocals := finsert name (TE_GhostLocals env),
+                          TE_ConstLocals := finsert name (TE_ConstLocals env) \<rparr>
          in (case elab_term env' elabEnv ghost tm next_mv of
                Inl errs \<Rightarrow> Inl errs
              | Inr (bodyTm, bodyTy, next_mv') \<Rightarrow>

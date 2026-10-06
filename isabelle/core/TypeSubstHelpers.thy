@@ -965,20 +965,24 @@ next
       varTy_wk: "is_well_kinded calleeEnv varTy" and
       body_typed: "core_term_type
                      (calleeEnv \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars calleeEnv),
-                                  TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv) \<rparr>)
+                                  TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv),
+                                  TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)
                      Ghost body = Some CoreTy_Bool" and
       ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits CoreType.splits if_splits)
 
     let ?env_ext = "calleeEnv \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars calleeEnv),
-                                TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv) \<rparr>"
+                                TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv),
+                                TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>"
 
-    \<comment> \<open>well-formedness of ?env_ext via tyenv_well_formed_add_ghost_var \<close>
-    from tyenv_well_formed_add_ghost_var[OF CoreTm_Quantifier.prems(2) varTy_wk]
-    have wf_ext: "tyenv_well_formed ?env_ext" .
+    \<comment> \<open>well-formedness of ?env_ext via tyenv_well_formed_add_ghost_var
+        (tyenv_well_formed does not read TE_ConstLocals) \<close>
+    have wf_ext: "tyenv_well_formed ?env_ext"
+      by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
+                 [OF tyenv_well_formed_add_ghost_var[OF CoreTm_Quantifier.prems(2) varTy_wk]])
 
-    \<comment> \<open>callee_env_subst_ok ?env_ext: only TE_LocalVars / TE_GhostLocals changed,
-        which callee_env_subst_ok doesn't reference. \<close>
+    \<comment> \<open>callee_env_subst_ok ?env_ext: only TE_LocalVars / TE_GhostLocals /
+        TE_ConstLocals changed, which callee_env_subst_ok doesn't reference. \<close>
     have ok_ext: "callee_env_subst_ok subst callerEnv ?env_ext"
       using CoreTm_Quantifier.prems(3)
       unfolding callee_env_subst_ok_def by simp
@@ -1010,7 +1014,8 @@ next
          = (apply_subst_to_callee_env subst callerEnv calleeEnv) \<lparr>
               TE_LocalVars := fmupd var (apply_subst subst varTy)
                                 (TE_LocalVars (apply_subst_to_callee_env subst callerEnv calleeEnv)),
-              TE_GhostLocals := finsert var (TE_GhostLocals (apply_subst_to_callee_env subst callerEnv calleeEnv)) \<rparr>"
+              TE_GhostLocals := finsert var (TE_GhostLocals (apply_subst_to_callee_env subst callerEnv calleeEnv)),
+              TE_ConstLocals := finsert var (TE_ConstLocals (apply_subst_to_callee_env subst callerEnv calleeEnv)) \<rparr>"
       unfolding apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
 
     show ?thesis

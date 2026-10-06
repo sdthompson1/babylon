@@ -729,22 +729,16 @@ next
       thus ?thesis using Inl f'_eq by simp
     next
       case (Inr rhsVal)
-      define state' addr where "state' = fst (alloc_store state rhsVal)"
-                           and "addr = snd (alloc_store state rhsVal)"
-      define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                                IS_Refs := fmdrop varName (IS_Refs state'),
-                                                IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>"
-      hence body_noFuel: "interp_term d fuel state'' bodyTm \<noteq> Inl InsufficientFuel"
-        using noFuel Inr state'_def addr_def
-        by (auto simp add: case_prod_beta split: sum.splits)
-      have IH_body: "\<forall>f'\<ge>fuel. interp_term d f' state'' bodyTm = interp_term d fuel state'' bodyTm"
-        using "9.IH"(2) Inr state'_def addr_def state''_def body_noFuel
-        by (metis fst_eqD snd_eqD surj_pair)
+      let ?state'' = "bind_const_local varName rhsVal state"
+      have body_noFuel: "interp_term d fuel ?state'' bodyTm \<noteq> Inl InsufficientFuel"
+        using noFuel Inr by (simp del: bind_const_local.simps)
+      have IH_body: "\<forall>f'\<ge>fuel. interp_term d f' ?state'' bodyTm = interp_term d fuel ?state'' bodyTm"
+        using "9.IH"(2)[OF Inr] body_noFuel by blast
       have "interp_term d f'' state rhsTm = Inr rhsVal" using IH_rhs Inr f''_ge by auto
-      moreover have "interp_term d f'' state'' bodyTm = interp_term d fuel state'' bodyTm"
+      moreover have "interp_term d f'' ?state'' bodyTm = interp_term d fuel ?state'' bodyTm"
         using IH_body f''_ge by metis
-      ultimately show ?thesis using f'_eq Inr state'_def addr_def state''_def
-        by (simp add: case_prod_beta)
+      ultimately show ?thesis using f'_eq Inr
+        by (simp del: bind_const_local.simps)
     qed
   qed
 next
@@ -2127,22 +2121,16 @@ next
       thus ?thesis using rhs_eq by simp
     next
       case (Inr rhsVal)
-      define state' addr where "state' = fst (alloc_store state rhsVal)"
-                           and "addr = snd (alloc_store state rhsVal)"
-      define state'' where "state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                                IS_Refs := fmdrop varName (IS_Refs state'),
-                                                IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>"
-      hence body_noFuel: "interp_term d fuel state'' bodyTm \<noteq> Inl InsufficientFuel"
-        using "9.prems" Inr state'_def addr_def
-        by (auto simp add: case_prod_beta split: sum.splits)
-      have IH_body: "\<forall>d'\<ge>d. interp_term d' fuel state'' bodyTm = interp_term d fuel state'' bodyTm"
-        using "9.IH"(2) Inr state'_def addr_def state''_def body_noFuel
-        by (metis fst_eqD snd_eqD surj_pair)
+      let ?state'' = "bind_const_local varName rhsVal state"
+      have body_noFuel: "interp_term d fuel ?state'' bodyTm \<noteq> Inl InsufficientFuel"
+        using "9.prems" Inr by (simp del: bind_const_local.simps)
+      have IH_body: "\<forall>d'\<ge>d. interp_term d' fuel ?state'' bodyTm = interp_term d fuel ?state'' bodyTm"
+        using "9.IH"(2)[OF Inr] body_noFuel by blast
       have "interp_term d' fuel state rhsTm = Inr rhsVal" using rhs_eq Inr by simp
-      moreover have "interp_term d' fuel state'' bodyTm = interp_term d fuel state'' bodyTm"
+      moreover have "interp_term d' fuel ?state'' bodyTm = interp_term d fuel ?state'' bodyTm"
         using IH_body d'_ge by metis
-      ultimately show ?thesis using Inr state'_def addr_def state''_def
-        by (simp add: case_prod_beta)
+      ultimately show ?thesis using Inr
+        by (simp del: bind_const_local.simps)
     qed
   qed
 next
@@ -2309,22 +2297,22 @@ next
     then obtain d'' where d'_eq: "d' = Suc d''" and d''_ge: "d'' \<ge> d"
       using Suc_le_D by auto
     let ?vals = "values_of_type state (apply_subst (IS_TyArgs state) varTy)"
-    let ?r = "\<lambda>dd v. converged (\<lambda>m. interp_term dd m (bind_local varName v state) bodyTm)"
+    let ?r = "\<lambda>dd v. converged (\<lambda>m. interp_term dd m (bind_const_local varName v state) bodyTm)"
     have ne: "eval_quantifier quant ?vals (?r d) \<noteq> Inl InsufficientFuel"
       using "19.prems" by simp
     have agree: "?r d'' v = ?r d v" if "?r d v \<noteq> Inl InsufficientFuel" for v
     proof (rule converged_agree[OF _ _ that])
       fix m
-      assume "interp_term d m (bind_local varName v state) bodyTm \<noteq> Inl InsufficientFuel"
-      thus "interp_term d'' m (bind_local varName v state) bodyTm
-              = interp_term d m (bind_local varName v state) bodyTm"
+      assume "interp_term d m (bind_const_local varName v state) bodyTm \<noteq> Inl InsufficientFuel"
+      thus "interp_term d'' m (bind_const_local varName v state) bodyTm
+              = interp_term d m (bind_const_local varName v state) bodyTm"
         using "19.IH" d''_ge by blast
     next
       fix m m'
-      assume "interp_term d'' m (bind_local varName v state) bodyTm \<noteq> Inl InsufficientFuel"
+      assume "interp_term d'' m (bind_const_local varName v state) bodyTm \<noteq> Inl InsufficientFuel"
         and "m \<le> m'"
-      thus "interp_term d'' m' (bind_local varName v state) bodyTm
-              = interp_term d'' m (bind_local varName v state) bodyTm"
+      thus "interp_term d'' m' (bind_const_local varName v state) bodyTm
+              = interp_term d'' m (bind_const_local varName v state) bodyTm"
         using interp_term_fuel_mono by blast
     qed
     have eq: "eval_quantifier quant ?vals (?r d'') = eval_quantifier quant ?vals (?r d)"

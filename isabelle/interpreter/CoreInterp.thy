@@ -346,6 +346,43 @@ fun alloc_store :: "'w InterpState \<Rightarrow> CoreValue \<Rightarrow> ('w Int
          new_store = IS_Store state @ [val]
     in (state \<lparr> IS_Store := new_store \<rparr>, addr))"
 
+(* Bind a local variable to a value, in a fresh store cell. Whether the name
+   counts as a const local is left as it was; the two helpers below settle
+   that, and are what the interpreter uses. *)
+fun bind_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
+  "bind_local varName val state =
+    (let (state', addr) = alloc_store state val
+     in state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
+                 IS_Refs := fmdrop varName (IS_Refs state') \<rparr>)"
+
+(* Bind a const local variable to a value, in a fresh store cell. Used for the
+   variable of a Let or a Quantifier, a Var parameter, and a Ref declaration
+   whose base is read-only (which copies the value). *)
+fun bind_const_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
+  "bind_const_local varName val state =
+    (bind_local varName val state)
+      \<lparr> IS_ConstLocals := finsert varName (IS_ConstLocals state) \<rparr>"
+
+(* Bind a non-const local variable to a value, in a fresh store cell. Used for
+   the variable of a Var declaration (CoreStmt_VarDecl, CoreStmt_VarDeclCall)
+   or an Obtain. The name is removed from IS_ConstLocals in case it was
+   previously a const local (now shadowed by this fresh non-const binding). *)
+fun bind_mutable_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
+  "bind_mutable_local varName val state =
+    (bind_local varName val state)
+      \<lparr> IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>"
+
+(* Bind a name as a ref to an existing store location (an address and a path
+   into the value stored there). Used for a Ref parameter, and a Ref
+   declaration whose base is writable (which aliases the base). The name is
+   dropped from IS_Locals and IS_ConstLocals so that the new ref properly
+   shadows any previous binding with the same name. *)
+fun bind_ref :: "string \<Rightarrow> (nat \<times> LValuePath list) \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
+  "bind_ref varName addrAndPath state =
+    state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+            IS_Refs := fmupd varName addrAndPath (IS_Refs state),
+            IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>"
+
 (* Restore scope after exiting a block:
    - old_state: the state before entering the scope
    - new_state: the state after executing the inner scope
@@ -410,15 +447,10 @@ fun process_one_arg :: "((string \<times> VarOrRef \<times> GhostOrNot)
                 \<Rightarrow> InterpError + 'w InterpState" where
   "process_one_arg _ (Inl err) = Inl err"
 | "process_one_arg ((name, Var, _), _, Inr val) (Inr state) =
-    (let (state', addr) = alloc_store state val
-    in Inr (state' \<lparr> IS_Locals := fmupd name addr (IS_Locals state'),
-                      IS_Refs := fmdrop name (IS_Refs state'),
-                      IS_ConstLocals := finsert name (IS_ConstLocals state') \<rparr>))"
+    Inr (bind_const_local name val state)"
 | "process_one_arg ((name, Var, _), _, Inl err) _ = Inl err"
 | "process_one_arg ((name, Ref, _), Inr (addr, path), Inr _) (Inr state) =
-    Inr (state \<lparr> IS_Locals := fmdrop name (IS_Locals state),
-                  IS_Refs := fmupd name (addr, path) (IS_Refs state),
-                  IS_ConstLocals := fminus (IS_ConstLocals state) {|name|} \<rparr>)"
+    Inr (bind_ref name (addr, path) state)"
 | "process_one_arg ((name, Ref, _), Inl err, _) _ = Inl err"
 | "process_one_arg ((name, Ref, _), _, Inl err) _ = Inl err"
 
@@ -638,25 +670,6 @@ definition invariants_error :: "CoreValue list \<Rightarrow> InterpError option"
      else if CV_Bool False \<in> set vals then Some RuntimeError
      else None)"
 
-(* Bind a local variable to a value, in a fresh store cell. Whether the name
-   counts as a const local is left as it was. Used for quantified variables. *)
-fun bind_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
-  "bind_local varName val state =
-    (let (state', addr) = alloc_store state val
-     in state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                 IS_Refs := fmdrop varName (IS_Refs state') \<rparr>)"
-
-(* Bind a non-const local variable to a value, in a fresh store cell. Used for
-   the variable of an Obtain, which is an ordinary non-const local, as for
-   CoreStmt_VarDecl. *)
-fun bind_mutable_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
-  "bind_mutable_local varName val state =
-    (let (state', addr) = alloc_store state val
-     in state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                 IS_Refs := fmdrop varName (IS_Refs state'),
-                 IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)"
-
-
 (* ========================================================================== *)
 (* The main intepreter definitions *)
 (* ========================================================================== *)
@@ -736,12 +749,7 @@ where
 | "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
     (case interp_term d fuel state rhsTm of
       Inl err \<Rightarrow> Inl err
-    | Inr rhsVal \<Rightarrow>
-        (let (state', addr) = alloc_store state rhsVal;
-             state'' = state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                IS_Refs := fmdrop varName (IS_Refs state'),
-                                IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>
-        in interp_term d fuel state'' bodyTm))"
+    | Inr rhsVal \<Rightarrow> interp_term d fuel (bind_const_local varName rhsVal state) bodyTm)"
 
   (* Function call *)
 | "interp_term d (Suc fuel) state (CoreTm_FunctionCall fnName argTypes argTms) =
@@ -822,7 +830,7 @@ where
 | "interp_term (Suc d) (Suc _) state (CoreTm_Quantifier quant varName varTy bodyTm) =
     eval_quantifier quant
       (values_of_type state (apply_subst (IS_TyArgs state) varTy))
-      (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_local varName v state) bodyTm))"
+      (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local varName v state) bodyTm))"
 
   (* Allocated: always false for now, and the operand is not evaluated. The
      real answer depends on the operand's type (a fixed-size array and an
@@ -900,16 +908,9 @@ where
   (* Variable declaration *)
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Var _ initialTm) =
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
-        CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
-
-        We remove varName from IS_ConstLocals in case it was previously a const
-        local (now shadowed by this fresh non-const declaration). \<close>
+        CoreStmt_VarDeclCall. The state is unchanged by evaluating it. \<close>
     (case interp_term d fuel state initialTm of
-       Inr initialVal \<Rightarrow>
-         (let (state', addr) = alloc_store state initialVal
-          in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                      IS_Refs := fmdrop varName (IS_Refs state'),
-                                      IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
+       Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state))
      | Inl err \<Rightarrow> Inl err)"
 
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall _ varName _ castOpt fnName argTys argTms) =
@@ -918,11 +919,7 @@ where
     (case interp_function_call d fuel state fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
          (case apply_cast_opt castOpt retVal of
-            Inr initialVal \<Rightarrow>
-              (let (state', addr) = alloc_store newState initialVal
-               in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                           IS_Refs := fmdrop varName (IS_Refs state'),
-                                           IS_ConstLocals := fminus (IS_ConstLocals state') {|varName|} \<rparr>)))
+            Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal newState))
           | Inl err \<Rightarrow> Inl err)
      | Inl err \<Rightarrow> Inl err)"
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Ref _ lvalueTm) =
@@ -941,20 +938,11 @@ where
              semantically equivalent since the source is immutable.\<close>
           (case interp_term d fuel state lvalueTm of
             Inl err \<Rightarrow> Inl err
-          | Inr val \<Rightarrow>
-              (let (state', addr) = alloc_store state val
-              in Inr (Continue (state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
-                                          IS_Refs := fmdrop varName (IS_Refs state'),
-                                          IS_ConstLocals := finsert varName (IS_ConstLocals state') \<rparr>))))
+          | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
-          \<comment> \<open>Base variable is writable: alias via writable lvalue. Drop varName
-             from IS_Locals and IS_ConstLocals so that the new ref properly
-             shadows any previous binding with the same name. \<close>
+          \<comment> \<open>Base variable is writable: alias via writable lvalue. \<close>
           (case interp_writable_lvalue d fuel state lvalueTm of
-            Inr addrAndPath \<Rightarrow>
-              Inr (Continue (state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                                      IS_Refs := fmupd varName addrAndPath (IS_Refs state),
-                                      IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>))
+            Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 

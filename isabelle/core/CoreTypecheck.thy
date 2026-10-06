@@ -384,12 +384,13 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         in core_term_type env' ghost body
     | None \<Rightarrow> None)"
 
-  (* Quantifier - Ghost mode only *)
+  (* Quantifier - Ghost mode only. The bound variable is a const local, as for Let. *)
 | "core_term_type env NotGhost (CoreTm_Quantifier _ _ _ _) = None"
 | "core_term_type env Ghost (CoreTm_Quantifier quant var varTy body) =
     (if is_well_kinded env varTy
      then let env' = env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>
+                           TE_GhostLocals := finsert var (TE_GhostLocals env),
+                           TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>
           in (case core_term_type env' Ghost body of
                 Some CoreTy_Bool \<Rightarrow> Some CoreTy_Bool
               | _ \<Rightarrow> None)
@@ -690,7 +691,8 @@ next
   fix env :: CoreTyEnv
   fix quant var varTy body x
   assume "x = env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                     TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                     TE_GhostLocals := finsert var (TE_GhostLocals env),
+                     TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
   show "((x, Ghost, body), env, Ghost, CoreTm_Quantifier quant var varTy body)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
@@ -987,10 +989,12 @@ proof -
     have body_eq:
       "core_term_type
          (env1 \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env1),
-                 TE_GhostLocals := finsert var (TE_GhostLocals env1) \<rparr>) ghost body
+                 TE_GhostLocals := finsert var (TE_GhostLocals env1),
+                 TE_ConstLocals := finsert var (TE_ConstLocals env1) \<rparr>) ghost body
        = core_term_type
          (env2 \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env2),
-                 TE_GhostLocals := finsert var (TE_GhostLocals env2) \<rparr>) ghost body"
+                 TE_GhostLocals := finsert var (TE_GhostLocals env2),
+                 TE_ConstLocals := finsert var (TE_ConstLocals env2) \<rparr>) ghost body"
       by (rule CoreTm_Quantifier.IH) (simp_all add: CoreTm_Quantifier.prems)
     have wk_eq: "is_well_kinded env1 varTy = is_well_kinded env2 varTy"
       using is_well_kinded_cong_env CoreTm_Quantifier.prems by metis
@@ -1209,7 +1213,8 @@ next
     from Ghost CoreTm_Quantifier.prems(2) obtain bodyTy where
       body_ty: "core_term_type
         (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+               TE_GhostLocals := finsert var (TE_GhostLocals env),
+               TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
         Ghost body = Some bodyTy"
       and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
       by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
@@ -1217,9 +1222,11 @@ next
     proof (cases "var = x")
       case True
       let ?inner = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                         TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                         TE_GhostLocals := finsert var (TE_GhostLocals env),
+                         TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
       let ?inner_x = "?env_x \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env_x),
-                                TE_GhostLocals := finsert var (TE_GhostLocals ?env_x) \<rparr>"
+                                TE_GhostLocals := finsert var (TE_GhostLocals ?env_x),
+                                TE_ConstLocals := finsert var (TE_ConstLocals ?env_x) \<rparr>"
       have "finsert x gv' = finsert x (TE_GhostLocals env)"
         using CoreTm_Quantifier.prems(3) by (auto simp: fset_eqI)
       from True this have "?inner_x = ?inner" by simp
@@ -1230,7 +1237,8 @@ next
       have x_not_free_body: "x |\<notin>| core_term_free_vars body" by auto
       let ?body_gv = "finsert var gv'"
       let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                            TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                            TE_GhostLocals := finsert var (TE_GhostLocals env),
+                            TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
       have gv_body: "\<forall>y. y \<noteq> x \<longrightarrow> (y |\<in>| ?body_gv \<longleftrightarrow> y |\<in>| TE_GhostLocals ?body_env)"
         using CoreTm_Quantifier.prems(3) False by auto
       from CoreTm_Quantifier.IH[OF x_not_free_body body_ty gv_body]
@@ -1244,7 +1252,8 @@ next
       hence "(?body_env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars ?body_env),
                           TE_GhostLocals := ?body_gv \<rparr>) =
           (?env_x \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env_x),
-                    TE_GhostLocals := finsert var (TE_GhostLocals ?env_x) \<rparr>)"
+                    TE_GhostLocals := finsert var (TE_GhostLocals ?env_x),
+                    TE_ConstLocals := finsert var (TE_ConstLocals ?env_x) \<rparr>)"
         by simp
       with body_ty' body_bool ty_eq wk' Ghost show ?thesis by (simp add: Let_def)
     qed
@@ -1601,16 +1610,19 @@ next
     from Ghost CoreTm_Quantifier.prems obtain bodyTy where
       body_ty: "core_term_type
         (env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-               TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)
+               TE_GhostLocals := finsert var (TE_GhostLocals env),
+               TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
         Ghost body = Some bodyTy"
       and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
       by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
     let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                           TE_GhostLocals := finsert var (TE_GhostLocals env),
+                           TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     have body_env_shape: "?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
                                        TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr> =
                           ?env' \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env'),
-                                  TE_GhostLocals := finsert var (TE_GhostLocals ?env') \<rparr>"
+                                  TE_GhostLocals := finsert var (TE_GhostLocals ?env'),
+                                  TE_ConstLocals := finsert var (TE_ConstLocals ?env') \<rparr>"
       by simp
     have body_ty': "core_term_type
          (?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
@@ -2009,14 +2021,17 @@ next
     from Ghost CoreTm_Quantifier.prems(1) obtain bodyTy where
       body_ty': "core_term_type
         (?env' \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env'),
-               TE_GhostLocals := finsert var (TE_GhostLocals ?env') \<rparr>)
+               TE_GhostLocals := finsert var (TE_GhostLocals ?env'),
+               TE_ConstLocals := finsert var (TE_ConstLocals ?env') \<rparr>)
         Ghost body = Some bodyTy"
       and ty_eq: "ty = CoreTy_Bool" and body_bool: "bodyTy = CoreTy_Bool"
       by (auto simp: Let_def split: option.splits if_splits CoreType.splits)
     let ?body_env = "env \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars env),
-                           TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>"
+                           TE_GhostLocals := finsert var (TE_GhostLocals env),
+                           TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
     have body_env_shape: "?env' \<lparr> TE_LocalVars := fmupd var varTy (TE_LocalVars ?env'),
-               TE_GhostLocals := finsert var (TE_GhostLocals ?env') \<rparr> =
+               TE_GhostLocals := finsert var (TE_GhostLocals ?env'),
+               TE_ConstLocals := finsert var (TE_ConstLocals ?env') \<rparr> =
          ?body_env \<lparr> TE_TypeVars := TE_TypeVars ?body_env |\<union>| extraTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr>"
       by simp
