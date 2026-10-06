@@ -53,6 +53,7 @@ session Babylon = "HOL-Library" +
     "core/LinkSubstRanges"
     "core/MergeAllSubsts"
     "core/MergeSubstsPrelims"
+    "core/ModuleBodyEnv"
     "core/SubstAbsorption"
     "core/SubstClosureExistsUnique"
     "core/TyEnvExtension"

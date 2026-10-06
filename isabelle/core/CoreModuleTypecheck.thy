@@ -1,5 +1,5 @@
 theory CoreModuleTypecheck
-  imports CoreModule CoreStmtTypecheck CoreTyEnvWellFormed
+  imports CoreModule CoreStmtTypecheck CoreTyEnvWellFormed ModuleBodyEnv
 begin
 
 (* Module-level well-typedness *)
@@ -31,59 +31,6 @@ begin
    to its definition (i32). *)
 
 
-
-(* ========================================================================== *)
-(* The body environment for checking a function definition                    *)
-(* ========================================================================== *)
-
-(* This defines the type environment in which the body of a function must
-   typecheck.
-
-   This is the module-level analogue of body_env_for (interpreter/StateMatchesEnv.thy)
-   generalized in one way: the module env may have unresolved abstract types,
-   so TE_TypeVars is TE_AbstractTypes env plus the function's own type
-   parameters (rather than the type parameters alone), and TE_RuntimeTypeVars
-   likewise keeps the abstract types that are runtime type variables.
-
-   Ghost functions are covered, as they are in body_env_for: a ghost
-   function's parameters are ghost locals and its type parameters are not
-   runtime type variables.
-
-   In the NotGhost case, the TE_RuntimeTypeVars formula is the same one used
-   by tyenv_fun_ghost_constraint (CoreTyEnvWellFormed.thy) when it checks a
-   non-ghost function's argument/return types for being runtime types, so
-   runtime-type facts about the signature transfer directly to the body env.
-
-   On a *closed* module (TE_AbstractTypes env = {||}), this definition
-   coincides field-for-field with body_env_for, for any function - which is
-   why state_matches_env's body-typecheck obligation matches the module-level
-   check when an InterpState is built. *)
-
-definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv" where
-  "module_body_env_for env names info =
-    env \<lparr>
-      TE_LocalVars := fmap_of_list (zip names (map fst (FI_TmArgs info))),
-      TE_GhostLocals := (if FI_Ghost info = Ghost then fset_of_list names
-                         else fset_of_list
-                                (map fst
-                                     (filter (\<lambda>(_, _, gh). gh = Ghost)
-                                             (zip names (map snd (FI_TmArgs info)))))),
-      TE_ConstLocals := fset_of_list
-        (map fst
-             (filter (\<lambda>(_, vor, _). vor = Var) (zip names (map snd (FI_TmArgs info))))),
-      TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info),
-      TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                             |\<union>| (if FI_Ghost info = NotGhost
-                                   then fset_of_list (FI_TyArgs info)
-                                   else {||}),
-      TE_ReturnType := FI_ReturnType info,
-      TE_FunctionGhost := FI_Ghost info,
-      TE_FunctionImpure := FI_Impure info,
-      TE_ProofGoal := None,
-      TE_ProofTopLevel := False
-    \<rparr>"
-
-
 (* ========================================================================== *)
 (* Clauses of normalized_module_well_typed                                    *)
 (* ========================================================================== *)
@@ -108,8 +55,9 @@ definition module_globals_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreVa
    is consistent with its FunInfo: the parameter names are distinct and line
    up one-for-one with the types and Var/Ref tags in FI_TmArgs, and the body
    (if any - extern functions have CF_Body = None) typechecks in the body
-   environment. (Distinctness of parameter names is also required - this matches
-   the same requirement in fun_info_matches_interp_fun.)
+   environment (module_body_env_for, defined in ModuleBodyEnv.thy).
+   (Distinctness of parameter names is also required - this matches the same
+   requirement in fun_info_matches_interp_fun.)
 
    An extern function has no ghost parameter. Its implementation is outside
    the program and takes the whole argument list, so ghost erasure could not

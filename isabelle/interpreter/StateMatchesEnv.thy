@@ -1,5 +1,6 @@
 theory StateMatchesEnv
   imports CoreInterp "../core/CoreStmtTypecheck" "../core/CoreTermTypeMode"
+          "../core/ModuleBodyEnv"
 begin
 
 (* This helper builds the type environment in which a function body should typecheck.
@@ -27,7 +28,7 @@ begin
    - TE_FunctionImpure: set to the function's FI_Impure.
 
    (With no abstract types, this is the same environment as module_body_env_for
-   in core/CoreModuleTypecheck.thy.)
+   in core/ModuleBodyEnv.thy; see module_body_env_for_eq_body_env_for below.)
 *)
 definition body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> FunInfo \<Rightarrow> CoreTyEnv" where
   "body_env_for env names funInfo =
@@ -50,6 +51,13 @@ definition body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightarrow> Fu
       TE_ProofGoal := None,
       TE_ProofTopLevel := False
     \<rparr>"
+
+(* In an env with no abstract types, the module typechecker's body
+   environment coincides with the interpreter's, for any function. *)
+lemma module_body_env_for_eq_body_env_for:
+  assumes abs_empty: "TE_AbstractTypes env = {||}"
+  shows "module_body_env_for env names info = body_env_for env names info"
+  using assms unfolding module_body_env_for_def body_env_for_def by simp
 
 (* Lemma: body_env_for does not depend on TE_ProofGoal. *)
 lemma body_env_for_input_TE_ProofGoal_irrelevant [simp]:
@@ -393,376 +401,17 @@ lemma state_matches_env_IS_World_irrelevant [simp]:
 (* body_env_for preserves tyenv_well_formed, given that funInfo is one of env's
    functions, and that there is one name for each parameter.
    The assumption "abs_empty" is justified because body_env_for is only used by the
-   interpreter, which only works with fully-linked programs (with no abstract types). *)
+   interpreter, which only works with fully-linked programs (with no abstract types).
+   Under that assumption body_env_for is module_body_env_for, so this is a
+   corollary of module_body_env_for_well_formed (core/ModuleBodyEnv.thy). *)
 lemma body_env_for_well_formed:
   assumes wf: "tyenv_well_formed env"
       and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
       and abs_empty: "TE_AbstractTypes env = {||}"
       and len_names: "length names = length (FI_TmArgs funInfo)"
   shows "tyenv_well_formed (body_env_for env names funInfo)"
-proof -
-  let ?be = "body_env_for env names funInfo"
-  let ?inner = "env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>"
-
-  \<comment> \<open>The body env inherits the (empty) abstract-type set. With it empty, the
-      generalized sub-predicate inner-envs collapse to the old shapes this proof
-      reasons about: TE_AbstractTypes env |\<union>| X = X and TE_AbstractTypes env |\<inter>| X = {||}. \<close>
-  have abs_be: "TE_AbstractTypes ?be = {||}" using abs_empty by (simp add: body_env_for_def)
-  note abs_collapse = abs_empty abs_be
-
-  \<comment> \<open>Field congruence facts: ?be agrees with env on TE_Datatypes etc., and with
-      ?inner on the relevant fields for is_well_kinded. \<close>
-  have wk_inner_eq: "\<And>ty. is_well_kinded ?be ty = is_well_kinded ?inner ty"
-    by (rule is_well_kinded_cong_env) (simp_all add: body_env_for_def)
-  have rt_cleared_eq:
-    "\<And>ty. is_runtime_type (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty
-        = is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-    by (rule is_runtime_type_cong_env) (simp_all add: body_env_for_def)
-
-  \<comment> \<open>Inner-override congruences for the various nested-env conjuncts. These all
-      override TE_TypeVars (and possibly TE_RuntimeTypeVars), so the outer
-      differences between env and ?be are dropped. \<close>
-  have wk_scope_eq:
-    "\<And>tvs t. is_well_kinded (?be \<lparr> TE_TypeVars := tvs \<rparr>) t
-            = is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
-    by (rule is_well_kinded_cong_env) (simp_all add: body_env_for_def)
-  have rt_scope_eq:
-    "\<And>tvs rtvs t. is_runtime_type (?be \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t
-                = is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
-    by (rule is_runtime_type_cong_env) (simp_all add: body_env_for_def)
-
-  \<comment> \<open>Extract relevant well-formedness facts from env. \<close>
-  from wf have
-    vars_wk: "tyenv_vars_well_kinded env" and
-    vars_rt: "tyenv_vars_runtime env" and
-    ctors_cons: "tyenv_ctors_consistent env" and
-    payloads_wk: "tyenv_payloads_well_kinded env" and
-    ctor_tyvars_distinct: "tyenv_ctor_tyvars_distinct env" and
-    ctors_by_type: "tyenv_ctors_by_type_consistent env" and
-    fun_types_wk: "tyenv_fun_types_well_kinded env" and
-    fun_tyvars_distinct: "tyenv_fun_tyvars_distinct env" and
-    fun_ghost: "tyenv_fun_ghost_constraint env" and
-    fun_ret_cp: "tyenv_fun_return_types_complete env" and
-    nonghost_payloads: "tyenv_nonghost_payloads_runtime env" and
-    ghost_dt_subset: "tyenv_ghost_datatypes_subset env" and
-    rt_subset: "tyenv_runtime_tyvars_subset env" and
-    dt_nonempty: "tyenv_datatypes_nonempty env"
-    unfolding tyenv_well_formed_def by auto
-
-  \<comment> \<open>FI_TmArgs types are well-kinded in ?inner. \<close>
-  from fun_types_wk fn_lookup have args_wk_inner:
-    "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). is_well_kinded ?inner ty"
-    unfolding tyenv_fun_types_well_kinded_def abs_empty by auto
-  \<comment> \<open>FI_ReturnType is well-kinded in ?inner. \<close>
-  from fun_types_wk fn_lookup have ret_wk_inner:
-    "is_well_kinded ?inner (FI_ReturnType funInfo)"
-    unfolding tyenv_fun_types_well_kinded_def abs_empty by auto
-
-  \<comment> \<open>(1) tyenv_vars_well_kinded ?be \<close>
-  have c1: "tyenv_vars_well_kinded ?be"
-    unfolding tyenv_vars_well_kinded_def
-  proof (intro conjI allI impI)
-    fix name ty
-    assume "fmlookup (TE_LocalVars ?be) name = Some ty"
-    hence "(name, ty) \<in> set (zip names (map fst (FI_TmArgs funInfo)))"
-      by (auto simp: body_env_for_def fmlookup_of_list weak_map_of_SomeI dest: map_of_SomeD)
-    hence in_args: "ty \<in> fst ` set (FI_TmArgs funInfo)"
-      using set_zip_rightD by fastforce
-    have "is_well_kinded ?inner ty"
-      using args_wk_inner in_args by force
-    thus "is_well_kinded ?be ty" using wk_inner_eq by simp
-  next
-    fix name ty
-    assume gv: "fmlookup (TE_GlobalVars ?be) name = Some ty"
-    hence "fmlookup (TE_GlobalVars env) name = Some ty"
-      by (simp add: body_env_for_def)
-    \<comment> \<open>With TE_AbstractTypes empty, vars_wk's global clause is the {||}-cleared form. \<close>
-    with vars_wk have "is_well_kinded (env \<lparr> TE_TypeVars := {||} \<rparr>) ty"
-      unfolding tyenv_vars_well_kinded_def using abs_empty by auto
-    hence "is_well_kinded (?be \<lparr> TE_TypeVars := {||} \<rparr>) ty"
-      using wk_scope_eq by simp
-    thus "is_well_kinded (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be \<rparr>) ty"
-      by (simp add: abs_be)
-  qed
-
-  \<comment> \<open>(2) tyenv_vars_runtime ?be. Locals: the parameters of a ghost function are all
-        ghost locals; of a function that is not ghost, a parameter that is not a
-        ghost local is a non-ghost parameter, and has a runtime type by
-        tyenv_fun_ghost_constraint. Globals are inherited. \<close>
-  have c2: "tyenv_vars_runtime ?be"
-    unfolding tyenv_vars_runtime_def
-  proof (intro conjI allI impI)
-    fix name ty
-    assume A: "fmlookup (TE_LocalVars ?be) name = Some ty \<and> name |\<notin>| TE_GhostLocals ?be"
-    hence lk: "fmlookup (TE_LocalVars ?be) name = Some ty"
-      and ng: "name |\<notin>| TE_GhostLocals ?be" by simp_all
-    from lk have in_zip: "(name, ty) \<in> set (zip names (map fst (FI_TmArgs funInfo)))"
-      by (auto simp: body_env_for_def fmlookup_of_list weak_map_of_SomeI dest: map_of_SomeD)
-    hence in_args: "ty \<in> fst ` set (FI_TmArgs funInfo)"
-      using set_zip_rightD by fastforce
-    from in_zip have name_in: "name \<in> set names"
-      by (rule set_zip_leftD)
-    show "is_runtime_type ?be ty"
-    proof (cases "FI_Ghost funInfo")
-      case Ghost
-      have "name |\<in>| TE_GhostLocals ?be"
-        using Ghost name_in by (simp add: body_env_for_def fset_of_list_elem)
-      with ng show ?thesis by simp
-    next
-      case NotGhost
-      \<comment> \<open>The parameter's ghost flag is NotGhost: otherwise its name would be
-          a ghost local. \<close>
-      from in_zip obtain i where i_lt: "i < length names"
-          and i_fi: "i < length (FI_TmArgs funInfo)"
-          and name_i: "names ! i = name" and ty_i: "ty = fst (FI_TmArgs funInfo ! i)"
-        by (auto simp: in_set_zip)
-      obtain vor gh where fi_i: "FI_TmArgs funInfo ! i = (ty, vor, gh)"
-        using ty_i by (cases "FI_TmArgs funInfo ! i") auto
-      have "gh = NotGhost"
-      proof (rule ccontr)
-        assume "gh \<noteq> NotGhost"
-        hence g: "gh = Ghost" by (cases gh) auto
-        have "(name, vor, gh) \<in> set (zip names (map snd (FI_TmArgs funInfo)))"
-          unfolding in_set_zip by (intro exI[of _ i]) (simp add: fi_i name_i i_lt i_fi)
-        hence "name |\<in>| TE_GhostLocals ?be"
-          using g NotGhost by (force simp: body_env_for_def fset_of_list_elem image_iff)
-        thus False using ng by simp
-      qed
-      hence in_ng_args: "(ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo)"
-        using fi_i i_fi by (metis nth_mem)
-      from fun_ghost fn_lookup NotGhost have
-        "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
-            is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                    TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-        unfolding tyenv_fun_ghost_constraint_def Let_def by (auto simp: abs_collapse)
-      with in_ng_args have rt_inner:
-        "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-        by blast
-      have "is_runtime_type ?be ty
-              = is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                        TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-        by (rule is_runtime_type_cong_env) (simp_all add: body_env_for_def NotGhost)
-      with rt_inner show ?thesis by simp
-    qed
-  next
-    fix name ty
-    assume A: "fmlookup (TE_GlobalVars ?be) name = Some ty"
-    from A have lk: "fmlookup (TE_GlobalVars env) name = Some ty"
-      by (simp add: body_env_for_def)
-    then have "is_runtime_type (env \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      using vars_rt unfolding tyenv_vars_runtime_def using abs_empty by auto
-    hence "is_runtime_type (?be \<lparr> TE_TypeVars := {||}, TE_RuntimeTypeVars := {||} \<rparr>) ty"
-      using rt_cleared_eq by simp
-    thus "is_runtime_type (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be,
-            TE_RuntimeTypeVars := TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be \<rparr>) ty"
-      by (simp add: abs_be)
-  qed
-
-  \<comment> \<open>(3) tyenv_ghost_vars_subset ?be: the ghost locals are parameter names, and
-        every parameter name is a local. \<close>
-  have dom_be: "fmdom (TE_LocalVars ?be) = fset_of_list names"
-    using len_names by (simp add: body_env_for_def)
-  have c3: "tyenv_ghost_vars_subset ?be"
-  proof -
-    have sub: "fset_of_list (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
-                                             (zip names (map snd (FI_TmArgs funInfo)))))
-                 |\<subseteq>| fset_of_list names"
-    proof (rule fsubsetI)
-      fix x
-      assume "x |\<in>| fset_of_list (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
-                                             (zip names (map snd (FI_TmArgs funInfo)))))"
-      then have "x \<in> set (map fst (filter (\<lambda>(_, _, gh). gh = Ghost)
-                                          (zip names (map snd (FI_TmArgs funInfo)))))"
-        by (simp only: fset_of_list_elem)
-      then have "x \<in> set names"
-        by (auto dest: set_zip_leftD)
-      then show "x |\<in>| fset_of_list names"
-        by (simp only: fset_of_list_elem)
-    qed
-    thus ?thesis
-      unfolding tyenv_ghost_vars_subset_def dom_be
-      by (simp add: body_env_for_def)
-  qed
-
-  \<comment> \<open>(4) tyenv_return_type_well_kinded ?be: TE_ReturnType ?be = FI_ReturnType. \<close>
-  have c4: "tyenv_return_type_well_kinded ?be"
-    unfolding tyenv_return_type_well_kinded_def
-    using ret_wk_inner wk_inner_eq by (simp add: body_env_for_def)
-
-  \<comment> \<open>(4b) tyenv_return_type_runtime ?be: for a function that is not ghost, by
-        tyenv_fun_ghost_constraint. \<close>
-  have c4b: "tyenv_return_type_runtime ?be"
-    unfolding tyenv_return_type_runtime_def
-  proof (intro impI)
-    assume "TE_FunctionGhost ?be = NotGhost"
-    hence ng: "FI_Ghost funInfo = NotGhost" by (simp add: body_env_for_def)
-    from fun_ghost fn_lookup ng have rt_inner:
-      "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                              TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
-                       (FI_ReturnType funInfo)"
-      unfolding tyenv_fun_ghost_constraint_def Let_def by (auto simp: abs_collapse)
-    have "is_runtime_type ?be (FI_ReturnType funInfo)
-            = is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs funInfo),
-                                      TE_RuntimeTypeVars := fset_of_list (FI_TyArgs funInfo) \<rparr>)
-                              (FI_ReturnType funInfo)"
-      by (rule is_runtime_type_cong_env) (simp_all add: body_env_for_def ng)
-    with rt_inner show "is_runtime_type ?be (TE_ReturnType ?be)"
-      by (simp add: body_env_for_def)
-  qed
-
-  \<comment> \<open>(4c) tyenv_return_type_complete ?be: for a function that is not ghost, by
-        tyenv_fun_return_types_complete. \<close>
-  have c4c: "tyenv_return_type_complete ?be"
-    unfolding tyenv_return_type_complete_def
-  proof (intro impI)
-    assume "TE_FunctionGhost ?be = NotGhost"
-    hence ng: "FI_Ghost funInfo = NotGhost" by (simp add: body_env_for_def)
-    from fun_ret_cp fn_lookup ng have "is_complete_type (FI_ReturnType funInfo)"
-      unfolding tyenv_fun_return_types_complete_def by blast
-    thus "is_complete_type (TE_ReturnType ?be)" by (simp add: body_env_for_def)
-  qed
-
-  \<comment> \<open>(5) tyenv_ctors_consistent ?be: TE_DataCtors and TE_Datatypes inherited. \<close>
-  have c5: "tyenv_ctors_consistent ?be"
-    using ctors_cons unfolding tyenv_ctors_consistent_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(6) tyenv_payloads_well_kinded ?be: inner override on TE_TypeVars, TE_Datatypes inherited. \<close>
-  have c6: "tyenv_payloads_well_kinded ?be"
-    unfolding tyenv_payloads_well_kinded_def
-  proof (intro allI impI)
-    fix ctorName dtName tyVars payload
-    assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
-    hence ctor_lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
-      by (simp add: body_env_for_def)
-    with payloads_wk
-    have "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
-      unfolding tyenv_payloads_well_kinded_def using abs_empty by simp
-    hence "is_well_kinded (?be \<lparr> TE_TypeVars := fset_of_list tyVars \<rparr>) payload"
-      using wk_scope_eq by simp
-    thus "is_well_kinded (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list tyVars \<rparr>) payload"
-      by (simp add: abs_be)
-  qed
-
-  \<comment> \<open>(7) tyenv_ctor_tyvars_distinct ?be: TE_DataCtors inherited. \<close>
-  have c7: "tyenv_ctor_tyvars_distinct ?be"
-    using ctor_tyvars_distinct unfolding tyenv_ctor_tyvars_distinct_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(8) tyenv_ctors_by_type_consistent ?be: TE_DataCtorsByType, TE_DataCtors inherited. \<close>
-  have c8: "tyenv_ctors_by_type_consistent ?be"
-    using ctors_by_type unfolding tyenv_ctors_by_type_consistent_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(9) tyenv_fun_types_well_kinded ?be: inner override, TE_Functions, TE_Datatypes inherited. \<close>
-  have c9: "tyenv_fun_types_well_kinded ?be"
-    unfolding tyenv_fun_types_well_kinded_def
-  proof (intro allI impI)
-    fix funName info
-    assume "fmlookup (TE_Functions ?be) funName = Some info"
-    hence info_lk: "fmlookup (TE_Functions env) funName = Some info"
-      by (simp add: body_env_for_def)
-    with fun_types_wk have
-      args_wk: "\<forall>ty \<in> fst ` set (FI_TmArgs info).
-                  is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty"
-      and ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
-                                  (FI_ReturnType info)"
-      unfolding tyenv_fun_types_well_kinded_def by (auto simp: abs_collapse)
-    show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
-              is_well_kinded (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
-          is_well_kinded (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
-                         (FI_ReturnType info)"
-      using args_wk ret_wk wk_scope_eq by (simp add: abs_be)
-  qed
-
-  \<comment> \<open>(10) tyenv_fun_tyvars_distinct ?be: TE_Functions inherited. \<close>
-  have c10: "tyenv_fun_tyvars_distinct ?be"
-    using fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(12) tyenv_fun_ghost_constraint ?be: inner override, TE_Functions inherited. \<close>
-  have c12: "tyenv_fun_ghost_constraint ?be"
-    unfolding tyenv_fun_ghost_constraint_def Let_def
-  proof (intro allI impI, elim conjE)
-    fix funName info
-    assume info_lk_be: "fmlookup (TE_Functions ?be) funName = Some info"
-       and ng_info: "FI_Ghost info = NotGhost"
-    from info_lk_be have info_lk: "fmlookup (TE_Functions env) funName = Some info"
-      by (simp add: body_env_for_def)
-    from fun_ghost info_lk ng_info have
-      "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
-            is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
-                                    TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
-       is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list (FI_TyArgs info),
-                               TE_RuntimeTypeVars := fset_of_list (FI_TyArgs info) \<rparr>)
-                       (FI_ReturnType info)"
-      unfolding tyenv_fun_ghost_constraint_def Let_def by (auto simp: abs_collapse)
-    thus "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
-              is_runtime_type (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list (FI_TyArgs info),
-                  TE_RuntimeTypeVars := (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
-                                         |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty) \<and>
-           is_runtime_type (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list (FI_TyArgs info),
-                  TE_RuntimeTypeVars := (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
-                                         |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
-                           (FI_ReturnType info)"
-      using rt_scope_eq by (simp add: abs_be)
-  qed
-
-  \<comment> \<open>(12c) tyenv_fun_return_types_complete ?be: TE_Functions inherited, and the
-        predicate is env-free. \<close>
-  have c12c: "tyenv_fun_return_types_complete ?be"
-    using fun_ret_cp unfolding tyenv_fun_return_types_complete_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(13) tyenv_nonghost_payloads_runtime ?be: inner override, TE_DataCtors,
-        TE_GhostDatatypes inherited. \<close>
-  have c13: "tyenv_nonghost_payloads_runtime ?be"
-    unfolding tyenv_nonghost_payloads_runtime_def
-  proof (intro allI impI)
-    fix ctorName dtName tyVars payload
-    assume ctor_lk_be: "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
-       and ng_dt: "dtName |\<notin>| TE_GhostDatatypes ?be"
-    from ctor_lk_be have ctor_lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
-      by (simp add: body_env_for_def)
-    from ng_dt have ng_dt_env: "dtName |\<notin>| TE_GhostDatatypes env"
-      by (simp add: body_env_for_def)
-    from nonghost_payloads ctor_lk ng_dt_env
-    have "is_runtime_type (env \<lparr> TE_TypeVars := fset_of_list tyVars,
-                                  TE_RuntimeTypeVars := fset_of_list tyVars \<rparr>) payload"
-      unfolding tyenv_nonghost_payloads_runtime_def using abs_empty by simp
-    hence "is_runtime_type (?be \<lparr> TE_TypeVars := fset_of_list tyVars,
-                                  TE_RuntimeTypeVars := fset_of_list tyVars \<rparr>) payload"
-      using rt_scope_eq by simp
-    thus "is_runtime_type (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list tyVars,
-                  TE_RuntimeTypeVars := (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
-                                         |\<union>| fset_of_list tyVars \<rparr>) payload"
-      by (simp add: abs_be)
-  qed
-
-  \<comment> \<open>(15) tyenv_runtime_tyvars_subset ?be: ?be sets TE_RuntimeTypeVars to
-       TE_TypeVars or to the empty set, so the subset relation is trivial. \<close>
-  have c15: "tyenv_runtime_tyvars_subset ?be"
-    unfolding tyenv_runtime_tyvars_subset_def by (simp add: body_env_for_def)
-
-  \<comment> \<open>(14) tyenv_ghost_datatypes_subset ?be: TE_GhostDatatypes, TE_Datatypes inherited. \<close>
-  have c14: "tyenv_ghost_datatypes_subset ?be"
-    using ghost_dt_subset unfolding tyenv_ghost_datatypes_subset_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(16) tyenv_datatypes_nonempty ?be: TE_Datatypes, TE_DataCtorsByType inherited. \<close>
-  have c16: "tyenv_datatypes_nonempty ?be"
-    using dt_nonempty unfolding tyenv_datatypes_nonempty_def
-    by (simp add: body_env_for_def)
-
-  \<comment> \<open>(17) tyenv_abstract_types_subset ?be: TE_AbstractTypes ?be = {||} (inherited from
-       the empty abstract-type set), so the subset is trivial. \<close>
-  have c17: "tyenv_abstract_types_subset ?be"
-    unfolding tyenv_abstract_types_subset_def by (simp add: abs_be)
-
-  from c1 c2 c3 c4 c4b c4c c5 c6 c7 c8 c9 c10 c12 c12c c13 c14 c15 c16 c17
-  show ?thesis unfolding tyenv_well_formed_def by simp
-qed
+  using module_body_env_for_well_formed[OF wf fn_lookup len_names]
+  by (simp add: module_body_env_for_eq_body_env_for[OF abs_empty])
 
 (* body_env_for only depends on the "global" fields of env (TE_GlobalVars,
    TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType,

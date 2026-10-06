@@ -245,6 +245,20 @@ next
   thus ?case by (auto simp: fset_of_list_elem)
 qed simp_all
 
+(* Growing TE_RuntimeTypeVars (with TE_GhostDatatypes unchanged) preserves
+   is_runtime_type: a runtime type's tyvars all sit in the source env's
+   runtime set. *)
+lemma is_runtime_type_mono_rtv:
+  assumes rt: "is_runtime_type env1 ty"
+      and rtv: "fset (TE_RuntimeTypeVars env1) \<subseteq> fset (TE_RuntimeTypeVars env2)"
+      and gd: "TE_GhostDatatypes env2 = TE_GhostDatatypes env1"
+  shows "is_runtime_type env2 ty"
+proof -
+  have "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env2)"
+    using is_runtime_type_tyvars_subset[OF rt] rtv by blast
+  then show ?thesis using is_runtime_type_transfer[OF rt _ gd] by blast
+qed
+
 
 (* ========================================================================== *)
 (* Term Properties *)

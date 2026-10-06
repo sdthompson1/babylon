@@ -62,18 +62,6 @@ qed
 
 
 (* ========================================================================== *)
-(* Body environments                                                          *)
-(* ========================================================================== *)
-
-(* In a module with no abstract types, the module typechecker's body
-   environment coincides with the interpreter's, for any function. *)
-lemma module_body_env_for_eq_body_env_for:
-  assumes abs_empty: "TE_AbstractTypes env = {||}"
-  shows "module_body_env_for env names info = body_env_for env names info"
-  using assms unfolding module_body_env_for_def body_env_for_def by simp
-
-
-(* ========================================================================== *)
 (* build_interp_funs                                                          *)
 (* ========================================================================== *)
 
