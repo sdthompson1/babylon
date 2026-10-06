@@ -379,12 +379,12 @@ qed
    (parameter, lvalue result, value result) triples that process_one_arg
    consumes. *)
 definition ref_arg_addrs ::
-    "((string \<times> VarOrRef \<times> GhostOrNot)
+    "((string \<times> VarOrRef)
       \<times> (InterpError + nat \<times> LValuePath list)
       \<times> (InterpError + CoreValue)) list \<Rightarrow> nat set" where
   "ref_arg_addrs argTuples =
-    {a. \<exists>name gh path valRes.
-          ((name, Ref, gh), Inr (a, path), valRes) \<in> set argTuples}"
+    {a. \<exists>name path valRes.
+          ((name, Ref), Inr (a, path), valRes) \<in> set argTuples}"
 
 (* Binding one argument only appends to the store. The new frame refers to
    what the old one did, plus either a freshly allocated cell (Var parameter)
@@ -396,7 +396,7 @@ lemma process_one_arg_frame:
             a \<in> frame_addrs state \<or> a \<in> ref_arg_addrs [arg] \<or>
             (length (IS_Store state) \<le> a \<and> a < length (IS_Store state')))"
 proof -
-  obtain name vr gh refRes valRes where arg_eq: "arg = ((name, vr, gh), refRes, valRes)"
+  obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
     by (cases arg) auto
   show ?thesis
   proof (cases vr)
@@ -524,16 +524,16 @@ qed
 lemma ref_arg_addrs_zip:
   assumes "a \<in> ref_arg_addrs (zip args (zip refResults valResults))"
   shows "\<exists>i path. i < length args \<and> i < length refResults \<and>
-                  fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
+                  snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
 proof -
-  from assms obtain name gh path valRes where
-    "((name, Ref, gh), Inr (a, path), valRes) \<in> set (zip args (zip refResults valResults))"
+  from assms obtain name path valRes where
+    "((name, Ref), Inr (a, path), valRes) \<in> set (zip args (zip refResults valResults))"
     unfolding ref_arg_addrs_def by blast
-  then obtain i where i: "args ! i = (name, Ref, gh)" "refResults ! i = Inr (a, path)"
+  then obtain i where i: "args ! i = (name, Ref)" "refResults ! i = Inr (a, path)"
                          "i < length args" "i < length refResults"
     by (auto simp: in_set_zip)
   have "i < length args \<and> i < length refResults \<and>
-        fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
+        snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
     using i by simp
   then show ?thesis by blast
 qed
@@ -550,20 +550,20 @@ lemma rights_set:
 (* The lvalues that an extern function may update are those passed in Ref
    argument positions. *)
 lemma extern_refs_addrs:
-  assumes "(a, path) \<in> set (rights (map (\<lambda>((_, vr, _), refResult).
+  assumes "(a, path) \<in> set (rights (map (\<lambda>((_, vr), refResult).
                                             if vr = Ref then refResult else Inl TypeError)
                                          (zip args refResults)))"
   shows "\<exists>i. i < length args \<and> i < length refResults \<and>
-             fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
+             snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
 proof -
-  from assms obtain name gh where
-    "((name, Ref, gh), Inr (a, path)) \<in> set (zip args refResults)"
+  from assms obtain name where
+    "((name, Ref), Inr (a, path)) \<in> set (zip args refResults)"
     by (auto simp: rights_set split: if_splits)
-  then obtain i where i: "args ! i = (name, Ref, gh)" "refResults ! i = Inr (a, path)"
+  then obtain i where i: "args ! i = (name, Ref)" "refResults ! i = Inr (a, path)"
                          "i < length args" "i < length refResults"
     by (auto simp: in_set_zip)
   have "i < length args \<and> i < length refResults \<and>
-        fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
+        snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
     using i by simp
   then show ?thesis by blast
 qed
@@ -617,7 +617,7 @@ definition call_ref_addrs :: "'w InterpState \<Rightarrow> string \<Rightarrow> 
     {a. \<exists>f i name.
           fmlookup (IS_Functions state) fnName = Some f \<and>
           i < length argTms \<and> i < length (IF_Args f) \<and>
-          fst (snd (IF_Args f ! i)) = Ref \<and>
+          snd (IF_Args f ! i) = Ref \<and>
           lvalue_base_name (argTms ! i) = Some name \<and>
           var_addr state name = Some a}"
 
@@ -629,7 +629,7 @@ lemma ref_result_in_call_ref_addrs:
   assumes "fmlookup (IS_Functions state) fnName = Some f"
     and "i < length (IF_Args f)"
     and "i < length argTms"
-    and "fst (snd (IF_Args f ! i)) = Ref"
+    and "snd (IF_Args f ! i) = Ref"
     and "map (interp_writable_lvalue d fuel state) argTms ! i = Inr (a, path)"
   shows "a \<in> call_ref_addrs state fnName argTms"
 proof -
@@ -1120,7 +1120,7 @@ next
       proof -
         from ref_arg_addrs_zip[OF that] obtain i path where
           i: "i < length (IF_Args f)" "i < length ?refResults"
-             "fst (snd (IF_Args f ! i)) = Ref" "?refResults ! i = Inr (a, path)"
+             "snd (IF_Args f ! i) = Ref" "?refResults ! i = Inr (a, path)"
           by blast
         from i(2) have i_lt: "i < length argTms" by simp
         show ?thesis
@@ -1187,7 +1187,7 @@ next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
         let ?vals = "rights ?valResults"
-        let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
+        let ?refs = "rights (map (\<lambda>((_, vr), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                  (zip (IF_Args f) ?refResults))"
         obtain newWorld refUpdates externRetVal where
@@ -1218,7 +1218,7 @@ next
             then obtain path where "(a, path) \<in> set ?refs" by auto
             from extern_refs_addrs[OF this] obtain i where
               i: "i < length (IF_Args f)" "i < length ?refResults"
-                 "fst (snd (IF_Args f ! i)) = Ref" "?refResults ! i = Inr (a, path)"
+                 "snd (IF_Args f ! i) = Ref" "?refResults ! i = Inr (a, path)"
               by blast
             from i(2) have i_lt: "i < length argTms" by simp
             from ref_result_in_call_ref_addrs[OF f_lookup i(1) i_lt i(3) i(4)] notin

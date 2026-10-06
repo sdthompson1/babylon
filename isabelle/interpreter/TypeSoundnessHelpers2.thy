@@ -579,7 +579,7 @@ lemma process_one_arg_step_sound:
             "sound_partial_arg_processing_result env names funInfo tySubst k storeTyping
                (Inr partialState)"
   shows "sound_partial_arg_processing_result env names funInfo tySubst (Suc k) storeTyping
-           (process_one_arg ((paramName, vor, gh), lvalResult, valResult) (Inr partialState))"
+           (process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState))"
 proof -
   \<comment> \<open>Extract the partial state invariants from partial_sound. \<close>
   from partial_sound have tyargs_partial: "IS_TyArgs partialState = tySubst"
@@ -653,7 +653,7 @@ proof -
       case (Inl err)
       from val_sound Inl have err_sound: "sound_error_result err" by simp
       from Var Inl have step_eq:
-        "process_one_arg ((paramName, vor, gh), lvalResult, valResult) (Inr partialState) = Inl err"
+        "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState) = Inl err"
         by simp
       show ?thesis
         using err_sound step_eq
@@ -690,7 +690,7 @@ proof -
                                 IS_ConstLocals := finsert paramName (IS_ConstLocals state') \<rparr>"
 
       have step_eq:
-        "process_one_arg ((paramName, vor, gh), lvalResult, valResult) (Inr partialState)
+        "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
            = Inr ?state''"
         using Var Inr alloc_eq
         by (simp add: case_prod_beta)
@@ -740,7 +740,7 @@ proof -
       case (Inl err)
       from lval_sound[OF Ref] Inl have err_sound: "sound_error_result err" by simp
       from Ref Inl have step_eq:
-        "process_one_arg ((paramName, vor, gh), lvalResult, valResult) (Inr partialState) = Inl err"
+        "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState) = Inl err"
         by simp
       show ?thesis
         using err_sound step_eq
@@ -762,7 +762,7 @@ proof -
         case Inl_val: (Inl err)
         from val_sound Inl_val have err_sound: "sound_error_result err" by simp
         from Ref Inr lval_eq Inl_val have step_eq:
-          "process_one_arg ((paramName, vor, gh), lvalResult, valResult) (Inr partialState) = Inl err"
+          "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState) = Inl err"
           by simp
         show ?thesis
           using err_sound step_eq
@@ -774,7 +774,7 @@ proof -
                                        IS_ConstLocals := fminus (IS_ConstLocals partialState) {|paramName|} \<rparr>"
 
         have step_eq:
-          "process_one_arg ((paramName, vor, gh), lvalResult, valResult) (Inr partialState)
+          "process_one_arg ((paramName, vor), lvalResult, valResult) (Inr partialState)
              = Inr ?state'"
           using Ref Inr lval_eq Inr_val by simp
 
@@ -846,7 +846,7 @@ qed
 (* If a single process_one_arg step succeeds, then the val-result was Inr (in
    both Var and Ref clauses) and, for the Ref clause, the ref-result was Inr too. *)
 lemma process_one_arg_inr_inversion:
-  assumes "process_one_arg ((name, vor, gh), refResult, valResult) (Inr state) = Inr state'"
+  assumes "process_one_arg ((name, vor), refResult, valResult) (Inr state) = Inr state'"
   shows "(\<exists>v. valResult = Inr v) \<and> (vor = Ref \<longrightarrow> (\<exists>a p. refResult = Inr (a, p)))"
 proof (cases vor)
   case Var
@@ -876,7 +876,7 @@ lemma fold_process_one_arg_inr_inversion:
       and "length ifArgs = length valResults"
   shows "\<forall>i < length ifArgs.
            (\<exists>v. valResults ! i = Inr v) \<and>
-           (fst (snd (ifArgs ! i)) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p)))"
+           (snd (ifArgs ! i) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p)))"
 using assms proof (induction ifArgs arbitrary: refResults valResults initState)
   case Nil
   then show ?case by simp
@@ -886,9 +886,9 @@ next
     by (cases refResults) auto
   from Cons.prems(3) obtain vv vrest where vv_eq: "valResults = vv # vrest"
     by (cases valResults) auto
-  obtain name vor gh where ifa_eq: "ifa = (name, vor, gh)" by (cases ifa)
+  obtain name vor where ifa_eq: "ifa = (name, vor)" by (cases ifa)
 
-  let ?step = "process_one_arg ((name, vor, gh), rr, vv) (Inr initState)"
+  let ?step = "process_one_arg ((name, vor), rr, vv) (Inr initState)"
   have fold_unfold:
     "fold process_one_arg (zip (ifa # ifrest) (zip refResults valResults)) (Inr initState)
        = fold process_one_arg (zip ifrest (zip rrest vrest)) ?step"
@@ -918,13 +918,13 @@ next
   from Cons.IH[OF rest_fold len_rrest len_vrest]
   have rest: "\<forall>i < length ifrest.
                 (\<exists>v. vrest ! i = Inr v) \<and>
-                (fst (snd (ifrest ! i)) = Ref \<longrightarrow> (\<exists>a p. rrest ! i = Inr (a, p)))" .
+                (snd (ifrest ! i) = Ref \<longrightarrow> (\<exists>a p. rrest ! i = Inr (a, p)))" .
 
   show ?case
   proof (intro allI impI)
     fix i assume i_lt: "i < length (ifa # ifrest)"
     show "(\<exists>v. valResults ! i = Inr v) \<and>
-          (fst (snd ((ifa # ifrest) ! i)) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p)))"
+          (snd ((ifa # ifrest) ! i) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p)))"
     proof (cases i)
       case 0
       from head ifa_eq show ?thesis using 0 rr_eq vv_eq by simp
@@ -933,7 +933,7 @@ next
       from i_lt Suc have j_lt: "j < length ifrest" by simp
       from rest j_lt have
         "(\<exists>v. vrest ! j = Inr v) \<and>
-         (fst (snd (ifrest ! j)) = Ref \<longrightarrow> (\<exists>a p. rrest ! j = Inr (a, p)))" by simp
+         (snd (ifrest ! j) = Ref \<longrightarrow> (\<exists>a p. rrest ! j = Inr (a, p)))" by simp
       thus ?thesis using Suc rr_eq vv_eq by simp
     qed
   qed
@@ -977,7 +977,7 @@ lemma fold_process_one_arg_sound_gen:
       and suffix_names:
             "map fst suffixIfArgs = drop k names"
       and var_ref_match:
-            "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+            "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
                        suffixFnArgs suffixIfArgs"
       and len_vals: "length suffixIfArgs = length suffixValResults"
       and len_refs: "length suffixIfArgs = length suffixRefResults"
@@ -1020,18 +1020,18 @@ next
   case (Cons arg restArgs)
   from Cons.prems(3) obtain ifHead ifRest where
     ifArgs_eq: "suffixIfArgs = ifHead # ifRest" and
-    ifRest_match: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+    ifRest_match: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
                               restArgs ifRest"
     by (cases suffixIfArgs) auto
   obtain paramTy vor gh where arg_eq: "arg = (paramTy, vor, gh)"
     by (cases arg) auto
-  obtain ifName ifVor ifGh where ifHead_eq: "ifHead = (ifName, ifVor, ifGh)"
+  obtain ifName ifVor where ifHead_eq: "ifHead = (ifName, ifVor)"
     by (cases ifHead)
-  \<comment> \<open>The parameter name comes from the InterpFun arg; the Var/Ref and ghost
-      markers match. \<close>
+  \<comment> \<open>The parameter name comes from the InterpFun arg; the Var/Ref markers
+      match. \<close>
   define paramName where "paramName = ifName"
   from Cons.prems(3) ifArgs_eq arg_eq ifHead_eq
-  have head_match: "vor = ifVor" and gh_match: "gh = ifGh" by simp_all
+  have head_match: "vor = ifVor" by simp
   from Cons.prems(4) ifArgs_eq obtain valHead valRest where
     vals_eq: "suffixValResults = valHead # valRest" and
     len_vals': "length ifRest = length valRest"
@@ -1066,13 +1066,13 @@ next
                      (apply_subst tySubst paramTy) refHead"
     using arg_eq refs_eq by force
 
-  let ?step = "process_one_arg ((paramName, vor, gh), refHead, valHead) partialResult"
+  let ?step = "process_one_arg ((paramName, vor), refHead, valHead) partialResult"
   have step_sound:
     "sound_partial_arg_processing_result env names funInfo tySubst (Suc k) storeTyping ?step"
   proof (cases partialResult)
     case (Inl err)
     from process_one_arg_preserve_error[of env names funInfo tySubst k storeTyping err
-                                           "((paramName, vor, gh), refHead, valHead)"]
+                                           "((paramName, vor), refHead, valHead)"]
          Cons.prems(9) Inl
     show ?thesis by simp
   next
@@ -1136,7 +1136,7 @@ next
   have fold_unfold: "fold process_one_arg
       (zip suffixIfArgs (zip suffixRefResults suffixValResults)) partialResult
     = fold process_one_arg (zip ifRest (zip refRest valRest)) ?step"
-    using ifArgs_eq vals_eq refs_eq head_match gh_match ifHead_eq paramName_def by simp
+    using ifArgs_eq vals_eq refs_eq head_match ifHead_eq paramName_def by simp
 
   from Cons.IH[OF rest_at_k1 rest_names ifRest_match len_vals' len_refs' len_rest
                   vals_sound_rest lvals_sound_rest step_sound]
@@ -1207,7 +1207,7 @@ proof -
   \<comment> \<open>From fi_match: parameter names are distinct, the Var/Ref markers align with
       FI_TmArgs, and the arg lists have equal length. \<close>
   from fi_match have vor_match:
-    "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2) (FI_TmArgs funInfo) (IF_Args f)"
+    "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
     and dist_names: "distinct ?names"
     unfolding fun_info_matches_interp_fun_def by simp_all
   from vor_match have len_ifargs: "length (IF_Args f) = length (FI_TmArgs funInfo)"

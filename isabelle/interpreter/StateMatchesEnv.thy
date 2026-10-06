@@ -156,8 +156,9 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
   "fun_info_matches_interp_fun env funInfo interpFun =
     \<comment> \<open>Type arguments match\<close>
     (FI_TyArgs funInfo = IF_TyArgs interpFun \<and>
-    \<comment> \<open>Term arguments match: same length, and the Var/Ref and ghost markers agree.\<close>
-    list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+    \<comment> \<open>Term arguments match: same length, and the Var/Ref markers agree.
+        (The ghost flags live only in the FunInfo.)\<close>
+    list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
     \<comment> \<open>Parameter names are distinct.\<close>
     distinct (map fst (IF_Args interpFun)) \<and>

@@ -26,22 +26,22 @@ begin
 (* ========================================================================== *)
 
 (* The function table of the state agrees with the signatures of the
-   environment about the flags of each parameter: whether it is Var or Ref,
-   and whether it is ghost. This is the one fact about the function table that
-   this file needs. It follows from funs_exist_in_state (see
-   funs_exist_in_state_param_flags_agree below). *)
+   environment about whether each parameter is Var or Ref. (Which parameters
+   are ghost is recorded in the signature only.) This is the one fact about
+   the function table that this file needs. It follows from
+   funs_exist_in_state (see funs_exist_in_state_param_flags_agree below). *)
 definition fun_param_flags_agree ::
     "(string, FunInfo) fmap \<Rightarrow> (string, 'w InterpFun) fmap \<Rightarrow> bool" where
   "fun_param_flags_agree funInfos funs \<equiv>
     \<forall>fnName info f.
       fmlookup funInfos fnName = Some info \<longrightarrow> fmlookup funs fnName = Some f \<longrightarrow>
-        map snd (IF_Args f) = map snd (FI_TmArgs info)"
+        map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
 
 lemma fun_param_flags_agreeD:
   assumes "fun_param_flags_agree funInfos funs"
     and "fmlookup funInfos fnName = Some info"
     and "fmlookup funs fnName = Some f"
-  shows "map snd (IF_Args f) = map snd (FI_TmArgs info)"
+  shows "map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
   using assms unfolding fun_param_flags_agree_def by blast
 
 lemma fun_param_flags_agree_Ref:
@@ -49,19 +49,19 @@ lemma fun_param_flags_agree_Ref:
     and "fmlookup funInfos fnName = Some info"
     and "fmlookup funs fnName = Some f"
     and "i < length (IF_Args f)"
-    and "fst (snd (IF_Args f ! i)) = Ref"
+    and "snd (IF_Args f ! i) = Ref"
   shows "fst (snd (FI_TmArgs info ! i)) = Ref"
 proof -
-  have eq: "map snd (IF_Args f) = map snd (FI_TmArgs info)"
+  have eq: "map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
     by (rule fun_param_flags_agreeD[OF assms(1,2,3)])
   from eq have len: "length (IF_Args f) = length (FI_TmArgs info)"
     by (rule map_eq_imp_length_eq)
   from assms(4) len have i_lt: "i < length (FI_TmArgs info)" by simp
   from eq
-  have "map snd (IF_Args f) ! i = map snd (FI_TmArgs info) ! i"
+  have "map snd (IF_Args f) ! i = map (fst \<circ> snd) (FI_TmArgs info) ! i"
     by simp
   with assms(4) i_lt
-  have "snd (IF_Args f ! i) = snd (FI_TmArgs info ! i)" by simp
+  have "snd (IF_Args f ! i) = fst (snd (FI_TmArgs info ! i))" by simp
   with assms(5) show ?thesis by simp
 qed
 
@@ -79,12 +79,12 @@ proof (intro allI impI)
         | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun"
     unfolding funs_exist_in_state_def by blast
   with f have "fun_info_matches_interp_fun env info f" by simp
-  then have la: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+  then have la: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
                            (FI_TmArgs info) (IF_Args f)"
     by (simp add: fun_info_matches_interp_fun_def)
-  have "map snd (FI_TmArgs info) = map snd (IF_Args f)"
-    using la by (induction rule: list_all2_induct) (auto simp: case_prod_beta prod_eq_iff)
-  then show "map snd (IF_Args f) = map snd (FI_TmArgs info)" by simp
+  have "map (fst \<circ> snd) (FI_TmArgs info) = map snd (IF_Args f)"
+    using la by (induction rule: list_all2_induct) (auto simp: case_prod_beta)
+  then show "map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)" by simp
 qed
 
 
@@ -705,7 +705,7 @@ proof -
         f: "fmlookup (IS_Functions full) fnName = Some f" and
         i1: "i < length argTms" and
         i2: "i < length (IF_Args f)" and
-        is_ref: "fst (snd (IF_Args f ! i)) = Ref" and
+        is_ref: "snd (IF_Args f ! i) = Ref" and
         base: "lvalue_base_name (argTms ! i) = Some name" and
         va: "var_addr full name = Some a"
         unfolding call_ref_addrs_def by blast

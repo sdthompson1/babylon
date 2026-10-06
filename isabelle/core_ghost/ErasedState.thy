@@ -25,13 +25,14 @@ begin
 (* Function tables *)
 (* ========================================================================== *)
 
-(* Erase a function: drop its ghost parameters, and erase the ghost code from
-   its body. The function signatures funInfos say which arguments of the calls
-   in the body are ghost. *)
+(* Erase the function named name: drop its ghost parameters, and erase the
+   ghost code from its body. The function signatures funInfos say which
+   parameters of the function are ghost (the InterpFun does not record this),
+   and which arguments of the calls in the body are ghost. *)
 definition erase_ghost_interp_fun ::
-    "(string, FunInfo) fmap \<Rightarrow> 'w InterpFun \<Rightarrow> 'w InterpFun" where
-  "erase_ghost_interp_fun funInfos f =
-    f \<lparr> IF_Args := filter (\<lambda>(_, _, gh). gh = NotGhost) (IF_Args f),
+    "(string, FunInfo) fmap \<Rightarrow> string \<Rightarrow> 'w InterpFun \<Rightarrow> 'w InterpFun" where
+  "erase_ghost_interp_fun funInfos name f =
+    f \<lparr> IF_Args := erase_ghost_args funInfos name (IF_Args f),
         IF_Body := map_sum (erase_ghost_statement_list funInfos) id (IF_Body f) \<rparr>"
 
 (* Each non-ghost function is, in the erased state, the erased function. (Ghost
@@ -41,7 +42,7 @@ definition funs_erased :: "CoreTyEnv \<Rightarrow> 'w InterpState \<Rightarrow> 
   "funs_erased env full erased \<equiv>
     \<forall>name info. fmlookup (TE_Functions env) name = Some info \<and> FI_Ghost info = NotGhost \<longrightarrow>
       fmlookup (IS_Functions erased) name
-        = map_option (erase_ghost_interp_fun (TE_Functions env))
+        = map_option (erase_ghost_interp_fun (TE_Functions env) name)
                      (fmlookup (IS_Functions full) name)"
 
 

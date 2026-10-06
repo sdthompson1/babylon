@@ -1804,7 +1804,7 @@ proof -
                   | Inl err \<Rightarrow> Inl err)
              | Inr externFun \<Rightarrow>
                  (let vals = rights ?valResults;
-                      refs = rights (map (\<lambda>((_, vr, _), refResult).
+                      refs = rights (map (\<lambda>((_, vr), refResult).
                                             if vr = Ref then refResult else Inl TypeError)
                                         (zip (IF_Args f) ?refResults));
                       (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
@@ -2162,7 +2162,7 @@ proof -
 
       \<comment> \<open>The interpreter result for the extern branch. \<close>
       let ?vals = "rights ?valResults"
-      let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
+      let ?refs = "rights (map (\<lambda>((_, vr), refResult).
                                   if vr = Ref then refResult else Inl TypeError)
                               (zip (IF_Args f) ?refResults))"
 
@@ -2184,7 +2184,7 @@ proof -
       have inr_chars:
         "\<forall>i < length (IF_Args f).
            (\<exists>v. ?valResults ! i = Inr v) \<and>
-           (fst (snd ((IF_Args f) ! i)) = Ref \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p)))" .
+           (snd ((IF_Args f) ! i) = Ref \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p)))" .
 
       \<comment> \<open>All valResults are Inr — construct the vals list. \<close>
       have all_val_inr: "\<forall>i < length argTms. \<exists>v. ?valResults ! i = Inr v"
@@ -2313,34 +2313,34 @@ proof -
       \<comment> \<open>Now build the ref-list information for apply_ref_updates_sound. \<close>
       \<comment> \<open>FI_TmArgs and IF_Args have matching Var/Ref positions. \<close>
       from fi_match have if_args_match:
-        "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+        "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
                    (FI_TmArgs funInfo) (IF_Args f)"
         unfolding fun_info_matches_interp_fun_def by simp
       have vor_match:
         "\<forall>i < length (IF_Args f).
-             fst (snd ((IF_Args f) ! i)) = Ref \<longleftrightarrow> fst (snd (FI_TmArgs funInfo ! i)) = Ref"
+             snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> fst (snd (FI_TmArgs funInfo ! i)) = Ref"
       proof (intro allI impI)
         fix i assume i_lt: "i < length (IF_Args f)"
         with len_fi have i_fi: "i < length (FI_TmArgs funInfo)" by simp
         obtain t1 v1 g1 where fi_i: "FI_TmArgs funInfo ! i = (t1, v1, g1)"
           by (cases "FI_TmArgs funInfo ! i") auto
-        obtain n2 v2 g2 where if_i: "(IF_Args f) ! i = (n2, v2, g2)"
+        obtain n2 v2 where if_i: "(IF_Args f) ! i = (n2, v2)"
           by (cases "(IF_Args f) ! i") auto
         from if_args_match i_lt len_fi fi_i if_i have "v1 = v2"
           by (auto simp: list_all2_conv_all_nth)
-        thus "fst (snd ((IF_Args f) ! i)) = Ref \<longleftrightarrow> fst (snd (FI_TmArgs funInfo ! i)) = Ref"
+        thus "snd ((IF_Args f) ! i) = Ref \<longleftrightarrow> fst (snd (FI_TmArgs funInfo ! i)) = Ref"
           using fi_i if_i by simp
       qed
 
       \<comment> \<open>From fold_process_one_arg_inr_inversion: each Ref-position refResult is Inr. \<close>
       have all_ref_inr:
-        "\<forall>i < length (IF_Args f). fst (snd ((IF_Args f) ! i)) = Ref
+        "\<forall>i < length (IF_Args f). snd ((IF_Args f) ! i) = Ref
            \<longrightarrow> (\<exists>a p. ?refResults ! i = Inr (a, p))"
         using inr_chars by blast
 
       \<comment> \<open>Bind the idxs list name. \<close>
       define idxs :: "nat list" where
-        idxs_def: "idxs = filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)]"
+        idxs_def: "idxs = filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)]"
       from rights_filter_zip_refs_chars[OF len_ir all_ref_inr]
       have refs_len: "length ?refs = length idxs"
         and refs_nth: "\<forall>j < length idxs.
@@ -2353,19 +2353,19 @@ proof -
       proof (intro allI impI)
         fix j assume "j < length idxs"
         then have mem: "idxs ! j \<in> set idxs" by simp
-        hence "idxs ! j \<in> set (filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)])"
+        hence "idxs ! j \<in> set (filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)])"
           unfolding idxs_def .
         hence "idxs ! j \<in> set [0 ..< length (IF_Args f)]" by auto
         thus "idxs ! j < length (IF_Args f)" by simp
       qed
       have idxs_is_ref:
-        "\<forall>j < length idxs. fst (snd ((IF_Args f) ! (idxs ! j))) = Ref"
+        "\<forall>j < length idxs. snd ((IF_Args f) ! (idxs ! j)) = Ref"
       proof (intro allI impI)
         fix j assume "j < length idxs"
         then have mem: "idxs ! j \<in> set idxs" by simp
-        hence "idxs ! j \<in> set (filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)])"
+        hence "idxs ! j \<in> set (filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)])"
           unfolding idxs_def .
-        thus "fst (snd ((IF_Args f) ! (idxs ! j))) = Ref" by simp
+        thus "snd ((IF_Args f) ! (idxs ! j)) = Ref" by simp
       qed
 
       \<comment> \<open>The filter on FI_TmArgs gives the same length as idxs (via vor_match).
@@ -2390,22 +2390,22 @@ proof -
         qed
         \<comment> \<open>Step 2: same count on idxs. \<close>
         have count_idxs:
-          "length idxs = card {i. i < length (IF_Args f) \<and> fst (snd ((IF_Args f) ! i)) = Ref}"
+          "length idxs = card {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
         proof -
           have "length idxs
-              = length (filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref) [0 ..< length (IF_Args f)])"
+              = length (filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref) [0 ..< length (IF_Args f)])"
             unfolding idxs_def by simp
           also have "\<dots> = card {i. i < length [0 ..< length (IF_Args f)]
-                                  \<and> fst (snd ((IF_Args f) ! ([0 ..< length (IF_Args f)] ! i))) = Ref}"
+                                  \<and> snd ((IF_Args f) ! ([0 ..< length (IF_Args f)] ! i)) = Ref}"
             by (rule length_filter_conv_card)
-          also have "\<dots> = card {i. i < length (IF_Args f) \<and> fst (snd ((IF_Args f) ! i)) = Ref}"
+          also have "\<dots> = card {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
             by (rule arg_cong[where f=card]) auto
           finally show ?thesis .
         qed
         \<comment> \<open>Step 3: the two index-sets are equal (via vor_match + len_fi). \<close>
         have sets_eq:
           "{i. i < length (FI_TmArgs funInfo) \<and> fst (snd (FI_TmArgs funInfo ! i)) = Ref}
-            = {i. i < length (IF_Args f) \<and> fst (snd ((IF_Args f) ! i)) = Ref}"
+            = {i. i < length (IF_Args f) \<and> snd ((IF_Args f) ! i) = Ref}"
           using len_fi vor_match by auto
         show ?thesis
           using count_FI count_idxs sets_eq by simp
@@ -2431,7 +2431,7 @@ proof -
         from idxs_in_bound j_lt have i_lt_if: "?i < length (IF_Args f)" by blast
         with len_fi have i_lt_fi: "?i < length (FI_TmArgs funInfo)" by simp
         with len_argTms_fi have i_lt_argTms: "?i < length argTms" by simp
-        from idxs_is_ref j_lt have if_i_ref: "fst (snd ((IF_Args f) ! ?i)) = Ref" by blast
+        from idxs_is_ref j_lt have if_i_ref: "snd ((IF_Args f) ! ?i) = Ref" by blast
         with vor_match i_lt_if have fi_i_ref: "fst (snd (FI_TmArgs funInfo ! ?i)) = Ref"
           by blast
         let ?paramTy_i = "fst (FI_TmArgs funInfo ! ?i)"
@@ -2570,14 +2570,14 @@ proof -
         have pred_eq:
           "\<And>i. i < length (IF_Args f) \<Longrightarrow>
                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
-                \<longleftrightarrow> fst (snd ((IF_Args f) ! i)) = Ref"
+                \<longleftrightarrow> snd ((IF_Args f) ! i) = Ref"
           using vor_match by blast
         have "filter (\<lambda>i. fst (snd (FI_TmArgs funInfo ! i)) = Ref)
                      [0 ..< length (FI_TmArgs funInfo)]
             = filter (\<lambda>i. fst (snd (FI_TmArgs funInfo ! i)) = Ref)
                      [0 ..< length (IF_Args f)]"
           using len_upt by simp
-        also have "\<dots> = filter (\<lambda>i. fst (snd ((IF_Args f) ! i)) = Ref)
+        also have "\<dots> = filter (\<lambda>i. snd ((IF_Args f) ! i) = Ref)
                                 [0 ..< length (IF_Args f)]"
           using pred_eq by (intro filter_cong) auto
         finally show ?thesis unfolding idxs_def .

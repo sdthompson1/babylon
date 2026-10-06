@@ -2185,17 +2185,17 @@ qed
    establishes from a successful arg-processing fold via
    fold_process_one_arg_inr_inversion). *)
 lemma rights_filter_zip_refs_chars_aux:
-  fixes ifs :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
+  fixes ifs :: "(string \<times> VarOrRef) list"
     and rrs :: "(InterpError + (nat \<times> LValuePath list)) list"
   assumes "length ifs = length rrs"
-      and "\<forall>i < length ifs. fst (snd (ifs ! i)) = Ref \<longrightarrow> (\<exists>a p. rrs ! i = Inr (a, p))"
+      and "\<forall>i < length ifs. snd (ifs ! i) = Ref \<longrightarrow> (\<exists>a p. rrs ! i = Inr (a, p))"
   shows
-    "length (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+    "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                           (zip ifs rrs)))
-       = length (filter (\<lambda>i. fst (snd (ifs ! i)) = Ref) [0 ..< length ifs])
-     \<and> (\<forall>j < length (filter (\<lambda>i. fst (snd (ifs ! i)) = Ref) [0 ..< length ifs]).
-            rrs ! ((filter (\<lambda>i. fst (snd (ifs ! i)) = Ref) [0 ..< length ifs]) ! j)
-              = Inr (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+       = length (filter (\<lambda>i. snd (ifs ! i) = Ref) [0 ..< length ifs])
+     \<and> (\<forall>j < length (filter (\<lambda>i. snd (ifs ! i) = Ref) [0 ..< length ifs]).
+            rrs ! ((filter (\<lambda>i. snd (ifs ! i) = Ref) [0 ..< length ifs]) ! j)
+              = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                                  (zip ifs rrs)) ! j))"
 using assms proof (induction ifs arbitrary: rrs)
   case Nil
@@ -2204,16 +2204,16 @@ next
   case (Cons ifa ifrest)
   from Cons.prems(1) obtain rr rrest where rrs_eq: "rrs = rr # rrest"
     by (cases rrs) auto
-  obtain name vor gh where ifa_eq: "ifa = (name, vor, gh)" by (cases ifa)
+  obtain name vor where ifa_eq: "ifa = (name, vor)" by (cases ifa)
 
   have len_rest: "length ifrest = length rrest"
     using Cons.prems(1) rrs_eq by simp
   have rest_inrs:
-    "\<forall>i < length ifrest. fst (snd (ifrest ! i)) = Ref \<longrightarrow> (\<exists>a p. rrest ! i = Inr (a, p))"
+    "\<forall>i < length ifrest. snd (ifrest ! i) = Ref \<longrightarrow> (\<exists>a p. rrest ! i = Inr (a, p))"
   proof (intro allI impI)
-    fix i assume i_lt: "i < length ifrest" and i_ref: "fst (snd (ifrest ! i)) = Ref"
+    fix i assume i_lt: "i < length ifrest" and i_ref: "snd (ifrest ! i) = Ref"
     have "Suc i < length (ifa # ifrest)" using i_lt by simp
-    moreover have "fst (snd ((ifa # ifrest) ! Suc i)) = Ref" using i_ref by simp
+    moreover have "snd ((ifa # ifrest) ! Suc i) = Ref" using i_ref by simp
     ultimately have "\<exists>a p. rrs ! Suc i = Inr (a, p)"
       using Cons.prems(2) by blast
     thus "\<exists>a p. rrest ! i = Inr (a, p)" using rrs_eq by simp
@@ -2222,24 +2222,24 @@ next
   \<comment> \<open>IH on the tail. \<close>
   from Cons.IH[OF len_rest rest_inrs]
   have IH_len:
-    "length (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+    "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                           (zip ifrest rrest)))
-       = length (filter (\<lambda>i. fst (snd (ifrest ! i)) = Ref) [0 ..< length ifrest])"
+       = length (filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest])"
     and IH_chars:
-    "\<And>j. j < length (filter (\<lambda>i. fst (snd (ifrest ! i)) = Ref) [0 ..< length ifrest]) \<Longrightarrow>
-          rrest ! ((filter (\<lambda>i. fst (snd (ifrest ! i)) = Ref) [0 ..< length ifrest]) ! j)
-            = Inr (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+    "\<And>j. j < length (filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest]) \<Longrightarrow>
+          rrest ! ((filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest]) ! j)
+            = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                                 (zip ifrest rrest)) ! j)"
     by auto
 
-  let ?map_rest = "map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+  let ?map_rest = "map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                        (zip ifrest rrest)"
-  let ?idxs_rest = "filter (\<lambda>i. fst (snd (ifrest ! i)) = Ref) [0 ..< length ifrest]"
+  let ?idxs_rest = "filter (\<lambda>i. snd (ifrest ! i) = Ref) [0 ..< length ifrest]"
 
   have upt_split: "[0 ..< length (ifa # ifrest)] = 0 # map Suc [0 ..< length ifrest]"
     using map_Suc_upt upt_rec by auto
   have idxs_split:
-    "filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref) [0 ..< length (ifa # ifrest)]
+    "filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref) [0 ..< length (ifa # ifrest)]
       = (if vor = Ref then 0 # map Suc ?idxs_rest else map Suc ?idxs_rest)"
     using upt_split ifa_eq by (simp add: filter_map o_def)
 
@@ -2247,41 +2247,41 @@ next
   proof (cases vor)
     case Var
     have rights_step:
-      "rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+      "rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                    (zip (ifa # ifrest) (rr # rrest)))
          = rights ?map_rest"
       using ifa_eq Var by simp
     have idxs_step:
-      "filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref) [0 ..< length (ifa # ifrest)]
+      "filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref) [0 ..< length (ifa # ifrest)]
          = map Suc ?idxs_rest"
       using idxs_split Var by simp
 
     have len_part:
-      "length (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+      "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                             (zip (ifa # ifrest) (rr # rrest))))
-         = length (filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+         = length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                           [0 ..< length (ifa # ifrest)])"
       using rights_step idxs_step IH_len by simp
 
     have chars_part:
-      "\<forall>j < length (filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+      "\<forall>j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                             [0 ..< length (ifa # ifrest)]).
-          (rr # rrest) ! ((filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+          (rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                                    [0 ..< length (ifa # ifrest)]) ! j)
-            = Inr (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+            = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                                 (zip (ifa # ifrest) (rr # rrest))) ! j)"
     proof (intro allI impI)
       fix j
-      assume "j < length (filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+      assume "j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                                   [0 ..< length (ifa # ifrest)])"
       hence j_lt: "j < length ?idxs_rest" using idxs_step length_map by metis
-      have rhs: "(filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+      have rhs: "(filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                           [0 ..< length (ifa # ifrest)]) ! j
                    = Suc (?idxs_rest ! j)"
         using idxs_step j_lt by simp
-      show "(rr # rrest) ! ((filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+      show "(rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                                      [0 ..< length (ifa # ifrest)]) ! j)
-              = Inr (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+              = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                                   (zip (ifa # ifrest) (rr # rrest))) ! j)"
         using rhs rights_step IH_chars[OF j_lt] by simp
     qed
@@ -2292,7 +2292,7 @@ next
     have head_inr: "\<exists>a p. rr = Inr (a, p)"
     proof -
       have "0 < length (ifa # ifrest)" by simp
-      moreover have "fst (snd ((ifa # ifrest) ! 0)) = Ref" using ifa_eq Ref by simp
+      moreover have "snd ((ifa # ifrest) ! 0) = Ref" using ifa_eq Ref by simp
       ultimately have "\<exists>a p. rrs ! 0 = Inr (a, p)"
         using Cons.prems(2) by blast
       thus ?thesis using rrs_eq by simp
@@ -2300,41 +2300,41 @@ next
     then obtain a p where rr_eq: "rr = Inr (a, p)" by blast
 
     have rights_step:
-      "rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+      "rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                    (zip (ifa # ifrest) (rr # rrest)))
          = (a, p) # rights ?map_rest"
       using ifa_eq Ref rr_eq by simp
     have idxs_step:
-      "filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref) [0 ..< length (ifa # ifrest)]
+      "filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref) [0 ..< length (ifa # ifrest)]
          = 0 # map Suc ?idxs_rest"
       using idxs_split Ref by simp
 
     have len_part:
-      "length (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+      "length (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                             (zip (ifa # ifrest) (rr # rrest))))
-         = length (filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+         = length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                           [0 ..< length (ifa # ifrest)])"
       using rights_step idxs_step IH_len by simp
 
     have chars_part:
-      "\<forall>j < length (filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+      "\<forall>j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                             [0 ..< length (ifa # ifrest)]).
-          (rr # rrest) ! ((filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+          (rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                                    [0 ..< length (ifa # ifrest)]) ! j)
-            = Inr (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+            = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                                 (zip (ifa # ifrest) (rr # rrest))) ! j)"
     proof (intro allI impI)
       fix j
       assume j_lt_outer:
-        "j < length (filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+        "j < length (filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                              [0 ..< length (ifa # ifrest)])"
-      show "(rr # rrest) ! ((filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+      show "(rr # rrest) ! ((filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                                      [0 ..< length (ifa # ifrest)]) ! j)
-              = Inr (rights (map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+              = Inr (rights (map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                                   (zip (ifa # ifrest) (rr # rrest))) ! j)"
       proof (cases j)
         case 0
-        have idx0: "(filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+        have idx0: "(filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                              [0 ..< length (ifa # ifrest)]) ! 0 = 0"
           using idxs_step by simp
         from idx0 0 rr_eq rights_step show ?thesis by simp
@@ -2342,7 +2342,7 @@ next
         case (Suc k)
         from j_lt_outer Suc idxs_step have k_lt: "k < length ?idxs_rest"
           by (metis Suc_less_eq length_Cons length_map)
-        have idxk: "(filter (\<lambda>i. fst (snd ((ifa # ifrest) ! i)) = Ref)
+        have idxk: "(filter (\<lambda>i. snd ((ifa # ifrest) ! i) = Ref)
                              [0 ..< length (ifa # ifrest)]) ! Suc k
                       = Suc (?idxs_rest ! k)"
           using idxs_step k_lt by simp
@@ -2355,14 +2355,14 @@ next
 qed
 
 lemma rights_filter_zip_refs_chars:
-  fixes ifArgs :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
+  fixes ifArgs :: "(string \<times> VarOrRef) list"
     and refResults :: "(InterpError + (nat \<times> LValuePath list)) list"
-  defines "mapped \<equiv> map (\<lambda>((_, vr, _), r). if vr = Ref then r else Inl TypeError)
+  defines "mapped \<equiv> map (\<lambda>((_, vr), r). if vr = Ref then r else Inl TypeError)
                         (zip ifArgs refResults)"
-      and "idxs \<equiv> filter (\<lambda>i. fst (snd (ifArgs ! i)) = Ref) [0 ..< length ifArgs]"
+      and "idxs \<equiv> filter (\<lambda>i. snd (ifArgs ! i) = Ref) [0 ..< length ifArgs]"
   assumes len_eq: "length ifArgs = length refResults"
       and ref_inrs: "\<forall>i < length ifArgs.
-                       fst (snd (ifArgs ! i)) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p))"
+                       snd (ifArgs ! i) = Ref \<longrightarrow> (\<exists>a p. refResults ! i = Inr (a, p))"
   shows "length (rights mapped) = length idxs \<and>
          (\<forall>j < length idxs.
              refResults ! (idxs ! j) = Inr (rights mapped ! j))"

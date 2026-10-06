@@ -42,37 +42,7 @@ begin
 (* Parameter lists *)
 (* ========================================================================== *)
 
-(* Two parameter lists with the same flags have the same ghost flags. *)
-lemma ghost_flags_cong:
-  assumes "map snd xs = map snd ys"
-  shows "map (\<lambda>(_, _, gh). gh) xs = map (\<lambda>(_, _, gh). gh) ys"
-proof -
-  have a: "map (\<lambda>(_, _, gh). gh) xs = map snd (map snd xs)" by (induction xs) auto
-  have b: "map (\<lambda>(_, _, gh). gh) ys = map snd (map snd ys)" by (induction ys) auto
-  show ?thesis unfolding a b assms by (rule refl)
-qed
-
-lemma no_ghost_flags_conv:
-  "list_all (\<lambda>(_, _, gh). gh = NotGhost) zs \<longleftrightarrow> (\<forall>p \<in> set (map snd zs). snd p = NotGhost)"
-  by (induction zs) auto
-
-lemma no_ghost_flags_cong:
-  assumes "map snd xs = map snd ys"
-    and "list_all (\<lambda>(_, _, gh). gh = NotGhost) ys"
-  shows "list_all (\<lambda>(_, _, gh). gh = NotGhost) xs"
-proof -
-  from assms(2) have "\<forall>p \<in> set (map snd ys). snd p = NotGhost"
-    by (simp only: no_ghost_flags_conv)
-  then have "\<forall>p \<in> set (map snd xs). snd p = NotGhost" by (simp only: assms(1))
-  then show ?thesis by (simp only: no_ghost_flags_conv)
-qed
-
 (* When no parameter is ghost, erasure drops nothing. *)
-lemma filter_no_ghost_params:
-  assumes "list_all (\<lambda>(_, _, gh). gh = NotGhost) params"
-  shows "filter (\<lambda>(_, _, gh). gh = NotGhost) params = params"
-  using assms by (induction params) auto
-
 lemma drop_ghost_no_ghost_params:
   assumes "list_all (\<lambda>(_, _, gh). gh = NotGhost) params"
     and "length xs = length params"
@@ -1494,29 +1464,37 @@ next
         by (cases "fold process_one_arg (zip (IF_Args f) (zip ?refsF ?valsF)) (Inr ?clearedF)")
            (simp_all add: Let_def)
 
-      \<comment> \<open>The function in the state, against its signature: the same flags,
-          and distinct parameter names. \<close>
+      \<comment> \<open>The function in the state, against its signature: the same Var/Ref
+          flags, and distinct parameter names. The ghost flags of the
+          parameters are those of the signature. \<close>
       have infoG: "fmlookup (TE_Functions genv) fnName = Some info"
         using info fn_eq by simp
       have f_lookup': "fmlookup funs fnName = Some f" using f_lookup funs_eq by simp
       note flags = fun_param_flags_agreeD[OF agree infoG f_lookup']
       have distF: "distinct (map fst (IF_Args f))"
         using dist infoG f_lookup' unfolding fun_param_names_distinct_def by blast
+      from flags have lenF: "length (IF_Args f) = length (FI_TmArgs info)"
+        by (rule map_eq_imp_length_eq)
+      let ?flagsF = "param_ghost_flags info"
+      have lenFlags: "length (IF_Args f) = length ?flagsF"
+        by (simp add: param_ghost_flags_def lenF)
 
       \<comment> \<open>The erased call. Its arguments are the erasures of the arguments of
           the parameters that are not ghost; the erased function has exactly
           those parameters. \<close>
-      let ?paramsE = "filter (\<lambda>(_, _, gh). gh = NotGhost) (IF_Args f)"
-      let ?flagsF = "map (\<lambda>(_, _, gh). gh) (IF_Args f)"
+      let ?paramsE = "drop_ghost ?flagsF (IF_Args f)"
       let ?argsE = "erase_ghost_args ?ft fnName (map ?er argTms)"
       let ?lvE = "\<lambda>tm. interp_writable_lvalue d fuel erased (?er tm)"
       let ?tmE = "\<lambda>tm. interp_term d fuel erased (?er tm)"
-      have flags_eq: "param_ghost_flags info = ?flagsF"
-        unfolding param_ghost_flags_def by (rule ghost_flags_cong[OF flags[symmetric]])
+      have paramsE_eq': "erase_ghost_args ?ft fnName (IF_Args f) = ?paramsE"
+        by (simp add: erase_ghost_args_def infoG)
       have argsE_eq: "?argsE = map ?er (drop_ghost ?flagsF argTms)"
-        by (simp add: erase_ghost_args_def infoG flags_eq drop_ghost_map)
+        by (simp add: erase_ghost_args_def infoG drop_ghost_map)
       have lenE: "length ?argsE = length ?paramsE"
-        unfolding argsE_eq using length_drop_ghost_params[OF len_eq] by simp
+        unfolding argsE_eq param_ghost_flags_def
+        using length_drop_ghost_params[OF len_eq[unfolded lenF]]
+              length_drop_ghost_params[OF lenF]
+        by simp
       have refsE_eq: "map (interp_writable_lvalue d fuel erased) ?argsE
                         = map ?lvE (drop_ghost ?flagsF argTms)"
         unfolding argsE_eq by (simp add: comp_def)
@@ -1534,35 +1512,44 @@ next
       have fnB: "TE_Functions ?envB = TE_Functions env" by (simp add: body_env_for_facts fn_eq)
       have fgB: "TE_FunctionGhost ?envB = NotGhost"
         by (rule body_env_for_notghost[OF ngI])
-      have pg: "\<forall>name vr gh. (name, vr, gh) \<in> set (IF_Args f) \<longrightarrow>
+      have pg: "\<forall>name vr gh. ((name, vr), gh) \<in> set (zip (IF_Args f) ?flagsF) \<longrightarrow>
                   (tyenv_var_ghost ?envB name \<longleftrightarrow> gh = Ghost)"
       proof (intro allI impI)
-        fix name vr gh assume mem: "(name, vr, gh) \<in> set (IF_Args f)"
+        fix name vr gh assume mem: "((name, vr), gh) \<in> set (zip (IF_Args f) ?flagsF)"
+        from mem obtain n where "IF_Args f ! n = (name, vr)" and "?flagsF ! n = gh"
+          and "n < length (IF_Args f)" and "n < length ?flagsF"
+          by (auto simp: in_set_zip)
+        then have mem': "(name, gh) \<in> set (zip (map fst (IF_Args f)) ?flagsF)"
+          by (auto simp: in_set_zip intro!: exI[where x = n])
+        have lenN: "length (map fst (IF_Args f)) = length (FI_TmArgs info)"
+          by (simp add: lenF)
         show "tyenv_var_ghost ?envB name \<longleftrightarrow> gh = Ghost"
-          by (rule body_env_for_param_ghost[OF ngI distF flags mem])
+          by (rule body_env_for_param_ghost[OF ngI distF lenN mem'])
       qed
 
       \<comment> \<open>The argument of a parameter that is not ghost evaluates
           correspondingly in the two states. \<close>
-      have vals: "\<forall>tm name vr. (tm, (name, vr, NotGhost)) \<in> set (zip argTms (IF_Args f)) \<longrightarrow>
+      have vals: "\<forall>tm name vr. (tm, ((name, vr), NotGhost))
+                                 \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
                     (\<forall>x. interp_term d fuel full tm = Inr x
                          \<longrightarrow> interp_term d fuel erased (?er tm) = Inr x)"
       proof (intro allI impI)
         fix tm name vr x
-        assume mem: "(tm, (name, vr, NotGhost)) \<in> set (zip argTms (IF_Args f))"
+        assume mem: "(tm, ((name, vr), NotGhost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
           and s: "interp_term d fuel full tm = Inr x"
         have Wtm: "notghost_typed env tm"
           by (rule call_args_notghostD(1)[OF cargs flags mem refl])
         show "interp_term d fuel erased (?er tm) = Inr x"
           by (rule IH_term[OF fn_eq funs_eq rel Wtm s])
       qed
-      have refs: "\<forall>tm name vr. (tm, (name, vr, NotGhost)) \<in> set (zip argTms (IF_Args f)) \<longrightarrow>
+      have refs: "\<forall>tm name vr. (tm, ((name, vr), NotGhost))
+                                 \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
                     (\<forall>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path)
                        \<longrightarrow> (\<exists>i. interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)
                                 \<and> i < length emb \<and> emb ! i = addr))"
       proof (intro allI impI)
         fix tm name vr addr path
-        assume mem: "(tm, (name, vr, NotGhost)) \<in> set (zip argTms (IF_Args f))"
+        assume mem: "(tm, ((name, vr), NotGhost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
           and s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
         have Wtm: "notghost_typed env tm"
           by (rule call_args_notghostD(1)[OF cargs flags mem refl])
@@ -1573,12 +1560,12 @@ next
       \<comment> \<open>An lvalue passed to a ghost Ref parameter is a ghost cell of the
           caller. \<close>
       have ghost_refs:
-        "\<forall>tm name. (tm, (name, Ref, Ghost)) \<in> set (zip argTms (IF_Args f)) \<longrightarrow>
+        "\<forall>tm name. (tm, ((name, Ref), Ghost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
            (\<forall>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path)
               \<longrightarrow> addr < length (IS_Store full) \<and> addr \<notin> set emb)"
       proof (intro allI impI)
         fix tm name addr path
-        assume mem: "(tm, (name, Ref, Ghost)) \<in> set (zip argTms (IF_Args f))"
+        assume mem: "(tm, ((name, Ref), Ghost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
           and s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
         have glv: "ghost_lvalue_ok env Ghost tm"
           by (rule call_args_notghostD(2)[OF cargs flags mem refl refl])
@@ -1602,7 +1589,7 @@ next
                                   (erase_ghost_term (TE_Functions genv) tm)"
                 and tmE = "\<lambda>tm. interp_term d fuel erased
                                   (erase_ghost_term (TE_Functions genv) tm)",
-              OF vals refs ghost_refs pg relC' lo ex foldF]
+              OF lenFlags vals refs ghost_refs pg relC' lo ex foldF]
       obtain preE extraA where
         foldE0: "fold process_one_arg
                    (zip ?paramsE (zip (map ?lvE (drop_ghost ?flagsF argTms))
@@ -1686,16 +1673,16 @@ next
           have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                          = Inr (restore_scope erased postE, retVal)"
             using lookE lenE tyLen_eq foldE Inl bodyE bE_eq ret_eq
-            by (simp add: Let_def D(6))
+            by (simp add: Let_def paramsE_eq' D(6))
           from callE relN' show ?thesis by blast
         qed
       next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
-        let ?refsXF = "rights (map (\<lambda>((_, vr, _), refResult).
+        let ?refsXF = "rights (map (\<lambda>((_, vr), refResult).
                                         if vr = Ref then refResult else Inl TypeError)
                                    (zip (IF_Args f) ?refsF))"
-        let ?refsXE = "rights (map (\<lambda>((_, vr, _), refResult).
+        let ?refsXE = "rights (map (\<lambda>((_, vr), refResult).
                                         if vr = Ref then refResult else Inl TypeError)
                                    (zip (IF_Args f) (map ?lvE argTms)))"
         obtain newWorld refUpdates externRetVal where
@@ -1716,12 +1703,13 @@ next
             argument is in executable position. \<close>
         have ngp: "no_ghost_params info"
           using extern infoG f_lookup' Inr unfolding extern_funs_no_ghost_params_def by blast
-        have allNG: "list_all (\<lambda>(_, _, gh). gh = NotGhost) (IF_Args f)"
-          by (rule no_ghost_flags_cong[OF flags ngp[unfolded no_ghost_params_def]])
+        note allNG = ngp[unfolded no_ghost_params_def]
         have paramsE_eq: "?paramsE = IF_Args f"
-          by (rule filter_no_ghost_params[OF allNG])
+          unfolding param_ghost_flags_def
+          by (rule drop_ghost_no_ghost_params[OF allNG lenF])
         have argsE_all: "?argsE = map ?er argTms"
-          by (simp only: argsE_eq drop_ghost_no_ghost_params[OF allNG len_eq])
+          unfolding argsE_eq param_ghost_flags_def
+          by (simp only: drop_ghost_no_ghost_params[OF allNG len_eq[unfolded lenF]])
         have wgs: "list_all (notghost_typed env) argTms"
           by (rule call_args_notghost_all[OF cargs ngp])
         have valsAll: "\<forall>tm \<in> set argTms. \<forall>x. interp_term d fuel full tm = Inr x
@@ -1773,15 +1761,15 @@ next
 
         \<comment> \<open>The lvalues passed in Ref positions are at corresponding addresses. \<close>
         have ref_args:
-          "\<forall>tm name vr gh. (tm, (name, vr, gh)) \<in> set (zip argTms (IF_Args f)) \<longrightarrow> vr = Ref \<longrightarrow>
+          "\<forall>tm name vr. (tm, (name, vr)) \<in> set (zip argTms (IF_Args f)) \<longrightarrow> vr = Ref \<longrightarrow>
              (\<exists>addr path i. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
                             interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path) \<and>
                             i < length emb \<and> emb ! i = addr)"
         proof (intro allI impI)
-          fix tm name vr gh
-          assume mem: "(tm, (name, vr, gh)) \<in> set (zip argTms (IF_Args f))"
+          fix tm name vr
+          assume mem: "(tm, (name, vr)) \<in> set (zip argTms (IF_Args f))"
             and vr: "vr = Ref"
-          from mem vr have mem': "(tm, (name, Ref, gh)) \<in> set (zip argTms (IF_Args f))"
+          from mem vr have mem': "(tm, (name, Ref)) \<in> set (zip argTms (IF_Args f))"
             by simp
           from fold_process_one_arg_ref_lvalue_ok
                  [OF foldF len_eq[symmetric] lenC lenB refl mem']
@@ -1815,7 +1803,7 @@ next
         have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                        = Inr (newErased, retVal)"
           using lookE lenE tyLen_eq foldE Inr ext_eq finalE ret_eq
-          by (simp add: Let_def paramsE_eq refsE_all valsE_all D(3) D(6))
+          by (simp add: Let_def paramsE_eq' paramsE_eq refsE_all valsE_all D(3) D(6))
         from callE relN' show ?thesis by blast
       qed
     qed

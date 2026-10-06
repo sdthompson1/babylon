@@ -404,24 +404,24 @@ next
             if_lookup: "fmlookup (IS_Functions state) fnName = Some interpFun" and
             fi_match: "fun_info_matches_interp_fun env funInfo interpFun"
             by (cases "fmlookup (IS_Functions state) fnName") auto
-          from fi_match have vor_match: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+          from fi_match have vor_match: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
                                       (FI_TmArgs funInfo) (IF_Args interpFun)"
             unfolding fun_info_matches_interp_fun_def by auto
           from vor_match have len_eq: "length (FI_TmArgs funInfo) = length (IF_Args interpFun)"
             by (rule list_all2_lengthD)
-          have "\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (IF_Args interpFun)"
+          have "\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args interpFun)"
           proof -
-            have "\<And>i. i < length (IF_Args interpFun) \<Longrightarrow> fst (snd (IF_Args interpFun ! i)) = Var"
+            have "\<And>i. i < length (IF_Args interpFun) \<Longrightarrow> snd (IF_Args interpFun ! i) = Var"
             proof -
               fix i assume i_bound: "i < length (IF_Args interpFun)"
               obtain a b c where nab: "FI_TmArgs funInfo ! i = (a, b, c)"
                 by (cases "FI_TmArgs funInfo ! i") auto
               from vor_match i_bound len_eq nab
-              have "b = fst (snd (IF_Args interpFun ! i))"
+              have "b = snd (IF_Args interpFun ! i)"
                 using list_all2_nthD by fastforce
               moreover have "b = Var"
                 using all_var i_bound len_eq nab by (auto simp: list_all_length)
-              ultimately show "fst (snd (IF_Args interpFun ! i)) = Var" by simp
+              ultimately show "snd (IF_Args interpFun ! i) = Var" by simp
             qed
             thus ?thesis
               by (fastforce simp: list_ex_iff in_set_conv_nth split: prod.splits)

@@ -94,7 +94,7 @@ definition make_interp_fun ::
   "FunInfo \<Rightarrow> CoreFunction \<Rightarrow> (CoreStatement list + 'w ExternFunc) \<Rightarrow> 'w InterpFun" where
   "make_interp_fun info f body =
      \<lparr> IF_TyArgs = FI_TyArgs info,
-       IF_Args = zip (CF_Args f) (map snd (FI_TmArgs info)),
+       IF_Args = zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info)),
        IF_Body = body,
        IF_Impure = FI_Impure info \<rparr>"
 

@@ -23,11 +23,11 @@ lemma fold_process_one_arg_error:
   by (induct xs) simp_all
 
 lemma process_one_arg_val_error:
-  "\<exists>e. process_one_arg ((name, vr, gh), refResult, Inl err) acc = Inl e"
+  "\<exists>e. process_one_arg ((name, vr), refResult, Inl err) acc = Inl e"
   by (cases vr; cases refResult; cases acc) simp_all
 
 lemma process_one_arg_ref_error:
-  "\<exists>e. process_one_arg ((name, Ref, gh), Inl err, valResult) acc = Inl e"
+  "\<exists>e. process_one_arg ((name, Ref), Inl err, valResult) acc = Inl e"
   by (cases valResult; cases acc) simp_all
 
 (* If the fold succeeds and an argument is Ref, its lvalue result must be Inr *)
@@ -35,7 +35,7 @@ lemma fold_process_one_arg_ref_ok:
   assumes "fold process_one_arg (zip args (zip refResults valResults)) acc = Inr finalState"
     and "length args = length refResults"
     and "length refResults = length valResults"
-    and "(i, (name, Ref, gh)) \<in> set (zip [0..<length args] args)"
+    and "(i, (name, Ref)) \<in> set (zip [0..<length args] args)"
   shows "\<exists>lval. refResults ! i = Inr lval"
   using assms
 proof (induction args arbitrary: refResults valResults acc i)
@@ -50,9 +50,9 @@ next
       and len_val': "length refResults' = length valResults'"
     by (cases refResults; cases valResults) auto
 
-  obtain argName argVr argGh where arg_eq: "arg = (argName, argVr, argGh)" by (cases arg)
+  obtain argName argVr where arg_eq: "arg = (argName, argVr)" by (cases arg)
 
-  let ?step = "process_one_arg ((argName, argVr, argGh), refResult, valResult') acc"
+  let ?step = "process_one_arg ((argName, argVr), refResult, valResult') acc"
 
   have fold_eq: "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc
                = fold process_one_arg (zip args (zip refResults' valResults')) ?step"
@@ -60,17 +60,17 @@ next
 
   from Cons.prems(4) obtain j where j_bound: "j < length (arg # args)"
     and i_eq: "i = [0..<length (arg # args)] ! j"
-    and arg_at_j: "(arg # args) ! j = (name, Ref, gh)"
+    and arg_at_j: "(arg # args) ! j = (name, Ref)"
     by (auto simp: set_zip)
   hence i_eq': "i = j" using j_bound
     by (metis One_nat_def add_diff_inverse_nat diff_Suc_1 diff_Suc_Suc less_zeroE nth_upt)
-  hence i_bound: "i < Suc (length args)" and arg_at_i: "(arg # args) ! i = (name, Ref, gh)"
+  hence i_bound: "i < Suc (length args)" and arg_at_i: "(arg # args) ! i = (name, Ref)"
     using j_bound arg_at_j by auto
 
   show ?case
   proof (cases "i = 0")
     case True
-    hence "arg = (name, Ref, gh)" using arg_at_i by simp
+    hence "arg = (name, Ref)" using arg_at_i by simp
     hence argVr_eq: "argVr = Ref" and argName_eq: "argName = name" using arg_eq by auto
     show ?thesis
     proof (cases refResult)
@@ -90,11 +90,11 @@ next
   next
     case False
     hence i_pos: "i > 0" using i_bound by simp
-    have tail_in: "(i - 1, (name, Ref, gh)) \<in> set (zip [0..<length args] args)"
+    have tail_in: "(i - 1, (name, Ref)) \<in> set (zip [0..<length args] args)"
     proof -
       from False i_bound have len: "i - 1 < length args" by simp
       have "[0..<length args] ! (i - 1) = i - 1" using len by simp
-      moreover have "args ! (i - 1) = (name, Ref, gh)" using arg_at_i False by simp
+      moreover have "args ! (i - 1) = (name, Ref)" using arg_at_i False by simp
       ultimately show ?thesis using len by (auto simp: set_zip intro!: exI[of _ "i - 1"])
     qed
     (* Need to show the fold on tail succeeds *)
@@ -163,14 +163,14 @@ lemma fold_process_one_arg_ref_lvalue_ok:
     and "length argTms = length refResults"
     and "length refResults = length valResults"
     and "refResults = map f argTms"
-    and "(argTm, (name, Ref, gh)) \<in> set (zip argTms fnArgs)"
+    and "(argTm, (name, Ref)) \<in> set (zip argTms fnArgs)"
   shows "\<exists>lval. f argTm = Inr lval"
 proof -
   from assms(6) obtain i where i_bound: "i < length argTms"
     and argTm_eq: "argTms ! i = argTm"
-    and fnArg_eq: "fnArgs ! i = (name, Ref, gh)"
+    and fnArg_eq: "fnArgs ! i = (name, Ref)"
     by (auto simp: set_zip in_set_conv_nth)
-  have "(i, (name, Ref, gh)) \<in> set (zip [0..<length fnArgs] fnArgs)"
+  have "(i, (name, Ref)) \<in> set (zip [0..<length fnArgs] fnArgs)"
     using i_bound fnArg_eq assms(2) by (auto simp: set_zip intro!: exI[of _ i])
   hence "\<exists>lval. refResults ! i = Inr lval"
     using fold_process_one_arg_ref_ok[OF assms(1) _ _ ] assms(2,3,4) by auto
@@ -199,9 +199,9 @@ next
       and len_val': "length refResults' = length valResults'"
     by (cases refResults; cases valResults) auto
 
-  obtain name vr gh where arg_eq: "arg = (name, vr, gh)" by (cases arg)
+  obtain name vr where arg_eq: "arg = (name, vr)" by (cases arg)
 
-  let ?step = "process_one_arg ((name, vr, gh), refResult, valResult') acc"
+  let ?step = "process_one_arg ((name, vr), refResult, valResult') acc"
 
   have fold_eq: "fold process_one_arg (zip (arg # args) (zip refResults valResults)) acc
                = fold process_one_arg (zip args (zip refResults' valResults')) ?step"
@@ -263,7 +263,7 @@ proof (cases acc)
   then show ?thesis by simp
 next
   case State: (Inr st)
-  obtain name vr gh where fields: "fnArg = (name, vr, gh)" by (cases fnArg)
+  obtain name vr where fields: "fnArg = (name, vr)" by (cases fnArg)
   show ?thesis
   proof (cases vr)
     case Var
@@ -355,9 +355,9 @@ lemma fold_process_one_arg_ok_results_agree:
     and ok: "fold process_one_arg (zip fnArgs (zip (map lv argTms) (map tm argTms))) acc
               = Inr finalState"
   shows "map tm' argTms = map tm argTms"
-    and "map (\<lambda>((_, vr, _), refResult). if vr = Ref then refResult else Inl TypeError)
+    and "map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
              (zip fnArgs (map lv' argTms))
-       = map (\<lambda>((_, vr, _), refResult). if vr = Ref then refResult else Inl TypeError)
+       = map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
              (zip fnArgs (map lv argTms))"
 proof -
   have len_ref: "length fnArgs = length (map lv argTms)" using len_eq by simp
@@ -374,7 +374,7 @@ proof -
   qed
 
   (* For a Ref argument, the lvalue result is a value too *)
-  let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr, _), refResult).
+  let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
                           if vr = Ref then refResult else Inl TypeError)
                         (zip fnArgs refResults)"
   show "?filter_refs (map lv' argTms) = ?filter_refs (map lv argTms)"
@@ -385,7 +385,7 @@ proof -
     fix i assume "i < length (?filter_refs (map lv' argTms))"
     hence i_bound: "i < length fnArgs" by simp
     hence i_bound': "i < length argTms" using len_eq by simp
-    obtain argName argVr argGh where fnArg_eq: "fnArgs ! i = (argName, argVr, argGh)"
+    obtain argName argVr where fnArg_eq: "fnArgs ! i = (argName, argVr)"
       by (cases "fnArgs ! i")
     show "?filter_refs (map lv' argTms) ! i = ?filter_refs (map lv argTms) ! i"
     proof (cases argVr)
@@ -394,7 +394,7 @@ proof -
     next
       case Ref
       have a_in: "argTms ! i \<in> set argTms" using i_bound' by simp
-      have in_zip: "(argTms ! i, (argName, Ref, argGh)) \<in> set (zip argTms fnArgs)"
+      have in_zip: "(argTms ! i, (argName, Ref)) \<in> set (zip argTms fnArgs)"
         using i_bound' fnArg_eq Ref len_eq by (auto simp: set_zip intro!: exI[of _ i])
       have "\<exists>lval. lv (argTms ! i) = Inr lval"
         using fold_process_one_arg_ref_lvalue_ok[OF ok len_eq _ len_val refl in_zip] by simp
@@ -1870,7 +1870,7 @@ next
               case (Inr externFun)
               (* External function: the result depends on valResults and refResults directly,
                  not on the fold result (preCallState). We need to show these maps are equal. *)
-              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr, _), refResult).
+              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                     (zip ?fnArgs refResults)"
               have valResults_eq: "map (interp_term d f'' state) argTms = ?valResults"
@@ -2954,7 +2954,7 @@ next
               case (Inr externFun)
               (* External function: the result depends on valResults and refResults
                  directly, so we need these to be the same at both depths. *)
-              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr, _), refResult).
+              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                     (zip ?fnArgs refResults)"
               have valResults_eq: "map (interp_term d' fuel state) argTms = ?valResults"

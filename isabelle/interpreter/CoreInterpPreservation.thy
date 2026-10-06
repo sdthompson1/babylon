@@ -28,7 +28,7 @@ lemma process_one_arg_preserves_globals_funs:
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DefaultCtors state' = IS_DefaultCtors state"
 proof -
-  obtain name vr gh refRes valRes where arg_eq: "arg = ((name, vr, gh), refRes, valRes)"
+  obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
     by (cases arg) auto
   show ?thesis
   proof (cases vr)
@@ -615,7 +615,7 @@ next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
         let ?vals = "rights ?valResults"
-        let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
+        let ?refs = "rights (map (\<lambda>((_, vr), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                  (zip (IF_Args f) ?refResults))"
         obtain newWorld refUpdates externRetVal where

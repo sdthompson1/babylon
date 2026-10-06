@@ -306,22 +306,23 @@ proof -
     \<comment> \<open>The five conjuncts of fun_info_matches_interp_fun.\<close>
     have if_sel:
       "IF_TyArgs (make_interp_fun info f body) = FI_TyArgs info"
-      "IF_Args (make_interp_fun info f body) = zip (CF_Args f) (map snd (FI_TmArgs info))"
+      "IF_Args (make_interp_fun info f body)
+         = zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info))"
       "IF_Body (make_interp_fun info f body) = body"
       "IF_Impure (make_interp_fun info f body) = FI_Impure info"
       by (simp_all add: make_interp_fun_def)
-    have mapfst: "map fst (zip (CF_Args f) (map snd (FI_TmArgs info))) = CF_Args f"
+    have mapfst: "map fst (zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info))) = CF_Args f"
       by (simp add: len)
-    have markers: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
-                     (FI_TmArgs info) (zip (CF_Args f) (map snd (FI_TmArgs info)))"
+    have markers: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
+                     (FI_TmArgs info) (zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info)))"
       by (auto simp add: list_all2_conv_all_nth len split_def)
-    have distZip: "distinct (map fst (zip (CF_Args f) (map snd (FI_TmArgs info))))"
+    have distZip: "distinct (map fst (zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info))))"
       unfolding mapfst by (rule distArgs)
     have body_match: "case body of
            Inl bodyStmts \<Rightarrow>
              core_statement_list_type
                (body_env_for env
-                  (map fst (zip (CF_Args f) (map snd (FI_TmArgs info)))) info)
+                  (map fst (zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info)))) info)
                (FI_Ghost info) bodyStmts \<noteq> None
          | Inr externFun \<Rightarrow> extern_fun_contract env info externFun"
       unfolding mapfst
