@@ -2,6 +2,25 @@ theory TypeSoundnessHelpers4
   imports TypeSoundnessHelpers3
 begin
 
+(* Checking the invariants of a loop is not a TypeError when their values are
+   booleans. (It can still be a RuntimeError: an invariant can be false.) *)
+lemma invariants_error_sound:
+  assumes "list_all2 (value_has_type env) vals (replicate n CoreTy_Bool)"
+  shows "invariants_error vals \<noteq> Some TypeError"
+proof -
+  have "\<exists>b. v = CV_Bool b" if "v \<in> set vals" for v
+  proof -
+    from that obtain i where i: "i < length vals" "vals ! i = v"
+      by (auto simp: in_set_conv_nth)
+    from assms have len: "length vals = n"
+      by (auto dest: list_all2_lengthD)
+    from list_all2_nthD[OF assms i(1)] i len
+    have "value_has_type env v CoreTy_Bool" by simp
+    then show ?thesis by (cases v) (auto split: CoreType.splits)
+  qed
+  then show ?thesis by (auto simp: invariants_error_def)
+qed
+
 (* The main type soundness theorem, stated at fixed depth d, given that terms are sound
    at every smaller depth. *)
 lemma type_soundness_at_depth:
@@ -1781,7 +1800,8 @@ next
         with CoreStmt_Assume interp_eq show ?thesis using storeTyping_extends_refl by auto
       next
         case (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-        \<comment> \<open>While (ghost or not): evaluates the
+        \<comment> \<open>While (ghost or not): evaluates the invariants (an error, or a
+            false one, ends the loop with that error), then the
             condition; if True, runs the body and recurses on the loop
             (via the statement-level fuel IH) after restore_scope; if False,
             returns Continue state. The typechecker's result env equals the
@@ -1824,7 +1844,37 @@ next
                   sound_statement_result env0 env0' storeTyping0
                     (interp_statement d fuel state0 stmt0)"
             using Suc.IH(4) by simp
-          show ?thesis
+          \<comment> \<open>The invariants are typed at Bool in Ghost mode, so evaluating them
+              gives a list of booleans, or an error that is not a TypeError. \<close>
+          from typing CoreStmt_While have
+            invs_typed: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars"
+            by (auto split: if_splits option.splits CoreType.splits)
+          let ?invTypes = "map (core_term_type env Ghost) invars"
+          from invs_typed have inv_types_some: "list_all (\<lambda>ty. ty \<noteq> None) ?invTypes"
+            by (simp add: list_all_length)
+          from invs_typed have inv_types_eq:
+            "map the ?invTypes = replicate (length invars) CoreTy_Bool"
+            by (induction invars) (auto simp: list_all_iff)
+          have IH_list: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 tms0 types0.
+                  state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                  tyenv_well_formed env0 \<Longrightarrow>
+                  map (core_term_type env0 Ghost) tms0 = types0 \<and>
+                  list_all (\<lambda>ty. ty \<noteq> None) types0 \<Longrightarrow>
+                  sound_term_results state0 env0 (map the types0)
+                    (interp_term_list d fuel state0 tms0)"
+            by (simp add: Suc.IH(2) "4.prems"(1,2))
+          from IH_list[OF "4.prems"(1,2)] inv_types_some
+          have "sound_term_results state env (map the ?invTypes)
+                  (interp_term_list d fuel state invars)"
+            by simp
+          hence invs_sound: "sound_term_results state env (replicate (length invars) CoreTy_Bool)
+                               (interp_term_list d fuel state invars)"
+            by (simp only: inv_types_eq)
+          \<comment> \<open>The loop itself, once the invariants have been evaluated and found
+              to hold. \<close>
+          have loop_sound: ?thesis
+            if iv [simp]: "interp_term_list d fuel state invars = Inr invarVals"
+            and ie [simp]: "invariants_error invarVals = None" for invarVals
           proof (cases "interp_term d fuel state condTm")
             case (Inl err)
             with cond_sound have "sound_error_result err" by simp
@@ -1976,6 +2026,37 @@ next
                   with interp_eq CoreStmt_While show ?thesis by simp
                 qed
               qed
+            qed
+          qed
+          \<comment> \<open>Now the invariants. An error in evaluating them, or a false one,
+              ends the loop with an error that is not a TypeError. \<close>
+          show ?thesis
+          proof (cases "interp_term_list d fuel state invars")
+            case (Inl err)
+            with invs_sound have "sound_error_result err" by simp
+            moreover have "interp_statement d (Suc fuel) state
+                (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl err"
+              using Inl by simp
+            ultimately show ?thesis using CoreStmt_While by simp
+          next
+            case (Inr invarVals)
+            show ?thesis
+            proof (cases "invariants_error invarVals")
+              case None
+              show ?thesis by (rule loop_sound[OF Inr None])
+            next
+              case (Some err)
+              from invs_sound Inr
+              have "list_all2 (value_has_type env) invarVals
+                      (replicate (length invars) CoreTy_Bool)"
+                by simp
+              from invariants_error_sound[OF this] Some
+              have "err \<noteq> TypeError" by auto
+              hence "sound_error_result err" by (cases err) simp_all
+              moreover have "interp_statement d (Suc fuel) state
+                  (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl err"
+                using Inr Some by simp
+              ultimately show ?thesis using CoreStmt_While by simp
             qed
           qed
       next

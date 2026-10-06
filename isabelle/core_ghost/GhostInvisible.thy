@@ -1134,6 +1134,12 @@ next
           bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) Ghost bodyStmts
                     = Some bodyEnv"
           by (auto split: if_splits option.splits CoreType.splits)
+        \<comment> \<open>The run succeeded, so the invariants were evaluated and all held. \<close>
+        from H CoreStmt_While obtain invarVals where
+          iv: "interp_term_list d fuel full invars = Inr invarVals" and
+          ie: "invariants_error invarVals = None"
+          by (auto split: sum.splits option.splits)
+        note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
           cv: "interp_term d fuel full condTm = Inr condVal"
           by (auto split: sum.splits)

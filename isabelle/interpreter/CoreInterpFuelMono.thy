@@ -1433,110 +1433,133 @@ next
       using Suc_le_D by auto
     assume noFuel: "interp_statement d (Suc fuel) state
                       (CoreStmt_While whileGhost condTm invars decr bodyStmts) \<noteq> Inl InsufficientFuel"
-    hence cond_noFuel: "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
+    hence "interp_term_list d fuel state invars \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
-    hence IH_cond: "\<forall>f'\<ge>fuel. interp_term d f' state condTm = interp_term d fuel state condTm"
-      using "36.IH"(1) by blast
+    hence invs_eq: "interp_term_list d f'' state invars = interp_term_list d fuel state invars"
+      using "36.IH"(1) f''_ge by blast
     show "interp_statement d f' state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
           interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-    proof (cases "interp_term d fuel state condTm")
+    proof (cases "interp_term_list d fuel state invars")
       case (Inl err)
-      hence "interp_term d f'' state condTm = Inl err" using IH_cond f''_ge by metis
-      thus ?thesis using Inl f'_eq by simp
+      thus ?thesis using invs_eq f'_eq by simp
     next
-      case (Inr condVal)
+      case Invs: (Inr invarVals)
       show ?thesis
-      proof (cases condVal)
-        case (CV_Bool b)
+      proof (cases "invariants_error invarVals")
+        case (Some err)
+        thus ?thesis using Invs invs_eq f'_eq by simp
+      next
+        case InvsOk: None
+        \<comment> \<open>The invariants hold, at both fuels. From here on the loop runs as
+            it would without them. \<close>
+        have invs_f'': "interp_term_list d f'' state invars = Inr invarVals"
+          using invs_eq Invs by simp
+        note [simp] = Invs InvsOk invs_f''
+        have cond_noFuel: "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
+          using noFuel by (auto split: sum.splits)
+        hence IH_cond: "\<forall>f'\<ge>fuel. interp_term d f' state condTm = interp_term d fuel state condTm"
+          using "36.IH"(2)[OF Invs InvsOk] by blast
         show ?thesis
-        proof (cases b)
-          case True
-          hence body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
-            using noFuel Inr CV_Bool by (auto split: sum.splits ExecResult.splits)
-          hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' state bodyStmts
-                                      = interp_statement_list d fuel state bodyStmts"
-            using "36.IH"(2) Inr CV_Bool True by blast
-          have cond_fuel: "interp_term d fuel state condTm = Inr (CV_Bool True)"
-            using Inr CV_Bool True by simp
-          have cond_f'': "interp_term d f'' state condTm = Inr (CV_Bool True)"
-            using IH_cond cond_fuel f''_ge by simp
-          show ?thesis
-          proof (cases "interp_statement_list d fuel state bodyStmts")
-            case (Inl err)
-            hence "interp_statement_list d f'' state bodyStmts = Inl err" using IH_body f''_ge by metis
-            thus ?thesis using Inl f'_eq cond_f'' cond_fuel by simp
-          next
-            case (Inr result)
-            show ?thesis
-            proof (cases result)
-              case (Continue state')
-              hence loop_noFuel: "interp_statement d fuel (restore_scope state state')
-                                    (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-                                  \<noteq> Inl InsufficientFuel"
-                using noFuel cond_fuel \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close>
-                by auto
-              hence IH_loop: "\<forall>f'\<ge>fuel. interp_statement d f' (restore_scope state state')
-                                          (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                                        interp_statement d fuel (restore_scope state state')
-                                          (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                using "36.IH"(3) Inr CV_Bool True
-                      \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Continue
-                by (metis cond_fuel)
-              have body_fuel: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
-                using \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Continue by simp
-              have "interp_term d f'' state condTm = Inr (CV_Bool True)"
-                using cond_f'' by simp
-              moreover have "interp_statement_list d f'' state bodyStmts = Inr (Continue state')"
-                using IH_body body_fuel f''_ge by metis
-              moreover have "interp_statement d f'' (restore_scope state state')
-                              (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                            interp_statement d fuel (restore_scope state state')
-                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                using IH_loop f''_ge by metis
-              ultimately show ?thesis using f'_eq cond_fuel body_fuel by simp
-            next
-              case (Return state' retVal)
-              have body_fuel: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
-                using \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Return by simp
-              have "interp_term d f'' state condTm = Inr (CV_Bool True)"
-                using cond_f'' by simp
-              moreover have "interp_statement_list d f'' state bodyStmts = Inr (Return state' retVal)"
-                using IH_body body_fuel f''_ge by metis
-              ultimately show ?thesis using f'_eq cond_fuel body_fuel by simp
-            qed
-          qed
+        proof (cases "interp_term d fuel state condTm")
+          case (Inl err)
+          hence "interp_term d f'' state condTm = Inl err" using IH_cond f''_ge by metis
+          thus ?thesis using Inl f'_eq by simp
         next
-          case False
-          have cond_fuel: "interp_term d fuel state condTm = Inr (CV_Bool False)"
-            using Inr CV_Bool False by simp
-          have "interp_term d f'' state condTm = Inr (CV_Bool False)"
-            using IH_cond cond_fuel f''_ge by metis
-          thus ?thesis using f'_eq cond_fuel by simp
+          case (Inr condVal)
+          show ?thesis
+          proof (cases condVal)
+            case (CV_Bool b)
+            show ?thesis
+            proof (cases b)
+              case True
+              hence body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
+                using noFuel Inr CV_Bool by (auto split: sum.splits ExecResult.splits)
+              hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' state bodyStmts
+                                          = interp_statement_list d fuel state bodyStmts"
+                using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True by blast
+              have cond_fuel: "interp_term d fuel state condTm = Inr (CV_Bool True)"
+                using Inr CV_Bool True by simp
+              have cond_f'': "interp_term d f'' state condTm = Inr (CV_Bool True)"
+                using IH_cond cond_fuel f''_ge by simp
+              show ?thesis
+              proof (cases "interp_statement_list d fuel state bodyStmts")
+                case (Inl err)
+                hence "interp_statement_list d f'' state bodyStmts = Inl err" using IH_body f''_ge by metis
+                thus ?thesis using Inl f'_eq cond_f'' cond_fuel by simp
+              next
+                case (Inr result)
+                show ?thesis
+                proof (cases result)
+                  case (Continue state')
+                  hence loop_noFuel: "interp_statement d fuel (restore_scope state state')
+                                        (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                                      \<noteq> Inl InsufficientFuel"
+                    using noFuel cond_fuel \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close>
+                    by auto
+                  hence IH_loop: "\<forall>f'\<ge>fuel. interp_statement d f' (restore_scope state state')
+                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                                            interp_statement d fuel (restore_scope state state')
+                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                    using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True
+                          \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Continue
+                    by (metis cond_fuel)
+                  have body_fuel: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
+                    using \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Continue by simp
+                  have "interp_term d f'' state condTm = Inr (CV_Bool True)"
+                    using cond_f'' by simp
+                  moreover have "interp_statement_list d f'' state bodyStmts = Inr (Continue state')"
+                    using IH_body body_fuel f''_ge by metis
+                  moreover have "interp_statement d f'' (restore_scope state state')
+                                  (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                                interp_statement d fuel (restore_scope state state')
+                                  (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                    using IH_loop f''_ge by metis
+                  ultimately show ?thesis using f'_eq cond_fuel body_fuel by simp
+                next
+                  case (Return state' retVal)
+                  have body_fuel: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
+                    using \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Return by simp
+                  have "interp_term d f'' state condTm = Inr (CV_Bool True)"
+                    using cond_f'' by simp
+                  moreover have "interp_statement_list d f'' state bodyStmts = Inr (Return state' retVal)"
+                    using IH_body body_fuel f''_ge by metis
+                  ultimately show ?thesis using f'_eq cond_fuel body_fuel by simp
+                qed
+              qed
+            next
+              case False
+              have cond_fuel: "interp_term d fuel state condTm = Inr (CV_Bool False)"
+                using Inr CV_Bool False by simp
+              have "interp_term d f'' state condTm = Inr (CV_Bool False)"
+                using IH_cond cond_fuel f''_ge by metis
+              thus ?thesis using f'_eq cond_fuel by simp
+            qed
+          next
+            case (CV_FiniteInt x21 x22 x23)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_FiniteInt Inr by simp
+          next
+            case (CV_Record x4)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_Record Inr by simp
+          next
+            case (CV_Variant x51 x52)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_Variant Inr by simp
+          next
+            case (CV_Array x61 x62)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_Array Inr by simp
+          next
+            case (CV_Int x7)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_Int Inr by simp
+          next
+            case (CV_Real x8)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_Real Inr by simp
+          qed
         qed
-      next
-        case (CV_FiniteInt x21 x22 x23)
-        have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
-        thus ?thesis using f'_eq CV_FiniteInt Inr by simp
-      next
-        case (CV_Record x4)
-        have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
-        thus ?thesis using f'_eq CV_Record Inr by simp
-      next
-        case (CV_Variant x51 x52)
-        have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
-        thus ?thesis using f'_eq CV_Variant Inr by simp
-      next
-        case (CV_Array x61 x62)
-        have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
-        thus ?thesis using f'_eq CV_Array Inr by simp
-      next
-        case (CV_Int x7)
-        have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
-        thus ?thesis using f'_eq CV_Int Inr by simp
-      next
-        case (CV_Real x8)
-        have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
-        thus ?thesis using f'_eq CV_Real Inr by simp
       qed
     qed
   qed
@@ -2595,82 +2618,105 @@ next
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
-    have "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
+    have "interp_term_list d fuel state invars \<noteq> Inl InsufficientFuel"
       using "36.prems" by (auto split: sum.splits)
-    hence cond_eq: "interp_term d' fuel state condTm = interp_term d fuel state condTm"
+    hence invs_eq: "interp_term_list d' fuel state invars = interp_term_list d fuel state invars"
       using "36.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
           interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-    proof (cases "interp_term d fuel state condTm")
+    proof (cases "interp_term_list d fuel state invars")
       case (Inl err)
-      thus ?thesis using cond_eq by simp
+      thus ?thesis using invs_eq by simp
     next
-      case (Inr condVal)
+      case Invs: (Inr invarVals)
       show ?thesis
-      proof (cases condVal)
-        case (CV_Bool b)
+      proof (cases "invariants_error invarVals")
+        case (Some err)
+        thus ?thesis using Invs invs_eq by simp
+      next
+        case InvsOk: None
+        \<comment> \<open>The invariants hold, at both depths. From here on the loop runs as
+            it would without them. \<close>
+        have invs_d': "interp_term_list d' fuel state invars = Inr invarVals"
+          using invs_eq Invs by simp
+        note [simp] = Invs InvsOk invs_d'
+        have "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
+          using "36.prems" by (auto split: sum.splits)
+        hence cond_eq: "interp_term d' fuel state condTm = interp_term d fuel state condTm"
+          using "36.IH"(2)[OF Invs InvsOk] d'_ge by blast
         show ?thesis
-        proof (cases b)
-          case True
-          have cond_d: "interp_term d fuel state condTm = Inr (CV_Bool True)"
-            using Inr CV_Bool True by simp
-          have cond_d': "interp_term d' fuel state condTm = Inr (CV_Bool True)"
-            using cond_eq cond_d by simp
-          have body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
-            using "36.prems" Inr CV_Bool True by (auto split: sum.splits ExecResult.splits)
-          hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel state bodyStmts
-                                    = interp_statement_list d fuel state bodyStmts"
-            using "36.IH"(2) Inr CV_Bool True by blast
-          hence body_eq: "interp_statement_list d' fuel state bodyStmts
-                            = interp_statement_list d fuel state bodyStmts"
-            using d'_ge by blast
-          show ?thesis
-          proof (cases "interp_statement_list d fuel state bodyStmts")
-            case (Inl err)
-            thus ?thesis using body_eq cond_d cond_d' by simp
-          next
-            case Body: (Inr result)
-            show ?thesis
-            proof (cases result)
-              case (Continue state')
-              have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
-                using Body Continue by simp
-              have body_d': "interp_statement_list d' fuel state bodyStmts = Inr (Continue state')"
-                using body_eq body_d by simp
-              have loop_noFuel: "interp_statement d fuel (restore_scope state state')
-                                    (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-                                  \<noteq> Inl InsufficientFuel"
-                using "36.prems" cond_d body_d by auto
-              hence IH_loop: "\<forall>d'\<ge>d. interp_statement d' fuel (restore_scope state state')
-                                          (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                                        interp_statement d fuel (restore_scope state state')
-                                          (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                using "36.IH"(3) Inr CV_Bool True Body Continue
-                by metis
-              have "interp_statement d' fuel (restore_scope state state')
-                      (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                    interp_statement d fuel (restore_scope state state')
-                      (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                using IH_loop d'_ge by metis
-              thus ?thesis using cond_d cond_d' body_d body_d' by simp
-            next
-              case (Return state' retVal)
-              have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
-                using Body Return by simp
-              have "interp_statement_list d' fuel state bodyStmts = Inr (Return state' retVal)"
-                using body_eq body_d by simp
-              thus ?thesis using cond_d cond_d' body_d by simp
-            qed
-          qed
+        proof (cases "interp_term d fuel state condTm")
+          case (Inl err)
+          thus ?thesis using cond_eq by simp
         next
-          case False
-          have cond_d: "interp_term d fuel state condTm = Inr (CV_Bool False)"
-            using Inr CV_Bool False by simp
-          have "interp_term d' fuel state condTm = Inr (CV_Bool False)"
-            using cond_eq cond_d by simp
-          thus ?thesis using cond_d by simp
+          case (Inr condVal)
+          show ?thesis
+          proof (cases condVal)
+            case (CV_Bool b)
+            show ?thesis
+            proof (cases b)
+              case True
+              have cond_d: "interp_term d fuel state condTm = Inr (CV_Bool True)"
+                using Inr CV_Bool True by simp
+              have cond_d': "interp_term d' fuel state condTm = Inr (CV_Bool True)"
+                using cond_eq cond_d by simp
+              have body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
+                using "36.prems" Inr CV_Bool True by (auto split: sum.splits ExecResult.splits)
+              hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel state bodyStmts
+                                        = interp_statement_list d fuel state bodyStmts"
+                using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True by blast
+              hence body_eq: "interp_statement_list d' fuel state bodyStmts
+                                = interp_statement_list d fuel state bodyStmts"
+                using d'_ge by blast
+              show ?thesis
+              proof (cases "interp_statement_list d fuel state bodyStmts")
+                case (Inl err)
+                thus ?thesis using body_eq cond_d cond_d' by simp
+              next
+                case Body: (Inr result)
+                show ?thesis
+                proof (cases result)
+                  case (Continue state')
+                  have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
+                    using Body Continue by simp
+                  have body_d': "interp_statement_list d' fuel state bodyStmts = Inr (Continue state')"
+                    using body_eq body_d by simp
+                  have loop_noFuel: "interp_statement d fuel (restore_scope state state')
+                                        (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                                      \<noteq> Inl InsufficientFuel"
+                    using "36.prems" cond_d body_d by auto
+                  hence IH_loop: "\<forall>d'\<ge>d. interp_statement d' fuel (restore_scope state state')
+                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                                            interp_statement d fuel (restore_scope state state')
+                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                    using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True Body Continue
+                    by metis
+                  have "interp_statement d' fuel (restore_scope state state')
+                          (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                        interp_statement d fuel (restore_scope state state')
+                          (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                    using IH_loop d'_ge by metis
+                  thus ?thesis using cond_d cond_d' body_d body_d' by simp
+                next
+                  case (Return state' retVal)
+                  have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
+                    using Body Return by simp
+                  have "interp_statement_list d' fuel state bodyStmts = Inr (Return state' retVal)"
+                    using body_eq body_d by simp
+                  thus ?thesis using cond_d cond_d' body_d by simp
+                qed
+              qed
+            next
+              case False
+              have cond_d: "interp_term d fuel state condTm = Inr (CV_Bool False)"
+                using Inr CV_Bool False by simp
+              have "interp_term d' fuel state condTm = Inr (CV_Bool False)"
+                using cond_eq cond_d by simp
+              thus ?thesis using cond_d by simp
+            qed
+          qed (use cond_eq Inr in simp_all)
         qed
-      qed (use cond_eq Inr in simp_all)
+      qed
     qed
   qed
 next

@@ -955,6 +955,18 @@ next
             bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost body
                       = Some bodyEnv"
             by (auto split: if_splits option.splits CoreType.splits)
+          \<comment> \<open>The full run succeeded, so its invariants were evaluated and all
+              held. The erased loop has no invariants, so its check passes
+              trivially (given some fuel, which the full run shows there is). \<close>
+          from H CoreStmt_While obtain invarVals where
+            iv: "interp_term_list d fuel full invars = Inr invarVals" and
+            ie: "invariants_error invarVals = None"
+            by (auto split: sum.splits option.splits)
+          from iv have ivE: "interp_term_list d fuel erased [] = Inr []"
+            by (cases fuel) simp_all
+          have ieE: "invariants_error [] = None"
+            by (simp add: invariants_error_def)
+          note [simp] = iv ie ivE ieE
           from H CoreStmt_While obtain condVal where
             cv: "interp_term d fuel full condTm = Inr condVal"
             by (auto split: sum.splits)

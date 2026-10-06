@@ -629,6 +629,15 @@ definition choose_witness ::
         then Inr (SOME v. v \<in> vals \<and> r v = Inr (CV_Bool True))
         else Inl RuntimeError)"
 
+(* Given the values of the invariants of a loop, return None if all of them are
+   true, or an error otherwise. A false invariant is a RuntimeError, and a
+   non-boolean invariant is a TypeError. *)
+definition invariants_error :: "CoreValue list \<Rightarrow> InterpError option" where
+  "invariants_error vals =
+    (if \<exists>v \<in> set vals. \<forall>b. v \<noteq> CV_Bool b then Some TypeError
+     else if CV_Bool False \<in> set vals then Some RuntimeError
+     else None)"
+
 (* Bind a local variable to a value, in a fresh store cell. Whether the name
    counts as a const local is left as it was. Used for quantified variables. *)
 fun bind_local :: "string \<Rightarrow> CoreValue \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
@@ -1003,19 +1012,28 @@ where
       Inr val \<Rightarrow> Inr (Return state val)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* While. The invariants and the decreases-term are not evaluated. *)
+  (* While. Each time the condition is about to be tested (including the last
+     time, when it is false), the invariants are evaluated first, and it is a
+     RuntimeError if one of them is false. The decreases-term is not
+     evaluated. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-    (case interp_term d fuel state condTm of
-      Inr (CV_Bool True) \<Rightarrow>
-        (case interp_statement_list d fuel state bodyStmts of
-          Inr (Continue state') \<Rightarrow>
-            interp_statement d fuel (restore_scope state state')
-                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-        | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
-        | Inl err \<Rightarrow> Inl err)
-    | Inr (CV_Bool False) \<Rightarrow> Inr (Continue state)
-    | Inr _ \<Rightarrow> Inl TypeError
-    | Inl err \<Rightarrow> Inl err)"
+    (case interp_term_list d fuel state invars of
+      Inl err \<Rightarrow> Inl err
+    | Inr invarVals \<Rightarrow>
+        (case invariants_error invarVals of
+          Some err \<Rightarrow> Inl err
+        | None \<Rightarrow>
+            (case interp_term d fuel state condTm of
+              Inr (CV_Bool True) \<Rightarrow>
+                (case interp_statement_list d fuel state bodyStmts of
+                  Inr (Continue state') \<Rightarrow>
+                    interp_statement d fuel (restore_scope state state')
+                                      (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
+                | Inl err \<Rightarrow> Inl err)
+            | Inr (CV_Bool False) \<Rightarrow> Inr (Continue state)
+            | Inr _ \<Rightarrow> Inl TypeError
+            | Inl err \<Rightarrow> Inl err)))"
 
   (* Pattern match *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Match _ scrutTm arms) =

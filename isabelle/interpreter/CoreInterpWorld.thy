@@ -481,6 +481,13 @@ next
           by (auto split: if_splits option.splits CoreType.splits)
         have okB: "gw = Ghost \<or> \<not> TE_FunctionImpure (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
           using ok gw_ok by auto
+        \<comment> \<open>The run succeeded, so the invariants were evaluated and all held.
+            Evaluating them is evaluating terms, which cannot change the state. \<close>
+        from H CoreStmt_While obtain invarVals where
+          iv: "interp_term_list d fuel state invars = Inr invarVals" and
+          ie: "invariants_error invarVals = None"
+          by (auto split: sum.splits option.splits)
+        note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
           cv: "interp_term d fuel state condTm = Inr condVal"
           by (auto split: sum.splits)
