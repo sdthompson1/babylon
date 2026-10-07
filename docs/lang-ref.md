@@ -2469,19 +2469,19 @@ function must be a complete type.
 A function can also be marked `extern`. In this case, it is illegal to
 supply a function body. Also, an `extern` function (of a given name)
 can occur in either the interface or implementation of a module, but
-not both. Finally, note that a function cannot be both `extern` and
-`ghost` at the same time.
+not both.
 
-An `extern` function represents a function defined in some external
-environment, such as a separate C file which is linked into the
-program externally. (The exact process for doing this is documented
-elsewhere.)
+A non-ghost `extern` function represents a function defined in some
+external environment, such as a separate C file which is linked into
+the program externally. (The exact process for doing this is
+documented elsewhere.)
 
 The verifier will prove that all `requires` conditions on an extern
 function are met at the call site(s), just as with normal functions.
 But note that the verifier will *not* prove that the external
-implementation respects any `ensures` conditions that are stated. For
-example, in the following:
+implementation actually returns, or, when it does return, that it
+respects any `ensures` conditions that are stated. Both of these facts
+are simply assumed. For example, in the following:
 
 ```
 extern function foo(x: i32): i32
@@ -2527,6 +2527,30 @@ versions of those names on the Babylon side.
 
 Note that all extern names must consist only of alphanumeric
 characters or underscores, and begin with an alphabetic character.
+
+Ghost extern functions are also possible. These represent unproved
+(but assumed) axioms or statements. For example, assuming that a `pow`
+function on integers is defined, we may write:
+
+```
+ghost extern function fermat(x: int, y: int, z: int, n: int)
+    requires x > int(0) && y > int(0) && z > int(0);
+    requires n > int(2);
+    ensures pow(x,n) + pow(y,n) != pow(z,n);
+```
+
+This amounts to stating Fermat's last theorem without proof. One could
+then call the function `fermat` at specific values, in order to allow
+the verifier to assume specific instances of the theorem, whenever
+required.
+
+As with all `extern` functions, it is assumed that a `ghost extern`
+function always returns when called, and that its `ensures` conditions
+are always true at the point of return (provided that the `requires`
+conditions were true on function entry). If these assumptions are not
+respected, then verification might be unsound.
+
+
 
 
 # "Memory leak" prevention
