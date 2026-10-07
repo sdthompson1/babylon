@@ -517,9 +517,11 @@ static struct Type * chase_univars(struct Type *type)
     return type;
 }
 
-// Make a new "empty" TY_UNIVAR type. The requirements will be
-// must_be_executable if tc_context->executable is true, or no
-// requirements otherwise.
+// Make a new "empty" TY_UNIVAR type. The univar records the mode
+// (executable or ghost) in which it was created; it can only be bound
+// in that same mode (see univar_is_bindable and update_univar_type).
+// A univar created in executable mode can therefore only ever be
+// bound to an executable type.
 // (Note that univars are always required to be complete types;
 // see also update_univar_type.)
 // 'loc' is the location of the term that gave rise to the univar
@@ -530,7 +532,7 @@ static struct Type * new_univar_type(struct TypecheckContext *tc_context,
 {
     struct Type *type = make_type(g_no_location, TY_UNIVAR);
     type->univar_data.node = alloc(sizeof(struct UnivarNode));
-    type->univar_data.node->must_be_executable = tc_context->executable;
+    type->univar_data.node->executable = tc_context->executable;
     type->univar_data.node->location = loc;
     type->univar_data.node->type = NULL;
     type->univar_data.node->ref_count = 1;
@@ -555,8 +557,15 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     // recursively for any "child" types:
     switch (type->tag) {
     case TY_UNIVAR:
-        if (req->must_be_executable) {
-            type->univar_data.node->must_be_executable = true;
+        // An unresolved univar created in executable mode can only
+        // ever be bound to an executable type (see update_univar_type),
+        // so there is nothing to check now.
+        // An unresolved univar created in ghost mode should never
+        // appear in a type that is required to be executable: a ghost
+        // univar lives only inside the ghost term that created it
+        // (see nr_typecheck_call).
+        if (req->must_be_executable && !type->univar_data.node->executable) {
+            fatal_error("ensure_type_meets_flags: ghost univar in an executable type");
         }
         return true;
 
@@ -647,8 +656,18 @@ static bool check_type_inferred(struct TypecheckContext *tc_context,
     return true;
 }
 
+// A univar can only be bound in the mode (executable or ghost) that
+// created it. A univar that is not bindable in the current mode is
+// "rigid": unify_types treats it like any other (opaque) type.
+// 'type' must be an unresolved TY_UNIVAR.
+static bool univar_is_bindable(struct TypecheckContext *tc_context, struct Type *type)
+{
+    return type->univar_data.node->executable == tc_context->executable;
+}
+
 // Unify types by setting LHS := RHS. LHS must be a "NULL" TY_UNIVAR
-// type (i.e. a unification variable that hasn't been "resolved" yet).
+// type (i.e. a unification variable that hasn't been "resolved" yet)
+// which is bindable in the current mode (see univar_is_bindable).
 // LHS must not occur on RHS (this is not checked). Returns true on
 // success.
 static bool update_univar_type(struct TypecheckContext *tc_context,
@@ -659,12 +678,16 @@ static bool update_univar_type(struct TypecheckContext *tc_context,
     if (lhs->tag != TY_UNIVAR || lhs->univar_data.node->type != NULL) {
         fatal_error("update_univar_type: incorrect input");
     }
+    if (!univar_is_bindable(tc_context, lhs)) {
+        fatal_error("update_univar_type: univar is not bindable in the current mode");
+    }
 
-    // The new type must meet the requirements from the univar_data.node,
+    // The new type must be valid in the current mode (which, by the
+    // above check, is also the mode in which the univar was created),
     // and must also be complete (type inference will never infer an
     // incomplete type).
     struct TypeFlags flags = {
-        .must_be_executable = lhs->univar_data.node->must_be_executable,
+        .must_be_executable = tc_context->executable,
         .must_be_complete = true
     };
     if (!ensure_type_meets_flags(tc_context, &flags, rhs, loc)) {
@@ -713,27 +736,32 @@ static bool unify_types(struct TypecheckContext *tc_context,
         return false;
     }
 
-    // If expected is TY_UNIVAR (i.e. an unresolved unification variable)
-    // then we can just set expected := actual.
-    if (expected_type->tag == TY_UNIVAR) {
-        if (actual_type->tag == TY_UNIVAR
-        && actual_type->univar_data.node == expected_type->univar_data.node) {
-            // expected_type and actual_type are the same variable. Do nothing.
-            return true;
-        } else {
-            // Set expected := actual.
-            return update_univar_type(tc_context, expected_type, actual_type, loc);
-        }
+    // An unresolved unification variable is "flexible" if it can be
+    // bound in the current mode, and "rigid" otherwise (see
+    // univar_is_bindable).
+    bool expected_flex = expected_type->tag == TY_UNIVAR && univar_is_bindable(tc_context, expected_type);
+    bool actual_flex = actual_type->tag == TY_UNIVAR && univar_is_bindable(tc_context, actual_type);
+
+    if (expected_type->tag == TY_UNIVAR && actual_type->tag == TY_UNIVAR
+    && actual_type->univar_data.node == expected_type->univar_data.node) {
+        // expected_type and actual_type are the same variable. Do nothing.
+        return true;
     }
 
-    // If actual is TY_UNIVAR (i.e. an unresolved unification variable)
-    // then we can set actual := expected.
-    if (actual_type->tag == TY_UNIVAR) {
+    if (expected_flex) {
+        // Set expected := actual.
+        return update_univar_type(tc_context, expected_type, actual_type, loc);
+    }
+
+    if (actual_flex) {
+        // Set actual := expected.
         return update_univar_type(tc_context, actual_type, expected_type, loc);
     }
 
     // If we get here, then no unifying is possible, so continue with
-    // "normal" type-matching.
+    // "normal" type-matching. Any remaining univar is rigid (it was
+    // created in the other mode) and is treated like any other type:
+    // it matches only itself (and that case was handled above).
 
     bool ok = true;
 
@@ -865,13 +893,25 @@ static bool unify_types(struct TypecheckContext *tc_context,
             fatal_error("unify_types called on non-kindchecked type");
 
         case TY_UNIVAR:
-            // Unreachable, as we checked for this case above.
-            fatal_error("unreachable code");
+            // Two different rigid univars. These do not match.
+            ok = false;
+            break;
         }
     }
 
     if (!ok) {
-        report_type_mismatch(expected_type, actual_type, *loc);
+        if (expected_type->tag == TY_UNIVAR || actual_type->tag == TY_UNIVAR) {
+            // The mismatch involves a rigid univar. The only way this
+            // can happen is that a ghost argument of an executable call
+            // is being matched (in ghost mode) against a formal type
+            // mentioning a type argument of the call that has not been
+            // determined by the non-ghost arguments. (In ghost mode
+            // every univar is bindable; and a ghost univar never
+            // escapes into executable mode; see nr_typecheck_call.)
+            report_cannot_infer_type_arg_from_ghost_arg(*loc);
+        } else {
+            report_type_mismatch(expected_type, actual_type, *loc);
+        }
         ++tc_context->num_errors;
     }
     return ok;
@@ -2125,6 +2165,48 @@ static void* nr_typecheck_quantifier(struct TermTransform *tr, void *context, st
     return NULL;
 }
 
+// Check that the actual argument for a 'ref' formal parameter is a
+// writable lvalue (and that allow_side_effect is true). Returns true
+// if all checks pass.
+// This reads tc_context->executable, so it must be called in the
+// ambient mode of the call (not in the ghost mode used for matching
+// ghost arguments).
+static bool check_ref_arg(struct TypecheckContext *tc_context,
+                          struct FunArg *formal,
+                          struct Term *actual,
+                          bool allow_side_effect)
+{
+    bool ghost = false;
+    bool read_only = false;
+    bool lvalue = is_lvalue(tc_context, actual, &ghost, &read_only);
+
+    if (!allow_side_effect) {
+        report_ref_arg_not_allowed_in_subexpression(actual->location);
+        ++tc_context->num_errors;
+        return false;
+    } else if (!lvalue) {
+        report_cannot_take_ref(actual->location);
+        ++tc_context->num_errors;
+        return false;
+    } else if (read_only) {
+        report_cannot_take_ref_to_readonly(actual->location);
+        ++tc_context->num_errors;
+        return false;
+    } else if (!ghost && !tc_context->executable) {
+        // Trying to write to a non-ghost variable in a ghost context.
+        report_writing_nonghost_from_ghost_code(actual->location);
+        ++tc_context->num_errors;
+        return false;
+    } else if (!ghost && formal->ghost) {
+        // ref ghost arguments can only accept ghost lvalues
+        report_ref_ghost_requires_ghost_arg(actual->location);
+        ++tc_context->num_errors;
+        return false;
+    }
+
+    return true;
+}
+
 static void* nr_typecheck_call(struct TermTransform *tr, void *context,
                                struct Term *term, void *type_result)
 {
@@ -2221,50 +2303,58 @@ static void* nr_typecheck_call(struct TermTransform *tr, void *context,
         ok = false;
 
     } else {
-        // Check that the actual arguments match the function's formal parameter types
-        dummy_list = fun_type->function_data.args;
-        actual_list = term->call.args;
+        // Check that the actual arguments match the function's formal
+        // parameter types.
 
-        while (dummy_list && actual_list) {
-            if (!match_term_to_type(tc_context, dummy_list->type, &actual_list->rhs)) {
-                ok = false;
-            }
+        // This is done in two passes: first the non-ghost arguments
+        // (in the ambient mode), then the ghost arguments (in ghost
+        // mode). Because a univar can only be bound in the mode that
+        // created it, this means that in an executable call:
+        //  - The call's type arguments (univars created in executable
+        //    mode) can be determined only by the non-ghost arguments,
+        //    or by the surrounding statement. They are rigid while the
+        //    ghost arguments are matched.
+        //  - Each ghost argument is checked against the type arguments
+        //    (as determined so far) but cannot change them. Any univars
+        //    created by the ghost argument itself can be bound during
+        //    this matching (possibly to a type mentioning the call's
+        //    univars).
+        // The non-ghost arguments go first so that the type arguments
+        // have the best chance of being resolved before the ghost
+        // arguments are compared with them.
+        // In a ghost call (executable == false) both passes run in
+        // ghost mode and all univars are bindable, so ghost arguments
+        // can determine type arguments as usual.
+        for (int pass = 0; pass < 2; ++pass) {
+            bool ghost_pass = (pass == 1);
 
-            // For typechecking purposes, 'ref' arguments must be
-            // writable lvalues (and allow_side_effect must be true).
-            if (dummy_list->ref) {
+            dummy_list = fun_type->function_data.args;
+            actual_list = term->call.args;
 
-                bool ghost = false;
-                bool read_only = false;
-                bool lvalue = is_lvalue(tc_context, actual_list->rhs, &ghost, &read_only);
+            while (dummy_list && actual_list) {
+                if (dummy_list->ghost == ghost_pass) {
+                    bool old_exec = tc_context->executable;
+                    if (ghost_pass) {
+                        tc_context->executable = false;
+                    }
+                    if (!match_term_to_type(tc_context, dummy_list->type, &actual_list->rhs)) {
+                        ok = false;
+                    }
+                    tc_context->executable = old_exec;
 
-                if (!allow_side_effect) {
-                    report_ref_arg_not_allowed_in_subexpression(actual_list->rhs->location);
-                    ++tc_context->num_errors;
-                    ok = false;
-                } else if (!lvalue) {
-                    report_cannot_take_ref(actual_list->rhs->location);
-                    ++tc_context->num_errors;
-                    ok = false;
-                } else if (read_only) {
-                    report_cannot_take_ref_to_readonly(actual_list->rhs->location);
-                    ++tc_context->num_errors;
-                    ok = false;
-                } else if (!ghost && !tc_context->executable) {
-                    // Trying to write to a non-ghost variable in a ghost context.
-                    report_writing_nonghost_from_ghost_code(actual_list->rhs->location);
-                    ++tc_context->num_errors;
-                    ok = false;
-                } else if (!ghost && dummy_list->ghost) {
-                    // ref ghost arguments can only accept ghost lvalues
-                    report_ref_ghost_requires_ghost_arg(actual_list->rhs->location);
-                    ++tc_context->num_errors;
-                    ok = false;
+                    // For typechecking purposes, 'ref' arguments must be
+                    // writable lvalues (and allow_side_effect must be true).
+                    // (This check runs in the ambient mode.)
+                    if (dummy_list->ref) {
+                        if (!check_ref_arg(tc_context, dummy_list, actual_list->rhs, allow_side_effect)) {
+                            ok = false;
+                        }
+                    }
                 }
-            }
 
-            dummy_list = dummy_list->next;
-            actual_list = actual_list->next;
+                dummy_list = dummy_list->next;
+                actual_list = actual_list->next;
+            }
         }
 
         // Check whether we expect to have a return value or not.

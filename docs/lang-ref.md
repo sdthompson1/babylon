@@ -2396,9 +2396,10 @@ function add(x: i32, y: i32, ghost sum: int): i32
 Here `sum` is a "witness" argument, used only to state the
 specification; the compiled code for `add` takes just `x` and `y`.
 
-Finally, note that functions can be "generic". This is done by adding
-one or more type variable names, enclosed in `< >`, after the function
-name. For example:
+Finally, note that functions can be "generic". (This was already
+briefly mentioned above under "Function calls".) A function
+declaration can be made generic by adding one or more type variable
+names, enclosed in `< >`, after the function name. For example:
 
 ```
 function make_tuple<U, V>(x: U, y: V): {U, V}
@@ -2444,8 +2445,22 @@ unknown size is to declare the parameters as `T[]` rather than `T`,
 e.g. `function copy<T>(ref dest: T[], src: T[])`; then `copy(a, b)` is
 fine, with `T = i32`.
 
-The return type of an executable (non-ghost) function must be a
-complete type.
+Note that when type inference is being used (see also "Function calls"
+above), it is not allowed to infer types from a ghost argument; only
+non-ghost arguments participate in type inference. For example, given
+`function f<T>(ghost z: T)`, the call `f(42)` would fail -- the ghost
+argument `42` cannot be used to deduce that `T` is `i32`. Instead, one
+would have to write `f<i32>(42)` explicitly. (This restriction does
+not apply to ghost code; it applies only to calls to non-ghost
+functions made from executable code.) (The reason for the restriction
+is technical: it made certain parts of the formally verified Babylon
+compiler easier to write. It might be removed in a future version of
+the language, but since it applies only in a rare edge case, this has
+not been considered worth doing for now.)
+
+Finally, note that the return type of an executable (non-ghost)
+function must be a complete type.
+
 
 
 ### Extern functions

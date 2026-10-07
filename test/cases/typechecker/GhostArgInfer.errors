@@ -1,0 +1,12 @@
+src/GhostArgInfer.b:50:8: Type argument cannot be inferred from a ghost argument (write the type arguments explicitly)
+src/GhostArgInfer.b:51:8: Type argument cannot be inferred from a ghost argument (write the type arguments explicitly)
+src/GhostArgInfer.b:52:17: Type argument cannot be inferred from a ghost argument (write the type arguments explicitly)
+src/GhostArgInfer.b:53:13: Type argument cannot be inferred from a ghost argument (write the type arguments explicitly)
+src/GhostArgInfer.b:54:5: Unable to infer type
+src/GhostArgInfer.b:63:11: Type mismatch
+src/GhostArgInfer.b:65:11: 'ref ghost' argument requires a ghost lvalue
+src/GhostArgInfer.b:71:8: Type mismatch
+src/GhostArgInfer.b:78:29: Type argument cannot be inferred from a ghost argument (write the type arguments explicitly)
+src/GhostArgInfer.b:89:8: 'int' or 'real' types not allowed in executable code
+src/GhostArgInfer.b:95:8: Unable to infer type
+src/GhostArgInfer.b:96:13: Unable to infer type

@@ -557,6 +557,12 @@ void report_cannot_infer_type(struct Location loc)
     print_error("Unable to infer type\n");
 }
 
+void report_cannot_infer_type_arg_from_ghost_arg(struct Location loc)
+{
+    print_location(loc);
+    print_error("Type argument cannot be inferred from a ghost argument (write the type arguments explicitly)\n");
+}
+
 void report_unexpected_return_value(struct Term *term)
 {
     print_location(term->location);

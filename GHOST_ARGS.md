@@ -1,9 +1,11 @@
 # Plan: type inference for ghost arguments
 
-Status: the Isabelle part (section 3) is done and committed (commit
-`21c05ee`, 6-Oct-2026, as commit 4 of HYBRID.md). The C part (section 4),
-the C error message (section 5) and the tests and documentation
-(section 6) are still to do.
+Status: done. The Isabelle part (section 3) was committed as `21c05ee`
+(6-Oct-2026, commit 4 of HYBRID.md). The C part (sections 4-6) was done
+on 7-Oct-2026 in a single commit; step 0's measurement found nothing in
+`packages/` or `test/cases/` that depended on inferring from ghost
+actuals, apart from `UnivarFlags.b`, which became
+`test/cases/typechecker/GhostArgInfer.b`.
 
 This plan changes how type arguments are inferred at a call that has `ghost`
 parameters. It covers the C compiler (`src/`), which already has ghost

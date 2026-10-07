@@ -61,7 +61,7 @@ struct NameTypeList {
 struct UnivarNode {
     struct Type *type;
     uint32_t ref_count;
-    bool must_be_executable;  // Type must be valid in executable code (e.g. not 'int' or 'real')
+    bool executable;  // Mode in which the univar was created. It can only be bound in the same mode.
     struct Location location;  // Where the univar originated (for "Unable to infer type" errors)
 };
 
