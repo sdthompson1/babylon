@@ -103,7 +103,8 @@ definition heap_erased ::
     "CoreTyEnv \<Rightarrow> nat list \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> bool" where
   "heap_erased env emb full erased \<equiv>
     IS_Globals erased = IS_Globals full \<and>
-    IS_DefaultCtors erased = IS_DefaultCtors full \<and>
+    IS_DataCtorsByType erased = IS_DataCtorsByType full \<and>
+    IS_DataCtors erased = IS_DataCtors full \<and>
     IS_World erased = IS_World full \<and>
     funs_erased env full erased \<and>
     store_erased emb full erased"

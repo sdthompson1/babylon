@@ -14,8 +14,8 @@ begin
    The construction:
     1. Normalizes the module (grounding all types; the substitution becomes
        empty).
-    2. Populates IS_DefaultCtors, IS_Datatypes and IS_DataCtors from the type
-       environment's datatype tables.
+    2. Copies the type environment's datatype tables into IS_Datatypes,
+       IS_DataCtors and IS_DataCtorsByType.
     3. Populates IS_Functions from the CM_Functions entries, pairing each
        extern function with its supplied ExternFunc.
     4. Populates IS_Globals directly from CM_GlobalVars: the elaborator has
@@ -34,34 +34,6 @@ datatype InterpStateError =
 
 
 (* ========================================================================== *)
-(* Default constructors                                                       *)
-(* ========================================================================== *)
-
-(* The IS_DefaultCtors entry for one datatype: the first data constructor in
-   the datatype's TE_DataCtorsByType list, with its type variables and payload
-   type from TE_DataCtors. None if the tables have no entry (impossible for
-   the datatypes of a well-formed env). *)
-definition default_ctor_for ::
-  "CoreTyEnv \<Rightarrow> string \<Rightarrow> (string \<times> string list \<times> CoreType) option" where
-  "default_ctor_for env dtName =
-    (case fmlookup (TE_DataCtorsByType env) dtName of
-       Some (ctorName # _) \<Rightarrow>
-         (case fmlookup (TE_DataCtors env) ctorName of
-            Some (_, tyVars, payloadTy) \<Rightarrow> Some (ctorName, tyVars, payloadTy)
-          | None \<Rightarrow> None)
-     | _ \<Rightarrow> None)"
-
-(* IS_DefaultCtors: one entry per datatype for which default_ctor_for
-   succeeds. *)
-definition default_ctors_map ::
-  "CoreTyEnv \<Rightarrow> (string, string \<times> string list \<times> CoreType) fmap" where
-  "default_ctors_map env =
-     fmmap_keys (\<lambda>dtName _. the (default_ctor_for env dtName))
-       (fmfilter (\<lambda>dtName. default_ctor_for env dtName \<noteq> None)
-          (TE_DataCtorsByType env))"
-
-
-(* ========================================================================== *)
 (* Base state                                                                 *)
 (* ========================================================================== *)
 
@@ -75,9 +47,9 @@ definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w Int
        IS_Store = [],
        IS_ConstLocals = {||},
        IS_TyArgs = fmempty,
-       IS_DefaultCtors = default_ctors_map env,
        IS_Datatypes = TE_Datatypes env,
        IS_DataCtors = TE_DataCtors env,
+       IS_DataCtorsByType = TE_DataCtorsByType env,
        IS_Functions = fmempty,
        IS_World = world \<rparr>"
 

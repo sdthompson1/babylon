@@ -343,12 +343,6 @@ proof -
     unfolding ty_args_well_formed_def
     using dom_tgt range_ground_tgt range_wk_tgt by blast
 
-  have dc_tgt: "default_ctors_match ?clearedState ?pEnv"
-    using sme
-    unfolding state_matches_env_def default_ctors_match_def
-              partial_body_env_for_def body_env_for_def
-    by simp
-
   have tm_tgt: "tables_match ?clearedState ?pEnv"
     using sme
     unfolding state_matches_env_def tables_match_def
@@ -360,7 +354,7 @@ proof -
 
   show ?thesis
     unfolding state_matches_env_def
-    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt cn_tgt swt_tgt ta_tgt dc_tgt
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt cn_tgt swt_tgt ta_tgt
           tm_tgt abs_tgt
     by blast
 qed
@@ -1457,8 +1451,8 @@ qed
    - post_env_mid: the body's post-state matches env_mid under postStoreTyping
    - ext_post: postStoreTyping extends storeTyping (transitively, via
      bodyStoreTyping)
-   - globals_eq, functions_eq, default_ctors_eq: the globals, functions and
-     default constructors of postCallState equal those of state. Phrasing these
+   - globals_eq, functions_eq, ctors_by_type_eq: the globals, functions and
+     constructor lists of postCallState equal those of state. Phrasing these
      as hypotheses keeps the lemma usable in both the Babylon and extern cases.
    - dt_eq, ty_eq: env_mid's datatype fields agree with env (bodyEnv =
      body_env_for env funInfo, and env_mid agrees with bodyEnv on the pinned
@@ -1471,7 +1465,7 @@ lemma restore_scope_sound:
       and ext_post: "storeTyping_extends storeTyping postStoreTyping"
       and globals_eq: "IS_Globals postCallState = IS_Globals state"
       and functions_eq: "IS_Functions postCallState = IS_Functions state"
-      and default_ctors_eq: "IS_DefaultCtors postCallState = IS_DefaultCtors state"
+      and ctors_by_type_eq: "IS_DataCtorsByType postCallState = IS_DataCtorsByType state"
       and dt_eq: "TE_DataCtors env = TE_DataCtors env_mid"
       and ty_eq: "TE_Datatypes env = TE_Datatypes env_mid"
   shows "state_matches_env (restore_scope state postCallState) env storeTyping"
@@ -1617,22 +1611,18 @@ proof -
   have rs_ta: "ty_args_well_formed ?rs env"
     using ta_src rs_tyargs unfolding ty_args_well_formed_def by simp
 
-  have rs_dc: "default_ctors_match ?rs env"
-    using state_env default_ctors_eq
-    unfolding state_matches_env_def default_ctors_match_def
-    by simp
-
-  \<comment> \<open>The tables of the restored state are postCallState's, which are those of
-      env_mid, and env_mid has env's. \<close>
+  \<comment> \<open>The tables of the restored state are postCallState's. For the datatypes
+      and ctors these are env_mid's, and env_mid has env's; the ctor lists are
+      state's by ctors_by_type_eq, and state's are env's. \<close>
   have rs_tm: "tables_match ?rs env"
-    using post_env_mid dt_eq ty_eq
+    using post_env_mid state_env dt_eq ty_eq ctors_by_type_eq
     unfolding state_matches_env_def tables_match_def
     by simp
 
   have rs_abs: "TE_AbstractTypes env = {||}"
     using state_env unfolding state_matches_env_def by blast
 
-  from rs_lv rs_gv rs_no_lv rs_no_gv rs_fes rs_no_fun rs_cn rs_swt rs_ta rs_dc rs_tm rs_abs
+  from rs_lv rs_gv rs_no_lv rs_no_gv rs_fes rs_no_fun rs_cn rs_swt rs_ta rs_tm rs_abs
   show ?thesis
     unfolding state_matches_env_def by blast
 qed

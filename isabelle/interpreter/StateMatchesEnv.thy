@@ -305,22 +305,12 @@ definition ty_args_well_formed :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
      subst_range_tyvars (IS_TyArgs state) = {} \<and>
      (\<forall>ty \<in> fmran' (IS_TyArgs state). is_well_kinded env ty)"
 
-(* For each datatype, if env says defCtorName heads the ctor list and
-   TE_DataCtors records (dtName', tyvars, payload) for defCtorName, then
-   IS_DefaultCtors carries the matching triple at dtName. Used to evaluate
-   CoreTm_Default at a datatype type. *)
-definition default_ctors_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
-  "default_ctors_match state env \<equiv>
-     \<forall>dtName defCtorName otherCtors dtName' tyvars payload.
-       fmlookup (TE_DataCtorsByType env) dtName = Some (defCtorName # otherCtors) \<longrightarrow>
-       fmlookup (TE_DataCtors env) defCtorName = Some (dtName', tyvars, payload) \<longrightarrow>
-       fmlookup (IS_DefaultCtors state) dtName = Some (defCtorName, tyvars, payload)"
-
 (* The state's datatype tables are those of the env. *)
 definition tables_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "tables_match state env \<equiv>
      IS_Datatypes state = TE_Datatypes env \<and>
-     IS_DataCtors state = TE_DataCtors env"
+     IS_DataCtors state = TE_DataCtors env \<and>
+     IS_DataCtorsByType state = TE_DataCtorsByType env"
 
 (* Overall definition: state matches environment under a given store typing. *)
 (* The final conjunct (TE_AbstractTypes env = {||}) reflects that the interpreter can
@@ -336,7 +326,6 @@ definition state_matches_env :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righta
     const_locals_match state env \<and>
     store_well_typed state env storeTyping \<and>
     ty_args_well_formed state env \<and>
-    default_ctors_match state env \<and>
     tables_match state env \<and>
     TE_AbstractTypes env = {||}"
 
@@ -357,7 +346,7 @@ proof -
           funs_exist_in_state_def no_extra_funs_def
           const_locals_match_def
           store_well_typed_def ty_args_well_formed_def
-          default_ctors_match_def tables_match_def
+          tables_match_def
           local_var_in_state_with_type_def global_var_in_state_with_type_def
           rt_eq wk_eq
           split: option.splits)
@@ -379,7 +368,7 @@ proof -
           funs_exist_in_state_def no_extra_funs_def
           const_locals_match_def
           store_well_typed_def ty_args_well_formed_def
-          default_ctors_match_def tables_match_def
+          tables_match_def
           local_var_in_state_with_type_def global_var_in_state_with_type_def
           rt_eq wk_eq
           split: option.splits)
@@ -395,7 +384,7 @@ lemma state_matches_env_IS_World_irrelevant [simp]:
         funs_exist_in_state_def no_extra_funs_def
         const_locals_match_def
         store_well_typed_def ty_args_well_formed_def
-        default_ctors_match_def tables_match_def
+        tables_match_def
         local_var_in_state_with_type_def global_var_in_state_with_type_def
         split: option.splits)
 

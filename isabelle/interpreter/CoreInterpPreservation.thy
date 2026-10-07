@@ -2,23 +2,24 @@ theory CoreInterpPreservation
   imports CoreInterp
 begin
 
-(* The interpreter never changes IS_Globals, IS_Functions or IS_DefaultCtors,
-   and a statement or a function call hands back the IS_TyArgs it was started
-   with. *)
+(* The interpreter never changes IS_Globals, IS_Functions or the datatype
+   tables (IS_DataCtors, IS_DataCtorsByType), and a statement or a function
+   call hands back the IS_TyArgs it was started with. *)
 
 
 (* ========================================================================== *)
 (* The helper functions *)
 (* ========================================================================== *)
 
-(* IS_Globals / IS_Functions / IS_TyArgs / IS_DefaultCtors preservation for the
+(* IS_Globals / IS_Functions / IS_TyArgs / datatype-table preservation for the
    leaf state transformers used inside the interpreter. *)
 
 lemma alloc_store_preserves_globals_funs:
   "IS_Globals (fst (alloc_store state v)) = IS_Globals state"
   "IS_Functions (fst (alloc_store state v)) = IS_Functions state"
   "IS_TyArgs (fst (alloc_store state v)) = IS_TyArgs state"
-  "IS_DefaultCtors (fst (alloc_store state v)) = IS_DefaultCtors state"
+  "IS_DataCtorsByType (fst (alloc_store state v)) = IS_DataCtorsByType state"
+  "IS_DataCtors (fst (alloc_store state v)) = IS_DataCtors state"
   by (simp_all add: Let_def)
 
 lemma process_one_arg_preserves_globals_funs:
@@ -26,7 +27,8 @@ lemma process_one_arg_preserves_globals_funs:
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
-         IS_DefaultCtors state' = IS_DefaultCtors state"
+         IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
+         IS_DataCtors state' = IS_DataCtors state"
 proof -
   obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
     by (cases arg) auto
@@ -48,7 +50,8 @@ proof -
         by (simp add: case_prod_beta)
       have "IS_Globals (fst ?alloc) = IS_Globals state"
            "IS_Functions (fst ?alloc) = IS_Functions state"
-           "IS_DefaultCtors (fst ?alloc) = IS_DefaultCtors state"
+           "IS_DataCtorsByType (fst ?alloc) = IS_DataCtorsByType state"
+           "IS_DataCtors (fst ?alloc) = IS_DataCtors state"
         by (simp_all add: alloc_store_preserves_globals_funs)
       with state'_eq show ?thesis by simp
     qed
@@ -83,7 +86,8 @@ lemma fold_process_one_arg_preserves_globals_funs:
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
-         IS_DefaultCtors state' = IS_DefaultCtors state"
+         IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
+         IS_DataCtors state' = IS_DataCtors state"
   using assms
 proof (induction args arbitrary: state)
   case Nil
@@ -102,7 +106,8 @@ next
     have step: "IS_Globals state1 = IS_Globals state \<and>
                 IS_Functions state1 = IS_Functions state \<and>
                 IS_TyArgs state1 = IS_TyArgs state \<and>
-                IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+                IS_DataCtorsByType state1 = IS_DataCtorsByType state \<and>
+                IS_DataCtors state1 = IS_DataCtors state" by simp
     from Inr Cons.prems have "fold process_one_arg args (Inr state1) = Inr state'"
       by simp
     from Cons.IH[OF this] step show ?thesis by simp
@@ -114,7 +119,8 @@ lemma apply_ref_updates_preserves_globals_funs:
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
-         IS_DefaultCtors state' = IS_DefaultCtors state"
+         IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
+         IS_DataCtors state' = IS_DataCtors state"
   using assms
 proof (induction state lvs vs arbitrary: state' rule: apply_ref_updates.induct)
   case (1 state)
@@ -139,7 +145,8 @@ lemma perform_swap_preserves_globals_funs:
   shows "IS_Globals state' = IS_Globals state \<and>
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
-         IS_DefaultCtors state' = IS_DefaultCtors state"
+         IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
+         IS_DataCtors state' = IS_DataCtors state"
 proof -
   obtain addr1 path1 where lv1_eq: "lv1 = (addr1, path1)" by (cases lv1)
   obtain addr2 path2 where lv2_eq: "lv2 = (addr2, path2)" by (cases lv2)
@@ -159,21 +166,23 @@ lemma restore_scope_preserves_globals_funs:
 (* The relation between two states *)
 (* ========================================================================== *)
 
-(* state' has the same globals, functions, type arguments and default
-   constructors as state. *)
+(* state' has the same globals, functions, type arguments and datatype
+   tables as state. *)
 definition static_parts_eq :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> bool" where
   "static_parts_eq state state' \<equiv>
     IS_Globals state' = IS_Globals state \<and>
     IS_Functions state' = IS_Functions state \<and>
     IS_TyArgs state' = IS_TyArgs state \<and>
-    IS_DefaultCtors state' = IS_DefaultCtors state"
+    IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
+    IS_DataCtors state' = IS_DataCtors state"
 
 lemma static_parts_eqD:
   assumes "static_parts_eq state state'"
   shows "IS_Globals state' = IS_Globals state"
     and "IS_Functions state' = IS_Functions state"
     and "IS_TyArgs state' = IS_TyArgs state"
-    and "IS_DefaultCtors state' = IS_DefaultCtors state"
+    and "IS_DataCtorsByType state' = IS_DataCtorsByType state"
+    and "IS_DataCtors state' = IS_DataCtors state"
   using assms by (simp_all add: static_parts_eq_def)
 
 lemma static_parts_eq_refl:
@@ -579,7 +588,8 @@ next
       from fold_process_one_arg_preserves_globals_funs[OF fold_eq]
       have pre_gf: "IS_Globals preCallState = IS_Globals state \<and>
                     IS_Functions preCallState = IS_Functions state \<and>
-                    IS_DefaultCtors preCallState = IS_DefaultCtors state"
+                    IS_DataCtorsByType preCallState = IS_DataCtorsByType state \<and>
+                    IS_DataCtors preCallState = IS_DataCtors state"
         by simp
 
       show "static_parts_eq state state'"

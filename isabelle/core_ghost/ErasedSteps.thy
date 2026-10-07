@@ -22,26 +22,28 @@ begin
 
 lemma state_erasedI:
   assumes "IS_Globals erased = IS_Globals full"
-    and "IS_DefaultCtors erased = IS_DefaultCtors full"
+    and "IS_DataCtorsByType erased = IS_DataCtorsByType full"
     and "IS_World erased = IS_World full"
     and "funs_erased env full erased"
     and "store_erased emb full erased"
     and "IS_TyArgs erased = IS_TyArgs full"
     and "locals_erased env emb full erased"
     and "ghost_locals_separate env emb full"
+    and "IS_DataCtors erased = IS_DataCtors full"
   shows "state_erased env emb full erased"
   unfolding state_erased_def heap_erased_def by (intro conjI assms)
 
 lemma state_erasedD:
   assumes "state_erased env emb full erased"
   shows "IS_Globals erased = IS_Globals full"
-    and "IS_DefaultCtors erased = IS_DefaultCtors full"
+    and "IS_DataCtorsByType erased = IS_DataCtorsByType full"
     and "IS_World erased = IS_World full"
     and "funs_erased env full erased"
     and "store_erased emb full erased"
     and "IS_TyArgs erased = IS_TyArgs full"
     and "locals_erased env emb full erased"
     and "ghost_locals_separate env emb full"
+    and "IS_DataCtors erased = IS_DataCtors full"
   using assms unfolding state_erased_def heap_erased_def by blast+
 
 lemma state_erased_heap:
@@ -397,7 +399,8 @@ proof -
   qed
 
   have g': "IS_Globals erased' = IS_Globals full'" using D(1) stF(1) stE(1) by simp
-  have c': "IS_DefaultCtors erased' = IS_DefaultCtors full'" using D(2) stF(4) stE(4) by simp
+  have c': "IS_DataCtorsByType erased' = IS_DataCtorsByType full'" using D(2) stF(4) stE(4) by simp
+  have dc': "IS_DataCtors erased' = IS_DataCtors full'" using D(9) stF(5) stE(5) by simp
   have w': "IS_World erased' = IS_World full'" using D(3) F(2) E(2) by simp
   have f': "funs_erased env' full' erased'"
   proof -
@@ -471,7 +474,7 @@ proof -
     show "a < length (IS_Store full') \<and> a \<notin> set ?emb'" by (auto simp: F(3))
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
 qed
 
 (* Both states bind varName as a ref, to corresponding addresses with the same
@@ -503,7 +506,8 @@ proof -
   qed
 
   have g': "IS_Globals erased' = IS_Globals full'" using D(1) stF(1) stE(1) by simp
-  have c': "IS_DefaultCtors erased' = IS_DefaultCtors full'" using D(2) stF(4) stE(4) by simp
+  have c': "IS_DataCtorsByType erased' = IS_DataCtorsByType full'" using D(2) stF(4) stE(4) by simp
+  have dc': "IS_DataCtors erased' = IS_DataCtors full'" using D(9) stF(5) stE(5) by simp
   have w': "IS_World erased' = IS_World full'" using D(3) F(2) E(2) by simp
   have f': "funs_erased env' full' erased'"
   proof -
@@ -574,7 +578,7 @@ proof -
     show "a < length (IS_Store full') \<and> a \<notin> set emb" by (simp add: F(3))
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
 qed
 
 (* Both states write the same value to corresponding cells. *)
@@ -625,7 +629,8 @@ proof -
   qed
 
   have g': "IS_Globals erased' = IS_Globals full'" using D(1) stF(1) stE(1) by simp
-  have c': "IS_DefaultCtors erased' = IS_DefaultCtors full'" using D(2) stF(4) stE(4) by simp
+  have c': "IS_DataCtorsByType erased' = IS_DataCtorsByType full'" using D(2) stF(4) stE(4) by simp
+  have dc': "IS_DataCtors erased' = IS_DataCtors full'" using D(9) stF(5) stE(5) by simp
   have w': "IS_World erased' = IS_World full'" using D(3) F(2) E(2) by simp
   have f': "funs_erased env full' erased'"
   proof -
@@ -648,7 +653,7 @@ proof -
     then show ?thesis using D(8) by (rule iffD2)
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
 qed
 
 (* Both states get the same new world. *)
@@ -663,7 +668,8 @@ proof -
   show ?thesis
   proof (rule state_erasedI)
     show "IS_Globals ?e = IS_Globals ?f" using D(1) by simp
-    show "IS_DefaultCtors ?e = IS_DefaultCtors ?f" using D(2) by simp
+    show "IS_DataCtorsByType ?e = IS_DataCtorsByType ?f" using D(2) by simp
+    show "IS_DataCtors ?e = IS_DataCtors ?f" using D(9) by simp
     show "IS_World ?e = IS_World ?f" by simp
     show "funs_erased env ?f ?e"
     proof -
@@ -714,7 +720,8 @@ proof -
   let ?rsE = "restore_scope erased erased1"
   note D = state_erasedD[OF rel]
   from inner have g1: "IS_Globals erased1 = IS_Globals full1"
-    and c1: "IS_DefaultCtors erased1 = IS_DefaultCtors full1"
+    and c1: "IS_DataCtorsByType erased1 = IS_DataCtorsByType full1"
+    and dc1: "IS_DataCtors erased1 = IS_DataCtors full1"
     and w1: "IS_World erased1 = IS_World full1"
     and f1: "funs_erased env1 full1 erased1"
     and se1: "store_erased (emb @ extra) full1 erased1"
@@ -751,7 +758,8 @@ proof -
   show ?thesis
   proof (rule state_erasedI)
     show "IS_Globals ?rsE = IS_Globals ?rsF" using g1 by simp
-    show "IS_DefaultCtors ?rsE = IS_DefaultCtors ?rsF" using c1 by simp
+    show "IS_DataCtorsByType ?rsE = IS_DataCtorsByType ?rsF" using c1 by simp
+    show "IS_DataCtors ?rsE = IS_DataCtors ?rsF" using dc1 by simp
     show "IS_World ?rsE = IS_World ?rsF" using w1 by simp
     show "funs_erased env ?rsF ?rsE"
     proof -
@@ -1176,7 +1184,8 @@ proof -
   show ?thesis
   proof (rule state_erasedI)
     show "IS_Globals ?e = IS_Globals ?f" using D(1) by simp
-    show "IS_DefaultCtors ?e = IS_DefaultCtors ?f" using D(2) by simp
+    show "IS_DataCtorsByType ?e = IS_DataCtorsByType ?f" using D(2) by simp
+    show "IS_DataCtors ?e = IS_DataCtors ?f" using D(9) by simp
     show "IS_World ?e = IS_World ?f" using D(3) by simp
     show "funs_erased envB ?f ?e"
     proof -
@@ -1677,10 +1686,12 @@ lemma find_matching_arm_map:
   using assms
   by (induction v arms rule: find_matching_arm.induct) (auto split: if_splits)
 
-(* default_value looks at the state only through IS_DefaultCtors. *)
+(* default_value looks at the state only through IS_DataCtorsByType and
+   IS_DataCtors. *)
 lemma default_value_cong_state:
   fixes s1 s2 :: "'w InterpState"
-  assumes eq: "IS_DefaultCtors s2 = IS_DefaultCtors s1"
+  assumes eq: "IS_DataCtorsByType s2 = IS_DataCtorsByType s1"
+    and eq2: "IS_DataCtors s2 = IS_DataCtors s1"
   shows "\<forall>ty. default_value fuel s2 ty = default_value fuel s1 ty"
     and "\<forall>tys. default_value_list fuel s2 tys = default_value_list fuel s1 tys"
 proof (induction fuel rule: nat.induct)
@@ -1700,7 +1711,8 @@ next
       fix ty
       show "default_value (Suc fuel) s2 ty = default_value (Suc fuel) s1 ty"
         by (cases ty)
-           (auto simp: IH1 IH2 eq Let_def split: option.splits prod.splits sum.splits)
+           (auto simp: IH1 IH2 eq eq2 Let_def
+                 split: option.splits list.splits prod.splits sum.splits)
     qed
   next
     case 2 show ?case

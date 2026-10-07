@@ -450,30 +450,46 @@ next
                      \<noteq> Inl InsufficientFuel"
     show "default_value f' state (CoreTy_Datatype dtName tyArgs)
             = default_value (Suc fuel) state (CoreTy_Datatype dtName tyArgs)"
-    proof (cases "fmlookup (IS_DefaultCtors state) dtName")
+    proof (cases "fmlookup (IS_DataCtorsByType state) dtName")
       case None
       thus ?thesis using f'_eq by simp
     next
-      case (Some triple)
-      obtain ctorName rest where pair1: "(ctorName, rest) = triple" by (cases triple) auto
-      obtain tyvars payloadTy where pair2: "(tyvars, payloadTy) = rest" by (cases rest) auto
-      from pair1 pair2 have triple_eq: "triple = (ctorName, tyvars, payloadTy)" by simp
+      case (Some ctors)
+      note SomeL = Some
       show ?thesis
-      proof (cases "length tyvars = length tyArgs")
-        case False
-        thus ?thesis using Some triple_eq f'_eq by simp
+      proof (cases ctors)
+        case Nil
+        thus ?thesis using SomeL f'_eq by simp
       next
-        case True
-        let ?subst = "fmap_of_list (zip tyvars tyArgs)"
-        let ?substTy = "apply_subst ?subst payloadTy"
-        from noFuel Some triple_eq True
-        have sub_noFuel: "default_value fuel state ?substTy \<noteq> Inl InsufficientFuel"
-          by (auto simp: Let_def split: sum.splits)
-        from "5.IH"[OF Some pair1 pair2 True refl refl sub_noFuel]
-        have IH: "\<forall>f'\<ge>fuel. default_value f' state ?substTy = default_value fuel state ?substTy" .
-        from IH f''_ge have
-          "default_value f'' state ?substTy = default_value fuel state ?substTy" by blast
-        with f'_eq Some triple_eq True show ?thesis by (simp add: Let_def)
+        case (Cons ctorName otherCtors)
+        show ?thesis
+        proof (cases "fmlookup (IS_DataCtors state) ctorName")
+          case None
+          thus ?thesis using SomeL Cons f'_eq by simp
+        next
+          case (Some triple)
+          note SomeC = Some
+          obtain dtName' rest where pair1: "(dtName', rest) = triple" by (cases triple) auto
+          obtain tyvars payloadTy where pair2: "(tyvars, payloadTy) = rest" by (cases rest) auto
+          from pair1 pair2 have triple_eq: "triple = (dtName', tyvars, payloadTy)" by simp
+          show ?thesis
+          proof (cases "length tyvars = length tyArgs")
+            case False
+            thus ?thesis using SomeL Cons SomeC triple_eq f'_eq by simp
+          next
+            case True
+            let ?subst = "fmap_of_list (zip tyvars tyArgs)"
+            let ?substTy = "apply_subst ?subst payloadTy"
+            from noFuel SomeL Cons SomeC triple_eq True
+            have sub_noFuel: "default_value fuel state ?substTy \<noteq> Inl InsufficientFuel"
+              by (auto simp: Let_def split: sum.splits)
+            from "5.IH"[OF SomeL Cons SomeC pair1 pair2 True refl refl sub_noFuel]
+            have IH: "\<forall>f'\<ge>fuel. default_value f' state ?substTy = default_value fuel state ?substTy" .
+            from IH f''_ge have
+              "default_value f'' state ?substTy = default_value fuel state ?substTy" by blast
+            with f'_eq SomeL Cons SomeC triple_eq True show ?thesis by (simp add: Let_def)
+          qed
+        qed
       qed
     qed
   qed

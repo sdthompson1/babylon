@@ -440,7 +440,7 @@ proof -
               no_extra_local_vars_def no_extra_global_vars_def
               funs_exist_in_state_def no_extra_funs_def
               const_locals_match_def store_well_typed_def ty_args_well_formed_def
-              default_ctors_match_def tables_match_def
+              tables_match_def
               local_var_in_state_with_type_def global_var_in_state_with_type_def
               lv gv cl tv abs fn dt dc dcbt wk_eq vht_eq tap_eq fi_eq
     by simp
@@ -721,9 +721,6 @@ proof -
       using state_env tyargs''_eq env'_eq wk_eq
       unfolding state_matches_env_def ty_args_well_formed_def by simp
   qed
-  moreover have "default_ctors_match state'' env'"
-    using state_env state''_eq state'_eq env'_eq
-    unfolding state_matches_env_def default_ctors_match_def by simp
   moreover have "tables_match state'' env'"
     using state_env state''_eq state'_eq env'_eq
     unfolding state_matches_env_def tables_match_def by simp
@@ -922,10 +919,6 @@ proof -
       unfolding state_matches_env_def ty_args_well_formed_def by simp
   qed
 
-  have dc_tgt: "default_ctors_match state' env'"
-    using state_env state'_eq env'_eq
-    unfolding state_matches_env_def default_ctors_match_def by simp
-
   have tm_tgt: "tables_match state' env'"
     using state_env state'_eq env'_eq
     unfolding state_matches_env_def tables_match_def by simp
@@ -935,7 +928,7 @@ proof -
 
   show ?thesis
     unfolding state_matches_env_def
-    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt cn_tgt swt_tgt ta_tgt dc_tgt
+    using lv_tgt gv_tgt no_lv_tgt no_gv_tgt fes_tgt no_fun_tgt cn_tgt swt_tgt ta_tgt
           tm_tgt abs_tgt
     by blast
 qed
@@ -2003,10 +1996,6 @@ proof -
   moreover have "ty_args_well_formed state' env"
     using state_env
     unfolding state_matches_env_def ty_args_well_formed_def by simp
-
-  moreover have "default_ctors_match state' env"
-    using state_env state'_eq
-    unfolding state_matches_env_def default_ctors_match_def by simp
 
   moreover have "tables_match state' env"
     using state_env state'_eq

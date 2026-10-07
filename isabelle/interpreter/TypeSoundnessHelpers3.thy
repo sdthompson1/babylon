@@ -2033,7 +2033,7 @@ proof -
           from fold_process_one_arg_preserves_globals_funs[OF fold_eq]
           have pre_globals: "IS_Globals preCallState = IS_Globals state"
             and pre_functions: "IS_Functions preCallState = IS_Functions state"
-            and pre_default_ctors: "IS_DefaultCtors preCallState = IS_DefaultCtors state"
+            and pre_ctors_by_type: "IS_DataCtorsByType preCallState = IS_DataCtorsByType state"
             by auto
 
           \<comment> \<open>postCallState inherits IS_Globals / IS_Functions from preCallState
@@ -2050,8 +2050,8 @@ proof -
           have post_functions: "IS_Functions postCallState = IS_Functions state"
             using static_parts_eqD(2)[OF static_post] pre_functions
             by simp
-          have post_default_ctors: "IS_DefaultCtors postCallState = IS_DefaultCtors state"
-            using static_parts_eqD(4)[OF static_post] pre_default_ctors
+          have post_ctors_by_type: "IS_DataCtorsByType postCallState = IS_DataCtorsByType state"
+            using static_parts_eqD(4)[OF static_post] pre_ctors_by_type
             by simp
 
           \<comment> \<open>tyenv_fixed_eq carries the dt-relevant field equalities. We also
@@ -2079,7 +2079,7 @@ proof -
           \<comment> \<open>Apply restore_scope_sound to get state_matches for the restored state. \<close>
           have sme_rs: "state_matches_env (restore_scope state postCallState) env storeTyping"
             using restore_scope_sound[OF state_env sme_post ext_chain
-                                          post_globals post_functions post_default_ctors
+                                          post_globals post_functions post_ctors_by_type
                                           dt_eq(1) dt_eq(2)] .
 
           \<comment> \<open>storeTyping_extends storeTyping storeTyping: reflexive. \<close>
@@ -2992,7 +2992,8 @@ next
     with Inr show ?thesis by simp
   qed
 next
-  \<comment> \<open>Datatype: look up first ctor in IS_DefaultCtors, recurse on payload. \<close>
+  \<comment> \<open>Datatype: look up the first ctor in IS_DataCtorsByType and its payload in
+      IS_DataCtors, recurse on the payload. \<close>
   case (5 fuel state dtName tyArgs)
   from "5.prems"(3) obtain numTyArgs where
     dt_lookup: "fmlookup (TE_Datatypes env) dtName = Some numTyArgs" and
@@ -3013,16 +3014,17 @@ next
     ctor_lookup: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payload)"
     by blast
 
-  \<comment> \<open>default_ctors_match gives us the IS_DefaultCtors entry. \<close>
-  from "5.prems"(1) have dcm: "default_ctors_match state env"
+  \<comment> \<open>tables_match gives us the state's lookups. \<close>
+  from "5.prems"(1) have tm: "tables_match state env"
     unfolding state_matches_env_def by simp
   \<comment> \<open>The matched env has no unresolved abstract types, so the payload-well-kinded
       and payload-runtime env shapes collapse to the ctor's own tyvars. \<close>
   from "5.prems"(1) have abs_empty: "TE_AbstractTypes env = {||}"
     unfolding state_matches_env_def by blast
-  from dcm ctors_lookup ctor_lookup
-  have dc_lookup: "fmlookup (IS_DefaultCtors state) dtName = Some (ctorName, tyvars, payload)"
-    unfolding default_ctors_match_def by blast
+  have bt_lookup: "fmlookup (IS_DataCtorsByType state) dtName = Some (ctorName # otherCtors)"
+    using tm ctors_lookup unfolding tables_match_def by simp
+  have dc_lookup: "fmlookup (IS_DataCtors state) ctorName = Some (dtName, tyvars, payload)"
+    using tm ctor_lookup unfolding tables_match_def by simp
 
   \<comment> \<open>tyenv_ctors_consistent gives length tyvars = numTyArgs = length tyArgs. \<close>
   from wf have ctors_cons: "tyenv_ctors_consistent env"
@@ -3075,24 +3077,28 @@ next
     finally show ?thesis by simp
   qed
 
-  \<comment> \<open>Apply the IH to the substituted payload type. The IH requires the triple
-      to be presented as two nested pair-equations (one per pair destructuring). \<close>
-  obtain triple where triple_def: "triple = (ctorName, tyvars, payload)" by simp
+  \<comment> \<open>Apply the IH to the substituted payload type. The IH requires the ctor
+      list and the triple to be presented as nested equations, one per
+      case/pair destructuring in default_value. \<close>
+  obtain ctors where ctors_def: "ctors = ctorName # otherCtors" by simp
+  obtain triple where triple_def: "triple = (dtName, tyvars, payload)" by simp
   obtain rest where rest_def: "rest = (tyvars, payload)" by simp
-  have dc_lookup': "fmlookup (IS_DefaultCtors state) dtName = Some triple"
+  have bt_lookup': "fmlookup (IS_DataCtorsByType state) dtName = Some ctors"
+    using bt_lookup ctors_def by simp
+  have dc_lookup': "fmlookup (IS_DataCtors state) ctorName = Some triple"
     using dc_lookup triple_def by simp
-  have pair1: "(ctorName, rest) = triple" using triple_def rest_def by simp
+  have pair1: "(dtName, rest) = triple" using triple_def rest_def by simp
   have pair2: "(tyvars, payload) = rest" using rest_def by simp
   have IH_payload: "case default_value fuel state ?substPayload of
                       Inl err \<Rightarrow> sound_error_result err
                     | Inr v \<Rightarrow> value_has_type env v ?substPayload"
-    using "5.IH" "5.prems"(1) dc_lookup' len_tyvars local.wf pair1 rest_def substPayload_ground
-      substPayload_wk by auto
+    using "5.IH" "5.prems"(1) bt_lookup' ctors_def dc_lookup' len_tyvars local.wf pair1 rest_def
+      substPayload_ground substPayload_wk by auto
 
   show ?case
   proof (cases "default_value fuel state ?substPayload")
     case (Inl err)
-    with IH_payload dc_lookup len_tyvars show ?thesis by (simp add: Let_def)
+    with IH_payload bt_lookup dc_lookup len_tyvars show ?thesis by (simp add: Let_def)
   next
     case (Inr v)
     with IH_payload have v_typed: "value_has_type env v ?substPayload" by simp
@@ -3103,7 +3109,7 @@ next
       "value_has_type env (CV_Variant ctorName v) (CoreTy_Datatype dtName tyArgs)"
       using ctor_lookup len_tyvars args_wk ty_args_ground v_typed
       by (simp split: option.splits)
-    from dc_lookup len_tyvars Inr value_typed
+    from bt_lookup dc_lookup len_tyvars Inr value_typed
     show ?thesis by (simp add: Let_def)
   qed
 next

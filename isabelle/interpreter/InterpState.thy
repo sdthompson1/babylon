@@ -47,16 +47,15 @@ record 'world InterpState =
      Maps each type parameter (by name) to a ground CoreType. *)
   IS_TyArgs :: "(string, CoreType) fmap"
 
-  (* For each non-ghost datatype, a triple (firstCtorName, ctorTyvars, ctorPayloadType)
-     giving the first data constructor of the datatype, used to evaluate
-     CoreTm_Default at a datatype type. *)
-  IS_DefaultCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
-
-  (* The datatypes of the program (name to number of type parameters) and their
+  (* The datatypes of the program (name to number of type parameters), their
      data constructors (constructor name to datatype name, type parameters and
-     payload type). *)
+     payload type), and each datatype's constructors in declaration order.
+     These are copies of the type environment's TE_Datatypes, TE_DataCtors
+     and TE_DataCtorsByType tables. The first constructor in a datatype's
+     list is the one used to evaluate CoreTm_Default at that datatype. *)
   IS_Datatypes :: "(string, nat) fmap"
   IS_DataCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
+  IS_DataCtorsByType :: "(string, string list) fmap"
 
   (* Available functions (only includes non-ghost functions) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"

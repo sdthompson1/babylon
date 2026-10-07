@@ -1948,7 +1948,7 @@ next
                   from static_parts_eqD(2)[OF interp_statement_list_static[OF body_list_eq]]
                   have functions_eq: "IS_Functions state1 = IS_Functions state" by simp
                   from static_parts_eqD(4)[OF interp_statement_list_static[OF body_list_eq]]
-                  have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+                  have ctors_by_type_eq: "IS_DataCtorsByType state1 = IS_DataCtorsByType state" by simp
                   from fxeq_body have dt_eq:
                     "TE_DataCtors env = TE_DataCtors bodyEnv'"
                     "TE_Datatypes env = TE_Datatypes bodyEnv'"
@@ -1956,7 +1956,7 @@ next
                   have sme_rs: "state_matches_env (restore_scope state state1)
                                   env storeTyping"
                     using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
-                                                 globals_eq functions_eq default_ctors_eq
+                                                 globals_eq functions_eq ctors_by_type_eq
                                                  dt_eq(1) dt_eq(2)] .
                   \<comment> \<open>Recursive call: apply the fuel-level statement IH. \<close>
                   from IH_stmt[OF sme_rs "4.prems"(2) no_goal while_typed]
@@ -1997,7 +1997,7 @@ next
                   from static_parts_eqD(3)[OF interp_statement_list_static[OF body_list_eq]]
                   have tyargs_eq: "IS_TyArgs state1 = IS_TyArgs state" by simp
                   from static_parts_eqD(4)[OF interp_statement_list_static[OF body_list_eq]]
-                  have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+                  have ctors_by_type_eq: "IS_DataCtorsByType state1 = IS_DataCtorsByType state" by simp
                   from fxeq1 have dt_eq:
                     "TE_DataCtors env = TE_DataCtors env_mid"
                     "TE_Datatypes env = TE_Datatypes env_mid"
@@ -2005,7 +2005,7 @@ next
                   have sme_rs: "state_matches_env (restore_scope state state1)
                                   env storeTyping"
                     using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
-                                                 globals_eq functions_eq default_ctors_eq
+                                                 globals_eq functions_eq ctors_by_type_eq
                                                  dt_eq(1) dt_eq(2)] .
                   have interp_eq: "interp_statement d (Suc fuel) state
                       (CoreStmt_While whileGhost condTm invars decr bodyStmts)
@@ -2163,7 +2163,7 @@ next
                   from static_parts_eqD(2)[OF interp_statement_list_static[OF body_list_eq]]
                   have functions_eq: "IS_Functions state1 = IS_Functions state" by simp
                   from static_parts_eqD(4)[OF interp_statement_list_static[OF body_list_eq]]
-                  have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+                  have ctors_by_type_eq: "IS_DataCtorsByType state1 = IS_DataCtorsByType state" by simp
                   \<comment> \<open>Apply restore_scope_sound. \<close>
                   from fxeq_body have dt_eq:
                     "TE_DataCtors env = TE_DataCtors bodyEnv'"
@@ -2172,7 +2172,7 @@ next
                   have sme_rs: "state_matches_env (restore_scope state state1)
                                   env storeTyping"
                     using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
-                                                 globals_eq functions_eq default_ctors_eq
+                                                 globals_eq functions_eq ctors_by_type_eq
                                                  dt_eq(1) dt_eq(2)] .
                   have interp_eq: "interp_statement d (Suc fuel) state
                       (CoreStmt_Match matchGhost scrut arms)
@@ -2209,7 +2209,7 @@ next
                   from static_parts_eqD(3)[OF interp_statement_list_static[OF body_list_eq]]
                   have tyargs_eq: "IS_TyArgs state1 = IS_TyArgs state" by simp
                   from static_parts_eqD(4)[OF interp_statement_list_static[OF body_list_eq]]
-                  have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+                  have ctors_by_type_eq: "IS_DataCtorsByType state1 = IS_DataCtorsByType state" by simp
                   \<comment> \<open>Apply restore_scope_sound with env_mid. \<close>
                   from fxeq1 have dt_eq:
                     "TE_DataCtors env = TE_DataCtors env_mid"
@@ -2218,7 +2218,7 @@ next
                   have sme_rs: "state_matches_env (restore_scope state state1)
                                   env storeTyping"
                     using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
-                                                 globals_eq functions_eq default_ctors_eq
+                                                 globals_eq functions_eq ctors_by_type_eq
                                                  dt_eq(1) dt_eq(2)] .
                   have interp_eq: "interp_statement d (Suc fuel) state
                       (CoreStmt_Match matchGhost scrut arms)
@@ -2316,7 +2316,7 @@ next
             from static_parts_eqD(2)[OF interp_statement_list_static[OF body_list_eq]]
             have functions_eq: "IS_Functions state1 = IS_Functions state" by simp
             from static_parts_eqD(4)[OF interp_statement_list_static[OF body_list_eq]]
-            have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+            have ctors_by_type_eq: "IS_DataCtorsByType state1 = IS_DataCtorsByType state" by simp
             \<comment> \<open>Apply restore_scope_sound. \<close>
             from fxeq_body have dt_eq:
               "TE_DataCtors env = TE_DataCtors bodyEnv'"
@@ -2325,7 +2325,7 @@ next
             have sme_rs: "state_matches_env (restore_scope state state1)
                             env storeTyping"
               using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
-                                           globals_eq functions_eq default_ctors_eq
+                                           globals_eq functions_eq ctors_by_type_eq
                                            dt_eq(1) dt_eq(2)] .
             have interp_eq: "interp_statement d (Suc fuel) state
                 (CoreStmt_Block body)
@@ -2362,7 +2362,7 @@ next
             from static_parts_eqD(3)[OF interp_statement_list_static[OF body_list_eq]]
             have tyargs_eq: "IS_TyArgs state1 = IS_TyArgs state" by simp
             from static_parts_eqD(4)[OF interp_statement_list_static[OF body_list_eq]]
-            have default_ctors_eq: "IS_DefaultCtors state1 = IS_DefaultCtors state" by simp
+            have ctors_by_type_eq: "IS_DataCtorsByType state1 = IS_DataCtorsByType state" by simp
             \<comment> \<open>Apply restore_scope_sound with env_mid. \<close>
             from fxeq1 have dt_eq:
               "TE_DataCtors env = TE_DataCtors env_mid"
@@ -2371,7 +2371,7 @@ next
             have sme_rs: "state_matches_env (restore_scope state state1)
                             env storeTyping"
               using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
-                                           globals_eq functions_eq default_ctors_eq
+                                           globals_eq functions_eq ctors_by_type_eq
                                            dt_eq(1) dt_eq(2)] .
             have interp_eq: "interp_statement d (Suc fuel) state
                 (CoreStmt_Block body)

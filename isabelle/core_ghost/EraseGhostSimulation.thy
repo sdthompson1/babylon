@@ -512,7 +512,7 @@ next
         case (CoreTm_Default dty)
         have dv: "default_value fuel erased (apply_subst (IS_TyArgs full) dty)
                     = default_value fuel full (apply_subst (IS_TyArgs full) dty)"
-          by (rule default_value_cong_state(1)[OF D(2), rule_format])
+          by (rule default_value_cong_state(1)[OF D(2) D(9), rule_format])
         show ?thesis by (simp add: CoreTm_Default D(6) dv)
       qed
       show "interp_term d (Suc fuel) erased (?er tm) = Inr v" unfolding eq by (rule H)

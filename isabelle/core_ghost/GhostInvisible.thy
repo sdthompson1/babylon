@@ -288,8 +288,10 @@ proof -
   proof (intro conjI)
     show "IS_Globals erased = IS_Globals full'"
       using heap stD(1) by (simp add: heap_erased_def)
-    show "IS_DefaultCtors erased = IS_DefaultCtors full'"
+    show "IS_DataCtorsByType erased = IS_DataCtorsByType full'"
       using heap stD(4) by (simp add: heap_erased_def)
+    show "IS_DataCtors erased = IS_DataCtors full'"
+      using heap stD(5) by (simp add: heap_erased_def)
     show "IS_World erased = IS_World full'"
       using heap world by (simp add: heap_erased_def)
     show "funs_erased env' full' erased"
@@ -590,7 +592,9 @@ proof -
     unfolding heap_erased_def
   proof (intro conjI)
     show "IS_Globals erased = IS_Globals ?rs" using heap1 by (simp add: heap_erased_def)
-    show "IS_DefaultCtors erased = IS_DefaultCtors ?rs"
+    show "IS_DataCtorsByType erased = IS_DataCtorsByType ?rs"
+      using heap1 by (simp add: heap_erased_def)
+    show "IS_DataCtors erased = IS_DataCtors ?rs"
       using heap1 by (simp add: heap_erased_def)
     show "IS_World erased = IS_World ?rs" using heap1 by (simp add: heap_erased_def)
     show "funs_erased env ?rs erased"

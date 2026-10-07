@@ -24,44 +24,6 @@ begin
 
 
 (* ========================================================================== *)
-(* default_ctors_map                                                          *)
-(* ========================================================================== *)
-
-(* default_ctors_map answers exactly the lookups default_ctors_match asks
-   about. *)
-lemma default_ctors_map_lookup:
-  assumes byType: "fmlookup (TE_DataCtorsByType env) dtName
-                     = Some (defCtorName # otherCtors)"
-      and ctor: "fmlookup (TE_DataCtors env) defCtorName
-                     = Some (dtName', tyVars, payload)"
-  shows "fmlookup (default_ctors_map env) dtName = Some (defCtorName, tyVars, payload)"
-proof -
-  have dc: "default_ctor_for env dtName = Some (defCtorName, tyVars, payload)"
-    using byType ctor by (simp add: default_ctor_for_def)
-  show ?thesis
-    using byType dc by (simp add: default_ctors_map_def)
-qed
-
-(* Any state carrying default_ctors_map env satisfies default_ctors_match
-   against any environment with the same datatype tables as env. *)
-lemma default_ctors_map_match:
-  assumes dcs: "IS_DefaultCtors state = default_ctors_map env0"
-      and byType_eq: "TE_DataCtorsByType env = TE_DataCtorsByType env0"
-      and ctors_eq: "TE_DataCtors env = TE_DataCtors env0"
-  shows "default_ctors_match state env"
-  unfolding default_ctors_match_def
-proof (intro allI impI)
-  fix dtName defCtorName otherCtors dtName' tyvars payload
-  assume "fmlookup (TE_DataCtorsByType env) dtName = Some (defCtorName # otherCtors)"
-     and "fmlookup (TE_DataCtors env) defCtorName = Some (dtName', tyvars, payload)"
-  hence "fmlookup (default_ctors_map env0) dtName = Some (defCtorName, tyvars, payload)"
-    unfolding byType_eq ctors_eq by (rule default_ctors_map_lookup)
-  thus "fmlookup (IS_DefaultCtors state) dtName = Some (defCtorName, tyvars, payload)"
-    by (simp add: dcs)
-qed
-
-
-(* ========================================================================== *)
 (* build_interp_funs                                                          *)
 (* ========================================================================== *)
 
@@ -226,10 +188,10 @@ proof -
     "IS_Store ?st = []"
     "IS_ConstLocals ?st = {||}"
     "IS_TyArgs ?st = fmempty"
-    "IS_DefaultCtors ?st = default_ctors_map env"
     "IS_Functions ?st = funs"
     "IS_Datatypes ?st = TE_Datatypes env"
     "IS_DataCtors ?st = TE_DataCtors env"
+    "IS_DataCtorsByType ?st = TE_DataCtorsByType env"
     by (simp_all add: base_interp_state_def)
 
   \<comment> \<open>Conjunct: declared globals exist with their declared types.\<close>
@@ -422,13 +384,6 @@ proof -
     show "ty_args_well_formed ?st env"
       unfolding ty_args_well_formed_def
       by (simp add: st_sel tv ranEmpty srtEmpty)
-    show "default_ctors_match ?st env"
-    proof -
-      have "IS_DefaultCtors ?st = default_ctors_map env" by (rule st_sel(7))
-      moreover have "TE_DataCtorsByType env = TE_DataCtorsByType env" by (rule refl)
-      moreover have "TE_DataCtors env = TE_DataCtors env" by (rule refl)
-      ultimately show ?thesis by (rule default_ctors_map_match)
-    qed
     show "tables_match ?st env"
       unfolding tables_match_def by (simp add: st_sel)
     show "TE_AbstractTypes env = {||}" by (rule abs)

@@ -1195,9 +1195,9 @@ definition const_eval_state :: "(string, CoreValue) fmap \<Rightarrow> unit Inte
        IS_Store = [],
        IS_ConstLocals = {||},
        IS_TyArgs = fmempty,
-       IS_DefaultCtors = fmempty,
        IS_Datatypes = fmempty,
        IS_DataCtors = fmempty,
+       IS_DataCtorsByType = fmempty,
        IS_Functions = fmempty,
        IS_World = () \<rparr>"
 

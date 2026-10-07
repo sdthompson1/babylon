@@ -499,16 +499,19 @@ where
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (CV_Record (zip (map fst flds) vals)))"
 | "default_value (Suc fuel) state (CoreTy_Datatype dtName tyArgs) =
-    (case fmlookup (IS_DefaultCtors state) dtName of
-      None \<Rightarrow> Inl TypeError
-    | Some (ctorName, tyvars, payloadTy) \<Rightarrow>
-        if length tyvars = length tyArgs then
-          let subst = fmap_of_list (zip tyvars tyArgs);
-              substPayloadTy = apply_subst subst payloadTy in
-          (case default_value fuel state substPayloadTy of
-            Inl err \<Rightarrow> Inl err
-          | Inr v \<Rightarrow> Inr (CV_Variant ctorName v))
-        else Inl TypeError)"
+    (case fmlookup (IS_DataCtorsByType state) dtName of
+      Some (ctorName # _) \<Rightarrow>
+        (case fmlookup (IS_DataCtors state) ctorName of
+          None \<Rightarrow> Inl TypeError
+        | Some (_, tyvars, payloadTy) \<Rightarrow>
+            if length tyvars = length tyArgs then
+              let subst = fmap_of_list (zip tyvars tyArgs);
+                  substPayloadTy = apply_subst subst payloadTy in
+              (case default_value fuel state substPayloadTy of
+                Inl err \<Rightarrow> Inl err
+              | Inr v \<Rightarrow> Inr (CV_Variant ctorName v))
+            else Inl TypeError)
+    | _ \<Rightarrow> Inl TypeError)"
 | "default_value (Suc fuel) state (CoreTy_Array elemTy dims) =
     (if list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims then
        let sizes = fixed_dim_sizes dims in
