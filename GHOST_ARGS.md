@@ -1,8 +1,9 @@
 # Plan: type inference for ghost arguments
 
-Status: proposal (30-Sep-2026). Nothing described here is implemented.
-The Isabelle work is staged: the prerequisite in 3.1 (ghost parameters
-existing at all) comes first, then the inference rule in 3.2-3.3.
+Status: the Isabelle part (section 3) is done and committed (commit
+`21c05ee`, 6-Oct-2026, as commit 4 of HYBRID.md). The C part (section 4),
+the C error message (section 5) and the tests and documentation
+(section 6) are still to do.
 
 This plan changes how type arguments are inferred at a call that has `ghost`
 parameters. It covers the C compiler (`src/`), which already has ghost
@@ -552,13 +553,56 @@ declaration sites are unchanged.
 ## 5. Error messages
 
 A ghost actual that fails against a rigid `?T` (for example `f1(g)`) is a
-unification failure. In the Isabelle that is `TyErr_TypeMismatch`; in the
-C it reaches `report_type_mismatch` with an unresolved univar as the
-expected type. Neither tells the user what to do. Proposed: when the
-mismatch involves a rigid metavariable, report a dedicated error along the
-lines of "cannot infer type argument from a ghost argument", at the
-actual's location, in both implementations. To be decided when
-implementing (see 7).
+unification failure. Decided 7-Oct-2026: the two implementations handle
+it differently.
+
+**Isabelle: keep the plain mismatch.** The special-argument pass in
+`finish_call` and `unify_impure_call_args` reports `TyErr_TypeMismatch` at
+the actual's location, with the rigid metavariable visible in the expected
+type. For `f1(g)` the front end prints
+
+```
+type mismatch: expected '?7' but found 'i32'
+```
+
+(the number is the metavariable counter). This is kept as it is. The
+location is right, and a `?N` in the expected type is an adequate hint
+that a type argument was not fixed. A post-hoc rewrite of the error, in
+which a mismatch whose expected type mentions a rigid metavariable is
+reported as "cannot infer type argument", was considered and rejected: the
+error from `unify_type_lists` carries the whole expected and actual types
+of the argument, not the sub-position that failed, so the rewrite cannot
+tell a failure *at* `?T` from an unrelated failure elsewhere in the same
+type. With `f8<T>(ghost y: {a: Maybe<T>, b: bool}): Maybe<T>` and
+`var m: Maybe<i32> = f8({a = Nothing, b = int(2)})`, the failure is field
+`b`, and `?T` would have been fixed by the declared type; the rewrite
+would wrongly blame the type argument. Detecting the case inside the
+unifier would be precise but is not worth the change to
+`unify_upto_coercion` and its lemmas. The Isabelle prioritises simple
+definitions over the best possible message here.
+
+**C: dedicated message.** The C needs one, because `report_type_mismatch`
+(`src/error.c`) prints only "Type mismatch" and no types, so after
+section 4 the user would get nothing that hints at the cause. The C
+unifier reports at the point of failure, so the detection is precise and
+cheap. After step 2 of section 4, the only way a `TY_UNIVAR` reaches the
+"normal type-matching" code of `unify_types` (the tag comparison, or the
+`case TY_UNIVAR` arm) is that it is rigid: in ghost context every univar
+is bindable, and in executable context a ghost-created univar should be
+impossible (2.2). So in the `if (!ok)` block at the end of `unify_types`,
+if either side has tag `TY_UNIVAR`, call a new reporter, e.g.
+`report_cannot_infer_type_arg_from_ghost_arg(*loc)`, instead of
+`report_type_mismatch`. Because `unify_types` recurses into record
+fields, variant payloads and array element types with the same location,
+the check fires on the failing sub-comparison; in the `f8` example above
+field `b` gets the ordinary mismatch, as it should. Total change: the
+branch in `unify_types`, the new function in `src/error.c` and its
+prototype in `src/error.h`. Optionally the message can name the origin
+location stored in the univar node (the type argument that could not be
+inferred) and suggest writing it explicitly.
+
+The two implementations therefore reject the same programs at the same
+locations, with different wording.
 
 ## 6. Tests and documentation
 
@@ -578,7 +622,8 @@ implementing (see 7).
 
 ## 7. Open questions
 
-* The wording and form of the error in 5.
+* Resolved (7-Oct-2026): the error in 5. The Isabelle keeps the plain
+  mismatch; the C gets a dedicated message from `unify_types`.
 * Whether the Isabelle should express rigidity by interval (3.2) or by
   "not a type variable of the expected type". The interval form matches
   how the proof removes the block afterwards and is preferred unless it
