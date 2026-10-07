@@ -67,7 +67,6 @@ session Babylon = "HOL-Library" +
 
     (* core_ghost *)
     "core_ghost/EraseGhost"
-    "core_ghost/EraseGhostLemmas"
     "core_ghost/EraseGhostModuleTyping"
     "core_ghost/EraseGhostSimulation"
     "core_ghost/EraseGhostStmtTyping"

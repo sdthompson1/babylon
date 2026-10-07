@@ -9,8 +9,6 @@ begin
    EraseGhostStmtTyping.thy, EraseGhostModuleTyping.thy), and its semantics is related
    to the original code by a simulation theorem (EraseGhostSimulation.thy).
 
-   Some further properties are proved in EraseGhostLemmas.thy.
-
    Which arguments of a call are ghost is recorded only in the signature of
    the function that is called. So the functions below take a table of
    function signatures, "funs". For a module, it is the module's TE_Functions.
@@ -99,10 +97,6 @@ next
   obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
   show ?case using Cons.IH by (cases gh) (simp_all add: p)
 qed
-
-lemma erase_ghost_args_map:
-  "erase_ghost_args funs fnName (map f xs) = map f (erase_ghost_args funs fnName xs)"
-  by (simp add: erase_ghost_args_def drop_ghost_map split: option.splits)
 
 (* Dropping the ghost parameters from the parameter list itself is filtering
    it by the flag. *)
@@ -254,13 +248,6 @@ definition erase_ghost_funinfo :: "FunInfo \<Rightarrow> FunInfo" where
   "erase_ghost_funinfo info =
     info \<lparr> FI_TmArgs := filter (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info) \<rparr>"
 
-(* Ghost-erase all the statements in a function body. The parameter list is
-   not changed. *)
-definition erase_ghost_function_body ::
-    "(string, FunInfo) fmap \<Rightarrow> CoreFunction \<Rightarrow> CoreFunction" where
-  "erase_ghost_function_body funs f =
-    f \<lparr> CF_Body := map_option (erase_ghost_statement_list funs) (CF_Body f) \<rparr>"
-
 (* Ghost-erase the definition of the function `name`: remove the names of
    its ghost parameters, and ghost-erase its body. *)
 definition erase_ghost_function ::
@@ -268,15 +255,6 @@ definition erase_ghost_function ::
   "erase_ghost_function funs name f =
     f \<lparr> CF_Args := erase_ghost_args funs name (CF_Args f),
         CF_Body := map_option (erase_ghost_statement_list funs) (CF_Body f) \<rparr>"
-
-(* Ghost-erase all the statements in all function bodies of a module, with a
-   given table of function signatures.
-   Note this doesn't remove the ghost functions from the module, nor the ghost
-   parameters from the signatures and the parameter lists. *)
-definition erase_ghost_module_bodies ::
-    "(string, FunInfo) fmap \<Rightarrow> CoreModule \<Rightarrow> CoreModule" where
-  "erase_ghost_module_bodies funs m =
-    m \<lparr> CM_Functions := fmmap (erase_ghost_function_body funs) (CM_Functions m) \<rparr>"
 
 lemma erase_ghost_funinfo_simps [simp]:
   "FI_TyArgs (erase_ghost_funinfo info) = FI_TyArgs info"
@@ -291,25 +269,11 @@ lemma no_ghost_params_erase_ghost_funinfo [simp]:
   "no_ghost_params (erase_ghost_funinfo info)"
   by (auto simp: no_ghost_params_def list_all_iff)
 
-lemma erase_ghost_function_body_simps [simp]:
-  "CF_Args (erase_ghost_function_body funs f) = CF_Args f"
-  "CF_Body (erase_ghost_function_body funs f)
-     = map_option (erase_ghost_statement_list funs) (CF_Body f)"
-  by (simp_all add: erase_ghost_function_body_def)
-
 lemma erase_ghost_function_simps [simp]:
   "CF_Args (erase_ghost_function funs name f) = erase_ghost_args funs name (CF_Args f)"
   "CF_Body (erase_ghost_function funs name f)
      = map_option (erase_ghost_statement_list funs) (CF_Body f)"
   by (simp_all add: erase_ghost_function_def)
-
-lemma erase_ghost_module_bodies_simps [simp]:
-  "CM_TyEnv (erase_ghost_module_bodies funs m) = CM_TyEnv m"
-  "CM_TypeSubst (erase_ghost_module_bodies funs m) = CM_TypeSubst m"
-  "CM_GlobalVars (erase_ghost_module_bodies funs m) = CM_GlobalVars m"
-  "CM_Functions (erase_ghost_module_bodies funs m)
-     = fmmap (erase_ghost_function_body funs) (CM_Functions m)"
-  by (simp_all add: erase_ghost_module_bodies_def)
 
 
 (* ========================================================================== *)
