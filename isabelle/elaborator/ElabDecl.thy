@@ -616,11 +616,6 @@ definition elab_function_decl ::
            then Inl [TyErr_TypeVarCapture loc name]
            else if DF_Extern df \<and> DF_Body df \<noteq> None
            then Inl [TyErr_ExternFunctionWithBody loc name]
-           \<comment> \<open>An extern function is given its whole argument list, so it cannot
-              have a ghost parameter (ghost erasure could not drop the argument)\<close>
-           else if DF_Extern df
-                   \<and> \<not> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)
-           then Inl [TyErr_GhostParamOnExternFunction loc name]
            \<comment> \<open>A ghost extern function is never code-generated, so it cannot
               name an external symbol\<close>
            else if DF_Ghost df = Ghost \<and> DF_ExternName df \<noteq> None

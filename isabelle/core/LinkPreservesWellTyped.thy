@@ -3248,8 +3248,7 @@ lemma link_mid_functions_contribution:
                 core_statement_list_type
                   (module_body_env_for (CM_TyEnv (normalize_module m)) (CF_Args f0) info)
                   (FI_Ghost info)
-                  (apply_subst_to_statement_list (CM_TypeSubst m) body0) \<noteq> None) \<and>
-           (CF_Body f0 = None \<longrightarrow> no_ghost_params info)"
+                  (apply_subst_to_statement_list (CM_TypeSubst m) body0) \<noteq> None)"
 proof -
   let ?\<sigma>A = "CM_TypeSubst a"
   let ?\<sigma>M = "CM_TypeSubst m"
@@ -3304,8 +3303,7 @@ proof -
                  | Some body \<Rightarrow>
                      core_statement_list_type
                        (module_body_env_for ?envA (CF_Args ?fA) infoA)
-                       (FI_Ghost infoA) body \<noteq> None" and
-      externA: "CF_Body ?fA = None \<longrightarrow> no_ghost_params infoA"
+                       (FI_Ghost infoA) body \<noteq> None"
     using fwtA a_def' unfolding module_functions_well_typed_def by blast
 
   \<comment> \<open>Underneath: the raw whole-link declaration.\<close>
@@ -3419,10 +3417,6 @@ proof -
       using t4 unfolding Some ghostA by auto
   qed
 
-  \<comment> \<open>An extern function has no ghost parameter: substitution keeps the flags.\<close>
-  have extern: "CF_Body f0 = None \<longrightarrow> no_ghost_params ?infoM"
-    using externA infoA_eq by simp
-
   have "fmlookup (TE_Functions ?envM) name = Some ?infoM \<and>
         length (CF_Args f0) = length (FI_TmArgs ?infoM) \<and>
         distinct (CF_Args f0) \<and>
@@ -3432,9 +3426,8 @@ proof -
              core_statement_list_type
                (module_body_env_for ?envM (CF_Args f0) ?infoM)
                (FI_Ghost ?infoM)
-               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None) \<and>
-        (CF_Body f0 = None \<longrightarrow> no_ghost_params ?infoM)"
-    using m_decl len dist0 body_case extern by blast
+               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None)"
+    using m_decl len dist0 body_case by blast
   then show ?thesis by auto
 qed
 
@@ -3596,8 +3589,7 @@ proof -
              core_statement_list_type
                (module_body_env_for ?envM (CF_Args f0) info)
                (FI_Ghost info)
-               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None) \<and>
-        (CF_Body f0 = None \<longrightarrow> no_ghost_params info)"
+               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None)"
     proof (elim disjE)
       assume zA: "z \<in> set as"
       have adisj: "fmdisjoint_list (map CM_Functions as)"
@@ -3631,8 +3623,7 @@ proof -
                      core_statement_list_type
                        (module_body_env_for ?envM (CF_Args f0) info)
                        (FI_Ghost info)
-                       (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None" and
-        i_extern: "CF_Body f0 = None \<longrightarrow> no_ghost_params info"
+                       (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None"
       by auto
     show "\<exists>info.
         fmlookup (TE_Functions ?envM) name = Some info \<and>
@@ -3643,8 +3634,7 @@ proof -
          | Some body \<Rightarrow>
              core_statement_list_type
                (module_body_env_for ?envM (CF_Args f) info)
-               (FI_Ghost info) body \<noteq> None) \<and>
-        (CF_Body f = None \<longrightarrow> no_ghost_params info)"
+               (FI_Ghost info) body \<noteq> None)"
     proof (cases "CF_Body f0")
       case None
       then have fb: "CF_Body f = None"
@@ -3659,9 +3649,8 @@ proof -
              | Some body \<Rightarrow>
                  core_statement_list_type
                    (module_body_env_for ?envM (CF_Args f) info)
-                   (FI_Ghost info) body \<noteq> None) \<and>
-            (CF_Body f = None \<longrightarrow> no_ghost_params info)"
-        unfolding fa fb using i_decl i_len i_dist i_extern None by simp
+                   (FI_Ghost info) body \<noteq> None)"
+        unfolding fa fb using i_decl i_len i_dist None by simp
       then show ?thesis by auto
     next
       case (Some body0)
@@ -3682,8 +3671,7 @@ proof -
              | Some body \<Rightarrow>
                  core_statement_list_type
                    (module_body_env_for ?envM (CF_Args f) info)
-                   (FI_Ghost info) body \<noteq> None) \<and>
-            (CF_Body f = None \<longrightarrow> no_ghost_params info)"
+                   (FI_Ghost info) body \<noteq> None)"
         unfolding fa fb using i_decl i_len i_dist body' by simp
       then show ?thesis by auto
     qed

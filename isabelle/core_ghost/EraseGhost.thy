@@ -19,14 +19,6 @@ begin
 (* Ghost-erasing the arguments of a call *)
 (* ========================================================================== *)
 
-(* The ghost flags of a function's parameters, in order. *)
-definition param_ghost_flags :: "FunInfo \<Rightarrow> GhostOrNot list" where
-  "param_ghost_flags info = map (\<lambda>(_, _, gh). gh) (FI_TmArgs info)"
-
-(* Keep the elements of a list whose flag is NotGhost. *)
-definition drop_ghost :: "GhostOrNot list \<Rightarrow> 'a list \<Rightarrow> 'a list" where
-  "drop_ghost flags xs = map snd (filter (\<lambda>(gh, _). gh = NotGhost) (zip flags xs))"
-
 (* Remove, from a list with one element for each parameter of the function
    fnName, the elements that belong to ghost parameters. A function that is not
    in the table keeps the whole list. *)
@@ -35,82 +27,6 @@ definition erase_ghost_args :: "(string, FunInfo) fmap \<Rightarrow> string \<Ri
     (case fmlookup funs fnName of
        None \<Rightarrow> xs
      | Some info \<Rightarrow> drop_ghost (param_ghost_flags info) xs)"
-
-lemma drop_ghost_Nil [simp]:
-  "drop_ghost [] xs = []"
-  "drop_ghost flags [] = []"
-  by (simp_all add: drop_ghost_def)
-
-lemma drop_ghost_Cons [simp]:
-  "drop_ghost (NotGhost # flags) (x # xs) = x # drop_ghost flags xs"
-  "drop_ghost (Ghost # flags) (x # xs) = drop_ghost flags xs"
-  by (simp_all add: drop_ghost_def)
-
-lemma drop_ghost_map:
-  "drop_ghost flags (map f xs) = map f (drop_ghost flags xs)"
-proof (induction flags arbitrary: xs)
-  case Nil
-  show ?case by simp
-next
-  case (Cons gh flags)
-  show ?case by (cases xs; cases gh) (simp_all add: Cons.IH)
-qed
-
-lemma set_drop_ghost_subset:
-  "set (drop_ghost flags xs) \<subseteq> set xs"
-  unfolding drop_ghost_def by (auto dest: set_zip_rightD)
-
-lemma distinct_drop_ghost:
-  "distinct xs \<Longrightarrow> distinct (drop_ghost flags xs)"
-proof (induction flags arbitrary: xs)
-  case Nil
-  show ?case by simp
-next
-  case (Cons gh flags)
-  note IH = Cons.IH and dist = Cons.prems
-  show ?case
-  proof (cases xs)
-    case Nil
-    then show ?thesis by simp
-  next
-    case (Cons x xs')
-    have d: "distinct xs'" and nin: "x \<notin> set xs'"
-      using dist Cons by simp_all
-    have tl: "distinct (drop_ghost flags xs')" by (rule IH[OF d])
-    have "x \<notin> set (drop_ghost flags xs')"
-      using nin set_drop_ghost_subset[of flags xs'] by blast
-    with tl show ?thesis by (cases gh) (simp_all add: Cons)
-  qed
-qed
-
-(* The number of elements kept is the number of NotGhost parameters. *)
-lemma length_drop_ghost_params:
-  assumes "length xs = length params"
-  shows "length (drop_ghost (map (\<lambda>(_, _, gh). gh) params) xs)
-           = length (filter (\<lambda>(_, _, gh). gh = NotGhost) params)"
-  using assms
-proof (induction xs params rule: list_induct2)
-  case Nil
-  show ?case by simp
-next
-  case (Cons x xs p params)
-  obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
-  show ?case using Cons.IH by (cases gh) (simp_all add: p)
-qed
-
-(* Dropping the ghost parameters from the parameter list itself is filtering
-   it by the flag. *)
-lemma drop_ghost_params:
-  "drop_ghost (map (\<lambda>(_, _, gh). gh) params) params
-     = filter (\<lambda>(_, _, gh). gh = NotGhost) params"
-proof (induction params)
-  case Nil
-  show ?case by simp
-next
-  case (Cons p params)
-  obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
-  show ?case by (cases gh) (simp_all add: p Cons.IH)
-qed
 
 
 (* ========================================================================== *)

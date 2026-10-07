@@ -656,6 +656,64 @@ proof -
   show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
 qed
 
+(* The full state writes to a ghost cell: a cell of its store that no erased
+   address corresponds to. The erased state is unchanged. *)
+lemma state_erased_write_ghost_cell:
+  assumes rel: "state_erased env emb full erased"
+    and addr_lt: "addr < length (IS_Store full)"
+    and addr_notin: "addr \<notin> set emb"
+    and stepF: "store_write_step addr v full full'"
+  shows "state_erased env emb full' erased"
+proof -
+  note D = state_erasedD[OF rel]
+  note F = store_write_stepD[OF stepF]
+  note stF = static_parts_eqD[OF F(1)]
+
+  have se': "store_erased emb full' erased"
+    unfolding store_erased_def
+  proof (intro conjI allI impI)
+    show "length emb = length (IS_Store erased)" by (rule store_erasedD(1)[OF D(5)])
+    show "distinct emb" by (rule store_erasedD(2)[OF D(5)])
+  next
+    fix j assume j_lt: "j < length emb"
+    note b = store_erasedD(3)[OF D(5) j_lt]
+    note c = store_erasedD(4)[OF D(5) j_lt]
+    show "emb ! j < length (IS_Store full')" using b by (simp add: F(3))
+    \<comment> \<open>The cell written is not an embedded one, so every embedded cell is
+        untouched. \<close>
+    have "emb ! j \<noteq> addr" using addr_notin nth_mem[OF j_lt] by auto
+    then show "IS_Store erased ! j = IS_Store full' ! (emb ! j)"
+      using c by (simp add: F(3))
+  qed
+
+  have g': "IS_Globals erased = IS_Globals full'" using D(1) stF(1) by simp
+  have c': "IS_DataCtorsByType erased = IS_DataCtorsByType full'" using D(2) stF(4) by simp
+  have dc': "IS_DataCtors erased = IS_DataCtors full'" using D(9) stF(5) by simp
+  have w': "IS_World erased = IS_World full'" using D(3) F(2) by simp
+  have f': "funs_erased env full' erased"
+  proof -
+    have "funs_erased env full' erased = funs_erased env full erased"
+      by (rule funs_erased_cong_all[OF refl stF(2) refl])
+    then show ?thesis using D(4) by (rule iffD2)
+  qed
+  have t': "IS_TyArgs erased = IS_TyArgs full'" using D(6) stF(3) by simp
+  have l': "locals_erased env emb full' erased"
+  proof -
+    have "locals_erased env emb full' erased = locals_erased env emb full erased"
+      by (rule locals_erased_cong_states[OF F(4) F(5) F(6) refl refl refl])
+    then show ?thesis using D(7) by (rule iffD2)
+  qed
+  have s': "ghost_locals_separate env emb full'"
+  proof -
+    have len: "length (IS_Store full') = length (IS_Store full)" by (simp add: F(3))
+    have "ghost_locals_separate env emb full' = ghost_locals_separate env emb full"
+      by (rule ghost_locals_separate_cong_state[OF F(4) F(5) len])
+    then show ?thesis using D(8) by (rule iffD2)
+  qed
+
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
+qed
+
 (* Both states get the same new world. *)
 lemma state_erased_set_world:
   assumes rel: "state_erased env emb full erased"
@@ -1565,98 +1623,265 @@ qed
 
 
 (* ========================================================================== *)
-(* Calls: the ref updates of an extern function *)
+(* Calls: an extern function with ghost parameters *)
 (* ========================================================================== *)
 
-(* The lvalues that an extern function may update, in the two states, are at
-   corresponding addresses with the same paths, provided that this holds for
-   every argument term in a Ref position. *)
-lemma extern_refs_erased:
-  assumes "\<forall>tm name vr. (tm, (name, vr)) \<in> set (zip tms params) \<longrightarrow> vr = Ref \<longrightarrow>
-             (\<exists>addr path i. lvF tm = Inr (addr, path) \<and> lvE tm = Inr (i, path) \<and>
-                            i < length emb \<and> emb ! i = addr)"
-  shows "list_all2 (\<lambda>(addr, path) (i, path'). i < length emb \<and> emb ! i = addr \<and> path' = path)
-           (rights (map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
-                        (zip params (map lvF tms))))
-           (rights (map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
-                        (zip params (map lvE tms))))"
+(* An element of a list zipped with a zip is an element of the list zipped
+   with the first of the two. *)
+lemma in_set_zip_zipD:
+  assumes "(a, (b, c)) \<in> set (zip xs (zip ys zs))"
+  shows "(a, b) \<in> set (zip xs ys)"
+proof -
+  from assms obtain k where k1: "k < length xs" and k2: "k < length (zip ys zs)"
+    and xa: "xs ! k = a" and yz: "zip ys zs ! k = (b, c)"
+    by (auto simp: in_set_zip)
+  from k2 have ky: "k < length ys" and kz: "k < length zs" by simp_all
+  from yz ky kz have yb: "ys ! k = b" by simp
+  from k1 ky xa yb show ?thesis by (auto simp: in_set_zip)
+qed
+
+(* A list of results that are all Inr loses nothing to rights. *)
+lemma length_rights_all_inr:
+  assumes "\<forall>x \<in> set xs. \<exists>v. x = Inr v"
+  shows "length (rights xs) = length xs"
   using assms
-proof (induction params arbitrary: tms)
+proof (induction xs)
   case Nil
   show ?case by simp
 next
-  case (Cons p ps)
+  case (Cons x xs)
+  from Cons.prems have rest: "\<forall>x \<in> set xs. \<exists>v. x = Inr v" by simp
+  from Cons.prems obtain v where "x = Inr v" by auto
+  with Cons.IH[OF rest] show ?case by simp
+qed
+
+(* The ghost flags of the Ref parameters, read off the parameter list of the
+   function in the state paired with the ghost flags of its signature, are
+   those of the signature's Ref parameters. *)
+lemma ref_flags_zip_aux:
+  fixes tmArgs :: "(CoreType \<times> VarOrRef \<times> GhostOrNot) list"
+  assumes "map snd params = map (fst \<circ> snd) tmArgs"
+  shows "map snd (filter (\<lambda>((_, vr), _). vr = Ref)
+                         (zip params (map (\<lambda>(_, _, gh). gh) tmArgs)))
+           = map (\<lambda>(_, _, gh). gh) (filter (\<lambda>(_, vor, _). vor = Ref) tmArgs)"
+  using assms
+proof (induction tmArgs arbitrary: params)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons a tmArgs)
+  obtain ty vor gh where a: "a = (ty, vor, gh)" by (cases a)
+  from Cons.prems obtain p params' where ps: "params = p # params'"
+    by (cases params) auto
+  obtain name vr where p: "p = (name, vr)" by (cases p)
+  from Cons.prems ps p a have vr: "vr = vor"
+    and rest: "map snd params' = map (fst \<circ> snd) tmArgs"
+    by auto
+  show ?case using Cons.IH[OF rest] by (cases vor) (simp_all add: ps p a vr)
+qed
+
+lemma ref_param_ghost_flags_zip:
+  assumes "map snd params = map (fst \<circ> snd) (FI_TmArgs info)"
+  shows "map snd (filter (\<lambda>((_, vr), _). vr = Ref) (zip params (param_ghost_flags info)))
+           = ref_param_ghost_flags info"
+  unfolding param_ghost_flags_def ref_param_ghost_flags_def
+  by (rule ref_flags_zip_aux[OF assms])
+
+(* The values that the two states pass to an extern function. The full state
+   passes the value of every argument; the erased state passes the values of
+   the arguments that erasure keeps, which are the same values. *)
+lemma extern_vals_erased_ghost:
+  assumes len: "length params = length flags"
+    and lenT: "length tms = length params"
+    and allInr: "\<forall>tm \<in> set tms. \<exists>v. tmF tm = Inr v"
+    and keep: "\<forall>tm name vr. (tm, ((name, vr), NotGhost)) \<in> set (zip tms (zip params flags)) \<longrightarrow>
+                 (\<forall>v. tmF tm = Inr v \<longrightarrow> tmE tm = Inr v)"
+  shows "rights (map tmE (drop_ghost flags tms)) = drop_ghost flags (rights (map tmF tms))"
+  using len lenT allInr keep
+proof (induction params flags arbitrary: tms rule: list_induct2)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons p params gh flags)
+  from Cons.prems(1) obtain tm rest where tms_eq: "tms = tm # rest" by (cases tms) auto
+  obtain name vr where p_eq: "p = (name, vr)" by (cases p)
+  from Cons.prems(2) tms_eq obtain v where v: "tmF tm = Inr v" by auto
+  from Cons.prems tms_eq
+  have lenT': "length rest = length params"
+    and allInr': "\<forall>tm \<in> set rest. \<exists>v. tmF tm = Inr v"
+    and keep': "\<forall>tm name vr. (tm, ((name, vr), NotGhost)) \<in> set (zip rest (zip params flags)) \<longrightarrow>
+                  (\<forall>v. tmF tm = Inr v \<longrightarrow> tmE tm = Inr v)"
+    by auto
+  note tail = Cons.IH[OF lenT' allInr' keep']
   show ?case
-  proof (cases tms)
-    case Nil
-    then show ?thesis by simp
+  proof (cases gh)
+    case NotGhost
+    have mem: "(tm, ((name, vr), NotGhost)) \<in> set (zip tms (zip (p # params) (gh # flags)))"
+      using tms_eq p_eq NotGhost by simp
+    from Cons.prems(3)[rule_format, OF mem v] have vE: "tmE tm = Inr v" .
+    show ?thesis using tail by (simp add: tms_eq NotGhost v vE)
   next
-    case tms_eq: (Cons tm rest)
-    obtain name vr where p_eq: "p = (name, vr)" by (cases p)
-    from Cons.prems tms_eq
-    have rest_ok:
-      "\<forall>tm' name' vr'. (tm', (name', vr')) \<in> set (zip rest ps) \<longrightarrow> vr' = Ref \<longrightarrow>
-         (\<exists>addr path i. lvF tm' = Inr (addr, path) \<and> lvE tm' = Inr (i, path) \<and>
-                        i < length emb \<and> emb ! i = addr)"
-      by auto
-    note tail = Cons.IH[OF rest_ok]
+    case Ghost
+    show ?thesis using tail by (simp add: tms_eq Ghost v)
+  qed
+qed
+
+(* The lvalues that an extern function may update, in the full state against
+   those in the erased state, when the function may have ghost Ref parameters.
+   The flags are those of the Ref parameters, in order. The lvalue of a Ref
+   parameter that is not ghost has a corresponding erased lvalue. The lvalue
+   of a ghost Ref parameter is a ghost cell of the full state (n is the length
+   of the full store) and has no erased counterpart. *)
+inductive ref_lvs_erased ::
+    "nat list \<Rightarrow> nat \<Rightarrow> GhostOrNot list \<Rightarrow> (nat \<times> LValuePath list) list
+       \<Rightarrow> (nat \<times> LValuePath list) list \<Rightarrow> bool"
+  for emb :: "nat list" and n :: nat where
+  rle_nil: "ref_lvs_erased emb n [] [] []"
+| rle_keep: "i < length emb \<Longrightarrow> emb ! i = addr \<Longrightarrow> ref_lvs_erased emb n flags lvsF lvsE
+             \<Longrightarrow> ref_lvs_erased emb n (NotGhost # flags) ((addr, path) # lvsF) ((i, path) # lvsE)"
+| rle_ghost: "addr < n \<Longrightarrow> addr \<notin> set emb \<Longrightarrow> ref_lvs_erased emb n flags lvsF lvsE
+              \<Longrightarrow> ref_lvs_erased emb n (Ghost # flags) ((addr, path) # lvsF) lvsE"
+
+(* The ref lvalues of a call of an extern function are related as above,
+   provided that every argument in a Ref position that is not ghost has
+   corresponding lvalues in the two states, and every argument in a ghost Ref
+   position has, in the full state, an lvalue in a ghost cell. *)
+lemma extern_refs_erased_ghost:
+  assumes len: "length params = length flags"
+    and lenT: "length tms = length params"
+    and keep: "\<forall>tm name. (tm, ((name, Ref), NotGhost)) \<in> set (zip tms (zip params flags)) \<longrightarrow>
+                 (\<exists>addr path i. lvF tm = Inr (addr, path) \<and> lvE tm = Inr (i, path) \<and>
+                                i < length emb \<and> emb ! i = addr)"
+    and ghost: "\<forall>tm name. (tm, ((name, Ref), Ghost)) \<in> set (zip tms (zip params flags)) \<longrightarrow>
+                  (\<exists>addr path. lvF tm = Inr (addr, path) \<and> addr < n \<and> addr \<notin> set emb)"
+  shows "ref_lvs_erased emb n
+           (map snd (filter (\<lambda>((_, vr), _). vr = Ref) (zip params flags)))
+           (rights (map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+                        (zip params (map lvF tms))))
+           (rights (map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+                        (zip (drop_ghost flags params) (map lvE (drop_ghost flags tms)))))"
+  using len lenT keep ghost
+proof (induction params flags arbitrary: tms rule: list_induct2)
+  case Nil
+  then show ?case by (simp add: rle_nil)
+next
+  case (Cons p params gh flags)
+  from Cons.prems(1) obtain tm rest where tms_eq: "tms = tm # rest" by (cases tms) auto
+  obtain name vr where p_eq: "p = (name, vr)" by (cases p)
+  from Cons.prems tms_eq
+  have lenT': "length rest = length params"
+    and keep': "\<forall>tm name. (tm, ((name, Ref), NotGhost)) \<in> set (zip rest (zip params flags)) \<longrightarrow>
+                  (\<exists>addr path i. lvF tm = Inr (addr, path) \<and> lvE tm = Inr (i, path) \<and>
+                                 i < length emb \<and> emb ! i = addr)"
+    and ghost': "\<forall>tm name. (tm, ((name, Ref), Ghost)) \<in> set (zip rest (zip params flags)) \<longrightarrow>
+                   (\<exists>addr path. lvF tm = Inr (addr, path) \<and> addr < n \<and> addr \<notin> set emb)"
+    by auto
+  note tail = Cons.IH[OF lenT' keep' ghost']
+  show ?case
+  proof (cases gh)
+    case NotGhost
     show ?thesis
     proof (cases vr)
       case Var
-      with tail p_eq tms_eq show ?thesis by simp
+      show ?thesis using tail by (simp add: tms_eq p_eq NotGhost Var)
     next
       case Ref
-      have mem: "(tm, (name, Ref)) \<in> set (zip tms (p # ps))"
-        using tms_eq p_eq Ref by simp
-      from Cons.prems[rule_format, OF mem refl] obtain addr path i where
-        "lvF tm = Inr (addr, path)" and "lvE tm = Inr (i, path)" and
-        "i < length emb" and "emb ! i = addr"
+      have mem: "(tm, ((name, Ref), NotGhost)) \<in> set (zip tms (zip (p # params) (gh # flags)))"
+        using tms_eq p_eq Ref NotGhost by simp
+      from Cons.prems(2)[rule_format, OF mem] obtain addr path i where
+        lv: "lvF tm = Inr (addr, path)" and lvE: "lvE tm = Inr (i, path)" and
+        i_lt: "i < length emb" and addr_eq: "emb ! i = addr"
         by blast
-      with tail p_eq tms_eq Ref show ?thesis by simp
+      show ?thesis
+        using rle_keep[OF i_lt addr_eq tail]
+        by (simp add: tms_eq p_eq NotGhost Ref lv lvE)
+    qed
+  next
+    case Ghost
+    show ?thesis
+    proof (cases vr)
+      case Var
+      show ?thesis using tail by (simp add: tms_eq p_eq Ghost Var)
+    next
+      case Ref
+      have mem: "(tm, ((name, Ref), Ghost)) \<in> set (zip tms (zip (p # params) (gh # flags)))"
+        using tms_eq p_eq Ref Ghost by simp
+      from Cons.prems(3)[rule_format, OF mem] obtain addr path where
+        lv: "lvF tm = Inr (addr, path)" and addr_lt: "addr < n" and addr_notin: "addr \<notin> set emb"
+        by blast
+      show ?thesis
+        using rle_ghost[OF addr_lt addr_notin tail]
+        by (simp add: tms_eq p_eq Ghost Ref lv)
     qed
   qed
 qed
 
-(* Applying the same updates to lvalues at corresponding addresses. *)
-lemma apply_ref_updates_erased:
-  assumes "list_all2 (\<lambda>(addr, path) (i, path'). i < length emb \<and> emb ! i = addr \<and> path' = path)
-                     lvsF lvsE"
+(* Applying the ref updates of an extern function that may have ghost Ref
+   parameters. The full state applies all of them. The erased state applies
+   those of the parameters that are not ghost, to the corresponding cells. The
+   updates of the ghost parameters go to ghost cells of the full state, which
+   the relation does not constrain. *)
+lemma apply_ref_updates_erased_ghost:
+  assumes "ref_lvs_erased emb n flags lvsF lvsE"
+    and "n = length (IS_Store full)"
     and "state_erased env emb full erased"
     and "apply_ref_updates full lvsF vals = Inr full'"
-  shows "\<exists>erased'. apply_ref_updates erased lvsE vals = Inr erased'
+  shows "\<exists>erased'. apply_ref_updates erased lvsE (drop_ghost flags vals) = Inr erased'
                    \<and> state_erased env emb full' erased'"
   using assms
-proof (induction lvsF lvsE arbitrary: full erased vals rule: list_all2_induct)
-  case Nil
-  from Nil.prems(2) have "vals = [] \<and> full' = full" by (cases vals) simp_all
-  with Nil.prems(1) show ?case by auto
+proof (induction arbitrary: full erased vals rule: ref_lvs_erased.induct)
+  case rle_nil
+  from rle_nil.prems(3) have "vals = [] \<and> full' = full" by (cases vals) simp_all
+  with rle_nil.prems(2) show ?case by auto
 next
-  case (Cons lvF lvsF lvE lvsE)
-  obtain addr path where lvF_eq: "lvF = (addr, path)" by (cases lvF)
-  obtain i path' where lvE_eq: "lvE = (i, path')" by (cases lvE)
-  from Cons.hyps(1) lvF_eq lvE_eq
-  have i_lt: "i < length emb" and addr_eq: "emb ! i = addr" and p_eq: "path' = path"
-    by simp_all
-  from Cons.prems(2) obtain v vs where vals_eq: "vals = v # vs"
-    by (cases vals) (simp_all add: lvF_eq)
-  from Cons.prems(2) obtain updated where
+  case (rle_keep i addr flags lvsF lvsE path)
+  from rle_keep.prems(3) obtain v vs where vals_eq: "vals = v # vs"
+    by (cases vals) simp_all
+  from rle_keep.prems(3) obtain updated where
     upd: "update_value_at_path (IS_Store full ! addr) path v = Inr updated" and
     restF: "apply_ref_updates (full \<lparr> IS_Store := (IS_Store full)[addr := updated] \<rparr>) lvsF vs
               = Inr full'"
-    unfolding lvF_eq vals_eq by (auto simp: Let_def split: sum.splits)
+    unfolding vals_eq by (auto simp: Let_def split: sum.splits)
   let ?fullM = "full \<lparr> IS_Store := (IS_Store full)[addr := updated] \<rparr>"
   let ?erasedM = "erased \<lparr> IS_Store := (IS_Store erased)[i := updated] \<rparr>"
   have cell: "IS_Store erased ! i = IS_Store full ! addr"
-    by (rule erased_cell[OF Cons.prems(1) i_lt addr_eq])
+    by (rule erased_cell[OF rle_keep.prems(2) rle_keep.hyps(1) rle_keep.hyps(2)])
   have relM: "state_erased env emb ?fullM ?erasedM"
-    by (rule state_erased_write_both[where v = updated, OF Cons.prems(1) i_lt addr_eq])
+    by (rule state_erased_write_both[where v = updated,
+                                     OF rle_keep.prems(2) rle_keep.hyps(1) rle_keep.hyps(2)])
        (simp_all add: store_write_step_def static_parts_eq_def)
-  from Cons.IH[OF relM restF] obtain erased' where
-    restE: "apply_ref_updates ?erasedM lvsE vs = Inr erased'" and
+  have lenM: "n = length (IS_Store ?fullM)" using rle_keep.prems(1) by simp
+  from rle_keep.IH[OF lenM relM restF] obtain erased' where
+    restE: "apply_ref_updates ?erasedM lvsE (drop_ghost flags vs) = Inr erased'" and
     rel': "state_erased env emb full' erased'"
     by blast
-  have "apply_ref_updates erased (lvE # lvsE) vals = Inr erased'"
-    using restE upd by (simp add: lvE_eq p_eq vals_eq cell Let_def)
+  have "apply_ref_updates erased ((i, path) # lvsE) (drop_ghost (NotGhost # flags) vals)
+          = Inr erased'"
+    using restE upd by (simp add: vals_eq cell Let_def)
+  with rel' show ?case by blast
+next
+  case (rle_ghost addr flags lvsF lvsE path)
+  from rle_ghost.prems(3) obtain v vs where vals_eq: "vals = v # vs"
+    by (cases vals) simp_all
+  from rle_ghost.prems(3) obtain updated where
+    upd: "update_value_at_path (IS_Store full ! addr) path v = Inr updated" and
+    restF: "apply_ref_updates (full \<lparr> IS_Store := (IS_Store full)[addr := updated] \<rparr>) lvsF vs
+              = Inr full'"
+    unfolding vals_eq by (auto simp: Let_def split: sum.splits)
+  let ?fullM = "full \<lparr> IS_Store := (IS_Store full)[addr := updated] \<rparr>"
+  have addr_lt: "addr < length (IS_Store full)"
+    using rle_ghost.hyps(1) rle_ghost.prems(1) by simp
+  have stepF: "store_write_step addr updated full ?fullM"
+    by (simp add: store_write_step_def static_parts_eq_def)
+  have relM: "state_erased env emb ?fullM erased"
+    by (rule state_erased_write_ghost_cell[OF rle_ghost.prems(2) addr_lt rle_ghost.hyps(2) stepF])
+  have lenM: "n = length (IS_Store ?fullM)" using rle_ghost.prems(1) by simp
+  from rle_ghost.IH[OF lenM relM restF] obtain erased' where
+    restE: "apply_ref_updates erased lvsE (drop_ghost flags vs) = Inr erased'" and
+    rel': "state_erased env emb full' erased'"
+    by blast
+  have "apply_ref_updates erased lvsE (drop_ghost (Ghost # flags) vals) = Inr erased'"
+    using restE by (simp add: vals_eq)
   with rel' show ?case by blast
 qed
 

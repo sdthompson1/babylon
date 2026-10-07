@@ -397,9 +397,6 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
           @ '' does not match the ghostness of its earlier declaration''
     | TyErr_ExternFunctionWithBody loc name \<Rightarrow>
         loc_prefix loc @ ''extern function '' @ quote name @ '' cannot have a body''
-    | TyErr_GhostParamOnExternFunction loc name \<Rightarrow>
-        loc_prefix loc @ ''extern function '' @ quote name
-          @ '' cannot have a ghost parameter''
     | TyErr_ExternNameOnGhostFunction loc name \<Rightarrow>
         loc_prefix loc @ ''ghost extern function '' @ quote name
           @ '' cannot have an extern name''

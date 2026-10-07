@@ -914,7 +914,6 @@ proof -
       using length_drop_ghost_params[OF len] by simp
     have distE: "distinct (CF_Args f)"
       unfolding argsE by (rule distinct_drop_ghost[OF dist])
-    have externE: "CF_Body f = None \<longrightarrow> no_ghost_params ?infoE" by simp
     show "\<exists>info. fmlookup (TE_Functions ?E) name = Some info
                  \<and> length (CF_Args f) = length (FI_TmArgs info)
                  \<and> distinct (CF_Args f)
@@ -923,9 +922,8 @@ proof -
                     | Some body \<Rightarrow>
                         core_statement_list_type
                           (module_body_env_for ?E (CF_Args f) info) (FI_Ghost info) body
-                        \<noteq> None)
-                 \<and> (CF_Body f = None \<longrightarrow> no_ghost_params info)"
-      by (intro exI[of _ ?infoE] conjI) (rule fiE lenE distE bodyE' externE)+
+                        \<noteq> None)"
+      by (intro exI[of _ ?infoE] conjI) (rule fiE lenE distE bodyE')+
   qed
 
   have nwtE: "normalized_module_well_typed (erase_ghost_module m)"

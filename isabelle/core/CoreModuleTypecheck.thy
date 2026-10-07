@@ -57,11 +57,7 @@ definition module_globals_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreVa
    (if any - extern functions have CF_Body = None) typechecks in the body
    environment (module_body_env_for, defined in ModuleBodyEnv.thy).
    (Distinctness of parameter names is also required - this matches the same
-   requirement in fun_info_matches_interp_fun.)
-
-   An extern function has no ghost parameter. Its implementation is outside
-   the program and takes the whole argument list, so ghost erasure could not
-   remove a ghost argument from it. *)
+   requirement in fun_info_matches_interp_fun.) *)
 definition module_functions_well_typed :: "CoreTyEnv \<Rightarrow> (string, CoreFunction) fmap \<Rightarrow> bool" where
   "module_functions_well_typed env funs =
     (\<forall>name f. fmlookup funs name = Some f \<longrightarrow>
@@ -73,8 +69,7 @@ definition module_functions_well_typed :: "CoreTyEnv \<Rightarrow> (string, Core
                 | Some body \<Rightarrow>
                     core_statement_list_type
                       (module_body_env_for env (CF_Args f) info)
-                      (FI_Ghost info) body \<noteq> None) \<and>
-               (CF_Body f = None \<longrightarrow> no_ghost_params info)))"
+                      (FI_Ghost info) body \<noteq> None)))"
 
 
 (* ========================================================================== *)

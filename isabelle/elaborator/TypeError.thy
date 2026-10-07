@@ -104,7 +104,6 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_FunctionSignatureMismatch Location string  (* a function definition's signature differs from its earlier declaration *)
   | TyErr_ConstGhostnessMismatch Location string  (* a const definition's ghostness differs from an earlier declaration of the same name *)
   | TyErr_ExternFunctionWithBody Location string  (* an extern function may not also have a body *)
-  | TyErr_GhostParamOnExternFunction Location string  (* an extern function may not have a ghost parameter *)
   | TyErr_ExternNameOnGhostFunction Location string  (* a ghost extern function may not have an extern name (`= "name"`) *)
   | TyErr_EmptyDatatype Location string  (* datatype with no constructors *)
   | TyErr_TypeArgsNotAllowed Location string  (* type arguments on an abstract type declaration or realization *)

@@ -149,16 +149,45 @@ definition extern_fun_respects_purity :: "FunInfo \<Rightarrow> 'w ExternFunc \<
   "extern_fun_respects_purity funInfo externFun =
    (\<not> FI_Impure funInfo \<longrightarrow> (\<forall>world vals. fst (externFun world vals) = world))"
 
+(* Ghost independence: ghost erasure removes the ghost arguments of a call,
+   so an extern function must not depend on them. Called with the ghost
+   arguments removed, it returns the same world and return value, and the
+   same ref updates except those of the ghost Ref parameters. This holds for
+   every input with one value per parameter, not only for well-typed
+   arguments. *)
+definition extern_fun_ghost_independent :: "FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
+  "extern_fun_ghost_independent funInfo externFun =
+   (\<forall>world vals. length vals = length (FI_TmArgs funInfo) \<longrightarrow>
+      (case externFun world vals of (newWorld, refUpdates, retVal) \<Rightarrow>
+         externFun world (drop_ghost (param_ghost_flags funInfo) vals)
+           = (newWorld, drop_ghost (ref_param_ghost_flags funInfo) refUpdates, retVal)))"
+
 definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
   "extern_fun_contract env funInfo externFun =
    (extern_fun_well_typed env funInfo externFun \<and>
-    extern_fun_respects_purity funInfo externFun)"
+    extern_fun_respects_purity funInfo externFun \<and>
+    extern_fun_ghost_independent funInfo externFun)"
 
 (* A pure extern function returns the world it was given. *)
 lemma extern_fun_contract_pure_world:
   assumes "extern_fun_contract env funInfo externFun" and "\<not> FI_Impure funInfo"
   shows "fst (externFun world vals) = world"
   using assms unfolding extern_fun_contract_def extern_fun_respects_purity_def by simp
+
+(* An extern function called without its ghost arguments returns the same
+   world and value, and the ref updates of the parameters that are not
+   ghost. *)
+lemma extern_fun_ghost_independentD:
+  assumes "extern_fun_ghost_independent funInfo externFun"
+    and "length vals = length (FI_TmArgs funInfo)"
+    and "externFun world vals = (newWorld, refUpdates, retVal)"
+  shows "externFun world (drop_ghost (param_ghost_flags funInfo) vals)
+           = (newWorld, drop_ghost (ref_param_ghost_flags funInfo) refUpdates, retVal)"
+proof -
+  note inst = assms(1)[unfolded extern_fun_ghost_independent_def,
+                       THEN spec[where x = world], THEN spec[where x = vals]]
+  from inst assms(2) show ?thesis by (simp add: assms(3))
+qed
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed for typechecking the function body, if there is one. *)
@@ -183,12 +212,7 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
            (body_env_for env (map fst (IF_Args interpFun)) funInfo)
            (FI_Ghost funInfo) bodyStmts \<noteq> None
      | Inr externFun \<Rightarrow>
-         extern_fun_contract env funInfo externFun) \<and>
-    \<comment> \<open>An external function has no ghost parameter. (It is given the whole
-        argument list, so ghost erasure could not drop a ghost argument.)\<close>
-    (case IF_Body interpFun of
-       Inl _ \<Rightarrow> True
-     | Inr _ \<Rightarrow> no_ghost_params funInfo))"
+         extern_fun_contract env funInfo externFun))"
 
 (* Lemma: extern_fun_contract does not depend on TE_ProofGoal. *)
 lemma extern_fun_contract_TE_ProofGoal_irrelevant [simp]:

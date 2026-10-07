@@ -258,8 +258,7 @@ proof -
                  | Some stmts \<Rightarrow>
                      core_statement_list_type
                        (module_body_env_for env (CF_Args f) info')
-                       (FI_Ghost info') stmts \<noteq> None)" and
-      extern_ok: "CF_Body f = None \<longrightarrow> no_ghost_params info'"
+                       (FI_Ghost info') stmts \<noteq> None)"
       using fwt f_lk unfolding module_functions_well_typed_def by blast
     have info'_eq: "info' = info" using decl decl2 by simp
     have len: "length (CF_Args f) = length (FI_TmArgs info)"
@@ -316,24 +315,9 @@ proof -
         unfolding body_eq
         using externs_ok[OF decl ext_lk] by simp
     qed
-    \<comment> \<open>A function with no body has no ghost parameter.\<close>
-    have extern_match: "case body of Inl _ \<Rightarrow> True | Inr _ \<Rightarrow> no_ghost_params info"
-    proof (cases "CF_Body f")
-      case (Some stmts)
-      with body_ok have body_eq: "body = Inl stmts" by simp
-      show ?thesis unfolding body_eq by simp
-    next
-      case None
-      with body_ok obtain externFun where
-        ext_lk: "fmlookup externs name = Some externFun" and
-        body_eq: "body = Inr externFun"
-        by auto
-      from extern_ok None info'_eq have "no_ghost_params info" by simp
-      then show ?thesis unfolding body_eq by simp
-    qed
     have match: "fun_info_matches_interp_fun env info (make_interp_fun info f body)"
       unfolding fun_info_matches_interp_fun_def if_sel
-      using markers distZip body_match extern_match by simp
+      using markers distZip body_match by simp
 
     show "case fmlookup (IS_Functions ?st) name of
             Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun

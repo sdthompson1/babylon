@@ -97,6 +97,124 @@ record CoreTyEnv =
 definition no_ghost_params :: "FunInfo \<Rightarrow> bool" where
   "no_ghost_params info = list_all (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info)"
 
+(* The ghost flags of a function's parameters, in order. *)
+definition param_ghost_flags :: "FunInfo \<Rightarrow> GhostOrNot list" where
+  "param_ghost_flags info = map (\<lambda>(_, _, gh). gh) (FI_TmArgs info)"
+
+(* The ghost flags of a function's Ref parameters, in order. *)
+definition ref_param_ghost_flags :: "FunInfo \<Rightarrow> GhostOrNot list" where
+  "ref_param_ghost_flags info =
+    map (\<lambda>(_, _, gh). gh) (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs info))"
+
+(* Keep the elements of a list whose flag is NotGhost. Ghost erasure uses this
+   to remove the ghost arguments of a call, and the contract of an extern
+   function says what the function does when called without them. *)
+definition drop_ghost :: "GhostOrNot list \<Rightarrow> 'a list \<Rightarrow> 'a list" where
+  "drop_ghost flags xs = map snd (filter (\<lambda>(gh, _). gh = NotGhost) (zip flags xs))"
+
+lemma drop_ghost_Nil [simp]:
+  "drop_ghost [] xs = []"
+  "drop_ghost flags [] = []"
+  by (simp_all add: drop_ghost_def)
+
+lemma drop_ghost_Cons [simp]:
+  "drop_ghost (NotGhost # flags) (x # xs) = x # drop_ghost flags xs"
+  "drop_ghost (Ghost # flags) (x # xs) = drop_ghost flags xs"
+  by (simp_all add: drop_ghost_def)
+
+lemma drop_ghost_map:
+  "drop_ghost flags (map f xs) = map f (drop_ghost flags xs)"
+proof (induction flags arbitrary: xs)
+  case Nil
+  show ?case by simp
+next
+  case (Cons gh flags)
+  show ?case by (cases xs; cases gh) (simp_all add: Cons.IH)
+qed
+
+(* Dropping from two lists with the same flags, then pairing them up, is
+   pairing them up and then dropping. *)
+lemma zip_drop_ghost:
+  "zip (drop_ghost flags xs) (drop_ghost flags ys) = drop_ghost flags (zip xs ys)"
+proof (induction flags arbitrary: xs ys)
+  case Nil
+  show ?case by simp
+next
+  case (Cons gh flags)
+  note IH = Cons.IH
+  show ?case
+  proof (cases xs)
+    case Nil
+    then show ?thesis by simp
+  next
+    case xs_eq: (Cons x xs')
+    show ?thesis
+    proof (cases ys)
+      case Nil
+      then show ?thesis by (cases gh) (simp_all add: xs_eq)
+    next
+      case ys_eq: (Cons y ys')
+      show ?thesis by (cases gh) (simp_all add: xs_eq ys_eq IH)
+    qed
+  qed
+qed
+
+lemma set_drop_ghost_subset:
+  "set (drop_ghost flags xs) \<subseteq> set xs"
+  unfolding drop_ghost_def by (auto dest: set_zip_rightD)
+
+lemma distinct_drop_ghost:
+  "distinct xs \<Longrightarrow> distinct (drop_ghost flags xs)"
+proof (induction flags arbitrary: xs)
+  case Nil
+  show ?case by simp
+next
+  case (Cons gh flags)
+  note IH = Cons.IH and dist = Cons.prems
+  show ?case
+  proof (cases xs)
+    case Nil
+    then show ?thesis by simp
+  next
+    case (Cons x xs')
+    have d: "distinct xs'" and nin: "x \<notin> set xs'"
+      using dist Cons by simp_all
+    have tl: "distinct (drop_ghost flags xs')" by (rule IH[OF d])
+    have "x \<notin> set (drop_ghost flags xs')"
+      using nin set_drop_ghost_subset[of flags xs'] by blast
+    with tl show ?thesis by (cases gh) (simp_all add: Cons)
+  qed
+qed
+
+(* The number of elements kept is the number of NotGhost parameters. *)
+lemma length_drop_ghost_params:
+  assumes "length xs = length params"
+  shows "length (drop_ghost (map (\<lambda>(_, _, gh). gh) params) xs)
+           = length (filter (\<lambda>(_, _, gh). gh = NotGhost) params)"
+  using assms
+proof (induction xs params rule: list_induct2)
+  case Nil
+  show ?case by simp
+next
+  case (Cons x xs p params)
+  obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
+  show ?case using Cons.IH by (cases gh) (simp_all add: p)
+qed
+
+(* Dropping the ghost parameters from the parameter list itself is filtering
+   it by the flag. *)
+lemma drop_ghost_params:
+  "drop_ghost (map (\<lambda>(_, _, gh). gh) params) params
+     = filter (\<lambda>(_, _, gh). gh = NotGhost) params"
+proof (induction params)
+  case Nil
+  show ?case by simp
+next
+  case (Cons p params)
+  obtain ty vor gh where p: "p = (ty, vor, gh)" by (cases p)
+  show ?case by (cases gh) (simp_all add: p Cons.IH)
+qed
+
 (* Is a variable ghost? For locals, check TE_GhostLocals; globals are never
    ghost (in Core).
    Note that locals shadow globals, so if a name is both local and global, the

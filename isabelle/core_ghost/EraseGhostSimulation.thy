@@ -39,53 +39,12 @@ begin
 
 
 (* ========================================================================== *)
-(* Parameter lists *)
-(* ========================================================================== *)
-
-(* When no parameter is ghost, erasure drops nothing. *)
-lemma drop_ghost_no_ghost_params:
-  assumes "list_all (\<lambda>(_, _, gh). gh = NotGhost) params"
-    and "length xs = length params"
-  shows "drop_ghost (map (\<lambda>(_, _, gh). gh) params) xs = xs"
-  using assms(2,1)
-proof (induction xs params rule: list_induct2)
-  case Nil
-  show ?case by simp
-next
-  case (Cons x xs p params)
-  obtain name vr gh where p: "p = (name, vr, gh)" by (cases p)
-  from Cons.prems p have g: "gh = NotGhost"
-    and rest: "list_all (\<lambda>(_, _, gh). gh = NotGhost) params"
-    by auto
-  show ?case using Cons.IH[OF rest] by (simp add: p g)
-qed
-
-(* The arguments of a call of a function with no ghost parameter are all in
-   executable position. *)
-lemma call_args_notghost_all:
-  assumes "call_args_notghost env info tmArgs"
-    and "no_ghost_params info"
-  shows "list_all (notghost_typed env) tmArgs"
-proof -
-  from assms(1)
-  have la: "list_all2 (\<lambda>tm (_, vr, gh).
-                         (gh = NotGhost \<longrightarrow> notghost_typed env tm) \<and>
-                         (gh = Ghost \<longrightarrow> vr = Ref \<longrightarrow> ghost_lvalue_ok env Ghost tm))
-                      tmArgs (FI_TmArgs info)"
-    by (simp only: call_args_notghost_def)
-  from assms(2) have ng: "list_all (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info)"
-    by (simp only: no_ghost_params_def)
-  from la ng show ?thesis by (induction rule: list_all2_induct) auto
-qed
-
-
-(* ========================================================================== *)
 (* Two more facts about the function table *)
 (* ========================================================================== *)
 
-(* The parameter names of each function of the state are distinct, and a
-   function with no body (an external function) has no ghost parameter. Both
-   follow from funs_exist_in_state. *)
+(* The parameter names of each function of the state are distinct, and an
+   external function does not depend on its ghost arguments. Both follow from
+   funs_exist_in_state. *)
 definition fun_param_names_distinct ::
     "(string, FunInfo) fmap \<Rightarrow> (string, 'w InterpFun) fmap \<Rightarrow> bool" where
   "fun_param_names_distinct funInfos funs \<equiv>
@@ -93,13 +52,13 @@ definition fun_param_names_distinct ::
       fmlookup funInfos fnName = Some info \<longrightarrow> fmlookup funs fnName = Some f \<longrightarrow>
         distinct (map fst (IF_Args f))"
 
-definition extern_funs_no_ghost_params ::
+definition extern_funs_ghost_independent ::
     "(string, FunInfo) fmap \<Rightarrow> (string, 'w InterpFun) fmap \<Rightarrow> bool" where
-  "extern_funs_no_ghost_params funInfos funs \<equiv>
+  "extern_funs_ghost_independent funInfos funs \<equiv>
     \<forall>fnName info f externFun.
       fmlookup funInfos fnName = Some info \<longrightarrow> fmlookup funs fnName = Some f \<longrightarrow>
       IF_Body f = Inr externFun \<longrightarrow>
-        no_ghost_params info"
+        extern_fun_ghost_independent info externFun"
 
 lemma funs_exist_in_state_matches:
   assumes "funs_exist_in_state state env"
@@ -128,18 +87,18 @@ proof (intro allI impI)
     by (simp add: fun_info_matches_interp_fun_def)
 qed
 
-lemma funs_exist_in_state_extern_no_ghost_params:
+lemma funs_exist_in_state_extern_ghost_independent:
   assumes "funs_exist_in_state state env"
-  shows "extern_funs_no_ghost_params (TE_Functions env) (IS_Functions state)"
-  unfolding extern_funs_no_ghost_params_def
+  shows "extern_funs_ghost_independent (TE_Functions env) (IS_Functions state)"
+  unfolding extern_funs_ghost_independent_def
 proof (intro allI impI)
   fix fnName info f externFun
   assume info: "fmlookup (TE_Functions env) fnName = Some info"
     and f: "fmlookup (IS_Functions state) fnName = Some f"
     and b: "IF_Body f = Inr externFun"
   from funs_exist_in_state_matches[OF assms info f] b
-  show "no_ghost_params info"
-    by (simp add: fun_info_matches_interp_fun_def)
+  show "extern_fun_ghost_independent info externFun"
+    by (simp add: fun_info_matches_interp_fun_def extern_fun_contract_def)
 qed
 
 
@@ -188,7 +147,7 @@ lemma erase_ghost_simulation_aux:
     and bodies: "fun_bodies_typed genv funs"
     and pure: "funs_respect_purity (TE_Functions genv) funs"
     and dist: "fun_param_names_distinct (TE_Functions genv) funs"
-    and extern: "extern_funs_no_ghost_params (TE_Functions genv) funs"
+    and extern: "extern_funs_ghost_independent (TE_Functions genv) funs"
   shows "\<forall>env emb (full :: 'w InterpState) (erased :: 'w InterpState) v.
            TE_Functions env = TE_Functions genv \<longrightarrow>
            IS_Functions full = funs \<longrightarrow>
@@ -1684,7 +1643,7 @@ next
                                    (zip (IF_Args f) ?refsF))"
         let ?refsXE = "rights (map (\<lambda>((_, vr), refResult).
                                         if vr = Ref then refResult else Inl TypeError)
-                                   (zip (IF_Args f) (map ?lvE argTms)))"
+                                   (zip ?paramsE (map ?lvE (drop_ghost ?flagsF argTms))))"
         obtain newWorld refUpdates externRetVal where
           ext_eq: "externFun (IS_World full) (rights ?valsF)
                      = (newWorld, refUpdates, externRetVal)"
@@ -1698,88 +1657,64 @@ next
           and ret_eq: "retVal = externRetVal"
           by (cases "apply_ref_updates ?fullW ?refsXF refUpdates") (simp_all add: Let_def)
 
-        \<comment> \<open>An extern function has no ghost parameter. So erasure drops no
-            argument of this call and no parameter of the function, and every
-            argument is in executable position. \<close>
-        have ngp: "no_ghost_params info"
-          using extern infoG f_lookup' Inr unfolding extern_funs_no_ghost_params_def by blast
-        note allNG = ngp[unfolded no_ghost_params_def]
-        have paramsE_eq: "?paramsE = IF_Args f"
-          unfolding param_ghost_flags_def
-          by (rule drop_ghost_no_ghost_params[OF allNG lenF])
-        have argsE_all: "?argsE = map ?er argTms"
-          unfolding argsE_eq param_ghost_flags_def
-          by (simp only: drop_ghost_no_ghost_params[OF allNG len_eq[unfolded lenF]])
-        have wgs: "list_all (notghost_typed env) argTms"
-          by (rule call_args_notghost_all[OF cargs ngp])
-        have valsAll: "\<forall>tm \<in> set argTms. \<forall>x. interp_term d fuel full tm = Inr x
-                         \<longrightarrow> interp_term d fuel erased (?er tm) = Inr x"
-        proof (intro ballI allI impI)
-          fix tm x
-          assume mem: "tm \<in> set argTms" and s: "interp_term d fuel full tm = Inr x"
-          from wgs mem have Wtm: "notghost_typed env tm"
-            by (auto simp: list_all_iff)
-          show "interp_term d fuel erased (?er tm) = Inr x"
-            by (rule IH_term[OF fn_eq funs_eq rel Wtm s])
-        qed
-        have refsAll: "\<forall>tm \<in> set argTms. \<forall>addr path.
-                         interp_writable_lvalue d fuel full tm = Inr (addr, path)
-                         \<longrightarrow> (\<exists>i. interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)
-                                  \<and> i < length emb \<and> emb ! i = addr)"
-        proof (intro ballI allI impI)
-          fix tm addr path
-          assume mem: "tm \<in> set argTms"
-            and s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
-          from wgs mem have Wtm: "notghost_typed env tm"
-            by (auto simp: list_all_iff)
-          show "\<exists>i. interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)
-                    \<and> i < length emb \<and> emb ! i = addr"
-            by (rule IH_lv[OF fn_eq funs_eq rel Wtm s])
-        qed
-
-        \<comment> \<open>Every argument has a value in the full state, so the erased state
-            passes the same values to the extern function. \<close>
+        \<comment> \<open>Every argument has a value in the full state. \<close>
         have lenA: "length (IF_Args f) = length ?refsF" using len_eq by simp
         have lenB: "length ?refsF = length ?valsF" by simp
         have lenC: "length argTms = length ?refsF" by simp
-        have valsEq: "map ?tmE argTms = ?valsF"
-        proof (rule map_cong[OF refl])
-          fix tm assume mem: "tm \<in> set argTms"
+        have allInr: "\<forall>tm \<in> set argTms. \<exists>v. interp_term d fuel full tm = Inr v"
+        proof
+          fix tm assume "tm \<in> set argTms"
           then have "interp_term d fuel full tm \<in> set ?valsF" by auto
-          from fold_process_one_arg_all_ok[OF foldF lenA lenB this] obtain val where
-            s: "interp_term d fuel full tm = Inr val"
-            by blast
-          from valsAll mem s have "interp_term d fuel erased (?er tm) = Inr val" by blast
-          with s show "interp_term d fuel erased (?er tm) = interp_term d fuel full tm"
-            by simp
+          from fold_process_one_arg_all_ok[OF foldF lenA lenB this]
+          show "\<exists>v. interp_term d fuel full tm = Inr v" by blast
         qed
-        have valsE_all: "map (interp_term d fuel erased) ?argsE = ?valsF"
-          unfolding argsE_all using valsEq by (simp add: comp_def)
-        have refsE_all: "map (interp_writable_lvalue d fuel erased) ?argsE
-                           = map ?lvE argTms"
-          unfolding argsE_all by (simp add: comp_def)
+        have lenV: "length (rights ?valsF) = length (FI_TmArgs info)"
+        proof -
+          have "\<forall>x \<in> set ?valsF. \<exists>v. x = Inr v" using allInr by auto
+          from length_rights_all_inr[OF this] show ?thesis by (simp add: len_eq lenF)
+        qed
 
-        \<comment> \<open>The lvalues passed in Ref positions are at corresponding addresses. \<close>
-        have ref_args:
-          "\<forall>tm name vr. (tm, (name, vr)) \<in> set (zip argTms (IF_Args f)) \<longrightarrow> vr = Ref \<longrightarrow>
-             (\<exists>addr path i. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
-                            interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path) \<and>
-                            i < length emb \<and> emb ! i = addr)"
+        \<comment> \<open>The erased state passes the values of the arguments that erasure
+            keeps, which are the values the full state computed for them. \<close>
+        have valsE_drop: "rights (map (interp_term d fuel erased) ?argsE)
+                            = drop_ghost ?flagsF (rights ?valsF)"
+          unfolding valsE_eq
+          by (rule extern_vals_erased_ghost
+                     [where tmF = "interp_term d fuel full" and tmE = ?tmE,
+                      OF lenFlags len_eq allInr vals])
+
+        \<comment> \<open>The extern function does not depend on its ghost arguments. So the
+            erased call returns the same world and value, and the ref updates
+            of the Ref parameters that are not ghost. \<close>
+        have gi: "extern_fun_ghost_independent info externFun"
+          using extern infoG f_lookup' Inr
+          unfolding extern_funs_ghost_independent_def by blast
+        let ?rflags = "ref_param_ghost_flags info"
+        have extE: "externFun (IS_World full) (drop_ghost ?flagsF (rights ?valsF))
+                      = (newWorld, drop_ghost ?rflags refUpdates, externRetVal)"
+          by (rule extern_fun_ghost_independentD[OF gi lenV ext_eq])
+
+        \<comment> \<open>The lvalues passed in Ref positions: those of the parameters that
+            are not ghost are at corresponding addresses in the two states;
+            those of the ghost parameters are ghost cells of the full state. \<close>
+        have keepR: "\<forall>tm name. (tm, ((name, Ref), NotGhost))
+                                  \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+                       (\<exists>addr path i. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
+                                      interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path) \<and>
+                                      i < length emb \<and> emb ! i = addr)"
         proof (intro allI impI)
-          fix tm name vr
-          assume mem: "(tm, (name, vr)) \<in> set (zip argTms (IF_Args f))"
-            and vr: "vr = Ref"
-          from mem vr have mem': "(tm, (name, Ref)) \<in> set (zip argTms (IF_Args f))"
-            by simp
+          fix tm name
+          assume mem: "(tm, ((name, Ref), NotGhost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
+          have mem2: "(tm, (name, Ref)) \<in> set (zip argTms (IF_Args f))"
+            by (rule in_set_zip_zipD[OF mem])
           from fold_process_one_arg_ref_lvalue_ok
-                 [OF foldF len_eq[symmetric] lenC lenB refl mem']
+                 [OF foldF len_eq[symmetric] lenC lenB refl mem2]
           obtain lval where lv0: "interp_writable_lvalue d fuel full tm = Inr lval"
             by blast
           obtain addr path where ap: "lval = (addr, path)" by (cases lval)
           from lv0 ap have s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
             by simp
-          from mem have tm_in: "tm \<in> set argTms" by (rule set_zip_leftD)
-          from refsAll tm_in s obtain i where
+          from refs[rule_format, OF mem s] obtain i where
             sE: "interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)" and
             i_lt: "i < length emb" and ei: "emb ! i = addr"
             by blast
@@ -1789,21 +1724,58 @@ next
                               i < length emb \<and> emb ! i = addr"
             by blast
         qed
-        note xrefs = extern_refs_erased[OF ref_args]
+        have ghostR: "\<forall>tm name. (tm, ((name, Ref), Ghost))
+                                   \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+                        (\<exists>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
+                                     addr < length (IS_Store full) \<and> addr \<notin> set emb)"
+        proof (intro allI impI)
+          fix tm name
+          assume mem: "(tm, ((name, Ref), Ghost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
+          have mem2: "(tm, (name, Ref)) \<in> set (zip argTms (IF_Args f))"
+            by (rule in_set_zip_zipD[OF mem])
+          from fold_process_one_arg_ref_lvalue_ok
+                 [OF foldF len_eq[symmetric] lenC lenB refl mem2]
+          obtain lval where lv0: "interp_writable_lvalue d fuel full tm = Inr lval"
+            by blast
+          obtain addr path where ap: "lval = (addr, path)" by (cases lval)
+          from lv0 ap have s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
+            by simp
+          from ghost_refs[rule_format, OF mem s] s
+          show "\<exists>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
+                            addr < length (IS_Store full) \<and> addr \<notin> set emb"
+            by blast
+        qed
+        note xrefs = extern_refs_erased_ghost
+                       [where lvF = "interp_writable_lvalue d fuel full" and lvE = ?lvE,
+                        OF lenFlags len_eq keepR ghostR,
+                        unfolded ref_param_ghost_flags_zip[OF flags]]
 
-        \<comment> \<open>Both states get the new world, and then the same ref updates. \<close>
+        \<comment> \<open>Both states get the new world. The full state then applies all
+            the ref updates, and the erased state those of the Ref parameters
+            that are not ghost. \<close>
         have relW: "state_erased env emb ?fullW ?erasedW"
           by (rule state_erased_set_world[OF rel])
-        from apply_ref_updates_erased[OF xrefs relW final_eq] obtain newErased where
-          finalE: "apply_ref_updates ?erasedW ?refsXE refUpdates = Inr newErased" and
+        have lenW: "length (IS_Store full) = length (IS_Store ?fullW)" by simp
+        from apply_ref_updates_erased_ghost[OF xrefs lenW relW final_eq]
+        obtain newErased where
+          finalE0: "apply_ref_updates ?erasedW ?refsXE (drop_ghost ?rflags refUpdates)
+                      = Inr newErased" and
           relN: "state_erased env emb finalState newErased"
           by blast
+        have finalE: "apply_ref_updates ?erasedW
+                        (rights (map (\<lambda>((_, vr), refResult).
+                                        if vr = Ref then refResult else Inl TypeError)
+                                     (zip ?paramsE
+                                          (map (interp_writable_lvalue d fuel erased) ?argsE))))
+                        (drop_ghost ?rflags refUpdates)
+                      = Inr newErased"
+          using finalE0 by (simp only: refsE_eq)
         have relN': "state_erased env emb newFull newErased"
           unfolding newFull_eq by (rule relN)
         have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                        = Inr (newErased, retVal)"
-          using lookE lenE tyLen_eq foldE Inr ext_eq finalE ret_eq
-          by (simp add: Let_def paramsE_eq' paramsE_eq refsE_all valsE_all D(3) D(6))
+          using lookE lenE tyLen_eq foldE Inr valsE_drop extE finalE ret_eq
+          by (simp add: Let_def paramsE_eq' D(3) D(6))
         from callE relN' show ?thesis by blast
       qed
     qed
@@ -1843,7 +1815,7 @@ theorem erase_ghost_simulation:
                  funs_exist_in_state_bodies_typed[OF fes]
                  funs_exist_in_state_respect_purity[OF fes]
                  funs_exist_in_state_param_names_distinct[OF fes]
-                 funs_exist_in_state_extern_no_ghost_params[OF fes],
+                 funs_exist_in_state_extern_ghost_independent[OF fes],
               rule_format, OF refl refl fg rel T H])
 
 (* The same, with the whole state invariant as the hypothesis. *)
