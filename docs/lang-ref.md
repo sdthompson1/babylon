@@ -2550,6 +2550,10 @@ are always true at the point of return (provided that the `requires`
 conditions were true on function entry). If these assumptions are not
 respected, then verification might be unsound.
 
+A ghost extern function may not have an extern name (there would be no
+point, since ghost functions are never actually called by executable
+code).
+
 
 
 
