@@ -4570,7 +4570,7 @@ static bool check_interface_function(struct Module *module,
         return false;
     }
 
-    if (!interface->function_data.impure && implementation->function_data.impure) {
+    if (interface->function_data.impure != implementation->function_data.impure) {
         report_impurity_mismatch(interface);
         return false;
     }

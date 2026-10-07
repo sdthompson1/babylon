@@ -2265,12 +2265,13 @@ and in this case, a corresponding declaration, which *does* include
 the function body, must be written in the module implementation. The
 types (but not necessarily names) of all arguments must be the same,
 and the return type must be the same, between the two declarations.
-The requires and ensures conditions do not necessarily have to be
-identical, but the requires-conditions of the interface declaration
-must logically imply the requires-conditions of the implementation
-declaration, and the ensures-conditions of the implementation
-declaration must imply the ensures-conditions of the interface
-declaration.
+The names of any type parameters (e.g. the "T" in `f<T>`) also have to
+be the same, as well as any `ghost` or `impure` markers. The requires
+and ensures conditions do *not* necessarily have to be identical, but
+the requires-conditions of the interface declaration must logically
+imply the requires-conditions of the implementation declaration, and
+the ensures-conditions of the implementation declaration must imply
+the ensures-conditions of the interface declaration.
 
 Apart from the case described above, no two `function` declarations in
 a module can have the same name, nor can a `function` have the same

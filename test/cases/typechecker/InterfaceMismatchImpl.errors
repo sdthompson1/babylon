@@ -5,6 +5,7 @@ src/InterfaceMismatchImpl.b:7:5: Interface for 'test-binary:InterfaceMismatchImp
 src/InterfaceMismatchImpl.b:8:5: Interface for 'test-binary:InterfaceMismatchImpl.diff_ret_type' doesn't match implementation
 src/InterfaceMismatchImpl.b:9:5: Multiple implementations of 'test-binary:InterfaceMismatchImpl.double_impl'
 src/InterfaceMismatchImpl.b:11:5: Interface for 'test-binary:InterfaceMismatchImpl.fun_confused_with_const' doesn't match implementation
-src/InterfaceMismatchImpl.b:13:5: 'test-binary:InterfaceMismatchImpl.pure_int_impure_impl' has pure interface but impure implementation
+src/InterfaceMismatchImpl.b:13:5: 'test-binary:InterfaceMismatchImpl.pure_int_impure_impl': interface and implementation do not agree on whether they are 'impure'
+src/InterfaceMismatchImpl.b:14:12: 'test-binary:InterfaceMismatchImpl.impure_int_pure_impl': interface and implementation do not agree on whether they are 'impure'
 src/InterfaceMismatchImpl.b:16:11: 'test-binary:InterfaceMismatchImpl.ghost_int_real_impl': interface and implementation do not agree on whether they are 'ghost'
 src/InterfaceMismatchImpl.b:17:5: 'test-binary:InterfaceMismatchImpl.real_int_ghost_impl': interface and implementation do not agree on whether they are 'ghost'

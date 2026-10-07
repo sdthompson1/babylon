@@ -465,7 +465,7 @@ void report_impurity_mismatch(struct Decl *interface)
 {
     print_location(interface->location);
     char *new_name = sanitise_name(interface->name);
-    print_error("'%s' has pure interface but impure implementation\n", new_name);
+    print_error("'%s': interface and implementation do not agree on whether they are 'impure'\n", new_name);
     free(new_name);
 }
 

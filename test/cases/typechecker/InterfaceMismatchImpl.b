@@ -11,7 +11,7 @@ interface {
     const fun_confused_with_const: i32;
 
     function pure_int_impure_impl();   // Error
-    impure function impure_int_pure_impl();   // Allowed
+    impure function impure_int_pure_impl();   // Error
 
     ghost function ghost_int_real_impl();  // Error
     function real_int_ghost_impl();  // Error
