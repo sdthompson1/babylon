@@ -990,6 +990,7 @@ definition parse_function_decl :: "BabDeclaration Parser" where
                                                   then Ghost
                                                   else NotGhost),
                                      DF_Extern = (List.member markers Extern),
+                                     DF_ExternName = externName,
                                      DF_Impure = (List.member markers Impure) \<rparr>)
   })"
 

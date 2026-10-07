@@ -3458,10 +3458,23 @@ proof -
   have g5': "\<not> (DF_Extern df
                 \<and> \<not> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df))"
     using g5 by blast
+  \<comment> \<open>A ghost function has no extern name.\<close>
+  have g6: "\<not> (DF_Ghost df = Ghost \<and> DF_ExternName df \<noteq> None)"
+  proof
+    assume "DF_Ghost df = Ghost \<and> DF_ExternName df \<noteq> None"
+    then obtain s where gh: "DF_Ghost df = Ghost" and en: "DF_ExternName df = Some s"
+      by auto
+    from ok show False
+      unfolding elab_function_decl_def Let_def
+      by (simp add: g1 g2 g3 g4' g5' gh en)
+  qed
+  \<comment> \<open>The same guard in the simplifier's normal form (cf. g4').\<close>
+  have g6': "\<not> (DF_Ghost df = Ghost \<and> (\<exists>y. DF_ExternName df = Some y))"
+    using g6 by simp
   from ok obtain funInfo where
     sig: "elab_fun_signature env elabEnv df = Inr funInfo"
     unfolding elab_function_decl_def Let_def
-    by (cases "elab_fun_signature env elabEnv df") (auto simp: g1 g2 g3 g4 g4' g5')
+    by (cases "elab_fun_signature env elabEnv df") (auto simp: g1 g2 g3 g4 g4' g5' g6')
   show thesis
   proof (cases "fmlookup (TE_Functions env) (DF_Name df)")
     case (Some declInfo)
@@ -3470,23 +3483,23 @@ proof -
     have isdef: "DF_Extern df \<or> DF_Body df \<noteq> None"
       using ok unfolding elab_function_decl_def Let_def
       by (cases "DF_Extern df \<or> DF_Body df \<noteq> None")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig Some)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig Some)
     have nd: "DF_Name df |\<notin>| fmdom (CM_Functions m)"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "DF_Name df |\<in>| fmdom (CM_Functions m)")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig Some)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig Some)
     have ngc: "DF_Name df |\<notin>| EE_GhostConstants elabEnv"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "DF_Name df |\<in>| EE_GhostConstants elabEnv")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig Some nd)
     have fi_eq: "funInfo = declInfo"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "funInfo = declInfo")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd ngc)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig Some nd ngc)
     have vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd ngc fi_eq)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig Some nd ngc fi_eq)
     from ok isdef obtain bodyOpt where
       elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
       eq1: "env' = env" and
@@ -3498,7 +3511,7 @@ proof -
                              (CM_Functions m) \<rparr>"
       unfolding elab_function_decl_def Let_def
       by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig Some nd ngc fi_eq vd)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig Some nd ngc fi_eq vd)
     have lk: "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
       using Some fi_eq by simp
     show thesis
@@ -3508,7 +3521,7 @@ proof -
     have notin: "\<not> term_name_in_scope env (DF_Name df)"
       using ok unfolding elab_function_decl_def Let_def
       by (cases "term_name_in_scope env (DF_Name df)")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig None)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig None)
     let ?env1 = "tyenv_add_function (DF_Name df) funInfo env"
     let ?ee1 = "(if DF_ReturnType df = None
                  then elabEnv \<lparr> EE_VoidFunctions :=
@@ -3530,7 +3543,7 @@ proof -
                                          (CM_TyEnv m) \<rparr>)"
       unfolding elab_function_decl_def Let_def
       by (cases "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' g5' sig None notin)
+         (auto simp: g1 g2 g3 g4 g4' g5' g6' sig None notin)
     show thesis
       by (rule Declare[OF g1 g2 g3 g4 sig None notin elabB eq1 eq2 eq3 g5])
   qed

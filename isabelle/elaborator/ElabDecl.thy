@@ -621,6 +621,10 @@ definition elab_function_decl ::
            else if DF_Extern df
                    \<and> \<not> list_all (\<lambda>(_, _, _, gh). gh = NotGhost) (DF_TmArgs df)
            then Inl [TyErr_GhostParamOnExternFunction loc name]
+           \<comment> \<open>A ghost extern function is never code-generated, so it cannot
+              name an external symbol\<close>
+           else if DF_Ghost df = Ghost \<and> DF_ExternName df \<noteq> None
+           then Inl [TyErr_ExternNameOnGhostFunction loc name]
            else
              \<comment> \<open>Elaborate the signature, create FunInfo\<close>
              (case elab_fun_signature env elabEnv df of

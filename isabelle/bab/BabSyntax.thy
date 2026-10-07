@@ -129,6 +129,7 @@ record DeclFun =
   DF_Attributes :: "BabAttribute list"
   DF_Ghost :: GhostOrNot
   DF_Extern :: bool
+  DF_ExternName :: "string option"   (* `extern function f() = "name";` - only parsed when DF_Extern *)
   DF_Impure :: bool
 
 type_synonym DataCtor = "Location \<times> string \<times> (BabType option)"
