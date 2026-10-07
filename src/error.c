@@ -285,10 +285,10 @@ void report_impure_cannot_be_ghost(struct Decl *decl)
     print_error("'impure' function cannot be 'ghost'\n");
 }
 
-void report_extern_cannot_be_ghost(struct Decl *decl)
+void report_ghost_extern_name(struct Decl *decl)
 {
     print_location(decl->location);
-    print_error("'extern' function cannot be 'ghost'\n");
+    print_error("'ghost' 'extern' function cannot have an 'extern' name\n");
 }
 
 void report_invalid_extern_name(struct Decl *decl)

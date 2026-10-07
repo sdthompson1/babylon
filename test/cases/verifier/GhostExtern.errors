@@ -1,0 +1,2 @@
+src/GhostExtern.b:37:5: Assert might not hold
+src/GhostExtern.b:42:5: Precondition at src/GhostExtern.b:23:5 might not be met

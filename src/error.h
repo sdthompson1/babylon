@@ -119,7 +119,7 @@ void report_main_not_found(const char *module_name, const char *function_name);
 void report_main_wrong_type(const char *module_name, const char *function_name);
 void report_both_body_and_extern(struct Location location);
 void report_impure_cannot_be_ghost(struct Decl *decl);
-void report_extern_cannot_be_ghost(struct Decl *decl);
+void report_ghost_extern_name(struct Decl *decl);
 void report_invalid_extern_name(struct Decl *decl);
 void report_non_compile_time_constant(struct Location location);
 void report_const_uses_abstract_type(const char *type_name, struct Location location);

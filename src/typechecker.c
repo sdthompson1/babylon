@@ -3963,15 +3963,9 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         return;
     }
 
-    // ghost and extern are incompatible
     // ghost and impure are incompatible
     if (decl->ghost && decl->function_data.impure) {
         report_impure_cannot_be_ghost(decl);
-        ++tc_context->num_errors;
-        return;
-    }
-    if (decl->ghost && decl->function_data.is_extern) {
-        report_extern_cannot_be_ghost(decl);
         ++tc_context->num_errors;
         return;
     }
@@ -4082,9 +4076,15 @@ static void typecheck_function_decl(struct TypecheckContext *tc_context,
         ++tc_context->num_errors;
     }
 
-    if (decl->function_data.is_extern && !is_valid_extern_name(decl->function_data.extern_name)) {
-        report_invalid_extern_name(decl);
-        ++tc_context->num_errors;
+    if (decl->function_data.is_extern) {
+        // ghost extern functions are never linked, so cannot have an extern name
+        if (decl->ghost && decl->function_data.extern_name != NULL) {
+            report_ghost_extern_name(decl);
+            ++tc_context->num_errors;
+        } else if (!is_valid_extern_name(decl->function_data.extern_name)) {
+            report_invalid_extern_name(decl);
+            ++tc_context->num_errors;
+        }
     }
 
     if (kinds_ok && ret_type_ok) {

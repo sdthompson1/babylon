@@ -1,0 +1,3 @@
+src/GhostExtern.b:13:14: 'ghost' 'extern' function cannot have an 'extern' name
+src/GhostExtern.b:15:14: Function body provided for 'extern' function
+src/GhostExtern.b:27:13: Can't access a ghost variable or function from executable code

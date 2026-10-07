@@ -4,7 +4,7 @@ interface {}
 
 extern impure function foo(): i32;
 extern function bar(): i32;
-extern ghost function baz(): i32;  // Error: extern ghost not allowed.
+extern ghost function baz(): i32;  // OK: extern ghost is allowed.
 
 ghost function f1(): i32
 {

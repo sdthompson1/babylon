@@ -1,4 +1,3 @@
-src/Impure.b:7:14: 'extern' function cannot be 'ghost'
 src/Impure.b:11:12: Can't call an impure function from ghost code
 src/Impure.b:11:21: Can't call an impure function from ghost code
 src/Impure.b:12:12: Can't call an impure function from ghost code
