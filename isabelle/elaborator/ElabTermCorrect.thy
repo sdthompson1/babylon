@@ -1779,7 +1779,7 @@ next
   from "3.prems"(1) elab_target elab_operand have next_mv_eq: "next_mv' = next_mv''"
     by (auto split: if_splits option.splits)
   from "3.prems"(1) elab_target elab_operand have
-    target_is_int: "is_integer_type newTargetTy"
+    target_is_num: "is_numeric_type newTargetTy"
     by (auto split: if_splits)
 
   \<comment> \<open>IH: operand has its type in the extended env\<close>
@@ -1796,7 +1796,7 @@ next
   have target_wk: "is_well_kinded ?env' newTargetTy"
     using target_wk_env is_well_kinded_extend_tyvars
     unfolding extend_env_with_tyvars_def
-    by (simp add: is_integer_type_well_kinded target_is_int)
+    by (simp add: is_numeric_type_well_kinded target_is_num)
   have target_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' newTargetTy"
     using target_rt_env is_runtime_type_extend_runtime_tyvars
     unfolding extend_env_with_tyvars_def by auto
@@ -1810,7 +1810,7 @@ next
   proof (cases "unify ?is_flex operandTy newTargetTy")
     case (Some subst)
     \<comment> \<open>Unification succeeded: cast is eliminated via the unifier's substitution\<close>
-    from "3.prems"(1) elab_target elab_operand target_is_int Some have
+    from "3.prems"(1) elab_target elab_operand target_is_num Some have
       result: "newTm = apply_subst_to_term subst newOperand" "ty = newTargetTy"
       by (auto split: if_splits)
 
@@ -1837,9 +1837,9 @@ next
      and ret_unaffected = flex_subst_extend_env(2)[OF unif_dom_flex "3.prems"(2)]
      and abs_no_subst = flex_subst_extend_env(3)[OF unif_dom_flex "3.prems"(2)]
 
-    \<comment> \<open>The target is an (atomic) integer type, so the unifier's range is complete. \<close>
+    \<comment> \<open>The target is an (atomic) numeric type, so the unifier's range is complete. \<close>
     have subst_cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
-      using unify_atomic_range_complete[OF Some is_integer_type_atomic[OF target_is_int]] .
+      using unify_atomic_range_complete[OF Some is_numeric_type_atomic[OF target_is_num]] .
 
     have subst_applied:
       "core_term_type ?env' ghost (apply_subst_to_term subst newOperand)
@@ -1849,17 +1849,17 @@ next
     also have "apply_subst subst operandTy = apply_subst subst newTargetTy"
       using unify_sound[OF Some] .
     also have "apply_subst subst newTargetTy = newTargetTy"
-      using target_is_int is_integer_type_apply_subst by simp
+      using target_is_num is_numeric_type_apply_subst by simp
     finally show ?thesis using result by simp
 
   next
     case None
-    \<comment> \<open>Unification failed: fall through to the integer-cast branch\<close>
-    from "3.prems"(1) elab_target elab_operand target_is_int None have
+    \<comment> \<open>Unification failed: fall through to the numeric-cast branch\<close>
+    from "3.prems"(1) elab_target elab_operand target_is_num None have
       result: "newTm = CoreTm_Cast newTargetTy newOperand" "ty = newTargetTy"
-      and operand_is_int: "is_integer_type operandTy"
+      and operand_is_num: "is_numeric_type operandTy"
       by (auto split: if_splits)
-    show ?thesis using result ih operand_is_int target_is_int target_rt by auto
+    show ?thesis using result ih operand_is_num target_is_num target_rt by auto
   qed
 
 next

@@ -46,30 +46,34 @@ qed
 (* Value-level soundness of cast_value: a successful cast of a value well-typed
    at the (substituted) source type yields a value well-typed at the
    (substituted) target type, provided the static cast condition (cast_ok)
-   holds. Integer case: the value is a CV_FiniteInt or a CV_Int, and the target
-   is a finite-int type (where cast_value checks the range) or int. Array
-   case: the value is unchanged, the element type is shared, and the runtime
-   size check is exactly the sizes_match_dims conjunct of value_has_type at
-   the target. *)
+   holds. Numeric case: the value is a CV_FiniteInt, a CV_Int or a CV_Real, and
+   the target is a finite-int type (where cast_value checks the range), int or
+   real. Array case: the value is unchanged, the element type is shared, and
+   the runtime size check is exactly the sizes_match_dims conjunct of
+   value_has_type at the target. *)
 lemma cast_value_sound:
   assumes cast: "cast_value tgtTy v = Inr v'"
       and co: "cast_ok env srcTy tgtTy"
       and v_typed: "value_has_type env v (apply_subst subst srcTy)"
   shows "value_has_type env v' (apply_subst subst tgtTy)"
 using co proof (cases rule: cast_ok_cases)
-  case Int
-  have "is_integer_type (apply_subst subst srcTy)"
-    using Int(1) by (simp add: is_integer_type_apply_subst)
+  case Num
+  have "is_numeric_type (apply_subst subst srcTy)"
+    using Num(1) by (simp add: is_numeric_type_apply_subst)
   then consider (Fin) sign bits i where "v = CV_FiniteInt sign bits i"
               | (MInt) i where "v = CV_Int i"
+              | (MReal) r where "v = CV_Real r"
     using v_typed by (cases v; cases "apply_subst subst srcTy"; simp)
   then show ?thesis
   proof cases
     case (Fin sign bits i)
-    from cast Fin Int(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
+    from cast Fin Num(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
   next
     case (MInt i)
-    from cast MInt Int(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
+    from cast MInt Num(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
+  next
+    case (MReal r)
+    from cast MReal Num(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
   qed
 next
   case (Array elemTy dims dims')
@@ -88,29 +92,33 @@ next
 qed
 
 (* A failed cast_value on a well-typed value is a RuntimeError, never a
-   TypeError: an integer value (a CV_FiniteInt or a CV_Int) meets an integer
-   target, where the only failure is overflow at a finite-int target; and an
-   array value meets an array target, where the only failure is the size
-   check. *)
+   TypeError: a numeric value (a CV_FiniteInt, a CV_Int or a CV_Real) meets a
+   numeric target, where the only failure is overflow at a finite-int target;
+   and an array value meets an array target, where the only failure is the
+   size check. *)
 lemma cast_value_error_is_runtime:
   assumes cast: "cast_value tgtTy v = Inl err"
       and co: "cast_ok env srcTy tgtTy"
       and v_typed: "value_has_type env v (apply_subst subst srcTy)"
   shows "err = RuntimeError"
 using co proof (cases rule: cast_ok_cases)
-  case Int
-  have "is_integer_type (apply_subst subst srcTy)"
-    using Int(1) by (simp add: is_integer_type_apply_subst)
+  case Num
+  have "is_numeric_type (apply_subst subst srcTy)"
+    using Num(1) by (simp add: is_numeric_type_apply_subst)
   then consider (Fin) sign bits i where "v = CV_FiniteInt sign bits i"
               | (MInt) i where "v = CV_Int i"
+              | (MReal) r where "v = CV_Real r"
     using v_typed by (cases v; cases "apply_subst subst srcTy"; simp)
   then show ?thesis
   proof cases
     case (Fin sign bits i)
-    from cast Fin Int(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
+    from cast Fin Num(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
   next
     case (MInt i)
-    from cast MInt Int(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
+    from cast MInt Num(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
+  next
+    case (MReal r)
+    from cast MReal Num(2) show ?thesis by (cases tgtTy) (auto split: if_splits)
   qed
 next
   case (Array elemTy dims dims')

@@ -883,14 +883,14 @@ where
         (case elab_term env elabEnv ghost operand next_mv of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newOperand, operandTy, next_mv') \<Rightarrow>
-            if is_integer_type newTargetTy then
+            if is_numeric_type newTargetTy then
               (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) operandTy newTargetTy of
                 Some subst \<Rightarrow>
                   \<comment> \<open>Unification succeeded - we can eliminate the cast\<close>
                   Inr (apply_subst_to_term subst newOperand, newTargetTy, next_mv')
               | None \<Rightarrow>
-                  if is_integer_type operandTy then
-                    \<comment> \<open>Casting one integer type to another\<close>
+                  if is_numeric_type operandTy then
+                    \<comment> \<open>Casting one numeric type (finite int, int or real) to another\<close>
                     Inr (CoreTm_Cast newTargetTy newOperand, newTargetTy, next_mv')
                   else
                     Inl [TyErr_InvalidCast loc])

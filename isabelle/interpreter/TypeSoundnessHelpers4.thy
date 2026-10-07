@@ -864,7 +864,7 @@ next
         have arr: "\<exists>elemTy dims dims'. innerTy = CoreTy_Array elemTy dims
                      \<and> targetTy = CoreTy_Array elemTy dims' \<and> array_dims_well_kinded dims'"
         using co proof (cases rule: cast_ok_cases)
-          case Int
+          case Num
           with tgt_array show ?thesis by (cases targetTy) auto
         next
           case (Array elemTy dims dims')

@@ -146,6 +146,10 @@ lemma is_integer_type_atomic:
   "is_integer_type ty \<Longrightarrow> is_atomic_type ty"
   by (cases ty) auto
 
+lemma is_numeric_type_atomic:
+  "is_numeric_type ty \<Longrightarrow> is_atomic_type ty"
+  by (cases ty) auto
+
 (* Unifying anything against an atomic type can only bind a single
    flexible variable to that type, so the range of the unifier (if one exists)
    consists of that type alone. *)

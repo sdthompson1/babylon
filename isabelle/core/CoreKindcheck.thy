@@ -54,6 +54,11 @@ lemma is_integer_type_well_kinded:
   "is_integer_type ty \<Longrightarrow> is_well_kinded env ty"
   by (cases ty) auto
 
+(* Numeric types are always well-kinded *)
+lemma is_numeric_type_well_kinded:
+  "is_numeric_type ty \<Longrightarrow> is_well_kinded env ty"
+  by (cases ty) auto
+
 (* A list of type variables (as types) is well-kinded, provided the variables are all in scope. *)
 lemma list_all_tyvar_is_well_kinded:
   assumes "\<forall>n \<in> set nums. n |\<in>| TE_TypeVars env"

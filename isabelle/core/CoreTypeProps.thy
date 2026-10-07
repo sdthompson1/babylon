@@ -86,6 +86,11 @@ lemma finite_integer_type_is_integer_type:
   "is_finite_integer_type ty \<Longrightarrow> is_integer_type ty"
   by (cases ty) auto
 
+(* Integer types are numeric types *)
+lemma integer_type_is_numeric_type:
+  "is_integer_type ty \<Longrightarrow> is_numeric_type ty"
+  by (cases ty) auto
+
 (* Integer types are either FiniteInt or MathInt *)
 lemma is_integer_type_cases:
   assumes "is_integer_type ty"
@@ -96,6 +101,11 @@ lemma is_integer_type_cases:
 (* Integer types have no free type variables *)
 lemma integer_type_no_tyvars:
   "is_integer_type ty \<Longrightarrow> type_tyvars ty = {}"
+  by (cases ty) auto
+
+(* Numeric types have no free type variables *)
+lemma numeric_type_no_tyvars:
+  "is_numeric_type ty \<Longrightarrow> type_tyvars ty = {}"
   by (cases ty) auto
 
 (* A list of type variables (as types) satisfies list_all is_runtime_type, provided

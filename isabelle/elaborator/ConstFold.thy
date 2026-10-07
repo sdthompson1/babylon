@@ -178,7 +178,7 @@ where
       Some v \<Rightarrow> Inr v
     | None \<Rightarrow> Inl TypeError)"  \<comment> \<open>name not in scope\<close>
 
-  (* Cast (integer or array; cast_value is shared with interp_term) *)
+  (* Cast (numeric or array; cast_value is shared with interp_term) *)
 | "eval_const vals (CoreTm_Cast targetTy tm) =
     (case eval_const vals tm of
       Inl err \<Rightarrow> Inl err

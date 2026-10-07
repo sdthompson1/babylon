@@ -656,8 +656,11 @@ qed
 (* Apply a cast to a value.
     - RuntimeError if the cast fails (overflow for casts to a finite integer type;
       array's runtime size doesn't match for array casts to CoreDim_Fixed).
-    - TypeError if the cast itself is invalid (only array or integer targets are allowed).
-    - Otherwise: successful cast, returns the new value. *)
+    - TypeError if the cast itself is invalid (only array or numeric targets are allowed).
+    - Otherwise: successful cast, returns the new value.
+   A real cast to an integer type (finite or int) rounds downwards (towards minus
+   infinity), i.e. takes the floor, before any range check. All other numeric
+   casts leave the numerical value unchanged. *)
 fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
   "cast_value (CoreTy_FiniteInt sign bits) (CV_FiniteInt _ _ i) =
      (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
@@ -665,10 +668,18 @@ fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + 
 | "cast_value (CoreTy_FiniteInt sign bits) (CV_Int i) =
      (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
       else Inl RuntimeError)"
+| "cast_value (CoreTy_FiniteInt sign bits) (CV_Real r) =
+     (if int_fits sign bits \<lfloor>r\<rfloor> then Inr (CV_FiniteInt sign bits \<lfloor>r\<rfloor>)
+      else Inl RuntimeError)"
 | "cast_value (CoreTy_FiniteInt _ _) _ = Inl TypeError"
 | "cast_value CoreTy_MathInt (CV_FiniteInt _ _ i) = Inr (CV_Int i)"
 | "cast_value CoreTy_MathInt (CV_Int i) = Inr (CV_Int i)"
+| "cast_value CoreTy_MathInt (CV_Real r) = Inr (CV_Int \<lfloor>r\<rfloor>)"
 | "cast_value CoreTy_MathInt _ = Inl TypeError"
+| "cast_value CoreTy_MathReal (CV_FiniteInt _ _ i) = Inr (CV_Real (of_int i))"
+| "cast_value CoreTy_MathReal (CV_Int i) = Inr (CV_Real (of_int i))"
+| "cast_value CoreTy_MathReal (CV_Real r) = Inr (CV_Real r)"
+| "cast_value CoreTy_MathReal _ = Inl TypeError"
 | "cast_value (CoreTy_Array _ dims) (CV_Array sizes elems) =
      (if sizes_match_dims sizes dims then Inr (CV_Array sizes elems)
       else Inl RuntimeError)"

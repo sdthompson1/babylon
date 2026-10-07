@@ -118,9 +118,9 @@ lemma array_cast_ok_cases:
     "list_all2 dim_cast_ok dims dims'"
   using assms by (cases srcTy; cases tgtTy) auto
 
-(* An array cast never involves an integer type on either side. *)
-lemma array_cast_ok_not_integer:
-  "array_cast_ok srcTy tgtTy \<Longrightarrow> \<not> is_integer_type srcTy \<and> \<not> is_integer_type tgtTy"
+(* An array cast never involves a numeric type on either side. *)
+lemma array_cast_ok_not_numeric:
+  "array_cast_ok srcTy tgtTy \<Longrightarrow> \<not> is_numeric_type srcTy \<and> \<not> is_numeric_type tgtTy"
   by (cases srcTy; cases tgtTy) auto
 
 (* Substitution acts identically on both sides of an array cast (it rewrites
@@ -136,16 +136,21 @@ lemma array_cast_ok_type_tyvars:
   by (cases srcTy; cases tgtTy) auto
 
 
-(* A general cast can either be an array cast (as described above), or an integer
-   cast (converting any integer type to another). *)
+(* A general cast can either be an array cast (as described above), or a numeric
+   cast (converting any numeric type -- finite int, int or real -- to another). *)
 definition cast_ok :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \<Rightarrow> bool" where
   "cast_ok env srcTy tgtTy \<equiv>
-     is_integer_type srcTy \<and> is_integer_type tgtTy
+     is_numeric_type srcTy \<and> is_numeric_type tgtTy
      \<or> array_cast_ok srcTy tgtTy \<and> is_well_kinded env tgtTy"
 
+lemma cast_ok_numeric [simp]:
+  "is_numeric_type srcTy \<Longrightarrow> is_numeric_type tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
+  by (simp add: cast_ok_def)
+
+(* Special case: integer types are numeric, so integer casts are admissible. *)
 lemma cast_ok_int [simp]:
   "is_integer_type srcTy \<Longrightarrow> is_integer_type tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
-  by (simp add: cast_ok_def)
+  by (simp add: integer_type_is_numeric_type)
 
 lemma cast_ok_array:
   "array_cast_ok srcTy tgtTy \<Longrightarrow> is_well_kinded env tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
@@ -153,20 +158,20 @@ lemma cast_ok_array:
 
 lemma cast_ok_cases:
   assumes "cast_ok env srcTy tgtTy"
-  obtains (Int) "is_integer_type srcTy" "is_integer_type tgtTy"
+  obtains (Num) "is_numeric_type srcTy" "is_numeric_type tgtTy"
         | (Array) elemTy dims dims' where
             "srcTy = CoreTy_Array elemTy dims"
             "tgtTy = CoreTy_Array elemTy dims'"
             "list_all2 dim_cast_ok dims dims'"
             "is_well_kinded env tgtTy"
 proof -
-  from assms consider (I) "is_integer_type srcTy" "is_integer_type tgtTy"
+  from assms consider (N) "is_numeric_type srcTy" "is_numeric_type tgtTy"
     | (A) "array_cast_ok srcTy tgtTy" "is_well_kinded env tgtTy"
     unfolding cast_ok_def by blast
   then show ?thesis
   proof cases
-    case I
-    then show ?thesis by (rule Int)
+    case N
+    then show ?thesis by (rule Num)
   next
     case A
     from A(1) obtain elemTy dims dims' where
@@ -181,7 +186,7 @@ qed
 (* The target of an admissible cast is well-kinded. *)
 lemma cast_ok_well_kinded:
   "cast_ok env srcTy tgtTy \<Longrightarrow> is_well_kinded env tgtTy"
-  unfolding cast_ok_def using is_integer_type_well_kinded by blast
+  unfolding cast_ok_def using is_numeric_type_well_kinded by blast
 
 (* Both kinds of cast condition are closed under substitution, provided
    well-kindedness of the target transfers to the new env. *)
@@ -190,8 +195,8 @@ lemma cast_ok_apply_subst:
     and wk: "is_well_kinded env tgtTy \<Longrightarrow> is_well_kinded env' (apply_subst subst tgtTy)"
   shows "cast_ok env' (apply_subst subst srcTy) (apply_subst subst tgtTy)"
 using co proof (cases rule: cast_ok_cases)
-  case Int
-  then show ?thesis by (simp add: is_integer_type_apply_subst)
+  case Num
+  then show ?thesis by (simp add: is_numeric_type_apply_subst)
 next
   case (Array elemTy dims dims')
   have "array_cast_ok srcTy tgtTy" using Array(1,2,3) by simp
