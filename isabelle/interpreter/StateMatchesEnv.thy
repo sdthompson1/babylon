@@ -109,20 +109,19 @@ definition global_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTy
       Some val \<Rightarrow> value_has_type env val ty
     | None \<Rightarrow> False)"
 
-(* Contract for an external function: for every valid input (type args, term args,
-   world), the extern function returns a valid return value of the (substituted)
-   return type, and a valid list of ref updates (one per Ref parameter) at the
-   (substituted) Ref-parameter types.
-   The type arguments are not required to be runtime types: ghost code may call
-   the function at any ground, well-kinded type arguments.
-   The world is opaque to soundness, so the contract says only one thing about
-   it: a pure function (one that is not marked impure) returns the world it
-   was given. This holds for every input, not only for well-typed arguments.
-   Discharging this contract is the responsibility of whoever provides the
+(* The contract of an external function is a conjunction of named parts, one
+   per property. Discharging it is the responsibility of whoever provides the
    ExternFunc; the soundness proof for extern calls consumes it. *)
-definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
-  "extern_fun_contract env funInfo externFun =
-   ((\<forall>tySubst world vals.
+
+(* Typing: for every valid input (type args, term args, world), the extern
+   function returns a valid return value of the (substituted) return type, and
+   a valid list of ref updates (one per Ref parameter) at the (substituted)
+   Ref-parameter types.
+   The type arguments are not required to be runtime types: ghost code may call
+   the function at any ground, well-kinded type arguments. *)
+definition extern_fun_well_typed :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
+  "extern_fun_well_typed env funInfo externFun =
+   (\<forall>tySubst world vals.
        \<comment> \<open>tySubst maps exactly the callee's type arguments to ground,
            well-kinded types in the caller's env.\<close>
        fmdom tySubst = fset_of_list (FI_TyArgs funInfo) \<and>
@@ -140,15 +139,26 @@ definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow>
           list_all2 (value_has_type env)
                     refUpdates
                     (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))))
-    \<comment> \<open>A pure function leaves the world unchanged.\<close>
-    \<and> (\<not> FI_Impure funInfo \<longrightarrow> (\<forall>world vals. fst (externFun world vals) = world)))"
+                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))))"
+
+(* Purity: the world is opaque to soundness, so the contract says only one
+   thing about it: a pure function (one that is not marked impure) returns the
+   world it was given. This holds for every input, not only for well-typed
+   arguments. *)
+definition extern_fun_respects_purity :: "FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
+  "extern_fun_respects_purity funInfo externFun =
+   (\<not> FI_Impure funInfo \<longrightarrow> (\<forall>world vals. fst (externFun world vals) = world))"
+
+definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
+  "extern_fun_contract env funInfo externFun =
+   (extern_fun_well_typed env funInfo externFun \<and>
+    extern_fun_respects_purity funInfo externFun)"
 
 (* A pure extern function returns the world it was given. *)
 lemma extern_fun_contract_pure_world:
   assumes "extern_fun_contract env funInfo externFun" and "\<not> FI_Impure funInfo"
   shows "fst (externFun world vals) = world"
-  using assms unfolding extern_fun_contract_def by simp
+  using assms unfolding extern_fun_contract_def extern_fun_respects_purity_def by simp
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed for typechecking the function body, if there is one. *)
@@ -188,7 +198,7 @@ proof -
   have vht_eq: "value_has_type (env \<lparr> TE_ProofGoal := g \<rparr>) = value_has_type env"
     by (rule ext)+ simp
   show ?thesis
-    unfolding extern_fun_contract_def
+    unfolding extern_fun_contract_def extern_fun_well_typed_def
     using is_well_kinded_cong_env[where env' = "env \<lparr> TE_ProofGoal := g \<rparr>" and env = env]
           is_runtime_type_cong_env[where env' = "env \<lparr> TE_ProofGoal := g \<rparr>" and env = env]
           vht_eq
@@ -203,7 +213,7 @@ proof -
   have vht_eq: "value_has_type (env \<lparr> TE_ProofTopLevel := b \<rparr>) = value_has_type env"
     by (rule ext)+ simp
   show ?thesis
-    unfolding extern_fun_contract_def
+    unfolding extern_fun_contract_def extern_fun_well_typed_def
     using is_well_kinded_cong_env[where env' = "env \<lparr> TE_ProofTopLevel := b \<rparr>" and env = env]
           is_runtime_type_cong_env[where env' = "env \<lparr> TE_ProofTopLevel := b \<rparr>" and env = env]
           vht_eq
@@ -447,7 +457,7 @@ proof -
     by (rule ext)+ (rule value_has_type_cong_env[OF dc dt tv])
   have ext_eq: "\<And>externFun. extern_fun_contract env1 funInfo externFun
                               = extern_fun_contract env2 funInfo externFun"
-    by (simp add: extern_fun_contract_def wk_eq rt_eq vht_eq)
+    by (simp add: extern_fun_contract_def extern_fun_well_typed_def wk_eq rt_eq vht_eq)
   show ?thesis
     unfolding fun_info_matches_interp_fun_def
     by (simp add: body_eq ext_eq split: sum.splits)

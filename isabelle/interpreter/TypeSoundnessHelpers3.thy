@@ -2284,7 +2284,7 @@ proof -
                   list_all2 (value_has_type env) refUpdates
                     (map (\<lambda>(ty, _). apply_subst tySubst ty)
                          (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo))))"
-        unfolding extern_fun_contract_def by meson
+        unfolding extern_fun_contract_def extern_fun_well_typed_def by meson
       from ext_inst prem_dom prem_range prem_list_all2
       have contract_implies:
         "case externFun (IS_World state) ?vals of

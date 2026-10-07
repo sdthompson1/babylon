@@ -378,7 +378,7 @@ proof -
   have wk_eq: "\<And>ty. type_tyvars ty = {} \<Longrightarrow> is_well_kinded env' ty = is_well_kinded env ty"
     by (rule is_well_kinded_ground_cong_env[OF _ dt])
   show ?thesis
-    unfolding extern_fun_contract_def
+    unfolding extern_fun_contract_def extern_fun_well_typed_def
     by (simp add: vht_eq wk_eq cong: conj_cong)
 qed
 
