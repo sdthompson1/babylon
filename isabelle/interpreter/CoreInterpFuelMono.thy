@@ -994,14 +994,22 @@ next
       by simp
   qed
 next
-  (* Allocated: always false *)
-  case (20 d fuel state tm)
-  show ?case
+  (* Allocated: evaluates the operand, then a fuel-free check on the value *)
+  case (20 d fuel state ty tm)
+  then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
-    then obtain f'' where "f' = Suc f''" using Suc_le_D by auto
-    thus "interp_term d f' state (CoreTm_Allocated tm)
-            = interp_term d (Suc fuel) state (CoreTm_Allocated tm)"
+    then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
+      using Suc_le_D by auto
+    assume noFuel: "interp_term d (Suc fuel) state (CoreTm_Allocated ty tm) \<noteq> Inl InsufficientFuel"
+    hence sub_noFuel: "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
+      by (cases "interp_term d fuel state tm") simp_all
+    hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
+      using "20.IH" by blast
+    from IH f''_ge have "interp_term d f'' state tm = interp_term d fuel state tm"
+      by metis
+    with f'_eq show "interp_term d f' state (CoreTm_Allocated ty tm)
+                       = interp_term d (Suc fuel) state (CoreTm_Allocated ty tm)"
       by simp
   qed
 next
@@ -1149,7 +1157,7 @@ next
       case (CoreTm_Quantifier x1 x2 x3 x4)
       thus ?thesis using f'_eq by simp
     next
-      case (CoreTm_Allocated x)
+      case (CoreTm_Allocated xty x)
       thus ?thesis using f'_eq by simp
     next
       case (CoreTm_Old x)
@@ -2337,8 +2345,19 @@ next
       using d'_eq eq by simp
   qed
 next
-  (* Allocated: always false *)
-  case 20 then show ?case by simp
+  (* Allocated: evaluates the operand; is_allocated does not take a depth *)
+  case (20 d fuel state ty tm)
+  show ?case
+  proof (intro allI impI)
+    fix d' assume d'_ge: "d' \<ge> d"
+    have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
+      using "20.prems" by (auto split: sum.splits)
+    hence "interp_term d' fuel state tm = interp_term d fuel state tm"
+      using "20.IH" d'_ge by blast
+    thus "interp_term d' (Suc fuel) state (CoreTm_Allocated ty tm)
+            = interp_term d (Suc fuel) state (CoreTm_Allocated ty tm)"
+      by simp
+  qed
 next
   (* Old *)
   case (21 d fuel state tm)

@@ -3361,7 +3361,7 @@ next
   from "18.prems"(1) ghost_eq obtain newSubTm subTy next_mv_sub where
     elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
     sub_cp: "is_complete_type subTy" and
-    newTm_eq: "newTm = CoreTm_Allocated newSubTm" and
+    newTm_eq: "newTm = CoreTm_Allocated subTy newSubTm" and
     ty_eq: "ty = CoreTy_Bool" and
     next_mv_eq: "next_mv' = next_mv_sub"
     by (auto split: sum.splits if_splits)

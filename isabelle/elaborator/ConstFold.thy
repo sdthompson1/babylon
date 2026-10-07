@@ -58,7 +58,7 @@ fun is_constant_term :: "CoreTerm \<Rightarrow> bool" where
 | "is_constant_term (CoreTm_Match scrut arms) =
     (is_constant_term scrut \<and> list_all (is_constant_term \<circ> snd) arms)"
 | "is_constant_term (CoreTm_Sizeof tm) = is_constant_term tm"
-| "is_constant_term (CoreTm_Allocated _) = False"
+| "is_constant_term (CoreTm_Allocated _ _) = False"
 | "is_constant_term (CoreTm_Old _) = False"
 | "is_constant_term (CoreTm_Default _) = False"
 
@@ -111,7 +111,8 @@ fun term_types_ground :: "CoreTerm \<Rightarrow> bool" where
 | "term_types_ground (CoreTm_Match scrut arms) =
     (term_types_ground scrut \<and> list_all (term_types_ground \<circ> snd) arms)"
 | "term_types_ground (CoreTm_Sizeof tm) = term_types_ground tm"
-| "term_types_ground (CoreTm_Allocated tm) = term_types_ground tm"
+| "term_types_ground (CoreTm_Allocated ty tm) =
+    (type_tyvars ty = {} \<and> term_types_ground tm)"
 | "term_types_ground (CoreTm_Old tm) = term_types_ground tm"
 | "term_types_ground (CoreTm_Default ty) = (type_tyvars ty = {})"
 
@@ -277,7 +278,7 @@ where
      these occurs in a legal non-ghost const. (interp_term, which also runs ghost
      code, does evaluate Quantifier and Old.) *)
 | "eval_const vals (CoreTm_Quantifier _ _ _ _) = Inl TypeError"
-| "eval_const vals (CoreTm_Allocated _) = Inl TypeError"
+| "eval_const vals (CoreTm_Allocated _ _) = Inl TypeError"
 | "eval_const vals (CoreTm_Old _) = Inl TypeError"
 | "eval_const vals (CoreTm_Default _) = Inl TypeError"
 

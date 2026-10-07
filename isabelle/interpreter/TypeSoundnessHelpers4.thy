@@ -498,11 +498,9 @@ next
         then show ?thesis
           using "1.prems"(1,2) Suc.IH(1) type_soundness_sizeof typing by blast
       next
-        case (CoreTm_Allocated x18)
-        \<comment> \<open>Allocated always gives false, and its type is bool. \<close>
-        from typing CoreTm_Allocated have "ty = CoreTy_Bool"
-          by (auto split: option.splits if_splits)
-        with CoreTm_Allocated show ?thesis by simp
+        case (CoreTm_Allocated x181 x182)
+        then show ?thesis
+          using "1.prems"(1,2) Suc.IH(1) type_soundness_allocated typing by blast
       next
         case (CoreTm_Old innerTm)
         \<comment> \<open>Old is the identity. \<close>

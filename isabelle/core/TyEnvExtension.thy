@@ -661,18 +661,18 @@ next
   show ?case using CoreTm_Sizeof.prems(3) tm_ty tm_ty'
     by (auto split: option.splits CoreType.splits if_splits)
 next
-  case (CoreTm_Allocated tm)
+  case (CoreTm_Allocated annTy tm)
   show ?case
   proof (cases ghost)
     case NotGhost
     with CoreTm_Allocated.prems(3) show ?thesis by simp
   next
     case Ghost
-    with CoreTm_Allocated.prems(3) obtain tmTy where
-      tm_ty: "core_term_type env Ghost tm = Some tmTy" and
-      cp: "is_complete_type tmTy" and ty_eq: "ty = CoreTy_Bool"
+    with CoreTm_Allocated.prems(3) have
+      tm_ty: "core_term_type env Ghost tm = Some annTy" and
+      cp: "is_complete_type annTy" and ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits if_splits)
-    have tm_ty': "core_term_type env' Ghost tm = Some tmTy"
+    have tm_ty': "core_term_type env' Ghost tm = Some annTy"
       using CoreTm_Allocated.IH[OF CoreTm_Allocated.prems(1,2) tm_ty] .
     show ?thesis using Ghost tm_ty' cp ty_eq by simp
   qed

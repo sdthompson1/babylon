@@ -79,7 +79,7 @@ fun core_term_free_vars :: "CoreTerm \<Rightarrow> string fset" where
 | "core_term_free_vars (CoreTm_Match scrut arms) =
     core_term_free_vars scrut |\<union>| ffUnion (fset_of_list (map (core_term_free_vars \<circ> snd) arms))"
 | "core_term_free_vars (CoreTm_Sizeof tm) = core_term_free_vars tm"
-| "core_term_free_vars (CoreTm_Allocated tm) = core_term_free_vars tm"
+| "core_term_free_vars (CoreTm_Allocated _ tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Old tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Default _) = {||}"
 
@@ -99,7 +99,7 @@ lemma fmember_ffUnion_fimage_fset_of_list_iff:
 (* ========================================================================== *)
 
 (* Type variables appearing in the types syntactically embedded in a term.
-   Only six constructors carry an embedded type (the ones on which
+   Only seven constructors carry an embedded type (the ones on which
    core_term_type runs is_well_kinded / is_runtime_type); the rest just
    recurse into subterms. *)
 fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> string set" where
@@ -130,7 +130,8 @@ fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> string set" where
 | "core_term_free_tyvars (CoreTm_Match scrut arms) =
     core_term_free_tyvars scrut \<union> \<Union>(set (map (core_term_free_tyvars \<circ> snd) arms))"
 | "core_term_free_tyvars (CoreTm_Sizeof tm) = core_term_free_tyvars tm"
-| "core_term_free_tyvars (CoreTm_Allocated tm) = core_term_free_tyvars tm"
+| "core_term_free_tyvars (CoreTm_Allocated ty tm) =
+    type_tyvars ty \<union> core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Old tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Default ty) = type_tyvars ty"
 
@@ -163,7 +164,8 @@ fun core_term_free_tyvars_list :: "CoreTerm \<Rightarrow> string list" where
 | "core_term_free_tyvars_list (CoreTm_Match scrut arms) =
     core_term_free_tyvars_list scrut @ concat (map (core_term_free_tyvars_list \<circ> snd) arms)"
 | "core_term_free_tyvars_list (CoreTm_Sizeof tm) = core_term_free_tyvars_list tm"
-| "core_term_free_tyvars_list (CoreTm_Allocated tm) = core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Allocated ty tm) =
+    type_tyvars_list ty @ core_term_free_tyvars_list tm"
 | "core_term_free_tyvars_list (CoreTm_Old tm) = core_term_free_tyvars_list tm"
 | "core_term_free_tyvars_list (CoreTm_Default ty) = type_tyvars_list ty"
 

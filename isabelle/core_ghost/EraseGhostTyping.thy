@@ -828,7 +828,7 @@ next
     by (rule CoreTm_Sizeof.IH[OF t wf rel])
   show ?case using CoreTm_Sizeof.prems(1) t tE by simp
 next
-  case (CoreTm_Allocated tm)
+  case (CoreTm_Allocated ty tm)
   then show ?case by simp
 next
   case (CoreTm_Old tm)

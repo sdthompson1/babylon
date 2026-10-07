@@ -153,7 +153,7 @@ fun erase_ghost_term :: "(string, FunInfo) fmap \<Rightarrow> CoreTerm \<Rightar
     CoreTm_Match (erase_ghost_term funs tm)
                  (map (\<lambda>(pat, tm). (pat, erase_ghost_term funs tm)) cases)"
 | "erase_ghost_term funs (CoreTm_Sizeof tm) = CoreTm_Sizeof (erase_ghost_term funs tm)"
-| "erase_ghost_term funs (CoreTm_Allocated tm) = CoreTm_Allocated tm"
+| "erase_ghost_term funs (CoreTm_Allocated ty tm) = CoreTm_Allocated ty tm"
 | "erase_ghost_term funs (CoreTm_Old tm) = CoreTm_Old tm"
 | "erase_ghost_term funs (CoreTm_Default ty) = CoreTm_Default ty"
 

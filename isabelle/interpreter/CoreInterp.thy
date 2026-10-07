@@ -539,6 +539,117 @@ termination by lexicographic_order
 
 
 (* ========================================================================== *)
+(* Allocated *)
+(* ========================================================================== *)
+
+(* Combine the results of checking each component: an error if any component
+   errored, otherwise true iff any component was true. *)
+fun any_allocated :: "(InterpError + bool) list \<Rightarrow> InterpError + bool" where
+  "any_allocated [] = Inr False"
+| "any_allocated (Inl err # _) = Inl err"
+| "any_allocated (Inr b # rest) =
+    (case any_allocated rest of
+      Inl err \<Rightarrow> Inl err
+    | Inr b' \<Rightarrow> Inr (b \<or> b'))"
+
+(* Does a value of the given (ground) type currently hold allocated storage?
+   The type is needed because a CoreValue does not record whether an array is
+   allocatable or fixed-size: an allocatable array and a fixed-size array of
+   the same size are the same CoreValue.
+     - An allocatable array is allocated iff all of its sizes are non-zero.
+     - Any other array, a record or a variant is allocated iff some component
+       (element, field or payload) is.
+     - Scalars are never allocated.
+   Recursion is on the value, so no fuel is needed. TypeError arises only for
+   a type variable or an unknown data constructor, neither of which can happen
+   for a well-typed value of a ground type. *)
+function is_allocated :: "(string, string \<times> string list \<times> CoreType) fmap
+    \<Rightarrow> CoreValue \<Rightarrow> CoreType \<Rightarrow> InterpError + bool" where
+  "is_allocated ctors (CV_Bool _) _ = Inr False"
+| "is_allocated ctors (CV_FiniteInt _ _ _) _ = Inr False"
+| "is_allocated ctors (CV_Int _) _ = Inr False"
+| "is_allocated ctors (CV_Real _) _ = Inr False"
+| "is_allocated ctors (CV_Record fieldValues) ty =
+    (case ty of
+      CoreTy_Record fieldTypes \<Rightarrow>
+        any_allocated
+          (map (\<lambda>p. is_allocated ctors (snd (fst p)) (snd (snd p)))
+               (zip fieldValues fieldTypes))
+    | _ \<Rightarrow> Inl TypeError)"
+| "is_allocated ctors (CV_Variant ctor payload) ty =
+    (case ty of
+      CoreTy_Datatype _ argTypes \<Rightarrow>
+        (case fmlookup ctors ctor of
+          Some (_, tyvars, payloadTy) \<Rightarrow>
+            if length tyvars = length argTypes then
+              is_allocated ctors payload
+                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)
+            else Inl TypeError
+        | None \<Rightarrow> Inl TypeError)
+    | _ \<Rightarrow> Inl TypeError)"
+| "is_allocated ctors (CV_Array sizes valuesMap) ty =
+    (case ty of
+      CoreTy_Array elemTy dims \<Rightarrow>
+        if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims
+        then Inr (list_all (\<lambda>s. s \<noteq> 0) sizes)
+        else any_allocated
+               (map (\<lambda>idx. case fmlookup valuesMap idx of
+                              Some v \<Rightarrow> is_allocated ctors v elemTy
+                            | None \<Rightarrow> Inl TypeError)
+                    (all_indices sizes))
+    | _ \<Rightarrow> Inl TypeError)"
+  by pat_completeness auto
+
+termination is_allocated
+proof (relation "measure (\<lambda>(ctors, val, ty). size val)")
+  show "wf (measure (\<lambda>(ctors, val, ty). size val))" by simp
+next
+  \<comment> \<open>Record case: p is a (value, type) pair from the zip, so fst p is a field.\<close>
+  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
+  fix fieldValues :: "(string \<times> CoreValue) list"
+  fix ty :: CoreType
+  fix fieldTypes :: "(string \<times> CoreType) list"
+  fix p :: "(string \<times> CoreValue) \<times> (string \<times> CoreType)"
+  assume "p \<in> set (zip fieldValues fieldTypes)"
+  hence "fst p \<in> set fieldValues" by (metis set_zip_leftD prod.collapse)
+  hence "(fst (fst p), snd (fst p)) \<in> set fieldValues" by simp
+  hence "size (snd (fst p)) < size (CV_Record fieldValues)"
+    by (rule size_record_field)
+  thus "((ctors, snd (fst p), snd (snd p)), ctors, CV_Record fieldValues, ty)
+        \<in> measure (\<lambda>(ctors, val, ty). size val)"
+    by simp
+next
+  \<comment> \<open>Variant case: payload is a direct subterm.\<close>
+  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
+  fix ctor :: string
+  fix payload :: CoreValue
+  fix ty :: CoreType
+  fix x11 :: string
+  fix x12 :: "CoreType list"
+  fix x2 x y xa ya
+  show "((ctors, payload, apply_subst (fmap_of_list (zip xa x12)) ya),
+         ctors, CV_Variant ctor payload, ty) \<in> measure (\<lambda>(ctors, val, ty). size val)"
+    by simp
+next
+  \<comment> \<open>Array case: element found by lookup.\<close>
+  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
+  fix sizes :: "int list"
+  fix valuesMap :: "(int list, CoreValue) fmap"
+  fix ty :: CoreType
+  fix x71 :: CoreType
+  fix x72 :: "CoreDimension list"
+  fix x :: "int list"
+  fix x2 :: CoreValue
+  assume "fmlookup valuesMap x = Some x2"
+  hence "size x2 < size (CV_Array sizes valuesMap)"
+    by (rule size_array_lookup)
+  thus "((ctors, x2, x71), ctors, CV_Array sizes valuesMap, ty)
+        \<in> measure (\<lambda>(ctors, val, ty). size val)"
+    by simp
+qed
+
+
+(* ========================================================================== *)
 (* Casting *)
 (* ========================================================================== *)
 
@@ -838,10 +949,16 @@ where
       (values_of_type state (apply_subst (IS_TyArgs state) varTy))
       (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local varName v state) bodyTm))"
 
-  (* Allocated: always false for now, and the operand is not evaluated. The
-     real answer depends on the operand's type (a fixed-size array and an
-     allocatable array can have the same value), which is not available here. *)
-| "interp_term _ (Suc _) _ (CoreTm_Allocated _) = Inr (CV_Bool False)"
+  (* Allocated: evaluate the operand, then inspect the value guided by the
+     annotated operand type (with any current-frame tyvars resolved via
+     IS_TyArgs, as for Default). *)
+| "interp_term d (Suc fuel) state (CoreTm_Allocated ty tm) =
+    (case interp_term d fuel state tm of
+      Inl err \<Rightarrow> Inl err
+    | Inr v \<Rightarrow>
+        (case is_allocated (IS_DataCtors state) v (apply_subst (IS_TyArgs state) ty) of
+          Inl err \<Rightarrow> Inl err
+        | Inr b \<Rightarrow> Inr (CV_Bool b)))"
 
   (* Old: the identity (Core has no postconditions yet) *)
 | "interp_term d (Suc fuel) state (CoreTm_Old tm) = interp_term d fuel state tm"

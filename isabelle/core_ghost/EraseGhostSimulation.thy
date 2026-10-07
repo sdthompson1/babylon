@@ -503,7 +503,7 @@ next
         note sE = sub[OF W1 s]
         show ?thesis using s sE by (simp add: CoreTm_Sizeof)
       next
-        case (CoreTm_Allocated arg)
+        case (CoreTm_Allocated argTy arg)
         with W show ?thesis by simp
       next
         case (CoreTm_Old arg)

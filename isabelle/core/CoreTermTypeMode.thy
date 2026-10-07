@@ -293,7 +293,7 @@ next
   case (CoreTm_Sizeof tm) then show ?case
     by (auto split: option.splits CoreType.splits if_splits)
 next
-  case (CoreTm_Allocated tm)
+  case (CoreTm_Allocated ty tm)
   then show ?case
     by (cases ghost) (auto split: option.splits if_splits)
 next

@@ -89,7 +89,7 @@ datatype CoreTerm =
   | CoreTm_ArrayProj CoreTerm "CoreTerm list"
   | CoreTm_Match CoreTerm "(CorePattern \<times> CoreTerm) list"
   | CoreTm_Sizeof CoreTerm
-  | CoreTm_Allocated CoreTerm
+  | CoreTm_Allocated CoreType CoreTerm  (* the type is the operand's type *)
   | CoreTm_Old CoreTerm  (* in postcondition, returns "old" value of term; elsewhere, just returns the term *)
   | CoreTm_Default CoreType  (* default value of the given (well-kinded) type *)
 
@@ -131,7 +131,7 @@ lemma is_lvalue_simps [simp]:
   "is_lvalue (CoreTm_Match scrut arms) = False"
   "is_lvalue (CoreTm_Cast ty tm) = (is_array_type ty \<and> is_lvalue tm)"
   "is_lvalue (CoreTm_Quantifier q v ty body) = False"
-  "is_lvalue (CoreTm_Allocated tm) = False"
+  "is_lvalue (CoreTm_Allocated ty tm) = False"
   "is_lvalue (CoreTm_Old tm) = False"
   "is_lvalue (CoreTm_Sizeof tm) = False"
   "is_lvalue (CoreTm_Default ty) = False"

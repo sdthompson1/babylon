@@ -1574,16 +1574,18 @@ next
     using cond_ok is_lvalue_apply_subst_to_term[of tm subst] by blast
   show ?case using inner_subst cond_ok_subst ty_eq by simp
 next
-  case (CoreTm_Allocated tm)
+  case (CoreTm_Allocated innerTy tm)
   \<comment> \<open>Allocated is ghost-only and always returns Bool. The NotGhost equation reduces
-      to None, so we must be in Ghost. The inner term must typecheck to a complete type. \<close>
+      to None, so we must be in Ghost. The inner term must typecheck to the (complete)
+      annotation type; the substituted inner term then typechecks to the substituted
+      annotation. \<close>
   show ?case
   proof (cases ghost)
     case NotGhost
     with CoreTm_Allocated.prems(1) show ?thesis by simp
   next
     case Ghost
-    with CoreTm_Allocated.prems(1) obtain innerTy where
+    with CoreTm_Allocated.prems(1) have
       inner: "core_term_type calleeEnv Ghost tm = Some innerTy" and
       inner_cp: "is_complete_type innerTy" and
       ty_eq: "ty = CoreTy_Bool"

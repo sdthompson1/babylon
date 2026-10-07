@@ -42,8 +42,8 @@ fun apply_subst_to_term :: "TypeSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreT
                  (map (\<lambda>(pat, tm). (pat, apply_subst_to_term subst tm)) cases)"
 | "apply_subst_to_term subst (CoreTm_Sizeof tm) =
     CoreTm_Sizeof (apply_subst_to_term subst tm)"
-| "apply_subst_to_term subst (CoreTm_Allocated tm) =
-    CoreTm_Allocated (apply_subst_to_term subst tm)"
+| "apply_subst_to_term subst (CoreTm_Allocated ty tm) =
+    CoreTm_Allocated (apply_subst subst ty) (apply_subst_to_term subst tm)"
 | "apply_subst_to_term subst (CoreTm_Old tm) =
     CoreTm_Old (apply_subst_to_term subst tm)"
 | "apply_subst_to_term subst (CoreTm_Default ty) =
@@ -238,6 +238,12 @@ next
             (type_tyvars varTy - fset (fmdom subst)) \<union> subst_range_tyvars subst"
     by (rule apply_subst_tyvars_result)
   from CoreTm_Quantifier show ?case using ty by auto
+next
+  case (CoreTm_Allocated annTy tm)
+  have ty: "type_tyvars (apply_subst subst annTy) \<subseteq>
+            (type_tyvars annTy - fset (fmdom subst)) \<union> subst_range_tyvars subst"
+    by (rule apply_subst_tyvars_result)
+  from CoreTm_Allocated show ?case using ty by auto
 next
   case (CoreTm_FunctionCall fnName tyArgs args)
   have tyargs: "\<Union>(type_tyvars ` set (map (apply_subst subst) tyArgs)) \<subseteq>
