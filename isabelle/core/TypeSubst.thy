@@ -68,21 +68,22 @@ lemma apply_subst_singleton_other:
 lemma fmran'_singleton_subst: "fmran' (singleton_subst n ty) = {ty}"
   by (auto simp: singleton_subst_def fmran'_def split: if_splits)
 
-(* Type predicates (int, signed int, finite int) are preserved by apply_subst *)
+(* Integer/numeric/etc. types are all closed under substitution (they only match
+   on concrete, type-variable-free type constructors). *)
 lemma is_integer_type_apply_subst:
-  "is_integer_type ty \<Longrightarrow> is_integer_type (apply_subst subst ty)"
+  "is_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
   by (cases ty) auto
-lemma is_signed_integer_type_apply_subst:
-  "is_signed_integer_type ty \<Longrightarrow> is_signed_integer_type (apply_subst subst ty)"
-  by (cases ty) auto
-lemma is_signed_numeric_type_apply_subst:
-  "is_signed_numeric_type ty \<Longrightarrow> is_signed_numeric_type (apply_subst subst ty)"
-  by (cases ty) auto
-lemma is_finite_integer_type_apply_subst:
-  "is_finite_integer_type ty \<Longrightarrow> is_finite_integer_type (apply_subst subst ty)"
-  by (cases ty) auto
+
 lemma is_numeric_type_apply_subst:
-  "is_numeric_type ty \<Longrightarrow> is_numeric_type (apply_subst subst ty)"
+  "is_numeric_type ty \<Longrightarrow> apply_subst subst ty = ty"
+  by (cases ty) auto
+
+lemma is_signed_numeric_type_apply_subst:
+  "is_signed_numeric_type ty \<Longrightarrow> apply_subst subst ty = ty"
+  by (cases ty rule: is_signed_numeric_type.cases) auto
+
+lemma is_finite_integer_type_apply_subst:
+  "is_finite_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
   by (cases ty) auto
 
 (* Type variables after applying a substitution come from:

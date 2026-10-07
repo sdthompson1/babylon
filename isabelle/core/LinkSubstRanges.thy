@@ -41,25 +41,9 @@ begin
 (*                                                                            *)
 (* "t is a submap of s" is carried as the lookup-preservation hypothesis      *)
 (* (\<And>k v. fmlookup t k = Some v \<Longrightarrow> fmlookup s k = Some v) throughout.          *)
+(* fmadd_absorb_submap and fmlist_union_sublist_lookup, also in this shape,   *)
+(* live in FmapDisjointUnion.thy.                                             *)
 (* ========================================================================== *)
-
-(* Adding a submap on the right changes nothing. *)
-lemma fmadd_absorb_submap:
-  assumes sub: "\<And>k v. fmlookup t k = Some v \<Longrightarrow> fmlookup s k = Some v"
-  shows "s ++\<^sub>f t = s"
-proof (rule fmap_ext)
-  fix k
-  show "fmlookup (s ++\<^sub>f t) k = fmlookup s k"
-  proof (cases "k |\<in>| fmdom t")
-    case True
-    then obtain v where v: "fmlookup t k = Some v"
-      by (auto simp: fmlookup_dom_iff)
-    show ?thesis using True v sub[OF v] by simp
-  next
-    case False
-    then show ?thesis by simp
-  qed
-qed
 
 (* A map decomposes as a submap plus the rest, with disjoint domains. This is
    the shape sigma_tyvars_reach consumes (u ++f w with dom u and dom w
@@ -79,22 +63,6 @@ proof (rule fmap_ext)
     case False
     then show ?thesis by (simp add: fmdom_notD)
   qed
-qed
-
-(* The disjoint union over a sub-list is a submap of the union over the full
-   list. (Both lists must be pairwise disjoint; link success supplies that
-   for every projected family.) *)
-lemma fmlist_union_sublist_lookup:
-  assumes disj_full: "fmdisjoint_list ss"
-      and disj_sub: "fmdisjoint_list ts"
-      and sub: "set ts \<subseteq> set ss"
-      and lk: "fmlookup (fmlist_union ts) k = Some v"
-  shows "fmlookup (fmlist_union ss) k = Some v"
-proof -
-  obtain t where t_in: "t \<in> set ts" and t_lk: "fmlookup t k = Some v"
-    using fmlist_union_lookup[OF disj_sub] lk by blast
-  have "t \<in> set ss" using t_in sub by auto
-  then show ?thesis using t_lk fmlist_union_lookup[OF disj_full] by blast
 qed
 
 
@@ -144,7 +112,7 @@ proof -
     using sub by auto
   have subm: "\<And>k v. fmlookup (fmlist_union (map CM_TypeSubst as)) k = Some v
                 \<Longrightarrow> fmlookup (fmlist_union (map CM_TypeSubst ms)) k = Some v"
-    using fmlist_union_sublist_lookup[OF sdisjM sdisjA mapsub] by blast
+    using fmlist_union_sublist_lookup[OF sdisjM mapsub] by blast
   show ?thesis
     unfolding \<sigma>A_eq \<sigma>M_eq
     using sublink_closure_absorb[OF acycA closA closM subm] .
@@ -489,10 +457,10 @@ proof -
     using setB by auto
   have subA: "\<And>k v. fmlookup uA k = Some v \<Longrightarrow> fmlookup uM k = Some v"
     unfolding uA_def uM_def
-    using fmlist_union_sublist_lookup[OF sdisjM sdisjA mapsubA] by blast
+    using fmlist_union_sublist_lookup[OF sdisjM mapsubA] by blast
   have subB: "\<And>k v. fmlookup uB k = Some v \<Longrightarrow> fmlookup uM k = Some v"
     unfolding uB_def uM_def
-    using fmlist_union_sublist_lookup[OF sdisjM sdisjB mapsubB] by blast
+    using fmlist_union_sublist_lookup[OF sdisjM mapsubB] by blast
 
   \<comment> \<open>The whole union's domain splits as the two sub-unions'.\<close>
   have dom_char: "\<And>xs x. x |\<in>| fmdom (fmlist_union (map CM_TypeSubst xs))
@@ -533,10 +501,6 @@ proof -
                = funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) bs) |-| fmdom \<sigma>B"
     using beq by (simp add: link_result_def)
 
-  have dtdisjA: "fmdisjoint_list (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) as)"
-    using fdisjA unfolding link_fields_disjoint_def by blast
-  have dtdisjB: "fmdisjoint_list (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) bs)"
-    using fdisjB unfolding link_fields_disjoint_def by blast
   have dtdisjM: "fmdisjoint_list (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"
     using fdisjM unfolding link_fields_disjoint_def by blast
 
@@ -550,11 +514,11 @@ proof -
   have dtA_sub: "\<forall>k v. fmlookup (TE_Datatypes (CM_TyEnv a)) k = Some v
                    \<longrightarrow> fmlookup (TE_Datatypes (CM_TyEnv m)) k = Some v"
     unfolding aDT mDT
-    using fmlist_union_sublist_lookup[OF dtdisjM dtdisjA dtmapsubA] by blast
+    using fmlist_union_sublist_lookup[OF dtdisjM dtmapsubA] by blast
   have dtB_sub: "\<forall>k v. fmlookup (TE_Datatypes (CM_TyEnv b)) k = Some v
                    \<longrightarrow> fmlookup (TE_Datatypes (CM_TyEnv m)) k = Some v"
     unfolding bDT mDT
-    using fmlist_union_sublist_lookup[OF dtdisjM dtdisjB dtmapsubB] by blast
+    using fmlist_union_sublist_lookup[OF dtdisjM dtmapsubB] by blast
 
   \<comment> \<open>...and each side's type variables are among the inputs' union.\<close>
   have tvA_sub: "\<forall>x. x |\<in>| TE_TypeVars (CM_TyEnv a)
@@ -739,10 +703,10 @@ proof -
     using setB by auto
   have subA: "\<And>k v. fmlookup uA k = Some v \<Longrightarrow> fmlookup uM k = Some v"
     unfolding uA_def uM_def
-    using fmlist_union_sublist_lookup[OF sdisjM sdisjA mapsubA] by blast
+    using fmlist_union_sublist_lookup[OF sdisjM mapsubA] by blast
   have subB: "\<And>k v. fmlookup uB k = Some v \<Longrightarrow> fmlookup uM k = Some v"
     unfolding uB_def uM_def
-    using fmlist_union_sublist_lookup[OF sdisjM sdisjB mapsubB] by blast
+    using fmlist_union_sublist_lookup[OF sdisjM mapsubB] by blast
   have dom_char: "\<And>xs x. x |\<in>| fmdom (fmlist_union (map CM_TypeSubst xs))
                     \<longleftrightarrow> (\<exists>y \<in> set xs. x |\<in>| fmdom (CM_TypeSubst y))"
     by (auto simp: fmdom_fmlist_union funion_list_member)

@@ -312,24 +312,6 @@ corollary apply_subst_to_term_free_tyvars_ground:
   using apply_subst_to_term_free_tyvars[of subst tm] assms by auto
 
 
-(* Integer/numeric/etc. types are all closed under substitution (they only match
-   on concrete, type-variable-free type constructors). *)
-lemma is_integer_type_apply_subst:
-  "is_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
-  by (cases ty) auto
-
-lemma is_numeric_type_apply_subst:
-  "is_numeric_type ty \<Longrightarrow> apply_subst subst ty = ty"
-  by (cases ty) auto
-
-lemma is_signed_numeric_type_apply_subst:
-  "is_signed_numeric_type ty \<Longrightarrow> apply_subst subst ty = ty"
-  by (cases ty rule: is_signed_numeric_type.cases) auto
-
-lemma is_finite_integer_type_apply_subst:
-  "is_finite_integer_type ty \<Longrightarrow> apply_subst subst ty = ty"
-  by (cases ty) auto
-
 (* Applying a subst to the types of valid CoreTm_Binop operands is a no-op. *)
 (* (Follows from binop_operand_type_bool_or_numeric.) *)
 lemma binop_operand_apply_subst:

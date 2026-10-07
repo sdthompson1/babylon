@@ -315,10 +315,6 @@ where
 | "bab_term_size (BabTm_Allocated _ tm) = 1 + bab_term_size tm"
 | "bab_term_size (BabTm_Old _ tm) = 1 + bab_term_size tm"
 
-(* Combined size for lists *)
-definition list_type_size :: "BabType list \<Rightarrow> nat" where
-  "list_type_size tys = sum_list (map bab_type_size tys)"
-
 lemma bab_type_size_pos: "0 < bab_type_size ty"
   by (cases ty) auto
 

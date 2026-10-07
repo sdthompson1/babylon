@@ -18,10 +18,6 @@ begin
 (* Helper lemmas about process_one_arg and fold *)
 (* ========================================================================== *)
 
-lemma fold_process_one_arg_error:
-  "fold process_one_arg xs (Inl err) = Inl err"
-  by (induct xs) simp_all
-
 lemma process_one_arg_val_error:
   "\<exists>e. process_one_arg ((name, vr), refResult, Inl err) acc = Inl e"
   by (cases vr; cases refResult; cases acc) simp_all

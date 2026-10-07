@@ -771,21 +771,6 @@ proof
     using sub by (auto simp: funion_list_member)
 qed
 
-(* A sub-list's disjoint union is a sub-map of the full list's: disjointness
-   of the full list pins each key to a single input's entry, so the sub-list
-   cannot disagree. *)
-lemma fmlist_union_sublist_lookup:
-  assumes disj: "fmdisjoint_list ss"
-      and sub: "set us \<subseteq> set ss"
-      and lk: "fmlookup (fmlist_union us) k = Some v"
-  shows "fmlookup (fmlist_union ss) k = Some v"
-proof -
-  obtain s where s_in: "s \<in> set us" and s_lk: "fmlookup s k = Some v"
-    using fmlist_union_lookup_some[OF lk] by blast
-  then show ?thesis
-    using sub fmlist_union_lookup[OF disj] by blast
-qed
-
 (* Substitution-merge success restricts to sub-multisets unconditionally:
    domain disjointness restricts; the sub-list's dependency relation is a
    subrelation of the full one (the union substitution is a sub-map, so
@@ -898,25 +883,10 @@ qed
    entries are fully ground - no chain stops early - and then the runtime
    check transfers from the full link by ghost-set monotonicity alone: a
    ground type's runtime-ness never consults TE_RuntimeTypeVars, and a
-   datatype non-ghost in the big union is non-ghost in the smaller one. *)
+   datatype non-ghost in the big union is non-ghost in the smaller one.
 
-(* Adding a sub-map on the right is absorbed (fmadd is right-biased, and the
-   sub-map never disagrees). This lets the absorption identity
+   fmadd_absorb_submap (FmapDisjointUnion.thy) lets the absorption identity
    closure_absorb_type_raw apply with the full union in the "p ++f u" role. *)
-lemma fmadd_absorb_submap:
-  assumes sub: "\<And>k v. fmlookup n k = Some v \<Longrightarrow> fmlookup m k = Some v"
-  shows "m ++\<^sub>f n = m"
-proof (rule fmap_ext)
-  fix k
-  show "fmlookup (m ++\<^sub>f n) k = fmlookup m k"
-  proof (cases "fmlookup n k")
-    case None
-    then show ?thesis by (simp add: fmdom_notI)
-  next
-    case (Some v)
-    then show ?thesis using sub by (simp add: fmdomI)
-  qed
-qed
 
 (* A GROUND type's runtime-ness transfers to an env with FEWER ghost
    datatypes: the CoreTy_Var clause is unreachable (so TE_RuntimeTypeVars is

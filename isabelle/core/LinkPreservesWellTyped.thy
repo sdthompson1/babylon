@@ -634,8 +634,8 @@ proof
   then obtain v where "fmlookup (fmlist_union (map CM_TypeSubst as)) k = Some v"
     by (auto simp: fmlookup_dom_iff)
   then have "fmlookup (fmlist_union (map CM_TypeSubst ms)) k = Some v"
-    using fmlist_union_sublist_lookup[OF link_modules_success_facts(2)[OF linkM]
-            link_modules_success_facts(2)[OF linkA]] sub by auto
+    using fmlist_union_sublist_lookup[OF link_modules_success_facts(2)[OF linkM],
+                                      of "map CM_TypeSubst as"] sub by auto
   then have "k |\<in>| fmdom (fmlist_union (map CM_TypeSubst ms))"
     by (auto intro: fmdomI)
   then show "k |\<in>| fmdom (CM_TypeSubst m)"
@@ -668,50 +668,48 @@ lemma link_modules_decl_submaps:
 proof -
   note fA = link_modules_result_fields[OF linkA]
   note fM = link_modules_result_fields[OF linkM]
-  have dA: "link_fields_disjoint as" and dM: "link_fields_disjoint ms"
-    using link_modules_success_facts(1)[OF linkA]
-          link_modules_success_facts(1)[OF linkM] by blast+
+  have dM: "link_fields_disjoint ms"
+    using link_modules_success_facts(1)[OF linkM] by blast
   \<comment> \<open>One generic step per family.\<close>
   have step: "fmlookup (fmlist_union (map f as)) k0 = Some v0
-                \<Longrightarrow> fmdisjoint_list (map f as)
                 \<Longrightarrow> fmdisjoint_list (map f ms)
                 \<Longrightarrow> fmlookup (fmlist_union (map f ms)) k0 = Some v0"
     for f :: "CoreModule \<Rightarrow> ('x :: type, 'y :: type) fmap" and k0 v0
   proof -
     assume l: "fmlookup (fmlist_union (map f as)) k0 = Some v0"
-       and da: "fmdisjoint_list (map f as)" and dm: "fmdisjoint_list (map f ms)"
+       and dm: "fmdisjoint_list (map f ms)"
     have "set (map f as) \<subseteq> set (map f ms)" using sub by auto
     then show "fmlookup (fmlist_union (map f ms)) k0 = Some v0"
-      using fmlist_union_sublist_lookup[OF dm da _ l] by blast
+      using fmlist_union_sublist_lookup[OF dm _ l] by blast
   qed
   show "fmlookup (TE_GlobalVars (CM_TyEnv a)) k = Some v
           \<Longrightarrow> fmlookup (TE_GlobalVars (CM_TyEnv m)) k = Some v"
     unfolding fA(2) fM(2)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_Functions (CM_TyEnv a)) k2 = Some v2
           \<Longrightarrow> fmlookup (TE_Functions (CM_TyEnv m)) k2 = Some v2"
     unfolding fA(12) fM(12)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_Datatypes (CM_TyEnv a)) k3 = Some v3
           \<Longrightarrow> fmlookup (TE_Datatypes (CM_TyEnv m)) k3 = Some v3"
     unfolding fA(13) fM(13)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_DataCtors (CM_TyEnv a)) k4 = Some v4
           \<Longrightarrow> fmlookup (TE_DataCtors (CM_TyEnv m)) k4 = Some v4"
     unfolding fA(14) fM(14)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (TE_DataCtorsByType (CM_TyEnv a)) k5 = Some v5
           \<Longrightarrow> fmlookup (TE_DataCtorsByType (CM_TyEnv m)) k5 = Some v5"
     unfolding fA(15) fM(15)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (CM_GlobalVars a) k6 = Some v6
           \<Longrightarrow> fmlookup (CM_GlobalVars m) k6 = Some v6"
     unfolding fA(17) fM(17)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
   show "fmlookup (CM_Functions a) k7 = Some v7
           \<Longrightarrow> fmlookup (CM_Functions m) k7 = Some v7"
     unfolding fA(18) fM(18)
-    using step dA dM unfolding link_fields_disjoint_def by fastforce
+    using step dM unfolding link_fields_disjoint_def by fastforce
 qed
 
 
@@ -931,9 +929,9 @@ proof (rule fmap_ext)
   let ?uB = "fmlist_union (map f bs)"
   let ?uM = "fmlist_union (map f ms)"
   have subA: "\<And>v. fmlookup ?uA k = Some v \<Longrightarrow> fmlookup ?uM k = Some v"
-    using fmlist_union_sublist_lookup[OF dM dA] setMS by auto
+    using fmlist_union_sublist_lookup[OF dM, of "map f as"] setMS by auto
   have subB: "\<And>v. fmlookup ?uB k = Some v \<Longrightarrow> fmlookup ?uM k = Some v"
-    using fmlist_union_sublist_lookup[OF dM dB] setMS by auto
+    using fmlist_union_sublist_lookup[OF dM, of "map f bs"] setMS by auto
   have dom_eq: "fmdom (fmmap gA ?uA) = fmdom ?uA"
     by (rule fmdom_fmmap)
   show "fmlookup (fmmap gM (fmmap gA ?uA

@@ -1530,14 +1530,6 @@ lemma apply_subst_preserves_runtime_module_cond:
                            (apply_subst subst ty)"
   using assms apply_subst_preserves_runtime_module by blast
 
-(* Valid decreases types contain no type variables, so substitution leaves
-   them unchanged. *)
-lemma is_valid_decreases_type_apply_subst:
-  assumes "is_valid_decreases_type ty"
-  shows "apply_subst subst ty = ty"
-  using is_valid_decreases_type_no_tyvars[OF assms]
-  by (intro apply_subst_disjoint_id) simp
-
 (* The cast on an impure call's return value transfers to the substituted
    env: the cast condition is closed under substitution, and runtime-ness of
    the cast target transfers via the module conditions. *)

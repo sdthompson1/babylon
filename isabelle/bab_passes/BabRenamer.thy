@@ -166,8 +166,8 @@ fun add_local_type_names :: "Location \<Rightarrow> string list \<Rightarrow> Re
      in (internalDupErrs, newEnv))"
 
 (* Helper function to check for duplicates in a list and generate errors *)
-fun check_duplicate_names :: "Location \<Rightarrow> string list \<Rightarrow> string fset \<Rightarrow> RenameError list"
-  where "check_duplicate_names loc names currentScope =
+fun duplicate_name_errors :: "Location \<Rightarrow> string list \<Rightarrow> string fset \<Rightarrow> RenameError list"
+  where "duplicate_name_errors loc names currentScope =
     (let duplicates = filter (\<lambda>name. name |\<in>| currentScope) names
      in map (\<lambda>name. RenameError_DuplicateDefinition loc name) duplicates)"
 
@@ -176,7 +176,7 @@ fun add_local_term_names :: "Location \<Rightarrow> string list \<Rightarrow> Re
     (let sorted = sort names;
          internalDups = find_duplicates_in_sorted id sorted;
          internalDupErrs = map (\<lambda>name. RenameError_DuplicateDefinition loc name) internalDups;
-         scopeDupErrs = check_duplicate_names loc names (RE_CurrentScopeTermNames env);
+         scopeDupErrs = duplicate_name_errors loc names (RE_CurrentScopeTermNames env);
          allErrs = internalDupErrs @ scopeDupErrs;
          newNames = fset_of_list names;
          newEnv = env \<lparr> RE_LocalTermNames := newNames |\<union>| RE_LocalTermNames env,

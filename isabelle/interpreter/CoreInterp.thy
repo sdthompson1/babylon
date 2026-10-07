@@ -452,6 +452,11 @@ fun process_one_arg :: "((string \<times> VarOrRef)
 | "process_one_arg ((name, Ref), Inl err, _) _ = Inl err"
 | "process_one_arg ((name, Ref), _, Inl err) _ = Inl err"
 
+(* Once an error has occurred, folding further arguments keeps it. *)
+lemma fold_process_one_arg_error:
+  "fold process_one_arg xs (Inl err) = Inl err"
+  by (induct xs) simp_all
+
 (* Apply extern function ref updates back to the store. *)
 (* Takes list of ref lvalues and corresponding new values, returns updated state. *)
 fun apply_ref_updates :: "'w InterpState \<Rightarrow> (nat \<times> LValuePath list) list \<Rightarrow> CoreValue list 
