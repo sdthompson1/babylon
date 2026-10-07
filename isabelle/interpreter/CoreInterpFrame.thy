@@ -692,7 +692,6 @@ qed
    functions only ever call each other at the same depth. (Terms do not return
    a state, so nothing needs to be proved about them.) *)
 lemma interp_frame:
-  fixes dummy :: "'w InterpState"
   shows "\<forall>(state :: 'w InterpState) res.
            interp_statement d fuel state stmt = Inr res \<longrightarrow>
              frame_step state (result_state res)"
