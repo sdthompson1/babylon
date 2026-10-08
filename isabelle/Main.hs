@@ -2,6 +2,7 @@ module Main where
 
 import CodeExport
 import Str
+import Control.Exception
 import Data.Bits
 import System.Environment
 import System.Exit
@@ -41,18 +42,44 @@ moduleName path =
   let base = reverse (takeWhile (\c -> c /= '/' && c /= '\\') (reverse path))
   in takeWhile (/= '.') base
 
+-- Parse a command line argument into (module name, filename). The argument
+-- is either "Name=path", giving the module name explicitly (e.g.
+-- "A.B.C=dir/C.b"), or just "path", in which case the name is derived
+-- from the filename using moduleName.
+parseArg :: Prelude.String -> (Prelude.String, FilePath)
+parseArg arg =
+  case break (== '=') arg of
+    (name, '=' : path) -> (name, path)
+    _ -> (moduleName arg, arg)
+
+-- Exit status: 0 on success, 1 if compilation fails, 2 if no arguments were
+-- supplied, 3 if an exception occurs (e.g. a file could not be read).
+-- (Without the handler, GHC would exit with status 1 on an uncaught exception,
+-- making it indistinguishable from a compilation failure.)
 main :: IO ()
-main = do
+main = realMain `catch` handler
+  where
+    handler :: SomeException -> IO ()
+    handler e = case fromException e of
+      -- exitWith works by throwing an ExitCode exception; let it through.
+      Just ec -> throwIO (ec :: ExitCode)
+      Nothing -> do
+        hPutStrLn stderr ("Main: " ++ displayException e)
+        exitWith (ExitFailure 3)
+
+realMain :: IO ()
+realMain = do
   args <- getArgs
   case args of
     [] -> do
-      hPutStrLn stderr "Usage: Main <RootModule.b> [<OtherModule.b> ...]"
+      hPutStrLn stderr "Usage: Main [Name=]<RootModule.b> [[Name=]<OtherModule.b> ...]"
       exitWith (ExitFailure 2)
-    files -> do
-      contents <- mapM readFile files
-      let modules = zipWith (\f c -> (toIsabelleString (moduleName f),
-                                      toIsabelleString c))
-                            files contents
+    _ -> do
+      let namedFiles = map parseArg args
+      contents <- mapM (readFile . snd) namedFiles
+      let modules = zipWith (\(n, _) c -> (toIsabelleString n,
+                                           toIsabelleString c))
+                            namedFiles contents
       case run_compiler modules of
         CR_Success -> putStrLn "Success"
         CR_Errors errs -> do

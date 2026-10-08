@@ -33,8 +33,12 @@ follows:
 Each filename given on the command line is read as the source code of
 one Babylon module. The first module on the command line is the root
 module for the compilation. Each module's name (in the source text)
-must correspond to the filename, e.g. `dir/Foo.b` must is the module
+must correspond to the filename, e.g. `dir/Foo.b` must be the module
 `Foo`.
+
+Alternatively, a module name can be given explicitly by writing an
+argument in the form `Name=filename`, e.g. `A.B.C=dir/C.b`. This is
+needed for modules with dotted names.
 
 The program runs the front end and elaborator on the given modules. If
 everything succeeds it prints `Success`; otherwise the error messages
