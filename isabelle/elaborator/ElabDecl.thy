@@ -1,5 +1,5 @@
 theory ElabDecl
-  imports ElabStmt ConstFold "../core/CoreModuleTypecheck"
+  imports ElabStmt ConstFold "../core/CoreModuleTypecheck" "../bab_passes/BabMapDims"
 begin
 
 (* Declaration elaborator.
@@ -887,24 +887,77 @@ definition elab_typedef_decl ::
 
 
 (* ========================================================================== *)
+(* Array dimensions                                                           *)
+(* ========================================================================== *)
+
+(* Evaluate a fixed array-dimension term to an integer literal.
+
+   elab_dimension (ElabType.thy) accepts only integer literals, but Babylon
+   allows any compile-time constant expression of type u64 as a dimension
+   (e.g. "i32[SIZE]" where SIZE is a global constant). So, before a
+   declaration is elaborated, every fixed-dimension term in it is passed
+   through this function (via map_dims_declaration).
+
+   An integer literal is returned unchanged. Any other term is elaborated as
+   a non-ghost constant of type u64 (elab_const_rhs, which also checks that
+   the term is a compile-time constant) and then evaluated with fold_const,
+   against the global constants visible at this point (globalVals). The
+   resulting value is turned back into a literal.
+
+   The term is elaborated against the module-level env, so only global
+   (non-ghost) constants can be mentioned; local variables and function
+   parameters cannot. *)
+definition eval_dim_term ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> BabTerm
+   \<Rightarrow> TypeError list + BabTerm" where
+  "eval_dim_term env elabEnv globalVals tm =
+    (case tm of
+       BabTm_Literal _ (BabLit_Int _) \<Rightarrow> Inr tm
+     | _ \<Rightarrow>
+       (let loc = bab_term_location tm
+        in case elab_const_rhs env elabEnv NotGhost loc
+                               (CoreTy_FiniteInt Unsigned IntBits_64) tm of
+             Inl errs \<Rightarrow> Inl errs
+           | Inr coreTm \<Rightarrow>
+               (case fold_const globalVals loc coreTm of
+                  Inl errs \<Rightarrow> Inl errs
+                | Inr (CV_FiniteInt Unsigned IntBits_64 n) \<Rightarrow>
+                    Inr (BabTm_Literal loc (BabLit_Int n))
+                | Inr _ \<Rightarrow> Inl [TyErr_InvalidArrayDimension loc])))"
+
+
+(* ========================================================================== *)
 (* The main fold                                                              *)
 (* ========================================================================== *)
 
-(* Elaborate a single declaration: dispatches to one of the above functions.
-   ctxGlobals (the dependency context's global-constant values) is only
-   needed by the const case, for compile-time initializer evaluation. *)
-fun elab_declaration ::
+(* Elaborate a single (dimension-rewritten) declaration: dispatches to one of
+   the above functions. ctxGlobals (the dependency context's global-constant
+   values) is only needed by the const case, for compile-time initializer
+   evaluation. *)
+fun elab_declaration_dispatch ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreModule
    \<Rightarrow> BabDeclaration
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
-  "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Const dc) =
+  "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m (BabDecl_Const dc) =
      elab_const_decl env elabEnv ctxGlobals m dc"
-| "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Function df) =
+| "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m (BabDecl_Function df) =
      elab_function_decl env elabEnv m df"
-| "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Datatype dd) =
+| "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m (BabDecl_Datatype dd) =
      elab_datatype_decl env elabEnv ownAbstract m dd"
-| "elab_declaration env elabEnv ownAbstract ctxGlobals m (BabDecl_Typedef dt) =
+| "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m (BabDecl_Typedef dt) =
      elab_typedef_decl env elabEnv ownAbstract m dt"
+
+(* Elaborate a single declaration: first rewrite its array dimensions to
+   literals (eval_dim_term, evaluated against the imported constants together
+   with the constants of this module elaborated so far), then dispatch. *)
+definition elab_declaration ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> CoreModule
+   \<Rightarrow> BabDeclaration
+   \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
+  "elab_declaration env elabEnv ownAbstract ctxGlobals m d =
+    (case map_dims_declaration (eval_dim_term env elabEnv (ctxGlobals ++\<^sub>f CM_GlobalVars m)) d of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr d' \<Rightarrow> elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d')"
 
 (* Elaborate a declaration list, threading the state triple and stopping at
    the first failing declaration. *)

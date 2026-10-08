@@ -86,6 +86,39 @@ qed
 
 
 (* ========================================================================== *)
+(* The array-dimension rewrite                                                *)
+(* ========================================================================== *)
+
+(* elab_declaration first rewrites the declaration's array dimensions to
+   literals and then dispatches on the result. The correctness lemmas below
+   are proved for the dispatcher and lifted to elab_declaration through this
+   elimination rule, together with the shape-preservation facts for the
+   rewrite (map_dims_declaration_Inr_cases in BabMapDims.thy): the rewrite
+   changes only the types and terms inside the declaration, never its name,
+   type parameters, or which optional fields are present. *)
+lemma elab_declaration_Inr_elim:
+  assumes "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr r"
+  obtains d' where
+    "map_dims_declaration (eval_dim_term env elabEnv (ctxGlobals ++\<^sub>f CM_GlobalVars m)) d
+       = Inr d'"
+    and "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d' = Inr r"
+  using assms unfolding elab_declaration_def
+  by (auto split: sum.splits)
+
+(* The rewrite keeps the type-variable binders, hence their freshness. *)
+lemma map_dims_declaration_tyvar_binders:
+  assumes "map_dims_declaration f d = Inr d'"
+  shows "decl_tyvar_binders d' = decl_tyvar_binders d"
+  using assms by (cases rule: map_dims_declaration_Inr_cases) simp_all
+
+lemma map_dims_declaration_tyvars_fresh_ok:
+  assumes "map_dims_declaration f d = Inr d'"
+  shows "decl_tyvars_fresh_ok d' = decl_tyvars_fresh_ok d"
+  unfolding decl_tyvars_fresh_ok_def
+  by (simp add: map_dims_declaration_tyvar_binders[OF assms])
+
+
+(* ========================================================================== *)
 (* The state env as a function of the context and the module                  *)
 (* ========================================================================== *)
 
@@ -7767,10 +7800,10 @@ qed
 
 (* ---- The dispatcher ---- *)
 
-lemma elab_declaration_invariant:
+lemma elab_declaration_dispatch_invariant:
   assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and fresh: "decl_tyvars_fresh_ok d"
-      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+      and elab: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
 proof (cases d)
   case (BabDecl_Const dc)
@@ -7798,6 +7831,24 @@ next
   have f: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (DT_Name dt # DT_TyArgs dt)"
     using fresh BabDecl_Typedef unfolding decl_tyvars_fresh_ok_def by simp
   show ?thesis by (rule elab_typedef_decl_invariant[OF inv f e])
+qed
+
+(* Lifted through the array-dimension rewrite. *)
+lemma elab_declaration_invariant:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and fresh: "decl_tyvars_fresh_ok d"
+      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals env' elabEnv' m'"
+proof -
+  from elab obtain d' where
+    rw: "map_dims_declaration (eval_dim_term env elabEnv (ctxGlobals ++\<^sub>f CM_GlobalVars m)) d
+           = Inr d'" and
+    disp: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d'
+             = Inr (env', elabEnv', m')"
+    by (rule elab_declaration_Inr_elim)
+  have fresh': "decl_tyvars_fresh_ok d'"
+    using fresh map_dims_declaration_tyvars_fresh_ok[OF rw] by simp
+  show ?thesis by (rule elab_declaration_dispatch_invariant[OF inv fresh' disp])
 qed
 
 (* Lifted to the declaration list. *)
@@ -8106,10 +8157,10 @@ qed
 
 (* ---- The dispatcher, the list, and the top-level fold ---- *)
 
-lemma elab_declaration_subst_runtime:
+lemma elab_declaration_dispatch_subst_runtime:
   assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and rtok: "subst_runtime_ok env0 env m"
-      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+      and elab: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "subst_runtime_ok env0 env' m'"
 proof (cases d)
   case (BabDecl_Const dc)
@@ -8131,6 +8182,20 @@ next
   then have e: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
     using elab by simp
   show ?thesis by (rule elab_typedef_decl_subst_runtime[OF inv rtok e])
+qed
+
+(* Lifted through the array-dimension rewrite. *)
+lemma elab_declaration_subst_runtime:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and rtok: "subst_runtime_ok env0 env m"
+      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "subst_runtime_ok env0 env' m'"
+proof -
+  from elab obtain d' where
+    disp: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d'
+             = Inr (env', elabEnv', m')"
+    by (rule elab_declaration_Inr_elim)
+  show ?thesis by (rule elab_declaration_dispatch_subst_runtime[OF inv rtok disp])
 qed
 
 lemma elab_declaration_list_subst_runtime:
@@ -8214,8 +8279,8 @@ definition decls_abstract_names :: "BabDeclaration list \<Rightarrow> string fse
    (tyenv_add_global, tyenv_add_function and tyenv_add_datatype record other
    fields; apply_realization does not rewrite the module's own CM_TyEnv at
    all). *)
-lemma elab_declaration_own_tyvars:
-  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+lemma elab_declaration_dispatch_own_tyvars:
+  assumes e: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
 proof (cases d)
   case (BabDecl_Const dc)
@@ -8237,14 +8302,14 @@ proof (cases d)
 next
   case (BabDecl_Function df)
   have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
-    using e unfolding BabDecl_Function elab_declaration.simps
+    using e unfolding BabDecl_Function elab_declaration_dispatch.simps
                       elab_function_decl_def tyenv_add_function_def Let_def
     by (auto split: option.splits sum.splits if_splits)
   then show ?thesis by (simp add: BabDecl_Function)
 next
   case (BabDecl_Datatype dd)
   have "TE_TypeVars (CM_TyEnv m') = TE_TypeVars (CM_TyEnv m)"
-    using e unfolding BabDecl_Datatype elab_declaration.simps
+    using e unfolding BabDecl_Datatype elab_declaration_dispatch.simps
                       elab_datatype_decl_def apply_realization_def
                       tyenv_add_datatype_def Let_def
     by (auto split: option.splits sum.splits if_splits)
@@ -8252,10 +8317,33 @@ next
 next
   case (BabDecl_Typedef dt)
   show ?thesis
-    using e unfolding BabDecl_Typedef elab_declaration.simps
+    using e unfolding BabDecl_Typedef elab_declaration_dispatch.simps
                       elab_typedef_decl_def apply_realization_def
                       tyenv_add_abstract_type_def Let_def
     by (auto split: option.splits sum.splits if_splits)
+qed
+
+(* The array-dimension rewrite keeps the abstract-typedef names. *)
+lemma map_dims_declaration_abstract_names:
+  assumes "map_dims_declaration f d = Inr d'"
+  shows "decl_abstract_names d' = decl_abstract_names d"
+  using assms by (cases rule: map_dims_declaration_Inr_cases) simp_all
+
+(* Lifted through the array-dimension rewrite. *)
+lemma elab_declaration_own_tyvars:
+  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "TE_TypeVars (CM_TyEnv m') |\<subseteq>| TE_TypeVars (CM_TyEnv m) |\<union>| decl_abstract_names d"
+proof -
+  from e obtain d' where
+    rw: "map_dims_declaration (eval_dim_term env elabEnv (ctxGlobals ++\<^sub>f CM_GlobalVars m)) d
+           = Inr d'" and
+    disp: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d'
+             = Inr (env', elabEnv', m')"
+    by (rule elab_declaration_Inr_elim)
+  show ?thesis
+    using elab_declaration_dispatch_own_tyvars[OF disp]
+          map_dims_declaration_abstract_names[OF rw]
+    by simp
 qed
 
 (* Lifted to the declaration list. *)
@@ -8345,8 +8433,8 @@ definition decls_undefined_funs :: "BabDeclaration list \<Rightarrow> string fse
    undefined-const name: elab_const_decl adds the declaration and the
    definition together except in its no-value case, and definitions are never
    removed; no other declaration form touches either field. *)
-lemma elab_declaration_undefined_globals:
-  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+lemma elab_declaration_dispatch_undefined_globals:
+  assumes e: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
            |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
                 |\<union>| decl_undefined_consts d"
@@ -8373,7 +8461,7 @@ next
   case (BabDecl_Function df)
   have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
         \<and> CM_GlobalVars m' = CM_GlobalVars m"
-    using e unfolding BabDecl_Function elab_declaration.simps
+    using e unfolding BabDecl_Function elab_declaration_dispatch.simps
                       elab_function_decl_def tyenv_add_function_def Let_def
     by (auto split: option.splits sum.splits if_splits)
   then show ?thesis by (simp add: BabDecl_Function)
@@ -8381,7 +8469,7 @@ next
   case (BabDecl_Datatype dd)
   have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
         \<and> CM_GlobalVars m' = CM_GlobalVars m"
-    using e unfolding BabDecl_Datatype elab_declaration.simps
+    using e unfolding BabDecl_Datatype elab_declaration_dispatch.simps
                       elab_datatype_decl_def apply_realization_def
                       tyenv_add_datatype_def Let_def
     by (auto split: option.splits sum.splits if_splits)
@@ -8390,19 +8478,45 @@ next
   case (BabDecl_Typedef dt)
   have "TE_GlobalVars (CM_TyEnv m') = TE_GlobalVars (CM_TyEnv m)
         \<and> CM_GlobalVars m' = CM_GlobalVars m"
-    using e unfolding BabDecl_Typedef elab_declaration.simps
+    using e unfolding BabDecl_Typedef elab_declaration_dispatch.simps
                       elab_typedef_decl_def apply_realization_def
                       tyenv_add_abstract_type_def Let_def
     by (auto split: option.splits sum.splits if_splits)
   then show ?thesis by (simp add: BabDecl_Typedef)
 qed
 
+(* The array-dimension rewrite keeps the undefined-const names: a constant's
+   name, ghost flag and the presence of its initializer are unchanged. *)
+lemma map_dims_declaration_undefined_consts:
+  assumes "map_dims_declaration f d = Inr d'"
+  shows "decl_undefined_consts d' = decl_undefined_consts d"
+  using assms by (cases rule: map_dims_declaration_Inr_cases) simp_all
+
+(* Lifted through the array-dimension rewrite. *)
+lemma elab_declaration_undefined_globals:
+  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "fmdom (TE_GlobalVars (CM_TyEnv m')) |-| fmdom (CM_GlobalVars m')
+           |\<subseteq>| (fmdom (TE_GlobalVars (CM_TyEnv m)) |-| fmdom (CM_GlobalVars m))
+                |\<union>| decl_undefined_consts d"
+proof -
+  from e obtain d' where
+    rw: "map_dims_declaration (eval_dim_term env elabEnv (ctxGlobals ++\<^sub>f CM_GlobalVars m)) d
+           = Inr d'" and
+    disp: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d'
+             = Inr (env', elabEnv', m')"
+    by (rule elab_declaration_Inr_elim)
+  show ?thesis
+    using elab_declaration_dispatch_undefined_globals[OF disp]
+          map_dims_declaration_undefined_consts[OF rw]
+    by simp
+qed
+
 (* The same for functions: only elab_function_decl touches TE_Functions or
    CM_Functions, and it withholds the CM_Functions entry exactly for a
    bodiless non-extern function (an extern declaration IS a definition - its
    entry carries CF_Body = None). *)
-lemma elab_declaration_undefined_funs:
-  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+lemma elab_declaration_dispatch_undefined_funs:
+  assumes e: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
   shows "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
            |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
                 |\<union>| decl_undefined_funs d"
@@ -8430,14 +8544,14 @@ proof (cases d)
 next
   case (BabDecl_Function df)
   show ?thesis
-    using e unfolding BabDecl_Function elab_declaration.simps
+    using e unfolding BabDecl_Function elab_declaration_dispatch.simps
                       elab_function_decl_def tyenv_add_function_def Let_def
     by (auto split: option.splits sum.splits if_splits)
 next
   case (BabDecl_Datatype dd)
   have "TE_Functions (CM_TyEnv m') = TE_Functions (CM_TyEnv m)
         \<and> CM_Functions m' = CM_Functions m"
-    using e unfolding BabDecl_Datatype elab_declaration.simps
+    using e unfolding BabDecl_Datatype elab_declaration_dispatch.simps
                       elab_datatype_decl_def apply_realization_def
                       tyenv_add_datatype_def Let_def
     by (auto split: option.splits sum.splits if_splits)
@@ -8446,11 +8560,38 @@ next
   case (BabDecl_Typedef dt)
   have "TE_Functions (CM_TyEnv m') = TE_Functions (CM_TyEnv m)
         \<and> CM_Functions m' = CM_Functions m"
-    using e unfolding BabDecl_Typedef elab_declaration.simps
+    using e unfolding BabDecl_Typedef elab_declaration_dispatch.simps
                       elab_typedef_decl_def apply_realization_def
                       tyenv_add_abstract_type_def Let_def
     by (auto split: option.splits sum.splits if_splits)
   then show ?thesis by (simp add: BabDecl_Typedef)
+qed
+
+(* The array-dimension rewrite keeps the undefined-function names: a
+   function's name, extern flag and the presence of its body are unchanged,
+   as are a constant's name, ghost flag and initializer presence. *)
+lemma map_dims_declaration_undefined_funs:
+  assumes "map_dims_declaration f d = Inr d'"
+  shows "decl_undefined_funs d' = decl_undefined_funs d"
+  using assms by (cases rule: map_dims_declaration_Inr_cases) simp_all
+
+(* Lifted through the array-dimension rewrite. *)
+lemma elab_declaration_undefined_funs:
+  assumes e: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "fmdom (TE_Functions (CM_TyEnv m')) |-| fmdom (CM_Functions m')
+           |\<subseteq>| (fmdom (TE_Functions (CM_TyEnv m)) |-| fmdom (CM_Functions m))
+                |\<union>| decl_undefined_funs d"
+proof -
+  from e obtain d' where
+    rw: "map_dims_declaration (eval_dim_term env elabEnv (ctxGlobals ++\<^sub>f CM_GlobalVars m)) d
+           = Inr d'" and
+    disp: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d'
+             = Inr (env', elabEnv', m')"
+    by (rule elab_declaration_Inr_elim)
+  show ?thesis
+    using elab_declaration_dispatch_undefined_funs[OF disp]
+          map_dims_declaration_undefined_funs[OF rw]
+    by simp
 qed
 
 (* Lifted to the declaration list. *)

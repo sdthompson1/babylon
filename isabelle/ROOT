@@ -29,6 +29,7 @@ session Babylon = "HOL-Library" +
 
     (* bab_passes *)
     "bab_passes/BabDependency"
+    "bab_passes/BabMapDims"
     "bab_passes/BabRenamer"
     "bab_passes/BabStringHoist"
 

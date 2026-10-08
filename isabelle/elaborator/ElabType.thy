@@ -7,7 +7,9 @@ begin
 
 (* Elaborate a single array dimension.
    BabDim_Fixed must contain a literal integer within uint64 range;
-   anything else produces TyErr_InvalidArrayDimension. *)
+   anything else produces TyErr_InvalidArrayDimension. (Non-literal dimension
+   terms are evaluated to literals before elaboration; see eval_dim_term in
+   ElabDecl.thy.) *)
 fun elab_dimension :: "BabDimension \<Rightarrow> Location \<Rightarrow> TypeError + CoreDimension" where
   "elab_dimension BabDim_Unknown loc = Inr CoreDim_Unknown"
 | "elab_dimension BabDim_Allocatable loc = Inr CoreDim_Allocatable"
