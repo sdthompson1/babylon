@@ -884,18 +884,29 @@ struct Term * eval_to_normal_form(TypeEnv *env, struct Term *term)
         return NULL;
 
     case TM_SIZEOF:
-        ;
-        struct Type *arr_type = term->sizeof_data.rhs->type;
-        if (arr_type->tag == TY_ARRAY && arr_type->array_data.sizes != NULL) {
-            // fixed array sizes are already in normal-form, just need to
-            // copy (and make into a tuple if necessary)
-            if (arr_type->array_data.ndim == 1) {
-                return copy_term(arr_type->array_data.sizes[0]);
-            } else {
-                return make_sizeof_tuple(&arr_type->array_data);
+        {
+            // The operand must itself be a compile-time constant (e.g. a
+            // global constant array). In particular, sizeof of a local
+            // variable or parameter is not allowed here, even if its type
+            // is a fixed-size array type.
+            struct Term *operand = eval_to_normal_form(env, term->sizeof_data.rhs);
+            if (operand == NULL) {
+                return NULL;
             }
-        } else {
-            return NULL;
+            free_term(operand);
+
+            struct Type *arr_type = term->sizeof_data.rhs->type;
+            if (arr_type->tag == TY_ARRAY && arr_type->array_data.sizes != NULL) {
+                // fixed array sizes are already in normal-form, just need to
+                // copy (and make into a tuple if necessary)
+                if (arr_type->array_data.ndim == 1) {
+                    return copy_term(arr_type->array_data.sizes[0]);
+                } else {
+                    return make_sizeof_tuple(&arr_type->array_data);
+                }
+            } else {
+                return NULL;
+            }
         }
 
     case TM_ARRAY_PROJ:

@@ -377,7 +377,7 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_ConstDeclNeedsType loc name \<Rightarrow>
         loc_prefix loc @ ''constant '' @ quote name @ '' requires a type or a value''
     | TyErr_NotCompileTimeConstant loc \<Rightarrow>
-        loc_prefix loc @ ''initializer is not a compile-time constant''
+        loc_prefix loc @ ''value is not a compile-time constant''
     | TyErr_ConstValueNotVisible loc name \<Rightarrow>
         loc_prefix loc @ ''the value of constant '' @ quote name @ '' is not visible here''
     | TyErr_ConstEvalError loc err2 \<Rightarrow>

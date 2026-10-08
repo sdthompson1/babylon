@@ -96,7 +96,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   (* Declaration/Module level errors *)
   | TyErr_DuplicateName Location string  (* a constant, function, constructor, parameter, etc., was defined twice *)
   | TyErr_ConstDeclNeedsType Location string  (* `const x;` with neither type annotation nor value *)
-  | TyErr_NotCompileTimeConstant Location  (* a non-ghost global initializer contains a function call *)
+  | TyErr_NotCompileTimeConstant Location  (* a non-ghost global initializer contains a function call, or an array dimension mentions a non-constant (e.g. a local variable) *)
   | TyErr_ConstValueNotVisible Location string  (* a constant initializer references a constant with no visible value (e.g. an opaque imported constant) *)
   | TyErr_ConstEvalError Location InterpError  (* compile-time evaluation of a constant initializer failed (e.g. overflow, match failure, array index out of bounds) *)
   | TyErr_ConstAbstractType Location  (* a constant initializer mentions an abstract (unrealized) type, so it cannot be evaluated at compile time (e.g. an empty array literal at an opaque imported element type) *)

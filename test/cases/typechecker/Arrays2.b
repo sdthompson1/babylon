@@ -30,3 +30,9 @@ function test3(sz: i32)
     var b: i32[1, 2, 1 + true];  // error: type error in size
     var c: i32[sz];   // error: size is not a compile-time constant
 }
+
+function test4()
+{
+    var a: i32[10];
+    var b: i32[sizeof(a)];   // error: sizeof of a local variable is not a compile-time constant
+}

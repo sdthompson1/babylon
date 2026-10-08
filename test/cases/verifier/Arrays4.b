@@ -38,17 +38,13 @@ function f3()
     // Non-literal sizes
     var a: bool[DIM];
     var b: bool[DIM + u64(5)];
-    var c: u8[sizeof(b) + u64(1)];
 
     var d: u32[3,4];
-    var e: u32[sizeof(d).0 + u64(10)];
 
     assert sizeof(a) == u64(10);
     assert sizeof(b) == u64(15);
-    assert sizeof(c) == u64(16);
     assert sizeof(d).0 == u64(3);
     assert sizeof(d).1 == u64(4);
-    assert sizeof(e) == u64(13);
 
     assert !a[0];
     assert a[1];  // Should fail

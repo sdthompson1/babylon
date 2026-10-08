@@ -288,11 +288,14 @@ The language includes the following types:
 
     - Fixed-sized arrays: If `T` is a type, then `T[n]` is an array of
       `n` consecutive values of type `T`. Here, `n` can be any
-      constant expression (i.e. an expression whose value is known at
-      compile time) of type `u64`. For example, `i32[10]` is an array
-      of ten `i32` values. Multi-dimensional arrays are also
-      supported, e.g. `bool[10,20]` (a 2-d array of bools) or
-      `{i8,i8}[10,20,30]` (a 3-d array of tuples).
+      constant expression of type `u64`. (Such an expression must be
+      known at compile time; it can contain literals, operators and
+      global constants, but not local variables.) For example,
+      `i32[10]` is an array of ten `i32` values. If `SIZE` was a
+      global constant, equal to 10, then `i32[SIZE]` would be the same
+      type. Multi-dimensional arrays are also supported, e.g.
+      `bool[10,20]` (a 2-d array of bools) or `{i8,i8}[10,20,30]` (a
+      3-d array of tuples).
 
     - Allocatable arrays: If `T` is a type then `T[*]` is a
       one-dimensional allocatable array of `T` values. An allocatable

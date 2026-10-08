@@ -906,7 +906,17 @@ definition elab_typedef_decl ::
 
    The term is elaborated against the module-level env, so only global
    (non-ghost) constants can be mentioned; local variables and function
-   parameters cannot. *)
+   parameters cannot. The renamer resolves such names successfully (they are
+   in scope syntactically), so elab_const_rhs reports them as
+   TyErr_NameNotFound; that is turned into TyErr_NotCompileTimeConstant
+   here, since the real problem is that the dimension mentions something
+   that isn't a compile-time constant. *)
+definition dim_term_error :: "TypeError \<Rightarrow> TypeError" where
+  "dim_term_error err =
+    (case err of
+       TyErr_NameNotFound nloc _ \<Rightarrow> TyErr_NotCompileTimeConstant nloc
+     | _ \<Rightarrow> err)"
+
 definition eval_dim_term ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> (string, CoreValue) fmap \<Rightarrow> BabTerm
    \<Rightarrow> TypeError list + BabTerm" where
@@ -917,7 +927,7 @@ definition eval_dim_term ::
        (let loc = bab_term_location tm
         in case elab_const_rhs env elabEnv NotGhost loc
                                (CoreTy_FiniteInt Unsigned IntBits_64) tm of
-             Inl errs \<Rightarrow> Inl errs
+             Inl errs \<Rightarrow> Inl (map dim_term_error errs)
            | Inr coreTm \<Rightarrow>
                (case fold_const globalVals loc coreTm of
                   Inl errs \<Rightarrow> Inl errs
